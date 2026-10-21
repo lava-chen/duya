@@ -43,7 +43,7 @@
 # path per line, sorted. `unclassified` is the deliberately-excluded
 # bucket; it is held to the same rule as the six categories.
 
-[wire] (39)
+[wire] (37)
 apps/desktop/src/contracts/__tests__/contracts-boundary.test.ts
 apps/desktop/src/contracts/git.ts
 apps/desktop/src/contracts/import.ts
@@ -74,9 +74,7 @@ packages/agent-protocol/src/testing/index.ts
 packages/agent-protocol/src/testing/worker-adapter.ts
 packages/agent-protocol/src/transport.ts
 packages/agent-protocol/src/version.ts
-packages/agent/src/channels/__tests__/prompts.test.ts
 packages/agent/src/channels/prompts.ts
-packages/agent/src/channels/types.test.ts
 packages/agent/src/channels/types.ts
 packages/agent/src/constants/taskNotificationXml.ts
 packages/agent/src/index.ts
@@ -92,7 +90,7 @@ packages/agent-core/src/run-budget.ts
 packages/agent-core/src/run-outcome.ts
 packages/agent-protocol/src/codecs.ts
 
-[runtime-coordination] (272)
+[runtime-coordination] (243)
 apps/desktop/src/main/agents/__tests__/agent-communicator.channels.test.ts
 apps/desktop/src/main/agents/__tests__/session-spawn.e2e.test.ts
 apps/desktop/src/main/agents/agent-communicator.ts
@@ -219,7 +217,6 @@ packages/agent-runtime/src/transport/transport-port.ts
 packages/agent/src/abort/index.ts
 packages/agent/src/agent-profile/AgentProfileService.ts
 packages/agent/src/agent-profile/ToolFilter.ts
-packages/agent/src/agent-profile/__tests__/config-groups.test.ts
 packages/agent/src/agent-profile/bot-profile-reader.ts
 packages/agent/src/agent-profile/bot-toolset.ts
 packages/agent/src/agent-profile/config-agents.ts
@@ -237,16 +234,11 @@ packages/agent/src/agent/TurnContext.ts
 packages/agent/src/agent/TurnEventDispatcher.ts
 packages/agent/src/agent/TurnLoopTracker.ts
 packages/agent/src/agent/TurnStreamRunner.ts
-packages/agent/src/agent/__tests__/permissions-gate.test.ts
-packages/agent/src/agent/__tests__/stream-retry.test.ts
-packages/agent/src/agent/__tests__/tool-group-progress.test.ts
-packages/agent/src/agent/__tests__/toolInvokePermission.test.ts
 packages/agent/src/agent/dm/bot-session-id.ts
 packages/agent/src/agent/dm/envelope.ts
 packages/agent/src/agent/dm/index.ts
 packages/agent/src/agent/dm/mentions.ts
 packages/agent/src/agent/dm/types.ts
-packages/agent/src/agent/dm/wake-prompt.test.ts
 packages/agent/src/agent/dm/wake-prompt.ts
 packages/agent/src/agent/reminder-sources.ts
 packages/agent/src/agent/reminders.ts
@@ -263,23 +255,6 @@ packages/agent/src/agent/visual-analysis.ts
 packages/agent/src/compact/BackgroundPrefire.ts
 packages/agent/src/compact/CompactionManager.ts
 packages/agent/src/compact/PostCompactReinjector.ts
-packages/agent/src/compact/__tests__/BackgroundPrefire.test.ts
-packages/agent/src/compact/__tests__/CompactionManager.accounting.test.ts
-packages/agent/src/compact/__tests__/CompactionManager.loop-guards.test.ts
-packages/agent/src/compact/__tests__/PostCompactReinjector.test.ts
-packages/agent/src/compact/__tests__/compactErrors.test.ts
-packages/agent/src/compact/__tests__/contextWindow.test.ts
-packages/agent/src/compact/__tests__/historySanitize.test.ts
-packages/agent/src/compact/__tests__/imageParts.test.ts
-packages/agent/src/compact/__tests__/imageTruncationTransform.test.ts
-packages/agent/src/compact/__tests__/offloadCompress.test.ts
-packages/agent/src/compact/__tests__/projectionCompress.test.ts
-packages/agent/src/compact/__tests__/reformatCompress.test.ts
-packages/agent/src/compact/__tests__/shared.test.ts
-packages/agent/src/compact/__tests__/summaryGuard.test.ts
-packages/agent/src/compact/__tests__/summaryRetry.degenerate.test.ts
-packages/agent/src/compact/__tests__/summaryRetry.test.ts
-packages/agent/src/compact/__tests__/tokenBudgetCut.test.ts
 packages/agent/src/compact/compactErrors.ts
 packages/agent/src/compact/contextWindow.ts
 packages/agent/src/compact/historySanitize.ts
@@ -287,7 +262,6 @@ packages/agent/src/compact/imageParts.ts
 packages/agent/src/compact/index.ts
 packages/agent/src/compact/projectionCompress.ts
 packages/agent/src/compact/strategies/SessionMemoryCompactStrategy.ts
-packages/agent/src/compact/strategies/__tests__/SessionMemoryCompactStrategy.test.ts
 packages/agent/src/compact/strategies/index.ts
 packages/agent/src/compact/summaryGuard.ts
 packages/agent/src/compact/summaryRetry.ts
@@ -320,7 +294,6 @@ packages/agent/src/lifecycle/buildTaskNotification.ts
 packages/agent/src/lifecycle/mailboxBackgroundNotification.ts
 packages/agent/src/mentions/index.ts
 packages/agent/src/message/index.ts
-packages/agent/src/message/mailbox-attachment-context.test.ts
 packages/agent/src/message/mailbox-attachment-context.ts
 packages/agent/src/message/message-compaction-controller.ts
 packages/agent/src/message/message-factories.ts
@@ -330,8 +303,6 @@ packages/agent/src/message/message-source.ts
 packages/agent/src/message/runtime-context-adapters.ts
 packages/agent/src/message/threads.ts
 packages/agent/src/observability/cache-monitor.ts
-packages/agent/src/process/__tests__/permission-profile-bridge.test.ts
-packages/agent/src/process/__tests__/seed-token-usage-plan546.test.ts
 packages/agent/src/process/agent-process-entry.ts
 packages/agent/src/process/browser-backend.ts
 packages/agent/src/process/call-usage.ts
@@ -345,7 +316,6 @@ packages/agent/src/process/worker-protocol.ts
 packages/agent/src/process/workflow-runner.ts
 packages/agent/src/process/workflow-runtime-child.ts
 packages/agent/src/queue/index.ts
-packages/agent/src/session/__tests__/db-signature.test.ts
 packages/agent/src/session/bash-admission.ts
 packages/agent/src/session/bash-task-registry.ts
 packages/agent/src/session/bash-task-store.ts
@@ -357,7 +327,6 @@ packages/agent/src/session/title-generator.ts
 packages/agent/src/session/transcript-commands.ts
 packages/agent/src/session/transcript-md.ts
 packages/agent/src/session/turn-review.ts
-packages/agent/src/wake/__tests__/groupTurn.test.ts
 packages/agent/src/wake/cue.ts
 packages/agent/src/wake/epoch.ts
 packages/agent/src/wake/groupTurn.ts
@@ -366,7 +335,7 @@ packages/agent/src/wake/preemption.ts
 packages/agent/src/wake/queue.ts
 packages/agent/src/wake/types.ts
 
-[capability-adapter] (1032)
+[capability-adapter] (967)
 apps/desktop/src/main/config/__tests__/agent-id.test.ts
 apps/desktop/src/main/config/__tests__/agent-paths.test.ts
 apps/desktop/src/main/config/__tests__/agents-prompt.test.ts
@@ -633,7 +602,6 @@ packages/agent/src/agentsmd/nested-loader.ts
 packages/agent/src/agentsmd/stripSystemReminder.ts
 packages/agent/src/agentsmd/types.ts
 packages/agent/src/context/ContextLedger.ts
-packages/agent/src/context/__tests__/ContextLedger.test.ts
 packages/agent/src/context/contextual-user-fragment.ts
 packages/agent/src/context/os-context/index.ts
 packages/agent/src/hooks/builtin.ts
@@ -651,8 +619,6 @@ packages/agent/src/hooks/send-message-reminder.ts
 packages/agent/src/hooks/task-registry.ts
 packages/agent/src/hooks/types.ts
 packages/agent/src/journal/Journal.ts
-packages/agent/src/journal/__tests__/journal-plan445.test.ts
-packages/agent/src/journal/__tests__/journal.test.ts
 packages/agent/src/journal/types.ts
 packages/agent/src/mcp/apply.ts
 packages/agent/src/mcp/capability-catalog.ts
@@ -675,17 +641,6 @@ packages/agent/src/modes/engine/index.ts
 packages/agent/src/modes/engine/persistence.ts
 packages/agent/src/modes/engine/run-lifecycle-tracker.ts
 packages/agent/src/modes/engine/tracker.ts
-packages/agent/src/modes/goal/__tests__/coordinator-goal.test.ts
-packages/agent/src/modes/goal/__tests__/goal-changes.test.ts
-packages/agent/src/modes/goal/__tests__/goal-commands.test.ts
-packages/agent/src/modes/goal/__tests__/goal-config.test.ts
-packages/agent/src/modes/goal/__tests__/goal-evaluator.test.ts
-packages/agent/src/modes/goal/__tests__/goal-plan.test.ts
-packages/agent/src/modes/goal/__tests__/goal-plan553.test.ts
-packages/agent/src/modes/goal/__tests__/goal-reminders.test.ts
-packages/agent/src/modes/goal/__tests__/goal-stop-detector.test.ts
-packages/agent/src/modes/goal/__tests__/goal-summarizer.test.ts
-packages/agent/src/modes/goal/__tests__/goal-tools.test.ts
 packages/agent/src/modes/goal/goal-changes.ts
 packages/agent/src/modes/goal/goal-commands.ts
 packages/agent/src/modes/goal/goal-config.ts
@@ -698,16 +653,12 @@ packages/agent/src/modes/goal/goal-summarizer.ts
 packages/agent/src/modes/goal/goal-tools.ts
 packages/agent/src/modes/goal/goal-tracker.ts
 packages/agent/src/modes/index.ts
-packages/agent/src/modes/plan/__tests__/reminders.test.ts
 packages/agent/src/modes/plan/plan-file-path.ts
 packages/agent/src/modes/plan/plan-task-mode.ts
 packages/agent/src/modes/plan/plan-tracker.ts
 packages/agent/src/modes/plan/reminders.ts
 packages/agent/src/modes/registry.ts
 packages/agent/src/modes/research-mode.ts
-packages/agent/src/modes/research-mode/__tests__/research-fanout.test.ts
-packages/agent/src/modes/research-mode/__tests__/research-reminders.test.ts
-packages/agent/src/modes/research-mode/__tests__/research-tools.test.ts
 packages/agent/src/modes/research-mode/research-config.ts
 packages/agent/src/modes/research-mode/research-fanout.ts
 packages/agent/src/modes/research-mode/research-reminders.ts
@@ -748,13 +699,6 @@ packages/agent/src/modes/workflow/verify.ts
 packages/agent/src/modes/workflow/workflow-files.ts
 packages/agent/src/prompts/PromptSystem.ts
 packages/agent/src/prompts/PromptsRegistry.ts
-packages/agent/src/prompts/bot/__tests__/commsAndProfile.test.ts
-packages/agent/src/prompts/bot/__tests__/delegation.test.ts
-packages/agent/src/prompts/bot/__tests__/epoch.test.ts
-packages/agent/src/prompts/bot/__tests__/framework.test.ts
-packages/agent/src/prompts/bot/__tests__/memory.test.ts
-packages/agent/src/prompts/bot/__tests__/promptConfig.test.ts
-packages/agent/src/prompts/bot/__tests__/sections.test.ts
 packages/agent/src/prompts/bot/automations.ts
 packages/agent/src/prompts/bot/basicPrompt.ts
 packages/agent/src/prompts/bot/catalog.ts
@@ -776,13 +720,11 @@ packages/agent/src/prompts/bot/memory/usage.ts
 packages/agent/src/prompts/bot/profileUpdate.ts
 packages/agent/src/prompts/bot/roster.ts
 packages/agent/src/prompts/cache.ts
-packages/agent/src/prompts/configs/__tests__/botConfig.test.ts
 packages/agent/src/prompts/configs/bot.ts
 packages/agent/src/prompts/configs/code.ts
 packages/agent/src/prompts/configs/general.ts
 packages/agent/src/prompts/configs/research.ts
 packages/agent/src/prompts/constants/promptSections.ts
-packages/agent/src/prompts/dynamic/__tests__/skillsMetadata.test.ts
 packages/agent/src/prompts/dynamic/agentsMdSection.ts
 packages/agent/src/prompts/dynamic/environment.ts
 packages/agent/src/prompts/dynamic/environmentPreBuildHook.ts
@@ -828,8 +770,6 @@ packages/agent/src/skills/skillService.ts
 packages/agent/src/skills/skillsSync.ts
 packages/agent/src/skills/types.ts
 packages/agent/src/tool/AgentManagementTool/AgentManagementTool.ts
-packages/agent/src/tool/AgentManagementTool/__tests__/agent-management-tool.test.ts
-packages/agent/src/tool/AgentManagementTool/__tests__/discoverability.test.ts
 packages/agent/src/tool/AgentManagementTool/constants.ts
 packages/agent/src/tool/AgentManagementTool/index.ts
 packages/agent/src/tool/AppConnectionTool/approval-message.ts
@@ -838,7 +778,6 @@ packages/agent/src/tool/AppConnectionTool/index.ts
 packages/agent/src/tool/AppConnectorManageTool/AppConnectorManageTool.ts
 packages/agent/src/tool/AppConnectorManageTool/index.ts
 packages/agent/src/tool/ApplyPatchTool/ApplyPatchTool.ts
-packages/agent/src/tool/ApplyPatchTool/__tests__/ApplyPatchTool.test.ts
 packages/agent/src/tool/AskUserQuestionTool/AskUserQuestionTool.ts
 packages/agent/src/tool/AskUserQuestionTool/constants.ts
 packages/agent/src/tool/AskUserQuestionTool/prompt.ts
@@ -849,7 +788,6 @@ packages/agent/src/tool/BackgroundTaskTool/index.ts
 packages/agent/src/tool/BaseTool.ts
 packages/agent/src/tool/BashTool/BashTool.ts
 packages/agent/src/tool/BashTool/BashWorker.ts
-packages/agent/src/tool/BashTool/__tests__/safe-rm.test.ts
 packages/agent/src/tool/BashTool/constants.ts
 packages/agent/src/tool/BashTool/git-reminder.ts
 packages/agent/src/tool/BashTool/managed-bash.ts
@@ -896,8 +834,6 @@ packages/agent/src/tool/BrowserTool/input-dispatch.ts
 packages/agent/src/tool/BrowserTool/networkEnv.ts
 packages/agent/src/tool/BrowserTool/platform-adapters/types.ts
 packages/agent/src/tool/BrowserTool/platform-extractors/BaseExtractor.ts
-packages/agent/src/tool/BrowserTool/platform-extractors/__tests__/domestic-extractors.test.ts
-packages/agent/src/tool/BrowserTool/platform-extractors/__tests__/new-extractors.test.ts
 packages/agent/src/tool/BrowserTool/platform-extractors/_shared/public-api.ts
 packages/agent/src/tool/BrowserTool/platform-extractors/ali1688/index.ts
 packages/agent/src/tool/BrowserTool/platform-extractors/article/index.ts
@@ -973,7 +909,6 @@ packages/agent/src/tool/DuyaCliTool/index.ts
 packages/agent/src/tool/DuyaCliTool/prompt.ts
 packages/agent/src/tool/DuyaCliTool/runner.ts
 packages/agent/src/tool/EditTool/EditTool.ts
-packages/agent/src/tool/EditTool/__tests__/EditTool.test.ts
 packages/agent/src/tool/EditTool/prompt.ts
 packages/agent/src/tool/EnterPlanModeTool/EnterPlanModeTool.ts
 packages/agent/src/tool/EnterPlanModeTool/constants.ts
@@ -982,12 +917,8 @@ packages/agent/src/tool/ExitPlanModeTool/ExitPlanModeTool.ts
 packages/agent/src/tool/ExitPlanModeTool/constants.ts
 packages/agent/src/tool/ExitPlanModeTool/prompt.ts
 packages/agent/src/tool/GlobTool/GlobTool.ts
-packages/agent/src/tool/GlobTool/__tests__/GlobTool.test.ts
 packages/agent/src/tool/GlobTool/prompt.ts
 packages/agent/src/tool/GrepTool/GrepTool.ts
-packages/agent/src/tool/GrepTool/__tests__/GrepTool.sensitive.test.ts
-packages/agent/src/tool/GrepTool/__tests__/GrepTool.test.ts
-packages/agent/src/tool/GrepTool/__tests__/debug.test.ts
 packages/agent/src/tool/GrepTool/prompt.ts
 packages/agent/src/tool/GrepTool/sanitize.ts
 packages/agent/src/tool/ImageGenerateTool/ImageGenerateTool.ts
@@ -998,9 +929,7 @@ packages/agent/src/tool/ManageRoutineTool/ManageRoutineTool.ts
 packages/agent/src/tool/ManageRoutineTool/constants.ts
 packages/agent/src/tool/ManageRoutineTool/index.ts
 packages/agent/src/tool/MemoryWriteTool/MemoryWriteTool.ts
-packages/agent/src/tool/MemoryWriteTool/__tests__/memory-write-tool.test.ts
 packages/agent/src/tool/MessageSessionTool/MessageSessionTool.ts
-packages/agent/src/tool/MessageSessionTool/__tests__/MessageSessionTool.test.ts
 packages/agent/src/tool/MessageSessionTool/constants.ts
 packages/agent/src/tool/MessageSessionTool/index.ts
 packages/agent/src/tool/ModuleTool/ModuleTool.ts
@@ -1020,14 +949,9 @@ packages/agent/src/tool/PostToRoomTool/index.ts
 packages/agent/src/tool/PowerShellTool/PowerShellTool.ts
 packages/agent/src/tool/PowerShellTool/security.ts
 packages/agent/src/tool/ReactToMessageTool/ReactToMessageTool.ts
-packages/agent/src/tool/ReactToMessageTool/__tests__/react-to-message.test.ts
 packages/agent/src/tool/ReactToMessageTool/constants.ts
 packages/agent/src/tool/ReactToMessageTool/index.ts
 packages/agent/src/tool/ReadTool/ReadTool.ts
-packages/agent/src/tool/ReadTool/__tests__/ReadTool.concurrency.test.ts
-packages/agent/src/tool/ReadTool/__tests__/ReadTool.test.ts
-packages/agent/src/tool/ReadTool/__tests__/path-suggest.test.ts
-packages/agent/src/tool/ReadTool/__tests__/security.test.ts
 packages/agent/src/tool/ReadTool/path-suggest.ts
 packages/agent/src/tool/ReadTool/prompt.ts
 packages/agent/src/tool/ReadTool/schema.ts
@@ -1037,11 +961,9 @@ packages/agent/src/tool/SendMessageTool/SendMessageTool.ts
 packages/agent/src/tool/SendMessageTool/constants.ts
 packages/agent/src/tool/SendMessageTool/index.ts
 packages/agent/src/tool/SendToAgentTool/SendToAgentTool.ts
-packages/agent/src/tool/SendToAgentTool/__tests__/send-to-agent-tool.test.ts
 packages/agent/src/tool/SendToAgentTool/constants.ts
 packages/agent/src/tool/SendToAgentTool/index.ts
 packages/agent/src/tool/SessionSearchTool/SessionSearchTool.ts
-packages/agent/src/tool/SessionSearchTool/__tests__/SessionSearchTool.format.test.ts
 packages/agent/src/tool/SessionSearchTool/constants.ts
 packages/agent/src/tool/SessionSearchTool/index.ts
 packages/agent/src/tool/SessionSearchTool/prompt.ts
@@ -1053,11 +975,6 @@ packages/agent/src/tool/SkillTool/constants.ts
 packages/agent/src/tool/SkillTool/prompt.ts
 packages/agent/src/tool/StreamingToolExecutor.ts
 packages/agent/src/tool/SubagentTool/SubagentTool.ts
-packages/agent/src/tool/SubagentTool/__tests__/autoWakeAndKill.test.ts
-packages/agent/src/tool/SubagentTool/__tests__/constants.test.ts
-packages/agent/src/tool/SubagentTool/__tests__/continueParentWork.test.ts
-packages/agent/src/tool/SubagentTool/__tests__/subagentResult.test.ts
-packages/agent/src/tool/SubagentTool/__tests__/worktree.test.ts
 packages/agent/src/tool/SubagentTool/built-in/canvasAgent.ts
 packages/agent/src/tool/SubagentTool/built-in/codeReviewAgent.ts
 packages/agent/src/tool/SubagentTool/built-in/computerUseAgent.ts
@@ -1087,9 +1004,7 @@ packages/agent/src/tool/SwitchModeTool/index.ts
 packages/agent/src/tool/SwitchModeTool/modes.ts
 packages/agent/src/tool/SwitchModeTool/prompt.ts
 packages/agent/src/tool/TodoTool/TodoTool.ts
-packages/agent/src/tool/TodoTool/__tests__/TodoTool.test.ts
 packages/agent/src/tool/ToolCatalogTool/ToolCatalogTool.ts
-packages/agent/src/tool/ToolCatalogTool/__tests__/list-mode.test.ts
 packages/agent/src/tool/ToolExecutionPipeline.ts
 packages/agent/src/tool/ToolInvokeTool/ToolInvokeTool.ts
 packages/agent/src/tool/ToolInvokeTool/dispatcherFromRegistry.ts
@@ -1099,7 +1014,6 @@ packages/agent/src/tool/UpdateStateTool/UpdateStateTool.ts
 packages/agent/src/tool/UpdateStateTool/constants.ts
 packages/agent/src/tool/UpdateStateTool/index.ts
 packages/agent/src/tool/VisionTool/VisionTool.ts
-packages/agent/src/tool/VisionTool/__tests__/VisionTool.test.ts
 packages/agent/src/tool/WidgetRenderer/HeadlessWidgetRenderer.ts
 packages/agent/src/tool/WidgetRenderer/index.ts
 packages/agent/src/tool/WidgetRenderer/runVisualSelfReview.ts
@@ -1109,15 +1023,8 @@ packages/agent/src/tool/WidgetTool/WidgetTool.ts
 packages/agent/src/tool/WidgetTool/index.ts
 packages/agent/src/tool/WorkerPool.ts
 packages/agent/src/tool/WriteStage1PolicyTool/WriteStage1PolicyTool.ts
-packages/agent/src/tool/WriteStage1PolicyTool/__tests__/write-stage1-policy-tool.test.ts
 packages/agent/src/tool/WriteTool/WriteTool.ts
-packages/agent/src/tool/WriteTool/__tests__/WriteTool.test.ts
 packages/agent/src/tool/WriteTool/prompt.ts
-packages/agent/src/tool/__tests__/file-mutation-queue.test.ts
-packages/agent/src/tool/__tests__/file-read-state-448.test.ts
-packages/agent/src/tool/__tests__/file-snapshot.test.ts
-packages/agent/src/tool/__tests__/read-tool-truncation-448.test.ts
-packages/agent/src/tool/__tests__/task-verification.test.ts
 packages/agent/src/tool/bot-builtin.ts
 packages/agent/src/tool/builtin.ts
 packages/agent/src/tool/catalog-identity.ts
@@ -1145,9 +1052,6 @@ packages/agent/src/tool/stream-types.ts
 packages/agent/src/tool/task-verification.ts
 packages/agent/src/tool/types.ts
 packages/agent/src/tool/visibility-guard.ts
-packages/agent/src/utils/__tests__/notebook.test.ts
-packages/agent/src/utils/__tests__/path.test.ts
-packages/agent/src/utils/__tests__/processTreeKill.test.ts
 packages/agent/src/utils/attachment-context.ts
 packages/agent/src/utils/attachment-images.ts
 packages/agent/src/utils/bash/commands.ts
@@ -1571,7 +1475,7 @@ packages/agent/src/permissions/policy.ts
 packages/agent/src/permissions/rules.ts
 packages/agent/src/permissions/types.ts
 
-[host-ui] (437)
+[host-ui] (436)
 apps/desktop/src/main/cli/__tests__/bot-channels.test.ts
 apps/desktop/src/main/cli/__tests__/voice-env-report.test.ts
 apps/desktop/src/main/cli/auth.ts
@@ -1765,7 +1669,6 @@ apps/desktop/src/renderer/lib/providers/secret.ts
 apps/desktop/src/renderer/lib/providers/types.ts
 apps/desktop/src/renderer/main.tsx
 apps/desktop/src/renderer/vite-env.d.ts
-packages/agent/src/cli/__tests__/imageCmds.test.ts
 packages/agent/src/cli/banner.ts
 packages/agent/src/cli/colors.ts
 packages/agent/src/cli/config/db-config.ts
@@ -2010,7 +1913,7 @@ packages/gateway/src/types.ts
 packages/gateway/src/utils/index.ts
 packages/gateway/src/utils/mime.ts
 
-[unclassified] (323)
+[unclassified] (182)
 apps/desktop/src/main/__tests__/d71-kill-recovery.test.ts
 apps/desktop/src/main/__tests__/d71-kill-worker.mjs
 apps/desktop/src/main/__tests__/eval-baseline-comparison.test.ts
@@ -2121,149 +2024,8 @@ packages/agent-runtime/test/transport-boundary-scale.test.ts
 packages/agent-runtime/test/transport-equivalence.test.ts
 packages/agent/skills/.system/memory-search/scripts/memory-rag-lib.mjs
 packages/agent/skills/.system/memory-search/scripts/memory-search.mjs
-packages/agent/tests/BashTool.contract.spec.ts
-packages/agent/tests/PowerShellSecurity.spec.ts
-packages/agent/tests/ShellIntelligence.spec.ts
-packages/agent/tests/ShellProviders.spec.ts
-packages/agent/tests/agentsmd/loader.test.ts
-packages/agent/tests/agentsmd/stripSystemReminder.test.ts
-packages/agent/tests/app-connection-tool.test.ts
-packages/agent/tests/bash-admission.test.ts
-packages/agent/tests/cli-control-plane/doctor.test.ts
-packages/agent/tests/cli-control-plane/harness.ts
-packages/agent/tests/cli-control-plane/headless-server.cjs
-packages/agent/tests/cli-control-plane/installCli.test.ts
-packages/agent/tests/cli-control-plane/mcp.test.ts
-packages/agent/tests/cli-control-plane/provider.test.ts
-packages/agent/tests/cli-control-plane/seed-db.cjs
-packages/agent/tests/cli-control-plane/session-control-plane.test.ts
-packages/agent/tests/cli-control-plane/skill.test.ts
-packages/agent/tests/cli-control-plane/skillWrite.test.ts
-packages/agent/tests/config.test.ts
-packages/agent/tests/debug/ConversationTrace.test.ts
-packages/agent/tests/helpers/setup.ts
-packages/agent/tests/helpers/streamTestHelper.ts
-packages/agent/tests/integration/DuyaAgent.test.ts
-packages/agent/tests/integration/RealTasks.test.ts
 packages/agent/tests/integration/mcp-conformance.test.ts
-packages/agent/tests/mcp/runtime-closure.test.ts
-packages/agent/tests/mocks/fs/mockFs.ts
-packages/agent/tests/mocks/llm/MockLLMClient.ts
-packages/agent/tests/mocks/sqlite/inMemoryDb.ts
-packages/agent/tests/permissions/PermissionResult.test.ts
-packages/agent/tests/permissions/connectorApproval.test.ts
-packages/agent/tests/permissions/permissions.test.ts
-packages/agent/tests/permissions/securityPolicy.test.ts
-packages/agent/tests/permissions/sessionGrantScope.test.ts
-packages/agent/tests/process/agent-entry.test.ts
 packages/agent/tests/process/fixtures/real-worker.mjs
-packages/agent/tests/runtime-config-bridge.test.ts
-packages/agent/tests/setup.ts
-packages/agent/tests/skills/agent-scoped.test.ts
-packages/agent/tests/skills/bundled-user-collision.test.ts
-packages/agent/tests/skills/conditionalSkills.test.ts
-packages/agent/tests/skills/continuous-upgrade.test.ts
-packages/agent/tests/skills/envVarCollector.test.ts
-packages/agent/tests/skills/fingerprint.test.ts
-packages/agent/tests/skills/loader-scan.test.ts
-packages/agent/tests/skills/rootSnapshotCache.test.ts
-packages/agent/tests/skills/snapshotIntegration.test.ts
-packages/agent/tests/skills/system-skills.test.ts
-packages/agent/tests/skills/user-dir-system-skip.test.ts
-packages/agent/tests/timeouts.test.ts
-packages/agent/tests/tool/BashTool/soft-yield.test.ts
-packages/agent/tests/tool/BashTool/timeout-contract.test.ts
-packages/agent/tests/tool/BashTool/truncateOutput.test.ts
-packages/agent/tests/tool/byte-budget.test.ts
-packages/agent/tests/tool/conditional-activation.test.ts
-packages/agent/tests/tool/tool-type-fields.test.ts
-packages/agent/tests/unit/AgentTool/AgentTool.test.ts
-packages/agent/tests/unit/AgentTool/agentLifecycleBridge.test.ts
-packages/agent/tests/unit/AgentTool/builtInAgents.test.ts
-packages/agent/tests/unit/AgentTool/forkSubagent.test.ts
-packages/agent/tests/unit/AgentTool/prompt.test.ts
-packages/agent/tests/unit/Compact/CompactionManager.test.ts
-packages/agent/tests/unit/Compact/compaction-fidelity.test.ts
-packages/agent/tests/unit/SessionSearchTool.test.ts
-packages/agent/tests/unit/StreamingToolExecutor.test.ts
-packages/agent/tests/unit/ToolRegistry.test.ts
-packages/agent/tests/unit/agent-helpers.test.ts
-packages/agent/tests/unit/agent-profile/AgentProfileService.test.ts
-packages/agent/tests/unit/agent-profile/ToolFilter.test.ts
-packages/agent/tests/unit/agent-profile/config-agents.test.ts
-packages/agent/tests/unit/agent-profile/identity.test.ts
-packages/agent/tests/unit/agent-profile/subagentProfilePrompt.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.allowed-tools.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.omitAgentsMd.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.plan315.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.plan475-compact-rebase.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.plan486.test.ts
-packages/agent/tests/unit/agent/DuyaAgent.thinking-replay.test.ts
-packages/agent/tests/unit/agent/TurnEventDispatcher.test.ts
-packages/agent/tests/unit/agent/compaction-coordinator.test.ts
-packages/agent/tests/unit/agent/duya-agent-assemble.test.ts
-packages/agent/tests/unit/agent/nestedInjection.test.ts
-packages/agent/tests/unit/agent/permissions-gate.test.ts
-packages/agent/tests/unit/agent/reminder-sources.test.ts
-packages/agent/tests/unit/agent/run-manifest-verification.test.ts
-packages/agent/tests/unit/agent/session-finalizer.test.ts
-packages/agent/tests/unit/agent/turn-stream-runner.test.ts
-packages/agent/tests/unit/agentsmd/loader.test.ts
-packages/agent/tests/unit/agentsmd/nested-loader.test.ts
-packages/agent/tests/unit/agentsmd/release-reinject.test.ts
-packages/agent/tests/unit/db-persistence-round-trip.test.ts
-packages/agent/tests/unit/fts-identifier-split.test.ts
-packages/agent/tests/unit/hooks/builtin-loop-hooks.test.ts
-packages/agent/tests/unit/hooks/loop-bus.test.ts
-packages/agent/tests/unit/lifecycle/BackgroundAgentLifecycle.test.ts
-packages/agent/tests/unit/lifecycle/CleanupRegistry.test.ts
-packages/agent/tests/unit/lifecycle/OutputFileWriter.test.ts
-packages/agent/tests/unit/lifecycle/ProgressTracker.test.ts
-packages/agent/tests/unit/lifecycle/buildTaskNotification.test.ts
-packages/agent/tests/unit/live-context-usage-tracker.test.ts
-packages/agent/tests/unit/llm/attachment-context.test.ts
-packages/agent/tests/unit/llm/inferProvider.test.ts
-packages/agent/tests/unit/memory-state/system_log.test.ts
-packages/agent/tests/unit/message-compaction-controller.test.ts
-packages/agent/tests/unit/permissions/autoModeReadOnlyShell.test.ts
-packages/agent/tests/unit/prompts/code/conditionalSections.test.ts
-packages/agent/tests/unit/prompts/code/rules.test.ts
-packages/agent/tests/unit/prompts/code/workingWithTheUser.test.ts
-packages/agent/tests/unit/prompts/fileLinkSection.test.ts
-packages/agent/tests/unit/prompts/hbs-renderer.test.ts
-packages/agent/tests/unit/prompts/hbs/hbs-prompt-system.test.ts
-packages/agent/tests/unit/prompts/hbs/memory-1d-rest.test.ts
-packages/agent/tests/unit/prompts/hbs/session-guidance-1d-rest.test.ts
-packages/agent/tests/unit/prompts/modules/module-registry.test.ts
-packages/agent/tests/unit/prompts/modules/project-modules.test.ts
-packages/agent/tests/unit/prompts/modules/research-modules.test.ts
-packages/agent/tests/unit/prompts/omitAgentsMdPreBuildHook.test.ts
-packages/agent/tests/unit/prompts/projectContinuity.test.ts
-packages/agent/tests/unit/prompts/prompt-ledger.test.ts
-packages/agent/tests/unit/prompts/promptProfileSelection.test.ts
-packages/agent/tests/unit/prompts/promptStructure.test.ts
-packages/agent/tests/unit/prompts/visualVerification.test.ts
-packages/agent/tests/unit/runtime-context-adapters.test.ts
-packages/agent/tests/unit/security/bashToolSecurity.test.ts
-packages/agent/tests/unit/security/skillScanner.test.ts
-packages/agent/tests/unit/tool-harness.test.ts
-packages/agent/tests/unit/tool/builtin-surface.test.ts
-packages/agent/tests/unit/tool/orchestration/dependency-graph-orchestrator.test.ts
-packages/agent/tests/unit/tool/orchestration/dependency-graph-serialisation.test.ts
-packages/agent/tests/unit/tool/tool-dependencies.test.ts
-packages/agent/tests/unit/tool/tool-execution-pipeline.test.ts
-packages/agent/tests/unit/tools/ReadTool.test.ts
-packages/agent/tests/unit/tools/SendArtifactTool.test.ts
-packages/agent/tests/unit/tools/fileReadState.test.ts
-packages/agent/tests/unit/tools/writeEditFlow.test.ts
-packages/agent/tests/unit/wake-epoch.test.ts
-packages/agent/tests/unit/wake-preemption.test.ts
-packages/agent/tests/unit/wake-queue.test.ts
-packages/agent/tests/utils/bash/commands.test.ts
-packages/agent/tests/utils/bash/shellQuote.test.ts
-packages/agent/tests/utils/path.test.ts
-packages/agent/tests/utils/shell/intelligence.test.ts
-packages/agent/tests/vitest.config.ts
 packages/ai/test/anthropic-robustness.test.ts
 packages/ai/test/anthropic-thinking.test.ts
 packages/ai/test/api/bedrock-converse.test.ts
