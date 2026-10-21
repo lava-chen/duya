@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="./assets/readme/hero.gif" width="100%" alt="Duya — a local-first desktop AI agent that turns research, files, and tool output into an editable project canvas">
+  <img src="./assets/readme/hero.gif" width="100%" alt="Duya — open-source agent infrastructure with Desktop, TUI, and Web interfaces">
 </p>
 
 <h1 align="center">Duya</h1>
 
 <p align="center">
-  A local-first desktop AI agent that works inside your projects while keeping its tools, changes, and permission decisions visible.
+  Open-source, local-first agent infrastructure for Desktop, TUI, and Web — one runtime, multiple ways to work.
 </p>
 
 <p align="center">
@@ -17,11 +17,11 @@
   </a>
 </p>
 
-> **Public beta:** Duya is usable today, but onboarding, packaged builds, and some experimental workflows still need broader real-world testing. Expect visible rough edges and frequent releases.
+> **Project status:** Desktop is in public beta. The terminal TUI is under active development, and the Web client is an early-stage, local-only interface. These surfaces share a foundation but do not yet have feature parity.
 
-Duya is for people who want an agent to do more than answer in a chat box. Open a project, give it a task, and let it research the web, inspect files, run commands, and create useful outputs without hiding the execution behind a remote job.
+Duya is an open-source Agent foundation, not just a desktop chat client. The monorepo separates the agent protocol, reasoning and execution engine, Host orchestration, tools, persistence, and client presentation. The goal is to run project-aware agents through different interfaces without rebuilding the agent for each one.
 
-"Local-first" describes the workspace and application state, not every model call. Conversations, sessions, tool history, settings, and project references are kept on your computer. When you use a remote model provider, the prompt and the context needed for that request are sent to that provider. You can also connect a local Ollama instance when you want model inference to stay on your machine.
+"Local-first" refers to local Host/workspace operation and state, not a guarantee of offline execution. Remote model providers receive the context needed for model requests; browser and connected tools make their own network calls. You can use local Ollama for local inference. The Web client currently connects only to a loopback Host; it is not a hosted multi-user service.
 
 ---
 
@@ -45,16 +45,23 @@ You can send a correction or new constraint while the task is still running. Duy
 
 ---
 
-## Why a desktop agent?
+## One agent foundation, three interfaces
 
-- **Work where the files already are.** Choose a project folder and give the agent access to the context it needs instead of uploading the whole workspace to a separate environment.
-- **See the work, not just the answer.** Browser actions, file operations, terminal output, permission requests, and generated artifacts stay attached to the conversation.
-- **Keep control during long tasks.** Interrupt a run, add instructions, switch permission modes, or continue later from locally persisted session history.
-- **Bring your own model.** Configure a hosted provider, an OpenAI- or Anthropic-compatible endpoint, or local Ollama, then choose which models are available in the app.
+| Interface | Role | Current status |
+| --- | --- | --- |
+| **Desktop** (`apps/desktop`) | Electron workbench for chat, project files, tool activity, previews, and permissions | Public beta; the most complete user-facing path |
+| **TUI** (`packages/cli`) | Terminal chat and CLI control plane using the Host API | Active development; runnable from the repository |
+| **Web** (`apps/web`) | Browser client mounting the shared React UI through a local BFF | Early-stage, loopback-only; not a remote deployment |
+
+All three build on a shared set of packages: **Agent Protocol → Agent Core / Runtime → Host → clients**. The Host manages runs, workers, permissions, and event transport; client interfaces present and control that work. Each surface has different maturity and capabilities today.
+
+Duya also exposes extension points through tool capabilities, Skills, MCP, and its evolving plugin system. See [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for source-level ownership and [apps/web/README.md](./apps/web/README.md) for Web limitations.
 
 ---
 
 ## What can Duya do?
+
+The following describes capabilities in the project, primarily exposed through the Desktop workbench. Not every feature is available in TUI and Web yet.
 
 <img src="./assets/readme/section-what.svg" width="100%" alt="What can Duya do? Browser, files, shell, canvas, and MCP capabilities">
 
@@ -90,7 +97,9 @@ Conductor is an experimental project canvas for documents, shapes, tables, links
 
 ## Quick start
 
-### 1. Download a beta build
+### Desktop: install the public beta
+
+#### 1. Download a beta build
 
 Get the latest package from [GitHub Releases](https://github.com/lava-chen/duya/releases).
 
@@ -100,7 +109,7 @@ Get the latest package from [GitHub Releases](https://github.com/lava-chen/duya/
 | macOS Intel / Apple silicon | `.dmg` | Available, with less smoke-test coverage |
 | Linux | `.AppImage`, `.deb`, or `.rpm` | Available, with less smoke-test coverage |
 
-### 2. Configure a model
+#### 2. Configure a model
 
 In the provider settings, choose one of these paths:
 
@@ -109,13 +118,34 @@ In the provider settings, choose one of these paths:
 
 Duya includes presets for common providers and also accepts compatible custom endpoints. Provider availability, model access, pricing, and data handling remain subject to the provider you choose.
 
-### 3. Open a project
+#### 3. Open a project
 
 Choose the folder Duya should work in. This folder becomes the task's project context and default working directory for file search, edits, commands, references, and generated outputs.
 
-### 4. Run the first task
+#### 4. Run the first task
 
 Use the end-to-end research prompt above. A successful first run should show browser activity in the conversation and produce a Markdown note inside the selected project.
+
+### TUI: run from source
+
+```bash
+npm install
+npm run build:cli-dev
+npm run dev:tui
+```
+
+The TUI starts an ephemeral local Host by default. For other CLI commands, see [`packages/cli`](./packages/cli) and the [development guide](./docs/development/README.md). This is a development workflow, not a promise of a separately published CLI package.
+
+### Web: connect to a local Host
+
+The Web client is local-only, requires a running standalone Host (`duya serve` from an available CLI), and does not offer remote authentication or hosting:
+
+```bash
+npm run build:web-app
+npm run web-app
+```
+
+See [apps/web/README.md](./apps/web/README.md) for Host discovery, configuration, and current acceptance-test limitations.
 
 ---
 
@@ -123,7 +153,7 @@ Use the end-to-end research prompt above. A successful first run should show bro
 
 <img src="./assets/readme/section-privacy.svg" width="100%" alt="Privacy and control with permission prompts enabled">
 
-Duya keeps application state local, but local-first is not the same as offline or end-to-end encrypted.
+Duya is designed around a local Host and local persistence, but local-first is not the same as offline or end-to-end encrypted. Exact storage and credential handling vary by surface; the details below primarily describe Desktop.
 
 ### What stays on your computer
 
@@ -152,32 +182,35 @@ Tool calls remain visible in the conversation, and switching to a less restricti
 
 ## Architecture
 
-<img src="./assets/readme/workflow.svg" width="100%" alt="Duya architecture overview">
+<img src="./assets/readme/workflow.svg" width="100%" alt="Duya Desktop workflow and local agent execution" />
 
-Duya separates responsibilities so one chat loop does not own the entire application:
+Duya's **shared Agent foundation** is independent of any one interface:
 
-- The **renderer** presents chat, tool cards, project panels, previews, and canvases.
-- The **Electron main process** owns local persistence, application services, IPC, and agent-process lifecycle.
-- **Agent workers** run in child processes and communicate through the local Agent Server and IPC boundaries.
-- Browser, file, shell, Skill, MCP, memory, and canvas capabilities are exposed as tools rather than hidden side effects.
+- **`@duya/agent-protocol`** defines typed events, run contracts, and wire formats.
+- **`@duya/agent-core`** owns pure run reasoning; **`@duya/agent-runtime`** executes agent turns and emits run events.
+- **`@duya/host`** owns run orchestration, worker lifecycle, tool registration, and local HTTP/SSE control paths.
+- **`@duya/client-core`** provides transport-neutral state models; **`@duya/ui`** provides shared React presentation for Desktop and Web.
+- **`apps/desktop`**, **`packages/cli`**, and **`apps/web`** implement the Electron, terminal, and browser entry points respectively.
+- Browser, filesystem, shell, MCP, plugin, and other capabilities plug into the Host/runtime stack rather than defining the product boundary.
 
-This process separation improves interruption, recovery, and session isolation. It is not a promise of a hardened operating-system sandbox on every platform.
+Agent execution can use child processes with event and permission boundaries. This is not a guarantee of a hardened OS sandbox on every platform.
 
-Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the package map.
+Core technologies include TypeScript, Node.js, React 19, Electron, SQLite / better-sqlite3, HTTP + SSE, and worker processes. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the authoritative package and data-flow details.
 
 ---
 
-## Beta status and known limits
+## Maturity and known limits
 
-Duya is still a public beta. Before relying on it for sensitive or irreplaceable work, keep normal backups and review the selected permission mode.
+Duya is evolving rapidly. The Desktop app is a public beta, while TUI and Web are still being hardened:
 
-Current limits include:
+- Desktop onboarding, packaged upgrades, and macOS/Linux releases need broader smoke testing.
+- TUI runs against a local Host; command support and user experience continue to evolve.
+- Web currently binds to `127.0.0.1`, uses a local BFF, and has **no remote-access authentication**. Full worker/browser-chat and refresh-recovery acceptance still need verification.
+- Conductor and advanced workspace workflows remain experimental.
+- Process separation and permission gates are not equivalent to universal sandbox security.
+- Hosted model providers determine their own availability, pricing, and retention policies.
 
-- First-run onboarding and packaged upgrade paths still need broader real-user testing.
-- macOS and Linux packages have less smoke-test coverage than the Windows build.
-- Conductor and several advanced workspace workflows remain experimental.
-- Process isolation is implemented, but sandbox guarantees and tool restrictions vary by platform and configuration.
-- Provider behavior, availability, cost, and retention policies are controlled by the provider you connect.
+Keep backups for sensitive work and review tool permissions before running an agent.
 
 ---
 
@@ -186,6 +219,8 @@ Current limits include:
 ```bash
 npm install
 npm run electron:dev   # start Vite and Electron
+npm run dev:tui        # terminal UI (run build:cli-dev first)
+npm run build:web-app  # build the local Web client
 npm run electron:build # build the desktop application
 npm run typecheck:all  # type-check every workspace
 npm run test           # run unit tests
@@ -209,6 +244,8 @@ packages/capabilities/ Tool implementations: filesystem, shell, browser, MCP
 packages/agent/        Legacy shell (retirement in progress)
 apps/desktop/          Electron app: main process, preload, renderer shell
 apps/web/              Browser client for the standalone Host
+packages/cli/           CLI control plane and terminal TUI
+packages/client-core/   Shared surface state models
 scripts/               Build, bundle, packaging, and diagnostics
 docs/                  Architecture, execution plans, and release notes
 ```
