@@ -1,36 +1,48 @@
 # CI 提速与测试瘦身
 
 状态：active · 负责人：mavis 会话 · 更新：2026-10-21
-分支：codex/ci-speed-and-test-diet · worktree：E:\Projects\duya\.claude\worktrees\ci-speed-diet · base：577c7749 · owner：mavis
+分支：codex/ci-speed-and-test-diet（性能与质量）· codex/agent-test-retirement（测试退役，**独立 PR 单独审查**）
+worktree：E:\Projects\duya\.claude\worktrees\ci-speed-diet · E:\Projects\duya\.claude\worktrees\agent-test-retirement
+base：5b12f721 · owner：mavis
 
 ## 目标与边界
 
-普通 PR 的 CI 从 43 分钟降到 15 分钟内；退役包不再占用测试资源；矩阵不再声称它没有的覆盖。
-允许修改：`.github/workflows/test.yml`、`scripts/ci/**`、`vitest.config.ts`、`packages/agent/tests/**`、
-`packages/agent/src/**/*.test.ts`、`e2e/**`、`evals/agent/matrix/rows.ts`、架构 census 与 baseline。
+普通 PR 的 CI 从 43 分钟降到 15 分钟内。
+
+**分成两个 PR 的理由**：删除 `packages/agent` 的 291 个测试文件是一次**测试体系迁移**，
+需要单独审查覆盖率与迁移依据，不能混在性能优化里一起评审。
+
+| PR | 内容 | 审查重点 |
+| --- | --- | --- |
+| #339（本文档） | CI 并行化、manifest 分级、E2E 三处修正、并行暴露的测试隔离修复 | 性能与正确性 |
+| 独立 PR | 删除 `packages/agent` 测试套件 + 矩阵重指 + 架构期望值重 pin | 覆盖是否丢失 |
+
+允许修改（#339）：`.github/workflows/test.yml`、`scripts/ci/**`、`e2e/**`、
+`packages/host/tests/**`、`packages/ui/src/components/layout/app-sidebar.tsx`。
 本次不处理：`packages/agent` 源码本身、E2E 复用单次 Electron 启动、typecheck 依赖图拆分、
 最慢 7 个测试文件的内部重构。
 
 ## 验收
 
 - `npm run ci:test-scope` 对纯元数据 `package.json` 改动不再返回 `full`。
-- 并行与串行两次全量 vitest 的失败文件集合一致（并行不得引入新失败）。
 - `npm run check:test-coverage`、`npm run architecture:check` 退出 0。
-- `packages/agent` 下只剩 MCP conformance 门禁与 real-worker fixture。
 - CI 上不得新增红：相对同一 base 的对照 run，本 PR 的失败文件集合不得出现新增项。
+- （测试退役 PR 另计）`packages/agent` 下只剩 MCP conformance 门禁与 real-worker fixture。
 
 ## 进度
 
 - [x] 基线：串行 23分23秒 / 并行 4分20秒，两次失败集合对比（并行仅新增 1 个超时用例）
 - [x] W1 根 `package.json` 元数据改动不再升级为全量 unit + E2E
 - [x] W2 CI 去掉全局 `--no-file-parallelism`，改为 `--maxWorkers=2`
-- [x] W3 删除 `packages/agent` 291 个测试文件，同步 include globs / slice-census / 架构 baseline
 - [x] W4 清理低价值测试：删除调试性质 E2E、修正 macOS 专属断言、修正 conductor 入口
-- [x] 矩阵重指：28 条引用改指继任者，19 条无继任者的引用移除，10 行降级为 `unsupported`
 - [x] 验证：改动后全量 vitest、typecheck:all、architecture:check
 - [x] CI 归因：以 PR #338（同 base、无代码改动、`test` job 真跑全量）为对照做双向差集
 - [x] 修并行暴露的两个测试隔离缺陷（`task-store.test.ts`、`worker-transport-write-queue.test.ts`）
-- [x] 架构期望值 `module-dependency` 重 pin 127 → 123（归属按载体文件逐条证明）
+- [x] 拆分：测试退役（含矩阵重指、架构期望值重 pin）移到独立 PR，单独审查
+
+> 拆分前在本分支完成、现已移到 `codex/agent-test-retirement` 的工作：
+> 删除 `packages/agent` 291 个测试文件、矩阵 28 条引用重指、架构期望值 127 → 123。
+> 下文的"发现与决策"仍记录它们的结论，供两个 PR 共同引用。
 
 ## 发现与决策
 
@@ -40,25 +52,26 @@
 - 并行只引入 1 个新失败：`coalescing-throughput.test.ts` 的 10 虚拟分钟场景在默认 10s 预算下超时
   （实测 13s，与并行无关，串行那次是侥幸通过）→ 给该用例显式 30s 预算。
 - `packages/agent` 占 281/1459 个被跟踪测试文件（19%），且是 AGENTS.md 标注的退役层。
-  删除 291 个（146 个 src 内联 + 135 个 tests/ + 11 个测试基建，保留 2 个文件）。
+  删除 291 个（146 个 src 内联 + 135 个 tests/ + 11 个测试基建，保留 2 个文件）。**（独立 PR）**
 - 保留两件：MCP conformance L1–L9（AGENTS.md 写明的门禁）、`real-worker.mjs`
   （agent-runtime 的传输测试 spawn 它，且它 import agent 的构建产物，搬走会产生新的架构违规边）。
-- `slice-census.txt` 是冻结的逐文件清单，删文件必须同步维护，否则门禁报漂移。
+- `slice-census.txt` 是冻结的逐文件清单，删文件必须同步维护，否则门禁报漂移。**（独立 PR）**
 - 矩阵 `rows.ts` 在 HEAD 上就有 27 个引用文件已不存在（#311/#337 迁移遗留）。
-  删 agent 测试会把缺失数推到 41；重指 28 条引用后**降到 0**，门禁由红转绿。
+  删 agent 测试会把缺失数推到 41；重指 28 条引用后**降到 0**，门禁由红转绿。**（独立 PR）**
 - 12 个契约的继任者"无人测"是**既有洞**：它们的实现早已迁到 host/capabilities，迁走时就没人测。
-  这 10 个矩阵行因此降级为 `unsupported` 并在 `reason` 里写明缺口与归属模块。
+  这 10 个矩阵行因此降级为 `unsupported` 并在 `reason` 里写明缺口与归属模块。**（独立 PR）**
 - conductor E2E 失败的根因：主导航（conductor 入口）只在 sidebar 的 **Work tab** 渲染，
   而应用默认停在 Bots tab → 三个 spec 各自白等 20 秒。修法是共享 helper + 给 Work tab 补 testid。
 - `e2e/ipc/computer-use-permissions.spec.ts` 无条件断言 `platform === 'darwin'`，
   而 CI 的 E2E 跑在 ubuntu → 必然失败。TCC 是 macOS 专属契约，改为平台限定。
 - **master 的 run 不能用作 CI 归因对照**：CI 分流（#327）后 push 到 master 时 scope 为空，
-  `test`/`build` job 被 skip，近期 3 条 master run 全部如此 → 绿色是假证据。
-  合法对照是 PR #338：同一 base `577c7749`、只改文档、`test` job 真跑全量（1457 文件 / 95 失败）。
+  `test`/`build` job 被 skip，实测近 12 条 master run 全部如此 → 绿色是假证据。
+  单元测试的合法对照是 PR #338：同一 base `577c7749`、只改文档、`test` job 真跑全量（1457 文件 / 95 失败）。
+  E2E 在 master 上无对照，用 PR #333 的 run（最后一条真跑过 E2E 的 run）。
 - 删 agent 测试连带让 `selfTest.module-dependency` 少 4 条（127 → 123）。按**载体文件**在
   base 树与 HEAD 树之间做差集证明：那 4 条分属 3 个被删文件，**仍然存在的文件违规数变化为 0**
   → 解析器没漏看，债是被删掉的。关系式对齐：base 127+2777=2904，HEAD 123+2639=2762=边总数。
-  `.architecture-baseline.json` 未重录（2785 指纹、0 失效，那 4 个早已不在里面）。
+  `.architecture-baseline.json` 未重录（2785 指纹、0 失效，那 4 个早已不在里面）。**（独立 PR）**
 - 并行暴露的两个红都是**测试隔离缺陷**，不是产品缺陷：
   `task-store.test.ts` 的 `withTempDir` 在 Promise settle 前删目录（异步读被删 → store 返回 `[]`）；
   `worker-transport-write-queue.test.ts` 的被测模块把 `isDraining` 放在模块作用域，前一个用例
@@ -86,10 +99,17 @@
 
 ## 接续 / 结果
 
-实现完成并已提交（6 个 commit），PR #339 已开：
-https://github.com/lava-chen/duya/pull/339
+PR #339（性能与质量，6 个 commit）：https://github.com/lava-chen/duya/pull/339
+独立 PR（测试退役，2 个 commit）：分支 `codex/agent-test-retirement`，单独审查覆盖率与迁移依据。
+
 回收：未回收（PR 未集成，未经授权不合并）。
-下一步：CI 全量 run 通过后由用户决定是否合并。
+
+CI 归因结论（相对对照 run 的双向差集）：
+
+| | 新增红 | 不再红 | 既有红 |
+| --- | --- | --- | --- |
+| 单元测试 | **0** | 36 | 59 |
+| E2E | **0** | 2 | 15 |
 
 遗留（已写入 PR body 的"本次不做"）：
 最慢 7 个测试文件的内部重构、E2E 复用单次 Electron 启动、`typecheck:all` 按依赖图拆分、
