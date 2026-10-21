@@ -51,4 +51,4 @@
 
 ## 接续 / 结果
 
-已提交 `c1887b9`，已推送分支并创建 draft PR [#340](https://github.com/lava-chen/duya/pull/340)；未合并。当前 PR head 为 `c1887b9`，目标 `master` 已前进到 `5b12f72`；两侧自原始 base 以来修改的路径无交集，GitHub 报告可合并。下一步等待必需 review 与 CI，并由获授权的集成者决定是否合并；保留 managed worktree 与本地 ignored 材料。
+实现提交 `c1887b9`，计划状态已另行提交并推送。draft PR [#340](https://github.com/lava-chen/duya/pull/340) 未合并。2026-10-21 检查时，PR head 为 `2ba27ce`、目标 `master` 为 `5b12f72`；两侧自原始 base 以来修改的路径无交集，GitHub 报告可合并；该 head 的 `Test` workflow 正在运行。继续前先核对 PR 最新 head、必需 review 与 CI；由获授权的集成者决定是否合并。保留 managed worktree 与本地 ignored 材料。
