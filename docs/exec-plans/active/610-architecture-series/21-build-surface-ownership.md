@@ -64,6 +64,12 @@
 
 PR CI 首次失败在 "Plan tracking table matches the tree (T02)"：`19-fast-track-queue.md` 的 T01b 行引用了改名前的 `scripts/build-agent-bundle.mjs`，门禁校验文件引用必须存在于树中。已随 41106be9 改为新路径，本地 `plan-sync-check --strict` 转 OK。
 
+PR CI 第二次失败在 build job 的 "Build application"：renderer 经 node_modules 解析 `@duya/input-completion` 与 `@duya/client-core`，两者需要已 emit 的 dist，闭包里没有 → vite 无法解析入口。已随 153b4078 补入。
+
+PR CI 第三次失败在 build job 的 E2E 步骤：`Gateway entry not found: packages/gateway/dist/index.js`（desktop 运行时 spawn gateway 进程），以及 `packages/voice/dist/` 是 electron-builder 的打包资源源。已随 d4ad468e 把 `@duya/gateway` 与 `@duya/voice` 补入闭包；闭包最终 18 包。本地复跑整条 `build:desktop:deps → bundle:worker → build:cli-bundle → bundle:gateway → vite build → build-electron` 全绿。
+
+CI 最终状态（run 39585013816）：`architecture` success、`test scope` success、`build` job 的 "Build application" success，失败发生在 "Run affected Electron E2E tests"（17 个 UI 用例：conductor-canvas / conductor-pan-zoom / ui-states）。**该失败是仓库既有基线**：dependabot 的 vite 升级 PR（run 39557329938，只改依赖版本、不碰任何构建脚本）失败在完全相同的一批用例上；`codex/ci-speed-and-test-diet`、`codex/public-tree-cleanup` 同样失败在同一步。master 的 push run（39557045222）里 build/test 是 skipped，无 E2E 基线可比。用户授权在评估该基线失败后直接合并。
+
 ## 发现与决策（补充，实施期）
 
 - **BashWorker 入口缺插件是"bundle:agent 必须前置 build:packages"的真正原因**：`build-agent-bundle.mjs` 的主入口（worker-entry）挂了 `workspacePublicSources` 插件（源码解析），但 BashWorker 第二入口没挂，靠 node_modules 解析到 `dist/*.js`。本次给第二入口也挂上插件，两个入口真正 dist-independent（见发现 1），`bundle:worker` 不再需要任何前置构建。
