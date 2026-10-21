@@ -1,19 +1,47 @@
 // Plan 583 / ISS-10: the stdout write queue must actually be bounded.
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
-import { sendEvent } from '../src/worker-transport.js';
+import type { sendEvent as SendEvent } from '../src/worker-transport.js';
 
-const originalWrite = process.stdout.write.bind(process.stdout);
+/**
+ * `worker-transport.ts` keeps its queue and its in-flight flag at module
+ * scope. That state has to be fresh per case: a case that leaves the pump
+ * parked on a `drain` event leaves `isDraining` true, and the next case's
+ * `sendEvent` calls then only enqueue — nothing is written, because
+ * `sendEvent` skips the pump while the flag is set.
+ *
+ * The import is therefore dynamic and preceded by `vi.resetModules()`, so
+ * each case gets its own module instance. A static import would share one
+ * instance across the whole file, which is what made this file order
+ * dependent.
+ */
+let sendEvent: typeof SendEvent;
 
-/** Force backpressure so frames pile up in the queue instead of draining. */
+beforeEach(async () => {
+  vi.resetModules();
+  ({ sendEvent } = await import('../src/worker-transport.js'));
+});
+
+/**
+ * Force backpressure so frames pile up in the queue instead of draining.
+ *
+ * Once the stall is lifted the mock reports the write as ACCEPTED. It must
+ * not delegate to the real `process.stdout.write`: the real write's verdict
+ * depends on the pipe's buffer state, so on a machine where the pipe is
+ * already full it returns false again, the pump parks on `drain` a second
+ * time, and that `drain` never arrives — the case then fails on a
+ * scheduling accident rather than on the behaviour it is about.
+ */
 function stallStdout(): { setStalled: (stalled: boolean) => void } {
   let stalled = true;
-  const spy = vi.spyOn(process.stdout, 'write').mockImplementation(((
+  vi.spyOn(process.stdout, 'write').mockImplementation(((
     chunk: unknown,
     ...rest: unknown[]
   ) => {
     if (stalled) return false;
-    return (originalWrite as (...a: unknown[]) => boolean)(chunk, ...rest);
+    void chunk;
+    void rest;
+    return true;
   }) as never);
 
   return { setStalled: (value: boolean) => { stalled = value; } };
