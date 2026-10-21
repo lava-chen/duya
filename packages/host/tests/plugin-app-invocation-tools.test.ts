@@ -25,7 +25,7 @@ const INSTANCE = {
   updatedAt: 0,
 };
 
-function createApi(options: { granted?: readonly string[] | null } = {}) {
+function createApi(options: { granted?: readonly string[] | null; descriptors?: Array<{ toolId: string; schemaRevision: string; descriptor: Record<string, string> }> } = {}) {
   return createHostPluginAppInvocationApi({
     getInstance: async (instanceId) => (instanceId === INSTANCE.instanceId ? INSTANCE : null),
     authority: {
@@ -35,7 +35,7 @@ function createApi(options: { granted?: readonly string[] | null } = {}) {
       resolveToolCapability: () => CAPABILITY,
     },
     worker: {
-      describeMcpTools: async () => [
+      describeMcpTools: async () => options.descriptors ?? [
         {
           toolId: TOOL_ID,
           schemaRevision: 'rev-1',
@@ -60,6 +60,30 @@ describe('boundTools', () => {
     });
 
     expect(api.boundTools(binding.bindingId)).toEqual([{ toolId: TOOL_ID, toolName: TOOL_NAME }]);
+  });
+
+  it('does not bind a worker descriptor that omits its canonical tool name', async () => {
+    const api = createApi({
+      descriptors: [{
+        toolId: TOOL_ID,
+        schemaRevision: 'rev-1',
+        descriptor: { source: 'plugin', serverName: 'canvas' },
+      }],
+    });
+    const binding = await api.bindPluginAppInvocation({
+      pluginId: INSTANCE.pluginId,
+      appId: INSTANCE.appId,
+      instanceId: INSTANCE.instanceId,
+      sessionId: 'session-nameless',
+    });
+
+    expect(api.boundTools(binding.bindingId)).toEqual([]);
+    await expect(api.invokePluginAppTool({
+      bindingId: binding.bindingId,
+      nonce: binding.nonce,
+      toolId: TOOL_ID,
+      arguments: {},
+    })).resolves.toMatchObject({ ok: false, code: 'tool_unavailable' });
   });
 
   it('is empty for a binding that does not exist', async () => {

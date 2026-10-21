@@ -81,7 +81,7 @@ interface StoredBinding extends PluginAppInvocationBinding {
   readonly epoch: number;
   readonly expiresAt: number;
   readonly grantedCapabilities: readonly string[];
-  readonly tools: ReadonlyMap<string, { descriptor: PluginAppMcpDescriptor; capabilityId: string }>;
+  readonly tools: ReadonlyMap<string, { descriptor: PluginAppMcpDescriptor; capabilityId: string; toolName: string }>;
 }
 
 export class HostPluginAppInvocationApiError extends Error {
@@ -133,8 +133,10 @@ export function createHostPluginAppInvocationApi(
       });
       if (!grantedCapabilities) reject('plugin_app_grant_authority_unavailable', 503);
       const descriptors = await worker.describeMcpTools({ sessionId: input.sessionId, ...run });
-      const tools = new Map<string, { descriptor: PluginAppMcpDescriptor; capabilityId: string }>();
+      const tools = new Map<string, { descriptor: PluginAppMcpDescriptor; capabilityId: string; toolName: string }>();
       for (const descriptor of descriptors) {
+        const toolName = descriptor.descriptor.toolName;
+        if (!toolName) continue;
         const capabilityId = authority.resolveToolCapability({
           pluginId: input.pluginId,
           app,
@@ -142,7 +144,7 @@ export function createHostPluginAppInvocationApi(
         });
         if (capabilityId && app.requiredCapabilities.includes(capabilityId) && grantedCapabilities.includes(capabilityId)) {
           if (tools.has(descriptor.toolId)) reject('plugin_app_tool_identity_ambiguous', 409);
-          tools.set(descriptor.toolId, { descriptor, capabilityId });
+          tools.set(descriptor.toolId, { descriptor, capabilityId, toolName });
         }
       }
       const binding: StoredBinding = {
@@ -239,7 +241,7 @@ export function createHostPluginAppInvocationApi(
       if (!binding || Date.now() >= binding.expiresAt) return [];
       return [...binding.tools.values()].map((entry) => ({
         toolId: entry.descriptor.toolId,
-        toolName: entry.descriptor.descriptor.toolName,
+        toolName: entry.toolName,
       }));
     },
     async isBindingCurrent(bindingId: string, nonce: string, toolId: string, caller: SessionServiceCaller): Promise<boolean> {
