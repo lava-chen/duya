@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { launchDuya, closeDuya, invokeApi, type DuyaApp } from '../helpers';
+import { launchDuya, closeDuya, invokeApi, openConductorView, type DuyaApp } from '../helpers';
 
 interface ConductorCanvas {
   id: string;
@@ -43,13 +43,9 @@ test.describe.serial('Conductor pan and zoom', () => {
       () => typeof (window as unknown as { electronAPI?: unknown }).electronAPI !== 'undefined',
       { timeout: 30_000 },
     );
-    // open conductor panel via nav button if present
-    try {
-      await page.waitForSelector('[data-testid="nav-conductor"]', { timeout: 20_000 });
-      await page.click('[data-testid="nav-conductor"]', { timeout: 5_000 }).catch(() => {});
-    } catch {
-      // fallback: panel might already be open
-    }
+    // The primary navigation — and with it the Conductor entry — renders on
+    // the sidebar's Work tab only; see openConductorView().
+    await openConductorView(page);
     canvasId = await getCanvasId(page);
     await deleteAllElements(page, canvasId);
   });

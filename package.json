@@ -87,6 +87,8 @@
     "check:design-tokens": "node scripts/check-design-tokens.mjs",
     "check:design-tokens-compiled": "node scripts/verify-design-tokens-compiled.mjs",
     "check:db-health": "node scripts/check-db-health.js",
+    "sessions:rebuild-from-rollouts": "node scripts/import-legacy-rollouts.mjs",
+    "sessions:verify-import": "node scripts/verify-import.mjs",
     "typecheck:evals": "node scripts/typecheck-electron-gate.mjs --project evals/tsconfig.json",
     "eval:agent:smoke": "node scripts/eval-agent.mjs smoke",
     "eval:agent:extended": "node scripts/eval-agent.mjs extended",
