@@ -208,7 +208,15 @@ describe('Workspace selection', () => {
     await workspace.start();
     await workspace.select(sessionId);
 
-    for (let index = 0; index < 20 && workspace.getSnapshot().snapshot?.lastAcceptedSeq !== 3; index += 1) await settle(1);
+    // Wait for the replay to be accepted with a DEADLINE, not a tick count.
+    // The stub holds its frames for 25ms, and twenty 0ms timer ticks are
+    // ~20ms on Linux — so the fixed budget could expire before the frames
+    // even arrived, and the assertion below would report a missing replay
+    // that had not been sent yet.
+    const deadline = Date.now() + 5_000;
+    while (workspace.getSnapshot().snapshot?.lastAcceptedSeq !== 3 && Date.now() < deadline) {
+      await settle(1);
+    }
     expect(workspace.getSnapshot().snapshot?.lastAcceptedSeq).toBe(3);
     expect(workspace.getSnapshot().snapshot?.toolCalls).toHaveLength(1);
     expect(abortSignals[0]?.aborted).toBe(true);
