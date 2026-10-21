@@ -48,9 +48,15 @@ function git(cwd: string, ...args: string[]): string {
 /**
  * A throwaway git repo holding every FIRST-PARTY metafile input.
  *
- * `node_modules/` inputs are skipped: `verifyBundle` filters them out of the
- * judged set, so materialising them would add 1125 files that no assertion can
- * observe.
+ * `node_modules` inputs are skipped: `verifyBundle` filters them out of the
+ * judged set, so materialising them would add over a thousand files that no
+ * assertion can observe.
+ *
+ * The filter is the SEGMENT one the implementation uses, not a `node_modules/`
+ * prefix. The checked-in metafile records its dependency inputs as ABSOLUTE
+ * paths (`E:/Projects/duya/node_modules/...`), which a prefix filter does not
+ * match at all — and `path.join` then turns one into an un-creatable
+ * directory on Windows, so the fixture could not even be built.
  *
  * `core.autocrlf=false` is set explicitly. On Windows the default is `true`,
  * which rewrites line endings on checkout and makes `git status` report every
@@ -63,7 +69,7 @@ function makeFixture(): string {
     inputs: Record<string, unknown>;
     outputs: Record<string, unknown>;
   };
-  const firstParty = Object.keys(meta.inputs).filter((f) => !f.startsWith('node_modules/'));
+  const firstParty = Object.keys(meta.inputs).filter((f) => !f.split('/').includes('node_modules'));
   for (const file of firstParty) {
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });

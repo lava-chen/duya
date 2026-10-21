@@ -227,10 +227,11 @@ describe('G11-1 goes RED when a client entry value-imports the runtime', () => {
 describe('G11-1 on the live tree', () => {
   const reports = collectClientClosureReport();
 
-  it('measures both roots, named, one report each', () => {
+  it('measures every root, named, one report each', () => {
     expect(reports.map((r) => r.entry)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
+      'packages/cli/src/tui/index.ts',
     ]);
     expect(reports.every((r) => r.absent === false)).toBe(true);
   });
@@ -270,6 +271,19 @@ describe('G11-1 on the live tree', () => {
     expect(isMeasured(cli)).toBe(true);
   });
 
+  it('reports the TUI root CLEAN and MEASURED — it is a client surface too', () => {
+    // The TUI renders what the run layer produces, so it is registered as a
+    // client root of its own rather than relying on `chat.ts` happening to
+    // re-export it. Registering it is the gate's job; this case is what keeps
+    // the registration honest: a root that is named but never measured would
+    // satisfy "one report each" while covering nothing.
+    const tui = reports[2];
+    expect(isClientClosureClean(tui)).toBe(true);
+    expect(tui.findings).toEqual([]);
+    expect(isMeasured(tui)).toBe(true);
+    expect(tui.walked).toBeGreaterThan(0);
+  });
+
   it('no longer reaches the engine through local-host, because chat.ts dropped it', () => {
     // Names the exact edge T16 removed rather than only the verdict. Without
     // this, any other reason for a clean walk would satisfy the test above —
@@ -291,6 +305,9 @@ describe('G11-1 on the live tree', () => {
     );
     expect(reports[1].summary).toBe(
       `0/${reports[1].walked} forbidden packages in packages/cli/src/chat.ts`,
+    );
+    expect(reports[2].summary).toBe(
+      `0/${reports[2].walked} forbidden packages in packages/cli/src/tui/index.ts`,
     );
     expect(isEveryClientEntryClean(reports)).toBe(true);
   });
@@ -394,6 +411,7 @@ describe('the gate reads the tree, not a fixture it left behind', () => {
     expect(CLIENT_ENTRIES.map((e) => e.rel)).toEqual([
       'packages/client-core/src/index.ts',
       'packages/cli/src/chat.ts',
+      'packages/cli/src/tui/index.ts',
     ]);
     expect(CLIENT_ENTRIES.every((e) => e.kind === 'file')).toBe(true);
   });

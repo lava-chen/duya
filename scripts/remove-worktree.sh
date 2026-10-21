@@ -156,10 +156,16 @@ fi
 # PowerShell enumerates reparse points without following them; rmdir without /s
 # removes each reported link itself and never touches its target.
 is_windows() {
-  case "$OS" in
+  # `$OS` is set to `Windows_NT` by MSYS (Git Bash), but a NATIVE Linux or
+  # macOS bash does not set it at all — and under `set -u` an unset variable
+  # aborts the shell. Referencing it bare made this script die on every
+  # non-Windows runner, which is where CI runs it. `${OS:-}` is the same
+  # check with an unset value treated as "not Windows_NT".
+  case "${OS:-}" in
     Windows_NT) return 0 ;;
   esac
-  case "$OSTYPE" in
+  # `$OSTYPE` is set by bash itself in every mode.
+  case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*) return 0 ;;
   esac
   return 1
