@@ -19,6 +19,8 @@
 - `full`——基础设施变了（`vitest.config.ts`、锁文件、`tsconfig`、包清单的依赖/脚本字段）时无法收窄，跑全量。
 - `skip`——纯文档改动，不跑。
 
+范围按**整个 PR 的 diff** 算，不按单个 commit：PR 里动过 `package.json` 这类基础设施，之后再推只改文档的 commit，范围仍然是 `full`（本 PR 就实测过一次纯文档提交仍解析出 `unit=full`）。
+
 范围解析规则在 `scripts/ci/test-scope.mjs`，判定逻辑的测试在同目录的 `test-scope.test.ts`。
 
 ## 夜间路径
