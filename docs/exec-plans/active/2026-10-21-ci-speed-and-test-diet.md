@@ -39,6 +39,7 @@ base：5b12f721 · owner：mavis
 - [x] CI 归因：以 PR #338（同 base、无代码改动、`test` job 真跑全量）为对照做双向差集
 - [x] 修并行暴露的两个测试隔离缺陷（`task-store.test.ts`、`worker-transport-write-queue.test.ts`）
 - [x] 拆分：测试退役（含矩阵重指、架构期望值重 pin）移到独立 PR，单独审查
+- [x] E2E 移出 PR 路径，改为 nightly + 手动 `workflow_dispatch`
 
 > 拆分前在本分支完成、现已移到 `codex/agent-test-retirement` 的工作：
 > 删除 `packages/agent` 291 个测试文件、矩阵 28 条引用重指、架构期望值 127 → 123。
@@ -76,6 +77,13 @@ base：5b12f721 · owner：mavis
   `task-store.test.ts` 的 `withTempDir` 在 Promise settle 前删目录（异步读被删 → store 返回 `[]`）；
   `worker-transport-write-queue.test.ts` 的被测模块把 `isDraining` 放在模块作用域，前一个用例
   留下"挂起"状态后，后一个用例的 50 帧只入队不写出（CI 症状：期望 50 次、实际 0 次）。
+- **Electron E2E 移出 PR 路径**（改为 nightly + 手动 `workflow_dispatch`）。判据是可举证的：
+  套件 18 个 spec × 5 个 Playwright project，每个启真实 Electron → 一轮 ~17 分钟；
+  失败形态**全部同型**（`expect(locator).toBeVisible()` 超时 ~13 秒 → 渲染器没起来，
+  不是产品行为错）；失败数在两次对照 run 之间 17 → 15，而该分支没改任何 E2E 产品代码。
+  > 一个分不清"你的改动搞坏了"和"它本来就红"的红 job 不是门禁，是噪声。
+  **保留** nightly + 手动触发（真断裂仍被抓到，trace 仍保留）；**放弃** E2E 阻塞 PR 合并。
+  `build` job 仍在 PR 上跑 `electron:build`，构建破坏照常被拦。
 
 ## 验证记录
 
