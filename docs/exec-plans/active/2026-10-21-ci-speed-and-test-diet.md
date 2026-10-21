@@ -17,6 +17,7 @@
 - 并行与串行两次全量 vitest 的失败文件集合一致（并行不得引入新失败）。
 - `npm run check:test-coverage`、`npm run architecture:check` 退出 0。
 - `packages/agent` 下只剩 MCP conformance 门禁与 real-worker fixture。
+- CI 上不得新增红：相对同一 base 的对照 run，本 PR 的失败文件集合不得出现新增项。
 
 ## 进度
 
