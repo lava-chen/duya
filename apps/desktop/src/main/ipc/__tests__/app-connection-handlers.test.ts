@@ -6,15 +6,34 @@
  * to capture channel handlers, mock the AppConnectionService singleton,
  * then drive each channel and assert the DTO envelope.
  *
+ * Since the Desktop → Host migration the handler's readiness gate moved from
+ * the local boot database to the Host boundary: `getReadyAppConnectionService`
+ * resolves `getDesktopHostLocalAppConnectionApi()`
+ * (`../../cli/desktop-host-api`) before it constructs the service, so that
+ * module is mocked here too.
+ *
  * Critical boundary assertions:
  *   - list/status return ONLY status DTOs (no token field leaks)
  *   - connect propagates structured errorCode on FlowError
  *   - disconnect triggers the reload hook
+ *   - the Host App Connection API is resolved before the service is built
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
+  // The Host App Connection API the handler resolves as its readiness gate
+  // (see `getReadyAppConnectionService`). The handler only probes it — the
+  // data path still runs through the AppConnectionService — so a minimal
+  // Host API surface is enough here.
+  const hostAppConnectionApi = {
+    listAppConnections: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    listAppConnectionsByProvider: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    getAppConnection: vi.fn(async () => null as Record<string, unknown> | null),
+    upsertAppConnection: vi.fn(async () => ({} as Record<string, unknown>)),
+    updateAppConnectionStatus: vi.fn(async () => null as Record<string, unknown> | null),
+    removeAppConnection: vi.fn(async () => true),
+  };
   return {
     service: {
       list: vi.fn(),
@@ -31,6 +50,8 @@ const mocks = vi.hoisted(() => {
         (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>
       >(),
     },
+    hostAppConnectionApi,
+    getHostAppConnectionApi: vi.fn(() => hostAppConnectionApi),
   };
 });
 
@@ -59,6 +80,7 @@ vi.mock('electron', () => ({
 }));
 
 vi.mock('../../logging/logger', () => ({
+  initLogger: vi.fn(),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -72,6 +94,14 @@ vi.mock('../../logging/logger', () => ({
 
 vi.mock('../../services/app-connections/app-connection-service', () => ({
   getAppConnectionService: () => mocks.service,
+}));
+
+// The handler's readiness gate moved from the local boot database to the
+// Desktop Host API: `getReadyAppConnectionService` resolves
+// `getDesktopHostLocalAppConnectionApi()` before it constructs the service,
+// so the mock must return a Host API instead of throwing "not running".
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostLocalAppConnectionApi: mocks.getHostAppConnectionApi,
 }));
 
 vi.mock('../../db/connection', () => ({
@@ -95,6 +125,15 @@ describe('appConnection IPC handlers', () => {
     mocks.service.disconnect.mockReset();
     mocks.service.remove.mockReset();
     mocks.service.setReloadHook.mockReset();
+    // The Host API getter keeps its implementation — only the call history
+    // is cleared, so the readiness gate keeps resolving.
+    mocks.getHostAppConnectionApi.mockClear();
+    mocks.hostAppConnectionApi.listAppConnections.mockClear();
+    mocks.hostAppConnectionApi.listAppConnectionsByProvider.mockClear();
+    mocks.hostAppConnectionApi.getAppConnection.mockClear();
+    mocks.hostAppConnectionApi.upsertAppConnection.mockClear();
+    mocks.hostAppConnectionApi.updateAppConnectionStatus.mockClear();
+    mocks.hostAppConnectionApi.removeAppConnection.mockClear();
     registerAppConnectionHandlers();
   });
 
@@ -104,6 +143,10 @@ describe('appConnection IPC handlers', () => {
 
     await invoke('appConnection:list');
 
+    // The readiness gate now lives on the Host boundary: the handler
+    // resolves the Desktop Host App Connection API (it replaced the local
+    // boot-database check) BEFORE it builds the service.
+    expect(mocks.getHostAppConnectionApi).toHaveBeenCalledTimes(1);
     expect(mocks.service.setReloadHook).toHaveBeenCalledTimes(1);
     expect(typeof mocks.service.setReloadHook.mock.calls[0]![0]).toBe('function');
   });

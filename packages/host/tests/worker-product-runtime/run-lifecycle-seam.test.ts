@@ -54,7 +54,6 @@ import { fileURLToPath } from 'node:url';
 import type { Message, SSEEvent, Tool } from '@duya/host/worker-run-contracts';
 import type { ToolExecutionPipeline } from '@duya/host/worker-execution/tool-execution-pipeline';
 import type { WorkerSession } from '@duya/host/worker-session-runtime';
-import { makeWorkerSession } from './engine-turn-harness.js';
 
 // ============================================================================
 // The source under test
@@ -140,6 +139,24 @@ vi.mock('@duya/ai', async (importOriginal) => {
 const PRE_EXISTING = new Set(process.listeners('message'));
 const { ToolRegistry } = await import('@duya/host/worker-tool-registry');
 const { initDbClient } = await import('@duya/host/worker-db-client');
+// The harness reaches the db client TRANSITIVELY (its tool assembly pulls in
+// the worker session runtime, which pulls in the db client), so it is
+// imported here -- AFTER the snapshot above -- and DYNAMICALLY.
+//
+// A static import is hoisted and evaluated before any of this, so the db
+// client's own `'message'` listener would already be inside `PRE_EXISTING`.
+// The db client registers that listener as an import side effect
+// (`worker-db-client.ts:1251`), and `initDbClient()` is a one-shot latch, so
+// the explicit call in `installFakeDbIpc` would then be a no-op and the diff
+// it computes would be empty -- which is the `db-client registered no
+// message listener` throw.
+//
+// The ORDER of the two imports is the fix. The harness's own
+// `installEngineTurnIpc()` cannot be used instead: it captures `preexisting`
+// when it is CALLED, by which time this file's own set already contains the
+// db listener, so it would skip every listener in its fallback and turn the
+// throw into a hang.
+const { makeWorkerSession } = await import('./engine-turn-harness.js');
 
 let dbListener: ((m: unknown) => void) | null = null;
 const originalEnv = { ...process.env };

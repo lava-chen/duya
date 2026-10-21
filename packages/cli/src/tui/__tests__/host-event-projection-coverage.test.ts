@@ -4,11 +4,11 @@
  * ## The finding
  *
  * `projectHostEvent` (`host-event-stream.ts:24`) has 15 `case` arms and one
- * `default: return null`. The protocol declares **43** message types, of which
- * **37** are `RunEvent`s the projector is typed to receive — so **22 events
+ * `default: return null`. The protocol declares **44** message types, of which
+ * **38** are `RunEvent`s the projector is typed to receive — so **23 events
  * reach the TUI and are dropped without a word.**
  *
- * D9.5 found one of those 22 (`permission.resolved`) by accident, while chasing
+ * D9.5 found one of those 23 (`permission.resolved`) by accident, while chasing
  * a different defect. That it was the only one found is itself the finding: a
  * `default: return null` with no inventory is not a decision, it is an absence.
  * Nobody can tell, reading the projector, whether an event is dropped because
@@ -132,6 +132,9 @@ const DECLARED_UNPROJECTED: Record<string, { reason: string; suspicious?: true }
     },
     'checkpoint.saved': { reason: 'Durable state for resume; it has no transcript meaning.' },
     'hook.invoked': { reason: 'Hook telemetry; the caller already surfaces hook output as messages.' },
+    'diagnostic': {
+        reason: 'The structured-log channel: a dedicated stream an evaluator consumes, deliberately not the product UI. The TUI renders the transcript, not the log.',
+    },
     'diagnostic.trace': { reason: 'Debug tracing, deliberately not user-facing.' },
     'extension.custom': {
         reason: 'The forward-compatibility namespace. The protocol contract says unknown namespaces MUST be ignored, so `default: return null` IS the specified behaviour here.',

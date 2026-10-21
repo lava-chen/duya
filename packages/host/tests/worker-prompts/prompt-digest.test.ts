@@ -11,6 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { PromptSystem } from '@duya/host/worker-prompts/PromptSystem';
@@ -19,9 +20,22 @@ import { sectionDigest, setPromptObserver } from '@duya/host/worker-prompts/obse
 import { volatilePromptSection } from '@duya/host/worker-prompts/constants/promptSections';
 import type { PromptContext, PromptSectionDigest } from '@duya/host/worker-prompts/types';
 
+/**
+ * The working directory the prompt build resolves against.
+ *
+ * The AGENTS.md loader walks it up to the filesystem root with
+ * `path.dirname`, so the fixture must be absolute in the RUNNING
+ * platform's dialect. A literal from another dialect ('E:\Projects\duya'
+ * under POSIX) never converges on `path.parse(...).root`, and the walk
+ * then runs until the array overflows with `RangeError: Invalid array
+ * length`. Resolving keeps it absolute everywhere; the directory does
+ * not exist, so no real AGENTS.md enters the prompt.
+ */
+const WORKING_DIRECTORY = path.resolve('/duya-prompt-test-cwd');
+
 function context(overrides: Partial<PromptContext> = {}): PromptContext {
   return {
-    workingDirectory: 'E:\\Projects\\duya',
+    workingDirectory: WORKING_DIRECTORY,
     platform: 'win32',
     shell: 'bash',
     modelId: 'test-model',

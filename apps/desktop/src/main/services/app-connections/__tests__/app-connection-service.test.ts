@@ -20,7 +20,16 @@ import { asAppConnectorId } from '@duya/connectors/app-connector-id';
 const NOTION = asAppConnectorId('notion');
 import type { Database as DatabaseType } from 'better-sqlite3';
 
+// `initLogger` is called at module scope by `services/network/provider-usage`,
+// which this file's import graph reaches. A mock without that export fails
+// collection before a single test runs.
 vi.mock('../../../logging/logger', () => ({
+  initLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -370,9 +379,15 @@ describe('AppConnectionService — silent reconnect (remote-mcp-silent-reconnect
     vault.set('r-good', fakeToken());
     vault.set('r-bad', fakeToken());
 
-    remoteMcp.ensureSession
-      .mockResolvedValueOnce({ connectionId: 'r-good', test: [] } as never)
-      .mockRejectedValueOnce(new Error('transient'));
+    // The failure is injected PER CONNECTION rather than per call: the store
+    // lists a provider's rows by `updated_at DESC` (newest first), so the
+    // order `ensureSession` is called in is not the order the rows were
+    // seeded, and a call-ordered mock would attribute the rejection to
+    // whichever row happened to be visited first.
+    remoteMcp.ensureSession.mockImplementation(async (connectionId: string) => {
+      if (connectionId === 'r-bad') throw new Error('transient');
+      return { connectionId, test: [] } as never;
+    });
 
     await service.rehydrateRemoteMcpConnections();
 

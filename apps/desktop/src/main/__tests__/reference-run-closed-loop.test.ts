@@ -29,6 +29,21 @@
  * and a live model call. That boundary is drawn at the worker, not at storage,
  * so everything this plan actually built is exercised.
  *
+ * ## The vocabulary changed, and the file followed it
+ *
+ * Plan 610 S1 (`cdee21d5`) flipped the run layer's authority: the durable
+ * `run_events` ledger is written by the NATIVE `run:event` channel, under the
+ * Runtime's OWN sequence, and the legacy `chat:*` frames are reverse-
+ * translated for the live arm but no longer persisted. So the durable log this
+ * file reads is the RUNTIME's, and the frames it drives are the Runtime's own
+ * — written exactly as `worker-process-entry.ts` writes them.
+ *
+ * The legacy-only shape is not lost: `desktop-native-run-closed-loop.test.ts`
+ * proves that a run whose worker speaks only the legacy vocabulary settles
+ * with a deliberately EMPTY ledger, and that the run layer says so out loud.
+ * This file is the other half: what the ledger holds when the worker speaks
+ * the protocol.
+ *
  * Assertions read the SQLite rows DIRECTLY rather than through the store's own
  * accessors. Asserting through the same API that wrote the data proves the API
  * is self-consistent; reading the table proves the bytes are on disk.
@@ -39,7 +54,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { manifestFingerprint } from '@duya/agent-protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The Control Plane reaches storage through `getCoreStores()`, a boot-time
@@ -57,8 +72,10 @@ vi.mock('../db/core-connection', () => ({
 }));
 
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
-import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
-import { dispatchControlPlaneAction } from '../control-plane/run-control-plane';
+import { RunOrchestrator, createWorkerExecutionChannel, type WorkerInterrupt } from '../agents/server/run-orchestrator';
+import { createDesktopNativeRunEventWriter } from '../agents/server/native-run-event-writer';
+import { dispatchControlPlaneAction, __setDesktopHostRunApiForTesting } from '../control-plane/run-control-plane';
+import { createHostRunApi } from '@duya/host/run-api';
 import { RunStore, RUN_STORE_MIGRATIONS } from '../db/core/run-store';
 
 /**
@@ -77,30 +94,66 @@ const COOPERATIVE_INTERRUPT: WorkerInterrupt = {
 let db: Database.Database;
 let dir: string;
 
-/** Raw worker frames, in the shape the worker writes to stdout. */
-const FRAMES = {
-  turnStart: { type: 'chat:turn_start', data: {} },
-  text: { type: 'chat:text', data: 'Hello from the worker' },
-  toolUse: { type: 'chat:tool_use', id: 'call-1', name: 'Read', input: { path: 'a.ts' } },
-  toolResult: { type: 'chat:tool_result', id: 'call-1', data: { result: 'file contents' } },
-  toolProgress: { type: 'chat:tool_progress', id: 'call-1', data: { elapsedSeconds: 2 } },
-  // The worker carries the authoritative assistant message on the done
-  // boundary, ahead of `done`. See `worker-protocol.ts:AgentMessageFinalizedEvent`.
-  messageFinalized: {
-    type: 'chat:message_finalized',
-    sessionId: 'session-finalized',
-    messageId: 'msg-final-1',
-    content: [
-      { type: 'text', text: 'Hello from the worker' },
-      { type: 'tool_use', id: 'call-1', name: 'Read', input: { path: 'a.ts' } },
-    ],
-    stopReason: 'completed',
-  },
-  done: { type: 'chat:done', reason: 'completed' },
-} satisfies Record<string, Record<string, unknown>>;
+/**
+ * The Runtime's own messages, in the order the Runtime mints them.
+ *
+ * `ASSISTANT_MESSAGE_ID` is the RUN-SCOPED id the Runtime gives the message it
+ * finalised, and the text block it supersedes carries the same one: the
+ * finalized message has to join the block it replaces instead of sitting
+ * beside it under a second identity.
+ */
+const ASSISTANT_MESSAGE_ID = 'msg-run-scoped-1';
+const ASSISTANT_TEXT = 'Hello from the worker';
 
 /**
- * Drive the loop: open a run, push frames through the REAL router tee, settle.
+ * The frames one turn produces, as the Runtime writes them.
+ *
+ * `seq` is the Runtime's own sequence and it is what the ledger is keyed on.
+ * The `text_delta` is EPHEMERAL — counted in metrics, never retained — so it
+ * consumes a sequence number without leaving a row. That gap is the record of
+ * something that happened and was deliberately not stored.
+ */
+const TURN_FRAMES: readonly { seq: number; type: string; payload: Record<string, unknown> }[] = [
+  { seq: 1, type: 'run.started', payload: {} },
+  { seq: 2, type: 'turn.started', payload: {} },
+  {
+    seq: 3,
+    type: 'assistant.text_block',
+    payload: { messageId: ASSISTANT_MESSAGE_ID, text: ASSISTANT_TEXT },
+  },
+  { seq: 4, type: 'tool.call_started', payload: { toolCallId: 'call-1', name: 'Read' } },
+  { seq: 5, type: 'assistant.text_delta', payload: { messageId: ASSISTANT_MESSAGE_ID, text: 'Hello' } },
+  { seq: 6, type: 'tool.call_completed', payload: { toolCallId: 'call-1', status: 'success' } },
+  {
+    seq: 7,
+    type: 'assistant.message_finalized',
+    payload: {
+      messageId: ASSISTANT_MESSAGE_ID,
+      stopReason: 'completed',
+      content: [{ type: 'text', text: ASSISTANT_TEXT }],
+    },
+  },
+  { seq: 8, type: 'run.completed', payload: {} },
+];
+
+/** One `run:event` line, exactly as `worker-process-entry.ts` writes it. */
+function nativeFrame(
+  runId: string,
+  sessionId: string,
+  seq: number,
+  type: string,
+  payload: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    type: 'run:event',
+    epoch: 0,
+    envelope: { runId, sessionId, seq, payload: { type, ...payload } },
+  };
+}
+
+/**
+ * Drive the loop: open a run, push the Runtime's frames through the REAL
+ * router tee, settle.
  *
  * `deps` is a real `RouterDeps` shape, not a cast of the orchestrator: the tee
  * is called exactly as the router calls it.
@@ -117,9 +170,18 @@ async function runTurn(sessionId: string): Promise<string | null> {
     },
     interrupt: () => COOPERATIVE_INTERRUPT,
   });
+  const request = (action: string, payload: Record<string, unknown>) =>
+    dispatchControlPlaneAction(action, payload) as Promise<unknown>;
   const orchestrator = new RunOrchestrator({
     channel,
-    dbRequest: (action, payload) => dispatchControlPlaneAction(action, payload),
+    dbRequest: request,
+    // The ONE durable writer for Runtime-minted envelopes, exactly as
+    // `agents/server/index.ts` composes it. Without it the run layer refuses
+    // every native event and the ledger stays empty.
+    nativeWriter: createDesktopNativeRunEventWriter({
+      request,
+      logger: { warn: () => undefined },
+    }),
   });
 
   const start = await orchestrator.openRun(sessionId, {
@@ -138,17 +200,12 @@ async function runTurn(sessionId: string): Promise<string | null> {
   expect(dispatched).toBe(true);
 
   const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
-  for (const frame of [
-    FRAMES.turnStart,
-    FRAMES.text,
-    FRAMES.toolUse,
-    FRAMES.toolProgress,
-    FRAMES.toolResult,
-    FRAMES.messageFinalized,
-    FRAMES.done,
-  ]) {
-    normalizeAndObserve(sessionId, frame, deps);
+  for (const frame of TURN_FRAMES) {
+    normalizeAndObserve(sessionId, nativeFrame(runId, sessionId, frame.seq, frame.type, frame.payload), deps);
   }
+  // The legacy terminal frame is still what ends the turn for the host; the
+  // Runtime's own terminal envelope is the one in the ledger.
+  normalizeAndObserve(sessionId, { type: 'chat:done', reason: 'completed' }, deps);
 
   await orchestrator.settleSession(sessionId);
   return runId;
@@ -165,10 +222,17 @@ beforeEach(() => {
   for (const migration of [...RUN_STORE_MIGRATIONS].sort((a, b) => a.id - b.id)) {
     migration.up(db);
   }
-  hoisted.stores = { runs: new RunStore(db) };
+  const runs = new RunStore(db);
+  hoisted.stores = { runs };
+  // The Control Plane now speaks the typed Host Run API, and the Desktop's
+  // adapter reaches storage through it. The seam points it at the SAME real
+  // RunStore this file asserts against, so the measurement keeps a real
+  // durable store without standing up a Host HTTP process.
+  __setDesktopHostRunApiForTesting(createHostRunApi({ runs }));
 });
 
 afterEach(() => {
+  __setDesktopHostRunApiForTesting(null);
   hoisted.stores = null;
   db.close();
   rmSync(dir, { recursive: true, force: true });
@@ -209,10 +273,10 @@ describe('the Reference Run, closed', () => {
     // `seq` is a faithful index of the STREAM, not of the rows.
     //
     // It is tempting to assert the durable subset is 1..N gapless. It is not,
-    // and asserting it would be asserting a falsehood: a volatile event still
-    // consumes a sequence number, so the durable rows after it sit at 6, 7...
-    // A gap is the RECORD of something that happened and was deliberately not
-    // stored. `PRIMARY KEY (run_id, seq)` does not forbid gaps; only this
+    // and asserting it would be asserting a falsehood: a non-retained event
+    // still consumes a sequence number, so the durable rows after it sit at 6,
+    // 7... A gap is the RECORD of something that happened and was deliberately
+    // not stored. `PRIMARY KEY (run_id, seq)` does not forbid gaps; only this
     // invariant says anything useful about them.
     const seqs = events.map((e) => Number(e['seq']));
     expect(seqs[0]).toBe(1);
@@ -223,9 +287,10 @@ describe('the Reference Run, closed', () => {
 
     // The authoritative assistant message is in the DURABLE ledger, read back
     // out of the real `run_events` table — the same read E4.4's assertion makes
-    // against a real Electron renderer. It is here because the frame crossed
-    // the REAL router tee, the real orchestrator, the real translator and the
-    // real emitter, so a break anywhere on that path loses the row.
+    // against a real Electron renderer. It is here because the envelope
+    // crossed the REAL router tee, the real orchestrator, the real native
+    // writer, the real Control Plane and the real store, so a break anywhere
+    // on that path loses the row.
     //
     // Order is the part worth asserting: `transcript-snapshot.ts` reads the
     // finalized message as superseding the per-block events of the SAME message,
@@ -235,9 +300,9 @@ describe('the Reference Run, closed', () => {
       types.lastIndexOf('assistant.text_block'),
     );
     expect(types.indexOf('assistant.message_finalized')).toBeLessThan(types.indexOf('run.completed'));
-    // The `messageId` is the runtime's run-scoped one, not the frame's own, so
-    // the finalized message joins the text block it supersedes instead of
-    // sitting beside it under a second identity.
+    // The `messageId` is the runtime's run-scoped one, so the finalized message
+    // joins the text block it supersedes instead of sitting beside it under a
+    // second identity.
     const textBlock = events.find((e) => e['event_type'] === 'assistant.text_block')!;
     const finalizedRow = events.find((e) => e['event_type'] === 'assistant.message_finalized')!;
     const textBlockId = (
@@ -257,18 +322,21 @@ describe('the Reference Run, closed', () => {
         .filter((b) => b.type === 'text')
         .map((b) => b.text ?? '')
         .join(''),
-    ).toBe('Hello from the worker');
+    ).toBe(ASSISTANT_TEXT);
 
-    // Exactly one sequence number went to a non-durable event (`tool.progress`),
-    // and every other number in 1..max landed as a row. If this drifts, either
-    // a durable event is being dropped or a volatile one is being stored.
+    // Exactly one sequence number went to a non-retained event
+    // (`assistant.text_delta`), and every other number in 1..max landed as a
+    // row. If this drifts, either a durable event is being dropped or a
+    // non-retained one is being stored.
     const maxSeq = seqs[seqs.length - 1]!;
     expect(maxSeq).toBe(seqs.length + 1);
     const missing: number[] = [];
     for (let n = 1; n <= maxSeq; n += 1) if (!seqs.includes(n)) missing.push(n);
     expect(missing).toHaveLength(1);
 
-    // The whole point of translating: the legacy frame became protocol events.
+    // The whole point of the native channel: the ledger is the RUNTIME's
+    // events, under the RUNTIME's identity — not a projection of some other
+    // vocabulary.
     expect(types).toContain('turn.started');
     expect(types).toContain('assistant.text_block');
     expect(types).toContain('tool.call_started');
@@ -280,14 +348,15 @@ describe('the Reference Run, closed', () => {
     expect((first['payload'] as Record<string, unknown>)['type']).toBe('run.started');
   });
 
-  it('gives a volatile event a sequence number without giving it a row', async () => {
-    // `tool.progress` is volatile. The ledger still advances `seq` for it —
-    // that is what makes the durable subset's seq a faithful index of the
-    // stream — but the store must not grow a row for it.
+  it('gives a non-retained event a sequence number without giving it a row', async () => {
+    // `assistant.text_delta` is ephemeral: counted in metrics, never retained.
+    // The ledger still advances `seq` for it — that is what makes the durable
+    // subset's seq a faithful index of the stream — but the store must not grow
+    // a row for it.
     const runId = await runTurn('session-volatile');
     const types = rows('SELECT event_type FROM run_events WHERE run_id = ?', runId!).map((r) => r['event_type']);
 
-    expect(types).not.toContain('tool.progress');
+    expect(types).not.toContain('assistant.text_delta');
 
     // The proof that it was not silently ignored: the run recorded MORE events
     // than the frames that produced rows, so seq moved past it.
@@ -297,6 +366,8 @@ describe('the Reference Run, closed', () => {
 
   it('records a turn that ends in an error as failed, not completed', async () => {
     let dispatched = false;
+    const request = (action: string, payload: Record<string, unknown>) =>
+      dispatchControlPlaneAction(action, payload) as Promise<unknown>;
     const orchestrator = new RunOrchestrator({
       channel: createWorkerExecutionChannel({
         dispatch: () => {
@@ -305,7 +376,11 @@ describe('the Reference Run, closed', () => {
         },
         interrupt: () => COOPERATIVE_INTERRUPT,
       }),
-      dbRequest: (action, payload) => dispatchControlPlaneAction(action, payload),
+      dbRequest: request,
+      nativeWriter: createDesktopNativeRunEventWriter({
+        request,
+        logger: { warn: () => undefined },
+      }),
     });
     const start = await orchestrator.openRun('session-err', {
       workingDirectory: '/repo',
@@ -321,8 +396,19 @@ describe('the Reference Run, closed', () => {
 
     const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
     normalizeAndObserve('session-err', { type: 'chat:text', data: 'partial' }, deps);
+    // The Runtime's own envelopes, under its own sequence. They are written
+    // BEFORE the legacy terminal frame, because the legacy frame is what ends
+    // the turn and the run layer releases the session's binding when it does.
+    normalizeAndObserve('session-err', nativeFrame(runId, 'session-err', 1, 'run.started', {}), deps);
+    normalizeAndObserve(
+      'session-err',
+      nativeFrame(runId, 'session-err', 2, 'run.failed', {
+        error: { code: 'provider_rate_limited', message: 'upstream 429' },
+      }),
+      deps,
+    );
     // The worker puts `message` and `code` at the TOP level of `chat:error`
-    // (`agent-process-entry.ts:2106`), not inside `data`. Feeding the nested
+    // (`worker-process-entry.ts`), not inside `data`. Feeding the nested
     // shape would make the router emit `code: undefined` and the run would be
     // recorded `internal` — a plausible-looking wrong answer.
     normalizeAndObserve(

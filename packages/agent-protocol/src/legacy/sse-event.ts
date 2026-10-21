@@ -71,8 +71,8 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   Record<LegacySseEventType, readonly EventType[]>
 > = {
   // Today the declared type says `data: string` while the router actually sends
-  // `data.content` (router.ts:480) and the renderer reads
-  // `event.data.content` (router.ts:458). The declared type was a lie.
+  // `data.content` (router.ts:585) and the renderer reads
+  // `event.data.content` (packages/ui/src/lib/agent-http-client.ts:338). The declared type was a lie.
   text: ['assistant.text_block'],
   text_delta: ['assistant.text_delta'],
   // signature/redacted/encrypted move from the top level into the payload.
@@ -80,14 +80,14 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   thinking_delta: ['assistant.thinking_delta'],
 
   // `tool_use` and `tool_use_started` carry IDENTICAL data
-  // (router.ts:466-477 vs :491-502) and the same on the worker side
-  // (packages/agent/src/process/worker-protocol.ts:269-283, two interfaces
+  // (router.ts:587-598 vs :612-623) and the same on the worker side
+  // (packages/agent-protocol/src/worker-protocol.ts:319-333, two interfaces
   // that differ only in the `type` discriminant). The difference is ORDER, not
   // shape: `tool_use_started` is the provisional announcement while arguments
   // still stream; `tool_use` is the authoritative re-emission —
-  // DuyaAgent.ts:2394-2397 says so in as many words. Consumers collapse the
+  // packages/host/src/run-engine-model.ts:48-50 says so in as many words. Consumers collapse the
   // pair into ONE upsert slot keyed by id
-  // (agent-sse-client.ts:452-453, stream-session-manager.ts:2013-2014), which
+  // (agent-sse-client.ts:452-453, stream-session-manager.ts:2079-2080), which
   // is precisely why the protocol has to split them: one slot, two
   // durabilities, and no way to tell a duplicate from a correction.
   // Neither carries a result: completion arrives on `tool_result` below.
@@ -100,7 +100,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   tool_group_progress: ['tool.group_progress'],
 
   // The router actually emits `permission`, not `permission_request`
-  // (router.ts:513-517). drift test #9 exists to catch exactly that drift.
+  // (router.ts:634-638). drift test #9 exists to catch exactly that drift.
   permission_request: ['permission.requested'],
 
   turn_start: ['turn.started'],
@@ -130,7 +130,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
 /**
  * Event types the router emits that were NEVER in the `SSEEvent` union.
  * Listed so drift test #9 can assert the registry covers them — today
- * `normalizeWorkerEvent` (router.ts:450-569) produces at least ten types the
+ * `normalizeWorkerEvent` (router.ts:571-778) produces at least ten types the
  * union never declared.
  */
 export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventType[]>> = {
@@ -138,8 +138,8 @@ export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventTyp
   token_usage: ['assistant.usage'],
   // `checkpoint` is absorbed by compaction.completed + run.started{resumedFrom};
   // its {messages, generation} payload is a STORAGE shape and must not cross
-  // the protocol boundary (router.ts:1520-1526,
-  // packages/agent/src/process/worker-protocol.ts:248-255).
+  // the protocol boundary (router.ts:1880-1888,
+  // packages/agent-protocol/src/worker-protocol.ts:286-293).
   checkpoint: [],
   // Control frame, not an event.
   ready: [],
@@ -160,7 +160,7 @@ export const LEGACY_PERMISSION_ACTION_MAP: Readonly<Record<string, PermissionAct
   allow_once: 'allow',
   allow_for_session: 'allow_always',
   // `paused` is what the bot approval card path means when a host never
-  // answers (packages/agent/src/types.ts:337) — a timeout, recorded as a deny.
+  // answers (packages/host/src/worker-run-contracts.ts:82) — a timeout, recorded as a deny.
   paused: 'deny',
 };
 

@@ -4,7 +4,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+// `initLogger` is called at module scope by `services/network/provider-usage`,
+// which this file's import graph reaches. A mock without that export fails
+// collection before a single test runs.
 vi.mock('../../logging/logger', () => ({
+  initLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   LogComponent: { Conductor: 'Conductor', DB: 'DB' },
 }));

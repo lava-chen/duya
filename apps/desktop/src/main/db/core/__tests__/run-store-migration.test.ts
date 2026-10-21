@@ -37,6 +37,17 @@ import { RunStore } from '../run-store';
 let db: Database.Database;
 let dir: string;
 
+/**
+ * The core maximum that existed when the run store was added. The run store's
+ * ids were measured against it, which is why 35 is not 27.
+ *
+ * Source of truth: `packages/data/src/run-store.ts` — "35, 36 and 37,
+ * measured above the current core maximum of 34". This is a historical
+ * constant: migrations that landed after the run store sit above it and do
+ * not move it.
+ */
+const RUN_STORE_PREDECESSOR_MAX = 34;
+
 function applyAll(): void {
   for (const migration of collectMigrations()) migration.up(db);
 }
@@ -79,15 +90,36 @@ describe('the composed core migration list', () => {
     expect(dupes).toEqual([]);
   });
 
-  it('places the run store above every migration that already existed', () => {
+  it('keeps the run store wired into the composed list, above the migrations that predate it', () => {
     const all = collectMigrations();
     const runIds = RunStore.migrations.map((m) => m.id).sort((a, b) => a - b);
     const others = all.filter((m) => !RunStore.migrations.includes(m)).map((m) => m.id);
 
     expect(runIds.length).toBeGreaterThan(0);
-    // Not "above the current max" as a comment claimed — measured. A future
-    // migration landing at 35 would fail here instead of colliding at boot.
-    expect(Math.min(...runIds)).toBeGreaterThan(Math.max(...others));
+
+    // Every run-store migration is IN the composed list the runner applies.
+    // A dropped aggregate would leave the list sorted and duplicate-free, so
+    // neither of the checks above would notice — but a fresh database would
+    // come up without the `runs` / `run_events` tables.
+    expect(all.filter((m) => RunStore.migrations.includes(m))).toHaveLength(RunStore.migrations.length);
+
+    // The run store is no longer the NEWEST aggregate: id 38 (workspaces) and
+    // ids 40-42 (plugin app instances, plugin app grants, permission request
+    // facts) belong to other stores and sit at or above the run store's ids.
+    // "Above every other migration" therefore stopped being true when those
+    // landed, and asserting it would fail for a reason that says nothing
+    // about the run store.
+    //
+    // What still holds — and what made those ids safe in the first place —
+    // is the placement they were MEASURED for: above the core maximum that
+    // existed when the run store was added (34, recorded in
+    // packages/data/src/run-store.ts: "35, 36 and 37, measured above the
+    // current core maximum of 34"). So the run store's ids still sit above
+    // every migration that predates them, and no other aggregate may claim
+    // one of them — a future aggregate landing on 35/36/37/39 fails here
+    // rather than colliding at boot.
+    expect(Math.min(...runIds)).toBeGreaterThan(RUN_STORE_PREDECESSOR_MAX);
+    expect(others.filter((id) => runIds.includes(id))).toEqual([]);
   });
 
   it('is sorted, because the runner applies it in order', () => {

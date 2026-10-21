@@ -173,7 +173,7 @@ export function mapWorkerEvent(raw: RawWorkerEvent): RunEvent | { readonly unmap
     case 'chat:done':
       // `stopReason` and `usage` are DELIBERATELY ABSENT. The worker sends no
       // fields on this event, and the real stop reason lives on a different
-      // chain (DuyaAgent.ts:3154) that never reaches here. Filling it with a
+      // chain (packages/agent-protocol/src/worker-protocol.ts:445) that never reaches here. Filling it with a
       // plausible default is the fabrication G-5 forbids, and the absence is
       // itself the observation: the run finished and the producer said nothing
       // about why. See G-5b in the gap register.

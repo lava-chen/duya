@@ -32,7 +32,14 @@ describe('shell capability', () => {
       timeout: 10_000,
       windowsHide: true,
     });
-    expect(output).toBe('capability-shell-ok');
+    // The resolved shell terminates its output record with the platform line
+    // ending (PowerShell writes CRLF on Windows, POSIX printf writes none).
+    // The capability trims that terminator before the model sees it
+    // (truncateShellOutput), so compare the payload with at most one trailing
+    // terminator removed — a blanket trim() would also hide stray whitespace.
+    const payload = output.replace(/(?:\r\n|\r|\n)$/, '');
+    expect(payload).toBe('capability-shell-ok');
+    expect(output).toMatch(/^capability-shell-ok(?:\r\n|\r|\n)?$/);
   });
 
   it('keeps PowerShell commands encoded as UTF-16LE and non-interactive', () => {

@@ -39,6 +39,24 @@ function makeContext(overrides: Partial<ToolPermissionContext> = {}): ToolPermis
 const WS = process.platform === 'win32' ? 'C:/work/project' : '/home/dev/project';
 const HOME = homedir();
 
+/**
+ * The same layout, rooted so the path is ABSOLUTE ON THIS PLATFORM.
+ *
+ * `checkPathSafety` resolves a relative path against the workspace before it
+ * asks whether the path is sensitive. On POSIX a `C:/...` string is not
+ * absolute at all: it resolved INSIDE the workspace, was allowed as an
+ * in-workspace read, and never reached the sensitive-path check — so the
+ * Windows layouts were asserted on Linux without ever being sensitive, and
+ * the confirmation they require was silently absent.
+ *
+ * Only the ROOT changes here. The segments the policy matches on — the ones
+ * under test — are exactly the ones the layout lists.
+ */
+function rooted(shape: string): string {
+  if (process.platform === 'win32') return shape;
+  return '/' + shape.replace(/^[A-Za-z]:\//, '').replace(/^\/+/, '');
+}
+
 function read(filePath: string, wd = WS): PermissionCheckResult {
   return checkPathSafety(filePath, wd, makeContext(), { write: false });
 }
@@ -118,7 +136,8 @@ describe('checkPathSafety read (write:false)', () => {
       '/home/user/.config/microsoft-edge/Default/Cookies',
       '/home/user/.mozilla/firefox/profiles/abc.default-release/cookies.sqlite',
     ];
-    for (const filePath of sensitiveByShape) {
+    for (const shape of sensitiveByShape) {
+      const filePath = rooted(shape);
       const result = read(filePath);
       expect(result.allowed).toBe(true, `${filePath} must be allowed (read-only)`);
       expect(result.requiresUserConfirmation).toBe(true, `${filePath} must require confirmation`);

@@ -112,7 +112,13 @@ describe('files-handlers', () => {
     });
 
     it('returns "Directory does not exist" when existsSync returns false', async () => {
-      mocks.fs.existsSync.mockImplementation((p: string) => !p.endsWith('no\\such\\dir'));
+      // The handler resolves the path before asking, so what it asks about
+      // is `path.resolve('/no/such/dir')` — '/no/such/dir' on POSIX and
+      // 'C:\no\such\dir' on Windows. Matching the literal 'no\such\dir'
+      // therefore only ever matched on Windows, and on POSIX the mock
+      // answered "exists" and the handler walked an empty tree instead.
+      const norm = (value: string) => String(value).replace(/\\/g, '/');
+      mocks.fs.existsSync.mockImplementation((p: string) => !norm(p).endsWith('/no/such/dir'));
       const result = await invokeHandler('files:browse', {}, '/no/such/dir', '/no');
       expect(result).toEqual({ success: false, error: 'Directory does not exist', tree: [] });
     });

@@ -95,6 +95,13 @@ describe('/settings in the TUI', () => {
     const running = command.run({ client: client() as never, session: SESSION as never, tui: app, busy: false }, '');
     await settle();
 
+    // The SELECTED row explains itself, and the panel prints only that row's
+    // detail. Language is the first row; Theme is the one the assertion is
+    // about — it switched in place, so a panel that still promised a restart
+    // would be a regression disguised as a passing test.
+    press(input, 'down');
+    await settle();
+
     const panel = (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n');
     // Values are on the row, not hidden behind a submenu.
     expect(panel).toContain('Theme');
@@ -102,9 +109,6 @@ describe('/settings in the TUI', () => {
     expect(panel).toContain('Reasoning effort');
     expect(panel).toContain('Completion rows');
     expect(panel).toContain('8 rows');
-    // The selected row explains itself. Theme is the FIRST row and it is the
-    // one that changed: it no longer waits for a restart, so a panel that
-    // still promised one would be a regression disguised as a passing test.
     expect(panel).toContain('Switches immediately');
     expect(panel).not.toContain('Applies on the next launch');
     expect(panel).toContain('type to filter');
@@ -142,7 +146,10 @@ describe('/settings in the TUI', () => {
     const running = command.run({ client: fake as never, session: SESSION as never, tui: app, busy: false }, '');
     await settle();
 
-    // First row is Theme, saved as `system`: one Enter is `dark`.
+    // Theme is the second row (Language is the first), saved as `system`:
+    // one Enter is `dark`.
+    press(input, 'down');
+    await settle();
     press(input, 'return');
     await settle();
     expect(fake.calls).toEqual([['cli.tui.theme', 'dark']]);
@@ -178,10 +185,10 @@ describe('/settings in the TUI', () => {
     const running = command.run({ client: fake as never, session: SESSION as never, tui: app, busy: false }, '');
     await settle();
 
-    // Row five is Thinking blocks: theme, display mode, effort, per-model
-    // effort, then it. The count is the assertion — a row inserted above this
-    // one silently moves this test onto the wrong switch.
-    for (let step = 0; step < 4; step += 1) press(input, 'down');
+    // Row six is Thinking blocks: language, theme, display mode, effort,
+    // per-model effort, then it. The count is the assertion — a row inserted
+    // above this one silently moves this test onto the wrong switch.
+    for (let step = 0; step < 5; step += 1) press(input, 'down');
     await settle();
     press(input, 'return');
     await settle();
@@ -196,7 +203,7 @@ describe('/settings in the TUI', () => {
 });
 
 describe('/settings per-model effort', () => {
-  /** Row four: theme, display mode, effort, then this one. */
+  /** Row five: language, theme, display mode, effort, then this one. */
   async function openOnModelEffort(saved: Readonly<Record<string, string>> = {}) {
     const { app, input } = makeApp();
     app.start();
@@ -228,7 +235,7 @@ describe('/settings per-model effort', () => {
 
   it('writes one JSON key, not a per-model setting that could never be listed', async () => {
     const open = await openOnModelEffort();
-    for (let step = 0; step < 3; step += 1) press(open.input, 'down');
+    for (let step = 0; step < 4; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');
     await settle();
@@ -251,7 +258,7 @@ describe('/settings per-model effort', () => {
     // row's detail — so walk down to it before reading its explanation. Two
     // effort rows showing different values with no note reads as a menu that
     // disagrees with itself.
-    for (let step = 0; step < 2; step += 1) press(open.input, 'down');
+    for (let step = 0; step < 3; step += 1) press(open.input, 'down');
     await settle();
     expect(open.panel()).toContain('overrides it with High');
 

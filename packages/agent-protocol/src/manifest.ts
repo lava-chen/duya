@@ -49,10 +49,10 @@ import type { JsonValue } from './hash.js';
 
 export interface PermissionPolicy {
   readonly mode: PermissionPolicyMode;
-  /** permissions/types.ts:63 */
+  /** packages/capabilities/src/permissions/types.ts:70 */
   readonly hostSwitch: 'ask' | 'always' | 'never';
   /** Default 300_000, matching the hardcoded value at
-   *  agent-process-entry.ts:2240. */
+   *  packages/host/src/worker-process-entry.ts:507. */
   readonly defaultTimeoutMs: number;
   readonly rules?: PermissionRulesWire;
 }

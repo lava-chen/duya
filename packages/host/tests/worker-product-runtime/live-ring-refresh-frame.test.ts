@@ -65,28 +65,100 @@ beforeAll(async () => {
   seam = (await import(ENTRY_URL)) as unknown as EntrySeam;
 }, 120_000);
 
+/**
+ * Every `onFrame(...)` argument in the driver, as written.
+ *
+ * The declaration (`onFrame: (frame: ...) => void`) is not a call site and
+ * does not match.
+ *
+ * The argument is scanned to its MATCHING paren, with string literals
+ * skipped, so an argument that contains a comma or a nested call is read
+ * WHOLE. The previous read stopped at the first comma and then took the
+ * HEAD of what was left, which is how the third call site -- an object
+ * literal that SPREADS `chatFrame` -- came out as the empty string: the
+ * same expression shape a real regression would have. A guard that cannot
+ * tell those apart is not a guard, so the read is fixed before the claim is
+ * restated.
+ */
+function onFrameArguments(source: string): string[] {
+  const args: string[] = [];
+  const call = /\bonFrame\s*\(/g;
+  for (let match = call.exec(source); match !== null; match = call.exec(source)) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let quote: string | null = null;
+    let i = start;
+    while (i < source.length) {
+      const ch = source[i]!;
+      if (quote !== null) {
+        if (ch === '\\') {
+          i += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'" || ch === '`') {
+        quote = ch;
+      } else if (ch === '(') {
+        depth += 1;
+      } else if (ch === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+      i += 1;
+    }
+    args.push(source.slice(start, i).trim());
+  }
+  return args;
+}
+
+/** The argument with a trailing `as ...` cast removed, for the bare-reference check. */
+function withoutCast(arg: string): string {
+  return arg.replace(/\s+as\s+[^;]+$/, '').trim();
+}
+
 describe('the drain is post-codec, which is why the ring keys on chat:* names', () => {
   it('never hands the raw projected frame to onFrame', () => {
     const source = readFileSync(fileURLToPath(DRIVER_URL), 'utf8');
+    const args = onFrameArguments(source);
 
-    // Every `onFrame(` ARGUMENT in the driver, as written. The declaration
-    // (`onFrame: (frame: ...) => void`) is not a call site and does not match.
-    // Each argument is a cast expression, so compare on the HEAD of the
-    // expression rather than the whole string.
-    const args = [...source.matchAll(/\bonFrame\(\s*([^,)]+)/g)].map((m) => m[1].trim());
-    const heads = args.map((a) => (a.match(/^[A-Za-z_$][\w$]*/) ?? [''])[0]);
+    // The three call sites today: the turn-start status line, the usage
+    // result the surface projects, and the codec's own frame.
+    expect(args.length).toBeGreaterThanOrEqual(2);
 
-    // Two call sites, both after conversion: the usage `result` the surface
-    // projects, and `chatFrame` from the codec.
-    expect(heads.length).toBeGreaterThanOrEqual(2);
-    expect(heads).toContain('chatFrame');
-    expect(heads).toContain('result');
+    // The codec's output IS what the drain hands over -- `chatFrame` is the
+    // frame the codec returned, and it reaches `onFrame` spread into the
+    // outgoing frame.
+    expect(args.some((arg) => /\bchatFrame\b/.test(arg)), 'the codec output never reaches onFrame').toBe(true);
+    // And so is the usage result the surface projects.
+    expect(args.some((arg) => /\bresult\b/.test(arg)), 'the usage result never reaches onFrame').toBe(true);
 
-    // The invariant. The bare projected frame is what the old arms were
-    // written against, so passing it here is the regression, spelled out.
-    expect(heads).not.toContain('frame');
-    expect(heads).not.toContain('typed');
-    expect(heads).not.toContain('payload');
+    // The invariant, restated so that it can FAIL: every frame the drain
+    // hands over is a POST-codec frame. Either it is spelled in the `chat:`
+    // vocabulary, or it IS the codec's output, or it is the surface's usage
+    // result. A pre-codec value -- the projection `frame`, the envelope
+    // `typed`, the event `typed.payload` -- satisfies none of those, so a
+    // regression that handed one over is red here instead of green.
+    for (const arg of args) {
+      const postCodec = /'chat:[a-z_]+'/.test(arg) || /\bchatFrame\b/.test(arg) || /\bresult\b/.test(arg);
+      expect(postCodec, `onFrame is handed a pre-codec value: ${arg}`).toBe(true);
+    }
+
+    // The bare projected frame is never named at all. `frame` is the
+    // pre-codec projection (`worker-engine-driver.ts:264`), so an argument
+    // that names it is reaching for the frame the codec was supposed to
+    // replace -- including by spreading it, which the check above also
+    // rejects but which is worth naming on its own.
+    for (const arg of args) {
+      expect(arg, `onFrame names the raw projected frame: ${arg}`).not.toMatch(/\bframe\b/);
+    }
+
+    // And no argument IS a pre-codec value, bare. The turn-start site reads
+    // `typed.payload.index` to BUILD a `chat:turn_start` frame, so the
+    // envelope is legitimately in scope there; what must not happen is the
+    // envelope itself being handed over.
+    for (const arg of args) {
+      expect(['typed', 'typed.payload', 'payload', 'frame']).not.toContain(withoutCast(arg));
+    }
   });
 });
 

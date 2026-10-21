@@ -33,6 +33,7 @@
 import { EventEmitter } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { describe, expect, it } from 'vitest';
+import type { RunEventEnvelope } from '@duya/agent-protocol';
 import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
 import { handleGetRunResult, type RouterDeps } from '../agents/server/router';
 import type { WorkerInterrupt } from '../agents/server/run-orchestrator';
@@ -73,9 +74,6 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
         return { ok: true, state: 'created', runId: payload.runId };
       }
       if (action === 'run:append') {
-        for (const event of payload.events as Array<{ payload: { type: string } }>) {
-          appendSink?.(event);
-        }
         return {
           ok: true,
           state: 'applied',
@@ -84,6 +82,16 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
         };
       }
       return { ok: true, state: 'applied', runId: payload.runId, applied: true };
+    },
+    // The durable ledger's only writer is the NATIVE channel (plan 610 S1), so
+    // the sink is fed by the Runtime's own envelopes. The orchestrator's
+    // legacy reverse-translation no longer persists anything.
+    nativeWriter: {
+      currentEpoch: () => 0,
+      append: async (_runId: string, envelopes: readonly { payload: { type: string } }[]) => {
+        for (const envelope of envelopes) appendSink?.(envelope);
+        return { state: 'written', written: envelopes.length };
+      },
     },
     channel: createWorkerExecutionChannel({
       dispatch: () => {
@@ -97,6 +105,16 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
     }),
   });
   return { orchestrator, commands, runIds };
+}
+
+/** One Runtime-minted envelope, exactly as the worker writes it. */
+function nativeEnvelope(runId: string, sessionId: string, seq: number, type: string) {
+  return {
+    runId,
+    sessionId,
+    seq,
+    payload: { type },
+  } as unknown as RunEventEnvelope;
 }
 
 /** A response double that records what `sendJson` wrote. */
@@ -146,9 +164,22 @@ describe('H8.2 — a host can read the run layer’s terminal, not the worker’
     const start = await orchestrator.openRun('session-1', intent);
     expect(start.accepted).toBe(true);
 
-    // Drive the run the way the router does, through its own `observe`.
+    // Drive the run the way the router does, through its own `observe` — and
+    // through the run layer's durable writer, which is the NATIVE channel now
+    // (plan 610 S1). The legacy vocabulary is observed but no longer
+    // persisted, so the envelopes that reach the ledger are the Runtime's.
     orchestrator.observe('session-1', { type: 'chat:turn_start', data: { turnCount: 1 } });
     orchestrator.observe('session-1', { type: 'chat:text', data: 'hi' });
+    await orchestrator.persistNativeRunEvent(
+      'session-1',
+      nativeEnvelope(start.runId as string, 'session-1', 1, 'run.started'),
+      0,
+    );
+    await orchestrator.persistNativeRunEvent(
+      'session-1',
+      nativeEnvelope(start.runId as string, 'session-1', 2, 'run.completed'),
+      0,
+    );
     orchestrator.observe('session-1', { type: 'chat:done' });
     await drain();
 
@@ -227,7 +258,13 @@ describe('H8.2 — a host can read the run layer’s terminal, not the worker’
     void handleGetRunResult('session-1', res, depsFor(orchestrator));
     await drain();
 
-    // The run carried on: it was not closed by the read.
+    // The run carried on: it was not closed by the read. The Runtime's own
+    // terminal envelope still reaches the durable writer afterwards.
+    await orchestrator.persistNativeRunEvent(
+      'session-1',
+      nativeEnvelope((await orchestrator.runForSession('session-1')) as string, 'session-1', 2, 'run.completed'),
+      0,
+    );
     orchestrator.observe('session-1', { type: 'chat:done' });
     await drain();
 

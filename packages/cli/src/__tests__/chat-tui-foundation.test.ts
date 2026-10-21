@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
-import type { RunEventEnvelope, RunId, SessionId } from '@duya/agent-protocol';
+import type { CancelAgentRunResult, RunEventEnvelope, RunId, SessionId } from '@duya/agent-protocol';
 
 interface FakeTuiOptions {
   readonly onSubmit: (text: string) => void;
@@ -139,7 +139,7 @@ describe('chatTui production callback wiring', () => {
   });
 
   it('holds admission until an interrupted live run has finished cancelling', async () => {
-    const cancellation = deferred<void>();
+    const cancellation = deferred<CancelAgentRunResult>();
     const starts: string[] = [];
     const client = makeClient({
       startAgentRun: vi.fn(async ({ prompt }: { prompt: string }) => {
@@ -149,6 +149,10 @@ describe('chatTui production callback wiring', () => {
       watchAgentRunEvents: vi.fn(async function* (_runId: RunId, { signal }: { signal: AbortSignal }) {
         await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
       }),
+      // The Host answers a cancel with a `CancelAgentRunResult` — the shape
+      // `chat.ts` reads `requested` and `terminal` off. A bare `undefined` is
+      // not a value the API can produce, and reading it made the whole
+      // cancellation look like a failure.
       cancelAgentRun: vi.fn(() => cancellation.promise),
     });
     const { running, app } = await startChat(client);
@@ -160,7 +164,7 @@ describe('chatTui production callback wiring', () => {
     app.options.onSubmit('second');
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(starts).toEqual(['first']);
-    cancellation.resolve();
+    cancellation.resolve({ requested: true, runId: 'run-first' as RunId });
     await waitUntil(() => starts.length === 2);
     await waitUntil(() => vi.mocked(client.watchAgentRunEvents).mock.calls.length === 2);
     app.options.onInterrupt();
@@ -221,7 +225,10 @@ describe('chatTui production callback wiring', () => {
         starts.push(prompt);
         return acceptance.promise;
       }),
-      cancelAgentRun: vi.fn(async (runId: RunId) => { cancelled.push(runId); }),
+      cancelAgentRun: vi.fn(async (runId: RunId) => {
+        cancelled.push(runId);
+        return { requested: true, runId } satisfies CancelAgentRunResult;
+      }),
     });
     const { running, app } = await startChat(client);
 

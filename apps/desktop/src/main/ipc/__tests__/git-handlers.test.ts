@@ -373,8 +373,13 @@ describe('git:review', () => {
   });
 
   it('rejects an untracked symlink that resolves outside the workspace', async () => {
+    // The suffix is matched with the platform's own separator: the handler
+    // joins the workspace and the relative path with `path.join`, so on POSIX
+    // the path ends in `src/new-file.ts` and a hard-coded `src\\new-file.ts`
+    // never matched — the mocked escape was never simulated and the handler
+    // correctly reported the path as inside the workspace.
     mocks.fs.realpathSync.mockImplementation((value: string) =>
-      value.endsWith('src\\new-file.ts') ? '/tmp/outside.ts' : value,
+      value.replace(/\\/g, '/').endsWith('src/new-file.ts') ? '/tmp/outside.ts' : value,
     );
     mockGit([
       { args: ['status'], result: spawnResult(REVIEW_STATUS_FIXTURE) },

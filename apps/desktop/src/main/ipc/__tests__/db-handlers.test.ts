@@ -2,17 +2,26 @@
  * db-handlers.test.ts — Per-handler forwarding correctness for the core
  * DB IPC channels (plan 328 Phase 2.4).
  *
+ * Since commit 8f7f5032 ("feat(host): run CLI and Desktop through the Host
+ * worker") the Desktop handlers no longer talk to the core stores
+ * directly: session, message, lock, task and permission CRUD all cross the
+ * Host boundary (`../../cli/desktop-host-api`), and the IPC row shape is
+ * produced by the adapters in `../core-db-adapters`.
+ *
  * Coverage:
  *   - session:* / message:* / lock:* / task:* / permission:* / search:*
- *     channels forward to the right core-store method with correctly
- *     mapped args and return the adapter-shaped row.
- *   - Decision 3: db:message:replace → appendBatch (not a separate replace).
- *   - Decision 5: db:session:delete is a soft delete (status='deleted');
- *     db:session:list filters out automation mode; db:message:add uses
- *     INSERT OR IGNORE semantics via appendBatch.
- *   - Decision 7: db:search:sessions combines sessions.search +
- *     messageLog.searchText.
- *   - Errors from store methods propagate through the handler.
+ *     channels forward to the right Host API method with correctly mapped
+ *     args and return the adapter-shaped row.
+ *   - The legacy snake_case IPC row survives the migration: the handler
+ *     reads the Host session through the LOCAL adapter and maps it with
+ *     `coreSessionToIpcRow`.
+ *   - db:session:delete is a soft delete on the Host side (the Host keeps
+ *     the row for recovery).
+ *   - db:session:archive / db:session:unarchive forward to the Host archive
+ *     operations; the mock delegates to the REAL Host implementation over
+ *     the mocked core stores, so the archive contract (lock preflight,
+ *     subtree walk, file moves, two-phase commit) stays covered here.
+ *   - Errors from Host methods propagate through the handler.
  *
  * Pattern mirrors logger-handlers.test.ts / git-handlers.test.ts: all
  * mock state lives in vi.hoisted() so the vi.mock() factories (also
@@ -20,6 +29,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CoreSession } from '@duya/data/session-store';
+import { createHostSessionApi } from '@duya/host/session-api';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -27,6 +37,18 @@ import * as path from 'path';
 // All mock state lives in vi.hoisted so the vi.mock factory closures
 // (also hoisted) and the test bodies see the same singleton.
 const mocks = vi.hoisted(() => {
+  // Session extension-bound columns, mirroring the real adapter.
+  const SESSION_EXTENSION_KEYS = [
+    'system_prompt',
+    'conductor_mode_enabled',
+    'conductor_canvas_id',
+    'context_summary',
+    'context_summary_updated_at',
+    'plan_mode_enabled',
+    'goal_mode_enabled',
+    'source',
+  ] as const;
+
   const captured = {
     handle: new Map<
       string,
@@ -42,9 +64,6 @@ const mocks = vi.hoisted(() => {
     time: vi.fn(() => () => undefined),
     timeAsync: vi.fn(),
   };
-
-  // permission-resolver — returns a resolved profile string.
-  const resolvePermissionProfile = vi.fn(() => 'default');
 
   // ─── Mock stores (returned by getCoreStores()) ───
   // Each store method is a vi.fn with a default implementation so tests
@@ -252,17 +271,52 @@ const mocks = vi.hoisted(() => {
   // that the handler forwards the adapter's output (not a re-implementation
   // of the mapping logic). The tagged shape also makes return-value
   // assertions resilient to unrelated field changes in the real adapters.
+  // The field mapping mirrors the real adapter, so a forwarded value can be
+  // asserted field by field.
   const adapters = {
     ipcSessionToCoreCreate: vi.fn(
       (data: Record<string, unknown>, permissionMode: string) => ({
         __tag: 'coreCreate',
         id: data.id,
+        title: data.title,
+        workingDirectory: data.working_directory,
+        projectName: data.project_name,
+        status: data.status,
+        model: data.model,
+        providerId: data.provider_id,
+        mode: data.mode,
         permissionMode,
+        agentProfileId: (data.agent_profile_id as string | null | undefined) ?? null,
+        parentSessionId:
+          (data.parent_session_id as string | undefined) ??
+          (data.parent_id as string | undefined) ??
+          null,
+        agentType: data.agent_type,
+        agentName: data.agent_name,
+        draft: (data.draft_message as string | null | undefined) ?? null,
+        extensions: Object.fromEntries(
+          SESSION_EXTENSION_KEYS
+            .filter((key) => data[key] !== undefined)
+            .map((key) => [key, data[key]]),
+        ),
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
       }),
     ),
     ipcSessionToUpdate: vi.fn((data: Record<string, unknown>) => ({
       __tag: 'coreUpdate',
-      ...data,
+      ...(data.title !== undefined ? { title: data.title } : {}),
+      ...(data.working_directory !== undefined ? { workingDirectory: data.working_directory } : {}),
+      ...(data.project_name !== undefined ? { projectName: data.project_name } : {}),
+      ...(data.status !== undefined ? { status: data.status } : {}),
+      ...(data.model !== undefined ? { model: data.model } : {}),
+      ...(data.provider_id !== undefined ? { providerId: data.provider_id } : {}),
+      ...(data.mode !== undefined ? { mode: data.mode } : {}),
+      ...(data.permission_profile !== undefined ? { permissionMode: data.permission_profile } : {}),
+      ...(data.parent_id !== undefined ? { parentSessionId: data.parent_id } : {}),
+      ...(data.agent_profile_id !== undefined ? { agentProfileId: data.agent_profile_id } : {}),
+      ...(data.agent_type !== undefined ? { agentType: data.agent_type } : {}),
+      ...(data.agent_name !== undefined ? { agentName: data.agent_name } : {}),
     })),
     coreSessionToIpcRow: vi.fn((session: Record<string, unknown>) => ({
       __tag: 'ipcRow',
@@ -340,18 +394,229 @@ const mocks = vi.hoisted(() => {
       __tag: 'mailboxRow',
       id: item.id,
     })),
+    // ── Adapters the Host-migrated handler calls ──
+    hostMessageItemsToIpcMessages: vi.fn(
+      (sessionId: string, items: Array<{ id: string; sequence: number }>) =>
+        items.map((item) => ({
+          __tag: 'ipcMsg',
+          id: item.id,
+          session_id: sessionId,
+          seq_index: item.sequence,
+        })),
+    ),
+    newEventToIpcMessage: vi.fn((event: Record<string, unknown>) => ({
+      __tag: 'ipcMsg',
+      id: event.id,
+      session_id: event.sessionId,
+      seq_index: event.seq,
+    })),
+    ipcTaskToHostCreate: vi.fn((data: Record<string, unknown>) => ({
+      __tag: 'hostTaskCreate',
+      id: data.id,
+      subject: data.subject,
+      description: data.description,
+      status: data.status ?? 'pending',
+      blocks: [],
+      blockedBy: [],
+      metadata: {},
+    })),
+    ipcTaskToHostUpdate: vi.fn((data: Record<string, unknown>) => ({
+      __tag: 'hostTaskUpdate',
+      ...data,
+    })),
+    hostTaskToIpcRow: vi.fn((task: Record<string, unknown>) => ({
+      __tag: 'taskRow',
+      id: task.id,
+      session_id: task.sessionId,
+      subject: task.subject,
+    })),
+    coreGoalToIpcRow: vi.fn((goal: Record<string, unknown>) => ({
+      __tag: 'goalRow',
+      id: goal.id,
+      session_id: goal.sessionId,
+      status: goal.status,
+    })),
+  };
+
+  // ─── Host APIs (the boundary the handlers now use) ───
+  // The Desktop handlers call the Host session/local-session/lock/task/
+  // permission APIs instead of the core stores. These mocks are that
+  // boundary: a small in-memory Host whose session rows are the source of
+  // truth for the assertions.
+  const hostSessions = new Map<string, Record<string, unknown>>();
+  const hostTimeline = new Map<string, Array<Record<string, unknown>>>();
+  const hostTasks = new Map<string, Record<string, unknown>>();
+  const hostPermissions = new Map<string, Record<string, unknown>>();
+
+  const makeHostSession = (input: Record<string, unknown>): Record<string, unknown> => ({
+    id: String(input.id),
+    title: (input.title as string | undefined) ?? 'Mock',
+    projectName: (input.projectName as string | undefined) ?? '',
+    status: (input.status as string | undefined) ?? 'active',
+    model: (input.model as string | undefined) ?? '',
+    providerId: (input.providerId as string | undefined) ?? '',
+    mode: (input.mode as string | undefined) ?? 'code',
+    permissionMode: (input.permissionMode as string | undefined) ?? 'default',
+    agentProfileId: (input.agentProfileId as string | null | undefined) ?? null,
+    parentSessionId: (input.parentSessionId as string | null | undefined) ?? null,
+    agentType: (input.agentType as string | undefined) ?? '',
+    agentName: (input.agentName as string | undefined) ?? '',
+    draft: (input.draft as string | null | undefined) ?? null,
+    extensions: (input.extensions as Record<string, unknown> | undefined) ?? {},
+    workingDirectory: '',
+    rolloutPath: null,
+    archivedAt: null,
+    archivedPath: null,
+    recencyAt: 1000,
+    lastTurnStartedAt: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+
+  const hostSessionApi = {
+    resolveSessionPermissionProfile: vi.fn(async () => 'default'),
+    create: vi.fn(async (input: Record<string, unknown>) => {
+      const session = makeHostSession(input);
+      hostSessions.set(session.id as string, session);
+      return session;
+    }),
+    get: vi.fn(async (sessionId: string) => hostSessions.get(sessionId) ?? null),
+    list: vi.fn(async () => ({ sessions: [] as Array<Record<string, unknown>>, nextCursor: null })),
+    searchSessions: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    searchMessages: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    update: vi.fn(
+      async (sessionId: string, _expectedUpdatedAt: unknown, patch: Record<string, unknown>) => {
+        const existing = hostSessions.get(sessionId);
+        if (!existing) return { updated: false as const, reason: 'not_found' as const };
+        const next = { ...existing, ...patch, updatedAt: 2000 };
+        hostSessions.set(sessionId, next);
+        return { updated: true as const, session: next };
+      },
+    ),
+    delete: vi.fn(async (sessionId: string) => {
+      if (!hostSessions.has(sessionId)) {
+        return { deleted: false as const, reason: 'not_found' as const };
+      }
+      hostSessions.delete(sessionId);
+      return { deleted: true as const };
+    }),
+    // archive/unarchive are wired to the REAL Host implementation in the
+    // beforeEach below, so the archive contract stays covered.
+    archive: vi.fn(),
+    unarchive: vi.fn(),
+    countTimeline: vi.fn(async () => 0),
+    readMessages: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      messages: [] as Array<Record<string, unknown>>,
+      nextCursor: null,
+    })),
+    readProjectedTimeline: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      entries: [] as Array<Record<string, unknown>>,
+      nextCursor: null,
+    })),
+    readTimeline: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      entries: [] as Array<Record<string, unknown>>,
+      nextCursor: null,
+    })),
+    appendTimeline: vi.fn(
+      async (sessionId: string, input: { entries: ReadonlyArray<Record<string, unknown>> }) => {
+        const items = hostTimeline.get(sessionId) ?? [];
+        hostTimeline.set(sessionId, [...items, ...input.entries]);
+        return {
+          sessionId,
+          acceptedIds: input.entries.map((entry) => entry.id as string),
+          writtenCount: input.entries.length,
+          lastSequence: null,
+          cursor: null,
+        };
+      },
+    ),
+    deleteTimeline: vi.fn(async () => 0),
+    registerLocalDirectory: vi.fn(async (_directory: string) => ({
+      state: 'bound' as const,
+      workspaceId: 'workspace-test',
+      rootId: 'root-test',
+      relativePath: '',
+    })),
+  };
+
+  const hostLocalSessionApi = {
+    readLocalSession: vi.fn(async (sessionId: string) => hostSessions.get(sessionId) ?? null),
+    listLocalSessions: vi.fn(async () => ({
+      sessions: [] as Array<Record<string, unknown>>,
+      nextCursor: null,
+    })),
+  };
+
+  const hostLockApi = {
+    acquireLock: vi.fn(async () => true),
+    renewLock: vi.fn(async () => true),
+    releaseLock: vi.fn(async () => true),
+    isSessionLocked: vi.fn(async () => false),
+    getSessionLockOrigin: vi.fn(async () => null as string | null),
+  };
+
+  const hostTaskApi = {
+    createTask: vi.fn(async (sessionId: string, task: Record<string, unknown>) => {
+      const row = { ...task, sessionId, createdAt: 1000, updatedAt: 1000 };
+      hostTasks.set(row.id as string, row);
+      return row;
+    }),
+    getTask: vi.fn(async (taskId: string) => hostTasks.get(taskId) ?? null),
+    listTasks: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    listTasksByOwner: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    updateTask: vi.fn(async () => null),
+    deleteTask: vi.fn(async () => true),
+    deleteTasksBySession: vi.fn(async () => undefined),
+    claimTask: vi.fn(async () => ({ success: false })),
+    blockTasks: vi.fn(async () => true),
+    getAgentStatuses: vi.fn(async () => []),
+    unassignTeammateTasks: vi.fn(async () => ({ success: true })),
+  };
+
+  const hostPermissionApi = {
+    createPermissionRequest: vi.fn(async (input: Record<string, unknown>) => {
+      const row = {
+        id: input.id as string,
+        sessionId: (input.sessionId as string | null | undefined) ?? null,
+        toolName: input.toolName as string,
+        toolInput: (input.toolInput as Record<string, unknown> | null | undefined) ?? null,
+        status: 'pending',
+        decision: null,
+        message: null,
+        updatedPermissions: null,
+        updatedInput: null,
+        createdAt: 1000,
+        resolvedAt: null,
+      };
+      hostPermissions.set(row.id, row);
+      return row;
+    }),
+    getPermissionRequest: vi.fn(async (id: string) => hostPermissions.get(id) ?? null),
+    listPendingPermissionRequests: vi.fn(async () => [] as Array<Record<string, unknown>>),
+    resolvePermissionRequest: vi.fn(async (id: string) => hostPermissions.get(id) ?? null),
   };
 
   return {
     captured,
     logger,
-    resolvePermissionProfile,
     stores,
     sessionRows,
     adapters,
     resolveRolloutRoot,
     agentProfileRows,
     agentProfileApi,
+    hostSessions,
+    hostTimeline,
+    hostTasks,
+    hostPermissions,
+    hostSessionApi,
+    hostLocalSessionApi,
+    hostLockApi,
+    hostTaskApi,
+    hostPermissionApi,
   };
 });
 
@@ -382,10 +647,6 @@ vi.mock('../../db/core-connection', () => ({
   _setCoreStoresForTesting: vi.fn(),
 }));
 
-vi.mock('../../db/permission-resolver', () => ({
-  resolvePermissionProfile: mocks.resolvePermissionProfile,
-}));
-
 vi.mock('../../db/index', () => ({
   initDatabaseFromBoot: vi.fn(),
   initDatabase: vi.fn(),
@@ -403,6 +664,11 @@ vi.mock('../../cli/desktop-host-api', async () => {
   );
   return {
     ...actual,
+    getDesktopHostSessionApi: () => mocks.hostSessionApi,
+    getDesktopHostLocalSessionApi: () => mocks.hostLocalSessionApi,
+    getDesktopHostLockApi: () => mocks.hostLockApi,
+    getDesktopHostTaskApi: () => mocks.hostTaskApi,
+    getDesktopHostPermissionRequestApi: () => mocks.hostPermissionApi,
     getDesktopHostLocalAgentProfileApi: () => mocks.agentProfileApi,
   };
 });
@@ -516,6 +782,40 @@ import { formatArchiveDate } from '../../db/core/archive-paths';
 
 // ─── Helper ───
 
+/** Seed a Host session row so a handler can read it back through the Host. */
+function seedHostSession(
+  id: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const session = {
+    id,
+    title: 'Mock',
+    projectName: '',
+    status: 'active',
+    model: '',
+    providerId: '',
+    mode: 'code',
+    permissionMode: 'default',
+    agentProfileId: null,
+    parentSessionId: null,
+    agentType: '',
+    agentName: '',
+    draft: null,
+    extensions: {},
+    workingDirectory: '',
+    rolloutPath: null,
+    archivedAt: null,
+    archivedPath: null,
+    recencyAt: 1000,
+    lastTurnStartedAt: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+    ...overrides,
+  };
+  mocks.hostSessions.set(id, session);
+  return session;
+}
+
 async function invokeHandler(
   channel: string,
   event: unknown = {},
@@ -531,19 +831,42 @@ async function invokeHandler(
 
 describe('db-handlers (core store thin forward)', () => {
   beforeEach(() => {
-    // vi.clearAllMocks clears call history for every vi.fn while
-    // preserving their default implementations (set in vi.hoisted).
-    vi.clearAllMocks();
+    // vi.resetAllMocks() clears the call history AND restores the default
+    // implementation of every mock, so a stub installed by one test (a
+    // store override, a queued return value) cannot leak into the next one.
+    vi.resetAllMocks();
     mocks.captured.handle.clear();
     mocks.sessionRows.clear();
     mocks.agentProfileRows.clear();
+    mocks.hostSessions.clear();
+    mocks.hostTimeline.clear();
+    mocks.hostTasks.clear();
+    mocks.hostPermissions.clear();
+    // The archive/unarchive semantics moved into the Host package with the
+    // Desktop→Host migration, so the mock delegates to the REAL Host
+    // implementation over the same mocked core stores. That keeps the
+    // archive contract (lock preflight, subtree walk, file moves, two-phase
+    // commit) covered here instead of being asserted against a stub.
+    const hostArchiveApi = () =>
+      createHostSessionApi({
+        stores: mocks.stores as unknown as Parameters<
+          typeof createHostSessionApi
+        >[0]['stores'],
+        rolloutRoot: mocks.resolveRolloutRoot(),
+      });
+    mocks.hostSessionApi.archive.mockImplementation((sessionId: string) =>
+      hostArchiveApi().archive(sessionId),
+    );
+    mocks.hostSessionApi.unarchive.mockImplementation((sessionId: string) =>
+      hostArchiveApi().unarchive(sessionId),
+    );
     registerDbHandlers();
   });
 
   // ==================== Session Handlers ====================
 
   describe('db:session:create', () => {
-    it('forwards to sessions.create via adapter and returns coreSessionToIpcRow', async () => {
+    it('forwards to the Host session API and returns coreSessionToIpcRow', async () => {
       const data = {
         id: 's1',
         title: 'Test',
@@ -552,32 +875,42 @@ describe('db-handlers (core store thin forward)', () => {
       };
       const result = await invokeHandler('db:session:create', {}, data);
 
-      // Permission profile resolved with the explicit profile + parent +
-      // trust-override flag before insert.
-      expect(mocks.resolvePermissionProfile).toHaveBeenCalledWith(
-        'plan',
-        null,
-        { isTrustedOverride: false },
-      );
-      // Adapter maps the IPC DTO → core create input.
+      // Host resolves permission inheritance and the user default before the
+      // single session write.
+      expect(mocks.hostSessionApi.resolveSessionPermissionProfile).toHaveBeenCalledWith({
+        explicit: 'plan',
+        parentSessionId: null,
+        trustedOverride: false,
+      });
+      // The resolved profile is what the adapter maps into the create input.
       expect(mocks.adapters.ipcSessionToCoreCreate).toHaveBeenCalledWith(
         data,
         'default',
       );
-      // Store receives the adapter's output, not the raw DTO.
-      expect(mocks.stores.sessions.create).toHaveBeenCalledTimes(1);
-      const createArg = mocks.stores.sessions.create.mock.calls[0][0] as Record<
-        string,
-        unknown
-      >;
-      expect(createArg).toMatchObject({ __tag: 'coreCreate', id: 's1' });
-      // Return shape is the adapter-mapped row.
+      // The requested folder is registered through Host; only the opaque
+      // workspace reference is persisted.
+      expect(mocks.hostSessionApi.registerLocalDirectory).toHaveBeenCalledWith('/tmp');
+      expect(mocks.hostSessionApi.create).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 's1',
+          title: 'Test',
+          permissionMode: 'default',
+          workspaceId: 'workspace-test',
+          workspaceRootId: 'root-test',
+          workspaceRelativePath: '',
+        }),
+      );
+      // The row is read back through the LOCAL Host adapter and mapped.
+      expect(mocks.hostLocalSessionApi.readLocalSession).toHaveBeenCalledWith('s1', {
+        includeAllSessions: true,
+      });
       expect(mocks.adapters.coreSessionToIpcRow).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ __tag: 'ipcRow', id: 's1' });
     });
 
-    it('propagates errors from sessions.create', async () => {
-      mocks.stores.sessions.create.mockImplementationOnce(() => {
+    it('propagates errors from the Host session API', async () => {
+      mocks.hostSessionApi.create.mockImplementationOnce(() => {
         throw new Error('db locked');
       });
       await expect(
@@ -588,11 +921,12 @@ describe('db-handlers (core store thin forward)', () => {
 
   describe('db:session:get', () => {
     it('returns coreSessionToIpcRow when found', async () => {
-      const session = { id: 's1', status: 'active', updatedAt: 1000 };
-      mocks.stores.sessions.get.mockReturnValueOnce(session);
+      const session = seedHostSession('s1', { status: 'active', updatedAt: 1000 });
       const result = await invokeHandler('db:session:get', {}, 's1');
 
-      expect(mocks.stores.sessions.get).toHaveBeenCalledWith('s1');
+      expect(mocks.hostLocalSessionApi.readLocalSession).toHaveBeenCalledWith('s1', {
+        includeAllSessions: true,
+      });
       expect(mocks.adapters.coreSessionToIpcRow).toHaveBeenCalledWith(session);
       expect(result).toMatchObject({ __tag: 'ipcRow', id: 's1' });
     });
@@ -606,59 +940,61 @@ describe('db-handlers (core store thin forward)', () => {
 
   describe('db:session:update', () => {
     it('forwards patch via ipcSessionToUpdate and writes extension-bound keys', async () => {
-      const updated = { id: 's1', status: 'active', updatedAt: 2000 };
-      // sessions.get is called again after update to read back the row.
-      mocks.stores.sessions.get.mockReturnValueOnce(updated);
+      seedHostSession('s1');
       const data = { title: 'New', system_prompt: 'sys' };
       const result = await invokeHandler('db:session:update', {}, 's1', data);
 
       expect(mocks.adapters.ipcSessionToUpdate).toHaveBeenCalledWith(data);
-      expect(mocks.stores.sessions.update).toHaveBeenCalledTimes(1);
-      const [idArg, patchArg] = mocks.stores.sessions.update.mock
-        .calls[0] as [string, Record<string, unknown>];
+      expect(mocks.hostSessionApi.update).toHaveBeenCalledTimes(1);
+      const [idArg, expectedArg, patchArg] = mocks.hostSessionApi.update.mock
+        .calls[0] as [string, undefined, Record<string, unknown>];
       expect(idArg).toBe('s1');
-      expect(patchArg).toMatchObject({ __tag: 'coreUpdate', title: 'New' });
-      // system_prompt is an extension-bound field — written via setExtension.
-      expect(mocks.stores.sessions.setExtension).toHaveBeenCalledWith(
-        's1',
-        'system_prompt',
-        'sys',
-      );
+      expect(expectedArg).toBeUndefined();
+      // system_prompt is an extension-bound field — it travels inside the
+      // Host extension object, not as a top-level column.
+      expect(patchArg).toMatchObject({
+        title: 'New',
+        extensions: { system_prompt: 'sys' },
+      });
       expect(result).toMatchObject({ __tag: 'ipcRow', id: 's1' });
     });
   });
 
   describe('db:session:delete', () => {
-    it('soft-deletes via sessions.update({status:"deleted"}) — never calls sessions.delete (decision 5)', async () => {
-      mocks.stores.sessions.get.mockReturnValueOnce({
-        id: 's1',
-        status: 'active',
-      });
+    it('soft-deletes through the Host session API — never deletes the row locally', async () => {
+      seedHostSession('s1');
       const result = await invokeHandler('db:session:delete', {}, 's1');
 
       expect(result).toBe(true);
-      expect(mocks.stores.sessions.update).toHaveBeenCalledWith('s1', {
-        status: 'deleted',
-      });
+      expect(mocks.hostSessionApi.delete).toHaveBeenCalledWith('s1');
+      // The Host keeps the row for recovery; Desktop must not delete it.
       expect(mocks.stores.sessions.delete).not.toHaveBeenCalled();
     });
 
     it('returns false when session does not exist', async () => {
       const result = await invokeHandler('db:session:delete', {}, 'missing');
       expect(result).toBe(false);
-      expect(mocks.stores.sessions.update).not.toHaveBeenCalled();
+      expect(mocks.hostSessionApi.delete).toHaveBeenCalledWith('missing');
+      expect(mocks.stores.sessions.delete).not.toHaveBeenCalled();
     });
   });
 
   describe('db:session:list', () => {
     it('lists all sessions (cron sessions are ordinary now) and maps each row', async () => {
-      mocks.stores.sessions.list.mockReturnValueOnce([
-        { id: 's1', status: 'active', updatedAt: 1000 },
-        { id: 's2', status: 'active', updatedAt: 2000 },
-      ]);
+      const sessions = [
+        seedHostSession('s1', { status: 'active', updatedAt: 1000 }),
+        seedHostSession('s2', { status: 'active', updatedAt: 2000 }),
+      ];
+      mocks.hostLocalSessionApi.listLocalSessions.mockResolvedValueOnce({
+        sessions,
+        nextCursor: null,
+      } as never);
       const result = (await invokeHandler('db:session:list', {})) as unknown[];
 
-      expect(mocks.stores.sessions.list).toHaveBeenCalledWith({});
+      expect(mocks.hostLocalSessionApi.listLocalSessions).toHaveBeenCalledWith({
+        includeAllSessions: true,
+        limit: 200,
+      });
       expect(mocks.adapters.coreSessionToIpcRow).toHaveBeenCalledTimes(2);
       expect(result).toHaveLength(2);
       expect((result[0] as Record<string, unknown>).id).toBe('s1');
@@ -668,43 +1004,41 @@ describe('db-handlers (core store thin forward)', () => {
   // ==================== Message Handlers ====================
 
   describe('db:message:add', () => {
-    it('appends a single NewEvent via appendBatch and reads back the row (decision 5)', async () => {
+    it('appends a single NewEvent via the Host timeline and reads back the row', async () => {
       const data = {
         id: 'm1',
         session_id: 's1',
         role: 'user',
         content: 'hi',
       };
-      mocks.stores.sessions.create({ id: 's1' });
-      // appendBatch writes; listBySession reads back the stored event so
-      // the handler can return the canonical row shape.
-      mocks.stores.messageLog.listBySession.mockReturnValueOnce([
-        { id: 'm1', sessionId: 's1', seq: 0, payload: '{}', createdAt: 1000 },
-      ]);
+      // The read-back goes through Host too, so the append result is read
+      // from the Host message projection.
+      mocks.hostSessionApi.readMessages.mockResolvedValueOnce({
+        sessionId: 's1',
+        messages: [{ id: 'm1', sequence: 0, createdAt: 1000, turnId: null, entry: {} }],
+        nextCursor: null,
+      } as never);
       const result = await invokeHandler('db:message:add', {}, data);
 
       expect(mocks.adapters.ipcMessageToNewEvent).toHaveBeenCalledWith(
         's1',
         data,
       );
-      // Decision 5: appendBatch (INSERT OR IGNORE), not a replace path.
-      expect(mocks.stores.messageLog.appendBatch).toHaveBeenCalledTimes(1);
-      expect(mocks.stores.messageLog.timeline).not.toHaveBeenCalled();
-      const batchArg = mocks.stores.messageLog.appendBatch.mock
-        .calls[0][0] as unknown[];
-      expect(batchArg).toHaveLength(1);
-      expect(batchArg[0]).toMatchObject({
-        id: 'm1',
-        sessionId: 's1',
-        payload: data,
-        createdAt: 0,
+      // Decision 5: append-only (INSERT OR IGNORE) semantics — the payload
+      // is appended to the Host timeline, never replaced.
+      expect(mocks.hostSessionApi.appendTimeline).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.appendTimeline).toHaveBeenCalledWith('s1', {
+        entries: [data],
       });
-      expect(mocks.adapters.storedEventToIpcMessage).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.readMessages).toHaveBeenCalledWith('s1', {
+        includeSuperseded: true,
+        limit: 200,
+      });
+      expect(mocks.adapters.hostMessageItemsToIpcMessages).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ __tag: 'ipcMsg', id: 'm1' });
     });
 
     it('returns null when the stored event cannot be found after append', async () => {
-      mocks.stores.sessions.create({ id: 's1' });
       const result = await invokeHandler('db:message:add', {}, {
         id: 'm1',
         session_id: 's1',
@@ -716,12 +1050,16 @@ describe('db-handlers (core store thin forward)', () => {
   });
 
   describe('db:message:getBySession', () => {
-    it('forwards to messageLog.listBySession and maps via storedEventsToIpcMessages', async () => {
-      const events = [
-        { id: 'm1', sessionId: 's1', seq: 0, payload: '{}', createdAt: 1000 },
-        { id: 'm2', sessionId: 's1', seq: 1, payload: '{}', createdAt: 1001 },
+    it('forwards to the Host message projection and maps via hostMessageItemsToIpcMessages', async () => {
+      const items = [
+        { id: 'm1', sequence: 0, createdAt: 1000, turnId: null, entry: {} },
+        { id: 'm2', sequence: 1, createdAt: 1001, turnId: null, entry: {} },
       ];
-      mocks.stores.messageLog.listBySession.mockReturnValueOnce(events);
+      mocks.hostSessionApi.readMessages.mockResolvedValueOnce({
+        sessionId: 's1',
+        messages: items,
+        nextCursor: null,
+      } as never);
       const result = (await invokeHandler(
         'db:message:getBySession',
         {},
@@ -732,28 +1070,30 @@ describe('db-handlers (core store thin forward)', () => {
       // the handler default `includeSuperseded` to true, so the options bag is
       // now always forwarded. Assert the full call shape rather than the
       // legacy single-argument form.
-      expect(mocks.stores.messageLog.listBySession).toHaveBeenCalledWith('s1', {
+      expect(mocks.hostSessionApi.readMessages).toHaveBeenCalledWith('s1', {
         includeSuperseded: true,
+        limit: 200,
       });
-      expect(mocks.adapters.storedEventsToIpcMessages).toHaveBeenCalledWith(
-        events,
+      expect(mocks.adapters.hostMessageItemsToIpcMessages).toHaveBeenCalledWith(
+        's1',
+        items,
       );
       expect(result).toHaveLength(2);
     });
   });
 
   describe('db:message:getCount', () => {
-    it('returns the count from messageLog.getCount', async () => {
-      mocks.stores.messageLog.getCount.mockReturnValueOnce(42);
+    it('returns the count from the Host timeline', async () => {
+      mocks.hostSessionApi.countTimeline.mockResolvedValueOnce(42);
       const result = await invokeHandler('db:message:getCount', {}, 's1');
-      expect(mocks.stores.messageLog.getCount).toHaveBeenCalledWith('s1');
+      expect(mocks.hostSessionApi.countTimeline).toHaveBeenCalledWith('s1');
       expect(result).toBe(42);
     });
   });
 
   describe('db:message:replace', () => {
-    it('auto-creates a missing session and appends events via appendBatch (decision 3)', async () => {
-      // sessions.get returns undefined → auto-create path.
+    it('auto-creates a missing session and appends events via the Host timeline (decision 3)', async () => {
+      // The Host session lookup returns null → auto-create path.
       const messages = [
         { id: 'm1', role: 'user', content: 'a' },
         { id: 'm2', role: 'assistant', content: 'b' },
@@ -766,12 +1106,19 @@ describe('db-handlers (core store thin forward)', () => {
         1,
       );
 
-      expect(mocks.stores.sessions.create).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.get).toHaveBeenCalledWith('s1', {
+        includeAllSessions: true,
+      });
+      expect(mocks.hostSessionApi.create).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 's1' }),
+      );
       // Decision 3: uses appendBatch, not a separate replace method.
-      expect(mocks.stores.messageLog.appendBatch).toHaveBeenCalledTimes(1);
-      const batchArg = mocks.stores.messageLog.appendBatch.mock
-        .calls[0][0] as unknown[];
-      expect(batchArg).toHaveLength(2);
+      expect(mocks.hostSessionApi.appendTimeline).toHaveBeenCalledTimes(1);
+      const [sessionIdArg, batchArg] = mocks.hostSessionApi.appendTimeline.mock
+        .calls[0] as [string, { entries: unknown[] }];
+      expect(sessionIdArg).toBe('s1');
+      expect(batchArg.entries).toHaveLength(2);
       expect(mocks.adapters.ipcMessageToNewEvent).toHaveBeenCalledTimes(2);
       expect(result).toEqual({
         success: true,
@@ -781,17 +1128,16 @@ describe('db-handlers (core store thin forward)', () => {
     });
 
     it('skips session auto-create when the session already exists', async () => {
-      mocks.stores.sessions.create({ id: 's1' });
-      mocks.stores.sessions.create.mockClear();
+      seedHostSession('s1');
       await invokeHandler('db:message:replace', {}, 's1', [], 0);
-      expect(mocks.stores.sessions.create).not.toHaveBeenCalled();
+      expect(mocks.hostSessionApi.create).not.toHaveBeenCalled();
     });
   });
 
   // ==================== Lock Handlers ====================
 
   describe('db:lock:acquire', () => {
-    it('forwards (sessionId, lockId, owner, ttlSec) to locks.acquire', async () => {
+    it('forwards (sessionId, lockId, owner, ttlSec) to the Host lock API', async () => {
       const result = await invokeHandler(
         'db:lock:acquire',
         {},
@@ -800,27 +1146,27 @@ describe('db-handlers (core store thin forward)', () => {
         'owner-1',
       );
       // Default ttlSec is 300.
-      expect(mocks.stores.locks.acquire).toHaveBeenCalledWith(
-        's1',
-        'l1',
-        'owner-1',
-        300,
-      );
+      expect(mocks.hostLockApi.acquireLock).toHaveBeenCalledWith({
+        sessionId: 's1',
+        lockId: 'l1',
+        owner: 'owner-1',
+        ttlSec: 300,
+      });
       expect(result).toBe(true);
     });
 
     it('accepts an explicit ttlSec', async () => {
       await invokeHandler('db:lock:acquire', {}, 's1', 'l1', 'owner-1', 60);
-      expect(mocks.stores.locks.acquire).toHaveBeenCalledWith(
-        's1',
-        'l1',
-        'owner-1',
-        60,
-      );
+      expect(mocks.hostLockApi.acquireLock).toHaveBeenCalledWith({
+        sessionId: 's1',
+        lockId: 'l1',
+        owner: 'owner-1',
+        ttlSec: 60,
+      });
     });
 
-    it('propagates errors from locks.acquire', async () => {
-      mocks.stores.locks.acquire.mockImplementationOnce(() => {
+    it('propagates errors from the Host lock API', async () => {
+      mocks.hostLockApi.acquireLock.mockImplementationOnce(() => {
         throw new Error('lock table missing');
       });
       await expect(
@@ -832,7 +1178,7 @@ describe('db-handlers (core store thin forward)', () => {
   // ==================== Task Handlers ====================
 
   describe('db:task:create', () => {
-    it('forwards to tasks.create via ipcTaskToCoreCreate and returns coreTaskToIpcRow', async () => {
+    it('forwards to the Host task API via ipcTaskToHostCreate and returns hostTaskToIpcRow', async () => {
       const data = {
         id: 't1',
         session_id: 's1',
@@ -843,13 +1189,13 @@ describe('db-handlers (core store thin forward)', () => {
       };
       const result = await invokeHandler('db:task:create', {}, data);
 
-      expect(mocks.adapters.ipcTaskToCoreCreate).toHaveBeenCalledWith(data);
-      const createArg = mocks.stores.tasks.create.mock.calls[0][0] as Record<
-        string,
-        unknown
-      >;
-      expect(createArg).toMatchObject({ __tag: 'taskCreate', id: 't1' });
-      expect(mocks.adapters.coreTaskToIpcRow).toHaveBeenCalledTimes(1);
+      expect(mocks.adapters.ipcTaskToHostCreate).toHaveBeenCalledWith(data);
+      expect(mocks.hostTaskApi.createTask).toHaveBeenCalledTimes(1);
+      const [sessionIdArg, createArg] = mocks.hostTaskApi.createTask.mock
+        .calls[0] as [string, Record<string, unknown>];
+      expect(sessionIdArg).toBe('s1');
+      expect(createArg).toMatchObject({ __tag: 'hostTaskCreate', id: 't1' });
+      expect(mocks.adapters.hostTaskToIpcRow).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ __tag: 'taskRow', id: 't1' });
     });
   });
@@ -857,7 +1203,7 @@ describe('db-handlers (core store thin forward)', () => {
   // ==================== Permission Handlers ====================
 
   describe('db:permission:create', () => {
-    it('forwards to permissions.create via ipcPermissionToCoreCreate', async () => {
+    it('forwards to the Host permission API via ipcPermissionToCoreCreate', async () => {
       const data = {
         id: 'p1',
         sessionId: 's1',
@@ -869,7 +1215,8 @@ describe('db-handlers (core store thin forward)', () => {
       expect(mocks.adapters.ipcPermissionToCoreCreate).toHaveBeenCalledWith(
         data,
       );
-      const createArg = mocks.stores.permissions.create.mock
+      expect(mocks.hostPermissionApi.createPermissionRequest).toHaveBeenCalledTimes(1);
+      const createArg = mocks.hostPermissionApi.createPermissionRequest.mock
         .calls[0][0] as Record<string, unknown>;
       expect(createArg).toMatchObject({ __tag: 'permCreate', id: 'p1' });
       expect(mocks.adapters.corePermissionToIpcRow).toHaveBeenCalledTimes(1);
@@ -882,16 +1229,30 @@ describe('db-handlers (core store thin forward)', () => {
   describe('db:search:query (unified space search)', () => {
     it('aggregates session + message + link hits with the nav/content budget', async () => {
       // 1 metadata (nav) hit on session s1.
-      mocks.stores.sessions.search.mockReturnValueOnce([
-        { id: 's1', status: 'active', title: 'Alpha', agentName: '', projectName: 'proj', updatedAt: 3000 },
-      ]);
-      // 1 content hit on session s2 — title resolved via sessions.get.
-      mocks.stores.messageLog.searchText.mockReturnValueOnce([
-        { sessionId: 's2', messageId: 'm2', seq: 3, snippet: 'see https://example.com/q now' },
-      ]);
-      mocks.stores.sessions.get.mockReturnValueOnce({
-        id: 's2', status: 'active', title: 'Beta session', updatedAt: 5000,
-      });
+      mocks.hostSessionApi.searchSessions.mockResolvedValueOnce([
+        {
+          session: {
+            id: 's1',
+            title: 'Alpha',
+            agentName: '',
+            projectName: 'proj',
+            updatedAt: 3000,
+          },
+          snippet: '',
+          messageId: null,
+          sequence: null,
+        },
+      ] as never);
+      // 1 content hit on session s2 — the Host resolves the session metadata
+      // together with the matching message.
+      mocks.hostSessionApi.searchMessages.mockResolvedValueOnce([
+        {
+          session: { id: 's2', title: 'Beta session' },
+          messageId: 'm2',
+          sequence: 3,
+          snippet: 'see https://example.com/q now',
+        },
+      ] as never);
 
       const hits = (await invokeHandler(
         'db:search:query',
@@ -899,11 +1260,12 @@ describe('db-handlers (core store thin forward)', () => {
         'example.com',
       )) as Array<Record<string, unknown>>;
 
-      // nav cap (8) drives sessions.search limit; content budget = 25 - 1 nav = 24 (+5 headroom).
-      expect(mocks.stores.sessions.search).toHaveBeenCalledWith('example.com', 8);
-      expect(mocks.stores.messageLog.searchText).toHaveBeenCalledWith('example.com', {
-        limit: 29,
+      // nav cap (8) drives the session search limit; content budget = 25 - 1 nav = 24 (+5 headroom).
+      expect(mocks.hostSessionApi.searchSessions).toHaveBeenCalledWith('example.com', {
+        limit: 8,
+        includeContent: false,
       });
+      expect(mocks.hostSessionApi.searchMessages).toHaveBeenCalledWith('example.com', 29);
 
       const sessionHit = hits.find((h) => h.kind === 'session');
       expect(sessionHit).toMatchObject({ kind: 'session', sessionId: 's1', title: 'Alpha', snippet: 'proj' });
@@ -927,20 +1289,25 @@ describe('db-handlers (core store thin forward)', () => {
   });
 
   describe('db:search:sessions', () => {
-    it('combines sessions.search (metadata) with messageLog.searchText (content) — decision 7', async () => {
-      // 1 metadata hit + 1 content hit on a different session.
-      mocks.stores.sessions.search.mockReturnValueOnce([
-        { id: 's-meta', status: 'active', updatedAt: 1000 },
-      ]);
-      mocks.stores.messageLog.searchText.mockReturnValueOnce([
-        { sessionId: 's-content', messageId: 'm1', seq: 0, snippet: 'hit' },
-      ]);
-      // sessions.get returns a live session for the content-hit session.
-      mocks.stores.sessions.get.mockReturnValueOnce({
-        id: 's-content',
-        status: 'active',
-        updatedAt: 2000,
-      });
+    it('combines the Host session search (metadata) with its content hits — decision 7', async () => {
+      seedHostSession('s-content', { updatedAt: 2000 });
+      seedHostSession('s-meta', { updatedAt: 1000 });
+      // The Host owns both the metadata and the content hits, and the order
+      // it returns (recency first) is the order the handler must keep.
+      mocks.hostSessionApi.searchSessions.mockResolvedValueOnce([
+        {
+          session: { id: 's-content', title: 'Content', updatedAt: 2000 },
+          snippet: 'hit',
+          messageId: 'm1',
+          sequence: 0,
+        },
+        {
+          session: { id: 's-meta', title: 'Meta', updatedAt: 1000 },
+          snippet: '',
+          messageId: null,
+          sequence: null,
+        },
+      ] as never);
 
       const result = (await invokeHandler(
         'db:search:sessions',
@@ -948,30 +1315,36 @@ describe('db-handlers (core store thin forward)', () => {
         'query',
       )) as Array<Record<string, unknown>>;
 
-      expect(mocks.stores.sessions.search).toHaveBeenCalledWith('query', 10);
-      // remaining = 10 - 1 = 9, so limit passed to searchText is 9 + 5 = 14.
-      expect(mocks.stores.messageLog.searchText).toHaveBeenCalledWith('query', {
-        limit: 14,
+      expect(mocks.hostSessionApi.searchSessions).toHaveBeenCalledWith('query', {
+        limit: 10,
       });
-      // Both sources contributed one row.
+      // Each hit is re-read through the LOCAL Host projection so the row
+      // keeps the legacy IPC shape.
+      expect(mocks.hostLocalSessionApi.readLocalSession).toHaveBeenCalledWith('s-content', {
+        includeAllSessions: true,
+      });
+      expect(mocks.hostLocalSessionApi.readLocalSession).toHaveBeenCalledWith('s-meta', {
+        includeAllSessions: true,
+      });
+      // Both sources contributed one row, in the Host's order.
       expect(result).toHaveLength(2);
-      // Sort is updated_at DESC — content hit (2000) ranks above meta hit (1000).
       expect(result[0].id).toBe('s-content');
       expect(result[0].snippet).toBe('hit');
       expect(result[1].id).toBe('s-meta');
       expect(result[1].snippet).toBe('');
     });
 
-    it('skips content hits for deleted sessions', async () => {
-      mocks.stores.sessions.search.mockReturnValueOnce([]);
-      mocks.stores.messageLog.searchText.mockReturnValueOnce([
-        { sessionId: 's-del', messageId: 'm1', seq: 0, snippet: 'hit' },
-      ]);
-      mocks.stores.sessions.get.mockReturnValueOnce({
-        id: 's-del',
-        status: 'deleted',
-        updatedAt: 2000,
-      });
+    it('skips hits whose session the local Host projection no longer returns', async () => {
+      mocks.hostSessionApi.searchSessions.mockResolvedValueOnce([
+        {
+          session: { id: 's-del', title: 'Deleted', updatedAt: 2000 },
+          snippet: 'hit',
+          messageId: 'm1',
+          sequence: 0,
+        },
+      ] as never);
+      mocks.hostLocalSessionApi.readLocalSession.mockResolvedValueOnce(null);
+
       const result = (await invokeHandler(
         'db:search:sessions',
         {},
@@ -1092,6 +1465,11 @@ describe('db-handlers (core store thin forward)', () => {
   });
 
   // ==================== Plan 549 Track A: archive / unarchive handlers ====================
+  // The handler itself is a one-line forward to the Host archive operations
+  // (`getDesktopHostSessionApi().archive/unarchive`). The mock wires those to
+  // the REAL Host implementation over the mocked core stores, so the archive
+  // contract below (lock preflight, subtree walk, file moves, two-phase
+  // commit) is asserted against production code.
 
   describe('db:session:archive (Plan 549 / 582 G2)', () => {
     it('reports not_found for an unknown session id', async () => {
@@ -1273,13 +1651,15 @@ describe('db-handlers (core store thin forward)', () => {
         fs.writeFileSync(segB, '{"b":1}\n');
 
         mocks.resolveRolloutRoot.mockReturnValueOnce(root);
-        mocks.stores.sessions.get.mockReturnValueOnce({
+        // The Host reads the row twice (root probe, then the planning loop),
+        // so this must be a standing implementation rather than a single use.
+        mocks.stores.sessions.get.mockImplementation(() => ({
           id: 's-1',
           status: 'active',
           rolloutPath: 'sessions/2026/09/30/active.jsonl',
           archivedAt: null,
           archivedPath: null,
-        });
+        }));
         mocks.stores.messageLog.collectSessionRolloutFiles.mockReturnValueOnce([segA, segB]);
 
         const result = (await invokeHandler('db:session:archive', {}, 's-1')) as {

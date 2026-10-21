@@ -12,15 +12,40 @@
  * chat would always work, and no run would ever be recorded.
  *
  * So this test asserts on the CALLS, using a `dbRequest` double that records
- * every action and payload. `run:create` must be issued before any frame is
- * observed, `run:append` must carry the durable envelopes, and `run:complete`
- * must carry the terminal state.
+ * every action and payload, and on the run layer's OWN logger.
+ *
+ * ## Where the run layer lives now
+ *
+ * The orchestrator is Host-owned: `apps/desktop/src/main/agents/server/run-orchestrator.ts`
+ * is a re-export of `@duya/host/run-orchestrator`, and the implementation is
+ * `packages/host/src/run-orchestrator.ts`. It is reached from here through
+ * that re-export, so this file still measures the Desktop's adapter.
+ *
+ * ## What the run layer writes, and what it does not
+ *
+ * The durable `run_events` ledger has ONE writer, and it is not the
+ * orchestrator: the native `run:event` channel is (plan 610 S1,
+ * `cdee21d5`). The orchestrator's legacy reverse-translation no longer
+ * persists, so it issues `run:create` and `run:complete` and nothing else on
+ * the durable path. The tests below assert the CURRENT split:
+ *
+ *  - `run:create` is awaited BEFORE the executor is told to go;
+ *  - the native channel carries the durable envelopes, under the run's own
+ *    identity;
+ *  - `run:complete` carries the terminal state;
+ *  - a refusal on ANY of those is REPORTED through the run layer's own
+ *    logger, never swallowed.
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { RunTerminalState } from '@duya/agent-protocol';
-import { RunOrchestrator, createWorkerExecutionChannel, type ChatStartCommand } from '../agents/server/run-orchestrator';
-import { logger } from '../agents/server/logger';
+import type { RunEventEnvelope, RunTerminalState } from '@duya/agent-protocol';
+import {
+  RunOrchestrator,
+  createWorkerExecutionChannel,
+  type ChatStartCommand,
+  type NativeRunEventWriter,
+  type RunOrchestratorLogger,
+} from '../agents/server/run-orchestrator';
 
 /**
  * A stop the host has already completed: accepted, and the worker left cleanly.
@@ -55,19 +80,93 @@ function recorder(): { calls: Call[]; request: (a: string, p: Record<string, unk
   };
 }
 
-function makeOrchestrator(dbRequest: (a: string, p: Record<string, unknown>) => Promise<unknown>) {
+function makeOrchestrator(
+  dbRequest: (a: string, p: Record<string, unknown>) => Promise<unknown>,
+  extra: {
+    logger?: RunOrchestratorLogger;
+    nativeWriter?: NativeRunEventWriter;
+    onDispatch?: () => void;
+  } = {},
+) {
   let dispatched = 0;
   const orchestrator = new RunOrchestrator({
     dbRequest,
+    ...(extra.logger === undefined ? {} : { logger: extra.logger }),
+    ...(extra.nativeWriter === undefined ? {} : { nativeWriter: extra.nativeWriter }),
     channel: createWorkerExecutionChannel({
       dispatch: () => {
         dispatched += 1;
+        extra.onDispatch?.();
         return true;
       },
       interrupt: () => COOPERATIVE_INTERRUPT,
     }),
   });
   return { orchestrator, dispatchCount: () => dispatched };
+}
+
+/**
+ * The run layer's OWN logger, collected.
+ *
+ * The orchestrator takes its logger as an option and writes through THAT; the
+ * desktop `logger` module is not what it uses, so a spy on that module can
+ * never see a report the run layer made — and a swallowed report is exactly
+ * what the "acks are not swallowed" block below exists to catch.
+ */
+function recordingLogger(reports: string[]): RunOrchestratorLogger {
+  return {
+    info: (message: string) => {
+      reports.push(`info:${message}`);
+    },
+    warn: (message: string) => {
+      reports.push(`warn:${message}`);
+    },
+    // The error's own message is part of the report: the run layer puts the
+    // refusal's REASON in the error and the summary in the message, and a
+    // report that dropped the reason would not say what was refused.
+    error: (message: string, error?: Error) => {
+      reports.push(`error:${message}${error === undefined ? '' : ` — ${error.message}`}`);
+    },
+  };
+}
+
+/**
+ * A native `run:event` envelope, exactly as the Runtime mints it.
+ *
+ * The Runtime owns the sequence and the payload; the host only carries it.
+ */
+function nativeEnvelope(runId: string, sessionId: string, seq: number): RunEventEnvelope {
+  return {
+    runId,
+    sessionId,
+    seq,
+    payload: { type: 'run.started' },
+  } as unknown as RunEventEnvelope;
+}
+
+/**
+ * A native writer that records what it was asked to write.
+ *
+ * The durable ledger's only writer. A double here is a REAL seam of the
+ * product — `createDesktopNativeRunEventWriter` is what production composes —
+ * and it is the layer the durable-envelope assertions belong to now.
+ */
+function recordingWriter(): {
+  writer: NativeRunEventWriter;
+  written: Array<{ runId: string; seqs: number[] }>;
+} {
+  const written: Array<{ runId: string; seqs: number[] }> = [];
+  return {
+    written,
+    writer: {
+      // A run created moments ago is at attempt 0.
+      currentEpoch: () => 0,
+      append: async (runId: string, envelopes: readonly RunEventEnvelope[]) => {
+        written.push({ runId, seqs: envelopes.map((envelope) => envelope.seq) });
+        return { state: 'written', written: envelopes.length };
+      },
+    },
+  };
 }
 
 const intent = {
@@ -148,35 +247,37 @@ describe('RunOrchestrator', () => {
     expect(dispatchCount()).toBe(0);
   });
 
-  it('records run.started before the first frame is observed', async () => {
+  it('opens the run durably before the worker is told to go', async () => {
+    // The run has to EXIST before the executor is told to begin: the host
+    // dispatches the execution the moment the start resolves, so a create that
+    // had not landed would hand the worker a turn no row can answer for.
+    //
+    // The durable `run.started` is not written HERE any more. The ledger's
+    // only writer is the native `run:event` channel, and the envelope it
+    // carries is the Runtime's own — minted under the Runtime's own sequence,
+    // not a reverse-translation of a legacy frame. So what this asserts is
+    // the half the orchestrator still owns: the durable open, and the
+    // dispatch that follows it.
+    const order: string[] = [];
     const { calls, request } = recorder();
-    const { orchestrator } = makeOrchestrator(request);
+    const { orchestrator } = makeOrchestrator(
+      async (action, payload) => {
+        order.push(action);
+        return request(action, payload);
+      },
+      { onDispatch: () => order.push('dispatch') },
+    );
 
-    // Everything the run is OPENED with must be on the wire before
-    // `openRun` resolves, because the host dispatches the execution the moment
-    // it does. `run.started` is flushed on its own and awaited for exactly
-    // that reason: a run that crashes on its first frame still leaves the
-    // record that says what it was given.
     await open(orchestrator, 'session-1');
-    const openWindow = calls.length;
 
-    orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
-    await vi.waitFor(() => {
-      expect(calls.some((c) => c.action === 'run:complete')).toBe(false);
-    });
+    // The create is AWAITED, and the dispatch happens after it — both inside
+    // `openRun`, which is the single entry.
+    expect(order).toEqual(['run:create', 'dispatch']);
 
-    const createIndex = calls.findIndex((c) => c.action === 'run:create');
-    const firstAppendIndex = calls.findIndex((c) => c.action === 'run:append');
-    expect(createIndex).toBeGreaterThanOrEqual(0);
-    expect(firstAppendIndex).toBeGreaterThan(createIndex);
-    // Both landed inside `openRun`, not after it.
-    expect(firstAppendIndex).toBeLessThan(openWindow);
-
-    const events = calls[firstAppendIndex]?.payload.events as Array<{ payload: { type: string } }>;
-    // The first batch is `run.started` ALONE — proof it was not batched behind
-    // the turn event that followed it.
-    expect(events.map((e) => e.payload.type)).toEqual(['run.started']);
-    expect(calls[firstAppendIndex]?.payload.runId).toBe(calls[createIndex]?.payload.runId);
+    // And the orchestrator writes no ledger of its own. A `run:append` here
+    // would be a second writer with a second `seq` space, which is exactly
+    // what the native channel was introduced to end.
+    expect(calls.filter((c) => c.action === 'run:append')).toHaveLength(0);
   });
 
   it('settles the run when the worker reports done', async () => {
@@ -218,30 +319,50 @@ describe('RunOrchestrator', () => {
   it('keeps concurrent sessions on separate runs', async () => {
     // The bug this guards is a single shared "current run" field, which would
     // route one session's events into the other session's row.
-    const { calls, request } = recorder();
-    const { orchestrator } = makeOrchestrator(request);
+    //
+    // The durable writer is the native channel now, so the isolation is proved
+    // THERE: two sessions' envelopes must land under their OWN run ids, and
+    // the run each session points at must be the one its envelope names.
+    const { request } = recorder();
+    const { writer, written } = recordingWriter();
+    const { orchestrator } = makeOrchestrator(request, { nativeWriter: writer });
 
     const runA = await open(orchestrator, 'session-a');
     const runB = await open(orchestrator, 'session-b');
     expect(runA).not.toBe(runB);
 
-    orchestrator.observe('session-a', { type: 'turn_start', data: { turnCount: 1 } });
-    orchestrator.observe('session-b', { type: 'turn_start', data: { turnCount: 1 } });
-    await Promise.resolve();
-    await Promise.resolve();
+    await orchestrator.persistNativeRunEvent('session-a', nativeEnvelope(runA, 'session-a', 1), 0);
+    await orchestrator.persistNativeRunEvent('session-b', nativeEnvelope(runB, 'session-b', 1), 0);
 
-    const appends = calls.filter((c) => c.action === 'run:append');
-    const owners = new Set(appends.map((c) => c.payload.runId));
-    expect(owners.has(runA as string)).toBe(true);
-    expect(owners.has(runB as string)).toBe(true);
+    // One write per session, each under its OWN run. A shared "current run"
+    // would put both envelopes under the same id.
+    expect(written).toHaveLength(2);
+    expect(written.map((entry) => entry.runId)).toEqual([runA, runB]);
+    // And each session still points at its own run.
+    expect(orchestrator.runForSession('session-a')).toBe(runA);
+    expect(orchestrator.runForSession('session-b')).toBe(runB);
   });
 
   it('ignores frames for a session with no run', async () => {
     const { calls, request } = recorder();
-    const { orchestrator } = makeOrchestrator(request);
+    const { writer, written } = recordingWriter();
+    const { orchestrator } = makeOrchestrator(request, { nativeWriter: writer });
+
     // A GET-reconnect for a session whose run was never opened must not write
     // anything, and must not throw.
     expect(() => orchestrator.observe('unknown-session', { type: 'text', data: { content: 'x' } })).not.toThrow();
+
+    // And the durable writer — the only writer there is — was never asked. A
+    // frame for a session with no live run has no run to file itself under,
+    // and the refusal says so rather than dropping the envelope silently.
+    const refused = await orchestrator.persistNativeRunEvent(
+      'unknown-session',
+      nativeEnvelope('run-that-never-opened', 'unknown-session', 1),
+      0,
+    );
+    expect(refused.accepted).toBe(false);
+    expect(refused.reason).toContain('no live run');
+    expect(written).toHaveLength(0);
     expect(calls.filter((c) => c.action === 'run:append')).toHaveLength(0);
   });
 
@@ -341,34 +462,35 @@ describe('RunOrchestrator', () => {
  * as `completed`; a CAS that was not applied must be reconciled against the
  * existing terminal rather than silently assumed to be this call's success.
  *
+ * ## Where the refusals live now
+ *
+ * The run layer is Host-owned (`packages/host/src/run-orchestrator.ts`) and the
+ * durable ledger has ONE writer: the native `run:event` channel. So the
+ * refusals this block provokes have two homes now.
+ *
+ *   - A refused NATIVE append is a hole in the run's transcript. The run
+ *     layer counts the loss, refuses to let the run settle as a success over
+ *     it, and REPORTS it.
+ *   - A refused `run:complete` is still the run layer's own write, and it is
+ *     reported the same way.
+ *
+ * The logger matters here. The run layer takes its logger as an OPTION and
+ * writes through that, so a spy on the desktop `logger` module can never see a
+ * report the run layer made — a swallowed report is exactly what this block
+ * exists to catch, and it has to be read from the seam the run layer uses.
+ *
  * ## What these tests can and cannot prove
  *
  * The orchestrator exposes no receipt surface for an append or a terminal
  * write — `settleSession` returns `void` and swallows settle errors into a log
  * line. So the only thing observable from outside is whether the failure was
- * REPORTED. That is asserted here. It is the narrowest honest evidence
- * available without changing production signatures, and it is deliberately
- * tolerant of the mechanism the fix chooses (warn, error, or a thrown error
- * that `settleSession` logs) — what it forbids is silence.
+ * REPORTED, and what the run then settled as. Both are asserted here. It is
+ * the narrowest honest evidence available without changing production
+ * signatures, and it is deliberately tolerant of the mechanism the fix chooses
+ * (warn, error, or a thrown error that `settleSession` logs) — what it
+ * forbids is silence.
  */
 describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
-  /**
-   * Collect every diagnostic the orchestrator emits, and keep the spies out of
-   * the way of stdout. `warn` and `error` are pooled because the right level
-   * for a degraded transcript and the right level for a lost CAS are not the
-   * same question, and this test does not want to answer it.
-   */
-  function captureReports(): { reports: string[]; restore: () => void } {
-    const reports: string[] = [];
-    const warn = vi.spyOn(logger, 'warn').mockImplementation((msg: string) => {
-      reports.push(`warn:${msg}`);
-    });
-    const error = vi.spyOn(logger, 'error').mockImplementation((msg: string) => {
-      reports.push(`error:${msg}`);
-    });
-    return { reports, restore: () => { warn.mockRestore(); error.mockRestore(); } };
-  }
-
   /** `run:create` succeeds so the run opens; every other action is stubbed. */
   function stubFor(action: string, reply: unknown) {
     return async (requested: string, payload: Record<string, unknown>): Promise<unknown> => {
@@ -391,39 +513,35 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
   }
 
   it('reports a durable append the Control Plane refused', async () => {
-    // `appendRunEvents` never throws: it catches and answers a receipt
-    // (`run-control-plane.ts`). So a lost event batch cannot reach the runtime
-    // as a rejection — the ONLY way it can become visible is if the adapter
-    // reads the reply it currently throws away. R1.3 gave that reply a state, so
-    // the refusal now says WHICH kind it is rather than only that it happened.
-    const { reports, restore } = captureReports();
-    try {
-      // R2.1: only the MID-STREAM batches are refused. Refusing the very first
-      // append would refuse `run.started`, and a run whose start is not durable
-      // is not dispatched at all — which is R1.2's rule, and it would make this
-      // test pass for a different reason than the one it exists to prove.
-      const { orchestrator } = makeOrchestrator(async (action, payload) => {
-        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
-        if (action === 'run:append') {
-          const events = payload.events as Array<{ payload: { type: string } }>;
-          if (events.some((e) => e.payload.type === 'run.started')) {
-            return { ok: true, state: 'applied', runId: payload.runId, written: events.length };
-          }
-          return { ok: false, state: 'busy', runId: payload.runId, reason: 'SQLITE_BUSY: database is locked' };
-        }
-        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
-      });
-      await open(orchestrator, 'session-1');
+    // The durable append is the NATIVE channel's write now, and a refusal
+    // there is a hole in the run's transcript. Two things must be true, and
+    // both are asserted: the refusal is REPORTED, and the run may not settle
+    // as a success over the hole.
+    const reports: string[] = [];
+    const { orchestrator } = makeOrchestrator(recorder().request, {
+      logger: recordingLogger(reports),
+      nativeWriter: {
+        currentEpoch: () => 0,
+        append: async () => ({
+          state: 'failed',
+          reason: 'run:append was refused for run r-1: busy',
+        }),
+      },
+    });
+    const runId = await open(orchestrator, 'session-1');
 
-      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
-      orchestrator.observe('session-1', { type: 'done', data: {} });
+    await orchestrator.persistNativeRunEvent('session-1', nativeEnvelope(runId, 'session-1', 1), 0);
 
-      await vi.waitFor(() => {
-        expect(reports).not.toHaveLength(0);
-      });
-    } finally {
-      restore();
-    }
+    // The refusal is reported, and it says WHAT was refused.
+    expect(reports.join('|')).toMatch(/not persisted|refused/i);
+    expect(reports.join('|')).toContain('busy');
+
+    // And the run does not report a success over the hole in its transcript.
+    orchestrator.observe('session-1', { type: 'done', data: {} });
+    await orchestrator.settleSession('session-1');
+    const result = await orchestrator.resultFor('session-1');
+    expect(result?.status).toBe('failed');
+    expect(result?.error?.code).toBe('persistence_failed');
   });
 
   it('reports a terminal write the Control Plane refused', async () => {
@@ -432,27 +550,24 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     // in the host while its `runs` row is still `running`. R1.3 named that
     // refusal: a busy database is a distinct state from any other SQL failure,
     // because only one of them is worth retrying.
-    const { reports, restore } = captureReports();
-    try {
-      const { orchestrator } = makeOrchestrator(
-        stubFor('run:complete', {
-          ok: false,
-          state: 'busy',
-          runId: 'r-1',
-          reason: 'SQLITE_BUSY: database is locked',
-        }),
-      );
-      await open(orchestrator, 'session-1');
+    const reports: string[] = [];
+    const { orchestrator } = makeOrchestrator(
+      stubFor('run:complete', {
+        ok: false,
+        state: 'busy',
+        runId: 'r-1',
+        reason: 'SQLITE_BUSY: database is locked',
+      }),
+      { logger: recordingLogger(reports) },
+    );
+    await open(orchestrator, 'session-1');
 
-      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
-      orchestrator.observe('session-1', { type: 'done', data: {} });
+    orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+    orchestrator.observe('session-1', { type: 'done', data: {} });
 
-      await vi.waitFor(() => {
-        expect(reports).not.toHaveLength(0);
-      });
-    } finally {
-      restore();
-    }
+    await vi.waitFor(() => {
+      expect(reports.join('|')).toMatch(/busy|SQLITE_BUSY|degraded/i);
+    });
   });
 
   it('reports a lost terminal CAS instead of assuming this call won it', async () => {
@@ -464,63 +579,51 @@ describe('RunOrchestrator — Control Plane acks are not swallowed', () => {
     // something else, and the claim is lost). This asserts the second, which is
     // the one that must never be reported as a win. The first is asserted in
     // `run-orchestrator-ack.test.ts`, where it must NOT degrade the run.
-    const { reports, restore } = captureReports();
-    try {
-      const { orchestrator } = makeOrchestrator(
-        stubFor('run:complete', {
-          ok: false,
-          state: 'conflict',
-          runId: 'r-1',
-          applied: false,
-          committed: { status: 'cancelled' },
-          reason: 'another writer cancelled this run',
-        }),
-      );
-      await open(orchestrator, 'session-1');
+    const reports: string[] = [];
+    const { orchestrator } = makeOrchestrator(
+      stubFor('run:complete', {
+        ok: false,
+        state: 'conflict',
+        runId: 'r-1',
+        applied: false,
+        committed: { status: 'cancelled' },
+        reason: 'another writer cancelled this run',
+      }),
+      { logger: recordingLogger(reports) },
+    );
+    await open(orchestrator, 'session-1');
 
-      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
-      orchestrator.observe('session-1', { type: 'done', data: {} });
+    orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
+    orchestrator.observe('session-1', { type: 'done', data: {} });
 
-      await vi.waitFor(() => {
-        expect(reports).not.toHaveLength(0);
-      });
-    } finally {
-      restore();
-    }
+    await vi.waitFor(() => {
+      expect(reports.join('|')).toMatch(/conflict|degraded/i);
+    });
   });
 
   it('surfaces a channel that throws mid-append rather than losing the batch', async () => {
     // A throw is the one failure mode the adapter already propagates: the
-    // rejection escapes `append`, unwinds the settle, and the orchestrator logs
+    // rejection escapes the append, unwinds the settle, and the run layer logs
     // it. This test is a guard rather than a regression — it pins the behaviour
     // that makes the three cases above unambiguously defects: silence, not
     // propagation, is what a lost ack looks like today.
-    const { reports, restore } = captureReports();
-    try {
-      const { orchestrator } = makeOrchestrator(async (action, payload) => {
-        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
-        if (action === 'run:append') {
-          const events = payload.events as Array<{ payload: { type: string } }>;
-          // `run.started` must land for `openRun` to resolve, so only the
-          // terminal batch is allowed to fail.
-          if (events.some((e) => e.payload.type === 'run.completed')) {
-            throw new Error('db:request channel closed mid-append');
-          }
-          return { ok: true, state: 'applied', runId: payload.runId, written: events.length };
-        }
-        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
-      });
-      await open(orchestrator, 'session-1');
+    const reports: string[] = [];
+    const { orchestrator } = makeOrchestrator(recorder().request, {
+      logger: recordingLogger(reports),
+      nativeWriter: {
+        currentEpoch: () => 0,
+        append: async () => {
+          throw new Error('db:request channel closed mid-append');
+        },
+      },
+    });
+    const runId = await open(orchestrator, 'session-1');
 
-      orchestrator.observe('session-1', { type: 'turn_start', data: { turnCount: 1 } });
-      orchestrator.observe('session-1', { type: 'done', data: {} });
+    await orchestrator.persistNativeRunEvent('session-1', nativeEnvelope(runId, 'session-1', 1), 0);
 
-      await vi.waitFor(() => {
-        expect(reports).not.toHaveLength(0);
-      });
-    } finally {
-      restore();
-    }
+    await vi.waitFor(() => {
+      expect(reports.join('|')).toMatch(/threw|db:request channel closed/i);
+    });
   });
 });
 
@@ -564,60 +667,100 @@ describe('RunOrchestrator — R1.2 lifecycle at the adapter', () => {
     return { orchestrator, dispatched: () => dispatched };
   }
 
-  it('does not open a session whose durable start failed', async () => {
-    // The run row exists, `run.started` did not land, so the run did not open.
-    // `openRun` must report that rather than hand back a runId the host will
-    // attribute a whole turn's events to.
-    const { orchestrator, dispatched } = openAndRefuseStarted();
-    const { reports, restore } = (() => {
-      const reports: string[] = [];
-      const warn = vi.spyOn(logger, 'warn').mockImplementation((msg: string) => {
-        reports.push(msg);
-      });
-      return { reports, restore: () => warn.mockRestore() };
-    })();
+  /**
+   * A `run:create` whose ROW landed and whose REPLY is unreadable.
+   *
+   * This is the historical defect, and after plan 610 it is also the ONLY way
+   * a Desktop run row can exist without the run having opened: the run layer
+   * no longer writes `run.started` itself (the native `run:event` channel
+   * does), so it cannot be the thing that fails to become durable. What the
+   * run layer still owns is the create, and a create it cannot read is a run
+   * it cannot claim.
+   */
+  function openAndRefuseStart(): {
+    orchestrator: RunOrchestrator;
+    dispatched: () => number;
+    reports: string[];
+    written: Array<{ runId: string; seqs: number[] }>;
+  } {
+    let dispatched = 0;
+    const reports: string[] = [];
+    const { writer, written } = recordingWriter();
+    const orchestrator = new RunOrchestrator({
+      logger: recordingLogger(reports),
+      nativeWriter: writer,
+      dbRequest: async (action, payload) => {
+        // The row IS written; the reply is the shape the Control Plane used to
+        // send, which the reader cannot parse. That is the defect, reproduced
+        // on purpose rather than stubbed away.
+        if (action === 'run:create') return { state: 'created', runId: payload.runId };
+        if (action === 'run:events') return [];
+        if (action === 'run:append') {
+          return {
+            ok: true,
+            state: 'applied',
+            runId: payload.runId,
+            written: (payload.events as unknown[]).length,
+          };
+        }
+        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
+      },
+      channel: createWorkerExecutionChannel({
+        dispatch: () => {
+          dispatched += 1;
+          return true;
+        },
+        interrupt: () => COOPERATIVE_INTERRUPT,
+      }),
+    });
+    return { orchestrator, dispatched: () => dispatched, reports, written };
+  }
 
-    try {
-      const start = await orchestrator.openRun('session-1', intent);
-      // Not accepted, and the stage is NAMED: the row exists, `run.started` did
-      // not land. `not.toBeNull()` would not distinguish that from a refused row,
-      // which needs a different operator response.
-      expect(start).toMatchObject({ accepted: false, stage: 'started_not_durable' });
-      // The executor was never told to go.
-      expect(dispatched()).toBe(0);
-      // And the failure was NAMED in the log too. A generic "openRun failed"
-      // line is what a host reads today, and it cannot distinguish a Control
-      // Plane that refused the row from a run that could not be made durable.
-      expect(reports.join('|')).toMatch(/start_failed|run\.started/i);
-    } finally {
-      restore();
-    }
+  it('does not open a session whose durable start failed', async () => {
+    // The run row exists, the run did not open, so `openRun` must report that
+    // rather than hand back a runId the host will attribute a whole turn's
+    // events to.
+    //
+    // The stage is NAMED. `not.toBeNull()` would not distinguish this from a
+    // refused row, which needs a different operator response — and the
+    // difference used to be `started_not_durable` (the run layer's own
+    // `run.started` write was refused) against `run_not_created` (the create
+    // itself was refused). The run layer does not write `run.started` any
+    // more, so the first of those is no longer a thing the Desktop can
+    // produce, and the stage that remains is the one that names this shape.
+    const { orchestrator, dispatched, reports } = openAndRefuseStart();
+
+    const start = await orchestrator.openRun('session-1', intent);
+    expect(start).toMatchObject({ accepted: false, stage: 'run_not_created' });
+    // The executor was never told to go.
+    expect(dispatched()).toBe(0);
+    // And the failure was NAMED in the log too. A generic "openRun failed"
+    // line is what a host reads today, and it cannot distinguish a Control
+    // Plane that refused the row from a run that could not be made durable.
+    expect(reports.join('|')).toMatch(/refused the run|run_not_created|never executed/i);
   });
 
   it('leaves no session mapping behind for a run that never opened', async () => {
-    // `openRun` set `#bySession` before `controller.start`. On a start that
-    // failed, the next frame from the worker was routed into a run that has no
-    // record and no `run.started` — an append for a run the Control Plane
-    // never finished opening.
-    const { calls, request } = recorder();
-    const orchestrator = new RunOrchestrator({
-      dbRequest: async (action, payload) => {
-        if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
-        if (action === 'run:append') return { ok: false, state: 'busy', runId: payload.runId, reason: 'SQLITE_BUSY' };
-        return { ok: true, state: 'applied', runId: payload.runId, applied: true };
-      },
-      channel: createWorkerExecutionChannel({ dispatch: () => true, interrupt: () => true }),
-    });
-    void calls;
-    void request;
+    // The session is bound by `onDispatchReady`, which the controller reaches
+    // only AFTER the start succeeded. A run that never opened therefore never
+    // bound its session, and the next frame from the worker has nowhere to
+    // go: routing it into a run that has no record and no `run.started` is
+    // exactly the bug this asserts against.
+    const { orchestrator, written } = openAndRefuseStart();
 
     await orchestrator.openRun('session-1', intent).catch(() => null);
     // No run is addressable for this session, so a frame has nowhere to go.
     expect(orchestrator.runForSession('session-1')).toBeNull();
 
-    const before = calls.length;
-    orchestrator.observe('session-1', { type: 'text', data: { content: 'x' } });
-    expect(calls).toHaveLength(before);
+    // And the durable writer — the only writer there is — is never asked: a
+    // session with no live run has no run to file an envelope under.
+    const refused = await orchestrator.persistNativeRunEvent(
+      'session-1',
+      nativeEnvelope('run-that-never-opened', 'session-1', 1),
+      0,
+    );
+    expect(refused.accepted).toBe(false);
+    expect(written).toHaveLength(0);
   });
 
   it('releases the per-run model binding when the run ends', async () => {

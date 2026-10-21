@@ -103,11 +103,21 @@ afterAll(() => {
   if (mocks.home) fs.rmSync(mocks.home, { recursive: true, force: true });
 });
 
+/**
+ * The routing id Electron hands the window's main frame.
+ *
+ * It is NOT 0: Electron allocates frame ids per renderer process, and a
+ * freshly created BrowserWindow's main frame reports 1 (measured on Electron
+ * 44). The sender guard compares the sending frame against the sender's own
+ * `mainFrame`, so the fixture has to model both sides.
+ */
+const MAIN_FRAME_ROUTING_ID = 1;
+
 /** An IPC event that the sender guard should accept: the app's main frame. */
 function trustedEvent() {
   return {
-    sender: { id: mocks.mainWindowId },
-    senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/index.html` },
+    sender: { id: mocks.mainWindowId, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+    senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: `${mocks.mainOrigin}/index.html` },
   };
 }
 
@@ -184,25 +194,37 @@ describe('app:create-project-folder — sender trust (plan 583, ISS-30)', () => 
   }
 
   it('refuses an auxiliary window and creates nothing', async () => {
-    const event = { sender: { id: 9999 }, senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/` } };
+    const event = {
+      sender: { id: 9999, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+      senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: `${mocks.mainOrigin}/` },
+    };
     await expect(callWith(event, 'from-overlay')).rejects.toThrow(/untrusted sender/);
     expect(fs.existsSync(path.join(workspaceDir, 'from-overlay'))).toBe(false);
   });
 
   it('refuses a webview guest', async () => {
-    const event = { sender: { id: 7777 }, senderFrame: { routingId: 0, url: 'https://evil.example/' } };
+    const event = {
+      sender: { id: 7777, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+      senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: 'https://evil.example/' },
+    };
     await expect(callWith(event, 'from-guest')).rejects.toThrow(/untrusted sender/);
     expect(fs.existsSync(path.join(workspaceDir, 'from-guest'))).toBe(false);
   });
 
   it('refuses an iframe inside the main window', async () => {
-    const event = { sender: { id: mocks.mainWindowId }, senderFrame: { routingId: 12, url: `${mocks.mainOrigin}/` } };
+    const event = {
+      sender: { id: mocks.mainWindowId, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+      senderFrame: { routingId: 12, url: `${mocks.mainOrigin}/` },
+    };
     await expect(callWith(event, 'from-iframe')).rejects.toThrow(/untrusted sender/);
     expect(fs.existsSync(path.join(workspaceDir, 'from-iframe'))).toBe(false);
   });
 
   it('refuses a main frame that navigated off the app origin', async () => {
-    const event = { sender: { id: mocks.mainWindowId }, senderFrame: { routingId: 0, url: 'https://evil.example/' } };
+    const event = {
+      sender: { id: mocks.mainWindowId, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+      senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: 'https://evil.example/' },
+    };
     await expect(callWith(event, 'from-elsewhere')).rejects.toThrow(/untrusted sender/);
     expect(fs.existsSync(path.join(workspaceDir, 'from-elsewhere'))).toBe(false);
   });
@@ -210,7 +232,10 @@ describe('app:create-project-folder — sender trust (plan 583, ISS-30)', () => 
   it('refuses when there is no main window at all', async () => {
     mocks.mainWindowId = null;
     try {
-      const event = { sender: { id: 1 }, senderFrame: { routingId: 0, url: `${mocks.mainOrigin}/` } };
+      const event = {
+        sender: { id: 1, mainFrame: { routingId: MAIN_FRAME_ROUTING_ID } },
+        senderFrame: { routingId: MAIN_FRAME_ROUTING_ID, url: `${mocks.mainOrigin}/` },
+      };
       await expect(callWith(event, 'headless')).rejects.toThrow(/untrusted sender/);
     } finally {
       mocks.mainWindowId = 4242;

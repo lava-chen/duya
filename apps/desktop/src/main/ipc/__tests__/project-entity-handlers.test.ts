@@ -6,19 +6,29 @@
  * state + `vi.mock('electron')` to capture registered handlers
  * without spinning up a real IPC server.
  *
- * The handlers are thin wrappers around `createProject` /
- * `listProjects` / `getProject` from `apps/desktop/src/main/memory-state`, so we
- * only need to verify:
+ * Since the Desktop → Host migration the handlers no longer read the core
+ * `projects` table directly: every channel crosses the Host boundary through
+ * `getDesktopHostProjectApi()` (`../../cli/desktop-host-api`). The mock for
+ * that boundary DELEGATES to the REAL Host project implementation
+ * (`createHostProjectApi` from `@duya/host/project-api`) over the same real
+ * core `ProjectStore`, so the Host contract (JSON decode of `paths`,
+ * degrade-to-[] on corruption, canonical_root derived from paths[0]) stays
+ * covered here instead of being asserted against a stub.
+ *
+ * Coverage:
  *   - input validation (wrong shapes → structured error)
  *   - JSON corruption in `paths` field → degrade to [] (per plan
  *     525 §2.4 / `parseProjectPaths`)
  *   - happy paths return parsed `paths` arrays, not raw JSON strings
  *   - the three registered channels exist
+ *   - each channel forwards to the matching Host project API method
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+
+import { createHostProjectApi } from '@duya/host/project-api';
 
 import type { ProjectPathEntry } from '../../memory-state';
 import { CoreDatabase } from '../../db/core/database';
@@ -39,8 +49,14 @@ import type { CoreStores } from '../../db/core-connection';
 
 // All mock state lives in vi.hoisted so the vi.mock factory closure
 // (also hoisted) and the test bodies see the same singleton.
+type HostProjectApi = ReturnType<typeof createHostProjectApi>;
+
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>>(),
+  // The Host project API the handler calls now. Replaced in `beforeEach`
+  // with spies that DELEGATE to the real Host implementation over the
+  // real core ProjectStore (see the comment there).
+  hostProjectApi: null as unknown as HostProjectApi,
 }));
 
 vi.mock('electron', () => ({
@@ -51,8 +67,16 @@ vi.mock('electron', () => ({
   },
 }));
 
+// The handler crosses the Host boundary for every projects:* channel. The
+// mocked getter returns the spy object installed in `beforeEach`; the spies
+// themselves delegate to the REAL Host project implementation.
+vi.mock('../../cli/desktop-host-api', () => ({
+  getDesktopHostProjectApi: () => mocks.hostProjectApi,
+}));
+
 // Stub the structured logger so the handlers don't try to write to disk.
 vi.mock('../../logging/logger', () => ({
+  initLogger: vi.fn(),
   getLogger: () => ({
     error: vi.fn(),
     warn: vi.fn(),
@@ -79,6 +103,10 @@ async function invoke(channel: string, event: unknown = {}, ...args: unknown[]):
 
 describe('project-entity-handlers', () => {
   beforeEach(async () => {
+    // vi.resetAllMocks() clears the call history AND drops any installed
+    // implementation, so a stub installed by one test cannot leak into the
+    // next one. The Host spies below are re-installed right after it.
+    vi.resetAllMocks();
     vi.resetModules();
     mocks.handlers.clear();
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'project-entity-test-'));
@@ -103,10 +131,32 @@ describe('project-entity-handlers', () => {
       migrations: ProjectStore.migrations,
     });
     coreConn = await import('../../db/core-connection');
+    const projectStore = new ProjectStore(coreDb.db);
     coreConn._setCoreStoresForTesting({
       coreDb,
-      projects: new ProjectStore(coreDb.db),
+      projects: projectStore,
     } as CoreStores);
+
+    // The handler no longer touches the core store directly — it calls the
+    // Host project API. The mocked boundary therefore delegates to the REAL
+    // Host implementation (`createHostProjectApi`) over the same core
+    // ProjectStore, so the Host contract (JSON decode of the `paths`
+    // column, degrade-to-[] on corruption, canonical_root derived from
+    // paths[0]) is genuinely exercised instead of being asserted against a
+    // hand-written stub.
+    const hostProjectApi = createHostProjectApi(projectStore);
+    mocks.hostProjectApi = {
+      listProjects: vi.fn(() => hostProjectApi.listProjects()),
+      getProject: vi.fn((projectId: string) => hostProjectApi.getProject(projectId)),
+      createProject: vi.fn((input: Parameters<typeof hostProjectApi.createProject>[0]) =>
+        hostProjectApi.createProject(input),
+      ),
+      updateProject: vi.fn(
+        (projectId: string, patch: Parameters<typeof hostProjectApi.updateProject>[1]) =>
+          hostProjectApi.updateProject(projectId, patch),
+      ),
+      deleteProject: vi.fn((projectId: string) => hostProjectApi.deleteProject(projectId)),
+    };
 
     // Register handlers AFTER the DB is ready (fresh module instance).
     const { registerProjectEntityHandlers } = await import('../project-entity-handlers');
@@ -142,6 +192,8 @@ describe('project-entity-handlers', () => {
   describe('projects:list', () => {
     it('returns success with an empty array when no projects exist', async () => {
       const result = await invoke('projects:list');
+      // The list is read through the Host project API, not the local store.
+      expect(mocks.hostProjectApi.listProjects).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ success: true, projects: [] });
     });
 
@@ -155,8 +207,20 @@ describe('project-entity-handlers', () => {
         ],
       }) as { success: true; projectId: string; project: { paths: ProjectPathEntry[] } };
       expect(createResult.success).toBe(true);
+      // The handler normalizes the paths and hands them to the Host API.
+      expect(mocks.hostProjectApi.createProject).toHaveBeenCalledWith({
+        name: 'duya',
+        description: 'main repo',
+        paths: [
+          { path: fx('e:/Projects/duya'), description: null },
+          { path: fx('e:/Projects/duya-website'), description: 'website' },
+        ],
+        icon: null,
+        color: null,
+      });
 
       const listResult = await invoke('projects:list') as { success: true; projects: Array<{ name: string; paths: ProjectPathEntry[] }> };
+      expect(mocks.hostProjectApi.listProjects).toHaveBeenCalledTimes(1);
       expect(listResult.success).toBe(true);
       expect(listResult.projects).toHaveLength(1);
       expect(listResult.projects[0].name).toBe('duya');
@@ -175,6 +239,7 @@ describe('project-entity-handlers', () => {
   describe('projects:get', () => {
     it('returns null when the project does not exist', async () => {
       const result = await invoke('projects:get', {}, 'nonexistent-id');
+      expect(mocks.hostProjectApi.getProject).toHaveBeenCalledWith('nonexistent-id');
       expect(result).toEqual({ success: true, project: null });
     });
 
@@ -186,6 +251,7 @@ describe('project-entity-handlers', () => {
       const projectId = createResult.projectId;
 
       const result = await invoke('projects:get', {}, projectId) as { success: true; project: { project_id: string; paths: ProjectPathEntry[] } | null };
+      expect(mocks.hostProjectApi.getProject).toHaveBeenCalledWith(projectId);
       expect(result.success).toBe(true);
       expect(result.project).not.toBeNull();
       expect(result.project!.project_id).toBe(projectId);
@@ -219,6 +285,18 @@ describe('project-entity-handlers', () => {
           { path: fx('E:/Projects/duya/docs'), description: 'design notes' },
         ],
       }) as { success: true; projectId: string; project: { project_id: string; paths: ProjectPathEntry[] } };
+      // The register channel forwards the normalized path list to the Host
+      // project API, which owns the row write.
+      expect(mocks.hostProjectApi.createProject).toHaveBeenCalledWith({
+        name: 'duya',
+        description: 'main repo',
+        paths: [
+          { path: fx('e:/Projects/duya'), description: null },
+          { path: fx('e:/Projects/duya/docs'), description: 'design notes' },
+        ],
+        icon: null,
+        color: null,
+      });
       expect(result.success).toBe(true);
       expect(typeof result.projectId).toBe('string');
       expect(result.project.project_id).toBe(result.projectId);
@@ -349,6 +427,7 @@ describe('project-entity-handlers', () => {
       );
 
       const result = await invoke('projects:list') as { success: true; projects: Array<{ project_id: string; paths: ProjectPathEntry[] }> };
+      expect(mocks.hostProjectApi.listProjects).toHaveBeenCalledTimes(1);
       expect(result.success).toBe(true);
       const corrupted = result.projects.find((p) => p.project_id === 'corrupted-1');
       expect(corrupted).toBeTruthy();
@@ -371,6 +450,7 @@ describe('project-entity-handlers', () => {
       );
 
       const result = await invoke('projects:get', {}, 'corrupted-2') as { success: true; project: { project_id: string; paths: ProjectPathEntry[] } | null };
+      expect(mocks.hostProjectApi.getProject).toHaveBeenCalledWith('corrupted-2');
       expect(result.success).toBe(true);
       expect(result.project).not.toBeNull();
       expect(result.project!.paths).toEqual([]);

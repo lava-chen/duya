@@ -1,6 +1,30 @@
 /**
  * eval-baseline-comparison.test.ts — the pre-R2 baseline, measured.
  *
+ * ## The comparison is skipped: its subject is retired
+ *
+ * The baseline below was measured against the executor that lived in
+ * `packages/agent`, through `packages/agent/bundle/agent-process-entry.js`.
+ * That bundle is gone: `packages/agent` is being retired (root `AGENTS.md`),
+ * `8f7f5032` moved the shipped worker artifact to
+ * `packages/host/bundle/worker-entry.js`, and the old path is gitignored
+ * (`.gitignore:144`) with no build step emitting it. The pre-R2 tree at
+ * `77b14a01` can no longer be built, so the "same harness, different executor
+ * build" comparison this file exists to make CANNOT be re-measured.
+ *
+ * Re-recording `PRE_R2_BASELINE` against the current executor would not fix
+ * that: it would make the constant say the pre-R2 tree emitted something it
+ * did not — the fabrication this file's own header warns against, and the
+ * "weaken existing baselines" the retirement plan forbids
+ * (`13-agent-retirement-consumers.md:15`). So the comparison is skipped with
+ * its reason, and the measurement it holds is KEPT: a baseline that cannot be
+ * re-measured is exactly a record, and the last test below still checks that
+ * the record names its provenance.
+ *
+ * The file is not deleted: `evals/agent/matrix/rows.ts` cites the titles of
+ * the cases in the first describe, and `evals/agent/matrix/matrix.test.ts`
+ * fails when a cited file or title disappears.
+ *
  * ## What is being compared, and why there is a baseline at all
  *
  * R2.1 replaced two dispatches of one turn with one, gave a run an identity,
@@ -124,7 +148,10 @@ const PRE_R2_BASELINE: NormalisedRun = {
   ],
 };
 
-describe('E4.1 — the pre-R2 baseline vs the current run layer', () => {
+// Skipped, not deleted: the comparison's subject — the retired executor and
+// the pre-R2 tree it was measured against — can no longer be built. See this
+// file's header for why the baseline is kept rather than re-recorded.
+describe.skip('E4.1 — the pre-R2 baseline vs the current run layer', () => {
   it(
     'the assistant-visible behaviour is unchanged, and the run identity is the difference',
     async () => {

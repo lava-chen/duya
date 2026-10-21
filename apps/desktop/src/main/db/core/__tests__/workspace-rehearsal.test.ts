@@ -151,16 +151,23 @@ describe.skipIf(!nativeSqliteAvailable)('workspace migration rehearsal', () => {
     // One entry per mapped root that is not on disk. The corpus has no `E:/`
     // directory, so every seeded E:/ root is missing; p-clash claims
     // `E:/repos/duya` as well, which is why the path repeats.
+    // `fx` on each path, for the same reason the corpus seeds them with it:
+    // on POSIX the resolver sees a genuine absolute root, so the reported
+    // path is that root and not the `E:/...` fixture string.
     expect(plan.missing_paths.map((m) => `${m.project_id}:${m.path}`).sort()).toEqual(
-      [
-        'p-clash:E:/repos/duya',
-        'p-clash:E:/repos/shared',
-        'p-missing:E:/repos/unmounted',
-        'p-multi:E:/repos/duya',
-        'p-multi:E:/repos/duya-site',
-        'p-single:E:/repos/solo',
-        'p-bare:E:/repos/bare',
-      ].sort(),
+      (
+        [
+          ['p-clash', 'E:/repos/duya'],
+          ['p-clash', 'E:/repos/shared'],
+          ['p-missing', 'E:/repos/unmounted'],
+          ['p-multi', 'E:/repos/duya'],
+          ['p-multi', 'E:/repos/duya-site'],
+          ['p-single', 'E:/repos/solo'],
+          ['p-bare', 'E:/repos/bare'],
+        ] as const
+      )
+        .map(([projectId, p]) => `${projectId}:${fx(p)}`)
+        .sort(),
     );
     // The one root that really is on disk is not reported.
     expect(plan.missing_paths.some((m) => m.path === realDirRealpath)).toBe(false);

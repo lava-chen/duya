@@ -86,12 +86,24 @@ function makeOrchestrator(appendSink?: (event: { payload: { type: string } }) =>
     dbRequest: async (action, payload) => {
       if (action === 'run:create') return { ok: true, state: 'created', runId: payload.runId };
       if (action === 'run:append') {
-        for (const event of payload.events as Array<{ payload: { type: string } }>) {
-          appendSink?.(event);
-        }
-        return { ok: true, state: 'applied', runId: payload.runId, written: (payload.events as unknown[]).length };
+        return {
+          ok: true,
+          state: 'applied',
+          runId: payload.runId,
+          written: (payload.events as unknown[]).length,
+        };
       }
       return { ok: true, state: 'applied', runId: payload.runId, applied: true };
+    },
+    // The durable writer is the NATIVE channel now (plan 610 S1), so the sink
+    // is fed by the Runtime's own envelopes rather than by the orchestrator's
+    // legacy reverse-translation — which no longer persists at all.
+    nativeWriter: {
+      currentEpoch: () => 0,
+      append: async (_runId: string, envelopes: readonly { payload: { type: string } }[]) => {
+        for (const envelope of envelopes) appendSink?.(envelope);
+        return { state: 'written', written: envelopes.length };
+      },
     },
     channel: createWorkerExecutionChannel({
       dispatch: () => {
@@ -173,8 +185,34 @@ describe('R2.1 — the non-SSE chat turn is inside the run boundary', () => {
     const start = await orchestrator.openRun('session-1', intent);
     expect(start.accepted).toBe(true);
 
-    emit(JSON.stringify({ type: 'chat:turn_start', data: { turnCount: 1 } }));
-    emit(JSON.stringify({ type: 'chat:text', data: 'hi' }));
+    // The Runtime's own lines, exactly as `worker-process-entry.ts` writes
+    // them. The durable ledger is written by the native channel, so these are
+    // the frames that leave a trace in `runs`.
+    emit(
+      JSON.stringify({
+        type: 'run:event',
+        epoch: 0,
+        envelope: {
+          runId: start.runId,
+          sessionId: 'session-1',
+          seq: 1,
+          payload: { type: 'run.started' },
+        },
+      }),
+    );
+    emit(
+      JSON.stringify({
+        type: 'run:event',
+        epoch: 0,
+        envelope: {
+          runId: start.runId,
+          sessionId: 'session-1',
+          seq: 2,
+          payload: { type: 'run.completed' },
+        },
+      }),
+    );
+    // The legacy terminal frame is still what ends the turn.
     emit(JSON.stringify({ type: 'chat:done' }));
     await drain();
 

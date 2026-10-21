@@ -1,23 +1,57 @@
 // @vitest-environment jsdom
 
 /**
- * WorkflowPanel.test.tsx — plan 552 Phase 7 console (ZCode-parity).
+ * WorkflowPanel.test.tsx — the workflow console (plan 552 Phase 7).
  *
- * Covers the two-tab shell, the definition library (scope grouping +
- * read-only path), the runs split (in-progress vs finished), the evidence
- * view (lineage, stats strip, phase N/M trail, per-step rows with exit
- * code / ms / size, artifacts), and the stop/delete affordances.
+ * Commit 43e003be moved the desktop renderer into `@duya/ui` and re-cut the
+ * console: `WorkflowPanel` is now a navigation stub, and the surface the user
+ * actually drives lives under `components/workflow/`:
+ *
+ *   WorkflowPage          the page shell (定义 / 录制)
+ *   WorkflowLibraryView   the saved definition library (scope groups)
+ *   WorkflowDetailView    one definition (file path + arg table + history)
+ *   WorkflowRunHistory    one workflow's run rows
+ *   WorkflowRunDetailView one run (stage rail + per-node evidence)
+ *   WorkflowLaunchDialog  the 实参窗 (target project + declared args)
+ *
+ * The pure helpers (computeRunStats / computePhaseTrail / EvidenceRow / …)
+ * still live in WorkflowPanel.tsx and are covered here too.
  */
 
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("@/i18n", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+// `t` returns the key, so every assertion below names the exact i18n key the
+// product renders — a wording change cannot silently pass. The function is
+// stable: a fresh `t` on every render would re-trigger the effects that
+// depend on it (the run detail refetches its record on every `t` change).
+vi.mock("@/hooks/useTranslation", () => {
+  const t = (key: string) => key;
+  return { useTranslation: () => ({ t }) };
+});
+
+// The agent node body renders its child session as an embedded read-only
+// chat, which subscribes to the conversation store. The mock serves both call
+// styles this tree uses: the imperative `getState()` and the zustand
+// selector form.
+const { setActiveThread } = vi.hoisted(() => ({ setActiveThread: vi.fn() }));
+vi.mock("@/stores/conversation-store", () => {
+  const state = {
+    setActiveThread,
+    setCurrentView: vi.fn(),
+    startNewChat: vi.fn(),
+    updateNewChatDraft: vi.fn(),
+    messages: {} as Record<string, unknown>,
+    loadThreadMessages: vi.fn().mockResolvedValue(undefined),
+  };
+  const useConversationStore = (selector?: (s: typeof state) => unknown) =>
+    selector ? selector(state) : state;
+  return {
+    useConversationStore: Object.assign(useConversationStore, { getState: () => state }),
+  };
+});
 
 import {
-  WorkflowPanel,
   EvidenceRow,
   computeRunStats,
   computePhaseTrail,
@@ -33,6 +67,13 @@ import {
   type DwfWorkflowEntry,
   type WorkflowJournalRecord,
 } from "./WorkflowPanel";
+import { WorkflowPage } from "@/components/workflow/WorkflowPage";
+import { WorkflowLibraryView } from "@/components/workflow/WorkflowLibraryView";
+import { WorkflowRunHistory } from "@/components/workflow/WorkflowRunHistory";
+import { WorkflowRunDetailView } from "@/components/workflow/WorkflowRunDetailView";
+import { WorkflowRunCard } from "@/components/workflow/WorkflowRunCard";
+import type { WorkflowRunRecord } from "@/lib/workflow-ipc";
+import type { WorkflowRunSse } from "@/types/stream";
 
 // ─── fixtures ───
 
@@ -75,6 +116,58 @@ const runs: WorkflowRunRow[] = [
     retryOf: null,
     createdAt: 3_000_000,
     updatedAt: 3_060_000,
+  },
+];
+
+/** The run-anchored record shape the library surfaces read (WorkflowRunRecord). */
+const runRecords: WorkflowRunRecord[] = [
+  {
+    id: "run-live-1",
+    workflowName: "invoice-sync",
+    status: "active",
+    origin: "library",
+    scope: "project",
+    projectDir: "/repo",
+    parentSessionId: null,
+    params: { days: 7 },
+    artifacts: [],
+    summary: "Digest the repo and report the release tag",
+    spentTokens: 1020,
+    createdAt: 1_000_000,
+    updatedAt: 1_120_000,
+    finishedAt: null,
+  },
+  {
+    id: "run-2",
+    workflowName: "invoice-sync",
+    status: "complete",
+    origin: "library",
+    scope: "project",
+    projectDir: "/repo",
+    parentSessionId: null,
+    params: { days: 7 },
+    artifacts: [],
+    summary: "Second pass finished",
+    spentTokens: 900,
+    createdAt: 2_000_000,
+    updatedAt: 2_125_000,
+    finishedAt: 2_125_000,
+  },
+  {
+    id: "run-3",
+    workflowName: "invoice-sync",
+    status: "blocked",
+    origin: "library",
+    scope: "project",
+    projectDir: "/repo",
+    parentSessionId: null,
+    params: {},
+    artifacts: [],
+    summary: null,
+    spentTokens: null,
+    createdAt: 3_000_000,
+    updatedAt: 3_060_000,
+    finishedAt: null,
   },
 ];
 
@@ -150,15 +243,57 @@ const dwfInvalid = [
   { path: "/repo/.duya/workflows/broken.dwf.ts", reason: "frontmatter: missing description" },
 ];
 
+/** The one definition's own detail — its file path and its arg declarations. */
+const dwfDetail = {
+  ok: true,
+  name: "repo-digest",
+  path: "/repo/.duya/workflows/repo-digest.dwf.ts",
+  scope: "project",
+  meta: {
+    description: "Digest the repo",
+    whenToUse: "before a release",
+    args: {
+      days: { type: "number", required: true, description: "lookback window" },
+      tag: { type: "string", default: "latest" },
+    },
+  },
+  script: "",
+  source: "",
+  bodyLineOffset: 0,
+};
+
+/** The run card's view of one run — the same shape the SSE frames carry. */
+const steppedRun: WorkflowRunSse = {
+  runId: "run-2",
+  workflowName: "invoice-sync",
+  status: "complete",
+  startedAt: 2_000_000,
+  finishedAt: 2_125_000,
+  steps: [
+    { id: "collect", label: "collect", nodeKind: "phase", status: "success" },
+    { id: "fetch-tags", label: "git.tag.list", nodeKind: "tool", status: "success" },
+    {
+      id: "review",
+      label: "general-purpose",
+      nodeKind: "agent",
+      status: "success",
+      childSessionId: "child-session-abcdef",
+    },
+  ],
+  artifacts: [{ name: "capture-0.png", ref: "r1/capture-0.png" }],
+};
+
 const list = vi.fn();
+const listRuns = vi.fn();
 const journalFn = vi.fn();
 const del = vi.fn();
 const cancel = vi.fn();
 const dwfList = vi.fn();
+const dwfGet = vi.fn();
 const run = vi.fn();
 // Plan 560: the 实参窗 submits to the run anchor, not the session anchor.
 const trigger = vi.fn();
-// Run detail sub-view fetches the row by id.
+// The run detail fetches the record by id.
 const statusFn = vi.fn();
 
 Object.defineProperty(window, "electronAPI", {
@@ -166,26 +301,33 @@ Object.defineProperty(window, "electronAPI", {
   value: {
     workflow: {
       list,
+      listRuns,
       journal: journalFn,
       delete: del,
       cancel,
       run,
       trigger,
       status: statusFn,
-      dwf: { list: dwfList },
+      dwf: { list: dwfList, get: dwfGet },
     },
   },
 });
 
 beforeEach(() => {
+  // The launch dialog remembers the last run location and the typed args per
+  // workflow name — clear them so each case starts from a blank dialog.
+  window.localStorage.clear();
   list.mockReset().mockResolvedValue(runs);
+  listRuns.mockReset().mockResolvedValue(runRecords);
   journalFn.mockReset().mockResolvedValue(journal);
   del.mockReset().mockResolvedValue(true);
   cancel.mockReset().mockResolvedValue({ ok: true });
   dwfList.mockReset().mockResolvedValue({ entries: dwfEntries, invalid: dwfInvalid, dirs: [] });
+  dwfGet.mockReset().mockResolvedValue(dwfDetail);
   run.mockReset().mockResolvedValue({ ok: true, runId: "new-run-1" });
   trigger.mockReset().mockResolvedValue({ ok: true, runId: "new-run-1" });
-  statusFn.mockReset().mockImplementation(async (id: string) => runs.find((r) => r.id === id) ?? null);
+  statusFn.mockReset().mockImplementation(async (id: string) => runRecords.find((r) => r.id === id) ?? null);
+  setActiveThread.mockReset();
 });
 
 // ─── pure helpers ───
@@ -264,45 +406,91 @@ describe("console helpers", () => {
   });
 });
 
-// ─── shell + definitions tab (dwf library) ───
+// ─── definition library (WorkflowPage / WorkflowLibraryView) ───
 
-describe("WorkflowPanel shell", () => {
-  it("defaults to the definitions tab and renders scope groups", async () => {
-    render(<WorkflowPanel />);
-    await waitFor(() => expect(dwfList).toHaveBeenCalled());
-    expect(screen.getByTestId("workflow-tab-definitions").getAttribute("aria-selected")).toBe("true");
+describe("definition library", () => {
+  it("opens on the definitions tab and renders the library's scope groups", async () => {
+    render(<WorkflowPage projectDir="/repo" projectName="repo-project" />);
 
-    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
-    expect(screen.getByTestId("workflow-def-release-tag-recommendation")).toBeTruthy();
-    // Scope group headers carry counts.
-    expect(screen.getByText(/panel\.workflow\.scopeProject · 1/)).toBeTruthy();
-    expect(screen.getByText(/panel\.workflow\.scopeGlobal · 1/)).toBeTruthy();
+    // The page opens on the definitions tab, not on the recordings.
+    const tabs = screen.getByTestId("automation-tabs");
+    expect(
+      within(tabs).getByRole("tab", { name: "recorder.tabDefinitions" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      within(tabs).getByRole("tab", { name: /^recorder\.tab$/ }).getAttribute("aria-selected"),
+    ).toBe("false");
+
+    // Both entries are listed, grouped by scope, each group carrying its count.
+    await waitFor(() => expect(screen.getByText("repo-digest")).toBeTruthy());
+    const globalGroup = screen.getByText("workflow.scopeGlobal");
+    expect(within(globalGroup).getByText("1")).toBeTruthy();
+    expect(screen.getByText("release-tag-recommendation")).toBeTruthy();
+    const projectGroup = screen.getByText("repo-project");
+    expect(within(projectGroup).getByText("1")).toBeTruthy();
+    expect(screen.getByText("repo-digest")).toBeTruthy();
+
     // Unreadable files are named, not silently dropped.
-    expect(screen.getByText(/panel\.workflow\.invalidFiles · 1/)).toBeTruthy();
+    expect(screen.getByText(/1 个 workflow 文件无法识别/)).toBeTruthy();
     expect(screen.getByText(/broken\.dwf\.ts/)).toBeTruthy();
     expect(screen.getByText(/frontmatter: missing description/)).toBeTruthy();
   });
 
-  it("definition cards show the authoritative file path and arg metadata", async () => {
-    render(<WorkflowPanel />);
-    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
-    const card = screen.getByTestId("workflow-def-repo-digest");
-    expect(card.textContent).toContain("/repo/.duya/workflows/repo-digest.dwf.ts");
-    expect(card.textContent).toContain("panel.workflow.paramsShort · 2");
+  it("the definition detail shows the authoritative file path and arg metadata", async () => {
+    render(<WorkflowPage projectDir="/repo" projectName="repo-project" />);
+    await waitFor(() => expect(screen.getByText("repo-digest")).toBeTruthy());
+
+    // The library card opens the definition's own page.
+    fireEvent.click(screen.getByText("repo-digest"));
+    await waitFor(() =>
+      expect(screen.getByText("/repo/.duya/workflows/repo-digest.dwf.ts")).toBeTruthy(),
+    );
+    // The path shown is the one the loader reported, not a guess.
+    expect(dwfGet).toHaveBeenCalledWith({ name: "repo-digest", projectDir: "/repo" });
+
+    // Arg metadata: the declared names, their types, the required flag, the
+    // defaults and the per-arg docs.
+    const nameInputs = screen.getAllByLabelText("workflow.field.parameters.name") as HTMLInputElement[];
+    expect(nameInputs.map((i) => i.value)).toEqual(["days", "tag"]);
+    const typeSelects = screen.getAllByLabelText("workflow.field.parameters.type") as HTMLSelectElement[];
+    expect(typeSelects.map((s) => s.value)).toEqual(["number", "string"]);
+    expect(
+      screen.getByLabelText("days workflow.field.parameters.required").getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.getByLabelText("tag workflow.field.parameters.required").getAttribute("aria-checked"),
+    ).toBe("false");
+    const defaultInputs = screen.getAllByLabelText(
+      "workflow.field.parameters.default",
+    ) as HTMLInputElement[];
+    expect(defaultInputs.map((i) => i.value)).toEqual(["", "latest"]);
+    const descInputs = screen.getAllByLabelText("workflow.field.parameters.desc") as HTMLInputElement[];
+    expect(descInputs.map((i) => i.value)).toEqual(["lookback window", ""]);
   });
 
   it("passes the project directory through to the definition library", async () => {
-    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
+    render(<WorkflowLibraryView projectDir="/repo" />);
     await waitFor(() => expect(dwfList).toHaveBeenCalledWith("/repo"));
   });
+});
+
+// ─── launch dialog (WorkflowLaunchDialog) ───
+
+describe("launch dialog", () => {
+  /** The library card's ▶ — the entry point into the 实参窗. */
+  function openLaunchDialogFor(name: string) {
+    const card = screen.getByText(name).parentElement!;
+    fireEvent.click(within(card).getByRole("button", { name: "workflow.action.run" }));
+  }
 
   it("the launch dialog fills declared args and runs against the chosen project", async () => {
-    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
-    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
+    render(<WorkflowLibraryView projectDir="/repo" projectName="repo-project" />);
+    await waitFor(() => expect(screen.getByText("repo-digest")).toBeTruthy());
 
     // Run opens the 实参窗 (project + args), it does not fire immediately.
-    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
+    openLaunchDialogFor("repo-digest");
     expect(screen.getByTestId("workflow-launch-repo-digest")).toBeTruthy();
+    expect(trigger).not.toHaveBeenCalled();
 
     // Declared default is seeded into the string arg.
     const tagInput = within(screen.getByTestId("workflow-launch-arg-tag")).getByRole("textbox") as HTMLInputElement;
@@ -333,9 +521,9 @@ describe("WorkflowPanel shell", () => {
   });
 
   it("a missing required arg blocks the launch with an inline error", async () => {
-    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
-    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
-    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
+    render(<WorkflowLibraryView projectDir="/repo" />);
+    await waitFor(() => expect(screen.getByText("repo-digest")).toBeTruthy());
+    openLaunchDialogFor("repo-digest");
 
     fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
     await waitFor(() => expect(screen.getByTestId("workflow-launch-error")).toBeTruthy());
@@ -345,136 +533,175 @@ describe("WorkflowPanel shell", () => {
     expect(triggerFn).not.toHaveBeenCalled();
   });
 
-  it("a successful launch flips the panel to the runs tab", async () => {
-    render(<WorkflowPanel tab={{ params: { workingDirectory: "/repo" } }} />);
-    await waitFor(() => expect(screen.getByTestId("workflow-def-repo-digest")).toBeTruthy());
-    fireEvent.click(within(screen.getByTestId("workflow-def-repo-digest")).getByTestId("workflow-run-repo-digest"));
-    fireEvent.change(screen.getByTestId("workflow-launch-arg-days").querySelector("input")!, {
-      target: { value: "7" },
-    });
-    fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
+  it("a successful launch hands the new run to the run panel", async () => {
+    const events: Array<CustomEvent<{ runId?: string }>> = [];
+    const listener = (e: Event) => events.push(e as CustomEvent<{ runId?: string }>);
+    window.addEventListener("duya:open-workflow-run-panel", listener);
+    try {
+      render(<WorkflowLibraryView projectDir="/repo" />);
+      await waitFor(() => expect(screen.getByText("repo-digest")).toBeTruthy());
+      openLaunchDialogFor("repo-digest");
+      fireEvent.change(screen.getByTestId("workflow-launch-arg-days").querySelector("input")!, {
+        target: { value: "7" },
+      });
+      fireEvent.click(screen.getByTestId("workflow-launch-confirm"));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("workflow-tab-runs").getAttribute("aria-selected")).toBe("true"),
-    );
+      await waitFor(() => expect(trigger).toHaveBeenCalled());
+      // The launch lands on the new run: the app shell turns this event into
+      // the run panel (App.tsx listens for it).
+      expect(events).toHaveLength(1);
+      expect(events[0]!.detail.runId).toBe("new-run-1");
+      // The dialog closes on success.
+      expect(screen.queryByTestId("workflow-launch-repo-digest")).toBeNull();
+    } finally {
+      window.removeEventListener("duya:open-workflow-run-panel", listener);
+    }
   });
 });
 
-// ─── runs tab (stage-rail cards + sidebar detail) ───
+// ─── run card + run history + run detail ───
 
-describe("runs tab", () => {
-  async function openRuns() {
-    render(<WorkflowPanel />);
-    fireEvent.click(screen.getByTestId("workflow-tab-runs"));
-    await waitFor(() => expect(screen.getByTestId("workflow-run-run-live-1")).toBeTruthy());
-  }
+describe("run history and run detail", () => {
+  it("a run card's plain click expands the per-node chips instead of opening the detail", () => {
+    const events: Array<CustomEvent<{ runId?: string }>> = [];
+    const listener = (e: Event) => events.push(e as CustomEvent<{ runId?: string }>);
+    window.addEventListener("duya:open-workflow-run-panel", listener);
+    try {
+      render(<WorkflowRunCard run={steppedRun} />);
+      // Collapsed first: the rail headers show, no node chips anywhere.
+      expect(screen.queryByText("workflow.nodeKind.tool")).toBeNull();
+      // One plain click on the card reveals the chips…
+      fireEvent.click(screen.getByText("invoice-sync"));
+      expect(screen.getByText("workflow.nodeKind.tool")).toBeTruthy();
+      // …and never yanks the user into the run detail.
+      expect(events).toHaveLength(0);
+      // The explicit ↗ is the path into the run detail.
+      fireEvent.click(screen.getByRole("button", { name: "workflow.card.openDetail" }));
+      expect(events).toHaveLength(1);
+      expect(events[0]!.detail.runId).toBe("run-2");
+    } finally {
+      window.removeEventListener("duya:open-workflow-run-panel", listener);
+    }
+  });
 
-  async function openDetail(id: string) {
-    await openRuns();
-    // The card's plain click toggles the per-node chips (progressive
-    // disclosure, same as the chat card); the run detail opens through the
-    // card's explicit ↗ affordance.
-    fireEvent.click(
-      within(screen.getByTestId(`workflow-run-${id}`)).getByRole("button", {
-        name: "workflow.card.openDetail",
-      }),
+  it("the run history marks every run with its own state", async () => {
+    const onOpenRun = vi.fn();
+    render(
+      <WorkflowRunHistory
+        workflowName="invoice-sync"
+        scope="project"
+        projectDir="/repo"
+        onOpenRun={onOpenRun}
+      />,
     );
-    await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
-  }
 
-  it("a run card's plain click expands the per-node chips instead of opening the detail", async () => {
-    await openRuns();
-    const row = screen.getByTestId("workflow-run-run-live-1");
-    // The journal lands asynchronously — the toggle only arms once the run
-    // view carries steps.
-    await waitFor(() => expect(within(row).getByText("collect")).toBeTruthy());
-    // Collapsed first: the rail headers show, no node chips anywhere.
-    expect(within(row).queryByText("workflow.nodeKind.tool")).toBeNull();
-    // One plain click on the card reveals the chips…
-    fireEvent.click(within(row).getByText("invoice-sync"));
-    expect(within(row).getByText("workflow.nodeKind.tool")).toBeTruthy();
-    // …and never yanks the user into the run detail.
-    expect(screen.queryByTestId("workflow-run-detail")).toBeNull();
+    await waitFor(() => expect(screen.getByTestId("workflow-run-history")).toBeTruthy());
+    // The history is scoped to one workflow.
+    expect(listRuns).toHaveBeenCalledWith({ workflowName: "invoice-sync", limit: 100 });
+
+    // Every run of the workflow is listed, each carrying its own state: the
+    // live one, the finished one and the parked one are told apart.
+    expect(
+      within(screen.getByTestId("workflow-history-row-run-live-1")).getByText("workflow.runUi.running"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("workflow-history-row-run-2")).getByText("workflow.runUi.complete"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("workflow-history-row-run-3")).getByText("workflow.runUi.paused"),
+    ).toBeTruthy();
   });
 
-  it("splits in-progress from finished with counts", async () => {
-    await openRuns();
-    expect(screen.getByText(/panel\.workflow\.running · 2/)).toBeTruthy(); // active + blocked
-    expect(screen.getByText(/panel\.workflow\.finished · 1/)).toBeTruthy(); // complete
-    // Blocked run's pause message surfaces on the card itself.
-    expect(screen.getByText("awaiting approval at approve-payment")).toBeTruthy();
-  });
-
-  it("history cards render the stage rail from the journal", async () => {
-    await openRuns();
-    await waitFor(() => expect(journalFn).toHaveBeenCalledWith("run-2"));
-    const card = screen.getByTestId("workflow-run-run-2");
-    await waitFor(() => expect(card.querySelector('[data-testid="workflow-stage-rail"]')).toBeTruthy());
-    // The rail shows the phase name and step counts derived from the journal.
-    expect(card.textContent).toContain("collect");
-    expect(card.textContent).toContain("3/3");
-  });
-
-  it("clicking a card opens the run detail sub-view with lineage, summary, timeline, evidence and artifacts", async () => {
-    await openDetail("run-2");
+  it("the run detail renders the stage rail from the journal", async () => {
+    render(<WorkflowRunDetailView runId="run-2" onBack={() => {}} />);
     await waitFor(() => expect(journalFn).toHaveBeenCalledWith("run-2"));
 
-    // Lineage (retry_of → the source run id).
-    expect(screen.getByTestId("workflow-lineage-run-2").textContent).toContain("run-live-1".slice(0, 12));
-
-    // Summary line (sub-agents · done/total steps · tokens).
-    const detail = screen.getByTestId("workflow-run-detail");
-    expect(detail.textContent).toContain("panel.workflow.summaryLine");
-
-    // Phase timeline: merged 'collect' node with N/M progress.
-    const timeline = screen.getByTestId("workflow-phase-line-run-2");
-    expect(timeline.textContent).toContain("collect");
-    expect(timeline.textContent).toContain("3/3");
-
-    // Phase expands into its per-step evidence rows.
-    fireEvent.click(within(timeline).getByRole("button", { name: /collect/ }));
-    const evidence = screen.getByTestId("workflow-evidence-collect");
-    expect(evidence.textContent).toContain("fetch-tags");
-    expect(evidence.textContent).toContain("exit 0");
-    expect(evidence.textContent).toContain("12ms");
-    expect(evidence.textContent).toContain("371 B");
-    expect(evidence.textContent).toContain("panel.workflow.verified");
-    expect(evidence.textContent).toContain("child-se"); // sub-agent lineage link
-
-    // Artifacts section.
-    const artifacts = screen.getByTestId("workflow-artifacts-run-2");
-    expect(artifacts.textContent).toContain("r1/capture-0.png");
-    expect(artifacts.textContent).toContain("2.0 KB");
+    const graph = screen.getByTestId("workflow-run-node-graph");
+    const rail = within(graph).getByTestId("workflow-stage-rail");
+    // The rail shows the phase name and the step counts derived from the journal.
+    expect(rail.textContent).toContain("collect");
+    expect(rail.textContent).toContain("3/3");
   });
 
-  it("a live run's detail offers stop and refreshes; a finished one offers delete and returns on delete", async () => {
-    await openDetail("run-live-1");
-    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.stop/ }));
+  it("clicking a history row opens the run detail with the run's evidence", async () => {
+    const onOpenRun = vi.fn();
+    const { unmount } = render(
+      <WorkflowRunHistory
+        workflowName="invoice-sync"
+        scope="project"
+        projectDir="/repo"
+        onOpenRun={onOpenRun}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("workflow-history-row-run-2")).toBeTruthy());
+    fireEvent.click(screen.getByTestId("workflow-history-row-run-2"));
+    expect(onOpenRun).toHaveBeenCalledTimes(1);
+    expect(onOpenRun.mock.calls[0]![0].id).toBe("run-2");
+    unmount();
+
+    // The run detail that opens carries the run's summary, its stage rail and
+    // the per-node evidence behind the rail.
+    render(<WorkflowRunDetailView runId="run-2" onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("workflow-run-node-graph")).toBeTruthy());
+    expect(screen.getByText("Second pass finished")).toBeTruthy();
+
+    const rail = within(screen.getByTestId("workflow-run-node-graph")).getByTestId("workflow-stage-rail");
+    expect(rail.textContent).toContain("collect");
+    expect(rail.textContent).toContain("3/3");
+
+    // The tool node's evidence: exit code, duration and output size.
+    fireEvent.click(screen.getByRole("button", { name: "workflow.nodeKind.tool" }));
+    const toolDetail = screen.getByTestId("workflow-node-detail");
+    expect(toolDetail.textContent).toContain("workflow.step.exitCode 0");
+    expect(toolDetail.textContent).toContain("12ms");
+    expect(toolDetail.textContent).toContain("371 B");
+
+    // The agent node's evidence: the verification mark and the child session.
+    // The agent body mounts the child's transcript, whose async load settles
+    // in a microtask — hence the async act() around the click.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "general-purpose" }));
+    });
+    const agentDetail = screen.getByTestId("workflow-node-detail");
+    expect(agentDetail.textContent).toContain("panel.workflow.verified");
+    expect(agentDetail.textContent).toContain("child-session-abcdef");
+
+    // The artifacts the run published ride on the card.
+    expect(screen.getByText("capture-0.png")).toBeTruthy();
+  });
+
+  it("a live run's detail offers stop and keeps refreshing", async () => {
+    render(<WorkflowRunDetailView runId="run-live-1" onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId("workflow-run-node-graph")).toBeTruthy());
+
+    // A live run is stoppable where it stands.
+    fireEvent.click(screen.getByRole("button", { name: "workflow.card.stop" }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith("run-live-1"));
-    await waitFor(() => expect(statusFn).toHaveBeenCalledTimes(2));
 
-    // Back to the list, then open the finished run's detail from its ↗.
-    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.back/ }));
-    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
-    fireEvent.click(
-      within(screen.getByTestId("workflow-run-run-2")).getByRole("button", {
-        name: "workflow.card.openDetail",
-      }),
-    );
-    await waitFor(() => expect(screen.getByTestId("workflow-run-detail")).toBeTruthy());
-
-    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.delete/ }));
-    await waitFor(() => expect(del).toHaveBeenCalledWith("run-2"));
-    // Deleting returns to the list, which refetches.
-    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
-    await waitFor(() => expect(screen.getByTestId("workflow-run-run-live-1")).toBeTruthy());
+    // The live run keeps being re-read, so the card never goes stale. The
+    // poll lands outside React's event loop, hence the act() wrapper.
+    await act(async () => {
+      await waitFor(() => expect(statusFn.mock.calls.length).toBeGreaterThanOrEqual(2), {
+        timeout: 5000,
+      });
+    });
   });
 
-  it("the back button returns from the detail to the card list", async () => {
-    await openDetail("run-2");
-    fireEvent.click(screen.getByRole("button", { name: /panel\.workflow\.back/ }));
-    await waitFor(() => expect(screen.queryByTestId("workflow-run-detail")).toBeNull());
-    expect(screen.getByTestId("workflow-run-run-2")).toBeTruthy();
+  it("the back button returns from the run detail to the library", async () => {
+    const consumed = vi.fn();
+    render(
+      <WorkflowPage
+        projectDir="/repo"
+        projectName="repo-project"
+        runRequest={{ runId: "run-2" }}
+        onRunRequestConsumed={consumed}
+      />,
+    );
+    await waitFor(() => expect(screen.getByTestId("workflow-run-node-graph")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /workflow\.action\.back/ }));
+    await waitFor(() => expect(screen.queryByTestId("workflow-run-node-graph")).toBeNull());
+    expect(screen.getByTestId("workflow-library-embedded")).toBeTruthy();
   });
 });
 

@@ -415,11 +415,12 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
 
   it('finalizes the turn the run STOPPED on, and represents an earlier one by its blocks', async () => {
     // A turn that asks for tools stops on `tool_use`, which the event union
-    // cannot state -- and that is the NORMAL shape of a tool-calling turn, not an
-    // edge case. So the engine finalizes the turn the loop actually stopped on
-    // and leaves the earlier one to its durable block events, which is the same
-    // division of labour the inbound path has (one finalized frame per
-    // `chat:done`, blocks for everything).
+    // CAN state since T01b (`events/payloads.ts:84-93`) -- and that is the
+    // NORMAL shape of a tool-calling turn, not an edge case. So the engine
+    // finalizes the turn the loop actually stopped on and leaves the earlier
+    // one to its durable block events, which is the same division of labour
+    // the inbound path has (one finalized frame per `chat:done`, blocks for
+    // everything).
     const result = await engineRun([
       {
         frames: [
@@ -452,11 +453,14 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
     expect(result.records.map((record) => record.turn)).toEqual([1, 2]);
   });
 
-  it('refuses to state the run last stop reason, and says so in a diagnostic', async () => {
-    // `tool_use` means "the loop is going round again". None of the six protocol
-    // `StopReason` values says that, and `completed` would claim a normal finish
-    // that did not happen -- so the frame is left unmapped. The ceiling is what
-    // makes this the run's LAST turn: without it the loop would go round again.
+  it('states the run last stop reason, because the event union can now say "tool_use"', async () => {
+    // `tool_use` means "the loop is going round again", and the protocol's
+    // `StopReason` carries it since T01b (`events/payloads.ts:84-93`). So the
+    // engine has nothing left to refuse: the run's LAST turn says exactly why
+    // it stopped, in the provider's own word rather than one the engine chose.
+    //
+    // The ceiling is what makes this the run's LAST turn: without it the loop
+    // would go round again and this message would not be the run's.
     const result = await engineRun(
       [
         {
@@ -464,6 +468,46 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
             { type: 'text', text: ANSWER_ONE },
             { type: 'tool_use', call: READ_CALL },
             { type: 'turn_stopped', reason: 'tool_use' },
+          ],
+        },
+      ],
+      'run-stated',
+      1,
+    );
+
+    // Exactly one, and the reason on it is the frame's own.
+    expect(types(result.events)).toContain('assistant.message_finalized');
+    const finalized = onlyFinalized(result.events);
+    expect(finalized.stopReason).toBe('tool_use');
+    // The content is the turn's, in the legacy's order -- the answer first and
+    // the call it asked for after it.
+    expect(finalized.content).toEqual([
+      { type: 'text', text: ANSWER_ONE },
+      { type: 'tool_use', id: READ_CALL.callId, name: READ_CALL.name, input: READ_CALL.input },
+    ]);
+    // NOT a diagnostic. The refusal branch is not taken, because there is
+    // nothing to refuse, and a diagnostic here would be the engine
+    // apologising for a hole that is not there.
+    expect(types(result.events)).not.toContain('diagnostic');
+    // The blocks are still durable, so a consumer is not left with nothing.
+    expect(blocksOfType(result.events, 'assistant.text_block')).toHaveLength(1);
+    // And the host received the same message the event carries.
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0]?.content).toEqual(finalized.content);
+  });
+
+  it('refuses to state a stop reason the provider never gave, and says so in a diagnostic', async () => {
+    // The refusal is still a live path, and T01b moved what reaches it. Every
+    // reason a provider CAN report is now stateable, so the one thing that
+    // still leaves the engine with nothing to publish is a stream that ended
+    // WITHOUT a stop reason at all -- and `completed` would claim a normal
+    // finish that did not happen, so the frame is left unmapped.
+    const result = await engineRun(
+      [
+        {
+          frames: [
+            { type: 'text', text: ANSWER_ONE },
+            { type: 'tool_use', call: READ_CALL },
           ],
         },
       ],
@@ -476,8 +520,8 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
     // state, which is the counted-diagnostic rule the unmapped sub-agent frame
     // already follows.
     const diagnostic = result.events.find((event) => event.type === 'diagnostic');
-    expect(diagnostic?.message).toContain('tool_use');
-    expect(diagnostic?.data).toMatchObject({ turn: 1 });
+    expect(diagnostic?.message).toContain('none reported');
+    expect(diagnostic?.data).toMatchObject({ turn: 1, stopReason: null });
     // The blocks are still durable, so a consumer is not left with nothing.
     expect(blocksOfType(result.events, 'assistant.text_block')).toHaveLength(1);
     // And the host still received the message: the refusal is about the EVENT

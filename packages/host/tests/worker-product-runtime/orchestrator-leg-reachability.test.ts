@@ -49,6 +49,42 @@ import { selectRunDriverLeg } from '../../src/worker-run-composition.js';
 
 const PROBE_ID = 'orchestrator-leg-reachability-probe';
 
+/**
+ * The PRODUCTION state of the registry.
+ *
+ * Captured at module load -- after the import side effects above have
+ * registered every production mode, and BEFORE any case in this file can
+ * register anything of its own.
+ *
+ * The registry is a module-level singleton, so a case that registers a probe
+ * mode CHANGES what a later case sees. Which case that is depends on the
+ * order the cases run in, so a case that reads the live registry is correct
+ * in one order only. The production claim is therefore read from this
+ * snapshot: it is the same claim, taken at a point no case can move.
+ */
+const PRODUCTION_ORCHESTRATOR_MODES = modeModifierRegistry
+    .list()
+    .filter((m) => m.orchestrator !== undefined)
+    .map((m) => m.id);
+
+/**
+ * The probe mode, registered on demand.
+ *
+ * `register` throws when the id is taken and TWO cases here need the probe,
+ * so it is registered once and reused rather than registered twice.
+ */
+function probeMode(): ModeModifier {
+    const existing = modeModifierRegistry.get(PROBE_ID);
+    if (existing !== undefined) return existing;
+    const orchestrator: ModeModifier = {
+        id: PROBE_ID,
+        kind: 'message',
+        orchestrator: { execute: async function* () {} },
+    };
+    modeModifierRegistry.register(orchestrator);
+    return orchestrator;
+}
+
 describe('orchestrator leg reachability (D9 precondition)', () => {
     it('no mode registered by production carries an `orchestrator`', () => {
         // The direct claim, against the real registry. `list()` is the same
@@ -61,20 +97,16 @@ describe('orchestrator leg reachability (D9 precondition)', () => {
         const registered = modeModifierRegistry.list();
         expect(registered.length).toBeGreaterThan(0); // CONTROL: the registry is populated at all
 
-        const withOrchestrator = registered.filter((m) => m.orchestrator !== undefined).map((m) => m.id);
-        expect(withOrchestrator).toEqual([]);
+        // The offenders are the PRODUCTION ones -- see `PRODUCTION_ORCHESTRATOR_MODES`
+        // for why the live registry is not read here.
+        expect(PRODUCTION_ORCHESTRATOR_MODES).toEqual([]);
     });
 
     it('CONTROL: the registry DOES carry orchestrators when one is registered', () => {
         // Without this arm, the case above would also pass for a registry whose
         // `list()` was empty, or whose `orchestrator` field was never readable.
         // It differs from the production case by exactly one registration.
-        const orchestrator: ModeModifier = {
-            id: PROBE_ID,
-            kind: 'message',
-            orchestrator: { execute: async function* () {} },
-        };
-        modeModifierRegistry.register(orchestrator);
+        probeMode();
 
         const withOrchestrator = modeModifierRegistry
             .list()
@@ -91,12 +123,17 @@ describe('orchestrator leg reachability (D9 precondition)', () => {
         // `_readOrchestratorMode` is private, so the leg is reached the same way
         // production reaches it: through the RunHandle the session runtime
         // builds, with `orchestrator` carrying the registered mode.
+        //
+        // The probe is registered HERE rather than relied upon from the case
+        // above: the cases may run in any order, and this one is only
+        // meaningful with the mode in the registry.
+        const mode = probeMode();
         const frames = (async function* () {
             yield { type: 'text', data: { content: 'probe' } };
         })();
         const agent = { orchestratorFramesFor: () => frames } as never;
 
-        const leg = selectRunDriverLeg(agent, { orchestrator: modeModifierRegistry.get(PROBE_ID) } as never);
+        const leg = selectRunDriverLeg(agent, { orchestrator: mode } as never);
         expect(leg.kind).toBe('orchestrator');
     });
 

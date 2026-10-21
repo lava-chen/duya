@@ -7,7 +7,7 @@
  * by the frame codec" for every `type` its `switch` does not name. The message
  * claims a producer/consumer disagreement, which is a real problem worth an
  * operator's attention — but the driver runs EVERY projected frame through this
- * codec (`engine-run-driver.ts:690`), and `projectToLegacyFrame` deliberately
+ * codec (`worker-engine-driver.ts:268`), and `projectToLegacyFrame` deliberately
  * projects `assistant.text_delta` / `assistant.thinking_delta` /
  * `assistant.usage` (`legacy-sse-projector.ts:65`). Those three had no `case`,
  * so every single token of every answer logged a WARN.
@@ -17,19 +17,26 @@
  * were describing — measured on a live run as four consecutive WARN lines
  * printed above the reply, pushing it off the top of the view.
  *
- * The three are now named cases that drop silently, on the same stated ground as
- * the existing `case 'result'` arm: the `chat:*` worker vocabulary has no
- * streaming-delta frame, so there is nothing to forward.
+ * The three are now named cases, and they are named DIFFERENTLY from one
+ * another. The two deltas are FORWARDED (`worker-frame-codec.ts:124-131`): the
+ * `chat:*` vocabulary DOES have a streaming-delta frame — `chat:text_delta` and
+ * `chat:thinking_delta` are declared on the worker protocol
+ * (`worker-protocol.ts:308`, `:314`), the renderer reads them
+ * (`worker-frames.ts:44-53`), and `engine-chat-start-assembly-proof.test.ts`
+ * requires `chat:text_delta` to appear. The usage frame is DROPPED
+ * (`worker-frame-codec.ts:396-402`): the usage is accounted for upstream of
+ * this codec, so a `token_usage` frame has nowhere to go.
  *
  * ## What these tests hold down
  *
  * Both directions, because silencing one arm is trivially easy to do by
  * silencing the alarm:
  *
- *  - the three named types drop with NO warning;
- *  - a genuinely unknown type STILL warns.
+ *  - the two deltas reach the client, in the `chat:*` shape;
+ *  - the usage frame is dropped;
+ *  - and NONE of the three warns.
  *
- * The second is the one that matters. A codec that dropped everything quietly
+ * The last is the one that matters. A codec that dropped everything quietly
  * would pass a test written only about the flood.
  *
  * ## Why the logger is MOCKED rather than spied
@@ -108,21 +115,45 @@ beforeEach(() => {
   mocks.logger.warn.mockClear();
 });
 
-describe('convertSSEToAgentMessage -- frames dropped without an alarm', () => {
-  const DELIBERATELY_DROPPED = [
-    { type: 'assistant.text_delta', delta: 'partial ' } as RunEvent,
-    { type: 'assistant.thinking_delta', delta: 'pondering ' } as RunEvent,
+describe('convertSSEToAgentMessage -- frames the drain hands over without an alarm', () => {
+  /**
+   * The two deltas: FORWARDED, in the `chat:*` shape.
+   *
+   * The frame is written out in full, not as "something with a `chat:` type",
+   * because the delta text is the payload: a codec that forwarded the frame
+   * with an empty delta would satisfy a weaker claim than the one the
+   * renderer needs.
+   */
+  const FORWARDED: readonly { readonly payload: RunEvent; readonly frame: Record<string, unknown> }[] = [
+    {
+      payload: { type: 'assistant.text_delta', delta: 'partial ' } as RunEvent,
+      frame: { type: 'chat:text_delta', delta: 'partial ' },
+    },
+    {
+      payload: { type: 'assistant.thinking_delta', delta: 'pondering ' } as RunEvent,
+      frame: { type: 'chat:thinking_delta', delta: 'pondering ' },
+    },
+  ];
+
+  /** The usage frame: DROPPED, because the usage is accounted for upstream. */
+  const DROPPED: readonly RunEvent[] = [
     { type: 'assistant.usage', usage: { inputTokens: 12, outputTokens: 3 } } as unknown as RunEvent,
   ];
 
-  it('drops each one', () => {
-    for (const payload of DELIBERATELY_DROPPED) {
+  it('forwards each delta the drain delivers', () => {
+    for (const { payload, frame } of FORWARDED) {
+      expect(seam(payload), `${payload.type} should reach the client as ${frame.type}`).toEqual(frame);
+    }
+  });
+
+  it('drops the usage frame, which has no client frame to go to', () => {
+    for (const payload of DROPPED) {
       expect(seam(payload), `${payload.type} should be dropped, not forwarded`).toBeNull();
     }
   });
 
   it('stays silent for each one, which is the whole point', () => {
-    for (const payload of DELIBERATELY_DROPPED) {
+    for (const payload of [...FORWARDED.map((entry) => entry.payload), ...DROPPED]) {
       seam(payload);
       expect(mocks.logger.warn.mock.calls, `${payload.type} logged a warning`).toEqual([]);
     }
