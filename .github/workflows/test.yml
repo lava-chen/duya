@@ -653,15 +653,35 @@ jobs:
           E2E_FILES: ${{ needs.changes.outputs.e2e_files }}
         run: |
           set -o pipefail
+          # `xvfb-run` is the wrapper around Xvfb, which is a LINUX virtual
+          # display server. The macOS and Windows runners have no Xvfb, so
+          # asking for it there is `command not found` — exit 127 — and the
+          # suite has never actually started on two of the three platforms
+          # this matrix claims to cover. Measured on run 39643430577: the
+          # macOS and Windows build jobs both died on this line within a
+          # second, before a single spec ran, and the nightly's own macOS leg
+          # was reported as `cancelled` rather than failed — which is what a
+          # crash in a job that depends on a crashing job looks like.
+          #
+          # Linux keeps the virtual display (Electron needs one there); the
+          # other two run the suite directly, because their runners have a
+          # window server of their own.
+          run_e2e() {
+            if [ "$RUNNER_OS" = "Linux" ]; then
+              xvfb-run -a "$@"
+            else
+              "$@"
+            fi
+          }
           if [ "$E2E_SCOPE" = "full" ]; then
-            xvfb-run -a npm run test:e2e
+            run_e2e npm run test:e2e
           else
             mapfile -t e2e_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' "$E2E_FILES")
             if [ "${#e2e_files[@]}" -eq 0 ]; then
               echo "E2E scope was changed but no spec files were selected" >&2
               exit 1
             fi
-            xvfb-run -a npm run test:e2e -- "${e2e_files[@]}"
+            run_e2e npm run test:e2e -- "${e2e_files[@]}"
           fi
 
       - name: Package (macOS only)
