@@ -443,6 +443,9 @@ jobs:
         #   full build (22 packages)   151.8s
         #   unit-suite profile (19)     39.8s
         #
+        # On the CI runner the same change measured 166s -> 64s (runs
+        # 39639233610 and 39659948364).
+        #
         # The packages the profile leaves out are the expensive ones: `@duya/ui`
         # is a full `tsc` project over the renderer, and the unit suite
         # resolves it from source, not from `dist/`.

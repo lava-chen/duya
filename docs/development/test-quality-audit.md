@@ -6,7 +6,7 @@
 
 套件的数量不是问题：**1,178 个测试文件、13,414 个用例里没有一个是精确重复，也没有一个 `.only` 残留**。真正的问题是三件可量化的：
 
-1. **PR 关键路径被重复构建吃掉 187s。** `npm test` 的 `pretest` 钩子会再跑一次 `build:packages` 加重建 worker bundle，而 CI 在它前面已经构建过同一个工作区。
+1. **PR 关键路径被重复构建吃掉 145s（实测 145–187s）。** `npm test` 的 `pretest` 钩子会再跑一次 `build:packages` 加重建 worker bundle，而 CI 在它前面已经构建过同一个工作区。
 2. **单测只需要 19 个包的 `dist/`，CI 构建了 22 个。** 多出来的 `@duya/ui` 是一次完整的渲染层 `tsc`。
 3. **每个测试文件有约 370ms 的固定开销**，与用例数无关：1,178 个文件 × 370ms ≈ 436s CPU，占全量运行墙钟的 45%。
 
@@ -25,7 +25,7 @@
 | 其中：environment | 37.22s | 118 个 jsdom 文件 |
 | 其中：setup | 64.42s | 全局 setup 文件，每个文件都付 |
 | 其中：prepare | 58.44s | 每个文件都付 |
-| CI：test job 步骤 | install 54s · build 183s · pretest 187s | run 39653107412 / 39655210137 |
+| CI：test job 步骤（改前，全量范围） | install 54s · build 166s · pretest 145s · vitest 503s | run 39639233610 |
 
 `collect + setup + prepare + environment + transform` = 458s 的 CPU，对 354s 的用例体。**开销比被测代码还多。**
 
@@ -35,7 +35,7 @@
 
 ### F1 · 重复构建（已修）
 
-`pretest` = `bundle:agent` = `build:packages` + 重建 worker bundle。CI 的 "Run tests" step 前一个 step 已经跑过 `build:packages`。run 39653107412 的日志里 `pretest` 花了 **186.8s**（18:34:09 → 18:37:16），期间 vitest 一个用例都没跑。
+`pretest` = `bundle:agent` = `build:packages` + 重建 worker bundle。CI 的 "Run tests" step 前一个 step 已经跑过 `build:packages`。全量范围的 run 39639233610 里，`pretest` 花了 **144.8s**（17:00:14 → 17:02:39），期间 vitest 一个用例都没跑；另一个 run（39653107412，那次 PR 只跑了 139 个文件）里同一个 hook 花了 186.8s——**这个代价与测试范围无关**，它每次都把整个工作区重编一遍。
 
 worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟踪的产物（57 个文件），checkout 里已经带着它，而 `architecture` job 的 `bundle:verify` 门禁用 git 历史判定它是否过期。bundle 过期时 PR 本来就是红的——测试 job 重建一遍等于把那个红信号盖过去。
 
@@ -94,21 +94,22 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 改后那次运行是 **1,176 个文件全绿、2 个跳过、0 失败**。改前那次有 1 个文件红——是编码门禁正确地报出了**测量脚本自己**用 PowerShell `Set-Content -Encoding utf8` 写进 `test-setup.ts` 的一个 UTF-8 BOM（PowerShell 5.1 的 `-Encoding utf8` 带 BOM）。不是仓库的问题，但也不是一次干净的对照，所以下面这张表里的"改前"用的是这次运行的耗时、而不是它的通过状态。
 
-映射到 PR 关键路径（"改前"来自当前 master 的真实 run，"改后"是把本机实测的差值按本地/CI 比值换算）：
+映射到 CI（**实测**，两次都是 `unit_scope=full` 的全量套件，同一个 job，同一台 ubuntu runner）：
 
 | 环节 | 改前 | 改后 | 依据 |
 | --- | ---: | ---: | --- |
-| 安装依赖 | 54s | 54s | 不变 |
-| 构建工作区 | 183s | 48s | run 39655210137 实测 183s；档位是全量的 39.8/151.8 = 0.262 |
-| `pretest` 重复构建 | 187s | 0.1s | run 39653107412 的日志：pretest 18:34:09 → 18:37:16，其中 `ensure-sqlite-abi` 只占 0.08s |
-| vitest | 457s | 437s | 本机 440.24s → 420.79s，按 CI/本地 1.039 换算 |
-| 其余 | 11s | 11s | 不变 |
-| **test job** | **892s** | **550s** | |
-| **PR 关键路径** | **906s** | **564s（−37.8%）** | |
+| 安装依赖 | 54s | 57s | run 39639233610 / 39659948364 的 step 耗时 |
+| 构建工作区 | 166s | 64s | 同上；改后是 `--profile unit-suite` |
+| `pretest` 重复构建 | 145s | 0s | 改前：`pretest` 17:00:14 → 17:02:39；改后这个 hook 不再被调用 |
+| vitest | 503s | 483s | 改前 17:02:39 → 17:11:02；改后 19:17:20 → 19:25:22 |
+| **test job** | **879s** | **616s** | |
+| **PR 关键路径** | **893s** | **627s（−29.8%）** | 从 run 开始到最后一个 job 结束 |
 
-`typecheck` job 是 374s，仍短于 test job，所以关键路径没有换人。
+两次 run 都全量收集了套件（改前 1,177 个文件，改后 1,178 个），改后 **1,176 通过 / 2 跳过 / 0 失败**。
 
-**这是投影，不是实测。** 投影的每一步都来自本机实测或真实 run 的日志；这个 PR 自己的 run 出来之后，"改后"一列会被实测值替换。
+`typecheck` job 改前 455s、改后 461s，仍短于 test job，所以关键路径没有换人。
+
+**这组数是实测，不是投影。** 改前取 run 39639233610（PR #343 的分支，绿，全量范围），改后取本 PR 自己的 run 39659948364。另一个参照是 master 的手动触发 run 39655210137：同样的全量范围，test job 924s，其中 "Run tests" 670s 期间套件是红的——那个红是 master 既有的，不是本 PR 引入的。
 
 ## 故障注入
 
