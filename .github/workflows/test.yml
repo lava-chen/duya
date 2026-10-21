@@ -330,6 +330,64 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: npm run ci:test-scope
 
+  # ── Typecheck (static analysis) ──────────────────────────────────────────
+  # Split out of the `test` job on 2026-10-21.
+  #
+  # `typecheck:all` is pure static analysis: `tsc --noEmit` over the workspace,
+  # plus the repo's own check:* gates. It shares no state with the test suite
+  # and never observes a test result, so running it in the same job as the
+  # tests only means the two wait for each other.
+  #
+  # Measured on run 39617841005 (PR #343): the `test` job spent 7m15s in
+  # `typecheck:all` and 13m26s in vitest, for a 21m51s job. The typecheck
+  # half was dead time on the critical path — the suite could not start until
+  # every tsc had finished, and every tsc had to wait for the suite to be
+  # scheduled. As its own job it runs CONCURRENTLY with the tests, so the
+  # critical path is whichever of the two takes longer, not their sum.
+  #
+  # Both jobs build the workspace (`build:packages`), because a job's `dist/`
+  # does not cross a job boundary. That is deliberate: the two builds run at
+  # the same time, which is strictly faster than one build that both jobs
+  # queue behind.
+  typecheck:
+    name: typecheck
+    if: >-
+      github.event_name != 'push' &&
+      needs.changes.outputs.build_scope != 'skip'
+    needs: changes
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
+        node-version: [22.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck
+        # The renderer's `tsc --noEmit` aborts the Node process with
+        # `Abort trap: 6` (exit 134) on the macOS runner under the default
+        # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
+        # step with the default heap, so this is runner memory, not code.
+        # Same remedy AGENTS.md already documents for `typecheck:cli`.
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: npm run typecheck:all
+
   # ── Typecheck + tests ─────────────────────────────────────────────────────
   test:
     if: >-
@@ -366,16 +424,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run typecheck
+      - name: Build workspace packages
         if: needs.changes.outputs.build_scope != 'skip'
-        # The renderer's `tsc --noEmit` aborts the Node process with
-        # `Abort trap: 6` (exit 134) on the macOS runner under the default
-        # heap — a V8 out-of-memory, not a type error. ubuntu passes the same
-        # step with the default heap, so this is runner memory, not code.
-        # Same remedy AGENTS.md already documents for `typecheck:cli`.
+        # The `typecheck` job builds the workspace too, but a job's `dist/`
+        # does not cross a job boundary — and the suite resolves the
+        # workspace packages that are not aliased to source (`@duya/ai`,
+        # `@duya/cli`, `@duya/computer-use`, `@duya/gateway`,
+        # `@duya/input-completion`, `@duya/voice`) through their `exports`
+        # maps, which point at `dist/`. Without this build those imports
+        # resolve to nothing and the suite fails at import time.
+        #
+        # Two jobs building at the same time is FASTER than one build both
+        # jobs queue behind: the build is on the critical path of each job
+        # independently, so overlapping them overlaps the waiting too.
+        #
+        # The heap ceiling is the one the typecheck step has always carried:
+        # the renderer's `tsc --noEmit` aborts with `Abort trap: 6` (exit
+        # 134) on the macOS runner under the default heap, and the build step
+        # runs that same typecheck. It used to inherit the ceiling from the
+        # typecheck step this build sat inside.
         env:
           NODE_OPTIONS: --max-old-space-size=6144
-        run: npm run typecheck:all
+        run: npm run build:packages
 
       - name: Run tests
         if: needs.changes.outputs.unit_scope != 'skip'
@@ -396,14 +466,26 @@ jobs:
           # except for one 30,000-delta simulation that the default 10s
           # `testTimeout` could not hold; it now carries an explicit budget.
           #
-          # `--maxWorkers=2` is deliberate. The standard Linux runner has 4
-          # vCPUs, and the slowest files in the suite already sit close to the
-          # 10s default `testTimeout` (ModelProviderSelector's cases take
-          # 8-14s on a 20-core dev machine). Two workers leave the runner
-          # enough headroom that a loaded worker does not turn a slow test
-          # into a timeout. Raising this number is gated on fixing those
-          # files, not on guessing a bigger number here.
-          WORKERS=2
+          # `--maxWorkers=4` matches the runner's vCPU count. The previous
+          # value was 2, chosen because the slowest files in the suite sit
+          # close to the 10s default `testTimeout` and two workers left the
+          # runner headroom to keep a loaded worker from turning a slow test
+          # into a timeout. That headroom is now bought with the global
+          # `testTimeout` instead (30s, see `vitest.config.ts`), which is the
+          # part of the trade that is actually about CORRECTNESS: a timeout
+          # raised by load looks identical to a timeout raised by a real
+          # defect, and only one of them is a defect.
+          #
+          # The measurement behind the number, from the CI log of run
+          # 39617841005 (1,175 files): the suite's own test bodies total
+          # 391s of CPU, and the rest of the run is per-file overhead —
+          # 255s collecting modules, 99s setting up, 108s preparing. That
+          # overhead is what parallelises, so the wall clock is roughly
+          # (391 + 541) / workers, and the single slowest file
+          # (`ModelProviderSelector.test.tsx`, 137s) is the floor under it.
+          # Two workers cost 632s of wall clock; four cost about a third of
+          # that.
+          WORKERS=4
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ needs.changes.outputs.unit_scope }}" = "changed" ]; then
             mapfile -t unit_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' '${{ needs.changes.outputs.unit_files }}')
             if [ "${#unit_files[@]}" -eq 0 ]; then
