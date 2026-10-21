@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 
 // Follow this checkout's declared exports, including relocated source subpaths.
 // Shared dependency junctions otherwise let Vite read the primary manifest.
@@ -67,7 +67,41 @@ const CAPABILITIES_SRC = fileURLToPath(new URL('./packages/capabilities/src', im
 // makes one module id again.
 const HOST_SRC = fileURLToPath(new URL('./packages/host/src', import.meta.url))
 
+const REPO_ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)))
+
+/**
+ * Vite's `server.fs.allow` defaults to the workspace root, and Vite resolves
+ * every import to its REAL path before reading it. A worktree's `node_modules`
+ * is a JUNCTION to the primary checkout (see `docs/development/worktree.md`),
+ * so a third-party DEEP import — `react-syntax-highlighter/dist/esm/languages/
+ * prism/bash.js` — resolves to a real path under the primary checkout, which
+ * is OUTSIDE this root. The read is refused and the import dies with "Failed
+ * to load url … Does the file exist?", taking the whole test file with it:
+ * two `@duya/ui` markdown suites fail in every worktree and pass in the
+ * primary checkout, which is the signature of a path-scope problem and not
+ * of a product defect.
+ *
+ * The junction target is DERIVED from the resolved path rather than written
+ * down, so the primary checkout widens nothing: there the target is already
+ * inside the root, Vite's default allow list already covers it, and this
+ * returns `undefined` and leaves the default in place.
+ */
+function resolveFsAllow(): string[] | undefined {
+  let target: string
+  try {
+    target = realpathSync(path.join(REPO_ROOT, 'node_modules'))
+  } catch {
+    return undefined
+  }
+  const root = REPO_ROOT + path.sep
+  if (target.toLowerCase().startsWith(root.toLowerCase())) return undefined
+  return [REPO_ROOT, target]
+}
+
+const FS_ALLOW = resolveFsAllow()
+
 export default defineConfig({
+  server: FS_ALLOW ? { fs: { allow: FS_ALLOW } } : undefined,
   test: {
     globals: true,
     environment: 'node',
