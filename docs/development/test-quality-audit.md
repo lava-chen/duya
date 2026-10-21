@@ -79,6 +79,28 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 `mock-heavy` 的 34 个文件里最极端的是 `packages/ui/src/components/extensions/__tests__/ExtensionsPage.test.tsx`（18 个 mock / 3 个用例）。**这不是判决**——mock 密集在 UI 组件测试里是常态，判定要靠故障注入，不是靠计数。
 
+### F5 · 一个余量只有 1ms 的时序用例（已修）
+
+本 PR 自己的 CI 把它拉红过两次，失败文件是 `packages/agent-runtime/test/run-cancel-budget.test.ts` 里"墙钟上限触发停止"那一条：`expected 'cancelled' to be 'budget_exhausted'`。
+
+它**不在本 PR 的 diff 里**（16 个文件没有一个在 `packages/agent-runtime`），但它暴露了一类问题，所以写在这里。
+
+**余量只有 1ms。** 预算判定发生在 settle 时，测的是 `Date.now() - startedAt >= 30`；`Date.now()` 只有毫秒精度，而 `setTimeout(30)` 在负载下会提前 1ms 触发，于是测得 29ms → 判定"未越界" → 终态从 `budget_exhausted` 落回 `cancelled`。
+
+实测（不是推断）：
+
+| 条件 | 结果 |
+| --- | --- |
+| 空闲：`setTimeout(30)` 的 300 次采样 | 最小 30ms，0 次低于上限 |
+| 8 个 CPU burner 在跑：同样 300 次采样 | **出现 1 次 29ms** |
+| 该测试文件，空闲连跑 20 次 | 20/20 通过 |
+| 该测试文件，负载下连跑 12 次 | **红 1 次**（修复前） |
+| 修复后，负载下连跑 12 次 | 0/12 |
+
+修法用控制器**本来就有的 clock 接缝**（`RunController` 的 `clock`）：把"测量"变确定，**保留真实定时器**——上限仍然必须真实触发，运行时若不再挂墙钟计时器，测试照样红。
+
+**检测能力没有被削弱**（变异检验）：把计时器回调里的 `reason: 'budget'` 改成 `'user'`，该用例立刻报 `expected 'user' to be 'budget'`。改的是测量方式，不是断言。
+
 ## 改动的效果
 
 同一台机器、同一条件（`--maxWorkers=2`，与 CI 同），两次运行都只构建 `unit-suite` 档位：
@@ -111,6 +133,8 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 **这组数是实测，不是投影。** 改前取 run 39639233610（PR #343 的分支，绿，全量范围），改后取本 PR 自己的 run 39659948364。另一个参照是 master 的手动触发 run 39655210137：同样的全量范围，test job 924s，其中 "Run tests" 670s 期间套件是红的——那个红是 master 既有的，不是本 PR 引入的。
 
+**但本 PR 之后的两次 CI 是红的**，红在 F5 那个 1ms 余量的用例上，与本 PR 的改动无关。修掉它之后才有"本 PR 的 CI 是绿的"这句话——这条经历本身就是为什么"红了要先归因"：同一个 commit 重跑两次都红，看起来像回归，其实是 runner 一挤就翻的旧账。
+
 ## 故障注入
 
 见 [test-fault-injection 报告](test-fault-injection-report.md)。抽样的 6 个缺陷覆盖 5 类核心契约，**6 个全部被现有套件杀死**：协议兼容的 MINOR 下限、canonical JSON 键序、SHA-256 填充、持久化的 bot 会话前缀、bypass 模式下的 config 硬边界、以及 `WorkerEvent` 联合类型少一个成员。
@@ -127,3 +151,4 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 | D6 | E2E 不在 PR 路径上 | 真实链路无 PR 级信号 | 重建套件后恢复 |
 | D7 | `unit-suite` 档位是测出来的，不是推出来的 | master 把 fixture 挪个层，档位就过期 | 每次改到跨进程 fixture 都要重测档位 |
 | D8 | `packages/agent/tests/process/fixtures/real-worker.mjs` 已无人引用 | 退役层里留着一份死 fixture | 随 agent 层一起退役 |
+| D9 | 余量只有 1ms 的时序用例没有普查（F5 只抓到了实际翻红的那一个） | 下一台更挤的 runner 就可能再翻一个 | 按"断言依赖真实时钟 + 阈值 < 100ms"筛一遍，逐个改成确定测量 |
