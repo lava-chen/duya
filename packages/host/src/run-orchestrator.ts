@@ -2182,11 +2182,21 @@ export const RUN_ENTRY_DIVERGENCES: readonly { readonly claim: string; readonly 
  *
  * ## Why the count is not zero
  *
- * Two callers still reach the facade, and neither is this slice's to move: the
- * worker subprocess entry (`agent-process-entry.ts:handleChatStart`, reached only
- * through `openRun`) and the sub-agent turn (`runAgent.ts:runAgent`, a nested
- * loop inside the parent worker). Moving either is a later slice with its own
- * census row, not something H8.1 could finish honestly.
+ * One caller still reaches the facade, and it is not this slice's to move: the
+ * session-end parity test
+ * (`packages/agent/src/process/__tests__/engine-session-end-parity.test.ts`),
+ * which drives `DuyaAgent.streamChat` directly to prove that the headless host
+ * and the legacy engine end a session the same way.
+ *
+ * This registry used to name two more — the worker subprocess entry
+ * (`agent-process-entry.ts:handleChatStart`, reached only through `openRun`)
+ * and the sub-agent turn (`runAgent.ts:runAgent`, a nested loop inside the
+ * parent worker) — and both were real when it was written. They are not any
+ * more: `agent-process-entry.ts` is now a thin adapter over
+ * `@duya/host/worker-process-entry` and `runAgent.ts` a re-export of
+ * `@duya/host/worker-subagents/run-agent`, and neither holds a facade call
+ * site. A registry that names callers which no longer call is a count that
+ * can never reach zero, which is the failure this registry exists to prevent.
  *
  * Everything else that matches `.streamChat(` in `packages/agent/src` is an
  * `@duya/ai` client call that never touches the agent facade — the compaction
@@ -2251,22 +2261,24 @@ export interface LegacyRetirement {
 export const LEGACY_RETIREMENT: readonly LegacyRetirement[] = Object.freeze([
   Object.freeze({
     obsolete: 'duyaAgent.streamChat as a CLI TURN entry (packages/agent/src/cli/index.ts)',
-    remainingConsumers: 2,
+    remainingConsumers: 1,
     consumers: Object.freeze([
-      'packages/agent/src/tool/SubagentTool/runAgent.ts (sub-agent turn: a nested loop in the parent worker)',
-      'packages/agent/src/process/agent-process-entry.ts (worker chat:start, reached only through openRun)',
+      'packages/agent/src/process/__tests__/engine-session-end-parity.test.ts (session-end parity test: drives the facade directly)',
     ]),
     consumerRationale:
-      'Measured, not estimated: two `.streamChat(` call sites on a duyaAgent/subAgent receiver remain ' +
+      'Measured, not estimated: ONE `.streamChat(` call site on a duyaAgent/subAgent receiver remains ' +
       'in packages/agent/src, excluding @duya/ai client calls (a different type with no run ' +
-      'semantics), excluding comments, and excluding the sanctioned headless host. Of the two, the ' +
-      'worker entry is already reached only through openRun and the sub-agent runner is a nested ' +
-      'loop whose identity is taskId/subAgentSessionId, so neither belongs to later slices with ' +
-      'their own NON_DESKTOP_CONSUMERS rows rather than to H8.1. Every other call of that method ' +
-      'in the package is a one-shot model call with no session, no run identity and no terminal — ' +
-      'giving those a run would mean minting runs for work that is not a run. The CLI turn call ' +
-      'sites — the part H8.1 owned — are gone, and the CLI now starts its turns through ' +
-      'HeadlessRunHost.',
+      'semantics), excluding comments, and excluding the sanctioned headless host. It is the ' +
+      'session-end parity test, which drives the facade directly to prove that the headless host ' +
+      'and the legacy engine end a session the same way. The two call sites this registry used ' +
+      'to name — the worker entry (packages/agent/src/process/agent-process-entry.ts) and the ' +
+      'sub-agent runner (packages/agent/src/tool/SubagentTool/runAgent.ts) — are now pure ' +
+      're-export shims over @duya/host (worker-process-entry and worker-subagents/run-agent) and ' +
+      'hold no facade call site at all, so naming them as consumers overstated what was left to ' +
+      'retire. Every other call of that method in the package is a one-shot model call with no ' +
+      'session, no run identity and no terminal — giving those a run would mean minting runs for ' +
+      'work that is not a run. The CLI turn call sites — the part H8.1 owned — are gone, and the ' +
+      'CLI now starts its turns through HeadlessRunHost.',
     removalConditions: Object.freeze([
       'every remaining streamChat caller is a named non-turn model call, or has been moved',
       'packaging and host smoke pass: a packaged Electron build reaches agent-server ready',

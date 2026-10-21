@@ -429,6 +429,14 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     // before the effect is visible anywhere. Publishing it before the settle
     // would put a durable "it worked" ahead of the ledger row that proves it.
     //
+    // The two `turn.completed` entries are the turn's own terminal, and their
+    // POSITION is the specification: each one closes the turn it belongs to,
+    // AFTER that turn's drain and its effects have settled and BEFORE the next
+    // turn opens. A turn's ending is therefore never announced before the
+    // work that turn did, and never after the next turn has already started.
+    // (`run-engine.ts:894` publishes it at the end of the turn body, ahead of
+    // the stop decision that decides whether the run continues.)
+    //
     // `run.completed` is deliberately ABSENT from this list, and its absence is
     // asserted in `engine-publication.test.ts`: the engine proposes a terminal
     // and does not publish one, because publishing it here would make
@@ -447,15 +455,33 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
       'tools.drain',
       'ledger.settle:key:call-1:succeeded',
       'events.publish:tool.call_completed',
+      'events.publish:turn.completed',
       'context.assemble',
       'events.publish:turn.started',
       'model.stream:2',
       'events.publish:assistant.text_delta',
       'events.publish:assistant.text_block',
       'tools.drain',
+      'events.publish:turn.completed',
       'events.publish:assistant.message_finalized',
       'events.proposeTerminal',
     ]);
+
+    // The two `turn.completed` events carry the turn they close, and the
+    // reason the PROVIDER gave for it. The ids are the ones `turn.started`
+    // minted, so a consumer pairs the two by id rather than by position.
+    const started = h.events.filter(
+      (event): event is Extract<RunEvent, { type: 'turn.started' }> => event.type === 'turn.started',
+    );
+    const completed = h.events.filter(
+      (event): event is Extract<RunEvent, { type: 'turn.completed' }> => event.type === 'turn.completed',
+    );
+    expect(completed).toHaveLength(2);
+    expect(completed.map((event) => event.index)).toEqual([1, 2]);
+    // The harness ends both turns with `end_turn`, so the reason on the event
+    // is the provider's word and not one the engine invented.
+    expect(completed.map((event) => event.stopReason)).toEqual(['end_turn', 'end_turn']);
+    expect(completed.map((event) => event.turnId)).toEqual(started.map((event) => event.turnId));
   });
 
   it('feeds the tool result back to the model on the NEXT turn, not the current one', async () => {

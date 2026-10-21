@@ -43,9 +43,12 @@ describe('VisionTool', () => {
       'image/png',
       'Answer the following question about this image: "How many boxes?"\n\nProvide a clear and thorough answer based on what you see in the image.',
     );
+    // A successful analysis carries no error flag at all: VisionTool omits the
+    // optional `error` field on success and only sets it to true on failures.
+    expect(result.error).toBeUndefined();
+    expect(result).not.toHaveProperty('error');
     expect(result).toMatchObject({
       name: 'vision_analyze',
-      error: undefined,
       metadata: {
         imagePath: '/workspace/diagram.png',
         mimeType: 'image/png',

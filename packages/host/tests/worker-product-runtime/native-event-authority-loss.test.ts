@@ -41,15 +41,22 @@
  *      An event the projection drops cannot be reconstructed from what remains,
  *      and one that survives arrives with someone else's sequence number.
  *
- * ## The plan's headline example does not reproduce
+ * ## The plan's headline example reproduces -- for a different reason
  *
  * Plan 610 file 17 §2 nominates `turn.completed` as the event that "reaches the
- * engine but is missing from the Host ledger". Measured on this path it does not
- * reach the engine: `run-engine.ts` has no `turn.completed` emit site, and every
- * occurrence of the string in the tree is a projector drop arm, a surface
- * mapping, or a synthetic envelope in a test. Layer A2 pins that as executable
- * truth, because a plan that reads "the projector drops it" as "deliver it"
- * would build a channel for an event with no producer.
+ * engine but is missing from the Host ledger". It does reach the engine: T01
+ * (#275) gave the engine a `turn.completed` emit site (`run-engine.ts:894` calls
+ * `#publishTurnCompleted`, defined at `:2801`), and T01b (#287) closed both of
+ * T01's refusals, so a turn is published whatever the provider did or did not
+ * report.
+ *
+ * What has NOT changed is the LOSS. `turn.completed` is one of the eleven
+ * events the projector has no legacy frame for, so it is minted and never
+ * delivered to the Host over the legacy channel. Layer A2 pins the minting as
+ * executable truth, because a plan that reads "the projector drops it" as
+ * "deliver it" would build a channel for an event with no producer -- and a
+ * plan that reads "the engine never mints it" as "there is nothing to deliver"
+ * would close a channel that HAS a producer.
  *
  * ## Why the fixture cannot pass vacuously *
  * The two sides compared below are produced by DIFFERENT code: the native set is
@@ -316,6 +323,18 @@ function nativeCount(native: readonly RunEventEnvelope[], type: string): number 
 }
 
 /**
+ * The `turnId` a turn event carries.
+ *
+ * Read off the payload rather than off a narrowed union: the envelope's
+ * payload is a discriminated union, and `filter` does not narrow it, so the
+ * optional-property read is the honest way to say "every turn event has one
+ * of these fields, and I want to see WHICH".
+ */
+function turnIdOf(envelope: RunEventEnvelope): string {
+  return (envelope.payload as { turnId?: string }).turnId ?? '';
+}
+
+/**
  * The frame types the drain received, in the LEGACY vocabulary.
  *
  * `chat:` is stripped so a claim about a turn boundary is written once and does
@@ -376,23 +395,46 @@ describe('plan-610 S0 — native Runtime events on the production worker path', 
   // Layer A2 — a CORRECTION to the plan's premise, pinned as executable truth.
   // ==========================================================================
 
-  it('emits no turn.completed when the provider reports no usage, and that is T01\'s refusal', async () => {
+  it('mints turn.completed for every turn, and omits the usage the provider never reported', async () => {
     const run = await runOnce(false);
 
-    // This used to be named "never mints turn.completed: the engine has no emit
-    // site for it". That stopped being true when T01 landed (#275, `d0d0e7f0`):
-    // `run-engine.ts` now calls `#publishTurnCompleted` at the end of every turn
-    // and defines it at `run-engine.ts:2801`. The count below is still 0, so the
-    // assertion kept passing — but it was passing because THIS fixture sends no
-    // usage frame, which is one of T01's two refusals, not because the engine
-    // is mute. A green that survives the arrival of its opposite is a green that
-    // proves nothing; the name and the reason were the defect, not the number.
+    // This used to be named "never mints turn.completed: the engine has no
+    // emit site for it", and then "emits no turn.completed when the provider
+    // reports no usage, and that is T01's refusal". Both names are now
+    // false, and WHY they are false is what this row has to keep:
     //
-    // What it does pin, and is worth keeping: an ordinary turn still has its
-    // OPEN, so the zero below is a real absence of the terminal rather than a
-    // run that skipped turn boundaries entirely.
-    expect(nativeCount(run.native, 'turn.completed')).toBe(0);
-    expect(nativeCount(run.native, 'turn.started')).toBe(2);
+    //  - T01 (#275) gave the engine a `turn.completed` emit site
+    //    (`run-engine.ts:894` calls `#publishTurnCompleted`, defined at
+    //    `:2801`). "The engine has no emit site" stopped being a fact.
+    //  - T01b (#287) closed BOTH of T01's refusals: `tool_use` became a
+    //    stateable stop reason, and `usage` became optional on the payload.
+    //    So the refusal this row used to name is gone, and a turn is
+    //    published even when the provider reports no usage -- which is
+    //    exactly what this fixture's provider does.
+    //
+    // What is still refused is the INVENTED value, and that is what the row
+    // pins now: `usage` is OMITTED when the provider said nothing. A
+    // fabricated zero would not be a neutral absence -- `SurfaceModel` folds
+    // this value into the run's total, so a zero would overwrite a real
+    // reading.
+    const completed = run.native.filter((envelope) => envelope.payload.type === 'turn.completed');
+    const opened = run.native.filter((envelope) => envelope.payload.type === 'turn.started');
+
+    // One terminal per OPENING, and the SAME turn id the opening minted:
+    // a consumer pairs the two, and a terminal under a second id would leave
+    // the opening permanently open.
+    expect(opened).toHaveLength(2);
+    expect(completed).toHaveLength(2);
+    expect(completed.map(turnIdOf)).toEqual(opened.map(turnIdOf));
+
+    for (const envelope of completed) {
+      const payload = envelope.payload as { usage?: unknown; stopReason?: unknown };
+      // The provider reported no usage, so the field is absent -- not zero.
+      expect(payload.usage).toBeUndefined();
+      // And the turn still says how it ended, which is the fact the event
+      // exists to carry.
+      expect(payload.stopReason).toBeTruthy();
+    }
   });
 
   it('shows the frames the drain DOES receive, so the missing ones are a difference', async () => {

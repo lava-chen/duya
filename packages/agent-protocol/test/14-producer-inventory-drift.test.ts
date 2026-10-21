@@ -44,7 +44,14 @@ import { join } from 'node:path';
 import { extractInterface } from './extract-worker-fields.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
-const WORKER = join(REPO_ROOT, 'packages', 'agent', 'src', 'process', 'worker-protocol.ts');
+// The worker event vocabulary now lives INSIDE this package
+// (`packages/agent-protocol/src/worker-protocol.ts`); it used to be
+// `packages/agent/src/process/worker-protocol.ts`, which the monorepo
+// extraction moved here. Reading the retired path would make every
+// extraction below find nothing, and `extractInterface` returning null
+// makes the no-loss assertions vacuously true — the worst failure mode
+// for a drift test.
+const WORKER = join(REPO_ROOT, 'packages', 'agent-protocol', 'src', 'worker-protocol.ts');
 const PROTOCOL_PAYLOADS = fileURLToPath(new URL('../src/events/payloads.ts', import.meta.url));
 const TEST_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -91,6 +98,30 @@ const PAIRS: readonly Pair[] = [
     worker: 'AgentThinkingEvent',
     protocol: 'AssistantThinkingBlockPayload',
     renames: { content: 'thinking' },
+  },
+  {
+    // The streamed half of the assistant text surface. `text_block` above is
+    // the durable completed block; `text_delta` is the ephemeral increment,
+    // and the two are deliberately NOT collapsed (collapsing them writes
+    // every delta of every answer into `run_events`).
+    //
+    // The worker event carries only `delta`, and `delta` reaches the payload
+    // under its own name. The payload's other two fields — `messageId` and
+    // `index` — are FRAME context the worker event does not own: the
+    // translator supplies them (`messageId: str(data['messageId']) ||
+    // ctx.messageId`, `index: num(data['index'])` in
+    // `packages/agent-runtime/src/translate/chat-event-translator.ts`). The
+    // no-loss assertion below runs worker-field -> payload-field, so a
+    // payload field the worker never declared is not a loss; it is the frame
+    // doing its job.
+    worker: 'AgentTextDeltaEvent',
+    protocol: 'AssistantTextDeltaPayload',
+  },
+  {
+    // The streamed half of the assistant thinking surface, same shape and
+    // same reason as the text delta above.
+    worker: 'AgentThinkingDeltaEvent',
+    protocol: 'AssistantThinkingDeltaPayload',
   },
   {
     // The authoritative, durable half. `chat:tool_use` is what DuyaAgent.ts

@@ -12,9 +12,14 @@ const OK_CONFIG: TrustedSenderConfig = {
   allowedOrigins: [APP_ORIGIN],
 };
 
+// The main frame's routing id is NOT 0. Electron allocates frame ids per
+// renderer process; measured on Electron 44 a fresh BrowserWindow's main
+// frame reports 1, and the id changes again after a reload. The decision
+// therefore compares the sending frame against the sender's own main frame.
 const MAIN_FRAME: TrustedSenderFacts = {
   senderId: MAIN_ID,
-  frameRoutingId: 0,
+  frameRoutingId: 1,
+  mainFrameRoutingId: 1,
   frameUrl: `${APP_ORIGIN}/index.html`,
 };
 
@@ -54,6 +59,25 @@ describe('evaluateTrustedSender', () => {
     expect(verdict.ok === false && verdict.reason).toBe('subframe');
   });
 
+  it('refuses when the sender has no main frame to compare against', () => {
+    const verdict = evaluateTrustedSender(
+      { ...MAIN_FRAME, mainFrameRoutingId: null },
+      OK_CONFIG,
+    );
+    expect(verdict.ok === false && verdict.reason).toBe('subframe');
+  });
+
+  it('accepts a main frame whose routing id is not 0', () => {
+    // The regression this decision once carried: comparing against a literal
+    // 0 refused the app's own main frame, because Electron does not use 0
+    // for it.
+    const verdict = evaluateTrustedSender(
+      { ...MAIN_FRAME, frameRoutingId: 42, mainFrameRoutingId: 42 },
+      OK_CONFIG,
+    );
+    expect(verdict).toEqual({ ok: true });
+  });
+
   it('refuses a top frame that navigated off the app origin', () => {
     const verdict = evaluateTrustedSender(
       { ...MAIN_FRAME, frameUrl: 'https://evil.example/steal' },
@@ -91,7 +115,7 @@ describe('evaluateTrustedSender', () => {
 
   it('checks the sender before the frame, so a guest reads as unknown_window', () => {
     const verdict = evaluateTrustedSender(
-      { senderId: 3000, frameRoutingId: 9, frameUrl: 'https://evil.example/' },
+      { senderId: 3000, frameRoutingId: 9, mainFrameRoutingId: 9, frameUrl: 'https://evil.example/' },
       OK_CONFIG,
     );
     expect(verdict.ok === false && verdict.reason).toBe('unknown_window');

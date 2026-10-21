@@ -245,10 +245,25 @@ describe('R2.1 — one run entry dispatches the turn', () => {
     // and the router's `chat:start` carried two unrelated ids, so there was no
     // single "the run this turn executed as" to compare. Now there is, and every
     // durable event has to be filed under it.
+    //
+    // The durable writer is the NATIVE channel now (plan 610 S1), so "recorded
+    // once, under the run's own id" is proved THERE: the writer is handed the
+    // Runtime's own envelope, under the run the executor was told to run as,
+    // carrying the Runtime's own sequence. The legacy frames the router still
+    // normalises add NOTHING to it — the flip's contract, asserted positively
+    // here rather than left as an absence.
     const { calls, request } = recorder();
     const sent: ChatStartCommand[] = [];
+    const written: Array<{ runId: string; seqs: number[] }> = [];
     const orchestrator = new RunOrchestrator({
       dbRequest: request,
+      nativeWriter: {
+        currentEpoch: () => 0,
+        append: async (runId: string, envelopes: readonly { seq: number }[]) => {
+          written.push({ runId, seqs: envelopes.map((envelope) => envelope.seq) });
+          return { state: 'written', written: envelopes.length };
+        },
+      },
       channel: createWorkerExecutionChannel({
         dispatch: (command) => {
           sent.push(command);
@@ -262,32 +277,51 @@ describe('R2.1 — one run entry dispatches the turn', () => {
     const start = await orchestrator.openRun('session-1', intent);
     expect(start.accepted).toBe(true);
 
-    const frames = [
-      { type: 'chat:turn_start', data: { turnCount: 1 } },
-      { type: 'chat:text', data: 'hello' },
-      { type: 'chat:done' },
-    ];
-    for (const frame of frames) normalizeAndObserve('session-1', frame, deps);
+    // The Runtime's own lines, exactly as `worker-process-entry.ts` writes
+    // them, through the REAL router tee.
+    for (const [seq, type] of [
+      [1, 'run.started'],
+      [2, 'turn.started'],
+      [3, 'assistant.text_block'],
+    ] as const) {
+      normalizeAndObserve(
+        'session-1',
+        {
+          type: 'run:event',
+          epoch: 0,
+          envelope: { runId: start.runId, sessionId: 'session-1', seq, payload: { type } },
+        },
+        deps,
+      );
+    }
+    // A legacy frame in the middle of a native stream must add NOTHING. If the
+    // writer ever starts accepting reverse-translated frames again, the count
+    // below moves.
+    normalizeAndObserve('session-1', { type: 'chat:text', data: 'legacy chatter' }, deps);
+    normalizeAndObserve('session-1', { type: 'chat:done' }, deps);
     await orchestrator.settleSession('session-1');
 
     // Every durable write is filed under the id the executor was told to run as.
-    const appended = calls.filter((c) => c.action === 'run:append');
-    expect(appended.length).toBeGreaterThan(0);
-    for (const call of appended) expect(call.payload.runId).toBe(sent[0]?.runId);
+    expect(written.length).toBeGreaterThan(0);
+    for (const entry of written) expect(entry.runId).toBe(sent[0]?.runId);
 
-    const seqs = appended.flatMap((c) =>
-      (c.payload.events as Array<{ seq: number }>).map((e) => e.seq),
-    );
+    const seqs = written.flatMap((entry) => entry.seqs);
     // Gapless from 1, and every seq appears once. A second observer would
-    // append a second event for the same worker frame and break the gapless run.
+    // carry a second event for the same worker frame and break the gapless run.
     expect(seqs).toEqual(seqs.map((_, i) => i + 1));
     expect(new Set(seqs).size).toBe(seqs.length);
+    // Exactly the Runtime's three envelopes: the legacy frame and the legacy
+    // `done` are NOT in the ledger.
+    expect(seqs).toEqual([1, 2, 3]);
 
-    // Re-observing the same frames — what a second tee or a replaying reader
-    // would do — records nothing. The terminal is decided and immutable.
-    const before = calls.length;
-    for (const frame of frames) normalizeAndObserve('session-1', frame, deps);
-    expect(calls).toHaveLength(before);
+    // Re-observing the legacy frames records nothing. The terminal is decided
+    // and immutable, and the legacy vocabulary never reached the ledger in the
+    // first place.
+    const before = written.length;
+    normalizeAndObserve('session-1', { type: 'chat:text', data: 'again' }, deps);
+    normalizeAndObserve('session-1', { type: 'chat:done' }, deps);
+    expect(written).toHaveLength(before);
+    void calls;
   });
 
   it('answers the non-SSE turn with a real RunResult', async () => {

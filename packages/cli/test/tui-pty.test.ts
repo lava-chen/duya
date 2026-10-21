@@ -330,9 +330,14 @@ describe('duya tui in a real 80-column PTY', () => {
       term.write('\x08'); // BS: /re -> /r, widening the candidate set
       await until(() => raw.length > bsOffset, 'the BS redraw');
       await settle();
+      // The popup repaints the rows that CHANGED, so a row that was already on
+      // screen is not emitted a second time: `/resume`, `/rename` and
+      // `/read-file` are byte-identical in both frames and do not appear here.
+      // The two commands below are the ones the WIDER filter introduces —
+      // neither matches `/re`, so neither was a candidate a keystroke earlier.
       const broadenedFrame = readScreen(raw.slice(bsOffset));
-      expect(broadenedFrame).toContain('/rename');
-      expect(broadenedFrame).toContain('/read-file');
+      expect(broadenedFrame).toContain('/fork');
+      expect(broadenedFrame).toContain('/export');
 
       const closeOffset = raw.length;
       term.write('\x08'); // /r -> /

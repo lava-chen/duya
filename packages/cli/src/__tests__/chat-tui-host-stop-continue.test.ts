@@ -1,7 +1,7 @@
 /**
  * `duya chat-tui-host-stop-continue` — stop and continue through the real Host.
  *
- * ## This file was RED, and the 15 s budget was not why
+ * ## What this file was RED for, and what it is red for now
  *
  * The failure was reported as `TUI/Host transition timed out`, which reads like
  * a tight wall-clock budget under CI load. It is not. Instrumenting `until()`
@@ -9,7 +9,7 @@
  * the run was accepted and the client watched a stream that never produced a
  * single event. A timeout that starts from nothing is a symptom, not a cause.
  *
- * ## The real cause: the fixture spoke a protocol the Host no longer surfaces
+ * ## The first real cause: the fixture spoke a protocol the Host no longer surfaces
  *
  * The fake worker answered `chat:start` with legacy `chat:status` / `chat:text` /
  * `chat:done` frames. The Host counts those as a degradation and appends them to
@@ -25,17 +25,24 @@
  * from `[]` to `[status, status, text]`, which is the whole point — the TUI now
  * receives real Host events.
  *
- * ## Where it stands
+ * ## The second real cause: the fixture was not a worker
  *
- * Still red, and **not** claimed green. The remaining gap is termination: no
- * `done` frame arrives and `isBusy()` never falls back, i.e. the run-event stream
- * does not close after the run settles. `chatTui` learns the outcome from
- * `getAgentRun` after its `for await` ends (`chat.ts`), so a `done` frame may
- * legitimately never come — which makes "why does the stream not close" the open
- * question, not "why is there no done frame".
+ * Two things the real worker does were missing, and both are about how a turn
+ * ENDS rather than how it is reported:
  *
- * Next step is that question, on the Host side. Do not "fix" it by raising the
- * deadline: the budget was never the constraint.
+ *  1. **A cooperative stop is a worker that LEAVES.** `interruptWorker`
+ *     (`worker-manager.ts`) settles `cooperative` only when the child EXITS
+ *     inside its grace window; a worker that stays is `escalated` and gets
+ *     hard-killed, which the ledger records as `runtime_crash`. A fixture that
+ *     answers the interrupt and then sits there is not a cooperative worker.
+ *  2. **A turn ends with `chat:done`, not only with a native envelope.** The
+ *     native `run:event` channel is what a CLIENT reads; the legacy `chat:done`
+ *     frame is what SETTLES the run (`run-execution.ts` → `observe` →
+ *     `#finish`). The real worker sends both
+ *     (`worker-process-entry.ts`: `sendToMain({ type: 'chat:done' })`).
+ *
+ * With both restored, the run ends, the stream closes, `isBusy()` falls back,
+ * and the same session takes the next turn.
  */
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
@@ -105,19 +112,22 @@ describe('TUI stop and continue through the real Host', () => {
       // (worker-process-entry.ts sends { type: 'run:event', epoch, envelope }).
       // A worker that answers with legacy chat:* frames is counted as a
       // degradation and never reaches the TUI, so this fixture speaks native.
-      const emit = (command, payload) => {
-        process.send({
-          type: 'run:event',
-          epoch: 0,
-          envelope: {
-            sessionId: command.sessionId,
-            runId: command.runId,
-            seq: ++seq,
-            timestamp: Date.now(),
-            traceId: 'trace-tui-stop',
-            payload,
-          },
-        });
+      const envelope = (command, payload) => ({
+        type: 'run:event',
+        epoch: 0,
+        envelope: {
+          sessionId: command.sessionId,
+          runId: command.runId,
+          seq: ++seq,
+          timestamp: Date.now(),
+          traceId: 'trace-tui-stop',
+          payload,
+        },
+      });
+      const emit = (command, payload) => { process.send(envelope(command, payload)); };
+      // The same event, but the worker LEAVES once it is written.
+      const emitAndExit = (command, payload) => {
+        process.send(envelope(command, payload), () => process.exit(0));
       };
       process.stdin.setEncoding('utf8');
       process.stdin.on('data', (data) => {
@@ -128,13 +138,19 @@ describe('TUI stop and continue through the real Host', () => {
           if (!line.trim()) continue;
           const command = JSON.parse(line);
           if (command.type === 'chat:interrupt' && ${JSON.stringify(mode)} === 'cooperative') {
-            emit(command, { type: 'run.completed', status: 'cancelled' });
+            emitAndExit(command, { type: 'run.completed', status: 'cancelled' });
+            continue;
           }
           if (command.type !== 'chat:start') continue;
           emit(command, { type: 'assistant.status', message: 'working' });
           if (command.prompt === 'continue') {
             emit(command, { type: 'assistant.text_block', text: 'continued', messageId: 'm-1', index: 0 });
             emit(command, { type: 'run.completed', status: 'completed' });
+            // The turn's own end signal. The native envelope above is what the
+            // CLIENT reads; this legacy frame is what SETTLES the run
+            // (run-execution.ts -> observe -> #finish). The real worker sends
+            // both (worker-process-entry.ts: sendToMain({ type: 'chat:done' })).
+            process.send({ type: 'chat:done', sessionId: command.sessionId });
           }
         }
       });
@@ -155,7 +171,17 @@ describe('TUI stop and continue through the real Host', () => {
       view.options.onSubmit('continue');
       await until(() => view.frames.some((frame) => frame.type === 'text'));
       await until(() => !view.options.isBusy());
-      expect(view.errors).toEqual([]);
+      if (mode === 'cooperative') {
+        // The worker left on its own, so the run ended as a cancellation and
+        // there is nothing to report.
+        expect(view.errors).toEqual([]);
+      } else {
+        // The worker had to be killed, so the run CRASHED instead of
+        // cancelling, and the TUI says so. A stop that hides the crash is
+        // exactly the failure this assertion exists to catch.
+        expect(view.errors).toHaveLength(1);
+        expect(view.errors[0]).toContain('runtime_crash');
+      }
       expect(start).toHaveBeenCalledTimes(2);
       const first = await start.mock.results[0]!.value;
       const second = await start.mock.results[1]!.value;
