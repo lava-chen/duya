@@ -1,4 +1,6 @@
-# Duya local Web transport
+# Duya Web client (local-only)
+
+This is the early-stage browser interface for Duya's shared agent foundation, not a hosted multi-user product. Desktop is the primary public-beta client and the TUI has its own terminal entry point; the surfaces do not yet have feature parity.
 
 This workspace currently provides the T40a Node BFF and a browser client that
 mounts `@duya/ui` (see `src/main.tsx`). It connects to an existing standalone
