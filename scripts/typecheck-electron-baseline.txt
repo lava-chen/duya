@@ -11,11 +11,9 @@
 # Each fix should let you delete or lower its line here via `--write`;
 # never hand-add a line to silence a new error.
 #
-# 299 known error(s) across 146 (file, code) key(s).
-apps/desktop/src/main/agents/db-bridge.ts TS2339 10
-apps/desktop/src/main/agents/db-bridge.ts TS2531 1
+# 231 known error(s) across 111 (file, code) key(s).
+apps/desktop/src/main/agents/db-bridge.ts TS2339 1
 apps/desktop/src/main/agents/db-bridge.ts TS2551 2
-apps/desktop/src/main/agents/db-bridge.ts TS7053 2
 apps/desktop/src/main/agents/server/index.ts TS2345 1
 apps/desktop/src/main/agents/server/router.ts TS2345 1
 apps/desktop/src/main/agents/server/router.ts TS2353 1
@@ -24,7 +22,7 @@ apps/desktop/src/main/channels/connector-runtime.ts TS2741 1
 apps/desktop/src/main/channels/feishu-connector.ts TS7006 28
 apps/desktop/src/main/channels/index.ts TS2300 2
 apps/desktop/src/main/cli/handlers/config.ts TS18046 4
-apps/desktop/src/main/cli/handlers/config.ts TS2345 2
+apps/desktop/src/main/cli/handlers/config.ts TS2345 1
 apps/desktop/src/main/cli/handlers/config.ts TS2769 1
 apps/desktop/src/main/cli/handlers/crons.ts TS18047 18
 apps/desktop/src/main/cli/handlers/crons.ts TS2339 8
@@ -34,7 +32,6 @@ apps/desktop/src/main/cli/handlers/mcps.ts TS2345 1
 apps/desktop/src/main/cli/handlers/plugins.ts TS2339 10
 apps/desktop/src/main/cli/handlers/plugins.ts TS2345 2
 apps/desktop/src/main/cli/handlers/providers.ts TS2345 3
-apps/desktop/src/main/cli/handlers/skillWrite.ts TS2741 1
 apps/desktop/src/main/conductor/asset-service.ts TS2769 1
 apps/desktop/src/main/conductor/db-service.ts TS2353 2
 apps/desktop/src/main/conductor/link-snapshot-service.ts TS2769 2
@@ -45,20 +42,7 @@ apps/desktop/src/main/core/menu-manager.ts TS2322 5
 apps/desktop/src/main/core/window-manager.ts TS2345 4
 apps/desktop/src/main/core/window-manager.ts TS2365 1
 apps/desktop/src/main/core/window-state.ts TS2345 2
-apps/desktop/src/main/db/core/message-log.ts TS2322 1
-apps/desktop/src/main/db/core/message-log.ts TS2339 1
-apps/desktop/src/main/db/core/message-log.ts TS2353 1
-apps/desktop/src/main/db/core/message-repair.ts TS2339 7
-apps/desktop/src/main/db/core/stores.ts TS2322 1
-apps/desktop/src/main/db/tool-approval-resolver.ts TS2554 1
-apps/desktop/src/main/gateway/config.ts TS2739 1
-apps/desktop/src/main/gateway/message-bus.ts TS2345 2
-apps/desktop/src/main/import/batch-store.ts TS2305 3
-apps/desktop/src/main/import/batch-store.ts TS2749 1
-apps/desktop/src/main/import/import-handlers.ts TS2305 6
-apps/desktop/src/main/import/import-handlers.ts TS2345 1
-apps/desktop/src/main/import/import-handlers.ts TS2749 1
-apps/desktop/src/main/import/import-handlers.ts TS7006 1
+apps/desktop/src/main/gateway/message-bus.ts TS2345 1
 apps/desktop/src/main/import/scanner/claude-session-scanner.ts TS2749 1
 apps/desktop/src/main/import/scanner/codex-session-scanner.ts TS2749 1
 apps/desktop/src/main/import/writer/instruction-writer.ts TS2749 1
@@ -82,9 +66,7 @@ apps/desktop/src/main/ipc/mcp-handlers.ts TS2749 1
 apps/desktop/src/main/ipc/memory-handlers.ts TS2307 1
 apps/desktop/src/main/ipc/plugin-handlers.ts TS2322 1
 apps/desktop/src/main/ipc/plugin-handlers.ts TS2345 1
-apps/desktop/src/main/ipc/plugin-handlers.ts TS2552 1
 apps/desktop/src/main/ipc/plugin-handlers.ts TS2749 1
-apps/desktop/src/main/ipc/settings-handlers.ts TS2304 2
 apps/desktop/src/main/ipc/skills-handlers.ts TS2353 2
 apps/desktop/src/main/ipc/system-handlers.ts TS2339 1
 apps/desktop/src/main/ipc/system-handlers.ts TS2345 1
@@ -109,7 +91,6 @@ apps/desktop/src/main/services/app-connections/app-connection-service.ts TS2341 
 apps/desktop/src/main/services/app-connections/app-connection-service.ts TS2345 3
 apps/desktop/src/main/services/app-connections/app-connection-service.ts TS2554 3
 apps/desktop/src/main/services/app-connections/app-connection-service.ts TS2749 1
-apps/desktop/src/main/services/app-connections/connection-store.ts TS2749 1
 apps/desktop/src/main/services/app-connections/connector-service.ts TS2341 1
 apps/desktop/src/main/services/app-connections/connector-service.ts TS2554 2
 apps/desktop/src/main/services/app-connections/connector-service.ts TS2749 1
@@ -136,25 +117,9 @@ apps/desktop/src/main/services/capability-management/cross-source.ts TS2367 2
 apps/desktop/src/main/services/cliInstall.ts TS2322 2
 apps/desktop/src/main/services/cliInstall.ts TS2353 1
 apps/desktop/src/main/services/mcp-config.ts TS2345 1
-apps/desktop/src/main/services/orb-wakeless-chat.ts TS2339 1
-apps/desktop/src/main/services/proxy.ts TS2616 1
-apps/desktop/src/main/services/recap/recap-service.ts TS2709 1
-apps/desktop/src/main/services/recap/recap-service.ts TS2724 1
 apps/desktop/src/main/services/recorder/ax-helper.ts TS2322 1
 apps/desktop/src/main/services/recorder/ax-helper.ts TS2552 2
 apps/desktop/src/main/services/recorder/service.ts TS2322 1
 apps/desktop/src/main/services/terminal/TerminalManager.ts TS2353 2
 apps/desktop/src/main/services/voice/index.ts TS2783 1
-apps/desktop/src/main/wake/wake-rearm.ts TS2537 2
-apps/desktop/src/main/wake/wake-rearm.ts TS2551 3
-packages/agent/src/agentsmd/nested-loader.ts TS7016 1
-packages/agent/src/prompts/bot/basicPrompt.ts TS1343 1
-packages/agent/src/prompts/hbs/HbsPromptSystem.ts TS1343 1
-packages/agent/src/session/db.ts TS1343 1
-packages/agent/src/skills/loader.ts TS1343 1
-packages/agent/src/tool/DuyaCliTool/DuyaCliTool.ts TS2307 3
-packages/agent/src/tool/DuyaCliTool/DuyaCliTool.ts TS7006 3
-packages/agent/src/tool/DuyaCliTool/runner.ts TS2307 1
-packages/agent/src/tool/GlobTool/GlobTool.ts TS7016 1
-packages/agent/src/tool/WorkerPool.ts TS1343 1
 packages/gateway/src/proxy-fetch.ts TS2616 1

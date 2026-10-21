@@ -1,4 +1,6 @@
-// packages/agent/tests/tool/registry-unregister.test.ts
+// Moved from packages/agent/tests/tool/registry-unregister.test.ts, which was
+// removed with the retiring agent package. This file is the surviving home of
+// that coverage.
 // Phase 2A Batch A: unit tests for the new ToolRegistry additive API:
 //
 //   - `registerWithKey(key, definition, executor, owner?)` — register
