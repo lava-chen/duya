@@ -37,10 +37,24 @@ function makeTask(overrides: Partial<BashBackgroundTask> = {}): BashBackgroundTa
   };
 }
 
-function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> | T {
+/**
+ * Run `fn` against a fresh temp directory and remove it afterwards.
+ *
+ * The removal must happen AFTER an async callback settles. A `try/finally`
+ * around `return fn(dir)` removes the directory as soon as the callback
+ * RETURNS ITS PROMISE — which is before that promise settles — so the
+ * directory disappears while the callback is still awaiting
+ * `store.rehydrate()`. Its `readFile` is asynchronous I/O, so on a loaded
+ * machine the read loses the race against the delete and the store's
+ * `catch { return [] }` turns a missing file into an empty task list. The
+ * retention-trim cases then read as "the store dropped everything" instead
+ * of "the store kept the fresh task", which is what the assertion actually
+ * means to check.
+ */
+async function withTempDir<T>(fn: (dir: string) => Promise<T> | T): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), 'duya-bash-store-'));
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
