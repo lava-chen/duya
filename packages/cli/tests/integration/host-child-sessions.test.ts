@@ -15,7 +15,18 @@ afterEach(async () => {
   else process.env.DUYA_DATA_ROOT = savedDataRoot;
   if (savedTestMode === undefined) delete process.env.DUYA_TEST;
   else process.env.DUYA_TEST = savedTestMode;
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  // The Host's supervised worker is killed ASYNCHRONOUSLY: `close()` sends the
+  // termination signal and returns, and the child flushes its last log line
+  // into this data root on the way out. Removing the root underneath that
+  // write is a race, and it lost once on CI with `ENOTEMPTY: directory not
+  // empty, rmdir` — the root was re-populated between the removal listing it
+  // and the final rmdir. Node's `fs.rm` retries ENOTEMPTY (and EBUSY/EPERM)
+  // when `maxRetries` is set, which is the window this teardown needs; the
+  // worker is force-killed three seconds after the signal, so the window
+  // comfortably covers the slowest shutdown.
+  for (const root of roots.splice(0)) {
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });
 
 interface ProviderRequest {
