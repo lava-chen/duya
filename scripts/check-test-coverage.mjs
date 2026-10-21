@@ -32,53 +32,16 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { globToRegExp, readIncludeGlobs } from './lib/vitest-include.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
 const baselinePath = resolve(scriptDir, 'test-coverage-baseline.json');
-const configPath = resolve(repoRoot, 'vitest.config.ts');
 
 const write = process.argv.includes('--write');
 
 /** A file that looks like a test by name. */
 const TEST_FILE = /\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs)$/;
-
-/** Convert a vitest include glob (only the forms actually used here) to RegExp. */
-function globToRegExp(glob) {
-  let out = '^';
-  for (let i = 0; i < glob.length; i++) {
-    const ch = glob[i];
-    if (ch === '*') {
-      if (glob[i + 1] === '*') {
-        // `**/` matches zero or more directories.
-        if (glob[i + 2] === '/') { out += '(?:.*/)?'; i += 2; } else { out += '.*'; i += 1; }
-      } else {
-        out += '[^/]*';
-      }
-    } else if (ch === '?') {
-      out += '[^/]';
-    } else if ('.+^${}()|[]\\'.includes(ch)) {
-      out += `\\${ch}`;
-    } else {
-      out += ch;
-    }
-  }
-  return new RegExp(`${out}$`);
-}
-
-/** Read `test.include` out of vitest.config.ts without importing it. */
-function readIncludeGlobs() {
-  const src = readFileSync(configPath, 'utf8');
-  const start = src.indexOf('include:');
-  if (start === -1) throw new Error('could not find `include:` in vitest.config.ts');
-  const open = src.indexOf('[', start);
-  const close = src.indexOf(']', open);
-  if (open === -1 || close === -1) throw new Error('could not parse the include array');
-  const globs = [];
-  for (const m of src.slice(open, close).matchAll(/'([^']+)'/g)) globs.push(m[1]);
-  if (globs.length === 0) throw new Error('include array parsed as empty');
-  return globs;
-}
 
 function trackedFiles() {
   const proc = spawnSync('git', ['ls-files', '-z'], {
@@ -91,12 +54,11 @@ function trackedFiles() {
   return proc.stdout.toString('utf8').split('\0').filter(Boolean);
 }
 
-const globs = readIncludeGlobs();
+const globs = readIncludeGlobs(repoRoot);
 const matchers = globs.map(globToRegExp);
 const ALTERNATE_RUNNERS = new Map([
   ['evals/agent/performance/recorder.test.mjs', 'eval:agent:core:check'],
 ]);
-
 const rootPackage = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
 const typecheckAll = rootPackage.scripts?.['typecheck:all'] ?? '';
 for (const [file, scriptName] of ALTERNATE_RUNNERS) {
