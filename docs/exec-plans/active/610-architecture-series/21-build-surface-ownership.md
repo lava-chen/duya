@@ -60,7 +60,9 @@
 
 ## 接续 / 结果
 
-已交付：commit a7d2ac50，PR 待建。610 协调文档的"构建元数据"部分由此 PR 承接；`packages/agent` 目录本身与门禁 `legacyPackagePresent` 仍属 610 coordinator 的最终步骤，未在本 PR 处理。
+已交付：commits a7d2ac50 / 5ac695ea / 41106be9，PR [#341](https://github.com/lava-chen/duya/pull/341)。610 协调文档的"构建元数据"部分由此 PR 承接；`packages/agent` 目录本身与门禁 `legacyPackagePresent` 仍属 610 coordinator 的最终步骤，未在本 PR 处理。
+
+PR CI 首次失败在 "Plan tracking table matches the tree (T02)"：`19-fast-track-queue.md` 的 T01b 行引用了改名前的 `scripts/build-agent-bundle.mjs`，门禁校验文件引用必须存在于树中。已随 41106be9 改为新路径，本地 `plan-sync-check --strict` 转 OK。
 
 ## 发现与决策（补充，实施期）
 
