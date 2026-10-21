@@ -104,7 +104,7 @@ const isTestFile = (p) =>
  * counts depend on whether `dist/` happens to be present:
  *
  *   fresh clone, never built     -> 153 package-boundary escapes
- *   after `npm run typecheck:all`-> 161  (typecheck:web runs build:agent)
+ *   after `npm run typecheck:all`-> 161  (typecheck:all runs build:packages)
  *
  * Same commit, opposite verdicts. A gate whose result is a function of local
  * build state is not a gate.

@@ -92,6 +92,13 @@ fs.writeFileSync(path.join(outdir, 'worker-metafile.json'), JSON.stringify(mainB
 // `require(...)` that nothing resolves at runtime, which is exactly the failure
 // this build exists to prevent.
 //
+// The workspacePublicSources plugin keeps this entry dist-independent, same as
+// the main one above: without it, `@duya/capabilities/...` and `@duya/data/...`
+// resolve through node_modules into emitted `dist/*.js`, which is why
+// `bundle:agent` historically had to run after a full `build:packages`. With
+// it, both entries build from TypeScript source and no package build is a
+// precondition.
+//
 // BashWorker's transitive closure is Node builtins only (child_process, util,
 // fs, fs/promises, path, os, node:buffer via utils/duyaRoot.ts, BashTool/
 // constants.ts and utils/shell/providers.ts), so an empty externals list inlines
@@ -101,6 +108,7 @@ await build({
   entryPoints: ['packages/host/src/managed-shell/BashWorker.ts'],
   outfile: workerOutfile,
   bundle: true,
+  plugins: [workspacePublicSources()],
   platform: 'node',
   target: 'node18',
   format: 'cjs',
@@ -115,7 +123,7 @@ const packageJson = {
   version: '0.1.0',
   private: true,
   type: 'commonjs',
-  description: 'Agent process bundle - CommonJS format for Node.js subprocess'
+  description: 'Host worker bundle - CommonJS format for Node.js subprocess'
 };
 
 fs.writeFileSync(
@@ -130,14 +138,14 @@ fs.writeFileSync(
 const promptsAssetsSrc = path.join('packages', 'host', 'src', 'worker-prompts', 'assets');
 const promptsAssetsOut = path.join(outdir, 'assets');
 fs.cpSync(promptsAssetsSrc, promptsAssetsOut, { recursive: true });
-console.log(`[build-agent-bundle] Copied prompt assets to ${promptsAssetsOut}`);
+console.log(`[build-host-worker-bundle] Copied prompt assets to ${promptsAssetsOut}`);
 
 // Host owns bundled skills; the worker carries them beside its executable.
 const skillsAssetsSrc = path.join('packages', 'host', 'skills');
 fs.cpSync(skillsAssetsSrc, path.join(outdir, 'skills'), { recursive: true });
 
 const stats = fs.statSync(outfile);
-console.log(`[build-agent-bundle] Built ${outfile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+console.log(`[build-host-worker-bundle] Built ${outfile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
 const workerStats = fs.statSync(workerOutfile);
-console.log(`[build-agent-bundle] Built ${workerOutfile} (${(workerStats.size / 1024).toFixed(2)} KB)`);
-console.log(`[build-agent-bundle] Created package.json with type: commonjs`);
+console.log(`[build-host-worker-bundle] Built ${workerOutfile} (${(workerStats.size / 1024).toFixed(2)} KB)`);
+console.log(`[build-host-worker-bundle] Created package.json with type: commonjs`);

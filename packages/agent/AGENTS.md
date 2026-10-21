@@ -37,7 +37,7 @@
 | 想改 Bash/Write/Read 等工具 | `packages/agent/src/tool/builtin.ts:8` | 这一行说明真实实现在 `@duya/capabilities` |
 | 以为改 `DuyaAgent.ts` 能改行为 | `packages/agent/src/agent/DuyaAgent.ts:1` | 它只是 `WorkerSession` 的子类壳，行为在 `@duya/host` |
 | "这个包还在被谁用？" | `scripts/architecture/agent-retirement-gate.mjs` | 门禁扫描全仓引用；当前 `status: OPEN`、`legacyPackagePresent: true`、`runtimeVerificationRequired: true` |
-| 以为已经退役完了 | `scripts/build-packages.mjs:167` | `@duya/agent` 仍是 level-6 构建项，`npm run build:packages` 照样编译它，文件照样参与 typecheck |
+| 以为已经退役完了 | `scripts/architecture/agent-retirement-gate.mjs` | `@duya/agent` 已从 `build-packages.mjs` 的 BUILD_ORDER 移除、无任何 `build:`/`typecheck:` script 指向它；门禁仍 `OPEN`，剩余阻塞是目录本身与元数据字符串 |
 
 ## 4. 边界约束
 

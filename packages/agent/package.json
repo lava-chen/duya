@@ -28,10 +28,11 @@
     }
   },
   "scripts": {
-    "clean": "node -e \"require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
-    "build": "npm run clean && tsc --incremental",
-    "dev": "tsc --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --config tests/vitest.config.ts",
+    "test:watch": "vitest --config tests/vitest.config.ts --watch",
+    "test:coverage": "vitest --config tests/vitest.config.ts --coverage",
+    "test:run": "vitest --config tests/vitest.config.ts run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",

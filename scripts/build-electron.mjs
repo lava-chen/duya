@@ -85,7 +85,7 @@ async function buildElectron() {
     outfile: 'dist-electron/project-database-worker.js',
   });
 
-  // Host worker and shell-child executables are emitted by build-agent-bundle.mjs.
+  // Host worker and shell-child executables are emitted by build-host-worker-bundle.mjs.
 
   console.log('Electron build complete');
 
