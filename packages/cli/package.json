@@ -2,7 +2,7 @@
   "name": "@duya/cli",
   "version": "0.1.0",
   "private": true,
-  "description": "DUYA command-line control plane and reusable terminal TUI",
+  "description": "Duya CLI control plane and terminal TUI for the shared agent Host",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
