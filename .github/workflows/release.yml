@@ -58,18 +58,13 @@ jobs:
         # exits 1 when the binary is missing.
         run: node node_modules/electron/install.js
 
-      - name: Build workspace packages
-        # Single-pass build. This used to need a two-pass hack to break a
-        # `@duya/agent` <-> `@duya/conductor` cycle: pass 1 built conductor
-        # with errors suppressed via `|| echo` so `@duya/agent/*` types
-        # resolved, then conductor's dist was cleaned and rebuilt. Plan M4
-        # removed the last agent -> conductor import (the widget primitives
-        # moved into `packages/agent/src/tool/WidgetRenderer/`), so there is
-        # no cycle left and every package builds exactly once.
-        # build:agent already runs build:cli + build:conductor + agent.
-        run: npm run build:agent && npm run build:gateway
-
       - name: Build application
+        # electron:build is self-contained: it builds the @duya/desktop
+        # dependency closure (build:desktop:deps), the worker bundle, the CLI
+        # bundle, the gateway bundle and the renderer. This used to need a
+        # separate two-pass workspace build to break a `@duya/agent` <->
+        # `@duya/conductor` cycle; plan 610 removed the cycle and then the
+        # retired @duya/agent from the build graph entirely.
         env:
           # Vite on macOS arm64 runners OOMs at the default ~2 GB V8 heap
           # while transforming 25k+ modules. Raise the limit for all
@@ -77,13 +72,13 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
 
-      - name: Verify agent-bundle
+      - name: Verify worker bundle
         # after-pack.js (scripts/after-pack.js) requires
         # packages/host/bundle/worker-entry.js to exist before it
         # will sign-off the build. macOS arm64 runners have OOM'd inside
-        # `npm run bundle:agent` historically; catch the failure here
+        # `npm run bundle:worker` historically; catch the failure here
         # with a clear error rather than letting electron-builder fail
-        # in afterPack with a confusing "agent-bundle missing" message.
+        # in afterPack with a confusing missing-bundle message.
         shell: bash
         run: |
           if [ ! -f packages/host/bundle/worker-entry.js ]; then

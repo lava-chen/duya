@@ -114,15 +114,13 @@ function diagnoseEntryPoints() {
 }
 
 // =============================================================================
-// Agent Bundle
+// Host Worker Bundle
 // =============================================================================
 
-function diagnoseAgentBundle() {
-  const devAgentProcess = path.join(PROJECT_ROOT, 'packages', 'agent', 'dist', 'process', 'agent-process-entry.js');
-  const bundleAgentProcess = path.join(PROJECT_ROOT, 'packages', 'agent', 'bundle', 'agent-process-entry.js');
+function diagnoseHostWorkerBundle() {
+  const devWorkerEntry = path.join(PROJECT_ROOT, 'packages', 'host', 'bundle', 'worker-entry.js');
 
-  addResult('Agent Bundle', 'Dev dist (tsc)', checkFile(devAgentProcess, 'agent-process-entry.js').detail, '—', '—', checkFile(devAgentProcess, 'agent-process-entry.js').status);
-  addResult('Agent Bundle', 'Bundle (esbuild)', '—', checkFile(bundleAgentProcess, 'agent-process-entry.js').detail, `resources/agent-bundle/agent-process-entry.js`, checkFile(bundleAgentProcess, 'agent-process-entry.js').status);
+  addResult('Host Worker Bundle', 'Bundle (esbuild)', '—', checkFile(devWorkerEntry, 'worker-entry.js').detail, `resources/harness-bundle/worker-entry.js`, checkFile(devWorkerEntry, 'worker-entry.js').status);
 }
 
 // =============================================================================
@@ -234,9 +232,9 @@ function diagnosePathResolution() {
     : '/INSTALLED_APP/resources';
 
   const paths = {
-    AgentProcessPath: isSimulated
-      ? path.join(simulatedProcessResourcesPath, 'agent-bundle', 'agent-process-entry.js')
-      : path.join(PROJECT_ROOT, 'packages', 'agent', 'bundle', 'agent-process-entry.js'),
+    WorkerEntryPath: isSimulated
+      ? path.join(simulatedProcessResourcesPath, 'harness-bundle', 'worker-entry.js')
+      : path.join(PROJECT_ROOT, 'packages', 'host', 'bundle', 'worker-entry.js'),
     AgentServerPath: isSimulated
       ? path.join(simulatedProcessResourcesPath, 'app.asar', 'dist-electron', 'agent-server.js')
       : path.join(PROJECT_ROOT, 'dist-electron', 'agent-server.js'),
@@ -310,7 +308,7 @@ function renderJson() {
 function main() {
   diagnoseSystem();
   diagnoseEntryPoints();
-  diagnoseAgentBundle();
+  diagnoseHostWorkerBundle();
   diagnoseAgentServer();
   diagnoseGatewayBundle();
   diagnoseFrontend();

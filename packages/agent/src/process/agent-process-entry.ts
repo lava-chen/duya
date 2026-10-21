@@ -10,9 +10,9 @@ export function startAgentProcess(options: AgentProcessStartOptions = {}): Promi
 }
 function isProcessEntryPoint(): boolean {
   // `import.meta.url` must stay the literal expression below. esbuild's
-  // `import.meta.url` define in scripts/build-agent-bundle.mjs (CJS output,
-  // banner polyfill `pathToFileURL(__filename)`) only matches this exact
-  // syntactic shape; the same constraint is documented on WorkerPool's
+  // `import.meta.url` define in scripts/build-host-worker-bundle.mjs (CJS
+  // output, banner polyfill `pathToFileURL(__filename)`) only matches this
+  // exact syntactic shape; the same constraint is documented on WorkerPool's
   // resolveDirname().
   const selfUrl = import.meta.url;
   const entryArg = process.argv[1];

@@ -55,7 +55,7 @@ function artifacts(over: Partial<EvalArtifacts> = {}): EvalArtifacts {
     runControlCalls: ['run:open', 'run:append'],
     metadata: {
       head: 'f'.repeat(40),
-      agentBundle: { path: 'packages/agent/bundle/agent-process-entry.js', bytes: 1, sha256: 'c'.repeat(64) },
+      agentBundle: { path: 'packages/host/bundle/worker-entry.js', bytes: 1, sha256: 'c'.repeat(64) },
       versions: {},
       environment: { platform: 'linux', node: '22.0.0', abi: 137 },
       seed: 's',

@@ -108,7 +108,7 @@ export function getMCPSuggestedAction(
     case 'mcp-settings-invalid':
       return 'Fix the manifest/settings JSON. See the validator output for field-level details.';
     case 'mcp-bundled-missing':
-      return 'Reinstall DUYA or run `npm run bundle:agent` to rebuild the agent bundle.';
+      return 'Reinstall DUYA or run `npm run bundle:worker` to rebuild the worker bundle.';
     case 'mcp-env-var-missing':
       return `Set the missing variable(s) in your shell environment, or edit the plugin config.`;
     case 'mcp-user-config-missing':

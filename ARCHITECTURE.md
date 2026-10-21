@@ -1852,7 +1852,7 @@ before the app starts, and a missing artifact in a support log would look like a
 code bug. So the artifact stays in git, and the drift it invites is caught by a
 check instead of by convention.
 
-- Builder: `scripts/build-agent-bundle.mjs` (two esbuild entries —
+- Builder: `scripts/build-host-worker-bundle.mjs` (two esbuild entries —
   `worker-entry.js` from `packages/cli/src/agent-worker-entry.ts`, and
   `BashTool/BashWorker.js` from `packages/host/src/managed-shell/BashWorker.ts`,
   which is spawned as its own process with `external: []`). It `rmSync`s the
@@ -1880,7 +1880,7 @@ is not "the directory was touched": an edit under `packages/host/tests/`
 is not a bundle input and stays green.
 
 The check answers about the metafile that is **checked in**, so its denominator
-follows that file, not the tree. A local `bundle:agent` run rewrites both the
+follows that file, not the tree. A local `bundle:worker` run rewrites both the
 metafile and the artifact; until that result is committed, the check is judging a
 bundle that no longer exists in git — and it says so, because the rewrites are
 inputs that are now modified. Restoring `git checkout -- packages/host/bundle/`
@@ -1929,15 +1929,16 @@ npm run dev                    # Vite dev server only (port 3000)
 npm run electron:dev           # Vite + Electron together
 
 # Build
-npm run build                  # Production build (Vite)
-npm run build:web             # Web frontend only
-npm run build:agent           # Build @duya/agent workspace (tsc)
-npm run bundle:agent          # Bundle Agent subprocess entry (esbuild)
-npm run bundle:verify         # Check packages/host/bundle/ is not older than its source
-npm run electron:build         # Build Agent + bundle + Vite + Electron
+npm run build                  # Production build (Vite) — desktop renderer
+npm run dev:web                # Web app dev (Vite, @duya/web)
+npm run build:web              # Web app build (BFF tsc + client Vite build)
+npm run build:desktop:deps     # Build the @duya/desktop dependency closure (tsc)
+npm run bundle:worker          # Bundle the Host worker subprocess entry (esbuild)
+npm run bundle:verify          # Check packages/host/bundle/ is not older than its source
+npm run electron:build         # Desktop closure + bundles + Vite + Electron
 
 # Typecheck
-npm run typecheck:all         # Frontend + Agent
+npm run typecheck:all         # Frontend + Electron + CLI
 
 # Test
 npm run test                   # Vitest tests

@@ -52,7 +52,7 @@
  * throwaway worktree, and the result is pinned below as a normaliser-shaped
  * literal. This test then asserts the CURRENT tree against that pinned shape.
  * If the pre-R2 tree cannot be built in an environment without a network (it
- * needs its own `npm ci` and `npm run bundle:agent`), the pinned literal is
+ * needs its own `npm ci` and worker bundle), the pinned literal is
  * still the record, and the test says which side it is comparing.
  *
  * ## What "the same normalised semantics" means here
@@ -78,8 +78,8 @@ const E41_BASELINE_REF = '77b14a01';
  * The pre-R2 normal form, MEASURED — not predicted.
  *
  * Every value below was read off a real run of this same wire sequence against
- * the pre-R2 tree at `77b14a01`, built with its own `npm ci` +
- * `npm run bundle:agent`, and driven by the real `agent-process-entry.js` from
+ * `77b14a01`, built with its own `npm ci` +
+ * worker bundle, and driven by the real `worker-entry.js` from
  * that commit. The provider script, the init/chat:start commands and the DB
  * answers were byte-identical to the harness; the only variable was the worker
  * build.
