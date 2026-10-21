@@ -14,6 +14,10 @@ flags, not the letter.
 | module mocks | 679 |
 | measured test time | 335.8s |
 
+`test cases` and `assertions` are static counts of `it(`/`test(`/`expect(` call sites in
+the source. A run reports more cases than call sites, because `it.each` and loops expand
+one call site into several runtime cases.
+
 ## By module
 
 | module | files | cases | assertions | mocks | measured s | A | B | C |

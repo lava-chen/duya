@@ -354,6 +354,10 @@ function renderMarkdown(inventory) {
   lines.push(`| module mocks | ${totalMocks} |`);
   lines.push(`| measured test time | ${(measuredTotal / 1000).toFixed(1)}s |`);
   lines.push('');
+  lines.push('`test cases` and `assertions` are static counts of `it(`/`test(`/`expect(` call sites in');
+  lines.push('the source. A run reports more cases than call sites, because `it.each` and loops expand');
+  lines.push('one call site into several runtime cases.');
+  lines.push('');
   lines.push('## By module');
   lines.push('');
   lines.push('| module | files | cases | assertions | mocks | measured s | A | B | C |');
