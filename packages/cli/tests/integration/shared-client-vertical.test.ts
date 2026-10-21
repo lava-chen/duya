@@ -17,7 +17,26 @@ afterEach(async () => {
   else process.env.DUYA_DATA_ROOT = savedDataRoot;
   if (savedTestMode === undefined) delete process.env.DUYA_TEST;
   else process.env.DUYA_TEST = savedTestMode;
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  // The Host's supervised worker is killed ASYNCHRONOUSLY: `close()` sends
+  // the termination signal and returns, and the child flushes its last log
+  // line into this data root on the way out. The test then removed that root
+  // underneath the write, and the removal lost the race — ENOTEMPTY:
+  // directory not empty, rmdir — because the root was re-populated between
+  // the removal listing it and the final rmdir.
+  //
+  // Node's `fs.rm` retries ENOTEMPTY (and EBUSY/EPERM) when `maxRetries` is
+  // set, which is exactly the window this teardown needs; the worker is
+  // force-killed three seconds after the signal, so the window comfortably
+  // covers the slowest shutdown. No assertion is touched: the same directory
+  // is removed, it is just removed with a retry instead of a single shot.
+  //
+  // Measured on the ubuntu runner (run 39655210137): the case failed with
+  // `ENOTEMPTY: directory not empty, rmdir
+  // '/tmp/duya-shared-client-vertical-p67Oh7'`, and the suite reported
+  // 13384 tests passed with this one failure.
+  for (const root of roots.splice(0)) {
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });
 
 interface ScriptedRequest {
