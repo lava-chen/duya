@@ -842,19 +842,54 @@ export interface FunctionHook {
 export const HOOK_VAR_SAFE_RE = /^[a-zA-Z0-9_./:\\-]+$/;
 
 /**
+ * The same rule, for a value that is a PATH rather than a bare token.
+ *
+ * A path is routinely not a bare token. On Windows it is
+ * `C:\Users\John Doe\AppData\Local\Temp` — it contains a space — and the 8.3
+ * short form of a directory with a space in its name
+ * (`C:\Users\JOHNDO~1\AppData\Local\Temp`) contains a `~`. Neither character
+ * can carry a payload into a process spawned WITHOUT a shell: the arguments
+ * reach the child as literal argv entries, where a space is a space and a
+ * `~` is a `~`.
+ *
+ * The characters that CAN carry a payload — `$`, a backtick, `;`, `&`, `|`,
+ * quotes, a newline — stay rejected, so the rule is still a defence for a
+ * future caller that does go through a shell.
+ *
+ * Why this matters: with only {@link HOOK_VAR_SAFE_RE}, a hook on Windows
+ * could not be given a real working directory at all, and the placeholder
+ * was left in the argument verbatim — the hook ran with the literal text
+ * `${cwd}` instead of a path. Measured on the Windows runner (run
+ * 39643430577): `expands ${KEY} placeholders in command and args` failed
+ * with `expected 'sess-1|${cwd}' to be 'sess-1|C:\Users\RUNNER~1\...'`.
+ */
+export const HOOK_VAR_PATH_RE = /^[a-zA-Z0-9_./:~\\ -]+$/;
+
+/**
  * Expand `${KEY}` placeholders in a hook command / argument using `vars`.
  *
  * - Only `[A-Za-z_][A-Za-z0-9_]*` keys are recognized.
  * - Unknown keys (e.g. `${ZCODE_PLUGIN_ROOT}` when the caller did not
  *   provide it) are left verbatim so the hook script can resolve them
  *   itself.
- * - Values that fail {@link HOOK_VAR_SAFE_RE} are skipped (placeholder
- *   kept) rather than substituted.
+ * - Values that fail the accepted pattern are skipped (placeholder kept)
+ *   rather than substituted.
+ *
+ * @param options.valuePattern - which values may be substituted. The default
+ * is {@link HOOK_VAR_SAFE_RE}, which accepts a bare token only. A caller that
+ * spawns WITHOUT a shell should pass {@link HOOK_VAR_PATH_RE}, so that a real
+ * path — one with a space in it, or in the Windows 8.3 short form — can be
+ * passed through.
  */
-export function expandHookTemplate(input: string, vars: Record<string, string>): string {
+export function expandHookTemplate(
+  input: string,
+  vars: Record<string, string>,
+  options?: { readonly valuePattern?: RegExp },
+): string {
+  const pattern = options?.valuePattern ?? HOOK_VAR_SAFE_RE;
   return input.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, key: string) => {
     const value = vars[key];
-    if (value === undefined || !HOOK_VAR_SAFE_RE.test(value)) return match;
+    if (value === undefined || !pattern.test(value)) return match;
     return value;
   });
 }

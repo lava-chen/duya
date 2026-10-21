@@ -20,7 +20,7 @@ import type {
   HttpHook,
   ProcessCommandHook,
 } from './types.js';
-import { expandHookTemplate } from './types.js';
+import { expandHookTemplate, HOOK_VAR_PATH_RE } from './types.js';
 import { hookTaskRegistry, type HookBackgroundTask } from './task-registry.js';
 import { notifyHookTaskSettled } from './notify.js';
 import { hookCircuitBreaker, hookBreakerKey } from './circuit-breaker.js';
@@ -138,10 +138,14 @@ export function executeProcessHook(
     PROCESS_TIMEOUT_RANGE,
   );
   const vars = opts.vars ?? {};
+  // The path pattern, not the bare-token one: this executor spawns WITHOUT a
+  // shell, so a value that is a real path — a Windows working directory with
+  // a space in it, or in the 8.3 short form — has to be able to reach the
+  // child. The characters that could carry a payload are still rejected.
   return runCollectedProcess(
     {
-      command: expandHookTemplate(hook.command, vars),
-      args: (hook.args ?? []).map((a) => expandHookTemplate(a, vars)),
+      command: expandHookTemplate(hook.command, vars, { valuePattern: HOOK_VAR_PATH_RE }),
+      args: (hook.args ?? []).map((a) => expandHookTemplate(a, vars, { valuePattern: HOOK_VAR_PATH_RE })),
       shell: false,
     },
     input,
@@ -362,8 +366,10 @@ export function executeHookBackground(
   const spec: SpawnSpec =
     hook.type === 'process'
       ? {
-          command: expandHookTemplate(hook.command, opts.vars ?? {}),
-          args: (hook.args ?? []).map((a) => expandHookTemplate(a, opts.vars ?? {})),
+          command: expandHookTemplate(hook.command, opts.vars ?? {}, { valuePattern: HOOK_VAR_PATH_RE }),
+          args: (hook.args ?? []).map((a) =>
+            expandHookTemplate(a, opts.vars ?? {}, { valuePattern: HOOK_VAR_PATH_RE }),
+          ),
           shell: false,
         }
       : { command: hook.command, shell: true };

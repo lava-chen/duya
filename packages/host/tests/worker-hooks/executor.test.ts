@@ -10,6 +10,7 @@
 
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
 import * as http from 'node:http';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { AddressInfo } from 'node:net';
 import * as path from 'node:path';
@@ -412,6 +413,35 @@ describe('executeProcessHook', () => {
     );
     expect(result.ok).toBe(true);
     expect(result.additionalContext).toBe(`sess-1|${CWD}`);
+  });
+
+  it('expands a path value that holds a space or the windows 8.3 short form', async () => {
+    // A Windows working directory routinely holds a space, and the 8.3 short
+    // form of a directory whose name has a space in it holds a `~`. Neither
+    // can carry a payload into a process spawned WITHOUT a shell, and the
+    // process executor is the only caller of the expansion at all — the
+    // shell executor does not expand — so a real path has to be able to
+    // reach the child.
+    //
+    // Measured on the Windows runner (run 39643430577): the placeholder was
+    // left verbatim, and the hook received the literal text `${cwd}`.
+    const script = `process.stdout.write(JSON.stringify({additionalContext:process.argv[1]}))`;
+    // A REAL directory whose name holds a space, so the path cannot be a bare
+    // token — and on Windows the 8.3 short form of it holds a `~` as well.
+    // The directory has to exist: it is the child's working directory.
+    const spaced = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'duya hook path ')), 'work dir');
+    fs.mkdirSync(spaced, { recursive: true });
+    try {
+      const result = await executeProcessHook(
+        { type: 'process', command: 'node', args: ['-e', script, '${cwd}'] },
+        baseInput(),
+        { cwd: spaced, vars: { cwd: spaced } },
+      );
+      expect(result.ok).toBe(true);
+      expect(result.additionalContext).toBe(spaced);
+    } finally {
+      fs.rmSync(spaced, { recursive: true, force: true });
+    }
   });
 
   it('leaves unknown and unsafe ${KEY} placeholders untouched', async () => {
