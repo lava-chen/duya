@@ -65,7 +65,7 @@ npm run electron:build       # required before test:e2e
 
 ## 隔离与接续
 
-- 每个 agent 必须使用独立 managed worktree：主 agent、子 agent、单 agent、文档与小修复均无例外；共享检出只读。
+- 每个 agent 必须使用独立 worktree：主 agent、子 agent、单 agent、文档与小修复均无例外；优先 managed worktree。仅在 Harness 创建工具不可用时，才按 [worktree 指南](docs/development/worktree.md)手工创建独立检出；共享检出只读。
 - 完整流程：分配并登记 owner/base → 配置依赖 → 修改 → 验证 → commit → PR → review/CI → 授权集成 → 重验 → 安全回收并核对清单。
 - 新 worktree 不包含主检出的未提交改动；依赖这些改动时先保存并核对任务切片，再选择 base。
 - PR 未集成或验证失败就保留分支、worktree 与接续记录。回收前核对 owner 已退出、成果可达和 ignored 文件；managed 走管理工具，手工走 `scripts/remove-worktree.sh`，禁止递归删除或强制清理。
@@ -77,7 +77,7 @@ npm run electron:build       # required before test:e2e
 - 一个 commit 一个逻辑变更；只暂存本任务文件，不提交密钥或临时产物。
 - Conventional Commits，英文、祈使句、小写、无句号、标题不超过 72 字符。
 - 所有变更只通过 PR 交付；禁止直接 push `master` / `main`，无文档或小改例外。任务分支发布只用于本任务 PR。
-- 本轮以 PR 供审阅，不自行合并；获集成授权后由集成者在 review/CI 通过时用 merge commit 合并，再同步、重验与回收。GitHub 操作优先 `gh`。
+- 未经用户授权不合并；只有最新 PR head 上的必需 review 和必需 CI 检查全部通过，才可集成；非必需检查失败须记录并由获授权的集成者评估，不自动等同于阻断，也不得绕过必需检查。未满足验收或仍有未评估风险时保留 draft。获集成授权后用 merge commit 合并，再同步、重验与回收。GitHub 操作优先 `gh`。
 - 发布须有用户授权；tag 必须指向版本匹配的提交，由 release workflow 发布，并核验 Release 与产物。
 
 ## 文档与工具
