@@ -63,6 +63,18 @@ export interface HostPluginAppInvocationInternalApi extends HostPluginAppInvocat
    * `null` when the binding is unknown or already expired.
    */
   bindingEpoch(bindingId: string): number | null;
+  /**
+   * The tools one live binding covers, by catalog id and MCP tool name.
+   *
+   * The public binding shape deliberately does not carry the tool set — the
+   * App must not learn what it may call from a shape it could influence. A
+   * privileged host that launched the App does need to know which tools the
+   * binding covers, so the App can address them by their catalog id
+   * instead of guessing one.
+   *
+   * Empty for an unknown or expired binding.
+   */
+  boundTools(bindingId: string): Array<{ toolId: string; toolName: string }>;
 }
 
 interface StoredBinding extends PluginAppInvocationBinding {
@@ -221,6 +233,14 @@ export function createHostPluginAppInvocationApi(
       const binding = bindings.get(bindingId);
       if (!binding || Date.now() >= binding.expiresAt) return null;
       return binding.epoch;
+    },
+    boundTools(bindingId: string): Array<{ toolId: string; toolName: string }> {
+      const binding = bindings.get(bindingId);
+      if (!binding || Date.now() >= binding.expiresAt) return [];
+      return [...binding.tools.values()].map((entry) => ({
+        toolId: entry.descriptor.toolId,
+        toolName: entry.descriptor.descriptor.toolName,
+      }));
     },
     async isBindingCurrent(bindingId: string, nonce: string, toolId: string, caller: SessionServiceCaller): Promise<boolean> {
       const binding = bindings.get(bindingId);
