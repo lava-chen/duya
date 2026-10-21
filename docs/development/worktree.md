@@ -1,6 +1,6 @@
 # Worktree 与 PR 全流程
 
-每个 agent 先绑定独立 worktree 再开工；主 / 子 agent、单 agent、文档和小修复都执行同一流程。
+每个 agent 先绑定独立 worktree 再开工；主 / 子 agent、单 agent、文档和小修复都执行同一流程。优先由 Harness 分配 managed worktree；仅当创建工具不可用时，才按本指南使用独立 linked worktree。
 共享检出只用于只读定位与对账，不能在其中编辑计划、构建、安装或提交。所有改动经 PR 集成。
 
 ## 1. 分配与登记
@@ -27,21 +27,21 @@ node scripts/junction-worktree.mjs . --dry-run
 node scripts/junction-worktree.mjs .
 ```
 
-脚本共享第三方 node_modules，并建立 worktree 自己的 workspace overlay；禁止穿过共享 junction 安装依赖。
+只有包管理器、锁文件和平台兼容时才共享第三方 node_modules；脚本应建立 worktree 自己的 workspace overlay。共享 junction 只用于复用依赖，禁止穿过它安装或改写依赖。
 需要不同依赖版本时使用真正独立的依赖目录。按[构建](build.md)准备本检出的产物，TUI 先 `build:cli-dev` 再 `dev:tui`。
 
 ## 3. 修改、验证与 PR
 
 只在分配检出内修改独占路径；公共文件冲突先协调。同步 base 前保存本任务成果，不对共享 dirty master rebase。
-按根规则和[测试指南](testing.md)执行门禁，记录 SHA、环境、命令与结果，再检查暂存 diff 并提交本任务切片。
+按根规则和[测试指南](testing.md)执行门禁，记录 SHA、环境、命令与结果，再检查暂存 diff 并提交本任务切片。构建或测试可能改写已跟踪的 bundle / 生成文件；命令结束后检查 Git 状态与对应 freshness 校验，只保留本次源代码要求更新的产物。清理时只能撤销能证明由本次命令产生且不属于本任务成果的改动。
 
 所有变更创建 PR，包括文档和小修复。任务分支发布只用于该 PR；禁止直接 push master / main 或以其他远端更新绕过 PR。
-正文写问题、行为变化、验证范围和未通过检查，记录 PR URL；检查失败时保留为 draft，不声称可集成。
+正文写问题、行为变化、验证范围和未通过检查，记录 PR URL。最新 head 上必需 review 与必需 CI 未通过时保留为 draft 且不得集成；非必需检查失败要记录并交获授权集成者评估，不自动阻断，也不得绕过仓库必需状态。未评估的失败或风险仍未解决时保留 draft。
 PR 创建不等于允许合并，也不等于可以删除 worktree。
 
 ## 4. 授权集成与重验
 
-由获授权的集成者核对依赖顺序、review 与必需 CI，再用 merge commit 集成；未经集成授权的 agent 停在 PR 阶段。
+由获授权的集成者核对依赖顺序、最新 PR head、必需 review 与必需 CI，再用 merge commit 集成；未经集成授权的 agent 停在 PR 阶段。不得绕过仓库要求的检查。
 合并后确认 PR 的目标 SHA、同步结果与受影响验证。验证失败继续修复，保留分支和检出，不用回收掩盖未完成任务。
 
 ## 5. 安全回收与核对
