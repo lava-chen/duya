@@ -132,6 +132,27 @@ describe.skipIf(!BASH)('remove-worktree.sh is fail-closed', () => {
     expect(git(repo, ['branch', '--list', 'feature/x'])).toContain('feature/x');
   });
 
+  it('retains a clean detached worktree whose HEAD has no branch, remote, or tag ref', () => {
+    const { repo, worktree } = makeRepo();
+    git(worktree, ['checkout', '--detach']);
+    writeFileSync(join(worktree, 'README.md'), 'detached commit\\n');
+    git(worktree, ['add', 'README.md']);
+    git(worktree, ['-c', 'user.email=test@example.com', '-c', 'user.name=test', 'commit', '-m', 'detached-only']);
+    const detachedHead = git(worktree, ['rev-parse', 'HEAD']).trim();
+    const containingRefs = git(worktree, [
+      'for-each-ref', '--contains=HEAD', '--format=%(refname)',
+      'refs/heads', 'refs/remotes', 'refs/tags',
+    ]).trim();
+    expect(containingRefs).toBe('');
+
+    const result = removeWt(repo, worktree);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('detached HEAD is not contained');
+    expect(existsSync(worktree)).toBe(true);
+    expect(git(worktree, ['rev-parse', 'HEAD']).trim()).toBe(detachedHead);
+    expect(git(repo, ['worktree', 'list', '--porcelain'])).toContain(toBashPath(worktree));
+  });
   it('does not let --force remove a dirty worktree', () => {
     const { repo, worktree } = makeRepo();
     writeFileSync(join(worktree, 'README.md'), 'changed\n');

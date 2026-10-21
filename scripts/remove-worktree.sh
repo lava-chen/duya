@@ -134,6 +134,15 @@ if [ -n "$STATUS" ]; then
   exit 1
 fi
 
+# A detached worktree may be the only remaining reference to its HEAD. Git
+# permits removing it, but doing so would silently discard an unmerged commit.
+# Keep it until the caller creates an explicit backup branch or tag.
+if [ -z "$BRANCH" ]; then
+  DETACHED_REFS=$(git -C "$TARGET" for-each-ref --contains=HEAD \
+    --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null) \
+    || fail "could not check refs containing detached HEAD in $TARGET; worktree retained"
+  [ -n "$DETACHED_REFS" ] || fail "detached HEAD is not contained in any branch, remote, or tag ref; create a backup ref before removal"
+fi
 echo "==> worktree: $TARGET_ABS (branch: ${BRANCH:-detached})"
 
 if [ "$DRY_RUN" = "1" ]; then
