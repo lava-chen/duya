@@ -26,7 +26,10 @@
 - [x] W3 删除 `packages/agent` 291 个测试文件，同步 include globs / slice-census / 架构 baseline
 - [x] W4 清理低价值测试：删除调试性质 E2E、修正 macOS 专属断言、修正 conductor 入口
 - [x] 矩阵重指：28 条引用改指继任者，19 条无继任者的引用移除，10 行降级为 `unsupported`
-- [ ] 验证：改动后全量 vitest、typecheck:all、architecture:check
+- [x] 验证：改动后全量 vitest、typecheck:all、architecture:check
+- [x] CI 归因：以 PR #338（同 base、无代码改动、`test` job 真跑全量）为对照做双向差集
+- [x] 修并行暴露的两个测试隔离缺陷（`task-store.test.ts`、`worker-transport-write-queue.test.ts`）
+- [x] 架构期望值 `module-dependency` 重 pin 127 → 123（归属按载体文件逐条证明）
 
 ## 发现与决策
 
@@ -48,6 +51,17 @@
   而应用默认停在 Bots tab → 三个 spec 各自白等 20 秒。修法是共享 helper + 给 Work tab 补 testid。
 - `e2e/ipc/computer-use-permissions.spec.ts` 无条件断言 `platform === 'darwin'`，
   而 CI 的 E2E 跑在 ubuntu → 必然失败。TCC 是 macOS 专属契约，改为平台限定。
+- **master 的 run 不能用作 CI 归因对照**：CI 分流（#327）后 push 到 master 时 scope 为空，
+  `test`/`build` job 被 skip，近期 3 条 master run 全部如此 → 绿色是假证据。
+  合法对照是 PR #338：同一 base `577c7749`、只改文档、`test` job 真跑全量（1457 文件 / 95 失败）。
+- 删 agent 测试连带让 `selfTest.module-dependency` 少 4 条（127 → 123）。按**载体文件**在
+  base 树与 HEAD 树之间做差集证明：那 4 条分属 3 个被删文件，**仍然存在的文件违规数变化为 0**
+  → 解析器没漏看，债是被删掉的。关系式对齐：base 127+2777=2904，HEAD 123+2639=2762=边总数。
+  `.architecture-baseline.json` 未重录（2785 指纹、0 失效，那 4 个早已不在里面）。
+- 并行暴露的两个红都是**测试隔离缺陷**，不是产品缺陷：
+  `task-store.test.ts` 的 `withTempDir` 在 Promise settle 前删目录（异步读被删 → store 返回 `[]`）；
+  `worker-transport-write-queue.test.ts` 的被测模块把 `isDraining` 放在模块作用域，前一个用例
+  留下"挂起"状态后，后一个用例的 50 帧只入队不写出（CI 症状：期望 50 次、实际 0 次）。
 
 ## 验证记录
 
@@ -60,9 +74,23 @@
 | 工作区 | 同上 | `npm run check:test-coverage` | 0 | every tracked test file is collected |
 | 工作区 | 同上 | `npm run architecture:check` | 0 | OK — no new boundary violations（142 个失效指纹已收缩） |
 | 工作区 | 同上 | `npx vitest run evals/agent/matrix/matrix.test.ts` | 0 | 16/16 通过；引用缺失 27 → 0 |
+| c0647db1 | 同上 | `npx vitest run`（并行，全量） | 1 | 4分59秒，1177 文件 / 13284 用例 / 55 失败文件 |
+| c0647db1 | 同上 | `npm run typecheck:all` | 0 | 231 已知错误 / 111 键，0 新增 |
+| c0647db1 | 同上 | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| c0647db1 | 同上 | `architecture-check.mjs --self-test` | 2 | `module-dependency expected 127, counted 123` |
+| c0647db1 + base 树物化 | 同上 | 两树按载体文件差分 | — | 4 条差异全部来自 3 个被删文件；未删文件变化 0 个 |
+| e0a5e911 | 同上 | `architecture-check.mjs --self-test` | 0 | module-dependency 123；关系式 123+2639=2762 OK |
+| a7f056fd | 同上 | `npx vitest run packages/host/tests/` | 1 | 7 个失败文件，与 CI 清单逐一对照**全部是既有红** |
+| a7f056fd | 同上 | `npm run typecheck:all` | 0 | exit 0 |
 
 ## 接续 / 结果
 
-实现完成，验证中。尚未提交。
-回收：未回收（PR 未集成）。
-下一步：改动后全量 vitest + `typecheck:all` 通过后提交并开 PR。
+实现完成并已提交（6 个 commit），PR #339 已开：
+https://github.com/lava-chen/duya/pull/339
+回收：未回收（PR 未集成，未经授权不合并）。
+下一步：CI 全量 run 通过后由用户决定是否合并。
+
+遗留（已写入 PR body 的"本次不做"）：
+最慢 7 个测试文件的内部重构、E2E 复用单次 Electron 启动、`typecheck:all` 按依赖图拆分、
+12 个"实现已迁移、无人测试"的契约补测试、把触碰进程全局状态的测试文件（静态扫出 23 个）
+单独分组串行跑。
