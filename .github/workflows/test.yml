@@ -381,7 +381,26 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -o pipefail
-          # Keep file execution serial for stable temporary test namespaces.
+          # File-level parallelism is ON, and the worker count is pinned.
+          #
+          # This step used to pass `--no-file-parallelism`, which serialised
+          # ~1,460 test files: the full suite took 34 minutes on the runner.
+          # The stated reason for the serial flag was "stable temporary test
+          # namespaces", but the suites that use a fixed path are a handful
+          # (most use `fs.mkdtemp`, which is unique per call). Measured on a
+          # 20-core dev machine, the same files take 23 minutes serial and
+          # 4-5 minutes concurrent, and the two runs fail the same files —
+          # except for one 30,000-delta simulation that the default 10s
+          # `testTimeout` could not hold; it now carries an explicit budget.
+          #
+          # `--maxWorkers=2` is deliberate. The standard Linux runner has 4
+          # vCPUs, and the slowest files in the suite already sit close to the
+          # 10s default `testTimeout` (ModelProviderSelector's cases take
+          # 8-14s on a 20-core dev machine). Two workers leave the runner
+          # enough headroom that a loaded worker does not turn a slow test
+          # into a timeout. Raising this number is gated on fixing those
+          # files, not on guessing a bigger number here.
+          WORKERS=2
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ needs.changes.outputs.unit_scope }}" = "changed" ]; then
             mapfile -t unit_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' '${{ needs.changes.outputs.unit_files }}')
             if [ "${#unit_files[@]}" -eq 0 ]; then
@@ -389,14 +408,14 @@ jobs:
               exit 1
             fi
             if [ "${{ needs.changes.outputs.build_scope }}" = "skip" ]; then
-              npx vitest run --no-file-parallelism "${unit_files[@]}" 2>&1 | tee vitest-output.log
+              npx vitest run --maxWorkers="$WORKERS" "${unit_files[@]}" 2>&1 | tee vitest-output.log
             else
-              npm test -- --changed="$BASE_SHA" --no-file-parallelism 2>&1 | tee vitest-output.log
+              npm test -- --changed="$BASE_SHA" --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
             fi
           elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            npm test -- --coverage --no-file-parallelism 2>&1 | tee vitest-output.log
+            npm test -- --coverage --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
           else
-            npm test -- --no-file-parallelism 2>&1 | tee vitest-output.log
+            npm test -- --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
           fi
 
       # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited

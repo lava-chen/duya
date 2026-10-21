@@ -1,4 +1,4 @@
-import { classifyChangedFiles, getScopesForEvent } from './test-scope.mjs';
+import { classifyChangedFiles, getScopesForEvent, manifestChangeIsInfrastructure } from './test-scope.mjs';
 
 describe('classifyChangedFiles', () => {
   it('skips tests and build only when every change is documentation', () => {
@@ -164,6 +164,100 @@ describe('classifyChangedFiles', () => {
 
   it('skips product tests for master pushes because PRs and the schedule own them', () => {
     expect(getScopesForEvent('push', {})).toEqual({
+      unitScope: 'skip',
+      e2eScope: 'skip',
+      buildScope: 'skip',
+      e2eFiles: [],
+      unitFiles: [],
+    });
+  });
+});
+
+describe('manifestChangeIsInfrastructure', () => {
+  const base = {
+    name: 'duya',
+    description: 'local-first agent workbench',
+    keywords: ['agent'],
+    dependencies: { react: '19.0.0' },
+    devDependencies: { vitest: '3.0.0' },
+    scripts: { test: 'vitest run' },
+    workspaces: ['packages/*'],
+    type: 'module',
+    exports: { '.': './src/index.ts' },
+  };
+
+  it('treats a metadata-only edit as non-infrastructure', () => {
+    expect(manifestChangeIsInfrastructure(base, {
+      ...base,
+      description: 'a local-first agent workbench for many agents',
+      keywords: ['agent', 'cli'],
+    })).toBe(false);
+  });
+
+  it.each([
+    ['dependencies', { dependencies: { react: '19.1.0' } }],
+    ['devDependencies', { devDependencies: { vitest: '3.1.0' } }],
+    ['scripts', { scripts: { test: 'vitest run --coverage' } }],
+    ['workspaces', { workspaces: ['packages/*', 'apps/*'] }],
+    ['type', { type: 'commonjs' }],
+    ['exports', { exports: { '.': './src/main.ts' } }],
+  ])('treats a %s edit as infrastructure', (key, patch) => {
+    expect(manifestChangeIsInfrastructure(base, { ...base, ...patch })).toBe(true);
+  });
+
+  it('fails closed when a manifest cannot be read', () => {
+    expect(manifestChangeIsInfrastructure(null, base)).toBe(true);
+    expect(manifestChangeIsInfrastructure(base, null)).toBe(true);
+  });
+});
+
+describe('metadata-only manifest edits', () => {
+  it('skips build, unit and E2E for a metadata-only root manifest edit', () => {
+    expect(classifyChangedFiles(['package.json'], { metadataOnlyManifests: ['package.json'] })).toEqual({
+      unitScope: 'skip',
+      e2eScope: 'skip',
+      buildScope: 'skip',
+      e2eFiles: [],
+      unitFiles: [],
+    });
+  });
+
+  it('keeps a documentation PR cheap when it also edits the manifest description', () => {
+    expect(classifyChangedFiles(['docs/guide.md', 'package.json'], {
+      metadataOnlyManifests: ['package.json'],
+    })).toEqual({
+      unitScope: 'skip',
+      e2eScope: 'skip',
+      buildScope: 'skip',
+      e2eFiles: [],
+      unitFiles: [],
+    });
+  });
+
+  it('still runs the affected unit tests for a source change next to a metadata-only manifest edit', () => {
+    expect(classifyChangedFiles(['packages/host/src/run.ts', 'package.json'], {
+      metadataOnlyManifests: ['package.json'],
+    })).toEqual({
+      unitScope: 'changed',
+      e2eScope: 'skip',
+      buildScope: 'run',
+      e2eFiles: [],
+      unitFiles: ['packages/host/src/run.ts'],
+    });
+  });
+
+  it('still runs the full suites when the same manifest edit also changes a dependency', () => {
+    expect(classifyChangedFiles(['package.json'], { metadataOnlyManifests: [] })).toMatchObject({
+      unitScope: 'full',
+      e2eScope: 'full',
+      buildScope: 'run',
+    });
+  });
+
+  it('keeps a workspace manifest metadata edit out of the infrastructure path', () => {
+    expect(classifyChangedFiles(['packages/host/package.json'], {
+      metadataOnlyManifests: ['packages/host/package.json'],
+    })).toEqual({
       unitScope: 'skip',
       e2eScope: 'skip',
       buildScope: 'skip',
