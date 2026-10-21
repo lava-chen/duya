@@ -6,6 +6,7 @@
 | --- | --- | --- |
 | workspace 接口与依赖 | `npm run build:packages` | 按依赖顺序生成各包产物 |
 | 新检出运行 TUI | `npm run build:cli-dev` | 准备 CLI 与 worker，再运行 `dev:tui` |
+| 新检出运行 Web | Host：`npm run build:cli-dev` → `node packages/cli/bundle/cli.cjs serve`；Web：`npm run build:web-app` → `npm run web-app` | 两个终端启动本地 Host 与 loopback BFF；见 [Web 客户端说明](../../apps/web/README.md) |
 | main / preload | `npm run build:electron` | 更新 `dist-electron/`，再启动 Electron 验证 |
 | worker bundle | `npm run bundle:agent` | `packages/host/bundle/worker-entry.js` |
 | CLI bundle | `npm run build:cli-bundle` | `packages/cli/bundle/cli.cjs` |

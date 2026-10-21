@@ -1,6 +1,6 @@
 # Architecture
 
-> Last updated: 2026-10-12
+> Last updated: 2026-10-21
 
 ## Overview
 
@@ -10,13 +10,14 @@ Its contracts and phase gates define the target; this document describes
 the current implementation. Historical RFCs and migration schedules are
 centralized in that plan's reference directory.
 
-DUYA is a Windows desktop AI agent client with a modular architecture:
+Duya is an open-source, local-first Agent foundation with Desktop, TUI, and Web
+entry points. Its shared architecture separates these layers:
 
-- **Frontend**: Vite + React 19 + Zero Router (Electron renderer)
-- **Desktop Shell**: Electron 44 (Main Process)
-- **Agent runtime**: `@duya/agent-runtime` owns run identity, event ordering,
+- **Agent Protocol**: `@duya/agent-protocol` defines typed run contracts and wire events.
+- **Agent Core**: `@duya/agent-core` owns pure run reasoning and policy decisions.
+- **Agent Runtime**: `@duya/agent-runtime` owns run identity, event ordering,
   and the model/tool/context port contracts.
-- **Worker assembly**: `@duya/host` owns the product session, concrete tool
+- **Host**: `@duya/host` owns run orchestration, worker lifecycle, concrete tool
   registry composition, worker command loop and run-context bindings.
   `@duya/cli` supplies the command runner at the worker bootstrap; Host does
   not import CLI. `packages/host/bundle/worker-entry.js` is the new executable,
@@ -45,6 +46,10 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
   the Host worker bundle. The new child startup/command channel has been
   verified; complete CLI/Desktop execution with the old package absent remains
   pending.
+- **Clients**: `apps/desktop` is the Electron workbench, `packages/cli` provides
+  the terminal TUI and CLI control plane, and `apps/web` provides the loopback
+  browser client. `@duya/client-core` and `@duya/ui` share client-side models
+  and React presentation between Desktop and Web.
 - **Standalone child sessions**: the worker's existing `session` tool reaches
   `session-service.ts` through the Host worker DB bridge. The service creates
   real sessions and launches their runs through the same execution controller;
@@ -75,7 +80,7 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 | Database | better-sqlite3 (FTS5, trigram) |
 | Testing | Vitest, Playwright |
 
-## System Architecture
+## Desktop Integration Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -93,11 +98,11 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 │  Process layer 2 - Agent Server (HTTP + SSE)                │
 │  agent-server.js / router.ts / @duya/host/worker-manager    │
 ├─────────────────────────────────────────────────────────────┤
-│  Process layer 3 - Agent Workers (fork, one per session)    │
+│  Process layer 3 - Host Agent Workers (fork, one per session)│
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │  @duya/agent (workspace package)                      │  │
-│  │  @duya/ai (multi-protocol LLM adapter)                │  │
-│  │  entry: agent-process-entry.js                        │  │
+│  │  @duya/agent-core + @duya/agent-runtime               │  │
+│  │  @duya/host worker assembly + @duya/ai                │  │
+│  │  entry: packages/host/bundle/worker-entry.js           │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 
@@ -109,6 +114,10 @@ DUYA is a Windows desktop AI agent client with a modular architecture:
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+The TUI and Web clients use the standalone Host path rather than this Electron
+process diagram. For package ownership and current cross-surface boundaries, see
+[ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md).
 
 ## IPC Architecture
 

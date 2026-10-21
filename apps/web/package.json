@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local browser client transport for Duya Host",
+  "description": "Local-only Duya Web client and BFF for the shared agent Host",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit",

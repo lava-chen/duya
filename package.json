@@ -1,7 +1,7 @@
 {
   "name": "duya",
   "version": "0.8.1",
-  "description": "AI Agent Desktop Client (Beta)",
+  "description": "Open-source, local-first AI agent foundation for Desktop, TUI, and Web",
   "author": "lava-chen",
   "private": true,
   "main": "dist-electron/main.js",
