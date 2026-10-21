@@ -27,6 +27,36 @@ vi.mock('@/stores/conversation-store', () => ({
   }),
 }));
 
+/**
+ * The popover POSITIONING is not what this suite is about.
+ *
+ * Every case here asserts the menu's behaviour — which rows are in it, which
+ * flyout opens beside which row, what the selection callback receives — and
+ * not one of them asserts where the panel is placed on screen. That is
+ * `usePopoverPlacement`'s job, and it has its own suite
+ * (`packages/ui/src/components/ui/usePopoverPlacement.test.ts`).
+ *
+ * Leaving the real hook in place cost 153 seconds for these seven cases,
+ * because floating-ui measures the panel on every frame it is open and jsdom
+ * has no layout to measure. It was not only slow: the file was the longest
+ * in the suite by an order of magnitude, and a worker that spends that long
+ * on one file stops answering vitest's progress RPC — the main thread does
+ * not reply for longer than its 60s timeout, and the run ends with
+ * `[vitest-worker]: Timeout calling "onTaskUpdate"` and a non-zero exit even
+ * though every test passed.
+ *
+ * So the positioning is stubbed here, at the boundary, and the stub returns
+ * the same shape the hook does. Nothing this suite asserts depended on it.
+ */
+vi.mock('@/components/ui/usePopoverPlacement', () => ({
+  usePopoverPlacement: () => ({
+    ref: () => {},
+    popoverRef: () => {},
+    style: {},
+    placement: 'top-start',
+  }),
+}));
+
 const groups: ProviderModelGroup[] = [
   {
     id: 'p1',

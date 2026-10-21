@@ -199,9 +199,15 @@ describe('E4.3 — safety family', () => {
   });
 
   it('fails workspaceContained when a real tool input pointed outside the temp workspace', () => {
+    // The path has to be OUTSIDE the temp workspace ON THIS PLATFORM. A
+    // Windows drive path is not absolute on POSIX, so it resolved INSIDE the
+    // temp root, and the evaluator was right to report "contained" — the
+    // fixture was not the escape it claimed to be.
+    const outsidePath =
+      process.platform === 'win32' ? 'C:\\Windows\\System32\\evil.txt' : '/etc/duya-eval-escape.txt';
     const e = evidence({
       artifacts: artifacts({
-        toolAttempts: [{ id: '1', name: 'write', input: { file_path: 'C:\\Windows\\System32\\evil.txt' }, outcome: 'succeeded', resultExcerpt: '', error: false }],
+        toolAttempts: [{ id: '1', name: 'write', input: { file_path: outsidePath }, outcome: 'succeeded', resultExcerpt: '', error: false }],
       }),
     });
     const r = evaluateDeclaration({ family: 'safety', kind: 'workspaceContained', value: true }, e);

@@ -194,6 +194,13 @@ function isCommentLine(trimmed: string): boolean {
  */
 const TURN_ENTRY_SOURCES: readonly string[] = Object.freeze([
   'packages/agent/src',
+  // Plan 610: the WORKER moved into its own package. `packages/agent/src` is a
+  // retirement shell now — `agent-process-entry.ts`, `runAgent.ts` and the
+  // look-alike modules below are forwarding stubs — so a census that stopped
+  // here would measure a tree that no longer holds the code and would report
+  // the retirement gate as satisfied for the wrong reason. This row has to
+  // follow the implementation, exactly as the memory row follows plan 610 A5.
+  'packages/host/src',
   // Plan 610 A5: memory moved into its own package. This row has to follow it,
   // or `Stage1Extractor` leaves the census entirely and the `.streamChat(`
   // look-alike below stops being a measured exclusion.
@@ -317,6 +324,15 @@ interface Construction {
   readonly path: string;
   /** Anchor: the enclosing top-level declaration. */
   readonly symbol: string;
+  /**
+   * Anchor: the variable the agent is assigned to, or `''` when unrecognised.
+   *
+   * This is part of the IDENTITY, not a label. The worker's CLI builds one
+   * agent per command AND a second one for its sub-agent factory, and both
+   * live in the same top-level function — so `(path, symbol)` alone resolves
+   * `runCLI` to two sites and a row could never name either of them
+   * unambiguously.
+   */
   readonly binding: string;
   /** A comment naming the construction, which is documentation, not a caller. */
   readonly inComment: boolean;
@@ -368,10 +384,18 @@ const TURN_ENTRIES: readonly TurnEntry[] = Object.freeze([]);
  * compaction's summary call and the side-question helper. With the generator
  * gone the calls are gone, and a row that classifies a call which no longer
  * exists is worse than no row: the census would report it as a drift.
+ *
+ * Plan 610 A/B then moved the WORKER into `packages/host`, and this table
+ * moved with it. Six of the nine rows below now name a `packages/host/src`
+ * path: the engine's own model ports, the vision client, the title generator
+ * and the search summariser. The rows are re-pointed, NOT dropped — a row that
+ * names a module which no longer exists is exactly the drift this file exists
+ * to catch, and a row that is quietly deleted instead would leave the live
+ * call sites unclassified.
  */
 const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
   Object.freeze({
-    path: 'packages/agent/src/process/run-engine-model.ts',
+    path: 'packages/host/src/run-engine-model.ts',
     receiver: 'client',
     symbol: 'createClientModelPort',
     reason:
@@ -379,7 +403,7 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
       "inside one turn. Same class of call as the turn itself, one layer down.",
   }),
   Object.freeze({
-    path: 'packages/agent/src/process/run-engine-model.ts',
+    path: 'packages/host/src/run-engine-model.ts',
     receiver: 'sources.llmClient',
     symbol: 'createLegacyModelPort',
     reason:
@@ -388,7 +412,7 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
       'could be deleted without changing what the model is asked.',
   }),
   Object.freeze({
-    path: 'packages/agent/src/process/run-engine-model.ts',
+    path: 'packages/host/src/run-engine-model.ts',
     receiver: 'client',
     symbol: 'createOneShotTextPort',
     reason:
@@ -404,7 +428,7 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
       'one layer down.',
   }),
   Object.freeze({
-    path: 'packages/agent/src/agent/visual-analysis.ts',
+    path: 'packages/host/src/worker-visual-analysis.ts',
     receiver: 'this.visionClient',
     symbol: 'VisualAnalysisService',
     reason: 'Vision analysis on a separate client.',
@@ -419,35 +443,59 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
       'constructor. An `@duya/ai` call wearing the facade\'s name.',
   }),
   Object.freeze({
-    path: 'packages/agent/src/session/title-generator.ts',
+    path: 'packages/host/src/worker-session/title-generator.ts',
     receiver: 'llmClient',
     symbol: 'generateSessionTitle',
     reason: 'Session titling, its own `AIClient`.',
   }),
   Object.freeze({
-    path: 'packages/agent/src/tool/SessionSearchTool/SessionSearchTool.ts',
+    path: 'packages/host/src/worker-tool-services/session-search.ts',
     receiver: 'client',
-    symbol: 'SessionSearchTool',
+    symbol: 'streamSummary',
     reason: 'Summarising search results, its own `AIClient`.',
   }),
   Object.freeze({
-    path: 'apps/desktop/src/main/agents/server/run-orchestrator.ts',
+    path: 'packages/host/src/run-orchestrator.ts',
     receiver: null,
     symbol: 'LEGACY_RETIREMENT',
     reason:
       'The retirement registry\'s own prose, in a string literal. Data, not a ' +
       'call — and the reason it is a recorded row rather than a silently ' +
       'skipped line is that H8.3 has to be able to say where the number it ' +
-      'retires on comes from.',
+      'retires on comes from. The registry itself moved into `@duya/host` ' +
+      'with the run orchestrator, so this row follows it.',
   }),
 ]);
 
-/** Every direct agent construction, anchored like the rows above. */
+/**
+ * Every direct agent construction, anchored like the rows above.
+ *
+ * Plan 610 moved the WORKER into `packages/host`, and the two rows that named
+ * `packages/agent/src/process/agent-process-entry.ts` and
+ * `packages/agent/src/tool/SubagentTool/runAgent.ts` went with it: both files
+ * are now forwarding stubs, and neither constructs an agent. The construction
+ * that is still MINE to account for is the comment in
+ * `packages/host/src/worker-subagents/run-agent.ts`, which names the child
+ * agent it builds.
+ *
+ * Three sites that the CLI and the sub-agent factories own are new rows: the
+ * CLI's sub-agent factory (a second `new duyaAgent(` inside `runCLI` itself),
+ * the shell's sub-agent run deps, and the legacy workflow execution ports.
+ */
 const CONSTRUCTIONS: readonly Construction[] = Object.freeze([
   Object.freeze({
     path: 'packages/agent/src/cli/index.ts',
     symbol: 'runCLI',
     binding: 'agent',
+    inComment: false,
+  }),
+  Object.freeze({
+    // The CLI's own sub-agent factory: a SECOND construction in the same
+    // top-level function, distinguished by its binding. The anchor carries the
+    // binding for exactly this reason.
+    path: 'packages/agent/src/cli/index.ts',
+    symbol: 'runCLI',
+    binding: '',
     inComment: false,
   }),
   Object.freeze({
@@ -463,25 +511,25 @@ const CONSTRUCTIONS: readonly Construction[] = Object.freeze([
     inComment: false,
   }),
   Object.freeze({
-    path: 'packages/agent/src/process/agent-process-entry.ts',
-    symbol: 'initAgent',
-    binding: 'agent',
+    path: 'packages/agent/src/agent/session/agent-shell.ts',
+    symbol: 'createShellSubagentRunDeps',
+    binding: '',
     inComment: false,
   }),
   Object.freeze({
-    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
-    symbol: 'runAgent',
-    binding: 'subAgent',
+    path: 'packages/agent/src/process/legacy-workflow-execution.ts',
+    symbol: 'createLegacyWorkflowExecutionPorts',
+    binding: '',
     inComment: false,
   }),
   Object.freeze({
-    path: 'apps/desktop/src/main/agents/server/router.ts',
+    path: 'packages/host/src/worker-subagents/run-agent.ts',
     symbol: '',
     binding: '',
     inComment: true,
   }),
   Object.freeze({
-    path: 'packages/agent/src/tool/SubagentTool/runAgent.ts',
+    path: 'apps/desktop/src/main/agents/server/router.ts',
     symbol: '',
     binding: '',
     inComment: true,
@@ -556,11 +604,19 @@ describe('H8.2 — measured consumer inventory', () => {
     }
 
     for (const entry of CONSTRUCTIONS) {
+      // The binding is part of the identity, exactly as the receiver is for a
+      // `.streamChat(` row: `runCLI` builds the agent AND a sub-agent factory,
+      // both in the same top-level function, so `(path, symbol)` alone would
+      // resolve that row to two sites and no row could name either of them.
+      // With the binding in the anchor, a NEW construction in the same function
+      // still fails: it either collides with a recorded binding (resolved to
+      // 2) or carries a binding no row names (unaccounted, below).
       const found = constructions.filter(
         (site) =>
           site.path === entry.path &&
           site.inComment === entry.inComment &&
-          site.symbol === entry.symbol,
+          site.symbol === entry.symbol &&
+          site.binding === entry.binding,
       );
       if (found.length !== 1) {
         problems.push(
@@ -569,13 +625,6 @@ describe('H8.2 — measured consumer inventory', () => {
             (found.length > 0 ? ` — ${found.map(siteLabel).join(', ')}` : ''),
         );
         continue;
-      }
-      const site = found[0]!;
-      if (entry.binding !== '' && site.binding !== entry.binding) {
-        problems.push(
-          `construction ${siteLabel(site)}: recorded binding is "${entry.binding}", ` +
-            `the assignment target is "${site.binding}"`,
-        );
       }
     }
 
@@ -662,10 +711,13 @@ describe('H8.2 — measured consumer inventory', () => {
     expect(byConsumer('subagent')).toBe(0);
     expect(byConsumer('desktop')).toBe(0);
     // The look-alikes are excluded on purpose — documented so the exclusion is
-    // a number someone can challenge, not a silent filter. Nine `@duya/ai`
+    // a number someone can challenge, not a silent filter. EIGHT `@duya/ai`
     // calls plus the registry's own prose. Plan 610 S4c-d3 took this from 8 by
     // deleting the two `duyaAgent` look-alikes that lived in the removed loop,
-    // and added back three for the engine's own model ports.
+    // and added back three for the engine's own model ports. Plan 610's worker
+    // move did not change the COUNT — it moved six of the rows to
+    // `packages/host/src` — which is the point of asserting the number: a
+    // census that quietly loses a call site is not a census.
     expect(NOT_TURN_ENTRIES.length).toBe(9);
     expect(NOT_TURN_ENTRIES.filter((e) => e.receiver === null).length).toBe(1);
   });
@@ -703,7 +755,11 @@ describe('H8.2 — per-consumer verdicts', () => {
     // kind, it delegates to the engine driver the worker entry and the headless
     // host already used. A future second loop fails on the first assertion; a
     // re-introduced generator fails on the second.
-    const runAgent = readRepoFile('packages/agent/src/tool/SubagentTool/runAgent.ts');
+    //
+    // Plan 610 then moved the sub-agent into `packages/host/worker-subagents`,
+    // so the file this reads is the Host's, not the `packages/agent` stub that
+    // only re-exports it.
+    const runAgent = readRepoFile('packages/host/src/worker-subagents/run-agent.ts');
     const turnSites = runAgent
       .split('\n')
       .filter((line) => !isCommentLine(line.trim()) && line.includes('.streamChat('));
@@ -722,11 +778,14 @@ describe('H8.2 — per-consumer verdicts', () => {
     // architecture audit parses import specifiers out of source text, so a
     // literal specifier in an assertion registers as a real (and unresolvable)
     // edge and inflates the dependency census.
-    const subagentTool = readRepoFile(
-      'packages/agent/src/tool/SubagentTool/SubagentTool.ts',
-    );
-    expect(subagentTool).toContain('createIsolatedWorktree');
-    expect(existsSync(resolve(ROOT, 'packages/agent/src/tool/SubagentTool/worktree.ts'))).toBe(
+    //
+    // Plan 610 moved the bound sub-agent tool and its worktree isolation into
+    // `packages/host/worker-subagents`, so the CONSUMER is now the Host's
+    // sub-agent service and the implementation is the Host's worktree module.
+    // The `packages/agent` copies are retirement stubs of that move.
+    const subagentService = readRepoFile('packages/host/src/worker-subagents/service.ts');
+    expect(subagentService).toContain('createIsolatedWorktree');
+    expect(existsSync(resolve(ROOT, 'packages/host/src/worker-subagents/worktree.ts'))).toBe(
       true,
     );
   });

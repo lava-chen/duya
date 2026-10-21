@@ -103,7 +103,16 @@ describe('PowerShellTool capability', () => {
       },
     });
 
-    expect(result.error).toBeUndefined();
+    // A completed foreground run reports an explicit `error: false` flag
+    // (BashTool.buildForegroundResult derives it from the completion status),
+    // which is the capability-wide convention for "no error" results.
+    expect(result.error).toBe(false);
+    expect(result.result).toBe('ok');
+    expect(result.metadata).toMatchObject({
+      exitCode: 0,
+      taskId: 'powershell-execute-test',
+      outputFile: 'powershell-output.txt',
+    });
     expect(received?.command).toBe('Get-ChildItem');
     expect(received?.shellArgs).toContain('-EncodedCommand');
     const encodedCommand = received?.shellArgs.at(-1);

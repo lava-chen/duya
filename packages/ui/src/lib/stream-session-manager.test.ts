@@ -155,13 +155,19 @@ describe('StreamSessionManager State Machine', () => {
         content: 'Hello',
       });
 
-      // Wait a bit for async stream processing
-      await new Promise((r) => setTimeout(r, 100));
+      // Wait for the terminal phase with a DEADLINE, not with a fixed sleep.
+      // A fixed 100ms is a guess about how long the stream takes to settle,
+      // and on a loaded runner the guess is wrong — the phase had not reached
+      // its terminal state yet and the assertion failed on the runner's
+      // speed rather than on the state machine.
+      const terminalPhases: StreamPhase[] = ['completed', 'error', 'aborted'];
+      await vi.waitFor(() => {
+        expect(phases.some((p) => terminalPhases.includes(p))).toBe(true);
+      }, { timeout: 5_000 });
 
       expect(phases).toContain('starting');
       expect(phases).toContain('streaming');
       // Phase should eventually reach completed or similar terminal state
-      const terminalPhases: StreamPhase[] = ['completed', 'error', 'aborted'];
       const hasTerminal = phases.some((p) => terminalPhases.includes(p));
       expect(hasTerminal).toBe(true);
 
@@ -189,7 +195,10 @@ describe('StreamSessionManager State Machine', () => {
         sessionId: 'phase-maxturns',
         content: 'Do a very long task',
       });
-      await new Promise((r) => setTimeout(r, 100));
+      // A deadline, not a fixed sleep — see the phase-transition case above.
+      await vi.waitFor(() => {
+        expect(streamSessionManager.getSnapshot('phase-maxturns')?.phase).toBe('error');
+      }, { timeout: 5_000 });
 
       const snapshot = streamSessionManager.getSnapshot('phase-maxturns');
       expect(snapshot).not.toBeNull();
@@ -233,7 +242,12 @@ describe('StreamSessionManager State Machine', () => {
         sessionId: 'phase-retry',
         content: 'Hello',
       });
-      await new Promise((r) => setTimeout(r, 100));
+      // A deadline, not a fixed sleep — see the phase-transition case above.
+      await vi.waitFor(() => {
+        const terminalPhases: StreamPhase[] = ['completed', 'error', 'aborted'];
+        const phase = streamSessionManager.getSnapshot('phase-retry')?.phase;
+        expect(phase && terminalPhases.includes(phase)).toBe(true);
+      }, { timeout: 5_000 });
 
       // The notice was delivered (attempt 1/10) with the provider wording.
       expect(retries).toContainEqual({
@@ -270,7 +284,10 @@ describe('StreamSessionManager State Machine', () => {
         sessionId: 'live-keep',
         content: 'Hello',
       });
-      await new Promise((r) => setTimeout(r, 100));
+      // A deadline, not a fixed sleep — see the phase-transition case above.
+      await vi.waitFor(() => {
+        expect(useContextUsageStore.getState().liveBySession['live-keep']).toBeDefined();
+      }, { timeout: 5_000 });
 
       // The turn is over but the live snapshot must survive it: tokenUsage
       // reaches the persisted messages only at turn end, so dropping live on
@@ -304,7 +321,10 @@ describe('StreamSessionManager State Machine', () => {
         sessionId: 'live-legacy-anchor',
         content: 'Hello',
       });
-      await new Promise((r) => setTimeout(r, 100));
+      // A deadline, not a fixed sleep — see the phase-transition case above.
+      await vi.waitFor(() => {
+        expect(useContextUsageStore.getState().liveBySession['live-legacy-anchor']).toBeDefined();
+      }, { timeout: 5_000 });
 
       const live = useContextUsageStore.getState().liveBySession['live-legacy-anchor'];
       expect(live).toBeDefined();

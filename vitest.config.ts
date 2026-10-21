@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 
 // Follow this checkout's declared exports, including relocated source subpaths.
 // Shared dependency junctions otherwise let Vite read the primary manifest.
@@ -67,7 +67,41 @@ const CAPABILITIES_SRC = fileURLToPath(new URL('./packages/capabilities/src', im
 // makes one module id again.
 const HOST_SRC = fileURLToPath(new URL('./packages/host/src', import.meta.url))
 
+const REPO_ROOT = path.resolve(fileURLToPath(new URL('.', import.meta.url)))
+
+/**
+ * Vite's `server.fs.allow` defaults to the workspace root, and Vite resolves
+ * every import to its REAL path before reading it. A worktree's `node_modules`
+ * is a JUNCTION to the primary checkout (see `docs/development/worktree.md`),
+ * so a third-party DEEP import — `react-syntax-highlighter/dist/esm/languages/
+ * prism/bash.js` — resolves to a real path under the primary checkout, which
+ * is OUTSIDE this root. The read is refused and the import dies with "Failed
+ * to load url … Does the file exist?", taking the whole test file with it:
+ * two `@duya/ui` markdown suites fail in every worktree and pass in the
+ * primary checkout, which is the signature of a path-scope problem and not
+ * of a product defect.
+ *
+ * The junction target is DERIVED from the resolved path rather than written
+ * down, so the primary checkout widens nothing: there the target is already
+ * inside the root, Vite's default allow list already covers it, and this
+ * returns `undefined` and leaves the default in place.
+ */
+function resolveFsAllow(): string[] | undefined {
+  let target: string
+  try {
+    target = realpathSync(path.join(REPO_ROOT, 'node_modules'))
+  } catch {
+    return undefined
+  }
+  const root = REPO_ROOT + path.sep
+  if (target.toLowerCase().startsWith(root.toLowerCase())) return undefined
+  return [REPO_ROOT, target]
+}
+
+const FS_ALLOW = resolveFsAllow()
+
 export default defineConfig({
+  server: FS_ALLOW ? { fs: { allow: FS_ALLOW } } : undefined,
   test: {
     globals: true,
     environment: 'node',
@@ -139,8 +173,30 @@ export default defineConfig({
         '**/*.test.tsx',
       ],
     },
-    testTimeout: 10000,
-    hookTimeout: 10000,
+    // 30s, not the 10s this used to be. The number is not about how long a
+    // test SHOULD take — it is about how long the runner waits before it
+    // gives up on one.
+    //
+    // The runner does not have idle cores to hand out: at four workers the
+    // per-file overhead of this suite grew 1.7-1.8x (collect 255s -> 463s,
+    // setup 99s -> 168s, prepare 108s -> 180s) against a worker count that
+    // doubled, which is what a contended machine looks like. So a test that
+    // needs a fixed amount of work gets noticeably less of it, and a 10s
+    // budget turns that into a timeout.
+    //
+    // A timeout raised by load is indistinguishable from a timeout raised by
+    // a real defect: the same red job, the same message, two different
+    // meanings. The files that are genuinely heavy carry their own explicit
+    // budgets (the 30,000-delta simulation, the 80-column PTY suite, the
+    // child-session integration test), and those budgets are what a defect
+    // has to beat.
+    //
+    // A synchronous test cannot be interrupted anyway — the budget is
+    // checked after it returns — so the files that blow past it (the UI
+    // popover suite, whose cases take 4-14s) were never at risk from this
+    // number in the first place.
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
   resolve: {
     // Mirror vite.config.ts: prefer `.ts` over `.js` so test runs pick

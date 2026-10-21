@@ -202,9 +202,22 @@ describe('H8.1 — the retirement registry matches the code', () => {
     expect(entry.removalConditions.length).toBeGreaterThan(0);
     expect(entry.blockedOn).toContain('Host smoke');
 
-    // And the two conditions that ARE checkable are actually unmet, stated
-    // rather than assumed: consumers are non-zero.
-    expect(entry.remainingConsumers).toBeGreaterThan(0);
+    // And the reason the shim is kept is NAMED, not merely asserted.
+    //
+    // This used to assert `remainingConsumers > 0` — the consumer count was
+    // the second piece of evidence alongside host smoke. It stopped being
+    // evidence when the last consumer went away with the agent package's
+    // test suite. The claim the count supported — `removable: false` — is
+    // still made, and it is still backed: `blockedOn` names the condition
+    // that is unmet.
+    //
+    // The check is on `blockedOn` ALONE, deliberately. An `a || b` over the
+    // two conditions would be satisfied by the host-smoke half every time,
+    // and the assertion would stop being able to fail: `blockedOn` is
+    // required to name a condition, and the condition it names is the one
+    // that is not met.
+    expect(entry.blockedOn.length).toBeGreaterThan(0);
+    expect(entry.blockedOn).toContain('Host smoke');
   });
 
   it('keeps the shim while the CLI has no direct streamChat call left', () => {

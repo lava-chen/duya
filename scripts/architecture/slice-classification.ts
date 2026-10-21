@@ -117,6 +117,35 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'EXCEPTION to the wire rule below. The event REGISTRY is wire metadata, but `verdictForUnknownType` and the criticality boundary are decisions about how to handle an event at runtime.',
   },
 
+  // ── exceptions to the package rules below ───────────────────────────────
+  // The monorepo extraction (plan 611) split the tree into packages that each
+  // have ONE dominant job, but the job is not the same for every directory
+  // inside them. These four carve the capability and the CP work OUT of
+  // `packages/host/src`, so they have to precede the broader host rule
+  // below, for the same reachability reason stated at the head of RULES:
+  // under it they are unreachable, and each `why` would describe a
+  // classification the map does not actually apply.
+  {
+    prefix: 'packages/host/src/skills',
+    category: 'capability-adapter',
+    why: 'EXCEPTION to the host rule below. Skill DISCOVERY and INSTALLATION is filesystem work — a capability — and it is the same job `apps/desktop/src/main/skills` did before the extraction.',
+  },
+  {
+    prefix: 'packages/host/src/managed-shell',
+    category: 'capability-adapter',
+    why: 'EXCEPTION to the host rule below. The managed shell SPAWNS a child process and kills the tree, which is the same capability as `packages/agent/src/utils/processTreeKill.ts` and the reason this directory is not coordination.',
+  },
+  {
+    prefix: 'packages/host/src/connector-services',
+    category: 'capability-adapter',
+    why: 'EXCEPTION to the host rule below. Connector and MCP WIRING reaches a real integration, which is the job `apps/desktop/src/main/services` did before the extraction.',
+  },
+  {
+    prefix: 'packages/host/src/authorization',
+    category: 'cp-durable',
+    why: 'EXCEPTION to the host rule below. Permission COORDINATION is the Control Plane\'s job (00-contracts.md §A): the evaluator and the gate decide whether a grant survives. It was `packages/agent/src/permissions` before the extraction, and it is still CP.',
+  },
+
   // ── wire ────────────────────────────────────────────────────────────────
   // The protocol package is the single owner of the wire vocabulary (T3.1).
   {
@@ -140,9 +169,34 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Renderer-side DTO shapes. M5.1 recorded these as "candidates for `apps/desktop/src/contracts` once a second consumer exists"; M5.2 moved `import.ts` there for exactly that reason. What is left here is renderer-only vocabulary with no second consumer yet.',
   },
   {
-    prefix: 'apps/desktop/src/renderer/data',
+    prefix: 'packages/ui/src/contracts',
     category: 'wire',
-    why: 'Renderer transport shapes and the fetch layer that speaks them.',
+    why: 'The host contract vocabulary, and the second consumer the M5.1 rule predicted: `git.ts` and `import.ts` moved here with the renderer, so the desktop app, the preload bridge and the shared UI can share a type without any of them importing another. Wire because that is what it is by function — a boundary vocabulary, not domain logic.',
+  },
+  {
+    prefix: 'packages/ui/src/types',
+    category: 'wire',
+    why: 'Renderer-side DTO shapes, moved here with the renderer. The M5.1 rule recorded them as "candidates for `apps/desktop/src/contracts` once a second consumer exists"; the second consumer is the shared `@duya/ui` package.',
+  },
+  {
+    prefix: 'packages/ui/src/data',
+    category: 'wire',
+    why: 'Renderer transport shapes and the fetch layer that speaks them, moved here with the renderer.',
+  },
+  {
+    prefix: 'packages/connectors/src',
+    category: 'wire',
+    why: 'The `.app.json` declaration schema and the connector-id namespace. A vocabulary that the desktop app and the plugin loader both read and must agree on, so it is wire by function rather than a domain decision.',
+  },
+  {
+    prefix: 'packages/command-catalog/src',
+    category: 'wire',
+    why: 'The single source of truth for command metadata: name, alias, description, argument hint, surface. Metadata every layer agrees on and no layer may fork, so it is wire by the same test as `packages/agent/src/constants`.',
+  },
+  {
+    prefix: 'packages/tooling/src',
+    category: 'wire',
+    why: 'The 13 extension-slot vocabularies and the extension contracts: slot names, contributor interfaces, the registry shape. The vocabulary half is wire; the assembly-time validation rules are the mixed part, so the whole package stays here until it is split.',
   },
   // Ahead of the broader `memory-state` rule below it carves out of, for the
   // reachability reason stated at the head of RULES.
@@ -198,12 +252,27 @@ export const RULES: readonly ClassificationRule[] = [
     category: 'pure',
     why: 'Terminal-state resolution, budget accounting, durability policy, capability negotiation. Data in, decision out. Verified clean: imports only `@duya/agent-protocol`.',
   },
+  {
+    prefix: 'packages/client-core/src',
+    category: 'pure',
+    why: 'Run and session PROJECTION plus pure event-stream decoding. The package states its own constraint: no network and no other IO, and neither React nor IPC. Data in, a surface model out.',
+  },
+  {
+    prefix: 'packages/input-completion/src',
+    category: 'pure',
+    why: 'Input-completion RULES: trigger detection, fuzzy matching, ranking, and what to write back. The package states its own constraint — no React, no Electron, no IO, no clock — so it is a total function over the text and the candidate list.',
+  },
 
   // ── runtime coordination ────────────────────────────────────────────────
   {
     prefix: 'packages/agent-runtime/src',
     category: 'runtime-coordination',
     why: 'The run execution engine: transports, event emission, replay cursors, backpressure, control channels. Async coordination with no host dependency.',
+  },
+  {
+    prefix: 'packages/host/src',
+    category: 'runtime-coordination',
+    why: 'THE Host, Electron-agnostic: manifest freeze, the run orchestrator, worker lifecycle, the tool registry, the run control plane and the HTTP surface. It hosts the runtime and relays events, which is the job `apps/desktop/src/main/agents` did before the extraction, and the `skills`, `managed-shell`, `connector-services` and `authorization` directories inside it carry their own narrower rules above.',
   },
   {
     prefix: 'packages/agent/src/agent',
@@ -336,9 +405,9 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Provider client construction. The ModelClient port must be satisfiable without importing any of this.',
   },
   {
-    prefix: 'packages/agent/src/sandbox',
+    prefix: 'packages/sandbox/src',
     category: 'capability-adapter',
-    why: 'Sandbox enforcement. A capability by definition, and the reason Trust UI may not claim sandboxing until escape tests pass (00-contracts.md §E).',
+    why: 'Sandbox provider selection and enforcement. A capability by definition, and the reason Trust UI may not claim sandboxing until escape tests pass (00-contracts.md §E). It was `packages/agent/src/sandbox` before the extraction.',
   },
   {
     prefix: 'packages/agent/src/security',
@@ -366,14 +435,19 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Durable journal writes. Persistence is a capability; the CP owns the decision of what is durable.',
   },
   {
-    prefix: 'packages/agent/src/memory-state',
+    prefix: 'packages/memory/src',
     category: 'capability-adapter',
-    why: 'SQLite-backed memory state. A storage capability, and the target of the 16 main-boundary test edges (M5.2).',
+    why: 'The memory layer: curation ledger, rollout contract, stage-1 extraction pipeline, over storage handles the caller injects. It was `packages/agent/src/memory-state` and `packages/agent/src/memory-rollout` before the extraction, and it is still a storage capability.',
   },
   {
-    prefix: 'packages/agent/src/memory-rollout',
+    prefix: 'packages/capabilities/src',
     category: 'capability-adapter',
-    why: 'Memory extraction and rollout, driven by real model calls and real storage.',
+    why: 'The tool implementations — FS, process, browser, OS input, MCP — and the pure tool contracts beside them. Each one WRAPS a capability and is the thing a ToolExecutor port must be able to stand in for, which is the same job `packages/agent/src/tool` did before the extraction.',
+  },
+  {
+    prefix: 'packages/capabilities/scripts',
+    category: 'capability-adapter',
+    why: 'Build-time asset copying for the capability package. Build-time capability, not runtime code — the same classification `packages/ai/scripts` already carries.',
   },
   {
     prefix: 'packages/ai/src',
@@ -467,12 +541,32 @@ export const RULES: readonly ClassificationRule[] = [
     category: 'cp-durable',
     why: 'EXCEPTION worth stating. Policy evaluation is a pure decision and belongs in core; the GRANT is durable and belongs to CP. Whole directory classified CP until M5.3 splits the two halves.',
   },
+  {
+    prefix: 'packages/data/src',
+    category: 'cp-durable',
+    why: 'SQLite connections, migrations and the durable stores behind them. Storage is CP-owned; the store is the durable substrate the CAS rules write through. It was `apps/desktop/src/main/db` and `apps/desktop/src/main/project-database` before the extraction.',
+  },
 
   // ── host/UI ─────────────────────────────────────────────────────────────
   {
     prefix: 'apps/desktop/src/renderer',
     category: 'host-ui',
     why: 'React renderer: components, hooks, stores, orb, styles. UI, and the reason 53 main->renderer edges are a defect rather than a design.',
+  },
+  {
+    prefix: 'packages/ui/src',
+    category: 'host-ui',
+    why: 'THE shared React renderer: components, hooks, stores, orb, styles, i18n. UI, and the reason 53 main->renderer edges are a defect rather than a design. It was `apps/desktop/src/renderer` before the extraction, and the `types`, `contracts` and `data` directories inside it carry their own narrower wire rules above.',
+  },
+  {
+    prefix: 'apps/web/src',
+    category: 'host-ui',
+    why: 'The browser transport: a loopback BFF in `server/`, the browser API client in `client/`, and the entry that mounts the shared `@duya/ui` app. Host transport with no domain decisions of its own, which is the job `apps/desktop/src/main/ipc` did before the extraction.',
+  },
+  {
+    prefix: 'apps/web/vite.config.ts',
+    category: 'host-ui',
+    why: 'A build configuration, classified with the app it configures so the inventory has no unexplained file. It is not itself a capability; the prefix is the nearest honest bucket — the same reasoning `packages/ai/vitest.config.ts` already carries.',
   },
   {
     prefix: 'apps/desktop/src/main/ipc',
@@ -626,6 +720,71 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
   {
     prefix: 'apps/desktop/src/main/__tests__',
     why: 'Host tests. Same reasoning as the agent suite.',
+  },
+  // The extraction gave every new package its own test directory, and the
+  // reasoning is the one the agent suite already carries: a test asserts a
+  // package, it is not the package, and no cut moves it. Each prefix is a
+  // SIBLING of the package's `src` rule, never a child of it, so the
+  // exclusion stays reachable.
+  {
+    prefix: 'packages/host/tests',
+    why: 'Host tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/capabilities/tests',
+    why: 'Capability tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/data/tests',
+    why: 'Data-layer tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/memory/tests',
+    why: 'Memory-layer tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/sandbox/tests',
+    why: 'Sandbox tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/client-core/test',
+    why: 'Client-core tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/input-completion/test',
+    why: 'Input-completion tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/tooling/tests',
+    why: 'Tooling tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/connectors/tests',
+    why: 'Connector tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/command-catalog/tests',
+    why: 'Command-catalog tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'apps/web/tests',
+    why: 'Web app tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/agent-runtime/tests',
+    why: 'Runtime tests, in the second directory the package uses for them. Same reasoning as `packages/agent-runtime/test`.',
+  },
+  {
+    prefix: 'packages/cli/test',
+    why: 'CLI tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/cli/tests',
+    why: 'CLI integration tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/host/skills',
+    why: 'Bundled skill ASSETS (markdown plus scripts), not source. They ship as files the loader reads, so classifying them by job would be inventing a seventh category. The same reasoning as `packages/agent/skills`.',
   },
 
   {

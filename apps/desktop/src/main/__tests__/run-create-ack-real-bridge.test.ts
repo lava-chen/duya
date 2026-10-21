@@ -73,6 +73,7 @@ vi.mock('../ipc/db-handlers', () => ({ getDatabase: () => hoisted.stores }));
 import { handleDbRequest } from '../agents/db-bridge';
 import { normalizeAndObserve, type RouterDeps } from '../agents/server/router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '../agents/server/run-orchestrator';
+import { createDesktopNativeRunEventWriter } from '../agents/server/native-run-event-writer';
 import { readRunReceipt } from '../control-plane/run-receipt';
 import {
   dispatchControlPlaneAction,
@@ -145,6 +146,12 @@ function rows(sql: string, ...params: unknown[]): Record<string, unknown>[] {
 /** Every command the worker was told, in order. */
 type WorkerCommand = { type: string } & Record<string, unknown>;
 
+/** Every durable action the run layer asked the bridge for, in order. */
+interface Call {
+  action: string;
+  payload: Record<string, unknown>;
+}
+
 /**
  * An orchestrator wired to the REAL bridge, with a dispatch that records what
  * the worker would have been sent.
@@ -170,8 +177,9 @@ function newOrchestrator(
     degradeReply?: (action: string, reply: unknown) => unknown;
     mutateCreate?: (payload: Record<string, unknown>) => Record<string, unknown>;
   } = {},
-): { orchestrator: RunOrchestrator; dispatched: WorkerCommand[] } {
+): { orchestrator: RunOrchestrator; dispatched: WorkerCommand[]; calls: Call[] } {
   const dispatched: WorkerCommand[] = [];
+  const calls: Call[] = [];
   const channel = createWorkerExecutionChannel({
     dispatch: (command) => {
       dispatched.push(command as WorkerCommand);
@@ -179,18 +187,33 @@ function newOrchestrator(
     },
     interrupt: () => ({ accepted: true, settled: Promise.resolve('cooperative') }),
   });
+  // The one hop to the real bridge, shared by the run layer's own writes and
+  // by the native writer's.
+  const throughBridge = async (
+    action: string,
+    payload: Record<string, unknown>,
+  ): Promise<unknown> => {
+    calls.push({ action, payload });
+    const sent = action === 'run:create' && harness.mutateCreate !== undefined
+      ? harness.mutateCreate(payload)
+      : payload;
+    const reply = await dbRequestThroughBridge(action, sent);
+    return harness.degradeReply === undefined ? reply : harness.degradeReply(action, reply);
+  };
   return {
     orchestrator: new RunOrchestrator({
       channel,
-      dbRequest: async (action, payload) => {
-        const sent = action === 'run:create' && harness.mutateCreate !== undefined
-          ? harness.mutateCreate(payload)
-          : payload;
-        const reply = await dbRequestThroughBridge(action, sent);
-        return harness.degradeReply === undefined ? reply : harness.degradeReply(action, reply);
-      },
+      dbRequest: throughBridge,
+      // The ONE durable writer for Runtime-minted envelopes, exactly as
+      // `agents/server/index.ts` composes it. Without it the run layer refuses
+      // every native `run:event` and the durable log stays empty.
+      nativeWriter: createDesktopNativeRunEventWriter({
+        request: throughBridge,
+        logger: { warn: () => undefined },
+      }),
     }),
     dispatched,
+    calls,
   };
 }
 
@@ -322,14 +345,30 @@ describe('a desktop chat turn, opened through the real bridge', () => {
     expect(afterStart['status']).toBe('running');
 
     // Drive a turn through the REAL router tee, exactly as the router does.
+    //
+    // The frames are the Runtime's OWN, written as
+    // `worker-process-entry.ts` writes them: the durable `run_events` ledger
+    // has one writer (the native `run:event` channel) since plan 610 S1, and
+    // the legacy `chat:*` frames are observed but no longer persisted.
     const deps = { runOrchestrator: orchestrator } as unknown as RouterDeps;
-    for (const frame of [
-      { type: 'chat:turn_start', data: { turnCount: 1 } },
-      { type: 'chat:text', data: 'Hello from the worker' },
-      { type: 'chat:done' },
-    ]) {
-      normalizeAndObserve('session-1', frame, deps);
+    for (const [seq, type] of [
+      [1, 'run.started'],
+      [2, 'turn.started'],
+      [3, 'assistant.text_block'],
+      [4, 'run.completed'],
+    ] as const) {
+      normalizeAndObserve(
+        'session-1',
+        {
+          type: 'run:event',
+          epoch: 0,
+          envelope: { runId, sessionId: 'session-1', seq, payload: { type } },
+        },
+        deps,
+      );
     }
+    // The legacy terminal frame is still what ends the turn for the host.
+    normalizeAndObserve('session-1', { type: 'chat:done' }, deps);
     await orchestrator.settleSession('session-1');
 
     // Read the table directly: a terminal, a finish time, and a real log.
@@ -344,6 +383,8 @@ describe('a desktop chat turn, opened through the real bridge', () => {
     const types = events.map((e) => e['event_type']);
     expect(types).toContain('run.started');
     expect(types.some((t) => t === 'run.completed' || t === 'run.failed')).toBe(true);
+    // And the log is the Runtime's, under the Runtime's own sequence.
+    expect(events.map((e) => Number(e['seq']))).toEqual([1, 2, 3, 4]);
   });
 });
 
@@ -422,7 +463,7 @@ describe('when a run cannot be opened, the failure is loud and durable', () => {
     // The worker refuses the dispatch. Here the RUNTIME is the terminal writer
     // — its `#failStart` emits `run.failed` and settles the run before throwing
     // `RunStartError` — so the host must not write a second terminal on top.
-    const { orchestrator, dispatched } = newOrchestrator({ accept: false });
+    const { orchestrator, dispatched, calls } = newOrchestrator({ accept: false });
 
     const start = await orchestrator.openRun('session-1', INTENT);
 
@@ -436,11 +477,15 @@ describe('when a run cannot be opened, the failure is loud and durable', () => {
     expect(run['status']).toBe('failed');
     expect(run['terminal']).toBe('failed');
     expect(run['finished_at']).not.toBeNull();
-    // Exactly ONE terminal event, which is what "one writer" means: a second
+    // Exactly ONE terminal WRITE, which is what "one writer" means: a second
     // writer's attempt would be refused as a conflict and would have logged a
     // settled run as a stranded one.
-    const failed = rows("SELECT seq FROM run_events WHERE run_id = ? AND event_type = 'run.failed'", start.runId!);
-    expect(failed).toHaveLength(1);
+    expect(calls.filter((call) => call.action === 'run:complete')).toHaveLength(1);
+    // And the ledger holds no terminal of its own: the durable log is the
+    // RUNTIME's transcript, and the Runtime never ran. The host does not
+    // fabricate an envelope on its behalf — a fabricated `run.failed` would
+    // claim a fact about a run that never executed.
+    expect(rows('SELECT event_type FROM run_events WHERE run_id = ?', start.runId!)).toEqual([]);
   });
 
   it('refuses to dispatch and leaves no row at all when the Control Plane has no durable owner', async () => {

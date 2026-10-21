@@ -146,8 +146,8 @@ export interface ToolUse {
  *
  * The legacy wire carries the failure bit in three places and all three are
  * optional: `error?: boolean` on the worker's `chat:tool_result`
- * (packages/agent/src/process/worker-protocol.ts:299-305, relayed verbatim by
- * router.ts:506), `is_error?: boolean` on `@duya/ai`'s `ToolResultContent`
+ * (packages/agent-protocol/src/worker-protocol.ts:349-355, relayed verbatim by
+ * router.ts:624), `is_error?: boolean` on `@duya/ai`'s `ToolResultContent`
  * (packages/ai/src/types.ts:75-80), and nothing at all on the stored rows. An
  * absent bit is indistinguishable from a successful call, so a failed tool and
  * a silent one are the same value on the wire and in the transcript.
@@ -534,7 +534,7 @@ export interface ToolCallCompletedPayload {
  * ## What is NOT here
  *
  * The worker's `checkpoint` event carries `{ messages, generation }`
- * (packages/agent/src/process/worker-protocol.ts:248-255). The full message
+ * (packages/agent-protocol/src/worker-protocol.ts:286-293). The full message
  * array does NOT cross the protocol boundary. It is unbounded, it is the
  * transcript itself rather than a reference to it, and it is exactly the shape
  * that makes a checkpoint payload a credential and size hazard. A host that

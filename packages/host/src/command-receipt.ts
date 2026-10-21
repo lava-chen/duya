@@ -91,10 +91,11 @@ export interface CommandEnvelope {
  *
  *  - `senderId`  ← the child pid: identity of the sending process, which is the
  *    same question `senderId` asks for a webContents.
- *  - `frameRoutingId` ← `0` for the host's OWN bootstrap call and the session's
- *    registered route otherwise; a message arriving for a session the sending
- *    child is not registered under reads as a subframe, i.e. not the sender we
- *    think it is.
+ *  - `frameRoutingId` / `mainFrameRoutingId` ← the synthetic "frame" of the
+ *    sending child. There is no real frame on this transport, so the sender
+ *    IS its own top frame: a registered child carries the same id on both
+ *    sides and is admitted, while an unregistered one carries no frame at all
+ *    and reads as a subframe, i.e. not the sender we think it is.
  *  - `frameUrl`  ← the child's role (`DUYA_AGENT_ROLE`), projected onto a URL
  *    whose AUTHORITY is the role: `https://<role>.duya-agent.internal`. The
  *    authority has to carry the role rather than the scheme because the WHATWG
@@ -166,6 +167,7 @@ export function roleOrigin(role: string): string {
 function toTrustedSenderFacts(facts: CommandSenderFacts, trustedPids: ReadonlySet<number>): {
   senderId: number;
   frameRoutingId: number | null;
+  mainFrameRoutingId: number | null;
   frameUrl: string | null;
 } {
   // A host-initiated command has no child pid and is therefore not in
@@ -174,7 +176,11 @@ function toTrustedSenderFacts(facts: CommandSenderFacts, trustedPids: ReadonlySe
   const senderId = facts.senderPid ?? -1;
   return {
     senderId,
+    // There is no real frame on this transport: the synthetic "frame" IS the
+    // sender's own top frame. Both ids are therefore the same value, which
+    // admits the sender exactly as the old "routing id 0" projection did.
     frameRoutingId: trustedPids.has(senderId) ? 0 : null,
+    mainFrameRoutingId: 0,
     frameUrl: facts.role === null ? null : `${roleOrigin(facts.role)}/`,
   };
 }

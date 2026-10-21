@@ -12,9 +12,9 @@
  * >  fundamentally no path at all."
  *
  * Both halves are true of the worker's TYPED CLIENT SURFACE, and neither is
- * true of the ROUTE. `packages/agent/src/ipc/db-client.ts` really does contain
- * no `run:` helper (asserted below, so the next slice gets a failure rather
- * than a surprise). But the channel a new action would travel on is the
+ * true of the ROUTE. `packages/host/src/worker-db-client.ts` really does
+ * contain no `run:` helper (asserted below, so the next slice gets a failure
+ * rather than a surprise). But the channel a new action would travel on is the
  * existing `db:request` IPC, and the MAIN side already routes and AUTHORISES
  * `run:*` on it:
  *
@@ -187,6 +187,16 @@ const UNSPAWNED_SENDER = {
   role: 'agent-server',
 } as const;
 
+/**
+ * The attempt a run created moments ago is at.
+ *
+ * A run row is created at attempt 0 and nothing has advanced it, so the
+ * attempt a worker presents for it IS 0. It is a fact about the row, not a
+ * placeholder — the Control Plane refuses a `run:append` or a `run:complete`
+ * that presents no attempt at all.
+ */
+const ATTEMPT_ZERO = 0;
+
 let dir: string;
 let db: Database.Database;
 
@@ -326,6 +336,12 @@ describe('a worker CAN reach the run write path over the channel that already ex
     const settled = await workerRequest('run:complete', {
       runId: 'run-child-2',
       terminal: { status: 'completed' },
+      // The ATTEMPT FENCE. A durable terminal write is a write under the run's
+      // attempt, and the Control Plane refuses an unfenced one rather than
+      // making it unfenced (`host-run-api-adapter.ts:176`). A run created
+      // moments ago IS at attempt 0, so 0 is the value that is right here --
+      // not a placeholder, and not a number this file may omit.
+      epoch: ATTEMPT_ZERO,
     });
     const receipt = readRunReceipt(settled, 'run:complete', 'run-child-2');
     expect(receipt.state).toBe('applied');
@@ -341,6 +357,28 @@ describe('a worker CAN reach the run write path over the channel that already ex
     const parent = rows('SELECT * FROM runs WHERE id = ?', 'run-parent-2')[0]!;
     expect(parent['status']).toBe('running');
     expect(parent['terminal']).toBeNull();
+  });
+
+  it('refuses a terminal write that presents no attempt', async () => {
+    // The other half of the fence, and the reason the case above has to carry
+    // an `epoch`: an unfenced terminal write is refused outright. A run write
+    // with no attempt is a write by somebody who cannot say which attempt
+    // they are, and letting it through is how a superseded turn overwrites
+    // the terminal of the turn that replaced it.
+    await openRun('run-unfenced', 'session-unfenced');
+
+    const reply = await workerRequest('run:complete', {
+      runId: 'run-unfenced',
+      terminal: { status: 'completed' },
+    });
+    const receipt = readRunReceipt(reply, 'run:complete', 'run-unfenced');
+    expect(receipt.state).toBe('invalid');
+    expect(receipt.state === 'invalid' ? receipt.reason : '').toContain('attempt');
+
+    // And the refusal wrote nothing: the run is still the open row it was.
+    const row = rows('SELECT * FROM runs WHERE id = ?', 'run-unfenced')[0]!;
+    expect(row['status']).toBe('running');
+    expect(row['terminal']).toBeNull();
   });
 });
 
@@ -412,8 +450,12 @@ describe('the channel is still CLOSED from the sub-agent, and this file knows it
     // this assertion with the migration evidence — the three contracts and a
     // real cross-process test — because from that commit the sub-agent is one
     // call away from a child run that can strand itself.
+    //
+    // Plan 610 moved the worker client into `packages/host`, so the file this
+    // reads is the one that actually speaks the wire. The `packages/agent`
+    // copy is a re-export of it and would prove nothing.
     const dbClient = readFileSync(
-      resolve(ROOT, 'packages/agent/src/ipc/db-client.ts'),
+      resolve(ROOT, 'packages/host/src/worker-db-client.ts'),
       'utf8',
     );
     expect(dbClient).not.toMatch(/['"`]run:(create|append|complete|get|events|list-session)['"`]/);
@@ -424,8 +466,11 @@ describe('the channel is still CLOSED from the sub-agent, and this file knows it
     // off `subAgent.streamChat` onto the engine driver (plan 610 S4c-d3);
     // what is asserted is the same property under the new name — the
     // sub-agent's turn is still ONE site, still a nested loop, not fanned out.
+    //
+    // Plan 610 then moved the sub-agent runner into
+    // `packages/host/worker-subagents`, so the file this reads is the Host's.
     const runAgent = readFileSync(
-      resolve(ROOT, 'packages/agent/src/tool/SubagentTool/runAgent.ts'),
+      resolve(ROOT, 'packages/host/src/worker-subagents/run-agent.ts'),
       'utf8',
     );
     const turnSites = runAgent

@@ -687,8 +687,13 @@ const READ_SENSITIVE_PATH_PATTERNS: RegExp[] = [
   /\/\.duya\/secrets\.json$/,
   /\/\.duya\/config\.toml$/,
   /\/\.duya\/mcp\.toml$/,
-  // Windows credential vault / DPAPI
-  /\/microsoft\/credentials(\/|$)/,
+  // Windows credential vault / DPAPI. The `i` flag for the same reason the
+  // cookie patterns below carry it: `isSensitiveReadPath` only lowercases its
+  // target on Windows, so on POSIX the Windows spelling of the vault segment
+  // (`Microsoft/Credentials`) stopped matching and the read policy let a
+  // credential store through without asking. Matching more paths can only
+  // make the policy ask for MORE confirmation, never less.
+  /\/microsoft\/credentials(\/|$)/i,
   // Browser cookie databases. The shapes are the layouts the cookie importer
   // actually resolves (`browserUserDataPath` + `resolveCookieFilePath` in
   // apps/desktop/src/main/services/browser/cookie-importer.ts): a browser user
