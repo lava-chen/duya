@@ -252,7 +252,15 @@ export function buildInventory(options = {}) {
     });
   }
 
-  rows.sort((a, b) => (b.measured?.bodyMs ?? 0) - (a.measured?.bodyMs ?? 0) || a.file.localeCompare(b.file));
+  // Sorted by PATH, not by cost.
+  //
+  // This artifact is committed, so its only value is that a reviewer can read
+  // what changed. Sorting by the measured cost reshuffles every row on every
+  // re-measure: adding ONE assertion to one test file came out as a
+  // 13,000-line diff, where the actual change was one number. The cost
+  // ranking is what the "Slowest files" table is for; the records themselves
+  // stay where a reader can find them.
+  rows.sort((a, b) => a.file.localeCompare(b.file));
   return { globs, rows, otherRunners };
 }
 
