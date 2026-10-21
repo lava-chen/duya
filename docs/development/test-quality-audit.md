@@ -79,6 +79,8 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 `mock-heavy` 的 34 个文件里最极端的是 `packages/ui/src/components/extensions/__tests__/ExtensionsPage.test.tsx`（18 个 mock / 3 个用例）。**这不是判决**——mock 密集在 UI 组件测试里是常态，判定要靠故障注入，不是靠计数。
 
+第二轮抽样就落在那里（见下面的"故障注入"）：被抽到的 3 个 mock-heavy 文件都抓到了注入的缺陷，其中 `ExtensionsPage.test.tsx` 还暴露了一个**套件从未断言过的初始状态**——扩展页默认打开哪个面板。
+
 ### F5 · 一个余量只有 1ms 的时序用例（已修）
 
 本 PR 自己的 CI 把它拉红过两次，失败文件是 `packages/agent-runtime/test/run-cancel-budget.test.ts` 里"墙钟上限触发停止"那一条：`expected 'cancelled' to be 'budget_exhausted'`。
@@ -137,13 +139,17 @@ worker bundle 那一半同样是多余的：`packages/host/bundle/` 是 git 跟�
 
 ## 故障注入
 
-见 [test-fault-injection 报告](test-fault-injection-report.md)。抽样的 6 个缺陷覆盖 5 类核心契约，**6 个全部被现有套件杀死**：协议兼容的 MINOR 下限、canonical JSON 键序、SHA-256 填充、持久化的 bot 会话前缀、bypass 模式下的 config 硬边界、以及 `WorkerEvent` 联合类型少一个成员。
+见 [test-fault-injection 报告](test-fault-injection-report.md)。抽样的 **11 个缺陷全部被现有套件杀死**：契约层的 6 个（协议兼容的 MINOR 下限、canonical JSON 键序、SHA-256 填充、持久化的 bot 会话前缀、bypass 模式下的 config 硬边界、`WorkerEvent` 联合类型少一个成员），以及 UI 组件层的 5 个。
+
+UI 层那 5 个是第二轮加的，抽样刻意落在 `mock-heavy` 最密集的地方，**其中一条第一次跑是 `survived`**：注入"扩展页默认打开 installed 而不是 marketplace"之后，3 个用例全部通过——用户打开扩展页落在另一个面板上，套件一声不响。补了一条断言（打开时 marketplace 面板在场），再跑同一条变异：从 `survived` 变成 `killed`，未变异的源码上加强后的用例仍然全绿。
+
+**这条是"抽样能证伪"的最好证明**：它找出过一个用户看得见、套件看不见的缺陷，并且现在这个缺陷是关着的。
 
 ## 剩余技术债
 
 | # | 债 | 影响 | 建议 |
 | --- | --- | --- | --- |
-| D1 | 34 个 `mock-heavy` 文件的检测能力未经抽样验证 | 未知 | 扩展故障注入的抽样面 |
+| D1 | 34 个 `mock-heavy` 文件里**还有 31 个**的检测能力未经抽样验证 | 未知（抽到的 3 个都有检测能力，其中 1 个的盲区已补） | 继续按 mock 数排序往下抽，每个文件问一个"用户看得见的初始状态" |
 | D2 | 11 个测试直接写 stdout/stderr | 污染 CI 日志，失败可能被淹没 | 改用注入的 logger |
 | D3 | 4 个文件跳过自己的用例 | 覆盖面上的空洞 | 逐个确认是"暂缓"还是"永不" |
 | D4 | `collect` 仍是最大单项（237s） | 每文件 202ms 的模块图加载 | 按包压测 import 图，找可裁剪的重依赖 |
