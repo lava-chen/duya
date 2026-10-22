@@ -1,0 +1,152 @@
+{
+  "note": "Each case injects ONE realistic defect into production code and runs the tests that are supposed to catch it. A 'survived' verdict is a FINDING: the suite did not notice the defect. The mutations are literal source edits so a reviewer can read the injected defect before trusting the verdict.",
+  "cases": [
+    {
+      "name": "protocol compatibility: the per-message MINOR floor",
+      "source": "packages/agent-protocol/src/compatibility.ts",
+      "tests": [
+        "packages/agent-protocol/test/compatibility-gating.test.ts"
+      ],
+      "mutations": [
+        {
+          "id": "compat-1",
+          "find": "if (host.protocol.major < min.major || (host.protocol.major === min.major && host.protocol.minor < min.minor)) {",
+          "replace": "if (host.protocol.major < min.major) {",
+          "description": "A host that is one MINOR version behind a message's floor is admitted. This is the exact fail-open the module's own comment says an earlier version of this function had, and that 'the whole module exists to prevent'."
+        }
+      ]
+    },
+    {
+      "name": "manifest fingerprint: canonical JSON key order",
+      "source": "packages/agent-protocol/src/hash.ts",
+      "tests": [
+        "packages/agent-protocol/test/hash.test.ts"
+      ],
+      "mutations": [
+        {
+          "id": "hash-1",
+          "find": "const keys = Object.keys(record).sort();",
+          "replace": "const keys = Object.keys(record);",
+          "description": "Canonical JSON stops sorting object keys, so the fingerprint becomes a function of CONSTRUCTION order rather than of VALUE. Two structurally equal manifests built in a different key order fingerprint differently, and a legitimate resume is rejected."
+        },
+        {
+          "id": "hash-2",
+          "find": "padded[bytes.length] = 0x80;",
+          "replace": "padded[bytes.length] = 0x81;",
+          "description": "SHA-256 padding uses 0x81 instead of the FIPS 180-4 0x80 marker. The digest changes for every input, so every persisted fingerprint in the database stops matching."
+        }
+      ]
+    },
+    {
+      "name": "session id wire contract: the persisted bot prefix",
+      "source": "packages/agent-protocol/src/session-ids.ts",
+      "tests": [
+        "packages/agent-protocol/test/session-ids.test.ts"
+      ],
+      "mutations": [
+        {
+          "id": "session-1",
+          "find": "export const BOT_SESSION_ID_PREFIX = 'bot:';",
+          "replace": "export const BOT_SESSION_ID_PREFIX = 'bots:';",
+          "description": "The persisted bot-session id prefix changes. Every session id already in a user's database stops being recognised as a bot session, and the round trip getBotSessionId -> parseAgentIdFromBotSession no longer closes."
+        }
+      ]
+    },
+    {
+      "name": "permission safety: the DUYA config hard boundary",
+      "source": "packages/capabilities/src/permissions/policy.ts",
+      "tests": [
+        "packages/capabilities/tests/permissions/policy-read-permission.test.ts"
+      ],
+      "mutations": [
+        {
+          "id": "permission-1",
+          "find": "if (isWrite && isDuyaConfigPath(filePath)) {",
+          "replace": "if (isWrite && isDuyaConfigPath(filePath) && !(context && isBypassMode(context.mode))) {",
+          "description": "The DUYA config read-only boundary stops applying in bypass mode. A hand-edited config.toml is exactly the failure the guard was added for: it makes the file unparseable and silently wipes every provider on the next settings write."
+        }
+      ]
+    },
+    {
+      "name": "event consistency: the WorkerEvent union",
+      "source": "packages/agent-protocol/src/worker-protocol.ts",
+      "tests": [
+        "packages/agent-protocol/test/worker-event-completeness.test.ts"
+      ],
+      "mutations": [
+        {
+          "id": "worker-event-1",
+          "find": "  | PongEvent\n",
+          "replace": "",
+          "description": "A member is dropped from the WorkerEvent union. The compile-time guard in src/ cannot fire under vitest (esbuild strips types), so only the source-parsing test can catch this."
+        }
+      ]
+    },
+    {
+      "name": "UI message mode: the conductor exclusion",
+      "source": "packages/ui/src/components/chat/MessageInput.tsx",
+      "tests": [
+        "packages/ui/src/components/chat/__tests__/MessageInput.test.tsx"
+      ],
+      "mutations": [
+        {
+          "id": "ui-mode-1",
+          "find": "    if (mode !== 'conductor') return mode;",
+          "replace": "    if (mode) return mode;",
+          "description": "The composer stops excluding the conductor mode from the mode it sends with a message. `pickMessageMode` now answers 'conductor', and the agent resolves the wrong mode dispatch — conductor runs on its own flag, not as the message's mode."
+        }
+      ]
+    },
+    {
+      "name": "UI message mode reset: the session-level toggles",
+      "source": "packages/ui/src/components/chat/MessageInput.tsx",
+      "tests": [
+        "packages/ui/src/components/chat/__tests__/MessageInput.test.tsx"
+      ],
+      "mutations": [
+        {
+          "id": "ui-mode-2",
+          "find": "    if (MODE_KIND[mode] === 'session') {",
+          "replace": "    if (false) {",
+          "description": "After a message is sent, the session-level toggles (plan-task, research, conductor) are cleared along with the per-message ones. The user's plan-task tracker is switched off in the middle of a conversation, with no prompt and no visible change."
+        }
+      ]
+    },
+    {
+      "name": "UI extensions page: which panel the tab switch shows",
+      "source": "packages/ui/src/components/extensions/ExtensionsPage.tsx",
+      "tests": [
+        "packages/ui/src/components/extensions/__tests__/ExtensionsPage.test.tsx"
+      ],
+      "mutations": [
+        {
+          "id": "ui-extensions-1",
+          "find": "      {!isLoading && activeTab === \"marketplace\" && (",
+          "replace": "      {!isLoading && activeTab === \"installed\" && (",
+          "description": "The marketplace section renders when the INSTALLED tab is active. Clicking 'marketplace' shows an empty page and clicking 'installed' shows both panels."
+        },
+        {
+          "id": "ui-extensions-2",
+          "find": "  const [activeTab, setActiveTab] = useState<ExtensionTab>(\"marketplace\");",
+          "replace": "  const [activeTab, setActiveTab] = useState<ExtensionTab>(\"installed\");",
+          "description": "The extensions page opens on the installed tab instead of the marketplace. Every user lands on the other panel on open, and nothing in the suite says which panel that should be."
+        }
+      ]
+    },
+    {
+      "name": "UI provider management: the connection result banner",
+      "source": "packages/ui/src/components/settings/ProviderManagement.tsx",
+      "tests": [
+        "packages/ui/src/components/settings/__tests__/ProviderManagement.test.tsx"
+      ],
+      "mutations": [
+        {
+          "id": "ui-provider-1",
+          "find": "? `Connection OK${result.latencyMs ? ` (${result.latencyMs}ms)` : ''}`",
+          "replace": "? 'Connection OK'",
+          "description": "The 'provider tested OK' banner drops the measured latency. The number that says how slow the user's endpoint is disappears from the only place it was shown."
+        }
+      ]
+    }
+  ]
+}

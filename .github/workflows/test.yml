@@ -434,6 +434,22 @@ jobs:
         # maps, which point at `dist/`. Without this build those imports
         # resolve to nothing and the suite fails at import time.
         #
+        # It builds the `unit-suite` PROFILE rather than the whole workspace:
+        # the profile is the set of packages the unit suite resolves from
+        # `dist/`, and the rest of the workspace is either aliased to source
+        # by vitest or not imported by the suite at all. Measured on this tree
+        # from a clean `dist/` and a clean `tsconfig.tsbuildinfo`:
+        #
+        #   full build (22 packages)   151.8s
+        #   unit-suite profile (19)     39.8s
+        #
+        # On the CI runner the same change measured 166s -> 64s (runs
+        # 39639233610 and 39659948364).
+        #
+        # The packages the profile leaves out are the expensive ones: `@duya/ui`
+        # is a full `tsc` project over the renderer, and the unit suite
+        # resolves it from source, not from `dist/`.
+        #
         # Two jobs building at the same time is FASTER than one build both
         # jobs queue behind: the build is on the critical path of each job
         # independently, so overlapping them overlaps the waiting too.
@@ -445,7 +461,17 @@ jobs:
         # typecheck step this build sat inside.
         env:
           NODE_OPTIONS: --max-old-space-size=6144
-        run: npm run build:packages
+        run: node scripts/build-packages.mjs --profile unit-suite
+
+      # The native SQLite binding is built for ONE runtime at a time, and
+      # `npm ci` left it built for Electron (the `postinstall` hook runs
+      # `electron-builder install-app-deps`). The unit suite runs under Node,
+      # so the binding has to be swapped for the Node ABI before the suite
+      # starts. This is the half of the old `pretest` hook that is still
+      # required here — the other half was a second workspace build, and that
+      # is what the step below explains.
+      - name: Prepare the native SQLite binding for Node
+        run: node scripts/ensure-sqlite-abi.mjs node
 
       - name: Run tests
         if: needs.changes.outputs.unit_scope != 'skip'
@@ -492,6 +518,24 @@ jobs:
           # the tests. Cutting it means cutting what a file costs to collect,
           # which is a different piece of work — and the two files that would
           # move it most are named below.
+          #
+          # `npx vitest run` rather than `npm test`: `npm test` runs the
+          # `pretest` hook, and `pretest` is `bundle:agent` — which is
+          # `build:packages` PLUS a rebuild of the worker bundle. On the
+          # reference run (PR #343, run 39639233610) that hook spent 145s of
+          # the 648s this step reports, rebuilding a workspace the step above
+          # had already built, minute for minute.
+          #
+          # The bundle half is redundant for a second reason: `packages/host/
+          # bundle/` is a TRACKED artifact (57 files), so the checkout already
+          # carries it, and the `architecture` job's `bundle:verify` gate
+          # asserts that the committed bundle still matches the source it was
+          # built from — by reading git history, not by rebuilding. A stale
+          # bundle is therefore already a red PR, and the test job was
+          # rebuilding past that red instead of reporting it.
+          #
+          # `npm test` itself is unchanged for local use: the hook still
+          # builds the bundle there, where nothing else has built it.
           WORKERS=2
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ "${{ needs.changes.outputs.unit_scope }}" = "changed" ]; then
             mapfile -t unit_files < <(node -e 'for (const file of JSON.parse(process.argv[1])) console.log(file)' '${{ needs.changes.outputs.unit_files }}')
@@ -502,12 +546,12 @@ jobs:
             if [ "${{ needs.changes.outputs.build_scope }}" = "skip" ]; then
               npx vitest run --maxWorkers="$WORKERS" "${unit_files[@]}" 2>&1 | tee vitest-output.log
             else
-              npm test -- --changed="$BASE_SHA" --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
+              npx vitest run --changed="$BASE_SHA" --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
             fi
           elif [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            npm test -- --coverage --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
+            npx vitest run --coverage --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
           else
-            npm test -- --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
+            npx vitest run --maxWorkers="$WORKERS" 2>&1 | tee vitest-output.log
           fi
 
       # Plan 610 T04 / G10. This guard used to be an inline heredoc that exited

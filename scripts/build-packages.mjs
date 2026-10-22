@@ -47,6 +47,8 @@
  * Usage:
  *   node scripts/build-packages.mjs
  *   node scripts/build-packages.mjs --target @duya/cli
+ *   node scripts/build-packages.mjs --target @duya/cli --target @duya/host
+ *   node scripts/build-packages.mjs --profile unit-suite
  *
  * Exit codes: 0 = every package built; non-zero = the first failing package's
  * exit code is propagated. Failures are NOT swallowed.
@@ -163,26 +165,112 @@ const BUILD_ORDER = [
 
 const BUILD_ORDER_SET = new Set(BUILD_ORDER);
 
+/**
+ * Named build profiles: a SET of targets, named for the consumer that needs
+ * them.
+ *
+ * ## Why a profile instead of a longer `--target` list
+ *
+ * The unit suite resolves most workspace packages from SOURCE (vitest.config.ts
+ * aliases them), and the ones it does not alias it resolves through their
+ * `exports` map, which points at `dist/`. The list below is exactly that
+ * second set, so a CI job that only has to run the unit suite does not have to
+ * build the whole workspace to get it.
+ *
+ * The saving is not marginal. Measured on 2026-10-22 on this tree, from a
+ * clean `dist/` and a clean `tsconfig.tsbuildinfo`:
+ *
+ *   full build (22 packages)          151.8s
+ *   this profile's closure (19)        39.8s
+ *
+ * The packages the profile leaves out are the expensive ones: `@duya/ui` is a
+ * full `tsc` project over the renderer, and the unit suite resolves it from
+ * source, not from `dist/`.
+ *
+ * ## `@duya/host` is here for a reason that is NOT an import
+ *
+ * No test file imports `@duya/host`. It is in this list because
+ * `packages/host/tests/worker-product-runtime/agent-runtime-real-worker.mjs` —
+ * the program the subprocess-transport suites actually spawn — loads
+ * `packages/host/dist/worker-transport.js`, and the architecture gate
+ * requires that import to stay inside the module that owns the worker. So the
+ * unit suite needs the host layer's `dist` even though no test names it.
+ *
+ * Measured, not assumed: with this list minus `@duya/host`, the full suite
+ * ran 8 assertions short of green — `subprocess-framing.test.ts` and
+ * `transport-equivalence.test.ts`, both failing because the spawned worker
+ * produced no output. The suite's own guard ("needs the built worker, and
+ * says so rather than skipping") reported it, which is the behaviour it
+ * exists for.
+ *
+ * ## How this stays honest
+ *
+ * A package that the suite DOES need but that is missing from this list fails
+ * the suite at import time, loudly, in the job that builds this profile. That
+ * is the intended signal: the profile is wrong and the fix is to add the
+ * package here, not to widen the build back to everything.
+ *
+ * It also means the list is not a constant of the universe. It was derived by
+ * measurement, and it moved when the transport fixture moved from the agent
+ * layer to the host layer (the agent layer's own copy of the fixture is now
+ * unreferenced). A suite whose build requirement can change with a refactor
+ * is a suite whose build requirement has to be re-measured, not assumed.
+ */
+const BUILD_PROFILES = {
+  'unit-suite': {
+    targets: [
+      '@duya/ai',
+      '@duya/cli',
+      '@duya/computer-use',
+      '@duya/gateway',
+      '@duya/voice',
+      '@duya/plugin-core',
+      '@duya/connectors',
+      '@duya/host',
+    ],
+    why: 'the workspace packages the vitest suite resolves through their exports map rather than through a source alias',
+  },
+};
+
 function parseTarget(args) {
-  let target;
+  const targets = [];
+  let profile;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--target') {
-      if (target !== undefined || !args[index + 1]) {
-        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      if (!args[index + 1]) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
       }
-      target = args[index + 1];
+      targets.push(args[index + 1]);
       index += 1;
     } else if (arg.startsWith('--target=')) {
-      if (target !== undefined || arg.length === '--target='.length) {
-        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      if (arg.length === '--target='.length) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
       }
-      target = arg.slice('--target='.length);
+      targets.push(arg.slice('--target='.length));
+    } else if (arg === '--profile') {
+      if (profile !== undefined || !args[index + 1]) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
+      }
+      profile = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--profile=')) {
+      if (profile !== undefined || arg.length === '--profile='.length) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
+      }
+      profile = arg.slice('--profile='.length);
     } else {
       throw new Error(`Unknown build-packages argument: ${arg}`);
     }
   }
-  return target;
+  if (profile !== undefined) {
+    const known = BUILD_PROFILES[profile];
+    if (!known) {
+      throw new Error(`Unknown build profile ${profile}; expected one of: ${Object.keys(BUILD_PROFILES).join(', ')}`);
+    }
+    for (const target of known.targets) targets.push(target);
+  }
+  return targets.length === 0 ? undefined : targets;
 }
 
 function packageDirectory(name) {
@@ -214,9 +302,11 @@ function workspaceDependencies(name) {
   ].filter((dependency) => dependency.startsWith('@duya/')));
 }
 
-function selectBuildOrder(target) {
-  if (target === undefined) return BUILD_ORDER;
-  if (!BUILD_ORDER_SET.has(target)) {
+function selectBuildOrder(targets) {
+  if (targets === undefined) return BUILD_ORDER;
+  const list = Array.isArray(targets) ? targets : [targets];
+  for (const target of list) {
+    if (BUILD_ORDER_SET.has(target)) continue;
     // App targets (`@duya/desktop`) are never built by this script — an app's
     // own pipeline (vite / electron) owns that. `--target <app>` selects the
     // app's dependency closure: every @duya/* manifest dependency must be in
@@ -228,6 +318,9 @@ function selectBuildOrder(target) {
     }
   }
 
+  // Several targets, ONE closure. The union is what a caller that needs two
+  // packages actually needs: their shared dependencies are built once, in the
+  // canonical order, not twice in two overlapping chains.
   const required = new Set();
   const visit = (name) => {
     if (required.has(name)) return;
@@ -245,7 +338,7 @@ function selectBuildOrder(target) {
       visit(dependency);
     }
   };
-  visit(target);
+  for (const target of list) visit(target);
   return BUILD_ORDER.filter((name) => required.has(name));
 }
 
@@ -270,11 +363,11 @@ function runPackageBuild(name) {
     : spawnSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
 }
 
-let target;
+let targets;
 let selectedOrder;
 try {
-  target = parseTarget(process.argv.slice(2));
-  selectedOrder = selectBuildOrder(target);
+  targets = parseTarget(process.argv.slice(2));
+  selectedOrder = selectBuildOrder(targets);
 } catch (error) {
   process.stderr.write(`[build-packages] ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(64);
@@ -311,4 +404,6 @@ for (const [index, name] of selectedOrder.entries()) {
   }
 }
 
-process.stdout.write(`[build-packages] built ${selectedOrder.length} package(s)${target ? ` for ${target}` : ''}.\n`);
+process.stdout.write(
+  `[build-packages] built ${selectedOrder.length} package(s)${targets ? ` for ${targets.join(', ')}` : ''}.\n`,
+);
