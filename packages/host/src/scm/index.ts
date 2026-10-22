@@ -43,4 +43,6 @@ export type {
   ScmObserverDeps,
 } from './observe.js';
 
-export type { HostIntegrationState } from './integration-state.js';
+// The state union lives in the wire contract (plan 621 slice B). Re-exported
+// here so slice E keeps one import site; the member list is the contract's.
+export type { HostIntegrationState } from '@duya/agent-protocol';

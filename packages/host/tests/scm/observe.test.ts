@@ -9,7 +9,7 @@ import {
   type PrCheckOutcome,
   type PrIntegrationSignal,
 } from '../../src/scm/observe.js';
-import type { HostIntegrationState } from '../../src/scm/integration-state.js';
+import type { HostIntegrationState } from '@duya/agent-protocol';
 
 /** A `GhRunner` that answers from a stub and records every invocation. */
 function stubRunner(respond: (args: string[]) => unknown): {
