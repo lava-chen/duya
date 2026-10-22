@@ -1,0 +1,729 @@
+/**
+ * file-workspace.css — the redesigned file panel.
+ *
+ * Colour comes from the app tokens (--main-bg / --panel-surface / --text /
+ * --muted / --border / --accent) so both themes work without a second sheet.
+ * Only the syntax palette needs its own light/dark pair.
+ */
+
+:root {
+  --fw-syn-comment: #6a9955;
+  --fw-syn-string: #a31515;
+  --fw-syn-control: #af00db;
+  --fw-syn-decl: #0000ff;
+  --fw-syn-number: #098658;
+  --fw-syn-func: #795e26;
+  --fw-syn-type: #267f99;
+  --fw-syn-prop: #0070c1;
+  --fw-guide: rgba(0, 0, 0, 0.09);
+  --fw-tree-w: 240px;
+  --fw-code-row: 18px;
+}
+
+:root[data-theme="dark"] {
+  --fw-syn-comment: #6a9955;
+  --fw-syn-string: #ce9178;
+  --fw-syn-control: #c586c0;
+  --fw-syn-decl: #569cd6;
+  --fw-syn-number: #b5cea8;
+  --fw-syn-func: #dcdcaa;
+  --fw-syn-type: #4ec9b0;
+  --fw-syn-prop: #9cdcfe;
+  --fw-guide: rgba(255, 255, 255, 0.08);
+}
+
+.fw-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--main-bg);
+  border-radius: var(--panel-radius, 10px);
+  overflow: hidden;
+}
+
+/* ---------------- header: title + tabs on one row ---------------- */
+.fw-head {
+  flex: 0 0 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fw-head-left {
+  flex: 0 0 calc(var(--fw-tree-w) - 10px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.fw-head-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.fw-icon-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fw-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.fw-icon-btn.is-on {
+  color: var(--text);
+  background: var(--surface);
+}
+
+/* pill tabs */
+.fw-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fw-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.fw-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 6px 0 11px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  max-width: 210px;
+}
+
+.fw-tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.fw-tab.is-active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.fw-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-tab-close {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.fw-tab:hover .fw-tab-close,
+.fw-tab.is-active .fw-tab-close {
+  opacity: 1;
+}
+
+.fw-tab-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.fw-head-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-left: 4px;
+}
+
+/* ---------------- body ---------------- */
+.fw-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.fw-sidebar {
+  flex: 0 0 var(--fw-tree-w);
+  width: var(--fw-tree-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.fw-search {
+  flex: 0 0 auto;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 8px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.fw-search:focus-within {
+  border-color: var(--border-strong);
+}
+
+.fw-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.fw-search input::placeholder {
+  color: var(--muted);
+}
+
+/* ---------------- tree ---------------- */
+.fw-tree-scroll {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  min-height: 0;
+}
+
+.fw-tree-phantom {
+  position: relative;
+  width: 100%;
+}
+
+.fw-tree-row {
+  position: absolute;
+  top: 0;
+  left: 5px;
+  right: 5px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.fw-tree-row:hover {
+  background: var(--surface-hover);
+}
+
+.fw-tree-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.fw-tree-ic {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.fw-tree-ic.is-dir {
+  transition: transform 0.1s ease;
+}
+
+.fw-tree-ic.is-open {
+  transform: rotate(90deg);
+}
+
+.fw-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fw-tree-empty {
+  position: absolute;
+  inset: 24px 12px auto;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.fw-spin {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.2px solid var(--border-strong);
+  border-top-color: var(--muted);
+  animation: fw-spin 0.6s linear infinite;
+}
+
+@keyframes fw-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------- main column ---------------- */
+.fw-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--main-bg);
+}
+
+.fw-crumbs {
+  flex: 0 0 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+}
+
+.fw-crumb-seg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-crumb-seg.is-last {
+  color: var(--text);
+}
+
+.fw-crumb-sep {
+  opacity: 0.6;
+}
+
+.fw-mode {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.fw-mode button {
+  height: 100%;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fw-mode button.is-on {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---------------- code surface ---------------- */
+.fw-code-scroll {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  min-height: 0;
+  font-family: var(--font-mono, "Cascadia Code", "SFMono-Regular", Consolas, monospace);
+  font-size: 12px;
+  line-height: var(--fw-code-row);
+}
+
+.fw-code-phantom {
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+
+.fw-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  height: var(--fw-code-row);
+  width: max-content;
+  min-width: 100%;
+  white-space: pre;
+}
+
+.fw-line:hover {
+  background: var(--surface);
+}
+
+.fw-line.has-cmt {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.fw-line.is-editing {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.fw-gut {
+  flex: 0 0 32px;
+  width: 32px;
+  display: grid;
+  grid-template-columns: 16px 16px;
+  align-items: center;
+  justify-items: center;
+}
+
+.fw-plus,
+.fw-fold {
+  width: 14px;
+  height: 14px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans, sans-serif);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fw-plus {
+  background: var(--accent);
+  color: #fff;
+}
+
+.fw-line:hover .fw-plus,
+.fw-line.is-editing .fw-plus {
+  display: flex;
+}
+
+.fw-fold {
+  display: none;
+  color: var(--muted);
+}
+
+.fw-fold:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.fw-line .fw-gut:has(.fw-fold) .fw-fold {
+  display: flex;
+}
+
+.fw-fold svg {
+  transform: rotate(90deg);
+  transition: transform 0.1s ease;
+}
+
+.fw-fold.is-folded svg {
+  transform: rotate(0deg);
+}
+
+.fw-ln {
+  flex: 0 0 30px;
+  width: 30px;
+  padding-left: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.fw-code {
+  flex: 1;
+  padding-left: 6px;
+  background-image: repeating-linear-gradient(
+    to right,
+    transparent 0 calc(2ch - 1px),
+    var(--fw-guide) calc(2ch - 1px) 2ch
+  );
+  background-repeat: no-repeat;
+  background-size: calc(var(--fw-g, 0) * 2ch) 100%;
+}
+
+.fw-t-comment { color: var(--fw-syn-comment); font-style: italic; }
+.fw-t-string { color: var(--fw-syn-string); }
+.fw-t-control { color: var(--fw-syn-control); }
+.fw-t-decl { color: var(--fw-syn-decl); }
+.fw-t-number { color: var(--fw-syn-number); }
+.fw-t-func { color: var(--fw-syn-func); }
+.fw-t-type { color: var(--fw-syn-type); }
+.fw-t-prop { color: var(--fw-syn-prop); }
+.fw-t-punct { color: var(--text); opacity: 0.85; }
+
+/* inline comment composer, inserted between rows */
+.fw-cmt-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.fw-cmt {
+  margin: 0 16px 0 62px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--panel-surface);
+  overflow: hidden;
+  font-family: var(--font-sans, sans-serif);
+}
+
+.fw-cmt-hd {
+  padding: 4px 9px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fw-cmt-input {
+  display: block;
+  width: 100%;
+  height: 22px;
+  border: 0;
+  outline: 0;
+  resize: none;
+  padding: 2px 9px 3px;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fw-cmt-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 5px 4px;
+}
+
+.fw-cmt-send {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fw-cmt-send:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---------------- rendered views ---------------- */
+.fw-render {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.fw-markdown {
+  padding: 20px 28px 60px;
+  font-size: 13.5px;
+  line-height: 1.72;
+  color: var(--text);
+}
+
+.fw-html {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  min-height: 0;
+  background: var(--main-bg);
+}
+
+.fw-media {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+}
+
+.fw-media img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.fw-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px 28px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.fw-empty strong {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.fw-empty span {
+  font-size: 11.5px;
+  max-width: 300px;
+  line-height: 1.6;
+}
+
+/* ---------------- menus / overlays ---------------- */
+.fw-menu {
+  position: fixed;
+  z-index: 320;
+  min-width: 184px;
+  padding: 5px;
+  border-radius: 8px;
+  background: var(--panel-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.fw-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fw-menu-item:hover {
+  background: var(--surface-hover);
+}
+
+.fw-menu-item.is-disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+.fw-menu-label {
+  flex: 1;
+}
+
+.fw-menu-kbd {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fw-menu-arrow {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fw-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.fw-submenu {
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  margin-left: 3px;
+  min-width: 150px;
+  display: none;
+}
+
+.fw-menu-item.has-sub:hover .fw-submenu {
+  display: block;
+}
+
+.fw-selbar {
+  position: fixed;
+  z-index: 330;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 7px;
+  background: var(--panel-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+}
+
+.fw-selbar button {
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fw-selbar button:hover {
+  background: var(--surface-hover);
+}
+
+.fw-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 7px 13px;
+  border-radius: 6px;
+  background: var(--panel-surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 11.5px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 340;
+}

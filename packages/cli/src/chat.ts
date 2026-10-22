@@ -35,6 +35,7 @@ import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
 import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
+import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { RunSession } from '@duya/client-core';
 import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
@@ -126,6 +127,14 @@ function resolveConnection(options: ChatCommandOptions): ResolvedConnection {
 
 const BRIGHT_CYAN = '\x1b[96m';
 const YELLOW = '\x1b[33m';
+
+/**
+ * How often the attached terminal reads the run ledger for turns another
+ * client starts in the session it is showing. One second is fast enough to
+ * read as "live" against a turn that streams for seconds, and cheap enough to
+ * be a single indexed read; the plan's acceptance is ≤2s.
+ */
+const REMOTE_WATCH_INTERVAL_MS = 1000;
 
 /**
  * Plain-terminal line writer and the three codes `tui-command.ts` needs to
@@ -837,9 +846,57 @@ export async function chatTui(
     });
   };
 
+  /**
+   * This terminal is a viewer as well as a driver: the Desktop can start a
+   * turn in the very session being shown here. The watcher reads the run
+   * ledger for that, follows the durable events of a run it did not start, and
+   * asks for one transcript reload once that run settles.
+   *
+   * Runs this loop started are in `localRunIds` so they are never followed
+   * twice — `runTurn` already renders them.
+   */
+  const localRunIds = new Set<RunId>();
+  let watchedSessionId = sessionId;
+  const remoteWatch = new RemoteSessionWatch({
+    client,
+    sessionId,
+    isPaused: () => busy || sessionTransition || finished,
+    isLocalRun: (runId) => localRunIds.has(runId),
+    onFrame: (frame) => {
+      if (!busy && !sessionTransition && !finished) tui.push(frame);
+    },
+    onNotice: (text) => {
+      if (!finished) tui.printNotice(text);
+    },
+    onRunSettled: async () => {
+      if (finished || busy || sessionTransition || watchedSessionId !== activeSession.id) return;
+      try {
+        tui.replaceTranscript(await loadSessionMessages(client, activeSession.id));
+      } catch (error) {
+        if (!finished) {
+          tui.printError(
+            'Could not refresh the session: '
+            + (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
+    },
+  });
+  /**
+   * Point the watcher at the session this loop is now showing. A switch loads
+   * that session's history, so its ledger is baseline, not news.
+   */
+  function watchSession(next: SessionId): void {
+    watchedSessionId = next;
+    remoteWatch.setSession(next);
+  }
+  let remoteWatchTimer: ReturnType<typeof setInterval> | null = null;
+
   function close(): void {
     if (finished) return;
     finished = true;
+    if (remoteWatchTimer !== null) clearInterval(remoteWatchTimer);
+    remoteWatch.stop();
     queue.close();
     cancellationRequested = true;
     activeStream?.abort();
@@ -894,6 +951,7 @@ export async function chatTui(
     const previousModel = activeSession.model;
     activeSession = selected;
     await resyncEffortForModelChange(previousModel);
+    watchSession(selectedId);
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
@@ -909,6 +967,7 @@ export async function chatTui(
     // is never typed into is a ghost of the same kind as the opening one.
     owned?.own(activeSession.id);
     await resyncEffortForModelChange(previousModel);
+    watchSession(activeSession.id);
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.clearTranscript();
     tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
@@ -928,6 +987,7 @@ export async function chatTui(
     const previousModel = activeSession.model;
     activeSession = adopted;
     await resyncEffortForModelChange(previousModel);
+    watchSession(adopted.id);
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
@@ -967,6 +1027,7 @@ export async function chatTui(
         return 'failed';
       }
       activeRunId = start.runId;
+      localRunIds.add(start.runId);
       let permissionPollInFlight = false;
       let permissionPollErrorReported = false;
       const pollPendingPermissions = async (): Promise<void> => {
@@ -1229,6 +1290,11 @@ export async function chatTui(
   }
   if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();
+  // Start watching after the first paint: the seed read marks the ledger as
+  // seen, so opening a session does not replay everything it already ran.
+  remoteWatchTimer = setInterval(() => {
+    void remoteWatch.poll();
+  }, REMOTE_WATCH_INTERVAL_MS);
   await finishedPromise;
   return 0;
 }

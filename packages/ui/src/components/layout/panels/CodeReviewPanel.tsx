@@ -28,6 +28,8 @@ import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import { useCodeComments } from "@/hooks/use-code-comments";
 import { useTheme } from "@/hooks/useTheme";
 import { CodeViewer } from "./code-review-code-viewer";
+import { ReviewScopePicker, type ReviewScopeKind } from "@/components/code-review/ReviewScopePicker";
+import { ReviewCommitRail } from "@/components/code-review/ReviewCommitRail";
 import {
   getGitLatestTurnReview,
   getGitTurnHistory,
@@ -352,6 +354,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [error, setError] = useState("");
   const [diffError, setDiffError] = useState("");
   const [filter, setFilter] = useState("");
+  const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
+  const [baseLabel, setBaseLabel] = useState("未提交的更改");
   const [layout, setLayout] = useState<DiffLayout>("unified");
   const [wrapped, setWrapped] = useState(false);
   const [foldUnchanged, setFoldUnchanged] = useState(true);
@@ -378,6 +382,18 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   }, [patch]);
 
   const overflowMenuItems: MenuAction[] = [
+    {
+      kind: "action",
+      id: "expandAllFiles",
+      label: "展开所有文件",
+      onSelect: () => setCollapsedFiles(new Set()),
+    },
+    {
+      kind: "action",
+      id: "collapseAllFiles",
+      label: "折叠所有文件",
+      onSelect: () => setCollapsedFiles(new Set(filePatches.map((patch) => patch.path))),
+    },
     {
       kind: "checkbox",
       id: "showWhitespace",
@@ -598,8 +614,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return index >= 0 ? index : 0;
   }, [filePatches, selectedPath]);
   const visiblePatches = useMemo(() => {
-    if (!singleFileMode) return filePatches;
-    return filePatches.slice(selectedPatchIndex, selectedPatchIndex + 1);
+    if (singleFileMode) return filePatches.slice(selectedPatchIndex, selectedPatchIndex + 1);
+    return filePatches;
   }, [filePatches, selectedPatchIndex, singleFileMode]);
 
   const stepPatchFile = useCallback((delta: number) => {
@@ -625,6 +641,16 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     setSelectedPath(filePath);
     scrollToFile(filePath);
   }, [scrollToFile]);
+
+  const toggleFile = useCallback((path: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+    setSelectedPath(path);
+  }, []);
 
   const handleContextMenu = useCallback((path: string, event: React.MouseEvent) => {
     event.preventDefault();
@@ -740,60 +766,27 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   return (
     <div className={`code-review-panel${showFiles ? " has-file-tree" : ""}`}>
       <header className="code-review-toolbar">
-        <div className="code-review-scope">
-          <IconGitCompare size={18} aria-hidden="true" />
-          <select
-            className="code-review-scope-select"
-            value={scope}
-            onChange={(e) => setScope(e.target.value as ReviewScope)}
-            aria-label="审阅范围"
-          >
-            {(Object.keys(SCOPE_LABELS) as ReviewScope[]).map((key) => (
-              <option key={key} value={key}>{SCOPE_LABELS[key]}</option>
-            ))}
-          </select>
-          {scope === "latest-turn" && turns.length > 0 && (
-            <select
-              className="code-review-scope-select"
-              value={selectedTurnId}
-              onChange={(e) => setSelectedTurnId(e.target.value)}
-              aria-label="选择轮次"
-            >
-              {turns.map((turn, index) => (
-                <option key={turn.id} value={turn.id}>
-                  {index === 0
-                    ? `最近一轮 · +${turn.additions} −${turn.removals}`
-                    : `${formatTurnAge(turn.capturedAt)} · +${turn.additions} −${turn.removals} · ${turn.fileCount} 文件`}
-                </option>
-              ))}
-            </select>
-          )}
-          {scope === "commit" && (
-            <div className="code-review-scope-commit-pickers">
-              <select
-                className="code-review-scope-select"
-                value={commitFrom}
-                onChange={(e) => setCommitFrom(e.target.value)}
-                aria-label="起始提交"
-              >
-                {commits.map((c) => (
-                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
-                ))}
-              </select>
-              <span className="code-review-scope-arrow">&rarr;</span>
-              <select
-                className="code-review-scope-select"
-                value={commitTo}
-                onChange={(e) => setCommitTo(e.target.value)}
-                aria-label="目标提交"
-              >
-                {commits.map((c) => (
-                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
+        <ReviewScopePicker
+          workingDirectory={workingDirectory}
+          scope={scope as ReviewScopeKind}
+          baseLabel={baseLabel}
+          scopeLabel={SCOPE_LABELS[scope]}
+          headLabel={review.branch ?? ""}
+          commits={commits}
+          commitFrom={commitFrom}
+          commitTo={commitTo}
+          onApply={(next) => {
+            setBaseLabel(next.baseLabel);
+            if (next.scope === "commit") {
+              setCommitFrom(next.commitFrom);
+              setCommitTo(next.commitTo);
+            }
+            setScope(next.scope as ReviewScope);
+          }}
+        />
+        {review.baseRef && (
+          <span className="code-review-scope-range" title={review.baseRef}>{review.baseRef}</span>
+        )}
         <div className="code-review-scope-switch" role="group" aria-label="视图模式">
           <button
             type="button"
@@ -891,7 +884,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               {viewMode === "preview" ? (
                 <div className="code-review-preview-wrap">
                   {selectedPath ? (
-                    <div className="code-review-file-header">
+                      <div className="code-review-file-header">
                       <div className="code-review-file-identity">
                         {fileLanguageLabel(selectedPath) && (
                           <span className="code-review-lang-badge">{fileLanguageLabel(selectedPath)}</span>
@@ -974,7 +967,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                   ) : diffError ? (
                     <div className="code-review-diff-notice">{diffError}</div>
                   ) : null}
-                  {visiblePatches.length === 0 ? (
+                  {filePatches.length === 0 ? (
                     <div className="code-review-empty">没有可显示的文本差异。</div>
                   ) : (
                     visiblePatches.map((filePatch) => {
@@ -987,7 +980,13 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                           ref={(element) => { fileRefs.current[filePatch.path] = element; }}
                           className={`code-review-file-section${selectedPath === filePatch.path ? " is-selected" : ""}`}
                         >
-                          <div className="code-review-file-header">
+                          <button
+                            type="button"
+                            className="code-review-file-header"
+                            onClick={() => toggleFile(filePatch.path)}
+                            aria-expanded={!collapsedFiles.has(filePatch.path)}
+                          >
+                            <span className="rev-file-chevron">{collapsedFiles.has(filePatch.path) ? "▸" : "▾"}</span>
                             <div className="code-review-file-identity">
                               {langLabel && <span className="code-review-lang-badge">{langLabel}</span>}
                               <span title={filePatch.path}>{filePatch.path}</span>
@@ -997,8 +996,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                               <span className="is-add">+{fileStat.additions}</span>
                               <span className="is-remove">−{fileStat.removals}</span>
                             </span>
-                          </div>
-                          {filePatch.status === "binary" ? (
+                          </button>
+                          {collapsedFiles.has(filePatch.path) ? null : filePatch.status === "binary" ? (
                             <div className="code-review-empty">二进制文件，无法以内联文本显示。</div>
                           ) : (
                             <DiffContents hunks={filePatch.hunks} layout={layout} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
@@ -1067,6 +1066,16 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                   })
                 )}
               </div>
+              <ReviewCommitRail
+                scope={scope as ReviewScopeKind}
+                commits={commits}
+                turns={turns}
+                selectedTurnId={selectedTurnId}
+                onPickAll={() => setScope("uncommitted")}
+                onPickUncommitted={() => setScope("uncommitted")}
+                onPickCommit={(hash) => { setCommitTo(hash); setScope("commit"); }}
+                onPickTurn={(turnId) => { setSelectedTurnId(turnId); setScope("latest-turn"); }}
+              />
             </aside>
           )}
         </div>
