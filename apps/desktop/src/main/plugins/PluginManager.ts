@@ -190,28 +190,25 @@ export class PluginManager {
    */
   private hydrateViewItem(entry: PluginRegistryEntry): PluginViewItem {
     const catalogEntry = getPluginCatalogEntry(entry.id);
+    const installPath = entry.installPath || resolveInstalledSymlink(entry.id) || '';
     let manifest: PluginManifest | undefined;
-    if (entry.installPath) {
+    if (installPath) {
       try {
-        manifest = readPluginManifest(entry.installPath);
+        manifest = readPluginManifest(installPath);
       } catch {
         manifest = undefined;
       }
     }
     manifest ??= catalogEntry?.manifest;
 
-    const name = catalogEntry?.name ?? entry.name ?? entry.id;
-    const version = catalogEntry?.version ?? entry.version ?? '0.1.0';
+    const name = manifest?.name ?? catalogEntry?.name ?? entry.name ?? entry.id;
+    const version = manifest?.version ?? catalogEntry?.version ?? entry.version ?? '0.1.0';
     const source = catalogEntry?.source ?? entry.source ?? 'local';
     const trustLevel = catalogEntry?.trustLevel ?? entry.trustLevel ?? 'local';
     const scope = entry.scope ?? 'user';
     const marketplace = entry.marketplace || catalogEntry?.source || 'official';
     const autoUpdate = entry.autoUpdate ?? false;
 
-    const installPath =
-      entry.installPath ||
-      resolveInstalledSymlink(entry.id) ||
-      '';
     const dataPath = entry.dataPath || path.join(this.store.getPaths().dataDir, entry.id);
 
     const grantedPermissions =

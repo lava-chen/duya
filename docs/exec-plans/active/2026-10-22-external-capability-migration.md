@@ -2,7 +2,7 @@
 
 状态：active · 负责人：Codex 会话 · 更新：2026-10-22
 分支：`codex/browser-plugin-migration` · worktree：`/workspace/duya-browser-migration` · base：`ebd76d4878add41aa3e7cdac65a5884eee6c93a1`
-Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`75b1ff2`
+Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`5057fd5`
 
 ## 目标与边界
 
@@ -43,6 +43,10 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 
 ## 发现与决策
 
+- 用户指定以 GPT-6 Luna / high 子代理并行完成迁移。分工：`canvas_marketplace` 迁原编辑器与模型；`browser_marketplace` 迁自有浏览器桥接服务；`computer_marketplace` 处理驱动与运行时；`duya_canvas_detach` 准备旧 Canvas 依赖闭包删除；`duya_app_host` 修复通用访客通信和 App 导航；`agent_app_builder` 负责 Agent 建 App 模板及插件自有数据视图后端。每个实现使用独立 worktree，主代理审阅后集成到上述两个 PR 分支。
+- 2026-10-22 同步 `origin/master` 到 `96dadf4d`，以 merge commit `2fe3a6bf` 合入迁移分支；原主线变更为目录/文档整理。已撤回的 Computer Use Host 桥接测试仅保存在本地具名 stash，不参与当前实现或验收。
+- 真实 Electron 验收发现本地插件 registry 只持久化启停信息，`hydrateViewItem` 却在解析安装软链接之前尝试读取 manifest，导致 App 声明丢失、授权前直接返回 `grant_denied`。当前切片改为先解析安装路径再读取已安装 manifest，并以安装版本显示元数据。
+- Electron 44 的独立探针确认 webview 内 `window.parent === window`；既有 App 使用的 iframe 式 `parent.postMessage` 不能抵达嵌入窗口。通用宿主正在替换此传输，Main IPC/MCP 验收不得冒充 App 页面已可用。
 - DUYA 原 Plugin App 的 bind/invoke/revoke 与活跃聊天 run 绑定，五分钟过期，不适合长期编辑的 App。新通用 standalone 模式只持有插件自己声明的 MCP 服务和显式 grant，并按插件启停/更新撤销与重开；Canvas 不得有宿主特例。
 - Plugin MCP 经 `mcp/servers.json` → plugin capability discovery → `buildMCPCandidates` → Host MCP apply → worker registry 接入。Plugin source 有独立身份；旧 BrowserTool 是 Host builtin，两条路能并存。
 - Marketplace 已有 `playwright` 插件，提供独立 Playwright 浏览器上下文。本次另新增 `browser` CUA 插件，不替换 Playwright。Browser CUA 服务是无外部依赖 stdio MCP，server 源码与声明留在 Marketplace。
@@ -76,9 +80,11 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 | Marketplace `1985e42`；Canvas standalone Mini App 与 MCP store | Linux x64, Node 24 | `node --check plugins/conductor-canvas/server.cjs`；内联页面脚本 `vm.Script` 语法检查；`git diff --check` | 0；只证明语法与 diff，不证明桌面功能 | 当前会话命令输出 |
 | DUYA 当前 dirty worktree；通用 standalone App 宿主 | Linux x64, Node 24 | `npm run build:electron`、`npx vite build`、`npm run architecture:check` | 0 / 0 / 0；分别证明 Main/Preload 构建、UI 生产构建、无新增架构门禁违规；未运行桌面安装流程 | 当前会话命令输出 |
 | DUYA 当前 dirty worktree；完整打包前置 | Linux x64, Node 24 | `npm run electron:build` | 1；下载 Electron binary 失败，未进入应用打包。桌面真实验收受阻 | 当前会话命令输出 |
+| DUYA `2fe3a6bf` + 本地 manifest hydration 修复 | Linux x64, Node 24.19.0, Electron 44.2.0, Xvfb `:99` | `ELECTRON_OVERRIDE_DIST_PATH=... npm --ignore-scripts run electron:build`；已另行验证 Electron 下 better-sqlite3 可加载 | 0；完整桌面构建通过。缺失的已锁定 `@types/picomatch` 仅安装到 worktree 自有依赖 overlay；未穿过共享 node_modules 安装 | 当前会话命令输出 |
+| 同上；`PluginManager{,.listInstalled.test}.ts` | Linux x64, Node 24.19.0 | 定向 Vitest，真实 Electron 隔离 namespace 下 installLocal → App open → bind → MCP invoke | 3 tests passed；本地插件 App 声明可见；模拟一次授权后绑定 31 个工具，`canvas_manage list` 返回插件空数据。尚未验证 App 页面访客通信 | 当前会话命令输出 |
 
 ## 接续 / 结果
 
 已实现：Browser 官方市场插件 CUA REPL；Computer Use 市场插件通过独立 MCP 适配器启动用户配置的原生 Cua Driver，插件限定可见的桌面工具，不再声明 DUYA Host capability；Canvas 市场插件拥有独立 MCP/Mini App、显式旧库导出/导入和本地资产存储；App Builder 插件提供 Agent 可复制的独立 App 模板。DUYA 通用 standalone App 宿主包含独立 MCP 会话、grant 审批、版本失效和全窗口容器。原 Canvas 的完整界面、旧资产、动态组件和数据视图尚未搬完；Computer Use 还依赖外部驱动安装，旧 UIA/审计/撤销能力未对齐。三个旧模块都保留。迁移分支撤回了新增的 Computer Use Host 专用桥接，先前 Canvas Host 专用桥接也已撤回；历史测试数字不得作为当前代码通过的证据。
 
-下一步：完成 Canvas 原功能与资产迁移，把 Browser daemon 的专用逻辑改成插件自有服务并为 IAB 定义通用 Host 接口，安装并验收 Computer Use 原生驱动的跨平台权限与旧能力对齐；拿到 Electron binary 后在实际桌面进程中安装三个目标 Marketplace 插件和 App Builder 示例，验证权限、重载、App 与 agent 工具调用，再逐项切换并删除旧实现。`electron:build` 曾因 binary 下载失败，不能以 Main/UI 分别构建通过替代桌面验收。
+下一步：集成通用 App 访客通信修复并验证真实页面；继续迁移 Canvas 原 renderer/domain 与数据视图、资产，把 Browser daemon 专用逻辑移入插件并为 IAB 定义通用 Host 接口，安装验收 Computer Use 原生驱动；在真实桌面验证三个插件和 App Builder 的权限、重载及 Agent 调用，再逐项切换和删除旧实现。Electron binary 下载与完整构建阻塞已解除。
