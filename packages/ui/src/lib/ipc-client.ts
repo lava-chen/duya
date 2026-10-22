@@ -12,7 +12,7 @@ import type { ContentBlock } from '@/types/message'
 import type { SendMessageCardMeta } from '@/types/message'
 import type { MemoryEntry } from '@/types'
 import type { UsageSummary } from '@/types/usage'
-import type { HostMessageItem, HostSessionRecord } from '@duya/agent-protocol'
+import type { HostMessageItem, HostSessionRecord, HostWorkspaceBinding } from '@duya/agent-protocol'
 import { peekUiServices } from '@/services'
 
 // Types matching the store's expected format (camelCase)
@@ -594,16 +594,33 @@ export async function createThreadIPC(data: {
   agentName?: string
   /** Host-backed source whose registered workspace binding may be reused. */
   sourceSessionId?: string
+  /**
+   * A local directory to register as the session's workspace.
+   *
+   * The surface names a DIRECTORY and the Host resolves it into a workspace
+   * BINDING; the binding is what the session carries. The browser never names
+   * the path the worker runs in.
+   */
+  registerDirectory?: string
 }): Promise<Thread | null> {
   const services = peekUiServices()
   if (services) {
-    if (data.sourceSessionId === undefined) {
-      throw new Error('workspace_binding_required: Select an existing Host-registered workspace session before creating a Web chat.')
+    // Two ways to a workspace binding, and only two. A surface either
+    // registers a directory of its own, or reuses the binding an existing
+    // Host session already holds. Anything else would be a session with no
+    // workspace, which the worker cannot run in.
+    let workspace: HostWorkspaceBinding | undefined
+    if (data.registerDirectory !== undefined) {
+      if (services.registerWorkspace === undefined) {
+        throw new Error('workspace_registration_unavailable: This surface cannot register a local directory.')
+      }
+      workspace = await services.registerWorkspace(data.registerDirectory)
+    } else if (data.sourceSessionId !== undefined) {
+      const sourceSession = await services.sessions.get(data.sourceSessionId as HostSessionRecord['id'])
+      workspace = sourceSession?.workspace
     }
-    const sourceSession = await services.sessions.get(data.sourceSessionId as HostSessionRecord['id'])
-    const workspace = sourceSession?.workspace
-    if (workspace?.state !== 'bound') {
-      throw new Error('workspace_binding_required: The selected Host session has no registered workspace binding.')
+    if (workspace === undefined || workspace.state !== 'bound') {
+      throw new Error('workspace_binding_required: The session has no registered workspace binding.')
     }
     const session = await services.sessions.create({
       id: data.id as HostSessionRecord['id'],

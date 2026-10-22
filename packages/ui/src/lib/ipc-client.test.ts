@@ -54,6 +54,7 @@ function servicesWith(sessions: readonly HostSessionRecord[]): UiServices {
       bots: false,
       automation: false,
       workflows: false,
+      turnConfiguration: true,
     },
     sessions: {
       list: async () => ({ sessions: sessions.map((session) => ({ session, timelineCount: 0 })), nextCursor: null }),
