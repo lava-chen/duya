@@ -14,7 +14,7 @@ import type { HostMessageItem, HostSessionRecord } from '@duya/agent-protocol';
 import { clearUiServices, configureUiServices, type UiServices } from '@/services';
 import { mapIpcMessagesToStore } from '@/stores/conversation-store';
 import { mergeRunSessionRows } from './run-session-view';
-import { getProjectGroupsIPC, getThreadIPC, listProvidersIPC, listThreadsIPC } from './ipc-client';
+import { getActiveProviderIPC, getProjectGroupsIPC, getThreadIPC, listProvidersIPC, listThreadsIPC } from './ipc-client';
 
 const SESSION_ID = 'session-browser-1' as HostSessionRecord['id'];
 
@@ -54,6 +54,7 @@ function servicesWith(sessions: readonly HostSessionRecord[]): UiServices {
       bots: false,
       automation: false,
       workflows: false,
+      turnConfiguration: true,
     },
     sessions: {
       list: async () => ({ sessions: sessions.map((session) => ({ session, timelineCount: 0 })), nextCursor: null }),
@@ -220,6 +221,62 @@ describe('ipc-client on a host that is not Electron', () => {
     // No preload: the browser surface has no provider configuration, and the
     // Host owns the model a run uses.
     await expect(listProvidersIPC()).resolves.toEqual([]);
+  });
+
+  it('shows the Host provider roster the browser model picker reads', async () => {
+    // The roster the picker shows has to be the roster the Host adjudicates a
+    // turn's model against. A surface that kept a copy of its own could offer
+    // a model the Host would refuse.
+    const base = servicesWith([]);
+    configureUiServices({
+      ...base,
+      providers: {
+        catalog: async () => ({
+          providers: [
+            {
+              providerId: 'openai',
+              name: 'OpenAI',
+              providerType: 'openai',
+              baseUrl: 'https://api.openai.com/v1',
+              hasApiKey: true,
+              defaultModel: 'gpt-5',
+              models: [{ modelId: 'gpt-5', displayName: 'GPT-5' }],
+            },
+          ],
+          activeProviderId: 'openai',
+          activeModel: 'gpt-5',
+          configRoot: '/tmp/duya-provider-catalog-test',
+        }),
+      },
+    });
+
+    const providers = await listProvidersIPC();
+    const active = await getActiveProviderIPC();
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: 'openai',
+      name: 'OpenAI',
+      providerType: 'openai',
+      hasApiKey: true,
+      isDefault: true,
+      defaultModel: 'gpt-5',
+    });
+    // The model list travels where the picker reads it from.
+    expect(JSON.parse(providers[0]!.options)).toMatchObject({ enabled_models: ['gpt-5'] });
+    expect(active?.id).toBe('openai');
+    // The catalog says whether a provider HAS a key and never carries one, so
+    // the row must not invent one either.
+    expect(providers[0]!.apiKey).toBe('');
+  });
+
+  it('answers with no roster when the Host has no provider catalog', async () => {
+    // "No roster" is a thing a screen can show; a failed read is not.
+    const base = servicesWith([]);
+    configureUiServices({ ...base, providers: { catalog: async () => null } });
+
+    await expect(listProvidersIPC()).resolves.toEqual([]);
+    await expect(getActiveProviderIPC()).resolves.toBeNull();
   });
 
   it('lists the sessions the seam reports', async () => {

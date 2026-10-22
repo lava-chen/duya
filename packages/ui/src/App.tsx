@@ -687,12 +687,23 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         runAttachmentGateRef.current.invalidateRestores();
         setIsStreaming(true);
         const sendLease = selectionLeaseRef.current;
+        // The turn's CONFIGURATION travels with the request, not just its text.
+        // The Host adjudicates the permission mode, the agent profile and the
+        // declared modes the same way it does for the legacy path, so a turn
+        // that names them runs under the rules the user picked. Leaving them
+        // out would run the turn under the Host's defaults and say nothing.
+        const hostPermissionMode = permissionMode === 'bypass' ? 'bypassPermissions'
+          : permissionMode === 'ask' ? 'default'
+            : 'acceptEdits';
         void uiServices.runs.start({
           sessionId: activeThreadId,
           prompt: plainContent,
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
           ...(thread?.providerId ? { providerId: thread.providerId } : {}),
+          ...(permissionMode ? { permissionMode: hostPermissionMode } : {}),
+          ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+          ...(mode ? { modes: [mode] } : {}),
         }).then((result) => {
           if (selectionLeaseRef.current !== sendLease || selectedThreadRef.current !== activeThreadId) return;
           if (!result.accepted) {
@@ -1095,7 +1106,7 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
   );
 
   const renderView = () => {
-    if (uiServices?.platform === 'web') {
+    if (uiServices) {
       const capabilityByView: Partial<Record<string, keyof UiServices['capabilities']>> = {
         skills: 'extensions',
         automation: 'automation',
@@ -1109,7 +1120,12 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
       if (requiredCapability && !uiServices.capabilities[requiredCapability]) {
         return <CapabilityUnavailable title="此功能暂不可用" />;
       }
-      if (!activeThreadId && !newChatSourceSessionId && (currentView === 'chat' || currentView === 'home' || isNewChatDrafting)) {
+      // A surface that can register a directory may always start a
+      // conversation. One that cannot needs a session whose workspace the Host
+      // has already bound — the worker still needs somewhere to run.
+      const canStartConversation = uiServices.registerWorkspace !== undefined;
+      if (!canStartConversation && !activeThreadId && !newChatSourceSessionId &&
+          (currentView === 'chat' || currentView === 'home' || isNewChatDrafting)) {
         return <CapabilityUnavailable title="尚无已授权的工作区会话" />;
       }
       if (currentView === 'chat' && !uiServices.capabilities.bots && resolveChatMode(activeThreadId) !== 'workspace') {
@@ -1120,7 +1136,11 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
     // Lazy new-chat composer: no backing thread yet. Shown before the user
     // sends anything, so an unsent draft never appears in the sidebar.
     if (isNewChatDrafting) {
-      return <NewChatView onSendMessage={handleSendMessage} workspaceSelectionEnabled={uiServices?.capabilities.localFileAccess !== false} />;
+      // The folder picker needs a surface that can turn a directory into a
+      // workspace binding. A Host-backed surface that can register one may
+      // offer it; one that cannot would collect a path it could not use.
+      const canPickWorkspace = uiServices === null || uiServices.registerWorkspace !== undefined;
+      return <NewChatView onSendMessage={handleSendMessage} workspaceSelectionEnabled={canPickWorkspace} />;
     }
 
     if (shouldRenderChat) {
@@ -1172,12 +1192,15 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
               hostSendError={hostSendError}
               hostPermission={hostPermission}
               onHostPermissionResponse={respondToHostPermission}
-              allowPermissionModeChange={uiServices?.platform !== 'web'}
+              allowPermissionModeChange={uiServices?.capabilities.turnConfiguration !== false}
               hasQueuedMessages={hasQueuedMessages(activeThreadId)}
-              onLivePermissionChange={uiServices?.platform === 'web' ? undefined : (mode) => {
+              onLivePermissionChange={uiServices === null ? (mode) => {
+                // The legacy path persists the mode on the session row through
+                // the Electron channel. A Host-backed surface carries the mode
+                // with the TURN instead, so there is nothing to persist here.
                 const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
                 void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
-              }}
+              } : undefined}
             />
           )}
           {currentView === 'skills' && <SkillsView />}

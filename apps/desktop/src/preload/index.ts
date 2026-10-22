@@ -72,6 +72,85 @@ const duyaBackdropArg = process.argv.find((a) => a.startsWith('--duya-backdrop='
 export const windowBackdrop: '' | 'mica' | 'vibrancy' =
   (duyaBackdropArg?.split('=')[1] as '' | 'mica' | 'vibrancy') ?? '';
 
+// ── Detached panel windows ────────────────────────────────────────────────
+//
+// A side panel can leave the column tree and become its own OS window. The
+// main process owns that window; this bridge exposes the `panel-window:*`
+// channels and the identity of the pane THIS window hosts.
+//
+// The shapes below MIRROR the main-process ones — `PanelWindowEvent` from
+// `apps/desktop/src/main/core/panel-window-manager.ts`, the result
+// envelopes from `apps/desktop/src/main/ipc/panel-window-handlers.ts`. They
+// are mirrored rather than imported on purpose: the preload is a separate
+// bundle, and the two sides of a contextBridge are allowed to drift only as
+// far as the channel contract test can see.
+
+/** Which pane this window hosts. `null` in the main window. */
+export interface PanelWindowContext {
+  paneId: string | null
+  pageId: string | null
+}
+
+export interface PanelWindowOpenResult {
+  ok: boolean
+  paneId?: string
+  windowId?: number
+  alreadyOpen?: boolean
+  error?: string
+}
+
+export interface PanelWindowStateResult {
+  ok: boolean
+  paneId?: string
+  detached?: boolean
+  alwaysOnTop?: boolean
+  error?: string
+}
+
+export interface PanelWindowActionResult {
+  ok: boolean
+  paneId?: string
+  alwaysOnTop?: boolean
+  error?: string
+}
+
+export type PanelWindowEvent =
+  | { type: 'opened'; paneId: string; windowId: number }
+  | { type: 'returned'; paneId: string; reason: 'native-close' | 'requested' }
+  | { type: 'always-on-top-changed'; paneId: string; alwaysOnTop: boolean }
+
+/** Value of a `--name=value` renderer argument, or null. */
+function readRendererArg(prefix: string): string | null {
+  const arg = process.argv.find((a) => a.startsWith(prefix));
+  if (!arg) return null;
+  const value = arg.slice(prefix.length);
+  return value.length > 0 ? value : null
+}
+
+/** Value of a query parameter of this window's URL, or null. */
+function readLocationParam(name: string): string | null {
+  try {
+    const value = new URLSearchParams(window.location.search).get(name);
+    return value && value.length > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The pane this window hosts, or `null` in the main window.
+ *
+ * The main process passes the pane id twice: as a renderer argument
+ * (`--duya-panel-id=`) and as a URL query parameter (`?duyaPanel=`). The
+ * argument is read first because it does not depend on how the renderer
+ * entry point treats the URL; the query parameter is the fallback and the
+ * one a human can read in a bug report.
+ */
+export const panelWindowContext: PanelWindowContext = {
+  paneId: readRendererArg('--duya-panel-id=') ?? readLocationParam('duyaPanel'),
+  pageId: readRendererArg('--duya-panel-page=') ?? readLocationParam('duyaPanelPage'),
+}
+
 // Preload script initialized
 
 export interface AgentAPI {
@@ -1263,6 +1342,25 @@ export interface ElectronAPI {
     zoom: (action: 'in' | 'out' | 'reset') => Promise<void>
     toggleFullscreen: () => Promise<void>
   }
+  /** Detached panel windows — a side panel in its own OS window. */
+  panelWindow: {
+    /** The pane THIS window hosts; `null` in the main window. */
+    context: PanelWindowContext
+    /** Detach one pane into its own OS window (main window only). */
+    open: (paneId: string, pageId: string, title?: string) => Promise<PanelWindowOpenResult>
+    /**
+     * Return one pane to the main window. Without an argument the pane this
+     * window hosts is returned, which is what the detached window's own
+     * "open in main window" button wants.
+     */
+    close: (paneId?: string) => Promise<PanelWindowActionResult>
+    /** Pin (or unpin) the detached window of one pane. */
+    setAlwaysOnTop: (paneId: string, alwaysOnTop: boolean) => Promise<PanelWindowActionResult>
+    /** Is this pane detached, and is its window pinned? */
+    getState: (paneId: string) => Promise<PanelWindowStateResult>
+    /** Listen for detached-panel events from the main process. */
+    onEvent: (callback: (event: PanelWindowEvent) => void) => () => void
+  }
   agent: AgentAPI
   projects: {
     getRecentFolders: () => Promise<string[]>
@@ -2095,6 +2193,29 @@ const electronAPI: ElectronAPI = {
     editCommand: (action) => ipcRenderer.invoke('app-chrome:edit', action),
     zoom: (action) => ipcRenderer.invoke('app-chrome:zoom', action),
     toggleFullscreen: () => ipcRenderer.invoke('app-chrome:toggle-fullscreen'),
+  },
+  panelWindow: {
+    context: panelWindowContext,
+    open: (paneId: string, pageId: string, title?: string) =>
+      ipcRenderer.invoke('panel-window:open', { paneId, pageId, title }) as Promise<PanelWindowOpenResult>,
+    close: (paneId?: string) => {
+      const target = paneId ?? panelWindowContext.paneId
+      if (!target) {
+        return Promise.resolve({ ok: false, error: 'no panel context' } as PanelWindowActionResult)
+      }
+      return ipcRenderer.invoke('panel-window:close', { paneId: target }) as Promise<PanelWindowActionResult>
+    },
+    setAlwaysOnTop: (paneId: string, alwaysOnTop: boolean) =>
+      ipcRenderer.invoke('panel-window:set-always-on-top', { paneId, alwaysOnTop }) as Promise<PanelWindowActionResult>,
+    getState: (paneId: string) =>
+      ipcRenderer.invoke('panel-window:get-state', { paneId }) as Promise<PanelWindowStateResult>,
+    onEvent: (callback: (event: PanelWindowEvent) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: PanelWindowEvent) => callback(data)
+      ipcRenderer.on('panel-window:event', handler)
+      return () => {
+        ipcRenderer.removeListener('panel-window:event', handler)
+      }
+    },
   },
   agent: {
     // Plan 583 ISS-24: `streamChat` / `interrupt` invoked `agent:stream` and

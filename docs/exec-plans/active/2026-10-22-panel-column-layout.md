@@ -26,10 +26,10 @@ base：96dadf4d · owner：mavis
 
 | 切片 | 分支 / worktree | 独占路径 | 依赖 |
 | --- | --- | --- | --- |
-| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
+| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
 | **B 脱窗（Electron 侧）** | `codex/panel-layout-detach` / `panel-layout-detach` | `apps/desktop/src/main/**`；`apps/desktop/src/preload/**` | 本计划（IPC 契约与 A 的数据模型解耦，只用字符串参数） |
-| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
-| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/usage/**`；`packages/ui/src/styles/composer-panels.css` | 与 A 无冲突，可并行 |
+| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；新增 `packages/ui/src/components/layout/PaneDragHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
+| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css`；`packages/ui/src/styles/globals.css`（仅新增分桶调色板变量） | 与 A 无冲突，可并行 |
 
 集成顺序：**A → C**；B、D 独立，可各自先合。
 
@@ -77,12 +77,12 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 ## 进度
 
 - [x] 调研 Claude Desktop 布局模型（AX 树 + 截图），确定列树结构与归位规则
-- [x] 写本计划
+- [x] 写本计划（PR #351）
 - [x] A：列树渲染 + 归位规则（子 agent）· 分支 `codex/panel-layout-columns` · SHA `21b764e9`
 - [x] A：方向重做为面板卡片墙 + 窗口外壳两轮布局 · 同分支 · SHA `a256e982` / `0d89b57f`
-- [ ] B：脱窗 Electron 侧（子 agent）
-- [ ] C：拖拽换位（第二波）
-- [ ] D：用量浮层对齐（第二波）
+- [x] B：脱窗 Electron 侧（子 agent）—— 已实现并验证（PR #353）；分支 `codex/panel-layout-detach`
+- [ ] D：用量浮层（分段色条 + 分桶明细）（子 agent 进行中 · `codex/panel-layout-usage`）
+- [ ] C：拖拽换位（第二波，依赖 A 落地）
 
 ## 发现与决策
 
@@ -99,7 +99,19 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **duya 有 Claude 没有的东西，要保留**：面板级尺寸约束（`minWidth`/`widthRatio`/`maxWidthRatio`）与快捷键（`Ctrl+\`` / `Ctrl+T` / `Ctrl+Shift+G` / `Ctrl+P` / `Ctrl+Alt+S`）。列宽计算要继续受聊天列最小宽度保护（现有 `MIN_CHAT_WIDTH` / `MAX_PANEL_RATIO`）。
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
+- **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
+- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
+- **CI 只对 base=master 的 PR 触发**（`.github/workflows/test.yml:19-20` 是 `pull_request: branches: [master]`）。切片 A/B/D 的 PR 因此一律 base=master，计划文件随之进入各 PR（单独的"计划 PR"随之关闭）。堆叠到非默认分支会拿不到"必需检查通过"的证据。
+- **`ResizeHandle.tsx` 归切片 A 而不是 C**：列内堆叠需要纵向分隔条，而现有实现只有横向（`ResizeHandle.tsx:6` 的 `side: "left" | "right"`、`:143` 写死 `aria-orientation="vertical"`）。C 不碰它，改为新建 `PaneDragHandle.tsx`。
+- **分隔条命名沿用现有无障碍基础**：`ResizeHandle.tsx` 已有 `role="separator"` / `aria-orientation` / `aria-label` / `aria-valuenow|min|max` / 键盘方向键步进 / Home / End / Enter 重置 / 双击重置（`:104-168`）。新列树沿用这一套，`aria-label` 按 `调整 <左侧所有 pane> 和 <右侧所有 pane> 的大小`（纵向则是「上方 / 下方」）命名。
+- **B 切片：脱窗窗口加载同一个 renderer，只靠入口参数区分身份**。没有为脱窗复制一套面板实现——脱窗窗口用同一份 `dist/index.html`、同一套 preload，只多带 `--duya-panel-id=` / `--duya-panel-page=`（preload 读得到）和 `?duyaPanel=` / `?duyaPanelPage=`（人可读、便于排障）两组入口参数。复制一套面板实现等于复制一份面板状态机，和「主窗持有布局真值」直接冲突。
+- **B 切片：布局真值留在主窗，脱窗窗口只发意图**。列 / 面板顺序 / 列宽全在主窗 renderer；脱窗窗口只通过 `panel-window:*` 通道把「收回 / 置顶」等意图发回主进程。原生 X 不销毁面板实例——主窗的列树里那个 pane 一直在，只是 host 从 `detached` 变回 `docked`，所以「关掉脱窗 = 面板状态不丢」是天然成立的。
+- **B 切片：原生 X 在主进程里被翻译成「收回主窗」**。做法是脱窗的 `close` 事件里 `preventDefault()` 拒绝这次关闭，再由主进程自己关一次；第二次关闭被推迟一个 tick（`setImmediate`），因为在 `close` 事件里再调 `close()` 是重入的。另外 `before-quit` 会置位一个 quitting 标志——否则「关窗 = 收回」会把应用退出也一起拦下来。
+- **B 切片：置顶状态归主进程持久化**（`{userData}/panel-window-state.json`，原子写）。理由是生命周期：脱窗随时可能被关掉，偏好只存在那个窗口里就会跟着一起没；主进程比任何脱窗活得久。重新脱窗时按 paneId 恢复。实测第二次脱窗时原生窗口直接是 `alwaysOnTop=true`。
+- **B 切片：脱窗窗口的 IPC 权限比主窗窄**。标准 `assertTrustedSender` 会直接拒绝一切辅助窗口（`unknown_window`），所以这里另写一套更严的判定：调用方按 webContents id 认领身份（主窗 or 本模块自己开的脱窗），脱窗只能操作**自己那个 pane**，且必须来自该窗口自己的顶层 frame（webview guest 的 routingId 不同）。否则一个飘在外的面板就能改别人的面板。
+- **B 切片：新增通道不需要登记 IPC 普查**。`architecture:check` 里的 `ipc-channel-census.mjs` 查的是 **worker ↔ Main** 的请求/响应通道，不是 renderer ↔ Main；renderer 侧的通道由 `ipc-channel-contract.test.ts` / `ipc-contract.test.ts` 守（preload 调用的每个通道必须有 handler）。本切片四个通道都注册了 handler，两条测试都过，因此没有新增门禁登记项。
+- **B 切片：脱窗窗口的原生标题栏要钉住面板名**。renderer 会写 `document.title`，默认会把原生标题栏覆盖成 app 名；用 `page-title-updated` + `preventDefault()` 把标题钉成面板名。脱窗窗口刻意不设 `titleBarStyle: 'hidden'`——移动 / 展开 / 关闭让位给原生控件，这是对标 Claude 的行为。
 
 ### 切片 A 的取舍（子 agent 记录）
 
@@ -174,6 +186,7 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | --- | --- | --- | --- | --- |
 | 96dadf4d / 仅 3 个未跟踪文件 | Windows 11 / Node 主检出 | `git worktree add .claude/worktrees/panel-layout-plan -b codex/panel-layout-plan origin/master` | 0 | worktree 列表含 5 项 |
 | 96dadf4d | 同上 | Claude Desktop 布局归位实测三轮 | 行为已记录 | 见「发现与决策」 |
+<<<<<<< HEAD
 | 275dab09 / clean（切片 A 基线） | Windows 11 / Node 24.16 / worktree `panel-layout-columns` | `npx vitest run packages/ui/src/components/layout` | 1 | 5 个 suite 因 `@duya/ai` 的 dist 未构建而无法解析（`Failed to resolve entry for package "@duya/ai"`）——**worktree 环境缺产物**，非用例失败 |
 | 275dab09 / clean（切片 A 基线） | 同上 | `npm run test:e2e:ui-states` | 1 | 4 个用例：3 过 1 失败。失败文件 `e2e/ui-states/ui-states.spec.ts:376`，用例「the theme switch repaints the shell in both themes and persists both」，错误签名 `could not get an unobstructed click on the theme toggle … a modal overlay (div.fixed.inset-0.z-50) still covers the shell after 15000ms; on-screen text: DUYA` |
 | 21b764e9 / clean | 同上 | `npm run build:packages` | 0 | 22 个包构建完成，补上 worktree 缺失的 dist（上面 5 个 suite 因此转绿） |
@@ -225,6 +238,14 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | 改动前面板卡片 vs 画布 | 暗色 rgb(30,30,30) / rgb(30,30,30)、亮色 255 / 255 —— **完全相同**，用户看到的浅色来自参考产品而非本构建 |
 | 抬亮后卡片 | `.panel-wall-cell` 计算 `--main-bg: #232323`、背景 rgb(35,35,35)；`rgb(35)` 与画布 `rgb(30)` 差 5 级，与参考图差值一致 |
 | 抬亮后内缩环 | 卡片外 8px 环取样 x=1052 处 rgb(30,30,30) —— 与聊天画布齐平，未跟随抬起 |
+| B 切片 `e028447d` / 仅本切片 9 个文件 + 计划文件 | Windows 11 / Node 20 / worktree `panel-layout-detach` | `npx vitest run apps/desktop/src/main` | 0 | 296 文件通过 / 1 跳过，3564 用例通过 / 11 跳过（含新增 31 例：窗口生命周期 18 + IPC 契约 13） |
+| B 切片 `e028447d` | 同上 | `npm run architecture:check` | 0 | 2792 条全部落在 baseline，无新增违规 |
+| B 切片 `e028447d` | 同上 | `npm run typecheck:electron:prepared` | 0 | no new type errors（231 个既有错误 / 111 个 key） |
+| B 切片 `e028447d` | 同上 | `npx tsc --noEmit --project apps/desktop/tsconfig.preload.json` | 0 | preload 无类型错误（该 project 不在任何 npm 脚本里，手工跑） |
+| B 切片 `e028447d` | 同上 | `npm run typecheck:all` | 0 | 全量类型门禁通过（含 electron / evals 两道 ratchet） |
+| **基线** 275dab09（同 base，未改代码） | 同上 | `npm run test:e2e:ipc` | 0 | 48 passed / 2 skipped / 0 failed（8.4m） |
+| B 切片 `e028447d` | 同上 | `npm run test:e2e:ipc` | 0 | 48 passed / 2 skipped / 0 failed（8.3m）——与基线逐文件 / 逐用例一致，无新增失败 |
+| B 切片 `e028447d` | 同上 | `npm run electron:build` + 真实 Electron 脚本驱动 | 0 | 见下「脱窗实测」 |
 
 ## 接续 / 结果
 
@@ -240,8 +261,9 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui/src/components/layout packages/ui/src/components/chat` 0 / 691 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`build` 0、`test:e2e:ui-states` 0 / 4 例；第三轮 `typecheck:all` 0、`architecture:check` 0、`vitest packages/ui` 0 / 2200 例）。**实机证据**：用 CDP 抓了真实 Electron 的渲染页（`docs-local/research/panel-wall/cdp-shot*.png`），量了图标行与会话列表的几何、卡片与画布的像素底色。**未验证**：拖窗本身走原生窗口路径，CDP 与截图都无法证明，需用户在实机上拖动确认。
 
-已合并：无（PR 未合并，等授权）。
+已合并：B 切片 PR #353 已合并；A 切片随本 PR #354 合并。
 
+<<<<<<< HEAD
 PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。第三轮已推到同一分支，不另开 PR。
 
 ⚠️ **同一 worktree 里出现过第二个写者**：`0d89b57f` 之后 `PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些已由 `5d973be1` 一并提交，与本轮外壳改动混在同一 commit 里——评审时按文件而不是按 commit 看。接手前仍先 `git status` 对账，勿覆盖。
@@ -251,3 +273,13 @@ PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `co
 阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（会话列表本身）没重做。④ **收起侧栏的目标形态未定**：用户先给了「收起后整栏消失、只留顶栏那排」的描述与参考图，随后决定「侧栏就先这样不动了」，此需求未实现，恢复工作时先与用户重确认形态。
 
 回收：未回收（分支与 worktree 保留给评审与后续切片）。切片 C（拖拽换位）若继续，墙模型是它的写回点（`layout-model.ts` / `usePanel.ts`）；`PanelHeader.tsx` 现已不被 `PanelZone` 渲染，接手前先确认它的新定位。
+
+**B 切片（脱窗 Electron 侧）结果** —— 分支 `codex/panel-layout-detach`，worktree `.claude/worktrees/panel-layout-detach`，base `275dab09`，提交 `e028447d`（PR base = master）。
+
+已实现：独立 OS 窗口生命周期（`apps/desktop/src/main/core/panel-window-manager.ts` + `panel-window-state.ts`）、`panel-window:*` 四个 IPC 通道（`apps/desktop/src/main/ipc/panel-window-handlers.ts`）、preload 桥 `window.electronAPI.panelWindow`（`apps/desktop/src/preload/index.ts`）。已验证：单测 31 例、main 全量 3564 例、architecture:check、electron 类型门禁、e2e ipc 与同 base 逐用例一致、真实 Electron 里脱窗 / 置顶 / 原生 X 收回全链路跑通。已合并：PR #353。
+
+**脱窗实测（真实 Electron，截图见 `.e2e-userdata/panel-detach-check/evidence/`）**：主窗 `panelWindow.context = {paneId:null,pageId:null}`；`panel-window:open` 返回 `{ok:true,paneId:'pane-e2e-1',windowId:2}`，真的多出一个原生窗口（1128×878，独立标题栏，标题为面板名「终端」），URL 为 `…/dist/index.html?duyaPanel=pane-e2e-1&duyaPanelPage=terminal`，脱窗内 preload 读到 `context={paneId:'pane-e2e-1',pageId:'terminal'}`；`set-always-on-top` 后原生窗口 `isAlwaysOnTop()=true`（主窗不受影响）；点原生 X（等价 `win.close()`）后脱窗消失、主窗收到 `{type:'returned',reason:'native-close'}`、`get-state` 回到 `detached:false` 且 `alwaysOnTop:true` 保留，`{userData}/panel-window-state.json` 落盘 `{"panes":{"pane-e2e-1":{"pageId":"terminal","alwaysOnTop":true}}}`。
+
+未完成 / 阻塞：**渲染侧仍缺**——脱窗窗口目前渲染的是完整 app 外壳，「只渲染这一个面板」要靠切片 A 读 `panelWindow.context.paneId` 后自己收敛；本切片不碰 `packages/ui/**`。B 不依赖 A 即可合入，A 的接线契约见 PR 正文。
+
+外部副作用：本次只在 worktree 内跑真实 Electron，产物落在 `.e2e-userdata/panel-detach-check/`（未跟踪）；`packages/host/bundle/*` 等被构建改写的已跟踪文件已按「只保留本任务成果」还原。
