@@ -1,0 +1,327 @@
+/**
+ * code-review-v2.css — shell for the redesigned review panel.
+ *
+ * Only the chrome lives here: the scope picker, the file rows, and the
+ * commit rail. The diff body keeps its existing styles from
+ * code-review.css so line comments and folding behave exactly as before.
+ */
+
+.rev-scope {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.rev-scope-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 420px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.rev-scope-trigger:hover,
+.rev-scope-trigger.is-open {
+  background: var(--surface-hover);
+}
+
+.rev-scope-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rev-scope-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.rev-picker {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  width: 300px;
+  max-height: 460px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--panel-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.4);
+}
+
+.rev-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-bottom: 4px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.rev-picker-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.rev-picker-group {
+  padding: 6px 9px 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+
+.rev-picker-list {
+  overflow: auto;
+  min-height: 0;
+}
+
+.rev-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rev-picker-item:hover {
+  background: var(--surface-hover);
+}
+
+.rev-picker-item.is-on {
+  background: var(--surface-hover);
+}
+
+.rev-picker-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rev-picker-tag {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.rev-picker-empty {
+  padding: 8px 9px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.rev-picker-commits {
+  display: grid;
+  gap: 4px;
+  padding: 2px 4px 4px;
+}
+
+.rev-picker-commits select {
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  padding: 0 6px;
+}
+
+/* ---------------- file rows ---------------- */
+.rev-file {
+  border-bottom: 1px solid var(--border-weak, var(--border));
+}
+
+.rev-file.is-selected > .rev-file-row {
+  background: var(--surface);
+}
+
+.rev-file-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rev-file-row:hover {
+  background: var(--surface-hover);
+}
+
+.rev-file-chevron {
+  flex: 0 0 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.rev-file-name {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.rev-file-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.rev-file-badge {
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--surface);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.rev-file-stat {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  flex: 0 0 auto;
+}
+
+.rev-file-stat .is-add {
+  color: #22c55e;
+}
+
+.rev-file-stat .is-remove {
+  color: #e5534b;
+}
+
+/* ---------------- commit rail ---------------- */
+.rev-rail {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 42%;
+  min-height: 32px;
+  border-top: 1px solid var(--border);
+}
+
+.rev-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.rev-rail-head:hover {
+  color: var(--text);
+}
+
+.rev-rail-chevron {
+  transition: transform 0.12s ease;
+}
+
+.rev-rail.is-collapsed .rev-rail-chevron {
+  transform: rotate(-90deg);
+}
+
+.rev-rail-count {
+  color: var(--muted);
+}
+
+.rev-rail-list {
+  overflow: auto;
+  padding: 0 6px 8px;
+}
+
+.rev-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 26px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rev-rail-item:hover {
+  background: var(--surface-hover);
+}
+
+.rev-rail-item.is-on {
+  background: var(--surface-hover);
+}
+
+.rev-rail-sub {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rev-rail-hash {
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 10.5px;
+}
+
+/* sidebar moves to the left column (the shell is a grid, not flex) */
+.code-review-panel.has-file-tree .code-review-workspace {
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+}
+
+.code-review-panel.has-file-tree .code-review-file-tree {
+  grid-column: 1;
+  grid-row: 1;
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+
+.code-review-panel.has-file-tree .code-review-main {
+  grid-column: 2;
+  grid-row: 1;
+}
