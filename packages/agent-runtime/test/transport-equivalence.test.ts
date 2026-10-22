@@ -69,7 +69,7 @@ import {
 } from '../src/transport/equivalence.js';
 
 const WORKER = fileURLToPath(
-  new URL('../../agent/tests/process/fixtures/real-worker.mjs', import.meta.url),
+  new URL('../../host/tests/worker-product-runtime/agent-runtime-real-worker.mjs', import.meta.url),
 );
 
 /** Three real multi-byte characters, spelled as escapes to keep this ASCII. */

@@ -161,7 +161,7 @@ export default defineConfig({
       // the repo root; watching them races with locked Chromium cache
       // files and can crash the dev server on Windows.
       // Build outputs are excluded too: `electron:dev` regenerates
-      // dist-electron/, packages/agent/bundle/ and (after packaging)
+      // dist-electron/, packages/host/bundle/ and (after packaging)
       // release/ on every start, and a background agent editing code
       // triggers rescan after each build. Watching these multi-GB trees
       // on Windows pins the Vite event loop (page requests time out for
@@ -180,7 +180,7 @@ export default defineConfig({
         '**/storybook-static/**',
         '**/docs/**',
         '**/coverage/**',
-        '**/packages/agent/bundle/**',
+        '**/packages/host/bundle/**',
       ],
     },
     // Kick off dep optimization + transform of the entry / hot

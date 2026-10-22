@@ -354,10 +354,10 @@ module.exports = async function afterPack(context) {
     console.log('[afterPack] node-pty not found in resources, skipping (terminal feature will be unavailable)');
   }
 
-  // Step 3: Verify agent-bundle exists (esbuild should have inlined all dependencies)
-  console.log('[afterPack] Step 3: Verifying agent-bundle...');
-  const agentBundlePath = path.join(RESOURCES_DIR, 'harness-bundle', 'worker-entry.js');
-  if (!fs.existsSync(agentBundlePath)) {
+  // Step 3: Verify the host worker bundle exists (esbuild should have inlined all dependencies)
+  console.log('[afterPack] Step 3: Verifying host worker bundle...');
+  const workerBundlePath = path.join(RESOURCES_DIR, 'harness-bundle', 'worker-entry.js');
+  if (!fs.existsSync(workerBundlePath)) {
     // Diagnose: was the source bundle present in the workspace at all?
     // extraResources copies from packages/host/bundle/ → release/<platform>/resources/harness-bundle/.
     // If the source is missing, electron-builder silently skips the copy and
@@ -378,19 +378,19 @@ module.exports = async function afterPack(context) {
       packagedResourcesDiagnostic = `present — subdirs: ${fs.readdirSync(packagedResourcesDir).join(', ')}`;
     }
     throw new Error(
-      `[afterPack] FATAL: worker-entry.js not found at ${agentBundlePath}.\n` +
+      `[afterPack] FATAL: worker-entry.js not found at ${workerBundlePath}.\n` +
       `  Source packages/host/bundle/worker-entry.js: ${sourceDiagnostic}\n` +
       `  ${packagedResourcesDir}: ${packagedResourcesDiagnostic}\n` +
-      'Run `npm run bundle:agent` before packaging. The agent core cannot start without this entry file.'
+      'Run `npm run bundle:worker` before packaging. The host worker cannot start without this entry file.'
     );
   }
-  const agentBundleStats = fs.statSync(agentBundlePath);
-  console.log(`[afterPack] Agent bundle verified: ${agentBundlePath} (${(agentBundleStats.size / 1024 / 1024).toFixed(2)} MB)`);
+  const workerBundleStats = fs.statSync(workerBundlePath);
+  console.log(`[afterPack] Worker bundle verified: ${workerBundlePath} (${(workerBundleStats.size / 1024 / 1024).toFixed(2)} MB)`);
 
   // Step 3.5: Verify the BashTool worker shipped next to the entry.
   // WorkerPool.createWorker() spawns this file as its own process via
   // process.execPath, resolving it relative to the bundle directory. esbuild
-  // cannot inline a spawned process, so scripts/build-agent-bundle.mjs emits it
+  // cannot inline a spawned process, so scripts/build-host-worker-bundle.mjs emits it
   // as a second entry. If that step is ever skipped or its output is not
   // copied by the `packages/host/bundle/ -> harness-bundle/` extraResources
   // rule, the installed app still starts and still reaches agent ready — the
@@ -405,7 +405,7 @@ module.exports = async function afterPack(context) {
     if (fs.existsSync(sourceWorker)) {
       workerDiagnostic = 'present in the workspace but NOT copied into resources';
     } else {
-      workerDiagnostic = 'not present — run `npm run bundle:agent` before packaging';
+      workerDiagnostic = 'not present — run `npm run bundle:worker` before packaging';
     }
     throw new Error(
       `[afterPack] FATAL: BashWorker.js not found at ${bashWorkerPath}.\n` +
@@ -417,9 +417,9 @@ module.exports = async function afterPack(context) {
   const bashWorkerStats = fs.statSync(bashWorkerPath);
   console.log(`[afterPack] BashTool worker verified: ${bashWorkerPath} (${(bashWorkerStats.size / 1024).toFixed(2)} KB)`);
 
-  // Step 4: Copy playwright package to agent-bundle node_modules
+  // Step 4: Copy playwright package to the worker bundle node_modules
   // Playwright is marked as external in esbuild config, so it needs to be available at runtime
-  console.log('[afterPack] Step 4: Copying playwright to agent-bundle...');
+  console.log('[afterPack] Step 4: Copying playwright to the worker bundle...');
   const agentBundleNodeModules = path.join(RESOURCES_DIR, 'harness-bundle', 'node_modules');
   const playwrightSource = path.join(projectDir, 'node_modules', 'playwright');
   const playwrightCoreSource = path.join(projectDir, 'node_modules', 'playwright-core');

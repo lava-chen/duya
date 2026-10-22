@@ -111,7 +111,20 @@ function createMockDeps(overrides?: {
   // 'none' → never ready; used to drive timeout tests.
 
   const workerManager = {
-    workerCount: overrides?.workerCount ?? 1,
+    // ZERO by default, not one. The router refuses an invoke when
+    // `workerCount >= calculateMaxConcurrentWorkers()`, and that cap is
+    // derived from the machine: a 3-core, 14GB runner gets a cap of 1. A
+    // default of one therefore meant "at the cap" on a small machine, and
+    // every case that expects an invoke to be ACCEPTED came back
+    // `server_busy` instead. Measured on the macOS runner (run
+    // 39643430577): the two "accepts when target is ..." cases failed there
+    // and nowhere else.
+    //
+    // Zero is below the cap on every machine — the cap never returns less
+    // than 1 — so the default means "no worker is running", which is what
+    // these cases are about. The case that exercises the cap asks for it
+    // explicitly.
+    workerCount: overrides?.workerCount ?? 0,
     spawnWorker: vi.fn(() => fakeChild),
     sendCommand: vi.fn(),
     interruptWorker: vi.fn(),

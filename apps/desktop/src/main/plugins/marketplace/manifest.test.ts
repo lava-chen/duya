@@ -3,7 +3,7 @@
 // validation, and the path-containment fence for manifest-declared paths.
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, realpathSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -259,7 +259,22 @@ describe('resolveContainedPath — the fence', () => {
   it('resolves simple relative paths inside the root', () => {
     const dir = makeMarketplace('fence');
     mkdirSync(join(dir, 'plugins', 'linear'), { recursive: true });
-    expect(resolveContainedPath(dir, './plugins/linear')).toBe(join(dir, 'plugins', 'linear'));
+    // The result is anchored on the root's CANONICAL path, which is the
+    // point of the fence: a manifest-declared path is resolved against the
+    // real directory, so a symlinked root cannot smuggle a path out of it.
+    // The case above ("resolves through a symlinked root to its canonical
+    // target") asserts that same rule directly.
+    //
+    // Comparing against the LEXICAL root instead only works on a machine
+    // whose temp directory is not itself behind a symlink. macOS is such a
+    // machine: `/var` is a symlink to `/private/var`, so the canonical and
+    // the lexical spelling of the same directory differ and the two
+    // assertions contradicted each other — one demanding the canonical path
+    // and this one demanding the lexical one. Measured on the macOS runner
+    // (run 39643430577).
+    expect(resolveContainedPath(dir, './plugins/linear')).toBe(
+      join(realpathSync(dir), 'plugins', 'linear'),
+    );
   });
 
   it('rejects ../ escapes', () => {
@@ -292,7 +307,7 @@ describe('resolvePluginEntryDir', () => {
       name: 'linear',
       source: { source: 'local' as const, path: './plugins/linear' },
     };
-    expect(resolvePluginEntryDir(dir, entry)).toBe(join(dir, 'plugins', 'linear'));
+    expect(resolvePluginEntryDir(dir, entry)).toBe(join(realpathSync(dir), 'plugins', 'linear'));
   });
 
   it('fences local entries against escapes from a remote manifest', () => {
@@ -312,7 +327,7 @@ describe('resolvePluginEntryDir', () => {
       name: 'thing',
       source: { source: 'git' as const, url: 'https://github.com/a/b.git', path: './sub' },
     };
-    expect(resolvePluginEntryDir(dir, entry, clone)).toBe(join(clone, 'sub'));
+    expect(resolvePluginEntryDir(dir, entry, clone)).toBe(join(realpathSync(clone), 'sub'));
   });
 
   it('requires a materialized dir for git entries', () => {

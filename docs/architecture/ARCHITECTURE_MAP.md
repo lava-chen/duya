@@ -77,7 +77,7 @@ not checked.
    this, *not* the runtime, so the runtime cannot self-certify.
 4. **Worker spawned.** `packages/host/src/worker-manager.ts:231`; the artifact
    is `packages/host/bundle/worker-entry.js`, built from
-   `packages/cli/src/agent-worker-entry.ts` (`scripts/build-agent-bundle.mjs:30`).
+   `packages/cli/src/agent-worker-entry.ts` (`scripts/build-host-worker-bundle.mjs:30`).
 5. **Turn runs.** `packages/host/src/worker-process-entry.ts:1684` →
    `driveRunWithEngine` (`packages/host/src/worker-engine-driver.ts:104`) →
    `RunEngineImpl.execute` (`packages/agent-runtime/src/engine/run-engine.ts`).

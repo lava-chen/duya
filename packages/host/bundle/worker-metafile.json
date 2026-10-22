@@ -3978,7 +3978,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-hooks/types.ts": {
-      "bytes": 29034,
+      "bytes": 30742,
       "imports": [
         {
           "path": "../../../node_modules/zod/index.js",
@@ -25615,7 +25615,7 @@
       "format": "esm"
     },
     "packages/sandbox/src/allowed-roots.ts": {
-      "bytes": 3665,
+      "bytes": 5063,
       "imports": [
         {
           "path": "node:fs",
@@ -27362,7 +27362,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -27803,7 +27803,7 @@
       "format": "esm"
     },
     "packages/plugin-core/src/mcp/error-messages.ts": {
-      "bytes": 6619,
+      "bytes": 6621,
       "imports": [],
       "format": "esm"
     },
@@ -38055,7 +38055,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-hooks/executor.ts": {
-      "bytes": 21604,
+      "bytes": 22105,
       "imports": [
         {
           "path": "node:child_process",
@@ -43087,7 +43087,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14277
+          "bytesInOutput": 14290
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -43249,7 +43249,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -43321,7 +43321,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7353
+          "bytesInOutput": 7340
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43330,10 +43330,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 46
+          "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 45
+          "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -43345,13 +43345,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43360,7 +43360,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -43408,7 +43408,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -43438,7 +43438,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -43462,7 +43462,7 @@
           "bytesInOutput": 328
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
           "bytesInOutput": 3576
@@ -45625,7 +45625,7 @@
           "bytesInOutput": 225
         },
         "../../../node_modules/ajv/dist/vocabularies/validation/limitNumber.js": {
-          "bytesInOutput": 680
+          "bytesInOutput": 685
         },
         "../../../node_modules/ajv/dist/vocabularies/validation/multipleOf.js": {
           "bytesInOutput": 560
@@ -46051,13 +46051,13 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 36
+          "bytesInOutput": 23
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1627
@@ -46090,7 +46090,7 @@
           "bytesInOutput": 150
         },
         "packages/sandbox/src/allowed-roots.ts": {
-          "bytesInOutput": 536
+          "bytesInOutput": 558
         },
         "packages/sandbox/src/index.ts": {
           "bytesInOutput": 52
@@ -47170,7 +47170,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47179,10 +47179,10 @@
           "bytesInOutput": 2872
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -47287,7 +47287,7 @@
           "bytesInOutput": 3415
         },
         "packages/host/src/worker-hooks/types.ts": {
-          "bytesInOutput": 9574
+          "bytesInOutput": 9630
         },
         "packages/host/src/worker-hooks/hooks-json.ts": {
           "bytesInOutput": 750
@@ -48415,7 +48415,7 @@
           "bytesInOutput": 2709
         },
         "packages/plugin-core/src/mcp/error-messages.ts": {
-          "bytesInOutput": 4603
+          "bytesInOutput": 4605
         },
         "packages/plugin-core/src/mcp/shadow.ts": {
           "bytesInOutput": 917
@@ -48913,7 +48913,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-hooks/executor.ts": {
-          "bytesInOutput": 5825
+          "bytesInOutput": 5897
         },
         "packages/host/src/worker-hooks/notify.ts": {
           "bytesInOutput": 670
@@ -49258,7 +49258,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5528714
+      "bytes": 5528843
     }
   }
 }

@@ -4,7 +4,7 @@
  * ## What makes this different from a fixture-driven test
  *
  * The child here is a real `node` process running the repository's OWN
- * `sendEvent` from `packages/agent/src/process/worker-protocol.ts`. That
+ * `sendEvent` from `packages/host/src/worker-transport.ts`. That
  * function is where every property that makes framing non-trivial lives:
  *
  *  - it injects `_logger: 'worker'` into every frame;
@@ -37,10 +37,10 @@ import type { RawFrameIntake } from '../src/transport/transport-port.js';
 import type { JsonValue, RunId } from '@duya/agent-protocol';
 
 const WORKER = fileURLToPath(
-  new URL('../../agent/tests/process/fixtures/real-worker.mjs', import.meta.url),
+  new URL('../../host/tests/worker-product-runtime/agent-runtime-real-worker.mjs', import.meta.url),
 );
 const WORKER_PROTOCOL_DIST = fileURLToPath(
-  new URL('../../agent/dist/process/worker-protocol.js', import.meta.url),
+  new URL('../../host/dist/worker-transport.js', import.meta.url),
 );
 
 /** Real 3-byte characters, spelled as escapes so this file stays pure ASCII. */

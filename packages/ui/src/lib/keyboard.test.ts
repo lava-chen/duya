@@ -11,6 +11,22 @@ function key(overrides: Partial<ShortcutEventLike> & { key: string }): ShortcutE
   return overrides;
 }
 
+/**
+ * `mod` is a platform alias: ⌘ on Apple platforms, Ctrl everywhere else.
+ *
+ * The suite has to press the key the platform actually maps, or it asserts
+ * about a platform it is not on. Measured on the macOS runner (run
+ * 39643430577): every Ctrl variant below failed there, because macOS maps
+ * `mod` to ⌘ and the shortcut never matched.
+ *
+ * The detection mirrors `isApplePlatform` in ./keyboard, which reads
+ * `navigator.platform` and falls back to `navigator.userAgent`.
+ */
+const APPLE_PLATFORM = /mac|iphone|ipad|ipod/i.test(
+  (typeof navigator === 'undefined' ? '' : navigator.platform || navigator.userAgent) || '',
+);
+const MOD_PRESSED = APPLE_PLATFORM ? { metaKey: true } : { ctrlKey: true };
+
 describe('isImeEvent', () => {
   it('detects composition state', () => {
     expect(isImeEvent(key({ key: 'Enter', isComposing: true }))).toBe(true);
@@ -41,28 +57,28 @@ describe('isShortcutEventNoise', () => {
 
 describe('matchesShortcut', () => {
   it('requires declared modifiers to be pressed and undeclared ones to be released', () => {
-    // mod 在非 Apple 平台映射到 Ctrl。
-    expect(matchesShortcut(key({ key: 'k', ctrlKey: true }), { key: 'k', mod: true })).toBe(true);
+    // mod 映射到该平台的那个修饰键（Apple = ⌘，其它 = Ctrl）。
+    expect(matchesShortcut(key({ key: 'k', ...MOD_PRESSED }), { key: 'k', mod: true })).toBe(true);
 
     // 声明了 mod 但没按 → 不匹配。
     expect(matchesShortcut(key({ key: 'k' }), { key: 'k', mod: true })).toBe(false);
 
     // 未声明 shift，用户多按了 shift → 不匹配（避免 mod+K 误命中 mod+shift+K）。
     expect(
-      matchesShortcut(key({ key: 'k', ctrlKey: true, shiftKey: true }), { key: 'k', mod: true }),
+      matchesShortcut(key({ key: 'k', ...MOD_PRESSED, shiftKey: true }), { key: 'k', mod: true }),
     ).toBe(false);
   });
 
   it('compares keys case-insensitively', () => {
-    expect(matchesShortcut(key({ key: 'K', ctrlKey: true }), { key: 'k', mod: true })).toBe(true);
+    expect(matchesShortcut(key({ key: 'K', ...MOD_PRESSED }), { key: 'k', mod: true })).toBe(true);
   });
 
   it('never matches noisy events', () => {
     expect(
-      matchesShortcut(key({ key: 'k', ctrlKey: true, isComposing: true }), { key: 'k', mod: true }),
+      matchesShortcut(key({ key: 'k', ...MOD_PRESSED, isComposing: true }), { key: 'k', mod: true }),
     ).toBe(false);
     expect(
-      matchesShortcut(key({ key: 'k', ctrlKey: true, repeat: true }), { key: 'k', mod: true }),
+      matchesShortcut(key({ key: 'k', ...MOD_PRESSED, repeat: true }), { key: 'k', mod: true }),
     ).toBe(false);
   });
 });

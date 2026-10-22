@@ -98,6 +98,8 @@ interface StopProbe {
   hang: boolean;
   /** Call the sink's `end` from inside `stop` (a cooperative terminal). */
   endOnStop: boolean;
+  /** Runs inside `stop`, before it answers — the moment the stop has landed. */
+  onStop?: () => void;
 }
 
 function probeExecutor(probe: StopProbe, sinkBox: { end: () => void } | null = null): ExecutionChannel {
@@ -106,6 +108,7 @@ function probeExecutor(probe: StopProbe, sinkBox: { end: () => void } | null = n
       return {
         stop: async (request: StopRequest) => {
           probe.requests.push(request);
+          probe.onStop?.();
           if (probe.hang) return new Promise<never>(() => undefined);
           if (probe.endOnStop) sinkBox?.end();
           return {
@@ -178,7 +181,7 @@ function contextFor(): TranslateContext {
 function buildController(
   channel: ExecutionChannel,
   persistence: RunPersistence,
-  options: { cancelGraceMs?: number; stopBoundMs?: number } = {},
+  options: { cancelGraceMs?: number; stopBoundMs?: number; clock?: () => number } = {},
 ): RunController {
   return new RunController({
     channel,
@@ -188,7 +191,33 @@ function buildController(
     persistenceFor: () => persistence,
     ...(options.cancelGraceMs === undefined ? {} : { cancelGraceMs: options.cancelGraceMs }),
     ...(options.stopBoundMs === undefined ? {} : { stopBoundMs: options.stopBoundMs }),
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
   });
+}
+
+/**
+ * A clock that cannot land on the wrong side of a ceiling.
+ *
+ * The verdict for a wallclock stop is measured at settle time as
+ * `clock() - startedAt`, and `Date.now()` has 1ms resolution. Under load the
+ * timer fires in the millisecond BEFORE a 30ms ceiling, the measurement comes
+ * out as 29, and the run is then recorded as `cancelled` rather than
+ * `budget_exhausted`. That is measured, not guessed: with eight CPU burners
+ * running, `setTimeout(30)` reported a 29ms delta in 1 run of 300, and this
+ * file failed 1 run in 12 on a machine that passes 20 of 20 idle.
+ *
+ * So the MEASUREMENT is made deterministic and the TIMER is left real: the
+ * ceiling still has to fire for the stop to happen at all, and a runtime that
+ * stopped arming the wallclock timer still fails the test below.
+ */
+function budgetClock(ceiling: number): { now: () => number; pastCeiling: () => void } {
+  let now = 0;
+  return {
+    now: () => now,
+    pastCeiling: () => {
+      now = ceiling + 1;
+    },
+  };
 }
 
 /**
@@ -364,9 +393,17 @@ describe('R2.3 — a budget is checked before the next unit of work starts', () 
     // A wallclock ceiling cannot be checked "before the operation" in any
     // useful sense — the only thing that can act on it is a timer. So the
     // runtime arms one, and it is the SAME stop path a user cancel uses.
+    //
+    // The timer stays real; only the MEASUREMENT of the elapsed budget is
+    // pinned, through the controller's clock seam. See `budgetClock` for why:
+    // a 1ms margin is not a margin.
     const persistence = new RecordingPersistence();
-    const probe = newProbe();
-    const controller = buildController(probeExecutor(probe), persistence, { cancelGraceMs: 10 });
+    const clock = budgetClock(30);
+    const probe = newProbe({ onStop: () => clock.pastCeiling() });
+    const controller = buildController(probeExecutor(probe), persistence, {
+      cancelGraceMs: 10,
+      clock: clock.now,
+    });
 
     const handle = await controller.start(buildManifest('run-wall', { maxWallClockMs: 30 }), {
       prompt: 'p',

@@ -113,6 +113,73 @@ describe('isPathWithinRoots', () => {
     });
   });
 
+  describe('a root reached through a symlink', () => {
+    // macOS is the machine where this bites: `/var` is a symlink to
+    // `/private/var`, so a temp root at `/var/folders/.../duya-roots-XXXX`
+    // has the realpath `/private/var/folders/.../duya-roots-XXXX`. The
+    // check compared that REAL root against the LEXICAL target, the two
+    // spellings of the same directory stopped sharing a prefix, and every
+    // path inside the root was judged to be outside it. Measured on the
+    // macOS runner (run 39643430577): 33 assertions across 4 suites failed
+    // with `allowed: false` for paths that were plainly inside the
+    // workspace.
+    //
+    // The bug is reproduced HERE on every platform by putting the root
+    // behind a link of its own, so the fix cannot be undone on a platform
+    // that happens not to have one.
+    let base: string;
+    let linkedRoot: string;
+    let linkAttempted: boolean;
+
+    beforeEach(() => {
+      base = mkdtempSync(join(tmpdir(), 'duya-linked-'));
+      const real = join(base, 'real');
+      mkdirSync(real, { recursive: true });
+      const link = join(base, 'link');
+      linkAttempted = false;
+      try {
+        // A junction on Windows (which needs no privileges), a directory
+        // symlink everywhere else.
+        symlinkSync(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+        linkAttempted = true;
+      } catch {
+        linkAttempted = false;
+      }
+      linkedRoot = join(linkAttempted ? link : real, 'root');
+      mkdirSync(join(linkedRoot, 'memory'), { recursive: true });
+      writeFileSync(join(linkedRoot, 'memory', 'a.md'), 'hello');
+    });
+
+    afterEach(() => {
+      rmSync(base, { recursive: true, force: true });
+    });
+
+    it('accepts a target inside a root whose own path passes through a symlink', () => {
+      if (!linkAttempted) return; // skip: cannot create a link on this platform
+      expect(isPathWithinRoots(join(linkedRoot, 'memory', 'a.md'), [linkedRoot])).toBe(true);
+    });
+
+    it('still rejects a target outside that root', () => {
+      if (!linkAttempted) return;
+      const outside = join(base, 'outside.txt');
+      writeFileSync(outside, 'shh');
+      expect(isPathWithinRoots(outside, [linkedRoot])).toBe(false);
+    });
+
+    it('still rejects a symlink inside the root that points outside it', () => {
+      if (!linkAttempted) return;
+      const outside = join(base, 'outside.txt');
+      writeFileSync(outside, 'shh');
+      const escape = join(linkedRoot, 'memory', 'escape.md');
+      try {
+        symlinkSync(outside, escape);
+      } catch {
+        return; // skip: symlink creation may fail without privileges
+      }
+      expect(isPathWithinRoots(escape, [linkedRoot])).toBe(false);
+    });
+  });
+
   describe('trailing separator', () => {
     it('treats root with trailing separator the same as without', () => {
       const rootWithSep = root + (process.platform === 'win32' ? '\\' : '/');

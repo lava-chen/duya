@@ -19,20 +19,22 @@
  *
  * Project references were rejected on evidence, not taste:
  *
- *  1. The real consumers never run `tsc`. `scripts/build-agent-bundle.mjs` and
- *     `scripts/build-electron.mjs` are esbuild, and they resolve `@duya/*`
- *     through `node_modules` into `dist/*.js` without type-checking the
- *     consumer. `references` only orders `tsc` invocations, so it would be
- *     decorative for exactly the paths that break.
- *  2. There is a self-referential edge. `packages/agent/src/journal/Journal.ts`
- *     imports `@duya/agent/message`, which resolves to its own
- *     `packages/agent/dist/message/index.d.ts`. Project references cannot
- *     express a package depending on its own output; building `agent` as the
- *     last step of an explicit chain can.
- *  3. ~153 imports of the form `packages/agent/src/...` from
- *     `apps/desktop/src/main` bypass any tsconfig graph and make
- *     `packages/agent`'s tsconfig the effective type environment for the main
- *     process.
+ *  1. The real consumers never run `tsc`. `scripts/build-host-worker-bundle.mjs`
+ *     and `scripts/build-electron.mjs` are esbuild, and they resolve `@duya/*`
+ *     from TypeScript source through the workspacePublicSources plugin without
+ *     type-checking the consumer. `references` only orders `tsc` invocations,
+ *     so it would be decorative for exactly the paths that break.
+ *  2. The remaining consumers DO run `tsc`, and the tsconfig `paths` maps point
+ *     `@duya/*` at emitted `dist` declarations. A wrong order therefore
+ *     typechecks a package against a stale (or missing) neighbor `dist` —
+ *     phantom errors that depend on whatever the workstation last built.
+ *
+ * Retired packages are NOT in this array. `@duya/agent` was removed (plan 610):
+ * it used to sit last because its own source resolved `@duya/agent/message` to
+ * its emitted `dist/message` and `apps/desktop/src/main` still imported it.
+ * Neither is true any longer, and no script may build it — the retirement gate
+ * (`scripts/architecture/agent-retirement-gate.mjs`) keeps watching for a
+ * resurrected build path.
  *
  * THE ORDER
  *
@@ -45,13 +47,15 @@
  * Usage:
  *   node scripts/build-packages.mjs
  *   node scripts/build-packages.mjs --target @duya/cli
+ *   node scripts/build-packages.mjs --target @duya/cli --target @duya/host
+ *   node scripts/build-packages.mjs --profile unit-suite
  *
  * Exit codes: 0 = every package built; non-zero = the first failing package's
  * exit code is propagated. Failures are NOT swallowed.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -88,9 +92,8 @@ const BUILD_ORDER = [
   // Plan 610: the `/` and `@` completion rules shared by the desktop composer
   // and the CLI TUI prompt. Level 1 because it imports nothing but its own
   // siblings -- no `@duya/*` package, no React, no blessed. It has to build
-  // before `@duya/agent` (whose `src/cli/ui/*` imports it) and before the
-  // desktop renderer, whose `tsconfig.renderer.json` maps the package onto this
-  // one's emitted `dist`.
+  // before the desktop renderer, whose `tsconfig.renderer.json` maps the
+  // package onto this one's emitted `dist`.
   //
   // Omitting it here fails in a way that is invisible locally: a workstation
   // that has run `npm run -w @duya/input-completion build` by hand resolves the
@@ -128,7 +131,7 @@ const BUILD_ORDER = [
   // (transcript types), `@duya/sandbox` (path containment), `@duya/tooling`
   // (contributor declaration), level-2 `@duya/ai` (the `ToolResult` runtime
   // type, same edge `@duya/memory` declares) plus npm `diff`/`picomatch`/
-  // `zod`. It must build before `@duya/agent`, whose shims re-export it.
+  // `zod`.
   '@duya/data', //             -> @duya/agent-protocol
   '@duya/conductor',
   '@duya/gateway',
@@ -158,42 +161,121 @@ const BUILD_ORDER = [
   '@duya/host', //         -> @duya/agent-runtime, @duya/data, @duya/agent-protocol
   '@duya/cli', //          -> @duya/host, @duya/plugin-core, @duya/input-completion
   '@duya/web', //          -> @duya/host, @duya/agent-protocol, @duya/ui (Node BFF + shared source renderer)
-
-
-  // Level 6 — last. `@duya/agent` consumes the level-2 through level-5 packages,
-  // and `apps/desktop/src/main` plus the agent bundle both import it, so
-  // nothing that needs it can be built or typechecked earlier. It also
-  // resolves `@duya/agent/message` to its OWN emitted `dist/message`, so it
-  // must be fully built before any step that leans on its emitted types.
-  '@duya/agent', // -> @duya/ai, @duya/cli, @duya/computer-use, @duya/plugin-core, @duya/memory
 ];
 
 const BUILD_ORDER_SET = new Set(BUILD_ORDER);
 
+/**
+ * Named build profiles: a SET of targets, named for the consumer that needs
+ * them.
+ *
+ * ## Why a profile instead of a longer `--target` list
+ *
+ * The unit suite resolves most workspace packages from SOURCE (vitest.config.ts
+ * aliases them), and the ones it does not alias it resolves through their
+ * `exports` map, which points at `dist/`. The list below is exactly that
+ * second set, so a CI job that only has to run the unit suite does not have to
+ * build the whole workspace to get it.
+ *
+ * The saving is not marginal. Measured on 2026-10-22 on this tree, from a
+ * clean `dist/` and a clean `tsconfig.tsbuildinfo`:
+ *
+ *   full build (22 packages)          151.8s
+ *   this profile's closure (19)        39.8s
+ *
+ * The packages the profile leaves out are the expensive ones: `@duya/ui` is a
+ * full `tsc` project over the renderer, and the unit suite resolves it from
+ * source, not from `dist/`.
+ *
+ * ## `@duya/host` is here for a reason that is NOT an import
+ *
+ * No test file imports `@duya/host`. It is in this list because
+ * `packages/host/tests/worker-product-runtime/agent-runtime-real-worker.mjs` —
+ * the program the subprocess-transport suites actually spawn — loads
+ * `packages/host/dist/worker-transport.js`, and the architecture gate
+ * requires that import to stay inside the module that owns the worker. So the
+ * unit suite needs the host layer's `dist` even though no test names it.
+ *
+ * Measured, not assumed: with this list minus `@duya/host`, the full suite
+ * ran 8 assertions short of green — `subprocess-framing.test.ts` and
+ * `transport-equivalence.test.ts`, both failing because the spawned worker
+ * produced no output. The suite's own guard ("needs the built worker, and
+ * says so rather than skipping") reported it, which is the behaviour it
+ * exists for.
+ *
+ * ## How this stays honest
+ *
+ * A package that the suite DOES need but that is missing from this list fails
+ * the suite at import time, loudly, in the job that builds this profile. That
+ * is the intended signal: the profile is wrong and the fix is to add the
+ * package here, not to widen the build back to everything.
+ *
+ * It also means the list is not a constant of the universe. It was derived by
+ * measurement, and it moved when the transport fixture moved from the agent
+ * layer to the host layer (the agent layer's own copy of the fixture is now
+ * unreferenced). A suite whose build requirement can change with a refactor
+ * is a suite whose build requirement has to be re-measured, not assumed.
+ */
+const BUILD_PROFILES = {
+  'unit-suite': {
+    targets: [
+      '@duya/ai',
+      '@duya/cli',
+      '@duya/computer-use',
+      '@duya/gateway',
+      '@duya/voice',
+      '@duya/plugin-core',
+      '@duya/connectors',
+      '@duya/host',
+    ],
+    why: 'the workspace packages the vitest suite resolves through their exports map rather than through a source alias',
+  },
+};
+
 function parseTarget(args) {
-  let target;
+  const targets = [];
+  let profile;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--target') {
-      if (target !== undefined || !args[index + 1]) {
-        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      if (!args[index + 1]) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
       }
-      target = args[index + 1];
+      targets.push(args[index + 1]);
       index += 1;
     } else if (arg.startsWith('--target=')) {
-      if (target !== undefined || arg.length === '--target='.length) {
-        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace>]');
+      if (arg.length === '--target='.length) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
       }
-      target = arg.slice('--target='.length);
+      targets.push(arg.slice('--target='.length));
+    } else if (arg === '--profile') {
+      if (profile !== undefined || !args[index + 1]) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
+      }
+      profile = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--profile=')) {
+      if (profile !== undefined || arg.length === '--profile='.length) {
+        throw new Error('Usage: node scripts/build-packages.mjs [--target <workspace> ...] [--profile <name>]');
+      }
+      profile = arg.slice('--profile='.length);
     } else {
       throw new Error(`Unknown build-packages argument: ${arg}`);
     }
   }
-  return target;
+  if (profile !== undefined) {
+    const known = BUILD_PROFILES[profile];
+    if (!known) {
+      throw new Error(`Unknown build profile ${profile}; expected one of: ${Object.keys(BUILD_PROFILES).join(', ')}`);
+    }
+    for (const target of known.targets) targets.push(target);
+  }
+  return targets.length === 0 ? undefined : targets;
 }
 
 function packageDirectory(name) {
   if (name === '@duya/web') return resolve(repoRoot, 'apps', 'web');
+  if (name === '@duya/desktop') return resolve(repoRoot, 'apps', 'desktop');
   if (!name.startsWith('@duya/')) {
     throw new Error(`Expected a @duya workspace package, got: ${name}`);
   }
@@ -220,12 +302,25 @@ function workspaceDependencies(name) {
   ].filter((dependency) => dependency.startsWith('@duya/')));
 }
 
-function selectBuildOrder(target) {
-  if (target === undefined) return BUILD_ORDER;
-  if (!BUILD_ORDER_SET.has(target)) {
-    throw new Error(`Unknown build target ${target}; expected one of: ${BUILD_ORDER.join(', ')}`);
+function selectBuildOrder(targets) {
+  if (targets === undefined) return BUILD_ORDER;
+  const list = Array.isArray(targets) ? targets : [targets];
+  for (const target of list) {
+    if (BUILD_ORDER_SET.has(target)) continue;
+    // App targets (`@duya/desktop`) are never built by this script — an app's
+    // own pipeline (vite / electron) owns that. `--target <app>` selects the
+    // app's dependency closure: every @duya/* manifest dependency must be in
+    // BUILD_ORDER (visit enforces it), the app itself is dropped by the
+    // filter below since it is not a BUILD_ORDER member.
+    const manifestPath = resolve(packageDirectory(target), 'package.json');
+    if (!existsSync(manifestPath)) {
+      throw new Error(`Unknown build target ${target}; expected one of: ${BUILD_ORDER.join(', ')}`);
+    }
   }
 
+  // Several targets, ONE closure. The union is what a caller that needs two
+  // packages actually needs: their shared dependencies are built once, in the
+  // canonical order, not twice in two overlapping chains.
   const required = new Set();
   const visit = (name) => {
     if (required.has(name)) return;
@@ -243,7 +338,7 @@ function selectBuildOrder(target) {
       visit(dependency);
     }
   };
-  visit(target);
+  for (const target of list) visit(target);
   return BUILD_ORDER.filter((name) => required.has(name));
 }
 
@@ -256,129 +351,33 @@ function selectBuildOrder(target) {
  * refuses to spawn directly (EINVAL), so Windows goes through the real
  * command interpreter with the arguments kept separate; POSIX has a real
  * `npm` executable and needs no interpreter at all.
- *
- * Async because a LEVEL's packages are built at the same time — see
- * {@link buildLevels} for why that is safe and what it buys.
  */
 function runPackageBuild(name) {
   const isWindows = process.platform === 'win32';
   const args = ['run', '-w', name, 'build'];
-  const command = isWindows ? process.env.ComSpec ?? 'cmd.exe' : 'npm';
-  const commandArgs = isWindows ? ['/d', '/s', '/c', 'npm', ...args] : args;
-  return new Promise((settle) => {
-    let settled = false;
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      settle(result);
-    };
-    const child = spawn(command, commandArgs, { cwd: repoRoot, stdio: 'inherit' });
-    child.on('error', (error) => finish({ error }));
-    child.on('close', (status, signal) => finish({ status, signal }));
-  });
+  return isWindows
+    ? spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', 'npm', ...args], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    })
+    : spawnSync('npm', args, { cwd: repoRoot, stdio: 'inherit' });
 }
 
-/**
- * Group the selected build order into LEVELS.
- *
- * The order above is already written as levels — the comments in
- * `BUILD_ORDER` say "Level 1", "Level 2" and so on, and the file's own header
- * states that "order WITHIN a level is irrelevant". That makes the levels the
- * parallel unit, and the array's level structure the thing this function
- * derives.
- *
- * The levels are computed from the WORKSPACE DEPENDENCY GRAPH rather than
- * parsed out of the prose, because the graph is the truth and the prose is
- * documentation: a package added to `BUILD_ORDER` without a matching comment
- * would silently get the wrong level if the level came from the comments.
- * The graph says `agent` depends on `cli`, which depends on `host`, which
- * depends on `agent-runtime` — and the level is what keeps that chain
- * ordered while everything beside it runs at the same time.
- */
-function buildLevels(selectedOrder) {
-  const selected = new Set(selectedOrder);
-  const levelOf = new Map();
-
-  const computeLevel = (name, visiting) => {
-    if (levelOf.has(name)) return levelOf.get(name);
-    if (visiting.has(name)) {
-      throw new Error(`Workspace dependency cycle involving ${name}`);
-    }
-    visiting.add(name);
-    let level = 0;
-    for (const dependency of workspaceDependencies(name)) {
-      if (!selected.has(dependency)) continue;
-      level = Math.max(level, computeLevel(dependency, visiting) + 1);
-    }
-    visiting.delete(name);
-    levelOf.set(name, level);
-    return level;
-  };
-
-  const levels = [];
-  for (const name of selectedOrder) {
-    const level = computeLevel(name, new Set());
-    const bucket = levels[level];
-    if (bucket) bucket.push(name);
-    else levels[level] = [name];
-  }
-  return levels;
-}
-
-/**
- * How many packages may be built at the same time.
- *
- * Two, deliberately. These builds are `tsc` invocations and each one may
- * hold a multi-gigabyte heap: the renderer's `tsc --noEmit` is the one that
- * aborts with `Abort trap: 6` on the macOS runner when the heap is too
- * small, so a machine full of them at once is a memory question before it is
- * a speed question — and the scheduled run puts a macOS runner next to the
- * Linux ones.
- *
- * Two is also where the time is. The build's critical path is the renderer's
- * typecheck (90s measured on the CI runner) and the web package (37s); every
- * other package is 2-5s. Raising the limit to three would shorten the cheap
- * levels by about three seconds and put a third `tsc` next to the two that
- * are already holding the most memory, which is a bad trade for a nightly
- * signal.
- */
-const BUILD_CONCURRENCY = 2;
-
-async function runWithConcurrency(items, limit, worker) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) return;
-      results[index] = await worker(items[index], index);
-    }
-  });
-  await Promise.all(runners);
-  return results;
-}
-
-let target;
+let targets;
 let selectedOrder;
-let levels;
 try {
-  target = parseTarget(process.argv.slice(2));
-  selectedOrder = selectBuildOrder(target);
-  levels = buildLevels(selectedOrder);
+  targets = parseTarget(process.argv.slice(2));
+  selectedOrder = selectBuildOrder(targets);
 } catch (error) {
   process.stderr.write(`[build-packages] ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(64);
 }
 
-const total = selectedOrder.length;
-let built = 0;
+for (const [index, name] of selectedOrder.entries()) {
+  const label = `build-packages ${index + 1}/${selectedOrder.length}`;
+  process.stdout.write(`[${label}] ${name}\n`);
 
-for (const level of levels) {
-  // The capability module content is GENERATED into a source file, so it is
-  // produced before the level starts: every package in the level then reads
-  // the same content, and the package that owns it builds against it.
-  if (level.includes('@duya/capabilities')) {
+  if (name === '@duya/capabilities') {
     const generated = spawnSync(process.execPath, [resolve(repoRoot, 'scripts/inline-modules.mjs')], {
       cwd: repoRoot,
       stdio: 'inherit',
@@ -393,29 +392,18 @@ for (const level of levels) {
     }
   }
 
-  const results = await runWithConcurrency(level, BUILD_CONCURRENCY, async (name) => {
-    // The label keeps the original "`i/n`" shape: `i` is the package's
-    // position in BUILD_ORDER, which is fixed, so a reader can still tell
-    // where in the canonical order a package sits even though the packages
-    // around it are building at the same time.
-    const index = selectedOrder.indexOf(name) + 1;
-    process.stdout.write(`[build-packages ${index}/${total}] ${name}\n`);
-    const proc = await runPackageBuild(name);
-    return { name, proc };
-  });
+  const proc = runPackageBuild(name);
 
-  // The FIRST failing package in BUILD_ORDER is the one reported, so the
-  // message names the same package the serial build would have named.
-  for (const { name, proc } of results) {
-    if (proc.error) {
-      process.stderr.write(`[build-packages] could not run npm for ${name}: ${proc.error.message}\n`);
-      process.exit(1);
-    }
-    if (proc.status !== 0) {
-      process.stderr.write(`[build-packages] ${name} build failed with exit ${proc.status}\n`);
-      process.exit(proc.status ?? 1);
-    }
+  if (proc.error) {
+    process.stderr.write(`[build-packages] could not run npm for ${name}: ${proc.error.message}\n`);
+    process.exit(1);
+  }
+  if (proc.status !== 0) {
+    process.stderr.write(`[build-packages] ${name} build failed with exit ${proc.status}\n`);
+    process.exit(proc.status ?? 1);
   }
 }
 
-process.stdout.write(`[build-packages] built ${total} package(s)${target ? ` for ${target}` : ''}.\n`);
+process.stdout.write(
+  `[build-packages] built ${selectedOrder.length} package(s)${targets ? ` for ${targets.join(', ')}` : ''}.\n`,
+);

@@ -19,7 +19,7 @@ node packages/cli/bundle/cli.cjs serve
 In another terminal, build and start the Web client from the repository root:
 
 ```sh
-npm run build:web-app
+npm run build:web
 npm run web-app
 ```
 

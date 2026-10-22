@@ -35,7 +35,7 @@
  *
  *   --bundle          Inspects the STAGED `packages/host/bundle/` tree that
  *                     electron-builder copies into resources/. Needs
- *                     `npm run bundle:agent` first, but not a package. This
+ *                     `npm run bundle:worker` first, but not a package. This
  *                     is the only mode that sees esbuild's real output, so it
  *                     is the one that can prove self-containment and the
  *                     CommonJS marker. It is NOT a packaging pass: the staged
@@ -70,7 +70,7 @@
  * Usage:
  *   node scripts/check-packaged-artifacts.mjs            # static (CI)
  *   node scripts/check-packaged-artifacts.mjs --json
- *   node scripts/check-packaged-artifacts.mjs --bundle    # needs bundle:agent
+ *   node scripts/check-packaged-artifacts.mjs --bundle    # needs bundle:worker
  *   node scripts/check-packaged-artifacts.mjs --packaged  # needs a real package
  *   node scripts/check-packaged-artifacts.mjs --packaged --platform mac
  *
@@ -87,7 +87,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const BASELINE_PATH = path.join(REPO_ROOT, 'scripts', 'packaged-artifact-baseline.json');
 
 /** The esbuild config that defines what is inlined vs. left to runtime. */
-const BUNDLE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'build-agent-bundle.mjs');
+const BUNDLE_SCRIPT = path.join(REPO_ROOT, 'scripts', 'build-host-worker-bundle.mjs');
 /** Packaged-path resolver for the agent entry (main process). */
 const PROCESS_MANAGER = path.join(
   REPO_ROOT,
@@ -134,7 +134,7 @@ export const PRIMARY_AGENT_ENTRY = 'harness-bundle/worker-entry.js';
  * Each entry pairs the relative path with the source that resolves it. The
  * gate then asks the question nothing else asks: does a build step actually
  * emit that file into the bundle directory? Both are produced by
- * `build-agent-bundle.mjs` — `assets/` by a directory copy, and
+ * `build-host-worker-bundle.mjs` — `assets/` by a directory copy, and
  * `BashTool/BashWorker.js` by a second esbuild entry, because WorkerPool
  * spawns the worker as its own process and esbuild cannot inline that.
  */
@@ -144,14 +144,14 @@ export const BUNDLE_FILE_CONTRACTS = [
     relativePath: 'assets',
     kind: 'directory',
     resolvedBy: 'packages/host/src/worker-prompts/hbs/HbsPromptSystem.ts',
-    producer: 'scripts/build-agent-bundle.mjs',
+    producer: 'scripts/build-host-worker-bundle.mjs',
   },
   {
     id: 'bash-worker',
     relativePath: 'BashTool/BashWorker.js',
     kind: 'file',
     resolvedBy: 'packages/host/src/worker-tool-pool.ts',
-    producer: 'scripts/build-agent-bundle.mjs',
+    producer: 'scripts/build-host-worker-bundle.mjs',
   },
 ];
 
@@ -175,7 +175,7 @@ export const BASH_WORKER_CONTRACT_PATH = (() => {
  * path into the bundle directory?".
  */
 const PRODUCER_SOURCES = [
-  'scripts/build-agent-bundle.mjs',
+  'scripts/build-host-worker-bundle.mjs',
   'scripts/after-pack.js',
   'scripts/build-electron.mjs',
   'electron-builder.yml',
@@ -606,7 +606,7 @@ export function runStaticChecks() {
       check: 'esbuild-externals-allowlist',
       kind: missing.length > 0 ? 'missing' : 'unexpected',
       message:
-        `external list in scripts/build-agent-bundle.mjs drifted from the allowlist`
+        `external list in scripts/build-host-worker-bundle.mjs drifted from the allowlist`
         + `${missing.length ? ` — no longer external: ${missing.join(', ')}` : ''}`
         + `${unexpected.length ? ` — newly external: ${unexpected.join(', ')}` : ''}`,
       evidence: `declared: ${externals.join(', ') || '(none)'}`,
@@ -623,7 +623,7 @@ export function runStaticChecks() {
       check: 'bundle-format',
       kind: 'unexpected',
       message: `agent bundle format is ${format ?? '(unset)'}, expected '${REQUIRED_BUNDLE_FORMAT}'`,
-      evidence: 'scripts/build-agent-bundle.mjs `format:` key',
+      evidence: 'scripts/build-host-worker-bundle.mjs `format:` key',
     });
   }
 
@@ -726,7 +726,7 @@ export function runBundleChecks(options = {}) {
       check: 'bundle-entry-built',
       kind: 'missing',
       message: `no agent bundle at ${entry}`,
-      evidence: 'run `npm run bundle:agent` first',
+      evidence: 'run `npm run bundle:worker` first',
     });
     return { findings, bundleDir };
   }
@@ -748,7 +748,7 @@ export function runBundleChecks(options = {}) {
       check: 'bundle-cjs-marker',
       kind: 'missing',
       message: `no CommonJS marker package.json in ${bundleDir}`,
-      evidence: 'build-agent-bundle.mjs writes it; without it the bundle format is unresolvable',
+      evidence: 'build-host-worker-bundle.mjs writes it; without it the bundle format is unresolvable',
     });
   } else {
     const marker = JSON.parse(readFileSync(markerPath, 'utf8'));

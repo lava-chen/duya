@@ -44,7 +44,7 @@
 | --- | --- |
 | `build-packages.mjs` | `npm run build:packages` |
 | `build-electron.mjs` | `npm run build:electron` |
-| `build-agent-bundle.mjs` | `npm run bundle:agent` |
+| `build-host-worker-bundle.mjs` | `npm run bundle:worker` |
 | `build-cli-bundle.mjs` | `npm run build:cli-bundle` |
 | `build-gateway-bundle.mjs` | `npm run bundle:gateway` |
 | `pack-extension.mjs` | `npm run pack:extension` |
@@ -113,7 +113,7 @@
 
 ### 一次构建的全量 typecheck
 
-`typecheck:all` 先跑静态门禁，再只运行一次 `build:packages`，随后调用 `typecheck:*:prepared` 与其余原有 TypeScript / Electron 错误门禁。prepared 入口只执行检查；直接调用原 `typecheck:runtime`、`typecheck:web`、`typecheck:electron`、`typecheck:agent` 或 `typecheck:cli` 仍保留各自先构建依赖的行为。所有原有 TS 检查和门禁均保留。
+`typecheck:all` 先跑静态门禁，再只运行一次 `build:packages`，随后调用 `typecheck:*:prepared` 与其余原有 TypeScript / Electron 错误门禁。prepared 入口只执行检查；直接调用原 `typecheck:runtime`、`typecheck:web`、`typecheck:electron` 或 `typecheck:cli` 仍保留各自先构建依赖的行为。所有原有 TS 检查和门禁均保留。
 ### 基线文件
 `check-test-coverage.mjs` 只接受源码映射中逐项登记的 alternate runner 路径。每项必须对应精确的 npm 脚本命令，并由 `typecheck:all` 精确调用；其余未收集测试仍会使门禁失败。recorder 的 Node 测试是单独登记项，不豁免整个 `evals/` 目录。
 

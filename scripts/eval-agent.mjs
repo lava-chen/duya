@@ -68,10 +68,10 @@ const outFile = outFlag !== -1 && args[outFlag + 1] !== undefined
   ? path.resolve(repoRoot, args[outFlag + 1])
   : path.join(repoRoot, 'evals', 'agent', 'reports', `${mode}.json`);
 
-if (!existsSync(path.join(repoRoot, 'packages', 'agent', 'bundle', 'agent-process-entry.js'))) {
+if (!existsSync(path.join(repoRoot, 'packages', 'host', 'bundle', 'worker-entry.js'))) {
   process.stderr.write(
-    'eval-agent: the agent bundle is missing.\n'
-    + 'The evals fork the SAME bundle the product forks; run `npm run bundle:agent` first.\n',
+    'eval-agent: the host worker bundle is missing.\n'
+    + 'The evals fork the SAME bundle the product forks; run `npm run bundle:worker` first.\n',
   );
   process.exit(3);
 }

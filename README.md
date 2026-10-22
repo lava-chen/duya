@@ -151,7 +151,7 @@ node packages/cli/bundle/cli.cjs serve
 Then build and start the Web client in another terminal:
 
 ```bash
-npm run build:web-app
+npm run build:web
 npm run web-app
 ```
 
@@ -230,7 +230,7 @@ Keep backups for sensitive work and review tool permissions before running an ag
 npm install
 npm run electron:dev   # start Vite and Electron
 npm run dev:tui        # terminal UI (run build:cli-dev first)
-npm run build:web-app  # build the local Web client
+npm run build:web  # build the local Web client
 npm run electron:build # build the desktop application
 npm run typecheck:all  # type-check every workspace
 npm run test           # run unit tests

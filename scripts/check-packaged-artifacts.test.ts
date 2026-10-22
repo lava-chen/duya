@@ -36,7 +36,7 @@ const readRepoFile = (rel: string): string => readFileSync(path.join(REPO_ROOT, 
 
 describe('extractExternals', () => {
   it('reads the real esbuild external list', () => {
-    const externals = extractExternals(readRepoFile('scripts/build-agent-bundle.mjs'));
+    const externals = extractExternals(readRepoFile('scripts/build-host-worker-bundle.mjs'));
     // Compared as a set: the gate asks "is the allowlist still the declared
     // set", not "is the source order stable". Re-ordering the array is a
     // no-op for resolution and must not redden the gate.
@@ -83,7 +83,7 @@ describe('extractExternals', () => {
 
 describe('extractFormat', () => {
   it('reads the real bundle format', () => {
-    expect(extractFormat(readRepoFile('scripts/build-agent-bundle.mjs')))
+    expect(extractFormat(readRepoFile('scripts/build-host-worker-bundle.mjs')))
       .toBe(REQUIRED_BUNDLE_FORMAT);
   });
 
@@ -318,14 +318,14 @@ describe('bash worker build contract', () => {
     // The defect was precisely that no producer existed. A contract pointing at
     // a script that is not in the tree would silently re-open it.
     const contract = BUNDLE_FILE_CONTRACTS.find((c) => c.id === 'bash-worker');
-    expect(contract!.producer).toBe('scripts/build-agent-bundle.mjs');
-    expect(existsSync(path.join(REPO_ROOT, 'scripts', 'build-agent-bundle.mjs'))).toBe(true);
+    expect(contract!.producer).toBe('scripts/build-host-worker-bundle.mjs');
+    expect(existsSync(path.join(REPO_ROOT, 'scripts', 'build-host-worker-bundle.mjs'))).toBe(true);
   });
 
   it('is actually emitted by that script rather than only mentioned in a comment', () => {
     // Static mode proves a producer NAMES the path. This proves the script
     // really builds it, so a commented-out reference cannot pass as a fix.
-    const source = readRepoFile('scripts/build-agent-bundle.mjs');
+    const source = readRepoFile('scripts/build-host-worker-bundle.mjs');
     const entryPoint = 'packages/host/src/managed-shell/BashWorker.ts';
     expect(source).toContain(entryPoint);
     // ...and esbuild is given the real source path, not a literal file copy.

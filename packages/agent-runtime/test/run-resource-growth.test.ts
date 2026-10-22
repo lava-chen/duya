@@ -288,7 +288,21 @@ describe(`${RUNS} runs leave no timer, process or subscription behind`, () => {
     // Secondary signal only, and labelled as such: `getActiveResourcesInfo()`
     // cannot see the unref'd timers above, so this asserts only that no NEW KIND
     // of resource appeared — a leaked socket or a leaked child would show here.
-    expect(Object.keys(after).sort()).toEqual(Object.keys(before).sort());
+    //
+    // Comparing the whole kind LIST is stricter than that intent, and the
+    // stricter version does not survive a snapshot: the two snapshots are
+    // taken at different moments, and a timer released in between and a pipe
+    // opened in between change the list without anything leaking. Measured on
+    // the Windows runner (run 39643430577): the list went from
+    // ['PipeWrap', 'Timeout'] to ['PipeWrap', 'SimpleWriteWrap'] — a released
+    // timer and a fresh pipe, no leak.
+    //
+    // What IS stable is the set of kinds that ACCUMULATE: a socket or a child
+    // process that leaks adds one per run and stays in the list. Those are
+    // compared; the kinds that come and go are not.
+    const accumulating = (kinds: string[]): string[] =>
+      kinds.filter((kind) => /^(?:TCPWRAP|UDPWRAP|PipeWrap|ProcessWrap)$/i.test(kind)).sort();
+    expect(accumulating(Object.keys(after))).toEqual(accumulating(Object.keys(before)));
   });
 
   it('holds no live run for any finished run id, so nothing can be re-subscribed', async () => {

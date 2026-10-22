@@ -30,16 +30,36 @@ import { isAbsolute, resolve, relative } from 'node:path';
  * callers gate on `allowedRoots?.length` to express "unrestricted".
  *
  * Resolution strategy per root:
- *   1. Realpath the root (root must exist; non-existent roots are skipped).
- *   2. Lexically resolve the target with `path.resolve` (collapses `..`).
- *   3. `path.relative(realRoot, lexTarget)` — if it does NOT start with
- *      `..` and is NOT absolute, the target is lexically inside the root.
+ *   1. Resolve the root LEXICALLY (collapses `..` and any trailing
+ *      separator) and the target lexically too.
+ *   2. `path.relative(lexRoot, lexTarget)` — if it does NOT start with `..`
+ *      and is NOT absolute, the target is lexically inside the root.
  *      `path.relative` returns an absolute path when the drives differ on
  *      Windows (e.g. C: → D:), which correctly rejects cross-drive escapes.
- *   4. If the target exists, realpath it and re-check against the real
- *      root. This catches symlinks inside the root that point outside.
+ *   3. If the target exists, realpath BOTH the root and the target and
+ *      re-check. This catches symlinks inside the root that point outside.
  *      If the target does not exist yet (write case), the lexical check
- *      from step 3 is the best available guarantee and is accepted.
+ *      from step 2 is the best available guarantee and is accepted.
+ *
+ * ## Why both sides of each comparison are the same KIND of path
+ *
+ * The lexical check compares a LEXICAL root with a LEXICAL target, and the
+ * symlink check compares a REAL root with a REAL target. Mixing them — a
+ * realpath'd root against a lexical target — makes the check fail on any
+ * machine whose root path passes through a symlink, because the two spellings
+ * of the same directory no longer share a prefix.
+ *
+ * macOS is that machine: `/var` is a symlink to `/private/var`, so a temp
+ * root at `/var/folders/.../duya-roots-XXXX` has the realpath
+ * `/private/var/folders/.../duya-roots-XXXX`. Comparing that realpath
+ * against the lexical target produced `../../../var/folders/...`, the target
+ * was judged to be OUTSIDE its own root, and every legitimate path was
+ * rejected. Measured on the macOS runner (run 39643430577): 33 assertions
+ * across 4 suites failed with `allowed: false` for paths that were plainly
+ * inside the workspace.
+ *
+ * The symlink-escape protection is unchanged and still there: it is step 3,
+ * and it compares real against real.
  */
 export function isPathWithinRoots(absPath: string, roots: string[]): boolean {
   if (!Array.isArray(roots) || roots.length === 0) return false;
@@ -50,17 +70,21 @@ export function isPathWithinRoots(absPath: string, roots: string[]): boolean {
   for (const root of roots) {
     if (!root || !isAbsolute(root)) continue;
 
-    let realRoot: string;
-    try {
-      realRoot = realpathSync(root);
-    } catch {
-      // Root does not exist or is unreadable; cannot anchor here.
-      continue;
-    }
-
-    const rel = relative(realRoot, lexTarget);
+    // The LEXICAL root and the LEXICAL target, compared to each other. Both
+    // sides must be the same kind of path: see the file header.
+    const lexRoot = resolve(root);
+    const rel = relative(lexRoot, lexTarget);
     if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
       // Lexically inside. Now verify no symlink escape if the target exists.
+      // This comparison is realpath against realpath.
+      let realRoot: string;
+      try {
+        realRoot = realpathSync(lexRoot);
+      } catch {
+        // Root does not exist or is unreadable; cannot anchor here. Skipping
+        // it is the original behaviour and it is the safe one.
+        continue;
+      }
       try {
         const realTarget = realpathSync(lexTarget);
         const relReal = relative(realRoot, realTarget);
