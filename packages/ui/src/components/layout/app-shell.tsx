@@ -253,6 +253,12 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
         </Suspense>
       )}
       <div className="app-shell">
+        {!isMac && (
+          <TitleBar
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={toggleSidebarCollapsed}
+          />
+        )}
         <div
           className="app-body"
           onMouseDown={handleBodyMouseDown}
@@ -270,27 +276,19 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
               maxWidth: effectiveSidebarWidth,
             }}
           />
-          <div className="app-content-column">
-            {!isMac && (
-              <TitleBar
-                sidebarCollapsed={sidebarCollapsed}
-                onToggleSidebar={toggleSidebarCollapsed}
-              />
-            )}
-            <div className="app-workspace-row">
-              <div className="app-main-wrapper">
-                <div className="app-main">
-                  <div className="app-main-inner">
-                    <main className="app-content">{children}</main>
-                  </div>
-                </div>
-                <div className="app-status-bar">
-                  <UpdateBadge />
+          <div className="app-workspace-row">
+            <div className="app-main-wrapper">
+              <div className="app-main">
+                <div className="app-main-inner">
+                  <main className="app-content">{children}</main>
                 </div>
               </div>
-              <PanelZone />
-              <TaskDrawerToggle />
+              <div className="app-status-bar">
+                <UpdateBadge />
+              </div>
             </div>
+            <PanelZone />
+            <TaskDrawerToggle />
           </div>
         </div>
       </div>

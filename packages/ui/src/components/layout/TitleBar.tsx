@@ -195,7 +195,7 @@ export function TitleBar({ sidebarCollapsed = false, onToggleSidebar }: TitleBar
 
   return (
     <div
-      className={`titlebar-drag-region${isMac ? " is-mac" : " is-win"}`}
+      className={`titlebar${isMac ? " is-mac" : " is-win"}`}
       style={{
         "--window-controls-offset": isMac ? "70px" : "0px",
       } as React.CSSProperties}
@@ -269,7 +269,6 @@ export function TitleBar({ sidebarCollapsed = false, onToggleSidebar }: TitleBar
           />
         ))}
       </nav>
-      <div className="titlebar-drag-fill" />
       {/* The session actions sit right next to the native window controls,
           which the platform draws over the reserved right margin. */}
       <div className="titlebar-actions">

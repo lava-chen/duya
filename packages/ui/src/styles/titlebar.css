@@ -147,23 +147,18 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Electron draggable title bar region */
-.titlebar-drag-region {
+/* Window title bar. It spans the whole window: the brand chip, the
+   navigation buttons and the menus sit above the sidebar, the session
+   actions sit at the right end, next to the native window controls. */
+.titlebar {
   height: 44px;
   width: 100%;
-  -webkit-app-region: drag;
   flex-shrink: 0;
   position: relative;
   z-index: 100;
   display: flex;
   align-items: center;
   background: var(--sidebar-bg);
-}
-
-/* Drag filler after the menu bar — everything not a control stays draggable. */
-.titlebar-drag-fill {
-  flex: 1;
-  align-self: stretch;
 }
 
 /* Brand chip doubles as the sidebar rail toggle: hovering swaps the app icon
@@ -182,7 +177,6 @@
   border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 
 .titlebar-brand .titlebar-logo {
@@ -248,15 +242,13 @@
   cursor: default;
 }
 
-/* Native-style menu bar (文件 / 编辑 / 视图 / 帮助). Each item hosts a
-   DropdownMenu portal; the bar itself must not drag the window. */
+/* Native-style menu bar (文件 / 编辑 / 视图 / 帮助). */
 .titlebar-menubar {
   display: flex;
   align-items: center;
   gap: 2px;
   margin-left: 6px;
   height: 100%;
-  -webkit-app-region: no-drag;
 }
 
 .titlebar-menubar-item {
@@ -293,14 +285,6 @@
   color: var(--muted);
 }
 
-/* Make sure buttons in the drag region are clickable */
-.titlebar-drag-region button,
-.titlebar-drag-region a,
-.titlebar-drag-region input,
-.titlebar-drag-region select {
-  -webkit-app-region: no-drag;
-}
-
 /* Title bar right actions */
 .titlebar-actions {
   display: flex;
@@ -313,12 +297,12 @@
 }
 
 /* Windows: reserve space for window controls (min/max/close) on the right */
-.titlebar-drag-region.is-win .titlebar-actions {
+.titlebar.is-win .titlebar-actions {
   padding-right: 140px;
 }
 
 /* macOS: no right-side window controls needed */
-.titlebar-drag-region.is-mac .titlebar-actions {
+.titlebar.is-mac .titlebar-actions {
   padding-right: 1rem;
 }
 

@@ -44,29 +44,6 @@
 }
 
 /* ============================================
-   Window shell
-   ============================================
-   The window is split left / right: the sidebar runs the full height,
-   and the title bar spans the content area only — the session title and
-   its actions then sit in the same row as the native window controls.
-*/
-
-.app-content-column {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-}
-
-.titlebar-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-/* ============================================
    Panel wall
    ============================================
    The side panel is a grid of panel cards. Every card owns its header
