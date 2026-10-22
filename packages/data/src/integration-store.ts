@@ -1,8 +1,8 @@
 /**
  * integration-store.ts — the observed PR / CI / review / merge projection for
- * `duya-core.db` (plan 621, migration 43).
+ * `duya-core.db` (plan 621, migrations 43 + 44).
  *
- * ## This table is a cache, and it is the only new table in plan 621
+ * ## `integrations` is a cache; `integration_events` is the history
  *
  * `(repo, pr_number)` identifies an Integration, and GitHub is the authority
  * for everything else about it. Every column that could be mistaken for a fact
@@ -10,6 +10,15 @@
  * participating in a decision about writing, deleting or identity. Reading this
  * module to answer "can this checkout go away" is a contract violation, not a
  * shortcut: the row may be days old.
+ *
+ * The row itself is a single-line upsert: it answers "what did we last see".
+ * History lives in `integration_events` (migration 44, plan 621 slice E): one
+ * append-only row per OBSERVED STATE CHANGE, so §4.4's "state transitions do
+ * not overwrite history" has a home. Two disciplines keep the table bounded:
+ * a repeated observation of the same state appends nothing (polling must not
+ * flood it), and `from_state` of the very first event is NULL — `none` is a
+ * state meaning "there is no PR", which is a different fact from "we never
+ * looked before".
  *
  * ## Why `integration_sessions` carries no foreign key to `sessions`
  *
@@ -54,6 +63,20 @@ export interface IntegrationSessionRow {
   readonly last_seen_at: number;
 }
 
+/**
+ * One append-only state-transition record. `from_state` is NULL for the first
+ * observed state; `observed_error` is set only when `to_state` is `unknown`.
+ */
+export interface IntegrationEventRow {
+  readonly id: number;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly from_state: HostIntegrationState | null;
+  readonly to_state: HostIntegrationState;
+  readonly observed_error: string | null;
+  readonly observed_at: number;
+}
+
 export interface UpsertIntegrationObservationInput {
   readonly repo: string;
   readonly prNumber: number;
@@ -76,7 +99,10 @@ export interface LinkIntegrationSessionInput {
 
 /** Observed-state projection over the core database. Read-mostly, non-authoritative. */
 export class IntegrationStore {
-  /** Migration id=43: `integrations` + `integration_sessions`. Owned by plan 621 slice B. */
+  /**
+   * Migrations id=43 (`integrations` + `integration_sessions`, slice B) and
+   * id=44 (`integration_events`, slice E). Owned by plan 621.
+   */
   static readonly migrations: Migration[] = [
     {
       id: 43,
@@ -116,6 +142,31 @@ export class IntegrationStore {
         `);
       },
     },
+    {
+      id: 44,
+      name: 'create_integration_events',
+      up: (db) => {
+        db.exec(`
+          -- Append-only transition history (plan 621 §4.4): the integrations
+          -- row is a single-line upsert, so without this table every state
+          -- change would overwrite the previous one. No FK to integrations:
+          -- the projection can be rebuilt from GitHub, the history cannot.
+          -- the projection can be rebuilt from GitHub, the history cannot.
+          CREATE TABLE IF NOT EXISTS integration_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo           TEXT NOT NULL,
+            pr_number      INTEGER NOT NULL,
+            from_state     TEXT,
+            to_state       TEXT NOT NULL,
+            observed_error TEXT,
+            observed_at    INTEGER NOT NULL
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_integration_events_pr
+            ON integration_events(repo, pr_number, observed_at);
+        `);
+      },
+    },
   ];
 
   private readonly db: SqliteDatabase;
@@ -129,13 +180,19 @@ export class IntegrationStore {
   }
 
   /**
-   * Write one observation over the previous one.
+   * Write one observation over the previous one, and append an
+   * `integration_events` row when the observed state changed.
    *
    * Only `observed_*` and `updated_at` move. `created_at` is the first time
    * this PR was ever seen and is never rewritten, so "how long have we known
    * about this PR" survives a thousand re-observations. A successful
    * observation clears `observed_error`, because the previous failure is no
    * longer true of the row.
+   *
+   * The event append is state-change-gated (§4.4): a repeated observation of
+   * the same state writes history only once, so a poller cannot flood the
+   * table. A failed (`unknown`) observation is recorded like any other —
+   * "we tried and could not see" is as historical as a successful read.
    */
   upsertObservation(input: UpsertIntegrationObservationInput): IntegrationRow {
     const repo = requireNonEmpty(input.repo, 'repo');
@@ -149,36 +206,59 @@ export class IntegrationStore {
 
     const now = Date.now();
     const observedAt = input.observedAt ?? now;
-    this.db
-      .prepare(
-        `INSERT INTO integrations (
-          repo, pr_number, observed_state, observed_head_sha, observed_base_ref,
-          observed_url, observed_error, observed_at, created_at, updated_at
-        ) VALUES (
-          @repo, @pr_number, @state, @head_sha, @base_ref,
-          @url, @error, @observed_at, @created_at, @updated_at
+    // One transaction: a row without its transition (or the reverse) would be
+    // a half-written history.
+    const write = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO integrations (
+            repo, pr_number, observed_state, observed_head_sha, observed_base_ref,
+            observed_url, observed_error, observed_at, created_at, updated_at
+          ) VALUES (
+            @repo, @pr_number, @state, @head_sha, @base_ref,
+            @url, @error, @observed_at, @created_at, @updated_at
+          )
+          ON CONFLICT(repo, pr_number) DO UPDATE SET
+            observed_state    = excluded.observed_state,
+            observed_head_sha = excluded.observed_head_sha,
+            observed_base_ref = excluded.observed_base_ref,
+            observed_url      = excluded.observed_url,
+            observed_error    = excluded.observed_error,
+            observed_at       = excluded.observed_at,
+            updated_at        = excluded.updated_at`,
         )
-        ON CONFLICT(repo, pr_number) DO UPDATE SET
-          observed_state    = excluded.observed_state,
-          observed_head_sha = excluded.observed_head_sha,
-          observed_base_ref = excluded.observed_base_ref,
-          observed_url      = excluded.observed_url,
-          observed_error    = excluded.observed_error,
-          observed_at       = excluded.observed_at,
-          updated_at        = excluded.updated_at`,
-      )
-      .run({
-        repo,
-        pr_number: prNumber,
-        state: input.state,
-        head_sha: input.headSha ?? null,
-        base_ref: input.baseRef ?? null,
-        url: input.url ?? null,
-        error: observedError,
-        observed_at: observedAt,
-        created_at: now,
-        updated_at: now,
-      });
+        .run({
+          repo,
+          pr_number: prNumber,
+          state: input.state,
+          head_sha: input.headSha ?? null,
+          base_ref: input.baseRef ?? null,
+          url: input.url ?? null,
+          error: observedError,
+          observed_at: observedAt,
+          created_at: now,
+          updated_at: now,
+        });
+
+      const last = this.db
+        .prepare(
+          `SELECT to_state FROM integration_events
+           WHERE repo = ? AND pr_number = ?
+           ORDER BY id DESC
+           LIMIT 1`,
+        )
+        .get(repo, prNumber) as { to_state: HostIntegrationState } | undefined;
+      if (last === undefined || last.to_state !== input.state) {
+        this.db
+          .prepare(
+            `INSERT INTO integration_events (
+              repo, pr_number, from_state, to_state, observed_error, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(repo, prNumber, last?.to_state ?? null, input.state, observedError, observedAt);
+      }
+    });
+    write();
     return this.get(repo, prNumber)!;
   }
 
@@ -208,6 +288,25 @@ export class IntegrationStore {
          ORDER BY i.observed_at, i.repo, i.pr_number`,
       )
       .all(sessionId) as IntegrationRow[];
+  }
+
+  /**
+   * The state-transition history of one PR, newest first.
+   *
+   * Reads `integration_events` only: this is history, never the current
+   * answer — "what is the state now" belongs to `get` / the `observed_*` row.
+   */
+  listEvents(repo: string, prNumber: number, limit = 50): IntegrationEventRow[] {
+    if (!repo || !Number.isSafeInteger(prNumber)) return [];
+    const bounded = Number.isSafeInteger(limit) && limit > 0 ? limit : 50;
+    return this.db
+      .prepare(
+        `SELECT * FROM integration_events
+         WHERE repo = ? AND pr_number = ?
+         ORDER BY id DESC
+         LIMIT ?`,
+      )
+      .all(repo, prNumber, bounded) as IntegrationEventRow[];
   }
 
   /**
