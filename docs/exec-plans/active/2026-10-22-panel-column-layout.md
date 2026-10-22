@@ -110,6 +110,27 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **分隔条命名按实测格式 `调整 <左/上所有 pane> 和 <右/下所有 pane> 的大小`**（逗号分隔、从左到右）。这条格式是**中文硬编码**：本切片路径不含 `packages/ui/src/i18n/**`，无法加 i18n key，故英文界面下也是中文可访问名——留给拥有 i18n 与 `PanelHeader` 的后续切片本地化。
 - **`workspaceExpanded` / `panelOpen` 仍是区域级开关**：展开态是整个区域铺满工作区，列树在其中横向排布；列树不引入第二个开关。
 
+### 切片 A 的方向调整：面板卡片墙（2026-10-22 按用户反馈重做）
+
+用户看截图后判定「完全不对」：目标不是「列树 + 全局 tab 条」，而是 Claude Code「Code」模式的**面板卡片墙**——右侧是网格，每张卡片是独立面板（文件查看 / 代码审查 / 浏览器 / 终端 / 后台任务），画布不管。重做时按截图逐张**量像素**，不目测。
+
+- **量出来的规格**（截图 `屏幕截图 2026-10-19 211831.png`，1920×1031）：卡片墙左沿 x=780、右沿 x=1912；列分隔在 x=1201（卡片间缝 3–4px）；卡片 header 高 ≈ 28px（图标中心 y=53，卡片顶 y=40）；行分隔带 y=527–543。
+- **网格形状随卡片数**：1–2 张 = 1 列（上下堆叠，每张占满宽）；≥3 张 = 2 列 × ⌈n/2⌉ 行。空格子渲染成「+」格，作为加入面板的入口。
+- **每张卡片自带 header**（图标 + 标题 + 展开 + 关闭），**没有全局 tab 条**：`PanelHeader.tsx` 未被本切片改动，但 `PanelZone` 不再渲染它。
+- **区域宽与列宽解耦**：区域宽由左边缘拖拽条决定（`panelWidth`），列/行只分配区域内的份额（ratio）。拖列分隔条只改份额，区域宽不变。
+- **面板集合收敛到 5 种**：文件 / 代码审查 / 浏览器 / 终端 / 后台任务（暂用 `workflow` 面板）。画布（`conductor`）不进卡片墙，但事件打开仍可用。新增 `panels/wall-pages.ts` 记录这张表，**没有改 `registry.ts`**。
+- **模型从列树换成墙**：`layout-model.ts` 重写为 `panes / columns / columnRatios / rowRatios / expandedPaneId`；旧 payload（列树）识别不出来就按 tab 顺序迁移成墙；持久化仍是 `duya:panel:v2:<sessionKey>` 的可选字段 `layout`。
+- **上面「切片 A 的取舍」那套（族内同列、区域宽=列宽之和、靠全局 tab 条做拖拽换位）随之作废**，由墙模型取代。
+
+### 窗口整体布局的调整（用户追加要求）
+
+用户追加：duya 的整体布局改成截图里的左右布局，并把右上角那排按钮并到窗口控制区旁边。
+
+- **顶栏只盖内容区**：`.app-body` 变成「左：侧栏（整高）／右：`.app-content-column`（顶栏 + 工作区）」，侧栏因此占满窗口高度，标题栏只跨内容区——与截图一致（截图里左侧图标栏 + 侧栏是整高的，顶栏在内容区）。
+- **会话动作并到窗口控制区旁**：`ChatHeaderActions` 从聊天 header 右侧移到 `TitleBar` 的 `.titlebar-actions`（`titlebar.css` 早就为 Windows 原生窗口按钮预留了 `padding-right: 140px`）。重命名动作经 `duya:rename-thread` 窗口事件回到 header，标题编辑仍归 header。
+- **macOS 例外**：macOS 用原生 inset 标题栏、没有自绘顶栏，动作留在聊天 header 里（`hasCustomTitleBar()` 判定）。
+- **未做**：`registry.ts` 里的画布页面本身没有删（不在本切片路径，且 i18n 键也在路径外）；侧栏内部结构（图标栏）没重做，只把它变成整高。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -125,6 +146,11 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | 21b764e9 / clean | 同上 | `npm run typecheck:all` | 0 | 含 electron gate `OK — no new type errors` |
 | 21b764e9 / clean | 同上 | `npm run test:e2e:ui-states` | 1 | 与基线**同文件 / 同用例 / 同错误签名**的既有失败，未新增失败 |
 | 21b764e9 / clean | 同上 | `npm run electron:build` + `node docs-local/research/panel-column-layout/column-evidence.mjs` | 0 | 真实 Electron 里截图与数值见下 |
+| a256e982 / clean（面板墙） | 同上 | `npx vitest run packages/ui/src/components/layout` | 0 | 19 个 suite / 188 个用例全过；`layout-model` 27 例 + `PanelZone` 7 例为新增/重写 |
+| 15da2da4 / clean（面板墙 + 窗口布局） | 同上 | `npx tsc --noEmit` | 0 | web 侧类型检查通过 |
+| 15da2da4 / clean | 同上 | `npx vitest run packages/ui` | 0 | 210 个 suite / 2202 个用例全过（2 skipped） |
+| 15da2da4 / clean | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；`.architecture-baseline.json` 未改动 |
+| 15da2da4 / clean | 同上 | `npm run test:e2e:ui-states` | 0 | 4 个用例全过；基线上那条主题开关的既有失败（`ui-states.spec.ts:376`）本次也通过 |
 
 ### 切片 A 的可见行为证据（真实 Electron，1600×900）
 
@@ -139,16 +165,23 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 ## 接续 / 结果
 
-已实现：切片 A —— 侧面板改为「多列 + 列内堆叠」：`panels/layout-model.ts`（列树模型与归位规则）、`usePanel.ts`（列树状态、持久化、宽度记账）、`PanelZone.tsx`（列/栈渲染与分隔条）、`ResizeHandle.tsx`（横向分隔条变体）、`workspace.css`（列树样式）、模型与渲染单测。
+已实现（**方向已重做为面板卡片墙**）：
 
-已验证：上表全部命令（退出码见表）；真实 Electron 里两列并排 / 关一个后同列占满且列宽不变，均有截图与数值。
+- `panels/layout-model.ts` 重写为**墙模型**（`panes / columns / columnRatios / rowRatios / expandedPaneId` + 形状推导、份额归一化、像素几何、分隔条命名）。
+- 新增 `panels/PanelCard.tsx`（卡片 chrome：图标 + 标题 + 展开 + 关闭）、`panels/wall-pages.ts`（面板集合表）。
+- `PanelZone.tsx` 渲染**网格 + 卡片 + 双向可拖分隔条 + 「+」空格**，不再渲染全局 tab 条；新增一条 28px 的墙工具条承载「加入面板」。
+- `usePanel.ts` 换成墙状态与持久化（旧载荷迁移），区域宽与列份额解耦。
+- `workspace.css` 换成墙样式（卡片间距 4px、卡片 header 28px、圆角 6px）。
+- 窗口布局：顶栏只盖内容区（侧栏整高），会话动作移到顶栏右端、原生窗口按钮旁（`app-shell.tsx` / `TitleBar.tsx` / `ChatHeader.tsx`）。
+
+已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`test:e2e:ui-states` 0 / 4 例）。**本轮没有实机截图证据**：构建 + 启动真实 Electron 的成本太高，结论来自单测、e2e 与对用户截图的像素量测。
 
 已合并：无（PR 未合并，等授权）。
 
-PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，CI 可触发；head = `codex/panel-layout-columns`）。
+PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。
 
-外部副作用：在本 worktree 的 `e2e/.e2e-userdata/panel-column-layout/` 留下一个隔离命名空间的测试会话；`docs-local/research/panel-column-layout/` 留有截图与证据脚本（均不入库）。构建产物（`packages/*/dist`、`dist/`、`dist-electron/`）只写在本 worktree。
+外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1`）与墙样式草稿（均不入库）。
 
-阻塞：无。C（拖拽换位）可在本切片合入后开工，写回点仍是 `layout-model.ts` / `usePanel.ts`；`PanelHeader.tsx` / `PaneDragHandle` 未被本切片改动。
+阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（图标栏）没重做。
 
-回收：未回收（分支与 worktree 保留给评审与后续切片）。
+回收：未回收（分支与 worktree 保留给评审与后续切片）。切片 C（拖拽换位）若继续，墙模型是它的写回点（`layout-model.ts` / `usePanel.ts`）；`PanelHeader.tsx` 现已不被 `PanelZone` 渲染，接手前先确认它的新定位。
