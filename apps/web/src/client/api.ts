@@ -28,6 +28,7 @@ import type {
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestStatus,
+  HostProviderCatalog,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -290,15 +291,22 @@ export class ApiClient {
   /**
    * Start one run.
    *
-   * The shared renderer sends the model, the provider and the thinking-effort
-   * level the user picked, and this transport carries all three: the Host
-   * resolves the first two against its own config and reads the third as a
-   * turn option. Anything else — a working directory, a raw options bag — is
-   * refused rather than dropped, because a dropped option is a run that
-   * silently ran with different configuration than the screen promised.
+   * The shared renderer sends the turn's configuration: the model, the
+   * provider, the thinking-effort level, the permission mode, the agent
+   * profile, and the modes and tools the turn declares. This transport carries
+   * all of them, because the Host resolves each of them the same way it does
+   * for the Desktop renderer — a browser that could not name them would be a
+   * browser whose turns silently ran under different rules than the user's.
+   *
+   * Anything else — a working directory, a raw options bag — is refused rather
+   * than dropped, because a dropped option is a run that silently ran with
+   * different configuration than the screen promised.
    */
   async startHostRun(input: UiStartRunInput): Promise<StartAgentRunResult> {
-    const allowedKeys = new Set(['sessionId', 'prompt', 'origin', 'model', 'providerId', 'effort']);
+    const allowedKeys = new Set([
+      'sessionId', 'prompt', 'origin', 'model', 'providerId', 'effort',
+      'permissionMode', 'agentProfileId', 'modes', 'tools',
+    ]);
     if (Object.keys(input).some((key) => !allowedKeys.has(key)) || typeof input.prompt !== 'string' ||
         (input.origin !== undefined && input.origin !== 'user')) {
       throw new ApiError(400, 'unsupported_run_options');
@@ -309,6 +317,10 @@ export class ApiClient {
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.providerId === undefined ? {} : { providerId: input.providerId }),
       ...(input.effort === undefined ? {} : { effort: input.effort }),
+      ...(input.permissionMode === undefined ? {} : { permissionMode: input.permissionMode }),
+      ...(input.agentProfileId === undefined ? {} : { agentProfileId: input.agentProfileId }),
+      ...(input.modes === undefined ? {} : { modes: input.modes }),
+      ...(input.tools === undefined ? {} : { tools: input.tools }),
     }, {}, 'POST');
     if (body['accepted'] === true && typeof body['runId'] === 'string') {
       return { accepted: true, stage: body['stage'] === 'created' ? 'created' : 'dispatched', runId: body['runId'] };
@@ -318,6 +330,46 @@ export class ApiClient {
       throw new ApiError(200, 'invalid_run_start_result');
     }
     return { accepted: false, stage, reason: typeof body['reason'] === 'string' ? body['reason'] : 'unknown' };
+  }
+
+  /**
+   * Ask the Host to register a local directory as a workspace.
+   *
+   * The browser names a DIRECTORY, and the Host returns the workspace BINDING
+   * that a session needs. The browser never gets to name the path the worker
+   * runs in — it asks for a directory to be registered, and the Host decides
+   * what that becomes. That is the same boundary the Desktop's workspace
+   * registration keeps.
+   */
+  async registerLocalDirectory(directory: string): Promise<HostWorkspaceBinding> {
+    const body = await this.#mutate(
+      '/api/workspaces/local-directories',
+      { directory },
+      {},
+      'POST',
+    );
+    const workspace = body['workspace'];
+    if (!isRecord(workspace)) throw new ApiError(200, 'invalid_workspace_binding');
+    return workspace as unknown as HostWorkspaceBinding;
+  }
+
+  /**
+   * The Host's configured provider/model roster.
+   *
+   * This is the roster the Host adjudicates a turn's model against, so the
+   * browser shows THIS one: offering a model the Host would refuse would be
+   * offering a lie. The catalog carries no secrets -- it says whether a
+   * provider HAS a key, never the key itself.
+   *
+   * `null` means the Host has no roster at all, which is a thing a screen can
+   * show rather than an error.
+   */
+  async getProviderCatalog(): Promise<HostProviderCatalog | null> {
+    const body = await this.#readJson('/api/providers/catalog', {});
+    const catalog = body['catalog'];
+    if (catalog === null || catalog === undefined) return null;
+    if (!isRecord(catalog)) throw new ApiError(200, 'invalid_provider_catalog');
+    return catalog as unknown as HostProviderCatalog;
   }
 
   async cancelHostRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult> {

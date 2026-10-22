@@ -23660,18 +23660,60 @@
       ],
       "format": "esm"
     },
-    "packages/client-core/src/decoding/sse.ts": {
-      "bytes": 3952,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/client-core/src/decoding/envelope.ts": {
       "bytes": 4240,
       "imports": [],
       "format": "esm"
     },
+    "packages/client-core/src/decoding/sse.ts": {
+      "bytes": 3952,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/client-core/src/session/run-event-stream.ts": {
+      "bytes": 16554,
+      "imports": [
+        {
+          "path": "packages/client-core/src/session/run-session.ts",
+          "kind": "import-statement",
+          "original": "./run-session.js"
+        },
+        {
+          "path": "packages/client-core/src/decoding/envelope.ts",
+          "kind": "import-statement",
+          "original": "../decoding/envelope.js"
+        },
+        {
+          "path": "packages/client-core/src/decoding/sse.ts",
+          "kind": "import-statement",
+          "original": "../decoding/sse.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/client-core/src/session/run-projection.ts": {
+      "bytes": 8148,
+      "imports": [
+        {
+          "path": "packages/client-core/src/session/run-session.ts",
+          "kind": "import-statement",
+          "original": "./run-session.js"
+        },
+        {
+          "path": "packages/client-core/src/session/run-event-stream.ts",
+          "kind": "import-statement",
+          "original": "./run-event-stream.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/client-core/src/transport/host-api.ts": {
+      "bytes": 12653,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/client-core/src/index.ts": {
-      "bytes": 165,
+      "bytes": 294,
       "imports": [
         {
           "path": "packages/client-core/src/surface/surface-model.ts",
@@ -23684,6 +23726,16 @@
           "original": "./session/run-session.js"
         },
         {
+          "path": "packages/client-core/src/session/run-event-stream.ts",
+          "kind": "import-statement",
+          "original": "./session/run-event-stream.js"
+        },
+        {
+          "path": "packages/client-core/src/session/run-projection.ts",
+          "kind": "import-statement",
+          "original": "./session/run-projection.js"
+        },
+        {
           "path": "packages/client-core/src/decoding/sse.ts",
           "kind": "import-statement",
           "original": "./decoding/sse.js"
@@ -23692,6 +23744,11 @@
           "path": "packages/client-core/src/decoding/envelope.ts",
           "kind": "import-statement",
           "original": "./decoding/envelope.js"
+        },
+        {
+          "path": "packages/client-core/src/transport/host-api.ts",
+          "kind": "import-statement",
+          "original": "./transport/host-api.js"
         }
       ],
       "format": "esm"
@@ -27362,7 +27419,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -43141,7 +43198,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -43225,13 +43282,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -43321,7 +43378,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43333,7 +43390,7 @@
           "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -43348,10 +43405,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43438,7 +43495,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -45037,7 +45094,7 @@
           "bytesInOutput": 1949
         },
         "packages/capabilities/src/BrowserTool/ports.ts": {
-          "bytesInOutput": 227
+          "bytesInOutput": 240
         },
         "packages/capabilities/src/BrowserTool/stealth.ts": {
           "bytesInOutput": 7748
@@ -45969,14 +46026,23 @@
         "packages/client-core/src/session/run-session.ts": {
           "bytesInOutput": 36
         },
-        "packages/client-core/src/decoding/sse.ts": {
-          "bytesInOutput": 30
-        },
         "packages/client-core/src/decoding/envelope.ts": {
           "bytesInOutput": 30
         },
+        "packages/client-core/src/decoding/sse.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/client-core/src/session/run-event-stream.ts": {
+          "bytesInOutput": 48
+        },
+        "packages/client-core/src/session/run-projection.ts": {
+          "bytesInOutput": 42
+        },
+        "packages/client-core/src/transport/host-api.ts": {
+          "bytesInOutput": 30
+        },
         "packages/client-core/src/index.ts": {
-          "bytesInOutput": 41
+          "bytesInOutput": 59
         },
         "packages/agent-runtime/src/surface/legacy-projection.ts": {
           "bytesInOutput": 316
@@ -46027,7 +46093,7 @@
           "bytesInOutput": 225
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -47653,7 +47719,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1005
+          "bytesInOutput": 1007
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -49258,7 +49324,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5528843
+      "bytes": 5529122
     }
   }
 }

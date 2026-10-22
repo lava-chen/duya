@@ -26,10 +26,10 @@ base：96dadf4d · owner：mavis
 
 | 切片 | 分支 / worktree | 独占路径 | 依赖 |
 | --- | --- | --- | --- |
-| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
+| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
 | **B 脱窗（Electron 侧）** | `codex/panel-layout-detach` / `panel-layout-detach` | `apps/desktop/src/main/**`；`apps/desktop/src/preload/**` | 本计划（IPC 契约与 A 的数据模型解耦，只用字符串参数） |
-| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
-| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/usage/**`；`packages/ui/src/styles/composer-panels.css` | 与 A 无冲突，可并行 |
+| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；新增 `packages/ui/src/components/layout/PaneDragHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
+| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css`；`packages/ui/src/styles/globals.css`（仅新增分桶调色板变量） | 与 A 无冲突，可并行 |
 
 集成顺序：**A → C**；B、D 独立，可各自先合。
 
@@ -77,11 +77,11 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 ## 进度
 
 - [x] 调研 Claude Desktop 布局模型（AX 树 + 截图），确定列树结构与归位规则
-- [x] 写本计划
-- [ ] A：列树渲染 + 归位规则（子 agent）
+- [x] 写本计划（PR #351）
+- [ ] A：列树渲染 + 归位规则（子 agent 进行中 · `codex/panel-layout-columns`）
 - [x] B：脱窗 Electron 侧（子 agent）—— 已实现并验证，见「验证记录」；分支 `codex/panel-layout-detach`
-- [ ] C：拖拽换位（第二波）
-- [ ] D：用量浮层对齐（第二波）
+- [ ] D：用量浮层（分段色条 + 分桶明细）（子 agent 进行中 · `codex/panel-layout-usage`）
+- [ ] C：拖拽换位（第二波，依赖 A 落地）
 
 ## 发现与决策
 
@@ -98,7 +98,12 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **duya 有 Claude 没有的东西，要保留**：面板级尺寸约束（`minWidth`/`widthRatio`/`maxWidthRatio`）与快捷键（`Ctrl+\`` / `Ctrl+T` / `Ctrl+Shift+G` / `Ctrl+P` / `Ctrl+Alt+S`）。列宽计算要继续受聊天列最小宽度保护（现有 `MIN_CHAT_WIDTH` / `MAX_PANEL_RATIO`）。
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
+- **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
+- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
+- **CI 只对 base=master 的 PR 触发**（`.github/workflows/test.yml:19-20` 是 `pull_request: branches: [master]`）。切片 A/B/D 的 PR 因此一律 base=master，计划文件随之进入各 PR（单独的"计划 PR"随之关闭）。堆叠到非默认分支会拿不到"必需检查通过"的证据。
+- **`ResizeHandle.tsx` 归切片 A 而不是 C**：列内堆叠需要纵向分隔条，而现有实现只有横向（`ResizeHandle.tsx:6` 的 `side: "left" | "right"`、`:143` 写死 `aria-orientation="vertical"`）。C 不碰它，改为新建 `PaneDragHandle.tsx`。
+- **分隔条命名沿用现有无障碍基础**：`ResizeHandle.tsx` 已有 `role="separator"` / `aria-orientation` / `aria-label` / `aria-valuenow|min|max` / 键盘方向键步进 / Home / End / Enter 重置 / 双击重置（`:104-168`）。新列树沿用这一套，`aria-label` 按 `调整 <左侧所有 pane> 和 <右侧所有 pane> 的大小`（纵向则是「上方 / 下方」）命名。
 - **B 切片：脱窗窗口加载同一个 renderer，只靠入口参数区分身份**。没有为脱窗复制一套面板实现——脱窗窗口用同一份 `dist/index.html`、同一套 preload，只多带 `--duya-panel-id=` / `--duya-panel-page=`（preload 读得到）和 `?duyaPanel=` / `?duyaPanelPage=`（人可读、便于排障）两组入口参数。复制一套面板实现等于复制一份面板状态机，和「主窗持有布局真值」直接冲突。
 - **B 切片：布局真值留在主窗，脱窗窗口只发意图**。列 / 面板顺序 / 列宽全在主窗 renderer；脱窗窗口只通过 `panel-window:*` 通道把「收回 / 置顶」等意图发回主进程。原生 X 不销毁面板实例——主窗的列树里那个 pane 一直在，只是 host 从 `detached` 变回 `docked`，所以「关掉脱窗 = 面板状态不丢」是天然成立的。
 - **B 切片：原生 X 在主进程里被翻译成「收回主窗」**。做法是脱窗的 `close` 事件里 `preventDefault()` 拒绝这次关闭，再由主进程自己关一次；第二次关闭被推迟一个 tick（`setImmediate`），因为在 `close` 事件里再调 `close()` 是重入的。另外 `before-quit` 会置位一个 quitting 标志——否则「关窗 = 收回」会把应用退出也一起拦下来。
