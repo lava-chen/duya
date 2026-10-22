@@ -1,3 +1,4 @@
+// apps/desktop/src/renderer/components/chat/ChatHeader.tsx
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,19 +15,130 @@ interface ChatHeaderProps {
 
 const NOOP_OPEN_PANEL = () => "";
 
+/** The event that asks the chat header to start renaming its title. */
+const RENAME_THREAD_EVENT = "duya:rename-thread";
+
+/**
+ * macOS keeps the native title bar, so the session actions stay with the
+ * chat header there. Everywhere else the window draws its own title bar,
+ * and the actions live next to the native window controls.
+ */
+function hasCustomTitleBar(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.electronAPI?.versions?.platform !== "darwin";
+}
+
+/**
+ * The action cluster of the session title bar.
+ *
+ * It sits in the window's top bar, right next to the native window
+ * controls, so the top bar carries the session title and the session
+ * actions in one row.
+ */
+export function ChatHeaderActions() {
+  const { t } = useTranslation();
+  const currentView = useConversationStore((s) => s.currentView);
+  const thread = useConversationStore((s) => {
+    const id = s.activeThreadId;
+    return id ? s.threads.find((candidate) => candidate.id === id) ?? null : null;
+  });
+  const setCurrentView = useConversationStore((s) => s.setCurrentView);
+  const openOrActivatePage = useOptionalPanel()?.openOrActivatePage ?? NOOP_OPEN_PANEL;
+
+  const handleCopyId = useCallback(() => {
+    if (!thread) return;
+    navigator.clipboard.writeText(thread.id).catch(() => {});
+  }, [thread]);
+
+  const handleCopyTitle = useCallback(() => {
+    if (!thread) return;
+    navigator.clipboard.writeText(thread.title || "").catch(() => {});
+  }, [thread]);
+
+  const menuItems: MenuAction[] = thread
+    ? [
+        {
+          kind: "action",
+          id: "rename",
+          label: t("thread.renameThread"),
+          // Plan 582 (G8): the `Ctrl+Alt+R` / `Ctrl+Alt+S` labels that used to
+          // sit here had no keydown handler anywhere in the renderer — grep for
+          // `altKey` finds nothing. They advertised shortcuts that did nothing,
+          // which is worse than showing none: users bind muscle memory to a key
+          // and then conclude the app is broken. Re-add a label only alongside the
+          // handler that implements it.
+          onSelect: () => {
+            window.dispatchEvent(new CustomEvent(RENAME_THREAD_EVENT));
+          },
+        },
+        { kind: "divider", id: "div-1" },
+        {
+          kind: "action",
+          id: "openSideChat",
+          label: t("chat.header.openSideChat"),
+          onSelect: () => {
+            openOrActivatePage("files");
+          },
+        },
+        {
+          kind: "submenu",
+          id: "copy",
+          label: t("chat.header.copy"),
+          items: [
+            {
+              kind: "action",
+              id: "copyId",
+              label: t("chat.header.copyId"),
+              onSelect: handleCopyId,
+            },
+            {
+              kind: "action",
+              id: "copyTitle",
+              label: t("chat.header.copyTitle"),
+              onSelect: handleCopyTitle,
+            },
+          ],
+        },
+        {
+          kind: "action",
+          id: "addAutomation",
+          label: t("chat.header.addAutomation"),
+          onSelect: () => {
+            setCurrentView("automation");
+          },
+        },
+      ]
+    : [];
+
+  if (!thread || currentView !== "chat") return null;
+
+  return (
+    <DropdownMenu
+      trigger={
+        <button
+          type="button"
+          className="chat-header-btn chat-header-menu-trigger"
+          title={t("chat.header.more")}
+          aria-label="More actions"
+        >
+          <DotsThreeIcon size={16} />
+        </button>
+      }
+      items={menuItems}
+    />
+  );
+}
+
 /**
  * In-content header for the active chat session.
  *
- * Mirrors the IDE-style "open file" tab: thread title (click-to-rename),
- * inline project name, and action menu (…). Mounted by ChatView at the
- * top of the chat surface; takes the place of the title that used to live
- * in the OS-level TitleBar.
+ * Mirrors the IDE-style "open file" tab: thread title (click-to-rename)
+ * and the inline project name. The action menu (⋯) lives in the window's
+ * top bar next to the window controls.
  */
 export function ChatHeader({ thread }: ChatHeaderProps) {
   const { t } = useTranslation();
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
-  const setCurrentView = useConversationStore((s) => s.setCurrentView);
-  const openOrActivatePage = useOptionalPanel()?.openOrActivatePage ?? NOOP_OPEN_PANEL;
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");
@@ -49,6 +161,14 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
       inputRef.current?.select();
     }
   }, [isEditing]);
+
+  // The rename action sits in the window's top bar; it asks the header to
+  // start editing through a window event.
+  useEffect(() => {
+    const handleRename = () => setIsEditing(true);
+    window.addEventListener(RENAME_THREAD_EVENT, handleRename);
+    return () => window.removeEventListener(RENAME_THREAD_EVENT, handleRename);
+  }, []);
 
   const commitRename = useCallback(() => {
     const next = draft.trim();
@@ -78,69 +198,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
     [commitRename, cancelRename]
   );
 
-  const handleCopyId = useCallback(() => {
-    navigator.clipboard.writeText(thread.id).catch(() => {});
-  }, [thread.id]);
-
-  const handleCopyTitle = useCallback(() => {
-    navigator.clipboard.writeText(thread.title || "").catch(() => {});
-  }, [thread.title]);
-
-  const handleOpenSideChat = useCallback(() => {
-    openOrActivatePage("files");
-  }, [openOrActivatePage]);
-
-  const handleAddAutomation = useCallback(() => {
-    setCurrentView("automation");
-  }, [setCurrentView]);
-
-  const menuItems: MenuAction[] = [
-    {
-      kind: "action",
-      id: "rename",
-      label: t("thread.renameThread"),
-      // Plan 582 (G8): the `Ctrl+Alt+R` / `Ctrl+Alt+S` labels that used to
-      // sit here had no keydown handler anywhere in the renderer — grep for
-      // `altKey` finds nothing. They advertised shortcuts that did nothing,
-      // which is worse than showing none: users bind muscle memory to a key
-      // and then conclude the app is broken. Re-add a label only alongside the
-      // handler that implements it.
-      onSelect: () => setIsEditing(true),
-    },
-    { kind: "divider", id: "div-1" },
-    {
-      kind: "action",
-      id: "openSideChat",
-      label: t("chat.header.openSideChat"),
-      onSelect: handleOpenSideChat,
-    },
-    {
-      kind: "submenu",
-      id: "copy",
-      label: t("chat.header.copy"),
-      items: [
-        {
-          kind: "action",
-          id: "copyId",
-          label: t("chat.header.copyId"),
-          onSelect: handleCopyId,
-        },
-        {
-          kind: "action",
-          id: "copyTitle",
-          label: t("chat.header.copyTitle"),
-          onSelect: handleCopyTitle,
-        },
-      ],
-    },
-    {
-      kind: "action",
-      id: "addAutomation",
-      label: t("chat.header.addAutomation"),
-      onSelect: handleAddAutomation,
-    },
-  ];
-
   return (
     <div className="chat-header">
       <div className="chat-header-inner">
@@ -148,7 +205,6 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
           {isEditing ? (
             <input
               ref={inputRef}
-              type="text"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onBlur={commitRename}
@@ -178,21 +234,9 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
             </span>
           )}
 
-          {!isEditing && (
+          {!isEditing && !hasCustomTitleBar() && (
             <div className="chat-header-actions">
-              <DropdownMenu
-                trigger={
-                  <button
-                    type="button"
-                    className="chat-header-btn chat-header-menu-trigger"
-                    title={t("chat.header.more")}
-                    aria-label="More actions"
-                  >
-                    <DotsThreeIcon size={16} />
-                  </button>
-                }
-                items={menuItems}
-              />
+              <ChatHeaderActions />
             </div>
           )}
         </div>

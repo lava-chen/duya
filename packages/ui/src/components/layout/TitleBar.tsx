@@ -12,6 +12,7 @@ import {
   SidebarLeftCollapseIcon,
   SidebarLeftExpandIcon,
 } from "@/components/icons";
+import { ChatHeaderActions } from "@/components/chat/ChatHeader";
 
 const GITHUB_REPO_URL = "https://github.com/lava-chen/duya";
 
@@ -269,6 +270,11 @@ export function TitleBar({ sidebarCollapsed = false, onToggleSidebar }: TitleBar
         ))}
       </nav>
       <div className="titlebar-drag-fill" />
+      {/* The session actions sit right next to the native window controls,
+          which the platform draws over the reserved right margin. */}
+      <div className="titlebar-actions">
+        <ChatHeaderActions />
+      </div>
     </div>
   );
 }
