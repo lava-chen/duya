@@ -1322,6 +1322,15 @@ const en = {
   'thread.noThreads': 'No threads yet',
   'thread.running': 'Agent is running...',
   'thread.options': 'Thread options',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // session it belongs to, so a screen reader can tell two rows apart.
+  'thread.optionsFor': '{title} options',
+  'thread.openFolder': 'Open folder in file manager',
+  // Leading status glyph on a session row.
+  'thread.status.idle': 'Idle',
+  'thread.status.running': 'Running',
+  'thread.status.awaitingInput': 'Waiting for input',
+  'thread.status.error': 'Failed',
   'thread.archiveThread': 'Archive Thread',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': 'Unarchive',
@@ -1666,6 +1675,9 @@ const en = {
   'project.folderPathPlaceholderMac': 'e.g., ~/Projects/my-project',
   'project.folderPathPlaceholderLinux': 'e.g., /home/name/Projects/my-project',
   'project.options': 'Project options',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // project it belongs to, so a screen reader can tell two rows apart.
+  'project.optionsFor': '{name} options',
   'project.recentProjects': 'Recent Projects',
   'project.noRecent': 'No recent projects',
   'project.openFolder': 'Open Folder',
@@ -1714,6 +1726,13 @@ const en = {
   'sidebar.section.pinned': 'Pinned',
   // Plan 549 (Track B): archived-section label.
   'sidebar.section.archived': 'Archived',
+  // Claude parity (2026-10-22): group-header actions and the filter popover.
+  'sidebar.section.searchInGroup': 'Search in this group',
+  'sidebar.section.searchPlaceholder': 'Search sessions',
+  'sidebar.filter.title': 'Filter',
+  'sidebar.filter.groupBy': 'Group by',
+  'sidebar.filter.sortBy': 'Sort by',
+  'sidebar.filter.showEmptyGroups': 'Show empty groups',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': 'Work',

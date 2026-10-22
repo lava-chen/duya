@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
-import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon } from "@/components/icons";
+import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon, WarningIcon, FolderOpenIcon } from "@/components/icons";
 import { exportRolloutIPC } from "@/lib/ipc-client";
 import { showNotification } from "@/lib/notification";
 import {
@@ -26,6 +26,20 @@ interface ThreadListItemProps {
 }
 
 const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permission", "persisting"];
+
+/**
+ * Claude parity: one leading status glyph per session row.
+ *
+ *   idle     — hollow ring (the session is not doing anything)
+ *   running  — spinner (an agent turn is in flight)
+ *   awaiting — amber dot (the session is blocked on the user)
+ *   error    — red warning triangle (the last turn failed)
+ *
+ * `Thread` has no `status` column, so the state is derived from the stream
+ * phase the renderer already subscribes to — no new persistence, no IPC.
+ */
+type SessionStatus = "idle" | "running" | "awaiting" | "error";
+
 
 function formatTimeAgo(t: TFunc, timestamp: number): string {
   const now = Date.now();
@@ -62,14 +76,17 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const [isArchiveConfirmOpen, setIsArchiveConfirmOpen] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(thread.title || "");
-  const [isRunning, setIsRunning] = useState(false);
+  // Keep the raw phase (not just a boolean) so the row can tell "failed"
+  // apart from "not running" — the stream phase is the only per-session
+  // runtime signal the renderer has.
+  const [phase, setPhase] = useState<StreamPhase>("idle");
   const inputRef = useRef<HTMLInputElement>(null);
   const displayTitle = thread.title || t('thread.newThread');
 
-  // Subscribe to stream phase changes to show running indicator
+  // Subscribe to stream phase changes to derive the row's trailing state.
   useEffect(() => {
-    const unsubscribe = subscribeToPhase(thread.id, (phase) => {
-      setIsRunning(ACTIVE_PHASES.includes(phase));
+    const unsubscribe = subscribeToPhase(thread.id, (next) => {
+      setPhase(next);
     });
     return unsubscribe;
   }, [thread.id]);
@@ -101,6 +118,33 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
       unsubAuth();
     };
   }, [thread.id]);
+
+  const isRunning = ACTIVE_PHASES.includes(phase);
+  // A blocked session is the most actionable state on the row, and
+  // `awaiting_permission` is itself an active phase — so "awaiting" has to
+  // win over "running" or the amber dot would never show.
+  const sessionStatus: SessionStatus =
+    phase === "error"
+      ? "error"
+      : awaitingInput != null
+        ? "awaiting"
+        : isRunning
+          ? "running"
+          : "idle";
+  const statusLabel = {
+    idle: t("thread.status.idle"),
+    running: t("thread.status.running"),
+    awaiting: t("thread.status.awaitingInput"),
+    error: t("thread.status.error"),
+  }[sessionStatus];
+  // Codex parity (2026-10-22): the row carries NO leading glyph. Codex
+  // renders the title flush with the group header's left edge and signals
+  // state only in the trailing slot (spinner / status dot / PR mark), so a
+  // 20-row list stays scannable. Claude Code's leading hollow ring was
+  // tried and dropped: it cost 12px per row and pushed the titles off the
+  // header's alignment.
+  // `idle` therefore renders nothing at all — the resting state is not news.
+  const showTrailingStatus = sessionStatus !== "idle";
 
   const handleClick = () => {
     if (!isRenaming) {
@@ -194,6 +238,15 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     setThreadPinned(thread.id, !isPinned);
   }, [setThreadPinned, thread.id, isPinned]);
 
+  // Claude parity: the row menu opens the session's working directory in
+  // the OS file manager (its "资源管理器" entry). duya's `shell.openPath`
+  // is the same affordance for a project folder.
+  const handleOpenFolder = useCallback(() => {
+    const dir = thread.workingDirectory;
+    if (!dir) return;
+    void window.electronAPI?.shell?.openPath?.(dir);
+  }, [thread.workingDirectory]);
+
   // Build the menu as MenuActions so the shared DropdownMenu can render it.
   // `className: "thread-dropdown-item"` keeps the legacy item visual
   // (icon-left, danger-tinted delete); the container + divider come from
@@ -202,6 +255,11 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   // Plan 549 (Track B): the archive/unarchive row depends on whether
   // the thread is currently archived. We push the active one and skip
   // the other so the user only ever sees the next action.
+  //
+  // Claude parity (2026-10-22): the item order and the single-key
+  // shortcuts follow Claude Code's session menu (固定 P / 重命名 R /
+  // 归档 A / 删除 D). The letters are only shown because the row
+  // implements them — see the keydown handler on the row itself.
   const isArchived = thread.archivedAt != null;
   const archiveAction: MenuAction = isArchived
     ? {
@@ -216,6 +274,7 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
         kind: "action",
         id: "archive",
         label: t("thread.archiveThread"),
+        shortcut: "A",
         iconLeft: <ArchiveIcon size={14} />,
         className: "thread-dropdown-item",
         // Plan 582 (G9): opens the confirm dialog instead of archiving. The
@@ -227,8 +286,18 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const threadMenuItems: MenuAction[] = [
     {
       kind: "action",
+      id: "toggle-pin",
+      label: isPinned ? t("thread.unpinThread") : t("thread.pinThread"),
+      shortcut: "P",
+      iconLeft: isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />,
+      className: "thread-dropdown-item",
+      onSelect: handleTogglePin,
+    },
+    {
+      kind: "action",
       id: "rename",
       label: t("thread.renameThread"),
+      shortcut: "R",
       iconLeft: <NotePencilIcon size={14} />,
       className: "thread-dropdown-item",
       onSelect: handleRename,
@@ -241,14 +310,18 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
       className: "thread-dropdown-item",
       onSelect: handleCopyId,
     },
-    {
-      kind: "action",
-      id: "toggle-pin",
-      label: isPinned ? t("thread.unpinThread") : t("thread.pinThread"),
-      iconLeft: isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />,
-      className: "thread-dropdown-item",
-      onSelect: handleTogglePin,
-    },
+    ...(thread.workingDirectory
+      ? [
+          {
+            kind: "action" as const,
+            id: "open-folder",
+            label: t("thread.openFolder"),
+            iconLeft: <FolderOpenIcon size={14} />,
+            className: "thread-dropdown-item",
+            onSelect: handleOpenFolder,
+          },
+        ]
+      : []),
     {
       kind: "action",
       id: "export-rollout",
@@ -257,12 +330,13 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
       className: "thread-dropdown-item",
       onSelect: () => void handleExportRollout(),
     },
+    { kind: "divider", id: "danger-sep" },
     archiveAction,
-    { kind: "divider", id: "delete-sep" },
     {
       kind: "action",
       id: "delete",
       label: t("thread.deleteThread"),
+      shortcut: "D",
       iconLeft: <TrashIcon size={14} />,
       danger: true,
       className: "thread-dropdown-item",
@@ -279,9 +353,38 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
+          // The row also hosts the rename input. Letters typed there must
+          // never reach the row's command switch, or renaming a session to
+          // "docs" would delete it on the "d".
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             handleClick();
+            return;
+          }
+          // Claude-style single-key row commands. They only fire while the
+          // row itself holds focus (clicked or tabbed to), so typing in the
+          // composer is never affected.
+          if (e.metaKey || e.ctrlKey || e.altKey) return;
+          switch (e.key.toLowerCase()) {
+            case "p":
+              e.preventDefault();
+              handleTogglePin();
+              break;
+            case "r":
+              e.preventDefault();
+              handleRename();
+              break;
+            case "a":
+              e.preventDefault();
+              handleOpenArchiveConfirm();
+              break;
+            case "d":
+              e.preventDefault();
+              handleDelete();
+              break;
+            default:
+              break;
           }
         }}
       >
@@ -303,13 +406,34 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
           <span className="thread-item-title">{displayTitle}</span>
         )}
 
-        {/* Default content (time / running / pinned) stays in flow so the title
-            width stays stable. The pin + menu buttons are a sibling overlay
-            positioned against the row itself; on hover the default content
-            fades out and the buttons fade in over the same area. */}
+        {/* Default content (status / time / pinned / archived) stays in flow so
+            the title width stays stable. The pin + menu buttons are a sibling
+            overlay positioned against the row itself; on hover the default
+            content fades out and the buttons fade in over the same area.
+            Codex parity (2026-10-22): the session state lives in this trailing
+            slot, not in a leading glyph — the title stays flush with the
+            group header's left edge. */}
         <div className="thread-item-actions">
           <div className="thread-item-actions-default">
-            {/* Plan 516 — awaiting-input pill wins over running / pinned / time.
+            {/* Codex parity: the trailing state mark. Only non-idle sessions
+                get one; `idle` renders nothing so resting rows stay quiet. */}
+            {showTrailingStatus && (
+              <span
+                className={`thread-item-status thread-item-status-${sessionStatus}`}
+                role="img"
+                aria-label={statusLabel}
+                title={statusLabel}
+              >
+                {sessionStatus === "error" ? (
+                  <WarningIcon size={12} />
+                ) : sessionStatus === "running" ? (
+                  <CircleNotchIcon size={12} className="animate-spin" />
+                ) : (
+                  <span className="thread-item-status-dot" />
+                )}
+              </span>
+            )}
+            {/* Plan 516 — awaiting-input pill wins over pinned / time.
                 Reuses the same .bot-contact-status-pill .awaiting-input class
                 pair as the bot row so the sidebar visual language stays unified. */}
             {awaitingInput != null ? (
@@ -330,10 +454,6 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
                       ? 'bot.contactStatus.awaitingAuth'
                       : 'bot.contactStatus.awaitingPermission',
                 )}
-              </span>
-            ) : isRunning ? (
-              <span className="thread-item-running-indicator" title={t('thread.running')}>
-                <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
               </span>
             ) : isArchived ? (
               /* Plan 549 (Track B): archived rows show the archive date
@@ -378,7 +498,8 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
               <button
                 type="button"
                 className="thread-item-menu-btn"
-                aria-label={t('thread.options')}
+                aria-label={t('thread.optionsFor', { title: displayTitle })}
+                title={t('thread.optionsFor', { title: displayTitle })}
               >
                 <DotsThreeIcon size={16} stroke={2.5} />
               </button>
