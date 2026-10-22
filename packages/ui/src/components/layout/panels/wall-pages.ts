@@ -8,7 +8,6 @@
 //   review   — the code review diff
 //   browser  — the embedded browser
 //   terminal — a shell
-//   workflow — the background runs (the "background tasks" surface)
 //
 // The canvas page (`conductor`) is deliberately not part of the wall: it is
 // opened by events (chat pills) and keeps working, but the wall does not
@@ -22,7 +21,6 @@ export const WALL_PAGE_IDS: readonly PageId[] = [
   "review",
   "browser",
   "terminal",
-  "workflow",
 ];
 
 /** The pages that are opened by events and never added by hand. */

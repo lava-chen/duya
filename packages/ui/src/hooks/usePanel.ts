@@ -617,7 +617,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       const needed = columns * MIN_PANEL_WIDTH;
       if (panelWidthRef.current < needed) setPanelWidth(needed);
     }
-    setLayout((prev) => setActivePane(placePane(prev, paneId), paneId));
+    // Opening a card leaves any card that filled the wall with the region
+    // collapse: the new card has to be visible in the wall.
+    setLayout((prev) => setActivePane(
+      placePane({ ...prev, expandedPaneId: null }, paneId),
+      paneId,
+    ));
   }, []);
 
   const togglePanel = useCallback(() => {
@@ -693,7 +698,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
         (t) => t.pageId === pageId && dedupKey(t.pageId, t.params) === key
       );
       if (existing) {
-        setLayout((prev) => setActivePane(prev, existing.id));
+        setLayout((prev) => setActivePane(
+          prev.expandedPaneId && prev.expandedPaneId !== existing.id
+            ? { ...prev, expandedPaneId: null }
+            : prev,
+          existing.id,
+        ));
         const providedTitle = typeof params?.title === "string" ? params.title : undefined;
         if (providedTitle && providedTitle !== existing.title) {
           setTabs((prev) => prev.map((tab) => (
@@ -916,40 +926,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener("duya:open-conductor-panel", handleOpenConductorPanel as EventListener);
     return () => {
       window.removeEventListener("duya:open-conductor-panel", handleOpenConductorPanel as EventListener);
-    };
-  }, [openOrActivatePage]);
-
-  // Workflow run cards' ↗ lands the run in the side panel's workflow page.
-  // The page's own component also listens for this event to expand the run
-  // row, because reused panel tabs do not receive updated params.
-  useEffect(() => {
-    const handleOpenWorkflowRunPanel = (event: Event) => {
-      const runId = (event as CustomEvent<{ runId?: string }>).detail?.runId;
-      if (typeof runId !== "string" || !runId.trim()) return;
-      openOrActivatePage("workflow", { runId: runId.trim() });
-    };
-
-    window.addEventListener("duya:open-workflow-run-panel", handleOpenWorkflowRunPanel as EventListener);
-    return () => {
-      window.removeEventListener("duya:open-workflow-run-panel", handleOpenWorkflowRunPanel as EventListener);
-    };
-  }, [openOrActivatePage]);
-
-  // Workflow node chips / evidence rows open one node's dedicated detail view
-  // in the side panel's workflow page — same two-layer listen as the run
-  // panel above (page open + in-page focus, reused tabs keep frozen params).
-  useEffect(() => {
-    const handleOpenWorkflowNodePanel = (event: Event) => {
-      const detail = (event as CustomEvent<{ runId?: string; nodeId?: string }>).detail;
-      const runId = typeof detail?.runId === "string" ? detail.runId.trim() : "";
-      const nodeId = typeof detail?.nodeId === "string" ? detail.nodeId.trim() : "";
-      if (!runId || !nodeId) return;
-      openOrActivatePage("workflow", { runId, nodeId });
-    };
-
-    window.addEventListener("duya:open-workflow-node-panel", handleOpenWorkflowNodePanel as EventListener);
-    return () => {
-      window.removeEventListener("duya:open-workflow-node-panel", handleOpenWorkflowNodePanel as EventListener);
     };
   }, [openOrActivatePage]);
 

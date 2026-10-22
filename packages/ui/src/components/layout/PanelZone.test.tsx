@@ -84,7 +84,6 @@ vi.mock("./panels/registry", () => {
     review: make("review"),
     browser: make("browser"),
     terminal: make("terminal"),
-    workflow: make("workflow"),
   };
   return {
     PAGE_REGISTRY: registry,

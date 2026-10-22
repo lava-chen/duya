@@ -8,6 +8,9 @@ import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { PanelLaunchers } from "@/components/layout/panels/PanelLaunchers";
+import { setTaskDrawerOpen, useTaskDrawerOpen } from "@/components/layout/task-drawer-store";
+import { resolveChatMode } from "@/components/chat/bot/chat-mode";
 
 interface ChatHeaderProps {
   thread: Thread;
@@ -44,6 +47,7 @@ export function ChatHeaderActions() {
   });
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
   const openOrActivatePage = useOptionalPanel()?.openOrActivatePage ?? NOOP_OPEN_PANEL;
+  const taskDrawerOpen = useTaskDrawerOpen();
 
   const handleCopyId = useCallback(() => {
     if (!thread) return;
@@ -80,6 +84,17 @@ export function ChatHeaderActions() {
             openOrActivatePage("files");
           },
         },
+        ...(resolveChatMode(thread.id) === "workspace"
+          ? [
+              {
+                kind: "checkbox" as const,
+                id: "taskDrawer",
+                label: t("panel.taskList"),
+                checked: taskDrawerOpen,
+                onToggle: () => setTaskDrawerOpen(!taskDrawerOpen),
+              },
+            ]
+          : []),
         {
           kind: "submenu",
           id: "copy",
@@ -132,13 +147,15 @@ export function ChatHeaderActions() {
 /**
  * In-content header for the active chat session.
  *
- * Mirrors the IDE-style "open file" tab: thread title (click-to-rename)
- * and the inline project name. The action menu (⋯) lives in the window's
- * top bar next to the window controls.
+ * Mirrors the IDE-style "open file" tab: thread title (click-to-rename),
+ * the more menu right next to it, and the inline project pill, which opens
+ * the folder actions menu. On macOS the action cluster stays next to the
+ * native window controls instead (see {@link ChatHeaderActions}).
  */
 export function ChatHeader({ thread }: ChatHeaderProps) {
   const { t } = useTranslation();
   const updateThreadTitle = useConversationStore((s) => s.updateThreadTitle);
+  const openOrActivatePage = useOptionalPanel()?.openOrActivatePage ?? NOOP_OPEN_PANEL;
 
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title || "");
@@ -148,6 +165,63 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
   const projectName = thread.projectName || (thread.workingDirectory
     ? thread.workingDirectory.split(/[\\/]/).pop() || thread.workingDirectory
     : "");
+
+  const workingDirectory = thread.workingDirectory || "";
+
+  // The project pill opens the same folder actions the reference product
+  // shows: reveal the folder, open a terminal on it, copy the path. Items
+  // that would need data or IPC the renderer does not have (git remote,
+  // changing a live session's working directory) are deliberately absent —
+  // a menu entry without a working handler is worse than no entry.
+  const projectMenuItems: MenuAction[] = [
+    ...(workingDirectory
+      ? [
+          {
+            kind: "action" as const,
+            id: "showInExplorer",
+            label: t("chat.header.project.showInExplorer"),
+            onSelect: () => {
+              void window.electronAPI?.shell?.openPath?.(workingDirectory);
+            },
+          },
+          {
+            kind: "action" as const,
+            id: "openInTerminal",
+            label: t("chat.header.project.openInTerminal"),
+            onSelect: () => {
+              openOrActivatePage("terminal", { cwd: workingDirectory });
+            },
+          },
+        ]
+      : []),
+    {
+      kind: "submenu" as const,
+      id: "copy",
+      label: t("chat.header.copy"),
+      items: [
+        ...(workingDirectory
+          ? [
+              {
+                kind: "action" as const,
+                id: "copyProjectPath",
+                label: t("chat.header.project.copyPath"),
+                onSelect: () => {
+                  void navigator.clipboard.writeText(workingDirectory);
+                },
+              },
+            ]
+          : []),
+        {
+          kind: "action" as const,
+          id: "copyProjectName",
+          label: t("chat.header.project.copyName"),
+          onSelect: () => {
+            void navigator.clipboard.writeText(projectName);
+          },
+        },
+      ],
+    },
+  ];
 
   useEffect(() => {
     if (!isEditing) {
@@ -228,14 +302,26 @@ export function ChatHeader({ thread }: ChatHeaderProps) {
             </Button>
           )}
 
+          {!isEditing && hasCustomTitleBar() && <ChatHeaderActions />}
+
           {projectName && !isEditing && (
-            <span className="chat-header-project" title={thread.workingDirectory || projectName}>
-              <span className="chat-header-project-text">{projectName}</span>
-            </span>
+            <DropdownMenu
+              trigger={
+                <button
+                  type="button"
+                  className="chat-header-project"
+                  title={thread.workingDirectory || projectName}
+                >
+                  <span className="chat-header-project-text">{projectName}</span>
+                </button>
+              }
+              items={projectMenuItems}
+            />
           )}
 
           {!isEditing && !hasCustomTitleBar() && (
             <div className="chat-header-actions">
+              <PanelLaunchers />
               <ChatHeaderActions />
             </div>
           )}

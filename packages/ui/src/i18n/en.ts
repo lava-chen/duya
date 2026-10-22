@@ -171,6 +171,10 @@ const en = {
   'chat.header.copyTitle': 'Copy title',
   'chat.header.addAutomation': 'Add automation...',
   'chat.header.more': 'More',
+  'chat.header.project.showInExplorer': 'Show in File Explorer',
+  'chat.header.project.openInTerminal': 'Open in Terminal',
+  'chat.header.project.copyPath': 'Copy path',
+  'chat.header.project.copyName': 'Copy project name',
   'chat.header.projectWorkspace': 'Workspace',
 
   'messageInput.attachFiles': 'Attach files',
@@ -1375,6 +1379,7 @@ const en = {
   'subAgent.status.killed': 'Stopped',
 
   'panel.files': 'Files',
+  'panel.launchersAria': 'Panels',
   'panel.preview': 'Preview',
   'panel.review': 'Code Review',
   'panel.conductor': 'Canvas',

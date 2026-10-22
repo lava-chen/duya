@@ -7,7 +7,6 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useNavHistoryStore } from "@/stores/nav-history-store";
-import { useOptionalPanel } from "@/hooks/usePanel";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -15,7 +14,7 @@ import {
   SidebarLeftCollapseIcon,
   SidebarLeftExpandIcon,
 } from "@/components/icons";
-import { ChatHeader, ChatHeaderActions } from "@/components/chat/ChatHeader";
+import { ChatHeader, ChatHeaderActions, hasCustomTitleBar } from "@/components/chat/ChatHeader";
 import { PanelLaunchers } from "@/components/layout/panels/PanelLaunchers";
 
 const GITHUB_REPO_URL = "https://github.com/lava-chen/duya";
@@ -119,10 +118,12 @@ export function TitleBar() {
     const id = s.activeThreadId;
     return id ? s.threads.find((candidate) => candidate.id === id) ?? null : null;
   });
-  const workspaceExpanded = useOptionalPanel()?.workspaceExpanded ?? false;
   const isMac = window.electronAPI?.versions?.platform === "darwin";
 
-  const showSessionTitle = currentView === "chat" && !!thread && !workspaceExpanded;
+  // The session title stays in the top bar even when a panel owns the
+  // workspace: the panel covers the row below the bar, not the bar itself,
+  // so hiding the title would leave an empty 44px strip.
+  const showSessionTitle = currentView === "chat" && !!thread;
 
   return (
     <div
@@ -135,10 +136,12 @@ export function TitleBar() {
         {showSessionTitle && thread ? <ChatHeader thread={thread} /> : null}
       </div>
       {/* The session actions sit right next to the native window controls,
-          which the platform draws over the reserved right margin. */}
+          which the platform draws over the reserved right margin. On custom
+          title bars the more menu lives next to the session title instead
+          (see ChatHeader), so only the platform launchers stay here. */}
       <div className="titlebar-actions">
         <PanelLaunchers />
-        <ChatHeaderActions />
+        {!hasCustomTitleBar() && <ChatHeaderActions />}
       </div>
     </div>
   );

@@ -10,7 +10,6 @@ import {
   ChalkboardIcon,
   TerminalIcon,
   GearSixIcon,
-  RepeatIcon,
   ChatCircleIcon,
   type IconProps,
 } from "@/components/icons";
@@ -32,9 +31,6 @@ const SidebarConductorView = lazy(() =>
 );
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
-);
-const WorkflowPanel = lazy(() =>
-  import("./WorkflowPanel").then((m) => ({ default: m.WorkflowPanel }))
 );
 const SessionMessagesPanel = lazy(() =>
   import("./SessionMessagesPanel").then((m) => ({ default: m.SessionMessagesPanel }))
@@ -108,17 +104,6 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     maxWidth: null,
     defaultExpanded: false,
     component: CodeReviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
-  workflow: {
-    id: "workflow",
-    labelKey: "panel.workflow.title",
-    icon: RepeatIcon,
-    multiInstance: false,
-    available: true,
-    minWidth: 380,
-    widthRatio: 0.5,
-    defaultExpanded: false,
-    component: WorkflowPanel as unknown as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   conductor: {
     id: "conductor",

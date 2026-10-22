@@ -8,7 +8,6 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { useNavHistoryStore, registerNavApplier, type NavHistoryEntry } from "@/stores/nav-history-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
-import { TaskDrawerToggle } from "@/components/layout/TaskDrawerToggle";
 import { useBackdropRepair } from "@/lib/backdrop-repair";
 import type { UiServices } from "@/services/ui-services";
 
@@ -293,7 +292,6 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
                 </div>
               </div>
               <PanelZone />
-              <TaskDrawerToggle />
             </div>
           </div>
         </div>

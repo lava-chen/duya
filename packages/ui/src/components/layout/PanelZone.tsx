@@ -7,6 +7,7 @@ import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, 
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { PanelCard } from "./panels/PanelCard";
 import { WALL_PAGE_IDS } from "./panels/wall-pages";
+import { panelParamsFor, shortcutFor } from "./panels/launch";
 import {
   columnPixelWidths,
   formatWallSeparatorLabel,
@@ -14,8 +15,7 @@ import {
   wallShape,
 } from "./panels/layout-model";
 import { ResizeHandle } from "./ResizeHandle";
-import { SidebarLeftCollapseIcon, SidebarLeftExpandIcon, CornersInIcon, CornersOutIcon, PlusIcon } from "@/components/icons";
-import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
+import { PlusIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import {
   setTaskDrawerOpen,
@@ -25,18 +25,9 @@ import type { CSSProperties } from "react";
 
 /** The gap between two cards of the wall, in pixels. */
 const WALL_GAP = 4;
-/** The wall's own padding, in pixels. */
-const WALL_PADDING = 4;
-
-function shortcutFor(id: PageId): string | null {
-  switch (id) {
-    case "terminal": return "Ctrl+`";
-    case "browser": return "Ctrl+T";
-    case "review": return "Ctrl+Shift+G";
-    case "files": return "Ctrl+P";
-    default: return null;
-  }
-}
+/** The wall's own padding, in pixels; keeps every card inset like a small
+ * window inside the app. Must match the CSS `.panel-wall` padding. */
+const WALL_PADDING = 8;
 
 export function PanelZone() {
   const {
@@ -44,7 +35,6 @@ export function PanelZone() {
     panelWidth,
     setPanelOpen,
     setPanelWidth,
-    togglePanel,
     openOrActivatePage,
     activateTab,
     closePanel,
@@ -111,34 +101,20 @@ export function PanelZone() {
 
   // The panel is normally anchored to a chat session, so non-session views
   // force-close it (it would otherwise be open with no toggle in reach).
-  // Exception: `workflow` — its management page renders run cards whose whole
-  // affordance is landing a run detail in the side panel; force-closing here
-  // made the panel flash and vanish on every card click. The panel stays
-  // closable on that view via the edge toggle rendered while it is open.
   useEffect(() => {
     if (isSessionView) return;
-    if (currentView === "workflow") return;
     if (taskDrawerOpen) setTaskDrawerOpen(false);
     if (panelOpen) setPanelOpen(false);
   }, [isSessionView, currentView, panelOpen, setPanelOpen, taskDrawerOpen]);
 
-  const paramsFor = useCallback(
-    (pageId: PageId): Record<string, unknown> | undefined => {
-      if (!cwd) return undefined;
-      if (pageId === "terminal") return { cwd };
-      if (pageId === "files") return { workingDirectory: cwd };
-      if (pageId === "review") return { workingDirectory: cwd, sessionId: activeThreadId };
-      if (pageId === "workflow") return { workingDirectory: cwd };
-      return undefined;
-    },
-    [cwd]
-  );
-
   const openPage = useCallback(
     (pageId: PageId) => {
-      openOrActivatePage(pageId, paramsFor(pageId));
+      openOrActivatePage(
+        pageId,
+        panelParamsFor(pageId, { workingDirectory: cwd, sessionId: activeThreadId }),
+      );
     },
-    [openOrActivatePage, paramsFor]
+    [openOrActivatePage, cwd, activeThreadId]
   );
 
   const clampActiveWidth = useCallback(
@@ -286,23 +262,6 @@ export function PanelZone() {
     [rowHeights, setRowHeights]
   );
 
-  const menuItems: MenuAction[] = useMemo(
-    () => WALL_PAGE_IDS.map((id) => {
-      const entry = PAGE_REGISTRY[id];
-      return {
-        kind: "action" as const,
-        id: entry.id,
-        label: t(entry.labelKey),
-        shortcut: shortcutFor(entry.id) ?? undefined,
-        disabled: !entry.available,
-        description: !entry.available ? t("panel.unavailable") : undefined,
-        iconLeft: <entry.icon size={15} stroke={1.5} />,
-        onSelect: () => openPage(entry.id),
-      };
-    }),
-    [openPage, t]
-  );
-
   const wallStyle = {
     gridTemplateColumns: layout.columnRatios.map((ratio) => `minmax(0, ${ratio}fr)`).join(" "),
     gridTemplateRows: layout.rowRatios.map((ratio) => `minmax(0, ${ratio}fr)`).join(" "),
@@ -331,6 +290,11 @@ export function PanelZone() {
       const Component = descriptor.component;
       const isExpanded = expandedPaneId === paneId;
       const hidden = Boolean(expandedPaneId) && !isExpanded;
+      // A lone card already fills the wall, so its header action expands the
+      // whole panel region instead. With two or more cards the same action
+      // expands the card and the region together, so a maximized panel always
+      // covers the entire content column.
+      const controlsWorkspace = layout.panes.length <= 1;
       return (
         <div
           key={paneId}
@@ -344,11 +308,28 @@ export function PanelZone() {
           <PanelCard
             tab={tab}
             icon={descriptor.icon}
-            expanded={isExpanded}
-            expandable={layout.panes.length > 1}
+            expanded={controlsWorkspace ? workspaceExpanded : isExpanded}
+            expandable={controlsWorkspace ? isSessionView : true}
             onActivate={() => activateTab(paneId)}
-            onToggleExpand={() => togglePaneExpanded(paneId)}
-            onClose={() => closePanel(paneId)}
+            onToggleExpand={() => {
+              if (controlsWorkspace) {
+                setWorkspaceExpanded(!workspaceExpanded);
+                return;
+              }
+              if (isExpanded) {
+                togglePaneExpanded(paneId);
+                setWorkspaceExpanded(false);
+                return;
+              }
+              activateTab(paneId);
+              togglePaneExpanded(paneId);
+              setWorkspaceExpanded(true);
+            }}
+            onClose={() => {
+              if (isExpanded) setWorkspaceExpanded(false);
+              closePanel(paneId);
+            }}
+            expandTestId={controlsWorkspace ? "workspace-expand" : undefined}
           >
             <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
               <Component tab={tab} embedded />
@@ -357,7 +338,18 @@ export function PanelZone() {
         </div>
       );
     },
-    [cardStyle, closePanel, expandedPaneId, layout.panes, tabsById, togglePaneExpanded, activateTab]
+    [
+      cardStyle,
+      closePanel,
+      expandedPaneId,
+      layout.panes,
+      tabsById,
+      togglePaneExpanded,
+      activateTab,
+      isSessionView,
+      setWorkspaceExpanded,
+      workspaceExpanded,
+    ]
   );
 
   /**
@@ -412,38 +404,6 @@ export function PanelZone() {
       data-wall-rows={rows}
       style={zoneStyle}
     >
-      {(isSessionView || panelOpen) && (
-        <>
-          <button
-            type="button"
-            className={`panel-edge-toggle${panelOpen ? " active" : ""}`}
-            onClick={togglePanel}
-            title={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
-            aria-label={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
-            aria-expanded={panelOpen}
-          >
-            {panelOpen
-              ? <SidebarLeftCollapseIcon size={16} stroke={1.5} />
-              : <SidebarLeftExpandIcon size={16} stroke={1.5} />}
-          </button>
-
-          {isSessionView && panelOpen && activeTab && (
-            <button
-              type="button"
-              className="panel-edge-toggle panel-expand-toggle"
-              onClick={() => setWorkspaceExpanded(!workspaceExpanded)}
-              title={workspaceExpanded ? t('panel.collapsePanel') : t('panel.expandPanel')}
-              aria-label={workspaceExpanded ? t('panel.collapsePanel') : t('panel.expandPanel')}
-              data-testid="workspace-expand"
-            >
-              {workspaceExpanded
-                ? <CornersInIcon size={16} stroke={1.5} />
-                : <CornersOutIcon size={16} stroke={1.5} />}
-            </button>
-          )}
-        </>
-      )}
-
       {panelOpen && !workspaceExpanded && (
         <ResizeHandle
           side="left"
@@ -472,23 +432,6 @@ export function PanelZone() {
         style={{ width: workspaceExpanded ? "100%" : panelWidth }}
         aria-hidden={!panelOpen}
       >
-        <div className="panel-wall-toolbar">
-          <span className="panel-wall-toolbar-spacer" />
-          <DropdownMenu
-            trigger={
-              <button
-                type="button"
-                className="panel-wall-add"
-                title={t('panel.addPage')}
-                aria-label={t('panel.addPage')}
-              >
-                <PlusIcon size={14} stroke={1.5} />
-              </button>
-            }
-            items={menuItems}
-            className="panel-add-menu"
-          />
-        </div>
         {layout.panes.length === 0 ? (
           <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
             <EmptyPanelLauncher onSelect={openPage} />

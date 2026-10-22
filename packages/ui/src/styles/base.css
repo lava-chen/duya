@@ -128,6 +128,12 @@
   /* Glass edge stroke: top-lit gradient drawn in the border-box layer.
      Bright at the top edge (light catching the pane), fading down. */
   --glass-edge: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.12));
+  /* --panel-surface: a panel card's own surface. The reference product lifts
+     it one step above the conversation canvas so the card reads as a window
+     floating on the pane. The light canvas is already pure white, so the
+     light theme has no headroom and keeps the card flush (its 1px border is
+     what separates it); the dark theme gets the lift. */
+  --panel-surface: #ffffff;
   --surface: rgba(0, 0, 0, 0.03);
   --surface-solid: #f7f7f7;
   --surface-hover: rgba(0, 0, 0, 0.06);
@@ -269,6 +275,8 @@
   --glass-chrome: rgba(37, 37, 37, 0.38);
   /* Dark twin: lower alphas so the stroke reads as edge light, not a frame. */
   --glass-edge: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
+  /* One step above --main-bg, the same lift the reference's panel carries. */
+  --panel-surface: #232323;
   --surface: rgba(255, 255, 255, 0.06);
   --surface-solid: #2c2c2c;
   --surface-hover: rgba(255, 255, 255, 0.1);

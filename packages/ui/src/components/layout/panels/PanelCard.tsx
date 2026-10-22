@@ -24,6 +24,8 @@ interface PanelCardProps {
   onActivate?: () => void;
   onToggleExpand: () => void;
   onClose: () => void;
+  /** Test hook for the expand action (the lone-card case drives the workspace). */
+  expandTestId?: string;
   children: ReactNode;
 }
 
@@ -35,6 +37,7 @@ export function PanelCard({
   onActivate,
   onToggleExpand,
   onClose,
+  expandTestId,
   children,
 }: PanelCardProps) {
   const { t } = useTranslation();
@@ -58,6 +61,7 @@ export function PanelCard({
               title={expandLabel}
               aria-label={expandLabel}
               aria-pressed={expanded}
+              data-testid={expandTestId}
             >
               {expanded
                 ? <CornersInIcon size={14} stroke={1.5} />

@@ -159,6 +159,18 @@
   display: flex;
   align-items: center;
   background: var(--main-bg);
+  /* Electron hides the native title bar on Windows/Linux (titleBarStyle
+     'hidden' + titleBarOverlay), so a CSS drag region over the 44px chrome
+     strip is the only way to move the window. */
+  -webkit-app-region: drag;
+}
+
+/* A drag region swallows the clicks of everything inside it, so each control
+   in the chrome strip has to opt back out. */
+.titlebar button,
+.titlebar input,
+.titlebar a {
+  -webkit-app-region: no-drag;
 }
 
 /* The session title area. The chat header's title row is hosted here, so
@@ -199,14 +211,23 @@
   background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
 }
 
-/* The sidebar fills the column under the icon row. */
+/* The sidebar fills the column under the icon row. The column already owns
+   the surface, so the sidebar must not paint its own tint on top of it —
+   two translucent fills stacked read as a darker band, and the boundary
+   between them shows as a horizontal seam. */
 .app-sidebar-column > .app-sidebar {
   flex: 1 1 auto;
   min-height: 0;
+  background: transparent;
+}
+
+html[data-backdrop] .app-sidebar-column > .app-sidebar {
+  background: transparent;
 }
 
 /* The icon row at the top of the sidebar: the application menu, the sidebar
-   toggle and the back / forward buttons. */
+   toggle and the back / forward buttons. It is the left half of the window's
+   44px drag strip (see .titlebar). */
 .app-rail {
   display: flex;
   flex-direction: row;
@@ -215,9 +236,16 @@
   flex: 0 0 auto;
   height: 44px;
   padding: 0 12px;
+  -webkit-app-region: drag;
 }
 
-/* Collapsed sidebar: the icon row becomes the narrow icon rail again. */
+.app-rail button {
+  -webkit-app-region: no-drag;
+}
+
+/* Collapsed sidebar: the icon row becomes the narrow icon rail again. It
+   keeps the column's single surface (no border-right) and grows to the
+   sidebar rail's 34px icon boxes so the two stacks read as one rail. */
 .app-sidebar-column[data-collapsed="true"] {
   width: 56px;
 }
@@ -226,8 +254,20 @@
   flex-direction: column;
   width: 56px;
   height: auto;
-  padding: 6px 0;
-  border-right: 1px solid var(--border);
+  gap: 0.35rem;
+  padding: 0.6rem 0;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail-btn,
+.app-sidebar-column[data-collapsed="true"] .app-rail-brand {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail-logo,
+.app-sidebar-column[data-collapsed="true"] .app-rail-brand-toggle {
+  border-radius: 8px;
 }
 
 .app-rail-btn {
@@ -306,6 +346,7 @@
 
 /* The content column: the top bar plus the workspace below it. */
 .app-content-column {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -314,6 +355,25 @@
   /* The column owns the background so the top bar and the workspace below
      read as one surface instead of stacked panes. */
   background: var(--main-bg);
+}
+
+/* Glass borderline between the sidebar pane and the content pane: a 1px
+   top-lit gradient stroke floating on the boundary (theme-aware via
+   --glass-edge), like the edge of a frosted glass sheet. The extra
+   top-light layer doubles the highlight near the title bar so the edge
+   reads as lit glass, not a plain divider. */
+.app-content-column::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent 40%),
+    var(--glass-edge);
+  pointer-events: none;
+  z-index: 10;
 }
 
 /* Flatten the workspace into the column: no rounded inset card and no
@@ -367,8 +427,8 @@ html[data-backdrop] .app-content-column .app-main-inner {
 }
 
 /* Per-panel launchers: one icon per panel type, before the session menu.
-   The focused page tints with the accent; a page that is open but not
-   focused only brightens, so the bar stays quiet with several panels. */
+   Each icon is an independent toggle for its type, so several can be on at
+   once; an open but unfocused type is tinted the same as the focused one. */
 .titlebar-panel-launchers {
   display: flex;
   align-items: center;
@@ -394,10 +454,6 @@ html[data-backdrop] .app-content-column .app-main-inner {
 
 .titlebar-panel-launcher:hover:not(:disabled) {
   background: var(--surface-hover);
-  color: var(--text-primary);
-}
-
-.titlebar-panel-launcher.open {
   color: var(--text-primary);
 }
 
