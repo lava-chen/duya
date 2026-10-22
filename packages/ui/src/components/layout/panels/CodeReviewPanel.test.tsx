@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getGitLatestTurnReview: vi.fn(),
   getGitTurnHistory: vi.fn(),
   getGitTurnDetail: vi.fn(),
+  getGitBranches: vi.fn(async () => ({ isGitRepo: true, locals: [], remotes: [] })),
   getGitCommits: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("@/lib/git-ipc", () => ({
   getGitLatestTurnReview: mocks.getGitLatestTurnReview,
   getGitTurnHistory: mocks.getGitTurnHistory,
   getGitTurnDetail: mocks.getGitTurnDetail,
+  getGitBranches: mocks.getGitBranches,
   getGitCommits: mocks.getGitCommits,
 }));
 
@@ -279,8 +281,7 @@ describe("CodeReviewPanel", () => {
 
     // History dropdown shows both persisted turns; picking the older one
     // loads its detail and replaces the diff.
-    const turnSelect = screen.getByLabelText("选择轮次");
-    await user.selectOptions(turnSelect, "row-old");
+    fireEvent.click(screen.getByLabelText("轮次 row-old"));
 
     await waitFor(() => {
       expect(mocks.getGitTurnDetail).toHaveBeenCalledWith("/test/workspace", "row-old");
@@ -325,8 +326,8 @@ describe("CodeReviewPanel", () => {
     expect(await screen.findByText("src/turn-file.ts")).toBeTruthy();
 
     // Switch the scope select to uncommitted (workspace review)
-    const scopeSelect = screen.getByLabelText("审阅范围");
-    await user.selectOptions(scopeSelect, "uncommitted");
+    await user.click(screen.getByLabelText("审阅范围"));
+    await user.click(screen.getByLabelText("范围：所有更改"));
 
     await waitFor(() => {
       expect(mocks.getGitReviewScoped).toHaveBeenCalledWith(
@@ -351,8 +352,8 @@ describe("CodeReviewPanel", () => {
 
     render(<CodeReviewPanel tab={workspaceTab()} embedded />);
 
-    const scopeSelect = screen.getByLabelText("审阅范围");
-    fireEvent.change(scopeSelect, { target: { value: "commit" } });
+    fireEvent.click(screen.getByLabelText("审阅范围"));
+    fireEvent.click(screen.getByLabelText("范围：指定提交"));
 
     await waitFor(() => {
       expect(mocks.getGitCommits).toHaveBeenCalledWith("/test/workspace", 50);

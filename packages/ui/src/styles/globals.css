@@ -16,8 +16,10 @@
 @import "./office-browser.css";
 @import "./conductor.css";
 @import "./code-review.css";
+@import "./code-review-v2.css";
 @import "./composer-panels.css";
 @import "./pages.css";
+@import "./file-workspace.css";
 @import "./sidebar-sections.css";
 
 @plugin "@tailwindcss/typography";

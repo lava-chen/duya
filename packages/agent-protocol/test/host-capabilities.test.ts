@@ -38,7 +38,7 @@ describe('host capability vocabulary', () => {
   it('has an owner for every capability, and no owner for anything else', () => {
     const named = Object.keys(HOST_CAPABILITY_OWNERS).sort();
     expect(named).toEqual([...HOST_CAPABILITIES].sort());
-    expect(named.length).toBe(22);
+    expect(named.length).toBe(23);
   });
 
   it('assigns workspace capabilities to the runtime, not the host', () => {
@@ -56,7 +56,7 @@ describe('host capability vocabulary', () => {
 
   it('lists the browser-invisible capabilities as data', () => {
     const local = hostLocalOnlyCapabilities();
-    expect(local.length).toBe(17);
+    expect(local.length).toBe(18);
     expect(local).toContain('native_dialog');
     expect(local).toContain('os_shell');
     expect(local).toContain('port_discovery');

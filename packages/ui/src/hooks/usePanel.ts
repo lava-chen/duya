@@ -239,6 +239,10 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
     case "conductor":
       return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
+    case "workspace":
+      // Single workspace page: every file lands in the same page tab and is
+      // tracked by the panel own tab strip instead of a new page tab.
+      return "workspace::__files__";
     case "preview":
       return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "review":
@@ -818,7 +822,16 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       // focused editor (per PanelFileTreeSplit design intent), not a split
       // browser. Users can still expand it via the toolbar toggle.
       setWorkspaceTreeOpen(false);
-      openOrActivatePage("preview", params);
+      // The workspace page is a singleton: hand the file to the panel's own
+      // tab strip instead of opening one page tab per file.
+      openOrActivatePage("workspace", { workingDirectory });
+      window.dispatchEvent(new CustomEvent("duya:workspace-open-file", {
+        detail: {
+          filePath,
+          lineStart: params.lineStart,
+          lineEnd: params.lineEnd,
+        },
+      }));
     };
 
     window.addEventListener("duya:open-file-preview-panel", handleOpenFilePreview as EventListener);

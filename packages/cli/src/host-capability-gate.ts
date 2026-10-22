@@ -7,7 +7,7 @@
  *
  * `HostDeclaration.capabilities` is what this client can CONSUME from a runtime
  * (`PROTOCOL_CAPABILITIES`, six names). `HostHandshakeV1.provides` is what the
- * Host can SERVE (`HOST_CAPABILITIES`, twenty-two names). Neither is inferable
+ * Host can SERVE (`HOST_CAPABILITIES`, twenty-three names). Neither is inferable
  * from the other, and `agent-protocol/src/version.ts:116` exists because
  * collapsing them produces a handshake in which the runtime concludes the host
  * can execute something merely because the host offered to serve it. So this
@@ -75,6 +75,18 @@ import type { HostHandshakeV1, HostSessionHttpClient } from '@duya/host/http-cli
  * on another machine can still read the remote workspace through this Host.
  */
 export const WORKSPACE_READ_CAPABILITY = 'workspace_filesystem' satisfies HostCapability;
+
+/**
+ * The capability a client checks before attaching to a Host someone else
+ * started: can this Host run a turn, or is it only a run ledger?
+ *
+ * A ledger-only Host holds the database, so a client that ignores this and
+ * boots its own Host does not get a second working Host — it gets
+ * `DatabaseOwnerLockError`. The name is declared by `@duya/host` only when a
+ * run execution API is registered, which is why absence is a refusal and not
+ * an assumption.
+ */
+export const HOST_RUN_EXECUTION_CAPABILITY = 'agent_run_execution' satisfies HostCapability;
 
 /**
  * What the CLI consumes, measured rather than assumed.

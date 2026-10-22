@@ -18,11 +18,14 @@ Date: 2026-10-18. Parent: [610](README.md) · 执行队列 [19](./19-fast-track-
 | 方向 | 定义位置 | 名字数 | 性质 |
 | --- | --- | --- | --- |
 | 执行 EXECUTE | `packages/agent-protocol/src/capabilities.ts:265` | **3** | 字面量 `RUNTIME_CAPABILITIES` |
-| 提供 PROVIDE | `packages/agent-protocol/src/host-capabilities.ts:64` | **22** | 字面量 `HOST_CAPABILITIES` ＋ `HOST_CAPABILITY_OWNERS` |
+| 提供 PROVIDE | `packages/agent-protocol/src/host-capabilities.ts:64` | **23** | 字面量 `HOST_CAPABILITIES` ＋ `HOST_CAPABILITY_OWNERS` |
 | 消费 CONSUME | `packages/agent-protocol/src/version.ts:92` | **6** | 字面量 `PROTOCOL_CAPABILITIES` |
 
-三表合计 **31 个不重复名字**。实测这个数字来自测试首次运行的红因，而不是本文数出来的：
-红因打印了 31 个「exported by code but absent from the census table」。
+三表合计 **32 个不重复名字**（2026-10-18 基线为 31，见下方追加记录）。基线数字来自测试首次
+运行的红因，而不是本文数出来的：当时红因打印了 31 个「exported by code but absent from the census table」。
+
+2026-10-22 追加 `agent_run_execution`（[单 Host 多客户端](../2026-10-22-single-host-multiclient.md)），
+提供侧 22 → 23，合计 31 → 32；其余计数与 2026-10-18 基线一致。
 
 **消费侧是推导的，不是第二份字面量。** `capability-negotiation.ts:35` 写的是
 `RequiredCapability = NonNullable<MessageGate['requiresCapability']>`，真正枚举它的是
@@ -39,12 +42,12 @@ Date: 2026-10-18. Parent: [610](README.md) · 执行队列 [19](./19-fast-track-
 
 - `version.ts:88` 已经声明「这是消费侧，不是 runtime 的能力表」，`capabilities.ts:258` 已经声明
   「这是执行侧」。**两份注释互相引用对方，两边都正确，且都没有指认出第三张表。**
-- `host-capabilities.ts:2` 声明「host 能 OFFER 什么」，但提供侧的 22 个名字里，**没有一个**
+- `host-capabilities.ts:2` 声明「host 能 OFFER 什么」，但提供侧的 23 个名字里，**没有一个**
   出现在执行侧或消费侧。跨表重叠 today 是 **0**。
 
 **所以「同一名字出现在两个方向」在今天的树上无法自然发生。** 这不是好消息，是 610 §4 第 4 条说的
 那个病：*绿不得等于没检查到*。真正存在的重叠是**换名的重叠**（§4），而按名字做的门禁看不见换名。
-本文把 31 个名字的方向钉死，并用 `both` 通道给未来的重叠留出唯一的入口。
+本文把 32 个名字的方向钉死，并用 `both` 通道给未来的重叠留出唯一的入口。
 
 ## 3. 机器可读方向表（测试读的就是这张表）
 
@@ -85,6 +88,7 @@ Date: 2026-10-18. Parent: [610](README.md) · 执行队列 [19](./19-fast-track-
 | `plugins` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:104 | owner=host-local。已装插件与其信任态 |
 | `canvas` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:106 | owner=host-local。画布表面 |
 | `orb` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:108 | owner=host-local。Orb 表面 |
+| `agent_run_execution` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:110 | owner=host-local。Host 能通过 HTTP 启动与取消 agent run；只有注册了执行 API 才广播，纯账本 Host 不广播 |
 <!-- census:end -->
 
 三个 `both` 行不是本文发明的：`CapabilityOwner` 的第三个取值就是 `both`

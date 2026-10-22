@@ -53,6 +53,7 @@
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |
 | [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | observer 仅有可选 hash 接缝；无生产 sink/rollout 记录，接续 Phase 0 采样前先完成隐私边界 |
 | [620 会话记录架构](active/620-session-record-architecture.md) | P0 | 实现待认领；从 A1 开始，固定 fixture 验证，不读取真实用户 rollout 数据 |
+| [621 工作区生命周期](active/621-coding-workspace-lifecycle-harness.md) | P0 | 契约已定稿；A（Checkout Provider）/ B（协议与观测投影表）/ C（只读 SCM Observer）三路并行，D/E 待第一波合并 |
 | [CI 提速与测试瘦身](active/2026-10-21-ci-speed-and-test-diet.md) | — | #339（CI 提速）已合并 `052f85cb`；#342（退役 `packages/agent` 291 个测试）仍 open，待授权合并 |
 | [CI 提速的后续四项](active/2026-10-21-ci-followups.md) | — | 上面那份之后的四项（typecheck 按依赖图拆分、最慢 7 个测试文件重构、全局状态测试分组串行、12 个契约补测试）；实测数据与验收都在正文 |
 
