@@ -132,12 +132,20 @@ describe('startAgentRun', () => {
     expect(result).toMatchObject({ accepted: false, stage: 'refused_dispatch_failed' });
   });
 
-  it('turns a failed dispatch into a refusal instead of an accepted run', async () => {
+  it('names the other client when the session is already running a turn', async () => {
+    // 409 is the Agent Server's STREAMING mutex — the same gate the Desktop
+    // renderer passes through, so this is the cross-client contention case.
     const { origin } = await fakeAgentServer({ chatStatus: 409 });
     const result = await adapterFor(origin).startAgentRun({ sessionId: 's1', prompt: 'hello' });
     expect(result).toMatchObject({ accepted: false, stage: 'refused_dispatch_failed' });
     if (result.accepted) throw new Error('unreachable');
-    expect(result.reason).toContain('409');
+    expect(result.reason).toContain('another client');
+  });
+
+  it('reports a session this server cannot serve as missing', async () => {
+    const { origin } = await fakeAgentServer({ chatStatus: 404 });
+    const result = await adapterFor(origin).startAgentRun({ sessionId: 's1', prompt: 'hello' });
+    expect(result).toMatchObject({ accepted: false, stage: 'refused_no_session' });
   });
 
   it('refuses when the turn was dispatched but no run id can be read', async () => {

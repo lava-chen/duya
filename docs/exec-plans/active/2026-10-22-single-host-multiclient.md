@@ -26,7 +26,7 @@
 - [x] 1. 在 Host 握手中声明执行能力，Host 服务端按已注册 API 推导，旧 Host 缺声明时按不具备处理。
 - [x] 2. CLI 新增「发现并附着已有 Host」解析：读 runtime 文件、校验 PID、健康检查、能力检查；`runTuiCommand` 优先 attach，只有无可附着 Host 时才自起。
 - [x] 3. Desktop 的 Host HTTP 面获得执行能力：抽取 router 现有的 turn 启动实现为单一入口，实现 `HostRunExecutionApiV1` 并注入 `HostSessionHttpServer`。
-- [ ] 4. 同会话并发驱动：确认 Desktop chat lock 与 Host 执行控制器的互斥关系，缺口在 Host 侧补 lock 获取，或在计划里明确拒绝语义。
+- [x] 4. 同会话并发驱动：确认 Desktop chat lock 与 Host 执行控制器的互斥关系，缺口在 Host 侧补 lock 获取，或在计划里明确拒绝语义。
 - [ ] 5. 跨客户端可见性：TUI 查看会话时增量刷新远端 run/消息；ephemeral 事件不可跨进程，按 durable 事件兜底。
 - [ ] 6. 测试与验收：协议/CLI/Desktop 单测，人工双端验收，Electron 重建。
 
@@ -60,6 +60,10 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 
 一个已知边界：`agent_run_execution` 的广播只看执行 API 是否注册，不看 Agent Server 当时是否存活。Agent Server 未起时 `startAgentRun` 会返回 `refused_dispatch_failed`（`the agent server is not running`），而不是让附着方以为能跑。Desktop 启动时该子进程会随之启动，所以正常路径不命中。
 
+步骤 4 的结论：互斥已经存在，位置与计划假设的相反。真正的 per-session 锁是 Agent Server 的 `sessionManager.transitionState(sessionId, STREAMING)`（`apps/desktop/src/main/agents/server/router.ts:902-931`），它在读取请求体、spawn worker、`openRun` 之前就失败并返回 409。`acquireChatLock` 不是锁，只是把它镜像进 `session_runtime_locks` 供主进程判断忙闲（`apps/desktop/src/main/agents/server/chat-runtime-lock.ts:48-82`），fire-and-forget 且 300s TTL 兜底。
+
+Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的是同一把锁；Desktop 不使用 `HostRunExecutionController`，也就不存在「第二把锁」需要补。适配器把 409 变成一句点名对方的拒绝（`this session is already running a turn in another client`），CLI 与 TUI 都会把 `start.reason` 打给用户（`packages/cli/src/chat.ts:250-252`、`964-967`）。残留风险只有 TTL 镜像与 run fence 这两个既有兜底，没有新增。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -76,6 +80,8 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 | 同上 | 同上 | `npm run -w @duya/desktop typecheck:main` | 2；仅既有 baseline 错误 | 本次两个新文件与 `active-run` 路由零错误；`router.ts` 两处报错在 1940/3618，均属既有代码 |
 | 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 同一条未触发基线，未重录 |
 | 同上 | 同上 | `npm run electron:build` | 未运行 | 留到 PR 前与人工双端验收一起做 |
+| 4653c2d4 + 步骤 4 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run apps/desktop/src/main/cli/__tests__/desktop-run-execution-api.test.ts` | 0；11 用例通过 | 新增 409 点名另一客户端、404 视为无会话两例 |
+| 同上 | 同上 | `npm run -w @duya/desktop typecheck:main` | 2；仅既有 baseline 错误 | 本次两个文件零错误；`router.ts` 报错仍在 1940/3618 |
 
 ## 接续 / 结果
 
@@ -96,7 +102,11 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 因此开始广播 `agent_run_execution`。适配器 10 例单测覆盖请求形状、拒绝路径与取消。
 未跑 `npm run typecheck:all`、`npm run electron:build`（留到 PR 前统一跑）。
 回收：不适用，PR 未创建。
-下一步：步骤 4 的同会话互斥。router 里的 `acquireChatLock` 是 `void ...catch(() => {})`（
-`apps/desktop/src/main/agents/server/router.ts:1336`），失败被吞掉；TUI 经 Host 走同一入口，所以
-两端同时驱动同一 session 时目前只有 run fence 兜底。要么把 lock 失败变成显式 409，要么在
-Host 适配器先查 active-run 并拒绝。
+
+步骤 4 已完成：互斥不需要新增实现，只补拒绝语义。Agent Server 的
+`transitionState(sessionId, STREAMING)` 是唯一真正的 per-session 锁，Desktop Host 与 TUI 走同一入口、
+争同一把锁；`acquireChatLock` 只是忙闲镜像，不参与互斥。适配器把 409 翻成
+`this session is already running a turn in another client`，404 翻成 `refused_no_session`，
+测试补到 11 例。
+下一步：步骤 5 的跨客户端可见性。当前 TUI 只在自己发起的 run 上跟随事件流，桌面端发起的
+turn 在 TUI 侧不会自动出现，需要会话视图按 durable 事件增量刷新。

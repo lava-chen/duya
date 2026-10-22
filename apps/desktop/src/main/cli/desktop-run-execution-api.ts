@@ -114,10 +114,24 @@ export function createDesktopRunExecutionApi(
 
       if (!response.ok || response.body === null) {
         const detail = await response.text().catch(() => '');
+        const suffix = detail ? `: ${detail.slice(0, 200)}` : '';
+        // The Agent Server's STREAMING transition is the per-session mutex for
+        // this whole product, not just for the renderer: it is taken before a
+        // worker spawns and before `openRun`, so a turn from the TUI and a turn
+        // from the Desktop contend on the same gate. A 409 here therefore means
+        // "someone else is driving this session right now" — true for the other
+        // client as much as for a second tab, so the refusal says so instead of
+        // surfacing a bare status.
+        if (response.status === 409) {
+          return refuse(
+            'refused_dispatch_failed',
+            `this session is already running a turn in another client${suffix}`,
+          );
+        }
         // A missing route means the session is not one this server can serve;
-        // a busy session (409) is a failure to dispatch, not a missing one.
+        // anything else is the server failing to start the turn.
         const stage = response.status === 404 ? 'refused_no_session' : 'refused_dispatch_failed';
-        return refuse(stage, `the agent server answered ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+        return refuse(stage, `the agent server answered ${response.status}${suffix}`);
       }
 
       const runId = await readActiveRun(origin, input.sessionId);
