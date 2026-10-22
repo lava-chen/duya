@@ -60,11 +60,14 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
   // input beyond the ids the host UI already knows.
   useEffect(() => {
     const api = getPluginAppAPI();
+    setLaunch(null);
+    setError(null);
     if (!api) {
       reportError("Plugin Apps are not available in this client.");
       return;
     }
     let cancelled = false;
+    let opened: PluginAppLaunch | null = null;
     void api
       .open({ pluginId, appId, chatSessionId })
       .then((result) => {
@@ -96,6 +99,7 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
           entryUrl: result.entryUrl,
           documentToken,
         };
+        opened = next;
         launchRef.current = next;
         setLaunch(next);
       })
@@ -105,6 +109,10 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
       });
     return () => {
       cancelled = true;
+      if (opened && launchRef.current === opened) {
+        launchRef.current = null;
+        void api.close({ sessionId: opened.sessionId }).catch(() => {});
+      }
     };
   }, [pluginId, appId, chatSessionId, reportError, generation]);
 
@@ -120,17 +128,6 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
       setGeneration((value) => value + 1);
     });
   }, [pluginId]);
-
-  // Close the session when the host goes away, so the Host revokes the
-  // binding the App minted.
-  useEffect(() => {
-    return () => {
-      const current = launchRef.current;
-      launchRef.current = null;
-      if (!current) return;
-      void getPluginAppAPI()?.close({ sessionId: current.sessionId }).catch(() => {});
-    };
-  }, []);
 
   // Relay guest messages into the Main process. A sandbox without
   // `allow-same-origin` gives the App an opaque origin; that is why the host

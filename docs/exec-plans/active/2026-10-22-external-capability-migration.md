@@ -2,7 +2,7 @@
 
 状态：active · 负责人：Codex 会话 · 更新：2026-10-22
 分支：`codex/browser-plugin-migration` · worktree：`/workspace/duya-browser-migration` · base：`ebd76d4878add41aa3e7cdac65a5884eee6c93a1`
-Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`c34eb28`
+Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`66daf35`
 
 ## 目标与边界
 
@@ -12,8 +12,8 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 
 ## 验收
 
-- Browser：目标为官方 `cua_repl` MCP，提供持久化 JS REPL、模块目录添加、会话 reset 三个工具。服务端强制首个 `js` 调用仅读 CUA 文档、第二个调用仅读当前浏览器状态；目标/标签切换后也必须另起调用读新状态才能继续。
-- Browser target：控制面覆盖 DUYA 内置浏览器/IAB 标签与可用的 Chrome、Edge 标签，按 URL、tab id 或浏览器名选择目标。
+- Browser：目标为官方市场插件的 `cua_repl` MCP，提供持久化 JS REPL、模块目录添加、会话 reset 三个工具。服务端强制首个 `js` 调用仅读 CUA 文档、第二个调用仅读当前浏览器状态；目标/标签切换后也必须另起调用读新状态才能继续。
+- Browser target：插件自己管理 Chromium 与可用的 Chrome、Edge 标签，按 URL、tab id 或浏览器名选择目标。独立 managed Chromium 取代旧 DUYA daemon/IAB 控制面；不新增 Browser 专用 Host 接口，UI-only URL 展示不在本次范围。
 - Browser：由 Marketplace 声明并经 DUYA Plugin/MCP 调用链接入；验证初始化、列工具、REPL 状态保留、浏览器导航与快照；先前 Playwright smoke 只算通用 MCP 基线，不算此目标形态通过。
 - Computer Use：独立 Marketplace 插件启动用户配置的原生 Cua Driver MCP 进程，插件适配器限定桌面工具清单；DUYA 只按通用 plugin MCP 管理它。旧 Windows UIA/审计/撤销能力、跨平台权限和二进制分发仍需单独验收。
 - Conductor Canvas：完整实现属于独立 Marketplace Plugin。DUYA 只保留所有 Mini App 共用的包加载、沙箱、生命周期、授权与 MCP 接口；不能经插件反调 DUYA 内置 Canvas executor、数据库或 renderer。现有 Canvas 旧实现只在迁移验收前保留作兼容。
@@ -42,6 +42,18 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 - [ ] Browser：将旧 daemon 的浏览器专用逻辑与 IAB 控制面迁往插件；DUYA 最终只保留通用 App/Host 接口。
 
 ## 发现与决策
+
+### 当前接续（覆盖下方早期实现记录）
+
+- DUYA 当前已提交 `ed0d3eeb`：本地 manifest hydration、会话级资源服务、opaque-origin iframe 通信与通用 Apps 导航已集成；PluginAppHost 会话 effect 清理和 MiniAppsView 更新时保留 launcher 的修复尚未提交。真实 Apps 生命周期已通过：CLI 安装 Notes 1.0.0、界面打开、MCP 写入、CLI 更新 1.1.0 自动重载并保留数据、停用关闭，更新前和停用后的资产 URL 均为 404。验证使用独立 namespace/profile 与当前检出的 Vite/Main；之前手动注入 iframe 的结果单独保留。
+- Marketplace 已推送 `66daf35`：原 Conductor renderer/domain/native/widget/refine 代码已移到插件，配置/模型服务/refine 持久化及桥接响应解码已接通；旧项目数据库连同主库画布、资产、动作历史可显式导出后导入插件。后端最近提交的 18 项定向检查由对应 subagent 报告通过，整合后全流程仍待验收。
+- Browser 正在改为插件自有扩展桥接服务 + 独立 managed Chromium（CDP pipe）。后者真实 Chromium 的本地 HTTP 导航、求值、双标签与关闭已由 subagent 验证；完整 REPL 整合和扩展真实加载仍待完成。早期依赖 DUYA `/webview-*` daemon 的方案被此决定替代。
+- Computer Use 插件已经拥有外部 Cua Driver 生命周期、动作策略、目标身份检查、审计和跨进程撤销。官方 0.38.0 驱动在 Linux/Xvfb 完成 initialize/list/guide/permissions/desktop image 验证；系统未提供 AT-SPI 会话，不能据此宣称跨平台可访问性验收。
+- Canvas 链接截图尚需插件自己提供浏览器捕获；不能向 DUYA 恢复专用 capture 接口。renderer agent 正在补齐。
+- Canvas、Computer Use 旧实现的删除切片分别在独立 worktree 准备中，尚未进入整合分支。Browser core 删除须在市场 Browser 集成后继续。只把录制服务确实仍用到的底层类型/窗口读取留在现有 recorder 目录，不新建替名的内置 Computer Use 包。
+- 交付 PR：DUYA #355、Marketplace #2，均保持 draft，均已附加到本任务。没有合并 master。
+
+### 早期调查与实现记录
 
 - 用户指定以 GPT-6 Luna / high 子代理并行完成迁移。分工：`canvas_marketplace` 迁原编辑器与模型；`browser_marketplace` 迁自有浏览器桥接服务；`computer_marketplace` 处理驱动与运行时；`duya_canvas_detach` 准备旧 Canvas 依赖闭包删除；`duya_app_host` 修复通用访客通信和 App 导航；`agent_app_builder` 负责 Agent 建 App 模板及插件自有数据视图后端。每个实现使用独立 worktree，主代理审阅后集成到上述两个 PR 分支。
 - 2026-10-22 同步 `origin/master` 到 `96dadf4d`，以 merge commit `2fe3a6bf` 合入迁移分支；原主线变更为目录/文档整理。已撤回的 Computer Use Host 桥接测试仅保存在本地具名 stash，不参与当前实现或验收。
@@ -85,8 +97,13 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 | 同上；`PluginManager{,.listInstalled.test}.ts` | Linux x64, Node 24.19.0 | 定向 Vitest，真实 Electron 隔离 namespace 下 installLocal → App open → bind → MCP invoke | 3 tests passed；本地插件 App 声明可见；模拟一次授权后绑定 31 个工具，`canvas_manage list` 返回插件空数据。尚未验证 App 页面访客通信 | 当前会话命令输出 |
 | DUYA `acb9ec56` + App assets 切片 | Linux x64, Node 24, Electron 44.2.0, Xvfb `:99` | assets/host 定向 Vitest；Electron Main 构建与类型门禁；真实 preview `file://` 和 dev `http://localhost:3000` 页面内注入隔离 iframe并使用生产 MainIPC relay | 4 tests passed；构建/类型门禁退出 0；两模式均显示 Canvas 插件服务已连接，关闭后 entry URL 返回 404。此处是实际资源/MCP链路探针，生产 PluginAppHost UI 集成仍待验收 | 当前会话命令输出 |
 
+## 最新验证补充
+
+- DUYA `6b9ee5f7` + 通用 App 生命周期 dirty 修复，Electron 44.2 / Linux / Xvfb：`npm run build:electron` 退出 0。真实 CLI install/update 与 App UI 流程通过，具体验收见当前接续。CLI 先前误读 PluginResult 的 ok/value，导致安装成功后返回 HTTP 500；现已统一读取 success/data。
+- 同检出 `npm run architecture:check` 退出 0，无新增违规。`npm run typecheck:all` 在 UI 构建停下，三处遗留 conductor route 引用与新 ViewType 不匹配：SearchCommandPalette.tsx、CanvasConductorToolRow.tsx、app-shell.tsx；由 Canvas detach 切片清理，尚不能报告全仓门禁通过。
+
 ## 接续 / 结果
 
 已实现：Browser 官方市场插件 CUA REPL；Computer Use 市场插件通过独立 MCP 适配器启动用户配置的原生 Cua Driver，插件限定可见的桌面工具，不再声明 DUYA Host capability；Canvas 市场插件拥有独立 MCP/Mini App、显式旧库导出/导入和本地资产存储；App Builder 插件提供 Agent 可复制的独立 App 模板。DUYA 通用 standalone App 宿主包含独立 MCP 会话、grant 审批、版本失效和全窗口容器。原 Canvas 的完整界面、旧资产、动态组件和数据视图尚未搬完；Computer Use 还依赖外部驱动安装，旧 UIA/审计/撤销能力未对齐。三个旧模块都保留。迁移分支撤回了新增的 Computer Use Host 专用桥接，先前 Canvas Host 专用桥接也已撤回；历史测试数字不得作为当前代码通过的证据。
 
-下一步：集成通用 App 访客通信修复并验证真实页面；继续迁移 Canvas 原 renderer/domain 与数据视图、资产，把 Browser daemon 专用逻辑移入插件并为 IAB 定义通用 Host 接口，安装验收 Computer Use 原生驱动；在真实桌面验证三个插件和 App Builder 的权限、重载及 Agent 调用，再逐项切换和删除旧实现。Electron binary 下载与完整构建阻塞已解除。
+下一步：完成真实 Apps 安装→MCP 数据写入→更新重载→停用关闭；补齐 Canvas 链接截图并核对原功能闭包；集成 Browser 自有运行时，继续三项旧模块剥离。逐项核对插件替代链路后整合各删除 commit，重建当前检出的 Electron/worker/UI 并记录门禁结果，更新两个 draft PR。Electron binary 下载与完整构建阻塞已解除。

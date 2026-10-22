@@ -46,9 +46,10 @@ export function MiniAppsView() {
   return (
     <PageFrame>
       <PageHeader title={t("apps.title")} subtitle={t("apps.description")} />
-      {loading ? (
+      {error && plugins.length > 0 ? <p className="plugin-app-host-error" role="alert">{error}</p> : null}
+      {loading && plugins.length === 0 ? (
         <p className="text-sm text-muted-foreground" role="status">{t("apps.loading")}</p>
-      ) : error ? (
+      ) : error && plugins.length === 0 ? (
         <p className="plugin-app-host-error" role="alert">{error}</p>
       ) : appPlugins.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center">
