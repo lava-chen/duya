@@ -32,6 +32,7 @@ import type {
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
+  HostProviderCatalog,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -77,6 +78,20 @@ export interface HostApiBridge {
     requestId: string,
     input: HostPermissionRequestResolveInput,
   ): Promise<HostPermissionRequest | null>;
+
+  /**
+   * The configured provider/model roster.
+   *
+   * This is the roster the Host adjudicates a turn's model against, so it is
+   * the roster a surface has to show: a browser that offered a model the
+   * Host would refuse would be offering a lie.
+   *
+   * OPTIONAL. A bridge whose Host has no provider catalog leaves the method
+   * out, and `null` says the same thing when the method is there but the Host
+   * refuses the read: there is no roster, which is the truth rather than an
+   * error to dress up.
+   */
+  getProviderCatalog?(): Promise<HostProviderCatalog | null>;
 
   /**
    * Opens the run's live event stream.
@@ -208,6 +223,18 @@ export function createHostHttpBridge(options: HostHttpBridgeOptions): HostApiBri
         { method: 'POST', body: input },
       );
       return page.permission ?? null;
+    },
+    getProviderCatalog: async () => {
+      try {
+        const page = await request<{ catalog: HostProviderCatalog }>('/v1/local/provider-catalog', {});
+        return page.catalog;
+      } catch (error) {
+        // A Host composed WITHOUT the local provider catalog refuses the
+        // read with a 404. That is the absence of a roster, not a failure of
+        // the read, and it is the only status that means it here.
+        if (error instanceof HostApiError && error.status === 404) return null;
+        throw error;
+      }
     },
     openRunStream: async (runId, afterSeq, signal) => {
       const url = `${base}/v1/agent-runs/${encodeURIComponent(runId)}/events/stream?${toQuery({ afterSeq })}`;

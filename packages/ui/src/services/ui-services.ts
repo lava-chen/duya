@@ -4,6 +4,7 @@ import type {
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
+  HostProviderCatalog,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -107,6 +108,21 @@ export interface UiServices {
       requestId: string,
       input: HostPermissionRequestResolveInput,
     ): Promise<HostPermissionRequest | null>;
+  };
+  /**
+   * The provider/model roster, when the surface can read one.
+   *
+   * OPTIONAL. A surface whose Host has no provider catalog leaves the
+   * namespace out, and the model picker then shows nothing — which is the
+   * truth. `null` says the same thing for a surface that HAS the namespace
+   * but whose Host has no roster.
+   *
+   * A surface that HAS a roster must show THAT one: the roster the Host
+   * adjudicates a turn's model against, not a copy the surface kept for
+   * itself.
+   */
+  readonly providers?: {
+    catalog(): Promise<HostProviderCatalog | null>;
   };
   /**
    * Register a local directory as a workspace, when the surface can.

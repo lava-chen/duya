@@ -163,6 +163,12 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
     // binding. That is what lets a Web user start a conversation in a folder
     // of their own instead of only reusing a session that already has one.
     registerWorkspace: async (directory) => await api.registerLocalDirectory(directory),
+    // The provider roster comes from the Host too: it is the roster the Host
+    // adjudicates a turn's model against, so the browser's model picker and
+    // the Host agree on what may be picked.
+    providers: {
+      catalog: async () => await api.getProviderCatalog(),
+    },
   };
 }
 
