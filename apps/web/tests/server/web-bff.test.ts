@@ -604,6 +604,66 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(foreignKey.status).toBe(400);
   }, 30_000);
 
+  it('serves the Host provider roster the browser model picker reads', async () => {
+    // The roster the browser shows is the roster the Host adjudicates a
+    // turn's model against. A fake Host serves one, and the BFF has to pass
+    // it through UNCHANGED: a reshaped roster could let the picker offer a
+    // model the Host would refuse.
+    const catalog = {
+      providers: [
+        {
+          providerId: 'openai',
+          name: 'OpenAI',
+          providerType: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          hasApiKey: true,
+          defaultModel: 'gpt-5',
+          models: [{ modelId: 'gpt-5', displayName: 'GPT-5' }],
+        },
+      ],
+      activeProviderId: 'openai',
+      activeModel: 'gpt-5',
+      configRoot: '/tmp/duya-web-bff-catalog',
+    };
+    const host = new HostSessionHttpServer({
+      api: {} as HostSessionHttpServerOptions['api'],
+      taskApi: {} as HostSessionHttpServerOptions['taskApi'],
+      token: HOST_TOKEN,
+      localProviderCatalogApi: {
+        async getProviderCatalog() {
+          return catalog;
+        },
+      },
+    });
+    const bff = await startBffForHostServer(host);
+
+    const response = await fetch(`${bff.origin}/api/providers/catalog`);
+    const body = await response.json() as { catalog: typeof catalog };
+
+    expect(response.status).toBe(200);
+    expect(body.catalog).toEqual(catalog);
+    // The roster says whether a provider HAS a key; it never carries one.
+    expect(JSON.stringify(body)).not.toMatch(/sk-[A-Za-z0-9]/);
+  }, 30_000);
+
+  it('reports no roster instead of failing when the Host has no provider catalog', async () => {
+    // A Host composed without the local provider catalog refuses the read.
+    // That is the absence of a roster, not a failure of the read, and the
+    // browser can draw "nothing here" but not "something went wrong".
+    const host = new HostSessionHttpServer({
+      api: {} as HostSessionHttpServerOptions['api'],
+      taskApi: {} as HostSessionHttpServerOptions['taskApi'],
+      token: HOST_TOKEN,
+    });
+    const bff = await startBffForHostServer(host);
+
+    const response = await fetch(`${bff.origin}/api/providers/catalog`);
+    const body = await response.json() as { catalog: unknown };
+
+    expect(response.status).toBe(200);
+    expect(body.catalog).toBeNull();
+  }, 30_000);
+
   it('replays SSE after the supplied cursor and preserves the Host event envelopes', async () => {
     const host = await startTestHost();
     const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);

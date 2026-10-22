@@ -270,6 +270,20 @@ try {
   const { workspace: binding } = await registerResponse.json();
   if (binding.state !== 'bound') fail(`The workspace is not bound: ${JSON.stringify(binding)}`);
 
+  // 3.5. The provider roster, through the browser's route. The model picker
+  //      reads THIS, and it has to be the roster the Host adjudicates a
+  //      turn's model against -- the acceptance Host runs on the copied real
+  //      configuration, so it has real providers to report.
+  const catalogResponse = await fetch(`${bffOrigin}/api/providers/catalog`);
+  if (catalogResponse.status !== 200) {
+    fail(`The provider catalog failed: ${catalogResponse.status} ${await catalogResponse.text()}`);
+  }
+  const { catalog } = await catalogResponse.json();
+  if (!catalog || !Array.isArray(catalog.providers) || catalog.providers.length === 0) {
+    fail(`The provider catalog is empty: ${JSON.stringify(catalog)}`);
+  }
+  step(`provider catalog: ${catalog.providers.length} provider(s)`);
+
   // The Host's own log is the fastest way to see WHY a run did not produce
   // events, so it is captured from the start rather than dumped at the end.
   const hostLog = () => children.find((item) => item.label === 'host').output.join('');

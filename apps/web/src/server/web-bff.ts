@@ -12,6 +12,7 @@ import {
   CURRENT_HOST_DECLARATION,
   isPermissionPolicyMode,
   type HostPermissionRequestResolveInput,
+  type HostProviderCatalog,
   type HostSessionCreateInput,
   type HostSessionListQuery,
   type HostSessionPatch,
@@ -291,6 +292,11 @@ async function routeRequest(context: RequestContext): Promise<void> {
       return;
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/api/providers/catalog') {
+      sendJson(response, 200, { catalog: await readProviderCatalog(context.client) });
+      return;
+    }
+
     const cancelMatch = /^\/api\/runs\/([^/]+)\/cancel$/.exec(requestUrl.pathname);
     if (request.method === 'POST' && cancelMatch) {
       const runId = decodePathPart(cancelMatch[1]);
@@ -352,6 +358,23 @@ async function sendHandshake(context: RequestContext): Promise<void> {
     unsupported: handshake.unsupported ?? {},
     consumedBy: handshake.consumedBy ?? [],
   });
+}
+
+/**
+ * The Host's provider catalog, or `null` when it has none.
+ *
+ * A Host composed without the local provider catalog refuses the read with a
+ * 404. That is the absence of a roster, not a failure of the read, so it
+ * becomes `null` here and the browser draws nothing — a shape a screen can
+ * show, where a failed request is not.
+ */
+async function readProviderCatalog(client: HostSessionHttpClient): Promise<HostProviderCatalog | null> {
+  try {
+    return await client.getProviderCatalog();
+  } catch (error) {
+    if (error instanceof HostSessionHttpError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 async function streamRunEvents(context: RequestContext, runId: string, afterSeq: number): Promise<void> {

@@ -30,6 +30,7 @@ import type {
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
+  HostProviderCatalog,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -137,5 +138,12 @@ export function createUiServices(options: CreateUiServicesOptions): UiServices {
         input: HostPermissionRequestResolveInput,
       ): Promise<HostPermissionRequest | null> => bridge.resolveApproval(requestId, input),
     },
+    // The provider roster is present only when the bridge can read one. A
+    // bridge that cannot leaves the namespace out, and the model picker then
+    // has nothing to show -- which is the truth, rather than a list the
+    // surface made up.
+    ...(bridge.getProviderCatalog === undefined
+      ? {}
+      : { providers: { catalog: (): Promise<HostProviderCatalog | null> => bridge.getProviderCatalog!() } }),
   };
 }

@@ -28,6 +28,7 @@ import type {
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestStatus,
+  HostProviderCatalog,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -350,6 +351,25 @@ export class ApiClient {
     const workspace = body['workspace'];
     if (!isRecord(workspace)) throw new ApiError(200, 'invalid_workspace_binding');
     return workspace as unknown as HostWorkspaceBinding;
+  }
+
+  /**
+   * The Host's configured provider/model roster.
+   *
+   * This is the roster the Host adjudicates a turn's model against, so the
+   * browser shows THIS one: offering a model the Host would refuse would be
+   * offering a lie. The catalog carries no secrets -- it says whether a
+   * provider HAS a key, never the key itself.
+   *
+   * `null` means the Host has no roster at all, which is a thing a screen can
+   * show rather than an error.
+   */
+  async getProviderCatalog(): Promise<HostProviderCatalog | null> {
+    const body = await this.#readJson('/api/providers/catalog', {});
+    const catalog = body['catalog'];
+    if (catalog === null || catalog === undefined) return null;
+    if (!isRecord(catalog)) throw new ApiError(200, 'invalid_provider_catalog');
+    return catalog as unknown as HostProviderCatalog;
   }
 
   async cancelHostRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult> {
