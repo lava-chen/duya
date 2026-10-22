@@ -20,7 +20,8 @@
     "@duya/memory": "0.1.0",
     "@duya/plugin-core": "0.1.0",
     "@duya/sandbox": "0.1.0",
-    "@duya/voice": "0.1.0"
+    "@duya/voice": "0.1.0",
+    "ajv": "^8.20.0"
   },
   "scripts": {
     "typecheck:main": "tsc -p tsconfig.main.json --noEmit",

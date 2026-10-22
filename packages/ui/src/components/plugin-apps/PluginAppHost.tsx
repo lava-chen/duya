@@ -19,7 +19,7 @@ interface PluginAppHostProps {
   pluginId: string;
   appId: string;
   /** The chat session the App acts in. Chosen by trusted code, not the App. */
-  chatSessionId: string;
+  chatSessionId?: string;
   onError?: (message: string) => void;
 }
 
@@ -40,6 +40,7 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
   const [webviewNode, setWebviewNode] = useState<WebviewElement | null>(null);
   const [launch, setLaunch] = useState<PluginAppLaunch | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [generation, setGeneration] = useState(0);
   const launchRef = useRef<PluginAppLaunch | null>(null);
 
   const setWebviewRef = useCallback((node: HTMLElement | null) => {
@@ -90,7 +91,20 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
     return () => {
       cancelled = true;
     };
-  }, [pluginId, appId, chatSessionId, reportError]);
+  }, [pluginId, appId, chatSessionId, reportError, generation]);
+
+  useEffect(() => {
+    const api = getPluginAppAPI();
+    return api?.onChanged(({ pluginId: changedId }) => {
+      if (changedId !== pluginId) return;
+      const current = launchRef.current;
+      launchRef.current = null;
+      if (current) void api.close({ sessionId: current.sessionId }).catch(() => {});
+      setLaunch(null);
+      setError(null);
+      setGeneration((value) => value + 1);
+    });
+  }, [pluginId]);
 
   // Close the session when the host goes away, so the Host revokes the
   // binding the App minted.
@@ -107,9 +121,18 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
   useEffect(() => {
     if (!launch || !webviewNode) return;
 
+    const blockNavigation = (event: Event) => {
+      const targetUrl = (event as Event & { url?: string }).url;
+      if (targetUrl !== launch.entryUrl) event.preventDefault();
+    };
+    const blockPopup = (event: Event) => event.preventDefault();
+    webviewNode.addEventListener('will-navigate', blockNavigation);
+    webviewNode.addEventListener('new-window', blockPopup);
+
     const handler = (event: MessageEvent) => {
       const guest = webviewNode.contentWindow;
       if (!guest || event.source !== guest) return;
+      if (event.origin !== 'file://' && event.origin !== 'null') return;
       const request = parsePluginAppGuestRequest(event.data);
       if (!request) return;
 
@@ -143,7 +166,11 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
     };
 
     window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
+    return () => {
+      window.removeEventListener("message", handler);
+      webviewNode.removeEventListener('will-navigate', blockNavigation);
+      webviewNode.removeEventListener('new-window', blockPopup);
+    };
   }, [launch, webviewNode]);
 
   if (error) {

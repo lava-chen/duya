@@ -985,7 +985,7 @@ export interface PluginAppAPI {
    * package and mints the session. The App itself never names its own
    * authority.
    */
-  open: (payload: { pluginId: string; appId: string; chatSessionId: string }) => Promise<{
+  open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) => Promise<{
     ok: boolean
     error?: string
     sessionId?: string
@@ -1000,6 +1000,8 @@ export interface PluginAppAPI {
   }>
   /** Close the session and revoke the binding it minted. */
   close: (payload: { sessionId: string }) => Promise<{ ok: boolean }>
+  /** Reopen the App after its installed package, grants, or setup changes. */
+  onChanged: (callback: (payload: { pluginId: string }) => void) => () => void
 }
 
 export interface PluginAPI {
@@ -2957,11 +2959,13 @@ const electronAPI: ElectronAPI = {
   // and can only post a message to the renderer that hosts it, which
   // relays it here with the session handle.
   pluginApp: {
-    open: (payload: { pluginId: string; appId: string; chatSessionId: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
       ipcRenderer.invoke('plugin-app:open', payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       ipcRenderer.invoke('plugin-app:call', payload),
     close: (payload: { sessionId: string }) => ipcRenderer.invoke('plugin-app:close', payload),
+    onChanged: (callback: (payload: { pluginId: string }) => void) =>
+      registerHandler('plugin-app:changed', (data) => callback(data as { pluginId: string })),
   },
   // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
   // in the main process.

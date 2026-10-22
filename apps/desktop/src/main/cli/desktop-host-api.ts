@@ -80,7 +80,7 @@ import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
 import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-instance-api';
 import { createHostPluginAppGrantApi } from '@duya/host/local-plugin-app-grant-api';
-import { createHostPluginAppInvocationApi, type HostPluginAppInvocationInternalApi } from '@duya/host/local-plugin-app-invocation-api';
+import { createHostPluginAppInvocationApi, type HostPluginAppInvocationInternalApi, type HostPluginAppInvocationAuthority } from '@duya/host/local-plugin-app-invocation-api';
 import { createDesktopPluginAppAuthority } from '../plugins/plugin-app-authority';
 import { createHostLocalWorkbenchApi } from '@duya/host/local-workbench-api';
 import { createHostLocalSidebarSectionsApi } from '@duya/host/local-sidebar-sections-api';
@@ -138,6 +138,8 @@ let runningHandle: DesktopHostApiHandle | null = null;
 let startup: Promise<DesktopHostApiHandle> | null = null;
 let pluginAppInvocationInternalApi: HostPluginAppInvocationInternalApi | null = null;
 let pluginAppInstanceApiRef: ReturnType<typeof createHostPluginAppInstanceApi> | null = null;
+let pluginAppGrantApiRef: ReturnType<typeof createHostPluginAppGrantApi> | null = null;
+let pluginAppAuthorityRef: HostPluginAppInvocationAuthority | null = null;
 
 async function writeRuntimeFile(filePath: string, runtime: HostApiRuntime): Promise<void> {
   const directory = path.dirname(filePath);
@@ -214,12 +216,14 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   // plugin manifests are the only authority, and both Plugin App APIs read
   // the same one.
   const pluginAppAuthority = createDesktopPluginAppAuthority(stores.appGrants);
+  pluginAppAuthorityRef = pluginAppAuthority;
   const pluginAppInstanceApi = createHostPluginAppInstanceApi(stores.appInstances);
   pluginAppInstanceApiRef = pluginAppInstanceApi;
   const pluginAppGrantApi = createHostPluginAppGrantApi({
     store: stores.appGrants,
     authority: pluginAppAuthority,
   });
+  pluginAppGrantApiRef = pluginAppGrantApi;
   const workerGenerationByBinding = new Map<string, { generation: number; expiresAt: number }>();
   const workerGenerationByAttempt = new Map<string, number>();
   const pruneExpiredPluginAppBindingGenerations = () => {
@@ -425,6 +429,10 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       } finally {
         if (sessionApiClient === client) sessionApiClient = null;
         if (runningHandle === handle) runningHandle = null;
+        if (pluginAppInvocationInternalApi === pluginAppInvocationApi) pluginAppInvocationInternalApi = null;
+        if (pluginAppInstanceApiRef === pluginAppInstanceApi) pluginAppInstanceApiRef = null;
+        if (pluginAppGrantApiRef === pluginAppGrantApi) pluginAppGrantApiRef = null;
+        if (pluginAppAuthorityRef === pluginAppAuthority) pluginAppAuthorityRef = null;
         await removeOwnedRuntimeFile(runtimeFilePath, runtime);
       }
     },
@@ -580,6 +588,16 @@ export function getDesktopHostPluginAppInvocationApi(): HostPluginAppInvocationI
 export function getDesktopHostPluginAppInstanceApi(): ReturnType<typeof createHostPluginAppInstanceApi> {
   if (!pluginAppInstanceApiRef) throw new Error('Desktop Host Plugin App instance API is not running');
   return pluginAppInstanceApiRef;
+}
+
+export function getDesktopHostPluginAppGrantApi(): ReturnType<typeof createHostPluginAppGrantApi> {
+  if (!pluginAppGrantApiRef) throw new Error('Desktop Host Plugin App grant API is not running');
+  return pluginAppGrantApiRef;
+}
+
+export function getDesktopHostPluginAppAuthority(): HostPluginAppInvocationAuthority {
+  if (!pluginAppAuthorityRef) throw new Error('Desktop Host Plugin App authority is not running');
+  return pluginAppAuthorityRef;
 }
 
 export function getDesktopHostModeStateApi(): HostModeStateApiV1 {

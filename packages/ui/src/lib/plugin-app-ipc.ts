@@ -105,10 +105,11 @@ export function getPluginAppAPI() {
   const api = window.electronAPI?.pluginApp;
   if (!api) return null;
   return {
-    open: (payload: { pluginId: string; appId: string; chatSessionId: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
       api.open(payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       api.call(payload),
     close: (payload: { sessionId: string }) => api.close(payload),
+    onChanged: (callback: (payload: { pluginId: string }) => void) => api.onChanged(callback),
   };
 }

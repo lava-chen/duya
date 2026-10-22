@@ -19,7 +19,7 @@
  * and the chat session all come from the session record.
  */
 
-import { ipcMain } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,10 +30,18 @@ import {
   type PluginAppGuestMessage,
 } from './plugin-app-sessions';
 import { getPluginManager } from './PluginManager';
+import { readPluginManifest } from './manifest';
 import {
   getDesktopHostPluginAppInstanceApi,
   getDesktopHostPluginAppInvocationApi,
 } from '../cli/desktop-host-api';
+import {
+  approveStandaloneApp,
+  bindStandaloneApp,
+  closeStandaloneApp,
+  invokeStandaloneApp,
+  resolveStandaloneApp,
+} from './standalone-app-runtime';
 
 export type PluginAppHostError =
   | 'plugin_not_found'
@@ -47,12 +55,13 @@ export type PluginAppHostError =
   | 'invalid_message'
   | 'not_bound'
   | 'bind_failed'
-  | 'invoke_failed';
+  | 'invoke_failed'
+  | 'grant_denied';
 
 export interface PluginAppOpenRequest {
   pluginId: string;
   appId: string;
-  chatSessionId: string;
+  chatSessionId?: string;
 }
 
 export interface PluginAppOpenResult {
@@ -124,7 +133,12 @@ function findInstalledApp(
   for (const entry of getPluginManager().listInstalled()) {
     if (entry.id !== pluginId) continue;
     if (!entry.enabled) return null;
-    const app = entry.apps?.find((candidate) => candidate.appId === appId);
+    let app: PluginAppDefinition | undefined;
+    try {
+      app = readPluginManifest(entry.installPath).apps?.find((candidate) => candidate.appId === appId);
+    } catch {
+      return null;
+    }
     if (!app) return null;
     return { installPath: entry.installPath, app };
   }
@@ -160,15 +174,19 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
   if (typeof request?.pluginId !== 'string' || typeof request?.appId !== 'string') {
     return { ok: false, error: 'plugin_not_found' };
   }
-  if (typeof request.chatSessionId !== 'string' || request.chatSessionId.length === 0) {
+  const found = findInstalledApp(request.pluginId, request.appId);
+  if (!found) return { ok: false, error: 'app_not_found' };
+  const standalone = found.app.runtime === 'standalone';
+  if (!standalone && (typeof request.chatSessionId !== 'string' || request.chatSessionId.length === 0)) {
     return { ok: false, error: 'host_unavailable' };
   }
 
-  const found = findInstalledApp(request.pluginId, request.appId);
-  if (!found) return { ok: false, error: 'app_not_found' };
+  const standaloneApp = standalone ? resolveStandaloneApp(request.pluginId, request.appId) : null;
+  if (standalone && !standaloneApp) return { ok: false, error: 'app_not_found' };
 
   const entryPath = resolveAppEntry(found.installPath, found.app);
   if (!entryPath) return { ok: false, error: 'entry_unavailable' };
+  if (standaloneApp && !(await approveStandaloneApp(standaloneApp))) return { ok: false, error: 'grant_denied' };
 
   const instanceId = await resolveInstance(
     request.pluginId,
@@ -182,6 +200,8 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     appId: request.appId,
     instanceId,
     chatSessionId: request.chatSessionId,
+    runtime: standalone ? 'standalone' : 'agent-run',
+    packageRevision: standaloneApp?.revision,
   });
 
   return {
@@ -195,6 +215,34 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
 async function dispatch(sessionId: string, message: PluginAppGuestMessage): Promise<PluginAppCallResult> {
   const session = sessions.get(sessionId);
   if (!session) return { ok: false, error: 'unknown_session' };
+
+  if (session.runtime === 'standalone') {
+    if (!session.packageRevision) return { ok: false, error: 'bind_failed' };
+    if (message.method === 'revoke') {
+      await closeStandaloneApp(sessionId);
+      return { ok: true, result: { revoked: true } };
+    }
+    if (message.method === 'bind') {
+      try {
+        const result = await bindStandaloneApp(
+          sessionId, session.pluginId, session.appId, session.instanceId, session.packageRevision,
+        );
+        if (!sessions.get(sessionId)) {
+          await closeStandaloneApp(sessionId);
+          return { ok: false, error: 'unknown_session' };
+        }
+        return { ok: true, result };
+      } catch {
+        return { ok: false, error: 'bind_failed' };
+      }
+    }
+    try {
+      const result = await invokeStandaloneApp(sessionId, message.toolId, message.arguments);
+      return result.ok ? { ok: true, result: result.result } : { ok: false, error: 'invoke_failed', result };
+    } catch {
+      return { ok: false, error: 'invoke_failed' };
+    }
+  }
 
   let invocationApi;
   try {
@@ -210,7 +258,7 @@ async function dispatch(sessionId: string, message: PluginAppGuestMessage): Prom
         pluginId: session.pluginId,
         appId: session.appId,
         instanceId: session.instanceId,
-        sessionId: session.chatSessionId,
+        sessionId: session.chatSessionId!,
       });
     } catch {
       // The Host refuses a bind it cannot authorize (no active run, no
@@ -268,6 +316,8 @@ async function handleCall(request: PluginAppCallRequest): Promise<PluginAppCallR
 
 function handleClose(request: { sessionId?: string }): { ok: boolean } {
   if (typeof request?.sessionId !== 'string') return { ok: false };
+  const session = sessions.get(request.sessionId);
+  if (session?.runtime === 'standalone') void closeStandaloneApp(request.sessionId);
   const binding = sessions.bindingOf(request.sessionId);
   if (binding) {
     try {
@@ -289,4 +339,14 @@ export function registerPluginAppHostHandlers(): void {
 /** Test seam: the live session registry. */
 export function getPluginAppSessions(): PluginAppSessionStore {
   return sessions;
+}
+
+/** Invalidate every guest of a changed plugin and ask the host UI to reopen it. */
+export function invalidatePluginAppSessions(pluginId: string): void {
+  for (const session of sessions.forPlugin(pluginId)) {
+    handleClose({ sessionId: session.sessionId });
+  }
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('plugin-app:changed', { pluginId });
+  }
 }
