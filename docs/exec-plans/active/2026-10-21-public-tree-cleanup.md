@@ -1,7 +1,7 @@
 # Public repository tree cleanup
 
-状态：active（draft PR #340）· 更新：2026-10-21
-分支：`codex/public-tree-cleanup-review` · worktree：`/workspace/duya-pr340-review` · PR：[PR #340](https://github.com/lava-chen/duya/pull/340) · 最新 master：`16ee9dda`（含 #343）
+状态：active（draft PR #340，等待同步基线后的 CI）· 更新：2026-10-22
+分支：`codex/public-tree-cleanup-review` · worktree：`/workspace/duya-pr340-review` · PR：[PR #340](https://github.com/lava-chen/duya/pull/340) · 最新 master：`ebd76d48`（含 #343、#341、#349）
 
 ## 目标与边界
 
@@ -49,14 +49,14 @@
 | `c8df0e0`; task slice dirty | Windows / PowerShell; Node 24.16.0 | `git diff --check` | 0 | no whitespace errors |
 | `c1887b9`; clean committed worktree | Windows / PowerShell | compare branch with current `origin/master` (`5b12f72`) | 0 | 1 task commit ahead, 4 upstream commits ahead; no changed-path overlap; GitHub reports PR mergeable |
 
-## #343 合并后的复核
+## 最新 master 同步后的复核
 
-- 已把 `origin/master`（#343 合并后 `16ee9dda`）合入独立 worktree；PR #341 仍未合并。PR #340 当前保持 Draft。
+- 已把最新 `origin/master` `ebd76d48`（含 #343、#341、#349）合入独立 worktree；无冲突，PR #340 当前保持 Draft，等待新 head CI。
 - 相对最新 master 的清理变更初始有 9 个文件删除；恢复 Codex Harness 技能后，净删除为 8 个文件。七项文档/配置迁移包含五份文档和两份 entitlements。
-- `electron-builder.yml` 的 macOS entitlements 指向 `resources/packaging/entitlements.mac.plist` 与 `.inherit.plist`；文件存在且内容与原文件一致。Linux 上无法验证实际 macOS 签名/打包产物，需等待 PR CI 的 macOS package job 并检查产物权限。
-- 架构检查、全仓类型检查、规则测试和 packaged-artifact 静态门禁已通过；类型检查使用 4 GiB Node heap。完整跨平台 CI 尚待本次 head 推送后运行。
-- 本地安装使用 `npm ci --ignore-scripts`，因此未运行依赖原生 postinstall 的 Electron/macOS 打包。
+- `electron-builder.yml` 的 macOS entitlements 指向 `resources/packaging/entitlements.mac.plist` 与 `.inherit.plist`；文件存在且内容与原文件一致。按用户最新要求，本次无需 macOS 打包验证。
+- 架构检查、全仓类型检查、规则测试和 packaged-artifact 静态门禁已通过；类型检查使用 4 GiB Node heap。head `3c237a0` 的 PR CI（architecture、test scope、Ubuntu test/typecheck/build）已全绿；同步 #349 后的新 head 仍需重新跑 CI。
+- 本地安装使用 `npm ci --ignore-scripts`，因此未运行依赖原生 postinstall 的原生 Electron 打包；本任务不要求 macOS 验证。
 
 ## 接续 / 结果
 
-历史记录：初始实现提交为 `c1887b9`。本次接续新增 master 同步合并与审计修正；完成 macOS 产物和 CI 验证前，继续保留 Draft，不合并。
+历史记录：初始实现提交为 `c1887b9`。本次接续新增 master 同步合并与审计修正；当前同步基线后的 CI 全绿后可将 PR 标记 Ready 并合并。
