@@ -2,12 +2,27 @@
 
 import { useCallback, useRef, useEffect } from "react";
 
+/**
+ * Which edge of the boundary the handle sits on.
+ *
+ * - `left` / `right`: a vertical separator line; the pane next to it grows
+ *   horizontally. `left` means the handle is on the pane's LEFT edge, so the
+ *   pane it resizes is the one on its right.
+ * - `top` / `bottom`: a horizontal separator line; the pane next to it grows
+ *   vertically. `top` means the handle is on the pane's TOP edge, so the pane
+ *   it resizes is the one below it.
+ */
+export type ResizeHandleSide = "left" | "right" | "top" | "bottom";
+
 interface ResizeHandleProps {
-  side: "left" | "right";
+  side?: ResizeHandleSide;
   onResize: (delta: number) => void;
   onResizeStart?: () => void;
   onResizeEnd?: () => void;
-  /** Current panel width, exposed via aria-valuenow and used for keyboard steps. */
+  /**
+   * Current size of the pane the handle resizes, exposed via aria-valuenow
+   * and used for keyboard steps. Pixels, along the separator's axis.
+   */
   width?: number;
   /** Lower bound for keyboard resizing / aria-valuemin. */
   minWidth?: number;
@@ -28,7 +43,7 @@ interface ResizeHandleProps {
 const KEY_STEP_PX = 16;
 
 export function ResizeHandle({
-  side,
+  side = "left",
   onResize,
   onResizeStart,
   onResizeEnd,
@@ -41,6 +56,7 @@ export function ResizeHandle({
 }: ResizeHandleProps) {
   const isDragging = useRef(false);
   const startXRef = useRef(0);
+  const startYRef = useRef(0);
   const pendingDeltaRef = useRef(0);
   const frameRef = useRef<number | null>(null);
   const onResizeRef = useRef(onResize);
@@ -51,26 +67,34 @@ export function ResizeHandle({
     onResizeEndRef.current = onResizeEnd;
   }, [onResize, onResizeEnd]);
 
+  /**
+   * A `left` / `right` handle moves along x, a `top` / `bottom` handle along
+   * y. `primaryOnRight` (resp. `primaryBelow`) tells which side of the handle
+   * the resized pane sits on, which decides the sign of the reported delta.
+   */
+  const horizontal = side === "left" || side === "right";
+  const primaryOnRight = side === "left" || side === "top";
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
       isDragging.current = true;
       startXRef.current = e.clientX;
+      startYRef.current = e.clientY;
       pendingDeltaRef.current = 0;
       onResizeStart?.();
-      document.body.style.cursor = "col-resize";
+      document.body.style.cursor = horizontal ? "col-resize" : "row-resize";
       document.body.style.userSelect = "none";
     },
-    [onResizeStart]
+    [horizontal, onResizeStart]
   );
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
-      pendingDeltaRef.current =
-        side === "left"
-          ? e.clientX - startXRef.current
-          : startXRef.current - e.clientX;
+      pendingDeltaRef.current = horizontal
+        ? (primaryOnRight ? e.clientX - startXRef.current : startXRef.current - e.clientX)
+        : (primaryOnRight ? e.clientY - startYRef.current : startYRef.current - e.clientY);
       if (frameRef.current !== null) return;
       frameRef.current = requestAnimationFrame(() => {
         frameRef.current = null;
@@ -99,7 +123,7 @@ export function ResizeHandle({
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [side]);
+  }, [horizontal, primaryOnRight]);
 
   const requestWidth = useCallback(
     (target: number) => {
@@ -114,13 +138,16 @@ export function ResizeHandle({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (!onWidthRequest || typeof width !== "number") return;
+      // The arrow that moves the boundary edge AWAY from the resized pane
+      // grows that pane.
+      const growKey = horizontal ? "ArrowLeft" : side === "top" ? "ArrowUp" : "ArrowDown";
+      const shrinkKey = horizontal ? "ArrowRight" : side === "top" ? "ArrowDown" : "ArrowUp";
       switch (e.key) {
-        case "ArrowLeft":
-          // Widen (the panel sits to the right of this handle).
+        case growKey:
           e.preventDefault();
           requestWidth(width + KEY_STEP_PX * (e.shiftKey ? 4 : 1));
           break;
-        case "ArrowRight":
+        case shrinkKey:
           e.preventDefault();
           requestWidth(width - KEY_STEP_PX * (e.shiftKey ? 4 : 1));
           break;
@@ -147,7 +174,7 @@ export function ResizeHandle({
           break;
       }
     },
-    [maxWidth, minWidth, onReset, onWidthRequest, requestWidth, width]
+    [horizontal, maxWidth, minWidth, onReset, onWidthRequest, requestWidth, side, width]
   );
 
   return (
@@ -157,7 +184,7 @@ export function ResizeHandle({
       onDoubleClick={onReset}
       onKeyDown={onWidthRequest ? handleKeyDown : undefined}
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={horizontal ? "vertical" : "horizontal"}
       aria-label={label}
       aria-valuenow={typeof width === "number" ? Math.round(width) : undefined}
       aria-valuemin={minWidth}
