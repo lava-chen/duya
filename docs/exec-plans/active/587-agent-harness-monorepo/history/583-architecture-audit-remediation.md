@@ -6,9 +6,9 @@
 # 583 — 架构审计整改（5 域并行审计的 108 项缺口收敛：契约无单一事实源、门禁缺失、信任模型未落地）
 
 > **Status**: In Progress · **Priority**: P0 · **Owner**: TBD
-> **立项**: 2026-10-01（来源：`ARCHITECTURE_AUDIT.md`，5 域并行审计 @ `e1bc1650` / `9522711`）
+> **立项**: 2026-10-01（来源：[2026-10-01 architecture audit](../../../../architecture/2026-10-01-architecture-audit.md)，5 域并行审计 @ `e1bc1650` / `9522711`）
 > **前置**: 无
-> **分界**: 本 plan 只做审计报告 `ARCHITECTURE_AUDIT.md` 里的 108 项缺口。Plan 580（MCP 能力收敛）、Plan 582（会话归档加固）另行推进；涉及交叉处只在 §7 说明边界，不替它们排期。
+> **分界**: 本 plan 只做审计报告 [2026-10-01 architecture audit](../../../../architecture/2026-10-01-architecture-audit.md) 里的 108 项缺口。Plan 580（MCP 能力收敛）、Plan 582（会话归档加固）另行推进；涉及交叉处只在 §7 说明边界，不替它们排期。
 >
 > **交付进度（分轨 PR，链式堆叠）**
 >
@@ -67,7 +67,7 @@
 
 ## 0. 一句话目标
 
-把 `ARCHITECTURE_AUDIT.md` 审计出的 108 项缺口收敛成可执行清单，按「先止血、再建契约、最后清根因」的依赖顺序推进，并**先补上那道本可以拦住 4 个 P0 的自动化门禁**（esbuild 不做类型检查，且 CI 上没有跑 `typecheck:all`）。
+把 [2026-10-01 architecture audit](../../../../architecture/2026-10-01-architecture-audit.md) 审计出的 108 项缺口收敛成可执行清单，按「先止血、再建契约、最后清根因」的依赖顺序推进，并**先补上那道本可以拦住 4 个 P0 的自动化门禁**（esbuild 不做类型检查，且 CI 上没有跑 `typecheck:all`）。
 
 ---
 
@@ -99,7 +99,7 @@ vault 加密是对的、i18n 键完全对齐、git 只读契约被遵守；但�
     与原报告一致。审查者「28 个零消费者」的数字未独立复现（本次只做到 preload 作用域上界 46）。
 - **可信度纪律**：保留每条原始发现的 `Confidence` 标注。低/中置信度发现**不得**在摘要表中被当作硬结论；
   争议项进 §7「明确不做的事」而不是被悄悄采信。原始 9 条 P0 中，**3 条被降级**（webviewTag、明文 API key 打日志、
-  飞书 webhook），理由逐条写在 `ARCHITECTURE_AUDIT.md` §7。
+  飞书 webhook），理由逐条写在 [2026-10-01 architecture audit](../../../../architecture/2026-10-01-architecture-audit.md) §7。
 
 **去重后严重度**：P0 **4** / P1 **34** / P2 **54** / P3 **15**，合计 **108**。**系统性根因 4 个**（RC-1 契约无单一
 事实源、RC-2 该自动检查的没检查、RC-3 信任模型声明与落地分离、RC-4 安全原语双份且弱的那份在决策路径上）。
@@ -940,5 +940,5 @@ ISS-38 必须用表驱动测试断言「每条 `vercel.json` 跳转目标都存�
 - 不重写 Git 历史、不做 `reset`/`rebase` 清理；ISS-51 一律用 `git rm --cached`。
 
 **决策日志**
-- 2026-10-01：立项。基于 `ARCHITECTURE_AUDIT.md`（117 条原始发现 → 去重 108 项缺陷；9 条原始 P0 保留 4 条、
+- 2026-10-01：立项。基于 [2026-10-01 architecture audit](../../../../architecture/2026-10-01-architecture-audit.md)（117 条原始发现 → 去重 108 项缺陷；9 条原始 P0 保留 4 条、
   降级 3 条、合并 2 对）。ISS-05 走 (a) 落地强制还是 (b) 停止宣称，待实现前决策。

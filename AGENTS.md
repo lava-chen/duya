@@ -18,7 +18,7 @@ Duya：本地优先的 agent 工作台。此文件只放全仓约束；细节按
 | 日志修改 / Code Review 面板修改 | [日志](docs/development/logging.md) / [面板契约](docs/development/code-review.md) |
 | 版本、tag 或发布 | [发布](docs/development/release.md) |
 
-架构与定位：[ARCHITECTURE.md](ARCHITECTURE.md) · [ARCHITECTURE_MAP.md](ARCHITECTURE_MAP.md)；[排障](docs/development/footguns.md)按症状查。
+架构与定位：[ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) · [ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md)；[排障](docs/development/footguns.md)按症状查。
 
 ## 定位
 
@@ -59,7 +59,7 @@ npm run electron:build       # required before test:e2e
 - UI 改动用 Playwright MCP 真跑；MCP 连接器改动过 conformance L1–L9
   （`packages/agent/tests/integration/mcp-conformance.test.ts`）。
 - main / preload 修改后重建 Electron；UI 服务与构建产物必须来自当前检出，mock 通过不能代替真实 IPC / worker 链路验收。
-- 打包或懒加载边界变化时，推送前跑 `npm run electron:build`；架构变化同步 `ARCHITECTURE.md`。
+- 打包或懒加载边界变化时，推送前跑 `npm run electron:build`；架构变化同步 [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md)。
 - 验证记录带 SHA、dirty 范围、环境、命令和退出码；区分已实现、已验证、已合并。
   细则见[测试](docs/development/testing.md)与[构建](docs/development/build.md)。
 

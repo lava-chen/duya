@@ -94,6 +94,14 @@ test_paper.pdf
 duyaUI.pen
 
 # Agent tools
+/.codex/
+!/.codex/
+/.codex/*
+!/.codex/skills/
+/.codex/skills/*
+!/.codex/skills/visual-component-verify/
+/.codex/skills/visual-component-verify/*
+!/.codex/skills/visual-component-verify/SKILL.md
 .claude/
 .trae/
 .trae-html-share-packages/
@@ -131,6 +139,7 @@ docs/exec-plans/tech-debt-tracker.md
 docs/*.md
 !docs/README.md
 !docs/AGENTS.md
+!docs/README.zh-CN.md
 
 # Tests
 # Tests: the root-level `tests/` scratch directory is ignored, EXCEPT the

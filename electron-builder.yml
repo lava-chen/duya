@@ -148,8 +148,8 @@ mac:
   artifactName: "${productName}-${version}-${arch}.${ext}"
   hardenedRuntime: true
   gatekeeperAssess: false
-  entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.inherit.plist
+  entitlements: resources/packaging/entitlements.mac.plist
+  entitlementsInherit: resources/packaging/entitlements.mac.inherit.plist
   # Keep false here so local builds without Apple credentials succeed.
   # Notarization is performed conditionally by scripts/after-sign.js when
   # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID are set in CI.

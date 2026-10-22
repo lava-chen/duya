@@ -87,6 +87,7 @@ test_paper.pdf
 duyaUI.pen
 
 # Agent tools
+/.codex/
 .claude/
 .trae/
 .qoder/

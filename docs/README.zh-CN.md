@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/readme/hero.gif" width="100%" alt="Duya：支持桌面端、终端 TUI 与 Web 的开源 Agent 基础架构">
+  <img src="../assets/readme/hero.gif" width="100%" alt="Duya：支持桌面端、终端 TUI 与 Web 的开源 Agent 基础架构">
 </p>
 
 <h1 align="center">Duya</h1>
@@ -13,10 +13,10 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> ·
+  <a href="../README.md">English</a> ·
   <a href="https://github.com/lava-chen/duya/releases">下载桌面版</a> ·
-  <a href="./ARCHITECTURE_MAP.md">架构导航</a> ·
-  <a href="./CONTRIBUTING.md">参与贡献</a>
+  <a href="architecture/ARCHITECTURE_MAP.md">架构导航</a> ·
+  <a href="../CONTRIBUTING.md">参与贡献</a>
 </p>
 
 > **当前状态：** Desktop 处于公开 beta；TUI 持续开发中；Web 仍是早期的**仅本地访问**版本。三端复用同一套基础能力，但目前**尚未实现功能完全对齐**。
@@ -88,7 +88,7 @@ npm run build:web-app
 npm run web-app
 ```
 
-CLI 和 Web workspace 目前不是单独发布、可通过包管理器安装的软件包。浏览器入口通过本地 BFF 与 Host 通信。详细限制与连接方式参见 [apps/web/README.md](./apps/web/README.md)。
+CLI 和 Web workspace 目前不是单独发布、可通过包管理器安装的软件包。浏览器入口通过本地 BFF 与 Host 通信。详细限制与连接方式参见 [apps/web/README.md](../apps/web/README.md)。
 
 ## 架构
 
@@ -112,7 +112,7 @@ Desktop (Electron)      TUI / CLI        Web (local BFF + React UI)
 - `@duya/client-core`：与传输方式无关的状态模型；`@duya/ui`：Desktop 和 Web 共用的 React 界面。
 - `@duya/cli`：命令行控制面及 TUI；`apps/desktop`、`apps/web`：产品入口。
 
-详细职责与执行链以 [ARCHITECTURE.md](./ARCHITECTURE.md) 和 [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) 为准。
+详细职责与执行链以 [ARCHITECTURE.md](architecture/ARCHITECTURE.md) 和 [ARCHITECTURE_MAP.md](architecture/ARCHITECTURE_MAP.md) 为准。
 
 ## 本地优先与安全边界
 
@@ -157,4 +157,4 @@ apps/web/                 本地浏览器客户端
 docs/                     设计、开发、执行计划及发布资料
 ```
 
-贡献前请阅读 [AGENTS.md](./AGENTS.md) 与 [CONTRIBUTING.md](./CONTRIBUTING.md)。Duya 使用 [MIT License](./LICENSE)。
+贡献前请阅读 [AGENTS.md](../AGENTS.md) 与 [CONTRIBUTING.md](../CONTRIBUTING.md)。Duya 使用 [MIT License](../LICENSE)。

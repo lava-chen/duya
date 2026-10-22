@@ -4,6 +4,8 @@
 
 <h1 align="center">Duya</h1>
 
+<p align="center"><a href="docs/README.zh-CN.md">简体中文</a></p>
+
 <p align="center">
   Open-source, local-first agent infrastructure for Desktop, TUI, and Web — one runtime, multiple ways to work.
 </p>
@@ -55,7 +57,7 @@ You can send a correction or new constraint while the task is still running. Duy
 
 All three build on a shared set of packages: **Agent Protocol → Agent Core / Runtime → Host → clients**. The Host manages runs, workers, permissions, and event transport; client interfaces present and control that work. Each surface has different maturity and capabilities today.
 
-Duya also exposes extension points through tool capabilities, Skills, MCP, and its evolving plugin system. MCP and plugin configuration is available through the Desktop and CLI control paths; the Web client does not yet provide extension management. Plugin trust and permission controls are not a guarantee of a hardened operating-system sandbox. See [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for source-level ownership and [apps/web/README.md](./apps/web/README.md) for Web limitations.
+Duya also exposes extension points through tool capabilities, Skills, MCP, and its evolving plugin system. MCP and plugin configuration is available through the Desktop and CLI control paths; the Web client does not yet provide extension management. Plugin trust and permission controls are not a guarantee of a hardened operating-system sandbox. See [ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md) for source-level ownership and [apps/web/README.md](./apps/web/README.md) for Web limitations.
 
 ---
 
@@ -203,7 +205,7 @@ Duya's **shared Agent foundation** is independent of any one interface:
 
 Agent execution can use child processes with event and permission boundaries. Plugin trust controls and command sandbox options do not provide a universal hardened OS sandbox for every plugin, tool, platform, or configuration.
 
-Core technologies include TypeScript, Node.js, React 19, Electron, SQLite / better-sqlite3, HTTP + SSE, and worker processes. See [ARCHITECTURE.md](./ARCHITECTURE.md) and [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) for the authoritative package and data-flow details.
+Core technologies include TypeScript, Node.js, React 19, Electron, SQLite / better-sqlite3, HTTP + SSE, and worker processes. See [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) and [ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md) for the authoritative package and data-flow details.
 
 ---
 
@@ -258,9 +260,9 @@ scripts/               Build, bundle, packaging, and diagnostics
 docs/                  Architecture, execution plans, and release notes
 ```
 
-The full package map is in [ARCHITECTURE.md](./ARCHITECTURE.md). For "which
+The full package map is in [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md). For "which
 package do I open for this symptom?", see
-[ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md).
+[ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md).
 
 Before contributing, read [AGENTS.md](./AGENTS.md) and check the active work in [docs/exec-plans/README.md](./docs/exec-plans/README.md).
 
