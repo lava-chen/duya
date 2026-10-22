@@ -95,6 +95,8 @@ Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的�
 | 0c7915f5（干净） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | — |
 | 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 同一条未触发基线，未重录 |
 | 同上 | 同上 | `npm run electron:build` | 0；Vite 1m53s，native 模块复制完成 | 仅 `esbuild` external 警告，属既有 |
+| 6477b646 / 重建 worker bundle | Windows / Node 22.22.2 | `npm run bundle:verify` | 0；`FRESH 0/1086` | CI `architecture` 曾报 bundle 陈旧（`host-capabilities.ts`、`http-server.ts` 晚于 `6d191e5c`）；本地此前只跑 `architecture:check`，漏了 `bundle:verify` |
+| 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 同一条未触发基线，未重录 |
 
 ## 接续 / 结果
 
@@ -130,14 +132,14 @@ durable 块交给 `TUIApp.push`，settle 时用 `replaceTranscript` 读一次 du
 
 ## 接续与下一步
 
-PR [#360](https://github.com/lava-chen/duya/pull/360) 已创建，保持 draft。分支
-`codex/single-host-multiclient` 已推送，head `0c7915f5`，base `master`（`4653c2d4`），
-与最新 master 试合并无冲突。
+PR [#360](https://github.com/lava-chen/duya/pull/360) 已创建。分支
+`codex/single-host-multiclient` 已推送，head `544e7dfc`，base `master`，与最新 master 试合并无冲突。
 
 已通过的门禁：`npm run typecheck:all`、`npm run architecture:check`、`npm run electron:build`，
-以及步骤 1–5 各自的单测。
+以及步骤 1–5 各自的单测。CI 的 `architecture` 第二段 `bundle:verify` 曾失败（worker bundle 早于
+`host-capabilities.ts` 与 `http-server.ts` 的改动），已在 `6477b646` 重建并提交，本地复验 `FRESH`。
 
-剩下的是人工双端验收（验收 1–6），完成后在 PR 勾掉 test plan、转 ready 并请人 review：
+人工双端验收（验收 1–6）原计划在转 ready 前完成：
 
 1. Desktop `npm run electron:dev` 期间执行 `npm run dev:tui`，确认无 owner 锁错误、启动行带 Desktop origin、能看到 Desktop 已有 session。
 2. TUI 发一轮，Desktop 刷新后内容一致。
@@ -146,4 +148,5 @@ PR [#360](https://github.com/lava-chen/duya/pull/360) 已创建，保持 draft�
 5. 关掉 Desktop 后单跑 TUI，回退自起 ephemeral Host。
 6. descriptor PID 已死时不 attach。
 
-合并需用户授权；回收与 worktree 清理留到集成之后。
+用户已授权合并，并选择由 agent 修完 bundle 后转 ready 直接合并，上述人工验收改在集成后补做；
+合并用 merge commit。回收与 worktree 清理留到集成之后，届时按 [worktree 指南](../../development/worktree.md) 执行。
