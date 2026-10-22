@@ -560,7 +560,7 @@ export async function handleInstallPlugin(
     const result = fromPath
       ? await manager.installFromPath(fromPath, scope)
       : await manager.installFromCatalog(pluginId!, scope);
-    if (!result.ok) {
+    if (!result.success) {
       const mapped = pluginErrorToResponse(result.error);
       sendJson(res, mapped.status, mapped.body);
       return;
@@ -570,13 +570,13 @@ export async function handleInstallPlugin(
     await notifyMcpConfigChanged();
     const event: AuditEvent = {
       kind: 'plugin.install',
-      id: result.value.id,
+      id: result.data.id,
       ts: Date.now(),
       invokedBy: 'cli',
       ...(correlationId ? { correlationId } : {}),
     };
     await appendAuditEvent(getUserDataDir(), event);
-    sendJson(res, 200, { plugin: result.value });
+    sendJson(res, 200, { plugin: result.data });
   } catch (err) {
     const mapped = pluginErrorToResponse(err);
     sendJson(res, mapped.status, mapped.body);
@@ -593,7 +593,7 @@ export async function handleUninstallPlugin(
     const raw = (await readJsonBody(req)) as { deleteData?: unknown };
     const manager = getPluginManager();
     const result = await manager.remove(id, asBool(raw.deleteData));
-    if (!result.ok) {
+    if (!result.success) {
       const mapped = pluginErrorToResponse(result.error);
       sendJson(res, mapped.status, mapped.body);
       return;
@@ -607,7 +607,7 @@ export async function handleUninstallPlugin(
       ...(asBool(raw.deleteData) ? { note: 'deleteData=true' } : {}),
     };
     await appendAuditEvent(getUserDataDir(), event);
-    sendJson(res, 200, { id, removed: result.value.removed });
+    sendJson(res, 200, { id, removed: result.data.removed });
   } catch (err) {
     const mapped = pluginErrorToResponse(err);
     sendJson(res, mapped.status, mapped.body);
@@ -637,7 +637,7 @@ export async function handleUpdatePlugin(
     // newest cached version of the same catalog entry. The same audit
     // trail distinguishes install vs update via the `note` field.
     const result = await manager.installFromCatalog(id);
-    if (!result.ok) {
+    if (!result.success) {
       const mapped = pluginErrorToResponse(result.error);
       sendJson(res, mapped.status, mapped.body);
       return;
@@ -650,7 +650,7 @@ export async function handleUpdatePlugin(
       ...(correlationId ? { correlationId } : {}),
     };
     await appendAuditEvent(getUserDataDir(), event);
-    sendJson(res, 200, { plugin: result.value });
+    sendJson(res, 200, { plugin: result.data });
   } catch (err) {
     const mapped = pluginErrorToResponse(err);
     sendJson(res, mapped.status, mapped.body);
