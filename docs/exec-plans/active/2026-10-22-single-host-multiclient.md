@@ -27,7 +27,7 @@
 - [x] 2. CLI 新增「发现并附着已有 Host」解析：读 runtime 文件、校验 PID、健康检查、能力检查；`runTuiCommand` 优先 attach，只有无可附着 Host 时才自起。
 - [x] 3. Desktop 的 Host HTTP 面获得执行能力：抽取 router 现有的 turn 启动实现为单一入口，实现 `HostRunExecutionApiV1` 并注入 `HostSessionHttpServer`。
 - [x] 4. 同会话并发驱动：确认 Desktop chat lock 与 Host 执行控制器的互斥关系，缺口在 Host 侧补 lock 获取，或在计划里明确拒绝语义。
-- [ ] 5. 跨客户端可见性：TUI 查看会话时增量刷新远端 run/消息；ephemeral 事件不可跨进程，按 durable 事件兜底。
+- [x] 5. 跨客户端可见性：TUI 查看会话时增量刷新远端 run/消息；ephemeral 事件不可跨进程，按 durable 事件兜底。
 - [ ] 6. 测试与验收：协议/CLI/Desktop 单测，人工双端验收，Electron 重建。
 
 ## 发现与决策
@@ -64,6 +64,14 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 
 Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的是同一把锁；Desktop 不使用 `HostRunExecutionController`，也就不存在「第二把锁」需要补。适配器把 409 变成一句点名对方的拒绝（`this session is already running a turn in another client`），CLI 与 TUI 都会把 `start.reason` 打给用户（`packages/cli/src/chat.ts:250-252`、`964-967`）。残留风险只有 TTL 镜像与 run fence 这两个既有兜底，没有新增。
 
+步骤 5 没有做跨进程事件总线，也没有加 DB 触发器：可见性的最小正确实现是「TUI 每秒读一次 run 账本」。`RemoteSessionWatch`（`packages/cli/src/tui/remote-session-watch.ts:1`）用 `listAgentRunsBySession` 做一次带 limit 的索引读，首次读到的是基线（历史不重放），之后新增的 run 若仍在 `running` 就用现成的 `watchAgentRunEvents` 跟随 durable 流，已经终态的只触发一次 transcript 重载。1 秒的轮询就是验收里的 ≤2s（`packages/cli/src/chat.ts:131-137`）。
+
+刷新粒度是内容块，不是字符。`assistant.text_delta`、`assistant.status`、`tool.call_preview` 都是 ephemeral，只存在于执行进程内存（计划内已记录），所以远端 run 的文本以 `assistant.text_block` 为单位出现；同一个会话在两端看到的最终 transcript 一致，因为 `replaceTranscript` 读的是 durable 投影。
+
+三处刻意不做的事：远程权限请求不接管，approval overlay 属于本进程自己的 run，回答会被丢弃，所以只提示一次「在另一端处理」；本进程发起的 run 用 `localRunIds` 排除，避免同一 run 被渲染两遍；远端的 `done`/`error` 帧丢弃，以 settle 通知加重载代替，避免误触发本 loop 的终端状态。
+
+`/resume`、`/new` 与 `/switch` 都会 `watchSession(next)` 让 watcher 重新取基线；`close()` 会停轮询并 abort 正在跟随的流。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -82,6 +90,8 @@ Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的�
 | 同上 | 同上 | `npm run electron:build` | 未运行 | 留到 PR 前与人工双端验收一起做 |
 | 4653c2d4 + 步骤 4 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run apps/desktop/src/main/cli/__tests__/desktop-run-execution-api.test.ts` | 0；11 用例通过 | 新增 409 点名另一客户端、404 视为无会话两例 |
 | 同上 | 同上 | `npm run -w @duya/desktop typecheck:main` | 2；仅既有 baseline 错误 | 本次两个文件零错误；`router.ts` 报错仍在 1940/3618 |
+| 4653c2d4 + 步骤 5 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run packages/cli/src/__tests__` | 0；7 文件 44 用例通过 | 新增 `remote-session-watch` 9 例；既有 35 例未变 |
+| 同上 | 同上 | `npm run -w @duya/cli typecheck` | 0 | 新文件与 `chat.ts` 零错误 |
 
 ## 接续 / 结果
 
@@ -108,5 +118,15 @@ Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的�
 争同一把锁；`acquireChatLock` 只是忙闲镜像，不参与互斥。适配器把 409 翻成
 `this session is already running a turn in another client`，404 翻成 `refused_no_session`，
 测试补到 11 例。
-下一步：步骤 5 的跨客户端可见性。当前 TUI 只在自己发起的 run 上跟随事件流，桌面端发起的
-turn 在 TUI 侧不会自动出现，需要会话视图按 durable 事件增量刷新。
+
+步骤 5 已完成：新增 `packages/cli/src/tui/remote-session-watch.ts`，`chat.ts` 在首屏后启动
+1s 轮询，`/resume`、`/new`、`/switch` 重置基线，`close()` 停止轮询并 abort 跟随。远端 run 的
+durable 块交给 `TUIApp.push`，settle 时用 `replaceTranscript` 读一次 durable 投影；权限请求只
+提示不接管。新增 9 例单测；CLI 全套 44 例通过，`typecheck` 退出 0。
+未跑 `npm run typecheck:all`、`npm run architecture:check`、`npm run electron:build`（留到步骤 6 与 PR 前统一跑）。
+
+## 接续与下一步
+
+步骤 6 只剩验收与门禁：先跑 `npm run typecheck:all`、`npm run architecture:check`、相关 vitest，
+再 `npm run electron:build`，最后人工双端跑一遍验收 1–6（Desktop `npm run electron:dev` 期间执行
+`npm run dev:tui`；双向各发一轮；关掉 Desktop 后单跑 TUI 回退自起）。PR 未创建，worktree 保留。
