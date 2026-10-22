@@ -91,6 +91,7 @@ Claude 的前置圆环被明确排除。
 | dirty | Windows / CDP | `node docs-local/.../verify-themes.mjs` | 深浅两主题均 行高 26 / 行距 31 / 图标 0 | `duya-light.png` `duya-dark.png` |
 | dirty | Windows / CDP | `node docs-local/.../verify-project-mode.mjs` | 按项目分组：嵌套行高 26 / 行距 31 / 分组头 28 | `.project-group-threads` = flex column + gap 5px |
 | dirty | Windows / CDP | `node docs-local/.../verify-round2.mjs` | 行距 **27** / 行高 26 / 侧栏宽 **300** / pin 按钮 **0** / 行尾菜单按钮 601 / 前置图标 0 | 对照 Claude Code 参考值 27.2 / 26.4 / ~288 |
+| dirty | Windows / CDP | `node docs-local/.../verify-project-mode.mjs`（第二轮后复跑） | 按项目分组：嵌套行高 26 / 行距 **27** / 分组头 28 | `.project-group-threads` = flex column + gap 1px |
 | dirty | Windows / CDP | `node docs-local/.../verify-hover-menu.mjs` | 悬停层按钮数 **1**（只有 ⋮）；⋮ 菜单 7 项：置顶 / 重命名 / 复制 ID / 打开目录 / 导出 / 归档 / 删除 | `duya-round2-hover.png` `duya-round2-menu.png` |
 | dirty | Node 24.16.0 / jsdom | `vitest run .../ThreadListItem.test.tsx .../SectionActions.test.tsx` | 0 · **32/32** | 第二轮改动后复跑 |
 
@@ -99,8 +100,8 @@ Claude 的前置圆环被明确排除。
 - 过滤器浮层：分组头第三颗按钮点开是「分组方式 / 排序方式 / 显示空分组」，子菜单带 ✓，当前值直接显示在行上——与 Codex 的过滤器浮层同形。
 - 「在一个列表中」= Codex 的扁平列表形态，实测生效，一屏 20 个会话。
 - 深浅两主题行距/行高一致。
-- 按项目分组模式：嵌套会话行同样是 **26px 行高 / 31px 行距**，项目分组头 28px；
-  跨分组的 126.6px 是「上一组末行 → 下一组首行」跨过分组头的距离，不是行距异常。
+- 按项目分组模式：嵌套会话行同样是 **26px 行高**（第二轮 gap 1px 后行距 **27px**），项目分组头 28px；
+  跨分组的 114.6px 是「上一组末行 → 下一组首行」跨过分组头的距离，不是行距异常。
 - 第二轮：悬停一条会话，**只出现一个 ⋮ 按钮**（原来有两个：置顶 + ⋮）；
   点开 ⋮ 菜单有 7 项，置顶在菜单里，不再单独占一个行内按钮。
 - 第二轮：标题可用宽度从 149px 涨到 **189px**（侧栏 260→300），实测不再截断。
