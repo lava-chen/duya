@@ -25,7 +25,7 @@
 
 - [x] 1. 在 Host 握手中声明执行能力，Host 服务端按已注册 API 推导，旧 Host 缺声明时按不具备处理。
 - [x] 2. CLI 新增「发现并附着已有 Host」解析：读 runtime 文件、校验 PID、健康检查、能力检查；`runTuiCommand` 优先 attach，只有无可附着 Host 时才自起。
-- [ ] 3. Desktop 的 Host HTTP 面获得执行能力：抽取 router 现有的 turn 启动实现为单一入口，实现 `HostRunExecutionApiV1` 并注入 `HostSessionHttpServer`。
+- [x] 3. Desktop 的 Host HTTP 面获得执行能力：抽取 router 现有的 turn 启动实现为单一入口，实现 `HostRunExecutionApiV1` 并注入 `HostSessionHttpServer`。
 - [ ] 4. 同会话并发驱动：确认 Desktop chat lock 与 Host 执行控制器的互斥关系，缺口在 Host 侧补 lock 获取，或在计划里明确拒绝语义。
 - [ ] 5. 跨客户端可见性：TUI 查看会话时增量刷新远端 run/消息；ephemeral 事件不可跨进程，按 durable 事件兜底。
 - [ ] 6. 测试与验收：协议/CLI/Desktop 单测，人工双端验收，Electron 重建。
@@ -50,7 +50,15 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 
 拒绝的方案：删除或放宽 `DatabaseOwnerLock`。它保护的是迁移执行、WAL checkpoint 调度、run/worker 归属与进程内事件主干（`packages/data/src/database-owner-lock.ts:37-114`）；两个所有者会得到两条互不可见的事件总线，且迁移可能并发执行。
 
-执行面采用委托而不是第二套控制器：把 Desktop router 中的 turn 启动逻辑抽成单一入口，供 router 与新的 `HostRunExecutionApiV1` 适配器共用，避免同一 Electron 主进程出现两套 worker manager 竞争同一 session。若抽取成本过高，备选是给 Desktop 的 `HostSessionHttpServer` 传 `workerPath` 让 Host 执行，但必须在计划中记录双 worker 风险，且只允许不同 session 并发。
+执行面采用委托而不是第二套控制器：把 Desktop router 中的 turn 启动实现抽成单一入口，供 router 与新的 `HostRunExecutionApiV1` 适配器共用，避免同一 Electron 主进程出现两套 worker manager 竞争同一 session。若抽取成本过高，备选是给 Desktop 的 `HostSessionHttpServer` 传 `workerPath` 让 Host 执行，但必须在计划中记录双 worker 风险，且只允许不同 session 并发。
+
+步骤 3 的落地结果与计划不同的一点：不需要「抽取」一个新入口，`POST /sessions/:id/chat` 本身就是那个入口，而且它已经在 SSE 头写出之前 `await openRun`（`apps/desktop/src/main/agents/server/router.ts:1350-1392`、`1670-1690`）。适配器直接当这个入口的客户端，因此没有第二套 orchestrator，也没有重复的 worker manager。
+
+新增了一个只读路由 `GET /sessions/:id/active-run`（`apps/desktop/src/main/agents/server/router.ts:3466-3478`）。原因是协议要求 `StartAgentRunResult.accepted` 立即带 run id，而现有两条路都拿不到：`run-result` 会等运行结束，SSE 体里只有 worker 帧、没有 ack。`runForSession` 是 orchestrator 已有的绑定，所以该路由不加状态。
+
+取消走 `DELETE /sessions/:id/chat`，与桌面端停止按钮同一入口。run 到 session 的映射读 run 账本，查不到就拒绝并说明原因，不猜 session。
+
+一个已知边界：`agent_run_execution` 的广播只看执行 API 是否注册，不看 Agent Server 当时是否存活。Agent Server 未起时 `startAgentRun` 会返回 `refused_dispatch_failed`（`the agent server is not running`），而不是让附着方以为能跑。Desktop 启动时该子进程会随之启动，所以正常路径不命中。
 
 ## 验证记录
 
@@ -64,6 +72,10 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 | 同上 | 同上 | `npx vitest run packages/host/tests/health-capabilities.test.ts` | 0；2 用例 | handshake 现显式传 `HostDeclaration` |
 | 同上 | 同上 | `npm run -w @duya/host typecheck`、`-w @duya/cli typecheck` | 0 / 0 | — |
 | 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 有 1 条 baseline 指纹不再触发，未重录 |
+| 4653c2d4 + 步骤 3 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run apps/desktop/src/main/cli/__tests__` | 0；3 文件 25 用例通过 | 新增适配器 10 例 |
+| 同上 | 同上 | `npm run -w @duya/desktop typecheck:main` | 2；仅既有 baseline 错误 | 本次两个新文件与 `active-run` 路由零错误；`router.ts` 两处报错在 1940/3618，均属既有代码 |
+| 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 同一条未触发基线，未重录 |
+| 同上 | 同上 | `npm run electron:build` | 未运行 | 留到 PR 前与人工双端验收一起做 |
 
 ## 接续 / 结果
 
@@ -76,7 +88,15 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 文件损坏才自起 ephemeral Host；发现到 Host 后先握手，`agent_run_execution` 缺席或 HTTP 不可达时
 打印带 PID 与 `DUYA_DATA_ROOT` 建议的错误并以 1 退出。显式 `DUYA_TUI_ATTACH=1` 语义不变。
 测试覆盖 discovery 的四个分支与拒绝文本，CLI 单测 35 例全绿。
-未跑 `npm run typecheck:all`（全量门禁留到 PR 前统一跑）。
+
+步骤 3 已完成并提交：新增 `apps/desktop/src/main/cli/desktop-run-execution-api.ts`，把
+`startAgentRun` 转发到 Agent Server 的 `POST /sessions/:id/chat`（SSE，后台排空，不转发帧），
+把 `cancelAgentRun` 转发到 `DELETE /sessions/:id/chat`；run id 取自新增的同步只读路由
+`GET /sessions/:id/active-run`。Desktop 的 `HostSessionHttpServer` 已注入该 API，`/healthz`
+因此开始广播 `agent_run_execution`。适配器 10 例单测覆盖请求形状、拒绝路径与取消。
+未跑 `npm run typecheck:all`、`npm run electron:build`（留到 PR 前统一跑）。
 回收：不适用，PR 未创建。
-下一步：步骤 3，Desktop 的 Host 注入 `HostRunExecutionApiV1`。当前真实双端验收仍会命中拒绝路径，
-因为 Desktop 的 Host 还是纯账本。
+下一步：步骤 4 的同会话互斥。router 里的 `acquireChatLock` 是 `void ...catch(() => {})`（
+`apps/desktop/src/main/agents/server/router.ts:1336`），失败被吞掉；TUI 经 Host 走同一入口，所以
+两端同时驱动同一 session 时目前只有 run fence 兜底。要么把 lock 失败变成显式 409，要么在
+Host 适配器先查 active-run 并拒绝。
