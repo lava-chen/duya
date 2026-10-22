@@ -251,6 +251,7 @@ core DB 迁移链 = `MessageLog.migrations` + `collectCoreDataMigrations()`（`p
 - [x] 契约核对（496 / 587 C6 / data stores / worker-subagents / agent-protocol / remove-worktree）
 - [x] codex 参照实现取证（worktree crate / metadata / state migrations / TUI 起会话顺序 / git-attribution）
 - [x] 契约定稿（本文件 4.1–4.6）
+- [x] Provider 接口签名 v0（附录 A，B 可据此并行）
 - [ ] 派发 A / B / C（各自 worktree + PR）
 - [ ] 第一波合并后启动 D / E
 - [ ] D / E 合并后启动 F
@@ -260,7 +261,94 @@ core DB 迁移链 = `MessageLog.migrations` + `collectCoreDataMigrations()`（`p
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| `2e6f265d`，文档新增 | Windows / Git Bash | 只读核对 + `git diff --stat` | 待补 | 本文档各节 `file:line` 引用 |
+| `2e6f265d` 只读核对 | Windows / Git Bash | `git rev-parse`、逐文件 `Read` / `grep -n` | 0 | 本文「现状核对」表内全部 `file:line`；codex 侧引用自 `c7234c1174` |
+| `48d3c383`（仅 `docs/**`） | Windows 11 / Node 22.22.2 | `node scripts/check-text-encoding.mjs` | 0 — `no new violations (11 known)` | 终端输出 |
+| 同上 | 同上 | `node scripts/architecture/architecture-check.mjs` | 0 — `tolerated 2800 / baseline 2785`，无新增违规 | 终端输出 |
+| 同上 | 同上 | `env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` | 0 — 11m15s；`typecheck-electron-gate: no new type errors (231 known)`；`eval:agent:core:check` 4/4 pass | 终端输出 |
+| 同上 | 同上 | 目标测试 | 不适用：本次仅新增文档，未触碰 `packages/**` 实现 | — |
+
+构建副作用核对：`build:packages` 后 `git diff --numstat` 无内容差异，`packages/capabilities/src/ModuleTool/inline-content.ts` 只是 CRLF/LF 的 stat-dirty 条目，未纳入提交。
+
+## 附录 A — Provider 接口签名（v0，冻结给 B 并行）
+
+A 切片的对外形状。B 只依赖这份签名，不依赖 A 的内部实现；签名变更必须先改本节并通知 B。类型放 `packages/host/src/workspace/types.ts`。
+
+```ts
+export interface CheckoutRoot {
+  /** Linked worktree 根，绝对路径，canonical（dunce 等价：解析 junction 后的真实路径）。 */
+  root: string;
+  /** 调用方实际应当使用的 cwd = root + 源仓库内的相对目录。不是 root 本身。 */
+  cwd: string;
+  sourceRoot: string;
+  sourceCwd: string;
+  /** 创建时钉住的 base，detached HEAD 的起点。观测到的新值不覆盖它。 */
+  baseSha: string;
+}
+
+export interface CheckoutOwner {
+  sessionId: string;
+  boundAt: number;
+}
+
+/** 观测组合，不是枚举：五个维度各自独立。 */
+export interface CheckoutObserved {
+  registered: boolean;
+  worktree: 'clean' | 'dirty_tracked' | 'untracked' | 'ignored';
+  owner: CheckoutOwner | null | 'unreadable';
+  locked: boolean;
+  reclaim: { ok: true } | { ok: false; reason: CheckoutRetainReason };
+  observedAt: number;
+}
+
+export type CheckoutRetainReason =
+  | 'not_registered' | 'unreadable' | 'dirty_tracked' | 'untracked' | 'ignored'
+  | 'locked' | 'detached_unreferenced' | 'reparse_point' | 'owner_alive' | 'cwd_inside';
+
+export interface CheckoutProvider {
+  create(input: {
+    sourceCwd: string;
+    base?: string;
+    ownerSessionId: string;
+    label: string;
+  }): Promise<CheckoutRoot>;
+
+  observe(root: string): Promise<CheckoutObserved>;
+
+  /** 从 git 反推，不读注册表。只返回本仓库的 managed checkout。 */
+  list(sourceCwd: string): Promise<CheckoutRoot[]>;
+
+  /**
+   * 写入归属。`takeover` 是必填参数，不是可选布尔：
+   * 让「我忘了声明接管依据」和「我有依据」在类型上不可混同。
+   */
+  bind(
+    root: string,
+    sessionId: string,
+    takeover: 'fresh' | 'explicit-release' | 'prove-dead',
+  ): Promise<void>;
+
+  release(root: string, sessionId: string): Promise<void>;
+
+  /** 把当前 HEAD 写入 refs/duya/checkpoint/<session>/<n>，返回 ref 名。 */
+  checkpoint(root: string, sessionId: string): Promise<string>;
+
+  /** 唯一删除入口。拒绝时给出 retained 原因，不抛异常。 */
+  reclaim(root: string): Promise<{ removed: true } | { removed: false; reason: CheckoutRetainReason }>;
+
+  /** 写入闸口：工具执行边界调用，按 cwd 反查 checkout 再比对 owner。 */
+  assertWritable(
+    cwd: string,
+    sessionId: string,
+  ): Promise<{ ok: true; root: string } | { ok: false; reason: 'not_a_checkout' | 'unowned' | 'not_owner' }>;
+}
+```
+
+约束：
+
+- `create` 失败必须自行回滚到「没有这个 checkout」，不留半个目录、不留 `.git/worktrees/<name>` 注册。
+- `observe` / `list` / `assertWritable` 是纯读，不得产生副作用（包括不得 `worktree prune`）。
+- `reclaim` 不抛异常表达「拒绝」，因为拒绝是正常结果而不是错误；只有 IO 失败才抛。
+- `bind` 的 `prove-dead` 判定只允许读「该 session 是否有活跃 run」「是否被任何 worker 持有」，不得读时间戳。
 
 ## 接续 / 结果
 
