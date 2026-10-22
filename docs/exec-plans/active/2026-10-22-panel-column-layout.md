@@ -29,7 +29,7 @@ base：96dadf4d · owner：mavis
 | **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
 | **B 脱窗（Electron 侧）** | `codex/panel-layout-detach` / `panel-layout-detach` | `apps/desktop/src/main/**`；`apps/desktop/src/preload/**` | 本计划（IPC 契约与 A 的数据模型解耦，只用字符串参数） |
 | **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
-| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/usage/**`；`packages/ui/src/styles/composer-panels.css` | 与 A 无冲突，可并行 |
+| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css` | 与 A 无冲突，可并行 |
 
 集成顺序：**A → C**；B、D 独立，可各自先合。
 
@@ -77,11 +77,11 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 ## 进度
 
 - [x] 调研 Claude Desktop 布局模型（AX 树 + 截图），确定列树结构与归位规则
-- [x] 写本计划
-- [ ] A：列树渲染 + 归位规则（子 agent）
-- [ ] B：脱窗 Electron 侧（子 agent）
-- [ ] C：拖拽换位（第二波）
-- [ ] D：用量浮层对齐（第二波）
+- [x] 写本计划（PR #351）
+- [ ] A：列树渲染 + 归位规则（子 agent 进行中 · `codex/panel-layout-columns`）
+- [ ] B：脱窗 Electron 侧（子 agent 进行中 · `codex/panel-layout-detach`）
+- [ ] D：用量浮层（分段色条 + 分桶明细）（子 agent 进行中 · `codex/panel-layout-usage`）
+- [ ] C：拖拽换位（第二波，依赖 A 落地）
 
 ## 发现与决策
 
@@ -98,6 +98,8 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **duya 有 Claude 没有的东西，要保留**：面板级尺寸约束（`minWidth`/`widthRatio`/`maxWidthRatio`）与快捷键（`Ctrl+\`` / `Ctrl+T` / `Ctrl+Shift+G` / `Ctrl+P` / `Ctrl+Alt+S`）。列宽计算要继续受聊天列最小宽度保护（现有 `MIN_CHAT_WIDTH` / `MAX_PANEL_RATIO`）。
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
+- **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
+- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
 
 ## 验证记录
