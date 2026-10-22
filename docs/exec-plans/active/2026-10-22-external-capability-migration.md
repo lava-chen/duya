@@ -2,7 +2,7 @@
 
 状态：active · 负责人：Codex 会话 · 更新：2026-10-22
 分支：`codex/browser-plugin-migration` · worktree：`/workspace/duya-browser-migration` · base：`ebd76d4878add41aa3e7cdac65a5884eee6c93a1`
-Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`5057fd5`
+Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-marketplace-browser` · base：`dce6ffa` · 已推送：`c34eb28`
 
 ## 目标与边界
 
@@ -47,6 +47,7 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 - 2026-10-22 同步 `origin/master` 到 `96dadf4d`，以 merge commit `2fe3a6bf` 合入迁移分支；原主线变更为目录/文档整理。已撤回的 Computer Use Host 桥接测试仅保存在本地具名 stash，不参与当前实现或验收。
 - 真实 Electron 验收发现本地插件 registry 只持久化启停信息，`hydrateViewItem` 却在解析安装软链接之前尝试读取 manifest，导致 App 声明丢失、授权前直接返回 `grant_denied`。当前切片改为先解析安装路径再读取已安装 manifest，并以安装版本显示元数据。
 - Electron 44 的独立探针确认 webview 内 `window.parent === window`；既有 App 使用的 iframe 式 `parent.postMessage` 不能抵达嵌入窗口。通用宿主正在替换此传输，Main IPC/MCP 验收不得冒充 App 页面已可用。
+- 通用 App 静态资源现在按启动会话发布到随机 loopback 地址，校验 Host、安装目录 realpath 和文件边界，关闭/更新撤回资源令牌；Opaque-origin iframe 可加载相对模块、字体和样式，开发版与打包版使用同一入口。页面消息还需携带独立的 documentToken，防止 iframe 自行导航后其他文档继续使用原 App 会话。
 - DUYA 原 Plugin App 的 bind/invoke/revoke 与活跃聊天 run 绑定，五分钟过期，不适合长期编辑的 App。新通用 standalone 模式只持有插件自己声明的 MCP 服务和显式 grant，并按插件启停/更新撤销与重开；Canvas 不得有宿主特例。
 - Plugin MCP 经 `mcp/servers.json` → plugin capability discovery → `buildMCPCandidates` → Host MCP apply → worker registry 接入。Plugin source 有独立身份；旧 BrowserTool 是 Host builtin，两条路能并存。
 - Marketplace 已有 `playwright` 插件，提供独立 Playwright 浏览器上下文。本次另新增 `browser` CUA 插件，不替换 Playwright。Browser CUA 服务是无外部依赖 stdio MCP，server 源码与声明留在 Marketplace。
@@ -82,6 +83,7 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 | DUYA 当前 dirty worktree；完整打包前置 | Linux x64, Node 24 | `npm run electron:build` | 1；下载 Electron binary 失败，未进入应用打包。桌面真实验收受阻 | 当前会话命令输出 |
 | DUYA `2fe3a6bf` + 本地 manifest hydration 修复 | Linux x64, Node 24.19.0, Electron 44.2.0, Xvfb `:99` | `ELECTRON_OVERRIDE_DIST_PATH=... npm --ignore-scripts run electron:build`；已另行验证 Electron 下 better-sqlite3 可加载 | 0；完整桌面构建通过。缺失的已锁定 `@types/picomatch` 仅安装到 worktree 自有依赖 overlay；未穿过共享 node_modules 安装 | 当前会话命令输出 |
 | 同上；`PluginManager{,.listInstalled.test}.ts` | Linux x64, Node 24.19.0 | 定向 Vitest，真实 Electron 隔离 namespace 下 installLocal → App open → bind → MCP invoke | 3 tests passed；本地插件 App 声明可见；模拟一次授权后绑定 31 个工具，`canvas_manage list` 返回插件空数据。尚未验证 App 页面访客通信 | 当前会话命令输出 |
+| DUYA `acb9ec56` + App assets 切片 | Linux x64, Node 24, Electron 44.2.0, Xvfb `:99` | assets/host 定向 Vitest；Electron Main 构建与类型门禁；真实 preview `file://` 和 dev `http://localhost:3000` 页面内注入隔离 iframe并使用生产 MainIPC relay | 4 tests passed；构建/类型门禁退出 0；两模式均显示 Canvas 插件服务已连接，关闭后 entry URL 返回 404。此处是实际资源/MCP链路探针，生产 PluginAppHost UI 集成仍待验收 | 当前会话命令输出 |
 
 ## 接续 / 结果
 

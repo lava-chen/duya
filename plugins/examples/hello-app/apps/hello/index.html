@@ -52,18 +52,19 @@
       // The host protocol. The guest names only the method; the plugin, the
       // App, the instance and the chat session all come from the host.
       var CHANNEL = "duya.plugin-app";
+      var documentToken = location.pathname.split("/")[1];
 
       function call(method, extra) {
         return new Promise(function (resolve) {
           var id = "req-" + Math.random().toString(36).slice(2);
           var handler = function (event) {
             var data = event.data;
-            if (!data || data.channel !== CHANNEL || data.id !== id) return;
+            if (event.source !== window.parent || !data || data.channel !== CHANNEL || data.id !== id) return;
             window.removeEventListener("message", handler);
             resolve(data);
           };
           window.addEventListener("message", handler);
-          var message = { channel: CHANNEL, id: id, method: method };
+          var message = { channel: CHANNEL, id: id, method: method, documentToken: documentToken };
           if (extra) {
             for (var key in extra) {
               if (Object.prototype.hasOwnProperty.call(extra, key)) message[key] = extra[key];

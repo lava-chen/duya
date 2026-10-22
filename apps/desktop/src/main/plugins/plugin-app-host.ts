@@ -22,7 +22,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
 import {
   PluginAppSessionStore,
@@ -31,6 +30,7 @@ import {
 } from './plugin-app-sessions';
 import { getPluginManager } from './PluginManager';
 import { readPluginManifest } from './manifest';
+import { pluginAppAssets } from './plugin-app-assets';
 import {
   getDesktopHostPluginAppInstanceApi,
   getDesktopHostPluginAppInvocationApi,
@@ -204,12 +204,17 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     packageRevision: standaloneApp?.revision,
   });
 
-  return {
-    ok: true,
-    sessionId: session.sessionId,
-    launchNonce: session.launchNonce,
-    entryUrl: pathToFileURL(entryPath).href,
-  };
+  try {
+    const entryUrl = await pluginAppAssets.open(session.sessionId, found.installPath, entryPath);
+    if (!sessions.get(session.sessionId)) {
+      pluginAppAssets.revoke(session.sessionId);
+      return { ok: false, error: 'unknown_session' };
+    }
+    return { ok: true, sessionId: session.sessionId, launchNonce: session.launchNonce, entryUrl };
+  } catch {
+    sessions.close(session.sessionId);
+    return { ok: false, error: 'entry_unavailable' };
+  }
 }
 
 async function dispatch(sessionId: string, message: PluginAppGuestMessage): Promise<PluginAppCallResult> {
@@ -316,6 +321,7 @@ async function handleCall(request: PluginAppCallRequest): Promise<PluginAppCallR
 
 function handleClose(request: { sessionId?: string }): { ok: boolean } {
   if (typeof request?.sessionId !== 'string') return { ok: false };
+  pluginAppAssets.revoke(request.sessionId);
   const session = sessions.get(request.sessionId);
   if (session?.runtime === 'standalone') void closeStandaloneApp(request.sessionId);
   const binding = sessions.bindingOf(request.sessionId);
