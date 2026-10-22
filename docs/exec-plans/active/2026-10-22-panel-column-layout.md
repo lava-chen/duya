@@ -119,7 +119,7 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **网格形状随卡片数**：1–2 张 = 1 列（上下堆叠，每张占满宽）；≥3 张 = 2 列 × ⌈n/2⌉ 行。空格子渲染成「+」格，作为加入面板的入口。
 - **每张卡片自带 header**（图标 + 标题 + 展开 + 关闭），**没有全局 tab 条**：`PanelHeader.tsx` 未被本切片改动，但 `PanelZone` 不再渲染它。
 - **区域宽与列宽解耦**：区域宽由左边缘拖拽条决定（`panelWidth`），列/行只分配区域内的份额（ratio）。拖列分隔条只改份额，区域宽不变。
-- **面板集合收敛到 5 种**：文件 / 代码审查 / 浏览器 / 终端 / 后台任务（暂用 `workflow` 面板）。画布（`conductor`）不进卡片墙，但事件打开仍可用。新增 `panels/wall-pages.ts` 记录这张表，**没有改 `registry.ts`**。
+- **面板集合收敛到 5 种**：文件 / 代码审查 / 浏览器 / 终端 / 后台任务（暂用 `workflow` 面板）。画布（`conductor`）不进卡片墙，但事件打开仍可用。新增 `panels/wall-pages.ts` 记录这张表，**没有改 `registry.ts`**。（本轮收敛到 4 种：`workflow` 作为面板页已从 `PageId` 与 `WALL_PAGE_IDS` 移除，`TaskDrawerToggle` 删除；`WorkflowPanel.tsx` 只剩类型被 `components/workflow/**` 引用。见「外壳第三轮」。另：本轮 `registry.ts` 也在改动路径内。）
 - **模型从列树换成墙**：`layout-model.ts` 重写为 `panes / columns / columnRatios / rowRatios / expandedPaneId`；旧 payload（列树）识别不出来就按 tab 顺序迁移成墙；持久化仍是 `duya:panel:v2:<sessionKey>` 的可选字段 `layout`。
 - **上面「切片 A 的取舍」那套（族内同列、区域宽=列宽之和、靠全局 tab 条做拖拽换位）随之作废**，由墙模型取代。
 
@@ -158,6 +158,10 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **面板卡片亮度**：量像素证明本版卡片与画布在两个主题下都完全相同（暗 30/30、亮 255/255），用户给的截图来自另一个产品，其参考值为聊天区 rgb(21,21,21) / 面板 rgb(26,26,25)（亮一档）。按用户选择**照参考图略亮一档**：新增 `--panel-surface`（亮 `#ffffff`，暗 `#232323`）。亮色画布已是纯白、没有余量，所以保持贴平、靠 1px 边框区分；暗色抬一档。落点是 `.panel-wall-cell { --main-bg: var(--panel-surface) }`——重声明画布 token 而不是设 `background`，卡片自身与它内部所有画 `var(--main-bg)` 的页面体一起抬起，而卡片外的 8px 内缩环不在这棵子树里、继续与聊天画布齐平。`preview-drawer.css` 补一条：原生毛玻璃下 `.sidebar-panel-inner` 强制 `var(--main-bg)`，否则 sidebar 的玻璃 scrim 会把内缩环染成另一色。
   - 不能用 `color-mix()` 从 `--main-bg` 推导 `--panel-surface`：那会构成自定义属性环 → 计算值无效。所以两主题各写死一个值。
   - 第一次采样读到 rgb(32,32,32) 而非 35，用红色覆盖探针（`--panel-surface:#ff0000!important` → 抓到 rgb(255,0,0)）排除遮罩与色彩管理，重抓后卡片稳定 rgb(35,35,35)、画布 rgb(30,30,30)——32 是一帧过渡态。
+
+- **随同一提交入库的其他改动（第二个写者的工作，见「接续 / 结果」）**：workflow 面板页从 `PageId` / `WALL_PAGE_IDS` / `registry.ts` 移除、`TaskDrawerToggle` 删除；新增 `panels/PanelLaunchers.tsx` + `panels/launch.ts`（启动器与快捷键表，由顶栏、聊天 header、卡片墙共用）；`ChatHeader` 把 ⋯ 动作簇放到标题紧挨着（`hasCustomTitleBar()` 为 true 时），项目名改成 pill 菜单（在资源管理器里显示 / 在项目目录开终端 / 复制路径），macOS 才走 `chat-header-actions` 那一支；`PanelCard` / `PanelZone` / `usePanel` / `composer-panels.css` 配合调整，`i18n/en.ts`、`zh.ts` 补启动器与 pill 文案。
+
+- **待评审的死支**（本轮未动，避免混进已验收的改动）：`TitleBar.tsx:144` 的 `{!hasCustomTitleBar() && <ChatHeaderActions />}` 恒不成立——`app-shell.tsx:282` 只在非 macOS 挂载 `TitleBar`，而那时 `hasCustomTitleBar()`（`platform !== "darwin"`）必为 true。要么删掉这一支连同 `ChatHeaderActions` / `hasCustomTitleBar` 两个 import，要么重新定义 `TitleBar` 的挂载条件与 `is-mac` 分支（它现在带着一个永不生效的 `--window-controls-offset: 70px`）。
 
 ### 开发环境的两个坑（本轮实测）
 
