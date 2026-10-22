@@ -71,6 +71,7 @@ import { buildMCPCapabilityCatalog } from '@duya/capabilities/MCP/capability-cat
 import type { MailboxRow } from '@duya/host/worker-mailbox-row';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '@duya/host/worker-hooks/loop';
 import { applyHookInjection, renderHookContextEnvelope, type InjectableMessage, } from '@duya/host/worker-hooks/injection';
+import { applyContextRail, type ContextBlock, } from '@duya/host/worker-context/context-rail';
 import { createBuiltinLoopHooks } from '@duya/host/worker-hooks/builtin';
 import { createConfiguredLoopHooks } from '@duya/host/worker-hooks/config-loop';
 import { ConfigHooksRunner } from '@duya/host/worker-hooks/events';
@@ -866,6 +867,13 @@ export class WorkerSession implements AgentRuntime {
     private promptContexts: string[] = [];
     private promptContextBlocks: string[] = [];
     /**
+     * The volatile-context rail (plan 619 Phase 3): the prompt content
+     * that changes every turn, delivered through the message channel so
+     * the system prefix stays byte-identical between turns. Replaced
+     * wholesale on every prompt build.
+     */
+    private contextRailBlocks: ContextBlock[] = [];
+    /**
      * How many structured system blocks the projection produced and this
      * session dropped (plan 619 defect b). Counted so the blind spot is
      * visible in the log instead of silent.
@@ -1539,6 +1547,10 @@ export class WorkerSession implements AgentRuntime {
         // not come from a profile, and plan 619 Phase 0 needs to tell the
         // two apart when asking "what changed between turns".
         const hostBlocks: { name: string; content: string }[] = [];
+        // The volatile half of the prompt (plan 619 Phase 3). It is
+        // delivered through the message channel, not the system prompt,
+        // so the system prefix keeps the same bytes from turn to turn.
+        const contextBlocks: ContextBlock[] = [];
         if (options?.disableSystemPrompt) {
             systemPromptContent = '';
             logger.info('[Agent] streamChat: System prompt disabled (empty)');
@@ -1561,27 +1573,29 @@ export class WorkerSession implements AgentRuntime {
                 ...definedProperties({ language: this.language }),
                 ...definedProperties({ projectHome: this.projectHome })
             });
-            const systemPromptResult = await promptSystem.buildSystemPrompt(context);
-            systemPromptContent = [...systemPromptResult].join('\n\n');
+            const partition = await promptSystem.buildSystemPromptPartition(context);
+            systemPromptContent = partition.stable.map((section) => section.content).join('\n\n');
+            for (const section of partition.context) {
+                contextBlocks.push({ id: section.name, source: 'volatile_context', content: section.content });
+            }
         }
         if (!options?.disableSystemPrompt) {
             if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
-                    hostBlocks.push({ name: 'host:mcp_catalog', content: mcpCatalog });
-                    systemPromptContent = systemPromptContent
-                        ? `${systemPromptContent}\n\n${mcpCatalog}`
-                        : mcpCatalog;
+                    // The catalog changes whenever an MCP server connects or
+                    // disconnects, so it rides the context channel too.
+                    contextBlocks.push({ id: 'mcp_catalog', source: 'volatile_context', content: mcpCatalog });
                 }
             }
             const appsSection = buildAppsSystemSection(getCachedAppConnectionDescriptors());
             if (appsSection) {
-                hostBlocks.push({ name: 'host:apps', content: appsSection });
-                systemPromptContent = systemPromptContent
-                    ? `${systemPromptContent}\n\n${appsSection}`
-                    : appsSection;
+                contextBlocks.push({ id: 'apps', source: 'volatile_context', content: appsSection });
             }
         }
+        // The rail is replaced wholesale every build: a block that stopped
+        // rendering must not keep its stale text in the next request.
+        this.contextRailBlocks = contextBlocks;
         if (options?.systemPromptPrefix) {
             hostBlocks.push({ name: 'host:prefix', content: options.systemPromptPrefix });
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
@@ -2256,6 +2270,14 @@ export class WorkerSession implements AgentRuntime {
                 logger.info(`[Agent] restored ${restored} hook context block(s) after re-projection`);
             }
         }
+        // The volatile-context rail goes in unconditionally and last: it is
+        // current state, not a hook's contribution, and it must not ride the
+        // `injectHookContexts` switch.
+        applyContextRail(
+            messages as unknown as InjectableMessage[],
+            this.contextRailBlocks,
+            { now: Date.now() },
+        );
         // The projection can return blocks instead of a string when a system
         // segment carries structured content (a `legacy_system` row or a
         // compaction's `reinjectedSystemMessages`). Those blocks are dropped

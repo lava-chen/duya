@@ -39,11 +39,13 @@ export const botConfig: PromptSystemConfig = {
   sections: [
     // Dynamic sections — recomputed every call via .hbs templates
     { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call' },
-    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'] },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call' },
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call' },
+    // Context channel — recomputed every call and delivered as a message
+    // (plan 619 Phase 3).
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', placement: 'context' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', placement: 'context' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', placement: 'context', requiresTools: ['Skill', 'Read'] },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', placement: 'context' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

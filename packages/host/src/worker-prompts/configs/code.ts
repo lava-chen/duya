@@ -33,13 +33,13 @@ export const codeConfig: PromptSystemConfig = {
     // would repeat them (plan 619 defect e).
     // Volatile inline sections (dynamic half — recomputed every call)
     { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
-    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'vision', template: 'dynamic/vision.hbs', cachePolicy: 'every-call', description: 'Vision capability and visual verification' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Current directory state' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', placement: 'context', description: 'MCP servers can change' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Session-specific guidance' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', placement: 'context', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
+    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'vision', template: 'dynamic/vision.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Vision capability and visual verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.

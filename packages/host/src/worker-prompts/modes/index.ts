@@ -57,6 +57,21 @@ export function resolveEnabledSections(profile: PromptProfile): Set<string> {
 }
 
 /**
+ * Stable key for a profile — the second half of the (name, profile) pair
+ * the registry buckets its live PromptSystem instances by.
+ *
+ * Two profiles with the same key must behave identically, so the key
+ * carries both lists verbatim; a profile with neither list is the default
+ * and shares one bucket.
+ */
+export function promptProfileKey(profile: PromptProfile): string {
+  const enable = profile.enableSections ?? []
+  const disable = profile.disableSections ?? []
+  if (enable.length === 0 && disable.length === 0) return 'default'
+  return `enable=${enable.join(',')};disable=${disable.join(',')}`
+}
+
+/**
  * Get prompt profile for an AgentProfile.
  * AgentProfile.promptProfile is already a flat {enableSections?, disableSections?} —
  * just pass it through (or default to empty).

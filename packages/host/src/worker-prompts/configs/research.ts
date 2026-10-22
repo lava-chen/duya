@@ -36,9 +36,12 @@ export const researchConfig: PromptSystemConfig = {
     // toneAndStyle IS a generic section name; respect the profile gate.
     { module: 'toneAndStyle', name: 'toneAndStyle', cachePolicy: 'once' },
     // Volatile inline sections (dynamic half — recomputed every call)
+    // Context channel — recomputed every call and delivered as a message
+    // (plan 619 Phase 3).
     {
       name: 'outputFormat',
       cachePolicy: 'every-call',
+      placement: 'context',
       // Compute intent inline — resolveResearchIntent is a cheap context fallback.
       compute: (ctx) => getOutputFormatPromptSection(resolveResearchIntent(ctx)),
       description: 'Intent-specific output format',
@@ -47,6 +50,7 @@ export const researchConfig: PromptSystemConfig = {
       name: 'vision',
       template: 'dynamic/vision.hbs',
       cachePolicy: 'every-call',
+      placement: 'context',
       description: 'Vision capability and visual verification',
     },
   ],
