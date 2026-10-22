@@ -23,7 +23,7 @@ const RENAME_THREAD_EVENT = "duya:rename-thread";
  * chat header there. Everywhere else the window draws its own title bar,
  * and the actions live next to the native window controls.
  */
-function hasCustomTitleBar(): boolean {
+export function hasCustomTitleBar(): boolean {
   if (typeof window === "undefined") return true;
   return window.electronAPI?.versions?.platform !== "darwin";
 }

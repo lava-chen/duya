@@ -147,9 +147,9 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Window title bar. It spans the whole window: the brand chip, the
-   navigation buttons and the menus sit above the sidebar, the session
-   actions sit at the right end, next to the native window controls. */
+/* Window title bar of the content area. It carries the session title on
+   the left and the session actions on the right, next to the native
+   window controls. */
 .titlebar {
   height: 44px;
   width: 100%;
@@ -158,19 +158,107 @@
   z-index: 100;
   display: flex;
   align-items: center;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
 }
 
-/* Brand chip doubles as the sidebar rail toggle: hovering swaps the app icon
-   for the rail-toggle icon (ZCode desktop behavior). The chip is centered on
-   the collapsed rail's icon axis — rail width 56px with 34px buttons puts
-   the icon column center at 28px, so a 26px chip starts at 15px — keeping it
-   aligned with the icon column underneath in both sidebar states. */
-.titlebar-brand {
+/* The session title area. The chat header's title row is hosted here, so
+   the conversation starts right below the bar. */
+.titlebar-session {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+}
+
+/* Inside the title bar the chat header is only the title — it drops its own
+   row chrome (min height, padding, bottom border). */
+.titlebar-session .chat-header {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+}
+
+.titlebar-session .chat-header-inner {
+  min-height: 0;
+  padding: 0;
+  width: 100%;
+}
+
+/* The left column of the window: the icon row on top, the session list
+   below it. The icon row carries the window chrome (application menu,
+   sidebar toggle, back / forward), so the column reads top-to-bottom. */
+.app-sidebar-column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
+}
+
+/* The sidebar fills the column under the icon row. */
+.app-sidebar-column > .app-sidebar {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The icon row at the top of the sidebar: the application menu, the sidebar
+   toggle and the back / forward buttons. */
+.app-rail {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0 12px;
+}
+
+/* Collapsed sidebar: the icon row becomes the narrow icon rail again. */
+.app-sidebar-column[data-collapsed="true"] {
+  width: 56px;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail {
+  flex-direction: column;
+  width: 56px;
+  height: auto;
+  padding: 6px 0;
+  border-right: 1px solid var(--border);
+}
+
+.app-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-rail-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.app-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The app icon at the very top-left of the window. It doubles as the sidebar
+   toggle: hovering swaps the app icon for the rail-toggle icon. */
+.app-rail-brand {
   position: relative;
   width: 26px;
   height: 26px;
-  margin-left: 15px;
   flex-shrink: 0;
   padding: 0;
   border: none;
@@ -179,7 +267,7 @@
   cursor: pointer;
 }
 
-.titlebar-brand .titlebar-logo {
+.app-rail-brand .app-rail-logo {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -192,7 +280,7 @@
   transition: opacity 0.12s ease;
 }
 
-.titlebar-brand .titlebar-brand-toggle {
+.app-rail-brand .app-rail-brand-toggle {
   position: absolute;
   inset: 0;
   display: flex;
@@ -206,69 +294,51 @@
   transition: opacity 0.12s ease;
 }
 
-.titlebar-brand:hover .titlebar-logo,
-.titlebar-brand:focus-visible .titlebar-logo {
+.app-rail-brand:hover .app-rail-logo,
+.app-rail-brand:focus-visible .app-rail-logo {
   opacity: 0;
 }
 
-.titlebar-brand:hover .titlebar-brand-toggle,
-.titlebar-brand:focus-visible .titlebar-brand-toggle {
+.app-rail-brand:hover .app-rail-brand-toggle,
+.app-rail-brand:focus-visible .app-rail-brand-toggle {
   opacity: 1;
 }
 
-/* Title bar icon buttons: back/forward navigation. */
-.titlebar-nav-btn {
-  width: 30px;
-  height: 30px;
-  margin-left: 2px;
-  border: none;
-  border-radius: 6px;
+/* The content column: the top bar plus the workspace below it. */
+.app-content-column {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* The column owns the background so the top bar and the workspace below
+     read as one surface instead of stacked panes. */
+  background: var(--main-bg);
+}
+
+/* Flatten the workspace into the column: no rounded inset card and no
+   separate pane background behind the top bar. */
+.app-content-column > .titlebar {
   background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
-.titlebar-nav-btn:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.titlebar-nav-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-/* Native-style menu bar (文件 / 编辑 / 视图 / 帮助). */
-.titlebar-menubar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: 6px;
-  height: 100%;
-}
-
-.titlebar-menubar-item {
-  height: 26px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
+.app-content-column .app-main-wrapper,
+.app-content-column .app-main,
+.app-content-column .app-main-inner {
   background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
+  border-radius: 0;
 }
 
-.titlebar-menubar-item:hover,
-.titlebar-menubar-item.active {
-  background: var(--surface-hover);
+/* Native Mica/vibrancy backdrop: sidebar.css tints .titlebar and draws the
+   glass edge on .app-main-inner, which would re-introduce the seam. */
+html[data-backdrop] .app-content-column > .titlebar {
+  background: transparent;
 }
 
+html[data-backdrop] .app-content-column .app-main-inner {
+  border: 0;
+  background: transparent;
+}
 
 .titlebar-thread-title {
   font-size: 0.85rem;
@@ -294,6 +364,56 @@
   height: 100%;
   pointer-events: auto;
   margin-left: auto;
+}
+
+/* Per-panel launchers: one icon per panel type, before the session menu.
+   The focused page tints with the accent; a page that is open but not
+   focused only brightens, so the bar stays quiet with several panels. */
+.titlebar-panel-launchers {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.titlebar-panel-launcher {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.titlebar-panel-launcher:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-panel-launcher.open {
+  color: var(--text-primary);
+}
+
+.titlebar-panel-launcher.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.titlebar-panel-launcher:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.titlebar-panel-launcher:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 /* Windows: reserve space for window controls (min/max/close) on the right */

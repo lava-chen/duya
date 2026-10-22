@@ -190,6 +190,7 @@ html[data-backdrop] .app-main {
 }
 html[data-backdrop] .titlebar,
 html[data-backdrop] .app-sidebar,
+html[data-backdrop] .app-sidebar-column,
 html[data-backdrop] .app-status-bar {
   background: var(--glass-chrome);
 }
