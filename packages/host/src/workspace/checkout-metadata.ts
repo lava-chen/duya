@@ -170,9 +170,21 @@ export async function bindOwner(
         );
       }
       if (existing === null) {
-        // Owner was cleared between the link and the read: try once more.
-        linkSync(temporary, target);
-        return;
+        // Owner disappeared between the link and the read. One retry: if a
+        // third writer wins the same window, report it instead of throwing a
+        // raw EEXIST that the caller cannot classify.
+        try {
+          linkSync(temporary, target);
+          return;
+        } catch (retryErr) {
+          if (errorCode(retryErr) !== 'EEXIST') throw retryErr;
+          const winner = await readOwner(root);
+          if (winner !== 'unreadable' && winner !== null && winner.sessionId === owner) return;
+          throw new CheckoutOwnerError(
+            'owner_conflict',
+            `checkout at ${root} was concurrently assigned to another session`,
+          );
+        }
       }
       if (existing.sessionId === owner) return;
       throw new CheckoutOwnerError(
