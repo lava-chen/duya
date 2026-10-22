@@ -3463,6 +3463,19 @@ function handleSessionsRoute(
       handleGetChat(sessionId, req, res, deps);
       return;
     }
+    if (pathParts.length === 3 && pathParts[2] === 'active-run') {
+      // The run this session is executing right now, or `null`.
+      //
+      // A read, and deliberately a SYNCHRONOUS one: it exists for the Desktop
+      // Host's execution API, which starts a turn through `POST /chat` (SSE)
+      // and must name the run in its own answer. `run-result` cannot serve that
+      // caller — it waits on the runtime — and the SSE body carries worker
+      // frames, not an acknowledgement. `runForSession` is the binding the
+      // orchestrator already keeps, so this adds no state.
+      const runId = deps.runOrchestrator?.runForSession(sessionId) ?? null;
+      sendJson(res, 200, { runId });
+      return;
+    }
     if (pathParts.length === 3 && pathParts[2] === 'run-result') {
       // A read, so it answers without a worker and without touching the
       // session's live-run binding. `run-result` is a single path segment, so

@@ -107,6 +107,7 @@ import { createHostPermissionRequestApi } from '@duya/host/permission-request-ap
 import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
+import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
 import { createHostResearchApi } from '@duya/host/research-api';
 import { createDatabaseWorkspaceAccess } from '@duya/host/workspace-access';
 import { resolveRolloutRoot } from '../config/boot-config';
@@ -307,6 +308,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     },
   };
   pluginAppInvocationInternalApi = pluginAppInvocationApi;
+  const runApi = createHostRunApi(stores);
   const server = new HostSessionHttpServer({
     api,
     localSessionApi: createHostLocalSessionApi({
@@ -366,7 +368,14 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     localMailboxApi: createHostLocalMailboxApi(stores.mailbox),
     localPendingWakeApi: createHostLocalPendingWakeApi(stores.wakes),
     workflowRunApi: createHostWorkflowRunApi(stores),
-    runApi: createHostRunApi(stores),
+    runApi,
+    // The Host surface is the only Host a second client (the TUI) can attach
+    // to, because this process owns the database. Execution itself stays where
+    // it already lives — the Agent Server — so this forwards instead of
+    // starting a second orchestrator in Electron main.
+    runExecutionApi: createDesktopRunExecutionApi({
+      getSessionForRun: async (runId) => (await runApi.getAgentRun(runId))?.sessionId ?? null,
+    }),
     goalApi: createHostGoalApi(stores),
     modeStateApi: createHostModeStateApi(stores),
     taskApi: createHostTaskApi(stores),
