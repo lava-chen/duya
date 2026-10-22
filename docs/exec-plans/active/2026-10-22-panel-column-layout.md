@@ -242,7 +242,7 @@ PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `co
 
 ⚠️ **同一 worktree 里出现过第二个写者**：`0d89b57f` 之后 `PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些已由 `5d973be1` 一并提交，与本轮外壳改动混在同一 commit 里——评审时按文件而不是按 commit 看。接手前仍先 `git status` 对账，勿覆盖。
 
-外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1` / `crop.ps1` / `capture.ps1`）与 CDP 工具（`cdp-eval.mjs` / `cdp-shot.mjs`，均不入库）。第三轮的量测工具在仓库外（`~/.qoder-cn/tmp/`：`cdp.js` / `cdp-shot2.js` / `cdp-clip.js` / `cdp-reload.js` / `png-pixel.js`），使用前须 `CDP_PORT=9222`（脚本默认 9223）；整窗截图按 dpr 1.25 取样（`SCALE=1.25`）。
+外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1` / `crop.ps1` / `capture.ps1`）与 CDP 工具（`cdp-eval.mjs` / `cdp-shot.mjs`，均不入库）。第三轮的量测工具写在会话级临时目录（`cdp.js` 求值 / `cdp-shot2.js` 整窗截图 / `cdp-clip.js` 区域截图 / `cdp-reload.js` 重载 / `png-pixel.js` 自写 8-bit PNG 解码器按 CSS 像素取样），**不入库、可能被清理**，重建契约：连 CDP 前须设 `CDP_PORT=9222`（脚本默认 9223）；整窗截图按 dpr 1.25 取样（`SCALE=1.25`，1510×844 视口对应 1888×1055 位图）。
 
 阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（会话列表本身）没重做。④ **收起侧栏的目标形态未定**：用户先给了「收起后整栏消失、只留顶栏那排」的描述与参考图，随后决定「侧栏就先这样不动了」，此需求未实现，恢复工作时先与用户重确认形态。
 
