@@ -124,12 +124,15 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 ### 窗口整体布局的调整（用户追加要求）
 
-用户追加：duya 的整体布局改成截图里的左右布局，并把右上角那排按钮并到窗口控制区旁边。
+用户追加：duya 的整体布局改成截图里的左右布局，并把右上角那排按钮并到窗口控制区旁边；随后又明确「标题栏这排（图标 / 前进后退 / 菜单）放到 sidebar 上面，取消 titlebar drag region」。
 
-- **顶栏只盖内容区**：`.app-body` 变成「左：侧栏（整高）／右：`.app-content-column`（顶栏 + 工作区）」，侧栏因此占满窗口高度，标题栏只跨内容区——与截图一致（截图里左侧图标栏 + 侧栏是整高的，顶栏在内容区）。
-- **会话动作并到窗口控制区旁**：`ChatHeaderActions` 从聊天 header 右侧移到 `TitleBar` 的 `.titlebar-actions`（`titlebar.css` 早就为 Windows 原生窗口按钮预留了 `padding-right: 140px`）。重命名动作经 `duya:rename-thread` 窗口事件回到 header，标题编辑仍归 header。
+- **标题栏整行在最上**：`.app-shell` 是列，标题栏是第一个子元素（整宽），下面才是 `.app-body`（行：侧栏 + 工作区）→ 图标 / 前进后退 / 菜单正好落在**侧栏上方**，内容区在标题栏下面。
+- **会话动作并到窗口控制区旁**：`ChatHeaderActions` 从聊天 header 右侧移到 `TitleBar` 的 `.titlebar-actions`（`titlebar.css` 早已为 Windows 原生窗口按钮预留 `padding-right: 140px`）。重命名动作经 `duya:rename-thread` 窗口事件回到 header，标题编辑仍归 header。
+- **取消 drag region**：`.titlebar-drag-region` 改成普通 `.titlebar`（去掉 `-webkit-app-region: drag`），删掉 `.titlebar-drag-fill` 与两处 `no-drag` 声明；窗口不再能靠标题栏拖动。
 - **macOS 例外**：macOS 用原生 inset 标题栏、没有自绘顶栏，动作留在聊天 header 里（`hasCustomTitleBar()` 判定）。
-- **未做**：`registry.ts` 里的画布页面本身没有删（不在本切片路径，且 i18n 键也在路径外）；侧栏内部结构（图标栏）没重做，只把它变成整高。
+- **未做**：`registry.ts` 里的画布页面本身没有删（不在本切片路径，且 i18n 键也在路径外）；侧栏内部结构（图标栏）没重做。
+
+> 排查记录：同一份代码在 dev server 下与 preview 模式下表现不同——preview 模式加载 `dist/`（旧构建）会显示旧布局。**验证布局改动必须确认 DevTools 标题是 `http://localhost:3000/`**，否则看到的是上一次构建的产物。
 
 ## 验证记录
 
