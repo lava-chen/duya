@@ -35,7 +35,7 @@ import {
 } from '../../prompts/index.js';
 import type { PromptSystem } from '../../prompts/index.js';
 import type { ToolRegistry } from '../../tool/registry.js';
-import { readToolExposureConfig } from '../../config/tool-exposure.js';
+import { readToolExposureConfig, shouldInjectMcpCatalog } from '../../config/tool-exposure.js';
 import { ToolCatalogTool, type ToolCatalogView } from '../../tool/ToolCatalogTool/ToolCatalogTool.js';
 import { ToolInvokeTool } from '../../tool/ToolInvokeTool/ToolInvokeTool.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
@@ -240,7 +240,7 @@ export async function buildSystemPrompt(
     // Four-tier exposure: the bounded MCP directory is only useful when MCP
     // tools are absent from the request's tools array (exposure = "search").
     // Under `full`/`hint` the tools are declared on every request.
-    if (readToolExposureConfig().exposure !== 'full') {
+    if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
       const mcpCatalog = buildMCPCapabilityCatalog(
         ctx.activeMCPRegistry.getAllTools().filter(
           (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',

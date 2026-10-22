@@ -40,7 +40,7 @@ import type { CanUseToolFn } from '@duya/host/worker-execution/streaming-tool-ex
 import type { WidgetStyleSignature, CanvasFreshnessState } from '@duya/host/worker-run-contracts';
 import { createHasPermissionsToUseTool } from '@duya/host/authorization/worker-permission-evaluator';
 import { resolveCacheRetention } from '@duya/host/worker-config/cache-config';
-import { readToolExposureConfig } from '@duya/host/worker-config/tool-exposure';
+import { readToolExposureConfig, shouldInjectMcpCatalog } from '@duya/host/worker-config/tool-exposure';
 import type { ToolPermissionCheckContext } from '@duya/host/authorization/worker-permission-evaluator';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '@duya/capabilities/permissions';
 import type { CommunicationPlatform } from '@duya/host/worker-prompts/types';
@@ -86,7 +86,7 @@ import { modeModifierRegistry, modeTrackerEngine } from '@duya/host/worker-modes
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '@duya/host/worker-modes/modifiers';
 import type { SubagentRunDeps } from '@duya/host/worker-subagents/run-agent';
 import { ModeCoordinator } from '@duya/host/worker-modes/engine';
-import { applyModes, collectActiveModes, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
+import { applyModes, collectActiveModes, composeModePrompt, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
 import { planModeTracker } from '@duya/host/worker-modes/plan/plan-tracker';
 import { ToolRegistry } from '@duya/host/worker-tool-registry';
 import type { ToolExecutor } from '@duya/host/worker-tool-registry';
@@ -270,11 +270,12 @@ export class WorkerSession implements AgentRuntime {
             return systemPrompt;
         }
         this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
-        let prefix = '';
-        for (const p of this.resolvedModes.prompt.prefixes) {
-            prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
-        }
-        return `${prefix}\n\n${this.baseSystemPromptWithoutModes}`;
+        return composeModePrompt(
+            this.baseSystemPromptWithoutModes,
+            this.resolvedModes.prompt.prefixes,
+            this.resolvedModes.prompt.suffixes,
+            this.modeCtx,
+        );
     }
     async runModeExitHooks(): Promise<void> {
         if (!this.resolvedModes || !this.modeCtx)
@@ -864,6 +865,12 @@ export class WorkerSession implements AgentRuntime {
     private widgetStyleHistory: WidgetStyleSignature[] = [];
     private promptContexts: string[] = [];
     private promptContextBlocks: string[] = [];
+    /**
+     * How many structured system blocks the projection produced and this
+     * session dropped (plan 619 defect b). Counted so the blind spot is
+     * visible in the log instead of silent.
+     */
+    private systemBlockDropCount = 0;
     private injectedSkillParts: Map<string, number> = new Map();
     getInjectedSkillParts(): Array<{
         label: string;
@@ -1558,7 +1565,7 @@ export class WorkerSession implements AgentRuntime {
             systemPromptContent = [...systemPromptResult].join('\n\n');
         }
         if (!options?.disableSystemPrompt) {
-            if (readToolExposureConfig().exposure === 'search') {
+            if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
                     hostBlocks.push({ name: 'host:mcp_catalog', content: mcpCatalog });
@@ -2249,9 +2256,23 @@ export class WorkerSession implements AgentRuntime {
                 logger.info(`[Agent] restored ${restored} hook context block(s) after re-projection`);
             }
         }
+        // The projection can return blocks instead of a string when a system
+        // segment carries structured content (a `legacy_system` row or a
+        // compaction's `reinjectedSystemMessages`). Those blocks are dropped
+        // here — the model never sees them. Plan 619 defect b tracks the
+        // size of the blind spot before the real fix lands; until then the
+        // drop is counted, not silent.
         const systemFromProjection = typeof projection.system === 'string'
             ? projection.system
             : '';
+        if (typeof projection.system !== 'string' && projection.system.length > 0) {
+            const blockCount = projection.system.length;
+            this.systemBlockDropCount += blockCount;
+            logger.warn(
+                `[Agent] dropped ${blockCount} structured system block(s) from the projection ` +
+                `(total ${this.systemBlockDropCount}); plan 619 defect b`,
+            );
+        }
         const merged = systemPromptContent && systemFromProjection
             ? `${systemPromptContent}\n\n---\n\n## Conversation Context\n\n${systemFromProjection}`
             : (systemPromptContent || systemFromProjection);
