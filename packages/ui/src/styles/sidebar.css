@@ -414,6 +414,19 @@ html[data-glass-repair] .attachment-preview-overlay {
   background: var(--surface-hover);
 }
 
+/* Claude parity (2026-10-22): a filter row shows its current value on the
+   right (`分组方式   文件夹 ›`) so the mode is readable without opening the
+   flyout. Muted and small — it is state, not an action. */
+.sidebar-project-menu-item-value {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+
 .sidebar-project-menu-item.disabled,
 .sidebar-project-menu-item:disabled {
   color: var(--muted);
@@ -888,6 +901,44 @@ html[data-glass-repair] .attachment-preview-overlay {
 .thread-item.active {
   background: var(--surface);
   color: var(--text);
+}
+
+/* Claude parity (2026-10-22): the leading status glyph.
+ *
+ * Every session row starts with one fixed-width glyph slot, so the titles
+ * stay aligned and the state is readable at a glance:
+ *   idle (hollow ring) / running (spinner) / awaiting (amber dot) / error.
+ * The idle ring is deliberately dim — it is the resting state, not news. */
+.thread-item-status {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.thread-item-status-running {
+  color: var(--accent);
+  opacity: 1;
+}
+
+.thread-item-status-awaiting {
+  opacity: 1;
+}
+
+.thread-item-status-awaiting .thread-item-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warning);
+}
+
+.thread-item-status-error {
+  color: var(--error);
+  opacity: 1;
 }
 
 .thread-item-title {

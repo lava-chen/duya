@@ -31,6 +31,13 @@ export type MenuAction =
       id: string;
       label: string;
       iconLeft?: ReactNode;
+      /**
+       * Right-aligned current value, shown before the chevron.
+       * Claude parity (2026-10-22): a filter row reads
+       * `分组方式   文件夹 ›` — the value belongs to the row, not to the
+       * flyout, so the user can see the mode without opening the submenu.
+       */
+      value?: ReactNode;
       items: MenuAction[];
       className?: string;
     }
@@ -509,9 +516,12 @@ function SubmenuItem({
         <span className="sidebar-project-menu-item-icon">{item.iconLeft}</span>
       )}
       <span>{item.label}</span>
+      {item.value && (
+        <span className="sidebar-project-menu-item-value">{item.value}</span>
+      )}
       <CaretRightIcon
         size={12}
-        style={{ marginLeft: "auto", flexShrink: 0 }}
+        style={{ marginLeft: item.value ? 6 : "auto", flexShrink: 0 }}
       />
       {open &&
         createPortal(

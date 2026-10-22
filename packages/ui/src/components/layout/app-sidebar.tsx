@@ -41,23 +41,22 @@ import {
   EyeSlashIcon,
   FileIcon,
   FolderOpenIcon,
-  DotsThreeIcon,
   BrainIcon,
   WebhookIcon,
   MicrophoneIcon,
   CaretRightIcon,
   CaretDownIcon,
-  CheckIcon,
   ChatCirclePlusIcon,
   NotePencilIcon,
   CircleNotchIcon,
   TrashIcon,
   SearchIcon,
 } from "@/components/icons";
-import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
+import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab } from "@/stores/conversation-store";
 import { useSearchPaletteStore } from "@/stores/search-palette-store";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { SortableProjectGroupItem } from "./sidebar/SortableProjectGroupItem";
+import { SectionActions } from "./sidebar/SectionActions";
 import { ThreadListItem } from "../shared/ThreadListItem";
 import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
 import { restoreAllArchivedSessions } from "@/lib/project-actions";
@@ -68,6 +67,7 @@ import {
   SYSTEM_SECTIONS,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
+import { useProjectsStore } from "@/stores/projects-store";
 import { restrictVerticalDragWithinContainer } from "@/lib/sidebarDrag";
 import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -291,6 +291,9 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     }, [reloadBots]);
     // Plan 478: shared-room edit opens the settings panel (rooms live in the
     // Bots section as their own "群聊" group).
+    // P2 (Claude parity): a user section's "+" opens the create-project
+    // dialog with the section as the filing target.
+    const [createProjectTargetSection, setCreateProjectTargetSection] = useState<string | null>(null);
     // Title-bar 文件 menu (and other global entry points) open the unified
     // create-project dialog through the `duya:new-project` window event —
     // the dialog itself lives here in the sidebar.
@@ -433,6 +436,32 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         return next;
       });
     }, []);
+
+    // P2 (Claude parity, 2026-10-22): the filter popover's "显示空分组"
+    // switch. A project is currently derived from its sessions, so a
+    // registered project without any session would be invisible. With the
+    // switch on, the project registry fills those gaps.
+    const [showEmptyGroups, setShowEmptyGroups] = useState(false);
+    // P2: group-scoped search. One query per section id — the global ⌘K
+    // palette stays global, this one only ever touches its own section.
+    const [sectionQueries, setSectionQueries] = useState<Record<string, string>>({});
+    const setSectionQuery = useCallback((id: string, query: string) => {
+      setSectionQueries((prev) => ({ ...prev, [id]: query }));
+    }, []);
+    const toggleSectionSearch = useCallback((id: string) => {
+      setSectionQueries((prev) => {
+        const next = { ...prev };
+        if (next[id] !== undefined) delete next[id];
+        else next[id] = "";
+        return next;
+      });
+    }, []);
+    // The project registry backs "显示空分组" (see above).
+    const registeredProjects = useProjectsStore((s) => s.projects);
+    const loadProjects = useProjectsStore((s) => s.loadProjects);
+    useEffect(() => {
+      void loadProjects();
+    }, [loadProjects]);
 
     const systemDark = useMemo(
       () =>
@@ -717,6 +746,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const handleCreateProjectConfirm = async (input: { name: string; paths: string[]; icon: string | null; color: string | null }) => {
       setIsCreateProjectDialogOpen(false);
       setMenuCreateProject(false);
+      const targetSectionId = createProjectTargetSection;
+      setCreateProjectTargetSection(null);
       const projectName = input.name.trim();
       if (!projectName) return;
       try {
@@ -760,6 +791,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         }
 
         const thread = await createThread({ workingDirectory: firstPath, projectName });
+        // P2: a user section's "+" creates the project AND files it into
+        // that section, so the new project lands where the user asked.
+        if (targetSectionId && firstPath) {
+          await useSidebarSectionsStore
+            .getState()
+            .assignProjectToSection(targetSectionId, firstPath);
+        }
         if (thread) setCurrentView('chat');
       } catch (error) {
         console.error('[AppSidebar] Failed to create project:', error);
@@ -828,6 +866,28 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           createdAt,
           isExpanded: !collapsedProjects.has(wd),
         });
+      }
+
+      // P2 (Claude parity): "显示空分组" — a registered project that has no
+      // session yet still shows up. A project group is otherwise derived
+      // purely from its threads, so an empty project would be invisible.
+      //
+      // This has to run BEFORE the user-section / unassigned split below:
+      // both of them read `allProjectGroups`, so filling the map afterwards
+      // would leave the empty projects with no section to land in.
+      if (showEmptyGroups) {
+        for (const entity of registeredProjects) {
+          const dir = entity.canonical_root || entity.paths?.[0]?.path;
+          if (!dir || allProjectGroups.has(dir)) continue;
+          allProjectGroups.set(dir, {
+            workingDirectory: dir,
+            projectName: entity.name || dir.split(/[\\/]/).pop() || "Unknown",
+            threadCount: 0,
+            lastActivity: entity.last_seen_at ?? entity.created_at ?? 0,
+            createdAt: entity.created_at ?? 0,
+            isExpanded: !collapsedProjects.has(dir),
+          });
+        }
       }
 
       // Build user-defined sections: for each user section, pick the
@@ -994,7 +1054,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           archivedHiddenCount: Math.max(0, archivedThreads.length - archivedVisibleCount),
         },
       ];
-    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount, archivedVisibleCount]);
+    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount, archivedVisibleCount, showEmptyGroups, registeredProjects]);
 
     // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
     // Treat every section (user or system) as collapsed only when there is
@@ -1663,26 +1723,76 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                   },
               tone: section.id === '__system__:project' ? 'soft' as const : 'bold' as const,
             };
-            // The "项目" section gets a trailing "⋯ +" action group — matching
-            // Codex's header pattern. The "⋯" opens a popup menu with
-            // layout (按项目 / 在一个列表中) and sort (优先级 / 最近更新 /
-            // 手动排序) options; the "+" creates a new blank project.
+            // Claude parity (2026-10-22): every section header carries the
+            // same three-button group — 新建 / 组内搜索 / 过滤器 — and the
+            // buttons that cannot do anything for this section are omitted
+            // rather than shown dead.
+            //
+            // The old "⋯ +" pair is gone: 整理 / 排序方式 moved into the
+            // filter popover, where each row shows its current value.
             const isProjectSection = section.id === '__system__:project';
+            const sectionQuery = sectionQueries[section.id] ?? "";
+            const searchActive = sectionQueries[section.id] !== undefined;
+            const trimmedQuery = sectionQuery.trim().toLowerCase();
+            // Only project-bearing sections can be created in / filtered.
+            const sectionHoldsProjects = isProjectSection || isUser;
+            const sectionTrailing = (
+              <SectionActions
+                onCreate={
+                  isProjectSection
+                    ? projectGroupBy === 'singleList'
+                      ? () => startNewChat()
+                      : handleNewBlankProject
+                    : isUser
+                      ? () => {
+                          setCreateProjectTargetSection(section.id);
+                          setIsCreateProjectDialogOpen(true);
+                        }
+                      : undefined
+                }
+                createLabel={
+                  isProjectSection
+                    ? projectGroupBy === 'singleList'
+                      ? t('nav.newChat')
+                      : t('project.newProject')
+                    : isUser
+                      ? t('project.newProject')
+                      : undefined
+                }
+                onToggleSearch={() => toggleSectionSearch(section.id)}
+                searchActive={searchActive}
+                filter={sectionHoldsProjects ? {
+                  groupBy: isProjectSection ? projectGroupBy : undefined,
+                  onGroupBy: isProjectSection ? setProjectGroupBy : undefined,
+                  sortBy: projectSortBy,
+                  onSortBy: setProjectSortBy,
+                  showEmptyGroups,
+                  onShowEmptyGroups: setShowEmptyGroups,
+                } : undefined}
+              />
+            );
+            const sectionSearch = searchActive ? (
+              <input
+                className="sidebar-section-search-input"
+                value={sectionQuery}
+                autoFocus
+                placeholder={t('sidebar.section.searchPlaceholder')}
+                aria-label={t('sidebar.section.searchPlaceholder')}
+                onChange={(e) => setSectionQuery(section.id, e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    toggleSectionSearch(section.id);
+                  }
+                }}
+              />
+            ) : undefined;
             return (
               <SidebarSectionItem
                 key={section.id}
                 {...sectionItemProps}
-                trailing={isProjectSection ? (
-                  <ProjectSectionActions
-                    onNewBlankProject={handleNewBlankProject}
-                    onNewSession={() => startNewChat()}
-                    isFlatList={projectGroupBy === 'singleList'}
-                    projectSortBy={projectSortBy}
-                    onProjectSortBy={setProjectSortBy}
-                    projectGroupBy={projectGroupBy}
-                    onProjectGroupBy={setProjectGroupBy}
-                  />
-                ) : undefined}
+                trailing={sectionTrailing}
+                search={sectionSearch}
               >
                 {(() => {
                   // Plan: project-level drag-and-drop. Each section owns
@@ -1740,15 +1850,36 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                                 && !t.id.startsWith('gw-')
                                 && !t.id.startsWith('wakeless-'),
                             );
+                            // P2: group-scoped search. A project survives the
+                            // filter when its name matches OR one of its
+                            // sessions does; only the matching sessions are
+                            // shown inside it.
+                            const nameMatches =
+                              !trimmedQuery ||
+                              project.projectName.toLowerCase().includes(trimmedQuery);
+                            const visibleThreads = trimmedQuery
+                              ? projectThreads.filter((t) =>
+                                  t.title.toLowerCase().includes(trimmedQuery),
+                                )
+                              : projectThreads;
+                            if (!nameMatches && visibleThreads.length === 0) {
+                              return null;
+                            }
                             return (
                               <SortableProjectGroupItem
                                 key={project.workingDirectory}
                                 project={project}
-                                threads={projectThreads}
+                                threads={visibleThreads}
                                 activeThreadId={activeThreadId}
                                 sortBy={projectSortBy}
                               />
                             );
+                          }
+                          if (
+                            trimmedQuery &&
+                            !entry.thread.title.toLowerCase().includes(trimmedQuery)
+                          ) {
+                            return null;
                           }
                           return (
                             <ThreadListItem
@@ -2020,121 +2151,3 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     );
   }
 );
-
-interface ProjectSectionActionsProps {
-  onNewBlankProject: () => void;
-  onNewSession: () => void;
-  isFlatList: boolean;
-  projectSortBy: ProjectSortBy;
-  onProjectSortBy: (sortBy: ProjectSortBy) => void;
-  projectGroupBy: ProjectGroupBy;
-  onProjectGroupBy: (groupBy: ProjectGroupBy) => void;
-}
-
-/**
- * Plan 471: the "项目" section header's trailing "⋯ +" action group.
- *
- * The "⋯" opens a popup menu with two option groups:
- *   - 整理 (organize): 按项目 / 在一个列表中  — project layout toggle
- *   - 排序方式 (sortBy): 优先级 / 最近更新 / 手动排序
- *
- * The "+" semantic depends on `isFlatList`:
- *   - byProject mode: creates a new blank project (opens the unified
- *     create-project dialog).
- *   - singleList mode: creates a new no-project session directly,
- *     matching the section's "Sessions" rename. There are no project
- *     groups to add to, so a project dialog would feel off.
- *
- * This is the same control surface the old `SidebarProjectHeader`
- * exposed, but relocated into the section header's trailing slot so
- * the header itself stays a plain "name + caret + [⋯ +]" row that
- * matches the Codex reference.
- */
-function ProjectSectionActions({
-  onNewBlankProject,
-  onNewSession,
-  isFlatList,
-  projectSortBy,
-  onProjectSortBy,
-  projectGroupBy,
-  onProjectGroupBy,
-}: ProjectSectionActionsProps) {
-  const { t } = useTranslation();
-
-  return (
-    <div className="relative flex items-center gap-1">
-      <DropdownMenu
-        trigger={
-          <button
-            type="button"
-            className="sidebar-section-action"
-            title={t('common.more')}
-          >
-            <DotsThreeIcon size={16} />
-          </button>
-        }
-        items={[
-          {
-            kind: "section",
-            id: "organize",
-            title: t('project.organize'),
-            items: [
-              {
-                kind: "action",
-                id: "by-project",
-                label: t('project.byProject'),
-                iconRight: projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
-                onSelect: () => onProjectGroupBy('byProject'),
-              },
-              {
-                kind: "action",
-                id: "single-list",
-                label: t('project.inOneList'),
-                iconRight: projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
-                onSelect: () => onProjectGroupBy('singleList'),
-              },
-            ],
-          },
-          { kind: "divider", id: "divider-1" },
-          {
-            kind: "section",
-            id: "sort-by",
-            title: t('project.sortBy'),
-            items: [
-              {
-                kind: "action",
-                id: "priority",
-                label: t('project.priority'),
-                iconRight: projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
-                onSelect: () => onProjectSortBy('priority'),
-              },
-              {
-                kind: "action",
-                id: "last-activity",
-                label: t('project.lastUpdated'),
-                iconRight: projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
-                onSelect: () => onProjectSortBy('lastActivity'),
-              },
-              {
-                kind: "action",
-                id: "manual",
-                label: t('project.manualSort'),
-                iconRight: projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />,
-                onSelect: () => onProjectSortBy('manual'),
-              },
-            ],
-          },
-        ]}
-      />
-      <button
-        type="button"
-        className="sidebar-section-action"
-        onClick={isFlatList ? onNewSession : onNewBlankProject}
-        title={isFlatList ? t('nav.newChat') : t('project.newProject')}
-        aria-label={isFlatList ? t('nav.newChat') : t('project.newProject')}
-      >
-        <PlusIcon size={14} />
-      </button>
-    </div>
-  );
-}

@@ -387,7 +387,8 @@ export function ProjectGroupItem({
                 type="button"
                 className="project-group-menu-btn"
                 style={{ opacity: isHovered || menuOpen ? 1 : 0 }}
-                aria-label={t('project.options')}
+                aria-label={t('project.optionsFor', { name: project.projectName })}
+                title={t('project.optionsFor', { name: project.projectName })}
               >
                 <DotsThreeIcon size={16} stroke={2.5} />
               </button>

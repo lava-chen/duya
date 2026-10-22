@@ -41,6 +41,12 @@ export interface SidebarSectionItemProps {
    *  - `soft`: subtle styling (e.g. for the "项目" default group fallback)
    */
   tone?: 'bold' | 'soft';
+  /**
+   * Group-scoped search box, rendered under the header. Claude parity
+   * (2026-10-22): the 🔍 button in a group header filters that group only —
+   * the global ⌘K palette stays the global one.
+   */
+  search?: React.ReactNode;
 }
 
 export function SidebarSectionItem({
@@ -52,6 +58,7 @@ export function SidebarSectionItem({
   trailing,
   children,
   tone = 'bold',
+  search,
 }: SidebarSectionItemProps) {
   const { t } = useTranslation();
 
@@ -96,6 +103,9 @@ export function SidebarSectionItem({
           </span>
         )}
       </div>
+      {/* Group-scoped search sits directly under the header, above the rows
+          it filters — a search box below its own results reads as a footer. */}
+      {!collapsed && search && <div className="sidebar-section-search">{search}</div>}
       {!collapsed && children && <div className="sidebar-section-body">{children}</div>}
     </div>
   );
