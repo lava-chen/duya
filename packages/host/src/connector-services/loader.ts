@@ -7,6 +7,7 @@ import type {
 } from '@duya/plugin-core';
 import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve';
 import type { MCPServerConfig } from '@duya/capabilities/MCP/ports';
+import { createComputerUseHostCapabilityConfig } from '../worker-tool-bindings/computer-use-capability-bridge.js';
 import { logger } from '../worker-logger.js';
 import {
   collectWorkerMCPCandidates,
@@ -34,6 +35,12 @@ export interface MCPLoaderOptions {
 
 export function resolvedToLegacyConfig(r: ResolvedMCPServerConfig): MCPServerConfig {
   const raw = r.rawConfig;
+  if (r.source === 'plugin' && r.pluginId && raw.hostCapability === 'computer-use') {
+    return {
+      ...createComputerUseHostCapabilityConfig(r.pluginId),
+      name: r.scopedServerName,
+    };
+  }
   const connectionId = (raw as typeof raw & { connectionId?: string }).connectionId;
   return {
     name: r.scopedServerName,

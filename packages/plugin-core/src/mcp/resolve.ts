@@ -52,12 +52,25 @@ interface ValidationResult {
   reason?: string;
 }
 
-function validateRawConfig(raw: MCPCandidate['rawConfig']): ValidationResult {
+function validateRawConfig(candidate: MCPCandidate): ValidationResult {
+  const raw = candidate.rawConfig;
   if (!raw || typeof raw !== 'object') {
     return { ok: false, reason: 'rawConfig is not an object' };
   }
   if (typeof raw.name !== 'string' || raw.name.trim().length === 0) {
     return { ok: false, reason: 'rawConfig.name must be a non-empty string' };
+  }
+  if (raw.hostCapability !== undefined) {
+    if (candidate.source !== 'plugin') {
+      return { ok: false, reason: 'Host capabilities may only be requested by an installed plugin' };
+    }
+    if (raw.hostCapability !== 'computer-use') {
+      return { ok: false, reason: `unsupported Host capability: ${raw.hostCapability}` };
+    }
+    if (raw.command !== undefined || raw.url !== undefined || raw.transport !== undefined) {
+      return { ok: false, reason: 'Host capability declarations cannot include a process or URL transport' };
+    }
+    return { ok: true };
   }
   const transport = raw.transport ?? 'stdio';
   if (transport !== 'stdio' && transport !== 'streamable-http') {
@@ -169,7 +182,7 @@ function expandCandidate(
   ctx: ResolutionContext,
 ): {
   expanded: {
-    transport?: 'stdio' | 'streamable-http';
+    transport?: 'stdio' | 'streamable-http' | 'in-process';
     command?: string;
     args: string[];
     env: Record<string, string>;
@@ -179,14 +192,27 @@ function expandCandidate(
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    hostCapability?: string;
   };
   missingVars: string[];
   missingKeys: string[];
 } {
+  if (c.rawConfig.hostCapability !== undefined) {
+    return {
+      expanded: {
+        transport: 'in-process',
+        args: [],
+        env: {},
+        hostCapability: c.rawConfig.hostCapability,
+      },
+      missingVars: [],
+      missingKeys: [],
+    };
+  }
   const userConfig = c.pluginId ? ctx.userConfigByPlugin[c.pluginId] : undefined;
   return expandMcpServerConfig(
     {
-      transport: c.rawConfig.transport,
+      transport: c.rawConfig.transport === 'in-process' ? undefined : c.rawConfig.transport,
       command: c.rawConfig.command,
       args: c.rawConfig.args,
       env: c.rawConfig.env,
@@ -415,7 +441,7 @@ function isNodeCompatibleRuntime(
 function staticPathCheck(
   c: MCPCandidate,
   expanded: {
-    transport?: 'stdio' | 'streamable-http';
+    transport?: 'stdio' | 'streamable-http' | 'in-process';
     command?: string;
     args: string[];
     env: Record<string, string>;
@@ -425,9 +451,13 @@ function staticPathCheck(
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    hostCapability?: string;
   },
   inventoryId: string,
 ): PathCheckResult {
+  if (expanded.transport === 'in-process' && expanded.hostCapability) {
+    return { status: 'configured' };
+  }
   if (expanded.transport === 'streamable-http') {
     return { status: 'configured' };
   }
@@ -503,7 +533,7 @@ function staticPathCheck(
 interface ProcessedCandidate {
   inventory: MCPServerInventoryEntry;
   expanded: {
-    transport?: 'stdio' | 'streamable-http';
+    transport?: 'stdio' | 'streamable-http' | 'in-process';
     command?: string;
     args: string[];
     env: Record<string, string>;
@@ -513,6 +543,7 @@ interface ProcessedCandidate {
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    hostCapability?: string;
   };
   /** Set only when staticPathCheck reported an issue. */
   pathIssue?: MCPIssue;
@@ -576,6 +607,7 @@ function processCandidate(
       toolTimeouts: c.rawConfig.toolTimeouts,
       envPassthrough: c.rawConfig.envPassthrough,
       useShell: c.rawConfig.useShell,
+      hostCapability: c.rawConfig.hostCapability,
     },
     discoveryStatus: status,
     allowedAgentIds: c.rawConfig.allowedAgentIds,
@@ -595,7 +627,7 @@ export async function resolveMCPDiscovery(
   const processed: Array<{ proc: ProcessedCandidate; issues: MCPIssue[]; candidate: MCPCandidate }> = [];
 
   for (const c of candidates) {
-    const v = validateRawConfig(c.rawConfig);
+    const v = validateRawConfig(c);
     if (!v.ok) {
       processed.push({
         proc: {

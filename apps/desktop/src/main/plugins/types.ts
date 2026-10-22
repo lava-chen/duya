@@ -97,6 +97,8 @@ export interface PluginManifest {
   };
   capabilities: {
     skills?: string[];
+    /** Host-executed, permission-gated capability bridges requested by a plugin. */
+    hostCapabilities?: string[];
     mcpServers?: Array<{
       name: string;
       transport?: 'stdio' | 'streamable-http' | 'sse';

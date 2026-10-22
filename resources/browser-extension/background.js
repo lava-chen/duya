@@ -257,10 +257,10 @@ function normalizeMaxTabs(value) {
   return Math.min(100, Math.max(1, Math.floor(n)));
 }
 
-/** Total number of agent-owned tabs open across all sessions. */
+/** Total number of agent-created tabs open across all sessions. */
 function totalOpenTabs() {
   let count = 0;
-  for (const session of sessionTabs.values()) count += session.tabIds.size;
+  for (const session of sessionTabs.values()) count += session.ownedTabIds?.size ?? session.tabIds.size;
   return count;
 }
 
@@ -325,7 +325,7 @@ async function getOrCreateSessionTab(sessionId) {
     throw new Error('Failed to create session tab: no tab id');
   }
 
-  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), idleTimer: null });
+  sessionTabs.set(sessionId, { tabId, tabIds: new Set([tabId]), ownedTabIds: new Set([tabId]), idleTimer: null });
 
   console.log(`[DUYA Bridge] Created session tab ${tabId} for session "${sessionId}"`);
 
@@ -366,6 +366,8 @@ async function createAdditionalSessionTab(sessionId, url) {
   const tab = await chrome.tabs.create({ windowId, url: url || 'about:blank', active: false });
   if (!tab.id) throw new Error('Failed to create browser tab');
   existing.tabIds.add(tab.id);
+  existing.ownedTabIds ??= new Set(existing.tabIds);
+  existing.ownedTabIds.add(tab.id);
   await ensureSessionGroup(sessionId, tab.id);
   resetSessionIdleTimer(sessionId);
   return tab.id;
@@ -427,6 +429,7 @@ async function closeSessionTab(sessionId) {
   if (!session) return;
 
   const tabIds = Array.from(session.tabIds);
+  const ownedTabIds = session.ownedTabIds ?? new Set(tabIds);
 
   // Clean up timer
   if (session.idleTimer) {
@@ -437,7 +440,9 @@ async function closeSessionTab(sessionId) {
   for (const tabId of tabIds) {
     try { await chrome.debugger.detach({ tabId }); } catch {}
     attachedTabs.delete(String(tabId));
-    try { await chrome.tabs.remove(tabId); } catch {}
+    if (ownedTabIds.has(tabId)) {
+      try { await chrome.tabs.remove(tabId); } catch {}
+    }
   }
 
   sessionTabs.delete(sessionId);
@@ -461,12 +466,18 @@ async function closeOwnedSessionTab(sessionId, tabId) {
   }
 
   session.tabIds.delete(tabId);
+  const ownedTabIds = session.ownedTabIds ?? new Set(session.tabIds);
+  const wasAgentCreated = ownedTabIds.has(tabId);
+  ownedTabIds.delete(tabId);
+  session.ownedTabIds = ownedTabIds;
   if (session.tabId === tabId) {
     session.tabId = session.tabIds.values().next().value;
   }
   try { await chrome.debugger.detach({ tabId }); } catch {}
   attachedTabs.delete(String(tabId));
-  try { await chrome.tabs.remove(tabId); } catch {}
+  if (wasAgentCreated) {
+    try { await chrome.tabs.remove(tabId); } catch {}
+  }
 
   if (session.tabIds.size === 0) {
     await closeSessionTab(sessionId);
@@ -494,6 +505,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   for (const [sessionId, session] of sessionTabs) {
     if (!session.tabIds.has(tabId)) continue;
     session.tabIds.delete(tabId);
+    session.ownedTabIds?.delete(tabId);
     attachedTabs.delete(String(tabId));
     if (session.tabId === tabId) session.tabId = session.tabIds.values().next().value;
     if (session.tabIds.size === 0) {
@@ -1090,14 +1102,62 @@ async function handleTabs(id, msg) {
     return;
   }
 
+  if (op === 'available') {
+    const tabs = await chrome.tabs.query({});
+    sendResult(id, {
+      ok: true,
+      data: tabs
+        .filter((tab) => typeof tab.id === 'number' && /^https?:\/\//i.test(tab.url || ''))
+        .map((tab) => ({ id: tab.id, url: tab.url, title: tab.title, active: tab.active })),
+    });
+    return;
+  }
+
+  if (op === 'attach') {
+    const tabId = typeof msg.tabId === 'number' ? msg.tabId : Number.parseInt(msg.tabId, 10);
+    if (!Number.isInteger(tabId) || tabId <= 0) {
+      sendResult(id, { ok: false, error: 'Missing or invalid tabId for tabs attach' });
+      return;
+    }
+    const tab = await chrome.tabs.get(tabId);
+    if (!/^https?:\/\//i.test(tab.url || '')) {
+      sendResult(id, { ok: false, error: 'Only http(s) tabs can be attached' });
+      return;
+    }
+    for (const [ownerSessionId, owner] of sessionTabs) {
+      if (ownerSessionId !== sessionId && owner.tabIds.has(tabId)) {
+        sendResult(id, { ok: false, error: `Tab ${tabId} is already attached to another DUYA session` });
+        return;
+      }
+    }
+    let session = sessionTabs.get(sessionId);
+    if (!session) {
+      session = { tabId, tabIds: new Set(), ownedTabIds: new Set(), idleTimer: null };
+      sessionTabs.set(sessionId, session);
+    }
+    session.tabIds.add(tabId);
+    session.ownedTabIds ??= new Set();
+    session.tabId = tabId;
+    resetSessionIdleTimer(sessionId);
+    try {
+      await attachTab(tabId);
+    } catch (err) {
+      session.tabIds.delete(tabId);
+      if (session.tabIds.size === 0) sessionTabs.delete(sessionId);
+      throw err;
+    }
+    sendResult(id, { ok: true, data: { tabId, url: tab.url, title: tab.title } });
+    return;
+  }
+
   if (op === 'list') {
     const session = sessionTabs.get(sessionId);
     if (!session) {
       sendResult(id, { ok: true, data: [] });
       return;
     }
-    // Session-owned tabs may live in any window (grouped mode), so list
-    // them from the ownership map instead of querying by windowId.
+    // Attached session tabs may live in any window (grouped mode), so list
+    // them from the session map instead of querying by windowId.
     const tabs = [];
     for (const tabId of session.tabIds) {
       try {

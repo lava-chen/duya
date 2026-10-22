@@ -444,6 +444,9 @@ function readMinimalManifest(
     apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
+      hostCapabilities: isObject(raw.capabilities) && Array.isArray(raw.capabilities.hostCapabilities)
+        ? asStringArray(raw.capabilities.hostCapabilities, 'capabilities.hostCapabilities')
+        : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
       hooks: hooks.length
         ? hooks.map((h) => ({ event: h.event, handler: h.handler }))
@@ -565,6 +568,9 @@ function parseLegacyV1V2Manifest(
     apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
     capabilities: {
       skills: capsRaw.skills ? asStringArray(capsRaw.skills, 'capabilities.skills') : undefined,
+      hostCapabilities: capsRaw.hostCapabilities
+        ? asStringArray(capsRaw.hostCapabilities, 'capabilities.hostCapabilities')
+        : undefined,
       mcpServers: Array.isArray(capsRaw.mcpServers)
         ? capsRaw.mcpServers.map((item, index) => {
             if (!isObject(item)) throw new Error(`Invalid capabilities.mcpServers[${index}]`);
