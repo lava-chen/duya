@@ -150,7 +150,16 @@ export function FileWorkspacePanel({ tab }: { tab: PageTab; embedded?: boolean }
         return;
       }
       setNotice(null);
-      const result = await api.preview(path, workingDirectory);
+      // Files outside the workspace (chat links to a home-directory file) need
+      // the standalone gate, otherwise the main process rejects the path.
+      const normalizedPath = path.replace(/\\/g, "/").toLowerCase();
+      const normalizedRoot = workingDirectory.replace(/\\/g, "/").toLowerCase();
+      const insideRoot = normalizedRoot.length > 0 && normalizedPath.startsWith(normalizedRoot);
+      const result = await api.preview(
+        path,
+        workingDirectory,
+        insideRoot ? undefined : { standalone: true },
+      );
       if (!result?.success) {
         setNotice(result?.error ?? "无法打开这个文件");
         return;
