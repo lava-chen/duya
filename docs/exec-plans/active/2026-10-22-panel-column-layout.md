@@ -129,7 +129,7 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 - **标题栏整行在最上**：`.app-shell` 是列，标题栏是第一个子元素（整宽），下面才是 `.app-body`（行：侧栏 + 工作区）→ 图标 / 前进后退 / 菜单正好落在**侧栏上方**，内容区在标题栏下面。
 - **会话动作并到窗口控制区旁**：`ChatHeaderActions` 从聊天 header 右侧移到 `TitleBar` 的 `.titlebar-actions`（`titlebar.css` 早已为 Windows 原生窗口按钮预留 `padding-right: 140px`）。重命名动作经 `duya:rename-thread` 窗口事件回到 header，标题编辑仍归 header。
-- **取消 drag region**：`.titlebar-drag-region` 改成普通 `.titlebar`（去掉 `-webkit-app-region: drag`），删掉 `.titlebar-drag-fill` 与两处 `no-drag` 声明；窗口不再能靠标题栏拖动。
+- **取消 drag region**：`.titlebar-drag-region` 改成普通 `.titlebar`（去掉 `-webkit-app-region: drag`），删掉 `.titlebar-drag-fill` 与两处 `no-drag` 声明；窗口不再能靠标题栏拖动。（第三轮撤销了此项，见「外壳第三轮」）
 - **macOS 例外**：macOS 用原生 inset 标题栏、没有自绘顶栏，动作留在聊天 header 里（`hasCustomTitleBar()` 判定）。
 - **未做**：`registry.ts` 里的画布页面本身没有删（不在本切片路径，且 i18n 键也在路径外）；侧栏内部结构（图标栏）没重做。
 
@@ -145,8 +145,19 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **菜单收成一个下拉**：文件 / 编辑 / 视图 / 帮助 四个菜单并成一个 ≡ 按钮，每项是 submenu（`›` 箭头）。
 - **← → 留在侧栏顶行**：中途按 mockup 把它挪到内容区顶栏，用户明确「也在侧栏顶栏」→ 放回图标行。
 - **会话标题进顶栏**：内容区顶栏左侧是会话标题（复用 `ChatHeader` 组件，CSS 去掉它自己的行内边距/底边框），右侧是会话动作（⋯），紧挨原生窗口按钮；聊天区紧贴顶栏，从底部顶到上面。
-- **顶栏不再是拖拽区**：去掉 `-webkit-app-region: drag`，窗口不能靠标题栏拖动。
+- **顶栏不再是拖拽区**：去掉 `-webkit-app-region: drag`，窗口不能靠标题栏拖动。（第三轮补回，见「外壳第三轮」）
 - **macOS 例外**：macOS 无自绘顶栏，`hasCustomTitleBar()` 为 false，`ChatHeader` 仍留在聊天视图内。
+
+### 外壳第三轮：拖拽区、展开态标题、收起栏缝隙、面板卡片亮度
+
+用户实机指出四点：① 顶部无法拖拽移动窗口；② 面板放大后 header 消失；③ 侧栏收起后不留小侧栏（给了参考图）；④ 面板背景色与 session 背景色不一致、面板浅一点。
+
+- **拖拽区补回**：`c7a72618` 记录过「取消 drag region」，那是这一版无法拖窗的直接原因——`titleBarStyle:'hidden'` + `titleBarOverlay` 把原生标题栏去掉了，窗口移动**只剩** CSS `-webkit-app-region: drag` 一条路。给 `.titlebar` 与 `.app-rail` 各加回 drag，并对其中每个可点控件（`button` / `input` / `a`、`.chat-header-*`、`.titlebar-panel-launcher`、`.app-rail-brand`）逐条 `no-drag` 退让。拖窗走原生路径，CDP 无法验证，需用户实机确认。
+- **展开态保留会话标题**：`.panel-zone-expanded` 绝对定位只盖 `.app-workspace-row`（y 从 44px 起），顶栏本来就在覆盖范围之外；`TitleBar.tsx` 之前用 `workspaceExpanded` 隐藏标题，等于在盖不到的地方留一条空带。改为始终按 `currentView === "chat" && !!thread` 判定，删掉对 `useOptionalPanel` 的依赖。
+- **收起栏的色差是缝隙不是缺栏**：收起后 56px 图标栏（`.app-rail`）本来就在。真正的问题是 `.app-sidebar-column > .app-sidebar` 又叠了一层半透明 `--glass-chrome`，两层透明填充叠出更深一条带；去掉 `border-right` 后仍留一条上下色差。修法：侧栏在该列内 `background: transparent`，由列自己铺一层玻璃；图标统一成 34px / 圆角 8px 与 `.app-sidebar-rail .rail-btn` 对齐。实测收起栏自上而下连续 `#252525`。**用户随后决定「侧栏就先这样不动了」**，此轮只到这里。
+- **面板卡片亮度**：量像素证明本版卡片与画布在两个主题下都完全相同（暗 30/30、亮 255/255），用户给的截图来自另一个产品，其参考值为聊天区 rgb(21,21,21) / 面板 rgb(26,26,25)（亮一档）。按用户选择**照参考图略亮一档**：新增 `--panel-surface`（亮 `#ffffff`，暗 `#232323`）。亮色画布已是纯白、没有余量，所以保持贴平、靠 1px 边框区分；暗色抬一档。落点是 `.panel-wall-cell { --main-bg: var(--panel-surface) }`——重声明画布 token 而不是设 `background`，卡片自身与它内部所有画 `var(--main-bg)` 的页面体一起抬起，而卡片外的 8px 内缩环不在这棵子树里、继续与聊天画布齐平。`preview-drawer.css` 补一条：原生毛玻璃下 `.sidebar-panel-inner` 强制 `var(--main-bg)`，否则 sidebar 的玻璃 scrim 会把内缩环染成另一色。
+  - 不能用 `color-mix()` 从 `--main-bg` 推导 `--panel-surface`：那会构成自定义属性环 → 计算值无效。所以两主题各写死一个值。
+  - 第一次采样读到 rgb(32,32,32) 而非 35，用红色覆盖探针（`--panel-surface:#ff0000!important` → 抓到 rgb(255,0,0)）排除遮罩与色彩管理，重抓后卡片稳定 rgb(35,35,35)、画布 rgb(30,30,30)——32 是一帧过渡态。
 
 ### 开发环境的两个坑（本轮实测）
 
@@ -180,6 +191,12 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | 0d89b57f / clean | 同上 | `npm run build` | 0 | 58.17s |
 | 0d89b57f / clean | 同上 | `npm run test:e2e:ui-states` | 0 | 首次 2 例失败（`.e2e-userdata` 残留命名空间：DB owner 锁文件丢失 + 新手引导遮罩盖住主题开关），清掉命名空间后 **4 例全过** |
 | 0d89b57f / clean | 同上 | 真实 Electron（Vite 3000 + `npx electron . --remote-debugging-port=9222`） | 0 | CDP `Page.captureScreenshot` + `Runtime.evaluate` 实测：图标行 = 侧栏顶行（app icon x=12、≡ x=42、← x=72、→ x=102，均 26×26）；会话列表在 y=44 以下；顶栏 ⋯ 在 x=1049、22×22 |
+| 5d973be1 / clean（外壳第三轮） | Windows 11 / Node 24.18 / worktree `panel-layout-columns` | `npx tsc --noEmit`（`packages/ui`） | 0 | — |
+| 5d973be1 / clean | 同上 | `npm run typecheck:all` | 0 | 含 electron gate `OK — no new type errors` |
+| 5d973be1 / clean | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；tolerated 2792 全部为既有 baseline，未新增指纹 |
+| 5d973be1 / clean | 同上 | `npx vitest run packages/ui/src/components/layout` | 0 | 18 个 suite / 186 个用例全过（`panel-zone-workflow-view` 套件随 workflow 面板移除而删除） |
+| 5d973be1 / clean | 同上 | `npx vitest run packages/ui` | 0 | 209 个 suite / 2200 个用例全过（2 skipped） |
+| 5d973be1 / clean | 同上 | 真实 Electron（已在跑的 dev 实例 + CDP `:9222`，未另开窗口） | 0 | 见下「第三轮像素与几何实测」 |
 
 ### 切片 A 的可见行为证据（真实 Electron，1600×900）
 
@@ -192,6 +209,19 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | 同族两个 pane（alpha.md / beta.md） | 落进**同一列**（列内 tab 互斥，未激活者 height 0 且 hidden），列间分隔条 `调整 文件 和 alpha.md，beta.md 的大小`，列内分隔条 `调整 alpha.md 和 beta.md 的大小` |
 | 关掉其中一个 | 同列剩余 pane 高度从 406px 变 **816px**（占满该列），列宽仍 480px |
 
+### 第三轮像素与几何实测（真实 Electron，1510×844 @ dpr 1.25）
+
+用 `Runtime.evaluate` 读计算样式，用 `Page.captureScreenshot` + 自写 PNG 解码器（`tmp/png-pixel.js`）按 CSS 像素取样。
+
+| 场景 | 观测 |
+| --- | --- |
+| 顶栏 / 图标行拖拽属性 | `.titlebar`、`.app-rail` = `drag`；`.chat-header-title`、`.chat-header-btn`、`.chat-header-project`、`.titlebar-panel-launcher`、`.app-rail-brand` = `no-drag` |
+| 面板展开（`data-panel-expanded="true"`） | `.panel-zone` x=56、w=1454，起于 44px 顶栏之下；顶栏仍渲染会话标题 + 项目 pill |
+| 侧栏收起 | 56px 图标栏整列连续 `#252525`，无上下色带（修法见上） |
+| 改动前面板卡片 vs 画布 | 暗色 rgb(30,30,30) / rgb(30,30,30)、亮色 255 / 255 —— **完全相同**，用户看到的浅色来自参考产品而非本构建 |
+| 抬亮后卡片 | `.panel-wall-cell` 计算 `--main-bg: #232323`、背景 rgb(35,35,35)；`rgb(35)` 与画布 `rgb(30)` 差 5 级，与参考图差值一致 |
+| 抬亮后内缩环 | 卡片外 8px 环取样 x=1052 处 rgb(30,30,30) —— 与聊天画布齐平，未跟随抬起 |
+
 ## 接续 / 结果
 
 已实现（**方向已重做为面板卡片墙**）：
@@ -202,17 +232,18 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - `usePanel.ts` 换成墙状态与持久化（旧载荷迁移），区域宽与列份额解耦。
 - `workspace.css` 换成墙样式（卡片间距 4px、卡片 header 28px、圆角 6px）。
 - 窗口外壳两轮布局（`app-shell.tsx` / `TitleBar.tsx` / `ChatHeader.tsx` / `ChatView.tsx` / `titlebar.css` / `sidebar.css`）：侧栏列 = 顶行图标（app icon + ≡ 菜单下拉 + ← →）+ 会话列表；内容列 = 顶栏（会话标题 + ⋯ 靠原生窗口按钮）+ 工作区（聊天 + 面板墙）。
+- 外壳第三轮（`5d973be1`）：44px 顶栏与图标行补回拖拽区并逐控件退让；面板展开时保留会话标题；收起栏去掉叠加玻璃与半边框、图标统一到 34px；新增 `--panel-surface`，`.panel-wall-cell` 重声明 `--main-bg` 使卡片及其内部页面抬一档、内缩环保持齐平。
 
-已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui/src/components/layout packages/ui/src/components/chat` 0 / 691 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`build` 0、`test:e2e:ui-states` 0 / 4 例）。**实机证据**：本轮用 CDP 抓了真实 Electron 的渲染页（`docs-local/research/panel-wall/cdp-shot*.png`），并用 `Runtime.evaluate` 量了图标行与会话列表的几何。
+已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui/src/components/layout packages/ui/src/components/chat` 0 / 691 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`build` 0、`test:e2e:ui-states` 0 / 4 例；第三轮 `typecheck:all` 0、`architecture:check` 0、`vitest packages/ui` 0 / 2200 例）。**实机证据**：用 CDP 抓了真实 Electron 的渲染页（`docs-local/research/panel-wall/cdp-shot*.png`），量了图标行与会话列表的几何、卡片与画布的像素底色。**未验证**：拖窗本身走原生窗口路径，CDP 与截图都无法证明，需用户在实机上拖动确认。
 
 已合并：无（PR 未合并，等授权）。
 
-PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。
+PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。第三轮已推到同一分支，不另开 PR。
 
-⚠️ **同一 worktree 里出现了第二个写者**：`0d89b57f` 之后，`PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些**不在** `0d89b57f` 里（该提交只含上表 6 个文件）。接手前先 `git status` 对账，勿覆盖。
+⚠️ **同一 worktree 里出现过第二个写者**：`0d89b57f` 之后 `PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些已由 `5d973be1` 一并提交，与本轮外壳改动混在同一 commit 里——评审时按文件而不是按 commit 看。接手前仍先 `git status` 对账，勿覆盖。
 
-外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1` / `crop.ps1` / `capture.ps1`）与 CDP 工具（`cdp-eval.mjs` / `cdp-shot.mjs`，均不入库）。
+外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1` / `crop.ps1` / `capture.ps1`）与 CDP 工具（`cdp-eval.mjs` / `cdp-shot.mjs`，均不入库）。第三轮的量测工具在仓库外（`~/.qoder-cn/tmp/`：`cdp.js` / `cdp-shot2.js` / `cdp-clip.js` / `cdp-reload.js` / `png-pixel.js`），使用前须 `CDP_PORT=9222`（脚本默认 9223）；整窗截图按 dpr 1.25 取样（`SCALE=1.25`）。
 
-阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（会话列表本身）没重做。
+阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（会话列表本身）没重做。④ **收起侧栏的目标形态未定**：用户先给了「收起后整栏消失、只留顶栏那排」的描述与参考图，随后决定「侧栏就先这样不动了」，此需求未实现，恢复工作时先与用户重确认形态。
 
 回收：未回收（分支与 worktree 保留给评审与后续切片）。切片 C（拖拽换位）若继续，墙模型是它的写回点（`layout-model.ts` / `usePanel.ts`）；`PanelHeader.tsx` 现已不被 `PanelZone` 渲染，接手前先确认它的新定位。
