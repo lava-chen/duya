@@ -79,6 +79,7 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - [x] 调研 Claude Desktop 布局模型（AX 树 + 截图），确定列树结构与归位规则
 - [x] 写本计划
 - [x] A：列树渲染 + 归位规则（子 agent）· 分支 `codex/panel-layout-columns` · SHA `21b764e9`
+- [x] A：方向重做为面板卡片墙 + 窗口外壳两轮布局 · 同分支 · SHA `a256e982` / `0d89b57f`
 - [ ] B：脱窗 Electron 侧（子 agent）
 - [ ] C：拖拽换位（第二波）
 - [ ] D：用量浮层对齐（第二波）
@@ -134,6 +135,24 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 > 排查记录：同一份代码在 dev server 下与 preview 模式下表现不同——preview 模式加载 `dist/`（旧构建）会显示旧布局。**验证布局改动必须确认 DevTools 标题是 `http://localhost:3000/`**，否则看到的是上一次构建的产物。
 
+### 窗口外壳的第二轮调整（用户实机截图 + `ui-mockup-shell.html` 对照）
+
+用户看了实机截图后指出两处：① 图标区应该是**上下**关系（不是最左侧一条竖排窄栏）；② 左上角那个按钮**原来是 app icon**，怎么变样了。参照物是 `docs-local/research/claude-desktop-ui/ui-mockup-shell.html`（用户自己的 Claude Desktop 外壳实现）与用户新发的 Claude Code 侧栏截图。
+
+- **量出来的规格**（用户截图 `16-18-18-244`，361×1382 侧栏切片）：图标行在**侧栏顶部**，横向排列 `≡ ⊞ ← →`；16px 图标、中心间距 30px、首个图标左边距 ≈17px、图标行高 ≈44px（下方 ≈53px 处才是分段控件）。
+- **图标行改成侧栏顶行**：`app-shell.tsx` 把 `AppRail` + `AppSidebar` 包进 `.app-sidebar-column`（列），`.app-rail` 由 `flex-direction: column` 改成 `row`、`height: 44px`；会话列表落在图标行下方 → 上下关系。
+- **app icon 复位**：左上角恢复 master 的 app icon 芯片（`icon.png`，hover 换成侧栏折叠图标，点击折叠/展开侧栏）。上一轮把它换成 ⊞ 图标属于改动过头。
+- **菜单收成一个下拉**：文件 / 编辑 / 视图 / 帮助 四个菜单并成一个 ≡ 按钮，每项是 submenu（`›` 箭头）。
+- **← → 留在侧栏顶行**：中途按 mockup 把它挪到内容区顶栏，用户明确「也在侧栏顶栏」→ 放回图标行。
+- **会话标题进顶栏**：内容区顶栏左侧是会话标题（复用 `ChatHeader` 组件，CSS 去掉它自己的行内边距/底边框），右侧是会话动作（⋯），紧挨原生窗口按钮；聊天区紧贴顶栏，从底部顶到上面。
+- **顶栏不再是拖拽区**：去掉 `-webkit-app-region: drag`，窗口不能靠标题栏拖动。
+- **macOS 例外**：macOS 无自绘顶栏，`hasCustomTitleBar()` 为 false，`ChatHeader` 仍留在聊天视图内。
+
+### 开发环境的两个坑（本轮实测）
+
+- **本 worktree 里 Vite 的 HMR 是失效的**：`vite.config.ts` 的 `server.watch.ignored` 含 `**/.claude/**`，而 worktree 就在 `.claude/worktrees/` 下 → watcher 忽略全部源码，改完代码重载页面仍是旧模块（看起来像改动没生效）。**改完必须重启 Vite**（`npx vite --port 3000 --strictPort`）再重载页面。
+- **`PrintWindow` 抓不到窗口右上角**：原生窗口控件叠加区（`titleBarOverlay`）在 `PrintWindow` 的位图里是空的，会让人误判「顶栏右端的 ⋯ 按钮没渲染」。改用 `electron --remote-debugging-port=9222` + CDP `Page.captureScreenshot` 抓渲染页，并用 `Runtime.evaluate` 直接查 DOM 几何（实测 ⋯ 按钮在 x=1049、22×22、白色描边，DOM 里一直在）。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -154,6 +173,13 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | 15da2da4 / clean | 同上 | `npx vitest run packages/ui` | 0 | 210 个 suite / 2202 个用例全过（2 skipped） |
 | 15da2da4 / clean | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；`.architecture-baseline.json` 未改动 |
 | 15da2da4 / clean | 同上 | `npm run test:e2e:ui-states` | 0 | 4 个用例全过；基线上那条主题开关的既有失败（`ui-states.spec.ts:376`）本次也通过 |
+| 0d89b57f / clean（外壳第二轮） | 同上 | `npx tsc --noEmit` | 0 | web 侧类型检查通过 |
+| 0d89b57f / clean | 同上 | `npx vitest run packages/ui/src/components/layout packages/ui/src/components/chat` | 0 | 72 个 suite / 691 个用例全过 |
+| 0d89b57f / clean | 同上 | `npx vitest run packages/ui` | 0 | 210 个 suite / 2202 个用例全过（2 skipped） |
+| 0d89b57f / clean | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；`.architecture-baseline.json` 未改动 |
+| 0d89b57f / clean | 同上 | `npm run build` | 0 | 58.17s |
+| 0d89b57f / clean | 同上 | `npm run test:e2e:ui-states` | 0 | 首次 2 例失败（`.e2e-userdata` 残留命名空间：DB owner 锁文件丢失 + 新手引导遮罩盖住主题开关），清掉命名空间后 **4 例全过** |
+| 0d89b57f / clean | 同上 | 真实 Electron（Vite 3000 + `npx electron . --remote-debugging-port=9222`） | 0 | CDP `Page.captureScreenshot` + `Runtime.evaluate` 实测：图标行 = 侧栏顶行（app icon x=12、≡ x=42、← x=72、→ x=102，均 26×26）；会话列表在 y=44 以下；顶栏 ⋯ 在 x=1049、22×22 |
 
 ### 切片 A 的可见行为证据（真实 Electron，1600×900）
 
@@ -175,16 +201,18 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - `PanelZone.tsx` 渲染**网格 + 卡片 + 双向可拖分隔条 + 「+」空格**，不再渲染全局 tab 条；新增一条 28px 的墙工具条承载「加入面板」。
 - `usePanel.ts` 换成墙状态与持久化（旧载荷迁移），区域宽与列份额解耦。
 - `workspace.css` 换成墙样式（卡片间距 4px、卡片 header 28px、圆角 6px）。
-- 窗口布局：顶栏只盖内容区（侧栏整高），会话动作移到顶栏右端、原生窗口按钮旁（`app-shell.tsx` / `TitleBar.tsx` / `ChatHeader.tsx`）。
+- 窗口外壳两轮布局（`app-shell.tsx` / `TitleBar.tsx` / `ChatHeader.tsx` / `ChatView.tsx` / `titlebar.css` / `sidebar.css`）：侧栏列 = 顶行图标（app icon + ≡ 菜单下拉 + ← →）+ 会话列表；内容列 = 顶栏（会话标题 + ⋯ 靠原生窗口按钮）+ 工作区（聊天 + 面板墙）。
 
-已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`test:e2e:ui-states` 0 / 4 例）。**本轮没有实机截图证据**：构建 + 启动真实 Electron 的成本太高，结论来自单测、e2e 与对用户截图的像素量测。
+已验证：见上表（`tsc --noEmit` 0、`vitest packages/ui/src/components/layout` 0 / 188 例、`vitest packages/ui/src/components/layout packages/ui/src/components/chat` 0 / 691 例、`vitest packages/ui` 0 / 2202 例、`architecture:check` 0、`build` 0、`test:e2e:ui-states` 0 / 4 例）。**实机证据**：本轮用 CDP 抓了真实 Electron 的渲染页（`docs-local/research/panel-wall/cdp-shot*.png`），并用 `Runtime.evaluate` 量了图标行与会话列表的几何。
 
 已合并：无（PR 未合并，等授权）。
 
 PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。
 
-外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1`）与墙样式草稿（均不入库）。
+⚠️ **同一 worktree 里出现了第二个写者**：`0d89b57f` 之后，`PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些**不在** `0d89b57f` 里（该提交只含上表 6 个文件）。接手前先 `git status` 对账，勿覆盖。
 
-阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（图标栏）没重做。
+外部副作用：本 worktree 的 `e2e/.e2e-userdata/` 留下隔离命名空间的测试会话；`docs-local/research/panel-wall/` 留有像素量测脚本（`measure.ps1` / `detect-lines.ps1` / `crop.ps1` / `capture.ps1`）与 CDP 工具（`cdp-eval.mjs` / `cdp-shot.mjs`，均不入库）。
+
+阻塞：① **`@computer-use` 的 host 工具在本子会话不可调用**（无 `tool_search`、`tool_ref` 无法发现、`mcode-tools connector tools` 里没有 computer 能力），所以「亲自操作 Claude Code」这一步没做成——改用用户 8 张截图逐张量像素替代。② 画布页面本身没删（`registry.ts` / i18n 不在路径内），只从卡片墙入口里移除。③ 侧栏内部结构（会话列表本身）没重做。
 
 回收：未回收（分支与 worktree 保留给评审与后续切片）。切片 C（拖拽换位）若继续，墙模型是它的写回点（`layout-model.ts` / `usePanel.ts`）；`PanelHeader.tsx` 现已不被 `PanelZone` 渲染，接手前先确认它的新定位。
