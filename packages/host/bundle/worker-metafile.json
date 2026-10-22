@@ -92,7 +92,7 @@
       "format": "esm"
     },
     "packages/data/src/integration-store.ts": {
-      "bytes": 10401,
+      "bytes": 10672,
       "imports": [],
       "format": "esm"
     },
@@ -554,12 +554,12 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/checkout-api.ts": {
-      "bytes": 8049,
+      "bytes": 8225,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-protocol/src/integration-api.ts": {
-      "bytes": 3812,
+      "bytes": 3908,
       "imports": [],
       "format": "esm"
     },
@@ -35188,7 +35188,7 @@
       "format": "esm"
     },
     "packages/host/src/checkout-api.ts": {
-      "bytes": 6533,
+      "bytes": 6704,
       "imports": [],
       "format": "esm"
     },
@@ -35664,8 +35664,56 @@
       "format": "esm"
     },
     "packages/host/src/integration-api.ts": {
-      "bytes": 4832,
+      "bytes": 4964,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/scm/gh-cli.ts": {
+      "bytes": 12564,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/scm/observe.ts": {
+      "bytes": 16120,
+      "imports": [
+        {
+          "path": "packages/host/src/scm/gh-cli.ts",
+          "kind": "import-statement",
+          "original": "./gh-cli.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/scm/index.ts": {
+      "bytes": 1191,
+      "imports": [
+        {
+          "path": "packages/host/src/scm/gh-cli.ts",
+          "kind": "import-statement",
+          "original": "./gh-cli.js"
+        },
+        {
+          "path": "packages/host/src/scm/observe.ts",
+          "kind": "import-statement",
+          "original": "./observe.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/worker-transcript-mutations.ts": {
@@ -35963,7 +36011,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 33770,
+      "bytes": 34644,
       "imports": [
         {
           "path": "node:crypto",
@@ -36229,6 +36277,26 @@
           "path": "packages/host/src/integration-api.ts",
           "kind": "import-statement",
           "original": "./integration-api.js"
+        },
+        {
+          "path": "packages/host/src/checkout-api.ts",
+          "kind": "import-statement",
+          "original": "./checkout-api.js"
+        },
+        {
+          "path": "packages/host/src/workspace/index.ts",
+          "kind": "import-statement",
+          "original": "./workspace/index.js"
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "./workspace/fs-utils.js"
+        },
+        {
+          "path": "packages/host/src/scm/index.ts",
+          "kind": "import-statement",
+          "original": "./scm/index.js"
         },
         {
           "path": "packages/host/src/workspace-access.ts",
@@ -45431,7 +45499,7 @@
           "bytesInOutput": 1949
         },
         "packages/capabilities/src/BrowserTool/ports.ts": {
-          "bytesInOutput": 227
+          "bytesInOutput": 240
         },
         "packages/capabilities/src/BrowserTool/stealth.ts": {
           "bytesInOutput": 7748
@@ -45443,7 +45511,7 @@
           "bytesInOutput": 6016
         },
         "packages/capabilities/src/BrowserTool/CDPClient.ts": {
-          "bytesInOutput": 21606
+          "bytesInOutput": 21619
         },
         "packages/capabilities/src/BrowserTool/SnapshotEngine.ts": {
           "bytesInOutput": 42365
@@ -45926,7 +45994,7 @@
           "bytesInOutput": 3922
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "../../../node_modules/ajv/dist/compile/codegen/code.js": {
           "bytesInOutput": 2614
@@ -46430,7 +46498,7 @@
           "bytesInOutput": 225
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -47573,7 +47641,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47582,10 +47650,10 @@
           "bytesInOutput": 2872
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9009
+          "bytesInOutput": 8992
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -47894,7 +47962,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -49015,6 +49083,15 @@
         "packages/host/src/tool-approval-api.ts": {
           "bytesInOutput": 5
         },
+        "packages/host/src/scm/gh-cli.ts": {
+          "bytesInOutput": 20
+        },
+        "packages/host/src/scm/index.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/host/src/scm/observe.ts": {
+          "bytesInOutput": 180
+        },
         "packages/host/src/run-execution.ts": {
           "bytesInOutput": 10
         },
@@ -49688,7 +49765,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5542703
+      "bytes": 5542905
     }
   }
 }
