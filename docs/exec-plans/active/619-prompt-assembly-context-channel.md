@@ -133,6 +133,23 @@ CLAUDE.md 同款位置；改动频率极低）。
 落地 (b) 的「只加告警」部分与 (c)(d)(e)(f)(g)(h)；(a) 留到 Phase 2（与分区一起，否则
 「缓存生效」与「字节恒定」互相打架）。
 
+**实施记录（2026-10-22 · 分支 `codex/619-phase1-prompt-defects` · base `8ebda627`）**
+
+本次落地 7 项，(g) 拆出单独排期（见下），(a) 仍留 Phase 2：
+
+| 缺陷 | 落地形态 | 行为变化 |
+| --- | --- | --- |
+| (c) | `isSectionEnabled` 改成 **disable 优先**（`modes/index.ts`） | 仅「两个列表都给」的 profile 变；顺带与 `resolveEnabledSections`（本来就是 enable 减 disable）对齐 |
+| (d) | `SUBAGENT_TYPE_PROFILE_MAP` / `DEFAULT_SUBAGENT_PROFILE` 的段名改成真实存在的 `memory` / `vision`，删掉 `memoryContent` / `widgetGuidelines` / `visionGuidelines`；加防漂移测试（遍历 4 个 config 的段名集合断言） | 是——子代理**真的**少了 memory 与 vision 段（此前是空操作） |
+| (e) | 删掉 code / research config 里的 `projectInstructions` 段与 4 处失效的 `invalidateCacheKeys`（`'project'` / `'projectInstructions'` 都不是活的缓存键；AGENTS.md 正文根本不经 PromptCache）；每份指令文件的 glob 适用性改挂到正文标题上 | 是——code / research profile 的 system 少了一段索引 |
+| (f) | 新增 `shouldInjectMcpCatalog(exposure)`，host 与 legacy agent 两个调用点都改调它 | 是——默认 `hint` 下 legacy 路径不再注入 MCP 目录（此前与 host 路径不一致） |
+| (h) | 抽出 `composeModePrompt(base, prefixes, suffixes, ctx)`，`applyModes` 与 `refreshTurnSystemPrompt` 都改调它；字符串前缀统一用空行连接，函数前缀仍自己控制 | 是——多两个换行，一次性缓存重建；**修好了 turn 0 与 turn N 的 system 字节必然不同**这条 |
+| (b) | 结构化 system 块被丢弃时计数并 `logger.warn`（不改行为） | 无（仅可观测） |
+
+**(g) 单独排期**：`BOT_BASIC_SYSTEM_PROMPT` 在 host 路径被丢弃（`bot/framework.ts` 显式
+`includeBasic:false`）。恢复它会直接改 bot 的模型人格（system prompt 变长数 KB），需要
+独立的对比与灰度，不混在这次 bug 修复里。
+
 ### Phase 2 — PromptSystem 分区 + 缓存修复
 
 - `PromptSystem.ts:119-191` `SectionDef` 新增 `placement?: 'system' | 'context'`（默认
@@ -338,3 +355,18 @@ CLAUDE.md 同款位置；改动频率极低）。
 会话记录格式的完整对照见 [620](./620-session-record-architecture.md)。本计划只拥有
 system prompt 与注入块这一片；620 拥有分类学单源、运行时上下文落盘、工具结果结构面与
 语料自包含。**Phase 4 必须等 620 Phase A**。
+
+### 9.5 Phase 1 验证（2026-10-22 · 分支 `codex/619-phase1-prompt-defects`）
+
+- **基线**：master 演进后，host 测试套件是 162 文件 / 1563 用例**全绿**；`packages/agent`
+  只剩 1 个测试文件（agent 包退役中，`packages/agent/tests/unit/prompts/` 已随实现迁移
+  删除）。Phase 1 的判定规则是「host 套件保持全绿 + 新增测试全绿」。
+- **新增测试**：`packages/host/tests/worker-prompts/` 下 4 个文件（段门控、AGENTS.md 索引、
+  MCP 目录门控、mode 前缀拼接），与 master 上已有的 `prompt-digest.test.ts` 合计 21/21。
+- **门禁**：`npm run -w @duya/host typecheck` 与 `npm run -w @duya/agent typecheck` 均 exit 0；
+  `npm run architecture:check` 无新增违规（棘轮基线 2806 条不变，且有 1 条指纹已不再触发）。
+- **行为变化的两处字节级断言**已同步更新：`worker-modes/modifiers/registry.test.ts`
+  （mode 前缀分隔符）与 `worker-product-runtime/turn-assembly-seam.test.ts`（该测试断言
+  「mode 拼接只有一处实现」——现在实现搬到了 `composeModePrompt`，文件里只留调用）。
+- **bundle**：`npm run bundle:worker` 重建后按仓库惯例单独成 `build(worker):` commit。
+
