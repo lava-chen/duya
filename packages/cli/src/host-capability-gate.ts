@@ -7,7 +7,7 @@
  *
  * `HostDeclaration.capabilities` is what this client can CONSUME from a runtime
  * (`PROTOCOL_CAPABILITIES`, six names). `HostHandshakeV1.provides` is what the
- * Host can SERVE (`HOST_CAPABILITIES`, twenty-two names). Neither is inferable
+ * Host can SERVE (`HOST_CAPABILITIES`, twenty-three names). Neither is inferable
  * from the other, and `agent-protocol/src/version.ts:116` exists because
  * collapsing them produces a handshake in which the runtime concludes the host
  * can execute something merely because the host offered to serve it. So this
