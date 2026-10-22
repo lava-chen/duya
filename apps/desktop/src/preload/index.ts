@@ -2964,8 +2964,11 @@ const electronAPI: ElectronAPI = {
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       ipcRenderer.invoke('plugin-app:call', payload),
     close: (payload: { sessionId: string }) => ipcRenderer.invoke('plugin-app:close', payload),
-    onChanged: (callback: (payload: { pluginId: string }) => void) =>
-      registerHandler('plugin-app:changed', (data) => callback(data as { pluginId: string })),
+    onChanged: (callback: (payload: { pluginId: string }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { pluginId: string }) => callback(data);
+      ipcRenderer.on('plugin-app:changed', listener);
+      return () => ipcRenderer.removeListener('plugin-app:changed', listener);
+    },
   },
   // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
   // in the main process.
