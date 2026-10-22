@@ -92,6 +92,9 @@ Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的�
 | 同上 | 同上 | `npm run -w @duya/desktop typecheck:main` | 2；仅既有 baseline 错误 | 本次两个文件零错误；`router.ts` 报错仍在 1940/3618 |
 | 4653c2d4 + 步骤 5 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run packages/cli/src/__tests__` | 0；7 文件 44 用例通过 | 新增 `remote-session-watch` 9 例；既有 35 例未变 |
 | 同上 | 同上 | `npm run -w @duya/cli typecheck` | 0 | 新文件与 `chat.ts` 零错误 |
+| 0c7915f5（干净） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | — |
+| 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 同一条未触发基线，未重录 |
+| 同上 | 同上 | `npm run electron:build` | 0；Vite 1m53s，native 模块复制完成 | 仅 `esbuild` external 警告，属既有 |
 
 ## 接续 / 结果
 
@@ -123,10 +126,24 @@ Desktop 的 Host 委托到同一个 chat 入口，所以 TUI 与桌面端争的�
 1s 轮询，`/resume`、`/new`、`/switch` 重置基线，`close()` 停止轮询并 abort 跟随。远端 run 的
 durable 块交给 `TUIApp.push`，settle 时用 `replaceTranscript` 读一次 durable 投影；权限请求只
 提示不接管。新增 9 例单测；CLI 全套 44 例通过，`typecheck` 退出 0。
-未跑 `npm run typecheck:all`、`npm run architecture:check`、`npm run electron:build`（留到步骤 6 与 PR 前统一跑）。
+全套门禁与 Electron 重建已在本步之后跑过，见验证记录。
 
 ## 接续与下一步
 
-步骤 6 只剩验收与门禁：先跑 `npm run typecheck:all`、`npm run architecture:check`、相关 vitest，
-再 `npm run electron:build`，最后人工双端跑一遍验收 1–6（Desktop `npm run electron:dev` 期间执行
-`npm run dev:tui`；双向各发一轮；关掉 Desktop 后单跑 TUI 回退自起）。PR 未创建，worktree 保留。
+PR [#360](https://github.com/lava-chen/duya/pull/360) 已创建，保持 draft。分支
+`codex/single-host-multiclient` 已推送，head `0c7915f5`，base `master`（`4653c2d4`），
+与最新 master 试合并无冲突。
+
+已通过的门禁：`npm run typecheck:all`、`npm run architecture:check`、`npm run electron:build`，
+以及步骤 1–5 各自的单测。
+
+剩下的是人工双端验收（验收 1–6），完成后在 PR 勾掉 test plan、转 ready 并请人 review：
+
+1. Desktop `npm run electron:dev` 期间执行 `npm run dev:tui`，确认无 owner 锁错误、启动行带 Desktop origin、能看到 Desktop 已有 session。
+2. TUI 发一轮，Desktop 刷新后内容一致。
+3. Desktop 发一轮，TUI 在 2 秒内出现新内容。
+4. 同一 session 两端同时发，第二次被拒绝且点名另一客户端。
+5. 关掉 Desktop 后单跑 TUI，回退自起 ephemeral Host。
+6. descriptor PID 已死时不 attach。
+
+合并需用户授权；回收与 worktree 清理留到集成之后。
