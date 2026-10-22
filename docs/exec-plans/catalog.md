@@ -7,6 +7,7 @@
 
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
+| [2026-10-22-panel-column-layout](active/2026-10-22-panel-column-layout.md) | — | 侧面板从单列 tab 改为多列 + 列内堆叠 + 可脱窗；切片 A/B 并行，C/D 第二波 |
 | [2026-10-21-public-tree-cleanup](active/2026-10-21-public-tree-cleanup.md) | — | 清理公开根目录，迁移文档入口和打包配置，核对链接与产物 |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |
