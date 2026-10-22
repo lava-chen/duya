@@ -40,7 +40,7 @@ export interface MCPCandidate {
     name: string;
     /** Durable identity for settings-owned servers; never contains credentials. */
     connectionId?: string;
-    transport?: 'stdio' | 'streamable-http' | 'in-process';
+    transport?: 'stdio' | 'streamable-http';
     command?: string;
     args?: string[];
     env?: Record<string, string>;
@@ -64,8 +64,6 @@ export interface MCPCandidate {
     toolTimeouts?: Record<string, number>;
     envPassthrough?: 'allowlist' | 'inherit';
     useShell?: boolean;
-    /** A Host-owned capability requested by the declaring plugin. */
-    hostCapability?: string;
   };
 }
 
@@ -97,7 +95,7 @@ export interface MCPServerInventoryEntry {
   scopedServerName: string;       // internal identifier (plugin:<id>:<name> for plugins, plain for others)
   rawConfig: {
     connectionId?: string;
-    transport?: 'stdio' | 'streamable-http' | 'in-process';
+    transport?: 'stdio' | 'streamable-http';
     command?: string;
     args?: string[];
     env?: Record<string, string>;
@@ -110,8 +108,6 @@ export interface MCPServerInventoryEntry {
     toolTimeouts?: Record<string, number>;
     envPassthrough?: 'allowlist' | 'inherit';
     useShell?: boolean;
-    /** A Host-owned capability requested by the declaring plugin. */
-    hostCapability?: string;
   };
   discoveryStatus: MCPDiscoveryStatus;
   allowedAgentIds?: string[];
@@ -136,7 +132,7 @@ export interface ResolvedMCPServerConfig {
   scopedServerName: string;
   rawConfig: {
     connectionId?: string;
-    transport?: 'stdio' | 'streamable-http' | 'in-process';
+    transport?: 'stdio' | 'streamable-http';
     command?: string;
     args: string[];
     env: Record<string, string>;
@@ -148,8 +144,6 @@ export interface ResolvedMCPServerConfig {
     toolTimeouts?: Record<string, number>;
     envPassthrough?: 'allowlist' | 'inherit';
     useShell?: boolean;
-    /** A Host-owned capability requested by the declaring plugin. */
-    hostCapability?: string;
   };
   allowedAgentIds?: string[];
 }

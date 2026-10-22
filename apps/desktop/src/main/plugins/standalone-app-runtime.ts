@@ -139,7 +139,7 @@ export async function bindStandaloneApp(sessionId: string, pluginId: string, app
   const candidates = buildCandidatesFromPluginEntry({
     id: pluginId, name: app.name, enabled: true, installPath: app.installPath, dataPath: app.dataPath,
     manifest: { capabilities: manifest.capabilities },
-  }).filter((item) => item.rawConfig.hostCapability === undefined);
+  });
   const setup = await getDesktopHostLocalPluginSetupApi().listPluginSetupValues();
   const environment = Object.fromEntries(Object.entries(process.env).filter((pair): pair is [string, string] => typeof pair[1] === 'string'));
   const resolved = await resolveMCPDiscovery(candidates, { environment, userConfigByPlugin: setup });

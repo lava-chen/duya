@@ -49,7 +49,6 @@ export interface MCPCollectorPluginEntry {
   dataPath?: string;
   manifest?: {
     capabilities?: {
-      hostCapabilities?: string[];
       mcpServers?: Array<{
         name: string;
         transport?: 'stdio' | 'streamable-http' | 'sse';
@@ -114,19 +113,6 @@ export function buildCandidatesFromPluginEntry(
         toolTimeouts: server.toolTimeouts,
         envPassthrough: server.envPassthrough,
         useShell: server.useShell,
-      },
-    });
-  }
-  for (const hostCapability of entry.manifest?.capabilities?.hostCapabilities ?? []) {
-    out.push({
-      source: 'plugin',
-      pluginId: entry.id,
-      pluginName: entry.name,
-      pluginRoot: entry.installPath,
-      pluginDataPath: entry.dataPath,
-      rawConfig: {
-        name: 'computer-use',
-        hostCapability,
       },
     });
   }
