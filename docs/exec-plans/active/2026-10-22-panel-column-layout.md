@@ -78,7 +78,7 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 - [x] 调研 Claude Desktop 布局模型（AX 树 + 截图），确定列树结构与归位规则
 - [x] 写本计划
-- [ ] A：列树渲染 + 归位规则（子 agent）
+- [x] A：列树渲染 + 归位规则（子 agent）· 分支 `codex/panel-layout-columns` · SHA `21b764e9`
 - [ ] B：脱窗 Electron 侧（子 agent）
 - [ ] C：拖拽换位（第二波）
 - [ ] D：用量浮层对齐（第二波）
@@ -100,21 +100,53 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
 
+### 切片 A 的取舍（子 agent 记录）
+
+- **落点规则按「族」细分，否则验收里的「两个不同类型并排成两列」做不到**：计划原文写的是「新 pane 加到当前活动 pane 所在列」，但那样「文件 + 终端」会叠进同一列。实现取**同族（同一 pageId）才进活动列，否则新开一列**：同族 pane 在列内像 tab 一样互斥（浏览器 webview 因此仍保持"只显示一个"），异族 pane 各自成列 → 并排。族由 pageId 决定，**没有改 `registry.ts`**（不在本切片路径内），族判定放在 `layout-model.ts` 的 `resolveTargetColumn`，把「新 pane 的族」作为入参而不是从活动 pane 推断。
+- **pane 的 id 就是 tab 的 id**：`tabs` 继续是面板元数据（标题/params）的唯一真源，`layout` 只回答「pane 在哪」。避免两套 id 互相翻译，`PanelHeader`（切片 C 拥有）不用改就能继续用全局 tab 条。
+- **列宽用「区域宽 + 每列比例」两层**：区域宽（`panelWidth`）= 各列宽之和；`Column.widthRatio` = 该列在区域里的份额，列宽 = 区域宽 × 比例。关面板只重排**本列**、不动任何比例 → **列宽天然不变**；整列删掉时区域宽减去该列像素宽、其余列比例不变 → 存活列宽也不变、空出来的位置还给聊天列。
+- **持久化不换 key**：`duya:panel:v2:<sessionKey>` 保持不变，只**新增可选字段 `layout`**。旧 payload 没有该字段时按「同族同列、异族各占一列」在内存里迁移；`sanitizeLayout` 会丢掉指向已消失 tab 的 pane、把 layout 里没有的 tab 补进列里，旧 localStorage 不会把 provider 搞崩。
+- **分隔条沿用 `ResizeHandle` 的无障碍骨架并加纵向变体**：`side` 扩成 `left|right|top|bottom`，`top/bottom` 是横向分隔条（`aria-orientation="horizontal"`、上下键、row-resize 光标），**原有横向行为与调用方未变**（`left/right` 的 delta 符号、键盘映射原样保留）。
+- **分隔条命名按实测格式 `调整 <左/上所有 pane> 和 <右/下所有 pane> 的大小`**（逗号分隔、从左到右）。这条格式是**中文硬编码**：本切片路径不含 `packages/ui/src/i18n/**`，无法加 i18n key，故英文界面下也是中文可访问名——留给拥有 i18n 与 `PanelHeader` 的后续切片本地化。
+- **`workspaceExpanded` / `panelOpen` 仍是区域级开关**：展开态是整个区域铺满工作区，列树在其中横向排布；列树不引入第二个开关。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | 96dadf4d / 仅 3 个未跟踪文件 | Windows 11 / Node 主检出 | `git worktree add .claude/worktrees/panel-layout-plan -b codex/panel-layout-plan origin/master` | 0 | worktree 列表含 5 项 |
 | 96dadf4d | 同上 | Claude Desktop 布局归位实测三轮 | 行为已记录 | 见「发现与决策」 |
+| 275dab09 / clean（切片 A 基线） | Windows 11 / Node 24.16 / worktree `panel-layout-columns` | `npx vitest run packages/ui/src/components/layout` | 1 | 5 个 suite 因 `@duya/ai` 的 dist 未构建而无法解析（`Failed to resolve entry for package "@duya/ai"`）——**worktree 环境缺产物**，非用例失败 |
+| 275dab09 / clean（切片 A 基线） | 同上 | `npm run test:e2e:ui-states` | 1 | 4 个用例：3 过 1 失败。失败文件 `e2e/ui-states/ui-states.spec.ts:376`，用例「the theme switch repaints the shell in both themes and persists both」，错误签名 `could not get an unobstructed click on the theme toggle … a modal overlay (div.fixed.inset-0.z-50) still covers the shell after 15000ms; on-screen text: DUYA` |
+| 21b764e9 / clean | 同上 | `npm run build:packages` | 0 | 22 个包构建完成，补上 worktree 缺失的 dist（上面 5 个 suite 因此转绿） |
+| 21b764e9 / clean | 同上 | `npx vitest run packages/ui/src/components/layout` | 0 | 19 个 suite / 146 个用例全过，含新增 `layout-model` 26 例 |
+| 21b764e9 / clean | 同上 | `npx vitest run packages/ui` | 0 | 210 个 suite 全过（无回归） |
+| 21b764e9 / clean | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；`.architecture-baseline.json` 未改动 |
+| 21b764e9 / clean | 同上 | `npm run typecheck:all` | 0 | 含 electron gate `OK — no new type errors` |
+| 21b764e9 / clean | 同上 | `npm run test:e2e:ui-states` | 1 | 与基线**同文件 / 同用例 / 同错误签名**的既有失败，未新增失败 |
+| 21b764e9 / clean | 同上 | `npm run electron:build` + `node docs-local/research/panel-column-layout/column-evidence.mjs` | 0 | 真实 Electron 里截图与数值见下 |
+
+### 切片 A 的可见行为证据（真实 Electron，1600×900）
+
+`docs-local/research/panel-column-layout/`（未入库）：`03-two-columns.png`、`04-after-close.png`、`05-stacked.png`、`06-stacked-after-close.png`、`layout-report.json`。
+
+| 场景 | 观测 |
+| --- | --- |
+| 同时打开「文件」+「终端」 | `columnCount=2`，区域宽 640px，两列各 320px（left 961 / 1288）→ **并排**；分隔条 `aria-label="调整 文件 和 终端 的大小"` |
+| 关掉「终端」 | `columnCount=1`，区域宽 320px，存活列仍 **320px**（列宽不变），空位还给聊天列 |
+| 同族两个 pane（alpha.md / beta.md） | 落进**同一列**（列内 tab 互斥，未激活者 height 0 且 hidden），列间分隔条 `调整 文件 和 alpha.md，beta.md 的大小`，列内分隔条 `调整 alpha.md 和 beta.md 的大小` |
+| 关掉其中一个 | 同列剩余 pane 高度从 406px 变 **816px**（占满该列），列宽仍 480px |
 
 ## 接续 / 结果
 
-已实现：无（本次为首个切片落地）。已验证：调研结论与计划本身。已合并：无。
+已实现：切片 A —— 侧面板改为「多列 + 列内堆叠」：`panels/layout-model.ts`（列树模型与归位规则）、`usePanel.ts`（列树状态、持久化、宽度记账）、`PanelZone.tsx`（列/栈渲染与分隔条）、`ResizeHandle.tsx`（横向分隔条变体）、`workspace.css`（列树样式）、模型与渲染单测。
 
-外部副作用：调研期间在 Claude Desktop 主窗开关过「终端」「文件」面板，已恢复为介入前的「更改 + 后台任务」同列（列宽 35% 与介入前一致）。
+已验证：上表全部命令（退出码见表）；真实 Electron 里两列并排 / 关一个后同列占满且列宽不变，均有截图与数值。
 
-阻塞：Wave 2（C/D）依赖 A 落地。
+已合并：无（PR 未合并，等授权）。
 
-回收：未回收（owner 会话在线，分支与 worktree 保留）。
+外部副作用：在本 worktree 的 `e2e/.e2e-userdata/panel-column-layout/` 留下一个隔离命名空间的测试会话；`docs-local/research/panel-column-layout/` 留有截图与证据脚本（均不入库）。构建产物（`packages/*/dist`、`dist/`、`dist-electron/`）只写在本 worktree。
 
-下一步：A、B 两个子 agent 在各自 worktree 并行开工；A 完成后开 C、D。
+阻塞：无。C（拖拽换位）可在本切片合入后开工，写回点仍是 `layout-model.ts` / `usePanel.ts`；`PanelHeader.tsx` / `PaneDragHandle` 未被本切片改动。
+
+回收：未回收（分支与 worktree 保留给评审与后续切片）。
