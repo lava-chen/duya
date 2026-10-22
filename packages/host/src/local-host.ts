@@ -89,6 +89,7 @@ import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
 import { createHostResearchApi } from './research-api.js';
+import { createHostIntegrationApi } from './integration-api.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
 import { HostRunExecutionController } from './run-execution.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
@@ -614,6 +615,19 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
       lockApi,
       workspaceApi,
+      // Plan 621 slice B: the observed PR/CI/review projection reads the same
+      // core handle as every other store. No `observePr` yet — slice C owns the
+      // `gh` read, so an explicit refresh answers `unknown` /
+      // `observer_unavailable` rather than inventing `open`.
+      integrationApi: createHostIntegrationApi({ store: core.stores.integrations }),
+      // TODO(621-B): add `checkoutApi: createHostCheckoutApi({ port, resolveSessionCheckoutRoot })`
+      // to this same object literal once slice A's `CheckoutProvider`
+      // (`packages/host/src/workspace/`) and slice D's resolver are merged.
+      // Nothing in this tree implements `CheckoutObservationPort` yet, and
+      // building a second one here would be the duplicate implementation the
+      // plan forbids. Until then `/v1/checkouts` answers 404
+      // `checkout_api_unavailable`, which is a different answer from
+      // "this session has no checkout".
       host: HOST,
       port: options.port ?? DEFAULT_PORT,
       token,
