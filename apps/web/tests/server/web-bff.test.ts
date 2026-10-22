@@ -503,6 +503,107 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(started).toHaveLength(1);
   }, 30_000);
 
+  it('carries the turn configuration the shared renderer names', async () => {
+    // The permission mode, the agent profile and the declared modes are the
+    // user's decisions about HOW the turn runs. A browser that could not name
+    // them would run every turn under the Host's defaults, with nothing on
+    // screen saying so — which is the same as the browser deciding for them.
+    const started: StartAgentRunInput[] = [];
+    const runId = 'run-web-bff-config' as RunId;
+    const host = new HostSessionHttpServer({
+      api: {} as HostSessionHttpServerOptions['api'],
+      taskApi: {} as HostSessionHttpServerOptions['taskApi'],
+      token: HOST_TOKEN,
+      runExecutionApi: {
+        async startAgentRun(input) {
+          started.push(input);
+          return { accepted: true, stage: 'dispatched', runId };
+        },
+      },
+    });
+    const bff = await startBffForHostServer(host);
+    const bootstrap = await readBootstrap(bff);
+
+    const startResponse = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({
+        sessionId: 'session-1',
+        prompt: 'hello',
+        permissionMode: 'bypassPermissions',
+        agentProfileId: 'reviewer',
+        modes: ['plan'],
+        tools: ['read_file'],
+      }),
+    });
+    const unknownMode = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ sessionId: 'session-1', prompt: 'hello', permissionMode: 'auto' }),
+    });
+    const emptyModeName = await fetch(`${bff.origin}/api/runs/start`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ sessionId: 'session-1', prompt: 'hello', modes: ['  '] }),
+    });
+
+    expect(startResponse.status).toBe(202);
+    expect(started).toEqual([{
+      sessionId: 'session-1',
+      prompt: 'hello',
+      origin: 'user',
+      permissionMode: 'bypassPermissions',
+      agentProfileId: 'reviewer',
+      modes: ['plan'],
+      tools: ['read_file'],
+    }]);
+    // `auto` is the AGENT's vocabulary, not the protocol's. A request naming it
+    // is a request the Host cannot honour, so it is refused rather than run
+    // under something the user did not ask for.
+    expect(unknownMode.status).toBe(400);
+    expect(emptyModeName.status).toBe(400);
+    expect(started).toHaveLength(1);
+  }, 30_000);
+
+  it('registers a local directory as a workspace the browser can then use', async () => {
+    // The browser names a DIRECTORY; the Host resolves it and returns a
+    // workspace BINDING. The browser never gets to name the path the worker
+    // runs in — it asks for a directory to be registered, and the Host decides
+    // what that becomes.
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+    const bootstrap = await readBootstrap(bff);
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-web-workspace-'));
+    roots.push(directory);
+
+    const response = await fetch(`${bff.origin}/api/workspaces/local-directories`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ directory }),
+    });
+    const body = await response.json() as { workspace: { workspaceId: string; rootId: string; state: string } };
+    const relative = await fetch(`${bff.origin}/api/workspaces/local-directories`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ directory: 'relative/path' }),
+    });
+    const foreignKey = await fetch(`${bff.origin}/api/workspaces/local-directories`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ directory, workspaceId: 'browser-chosen' }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(body.workspace.state).toBe('bound');
+    expect(body.workspace.workspaceId).not.toBe('');
+    expect(body.workspace.rootId).not.toBe('');
+    // A relative path would resolve against the BFF's own working directory,
+    // which is not a workspace anybody asked for.
+    expect(relative.status).toBe(400);
+    // The browser cannot choose the identity of the binding it gets.
+    expect(foreignKey.status).toBe(400);
+  }, 30_000);
+
   it('replays SSE after the supplied cursor and preserves the Host event envelopes', async () => {
     const host = await startTestHost();
     const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);

@@ -10,10 +10,12 @@ import type { AddressInfo } from 'node:net';
 import * as path from 'node:path';
 import {
   CURRENT_HOST_DECLARATION,
+  isPermissionPolicyMode,
   type HostPermissionRequestResolveInput,
   type HostSessionCreateInput,
   type HostSessionListQuery,
   type HostSessionPatch,
+  type PermissionPolicyMode,
   type RunEventEnvelope,
   type SessionId,
 } from '@duya/agent-protocol';
@@ -265,7 +267,27 @@ async function routeRequest(context: RequestContext): Promise<void> {
         // hands the options bag to the worker unchanged, which is the same
         // channel the Desktop renderer uses.
         ...(body.effort === undefined ? {} : { options: { effort: body.effort } }),
+        // The permission mode the user picked travels as a TYPED field, not in
+        // the options bag: the Host adjudicates that decision, and a bag that
+        // carried it would let a caller name a mode the Host never resolved.
+        ...(body.permissionMode === undefined ? {} : { permissionMode: body.permissionMode }),
+        // A per-turn agent profile wins over the session's own.
+        ...(body.agentProfileId === undefined ? {} : { agentProfileId: body.agentProfileId }),
+        // The modes and tools the turn declares.
+        ...(body.modes === undefined ? {} : { modes: body.modes }),
+        ...(body.tools === undefined ? {} : { tools: body.tools }),
       }));
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/workspaces/local-directories') {
+      const body = await readJsonBody(request);
+      if (!isRegisterDirectoryInput(body)) {
+        sendJson(response, 400, { error: { code: 'invalid_workspace_path' } });
+        return;
+      }
+      const workspace = await context.client.registerLocalDirectory(body.directory);
+      sendJson(response, 201, { workspace });
       return;
     }
 
@@ -547,6 +569,12 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
  *
  * A local path is NOT among them: the worker runs inside a workspace the Host
  * registered, and a directory the browser names would move that boundary.
+ *
+ * The turn's CONFIGURATION is: the permission mode the user picked, the agent
+ * profile, the modes and tools the turn declares. Those are the same fields the
+ * Desktop renderer sends, and the Host adjudicates them the same way — a
+ * browser that could not name them would be a browser whose turns silently
+ * ran under different rules than the user's.
  */
 function isStartRunInput(value: Record<string, unknown> | null): value is Record<string, unknown> & {
   readonly sessionId: string;
@@ -554,13 +582,56 @@ function isStartRunInput(value: Record<string, unknown> | null): value is Record
   readonly model?: string;
   readonly providerId?: string;
   readonly effort?: string;
+  readonly permissionMode?: PermissionPolicyMode;
+  readonly agentProfileId?: string | null;
+  readonly modes?: readonly string[];
+  readonly tools?: readonly string[];
 } {
-  return value !== null && hasOnlyKeys(value, ['sessionId', 'prompt', 'model', 'providerId', 'effort']) &&
+  return value !== null && hasOnlyKeys(value, [
+    'sessionId', 'prompt', 'model', 'providerId', 'effort',
+    'permissionMode', 'agentProfileId', 'modes', 'tools',
+  ]) &&
     isBoundedString(value.sessionId, 1, 256) && isBoundedString(value.prompt, 1, 64 * 1024) &&
     (value.model === undefined || isBoundedString(value.model, 1, 300)) &&
     (value.providerId === undefined || isBoundedString(value.providerId, 1, 300)) &&
     (value.effort === undefined ||
-      (typeof value.effort === 'string' && VALID_RUN_EFFORTS.includes(value.effort as (typeof VALID_RUN_EFFORTS)[number])));
+      (typeof value.effort === 'string' && VALID_RUN_EFFORTS.includes(value.effort as (typeof VALID_RUN_EFFORTS)[number]))) &&
+    (value.permissionMode === undefined || isPermissionPolicyMode(value.permissionMode)) &&
+    (value.agentProfileId === undefined || value.agentProfileId === null ||
+      isBoundedString(value.agentProfileId, 1, 256)) &&
+    (value.modes === undefined || isNameList(value.modes)) &&
+    (value.tools === undefined || isNameList(value.tools));
+}
+
+/**
+ * A list of names the turn declares.
+ *
+ * An empty name is refused rather than dropped: a list with a hole in it reads
+ * as a shorter list, and the difference is invisible in the record.
+ */
+function isNameList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) &&
+    value.length <= 64 &&
+    value.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 300);
+}
+
+/**
+ * The directory the browser asks the Host to register as a workspace.
+ *
+ * A local path IS among them, and that is the point: the Host resolves the
+ * path against the machine it runs on and returns a workspace BINDING, which
+ * is what a session needs. The browser never gets to name a path the worker
+ * runs in directly — it names a directory to be registered, and the Host
+ * decides what that becomes.
+ */
+function isRegisterDirectoryInput(value: Record<string, unknown> | null): value is Record<string, unknown> & {
+  readonly directory: string;
+} {
+  return value !== null && hasOnlyKeys(value, ['directory']) &&
+    isBoundedString(value.directory, 1, 4_096) &&
+    // A relative path would resolve against the BFF's own working directory,
+    // which is not a workspace anybody asked for.
+    path.isAbsolute(value.directory);
 }
 
 function isCancelRunInput(value: Record<string, unknown> | null): value is Record<string, unknown> & { readonly reason?: string } {

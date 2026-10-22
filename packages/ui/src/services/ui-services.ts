@@ -11,6 +11,7 @@ import type {
   HostSessionPatch,
   HostSessionRecord,
   HostSessionUpdateResult,
+  HostWorkspaceBinding,
   RunId,
   SessionId,
   StartAgentRunInput,
@@ -47,6 +48,17 @@ export interface UiPlatformCapabilities {
   readonly bots: boolean;
   readonly automation: boolean;
   readonly workflows: boolean;
+  /**
+   * Can this surface hand the user's TURN CONFIGURATION to the Host — the
+   * permission mode, the agent profile, the declared modes and tools?
+   *
+   * This is a capability, not a platform identity: the question a surface
+   * answers is "can the thing the user picked reach the worker", and a
+   * surface that cannot answer it must not draw a control that silently does
+   * nothing. A surface whose transport carries those fields sets it; one
+   * whose transport cannot does not.
+   */
+  readonly turnConfiguration: boolean;
 }
 
 /**
@@ -56,6 +68,11 @@ export interface UiPlatformCapabilities {
  * The level is NOT a protocol field: the Host carries it as a turn OPTION,
  * which is the same channel the Desktop renderer uses, so both surfaces
  * reach the worker with the same turn configuration.
+ *
+ * The turn's CONFIGURATION is named here too — the permission mode, the agent
+ * profile, the modes and tools — because a surface that cannot name them
+ * would produce turns that run under different rules than the user picked,
+ * without anything saying so.
  */
 export interface UiStartRunInput extends StartAgentRunInput {
   readonly effort?: string;
@@ -91,4 +108,16 @@ export interface UiServices {
       input: HostPermissionRequestResolveInput,
     ): Promise<HostPermissionRequest | null>;
   };
+  /**
+   * Register a local directory as a workspace, when the surface can.
+   *
+   * OPTIONAL. A surface whose Host cannot register a directory — the Desktop,
+   * where the user picks a folder through the OS — leaves it out, and the
+   * renderer then asks the Desktop's own path picker instead.
+   *
+   * The surface names a DIRECTORY and the Host returns the workspace BINDING.
+   * It never names the path the worker runs in: that is the Host's to decide,
+   * and the binding is the only thing a session may carry.
+   */
+  readonly registerWorkspace?: (directory: string) => Promise<HostWorkspaceBinding>;
 }
