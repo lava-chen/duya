@@ -44,6 +44,14 @@ export interface GhPrView {
   checks: PrCheckOutcome[];
 }
 
+/** The minimum `gh pr list` gives us: enough to match a ref to a PR number. */
+export interface GhPrRefMatch {
+  number: number;
+  headRefName: string | null;
+  headRefOid: string | null;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+}
+
 /**
  * Facts about a single PR. This is what slice E writes into the
  * `observed_*` columns; it is never an identity.
@@ -51,6 +59,23 @@ export interface GhPrView {
 export interface ObservedPrFacts {
   repo: string;
   prNumber: number;
+  state: HostIntegrationState;
+  headSha: string | null;
+  baseRef: string | null;
+  url: string | null;
+  observedAt: number;
+  observedError: string | null;
+}
+
+/**
+ * Facts about "the PR for this ref". `ref` is a branch name or a commit sha
+ * (detached checkouts have no branch name — plan 621 D3), `state` is `none`
+ * when no PR matched.
+ */
+export interface ObservedRefFacts {
+  repo: string;
+  ref: string;
+  prNumber: number | null;
   state: HostIntegrationState;
   headSha: string | null;
   baseRef: string | null;
@@ -78,6 +103,27 @@ const PR_VIEW_FIELDS = [
   'reviewDecision',
   'statusCheckRollup',
 ].join(',');
+
+/**
+ * The listing only has to answer "which PR number owns this ref". It is kept
+ * deliberately light: `statusCheckRollup` on a list call makes gh fetch checks
+ * for every PR in the page, which measured 26s for 100 PRs on this repository
+ * and blows the 20s budget, while these four fields take 9s for 500. The heavy
+ * facts are then read per matched PR by `observePr`, which is bounded by the
+ * caller's refs (usually a handful), not by repository size.
+ */
+const PR_LIST_FIELDS = ['number', 'headRefName', 'headRefOid', 'state'].join(',');
+
+/**
+ * `gh pr list` defaults to 30 results, which would silently miss the PR of an
+ * old checkout. One page of 500 covers realistic repositories; a repo with more
+ * PRs than this is a known gap (see the slice report) rather than a reason to
+ * issue N per-ref list calls.
+ */
+const PR_LIST_LIMIT = 500;
+
+/** A full or abbreviated commit sha, which is how a detached checkout is named. */
+const SHA_LIKE_REF = /^[0-9a-f]{7,40}$/i;
 
 let sharedRunner: GhRunner | null = null;
 
@@ -214,6 +260,23 @@ export function parsePrView(value: unknown): GhPrView {
   };
 }
 
+/** Narrow one `gh pr list --json number,headRefName,headRefOid,state` payload. */
+export function parsePrList(value: unknown): GhPrRefMatch[] {
+  if (!Array.isArray(value)) throw invalidPrJson('pr list');
+  const entries: unknown[] = value;
+  return entries.map((entry) => {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      throw invalidPrJson('pr list entry');
+    }
+    return {
+      number: readNumber(entry, 'number'),
+      headRefName: readOptionalString(entry, 'headRefName'),
+      headRefOid: readOptionalString(entry, 'headRefOid'),
+      state: readPrState(entry),
+    };
+  });
+}
+
 function describeObservationFailure(error: unknown): string {
   if (error instanceof GhError) return error.message;
   if (error instanceof Error) return error.message;
@@ -278,4 +341,113 @@ export async function observePr(
       observedError: describeObservationFailure(error),
     };
   }
+}
+
+/**
+ * Pick the PR that belongs to one ref.
+ *
+ * A ref is matched as a branch name when it is not sha-like, otherwise as a
+ * commit sha prefix — a detached checkout (plan 621 D3) has no branch name, so
+ * the sha is the only link back to its PR.
+ *
+ * A branch can carry several PRs over its lifetime (closed, then a new number
+ * after a force-push). Prefer the newest non-closed PR, then the newest one.
+ */
+function selectPrForRef(entries: readonly GhPrRefMatch[], ref: string): GhPrRefMatch | null {
+  const candidates = SHA_LIKE_REF.test(ref)
+    ? entries.filter((entry) => entry.headRefOid?.toLowerCase().startsWith(ref.toLowerCase()) === true)
+    : entries.filter((entry) => entry.headRefName === ref);
+  if (candidates.length === 0) return null;
+
+  const newestFirst = [...candidates].sort((a, b) => b.number - a.number);
+  return newestFirst.find((entry) => entry.state !== 'CLOSED') ?? newestFirst[0] ?? null;
+}
+
+/**
+ * Observe the PRs behind several refs.
+ *
+ * Matching is ONE `gh pr list` call followed by local comparison, so a caller
+ * with 20 checkouts still pays one listing instead of 20. The heavy per-PR
+ * facts (checks, review decision) are then read once per DISTINCT matched PR —
+ * bounded by `refs`, never by repository size — and all facts in one call share
+ * a single `observedAt` so a batch is internally consistent.
+ *
+ * `refs` are trimmed; blank entries are dropped and input order is preserved,
+ * so callers can zip the result back onto their checkouts. A ref with no PR is
+ * reported as `state: 'none'`, not as an error — "no PR yet" is an answer.
+ * A failed listing makes every ref `unknown` with the same `observedError`.
+ */
+export async function observePrsForRefs(
+  repo: string,
+  refs: readonly string[],
+  deps: ScmObserverDeps = {},
+): Promise<ObservedRefFacts[]> {
+  const wanted = refs.map((ref) => ref.trim()).filter((ref) => ref.length > 0);
+  if (wanted.length === 0) return [];
+
+  const now = deps.now ?? Date.now;
+  const observedAt = now();
+  const runner = deps.runner ?? defaultRunner();
+
+  let matches: GhPrRefMatch[];
+  try {
+    matches = await runner.runJson(
+      [
+        'pr',
+        'list',
+        '--repo',
+        repo,
+        // `--state all`: a merged PR is the normal case for a finished
+        // checkout, and closed-without-merge still needs to be reported.
+        '--state',
+        'all',
+        '--limit',
+        String(PR_LIST_LIMIT),
+        '--json',
+        PR_LIST_FIELDS,
+      ],
+      parsePrList,
+    );
+  } catch (error) {
+    const observedError = describeObservationFailure(error);
+    return wanted.map((ref) => ({
+      repo,
+      ref,
+      prNumber: null,
+      state: 'unknown' as const,
+      headSha: null,
+      baseRef: null,
+      url: null,
+      observedAt,
+      observedError,
+    }));
+  }
+
+  const observed = new Map<number, ObservedPrFacts>();
+  const results: ObservedRefFacts[] = [];
+  for (const ref of wanted) {
+    const match = selectPrForRef(matches, ref);
+    if (match === null) {
+      results.push({
+        repo,
+        ref,
+        prNumber: null,
+        state: 'none',
+        headSha: null,
+        baseRef: null,
+        url: null,
+        observedAt,
+        observedError: null,
+      });
+      continue;
+    }
+
+    let facts = observed.get(match.number);
+    if (facts === undefined) {
+      facts = await observePr(repo, match.number, { runner, now: () => observedAt });
+      observed.set(match.number, facts);
+    }
+    results.push({ ...facts, ref });
+  }
+  return results;
 }

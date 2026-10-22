@@ -26,10 +26,18 @@ export type {
   GhRunnerDeps,
 } from './gh-cli.js';
 
-export { deriveIntegrationState, observePr, parsePrView } from './observe.js';
+export {
+  deriveIntegrationState,
+  observePr,
+  observePrsForRefs,
+  parsePrList,
+  parsePrView,
+} from './observe.js';
 export type {
+  GhPrRefMatch,
   GhPrView,
   ObservedPrFacts,
+  ObservedRefFacts,
   PrCheckOutcome,
   PrIntegrationSignal,
   ScmObserverDeps,
