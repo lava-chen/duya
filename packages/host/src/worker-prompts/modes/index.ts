@@ -25,13 +25,18 @@ export {
  * When `enableSections` is non-empty it is a whitelist. This lets a profile
  * opt into a compact, task-appropriate prompt instead of inheriting every
  * dynamic section declared by the system configuration.
- * Without a whitelist, `disableSections` removes named sections.
+ *
+ * `disableSections` wins over `enableSections`. The two lists used to be
+ * mutually exclusive — a non-empty whitelist made the denylist unreachable
+ * — which meant a profile carrying both silently kept the sections it
+ * asked to drop, and left `resolveEnabledSections` (enable minus disable)
+ * disagreeing with this function. Deny-first is what both callers mean.
  */
 export function isSectionEnabled(profile: PromptProfile, sectionName: string): boolean {
   const disable = profile.disableSections
+  if (disable && disable.includes(sectionName)) return false
   const enable = profile.enableSections
   if (enable && enable.length > 0) return enable.includes(sectionName)
-  if (disable && disable.includes(sectionName)) return false
   return true
 }
 
