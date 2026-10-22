@@ -17,9 +17,22 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import type { HostRunExecutionApiV1 } from '@duya/agent-protocol';
+import {
+  CURRENT_VERSION,
+  PROTOCOL_SCHEMA_REVISION,
+  type HostDeclaration,
+  type HostRunExecutionApiV1,
+} from '@duya/agent-protocol';
 import { HostSessionHttpClient } from '../src/http-client.js';
 import { HostSessionHttpServer, type HostSessionHttpServerOptions } from '../src/http-server.js';
+
+/** A client declaration is required by `/healthz`, but its contents are not under test. */
+const DECLARATION: HostDeclaration = {
+  host: { name: 'test-client', version: '0.0.0' },
+  protocol: CURRENT_VERSION,
+  schemaRevision: PROTOCOL_SCHEMA_REVISION,
+  capabilities: [],
+};
 
 let server: HostSessionHttpServer | null = null;
 
@@ -49,7 +62,7 @@ async function handshake(options: Partial<HostSessionHttpServerOptions>) {
   });
   await server.listen();
   const client = new HostSessionHttpClient(`http://127.0.0.1:${server.port}`, 'test-token');
-  return client.handshake();
+  return client.handshake(DECLARATION);
 }
 
 describe('Host health run execution capability', () => {
