@@ -14,6 +14,10 @@
  * bootstrap, so it lives here, behind the entry the gate watches, instead of
  * being welded into the client module.
  *
+ * It only boots one when no Host is running. When the Desktop app (or
+ * `duya serve`) already owns this data directory, the TUI attaches to that
+ * Host instead — the same process cannot own the database twice.
+ *
  * The split is real rather than a hiding place — the gate scans `chat.ts`, and
  * the value import it used to reject (`@duya/host/local-host` → run-execution →
  * run-orchestrator → `@duya/agent-runtime`) is now reachable only from this
@@ -24,11 +28,17 @@
  */
 
 import type { SessionId } from '@duya/agent-protocol';
+import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
-import { startLocalHost } from '@duya/host/local-host';
+import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { chatInteractive, createChatSession, write, DIM, RED, RESET } from './chat.js';
+import {
+  CLI_HOST_DECLARATION,
+  HOST_RUN_EXECUTION_CAPABILITY,
+  describeRefusal,
+} from './host-capability-gate.js';
 import { OwnedSessions } from './owned-sessions.js';
 
 export interface TuiCommandOptions {
@@ -86,16 +96,93 @@ export function attachedHostFromEnv(env: NodeJS.ProcessEnv): AttachedHost | null
   };
 }
 
+/** An attached Host the descriptor named, so the refusal can also report its PID. */
+export interface DiscoveredHost extends AttachedHost {
+  readonly pid: number;
+}
+
 /**
- * Entry for the `duya tui` command. Starts an ephemeral Host and opens the TUI
- * in the same process, unless {@link attachedHostFromEnv} says to attach to a
- * Host that is already running. The started Host is shut down when the TUI
- * exits; an attached one is not this process's to close. Which screen model
- * that TUI uses is `inlineTuiRequested`; this entry point is the same either
- * way. Returns the process exit code.
+ * Attach to the Host that already owns this data directory, if any.
+ *
+ * `~/.duya/runtime/host-api.json` is written by whoever started the Host — the
+ * Desktop app, or `duya serve` — and `readLocalHostRuntime` already rejects a
+ * descriptor whose PID is gone. That is the whole point: the Desktop app holds
+ * `DatabaseOwnerLock` while it runs, so starting an ephemeral Host here would
+ * fail with `DatabaseOwnerLockError` instead of giving the user a second
+ * client. Attaching makes the TUI a client of the Host that already exists.
+ *
+ * Unlike {@link attachedHostFromEnv}, this is not an operator override: it is
+ * the normal path, so no environment variable opts in.
+ */
+export async function attachedHostFromRuntime(dataRoot?: string): Promise<DiscoveredHost | null> {
+  let runtime: Awaited<ReturnType<typeof readLocalHostRuntime>>;
+  try {
+    runtime = await readLocalHostRuntime(dataRoot);
+  } catch (error) {
+    // A half-written or corrupt descriptor is not evidence of a running Host.
+    // Starting one is still correct, and if a PID really does own the
+    // database the owner-lock error names it.
+    write(`${DIM}Ignoring unreadable Duya Host descriptor: ${errorMessage(error)}${RESET}`);
+    return null;
+  }
+  if (runtime === null) return null;
+  return {
+    origin: `http://${runtime.host}:${runtime.port}`,
+    token: runtime.token,
+    close: async () => {},
+    started: false,
+    pid: runtime.pid,
+  };
+}
+
+/**
+ * Why the TUI must not talk to this discovered Host, or `null` when it can.
+ *
+ * Two refusals matter. An unanswered origin means the descriptor is not stale
+ * by PID but the HTTP surface is gone, so booting a Host here only trades this
+ * message for an owner-lock error. A Host without `agent_run_execution` is
+ * worse: attachment would succeed and then the first turn would fail on
+ * `agent_run_execution_unavailable`. Both are answered before a session is
+ * created, not after the user typed a message.
+ */
+export async function discoveredHostRefusal(host: DiscoveredHost): Promise<string | null> {
+  const client = new HostSessionHttpClient(host.origin, host.token);
+  let handshake: HostHandshakeV1;
+  try {
+    handshake = await client.handshake(CLI_HOST_DECLARATION);
+  } catch (error) {
+    return `a Duya Host (pid ${host.pid}) owns this data directory but ${host.origin} is not answering: ${errorMessage(error)}. Stop that process, or set DUYA_DATA_ROOT to run the TUI on its own data directory`;
+  }
+  if (handshake.provides?.includes(HOST_RUN_EXECUTION_CAPABILITY) === true) return null;
+  return `${describeRefusal(handshake, HOST_RUN_EXECUTION_CAPABILITY)}. That Host (pid ${host.pid}) owns the database, so the TUI cannot start its own; quit it, or set DUYA_DATA_ROOT to run the TUI on its own data directory`;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Entry for the `duya tui` command. Opens the TUI against the Host that owns
+ * this data directory, starting an ephemeral Host only when none is running.
+ *
+ * Discovery goes through {@link attachedHostFromRuntime}; the environment
+ * override in {@link attachedHostFromEnv} wins when it is set. A discovered
+ * Host is not this process's to close, and the same is true of an overridden
+ * one; only the ephemeral Host is shut down on exit. Which screen model the TUI
+ * uses is `inlineTuiRequested`; this entry point is the same either way.
+ * Returns the process exit code.
  */
 export async function runTuiCommand(options: TuiCommandOptions): Promise<number> {
-  const host = attachedHostFromEnv(process.env) ?? await startLocalHost({
+  const explicit = attachedHostFromEnv(process.env);
+  const discovered = explicit === null ? await attachedHostFromRuntime() : null;
+  if (discovered !== null) {
+    const refusal = await discoveredHostRefusal(discovered);
+    if (refusal !== null) {
+      write(`${RED}${refusal}${RESET}`);
+      return 1;
+    }
+  }
+  const host = explicit ?? discovered ?? await startLocalHost({
     port: options.port,
     ephemeral: true,
     workerPath: resolveHostWorkerPath(),

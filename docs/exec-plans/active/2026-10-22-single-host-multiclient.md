@@ -24,7 +24,7 @@
 ## 进度
 
 - [x] 1. 在 Host 握手中声明执行能力，Host 服务端按已注册 API 推导，旧 Host 缺声明时按不具备处理。
-- [ ] 2. CLI 新增「发现并附着已有 Host」解析：读 runtime 文件、校验 PID、健康检查、能力检查；`runTuiCommand` 优先 attach，只有无可附着 Host 时才自起。
+- [x] 2. CLI 新增「发现并附着已有 Host」解析：读 runtime 文件、校验 PID、健康检查、能力检查；`runTuiCommand` 优先 attach，只有无可附着 Host 时才自起。
 - [ ] 3. Desktop 的 Host HTTP 面获得执行能力：抽取 router 现有的 turn 启动实现为单一入口，实现 `HostRunExecutionApiV1` 并注入 `HostSessionHttpServer`。
 - [ ] 4. 同会话并发驱动：确认 Desktop chat lock 与 Host 执行控制器的互斥关系，缺口在 Host 侧补 lock 获取，或在计划里明确拒绝语义。
 - [ ] 5. 跨客户端可见性：TUI 查看会话时增量刷新远端 run/消息；ephemeral 事件不可跨进程，按 durable 事件兜底。
@@ -46,6 +46,8 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 
 步骤 1 的实现改了原计划：不新增 `HostHealthV1` 字段，改为复用已有的握手 `provides`（`HostHandshakeV1`）。`/healthz` 已经为每个缺失名字生成 `unsupported` 原因（`packages/host/src/http-server.ts:455-468`），而且客户端有 `handshake()` 读取它（`packages/host/src/http-client.ts:377-381`）。新增名字只需在 `HOST_CAPABILITIES` 加一条、在 `registeredHostCapabilities` 里按 `runExecutionApi` 是否存在推导。旧 Host 不广播该名字，客户端按不具备处理，语义与原计划一致。
 
+步骤 2 的范围：`attachedHostFromRuntime` 读 descriptor 并复用 `readLocalHostRuntime` 的 PID 校验；`discoveredHostRefusal` 用 `handshake(CLI_HOST_DECLARATION)` 判执行能力并给出带 PID 的可操作文本。两处刻意不做的事：显式 `DUYA_TUI_ATTACH=1` 路径不探测能力，因为那是测试与运维覆盖，要求能力会让指向 stub Host 的 PTY 验收无法工作；descriptor 损坏时只警告并回退自起，因为半写入文件不是「有 Host 在跑」的证据，真被占用时 owner 锁错误会带 PID。发现到的 Host 与本进程无关，`close()` 永远 no-op，只有自起的那一个会关闭。
+
 拒绝的方案：删除或放宽 `DatabaseOwnerLock`。它保护的是迁移执行、WAL checkpoint 调度、run/worker 归属与进程内事件主干（`packages/data/src/database-owner-lock.ts:37-114`）；两个所有者会得到两条互不可见的事件总线，且迁移可能并发执行。
 
 执行面采用委托而不是第二套控制器：把 Desktop router 中的 turn 启动逻辑抽成单一入口，供 router 与新的 `HostRunExecutionApiV1` 适配器共用，避免同一 Electron 主进程出现两套 worker manager 竞争同一 session。若抽取成本过高，备选是给 Desktop 的 `HostSessionHttpServer` 传 `workerPath` 让 Host 执行，但必须在计划中记录双 worker 风险，且只允许不同 session 并发。
@@ -58,6 +60,10 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 | 4653c2d4 + 步骤 1 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run` 4 个能力测试文件 | 0；4 文件 36 用例通过 | `host-capabilities` 14、`capability-directions` 13、`health-capabilities` 2、`capability-degradation` 7 |
 | 同上 | 同上 | `npm run build:packages` | 0；构建 22 个包 | worktree 无 dist，先构建才能解析 `@duya/*` |
 | 同上 | 同上 | `npm run -w @duya/agent-protocol typecheck`、`-w @duya/host`、`-w @duya/cli` | 0 / 0 / 0 | — |
+| 4653c2d4 + 步骤 2 工作区改动 | Windows / Node 24.16 / vitest 3.2.4 | `npx vitest run packages/cli/src/__tests__` | 0；6 文件 35 用例通过 | 含新 discovery 7 例，环境未设 `DUYA_DATA_ROOT` |
+| 同上 | 同上 | `npx vitest run packages/host/tests/health-capabilities.test.ts` | 0；2 用例 | handshake 现显式传 `HostDeclaration` |
+| 同上 | 同上 | `npm run -w @duya/host typecheck`、`-w @duya/cli typecheck` | 0 / 0 | — |
+| 同上 | 同上 | `npm run architecture:check` | 0；无新增越界 | 有 1 条 baseline 指纹不再触发，未重录 |
 
 ## 接续 / 结果
 
@@ -65,6 +71,12 @@ Desktop 的 Host 目前是纯账本：组合时只注入了 `runApi`，没有 `r
 `registeredHostCapabilities` 只在 `runExecutionApi` 存在时广播；协议与 CLI 的钉死计数同步到 23，
 方向表补齐一行，新增 `packages/host/tests/health-capabilities.test.ts` 覆盖「有执行 API 才广播」与
 「纯账本 Host 缺席并给出原因」。
-未跑 `npm run typecheck:all` 与 `npm run architecture:check`（全量门禁留到 PR 前统一跑）。
+
+步骤 2 已完成并提交：`duya tui` 现在先 `attachedHostFromRuntime()`，descriptor 不存在、PID 已死或
+文件损坏才自起 ephemeral Host；发现到 Host 后先握手，`agent_run_execution` 缺席或 HTTP 不可达时
+打印带 PID 与 `DUYA_DATA_ROOT` 建议的错误并以 1 退出。显式 `DUYA_TUI_ATTACH=1` 语义不变。
+测试覆盖 discovery 的四个分支与拒绝文本，CLI 单测 35 例全绿。
+未跑 `npm run typecheck:all`（全量门禁留到 PR 前统一跑）。
 回收：不适用，PR 未创建。
-下一步：步骤 2，在 `packages/cli` 加自动发现与 attach；完成判据是 TUI 单元测试与手工双端启动。
+下一步：步骤 3，Desktop 的 Host 注入 `HostRunExecutionApiV1`。当前真实双端验收仍会命中拒绝路径，
+因为 Desktop 的 Host 还是纯账本。
