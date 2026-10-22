@@ -145,6 +145,8 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 已合并：无（PR 未合并，等授权）。
 
+PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，CI 可触发；head = `codex/panel-layout-columns`）。
+
 外部副作用：在本 worktree 的 `e2e/.e2e-userdata/panel-column-layout/` 留下一个隔离命名空间的测试会话；`docs-local/research/panel-column-layout/` 留有截图与证据脚本（均不入库）。构建产物（`packages/*/dist`、`dist/`、`dist-electron/`）只写在本 worktree。
 
 阻塞：无。C（拖拽换位）可在本切片合入后开工，写回点仍是 `layout-model.ts` / `usePanel.ts`；`PanelHeader.tsx` / `PaneDragHandle` 未被本切片改动。
