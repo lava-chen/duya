@@ -16,8 +16,8 @@ interface PluginAppLauncherProps {
 /**
  * Entry point for one plugin's Apps.
  *
- * The App is hosted as an external mini app: it runs in a sandboxed
- * webview and reaches the agent only through the session this launcher
+ * The App is hosted as an external mini app: it runs in an opaque-origin
+ * sandboxed frame and reaches the agent only through the session this launcher
  * asks the Main process to mint.
  */
 export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLauncherProps) {

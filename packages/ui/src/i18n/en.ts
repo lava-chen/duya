@@ -43,9 +43,18 @@ const en = {
   'nav.automation': 'Automation',
   'nav.workflow': 'Workflow',
   'nav.agents': 'Agents',
-  'nav.conductor': 'Canvas',
+  'nav.apps': 'Apps',
   'nav.extensions': 'Extensions',
   'nav.projects': 'Projects',
+
+  'apps.title': 'Mini Apps',
+  'apps.description': 'Open apps provided by your installed plugins.',
+  'apps.loading': 'Loading apps…',
+  'apps.loadError': 'Could not load installed apps.',
+  'apps.unavailable': 'Mini Apps are available in the desktop app.',
+  'apps.emptyTitle': 'No apps installed',
+  'apps.emptyDescription': 'Install or enable a plugin that provides an app to see it here.',
+  'apps.selectChat': 'Select a chat session before opening this app.',
 
   // Plan 525 — Projects page.
   'projects.title': 'Projects',

@@ -26,7 +26,7 @@ import { AutomationView } from "@/components/automation/AutomationView";
 import { WorkflowPage } from "@/components/workflow/WorkflowPage";
 import { ProjectsView } from "@/components/projects/ProjectsView";
 import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
-import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
+import { MiniAppsView } from "@/components/plugin-apps/MiniAppsView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
@@ -34,7 +34,6 @@ import { FontProvider } from "@/contexts/FontContext";
 import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
-import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, StreamPhase, FileAttachment } from "@/types/message";
 import type { PermissionRequestEvent } from "@/types/stream";
 import {
@@ -124,13 +123,7 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <FontProvider>
-          {uiServices?.platform === 'web' || uiServices?.capabilities.conductor === false ? (
-            <AppShellInner onReady={onReady} uiServices={uiServices} />
-          ) : (
-            <ConductorHostProvider>
-              <AppShellInner onReady={onReady} uiServices={uiServices} />
-            </ConductorHostProvider>
-          )}
+          <AppShellInner onReady={onReady} uiServices={uiServices} />
         </FontProvider>
       </I18nProvider>
     </QueryClientProvider>
@@ -1097,11 +1090,11 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
   const renderView = () => {
     if (uiServices?.platform === 'web') {
       const capabilityByView: Partial<Record<string, keyof UiServices['capabilities']>> = {
+        apps: 'extensions',
         skills: 'extensions',
         automation: 'automation',
         workflow: 'workflows',
         projects: 'localFileAccess',
-        conductor: 'conductor',
         settings: 'settings',
         extensions: 'extensions',
       };
@@ -1190,7 +1183,7 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
             />
           )}
           {currentView === 'projects' && <ProjectsView />}
-          {currentView === 'conductor' && <ConductorView />}
+          {currentView === 'apps' && <MiniAppsView />}
           {currentView === 'settings' && <SettingsView />}
           {currentView === 'extensions' && <ExtensionsPage />}
         </>
@@ -1219,8 +1212,8 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         // a brand-new install). The `shouldRenderChat` branch above also
         // routes `projects`, so this only fires on first-launch paths.
         return <ProjectsView />;
-      case 'conductor':
-        return <ConductorView />;
+      case 'apps':
+        return <MiniAppsView />;
       case 'settings':
         return <SettingsView />;
       case 'extensions':

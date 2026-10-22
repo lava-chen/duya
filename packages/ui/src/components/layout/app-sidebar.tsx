@@ -33,6 +33,7 @@ import {
   ChartBarIcon as BarChartIcon,
   CpuIcon as CubeIcon,
   ChalkboardIcon,
+  SquaresFourIcon,
   RobotIcon,
   QuestionIcon,
   ChannelIcon,
@@ -100,10 +101,10 @@ type ThemeMode = "light" | "dark";
 type SidebarTab = "work" | "bots";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.automation' | 'nav.workflow' | 'nav.conductor' | 'nav.extensions' | 'nav.projects';
+type NavLabelKey = 'nav.automation' | 'nav.workflow' | 'nav.apps' | 'nav.extensions' | 'nav.projects';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-  { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
+  { view: 'apps', labelKey: 'nav.apps', icon: SquaresFourIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
   { view: 'workflow', labelKey: 'nav.workflow', icon: RepeatIcon },
   { view: 'projects', labelKey: 'nav.projects', icon: FolderIcon },
@@ -177,8 +178,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [sidebarTab, setSidebarTab] = useState<SidebarTab>(capabilities?.bots === false ? "work" : "bots");
     const isUnavailable = (capability: keyof UiServices["capabilities"]) => capabilities?.[capability] === false;
     const unavailableTitle = (title: string) => `${title} · 仅桌面端可用`;
-    const capabilityForView: Record<Extract<ViewType, 'conductor' | 'automation' | 'workflow' | 'projects'>, keyof UiServices['capabilities']> = {
-      conductor: 'conductor', automation: 'automation', workflow: 'workflows', projects: 'localFileAccess',
+    const capabilityForView: Record<Extract<ViewType, 'apps' | 'automation' | 'workflow' | 'projects'>, keyof UiServices['capabilities']> = {
+      apps: 'extensions', automation: 'automation', workflow: 'workflows', projects: 'localFileAccess',
     };
     const {
       pinned: pinnedBots,
@@ -1034,9 +1035,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       const railNavClick = (view: ViewType) => {
         setSidebarTab("work");
         setCurrentView(view);
-        if (view === 'conductor') {
-          openOrActivatePage('conductor');
-        }
       };
       // Same roster order as the Bots tab: pinned → sectioned → unassigned.
       const railBots = [
@@ -1368,9 +1366,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
 
             const handleNavClick = () => {
               setCurrentView(item.view);
-              if (item.view === 'conductor') {
-                openOrActivatePage('conductor');
-              }
             };
 
             return (

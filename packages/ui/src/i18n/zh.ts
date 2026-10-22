@@ -45,9 +45,18 @@ const zh: Record<TranslationKey, string> = {
   'nav.automation': '自动化',
   'nav.workflow': '工作流',
   'nav.agents': 'Agents',
-  'nav.conductor': '画布',
+  'nav.apps': '应用',
   'nav.extensions': '扩展',
   'nav.projects': '项目',
+
+  'apps.title': '小应用',
+  'apps.description': '打开已安装插件提供的应用。',
+  'apps.loading': '正在加载应用…',
+  'apps.loadError': '无法加载已安装的应用。',
+  'apps.unavailable': '小应用仅在桌面应用中可用。',
+  'apps.emptyTitle': '尚未安装应用',
+  'apps.emptyDescription': '安装或启用提供应用的插件后，它们会显示在这里。',
+  'apps.selectChat': '请先选择一个聊天会话，再打开此应用。',
 
   // Plan 525 — Projects page.
   'projects.title': '项目',
