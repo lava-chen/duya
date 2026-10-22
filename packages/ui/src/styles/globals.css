@@ -18,6 +18,7 @@
 @import "./code-review.css";
 @import "./composer-panels.css";
 @import "./pages.css";
+@import "./file-workspace.css";
 @import "./sidebar-sections.css";
 
 @plugin "@tailwindcss/typography";
