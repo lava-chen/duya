@@ -21,7 +21,7 @@ import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, subscribeToConnectorAuthRequired, clearConnectorAuthRequired, attachToExistingStream, getSnapshot, type ConnectorAuthRequiredData } from '@/lib/stream-session-manager';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
-import { ChatHeader } from './ChatHeader';
+import { ChatHeader, hasCustomTitleBar } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { findModelById } from '@duya/ai';
@@ -1487,7 +1487,9 @@ export function ChatView({
 
   return (
     <div className={`chat-view flex flex-col flex-1 min-h-0 relative${taskDrawerOpen ? ' task-card-open' : ''}${workspaceExpanded ? ' panel-expanded' : ''}`}>
-      {!workspaceExpanded && activeThread && <ChatHeader thread={activeThread} />}
+      {/* The session title lives in the window's top bar; macOS has no
+          custom top bar, so it keeps its own header row there. */}
+      {!workspaceExpanded && activeThread && !hasCustomTitleBar() && <ChatHeader thread={activeThread} />}
 
       {/* Back to parent button when viewing a sub-agent */}
       {(() => {

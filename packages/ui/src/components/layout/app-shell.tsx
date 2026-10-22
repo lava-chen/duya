@@ -1,14 +1,13 @@
 "use client";
 
 import { AppSidebar } from "@/components/layout/app-sidebar";
-import { TitleBar } from "@/components/layout/TitleBar";
+import { AppRail, TitleBar } from "@/components/layout/TitleBar";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
 import { lazy, Suspense, useState, useCallback, useRef, useEffect, type CSSProperties } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useNavHistoryStore, registerNavApplier, type NavHistoryEntry } from "@/stores/nav-history-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
-import { TaskDrawerToggle } from "@/components/layout/TaskDrawerToggle";
 import { useBackdropRepair } from "@/lib/backdrop-repair";
 import type { UiServices } from "@/services/ui-services";
 
@@ -253,42 +252,47 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
         </Suspense>
       )}
       <div className="app-shell">
-        {!isMac && (
-          <TitleBar
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={toggleSidebarCollapsed}
-          />
-        )}
         <div
           className="app-body"
           onMouseDown={handleBodyMouseDown}
           onMouseMove={handleBodyMouseMove}
           onMouseLeave={handleBodyMouseLeave}
         >
-          <AppSidebar
-            ref={sidebarRef}
-            capabilities={capabilities}
-            collapsed={sidebarCollapsed}
-            onExpand={() => setSidebarCollapsed(false)}
-            style={{
-              width: effectiveSidebarWidth,
-              minWidth: effectiveSidebarWidth,
-              maxWidth: effectiveSidebarWidth,
-            }}
-          />
-          <div className="app-workspace-row">
-            <div className="app-main-wrapper">
-              <div className="app-main">
-                <div className="app-main-inner">
-                  <main className="app-content">{children}</main>
+          <div
+            className="app-sidebar-column"
+            data-collapsed={sidebarCollapsed ? "true" : undefined}
+          >
+            <AppRail
+              sidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={toggleSidebarCollapsed}
+            />
+            <AppSidebar
+              ref={sidebarRef}
+              capabilities={capabilities}
+              collapsed={sidebarCollapsed}
+              onExpand={() => setSidebarCollapsed(false)}
+              style={{
+                width: effectiveSidebarWidth,
+                minWidth: effectiveSidebarWidth,
+                maxWidth: effectiveSidebarWidth,
+              }}
+            />
+          </div>
+          <div className="app-content-column">
+            {!isMac && <TitleBar />}
+            <div className="app-workspace-row">
+              <div className="app-main-wrapper">
+                <div className="app-main">
+                  <div className="app-main-inner">
+                    <main className="app-content">{children}</main>
+                  </div>
+                </div>
+                <div className="app-status-bar">
+                  <UpdateBadge />
                 </div>
               </div>
-              <div className="app-status-bar">
-                <UpdateBadge />
-              </div>
+              <PanelZone />
             </div>
-            <PanelZone />
-            <TaskDrawerToggle />
           </div>
         </div>
       </div>

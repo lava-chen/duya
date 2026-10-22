@@ -147,45 +147,167 @@
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Electron draggable title bar region */
-.titlebar-drag-region {
+/* Window title bar of the content area. It carries the session title on
+   the left and the session actions on the right, next to the native
+   window controls. */
+.titlebar {
   height: 44px;
   width: 100%;
-  -webkit-app-region: drag;
   flex-shrink: 0;
   position: relative;
   z-index: 100;
   display: flex;
   align-items: center;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
+  /* Electron hides the native title bar on Windows/Linux (titleBarStyle
+     'hidden' + titleBarOverlay), so a CSS drag region over the 44px chrome
+     strip is the only way to move the window. */
+  -webkit-app-region: drag;
 }
 
-/* Drag filler after the menu bar — everything not a control stays draggable. */
-.titlebar-drag-fill {
+/* A drag region swallows the clicks of everything inside it, so each control
+   in the chrome strip has to opt back out. */
+.titlebar button,
+.titlebar input,
+.titlebar a {
+  -webkit-app-region: no-drag;
+}
+
+/* The session title area. The chat header's title row is hosted here, so
+   the conversation starts right below the bar. */
+.titlebar-session {
   flex: 1;
-  align-self: stretch;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
 }
 
-/* Brand chip doubles as the sidebar rail toggle: hovering swaps the app icon
-   for the rail-toggle icon (ZCode desktop behavior). The chip is centered on
-   the collapsed rail's icon axis — rail width 56px with 34px buttons puts
-   the icon column center at 28px, so a 26px chip starts at 15px — keeping it
-   aligned with the icon column underneath in both sidebar states. */
-.titlebar-brand {
+/* Inside the title bar the chat header is only the title — it drops its own
+   row chrome (min height, padding, bottom border). */
+.titlebar-session .chat-header {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+}
+
+.titlebar-session .chat-header-inner {
+  min-height: 0;
+  padding: 0;
+  width: 100%;
+}
+
+/* The left column of the window: the icon row on top, the session list
+   below it. The icon row carries the window chrome (application menu,
+   sidebar toggle, back / forward), so the column reads top-to-bottom. */
+.app-sidebar-column {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+  background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
+}
+
+/* The sidebar fills the column under the icon row. The column already owns
+   the surface, so the sidebar must not paint its own tint on top of it —
+   two translucent fills stacked read as a darker band, and the boundary
+   between them shows as a horizontal seam. */
+.app-sidebar-column > .app-sidebar {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: transparent;
+}
+
+html[data-backdrop] .app-sidebar-column > .app-sidebar {
+  background: transparent;
+}
+
+/* The icon row at the top of the sidebar: the application menu, the sidebar
+   toggle and the back / forward buttons. It is the left half of the window's
+   44px drag strip (see .titlebar). */
+.app-rail {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 44px;
+  padding: 0 12px;
+  -webkit-app-region: drag;
+}
+
+.app-rail button {
+  -webkit-app-region: no-drag;
+}
+
+/* Collapsed sidebar: the icon row becomes the narrow icon rail again. It
+   keeps the column's single surface (no border-right) and grows to the
+   sidebar rail's 34px icon boxes so the two stacks read as one rail. */
+.app-sidebar-column[data-collapsed="true"] {
+  width: 56px;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail {
+  flex-direction: column;
+  width: 56px;
+  height: auto;
+  gap: 0.35rem;
+  padding: 0.6rem 0;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail-btn,
+.app-sidebar-column[data-collapsed="true"] .app-rail-brand {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.app-sidebar-column[data-collapsed="true"] .app-rail-logo,
+.app-sidebar-column[data-collapsed="true"] .app-rail-brand-toggle {
+  border-radius: 8px;
+}
+
+.app-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.app-rail-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.app-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The app icon at the very top-left of the window. It doubles as the sidebar
+   toggle: hovering swaps the app icon for the rail-toggle icon. */
+.app-rail-brand {
   position: relative;
   width: 26px;
   height: 26px;
-  margin-left: 15px;
   flex-shrink: 0;
   padding: 0;
   border: none;
   border-radius: 7px;
   background: transparent;
   cursor: pointer;
-  -webkit-app-region: no-drag;
 }
 
-.titlebar-brand .titlebar-logo {
+.app-rail-brand .app-rail-logo {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -198,7 +320,7 @@
   transition: opacity 0.12s ease;
 }
 
-.titlebar-brand .titlebar-brand-toggle {
+.app-rail-brand .app-rail-brand-toggle {
   position: absolute;
   inset: 0;
   display: flex;
@@ -212,71 +334,71 @@
   transition: opacity 0.12s ease;
 }
 
-.titlebar-brand:hover .titlebar-logo,
-.titlebar-brand:focus-visible .titlebar-logo {
+.app-rail-brand:hover .app-rail-logo,
+.app-rail-brand:focus-visible .app-rail-logo {
   opacity: 0;
 }
 
-.titlebar-brand:hover .titlebar-brand-toggle,
-.titlebar-brand:focus-visible .titlebar-brand-toggle {
+.app-rail-brand:hover .app-rail-brand-toggle,
+.app-rail-brand:focus-visible .app-rail-brand-toggle {
   opacity: 1;
 }
 
-/* Title bar icon buttons: back/forward navigation. */
-.titlebar-nav-btn {
-  width: 30px;
-  height: 30px;
-  margin-left: 2px;
-  border: none;
-  border-radius: 6px;
+/* The content column: the top bar plus the workspace below it. */
+.app-content-column {
+  position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  /* The column owns the background so the top bar and the workspace below
+     read as one surface instead of stacked panes. */
+  background: var(--main-bg);
+}
+
+/* Glass borderline between the sidebar pane and the content pane: a 1px
+   top-lit gradient stroke floating on the boundary (theme-aware via
+   --glass-edge), like the edge of a frosted glass sheet. The extra
+   top-light layer doubles the highlight near the title bar so the edge
+   reads as lit glass, not a plain divider. */
+.app-content-column::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent 40%),
+    var(--glass-edge);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Flatten the workspace into the column: no rounded inset card and no
+   separate pane background behind the top bar. */
+.app-content-column > .titlebar {
   background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  flex-shrink: 0;
 }
 
-.titlebar-nav-btn:hover:not(:disabled) {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.titlebar-nav-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-/* Native-style menu bar (文件 / 编辑 / 视图 / 帮助). Each item hosts a
-   DropdownMenu portal; the bar itself must not drag the window. */
-.titlebar-menubar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin-left: 6px;
-  height: 100%;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-menubar-item {
-  height: 26px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
+.app-content-column .app-main-wrapper,
+.app-content-column .app-main,
+.app-content-column .app-main-inner {
   background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
+  border-radius: 0;
 }
 
-.titlebar-menubar-item:hover,
-.titlebar-menubar-item.active {
-  background: var(--surface-hover);
+/* Native Mica/vibrancy backdrop: sidebar.css tints .titlebar and draws the
+   glass edge on .app-main-inner, which would re-introduce the seam. */
+html[data-backdrop] .app-content-column > .titlebar {
+  background: transparent;
 }
 
+html[data-backdrop] .app-content-column .app-main-inner {
+  border: 0;
+  background: transparent;
+}
 
 .titlebar-thread-title {
   font-size: 0.85rem;
@@ -293,14 +415,6 @@
   color: var(--muted);
 }
 
-/* Make sure buttons in the drag region are clickable */
-.titlebar-drag-region button,
-.titlebar-drag-region a,
-.titlebar-drag-region input,
-.titlebar-drag-region select {
-  -webkit-app-region: no-drag;
-}
-
 /* Title bar right actions */
 .titlebar-actions {
   display: flex;
@@ -312,13 +426,59 @@
   margin-left: auto;
 }
 
+/* Per-panel launchers: one icon per panel type, before the session menu.
+   Each icon is an independent toggle for its type, so several can be on at
+   once; an open but unfocused type is tinted the same as the focused one. */
+.titlebar-panel-launchers {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.titlebar-panel-launcher {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.titlebar-panel-launcher:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.titlebar-panel-launcher.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.titlebar-panel-launcher:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.titlebar-panel-launcher:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 /* Windows: reserve space for window controls (min/max/close) on the right */
-.titlebar-drag-region.is-win .titlebar-actions {
+.titlebar.is-win .titlebar-actions {
   padding-right: 140px;
 }
 
 /* macOS: no right-side window controls needed */
-.titlebar-drag-region.is-mac .titlebar-actions {
+.titlebar.is-mac .titlebar-actions {
   padding-right: 1rem;
 }
 

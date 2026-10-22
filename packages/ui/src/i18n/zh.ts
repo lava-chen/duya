@@ -173,6 +173,10 @@ const zh: Record<TranslationKey, string> = {
   'chat.header.copyTitle': '复制标题',
   'chat.header.addAutomation': '添加自动化...',
   'chat.header.more': '更多',
+  'chat.header.project.showInExplorer': '在资源管理器中显示',
+  'chat.header.project.openInTerminal': '在终端中打开',
+  'chat.header.project.copyPath': '复制路径',
+  'chat.header.project.copyName': '复制项目名',
   'chat.header.projectWorkspace': '工作区',
 
   'messageInput.attachFiles': '附加文件',
@@ -1353,6 +1357,7 @@ const zh: Record<TranslationKey, string> = {
   'subAgent.status.killed': '已停止',
 
   'panel.files': '文件',
+  'panel.launchersAria': '面板',
   'panel.preview': '预览',
   'panel.review': '代码审阅',
   'panel.conductor': '画布',

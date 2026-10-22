@@ -629,7 +629,6 @@
 }
 
 .panel-zone {
-  --panel-edge-width: 42px;
   position: relative;
   width: var(--panel-zone-width);
   flex: 0 0 var(--panel-zone-width);
@@ -637,7 +636,6 @@
   min-width: 0;
   overflow: hidden;
   background: var(--main-bg);
-  border-left: 1px solid var(--border);
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
@@ -645,8 +643,6 @@
   width: var(--panel-zone-width);
   flex-basis: var(--panel-zone-width);
   background: var(--main-bg);
-  border-left-width: 1px;
-  border-left-color: var(--border);
 }
 
 .panel-zone-closed {
@@ -654,48 +650,6 @@
   flex-basis: 0;
   overflow: visible;
   background: transparent;
-  border-left-width: 0;
-  border-left-color: transparent;
-}
-
-.panel-edge-toggle {
-  position: absolute;
-  top: 6px;
-  right: 14px;
-  z-index: 4;
-  display: flex;
-  width: 32px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  color: var(--text-muted);
-  cursor: pointer;
-  box-shadow: none;
-  transition: background 150ms ease, color 150ms ease;
-}
-
-.panel-edge-toggle:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.panel-expand-toggle {
-  top: 6px;
-  right: 54px;
-}
-
-.panel-task-toggle.active,
-.workspace-task-toggle.active {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-}
-
-.workspace-task-toggle.has-background-tasks {
-  color: var(--accent);
 }
 
 /* Monospace title variant for command-line previews inside the drawer. */
@@ -1179,6 +1133,14 @@
   transition:
     opacity 120ms ease,
     transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The wall around the cards is the conversation's own surface: the glass
+   scrim sidebar.css gives .sidebar-panel-inner under a native backdrop would
+   tint the inset ring a different shade than the chat canvas next to it. The
+   lift belongs to the card alone (.panel-wall-cell). */
+html[data-backdrop] .panel-zone .sidebar-panel-inner {
+  background: var(--main-bg);
 }
 
 .panel-zone-open .panel-header {
