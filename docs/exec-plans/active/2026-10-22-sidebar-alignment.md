@@ -67,12 +67,15 @@ Claude 的前置圆环被明确排除。
 | dirty | Windows / Electron | `npm run electron:dev`（worktree 内） | vite :3000 · 6 个 electron 进程 | 实机截图 |
 | dirty | Windows / CDP | `node docs-local/.../verify-acceptance.mjs` | 行距 31 / 行高 26 / 前置图标 0 | 与 Codex 基线逐项比对 |
 | dirty | Windows / CDP | `node docs-local/.../verify-themes.mjs` | 深浅两主题均 行高 26 / 行距 31 / 图标 0 | `duya-light.png` `duya-dark.png` |
+| dirty | Windows / CDP | `node docs-local/.../verify-project-mode.mjs` | 按项目分组：嵌套行高 26 / 行距 31 / 分组头 28 | `.project-group-threads` = flex column + gap 5px |
 
 ### 实机核对到的行为
 
 - 过滤器浮层：分组头第三颗按钮点开是「分组方式 / 排序方式 / 显示空分组」，子菜单带 ✓，当前值直接显示在行上——与 Codex 的过滤器浮层同形。
 - 「在一个列表中」= Codex 的扁平列表形态，实测生效，一屏 20 个会话。
 - 深浅两主题行距/行高一致。
+- 按项目分组模式：嵌套会话行同样是 **26px 行高 / 31px 行距**，项目分组头 28px；
+  跨分组的 126.6px 是「上一组末行 → 下一组首行」跨过分组头的距离，不是行距异常。
 
 ## 环境坑（记录用）
 
@@ -91,5 +94,5 @@ Claude 的前置圆环被明确排除。
 下一步：
 
 1. `npm run architecture:check` 与 `npm run typecheck:all` 全量通过后开 PR（未获授权不合并）。
-2. 项目分组模式（按项目）下的会话行也用同一套 26px/31px 节奏 —— 实机已确认 `.project-group-threads` 同样带 5px gap。
+2. 项目分组模式（按项目）下的会话行也用同一套 26px/31px 节奏 —— 已用 CDP 实测确认（`verify-project-mode.mjs`：行高 26 / 行距 31 / 分组头 28）。
 3. 未做：把导航从 5 项收敛到 Claude 的 2 项 + 「更多」（属产品决策，本轮不动功能）。
