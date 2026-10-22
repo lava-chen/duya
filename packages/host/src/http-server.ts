@@ -441,6 +441,10 @@ function registeredHostCapabilities(options: HostSessionHttpServerOptions): read
   }
   // Local settings key/value access.
   if (options.localSettingsApi) provided.push('settings_store');
+  // Starting and cancelling runs needs an execution API behind the route. A
+  // Host assembled for the run ledger alone cannot serve this, and advertising
+  // it would make a client attach and then fail on its first turn.
+  if (options.runExecutionApi !== undefined) provided.push('agent_run_execution');
   return provided;
 }
 
