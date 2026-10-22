@@ -163,7 +163,15 @@ describe('reparse points', () => {
     expect(existsSync(path.join(target, 'keep.txt'))).toBe(true);
   });
 
-  it('reports a junction as reparse_point and still removes the checkout safely', async () => {
+  // Windows-only on purpose. A junction pointing at a directory that git cannot
+  // see is the hazard this step exists for: the directory has no tracked or
+  // untracked content of its own, so every content gate passes while a
+  // recursive delete would still follow the link into the user's checkout.
+  //
+  // On POSIX the same setup is refused EARLIER — a fresh symlink is `?? linked`
+  // in `git status`, so `untracked` wins before any unlink happens. That is not
+  // a weaker guarantee, it is a different one, and the POSIX case below pins it.
+  it.skipIf(process.platform !== 'win32')('reports a junction as reparse_point and still removes the checkout safely', async () => {
     const { api, checkout } = await freshCheckout();
     // An EMPTY target directory: git does not track empty directories, so the
     // link is invisible to `status`, `ls-files --others` and `--ignored`. That
@@ -178,6 +186,19 @@ describe('reparse points', () => {
 
     expect(await api.reclaim(checkout.root)).toEqual({ removed: true });
     expect(existsSync(checkout.root)).toBe(false);
+    expect(existsSync(target)).toBe(true);
+  }, 60_000);
+
+  it.skipIf(process.platform === 'win32')('refuses a directory symlink before any unlink on posix', async () => {
+    const { api, checkout } = await freshCheckout();
+    const target = tempDir('duya-symlink-target-');
+    const link = path.join(checkout.root, 'linked');
+    symlinkSync(target, link, 'dir');
+
+    // Git sees the symlink as untracked, so the content gate refuses first and
+    // the link (and its target) are never touched.
+    expect(await api.reclaim(checkout.root)).toEqual({ removed: false, reason: 'untracked' });
+    expect(existsSync(link)).toBe(true);
     expect(existsSync(target)).toBe(true);
   }, 60_000);
 
