@@ -28,7 +28,9 @@ export const codeConfig: PromptSystemConfig = {
     { module: 'workingWithTheUser', name: 'workingWithTheUser', cachePolicy: 'once' },
     { module: 'rules', name: 'rules', cachePolicy: 'once' },
     { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
-    { module: 'projectInstructions', name: 'projectInstructions', cachePolicy: 'once' },
+    // No `projectInstructions` section: the AGENTS.md file bodies are
+    // injected by the session runtime, so an index of the same files
+    // would repeat them (plan 619 defect e).
     // Volatile inline sections (dynamic half — recomputed every call)
     { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
     { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
@@ -62,11 +64,11 @@ export const codeConfig: PromptSystemConfig = {
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
+    // The AGENTS.md bodies never render through PromptCache — the session
+    // runtime injects them from the manager, which keeps its own mtime
+    // fast path — so there is no cache key to invalidate here.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return {
-        invalidateCacheKeys: ['projectInstructions'],
-        promptContextExtension: mergedExtension,
-      }
+      return { promptContextExtension: mergedExtension }
     }
     return { promptContextExtension: mergedExtension }
   },

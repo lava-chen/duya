@@ -58,13 +58,11 @@ export const botConfig: PromptSystemConfig = {
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
+    // The AGENTS.md bodies never render through PromptCache — the session
+    // runtime injects them from the manager, which keeps its own mtime
+    // fast path — so there is no cache key to invalidate here.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return envResult?.promptContextExtension === undefined
-        ? { invalidateCacheKeys: ['project'] }
-        : {
-            invalidateCacheKeys: ['project'],
-            promptContextExtension: envResult.promptContextExtension,
-          }
+      return envResult
     }
     return envResult
   },
