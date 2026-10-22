@@ -1,0 +1,29 @@
+// The panel kinds the side panel's wall offers.
+//
+// The wall shows one card per open page. These are the kinds the user can
+// add from the wall's empty cell:
+//
+//   files    — the project file tree
+//   preview  — the file viewer (opened by clicking a file; not added by hand)
+//   review   — the code review diff
+//   browser  — the embedded browser
+//   terminal — a shell
+//   workflow — the background runs (the "background tasks" surface)
+//
+// The canvas page (`conductor`) is deliberately not part of the wall: it is
+// opened by events (chat pills) and keeps working, but the wall does not
+// offer it.
+
+import type { PageId } from "./page-tab";
+
+/** The pages the wall's add-panel menu offers, in menu order. */
+export const WALL_PAGE_IDS: readonly PageId[] = [
+  "files",
+  "review",
+  "browser",
+  "terminal",
+  "workflow",
+];
+
+/** The pages that are opened by events and never added by hand. */
+export const WALL_EVENT_PAGE_IDS: readonly PageId[] = ["preview", "session-messages"];

@@ -6,17 +6,15 @@ import type { TranslationKey } from "@/i18n";
 import { getPageDescriptor, isPageId, type PageId, type PageTab } from "@/components/layout/panels/registry";
 import { bashTaskOutputTabTitle } from "@/components/layout/panels/BashTaskOutputView";
 import {
-  columnPixelWidths,
-  familyResolver,
-  findPaneColumn,
   layoutFromPanes,
   placePane,
   removePane,
-  resolveTargetColumn,
   sanitizeLayout,
   setActivePane,
   setColumnRatios,
-  setPaneRatio as setPaneRatioInLayout,
+  setRowRatios,
+  toggleExpandedPane,
+  wallShapeFor,
   type PaneId,
   type WorkspaceLayout,
 } from "@/components/layout/panels/layout-model";
@@ -57,10 +55,12 @@ export interface PanelContextValue {
   resetPanelWidth: (pageId: PageId) => void;
   openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
   reorderTabs: (fromId: string, toId: string, position: "before" | "after") => void;
-  /** Set the pixel width of every column; the region follows their sum. */
+  /** Set the pixel width of every column; the wall keeps its own width. */
   setColumnWidths: (widths: number[]) => void;
-  /** Set the vertical share a pane takes inside its column. */
-  setPaneRatio: (columnId: string, paneId: string, ratio: number) => void;
+  /** Set the pixel height of every row; the wall keeps its own height. */
+  setRowHeights: (heights: number[]) => void;
+  /** Expand a card so it fills the wall, or collapse it back into its cell. */
+  togglePaneExpanded: (paneId: string) => void;
 }
 
 export const PanelContext = createContext<PanelContextValue | null>(null);
@@ -96,8 +96,9 @@ interface PersistedPanelState {
   workspaceExpanded: boolean;
   workspaceTreeOpen: boolean;
   /**
-   * The column tree. Payloads written before the column tree existed do not
-   * carry it, and are migrated on load (see `layoutForState`).
+   * The panel wall: which card sits in which grid cell, and how the wall's
+   * width and height are split. Payloads written before the wall existed do
+   * not carry it, and are migrated on load (see `layoutForState`).
    */
   layout?: WorkspaceLayout;
 }
@@ -145,19 +146,20 @@ export function persistablePanelState(state: PersistedPanelState): PersistedPane
 }
 
 /**
- * The column tree of a persisted state.
+ * The wall of a persisted state.
  *
- * A payload that already carries a layout is trusted after it is validated
- * against the tabs. A payload without one predates the column tree and is
- * migrated: same-family tabs share a column, every other tab gets a column of
- * its own, which is how the old tab strip maps onto the new tree.
+ * A payload that already carries a wall is trusted after it is validated
+ * against the tabs. A payload without one predates the wall and is
+ * migrated: the cards keep the order of the old tab strip.
  */
 function layoutForState(state: PersistedPanelState): WorkspaceLayout {
   const identities = state.tabs.map((tab) => ({ id: tab.id, pageId: tab.pageId }));
   const sanitized = state.layout ? sanitizeLayout(state.layout, identities) : null;
   const layout = sanitized ?? layoutFromPanes(identities);
   if (!state.activeTabId) return layout;
-  return findPaneColumn(layout, state.activeTabId) ? setActivePane(layout, state.activeTabId) : layout;
+  return layout.panes.includes(state.activeTabId)
+    ? setActivePane(layout, state.activeTabId)
+    : layout;
 }
 
 /**
@@ -454,10 +456,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const [userWidths, setUserWidths] = useState<Partial<Record<PageId, number>>>(loadUserWidths);
   const [panelOpen, setPanelOpen] = useState<boolean>(initial.panelOpen);
-  // The region is as wide as its columns, so a restored tree needs a region
-  // that can hold them.
+  // A two-column wall needs room for both columns, so a restored wall
+  // starts with a region that can hold them.
   const [panelWidth, setPanelWidth] = useState(
-    () => DEFAULT_PANEL_WIDTH * Math.max(1, initialLayout.columns.length),
+    () => DEFAULT_PANEL_WIDTH * Math.max(1, initialLayout.columns),
   );
   const [panelView, setPanelView] = useState<PanelView>(initial.panelView);
   const [workspaceExpanded, setWorkspaceExpandedState] = useState(initial.workspaceExpanded);
@@ -493,18 +495,20 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     activeTabIdRef.current = activeTabId;
   }, [activeTabId]);
 
-  // Re-clamp the panel width when the workspace itself resizes (window
-  // resize, sidebar collapse, devtools dock). Without this the stale pixel
-  // width could overflow the window or violate the chat-column minimum
-  // until the next drag or tab switch.
+  // Keep the region inside the workspace. The chat column keeps its
+  // protected minimum, so the panel may not grow past it — a window resize
+  // (or a collapsing sidebar) has to pull the region back in.
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return;
     const workspace = document.querySelector(".app-workspace-row");
     if (!workspace) return;
     const observer = new ResizeObserver(() => {
-      const widths = columnPixelWidths(layoutRef.current, panelWidthRef.current);
-      if (widths.length === 0) return;
-      applyColumnWidthsRef.current(widths);
+      const width = workspace.getBoundingClientRect().width;
+      const max = Math.max(
+        MIN_PANEL_WIDTH,
+        Math.min(width - MIN_CHAT_WIDTH, width * MAX_PANEL_RATIO),
+      );
+      if (panelWidthRef.current > max) setPanelWidth(max);
     });
     observer.observe(workspace);
     return () => observer.disconnect();
@@ -559,39 +563,17 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const userWidthsRef = useRef(userWidths);
   userWidthsRef.current = userWidths;
 
-  /** The minimum width each column must keep for the pages it shows. */
-  const columnMinWidths = useCallback((tree: WorkspaceLayout, panes: PageTab[]): number[] => {
-    return tree.columns.map((column) => {
-      let min = MIN_PANEL_WIDTH;
-      for (const paneId of column.panes) {
-        const pane = panes.find((tab) => tab.id === paneId);
-        if (!pane) continue;
-        min = Math.max(min, getPageDescriptor(pane.pageId).minWidth);
-      }
-      return min;
-    });
-  }, []);
-
   /**
-   * Apply a set of column widths. The region is exactly as wide as its
-   * columns, and each column keeps the share it was given — so a column's
-   * width only changes when that column is resized.
+   * Apply a set of column widths.
+   *
+   * The wall's own width does not change: the columns split it, so a drag
+   * only moves the boundary between two shares.
    */
   const applyColumnWidths = useCallback((widths: number[]) => {
-    const tree = layoutRef.current;
-    const clamped = clampColumnWidths(
-      widths,
-      getWorkspaceWidth(),
-      columnMinWidths(tree, tabsRef.current),
-    );
-    const total = clamped.reduce((sum, width) => sum + width, 0);
+    const total = widths.reduce((sum, width) => sum + width, 0);
     if (total <= 0) return;
-    setPanelWidth(total);
-    setLayout((prev) => setColumnRatios(prev, clamped.map((width) => width / total)));
-  }, [columnMinWidths]);
-
-  const applyColumnWidthsRef = useRef(applyColumnWidths);
-  applyColumnWidthsRef.current = applyColumnWidths;
+    setLayout((prev) => setColumnRatios(prev, widths.map((width) => width / total)));
+  }, []);
 
   /** The width a column for this page takes when the column is created. */
   const resolveColumnWidth = useCallback((pageId: PageId): number => {
@@ -623,42 +605,20 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Put a newly opened pane into the column tree.
+   * Put a newly opened card into the wall.
    *
-   * A pane of the same family as the active one joins the active column — a
-   * second terminal becomes a second tab of that column, and the column keeps
-   * its width. Any other page gets a column of its own, so "files" and
-   * "terminal" end up side by side. The columns that already exist keep
-   * their width when that happens; the region grows instead.
+   * The wall grows to a second column once a third card is open, and the
+   * region widens with it so both columns stay usable.
    */
-  const openPaneInLayout = useCallback((paneId: PaneId, pageId: PageId) => {
-    const tree = layoutRef.current;
-    const familyOf = familyResolver(
-      tabsRef.current.map((tab) => ({ id: tab.id, pageId: tab.pageId })),
-    );
-    const targetColumnId = resolveTargetColumn(tree, pageId, familyOf);
-    if (targetColumnId !== null) {
-      setLayout((prev) => setActivePane(placePane(prev, paneId, targetColumnId).layout, paneId));
-      return;
+  const openPaneInLayout = useCallback((paneId: PaneId) => {
+    const next = placePane(layoutRef.current, paneId);
+    const { columns } = wallShapeFor(next.panes.length);
+    if (columns > layoutRef.current.columns) {
+      const needed = columns * MIN_PANEL_WIDTH;
+      if (panelWidthRef.current < needed) setPanelWidth(needed);
     }
-    const widths = columnPixelWidths(tree, panelWidthRef.current);
-    const minWidths = [
-      ...columnMinWidths(tree, tabsRef.current),
-      getPageDescriptor(pageId).minWidth,
-    ];
-    const nextWidths = clampColumnWidths(
-      [...widths, resolveColumnWidth(pageId)],
-      getWorkspaceWidth(),
-      minWidths,
-    );
-    const total = nextWidths.reduce((sum, width) => sum + width, 0);
-    if (total > 0) setPanelWidth(total);
-    setLayout((prev) => {
-      const placed = placePane(prev, paneId, null).layout;
-      const sized = setColumnRatios(placed, nextWidths.map((width) => width / total));
-      return setActivePane(sized, paneId);
-    });
-  }, [columnMinWidths, resolveColumnWidth]);
+    setLayout((prev) => setActivePane(placePane(prev, paneId), paneId));
+  }, []);
 
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
@@ -671,19 +631,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Set the width of the whole panel region. The columns to the right of the
-   * first one keep their width, so the first column absorbs the change.
+   * Set the width of the whole panel region. The wall's cards split that
+   * region, so the region's width is the only thing its edge drag changes.
    */
   const handleSetWidth = useCallback((width: number) => {
-    const tree = layoutRef.current;
-    const widths = columnPixelWidths(tree, panelWidthRef.current);
-    if (widths.length === 0) {
-      setPanelWidth(clampPanelWidth(width));
-      return;
-    }
-    const others = widths.slice(1).reduce((sum, value) => sum + value, 0);
-    applyColumnWidths([width - others, ...widths.slice(1)]);
-  }, [applyColumnWidths]);
+    setPanelWidth(clampPanelWidth(width));
+  }, []);
 
   /** Persist a user-initiated width (drag end) for the given page type. */
   const rememberUserWidth = useCallback((pageId: PageId, width: number) => {
@@ -715,20 +668,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       maxWidthRatio: descriptor.maxWidthRatio,
       maxWidth: descriptor.maxWidth,
     });
-    // The width belongs to the column that shows the page, so the other
-    // columns keep theirs.
-    const tree = layoutRef.current;
-    const paneId = tabsRef.current.find((tab) => tab.pageId === pageId)?.id;
-    const columnId = findPaneColumn(tree, paneId ?? null)?.id ?? null;
-    if (!columnId) {
-      setPanelWidth(nextWidth);
-      return;
-    }
-    const index = tree.columns.findIndex((column) => column.id === columnId);
-    const widths = columnPixelWidths(tree, panelWidthRef.current);
-    widths[index] = nextWidth;
-    applyColumnWidths(widths);
-  }, [applyColumnWidths]);
+    // The width belongs to the region, not to a single card.
+    setPanelWidth(clampPanelWidth(nextWidth));
+  }, []);
 
   const openPanel = useCallback<PanelContextValue["openPanel"]>((pageId, params) => {
     const id = genId();
@@ -739,7 +681,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       params,
     };
     setTabs((prev) => [...prev, newTab]);
-    openPaneInLayout(id, pageId);
+    openPaneInLayout(id);
     applyPageLayout(pageId);
     return id;
   }, [applyPageLayout, openPaneInLayout, t]);
@@ -1118,25 +1060,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       return next;
     });
 
-    // The column tree: the pane leaves its column, the remaining panes of
-    // that column refill it, and a column that runs empty leaves the region.
-    // No other column is touched - panes never migrate across columns.
-    const tree = layoutRef.current;
-    const result = removePane(tree, tabId);
-    if (result.removedColumnId) {
-      const widths = columnPixelWidths(tree, panelWidthRef.current);
-      const index = tree.columns.findIndex((column) => column.id === result.removedColumnId);
-      const kept = widths.filter((_, position) => position !== index);
-      const total = kept.reduce((sum, width) => sum + width, 0);
-      if (total > 0) {
-        // The region gives the freed slot back to the chat column; the
-        // columns that stay keep the width they had.
-        setPanelWidth(total);
-        setLayout(setColumnRatios(result.layout, kept.map((width) => width / total)));
-        return;
-      }
-    }
-    setLayout(result.layout);
+    // The card leaves the wall; the remaining cards close the gap.
+    setLayout((prev) => removePane(prev, tabId));
   }, []);
 
   const activateTab = useCallback<PanelContextValue["activateTab"]>((tabId) => {
@@ -1219,14 +1144,21 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  /** Set the pixel width of every column; the region follows their sum. */
+  /** Set the pixel width of every column; the wall keeps its own width. */
   const setColumnWidths = useCallback((widths: number[]) => {
     applyColumnWidths(widths);
   }, [applyColumnWidths]);
 
-  /** Set the vertical share a pane takes inside its column. */
-  const setPaneRatio = useCallback((columnId: string, paneId: string, ratio: number) => {
-    setLayout((prev) => setPaneRatioInLayout(prev, columnId, paneId, ratio));
+  /** Set the pixel height of every row; the wall keeps its own height. */
+  const setRowHeights = useCallback((heights: number[]) => {
+    const total = heights.reduce((sum, height) => sum + height, 0);
+    if (total <= 0) return;
+    setLayout((prev) => setRowRatios(prev, heights.map((height) => height / total)));
+  }, []);
+
+  /** Expand a card so it fills the wall, or collapse it back into its cell. */
+  const togglePaneExpanded = useCallback((paneId: string) => {
+    setLayout((prev) => toggleExpandedPane(prev, paneId));
   }, []);
 
   const value = useMemo<PanelContextValue>(
@@ -1255,7 +1187,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       openOrActivatePage,
       reorderTabs,
       setColumnWidths,
-      setPaneRatio,
+      setRowHeights,
+      togglePaneExpanded,
     }),
     [
       panelOpen,
@@ -1279,7 +1212,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       openOrActivatePage,
       reorderTabs,
       setColumnWidths,
-      setPaneRatio,
+      setRowHeights,
+      togglePaneExpanded,
     ],
   );
 

@@ -1,261 +1,217 @@
-// The column tree behind the side panel.
-//
-// These cases pin the rules the plan's findings describe: a column is a FIXED
-// slot, closing a pane reflows its own column only, and no pane is ever
-// migrated into another column.
-
 import { describe, expect, it } from "vitest";
-
 import {
   columnPixelWidths,
-  createLayout,
-  familyResolver,
-  formatPaneTreeLabel,
-  isPaneVisible,
+  formatWallSeparatorLabel,
   layoutFromPanes,
+  normalizeShares,
   placePane,
   removePane,
-  resolveTargetColumn,
+  rowPixelHeights,
   sanitizeLayout,
   setActivePane,
   setColumnRatios,
-  setPaneRatio,
-  type WorkspaceLayout,
+  setRowRatios,
+  toggleExpandedPane,
+  wallColumnsFor,
+  wallShapeFor,
+  type PaneIdentity,
 } from "../panels/layout-model";
 
-interface ColumnSpec {
-  panes: string[];
-  ratios?: number[];
-  widthRatio: number;
+function identities(...ids: string[]): PaneIdentity[] {
+  return ids.map((id) => ({ id, pageId: "files" }));
 }
 
-function build(columns: ColumnSpec[], activePaneId: string | null = null): WorkspaceLayout {
-  return {
-    columns: columns.map((column, index) => ({
-      id: `column-${index + 1}`,
-      widthRatio: column.widthRatio,
-      panes: [...column.panes],
-      ratios: column.ratios ?? column.panes.map(() => 1 / column.panes.length),
-    })),
-    activePaneId,
-  };
-}
-
-describe("layout model: closing a pane", () => {
-  const layout = build([
-    { panes: ["files", "files-2"], ratios: [0.5, 0.5], widthRatio: 0.4 },
-    { panes: ["terminal"], widthRatio: 0.6 },
-  ]);
-
-  it("lets the remaining pane of the column fill it", () => {
-    const result = removePane(layout, "files");
-    expect(result.removedColumnId).toBeNull();
-    expect(result.layout.columns[0].panes).toEqual(["files-2"]);
-    expect(result.layout.columns[0].ratios).toEqual([1]);
+describe("wall shape", () => {
+  it("stacks one or two cards in a single column", () => {
+    expect(wallColumnsFor(0)).toBe(1);
+    expect(wallColumnsFor(1)).toBe(1);
+    expect(wallColumnsFor(2)).toBe(1);
   });
 
-  it("leaves the other columns untouched", () => {
-    const result = removePane(layout, "files");
-    expect(result.layout.columns[1]).toEqual(layout.columns[1]);
+  it("switches to a two-column grid from the third card on", () => {
+    expect(wallColumnsFor(3)).toBe(2);
+    expect(wallColumnsFor(4)).toBe(2);
+    expect(wallColumnsFor(5)).toBe(2);
   });
 
-  it("keeps the width ratio of the column it reflowed", () => {
-    const result = removePane(layout, "files");
-    expect(result.layout.columns[0].widthRatio).toBe(0.4);
-  });
-
-  it("removes a column that runs empty and keeps the other columns' ratios", () => {
-    const result = removePane(layout, "terminal");
-    expect(result.removedColumnId).toBe("column-2");
-    expect(result.layout.columns).toHaveLength(1);
-    expect(result.layout.columns[0].widthRatio).toBe(0.4);
-    expect(result.layout.columns[0].panes).toEqual(["files", "files-2"]);
-  });
-
-  it("hands the focus to the pane below the closed one", () => {
-    const withFocus = setActivePane(layout, "files");
-    const result = removePane(withFocus, "files");
-    expect(result.layout.activePaneId).toBe("files-2");
-  });
-
-  it("hands the focus to the column on the left when the last pane goes", () => {
-    const withFocus = setActivePane(layout, "terminal");
-    const result = removePane(withFocus, "terminal");
-    expect(result.layout.activePaneId).toBe("files-2");
-  });
-
-  it("is a no-op for a pane it does not know", () => {
-    const result = removePane(layout, "nope");
-    expect(result.layout).toBe(layout);
-    expect(result.removedColumnId).toBeNull();
+  it("derives the row count from the card count", () => {
+    expect(wallShapeFor(1)).toEqual({ columns: 1, rows: 1 });
+    expect(wallShapeFor(2)).toEqual({ columns: 1, rows: 2 });
+    expect(wallShapeFor(3)).toEqual({ columns: 2, rows: 2 });
+    expect(wallShapeFor(4)).toEqual({ columns: 2, rows: 2 });
+    expect(wallShapeFor(5)).toEqual({ columns: 2, rows: 3 });
   });
 });
 
-describe("layout model: where a new pane lands", () => {
-  const terminalFamily = familyResolver([
-    { id: "term-1", pageId: "terminal" },
-    { id: "term-2", pageId: "terminal" },
-  ]);
-  const mixedFamily = familyResolver([
-    { id: "term-1", pageId: "terminal" },
-    { id: "files-1", pageId: "files" },
-  ]);
-
-  it("puts a pane of another family into a column of its own", () => {
-    const layout = build([{ panes: ["term-1"], widthRatio: 1 }], "term-1");
-    expect(resolveTargetColumn(layout, "files", mixedFamily)).toBeNull();
+describe("layoutFromPanes", () => {
+  it("keeps the card order and splits the wall evenly", () => {
+    const layout = layoutFromPanes(identities("a", "b", "c"));
+    expect(layout.panes).toEqual(["a", "b", "c"]);
+    expect(layout.columns).toBe(2);
+    expect(layout.columnRatios).toEqual([0.5, 0.5]);
+    expect(layout.rowRatios).toEqual([0.5, 0.5]);
+    expect(layout.expandedPaneId).toBeNull();
+    expect(layout.activePaneId).toBe("a");
   });
 
-  it("puts a pane of the active pane's family into the active column", () => {
-    const layout = build([{ panes: ["term-1"], widthRatio: 1 }], "term-1");
-    expect(resolveTargetColumn(layout, "terminal", terminalFamily)).toBe("column-1");
-  });
-
-  it("opens a new column when the active column is full", () => {
-    const layout = build([{ panes: ["term-1", "term-2"], widthRatio: 1 }], "term-1");
-    expect(resolveTargetColumn(layout, "terminal", terminalFamily)).toBeNull();
-  });
-
-  it("appends the new pane at the bottom of its column and splits the height", () => {
-    const layout = build([{ panes: ["term-1"], widthRatio: 1 }], "term-1");
-    const result = placePane(layout, "term-2", "column-1");
-    expect(result.createdColumn).toBe(false);
-    expect(result.layout.columns[0].panes).toEqual(["term-1", "term-2"]);
-    expect(result.layout.columns[0].ratios).toEqual([0.5, 0.5]);
-  });
-
-  it("appends a new column at the right end", () => {
-    const layout = build([{ panes: ["term-1"], widthRatio: 1 }], "term-1");
-    const result = placePane(layout, "files-1", null);
-    expect(result.createdColumn).toBe(true);
-    expect(result.layout.columns).toHaveLength(2);
-    expect(result.layout.columns[1].panes).toEqual(["files-1"]);
+  it("gives a single card the whole wall", () => {
+    const layout = layoutFromPanes(identities("a"));
+    expect(layout.columns).toBe(1);
+    expect(layout.columnRatios).toEqual([1]);
+    expect(layout.rowRatios).toEqual([1]);
   });
 });
 
-describe("layout model: column widths", () => {
-  it("turns the ratios into pixels of the region", () => {
-    const layout = build([
-      { panes: ["a"], widthRatio: 0.25 },
-      { panes: ["b"], widthRatio: 0.75 },
-    ]);
-    expect(columnPixelWidths(layout, 1000)).toEqual([250, 750]);
+describe("placePane", () => {
+  it("appends the card and re-shapes the grid", () => {
+    const layout = placePane(layoutFromPanes(identities("a", "b")), "c");
+    expect(layout.panes).toEqual(["a", "b", "c"]);
+    expect(layout.columns).toBe(2);
+    expect(layout.rowRatios).toHaveLength(2);
   });
 
-  it("normalizes the ratios it is given", () => {
-    const layout = build([
-      { panes: ["a"], widthRatio: 0.5 },
-      { panes: ["b"], widthRatio: 0.5 },
-    ]);
-    const resized = setColumnRatios(layout, [300, 100]);
-    expect(resized.columns[0].widthRatio).toBeCloseTo(0.75);
-    expect(resized.columns[1].widthRatio).toBeCloseTo(0.25);
-  });
-
-  it("keeps a column's width when a pane of another column is closed", () => {
-    const layout = build([
-      { panes: ["a", "b"], ratios: [0.5, 0.5], widthRatio: 0.4 },
-      { panes: ["c"], widthRatio: 0.6 },
-    ]);
-    const result = removePane(layout, "a");
-    const widths = columnPixelWidths(result.layout, 1000);
-    expect(widths[0]).toBeCloseTo(400);
-    expect(widths[1]).toBeCloseTo(600);
+  it("keeps the card where it is when it is already in the wall", () => {
+    const layout = layoutFromPanes(identities("a", "b", "c"));
+    expect(placePane(layout, "b")).toBe(layout);
   });
 });
 
-describe("layout model: vertical split inside a column", () => {
-  it("gives the other panes the rest of the column", () => {
-    const layout = build([{ panes: ["a", "b"], ratios: [0.5, 0.5], widthRatio: 1 }]);
-    const resized = setPaneRatio(layout, "column-1", "a", 0.3);
-    expect(resized.columns[0].ratios[0]).toBeCloseTo(0.3);
-    expect(resized.columns[0].ratios[1]).toBeCloseTo(0.7);
+describe("removePane", () => {
+  it("closes the gap the card leaves behind", () => {
+    const layout = removePane(layoutFromPanes(identities("a", "b", "c")), "b");
+    expect(layout.panes).toEqual(["a", "c"]);
+    expect(layout.columns).toBe(1);
+    expect(layout.rowRatios).toHaveLength(2);
   });
 
-  it("keeps a pane from being squeezed out of the column", () => {
-    const layout = build([{ panes: ["a", "b"], ratios: [0.5, 0.5], widthRatio: 1 }]);
-    const resized = setPaneRatio(layout, "column-1", "a", 0);
-    expect(resized.columns[0].ratios[0]).toBeGreaterThan(0);
-    expect(resized.columns[0].ratios[0] + resized.columns[0].ratios[1]).toBeCloseTo(1);
-  });
-});
-
-describe("layout model: pane visibility", () => {
-  const familyOf = familyResolver([
-    { id: "term-1", pageId: "terminal" },
-    { id: "term-2", pageId: "terminal" },
-    { id: "files-1", pageId: "files" },
-  ]);
-
-  it("shows the focused pane of a family and hides its siblings", () => {
-    const layout = build([{ panes: ["term-1", "term-2"], widthRatio: 1 }], "term-1");
-    expect(isPaneVisible(layout, "column-1", "term-1", familyOf)).toBe(true);
-    expect(isPaneVisible(layout, "column-1", "term-2", familyOf)).toBe(false);
+  it("drops an expanded card that leaves the wall", () => {
+    const expanded = toggleExpandedPane(layoutFromPanes(identities("a", "b")), "b");
+    expect(expanded.expandedPaneId).toBe("b");
+    expect(removePane(expanded, "b").expandedPaneId).toBeNull();
   });
 
-  it("stacks panes of different families", () => {
-    const layout = build([{ panes: ["term-1", "files-1"], widthRatio: 1 }], "term-1");
-    expect(isPaneVisible(layout, "column-1", "term-1", familyOf)).toBe(true);
-    expect(isPaneVisible(layout, "column-1", "files-1", familyOf)).toBe(true);
-  });
-
-  it("keeps a column's own focus when the active pane lives elsewhere", () => {
-    const layout = build([
-      { panes: ["term-1", "term-2"], widthRatio: 0.5 },
-      { panes: ["files-1"], widthRatio: 0.5 },
-    ], "files-1");
-    expect(isPaneVisible(layout, "column-1", "term-1", familyOf)).toBe(true);
-    expect(isPaneVisible(layout, "column-1", "term-2", familyOf)).toBe(false);
+  it("moves the focus to a remaining card", () => {
+    const focused = setActivePane(layoutFromPanes(identities("a", "b")), "b");
+    expect(removePane(focused, "b").activePaneId).toBe("a");
   });
 });
 
-describe("layout model: migration and validation", () => {
-  it("migrates a flat tab list into columns, one per family", () => {
-    const layout = layoutFromPanes([
-      { id: "t1", pageId: "terminal" },
-      { id: "t2", pageId: "terminal" },
-      { id: "f1", pageId: "files" },
-    ]);
-    expect(layout.columns).toHaveLength(2);
-    expect(layout.columns[0].panes).toEqual(["t1", "t2"]);
-    expect(layout.columns[1].panes).toEqual(["f1"]);
+describe("shares", () => {
+  it("normalizes the shares to one", () => {
+    expect(normalizeShares([1, 1], 2)).toEqual([0.5, 0.5]);
+    expect(normalizeShares([3, 1], 2)).toEqual([0.75, 0.25]);
   });
 
-  it("drops panes whose tab is gone and adds tabs the layout never saw", () => {
-    const raw = {
-      columns: [{ id: "column-1", widthRatio: 1, panes: ["t1", "ghost"], ratios: [0.5, 0.5] }],
-      activePaneId: "t1",
+  it("keeps every share above the floor", () => {
+    const shares = normalizeShares([100, 1], 2);
+    expect(shares[0]).toBeLessThan(1);
+    expect(shares[1]).toBeGreaterThan(0);
+    expect(shares[0] + shares[1]).toBeCloseTo(1);
+  });
+
+  it("fills missing shares evenly", () => {
+    expect(normalizeShares(undefined, 3)).toEqual([1 / 3, 1 / 3, 1 / 3]);
+  });
+
+  it("sets the column shares of a wall", () => {
+    const layout = setColumnRatios(layoutFromPanes(identities("a", "b", "c")), [1, 3]);
+    expect(layout.columnRatios[0]).toBeCloseTo(0.25, 5);
+    expect(layout.columnRatios[1]).toBeCloseTo(0.75, 5);
+  });
+
+  it("sets the row shares of a wall", () => {
+    const layout = setRowRatios(layoutFromPanes(identities("a", "b")), [1, 2]);
+    expect(layout.rowRatios[0]).toBeCloseTo(1 / 3, 5);
+    expect(layout.rowRatios[1]).toBeCloseTo(2 / 3, 5);
+  });
+});
+
+describe("toggleExpandedPane", () => {
+  it("expands and collapses the card", () => {
+    const layout = layoutFromPanes(identities("a", "b"));
+    const expanded = toggleExpandedPane(layout, "a");
+    expect(expanded.expandedPaneId).toBe("a");
+    expect(toggleExpandedPane(expanded, "a").expandedPaneId).toBeNull();
+  });
+
+  it("ignores a card that is not in the wall", () => {
+    const layout = layoutFromPanes(identities("a"));
+    expect(toggleExpandedPane(layout, "zzz")).toBe(layout);
+  });
+});
+
+describe("pixel geometry", () => {
+  it("splits the wall between the columns and leaves the gaps out", () => {
+    const layout = layoutFromPanes(identities("a", "b", "c"));
+    const widths = columnPixelWidths(layout, 404, 4);
+    expect(widths).toHaveLength(2);
+    expect(widths[0]).toBe(200);
+    expect(widths[1]).toBe(200);
+    expect(widths[0] + widths[1]).toBe(400);
+  });
+
+  it("splits the wall between the rows and leaves the gaps out", () => {
+    const layout = layoutFromPanes(identities("a", "b"));
+    const heights = rowPixelHeights(layout, 204, 4);
+    expect(heights).toEqual([100, 100]);
+  });
+
+  it("returns nothing when the wall has no size yet", () => {
+    const layout = layoutFromPanes(identities("a", "b", "c"));
+    expect(columnPixelWidths(layout, 0, 4)).toEqual([]);
+    expect(rowPixelHeights(layout, 0, 4)).toEqual([]);
+  });
+});
+
+describe("sanitizeLayout", () => {
+  it("drops cards that no longer exist", () => {
+    const stored = {
+      panes: ["a", "gone"],
+      columns: 1,
+      columnRatios: [1],
+      rowRatios: [0.5, 0.5],
+      expandedPaneId: null,
+      activePaneId: "a",
     };
-    const layout = sanitizeLayout(raw, [
-      { id: "t1", pageId: "terminal" },
-      { id: "f1", pageId: "files" },
-    ]);
-    expect(layout).not.toBeNull();
-    expect(layout!.columns[0].panes).toEqual(["t1"]);
-    expect(layout!.columns.some((column) => column.panes.includes("f1"))).toBe(true);
-    expect(layout!.activePaneId).toBe("t1");
+    const layout = sanitizeLayout(stored, identities("a", "b"));
+    expect(layout?.panes).toEqual(["a"]);
   });
 
-  it("rejects a payload that is not a layout", () => {
-    expect(sanitizeLayout(null, [])).toBeNull();
-    expect(sanitizeLayout({ columns: "nope" }, [])).toBeNull();
+  it("drops an expanded card that no longer exists", () => {
+    const stored = {
+      panes: ["a"],
+      columns: 1,
+      columnRatios: [1],
+      rowRatios: [1],
+      expandedPaneId: "gone",
+      activePaneId: "a",
+    };
+    expect(sanitizeLayout(stored, identities("a"))?.expandedPaneId).toBeNull();
+  });
+
+  it("rejects a payload that is not a wall", () => {
+    expect(sanitizeLayout(null, identities("a"))).toBeNull();
+    expect(sanitizeLayout({ columns: [] }, identities("a"))).toBeNull();
+  });
+
+  it("rejects the legacy column tree so it is migrated instead", () => {
+    const legacy = { columns: [{ id: "c1", widthRatio: 1, panes: ["a"], ratios: [1] }], activePaneId: "a" };
+    expect(sanitizeLayout(legacy, identities("a"))).toBeNull();
   });
 });
 
-describe("layout model: separator names", () => {
-  it("spells out the panes on both sides of the separator", () => {
-    expect(formatPaneTreeLabel(["文件", "终端"], ["浏览器"]))
-      .toBe("调整 文件，终端 和 浏览器 的大小");
+describe("formatWallSeparatorLabel", () => {
+  it("names both sides of the boundary", () => {
+    expect(formatWallSeparatorLabel(["Files"], ["Terminal", "Browser"]))
+      .toBe("调整 Files 和 Terminal 和 Browser 的大小");
   });
 
-  it("keeps the order of the panes", () => {
-    expect(formatPaneTreeLabel(["a", "b", "c"], ["d"]))
-      .toBe("调整 a，b，c 和 d 的大小");
+  it("names a boundary with only one side", () => {
+    expect(formatWallSeparatorLabel([], ["Files"])).toBe("调整 Files 的大小");
+    expect(formatWallSeparatorLabel(["Files"], [])).toBe("调整 Files 的大小");
   });
-});
 
-describe("layout model: empty layout", () => {
-  it("starts without columns", () => {
-    expect(createLayout()).toEqual({ columns: [], activePaneId: null });
+  it("falls back when neither side has a card", () => {
+    expect(formatWallSeparatorLabel([], [])).toBe("调整面板的大小");
   });
 });

@@ -1,20 +1,21 @@
+// apps/desktop/src/renderer/components/layout/PanelZone.tsx
 "use client";
 
-import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel } from "@/hooks/usePanel";
-import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
+import { PanelCard } from "./panels/PanelCard";
+import { WALL_PAGE_IDS } from "./panels/wall-pages";
 import {
   columnPixelWidths,
-  familyResolver,
-  formatPaneTreeLabel,
-  isPaneVisible,
-  type ColumnId,
-  type PaneId,
+  formatWallSeparatorLabel,
+  rowPixelHeights,
+  wallShape,
 } from "./panels/layout-model";
 import { ResizeHandle } from "./ResizeHandle";
-import { SidebarLeftCollapseIcon, SidebarLeftExpandIcon, CornersInIcon, CornersOutIcon } from "@/components/icons";
+import { SidebarLeftCollapseIcon, SidebarLeftExpandIcon, CornersInIcon, CornersOutIcon, PlusIcon } from "@/components/icons";
+import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useConversationStore } from "@/stores/conversation-store";
 import {
   setTaskDrawerOpen,
@@ -22,10 +23,10 @@ import {
 } from "./task-drawer-store";
 import type { CSSProperties } from "react";
 
-// `office` is a passive surface — opened by events
-// (`duya:open-office-panel`), so it is intentionally absent from both
-// this launcher and the add-page menu.
-const EMPTY_LAUNCHER_ORDER: PageId[] = ["review", "terminal", "browser", "files", "conductor"];
+/** The gap between two cards of the wall, in pixels. */
+const WALL_GAP = 4;
+/** The wall's own padding, in pixels. */
+const WALL_PADDING = 4;
 
 function shortcutFor(id: PageId): string | null {
   switch (id) {
@@ -33,7 +34,6 @@ function shortcutFor(id: PageId): string | null {
     case "browser": return "Ctrl+T";
     case "review": return "Ctrl+Shift+G";
     case "files": return "Ctrl+P";
-    case "conductor": return "Ctrl+Alt+S";
     default: return null;
   }
 }
@@ -46,6 +46,8 @@ export function PanelZone() {
     setPanelWidth,
     togglePanel,
     openOrActivatePage,
+    activateTab,
+    closePanel,
     rememberUserWidth,
     resetPanelWidth,
     tabs,
@@ -54,7 +56,8 @@ export function PanelZone() {
     workspaceExpanded,
     setWorkspaceExpanded,
     setColumnWidths,
-    setPaneRatio,
+    setRowHeights,
+    togglePaneExpanded,
   } = usePanel();
   const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
@@ -65,16 +68,18 @@ export function PanelZone() {
   // Last width produced by the in-flight drag; committed to the per-page
   // width memory on drag end.
   const lastDragWidthRef = useRef(panelWidth);
-  // Widths of the columns when the in-flight column drag started.
+  // Widths of the columns / heights of the rows when the in-flight drag
+  // started. The drag reports the offset from that point, not a step.
   const columnResizeStartRef = useRef<number[]>([]);
-  // Height of the panel content area: the columns fill it, so it converts a
-  // pane's vertical share into pixels.
-  const contentRef = useRef<HTMLDivElement | null>(null);
-  const [contentHeight, setContentHeight] = useState(0);
+  const rowResizeStartRef = useRef<number[]>([]);
+  // The wall's own size: the separators sit in the gaps between the cards,
+  // so their positions need the pixel geometry of the wall.
+  const wallRef = useRef<HTMLDivElement | null>(null);
+  const [wallSize, setWallSize] = useState({ width: 0, height: 0 });
   const taskDrawerOpen = useTaskDrawerOpen();
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const activeDescriptor = activeTab ? getPageDescriptor(activeTab.pageId) : null;
   const activePanelMinWidth = activeDescriptor?.minWidth ?? 340;
   const activePanelMaxWidth = activeDescriptor?.maxWidth === null
@@ -89,14 +94,20 @@ export function PanelZone() {
   } as CSSProperties;
 
   const tabsById = useMemo(() => new Map(tabs.map((tab) => [tab.id, tab])), [tabs]);
-  const familyOf = useMemo(
-    () => familyResolver(tabs.map((tab) => ({ id: tab.id, pageId: tab.pageId }))),
-    [tabs],
-  );
+  const { columns, rows } = wallShape(layout);
+  // The wall fills the region, so the region's width is the best guess
+  // before the wall has been measured.
+  const wallWidth = wallSize.width > 0 ? wallSize.width : panelWidth;
+  const wallHeight = wallSize.height;
   const columnWidths = useMemo(
-    () => columnPixelWidths(layout, panelWidth),
-    [layout, panelWidth],
+    () => columnPixelWidths(layout, wallWidth, WALL_GAP),
+    [layout, wallWidth],
   );
+  const rowHeights = useMemo(
+    () => rowPixelHeights(layout, wallHeight, WALL_GAP),
+    [layout, wallHeight],
+  );
+  const expandedPaneId = layout.expandedPaneId;
 
   // The panel is normally anchored to a chat session, so non-session views
   // force-close it (it would otherwise be open with no toggle in reach).
@@ -174,12 +185,16 @@ export function PanelZone() {
     }
   }, [activePanelMinWidth, panelOpen, panelWidth, setPanelWidth]);
 
-  // The content area's height is what turns a pane's vertical share into
-  // pixels.
+  // Measure the wall so the separators can sit in the gaps between the
+  // cards. The grid itself is laid out in `fr` units, so it does not depend
+  // on this measurement.
   useEffect(() => {
-    const element = contentRef.current;
+    const element = wallRef.current;
     if (!element) return;
-    const measure = () => setContentHeight(element.getBoundingClientRect().height);
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      setWallSize({ width: rect.width, height: rect.height });
+    };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
@@ -187,44 +202,35 @@ export function PanelZone() {
     return () => observer.disconnect();
   }, []);
 
-  const titleOf = useCallback(
-    (paneId: PaneId) => tabsById.get(paneId)?.title ?? "",
-    [tabsById]
-  );
-
-  /**
-   * The accessible name of the separator between two columns: it spells out
-   * the panes on each side, so the whole pane tree can be read out.
-   */
+  /** The card titles of the grid cells left / right of a column boundary. */
   const columnSeparatorLabel = useCallback(
     (columnIndex: number) => {
       const left: string[] = [];
       const right: string[] = [];
-      layout.columns.forEach((column, index) => {
-        for (const paneId of column.panes) {
-          (index < columnIndex ? left : right).push(titleOf(paneId));
-        }
+      layout.panes.forEach((paneId, index) => {
+        const title = tabsById.get(paneId)?.title ?? "";
+        ((index % columns) < columnIndex ? left : right).push(title);
       });
-      return formatPaneTreeLabel(left, right);
+      return formatWallSeparatorLabel(left, right);
     },
-    [layout.columns, titleOf]
+    [columns, layout.panes, tabsById]
   );
 
-  /** The accessible name of the separator between two stacked panes. */
-  const paneSeparatorLabel = useCallback(
-    (columnId: ColumnId, paneIndex: number) => {
-      const column = layout.columns.find((candidate) => candidate.id === columnId);
-      if (!column) return formatPaneTreeLabel([], []);
-      // The separator sits between the pane above it and the pane below it.
-      return formatPaneTreeLabel(
-        column.panes.slice(0, paneIndex).map(titleOf),
-        column.panes.slice(paneIndex).map(titleOf),
-      );
+  /** The card titles above / below a row boundary. */
+  const rowSeparatorLabel = useCallback(
+    (rowIndex: number) => {
+      const above: string[] = [];
+      const below: string[] = [];
+      layout.panes.forEach((paneId, index) => {
+        const title = tabsById.get(paneId)?.title ?? "";
+        (Math.floor(index / columns) < rowIndex ? above : below).push(title);
+      });
+      return formatWallSeparatorLabel(above, below);
     },
-    [layout.columns, titleOf]
+    [columns, layout.panes, tabsById]
   );
 
-  /** Move the boundary between two columns; the region keeps its width. */
+  /** Move the boundary between two columns; the wall keeps its width. */
   const handleColumnResize = useCallback(
     (columnIndex: number, delta: number) => {
       const start = columnResizeStartRef.current;
@@ -252,32 +258,158 @@ export function PanelZone() {
     [columnWidths, setColumnWidths]
   );
 
-  /** Move the boundary between two stacked panes of a column. */
-  const handlePaneResize = useCallback(
-    (columnId: ColumnId, paneId: PaneId, delta: number) => {
-      if (contentHeight <= 0) return;
-      const column = layout.columns.find((candidate) => candidate.id === columnId);
-      const ratio = column?.ratios[column.panes.indexOf(paneId)] ?? 0.5;
-      setPaneRatio(columnId, paneId, ratio - delta / contentHeight);
+  /** Move the boundary between two rows; the wall keeps its height. */
+  const handleRowResize = useCallback(
+    (rowIndex: number, delta: number) => {
+      const start = rowResizeStartRef.current;
+      if (start.length !== rowHeights.length) return;
+      const next = [...start];
+      next[rowIndex - 1] -= delta;
+      next[rowIndex] += delta;
+      setRowHeights(next);
     },
-    [layout.columns, setPaneRatio, contentHeight]
+    [rowHeights.length, setRowHeights]
   );
 
-  const renderPane = useCallback(
-    (paneId: PaneId) => {
+  /** Absolute height request for the row above the separator. */
+  const handleRowHeightRequest = useCallback(
+    (rowIndex: number, height: number) => {
+      const start = rowResizeStartRef.current.length === rowHeights.length
+        ? rowResizeStartRef.current
+        : rowHeights;
+      const next = [...start];
+      const delta = next[rowIndex - 1] - height;
+      next[rowIndex - 1] = height;
+      next[rowIndex] += delta;
+      setRowHeights(next);
+    },
+    [rowHeights, setRowHeights]
+  );
+
+  const menuItems: MenuAction[] = useMemo(
+    () => WALL_PAGE_IDS.map((id) => {
+      const entry = PAGE_REGISTRY[id];
+      return {
+        kind: "action" as const,
+        id: entry.id,
+        label: t(entry.labelKey),
+        shortcut: shortcutFor(entry.id) ?? undefined,
+        disabled: !entry.available,
+        description: !entry.available ? t("panel.unavailable") : undefined,
+        iconLeft: <entry.icon size={15} stroke={1.5} />,
+        onSelect: () => openPage(entry.id),
+      };
+    }),
+    [openPage, t]
+  );
+
+  const wallStyle = {
+    gridTemplateColumns: layout.columnRatios.map((ratio) => `minmax(0, ${ratio}fr)`).join(" "),
+    gridTemplateRows: layout.rowRatios.map((ratio) => `minmax(0, ${ratio}fr)`).join(" "),
+  } as CSSProperties;
+
+  const cardStyle = useCallback(
+    (index: number): CSSProperties => {
+      if (expandedPaneId) {
+        // The expanded card fills the wall; the other cards stay mounted but
+        // out of sight (a browser webview must keep its state).
+        return { gridArea: "1 / 1 / -1 / -1" };
+      }
+      return {
+        gridColumn: (index % columns) + 1,
+        gridRow: Math.floor(index / columns) + 1,
+      };
+    },
+    [columns, expandedPaneId]
+  );
+
+  const renderCard = useCallback(
+    (paneId: string) => {
       const tab = tabsById.get(paneId);
       if (!tab) return null;
-      const Component = getPageDescriptor(tab.pageId).component;
-      return <Component tab={tab} embedded />;
+      const descriptor = getPageDescriptor(tab.pageId);
+      const Component = descriptor.component;
+      const isExpanded = expandedPaneId === paneId;
+      const hidden = Boolean(expandedPaneId) && !isExpanded;
+      return (
+        <div
+          key={paneId}
+          className="panel-wall-cell"
+          data-pane-id={paneId}
+          style={{
+            ...cardStyle(layout.panes.indexOf(paneId)),
+            display: hidden ? "none" : undefined,
+          }}
+        >
+          <PanelCard
+            tab={tab}
+            icon={descriptor.icon}
+            expanded={isExpanded}
+            expandable={layout.panes.length > 1}
+            onActivate={() => activateTab(paneId)}
+            onToggleExpand={() => togglePaneExpanded(paneId)}
+            onClose={() => closePanel(paneId)}
+          >
+            <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
+              <Component tab={tab} embedded />
+            </Suspense>
+          </PanelCard>
+        </div>
+      );
     },
-    [tabsById]
+    [cardStyle, closePanel, expandedPaneId, layout.panes, tabsById, togglePaneExpanded, activateTab]
   );
+
+  /**
+   * The position of the separator between column `index - 1` and column
+   * `index`. The grid shares are the widths between the gaps, so the
+   * boundary sits one gap past the shared width.
+   */
+  const columnBoundaryLeft = useCallback(
+    (index: number) => {
+      const shared = layout.columnRatios
+        .slice(0, index)
+        .reduce((sum, ratio) => sum + ratio, 0);
+      const gapOffset = WALL_PADDING + index * WALL_GAP - WALL_GAP / 2;
+      if (wallSize.width > 0) {
+        const usable = Math.max(
+          0,
+          wallSize.width - WALL_PADDING * 2 - WALL_GAP * (columns - 1),
+        );
+        return `${WALL_PADDING + shared * usable + index * WALL_GAP - WALL_GAP / 2}px`;
+      }
+      return `calc(${shared * 100}% + ${gapOffset}px)`;
+    },
+    [columns, layout.columnRatios, wallSize.width]
+  );
+
+  /** The position of the separator between two rows. */
+  const rowBoundaryTop = useCallback(
+    (index: number) => {
+      const shared = layout.rowRatios
+        .slice(0, index)
+        .reduce((sum, ratio) => sum + ratio, 0);
+      const gapOffset = WALL_PADDING + index * WALL_GAP - WALL_GAP / 2;
+      if (wallSize.height > 0) {
+        const usable = Math.max(
+          0,
+          wallSize.height - WALL_PADDING * 2 - WALL_GAP * (rows - 1),
+        );
+        return `${WALL_PADDING + shared * usable + index * WALL_GAP - WALL_GAP / 2}px`;
+      }
+      return `calc(${shared * 100}% + ${gapOffset}px)`;
+    },
+    [layout.rowRatios, rows, wallSize.height]
+  );
+
+  const emptyCells = Math.max(0, columns * rows - layout.panes.length);
 
   return (
     <div
       className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${workspaceExpanded ? " panel-zone-expanded" : ""}${resizing ? " panel-zone-resizing" : ""}`}
       data-page-id={activeTab?.pageId ?? "none"}
-      data-column-count={layout.columns.length}
+      data-wall-columns={columns}
+      data-wall-rows={rows}
       style={zoneStyle}
     >
       {(isSessionView || panelOpen) && (
@@ -340,81 +472,96 @@ export function PanelZone() {
         style={{ width: workspaceExpanded ? "100%" : panelWidth }}
         aria-hidden={!panelOpen}
       >
-        {tabs.length > 0 && <PanelHeader />}
-        <div className="sidebar-panel-content" ref={contentRef}>
-          {layout.columns.length === 0 ? (
-            <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
-              <EmptyPanelLauncher onSelect={openPage} />
-            </Suspense>
-          ) : (
-            <div className="panel-columns">
-              {layout.columns.map((column, columnIndex) => (
-                <Fragment key={column.id}>
-                  {columnIndex > 0 && (
-                    <div className="panel-column-separator">
-                      <ResizeHandle
-                        side="right"
-                        onResizeStart={() => {
-                          columnResizeStartRef.current = columnWidths;
-                        }}
-                        onResize={(delta) => handleColumnResize(columnIndex, delta)}
-                        width={columnWidths[columnIndex - 1]}
-                        minWidth={MIN_PANEL_WIDTH}
-                        onWidthRequest={(width) => handleColumnWidthRequest(columnIndex, width)}
-                        label={columnSeparatorLabel(columnIndex)}
-                      />
-                    </div>
-                  )}
-                  <div
-                    className="panel-column"
-                    style={{ flex: `0 0 ${columnWidths[columnIndex] ?? 0}px` }}
-                  >
-                    {column.panes.map((paneId, paneIndex) => {
-                      const visible = isPaneVisible(layout, column.id, paneId, familyOf);
-                      const ratio = column.ratios[paneIndex] ?? 1;
-                      return (
-                        <Fragment key={paneId}>
-                          {paneIndex > 0 && (
-                            <div className="panel-pane-separator">
-                              <ResizeHandle
-                                side="top"
-                                onResize={(delta) => handlePaneResize(column.id, paneId, delta)}
-                                onWidthRequest={(target) => {
-                                  if (contentHeight <= 0) return;
-                                  setPaneRatio(column.id, paneId, target / contentHeight);
-                                }}
-                                width={ratio * contentHeight}
-                                minWidth={0}
-                                label={paneSeparatorLabel(column.id, paneIndex)}
-                              />
-                            </div>
-                          )}
-                          <div
-                            className={`panel-column-pane${visible ? "" : " panel-column-pane-hidden"}`}
-                            style={{ flexGrow: ratio }}
-                            aria-hidden={!visible}
-                            data-pane-id={paneId}
-                          >
-                            <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
-                              {renderPane(paneId)}
-                            </Suspense>
-                          </div>
-                        </Fragment>
-                      );
-                    })}
-                  </div>
-                </Fragment>
-              ))}
+        <div className="panel-wall-toolbar">
+          <span className="panel-wall-toolbar-spacer" />
+          <DropdownMenu
+            trigger={
+              <button
+                type="button"
+                className="panel-wall-add"
+                title={t('panel.addPage')}
+                aria-label={t('panel.addPage')}
+              >
+                <PlusIcon size={14} stroke={1.5} />
+              </button>
+            }
+            items={menuItems}
+            className="panel-add-menu"
+          />
+        </div>
+        {layout.panes.length === 0 ? (
+          <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
+            <EmptyPanelLauncher onSelect={openPage} />
+          </Suspense>
+        ) : (
+        <div className="panel-wall" ref={wallRef} style={wallStyle}>
+          {layout.panes.map((paneId) => renderCard(paneId))}
+          {emptyCells > 0 && !expandedPaneId && (
+            <div
+              className="panel-wall-cell panel-wall-cell-empty"
+              style={{
+                gridColumn: (layout.panes.length % columns) + 1,
+                gridRow: Math.floor(layout.panes.length / columns) + 1,
+              }}
+            >
+              <button
+                type="button"
+                className="panel-wall-add-tile"
+                title={t('panel.addPage')}
+                aria-label={t('panel.addPage')}
+                onClick={() => openPage(WALL_PAGE_IDS[0])}
+              >
+                <PlusIcon size={16} stroke={1.5} />
+              </button>
             </div>
           )}
+          {!expandedPaneId && Array.from({ length: Math.max(0, columns - 1) }, (_, index) => (
+            <div
+              key={`column-separator-${index}`}
+              className="panel-wall-separator panel-wall-separator-column"
+              style={{ left: columnBoundaryLeft(index + 1) }}
+            >
+              <ResizeHandle
+                side="right"
+                onResizeStart={() => {
+                  columnResizeStartRef.current = columnWidths;
+                }}
+                onResize={(delta) => handleColumnResize(index + 1, delta)}
+                width={columnWidths[index]}
+                minWidth={MIN_PANEL_WIDTH}
+                onWidthRequest={(width) => handleColumnWidthRequest(index + 1, width)}
+                label={columnSeparatorLabel(index + 1)}
+              />
+            </div>
+          ))}
+          {!expandedPaneId && Array.from({ length: Math.max(0, rows - 1) }, (_, index) => (
+            <div
+              key={`row-separator-${index}`}
+              className="panel-wall-separator panel-wall-separator-row"
+              style={{ top: rowBoundaryTop(index + 1) }}
+            >
+              <ResizeHandle
+                side="top"
+                onResizeStart={() => {
+                  rowResizeStartRef.current = rowHeights;
+                }}
+                onResize={(delta) => handleRowResize(index + 1, delta)}
+                width={rowHeights[index]}
+                minWidth={0}
+                onWidthRequest={(height) => handleRowHeightRequest(index + 1, height)}
+                label={rowSeparatorLabel(index + 1)}
+              />
+            </div>
+          ))}
         </div>
+        )}
       </div>
     </div>
   );
 }
 
 function EmptyPanelLauncher({ onSelect }: { onSelect: (pageId: PageId) => void }) {
-  const entries = EMPTY_LAUNCHER_ORDER.map((id) => PAGE_REGISTRY[id]);
+  const entries = WALL_PAGE_IDS.map((id) => PAGE_REGISTRY[id]);
 
   return (
     <div className="panel-empty-launcher">
