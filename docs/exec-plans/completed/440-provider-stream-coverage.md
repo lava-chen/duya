@@ -112,7 +112,7 @@ interface ProviderBlockContent {
   upstream payload), plus cases added to `anthropic-robustness.test.ts`,
   `openai-completions-robustness.test.ts`, and a **NEW**
   `openai-responses.test.ts` (currently no coverage at all).
-- After union changes: update [ARCHITECTURE.md](../../../ARCHITECTURE.md).
+- After union changes: update [ARCHITECTURE.md](../../architecture/ARCHITECTURE.md).
 
 Out of scope: audio blocks (#7, won't-fix by design); citation rendering
 UI; actually *enabling* server-side tools (a separate feature plan — 440

@@ -403,8 +403,8 @@ duya projects cleanup [--dry-run] [--archive-dir <path>]
 
 ## 7. 关联文档
 
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) § Profile/Mode/Permission（474 引用）
-- [ARCHITECTURE.md](../../ARCHITECTURE.md) § IPC Architecture（L1 数据流）
+- [ARCHITECTURE.md](../../architecture/ARCHITECTURE.md) § Profile/Mode/Permission（474 引用）
+- [ARCHITECTURE.md](../../architecture/ARCHITECTURE.md) § IPC Architecture（L1 数据流）
 - plan 525 §2.4 projects.paths JSON 形状
 - plan 534 §3 phases（projects 表迁 duya-core.db）
 - plan 474 §2.1 bot section 模块群

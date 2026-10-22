@@ -39,7 +39,6 @@ const ROOT_CONFIG_FILES = [
   'postcss.config.mjs',
   'test-setup.ts',
   'vite.config.ts',
-  'vitest.config.501.mts',
   'vitest.config.ts',
 ];
 const SOURCE_EXTENSIONS = new Set([

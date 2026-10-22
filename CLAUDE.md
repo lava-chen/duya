@@ -12,9 +12,9 @@ build commands, wrong DB path, wrong Electron version). It is now a pointer.
 | You want | Read |
 | --- | --- |
 | The map, commands, gates, git workflow, footguns | [AGENTS.md](./AGENTS.md) |
-| **Which package to open for a symptom** | [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md) |
+| **Which package to open for a symptom** | [ARCHITECTURE_MAP.md](docs/architecture/ARCHITECTURE_MAP.md) |
 | One specific package's responsibility + debug entries | `packages/<pkg>/AGENTS.md` |
-| Design and data flows | [ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Design and data flows | [ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md) |
 | What is being worked on right now | [docs/exec-plans/README.md](./docs/exec-plans/README.md) |
 
 ## If a path here looks wrong

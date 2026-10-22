@@ -6,7 +6,7 @@
 > **Status**: 未开始（本文件只做设计记录，三个阶段都还没有代码落地）
 > **Priority**: P1（P2 有独立性能收益但不阻塞任何发布）
 > **Created**: 2026-10-01
-> **Related**: [ARCHITECTURE.md](../../../../../ARCHITECTURE.md)（HTTP+SSE 三层分离）、`packages/agent-protocol/src/envelope.ts`（`SEQ_CONTRACT`）、`electron/agents/server/router.ts`（SSE 写入与背压）、`electron/agents/server/checkpoint-batcher.ts`（仓库里已有的时间窗 + 批量模式）
+> **Related**: [ARCHITECTURE.md](../../../../architecture/ARCHITECTURE.md)（HTTP+SSE 三层分离）、`packages/agent-protocol/src/envelope.ts`（`SEQ_CONTRACT`）、`electron/agents/server/router.ts`（SSE 写入与背压）、`electron/agents/server/checkpoint-batcher.ts`（仓库里已有的时间窗 + 批量模式）
 
 ---
 

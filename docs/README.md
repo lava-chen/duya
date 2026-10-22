@@ -4,8 +4,9 @@
 
 | 要解决的问题 | 位置 | 维护内容 |
 | --- | --- | --- |
+| 中文用户入口 | [README.zh-CN.md](README.zh-CN.md) | 产品介绍与快速开始 |
 | agent 开工规则 | [根 AGENTS.md](../AGENTS.md)、子树 AGENTS.md | 全仓约束、局部例外 |
-| 系统如何工作 | [ARCHITECTURE.md](../ARCHITECTURE.md)、[ARCHITECTURE_MAP.md](../ARCHITECTURE_MAP.md) | 职责、数据流、定位入口 |
+| 系统如何工作 | [architecture/](architecture/README.md) | 职责、数据流、定位入口 |
 | 本次做什么、接着做什么 | [exec-plans/](exec-plans/README.md) | 任务、验收、证据、接续 |
 | 开发操作怎么做 | [development/](development/README.md) | 构建、测试、worktree、发布 |
 | 为什么这样设计 | [design-docs/](design-docs/README.md) | 决策、理由、替代方案 |
@@ -17,7 +18,7 @@
 
 - `exec-plans/archive/` 保存新完成或被替代的计划；已有计划进入归档时保留证据并更新引用。
 - `exec-plans/completed/` 混有已跟踪与未跟踪的旧档案，保持原位；它不是当前队列，也不要批量加入 Git。
-- [architecture/](architecture/README.md) 是旧架构资料的兼容入口；恢复材料的来源与契约并入所属执行计划。
+- [architecture/](architecture/README.md) 是当前系统架构、定位地图与相关历史报告的入口。
 - `docs-local/` 是本机的研究、草稿与运行产物。可复现开发所需的规则、结论和证据摘要必须提升到 `docs/`。
 
 ## 新文档放哪里

@@ -5,7 +5,7 @@
 ## Overview
 
 Monorepo / Agent Harness changes follow the single execution plan
-[587](./docs/exec-plans/active/587-agent-harness-monorepo/README.md).
+[587](../exec-plans/active/587-agent-harness-monorepo/README.md).
 Its contracts and phase gates define the target; this document describes
 the current implementation. Historical RFCs and migration schedules are
 centralized in that plan's reference directory.
@@ -1683,7 +1683,7 @@ is not declared is what the gate blocks on.
 ### Where a symptom lives
 
 This is the short version. The full symptom-to-file table, with evidence for
-every row, is in [ARCHITECTURE_MAP.md](./ARCHITECTURE_MAP.md); each
+every row, is in [ARCHITECTURE_MAP.md](ARCHITECTURE_MAP.md); each
 package also carries its own `AGENTS.md` with the same information scoped to
 that package.
 
