@@ -26,10 +26,10 @@ base：96dadf4d · owner：mavis
 
 | 切片 | 分支 / worktree | 独占路径 | 依赖 |
 | --- | --- | --- | --- |
-| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
+| **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
 | **B 脱窗（Electron 侧）** | `codex/panel-layout-detach` / `panel-layout-detach` | `apps/desktop/src/main/**`；`apps/desktop/src/preload/**` | 本计划（IPC 契约与 A 的数据模型解耦，只用字符串参数） |
-| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
-| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css` | 与 A 无冲突，可并行 |
+| **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；新增 `packages/ui/src/components/layout/PaneDragHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
+| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css`；`packages/ui/src/styles/globals.css`（仅新增分桶调色板变量） | 与 A 无冲突，可并行 |
 
 集成顺序：**A → C**；B、D 独立，可各自先合。
 
@@ -101,6 +101,9 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
 - **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
+- **CI 只对 base=master 的 PR 触发**（`.github/workflows/test.yml:19-20` 是 `pull_request: branches: [master]`）。切片 A/B/D 的 PR 因此一律 base=master，计划文件随之进入各 PR（单独的"计划 PR"随之关闭）。堆叠到非默认分支会拿不到"必需检查通过"的证据。
+- **`ResizeHandle.tsx` 归切片 A 而不是 C**：列内堆叠需要纵向分隔条，而现有实现只有横向（`ResizeHandle.tsx:6` 的 `side: "left" | "right"`、`:143` 写死 `aria-orientation="vertical"`）。C 不碰它，改为新建 `PaneDragHandle.tsx`。
+- **分隔条命名沿用现有无障碍基础**：`ResizeHandle.tsx` 已有 `role="separator"` / `aria-orientation` / `aria-label` / `aria-valuenow|min|max` / 键盘方向键步进 / Home / End / Enter 重置 / 双击重置（`:104-168`）。新列树沿用这一套，`aria-label` 按 `调整 <左侧所有 pane> 和 <右侧所有 pane> 的大小`（纵向则是「上方 / 下方」）命名。
 
 ## 验证记录
 
