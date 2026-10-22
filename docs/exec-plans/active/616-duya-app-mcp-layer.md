@@ -5,6 +5,7 @@
 > **前置**：[580 MCP 能力核收敛](./580-mcp-capability-core-convergence.md)（catalog/exposure/tool_invoke 机制）、[452 MCP Direct 暴露](./452-mcp-direct-and-plugin-unification.md)（暴露开关）
 > **用户决策**（2026-10-19）：canvas 系列 + bot 系列 + browser 系列工具，从常规注册工具改为 **内置 MCP server `duya_app`** 的工具；只保留基础工具在常规工具集。
 > **用户决策**（2026-10-20）：**canvas 系列不再由 616 迁移**——即将从 app 内部剥离、改为对外提供服务，由他人负责。616 保留的是**共享面**（命名空间反解 + 权限 + profile 规则），不是某一类工具的注册面。
+> **决策修订（2026-10-22）**：Browser、Computer Use、Conductor Canvas 均改由独立计划 [外置能力迁移](./2026-10-22-external-capability-migration.md) 推进；不要执行本文中将 Browser / Computer Use 注册到 `duya_app` 的旧 T610d / T610d2 描述。616 的 MCP 基础设施、bot 和其余产品能力范围按各自验收继续。
 
 ## 0. 一句话
 
