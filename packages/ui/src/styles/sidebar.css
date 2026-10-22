@@ -822,12 +822,14 @@ html[data-glass-repair] .attachment-preview-overlay {
 .project-group-threads {
   /* Match the project header's side margins so thread hover/active
    * surfaces span the same width, while row titles keep their alignment.
-   * Codex parity (2026-10-22): 5px between the nested session rows, so the
-   * group reads as a stack of 31px rows instead of a wall. */
+   * Reference parity (2026-10-22): 1px between the nested session rows.
+   * Measured off a Claude Code desktop capture: the selected row's highlight
+   * is 26.4 CSS px tall and consecutive titles sit 27.2 CSS px apart, so the
+   * rows are 1px apart. duya's old 5px gap was a full extra 4px per row. */
   margin: 0.1rem 0.5rem 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 1px;
 }
 
 .project-group-expand-all {
@@ -996,9 +998,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   transition: opacity 0.15s ease;
 }
 
-/* The pin + menu buttons are a sibling of `.thread-item-actions`, positioned
-   against the row itself so they always sit inside its right padding and are
-   never clipped by the list's overflow. On hover they overlay the default
+/* The ⋯ 更多 button is a sibling of `.thread-item-actions`, positioned
+   against the row itself so it always sits inside its right padding and is
+   never clipped by the list's overflow. On hover it overlays the default
    content (which fades out), giving a clean replace-not-overlap effect. */
 .thread-item-actions-hover {
   position: absolute;
@@ -1039,10 +1041,12 @@ html[data-glass-repair] .attachment-preview-overlay {
 /* Sidebar navigation rows use a consistent, full-width hit target. The
    shared ThreadListItem also appears outside the sidebar, so keep this
    geometry and the softer state colors scoped to the navigation surface.
-   Codex parity (2026-10-22): the row is 26px tall with a 5px gap, giving a
-   31px pitch — measured off a real Codex capture at devicePixelRatio 1.25.
-   duya shipped 38px rows, which is why a 20-session list needed a scroll
-   that Codex does not: the extra 7px per row costs 140px over 20 rows. */
+   Reference parity (2026-10-22): the row is 26px tall with a 1px gap, so
+   the pitch is 27px. Measured off a Claude Code desktop capture at
+   devicePixelRatio 1.25: the selected row's highlight is 26.4 CSS px tall
+   and consecutive titles sit 27.2 CSS px apart. duya shipped 38px rows with
+   a 5px gap (39px pitch), which is why a 20-session list needed a scroll
+   the reference does not: the extra 12px per row costs 240px over 20 rows. */
 .app-sidebar .thread-item {
   height: 26px;
   min-height: 26px;
@@ -1064,15 +1068,15 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .app-sidebar .thread-item:hover .thread-item-title {
-  /* Reserve room for the hover overlay (pin + ⋮). At the 26px row height
-     the two 20px buttons need 44px; 48 leaves a hair of breathing room
-     without the title shifting as far as it did at the old 52px. */
-  padding-right: 48px;
+  /* Reserve room for the hover overlay. The row now carries a single action
+     button (⋮ 更多, 20px, 6px from the right edge) instead of the old pin + ⋮
+     pair, so the reservation drops from 48px to 8px - the title keeps more of
+     its length on hover instead of ellipsising early. */
+  padding-right: 8px;
 }
 
 .app-sidebar .thread-item-actions-hover {
   right: 6px;
-  gap: 2px;
 }
 
 .app-sidebar .thread-item-time {
@@ -1153,27 +1157,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   color: var(--text);
 }
 
-/* Plan 331 Phase 4: pin toggle button (shown on hover) and the always-on
-   pinned indicator. The pin button sits just left of the three-dots menu
-   button; the indicator replaces the timestamp on pinned threads. */
-.thread-item-pin-btn {
-  border: none;
-  border-radius: 0.3rem;
-  background: transparent;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  padding: 0.15rem;
-}
-
-.thread-item-pin-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
+/* The always-on pinned indicator. The quick-pin BUTTON is gone: every row
+   action now lives inside the ⋯ 更多 menu (which already carried a 固定 /
+   取消固定 entry), so hovering a session reveals one button instead
+   of a row of icons. The indicator still replaces the timestamp on pinned
+   threads. */
 
 .thread-item-pinned-indicator {
   color: var(--accent);

@@ -150,13 +150,13 @@
   /* Children (ProjectGroupItem / ThreadListItem) manage their own
      padding; we only provide a small drop-shadow cue when open. */
   padding: 0;
-  /* Codex parity (2026-10-22): the flat session list (singleList mode) is
-     a direct child of this container, so the 5px inter-row gap has to live
-     here - without it the rows stack at their bare 26px height and come
-     out tighter than Codex's measured 31px pitch. */
+  /* Reference parity (2026-10-22): the flat session list (singleList mode)
+     is a direct child of this container, so the 1px inter-row gap has to
+     live here - without it the rows stack at their bare 26px height and
+     come out tighter than the measured 27.2 CSS px title pitch. */
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 1px;
 }
 
 /* Claude parity (2026-10-22): the group header's trailing action group

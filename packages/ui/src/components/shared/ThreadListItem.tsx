@@ -476,20 +476,12 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
         </div>
 
         <div className="thread-item-actions-hover">
-          {/* Plan 331 Phase 4: quick pin toggle on hover. Pinned threads
-           * show a filled icon; unpinned show an outline icon. */}
-          <button
-            type="button"
-            className="thread-item-pin-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleTogglePin();
-            }}
-            aria-label={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
-            title={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
-          >
-            {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
-          </button>
+          {/* Reference parity (2026-10-22): one button, not a row of icons.
+              Hovering a session reveals only the ⋯ 更多 button; every row
+              action (pin, rename, copy id, open folder, export, archive,
+              delete) lives inside that menu. The menu already carried a
+              固定 / 取消固定 entry, so nothing was lost with the old
+              hover pin button. */}
           <DropdownMenu
             align="end"
             minWidth={180}
