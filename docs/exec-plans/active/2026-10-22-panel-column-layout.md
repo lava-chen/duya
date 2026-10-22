@@ -186,7 +186,6 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 | --- | --- | --- | --- | --- |
 | 96dadf4d / 仅 3 个未跟踪文件 | Windows 11 / Node 主检出 | `git worktree add .claude/worktrees/panel-layout-plan -b codex/panel-layout-plan origin/master` | 0 | worktree 列表含 5 项 |
 | 96dadf4d | 同上 | Claude Desktop 布局归位实测三轮 | 行为已记录 | 见「发现与决策」 |
-<<<<<<< HEAD
 | 275dab09 / clean（切片 A 基线） | Windows 11 / Node 24.16 / worktree `panel-layout-columns` | `npx vitest run packages/ui/src/components/layout` | 1 | 5 个 suite 因 `@duya/ai` 的 dist 未构建而无法解析（`Failed to resolve entry for package "@duya/ai"`）——**worktree 环境缺产物**，非用例失败 |
 | 275dab09 / clean（切片 A 基线） | 同上 | `npm run test:e2e:ui-states` | 1 | 4 个用例：3 过 1 失败。失败文件 `e2e/ui-states/ui-states.spec.ts:376`，用例「the theme switch repaints the shell in both themes and persists both」，错误签名 `could not get an unobstructed click on the theme toggle … a modal overlay (div.fixed.inset-0.z-50) still covers the shell after 15000ms; on-screen text: DUYA` |
 | 21b764e9 / clean | 同上 | `npm run build:packages` | 0 | 22 个包构建完成，补上 worktree 缺失的 dist（上面 5 个 suite 因此转绿） |
@@ -263,7 +262,6 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 
 已合并：B 切片 PR #353 已合并；A 切片随本 PR #354 合并。
 
-<<<<<<< HEAD
 PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `codex/panel-layout-columns`）；标题与正文已改写为「面板卡片墙」方向。第三轮已推到同一分支，不另开 PR。
 
 ⚠️ **同一 worktree 里出现过第二个写者**：`0d89b57f` 之后 `PanelZone.tsx`、`i18n/en.ts`、`i18n/zh.ts` 被改动，并新增 `panels/PanelLaunchers.tsx`、`panels/launch.ts`（面板启动器 + 快捷键表）。这些已由 `5d973be1` 一并提交，与本轮外壳改动混在同一 commit 里——评审时按文件而不是按 commit 看。接手前仍先 `git status` 对账，勿覆盖。
