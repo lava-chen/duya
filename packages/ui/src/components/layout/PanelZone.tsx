@@ -1,10 +1,18 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
+import {
+  columnPixelWidths,
+  familyResolver,
+  formatPaneTreeLabel,
+  isPaneVisible,
+  type ColumnId,
+  type PaneId,
+} from "./panels/layout-model";
 import { ResizeHandle } from "./ResizeHandle";
 import { SidebarLeftCollapseIcon, SidebarLeftExpandIcon, CornersInIcon, CornersOutIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -42,8 +50,11 @@ export function PanelZone() {
     resetPanelWidth,
     tabs,
     activeTabId,
+    layout,
     workspaceExpanded,
     setWorkspaceExpanded,
+    setColumnWidths,
+    setPaneRatio,
   } = usePanel();
   const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
@@ -54,11 +65,16 @@ export function PanelZone() {
   // Last width produced by the in-flight drag; committed to the per-page
   // width memory on drag end.
   const lastDragWidthRef = useRef(panelWidth);
+  // Widths of the columns when the in-flight column drag started.
+  const columnResizeStartRef = useRef<number[]>([]);
+  // Height of the panel content area: the columns fill it, so it converts a
+  // pane's vertical share into pixels.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [contentHeight, setContentHeight] = useState(0);
   const taskDrawerOpen = useTaskDrawerOpen();
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
-  const browserTabs = tabs.filter((tab) => tab.pageId === "browser");
   const activeDescriptor = activeTab ? getPageDescriptor(activeTab.pageId) : null;
   const activePanelMinWidth = activeDescriptor?.minWidth ?? 340;
   const activePanelMaxWidth = activeDescriptor?.maxWidth === null
@@ -71,6 +87,16 @@ export function PanelZone() {
     "--panel-zone-width": `${panelWidth}px`,
     "--panel-content-width": `${panelWidth}px`,
   } as CSSProperties;
+
+  const tabsById = useMemo(() => new Map(tabs.map((tab) => [tab.id, tab])), [tabs]);
+  const familyOf = useMemo(
+    () => familyResolver(tabs.map((tab) => ({ id: tab.id, pageId: tab.pageId }))),
+    [tabs],
+  );
+  const columnWidths = useMemo(
+    () => columnPixelWidths(layout, panelWidth),
+    [layout, panelWidth],
+  );
 
   // The panel is normally anchored to a chat session, so non-session views
   // force-close it (it would otherwise be open with no toggle in reach).
@@ -148,10 +174,110 @@ export function PanelZone() {
     }
   }, [activePanelMinWidth, panelOpen, panelWidth, setPanelWidth]);
 
+  // The content area's height is what turns a pane's vertical share into
+  // pixels.
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element) return;
+    const measure = () => setContentHeight(element.getBoundingClientRect().height);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const titleOf = useCallback(
+    (paneId: PaneId) => tabsById.get(paneId)?.title ?? "",
+    [tabsById]
+  );
+
+  /**
+   * The accessible name of the separator between two columns: it spells out
+   * the panes on each side, so the whole pane tree can be read out.
+   */
+  const columnSeparatorLabel = useCallback(
+    (columnIndex: number) => {
+      const left: string[] = [];
+      const right: string[] = [];
+      layout.columns.forEach((column, index) => {
+        for (const paneId of column.panes) {
+          (index < columnIndex ? left : right).push(titleOf(paneId));
+        }
+      });
+      return formatPaneTreeLabel(left, right);
+    },
+    [layout.columns, titleOf]
+  );
+
+  /** The accessible name of the separator between two stacked panes. */
+  const paneSeparatorLabel = useCallback(
+    (columnId: ColumnId, paneIndex: number) => {
+      const column = layout.columns.find((candidate) => candidate.id === columnId);
+      if (!column) return formatPaneTreeLabel([], []);
+      // The separator sits between the pane above it and the pane below it.
+      return formatPaneTreeLabel(
+        column.panes.slice(0, paneIndex).map(titleOf),
+        column.panes.slice(paneIndex).map(titleOf),
+      );
+    },
+    [layout.columns, titleOf]
+  );
+
+  /** Move the boundary between two columns; the region keeps its width. */
+  const handleColumnResize = useCallback(
+    (columnIndex: number, delta: number) => {
+      const start = columnResizeStartRef.current;
+      if (start.length !== columnWidths.length) return;
+      const next = [...start];
+      next[columnIndex - 1] += delta;
+      next[columnIndex] -= delta;
+      setColumnWidths(next);
+    },
+    [columnWidths.length, setColumnWidths]
+  );
+
+  /** Absolute width request for the column left of the separator. */
+  const handleColumnWidthRequest = useCallback(
+    (columnIndex: number, width: number) => {
+      const start = columnResizeStartRef.current.length === columnWidths.length
+        ? columnResizeStartRef.current
+        : columnWidths;
+      const next = [...start];
+      const delta = width - next[columnIndex - 1];
+      next[columnIndex - 1] = width;
+      next[columnIndex] -= delta;
+      setColumnWidths(next);
+    },
+    [columnWidths, setColumnWidths]
+  );
+
+  /** Move the boundary between two stacked panes of a column. */
+  const handlePaneResize = useCallback(
+    (columnId: ColumnId, paneId: PaneId, delta: number) => {
+      if (contentHeight <= 0) return;
+      const column = layout.columns.find((candidate) => candidate.id === columnId);
+      const ratio = column?.ratios[column.panes.indexOf(paneId)] ?? 0.5;
+      setPaneRatio(columnId, paneId, ratio - delta / contentHeight);
+    },
+    [layout.columns, setPaneRatio, contentHeight]
+  );
+
+  const renderPane = useCallback(
+    (paneId: PaneId) => {
+      const tab = tabsById.get(paneId);
+      if (!tab) return null;
+      const Component = getPageDescriptor(tab.pageId).component;
+      return <Component tab={tab} embedded />;
+    },
+    [tabsById]
+  );
+
   return (
     <div
       className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${workspaceExpanded ? " panel-zone-expanded" : ""}${resizing ? " panel-zone-resizing" : ""}`}
       data-page-id={activeTab?.pageId ?? "none"}
+      data-column-count={layout.columns.length}
       style={zoneStyle}
     >
       {(isSessionView || panelOpen) && (
@@ -215,31 +341,72 @@ export function PanelZone() {
         aria-hidden={!panelOpen}
       >
         {tabs.length > 0 && <PanelHeader />}
-        <div className="sidebar-panel-content">
-          <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
-            {browserTabs.map((browserTab) => {
-              const BrowserComponent = getPageDescriptor(browserTab.pageId).component;
-              const isActive = browserTab.id === activeTabId;
-              return (
-                <div
-                  key={browserTab.id}
-                  className={`sidebar-panel-browser-tab${isActive ? " active" : ""}`}
-                  aria-hidden={!isActive}
-                >
-                  <BrowserComponent tab={browserTab} embedded />
-                </div>
-              );
-            })}
-            {activeTab && activeTab.pageId !== "browser" ? (
-              (() => {
-                const desc = getPageDescriptor(activeTab.pageId);
-                const Component = desc.component;
-                return <Component tab={activeTab} embedded />;
-              })()
-            ) : !activeTab ? (
+        <div className="sidebar-panel-content" ref={contentRef}>
+          {layout.columns.length === 0 ? (
+            <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
               <EmptyPanelLauncher onSelect={openPage} />
-            ) : null}
-          </Suspense>
+            </Suspense>
+          ) : (
+            <div className="panel-columns">
+              {layout.columns.map((column, columnIndex) => (
+                <Fragment key={column.id}>
+                  {columnIndex > 0 && (
+                    <div className="panel-column-separator">
+                      <ResizeHandle
+                        side="right"
+                        onResizeStart={() => {
+                          columnResizeStartRef.current = columnWidths;
+                        }}
+                        onResize={(delta) => handleColumnResize(columnIndex, delta)}
+                        width={columnWidths[columnIndex - 1]}
+                        minWidth={MIN_PANEL_WIDTH}
+                        onWidthRequest={(width) => handleColumnWidthRequest(columnIndex, width)}
+                        label={columnSeparatorLabel(columnIndex)}
+                      />
+                    </div>
+                  )}
+                  <div
+                    className="panel-column"
+                    style={{ flex: `0 0 ${columnWidths[columnIndex] ?? 0}px` }}
+                  >
+                    {column.panes.map((paneId, paneIndex) => {
+                      const visible = isPaneVisible(layout, column.id, paneId, familyOf);
+                      const ratio = column.ratios[paneIndex] ?? 1;
+                      return (
+                        <Fragment key={paneId}>
+                          {paneIndex > 0 && (
+                            <div className="panel-pane-separator">
+                              <ResizeHandle
+                                side="top"
+                                onResize={(delta) => handlePaneResize(column.id, paneId, delta)}
+                                onWidthRequest={(target) => {
+                                  if (contentHeight <= 0) return;
+                                  setPaneRatio(column.id, paneId, target / contentHeight);
+                                }}
+                                width={ratio * contentHeight}
+                                minWidth={0}
+                                label={paneSeparatorLabel(column.id, paneIndex)}
+                              />
+                            </div>
+                          )}
+                          <div
+                            className={`panel-column-pane${visible ? "" : " panel-column-pane-hidden"}`}
+                            style={{ flexGrow: ratio }}
+                            aria-hidden={!visible}
+                            data-pane-id={paneId}
+                          >
+                            <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
+                              {renderPane(paneId)}
+                            </Suspense>
+                          </div>
+                        </Fragment>
+                      );
+                    })}
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

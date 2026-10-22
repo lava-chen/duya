@@ -43,6 +43,91 @@
   flex-direction: column;
 }
 
+/* ============================================
+   Panel column tree
+   ============================================
+
+   The side panel is a row of columns; each column is a stack of panes.
+   Column widths are set inline (they come from the layout model), panes
+   share their column vertically through their flex-grow.
+*/
+
+.panel-columns {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.panel-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--main-bg);
+  border-left: 1px solid var(--border);
+}
+
+/* The region's own edge already draws the outer border. */
+.panel-column:first-child {
+  border-left: none;
+}
+
+.panel-column-pane {
+  display: flex;
+  flex-direction: column;
+  flex-basis: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+/* Panes of the same family behave like tabs: they stay mounted so a
+   browser webview keeps its state, but only the focused one is shown. */
+.panel-column-pane-hidden {
+  display: none;
+}
+
+.panel-column-separator,
+.panel-pane-separator {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The zone's own edge handle is absolutely positioned against the zone;
+   the tree's separators sit in the flow, so they opt out of that. */
+.panel-zone .panel-column-separator .resize-handle,
+.panel-zone .panel-pane-separator .resize-handle {
+  position: relative;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  z-index: 6;
+}
+
+.panel-zone .panel-column-separator .resize-handle {
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+}
+
+.panel-zone .panel-pane-separator .resize-handle {
+  width: 100%;
+  height: 5px;
+  cursor: row-resize;
+}
+
+.panel-zone .panel-pane-separator .resize-handle-bar {
+  width: 40px;
+  height: 3px;
+}
+
 /* Browser guests are stateful. Keep every browser tab mounted so switching
    tabs restores its own page instead of constructing a fresh webview. */
 .sidebar-panel-browser-tab {
