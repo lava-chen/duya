@@ -201,6 +201,24 @@ core DB 迁移链 = `MessageLog.migrations` + `collectCoreDataMigrations()`（`p
 
 每个 PR 正文必须写：路径所有权、Base SHA、依赖 PR、实际执行的测试与退出码、未覆盖风险、接续记录。
 
+## 派工记录（第一波，2026-10-22）
+
+Base 统一 `2e6f265d`；每条分支一个独立 worktree、一个独立 PR；契约文档只在 #359，不复制到下游分支。
+
+| 切片 | owner | worktree | 分支 | HEAD | PR | 状态 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 契约 | 主会话 | `.claude/worktrees/worktree-lifecycle` | `codex/worktree-lifecycle` | `3da7bd85` | #359 | 已验证，待集成授权 |
+| A Provider | agent `wl-a-provider` | `.claude/worktrees/wl-a` | `codex/wl-a-checkout-provider` | `97f334bf` | #361 | 已验证（58 例），待 review |
+| B 协议 | agent `wl-b-protocol` | `.claude/worktrees/wl-b` | `codex/wl-b-checkout-protocol` | `4e703cf5` | #363 | 已验证（35 例），待 review |
+| C Observer | agent `wl-c-observer` | `.claude/worktrees/wl-c` | `codex/wl-c-scm-observer` | `1292e05b` | #362 | 已验证（61 例），待 review |
+
+### 已知的跨切片接续点（合并不是终点）
+
+1. **B 先于 C 合**。C 在自己树里建了 `scm/integration-state.ts`（因为 B 的 `HostIntegrationState` 当时不在 master）。B 合并后 C 必须删该文件改 `import type`，`scm/index.ts` 对外名字不变。
+2. **B 的 `checkout-api.ts` 目前用结构端口**，没接 A 的实现。A + B 合并后需要一个接线提交：`createCheckoutProvider({ isSessionAlive, cwdInUse })` 注入，并补 `resolveSessionCheckoutRoot(sessionId)`。
+3. **A 改了 `IsolatedWorktree.branch` 的语义**：detached 下返回 12 位短 SHA，不再是分支名。D 必须同时改 `service.ts:186` 的 "on branch …" 文案，以及 `IsolatedWorktree.path` 现在是 `cwd` 而非 worktree 根。
+4. **`integrations` 表是单行 upsert**，契约 §4.4 要求「状态迁移不覆盖历史」还没有落点。E 必须决定：加 `integration_events` 表，还是把迁移写进 rollout。
+
 ## 验收
 
 门禁（每个切片都跑，退出码进验证记录）：`npm run typecheck:all`、`npm run architecture:check`、目标 vitest。
@@ -252,7 +270,7 @@ core DB 迁移链 = `MessageLog.migrations` + `collectCoreDataMigrations()`（`p
 - [x] codex 参照实现取证（worktree crate / metadata / state migrations / TUI 起会话顺序 / git-attribution）
 - [x] 契约定稿（本文件 4.1–4.6）
 - [x] Provider 接口签名 v0（附录 A，B 可据此并行）
-- [ ] 派发 A / B / C（各自 worktree + PR）
+- [x] 派发 A / B / C（各自 worktree + PR：#361 / #363 / #362）
 - [ ] 第一波合并后启动 D / E
 - [ ] D / E 合并后启动 F
 - [ ] 场景 1–7 全绿，三端连通
