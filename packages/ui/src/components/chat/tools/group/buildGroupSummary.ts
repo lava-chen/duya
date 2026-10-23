@@ -1,12 +1,13 @@
 // Build the collapsed header text for a tool group.
 //
-// Counts each tool by its coarse-grained category (`commands` /
-// `editFiles` / `readFiles` / `search` / `browser` / `agent` / `ask` /
-// `memory` / `skill` / `module` / `tasks` / catch-all `tools`), looks
-// up the matching singular/plural i18n template, and joins the
-// rendered parts in a stable order. When the group has more than MAX_PARTS_BEFORE_TRUNCATE
-// distinct categories, head parts are rendered verbatim and the rest
-// are folded into a "+N more" tail.
+// Counts each tool by its coarse-grained category (`editFiles` /
+// `createFiles` / `readFiles` / `commands` / `search` / `browser` /
+// `agent` / `ask` / `memory` / `skill` / `module` / `tasks` /
+// catch-all `tools`), looks up the matching singular/plural i18n
+// template, and joins the rendered parts in a stable order. When the
+// group has more than MAX_PARTS_BEFORE_TRUNCATE distinct categories,
+// head parts are rendered verbatim and the rest are folded into a
+// "+N more" tail.
 //
 // Pure function — no React, no side effects. Safe to unit test in
 // isolation; the existing ToolActionsGroup.test.tsx asserts on this
@@ -35,6 +36,7 @@ export function buildGroupSummary(
   tools: ToolAction[],
   t: (key: TranslationKey, params?: Record<string, string | number>) => string,
   locale: string,
+  maxParts: number = MAX_PARTS_BEFORE_TRUNCATE,
 ): string {
   const counts = new Map<SummaryCategoryKey, SummaryPart>();
   for (const tool of tools) {
@@ -49,13 +51,15 @@ export function buildGroupSummary(
   }
 
   // Preserve a stable order so the header doesn't shuffle when streaming
-  // updates reorder the inner tools. Order matches the category table in
-  // the plan: commands → edit → read → search → browser → agent → ask →
-// memory → skill → module → tasks → catch-all tools.
+  // updates reorder the inner tools. The order mirrors the reference
+  // transcripts (Codex / Claude Code): file work first, then commands,
+  // then everything else — e.g. "Edited 5 files, created a file,
+  // read 2 files, ran 3 commands".
   const order: SummaryCategoryKey[] = [
-    'commands',
     'editFiles',
+    'createFiles',
     'readFiles',
+    'commands',
     'search',
     'browser',
     'agent',
@@ -63,6 +67,7 @@ export function buildGroupSummary(
     'skill',
     'module',
     'tasks',
+    'canvas',
     'tools',
   ];
   const parts: SummaryPart[] = [];
@@ -86,9 +91,9 @@ export function buildGroupSummary(
     t(templateKeyFor(p.categoryKey, p.count) as TranslationKey, { count: p.count }),
   );
 
-  if (renderedParts.length > MAX_PARTS_BEFORE_TRUNCATE) {
-    const head = renderedParts.slice(0, MAX_PARTS_BEFORE_TRUNCATE);
-    const remaining = renderedParts.length - MAX_PARTS_BEFORE_TRUNCATE;
+  if (renderedParts.length > maxParts) {
+    const head = renderedParts.slice(0, maxParts);
+    const remaining = renderedParts.length - maxParts;
     const sep = locale === 'zh' ? '，' : ', ';
     return `${head.join(sep)}${sep}${t('streaming.toolAction.groupSummary.andMore', { count: remaining })}`;
   }

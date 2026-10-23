@@ -1,8 +1,10 @@
 // Shared single-line chrome for every action row and group header.
 //
-// Lays out `[verb] [summary] [duration?] [StatusDot]`. The leading caret
-// is hidden until the row is hovered (or already expanded), so when the
-// row is at rest it sits flush against the surrounding text.
+// Lays out `[icon?] [verb] [summary] [rightSlot?] [duration?] [StatusDot]
+// [caret?]`. The expand caret sits at the END of the row and is always
+// visible — the reference transcripts (Codex / Claude Code) put it right
+// after the diff stat on the tail of the line, so the affordance is
+// discoverable without hovering.
 //
 // Rows that need extra affordances (e.g. FileEditToolRow's +N/-M stats,
 // SubAgentToolRow's tool count tail) wrap the summary children with
@@ -77,53 +79,21 @@ export function ActionRowChrome({
 }: ActionRowChromeProps) {
   const { t } = useTranslation();
   const verb = verbText ?? (verbKey ? t(verbKey) : null);
-  const showCaret = canExpand && (expanded || hovered);
   return (
     <button
       type="button"
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
-      // Flex `gap-2` is intentionally absent: when the leading caret is
-      // collapsed (no hover, not expanded), we want the verb to sit
-      // flush against the row's left edge so the chrome aligns with
-      // the surrounding text. The caret's motion.span animates its
-      // own `marginRight` to push siblings only when it's visible.
+      // No `gap-2` on purpose: the row's own paddings + the element
+      // margins below define the rhythm, and the verb has to sit flush
+      // against the left edge so expandable and plain rows share one
+      // alignment baseline.
       className={
         'flex w-full items-center px-2 py-0.5 min-h-6 text-sm hover:bg-muted/30 rounded-sm transition-colors ' +
         (buttonClassName ?? '')
       }
     >
-      <AnimatePresence initial={false}>
-        {canExpand && (
-          <motion.span
-            key="caret"
-            aria-hidden="true"
-            initial={{ width: 0, opacity: 0, marginRight: 0 }}
-            animate={{
-              width: showCaret ? 10 : 0,
-              opacity: showCaret ? 1 : 0,
-              marginRight: showCaret ? 8 : 0,
-            }}
-            exit={{ width: 0, opacity: 0, marginRight: 0 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
-              flexShrink: 0,
-            }}
-          >
-            <CaretRightIcon
-              size={10}
-              className={`text-muted-foreground/60 transition-transform duration-200 ${
-                expanded ? 'rotate-90' : ''
-              }`}
-            />
-          </motion.span>
-        )}
-      </AnimatePresence>
       {icon && (
         <span className="shrink-0 mr-1.5 flex items-center text-muted-foreground/70">
           {icon}
@@ -148,6 +118,24 @@ export function ActionRowChrome({
       <span className="ml-2">
         <StatusDot status={status} />
       </span>
+      {/* Caret sits at the END of the row and is always visible — the
+          reference transcripts (Codex / Claude Code) show the expand
+          affordance at the tail of the line, next to the diff stat,
+          instead of hiding it behind a hover on the left edge. */}
+      {canExpand && (
+        <span
+          aria-hidden="true"
+          className="ml-1 inline-flex shrink-0 items-center justify-center"
+          data-testid="row-caret"
+        >
+          <CaretRightIcon
+            size={10}
+            className={`text-muted-foreground/60 transition-transform duration-200 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          />
+        </span>
+      )}
     </button>
   );
 }
