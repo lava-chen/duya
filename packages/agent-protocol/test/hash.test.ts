@@ -35,7 +35,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
-import { canonicalJson, sha256Hex, type JsonValue } from '../src/hash.js';
+import { canonicalJson, isJsonValue, sha256Hex, type JsonValue } from '../src/hash.js';
 import { DEFAULT_PERMISSION_TIMEOUT_MS, manifestFingerprint, type RunManifest } from '../src/index.js';
 
 const nodeSha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -253,5 +253,60 @@ describe('manifest: the fingerprint is a function of value, not construction', (
     expect(manifestFingerprint(base)).toBe(
       '623eb085c2dd65c655a35441cde377de5f6c1e717dfa3ea1e1be042bad77c46f',
     );
+  });
+});
+
+describe('hash: isJsonValue accepts exactly what JSON can carry', () => {
+  it('accepts the JSON scalars and the aggregates built from them', () => {
+    expect(isJsonValue(null)).toBe(true);
+    expect(isJsonValue(true)).toBe(true);
+    expect(isJsonValue('text')).toBe(true);
+    expect(isJsonValue(42)).toBe(true);
+    expect(isJsonValue(0)).toBe(true);
+    expect(isJsonValue([])).toBe(true);
+    expect(isJsonValue([1, 'two', null])).toBe(true);
+    expect(isJsonValue({})).toBe(true);
+    expect(isJsonValue({ a: 1, b: [true, null] })).toBe(true);
+  });
+
+  it('rejects what JSON cannot carry', () => {
+    expect(isJsonValue(undefined)).toBe(false);
+    expect(isJsonValue(() => undefined)).toBe(false);
+    expect(isJsonValue(Symbol('x'))).toBe(false);
+    expect(isJsonValue(10n)).toBe(false);
+    // NaN and Infinity stringify to null, so they are not numbers in a JSON
+    // document even though they are `number` in TypeScript.
+    expect(isJsonValue(Number.NaN)).toBe(false);
+    expect(isJsonValue(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
+  it('rejects a class instance instead of accepting its serialised shape', () => {
+    class Point {
+      constructor(public readonly x: number) {}
+    }
+    // `JSON.stringify(new Point(1))` is '{"x":1}' — the field survives, but
+    // the value is no longer a plain object, and a `Date` is worse: it
+    // serialises to a STRING, so a caller reading it back gets a string
+    // where it expected an object. The guard refuses the whole class of
+    // non-plain values at the boundary rather than letting the shape drift.
+    expect(JSON.stringify(new Point(1))).toBe('{"x":1}');
+    expect(isJsonValue(new Point(1))).toBe(false);
+    expect(isJsonValue(new Date())).toBe(false);
+    expect(JSON.stringify(new Date(0))).toBe('"1970-01-01T00:00:00.000Z"');
+  });
+
+  it('rejects a cycle instead of recursing into it', () => {
+    const cyclic: Record<string, unknown> = { name: 'loop' };
+    cyclic.self = cyclic;
+    expect(isJsonValue(cyclic)).toBe(false);
+
+    const cyclicArray: unknown[] = [];
+    cyclicArray.push(cyclicArray);
+    expect(isJsonValue(cyclicArray)).toBe(false);
+  });
+
+  it('accepts a value that appears twice, because it is not a cycle', () => {
+    const shared = { id: 1 };
+    expect(isJsonValue({ first: shared, second: shared })).toBe(true);
   });
 });

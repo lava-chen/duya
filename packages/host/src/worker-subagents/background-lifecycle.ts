@@ -13,6 +13,7 @@ import {
 } from '@duya/agent-core/task-notifications/buildTaskNotification'
 import { parseModelVerdict } from './task-verification.js'
 import { sendBackgroundNotification } from '../worker-context/background-notification.js'
+import { finalizeCheckoutRun, type CheckoutRunRecord } from './worktree.js'
 
 export interface RegisterInput {
   taskId: string
@@ -31,6 +32,13 @@ export interface RegisterInput {
    * user's back. Defaults to true (unchanged pre-571 behavior).
    */
   autoWake?: boolean
+  /**
+   * Plan 621 D: the checkout this run owns, when it runs isolated (or resumed
+   * back into its own checkout). Carried in memory so every terminal path can
+   * checkpoint the HEAD, release ownership and record the outcome without a
+   * second source of truth.
+   */
+  checkout?: CheckoutRunRecord
 }
 
 /** Default window (ms) a drained terminal record stays queryable via
@@ -55,6 +63,10 @@ function isKillableStatus(status: TaskStatus): boolean {
 export class BackgroundAgentLifecycle {
   private tasks = new Map<string, TaskRecord>()
   private drained = new Set<string>()
+  /** Checkout attachment per task, set at register and consumed by the
+   * terminal close-out. Kept beside the record (not on it) so the shared
+   * TaskRecord shape stays free of plan-621 concerns. */
+  private checkouts = new Map<string, CheckoutRunRecord>()
   /** Timestamp (ms) at which each task was marked drained, so completed
    * records can be pruned after `drainedRetentionMs` instead of being
    * deleted immediately (which made get_task_output return not_found
@@ -124,6 +136,7 @@ export class BackgroundAgentLifecycle {
       subscribers: new Set(),
     }
     this.tasks.set(input.taskId, record)
+    if (input.checkout) this.checkouts.set(input.taskId, input.checkout)
     logger.info('[SubAgent] lifecycle registered', {
       taskId: input.taskId,
       parentSessionId: input.parentSessionId,
@@ -287,6 +300,7 @@ export class BackgroundAgentLifecycle {
         this.drainedAt.delete(id)
         this.drained.delete(id)
         this.tasks.delete(id)
+        this.checkouts.delete(id)
         this.notified.delete(id)
       }
     }
@@ -301,6 +315,26 @@ export class BackgroundAgentLifecycle {
 
   getSnapshot(taskId: string): TaskRecord | undefined {
     return this.tasks.get(taskId)
+  }
+
+  /**
+   * Plan 621 D close-out at the four terminal paths (completed / failed /
+   * killed / budget-interrupted-as-failed): pin a checkpoint ref on success,
+   * release checkout ownership, and record the outcome on the session. No-op
+   * for tasks that never owned a checkout. `finalizeCheckoutRun` is
+   * best-effort internally, so a failing record write can never turn a
+   * finished task into an unhandled rejection.
+   */
+  private async finalizeCheckout(taskId: string, outcome: 'completed' | 'failed' | 'cancelled'): Promise<void> {
+    const checkout = this.checkouts.get(taskId)
+    if (!checkout) return
+    const record = this.tasks.get(taskId)
+    if (!record) return
+    await finalizeCheckoutRun({
+      sessionId: record.subAgentSessionId,
+      record: checkout,
+      outcome,
+    })
   }
 
   getAll(): TaskRecord[] {
@@ -362,9 +396,11 @@ export class BackgroundAgentLifecycle {
       const taskError = progressError ?? extractAgentError(lastMessage)
       if (taskError) {
         this.tryFail(taskId, taskError)
+        await this.finalizeCheckout(taskId, 'failed')
         await this.enqueueTaskNotification(taskId, 'failed', { error: taskError })
       } else {
         this.tryComplete(taskId, result)
+        await this.finalizeCheckout(taskId, 'completed')
         const modelVerdict = parseModelVerdict(extractFinalText(result))
         await this.enqueueTaskNotification(taskId, 'completed', {
           finalMessage: extractFinalText(result),
@@ -387,6 +423,7 @@ export class BackgroundAgentLifecycle {
         // abort was not already accounted for.
         const recorded = this.tasks.get(taskId)?.error
         const reason = recorded?.startsWith('killed:') ? recorded.slice('killed:'.length).trim() : 'parent_abort'
+        await this.finalizeCheckout(taskId, 'cancelled')
         await this.enqueueTaskNotification(taskId, 'killed', { error: reason })
       } else {
         const message = (err as Error).message ?? 'Unknown error'
@@ -395,6 +432,7 @@ export class BackgroundAgentLifecycle {
         if (terminalProgress !== 'error') {
           onProgress?.({ type: 'error', data: message, agentId: taskId })
         }
+        await this.finalizeCheckout(taskId, 'failed')
         await this.enqueueTaskNotification(taskId, 'failed', { error: message })
       }
     } finally {

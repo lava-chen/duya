@@ -29,6 +29,55 @@ export type JsonValue =
 export type JsonObject = { readonly [key: string]: JsonValue };
 
 /**
+ * Narrow an unknown value to a JSON value.
+ *
+ * `JsonValue` is the wire shape every JSON column and every protocol DTO
+ * speaks, so an `unknown` that crosses a boundary has to be checked against
+ * it rather than asserted into it. An assertion would let a `Date`, a
+ * `Map` or a cyclic object through, and the failure would surface later as a
+ * silently wrong row instead of a rejected write.
+ *
+ * The prototype check matters: `JSON.stringify` accepts any object, but a
+ * class instance would serialise to `{}` and lose every field. Only plain
+ * objects and arrays carry JSON semantics.
+ *
+ * Cycles are rejected instead of recursed into: a self-referential value
+ * has no JSON form at all.
+ */
+export function isJsonValue(value: unknown): value is JsonValue {
+  return checkJsonValue(value, new Set<object>());
+}
+
+function checkJsonValue(value: unknown, ancestors: Set<object>): boolean {
+  if (value === null) return true;
+  switch (typeof value) {
+    case 'string':
+    case 'boolean':
+      return true;
+    case 'number':
+      return Number.isFinite(value);
+    case 'object':
+      break;
+    default:
+      // undefined, function, symbol, bigint — none of them are JSON.
+      return false;
+  }
+  if (ancestors.has(value)) return false;
+  if (Array.isArray(value)) {
+    ancestors.add(value);
+    const valid = value.every((item) => checkJsonValue(item, ancestors));
+    ancestors.delete(value);
+    return valid;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  ancestors.add(value);
+  const valid = Object.values(value).every((item) => checkJsonValue(item, ancestors));
+  ancestors.delete(value);
+  return valid;
+}
+
+/**
  * Deterministic serialisation: object keys sorted by code unit.
  *
  * `JSON.stringify` preserves insertion order, so two structurally equal
