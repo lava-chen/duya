@@ -16,16 +16,49 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildProgram } from '../index.js';
 
 const mocks = vi.hoisted(() => ({
+  startLocalHost: vi.fn(async () => ({
+    origin: 'http://127.0.0.1:1234',
+    port: 1234,
+    runtimeFilePath: '/tmp/host-api.json',
+    close: async () => {},
+  })),
   runChatCommand: vi.fn(async () => 0),
   runTuiCommand: vi.fn(async () => 0),
 }));
 
+vi.mock('@duya/host/local-host', () => ({
+  startLocalHost: mocks.startLocalHost,
+  readLocalHostRuntime: vi.fn(async () => null),
+}));
 vi.mock('../chat.js', () => ({ runChatCommand: mocks.runChatCommand }));
 vi.mock('../tui-command.js', () => ({ runTuiCommand: mocks.runTuiCommand }));
 
 beforeEach(() => {
+  mocks.startLocalHost.mockClear();
   mocks.runChatCommand.mockClear();
   mocks.runTuiCommand.mockClear();
+});
+
+describe('duya serve --client-scoped', () => {
+  it('hands the Host a client-scoped lifetime', async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(['node', 'duya', 'serve', '--client-scoped']);
+
+    expect(mocks.startLocalHost).toHaveBeenCalledWith(
+      expect.objectContaining({ clientScoped: true }),
+    );
+  });
+
+  it('leaves an ordinary serve running until it is stopped', async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(['node', 'duya', 'serve']);
+
+    expect(mocks.startLocalHost).toHaveBeenCalledWith(
+      expect.objectContaining({ clientScoped: false }),
+    );
+  });
 });
 
 describe('hyphenated options', () => {

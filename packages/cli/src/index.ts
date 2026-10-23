@@ -63,6 +63,10 @@ export function buildProgram(): Command {
   // out of the descriptor registry consumed by the in-process duya_cli tool.
   const serve = program.command('serve').description('Start the local Duya Host service');
   serve.option('--port <port>', 'Loopback HTTP port (0 selects an available port)', '0');
+  serve.option(
+    '--client-scoped',
+    'Stop the Host once its last client disconnects (used by `duya tui`)',
+  );
   serve.action(async () => {
     const rawPort: unknown = serve.getOptionValue('port');
     const port = typeof rawPort === 'string' ? Number(rawPort) : Number.NaN;
@@ -71,10 +75,15 @@ export function buildProgram(): Command {
       process.exitCode = 64;
       return;
     }
+    const clientScoped = serve.getOptionValue('clientScoped') === true;
 
     try {
       const workerPath = resolveHostWorkerPath();
-      const host = await startLocalHost({ port, ...(workerPath === undefined ? {} : { workerPath }) });
+      const host = await startLocalHost({
+        port,
+        clientScoped,
+        ...(workerPath === undefined ? {} : { workerPath }),
+      });
       process.stdout.write(`Duya Host listening at ${host.origin}\n`);
       process.stdout.write(`Runtime descriptor: ${host.runtimeFilePath}\n`);
       process.stdout.write(
@@ -82,6 +91,9 @@ export function buildProgram(): Command {
           ? 'Execution: LEDGER-ONLY (no worker entry found; set DUYA_HOST_WORKER_PATH)\n'
           : `Execution: enabled (worker: ${workerPath})\n`,
       );
+      if (clientScoped) {
+        process.stdout.write('Lifetime: client-scoped (stops when the last client disconnects)\n');
+      }
       let stopping = false;
       const stop = (): void => {
         if (stopping) return;
@@ -129,10 +141,11 @@ export function buildProgram(): Command {
     process.exitCode = await runChatCommand(options);
   });
 
-  // `duya tui` — ephemeral Host + TUI in one process.
+  // `duya tui` — the TUI client. It attaches to the Host that owns this data
+  // directory and starts one only when none is running.
   const tui = program
     .command('tui')
-    .description('Start an ephemeral Duya Host and open the TUI (DUYA_TUI_INLINE=1 for the inline screen model)');
+    .description('Open the TUI against the Duya Host that owns this data directory (DUYA_TUI_INLINE=1 for the inline screen model)');
   tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
   tui.option('--session <id>', 'Continue an existing session instead of creating one');
   tui.option('--model <model>', 'Default model override');

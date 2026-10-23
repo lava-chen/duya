@@ -3,6 +3,7 @@ export * from './database-migration.js';
 export * from './core-database.js';
 export * from './core-data-host.js';
 export * from './database-host.js';
+export * from './database-owner-lock.js';
 export * from './sqlite-connection.js';
 export * from './run-store.js';
 export * from './core-stores.js';
