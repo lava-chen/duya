@@ -39,6 +39,8 @@
 # here either — an addition costs nothing, so there is nothing to record and
 # nothing to absorb.
 #
+# The browser migration also retires 382 additional snapshot paths: 218 capability-adapter, 147 host-ui, 13 cp-durable, and 4 runtime-coordination. The frozen paths remain here; scripts/architecture/slice-classification.test.ts records each departure with its removal reason.
+#
 # Format: one `[bucket]` header per bucket, then one repo-relative POSIX
 # path per line, sorted. `unclassified` is the deliberately-excluded
 # bucket; it is held to the same rule as the six categories.

@@ -470,11 +470,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Connector, MCP and marketplace machinery. Every real integration lives behind an adapter here.',
   },
   {
-    prefix: 'packages/computer-use/src',
-    category: 'capability-adapter',
-    why: 'OS-level input, screen capture and automation backends. A capability in the most literal sense.',
-  },
-  {
     prefix: 'packages/voice/src',
     category: 'capability-adapter',
     why: 'STT/TTS providers and their process management. Audio devices plus child processes.',
