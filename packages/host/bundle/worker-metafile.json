@@ -92,7 +92,7 @@
       "format": "esm"
     },
     "packages/data/src/integration-store.ts": {
-      "bytes": 10672,
+      "bytes": 14844,
       "imports": [],
       "format": "esm"
     },
@@ -27703,7 +27703,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -43623,7 +43623,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14290
+          "bytesInOutput": 14277
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -43680,13 +43680,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43767,10 +43767,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -46077,7 +46077,7 @@
           "bytesInOutput": 3922
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1134
+          "bytesInOutput": 1121
         },
         "../../../node_modules/ajv/dist/compile/codegen/code.js": {
           "bytesInOutput": 2614
@@ -46605,7 +46605,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -47724,7 +47724,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -49857,7 +49857,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5548558
+      "bytes": 5548519
     }
   }
 }
