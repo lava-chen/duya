@@ -254,7 +254,7 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 ## 待决
 
 1. **跨 session 工作单元**（用户决定推后）：形态候选是 `agent_job_items.assigned_thread_id` 式派工记录（可重派、`attempt_count`），不是「Task 拥有 Session」的层级。第一波不需要。
-2. **Web 端接入方式**：Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。F 开工前必须在「同源反代 / localhost 例外 / 只读快照」三者中定一个，否则 F 会返工。
+2. **Web 端接入方式**：~~Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。F 开工前必须在「同源反代 / localhost 例外 / 只读快照」三者中定一个，否则 F 会返工。~~ **已定：同源反代。** `apps/web` 已有 Node BFF（浏览器只连同源 `/api/*`，BFF 持 bearer 连 Host），F 在 BFF 上加转发即可，不需要 localhost 例外或只读快照。
 3. **写入闸口的强制面**：只拦文件写入，还是也拦 Bash？场景 2 的「只读关联」只有在两者都拦时才是真的。
 
 ## 风险
@@ -279,6 +279,9 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 | 2026-10-22 | **D7** 不新增 agent 可调用的 worktree 工具 | codex 无此工具；agent 只需要「跑在被指定的 cwd 里」，创建属于 shell/UX |
 | 2026-10-22 | **D8** 回收实现下沉为 TS，`scripts/remove-worktree.sh` 保持独立，两边用同一份拒绝矩阵 fixture | 产品不能依赖仓库脚本（打包后不存在）；但两份实现必须有等价证明 |
 | 2026-10-22 | **D9** Task 方向推后到第二波，不新增 work_items | 用户决定；A/B/C 不依赖它 |
+| 2026-10-23 | **D10** F 的三端接入定为「窄契约 + 注册表 + 共享面板」，**不**把 Desktop 迁到 `UiServices` | `24-shared-renderer.md:88` 把 Desktop 的 `UiServices` 迁移明确 defer 到 T23；F 只需要 checkout / integration 两个命名空间，另立窄端口比提前动那次迁移更小 |
+| 2026-10-23 | **D11** Integration 的刷新是 **session 作用域**（`refreshForSession`），不是 per-PR | Host 的 HTTP 面只有 `GET /v1/integrations?sessionId=`、`POST /v1/integrations/sync`、`POST /v1/integrations/link`；per-PR 观测是 Host 内部 API（`HostIntegrationApiV1.observeForPr`），不是 HTTP 面的一部分。而且刷新本来就是 session → cwd → origin → checkpoint refs → PRs → store 这一条链 |
+| 2026-10-23 | **D12** 两个 Host 共用一处装配（`createHostWorkspaceLifecycleApis`） | headless `startLocalHost` 与 Desktop 内嵌 Host 服务同一组路由。装配写两遍 ⇒ 两个 Host 对同一问题给出不同答案，且 Desktop 那边会静默缺命名空间——这种缺口只在某端暴露 |
 
 ## 进度
 
