@@ -6,7 +6,7 @@
  *   - drops oldest images first when over the budget
  *   - replaces dropped images with a truncation notice
  *   - only touches tool_result blocks from image-emitting tools
- *   - respects DUYA_COMPUTER_USE_IMAGE_BUDGET env override
+ *   - respects DUYA_IMAGE_BUDGET env override
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Message, MessageContent, ToolResultContent } from '../../../src/context/compact/types.js';
 import { imageTruncationTransform, isImageTool } from '../../../src/context/compact/transforms/imageTruncationTransform.js';
 
-const ORIGINAL_BUDGET = process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+const ORIGINAL_BUDGET = process.env.DUYA_IMAGE_BUDGET;
 
 interface ToolUse { type: 'tool_use'; id: string; name: string; input: unknown }
 interface ToolResult { type: 'tool_result'; tool_use_id: string; content: unknown[] }
@@ -63,14 +63,14 @@ describe('imageTruncationTransform', () => {
     // Force a known budget for tests; the module reads env at load time
     // so we need to reload via require-cache reset in a real test, but
     // for the default-budget test we just use the module's default (5).
-    delete process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+    delete process.env.DUYA_IMAGE_BUDGET;
   });
 
   afterEach(() => {
     if (ORIGINAL_BUDGET === undefined) {
-      delete process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+      delete process.env.DUYA_IMAGE_BUDGET;
     } else {
-      process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET = ORIGINAL_BUDGET;
+      process.env.DUYA_IMAGE_BUDGET = ORIGINAL_BUDGET;
     }
   });
 
@@ -137,7 +137,7 @@ describe('imageTruncationTransform', () => {
           (cb) =>
             cb.type === 'text' &&
             typeof cb.text === 'string' &&
-            cb.text.includes('truncated by projection pipeline'),
+            cb.text.includes('image removed by projection size limit'),
         );
         if (hasNotice) {
           foundNotice = true;
