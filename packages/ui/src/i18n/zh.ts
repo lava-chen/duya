@@ -270,6 +270,7 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.running': '运行中...',
   'streaming.toolAction.noSnapshot': '没有可显示的快照',
   'streaming.toolAction.copy': '复制',
+  'streaming.toolAction.copyPath': '复制路径',
   'streaming.toolAction.close': '关闭',
   // History-list label shown before the command in BashToolRow header.
   'streaming.toolAction.ranCommand': '已运行',

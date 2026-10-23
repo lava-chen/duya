@@ -268,6 +268,7 @@ const en = {
   'streaming.toolAction.running': 'Running...',
   'streaming.toolAction.noSnapshot': 'No snapshot returned',
   'streaming.toolAction.copy': 'Copy',
+  'streaming.toolAction.copyPath': 'Copy path',
   'streaming.toolAction.close': 'Close',
   // History-list label shown before the command in BashToolRow header.
   'streaming.toolAction.ranCommand': 'Ran',
