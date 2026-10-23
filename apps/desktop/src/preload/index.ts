@@ -745,7 +745,7 @@ export interface BrowserCookieProfile {
 
 export interface BrowserCookieAPI {
   detectProfiles: (browser: 'chrome' | 'edge') => Promise<{ ok: boolean; profiles?: BrowserCookieProfile[]; error?: string }>
-  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_COOKIE_UNSUPPORTED' }>
+  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_COOKIE_UNSUPPORTED' }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
 

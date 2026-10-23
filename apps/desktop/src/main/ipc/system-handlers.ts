@@ -191,14 +191,6 @@ export function registerSystemHandlers(): void {
   // Public export for tests
   ;(registerSystemHandlers as unknown as { __isHttpUrl?: typeof isHttpUrl }).__isHttpUrl = isHttpUrl;
 
-  // Browser extension path
-  ipcMain.handle('browser-extension:get-path', () => {
-    if (isDev) {
-      return path.join(app.getAppPath(), 'extension');
-    }
-    return path.join(process.resourcesPath, 'extension');
-  });
-
   // Notification handler
   //
   // payload: { title, body, sessionId?, type?, actions?, replyPlaceholder?,
