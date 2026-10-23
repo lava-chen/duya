@@ -31,7 +31,7 @@
 - [x] footer、状态栏、Ctrl+P 窗口三处展示改用占用语义
 - [x] 单元测试(字符计数)+ 行为测试(占用 ≠ 花费)
 - [x] 变异验证
-- [ ] 门禁 + commit + PR
+- [x] 门禁 + commit + PR（#390，draft）
 
 ## 发现与决策
 
@@ -64,7 +64,10 @@
 
 ## 接续 / 结果
 
-未提交。worktree `.claude/worktrees/tui-context-usage` 独占
-`packages/cli/src/tui/{blocks.ts,TUIApp.ts}` 与相关测试 —— 与 `tui-todo-list` 分支
-(改 `blocks.ts` 的 todo 字段)同文件不同位置,合并时需注意 `blocks.ts` 的冲突。
-下一步:跑 `npm run typecheck:all` 与 `npm run architecture:check`,提交并开 PR。
+已提交 `bb551901`,PR #390(draft)。门禁:`typecheck:all` 0、`architecture:check` 0、
+CLI 全包 86 files / 1038 passed;变异证据见上(把占用率改回会话累计 → 新用例转红)。
+
+worktree `.claude/worktrees/tui-context-usage` 独占 `packages/cli/src/tui/{blocks.ts,TUIApp.ts}`
+与相关测试 —— 与 `tui-todo-list` 分支(改 `blocks.ts` 的 todo 字段)同文件不同位置,
+合并时需注意 `blocks.ts` 的冲突。
+下一步:等 review 与 CI;获集成授权后合并并重验,再回收检出。
