@@ -1,0 +1,7 @@
+# Raw measurement dumps. The harness writes one JSON per run; they are
+# machine-specific (CPU, driver, timings) and would only add noise to the
+# repository. The numbers that matter are quoted in the PR description.
+results/
+
+# Scratch logs from a local run.
+*.log
