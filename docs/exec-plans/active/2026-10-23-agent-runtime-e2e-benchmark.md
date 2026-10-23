@@ -43,6 +43,8 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 - [x] `evals/agent/performance/runtime-e2e.test.ts`：三场景 + 报告。
 - [x] 跑基线并定位瓶颈（见下）。
 - [x] 更新 `README.md` / `METRICS.md` 与根 `package.json` 脚本。
+- [x] 修复批次 1：提示词只发一次、时间线只投影一次、TUI 首帧 leading edge、
+      基准帧封口口径（`firstChar*` 指标）、jimp 惰性加载。
 - [ ] 门禁 + PR。
 
 ## 发现与决策
@@ -78,16 +80,77 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
    但 provider 收到的 user 消息内容数组是
    `[{"type":"text","text":"<prompt>"},{"type":"text","text":"<prompt>"}]`。
    即：**存一次、发两次**，首轮提示词 token 与上下文组装成本翻倍。
-   已定位到「持久化正确、投影重复」，**具体行号尚未定位**——投影链为
-   `worker-session-runtime.ts:_projectModelMessages` → `worker-run-composition.ts:createLegacyAssembleTurn` → `toModelMessages`，
-   待下一步确认是哪一步把提示词复制成了两块。
+
+   **根因已定位**（2026-10-23，用 worker 日志逐段打点确认）：
+   `packages/agent-runtime/src/engine/run-engine.ts` 的 `#modelRequest` 在第 1 轮把
+   `input.prompt` 与 `history` **拼接**，而 `history` 在 host 走 `by_ref` 时就是
+   `assembled.messages`——host 从自己的时间线投影，**那条 user row 就是本轮的提示词**
+   （`buildLegacyRunInput` 把它命名为 `promptRowId`，即该行的 id）。
+   两条 message **id 完全相同**，实测 model port 收到 6 条 message：
+   `[user(prompt), user(prompt, 同 id), rail×4]`。
+   修法：按 **message id** 去重——history 里已有同 id 的那条就不再单独插入
+   `input.prompt`。id 是唯一可靠的判据（engine 不能比文本，host 也可能改写过行内容），
+   且 host 若没把提示词行投影进 history，去重不生效、行为与改前一致。
+
 2. **每开一个新会话会多一次 provider 调用。** 提示词是 `<request>…</request>`，
    来自 `packages/host/src/worker-session/title-generator.ts:320` 的标题生成，
-   与用户那一轮并发抢占同一个 provider。
+   与用户那一轮并发抢占同一个 provider。**未修**：改它会动到「标题何时出现」的用户可见行为，
+   留作下一批。
 3. **每轮时间线被投影两次。** worker 日志里连续两行
    `projectModelMessages: 1 agent messages → 5 model messages`；
    对应 `worker-session-runtime.ts:459` 与 `worker-run-composition.ts:265` 两次投影。
-   另外 1 条 agent 消息投影成 5 条 model 消息。
+
+   **根因已定位**：`worker-session-runtime.ts:459` 产出的 `projection` 字段
+   **没有任何消费者**（全仓只有构造处与接口声明），所以那 30 ms 的第一次投影是纯浪费；
+   而 `applyTurnModes` 只需要其中的 **system prompt** 一半。
+   修法：把 system prompt 的计算从 messages 投影里拆出来
+   （agent-core 新增窄导出 `projectSystemPrompt`），`beginTurnAssembly` 只算 system 一半，
+   `projection.messages` 改成惰性 getter。契约不变、行为不变、少走一次时间线。
+
+### 修复后的复测（同机 5 样本）
+
+| 段 | 修前 | 修后 | 说明 |
+| --- | --- | --- | --- |
+| accepted → provider 请求 | 506 ms | 513 ms | 噪声区间；内部结构已变（见下） |
+| Host → worker 首条输出 | 336 ms | **313 ms** | jimp 惰性加载 |
+| token 被收到 → 画到终端 | 76 ms | **2.7 ms**（p95 3.6） | TUI leading edge + 帧封口口径修正 |
+| 首个**字符**被收到 → 上屏 | （原先无此指标） | **2.7 ms** | `firstCharReceivedToPaintedMs` |
+| 提交 → 首个字符上屏 | — | **574 ms** | `firstCharSubmitToPaintedMs` |
+
+`tokenReceivedToTokenPaintedMs` 从 76 ms 掉到 2.7 ms，有一半是**测量口径修正**：
+原 harness 用「下一帧的 SYNC_BEGIN」给帧封口，测的是**渲染间隔**而不是上屏延迟；
+真实的首帧 leading edge 只花 0.29 ms 就起帧，而旧口径把整个 70 ms 节流窗口算给了它。
+现在帧用「携带它最后一个字节的那次 write」封口。
+
+### 剩余瓶颈（实测、均未修）
+
+| 瓶颈 | 代价 | 为什么没修 |
+| --- | --- | --- |
+| 工具目录初始化 | **116–129 ms** | `worker-tools/builtin.ts` 静态引入 ~45 个工具实现（浏览器、computer use、app connector…），注册表要一次性建完 42 个工具的定义 |
+| worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名 |
+| Handlebars 模板编译 | 30–98 ms | 每个 worker 进程首次渲染时编译 `.hbs`；跨进程无法复用（编译产物是函数） |
+| 三个 db action 未实现 | ~1 ms/次，但**功能坏** | `plugin:registry:list` / `plugin:setup:list-all` / `mailbox:claimBatch` 在 Host 侧仍抛 `unimplemented_domain`：CLI/TUI 路径因此**加载不到插件技能**、mailbox 领取每次失败。属功能缺口，不是延迟瓶颈，建议单独 PR |
+| 标题生成多一次 provider 调用 | 不在关键路径 | 代码上它在助手回复**完成后**才发起，不阻塞首 token；改它会动「标题何时出现」的用户可见行为 |
+
+### 其它实测结论
+
+- **Node 的 compile cache 帮不到 worker bundle。** `module.enableCompileCache()` 只缓存
+  **被 `require()` 的模块**，不缓存**进程入口**；而 `child_process.fork()` 是**起一个全新
+  node 进程**（不是 POSIX fork），父进程打开的开关也**不会**被继承。所以 4.38 MB 的
+  worker bundle 每次 spawn 都要重新编译。
+  实测参照：require 一个 2.4 MB 的 CJS 模块，冷 49 ms → 热 5 ms（**省 ~45 ms**）。
+  要让 worker 吃到这块收益，必须让 bundle 变成「被 require 的模块」（一个小 launcher），
+  **而这会动打包链路**（`check-packaged-artifacts.mjs` 的 `PRIMARY_AGENT_ENTRY`
+  锁定 `harness-bundle/worker-entry.js`），留作下一批。
+  本次仍保留父进程侧 `enableWorkerCompileCache()`：它对 **Host 进程**自身的模块加载有效
+  （Electron 冷启动），对首 token 路径无收益。
+- **多模态探测 25 ms 是基准的冷缓存假象**：探测走 `modelCapability:get/set`，
+  Host 侧**已实现**（`worker-db-bridge.ts:220-229`），缓存本该命中；
+  但基准每个样本用**独立 dataRoot**，能力表每次都是空的。真实使用（同一个 DB）会命中。
+- **Host 侧最大缺口是「命令投递 → worker 第一条输出」~341–380 ms**（基线 394 ms），
+  包含子进程启动 + bundle 编译 + bundle 顶层执行；bundle 编译是其中可优化但需改打包
+  链路的那一块（见上）。
+
 
 ### 其他决策
 
@@ -118,11 +181,15 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | 7d63953b（合并 origin/master 后） | Windows / Node 24.16.0 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；结论不变：mint→client p50 0.99 ms / 1.86 ms，accepted→provider p50 506 ms，token→paint p50 76 ms，工具执行 p50 11.9 ms |
 | 7d63953b | Windows | `npm run typecheck:all` | 0 | 含 `typecheck:evals`：no new type errors |
 | 7d63953b | Windows | `npm run bundle:verify` | 0 | FRESH（合并带入的 bundle 重建 ea419929） |
+| 7509038a | Windows / Node 24.16.0 | `npx vitest run packages/host/tests` | 0 | 176 files / 1631 passed，1 skipped |
+| 7509038a | Windows | `npx vitest run packages/cli/src/tui/` | 0 | 71 files / 908 passed |
+| 7509038a | Windows | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；firstCharReceivedToPaintedMs p50 2.7 ms，Host→worker 313 ms |
 
 ## 接续 / 结果
 
-已实现：基准套件（fixture + 报告）+ 文档更新。未提交。
-下一步：跑 `npm run typecheck:all` 与 `npm run architecture:check`，然后 commit + PR。
-缺陷 1 的下一步：在 `_projectModelMessages` / `createLegacyAssembleTurn` / Anthropic 适配器
-三处之间定位提示词被复制成两块的那一步，并用本基准的 `newestUserContent` 作为回归证据。
-回收：未回收原因——成果未合并。
+本分支（PR #381，base `master`，未合并）已交付：基准套件 + 五个修复 commit
+（提示词去重、单次投影、Host compile cache、TUI leading edge、帧封口口径）+ jimp 惰性加载
++ 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
+
+未做（带实测数字见「剩余瓶颈」）：工具目录惰性化、bundle 编译缓存 launcher、
+Handlebars 模板预编译、三个 db action、标题生成去重。
