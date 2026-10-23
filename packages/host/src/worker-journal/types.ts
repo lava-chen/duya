@@ -1,51 +1,71 @@
 /**
- * Re-export the rollout event types that the agent-core Journal emits.
- * Kept in a sub-module so `Journal.ts` does not pull the Electron
- * message-log types into agent-core (it imports them only via db-client).
+ * The worker-side mirror of the rollout event taxonomy.
  *
- * The RolloutEvent union here is the agent-core subset — rebase events and
- * hook events are emitted directly without going through the @duya/agent
- * Message shape. The Electron-side storage layer (message-log.ts) holds
- * the canonical RolloutLine union and is responsible for projecting
- * these events into the JSONL rollout file.
+ * This used to be an independent union with two members, and it drifted:
+ * `hook_invoked` lived here and nowhere else, so the storage layer could
+ * not derive a `kind` for it and the write transaction died on a
+ * TypeError while the rollout file kept an orphan line (plan 620
+ * Phase A5).
+ *
+ * The mirror still has its own shape for `rebase` — the worker hands
+ * over `Message[]` and the storage layer converts it to `MessageEntry[]`
+ * — but the set of discriminators is now locked to the authority by a
+ * compile-time assertion, and covered by a runtime test.
  */
 
 import type { Message } from '@duya/agent-core/message';
+import type {
+  HookInvokedEvent,
+  PromptSnapshotEvent,
+  WorkerEmittableEventType,
+} from '@duya/agent-protocol/rollout-events';
 
-/**
- * Agent-core mirror of the Electron-side RolloutEvent union. Only the
- * variants the Journal emits are represented here; the storage layer's
- * canonical definition lives in `electron/db/core/rollout-events.ts`.
- *
- * Note: `newMessages` is `Message[]` here (the agent's representation),
- * converted to `MessageEntry[]` at the IPC boundary by `Journal.appendRebase`.
- *
- * Variants:
- *   - `rebase` — supersedes prior MessageEntries (compaction / edit-resend).
- *   - `hook_invoked` — a ConfigHook fired during this turn.
- */
 export type RolloutEvent =
   | {
       type: 'rebase';
       id: string;
       turnId: string;
-      supersededUpToSeq: number;
+      supersededUpToSeq: number | null;
       /**
        * Why this rebase was emitted. Drives rotation in the storage layer:
-       * `compaction` rebases rotate the rollout file (Plan 506/493),
-       * `edit_resend` rebases are inline mutations and do not. Defaults to
-       * `compaction` when omitted — historical rebase events from before
-       * this field existed were all compaction form (Plan 441).
+       * - `compaction` — auto/manual compaction; rotates the rollout file so the
+       *   compacted summary lands as the first data row of a new generation
+       *   (Plan 506 C1 + Plan 493 Phase B).
+       * - `edit_resend` — user edit / message truncate; inline mutation that
+       *   must NOT rotate (it is not an epoch boundary).
+       *
+       * Optional for backwards compatibility — historical events from before
+       * this field existed are all compaction form (Plan 441), so the rotation
+       * trigger treats a missing reason as `compaction`.
        */
       reason?: 'compaction' | 'edit_resend';
       newMessages: Message[];
       createdAt: number;
     }
-  | {
-      type: 'hook_invoked';
-      id: string;
-      turnId: string;
-      /** HookInvokedEvent-shaped payload (caller-defined). */
-      payload: unknown;
-      createdAt: number;
-    };
+  | HookInvokedEvent
+  | PromptSnapshotEvent;
+
+/** The discriminators this mirror can carry. */
+export type WorkerRolloutEventType = RolloutEvent['type'];
+
+/**
+ * Compile-time lock: the mirror must cover every event type the
+ * authority says a worker can emit.
+ *
+ * If a type is added to the authority and forgotten here, this
+ * assignment stops type-checking — the failure lands in the build
+ * instead of in a rollout file. (The storage layer owns the rest — the
+ * rotation marker — and the journal never emits those.)
+ */
+export const MIRROR_COVERS_THE_AUTHORITY: WorkerEmittableEventType extends WorkerRolloutEventType
+  ? true
+  : never = true;
+
+/**
+ * The mirror must not carry a type the authority does not know: that is
+ * the shape that used to make `deriveKind` throw and leave an orphan
+ * line behind.
+ */
+export const MIRROR_TYPES_ARE_KNOWN: WorkerRolloutEventType extends WorkerEmittableEventType
+  ? true
+  : never = true;

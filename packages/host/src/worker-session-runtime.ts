@@ -72,6 +72,12 @@ import type { MailboxRow } from '@duya/host/worker-mailbox-row';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '@duya/host/worker-hooks/loop';
 import { applyHookInjection, renderHookContextEnvelope, type InjectableMessage, } from '@duya/host/worker-hooks/injection';
 import { applyContextRail, type ContextBlock, } from '@duya/host/worker-context/context-rail';
+import {
+    buildPromptSnapshot,
+    newPromptLedgerState,
+    toRecordedBlocks,
+    type PromptLedgerState,
+} from '@duya/host/worker-context/prompt-ledger';
 import { createBuiltinLoopHooks } from '@duya/host/worker-hooks/builtin';
 import { createConfiguredLoopHooks } from '@duya/host/worker-hooks/config-loop';
 import { ConfigHooksRunner } from '@duya/host/worker-hooks/events';
@@ -278,6 +284,33 @@ export class WorkerSession implements AgentRuntime {
             this.modeCtx,
         );
     }
+    /**
+     * Record what the model was shown this turn (plan 619 Phase 4).
+     *
+     * The snapshot lands in the session's rollout as a `prompt_snapshot`
+     * row: the system prompt as it was handed to the provider, plus the
+     * volatile blocks that travelled on the message channel. Failures
+     * here must not break the turn — the prompt is already on its way.
+     */
+    private _recordPromptSnapshot(systemPrompt: string, options?: ChatOptions): void {
+        if (!this.journal || !this.currentTurnId) return;
+        try {
+            const snapshot = buildPromptSnapshot(this.promptLedgerState, {
+                turnId: this.currentTurnId,
+                systemPrompt,
+                contextBlocks: toRecordedBlocks(this.contextRailBlocks),
+                overridden: options?.systemPrompt !== undefined,
+            });
+            if (!snapshot) return;
+            this.journal.promptSnapshot(this.currentTurnId, snapshot);
+        }
+        catch (err) {
+            logger.warn(
+                `[Agent] prompt snapshot not recorded: ${err instanceof Error ? err.message : String(err)}`,
+            );
+        }
+    }
+
     async runModeExitHooks(): Promise<void> {
         if (!this.resolvedModes || !this.modeCtx)
             return;
@@ -456,6 +489,7 @@ export class WorkerSession implements AgentRuntime {
             resolved: resolvedBase,
         });
         systemPrompt = moded.systemPrompt;
+        this._recordPromptSnapshot(systemPrompt, options);
         let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
         while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
             progressToolName = `duya_${progressToolName}`;
@@ -873,6 +907,12 @@ export class WorkerSession implements AgentRuntime {
      * wholesale on every prompt build.
      */
     private contextRailBlocks: ContextBlock[] = [];
+    /**
+     * The prompt ledger's per-session state (plan 619 Phase 4): which
+     * texts have already been written, so an unchanged one is recorded
+     * by hash instead of by content.
+     */
+    private promptLedgerState: PromptLedgerState = newPromptLedgerState();
     /**
      * How many structured system blocks the projection produced and this
      * session dropped (plan 619 defect b). Counted so the blind spot is
