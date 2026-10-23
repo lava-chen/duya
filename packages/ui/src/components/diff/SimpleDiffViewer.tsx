@@ -1,16 +1,27 @@
 /**
  * SimpleDiffViewer - GitHub/VS Code style split diff display
  * Shows deletions first (red), then additions (green)
+ *
+ * The rows are drawn here rather than by a syntax highlighter component:
+ * a removed line has to show the OLD file's line number and an added line
+ * the NEW one, so the numbering is not the sequential 1..N of any single
+ * document and cannot be delegated. When a `language` is given, the source
+ * is tokenized by `lib/diff/diff-highlight.ts` and the tokens are rendered
+ * inline, while the +/- background stays on the row.
  */
 
 'use client';
 
 import React, { useMemo } from 'react';
+import { highlightDiffSource } from '@/lib/diff/diff-highlight';
 
 interface SimpleDiffViewerProps {
   oldContent?: string;
   newContent: string;
   maxHeight?: number;
+  /** Language of the edited file. Syntax highlighting is skipped when the
+   *  language is unknown, unsupported, or the source is too large. */
+  language?: string;
 }
 
 export interface DiffStats {
@@ -114,10 +125,25 @@ export function SimpleDiffViewer({
   oldContent = '',
   newContent,
   maxHeight = 400,
+  language,
 }: SimpleDiffViewerProps) {
   const { lines, stats } = useMemo(() => {
     return calculateDiff(oldContent, newContent);
   }, [oldContent, newContent]);
+
+  // Both sides are tokenized as whole documents, so a token that spans
+  // several lines (a block comment, a template literal) is coloured the
+  // same way on every line it covers. A removed line indexes the OLD
+  // document, an added line the NEW one - that is what keeps the two
+  // line numbering schemes apart.
+  const oldTokens = useMemo(
+    () => highlightDiffSource(oldContent, language),
+    [oldContent, language],
+  );
+  const newTokens = useMemo(
+    () => highlightDiffSource(newContent, language),
+    [newContent, language],
+  );
 
   if (lines.length === 0) {
     return (
@@ -141,15 +167,17 @@ export function SimpleDiffViewer({
 
           // VS Code/GitHub style colors
           const bgClass = line.type === 'add'
-            ? 'bg-[#2ea04326]'
-            : 'bg-[#f8514926]';
+            ? 'bg-[var(--diff-added-bg)]'
+            : 'bg-[var(--diff-removed-bg)]';
 
           const textClass = 'text-foreground';
 
           // Left border indicator
           const borderClass = line.type === 'add'
-            ? 'border-l-[3px] border-l-green-500'
-            : 'border-l-[3px] border-l-red-500';
+            ? 'border-l-[3px] border-l-[var(--diff-added-border)]'
+            : 'border-l-[3px] border-l-[var(--diff-removed-border)]';
+
+          const tokens = (line.type === 'remove' ? oldTokens : newTokens)?.[line.lineNum - 1];
 
           return (
             <React.Fragment key={idx}>
@@ -158,16 +186,28 @@ export function SimpleDiffViewer({
                 <div className="h-0 border-t border-border/30" />
               )}
               <div
-                className={`flex ${bgClass} ${borderClass} hover:bg-opacity-80 transition-colors`}
+                className={`flex ${bgClass} ${borderClass} transition-colors`}
               >
                 {/* Line number */}
-                <div className={`shrink-0 w-12 text-right pr-3 text-muted-foreground/40 select-none text-[12px]`}>
+                <div className={`shrink-0 w-12 text-right pr-3 text-[var(--diff-line-number-text)] select-none text-[12px]`}>
                   {line.lineNum}
                 </div>
                 {/* Content */}
                 <div className={`flex-1 overflow-hidden pr-4 ${textClass}`}>
                   <pre className="m-0 p-0 bg-transparent whitespace-pre-wrap break-all">
-                    <code>{line.content || ' '}</code>
+                    <code>
+                      {tokens && tokens.length > 0
+                        ? tokens.map((token, tokenIdx) =>
+                            token.kind === 'plain' ? (
+                              <React.Fragment key={tokenIdx}>{token.text}</React.Fragment>
+                            ) : (
+                              <span key={tokenIdx} className={`diff-syn-${token.kind}`}>
+                                {token.text}
+                              </span>
+                            ),
+                          )
+                        : (line.content || ' ')}
+                    </code>
                   </pre>
                 </div>
               </div>

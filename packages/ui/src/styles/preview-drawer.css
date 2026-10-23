@@ -47,6 +47,34 @@
   color: var(--tool-card-subtle);
 }
 
+/* File-diff card path header — the full path (middle truncated, so the
+   project root and the file name both stay readable) plus a copy
+   button. The row above the card only shows the file name, so this is
+   where the reader learns where the file actually lives. */
+.tool-diff-path {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.4rem 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border-weak);
+  background: var(--surface-hover);
+  font-family: var(--font-mono, 'Fira Mono', ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* The path takes the room it needs and gives way when it runs out; the
+   copy button stays pinned to the trailing edge so it lands in the same
+   place on every card. */
+.tool-diff-path > span {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tool-diff-path > button {
+  margin-left: auto;
+}
+
 /* =============================================================================
  * Terminal panel
  * Used by src/components/layout/panels/TerminalPanel.tsx.

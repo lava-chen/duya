@@ -41,6 +41,15 @@ const EXPANSION_SCOPE = 'group';
 
 interface GroupProps {
   entries: SegmentEntry[];
+  /**
+   * `flat` renders the header AND the body at once — the streaming
+   * path, where the round has no collapsed chrome of its own and the
+   * group must not hide the tool calls that are still arriving.
+   *
+   * Without it the group is a collapsible line: the header carries the
+   * group's semantic description plus its diff stat, and the rows show
+   * only after the user opens it.
+   */
   flat?: boolean;
   /** Whether the owning round's stream is still live. Gates the thinking
    *  rows' live shimmer/typewriter so they stop when the stream ends even
@@ -119,32 +128,34 @@ export function Group({
     [entries],
   );
 
+  const rows = entries.map((entry, i) =>
+    entry.kind === 'tool' ? (
+      <GroupToolRow
+        key={entry.tool.id || `g-${i}`}
+        tool={entry.tool}
+        streamingToolOutput={
+          lastRunningTool?.id === entry.tool.id ? streamingToolOutput : undefined
+        }
+        agentProgressEvents={agentProgressEvents}
+      />
+    ) : entry.kind === 'thinking' ? (
+      <ThinkingRow
+        key={`thinking-${i}`}
+        content={entry.content}
+        isStreaming={!!streamLive && !!entry.isStreaming}
+      />
+    ) : (
+      // Plan 437: hook entries route through HookActionRow, which
+      // reuses the shared ActionRowChrome so the group body stays
+      // visually uniform.
+      <HookActionRow key={entry.hook.id || `hook-${i}`} hook={entry.hook} />
+    )
+  );
+
   const body = (
     <div className="tool-group-body">
       {showBrowserFallback && <BrowserFallbackBanner />}
-      {entries.map((entry, i) =>
-        entry.kind === 'tool' ? (
-          <GroupToolRow
-            key={entry.tool.id || `g-${i}`}
-            tool={entry.tool}
-            streamingToolOutput={
-              lastRunningTool?.id === entry.tool.id ? streamingToolOutput : undefined
-            }
-            agentProgressEvents={agentProgressEvents}
-          />
-        ) : entry.kind === 'thinking' ? (
-          <ThinkingRow
-            key={`thinking-${i}`}
-            content={entry.content}
-            isStreaming={!!streamLive && !!entry.isStreaming}
-          />
-        ) : (
-          // Plan 437: hook entries route through HookActionRow, which
-          // reuses the shared ActionRowChrome so the group body stays
-          // visually uniform.
-          <HookActionRow key={entry.hook.id || `hook-${i}`} hook={entry.hook} />
-        )
-      )}
+      {rows}
     </div>
   );
 
@@ -158,11 +169,17 @@ export function Group({
       onClick={toggleExpanded}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      rightSlot={
-        <DiffStatBadge additions={diffStat.additions} removals={diffStat.removals} />
-      }
+      // The diff stat sits right behind the summary text — the reference
+      // transcripts read "Edited 3 files, ran 2 commands +28 -0", with
+      // the numbers glued to the phrase they belong to. The summary is
+      // content-sized (no `flex-1`) so the status dot and the caret
+      // follow the phrase instead of drifting to the far end of the row.
+      summaryClassName="flex items-center gap-2 min-w-0"
     >
-      <span data-title-source={displayTitle.source}>{displayTitle.title}</span>
+      <span data-title-source={displayTitle.source} className="truncate">
+        {displayTitle.title}
+      </span>
+      <DiffStatBadge additions={diffStat.additions} removals={diffStat.removals} />
     </ActionRowChrome>
   );
 

@@ -43,3 +43,11 @@ for (const language of COMMON_LANGUAGES) {
 }
 
 export { PrismLight as SyntaxHighlighter };
+
+// The refractor instance behind `PrismLight`. `PrismLight` is a thin React
+// wrapper around this exact singleton (see
+// `react-syntax-highlighter/dist/esm/prism-light.js`, which imports
+// `refractor` from 'refractor/core'), so the languages registered above are
+// the ones this instance knows. Callers that need the AST instead of a
+// component — the diff viewer, which draws its own rows — use this export.
+export { refractor } from 'refractor/core';
