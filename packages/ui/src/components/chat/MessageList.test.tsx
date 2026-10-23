@@ -49,10 +49,16 @@ beforeEach(() => {
   if (!Element.prototype.scrollTo) {
     Element.prototype.scrollTo = vi.fn();
   }
-  global.ResizeObserver = vi.fn().mockImplementation(() => ({
-    observe: vi.fn(),
-    disconnect: vi.fn(),
-  }));
+  // The implementation must be a constructible function, not an arrow: the
+  // component calls `new ResizeObserver(...)`, and a mock invoked as a
+  // constructor runs its implementation through `Reflect.construct`, which
+  // rejects arrow functions.
+  global.ResizeObserver = vi.fn().mockImplementation(function () {
+    return {
+      observe: vi.fn(),
+      disconnect: vi.fn(),
+    };
+  });
   // Force rAF to run synchronously so the scroll-state observer's
   // `requestAnimationFrame(() => updateScrollState())` resolves inside the
   // test body. Without this JSDOM's rAF only fires when `_pretendToBeVisual`

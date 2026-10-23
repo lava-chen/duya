@@ -168,7 +168,13 @@ class FakeBrowserWindow {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.globalShortcut.register.mockReturnValue(true);
-  mocks.BrowserWindow.mockImplementation(() => new FakeBrowserWindow() as unknown as Electron.BrowserWindow);
+  // The implementation must be a constructible function, not an arrow: the
+  // production code calls `new BrowserWindow(...)`, and a mock invoked as a
+  // constructor runs its implementation through `Reflect.construct`, which
+  // rejects arrow functions.
+  mocks.BrowserWindow.mockImplementation(function () {
+    return new FakeBrowserWindow() as unknown as Electron.BrowserWindow;
+  });
   __resetWakeService();
 });
 

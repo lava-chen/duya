@@ -33,6 +33,17 @@ const LIFECYCLE_EVENTS = [
 /** stdin events a readline consumer would attach to. */
 const STDIN_EVENTS = ['data', 'readable', 'end', 'close', 'error'] as const;
 
+/**
+ * Events the start path may attach but this file does not assert on.
+ *
+ * `message` belongs here: the child-process IPC handler is installed even
+ * when the command stream is INJECTED, so in a test worker that handler
+ * consumes the RUNNER's own IPC messages and logs every one of them. Left
+ * attached, it keeps the worker writing to stdout long after the test body
+ * has finished, and the runner tears the worker down mid-write.
+ */
+const CLEANUP_ONLY_EVENTS = ['message'] as const;
+
 type AnyListener = (...args: unknown[]) => void;
 
 /** Every listener currently attached to `process`, keyed by event name. */
@@ -60,7 +71,7 @@ function stdinListenerCount(): number {
  * runner itself added while the test was running.
  */
 function restoreProcessListeners(snapshot: Map<string, Set<AnyListener>>): void {
-  for (const event of LIFECYCLE_EVENTS) {
+  for (const event of [...LIFECYCLE_EVENTS, ...CLEANUP_ONLY_EVENTS]) {
     const before = snapshot.get(event) ?? new Set<AnyListener>();
     for (const listener of process.listeners(event) as unknown as AnyListener[]) {
       if (!before.has(listener)) process.off(event, listener);
@@ -82,9 +93,12 @@ const listenersAtFileScope = processListenerSnapshot();
 const originalSend = process.send;
 
 afterEach(() => {
+  // Detach the leaked IPC handler FIRST. While the stdout mock is still in
+  // place, a message that slips through is captured instead of reaching the
+  // real stdout — the runner must not be torn down mid-write.
+  restoreProcessListeners(listenersAtFileScope);
   vi.restoreAllMocks();
   process.send = originalSend;
-  restoreProcessListeners(listenersAtFileScope);
 });
 
 describe('agent-process-entry import contract', () => {
