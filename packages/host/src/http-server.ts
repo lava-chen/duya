@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { logger } from '@duya/host/worker-logger';
 import {
   createServer,
   type IncomingMessage,
@@ -5357,8 +5358,59 @@ function isDurableTimelineEntry(value: unknown): value is DurableTimelineEntry {
         && (value.reason === 'compaction' || value.reason === 'manual')
         && isFiniteNumber(value.seqBeforeRotation)
         && isFiniteNumber(value.createdAt);
+    case 'hook_invoked':
+      return typeof value.turnId === 'string' && isFiniteNumber(value.createdAt);
+    case 'prompt_snapshot':
+      return typeof value.turnId === 'string'
+        && isFiniteNumber(value.createdAt)
+        && isPromptSnapshotPart(value.systemPrompt)
+        && Array.isArray(value.contextBlocks)
+        && value.contextBlocks.every(isPromptSnapshotBlock);
     default:
+      // A type the taxonomy does not know. The whole batch is rejected —
+      // one unknown line fails every line — so the reason is counted and
+      // reported instead of vanishing into a bare 400 (plan 620 Phase A4).
+      if (typeof value.type === 'string') {
+        noteUnknownTimelineEntryType(value.type);
+      }
       return false;
+  }
+}
+
+/** One recorded piece of a prompt. */
+function isPromptSnapshotPart(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.hash !== 'string' || !isFiniteNumber(value.length)) return false;
+  if (value.content !== undefined && typeof value.content !== 'string') return false;
+  return true;
+}
+
+/** One recorded volatile-context block. */
+function isPromptSnapshotBlock(value: unknown): boolean {
+  if (!isPromptSnapshotPart(value) || !isRecord(value)) return false;
+  return typeof value.id === 'string' && typeof value.source === 'string';
+}
+
+/**
+ * Unknown timeline entry types, counted.
+ *
+ * The HTTP endpoint validates a whole batch at once, so an unrecognized
+ * `type` used to fail every line of the batch with one bare
+ * `invalid_timeline_entries` and no hint about what was wrong. The count
+ * makes the gap visible: a type the taxonomy does not know is a client
+ * and a server that disagree.
+ */
+const UNKNOWN_TIMELINE_ENTRY_TYPES = new Map<string, number>();
+
+function noteUnknownTimelineEntryType(type: string): void {
+  const count = (UNKNOWN_TIMELINE_ENTRY_TYPES.get(type) ?? 0) + 1;
+  UNKNOWN_TIMELINE_ENTRY_TYPES.set(type, count);
+  if (count === 1 || count % 20 === 0) {
+    logger.warn(
+      `Rejecting timeline entry with unknown type "${type}" (${count} seen). ` +
+        `The rollout taxonomy has no such discriminator — a client is sending ` +
+        `a shape the server does not know.`,
+    );
   }
 }
 

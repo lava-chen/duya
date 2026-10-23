@@ -3,11 +3,14 @@
  *
  * Owns the AGENTS.md instruction-file index builder (moved here from the
  * swept `general/sections/project.ts`). The manager singleton is read at
- * render time; the configs' `invalidateCacheKeys: ['projectInstructions']`
- * contract keeps working because the module normalizes onto the same
- * section name. The index is a pass-through slot: the full file contents
- * are deliberately excluded here because they are sent as the first user
- * message (Plan 408 Phase 5).
+ * render time.
+ *
+ * The index is a pass-through slot: the full file contents are excluded
+ * here because the session runtime injects them separately. As of plan 619
+ * defect e no config renders this section — the index used to sit in the
+ * system prompt ALONGSIDE those bodies, repeating every file. The glob
+ * scope each conditional file applies to now rides in the body heading
+ * (`worker-agents-md/loader.ts`), so dropping the index loses nothing.
  */
 
 import { getAgentsMdManager } from '../../../worker-agents-md/index.js'

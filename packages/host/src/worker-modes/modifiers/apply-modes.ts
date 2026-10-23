@@ -43,6 +43,34 @@ export interface ApplyModesResult {
   ctx: ModeModifierContext;
 }
 
+/**
+ * Compose the mode prompt from the base prompt and the resolved prefixes
+ * and suffixes.
+ *
+ * This is the ONLY place that decides how a mode prefix joins the base
+ * prompt. The join used to be decided twice — `prefix + systemPrompt`
+ * here, `${prefix}\n\n${base}` in the session runtime — so one run
+ * produced two different byte sequences for the same mode, and the system
+ * prompt differed between the first turn and the next. Function-form
+ * prefixes keep their own composition (they receive the current prompt
+ * and return the full text); string-form ones get a blank-line join.
+ */
+export function composeModePrompt(
+  base: string,
+  prefixes: ReadonlyArray<string | ((ctx: ModeModifierContext, base: string) => string)>,
+  suffixes: ReadonlyArray<string | ((ctx: ModeModifierContext, base: string) => string)>,
+  ctx: ModeModifierContext,
+): string {
+  let prompt = base;
+  for (const prefix of prefixes) {
+    prompt = typeof prefix === 'function' ? prefix(ctx, prompt) : `${prefix}\n\n${prompt}`;
+  }
+  for (const suffix of suffixes) {
+    prompt = typeof suffix === 'function' ? suffix(ctx, prompt) : `${prompt}\n\n${suffix}`;
+  }
+  return prompt;
+}
+
 export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResult> {
   const { basePrompt, baseTools, baseToolUseContext, ctx, resolved } = input;
 
@@ -54,15 +82,12 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
 
   // 2. Apply prompt prefixes / suffixes. Prefixes prepend (in registration
   //    order), suffixes append. Function-form entries get the current ctx.
-  let systemPrompt = basePrompt;
-  for (const prefix of resolved.prompt.prefixes) {
-    systemPrompt =
-      typeof prefix === 'function' ? prefix(ctx, systemPrompt) : prefix + systemPrompt;
-  }
-  for (const suffix of resolved.prompt.suffixes) {
-    systemPrompt =
-      typeof suffix === 'function' ? suffix(ctx, systemPrompt) : systemPrompt + suffix;
-  }
+  const systemPrompt = composeModePrompt(
+    basePrompt,
+    resolved.prompt.prefixes,
+    resolved.prompt.suffixes,
+    ctx,
+  );
 
   // 3. Evaluate function-form injects now that ctx is available, then merge.
   const injectedTools: ToolRegistration[] = [];

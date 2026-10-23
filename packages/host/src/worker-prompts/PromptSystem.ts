@@ -24,15 +24,15 @@
 
 import type {
   PromptContext,
+  PromptPartition,
+  PromptPlacement,
   PromptSection,
   SystemPrompt,
   ToolPromptContribution,
   PromptBuildContextOptions,
 } from './types.js'
-import {
-  asSystemPrompt,
-  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-} from './types.js'
+import { asSystemPrompt } from './types.js'
+import { cacheKeyFor, promptContextFingerprint } from './contextFingerprint.js'
 import { PromptCache, createPromptCache } from './cache.js'
 import type { PromptProfile } from './modes/types.js'
 import { DEFAULT_PROMPT_PROFILE, isSectionEnabled } from './modes/index.js'
@@ -194,6 +194,16 @@ export interface SectionDef {
    *                 "dynamic" semantics).
    */
   cachePolicy?: SectionCachePolicy
+  /**
+   * Which channel the section is delivered on. Defaults to `'system'`.
+   *
+   * `'context'` sections are NOT part of the system prompt: the caller
+   * delivers them through the message channel, so the system prompt keeps
+   * the same bytes from turn to turn. A `'context'` section is always
+   * recomputed every build — that is what "context" means — so declaring
+   * `cachePolicy: 'once'` on one is a configuration error.
+   */
+  placement?: PromptPlacement
 }
 
 /**
@@ -507,8 +517,19 @@ export class PromptSystem {
    * resolve via renderSectionCompute.
    */
   private buildSectionFromDef(def: SectionDef, context: PromptContext): PromptSection | null {
-    const cachePolicy = def.cachePolicy ?? (def.module ? 'once' : 'every-call')
+    const placement: PromptPlacement = def.placement ?? 'system'
     const sectionName = def.name ?? def.module ?? 'anonymous'
+    if (placement === 'context' && def.cachePolicy === 'once') {
+      throw new Error(
+        `PromptSystem '${this.config.name}': section '${sectionName}' declares placement 'context' ` +
+          `with cachePolicy 'once'. A context section is recomputed on every build by ` +
+          `definition — caching it would defeat the point of the channel.`,
+      )
+    }
+    const cachePolicy: SectionCachePolicy =
+      placement === 'context'
+        ? 'every-call'
+        : (def.cachePolicy ?? (def.module ? 'once' : 'every-call'))
     const compute = () => {
       if (def.module) {
         // Registry module reference — resolve via the shared HbsPromptSystem.
@@ -522,22 +543,33 @@ export class PromptSystem {
     }
 
     if (cachePolicy === 'once') {
-      return cachedPromptSection(sectionName, compute)
+      return { ...cachedPromptSection(sectionName, compute), placement }
     } else {
-      return volatilePromptSection(
-        sectionName,
-        compute,
-        def.description ?? 'Dynamic section',
-      )
+      return {
+        ...volatilePromptSection(
+          sectionName,
+          compute,
+          def.description ?? 'Dynamic section',
+        ),
+        placement,
+      }
     }
   }
 
   /**
-   * Build the complete system prompt.
+   * Build the prompt, split by delivery channel.
+   *
+   * `stable` is what belongs in the provider's system prompt: it does not
+   * change from turn to turn, so the provider's prompt cache keeps
+   * hitting. `context` is what changes every turn — the environment, the
+   * memory projection, the skill catalog — and the caller delivers it
+   * through the message channel instead, so the volatile content stops
+   * invalidating the system prefix.
+   *
    * Template method: preBuildHook → getAllSections → resolve cached →
-   * recompute volatile → combine.
+   * recompute volatile → split.
    */
-  async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
+  async buildSystemPromptPartition(context: PromptContext): Promise<PromptPartition> {
     // Pre-build hook: async side-effects + cache invalidation.
     if (this.config.preBuildHook) {
       const result = await this.config.preBuildHook(context)
@@ -553,10 +585,20 @@ export class PromptSystem {
 
     const allSections = this.getAllSections(context)
 
-    // Partition into cached ('once') and volatile ('every-call') sections.
+    // Split by channel first, then by cache policy within the system half.
+    const systemSections: PromptSection[] = []
+    const contextSections: PromptSection[] = []
+    for (const section of allSections) {
+      if (section.placement === 'context') {
+        contextSections.push(section)
+      } else {
+        systemSections.push(section)
+      }
+    }
+
     const cachedSections: PromptSection[] = []
     const volatileSections: PromptSection[] = []
-    for (const section of allSections) {
+    for (const section of systemSections) {
       if (section.volatile) {
         volatileSections.push(section)
       } else {
@@ -579,14 +621,23 @@ export class PromptSystem {
     })
 
     // Cached sections: consult cache, populate on miss.
-    const { staticContent, staticNames } = await this.resolveSections(cachedSections)
+    const { staticContent, staticNames } = await this.resolveSections(cachedSections, context)
 
-    const prompt = asSystemPrompt([
-      ...staticContent,
-      SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
-      ...volatileContent,
-    ])
-    const sections = [
+    // Context sections: always recomputed, always in parallel with the rest.
+    const contextResults = await Promise.all(
+      contextSections.map(section => Promise.resolve(section.compute())),
+    )
+    const contextContent: string[] = []
+    const contextNames: string[] = []
+    contextResults.forEach((content, index) => {
+      if (content === null) return
+      const section = contextSections[index]
+      if (!section) return
+      contextContent.push(content)
+      contextNames.push(section.name)
+    })
+
+    const stable = [
       ...staticNames.map((name, index) => ({
         name,
         content: staticContent[index] ?? '',
@@ -598,8 +649,30 @@ export class PromptSystem {
         volatile: true,
       })),
     ]
-    this.reportDigests(sections)
-    this.maybeDumpPrompt(prompt, sections)
+    const renderedContext = contextNames.map((name, index) => ({
+      name,
+      content: contextContent[index] ?? '',
+      volatile: true,
+    }))
+
+    this.reportDigests([...stable, ...renderedContext])
+    return { stable, context: renderedContext }
+  }
+
+  /**
+   * Build the complete system prompt.
+   *
+   * Callers that cannot deliver a second channel get both halves in one
+   * string. The session runtime uses {@link buildSystemPromptPartition}
+   * instead, so the volatile half leaves the system prompt.
+   */
+  async buildSystemPrompt(context: PromptContext): Promise<SystemPrompt> {
+    const partition = await this.buildSystemPromptPartition(context)
+    const prompt = asSystemPrompt([
+      ...partition.stable.map((section) => section.content),
+      ...partition.context.map((section) => section.content),
+    ])
+    this.maybeDumpPrompt(prompt, [...partition.stable, ...partition.context])
     return prompt
   }
 
@@ -622,15 +695,22 @@ export class PromptSystem {
   /**
    * Resolve cached sections: consult cache, populate on miss.
    * Volatile sections are handled separately in buildSystemPrompt.
+   *
+   * The cache key carries a fingerprint of the context the section was
+   * rendered against. Without it a cached section would survive a change
+   * in the very inputs it renders from — the tool set, the model, the
+   * working directory — and the model would be served stale bytes.
    */
   private async resolveSections(
     cachedSections: PromptSection[],
+    context: PromptContext,
   ): Promise<{ staticContent: string[]; staticNames: string[] }> {
+    const fingerprint = promptContextFingerprint(context)
     const slots: (string | null)[] = new Array(cachedSections.length).fill(null)
     const missIndices: number[] = []
     const missSections: PromptSection[] = []
     cachedSections.forEach((section, i) => {
-      const cached = this.cache.get(section.name)
+      const cached = this.cache.get(cacheKeyFor(section.name, fingerprint))
       if (cached !== undefined) {
         if (cached !== null) {
           slots[i] = cached
@@ -649,7 +729,7 @@ export class PromptSystem {
         const section = missSections[idx]
         const originalIdx = missIndices[idx]
         if (!section || originalIdx === undefined) return
-        this.cache.set(section.name, content)
+        this.cache.set(cacheKeyFor(section.name, fingerprint), content)
         if (content !== null) {
           slots[originalIdx] = content
         }

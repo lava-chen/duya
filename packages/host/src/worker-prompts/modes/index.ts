@@ -25,13 +25,18 @@ export {
  * When `enableSections` is non-empty it is a whitelist. This lets a profile
  * opt into a compact, task-appropriate prompt instead of inheriting every
  * dynamic section declared by the system configuration.
- * Without a whitelist, `disableSections` removes named sections.
+ *
+ * `disableSections` wins over `enableSections`. The two lists used to be
+ * mutually exclusive — a non-empty whitelist made the denylist unreachable
+ * — which meant a profile carrying both silently kept the sections it
+ * asked to drop, and left `resolveEnabledSections` (enable minus disable)
+ * disagreeing with this function. Deny-first is what both callers mean.
  */
 export function isSectionEnabled(profile: PromptProfile, sectionName: string): boolean {
   const disable = profile.disableSections
+  if (disable && disable.includes(sectionName)) return false
   const enable = profile.enableSections
   if (enable && enable.length > 0) return enable.includes(sectionName)
-  if (disable && disable.includes(sectionName)) return false
   return true
 }
 
@@ -49,6 +54,21 @@ export function resolveEnabledSections(profile: PromptProfile): Set<string> {
     for (const s of profile.disableSections) enabled.delete(s)
   }
   return enabled
+}
+
+/**
+ * Stable key for a profile — the second half of the (name, profile) pair
+ * the registry buckets its live PromptSystem instances by.
+ *
+ * Two profiles with the same key must behave identically, so the key
+ * carries both lists verbatim; a profile with neither list is the default
+ * and shares one bucket.
+ */
+export function promptProfileKey(profile: PromptProfile): string {
+  const enable = profile.enableSections ?? []
+  const disable = profile.disableSections ?? []
+  if (enable.length === 0 && disable.length === 0) return 'default'
+  return `enable=${enable.join(',')};disable=${disable.join(',')}`
 }
 
 /**

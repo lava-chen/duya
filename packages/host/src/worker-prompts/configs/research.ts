@@ -24,7 +24,9 @@ export const researchConfig: PromptSystemConfig = {
   sections: [
     // Cached registry modules (static half)
     { module: 'projectContinuity', name: 'projectContinuity', cachePolicy: 'once' },
-    { module: 'projectInstructions', name: 'projectInstructions', cachePolicy: 'once' },
+    // No `projectInstructions` section: the AGENTS.md file bodies are
+    // injected by the session runtime, so an index of the same files
+    // would repeat them (plan 619 defect e).
     { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
     // Research-specific modules — bypass profile gating (always render).
     { module: 'researchProfile', name: 'researchProfile', bypassProfile: true, cachePolicy: 'once' },
@@ -34,9 +36,12 @@ export const researchConfig: PromptSystemConfig = {
     // toneAndStyle IS a generic section name; respect the profile gate.
     { module: 'toneAndStyle', name: 'toneAndStyle', cachePolicy: 'once' },
     // Volatile inline sections (dynamic half — recomputed every call)
+    // Context channel — recomputed every call and delivered as a message
+    // (plan 619 Phase 3).
     {
       name: 'outputFormat',
       cachePolicy: 'every-call',
+      placement: 'context',
       // Compute intent inline — resolveResearchIntent is a cheap context fallback.
       compute: (ctx) => getOutputFormatPromptSection(resolveResearchIntent(ctx)),
       description: 'Intent-specific output format',
@@ -45,6 +50,7 @@ export const researchConfig: PromptSystemConfig = {
       name: 'vision',
       template: 'dynamic/vision.hbs',
       cachePolicy: 'every-call',
+      placement: 'context',
       description: 'Vision capability and visual verification',
     },
   ],
@@ -54,8 +60,11 @@ export const researchConfig: PromptSystemConfig = {
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
+    // The AGENTS.md bodies never render through PromptCache — the session
+    // runtime injects them from the manager, which keeps its own mtime
+    // fast path — so there is no cache key to invalidate here.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return { invalidateCacheKeys: ['projectInstructions'] }
+      return {}
     }
   },
 }

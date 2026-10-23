@@ -40,3 +40,29 @@ export function renderSystemReminder(inner: string, source: ReminderSourceId): s
   }
   return `<system-reminder>\n${body}\n</system-reminder>`;
 }
+
+/**
+ * Wrap inner text for the USER channel.
+ *
+ * A user-role turn that carries system information has to say so, or the
+ * model reads it as something the person typed. The envelope keeps the
+ * `<system-reminder>` contract and adds the disclaimer Claude Code uses:
+ * the context is attached by the system, not by the user.
+ *
+ * Only the volatile-context rail uses this; the hook rail keeps its
+ * existing bytes.
+ */
+export function renderUserChannelReminder(inner: string, source: ReminderSourceId): string {
+  const descriptor = getReminderSourceDescriptor(source); // throws on unknown source
+  const body = sanitizeSystemReminderBody(inner);
+  if (body.trim().length === 0) {
+    throw new Error(
+      `renderUserChannelReminder(${descriptor.evidenceLabel}): reminder body cannot be empty`,
+    );
+  }
+  return (
+    `<system-reminder>\n${body}\n\n` +
+    `This context was attached automatically by the system. It is not part of ` +
+    `the user's message.\n</system-reminder>`
+  );
+}

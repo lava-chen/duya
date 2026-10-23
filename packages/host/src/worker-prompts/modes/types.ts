@@ -43,22 +43,28 @@ export const DEFAULT_PROMPT_PROFILE: PromptProfile = {}
  * - Explore/research/plan: minimal — keep core context + tool guidance, drop governance
  * - verification: full — needs governance constraints (same as default)
  * - fork: bare — strong constraints, no conversation
+ *
+ * The names here must be section names some PromptSystem config actually
+ * declares. `memoryContent`, `widgetGuidelines` and `visionGuidelines` were
+ * never section names — the sections are `memory`, (none) and `vision` — so
+ * the denylist silently disabled nothing. A guard test asserts every name
+ * in this map exists in at least one config.
  */
 export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
   Explore: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'skills', 'sessionGuidance', 'vision'],
   },
   explore: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'skills', 'sessionGuidance', 'vision'],
   },
   research: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+    disableSections: ['memory', 'skills', 'sessionGuidance'],
   },
   // verification: full profile (no disable) — keeps governance constraints
   verification: {},
   // fork: bare — drop conversation/governance, keep safety + project + environment
   fork: {
-    disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'personality', 'widgetGuidelines', 'visionGuidelines'],
+    disableSections: ['memory', 'skills', 'sessionGuidance', 'personality', 'vision'],
   },
 }
 
@@ -66,5 +72,5 @@ export const SUBAGENT_TYPE_PROFILE_MAP: Record<string, PromptProfile> = {
  * Default profile for unknown subagent types.
  */
 export const DEFAULT_SUBAGENT_PROFILE: PromptProfile = {
-  disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'widgetGuidelines'],
+  disableSections: ['memory', 'skills', 'sessionGuidance'],
 }

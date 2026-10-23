@@ -170,8 +170,80 @@ export interface RotationEvent {
   createdAt: number;
 }
 
+/**
+ * A hook fired during a turn. The payload is caller-defined.
+ *
+ * This type used to live ONLY in the worker-side journal mirror, which
+ * meant the protocol did not recognise it: `deriveKind` fell through to
+ * `payload.message.role`, threw inside the write transaction, and left
+ * an orphan line in the rollout file with no index row. The type is
+ * registered here so the taxonomy has one authority (plan 620 Phase A).
+ */
+export interface HookInvokedEvent {
+  type: 'hook_invoked';
+  id: string;
+  turnId: string;
+  /** HookInvokedEvent-shaped payload (caller-defined). */
+  payload: unknown;
+  createdAt: number;
+}
+
+/**
+ * The assembled prompt of one turn: the system prompt as it was handed
+ * to the provider, plus the volatile blocks that travelled on the
+ * message channel instead (plan 619 Phase 4).
+ *
+ * The content is recorded, not just a digest: the question this answers
+ * is "what did the model actually see", and a hash cannot answer it.
+ */
+export interface PromptSnapshotEvent {
+  type: 'prompt_snapshot';
+  id: string;
+  turnId: string;
+  createdAt: number;
+  /** The system prompt, as assembled. */
+  systemPrompt: PromptSnapshotPart;
+  /** The volatile context blocks delivered on the message channel. */
+  contextBlocks: PromptSnapshotBlock[];
+  /**
+   * True when the caller supplied its own system prompt, so the recorded
+   * text is the caller's, not the one this session assembled.
+   */
+  overridden?: boolean;
+}
+
+/** One recorded piece of a prompt. */
+export interface PromptSnapshotPart {
+  /** SHA-256 of the content, hex encoded. */
+  hash: string;
+  /** Character length of the content. */
+  length: number;
+  /**
+   * The content itself, when it is recorded. Absent when it was not
+   * written — see the ledger's reason field.
+   */
+  content?: string;
+  /** Why the content is missing, when it is. */
+  omitted?: 'unchanged' | 'quota' | 'disabled';
+}
+
+/** One recorded volatile-context block. */
+export interface PromptSnapshotBlock extends PromptSnapshotPart {
+  /** The slot the block filled (the prompt section name). */
+  id: string;
+  /** The taxonomy entry the block was rendered under. */
+  source: string;
+  /** Which channel the block was delivered on. */
+  role: 'system' | 'user';
+}
+
 /** Full set of non-message rollout events. */
-export type RolloutEvent = RolloutProcessEvent | RebaseEvent | RotationEvent;
+export type RolloutEvent =
+  | RolloutProcessEvent
+  | RebaseEvent
+  | RotationEvent
+  | HookInvokedEvent
+  | PromptSnapshotEvent;
 
 export type RolloutEventType = RolloutEvent['type'];
 
@@ -179,23 +251,75 @@ export type RolloutEventType = RolloutEvent['type'];
 export type DurableTimelineEntry = MessageEntry | CompactionEntry | RolloutEvent;
 
 /**
- * Discriminator: which event `type` strings are valid for rollout events.
- * Used by `MessageLog.deriveKind` to map an event payload to its `kind` column.
+ * THE authoritative list of rollout event discriminators.
  *
- * Plain string array (no `as const satisfies`) because vitest's esbuild
- * version in this repo does not preserve the `satisfies` operator at
- * runtime, which surfaced as a ReferenceError. Type-safety for the union
- * is maintained by `RolloutEventType` above; new event types added here
- * must be added to `RolloutEventType` too.
+ * Every consumer derives from this one table: the type union above, the
+ * runtime guard, the storage layer's `kind` column, the HTTP validator
+ * and the worker-side journal mirror. Adding a rollout event type used
+ * to mean editing seven places in lockstep, and forgetting one of them
+ * did not fail loudly — an unknown `type` fell through `deriveKind` to
+ * `payload.message.role`, threw a TypeError inside the write
+ * transaction, and left an orphan line in the rollout file with no
+ * index row (that is exactly how `hook_invoked` behaved).
+ *
+ * The value says WHO produces the event: the worker journal emits
+ * `'worker'` events, the storage layer produces `'storage'` ones (the
+ * rotation marker), and `'reserved'` marks a type whose schema is kept
+ * although nothing writes it today. The reserved ones are not deleted:
+ * they have schema and read-side consumers, and "nobody writes it" is
+ * not a reason to remove it (plan 620 Phase A7).
+ *
+ * The table lives in THIS file on purpose. The esbuild pipeline this
+ * repo runs under has historically dropped CROSS-MODULE const references
+ * at runtime; a same-module constant survives that, and the runtime
+ * guard is derived from it instead of from a second hand-written list.
  */
-export const ROLLOUT_EVENT_TYPES: readonly RolloutEventType[] = [
-  'reasoning',
-  'tool_call',
-  'turn_started',
-  'system_context',
-  'rebase',
-  'rotation',
-];
+const ROLLOUT_EVENT_DISCRIMINATORS = {
+  reasoning: 'reserved',
+  tool_call: 'reserved',
+  turn_started: 'reserved',
+  system_context: 'reserved',
+  hook_invoked: 'worker',
+  rebase: 'worker',
+  rotation: 'storage',
+  prompt_snapshot: 'worker',
+} as const;
+
+/** Every rollout event discriminator, derived from the authority above. */
+export const ROLLOUT_EVENT_TYPES: readonly RolloutEventType[] = Object.keys(
+  ROLLOUT_EVENT_DISCRIMINATORS,
+) as RolloutEventType[];
+
+/** The event types the worker-side journal can emit, derived the same way. */
+export const WORKER_EMITTABLE_EVENT_TYPES: readonly RolloutEventType[] =
+  ROLLOUT_EVENT_TYPES.filter(
+    (type) =>
+      (ROLLOUT_EVENT_DISCRIMINATORS as Record<string, string>)[type] === 'worker',
+  );
+
+/**
+ * The event types the worker-side journal can emit.
+ *
+ * The storage layer produces the rotation marker, and the reserved types
+ * have no producer today — neither is the worker's to emit.
+ */
+export type WorkerEmittableEventType = {
+  [K in RolloutEventType]: (typeof ROLLOUT_EVENT_DISCRIMINATORS)[K] extends 'worker'
+    ? K
+    : never;
+}[RolloutEventType];
+
+/**
+ * True when the string names a rollout event.
+ *
+ * Exported so the consumers that cannot import the table itself (the
+ * storage layer, the HTTP validator) still share one authority: they
+ * call a function, and a function reference survives the bundler in a
+ * way a cross-module const reference does not.
+ */
+export function isRolloutEventType(type: string): boolean {
+  return Object.prototype.hasOwnProperty.call(ROLLOUT_EVENT_DISCRIMINATORS, type);
+}
 
 /** Type guard: returns true for any rollout-event payload (vs. message/compaction). */
 export function isRolloutEvent(
@@ -203,21 +327,7 @@ export function isRolloutEvent(
 ): payload is RolloutEvent {
   if (typeof payload !== 'object' || payload === null) return false;
   const t = (payload as { type?: unknown }).type;
-  // Inline the discriminator strings rather than referencing ROLLOUT_EVENT_TYPES —
-  // vitest's esbuild pipeline in this repo (0.27.7 with the project's tsconfig)
-  // has historically dropped cross-module const references at runtime even when
-  // the direct esbuild CLI output preserves them. The string literal here is
-  // the canonical list; ROLLOUT_EVENT_TYPES exists for documentation and
-  // exported for callers that want a runtime list.
-  return (
-    typeof t === 'string' &&
-    (t === 'reasoning' ||
-      t === 'tool_call' ||
-      t === 'turn_started' ||
-      t === 'system_context' ||
-      t === 'rebase' ||
-      t === 'rotation')
-  );
+  return typeof t === 'string' && isRolloutEventType(t);
 }
 
 /**
