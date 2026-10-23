@@ -40,7 +40,7 @@ import type { CanUseToolFn } from '@duya/host/worker-execution/streaming-tool-ex
 import type { WidgetStyleSignature, CanvasFreshnessState } from '@duya/host/worker-run-contracts';
 import { createHasPermissionsToUseTool } from '@duya/host/authorization/worker-permission-evaluator';
 import { resolveCacheRetention } from '@duya/host/worker-config/cache-config';
-import { readToolExposureConfig } from '@duya/host/worker-config/tool-exposure';
+import { readToolExposureConfig, shouldInjectMcpCatalog } from '@duya/host/worker-config/tool-exposure';
 import type { ToolPermissionCheckContext } from '@duya/host/authorization/worker-permission-evaluator';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '@duya/capabilities/permissions';
 import type { CommunicationPlatform } from '@duya/host/worker-prompts/types';
@@ -71,6 +71,13 @@ import { buildMCPCapabilityCatalog } from '@duya/capabilities/MCP/capability-cat
 import type { MailboxRow } from '@duya/host/worker-mailbox-row';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '@duya/host/worker-hooks/loop';
 import { applyHookInjection, renderHookContextEnvelope, type InjectableMessage, } from '@duya/host/worker-hooks/injection';
+import { applyContextRail, type ContextBlock, } from '@duya/host/worker-context/context-rail';
+import {
+    buildPromptSnapshot,
+    newPromptLedgerState,
+    toRecordedBlocks,
+    type PromptLedgerState,
+} from '@duya/host/worker-context/prompt-ledger';
 import { createBuiltinLoopHooks } from '@duya/host/worker-hooks/builtin';
 import { createConfiguredLoopHooks } from '@duya/host/worker-hooks/config-loop';
 import { ConfigHooksRunner } from '@duya/host/worker-hooks/events';
@@ -86,7 +93,7 @@ import { modeModifierRegistry, modeTrackerEngine } from '@duya/host/worker-modes
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '@duya/host/worker-modes/modifiers';
 import type { SubagentRunDeps } from '@duya/host/worker-subagents/run-agent';
 import { ModeCoordinator } from '@duya/host/worker-modes/engine';
-import { applyModes, collectActiveModes, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
+import { applyModes, collectActiveModes, composeModePrompt, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
 import { planModeTracker } from '@duya/host/worker-modes/plan/plan-tracker';
 import { ToolRegistry } from '@duya/host/worker-tool-registry';
 import type { ToolExecutor } from '@duya/host/worker-tool-registry';
@@ -270,12 +277,40 @@ export class WorkerSession implements AgentRuntime {
             return systemPrompt;
         }
         this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
-        let prefix = '';
-        for (const p of this.resolvedModes.prompt.prefixes) {
-            prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
-        }
-        return `${prefix}\n\n${this.baseSystemPromptWithoutModes}`;
+        return composeModePrompt(
+            this.baseSystemPromptWithoutModes,
+            this.resolvedModes.prompt.prefixes,
+            this.resolvedModes.prompt.suffixes,
+            this.modeCtx,
+        );
     }
+    /**
+     * Record what the model was shown this turn (plan 619 Phase 4).
+     *
+     * The snapshot lands in the session's rollout as a `prompt_snapshot`
+     * row: the system prompt as it was handed to the provider, plus the
+     * volatile blocks that travelled on the message channel. Failures
+     * here must not break the turn — the prompt is already on its way.
+     */
+    private _recordPromptSnapshot(systemPrompt: string, options?: ChatOptions): void {
+        if (!this.journal || !this.currentTurnId) return;
+        try {
+            const snapshot = buildPromptSnapshot(this.promptLedgerState, {
+                turnId: this.currentTurnId,
+                systemPrompt,
+                contextBlocks: toRecordedBlocks(this.contextRailBlocks),
+                overridden: options?.systemPrompt !== undefined,
+            });
+            if (!snapshot) return;
+            this.journal.promptSnapshot(this.currentTurnId, snapshot);
+        }
+        catch (err) {
+            logger.warn(
+                `[Agent] prompt snapshot not recorded: ${err instanceof Error ? err.message : String(err)}`,
+            );
+        }
+    }
+
     async runModeExitHooks(): Promise<void> {
         if (!this.resolvedModes || !this.modeCtx)
             return;
@@ -454,6 +489,7 @@ export class WorkerSession implements AgentRuntime {
             resolved: resolvedBase,
         });
         systemPrompt = moded.systemPrompt;
+        this._recordPromptSnapshot(systemPrompt, options);
         let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
         while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
             progressToolName = `duya_${progressToolName}`;
@@ -864,6 +900,25 @@ export class WorkerSession implements AgentRuntime {
     private widgetStyleHistory: WidgetStyleSignature[] = [];
     private promptContexts: string[] = [];
     private promptContextBlocks: string[] = [];
+    /**
+     * The volatile-context rail (plan 619 Phase 3): the prompt content
+     * that changes every turn, delivered through the message channel so
+     * the system prefix stays byte-identical between turns. Replaced
+     * wholesale on every prompt build.
+     */
+    private contextRailBlocks: ContextBlock[] = [];
+    /**
+     * The prompt ledger's per-session state (plan 619 Phase 4): which
+     * texts have already been written, so an unchanged one is recorded
+     * by hash instead of by content.
+     */
+    private promptLedgerState: PromptLedgerState = newPromptLedgerState();
+    /**
+     * How many structured system blocks the projection produced and this
+     * session dropped (plan 619 defect b). Counted so the blind spot is
+     * visible in the log instead of silent.
+     */
+    private systemBlockDropCount = 0;
     private injectedSkillParts: Map<string, number> = new Map();
     getInjectedSkillParts(): Array<{
         label: string;
@@ -1532,6 +1587,10 @@ export class WorkerSession implements AgentRuntime {
         // not come from a profile, and plan 619 Phase 0 needs to tell the
         // two apart when asking "what changed between turns".
         const hostBlocks: { name: string; content: string }[] = [];
+        // The volatile half of the prompt (plan 619 Phase 3). It is
+        // delivered through the message channel, not the system prompt,
+        // so the system prefix keeps the same bytes from turn to turn.
+        const contextBlocks: ContextBlock[] = [];
         if (options?.disableSystemPrompt) {
             systemPromptContent = '';
             logger.info('[Agent] streamChat: System prompt disabled (empty)');
@@ -1554,27 +1613,29 @@ export class WorkerSession implements AgentRuntime {
                 ...definedProperties({ language: this.language }),
                 ...definedProperties({ projectHome: this.projectHome })
             });
-            const systemPromptResult = await promptSystem.buildSystemPrompt(context);
-            systemPromptContent = [...systemPromptResult].join('\n\n');
+            const partition = await promptSystem.buildSystemPromptPartition(context);
+            systemPromptContent = partition.stable.map((section) => section.content).join('\n\n');
+            for (const section of partition.context) {
+                contextBlocks.push({ id: section.name, source: 'volatile_context', content: section.content });
+            }
         }
         if (!options?.disableSystemPrompt) {
-            if (readToolExposureConfig().exposure === 'search') {
+            if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
-                    hostBlocks.push({ name: 'host:mcp_catalog', content: mcpCatalog });
-                    systemPromptContent = systemPromptContent
-                        ? `${systemPromptContent}\n\n${mcpCatalog}`
-                        : mcpCatalog;
+                    // The catalog changes whenever an MCP server connects or
+                    // disconnects, so it rides the context channel too.
+                    contextBlocks.push({ id: 'mcp_catalog', source: 'volatile_context', content: mcpCatalog });
                 }
             }
             const appsSection = buildAppsSystemSection(getCachedAppConnectionDescriptors());
             if (appsSection) {
-                hostBlocks.push({ name: 'host:apps', content: appsSection });
-                systemPromptContent = systemPromptContent
-                    ? `${systemPromptContent}\n\n${appsSection}`
-                    : appsSection;
+                contextBlocks.push({ id: 'apps', source: 'volatile_context', content: appsSection });
             }
         }
+        // The rail is replaced wholesale every build: a block that stopped
+        // rendering must not keep its stale text in the next request.
+        this.contextRailBlocks = contextBlocks;
         if (options?.systemPromptPrefix) {
             hostBlocks.push({ name: 'host:prefix', content: options.systemPromptPrefix });
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
@@ -2249,9 +2310,31 @@ export class WorkerSession implements AgentRuntime {
                 logger.info(`[Agent] restored ${restored} hook context block(s) after re-projection`);
             }
         }
+        // The volatile-context rail goes in unconditionally and last: it is
+        // current state, not a hook's contribution, and it must not ride the
+        // `injectHookContexts` switch.
+        applyContextRail(
+            messages as unknown as InjectableMessage[],
+            this.contextRailBlocks,
+            { now: Date.now() },
+        );
+        // The projection can return blocks instead of a string when a system
+        // segment carries structured content (a `legacy_system` row or a
+        // compaction's `reinjectedSystemMessages`). Those blocks are dropped
+        // here — the model never sees them. Plan 619 defect b tracks the
+        // size of the blind spot before the real fix lands; until then the
+        // drop is counted, not silent.
         const systemFromProjection = typeof projection.system === 'string'
             ? projection.system
             : '';
+        if (typeof projection.system !== 'string' && projection.system.length > 0) {
+            const blockCount = projection.system.length;
+            this.systemBlockDropCount += blockCount;
+            logger.warn(
+                `[Agent] dropped ${blockCount} structured system block(s) from the projection ` +
+                `(total ${this.systemBlockDropCount}); plan 619 defect b`,
+            );
+        }
         const merged = systemPromptContent && systemFromProjection
             ? `${systemPromptContent}\n\n---\n\n## Conversation Context\n\n${systemFromProjection}`
             : (systemPromptContent || systemFromProjection);

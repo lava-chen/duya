@@ -42,6 +42,7 @@ import {
   type DurableTimelineEntry,
   type RebaseEvent,
   type RolloutEvent,
+  type RolloutEventType,
   type RolloutProcessEvent,
   type RotationEvent,
 } from './rollout-events.js';
@@ -56,7 +57,16 @@ export type { MessageLogLogger, MessageLogPathPorts, MessageLogPorts } from './m
 export type RolloutLine = DurableTimelineEntry;
 
 export type MessageEventKind = AgentMessage['role'];
-export type EventKind = MessageEventKind | 'compaction' | 'reasoning' | 'tool_call' | 'turn_started' | 'system_context' | 'rebase' | 'rotation';
+/**
+ * The `kind` column of the message index.
+ *
+ * The rollout half is derived from the protocol's authority, so a new
+ * event type cannot land in the protocol and miss the index (plan 620
+ * Phase A3). The hand-written list this replaced was the only place
+ * that failed loudly when a type was added; everywhere else a forgotten
+ * update surfaced as a TypeError inside the write transaction.
+ */
+export type EventKind = MessageEventKind | 'compaction' | RolloutEventType;
 
 export interface NewEvent {
   /** Deterministic id (= entry.id). Never randomUUID(). */

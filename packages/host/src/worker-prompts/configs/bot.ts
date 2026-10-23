@@ -39,11 +39,13 @@ export const botConfig: PromptSystemConfig = {
   sections: [
     // Dynamic sections — recomputed every call via .hbs templates
     { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call' },
-    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'] },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call' },
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call' },
+    // Context channel — recomputed every call and delivered as a message
+    // (plan 619 Phase 3).
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', placement: 'context' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', placement: 'context' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', placement: 'context', requiresTools: ['Skill', 'Read'] },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', placement: 'context' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
@@ -58,13 +60,11 @@ export const botConfig: PromptSystemConfig = {
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
+    // The AGENTS.md bodies never render through PromptCache — the session
+    // runtime injects them from the manager, which keeps its own mtime
+    // fast path — so there is no cache key to invalidate here.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return envResult?.promptContextExtension === undefined
-        ? { invalidateCacheKeys: ['project'] }
-        : {
-            invalidateCacheKeys: ['project'],
-            promptContextExtension: envResult.promptContextExtension,
-          }
+      return envResult
     }
     return envResult
   },

@@ -656,7 +656,14 @@ describe('the seam is public, and the loop routes through it rather than beside 
     // The pre-slice loop had both of these at the top of its body. Each is now
     // reachable only through `refreshTurnSystemPrompt` / `buildTurnPipeline`,
     // which the seam owns.
-    expect(occurrences(/baseSystemPromptWithoutModes\)\s*:\s*string|prefix \+= typeof p === 'function'/)).toBe(1);
+    //
+    // The mode prompt join has one home: `composeModePrompt` in
+    // worker-modes/modifiers/apply-modes.ts. This file CALLS it and no
+    // longer re-implements the join — the two call sites used to disagree on
+    // the separator, which made the system prompt differ between the first
+    // turn and the next (plan 619 defect h).
+    expect(occurrences(/prefix \+= typeof p === 'function'/)).toBe(0);
+    expect(occurrences(/composeModePrompt\(/)).toBe(1);
     expect(occurrences(/this\.buildTurnPipeline\s*\(/)).toBe(1);
   });
 });

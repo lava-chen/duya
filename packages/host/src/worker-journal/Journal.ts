@@ -31,6 +31,7 @@ import type { Message } from '@duya/agent-core/message';
 import { ingestMessage } from '@duya/agent-protocol';
 import { THREAD_METADATA_KEY } from '@duya/agent-core/message/threads';
 import type { RolloutEvent } from './types.js';
+import type { PromptSnapshotEvent } from '@duya/agent-protocol/rollout-events';
 
 // Re-export so callers can use the agent-core RolloutEvent union.
 export type { RolloutEvent } from './types.js';
@@ -258,6 +259,19 @@ export class Journal {
   /** Emit a typed RolloutEvent (used by hook_invoked). */
   private fireEvent(kind: string, event: RolloutEvent, turnId: string | null | undefined): void {
     this.fireEventRaw(kind, event, turnId);
+  }
+
+  /**
+   * Record what the model was shown this turn: the system prompt and the
+   * volatile blocks that travelled on the message channel (plan 619
+   * Phase 4).
+   *
+   * Goes through `fireEventRaw` — the `journal:emit` channel — because
+   * the `message:append` channel would drop the `type` discriminator and
+   * collapse the row into a message.
+   */
+  promptSnapshot(turnId: string, event: PromptSnapshotEvent): void {
+    this.fireEventRaw('prompt_snapshot', event, turnId);
   }
 }
 

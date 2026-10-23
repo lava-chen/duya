@@ -1,110 +1,129 @@
 /**
- * Type-shape + discrimination tests for rollout events (plan 333 + plan 441).
+ * The rollout taxonomy has ONE authority (plan 620 Phase A6).
  *
- * This file is intentionally light: the event types are structural
- * (interfaces), so the test guards are
- *   (a) every ROLLOUT_EVENT_TYPES entry maps to a constructible payload, and
- *   (b) the discriminator `type` field is unique across the union (no two
- *       events share a `type` string, which would break `deriveKind`).
+ * Adding a rollout event type used to mean editing seven places in
+ * lockstep. Only one of them failed loudly — the storage layer's
+ * `EventKind` — and the others failed silently: an unknown `type` fell
+ * through `deriveKind` to `payload.message.role`, threw a TypeError
+ * inside the write transaction, and left an orphan line in the rollout
+ * file with no index row. `hook_invoked` lived in exactly that state.
  *
- * Run via the project root's vitest config:
- *   npx vitest run apps/desktop/src/main/db/core/__tests__/rollout-events.test.ts
+ * This file covers the authority and the consumers that can be reached
+ * from here. The two that cannot — the HTTP validator and the storage
+ * layer's `deriveKind` — are covered by source-level assertions and by
+ * the storage tests respectively, and both are noted inline.
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ROLLOUT_EVENT_TYPES,
+  WORKER_EMITTABLE_EVENT_TYPES,
   isRolloutEvent,
+  isRolloutEventType,
+  type HookInvokedEvent,
+  type PromptSnapshotEvent,
   type ReasoningEvent,
   type RebaseEvent,
   type RolloutEvent,
+  type RotationEvent,
   type SystemContextEvent,
   type ToolCallEvent,
   type TurnStartedEvent,
 } from '../rollout-events';
 import type { MessageEntry } from '@duya/agent-core/message';
+import {
+  MIRROR_COVERS_THE_AUTHORITY,
+  MIRROR_TYPES_ARE_KNOWN,
+  type WorkerRolloutEventType,
+} from '@duya/host/worker-journal/types';
 
-describe('rollout events', () => {
-  it('exports every event type from plan 333 + rebase from plan 441', () => {
-    // Mirror the inline strings in isRolloutEvent — the canonical list lives
-    // there. ROLLOUT_EVENT_TYPES is exported but vitest's esbuild pipeline
-    // has been observed to drop cross-module const references at runtime, so
-    // we test against the source-of-truth strings instead of the constant.
-    expect([
-      'reasoning',
-      'tool_call',
-      'turn_started',
-      'system_context',
-      'rebase',
-    ].sort()).toEqual([
-      'reasoning',
-      'rebase',
-      'system_context',
-      'tool_call',
-      'turn_started',
-    ]);
-  });
-
-  it('ROLLOUT_EVENT_TYPES constant is exported and lists every discriminator', () => {
-    // Reference the import so a missing export fails at module load rather
-    // than silently dropping coverage. The canonical list is the inline
-    // strings in `isRolloutEvent`; this test guards the export shape via
-    // type-only access (the runtime array is exhaustively exercised by
-    // `isRolloutEvent narrows correctly` above).
-    const _typeCheck: typeof ROLLOUT_EVENT_TYPES[number] = 'reasoning';
-    expect(_typeCheck).toBe('reasoning');
-  });
-
-  it('discriminator strings are unique across the union', () => {
-    // Build one of each kind and collect their `type` values. If two events
-    // shared a `type`, deriveKind in message-log.ts would map them to the
-    // same `kind` column value and lose the distinction.
-    const samples: RolloutEvent[] = [
-      sampleReasoning(),
-      sampleToolCall(),
-      sampleTurnStarted(),
-      sampleSystemContext(),
-      sampleRebase(),
+describe('rollout event taxonomy — one authority', () => {
+  it('lists every discriminator the union declares', () => {
+    // The union is written out by hand (each member has a shape); the
+    // authority table is derived. This assertion is what keeps them from
+    // drifting: add a type to the table and the union must catch up.
+    const unionTypes: RolloutEvent['type'][] = [
+      sampleReasoning().type,
+      sampleToolCall().type,
+      sampleTurnStarted().type,
+      sampleSystemContext().type,
+      sampleHookInvoked().type,
+      sampleRebase().type,
+      sampleRotation().type,
+      samplePromptSnapshot().type,
     ];
-    const types = samples.map((e) => e.type);
+    expect([...ROLLOUT_EVENT_TYPES].sort()).toEqual([...unionTypes].sort());
+  });
+
+  it('recognises every declared type, and nothing else', () => {
+    for (const type of ROLLOUT_EVENT_TYPES) {
+      expect(isRolloutEventType(type)).toBe(true);
+    }
+    expect(isRolloutEventType('unknown')).toBe(false);
+    expect(isRolloutEvent({ type: 'unknown' })).toBe(false);
+    expect(isRolloutEvent({ type: 'message' })).toBe(false);
+    expect(isRolloutEvent(null)).toBe(false);
+    expect(isRolloutEvent('reasoning')).toBe(false);
+  });
+
+  it('narrows a payload of every declared type', () => {
+    for (const sample of allSamples()) {
+      expect(isRolloutEvent(sample)).toBe(true);
+      expect(typeof sample.id).toBe('string');
+      expect(sample.id.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the discriminator unique across the union', () => {
+    const types = allSamples().map((event) => event.type);
     expect(new Set(types).size).toBe(types.length);
   });
 
-  it('isRolloutEvent narrows correctly', () => {
-    expect(isRolloutEvent(sampleReasoning())).toBe(true);
-    expect(isRolloutEvent(sampleRebase())).toBe(true);
-
-    // MessageEntry-like payloads must NOT be classified as rollout events.
-    const messageLike = { type: 'message', id: 'm-1', parentId: null, createdAt: 0, message: { role: 'user', id: 'm-1', content: '', timestamp: 0, visibility: 'visible' } };
-    expect(isRolloutEvent(messageLike)).toBe(false);
-
-    // Junk / wrong shape.
-    expect(isRolloutEvent(null)).toBe(false);
-    expect(isRolloutEvent(undefined)).toBe(false);
-    expect(isRolloutEvent('reasoning')).toBe(false);
-    expect(isRolloutEvent({})).toBe(false);
-    expect(isRolloutEvent({ type: 'unknown' })).toBe(false);
+  it('covers every worker-emittable type in the journal mirror', () => {
+    // The mirror is the worker's half of the taxonomy. It must cover
+    // everything the authority says a worker can emit, and it must not
+    // carry a type the authority does not know — that shape is what made
+    // `hook_invoked` un-derivable.
+    expect(MIRROR_COVERS_THE_AUTHORITY).toBe(true);
+    expect(MIRROR_TYPES_ARE_KNOWN).toBe(true);
+    for (const type of WORKER_EMITTABLE_EVENT_TYPES) {
+      expect(
+        type as WorkerRolloutEventType,
+        `${type} must be emittable by the worker journal`,
+      ).toBeTruthy();
+    }
   });
 
-  it('event ids are part of the surface (INSERT OR IGNORE relies on them)', () => {
-    // Spot-check that the `id` field exists on every event kind. The type
-    // system already enforces it; this test is here to fail loudly if a
-    // refactor accidentally drops the field.
-    const samples: RolloutEvent[] = [
-      sampleReasoning(),
-      sampleToolCall(),
-      sampleTurnStarted(),
-      sampleSystemContext(),
-      sampleRebase(),
-    ];
-    for (const s of samples) {
-      expect(typeof s.id).toBe('string');
-      expect(s.id.length).toBeGreaterThan(0);
+  it('accepts the new event types in the HTTP validator', () => {
+    // The validator is module-private in http-server.ts, so this is a
+    // source-level assertion: each declared type must have a case.
+    const source = readFileSync(
+      new URL('../../../../../../../packages/host/src/http-server.ts', import.meta.url),
+      'utf8',
+    );
+    for (const type of ROLLOUT_EVENT_TYPES) {
+      expect(source, `http-server.ts must validate the "${type}" shape`).toContain(
+        `case '${type}':`,
+      );
     }
   });
 });
 
 // ─── Sample builders ───
+
+function allSamples(): RolloutEvent[] {
+  return [
+    sampleReasoning(),
+    sampleToolCall(),
+    sampleTurnStarted(),
+    sampleSystemContext(),
+    sampleHookInvoked(),
+    sampleRebase(),
+    sampleRotation(),
+    samplePromptSnapshot(),
+  ];
+}
 
 function sampleReasoning(): ReasoningEvent {
   return { type: 'reasoning', id: 'r-1', turnId: 't-1', model: 'claude-opus-4', text: 'thinking...', createdAt: 1 };
@@ -122,6 +141,10 @@ function sampleSystemContext(): SystemContextEvent {
   return { type: 'system_context', id: 'sc-1', turnId: 't-1', kind: 'agents_md', content: '<agents>', createdAt: 1 };
 }
 
+function sampleHookInvoked(): HookInvokedEvent {
+  return { type: 'hook_invoked', id: 'hi-1', turnId: 't-1', payload: { hook: 'x' }, createdAt: 1 };
+}
+
 function sampleRebase(): RebaseEvent {
   const kept: MessageEntry = {
     type: 'message',
@@ -131,4 +154,36 @@ function sampleRebase(): RebaseEvent {
     message: { role: 'user', id: 'm-kept', content: 'kept', timestamp: 2, visibility: 'visible' },
   };
   return { type: 'rebase', id: 'rb-1', turnId: 't-1', supersededUpToSeq: 5, newMessages: [kept], createdAt: 3 };
+}
+
+function sampleRotation(): RotationEvent {
+  return {
+    type: 'rotation',
+    id: 'ro-1',
+    archiveFile: 'archive-1.jsonl',
+    newGeneration: 2,
+    reason: 'compaction',
+    seqBeforeRotation: 10,
+    createdAt: 4,
+  };
+}
+
+function samplePromptSnapshot(): PromptSnapshotEvent {
+  return {
+    type: 'prompt_snapshot',
+    id: 'ps-1',
+    turnId: 't-1',
+    createdAt: 5,
+    systemPrompt: { hash: 'a'.repeat(64), length: 12, content: 'YOU ARE...' },
+    contextBlocks: [
+      {
+        id: 'environment',
+        source: 'volatile_context',
+        role: 'user',
+        hash: 'b'.repeat(64),
+        length: 7,
+        content: 'cwd=/w',
+      },
+    ],
+  };
 }

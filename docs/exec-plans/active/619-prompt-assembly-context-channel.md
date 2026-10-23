@@ -1,6 +1,7 @@
 # 619 — 提示词组装改造：单串 system + 消息通道分流 + rollout 留痕
 
-> **Status**: Active · **Priority**: P0 · **Owner**: /root/app_closeout (observer slice)
+> **Status**: Active · **Priority**: P0 · **Owner**: /root/app_closeout (observer slice) ·
+> `codex/619-phase1-prompt-defects`（Phase 1–5 与 620 Phase A）
 > **立项**: 2026-10-20（复盘：Claude Code 的原始 transcript 暴露了它的提示词注入模型——
 > system prompt 是**分段数组**，易变上下文走**独立注入通道**，每次注入**留痕**。duya 的结构
 > 几乎全有：分段数组、`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`、`PromptSegment` 的 id/placement、
@@ -11,6 +12,8 @@
 > **硬前置**: [620 会话记录架构](./620-session-record-architecture.md) **Phase A**
 > （分类学单源）——Phase 4 要新增 `prompt_snapshot` 行类型，而今天加一种记录类型要在
 > **七处**锁步手抄。先做 Phase 4 就是亲手造出第八处。619 的 Phase 0–3 不受此约束，可并行。
+> **本分支状态**: Phase 1–5 与 620 Phase A 已一并落地（见 §4「Phase 2–4 实施记录」），
+> 620 Phase A 的分类学单源先于 `prompt_snapshot` 落地，所以 Phase 4 不再是「第八处手抄」。
 > **与 561 / 620 的边界**: 见 §7。**不重复它们的事**。`codex/integrate-prompt-observer` 基于 `325cdded`；observer 仅提供可选 hash 接缝，尚无生产 sink、rollout 写入或真实会话采样。
 
 ---
@@ -133,6 +136,23 @@ CLAUDE.md 同款位置；改动频率极低）。
 落地 (b) 的「只加告警」部分与 (c)(d)(e)(f)(g)(h)；(a) 留到 Phase 2（与分区一起，否则
 「缓存生效」与「字节恒定」互相打架）。
 
+**实施记录（2026-10-22 · 分支 `codex/619-phase1-prompt-defects` · base `8ebda627`）**
+
+本次落地 7 项，(g) 拆出单独排期（见下），(a) 仍留 Phase 2：
+
+| 缺陷 | 落地形态 | 行为变化 |
+| --- | --- | --- |
+| (c) | `isSectionEnabled` 改成 **disable 优先**（`modes/index.ts`） | 仅「两个列表都给」的 profile 变；顺带与 `resolveEnabledSections`（本来就是 enable 减 disable）对齐 |
+| (d) | `SUBAGENT_TYPE_PROFILE_MAP` / `DEFAULT_SUBAGENT_PROFILE` 的段名改成真实存在的 `memory` / `vision`，删掉 `memoryContent` / `widgetGuidelines` / `visionGuidelines`；加防漂移测试（遍历 4 个 config 的段名集合断言） | 是——子代理**真的**少了 memory 与 vision 段（此前是空操作） |
+| (e) | 删掉 code / research config 里的 `projectInstructions` 段与 4 处失效的 `invalidateCacheKeys`（`'project'` / `'projectInstructions'` 都不是活的缓存键；AGENTS.md 正文根本不经 PromptCache）；每份指令文件的 glob 适用性改挂到正文标题上 | 是——code / research profile 的 system 少了一段索引 |
+| (f) | 新增 `shouldInjectMcpCatalog(exposure)`，host 与 legacy agent 两个调用点都改调它 | 是——默认 `hint` 下 legacy 路径不再注入 MCP 目录（此前与 host 路径不一致） |
+| (h) | 抽出 `composeModePrompt(base, prefixes, suffixes, ctx)`，`applyModes` 与 `refreshTurnSystemPrompt` 都改调它；字符串前缀统一用空行连接，函数前缀仍自己控制 | 是——多两个换行，一次性缓存重建；**修好了 turn 0 与 turn N 的 system 字节必然不同**这条 |
+| (b) | 结构化 system 块被丢弃时计数并 `logger.warn`（不改行为） | 无（仅可观测） |
+
+**(g) 单独排期**：`BOT_BASIC_SYSTEM_PROMPT` 在 host 路径被丢弃（`bot/framework.ts` 显式
+`includeBasic:false`）。恢复它会直接改 bot 的模型人格（system prompt 变长数 KB），需要
+独立的对比与灰度，不混在这次 bug 修复里。
+
 ### Phase 2 — PromptSystem 分区 + 缓存修复
 
 - `PromptSystem.ts:119-191` `SectionDef` 新增 `placement?: 'system' | 'context'`（默认
@@ -204,6 +224,24 @@ CLAUDE.md 同款位置；改动频率极低）。
 - 生产采样：同 session 内 `prompt_snapshot.systemPrompt.hash` 的 distinct 值 = 1（例外清单除外）。
 - provider 侧 cache 命中率对比 Phase 2 前后。
 - 更新 `docs/exec-plans/README.md` Active 表 + `ARCHITECTURE.md` 增补「提示词三通道」小节。
+
+### Phase 2–4 实施记录（2026-10-23 · 同一分支 `codex/619-phase1-prompt-defects`）
+
+Phase 2 与 Phase 3 必须同一个 commit：把 volatile 段标成 `placement:'context'` 而
+host 侧还没接分区时，那些段会**从 system 串里消失**——中间态是坏的。
+
+| Phase | 落地形态 | 备注 |
+| --- | --- | --- |
+| 2 | `SectionDef.placement`（`'system'` 默认 / `'context'`）；`buildSystemPromptPartition()` 拆两路；`buildSystemPrompt()` 保留原签名给 legacy 调用方；4 个 config 逐段标注；**删除 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`**（只写不读、还把哨兵文本送进模型） | 标注与 §3.2 的归类表一致 |
+| 2 | 缓存三件套：`PromptsRegistry` 按 (config, profile) 共享实例；缓存键带**上下文指纹**（`contextFingerprint.ts`，覆盖会影响渲染的全部 ctx 字段，排除 `sessionStartTime`）；`promptProfileKey()` 分桶 | 只做「共享实例」会造成陈旧缓存——工具集变了缓存仍给旧字节 |
+| 3 | **新** `packages/host/src/worker-context/context-rail.ts`；agent-core 注册 `volatile_context` source + `renderUserChannelReminder`（user 通道加「不是用户说的话」免责句）；rail 每轮整体覆盖、块消失即移除、独立 metadata key 命名空间 | 位置在尾部（hook rail 之后）；不进 timeline |
+| 4 | **新** `packages/host/src/worker-context/prompt-ledger.ts`；`Journal.promptSnapshot()` 走 `journal:emit`；`_recordPromptSnapshot()` 在最终 system 串算完后调用 | 全文记录，未变化的按 hash 记，配额 `DUYA_PROMPT_LEDGER_MAX_FULL` |
+| 620 A | rollout 分类学收成一张权威表（`packages/agent-protocol/src/rollout-events.ts`），并标注每个 type 的产生方（`worker` / `storage` / `reserved`）；`EventKind`、HTTP 校验器、worker 镜像全部派生 | 见下方裁定 |
+
+**620 A7 的兼容裁定**：`reasoning` / `tool_call` / `turn_started` / `system_context` 保留
+（schema 与读侧消费点齐备，「今天没有写入者」不是删除依据）；`rotation` 有生产者；
+`hook_invoked` **纳入**权威（它本来只有 worker 镜像一份，protocol 不认 → 真发出来
+`deriveKind` 抛 TypeError、rollout 文件留下孤儿行）；`prompt_snapshot` 新增。
 
 ---
 
@@ -338,3 +376,36 @@ CLAUDE.md 同款位置；改动频率极低）。
 会话记录格式的完整对照见 [620](./620-session-record-architecture.md)。本计划只拥有
 system prompt 与注入块这一片；620 拥有分类学单源、运行时上下文落盘、工具结果结构面与
 语料自包含。**Phase 4 必须等 620 Phase A**。
+
+### 9.5 Phase 1 验证（2026-10-22 · 分支 `codex/619-phase1-prompt-defects`）
+
+- **基线**：master 演进后，host 测试套件是 162 文件 / 1563 用例**全绿**；`packages/agent`
+  只剩 1 个测试文件（agent 包退役中，`packages/agent/tests/unit/prompts/` 已随实现迁移
+  删除）。Phase 1 的判定规则是「host 套件保持全绿 + 新增测试全绿」。
+- **新增测试**：`packages/host/tests/worker-prompts/` 下 4 个文件（段门控、AGENTS.md 索引、
+  MCP 目录门控、mode 前缀拼接），与 master 上已有的 `prompt-digest.test.ts` 合计 21/21。
+- **门禁**：`npm run -w @duya/host typecheck` 与 `npm run -w @duya/agent typecheck` 均 exit 0；
+  `npm run architecture:check` 无新增违规（棘轮基线 2806 条不变，且有 1 条指纹已不再触发）。
+- **行为变化的两处字节级断言**已同步更新：`worker-modes/modifiers/registry.test.ts`
+  （mode 前缀分隔符）与 `worker-product-runtime/turn-assembly-seam.test.ts`（该测试断言
+  「mode 拼接只有一处实现」——现在实现搬到了 `composeModePrompt`，文件里只留调用）。
+- **bundle**：`npm run bundle:worker` 重建后按仓库惯例单独成 `build(worker):` commit。
+
+### 9.6 Phase 2–4 验证（2026-10-23）
+
+- **回归**：`npx vitest run packages/host/tests/ packages/agent/tests/ packages/agent-protocol/test/
+  packages/agent-core/test/ packages/data/ apps/desktop/src/main/` — **516 文件 / 5902 用例
+  全绿**（1 文件 / 11 用例 skip）。新增测试：分段与缓存（`prompt-partition.test.ts` 7）、
+  context rail（`context-rail.test.ts` 6）、prompt ledger（`prompt-ledger.test.ts` 7）、
+  分类学单源（`rollout-events.test.ts` 6）、prompt_snapshot 落盘
+  （`message-log.test.ts` +1）。
+- **架构门禁**：`npm run architecture:check` — 无新增违规（total 2813，全部在基线内）。
+- **类型检查的 worktree 限制**：`npm run -w @duya/host typecheck` 在本 worktree 里报 4 条
+  `TS2742`（`app-connector-manage-tool.ts`），根因是 junction 让 `@duya/capabilities`
+  的声明无法生成可移植的相对引用——**不是代码问题**：清掉 `tsconfig.tsbuildinfo` 做全量
+  重建后错误数为 0。增量构建的产物会触发它，所以 worktree 里的类型结论要按「全量重建」
+  读，不能按增量读。
+- **磁盘**：worktree 的 `packages/*/dist` 全部是可重建产物，删掉后按依赖顺序重建即可；
+  验证期间 E 盘一度写满（`ENOSPC`），构建产物是主要占用。
+
+

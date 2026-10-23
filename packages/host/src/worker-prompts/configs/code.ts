@@ -28,16 +28,18 @@ export const codeConfig: PromptSystemConfig = {
     { module: 'workingWithTheUser', name: 'workingWithTheUser', cachePolicy: 'once' },
     { module: 'rules', name: 'rules', cachePolicy: 'once' },
     { module: 'configProtection', name: 'configProtection', cachePolicy: 'once' },
-    { module: 'projectInstructions', name: 'projectInstructions', cachePolicy: 'once' },
+    // No `projectInstructions` section: the AGENTS.md file bodies are
+    // injected by the session runtime, so an index of the same files
+    // would repeat them (plan 619 defect e).
     // Volatile inline sections (dynamic half — recomputed every call)
     { name: 'platform', template: 'dynamic/platform.hbs', cachePolicy: 'every-call', description: 'Communication platform-specific guidance' },
-    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', description: 'Current directory state' },
-    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', description: 'MCP servers can change' },
-    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', description: 'Session-specific guidance' },
-    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', template: 'dynamic/scratchpad.hbs', cachePolicy: 'every-call', description: 'Scratchpad directory' },
-    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', description: 'Persistent memory projection files may have been updated since last turn' },
-    { name: 'vision', template: 'dynamic/vision.hbs', cachePolicy: 'every-call', description: 'Vision capability and visual verification' },
+    { name: 'environment', template: 'dynamic/environment.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Current directory state' },
+    { name: 'mcp', template: 'dynamic/mcp-instructions.hbs', cachePolicy: 'every-call', placement: 'context', description: 'MCP servers can change' },
+    { name: 'sessionGuidance', template: 'dynamic/session-guidance.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Session-specific guidance' },
+    { name: 'skills', template: 'dynamic/skills-metadata.hbs', cachePolicy: 'every-call', placement: 'context', requiresTools: ['Skill', 'Read'], description: 'Skills can be loaded/unloaded' },
+    { name: 'memory', template: 'dynamic/memory.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Persistent memory projection files may have been updated since last turn' },
+    { name: 'vision', template: 'dynamic/vision.hbs', cachePolicy: 'every-call', placement: 'context', description: 'Vision capability and visual verification' },
   ],
   preBuildHook: async (ctx) => {
     // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
@@ -62,11 +64,11 @@ export const codeConfig: PromptSystemConfig = {
     // Plan 525 / 408 follow-up: thread the project-entity home into the
     // loader so it can read `<projectHome>/AGENTS.md` as a `'Project entity'`
     // source. Absent when cwd is outside any registered duya project.
+    // The AGENTS.md bodies never render through PromptCache — the session
+    // runtime injects them from the manager, which keeps its own mtime
+    // fast path — so there is no cache key to invalidate here.
     if (await initializeAgentsMd(ctx.workingDirectory, ctx.projectHome)) {
-      return {
-        invalidateCacheKeys: ['projectInstructions'],
-        promptContextExtension: mergedExtension,
-      }
+      return { promptContextExtension: mergedExtension }
     }
     return { promptContextExtension: mergedExtension }
   },
