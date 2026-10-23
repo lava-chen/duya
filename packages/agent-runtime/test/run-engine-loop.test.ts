@@ -1047,29 +1047,42 @@ describe('the engine is an implementation, not a delegating port', () => {
 });
 
 /**
- * The prompt reaches the model EXACTLY ONCE.
+ * The prompt reaches the model EXACTLY ONCE, and it is the LAST thing in the
+ * request.
  *
  * ## Why this is its own file section
  *
- * The engine puts the run's prompt into the first turn's request, and a host
- * that assembles the turn from its own timeline ALSO has that turn's user row
- * in the messages it hands over -- the row and the prompt are the same
- * message, reached by two different roads. Adding both sent the user's prompt
- * twice in one request: the model saw the question twice, and the input
- * tokens of the first turn doubled.
+ * Two properties, and they are different properties:
+ *
+ *  - ONCE. The engine puts the run's prompt into the first turn's request, and
+ *    a host that assembles the turn from its own timeline ALSO has that
+ *    turn's user row in the messages it hands over -- the row and the prompt
+ *    are the same message, reached by two different roads. Adding both sent
+ *    the user's prompt twice in one request: the model saw the question
+ *    twice, and the input tokens of the first turn doubled.
+ *  - LAST. A model reads a conversation from the end. The host's context rail
+ *    rides at the end of the request, and every rail row says, in so many
+ *    words, that it is NOT part of the user's message. A prompt at the FRONT
+ *    is therefore a question the model has to dig out from under the whole
+ *    conversation, with system context between it and the reader. Measured on
+ *    a real TUI session, the model answered "the user hasn't asked a new
+ *    question -- this is just system context attached".
  *
  * ## What the cases pin
  *
  *  - the host's assembled messages ALREADY carrying the prompt (by id) means
- *    the engine must not add it again;
- *  - a history that does NOT carry it still gets the prompt, and it still
- *    goes FIRST, because the prompt is the turn's opening question.
+ *    the engine must not add it again, and the row it already carries is
+ *    MOVED to the end rather than copied there;
+ *  - a history that does NOT carry it still gets the prompt, at the end;
+ *  - a row that merely LOOKS like the prompt (same text, different id) is a
+ *    different message and stays where the host put it.
  */
-describe('the prompt reaches the model exactly once', () => {
-  it('does not add the prompt again when the host already assembled it', async () => {
+describe('the prompt reaches the model exactly once, at the end', () => {
+  it('moves the host\'s own prompt row to the end instead of adding a second copy', async () => {
     const h = harness({
       turns: [{ frames: [{ type: 'text', text: 'done' }] }],
       assembledMessages: [
+        { role: 'user', id: 'older-1', content: 'an earlier question' },
         { role: 'user', id: 'p1', content: 'write a file' },
         { role: 'user', id: 'rail-1', content: 'a context rail block' },
       ],
@@ -1084,12 +1097,35 @@ describe('the prompt reaches the model exactly once', () => {
 
     const sent = h.sentMessages[0]!;
     expect(sent.filter((m) => m.id === 'p1')).toHaveLength(1);
-    // And the order is unchanged: the prompt opens the turn, the host's own
-    // context follows it.
-    expect(sent.map((m) => m.id)).toEqual(['p1', 'rail-1']);
+    // The question is the newest thing in the request: the conversation and the
+    // host's context rail come first, and the prompt closes it.
+    expect(sent.map((m) => m.id)).toEqual(['older-1', 'rail-1', 'p1']);
   });
 
-  it('still sends the prompt first when the history does not carry it', async () => {
+  it('keeps the host\'s own rendering of the prompt row when it moves it', async () => {
+    // The host may have rendered the prompt into the row differently -- an
+    // attachment, a quote prefix. Moving the row keeps that rendering; a
+    // copy of the engine's own prompt would lose it.
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'done' }] }],
+      assembledMessages: [
+        { role: 'user', id: 'older-1', content: 'an earlier question' },
+        { role: 'user', id: 'p1', content: 'write a file [with the host\'s attachment]' },
+      ],
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, {
+      input: inputFor({
+        history: { kind: 'by_ref', digest: 'd-hist', locator: 'transcript:run-1' },
+      }),
+    });
+
+    const sent = h.sentMessages[0]!;
+    expect(sent.at(-1)?.content).toBe('write a file [with the host\'s attachment]');
+  });
+
+  it('sends the prompt last when the history does not carry it', async () => {
     const h = harness({ turns: [{ frames: [{ type: 'text', text: 'done' }] }] });
     const clock = fakeClock();
 
@@ -1115,6 +1151,67 @@ describe('the prompt reaches the model exactly once', () => {
     });
 
     const sent = h.sentMessages[0]!;
-    expect(sent.map((m) => m.id)).toEqual(['p1', 'other-row']);
+    expect(sent.map((m) => m.id)).toEqual(['other-row', 'p1']);
+  });
+
+  it('sends the question once even when the history carries its id twice', async () => {
+    // A host that projected the prompt row twice would otherwise answer the
+    // question twice.
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'done' }] }],
+      assembledMessages: [
+        { role: 'user', id: 'p1', content: 'write a file' },
+        { role: 'user', id: 'older-1', content: 'an earlier question' },
+        { role: 'user', id: 'p1', content: 'write a file' },
+      ],
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, {
+      input: inputFor({
+        history: { kind: 'by_ref', digest: 'd-hist', locator: 'transcript:run-1' },
+      }),
+    });
+
+    const sent = h.sentMessages[0]!;
+    expect(sent.filter((m) => m.id === 'p1')).toHaveLength(1);
+    expect(sent.map((m) => m.id)).toEqual(['older-1', 'p1']);
+  });
+
+  it('does not move the prompt on a later turn, where the host already placed it', async () => {
+    // Turn 2 is a continuation after tool results: the question is history
+    // now, and what the model has to react to is the tool result. Moving the
+    // prompt again would put the OLD question after the tool result.
+    const h = harness({
+      turns: [
+        {
+          frames: [
+            {
+              type: 'tool_use',
+              call: { callId: 'c1', name: 'write', input: {}, sideEffect: 'read_only' },
+            },
+          ],
+        },
+        { frames: [{ type: 'text', text: 'done' }] },
+      ],
+      assembledMessages: [
+        { role: 'user', id: 'p1', content: 'write a file' },
+        { role: 'user', id: 'rail-1', content: 'a context rail block' },
+      ],
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, {
+      input: inputFor({
+        history: { kind: 'by_ref', digest: 'd-hist', locator: 'transcript:run-1' },
+      }),
+    });
+
+    const sent = h.sentMessages[1]!;
+    // The prompt keeps the position the HOST gave it -- first, because that
+    // is where the host's own turn put it -- and the tool result, which is
+    // what turn 2 is about, trails it.
+    expect(sent[0]!.id).toBe('p1');
+    expect(sent.at(-1)!.id).not.toBe('p1');
   });
 });

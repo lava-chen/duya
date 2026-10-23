@@ -2682,28 +2682,56 @@ export class RunEngineImpl implements RunEngine {
     // after tool results, and re-appending the prompt every turn is how a
     // conversation teaches a model to repeat itself.
     //
-    // The prompt is NOT appended when the history already carries it. A host
-    // that assembles the turn from its own timeline projects this turn's user
-    // row into `assembled.messages`, and that row IS the prompt -- the host
-    // committed the prompt row under the id the run input names, so the two
-    // are one message reached twice. Measured on the agent-runtime benchmark:
-    // the model received the user's prompt TWICE in one request, which
-    // doubled the input tokens of the first turn and let the model answer the
-    // same question twice.
+    // It goes in LAST, and that is the whole fix.
+    //
+    // A model reads a conversation from the END: the last turns are what it is
+    // being asked about now. The host's own context rail rides at the end of
+    // the request -- every rail row is a `user` turn wrapped in
+    // `<system-reminder> ... This context was attached automatically by the
+    // system. It is not part of the user's message.` -- so a request that
+    // ends with the rail ends with rows that say, in the model's own words,
+    // that they are NOT the user's message.
+    //
+    // Putting the prompt FIRST therefore did not "open the turn": it buried
+    // the user's question BEHIND the whole conversation and put the system
+    // context between the question and the reader. Measured on a real TUI
+    // session, the model received
+    //
+    //     [user(question), user(older conversation), user(rail), user(rail)]
+    //
+    // and answered "the user hasn't asked a new question -- this is just
+    // system context attached; the last user message was 'jixu', which I
+    // already answered". The question was in the request the whole time; it
+    // was simply not the newest thing in it.
     //
     // Identity is the message ID, and that is the only thing it can be: the
     // engine cannot compare prose (the host may have rendered the prompt into
     // the row's content differently) and must not drop a message on a
-    // heuristic. A host whose assembled messages do NOT carry the prompt row
-    // keeps the prompt here, which is why the filter is on the history and
-    // the prompt stays unconditional.
+    // heuristic.
+    //
+    // When the host's assembled messages DO carry the prompt row, that row IS
+    // the prompt -- the host committed it under the id the run input names --
+    // and it is MOVED to the end rather than copied there. Moving it keeps the
+    // host's own rendering of the turn (its attachments, its quote prefix)
+    // instead of substituting the engine's plainer copy of it.
+    //
+    // A host whose assembled messages do NOT carry the prompt row keeps the
+    // prompt, unchanged, and it lands at the end for the same reason.
     const promptId = input.prompt.id;
-    const historyWithoutPrompt = promptId === undefined
+    const hostPrompt = promptId === undefined
+      ? undefined
+      : history.find((message) => message.id === promptId);
+    const prompt: ModelMessage = hostPrompt ?? input.prompt;
+    // Every row carrying the prompt's id leaves the conversation, and exactly
+    // one of them -- the host's own -- is re-appended at the end. A history
+    // that carried the id twice would otherwise answer the question twice,
+    // which is the failure this arrangement exists to remove.
+    const conversation: readonly ModelMessage[] = hostPrompt === undefined
       ? history
       : history.filter((message) => message.id !== promptId);
     const messages: readonly ModelMessage[] =
       ctx.turn === 1
-        ? [input.prompt, ...steering, ...carried, ...historyWithoutPrompt, ...inbound]
+        ? [...conversation, ...carried, ...steering, prompt, ...inbound]
         : [...history, ...carried, ...steering, ...inbound];
 
     // Model selection is forwarded from the manifest when it names one, and
