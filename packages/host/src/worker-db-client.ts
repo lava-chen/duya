@@ -257,6 +257,15 @@ export const sessionDb = {
 
   update: (id: string, data: Record<string, unknown>) => sendDbRequest('session:update', { id, ...data }),
 
+  /**
+   * Plan 621 D: key-level extension write on the session row. The only
+   * durable per-session JSON carrier the worker can reach, used for the
+   * checkout record (`extensions.checkout`); the Host serves it with
+   * `SessionStore.setExtension`, which preserves every other key.
+   */
+  setExtension: (id: string, key: string, value: unknown) =>
+    sendDbRequest('session:setExtension', { id, key, value }),
+
   delete: (id: string) => sendDbRequest('session:delete', { id }),
 
   list: () => sendDbRequest('session:list', {}),
