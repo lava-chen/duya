@@ -1,14 +1,14 @@
 /**
- * Plan 621 slice B — HTTP wiring for the two new route families.
- *
- * These tests pin what a real `startLocalHost` composition answers today:
- * `/v1/integrations` is wired to the projection store, and `/v1/checkouts`
- * answers a named 404 because no checkout provider exists in this tree until
- * slice A lands. The point is that "this Host cannot observe checkouts" never
- * reads like "this session has no checkout".
+ * Plan 621 — HTTP wiring for the two new route families, against the REAL
+ * composition (`startLocalHost`): the checkout provider is wired, so a session
+ * that is not inside a checkout observes as `checkout: null` — which is a
+ * different answer from "this Host cannot observe checkouts". The named-404
+ * shell for an uncomposed Host is covered by the route unit in
+ * `http-server.ts`; these tests pin what a composed Host actually answers.
  *
  * The successful checkout bodies are covered by `checkout-api.test.ts` against
- * a fake port; the route shell itself cannot be exercised without A's provider.
+ * a fake port; here the real provider runs against paths that are not
+ * checkouts, which is the refusal side of the same contract.
  */
 
 import * as fs from 'node:fs/promises';
@@ -38,34 +38,49 @@ function headers(): Record<string, string> {
   return { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' };
 }
 
-describe('checkout routes without a provider', () => {
-  it('answers a named 404 for both observation and reclaim', async () => {
+describe('checkout routes over the real composition', () => {
+  it('answers "not in a checkout" for a session that has none', async () => {
     const host = await open();
 
     const observed = await fetch(`${host.origin}/v1/checkouts?sessionId=s-1`, { headers: headers() });
-    expect(observed.status).toBe(404);
-    expect(await observed.json()).toEqual({ error: { code: 'checkout_api_unavailable' } });
+    expect(observed.status).toBe(200);
+    expect(await observed.json()).toEqual({
+      checkout: { sessionId: 's-1', checkout: null, isOwner: false },
+    });
+  });
 
-    const byRoot = await fetch(`${host.origin}/v1/checkouts?root=/tmp/wt`, { headers: headers() });
-    expect(byRoot.status).toBe(404);
+  it('observes a path that is not a checkout as unregistered and not reclaimable', async () => {
+    const host = await open();
 
+    const byRoot = await fetch(`${host.origin}/v1/checkouts?root=/tmp/duya-not-a-checkout`, {
+      headers: headers(),
+    });
+    expect(byRoot.status).toBe(200);
+    const body = (await byRoot.json()) as { checkout: { registered: boolean; reclaimable: boolean; retainReason: string | null } };
+    expect(body.checkout.registered).toBe(false);
+    expect(body.checkout.reclaimable).toBe(false);
+    expect(body.checkout.retainReason).toBe('not_registered');
+  });
+
+  it('answers a reclaim request with the refusal, not an error', async () => {
+    const host = await open();
     const reclaimed = await fetch(`${host.origin}/v1/checkouts/reclaim`, {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify({ root: '/tmp/wt' }),
+      body: JSON.stringify({ root: '/tmp/duya-not-a-checkout' }),
     });
-    expect(reclaimed.status).toBe(404);
-    expect(await reclaimed.json()).toEqual({ error: { code: 'checkout_api_unavailable' } });
+    expect(reclaimed.status).toBe(200);
+    expect(await reclaimed.json()).toEqual({ result: { removed: false, reason: 'not_registered' } });
   });
 
-  it('rejects the wrong method before it looks at the body', async () => {
+  it('rejects the wrong method once the provider is composed', async () => {
     const host = await open();
     const response = await fetch(`${host.origin}/v1/checkouts?sessionId=s-1`, {
       method: 'DELETE',
       headers: headers(),
     });
-    // 404 first: an uncomposed Host does not advertise a method table either.
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(405);
+    expect(await response.json()).toEqual({ error: { code: 'method_not_allowed' } });
   });
 });
 

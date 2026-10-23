@@ -14,7 +14,7 @@
  */
 
 import { createGhRunner, GhError, readJsonField, type GhRunner } from './gh-cli.js';
-import type { HostIntegrationState } from './integration-state.js';
+import type { HostIntegrationState } from '@duya/agent-protocol';
 
 /**
  * Normalised outcome of one status check. GitHub exposes two shapes in
