@@ -29,6 +29,7 @@
 - [x] 3. `duya tui` 发现不到 Host 时拉起后台 Host 并附着
 - [x] 4. owner 锁冲突转可操作提示；顺手修好三个静默失效的 Commander 选项
 - [x] 5. 测试与验收
+- [x] 6. 重建被跟踪的 worker bundle（`85d74c86`）并跑通 `bundle:verify`
 
 ## 发现与决策
 
@@ -85,10 +86,13 @@
 | worktree dirty | Windows / Node 24.16 | `npm run architecture:check` | 0；**无新增越界** | 255 条 baseline 指纹不再触发（既有债务，未重录） |
 | worktree dirty | Windows / Node 24.16 | `npm run typecheck:all` | 0；整条链跑完，末步 eval check 4/4 | 首跑被 `check:encoding` 拦下（计划文档一个乱码字符），已修后重跑通过 |
 | worktree dirty | Windows / Node 24.16 | `npx vitest run packages/cli packages/host/tests` | 0；**273 文件 / 2804 用例通过**，1 skipped | 无回归 |
+| 85d74c86 | Windows / Node 24.16 | `npm run bundle:verify` | 0；`FRESH 0/922` bundle inputs | 被跟踪产物与新租约端点同步 |
+| 85d74c86 | Windows / Node 24.16 | `npm run electron:build` | 0；`Electron build complete`，native 模块已复制 | 桌面端打包链路未被本次改动破坏 |
+| 85d74c86 | Windows / Node 24.16 | `npm run check:encoding` | 0；OK（11 known） | 编码门禁 |
 
 ## 接续 / 结果
 
-已实现（分支 `codex/tui-multi-host`，未合并），共 5 个提交：
+已实现（分支 `codex/tui-multi-host`，未合并），共 7 个提交：
 
 | 提交 | 内容 |
 | --- | --- |
@@ -97,6 +101,8 @@
 | `1ded68d3` | 切片 2：Host 客户端租约端点与 client-scoped 自动退出 |
 | `2cf675f0` | 顺带修好三个静默失效的 Commander 选项（`--api-format`、`--runtime-file`） |
 | `dcb23acf` | 切片 3+4：TUI 拉起可共享的后台 Host；owner 锁冲突转可操作提示 |
+| `4e870109` | 文档：`packages/cli/AGENTS.md`、`packages/host/AGENTS.md` |
+| `85d74c86` | 重建被跟踪的 `packages/host/bundle/worker-entry.js`（新增租约端点后必须同步产物） |
 
 要点：
 
@@ -105,10 +111,12 @@
 - **切片 4**：owner 锁冲突改为可操作提示（点名 pid、给出 `DUYA_DATA_ROOT` 旁路）。`DatabaseOwnerLockError` 现在带结构化的 `ownerPid` / `ownerHostname`，不用再解析报错文本。
 - 文档：`packages/cli/AGENTS.md`、`packages/host/AGENTS.md` 更新排障入口与关键文件表。
 
-验证范围：三个包 typecheck、`architecture:check`、`typecheck:all`、cli+host 全量 2804 用例、以及真实进程上的双窗口端到端场景。
+验证范围：三个包 typecheck、`architecture:check`、`typecheck:all`、`bundle:verify`、`check:encoding`、cli+host 全量 2804 用例、`electron:build`，以及真实进程上的双窗口端到端场景。
 
-未覆盖：Electron 桌面端未重建（本次未改 main/preload，但 `packages/host` 的 dist 被 CLI 依赖，PR 前应跑一次 `npm run electron:build`）；`duya chat` 的多客户端行为未做端到端验收（它复用同一个 Host 与租约端点，但本次只在 TUI 路径上验证）。
+**关于 `electron:build` 的产物噪音**：它内含 `bundle:worker`，重建的 `worker-entry.js` 与已提交版本**字节不同但语义相同**——esbuild 的 minify 标识符分配不可复现（`scripts/architecture/bundle-verify.mjs` 开头即记录了这一点），叠加 `packages/capabilities/src/ModuleTool/inline-content.ts` 被构建改行尾（-10 字节 / 10 行 CRLF→LF）。实测两份产物的 require 目标、HTTP 路径、路由、lease 引用四组锚点集合**完全一致**（41 / 158 / 35 / 83），metafile 输入集合也一致，唯一变化是 `inline-content.ts` 的行尾。`bundle:verify` 的判据是基于 Git 的新鲜度而非字节比对，因此这两份产物都算 FRESH。**处理方式是还原到已提交版本**（`git checkout -- packages/host/bundle/`）：已提交的那份才是 CI 验证过的，重建副本只会制造噪音 diff。
+
+未覆盖：`duya chat` 的多客户端行为未做端到端验收（它复用同一个 Host 与租约端点，但本次只在 TUI 路径上验证）。
 
 回收：不适用，PR 未创建、未合并。
-下一步：创建 PR；PR 描述里写清验收 1–6 的实测结果与上面「未覆盖」两项。
+下一步：创建 PR；PR 描述里写清验收 1–6 的实测结果与上面「未覆盖」一项。
 
