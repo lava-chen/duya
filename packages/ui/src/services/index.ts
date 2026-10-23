@@ -2,6 +2,18 @@ export type { UiServices, UiStartRunInput, UiPlatformCapabilities, UiRunRecord, 
 export { clearUiServices, configureUiServices, getUiServices, peekUiServices } from './registry.js';
 export { createUiServices, type CreateUiServicesOptions } from './ui-services-factory.js';
 export { UiServicesProvider, useUiServices } from '../hooks/useUiServices.js';
+export {
+  clearWorkspaceLifecycle,
+  configureWorkspaceLifecycle,
+  getWorkspaceLifecycle,
+  peekWorkspaceLifecycle,
+  type PartialWorkspaceLifecyclePort,
+  type WorkspaceLifecyclePort,
+} from './workspace-lifecycle.js';
+export {
+  WorkspaceLifecycleProvider,
+  useWorkspaceLifecycle,
+} from '../hooks/useWorkspaceLifecycle.js';
 
 /**
  * The Host bridge, re-exported.
