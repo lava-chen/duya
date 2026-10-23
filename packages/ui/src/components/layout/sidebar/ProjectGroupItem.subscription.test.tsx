@@ -151,6 +151,8 @@ describe('ProjectGroupItem subscription scope', () => {
             color: null,
             sortOrder: 0,
             collapsed: false,
+            createdAt: 1,
+            updatedAt: 1,
           },
         ],
       });
