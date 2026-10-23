@@ -225,6 +225,7 @@ describe('slash registry', () => {
     expect([...names].sort()).toEqual([
       'archive',
       'capabilities',
+      'checkout',
       'context',
       'copy',
       'cost',
@@ -235,6 +236,7 @@ describe('slash registry', () => {
       'hotkeys',
       'model',
       'permission',
+      'pr',
       'read-file',
       'rename',
       'settings',
