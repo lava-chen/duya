@@ -51,7 +51,7 @@
 | [duya-app-mcp-layer](active/616-duya-app-mcp-layer.md) | P1 | 按本计划的 T 卡与验证记录接续；桌面扩展另见 618 |
 | [612 rollout 恢复](active/612-rollout-recovery-hardening.md) | P1 | 先核对 Phase 1 的实际落地与证据，Phase 2/3 决策见正文 |
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |
-| [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | observer 仅有可选 hash 接缝；无生产 sink/rollout 记录，接续 Phase 0 采样前先完成隐私边界 |
+| [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | Phase 1–5 与 620 Phase A 已合入（PR #365）：两通道投递 + 分类学单源 + `prompt_snapshot` 留痕。**下一动作**：① 定 `prompt_snapshot` 全文落盘的保留期限 / 导出边界（`DUYA_PROMPT_LEDGER=off` 可整体关闭）；② 采真实会话的 hash 表验证 system 前缀逐轮恒定（Phase 0 的产品采样验收）；③ (g) 恢复 `BOT_BASIC_SYSTEM_PROMPT` 单独排期（会改 bot 人格） |
 | [620 会话记录架构](active/620-session-record-architecture.md) | P0 | 实现待认领；从 A1 开始，固定 fixture 验证，不读取真实用户 rollout 数据 |
 | [621 工作区生命周期](active/621-coding-workspace-lifecycle-harness.md) | P0 | 契约已定稿；A（Checkout Provider）/ B（协议与观测投影表）/ C（只读 SCM Observer）三路并行，D/E 待第一波合并 |
 | [CI 提速与测试瘦身](active/2026-10-21-ci-speed-and-test-diet.md) | — | #339（CI 提速）已合并 `052f85cb`；#342（退役 `packages/agent` 291 个测试）仍 open，待授权合并 |
