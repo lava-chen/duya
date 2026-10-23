@@ -13,7 +13,7 @@ where to re-check — that is the point of this file.
 
 ## 1. The package map
 
-24 workspace packages. Each has its own `AGENTS.md`.
+23 workspace packages. Each has its own `AGENTS.md`.
 
 | Package | Owns | Debug entry |
 | --- | --- | --- |

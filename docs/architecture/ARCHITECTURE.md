@@ -1343,7 +1343,6 @@ Modes are declarative `ModeModifier` objects:
 
 - `plan-task` - Plan + task execution
 - `research` - Deep research (Plan 423)
-- `conductor` - Orchestration
 - `goal` - Goal tracking (Plan 411, v2 in Plan 553)
 - `computer-use` - OS desktop takeover (Plan 454; structural-first in Plan 564)
 
@@ -1571,7 +1570,7 @@ Canvas UI, persistence, and agent tools are provided by the Marketplace plugin i
 
 ## Package Workspace
 
-26 workspace packages. The layering below is not advisory — it is enforced by
+25 workspace packages. The layering below is not advisory — it is enforced by
 `architecture-policy.yaml` and checked by `npm run architecture:check`.
 
 ```
