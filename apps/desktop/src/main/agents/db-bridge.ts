@@ -25,6 +25,7 @@ import type {
   TurnReviewWriteInput,
 } from '@duya/agent-protocol';
 import { isHostResearchAction } from '@duya/agent-protocol/research-api';
+import { isJsonValue } from '@duya/agent-protocol';
 import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { runPromptInSession, interruptCronSession } from '../automation/agent-run';
@@ -561,6 +562,12 @@ export async function dispatchDbAction(
       const id = p.id as string;
       const key = p.key as string;
       if (!id || !key) throw new Error('session:setExtension requires id and key');
+      // The extension bag is persisted as JSON, so a value that is not JSON
+      // would corrupt the column. Rejecting it here is the same contract the
+      // store applies: an unwritable value is refused, not coerced.
+      if (!isJsonValue(p.value)) {
+        throw new Error(`session:setExtension requires a JSON value for key "${key}"`);
+      }
       await getDesktopHostSessionApi().update(id, undefined, {
         extensions: { [key]: p.value },
       });
