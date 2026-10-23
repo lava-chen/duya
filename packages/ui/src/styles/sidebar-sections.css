@@ -37,14 +37,14 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  /* Codex parity (2026-10-22): the group caption is a compact line, not a
-     full row. Measured off a real Codex capture: the "最近" caption is a
-     13px label on a 28px line, and its text starts at the same x as the
-     session titles below it. duya used 38px, which pushed the first
-     session a whole row down. */
-  height: 28px;
+  /* Claude parity (2026-10-23): the group caption is a compact 21px line —
+     the height measured off a real Claude Code desktop capture — with a
+     2.3px gap under it before the group body starts. The previous 28px
+     caption pushed the first session a whole row down. */
+  height: 21px;
   box-sizing: border-box;
   padding: 0 10px;
+  margin-bottom: 2.3px;
   /* Codex parity (2026-10-22): the group label is a small, quiet caption
      rather than a headline — 13px, muted. The content below it (session
      rows) carries the visual weight. */
@@ -159,9 +159,10 @@
   gap: 1px;
 }
 
-/* Claude parity (2026-10-22): the group header's trailing action group
-   (新建 / 组内搜索 / 过滤器). Buttons are the shared 22×22 `.sidebar-section-action`
-   chrome; the group only owns the layout. */
+/* Claude parity (2026-10-23): the group header's trailing action group
+   (新建 / 组内搜索 / 过滤器). Buttons are the shared 20×20
+   `.sidebar-section-action` chrome — 20px so they fit inside the 21px
+   caption line — and the group only owns the layout. */
 .sidebar-section-actions {
   display: inline-flex;
   align-items: center;
@@ -212,8 +213,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  /* Claude parity (2026-10-23): 20×20, matching `.sidebar-section-action`
+     so both fit inside the 21px caption line. */
+  width: 20px;
+  height: 20px;
   border: 0;
   background: transparent;
   border-radius: 0.25rem;
@@ -301,7 +304,8 @@
   align-items: center;
   gap: 0.35rem;
   width: 100%;
-  min-height: 28px;
+  /* Claude parity (2026-10-23): a caption, not a session row. */
+  min-height: 22px;
   box-sizing: border-box;
   padding: 0 10px;
   margin: 0;
@@ -310,7 +314,7 @@
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
-  border-radius: 9px;
+  border-radius: 8px;
   transition: background-color 0.15s ease, color 0.15s ease;
   opacity: 0.62;
 }

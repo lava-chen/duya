@@ -320,6 +320,10 @@ function Row({
     <button
       type="button"
       className={"search-palette-row" + (index === selected ? " is-active" : "")}
+      /* The command key is a stable handle for tests: the row's visible title
+         is a localised label, so a runner whose locale does not match would
+         not find the row by its visible text at all. */
+      data-palette-key={item.key}
       onClick={() => onSelect(item)}
       onMouseEnter={() => onHover(index)}
     >
