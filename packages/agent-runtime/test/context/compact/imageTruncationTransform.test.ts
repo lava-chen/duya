@@ -28,11 +28,11 @@ function makeImage(seed: string): ImageBlock {
   };
 }
 
-function makeComputerUseCall(id: string): ToolUse {
-  return { type: 'tool_use', id, name: 'computer_use', input: { action: 'capture' } };
+function makeReadCall(id: string): ToolUse {
+  return { type: 'tool_use', id, name: 'Read', input: { file_path: '/tmp/test.png' } };
 }
 
-function makeComputerUseResult(toolUseId: string, seed: string): ToolResult {
+function makeReadResult(toolUseId: string, seed: string): ToolResult {
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
@@ -75,7 +75,6 @@ describe('imageTruncationTransform', () => {
   });
 
   it('isImageTool recognizes the registered image tools', () => {
-    expect(isImageTool('computer_use')).toBe(true);
     expect(isImageTool('Read')).toBe(true);
     expect(isImageTool('VisionAnalyze')).toBe(true);
     expect(isImageTool('Bash')).toBe(false);
@@ -84,10 +83,10 @@ describe('imageTruncationTransform', () => {
 
   it('returns messages unchanged when under the budget', () => {
     const messages: Message[] = [
-      makeAssistantUse(makeComputerUseCall('call-1')),
-      makeUserMessage([makeComputerUseResult('call-1', 'img-1')]),
-      makeAssistantUse(makeComputerUseCall('call-2')),
-      makeUserMessage([makeComputerUseResult('call-2', 'img-2')]),
+      makeAssistantUse(makeReadCall('call-1')),
+      makeUserMessage([makeReadResult('call-1', 'img-1')]),
+      makeAssistantUse(makeReadCall('call-2')),
+      makeUserMessage([makeReadResult('call-2', 'img-2')]),
     ];
     const result = imageTruncationTransform.apply(messages);
     expect(result).toBe(messages); // same reference — no-op
@@ -98,8 +97,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [];
     for (let i = 0; i < 7; i++) {
       const callId = `call-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     expect(result).not.toBe(messages);
@@ -122,8 +121,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [];
     for (let i = 0; i < 7; i++) {
       const callId = `call-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     // Find a tool_result that was modified.
@@ -162,8 +161,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [makeAssistantUse(bashUse), makeUserMessage([bashResult])];
     for (let i = 0; i < 7; i++) {
       const callId = `cu-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     // The bash tool_result is preserved verbatim.

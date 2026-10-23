@@ -12,12 +12,12 @@ describe('PRESET_AGENT_PROFILES', () => {
     expect(curator!.allowedTools).toEqual(['read', 'write', 'edit', 'grep', 'glob']);
   });
 
-  it('memory-curator denies shell, subagent, canvas, and self-management tools', () => {
+  it('memory-curator denies shell, subagent, vision, and self-management tools', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator')!;
     expect(curator.disallowedTools).toContain('bash');
     expect(curator.disallowedTools).toContain('powershell');
     expect(curator.disallowedTools).toContain('task');
-    expect(curator.disallowedTools).toContain('canvas:*');
+    expect(curator.disallowedTools).toContain('vision_analyze');
     expect(curator.disallowedTools).toContain('duya_cli');
     expect(curator.disallowedTools).toContain('tool_catalog');
     expect(curator.disallowedTools).toContain('skill');
@@ -53,7 +53,7 @@ describe('PRESET_AGENT_PROFILES', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator')!;
     const allTools = [
       'read', 'write', 'edit', 'grep', 'glob',
-      'bash', 'powershell', 'task', 'browser', 'canvas_create',
+      'bash', 'powershell', 'task', 'browser',
       'show_widget', 'AskUserQuestion', 'duya_cli', 'tool_catalog',
       'skill', 'todo', 'vision_analyze',
     ];
@@ -90,13 +90,14 @@ describe('PRESET_AGENT_PROFILES', () => {
     const gateway = PRESET_AGENT_PROFILES.find((p) => p.id === 'gateway')!;
     const allTools = [
       'read', 'write', 'edit', 'todo', 'duya_cli', 'vision_analyze',
-      'canvas:create', 'show_widget', 'AskUserQuestion', 'task', 'memory',
+      'mcp_duya_app_vision_analyze', 'show_widget', 'AskUserQuestion', 'task', 'memory',
       'read_module', 'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
     ];
     const result = resolveAllowedTools(gateway, allTools);
-    for (const t of ['canvas:create', 'show_widget', 'AskUserQuestion', 'task', 'memory', 'read_module', 'EnterPlanMode', 'ExitPlanMode', 'SwitchMode']) {
+    for (const t of ['show_widget', 'AskUserQuestion', 'task', 'memory', 'read_module', 'EnterPlanMode', 'ExitPlanMode', 'SwitchMode']) {
       expect(result.denied).toContain(t);
     }
+    expect(result.allowed).toContain('mcp_duya_app_vision_analyze');
   });
 
   it('gateway profile re-enables memory/sessionGuidance/skills/tasks prompt sections', () => {
