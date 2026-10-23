@@ -350,6 +350,12 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 | 合入 master 后 | 同上 | `npm run typecheck:all` | 0 | 终端输出 |
 | 同上 | 同上 | 目标 vitest（cli/slash + command-catalog + ui/workspace + TaskDrawer） | 0 — 118 passed（5 files） | 终端输出 |
 | 同上 | 同上 | 浏览器实跑（web dev server + 共享面板 harness） | 三态渲染正确；`unknown` 显示为 `unknown` 并带原因，未折成 `open`；观测为「保留」时回收按钮**无** `disabled`；console 零应用级 error/warn（仅 vite HMR websocket） | 浏览器快照 |
+| 合入 master（PR #355）后 | 同上 | `npm run typecheck:all` | 0 — `typecheck-electron-gate: OK — no new type errors (206 known across 102 key(s))` | 终端输出 |
+| 同上 | 同上 | `npm run architecture:check` | 0 — `tolerated 2608 / baseline 2785`，无新增违规 | 终端输出 |
+| 同上 | 同上 | `npm run bundle:worker` 后 `npm run bundle:verify` | 0 — FRESH，`0/921 bundle inputs changed` | 终端输出 |
+| 同上 | 同上 | 目标 vitest（host + web + desktop + ui + cli/slash + command-catalog） | 0 — 696 files passed / 1 skipped，7512 passed / 12 skipped，0 failed | 终端输出 |
+
+环境备注：`wl-f` worktree 里裸 builtin import（`from 'stream'`）在 vitest 下解析失败，`packages/cli/src/tui/__tests__/*` 与 2 个既有 desktop 测试文件因此**收集失败**（`Cannot find module '<worktree>/stream'`）。同样文件在主检出与 `wl-f-tui` 通过，`apps/web` 侧全部通过；与本次改动无关（这两个文件未被本分支触及），CI 的干净检出不受影响。
 
 构建副作用核对：`build:packages` 后 `git diff --numstat` 无内容差异，`packages/capabilities/src/ModuleTool/inline-content.ts` 只是 CRLF/LF 的 stat-dirty 条目，未纳入提交。第二波三个切片都遇到过这一条：构建脚本改写了该文件的换行符，提交前已 `git checkout --` 还原。
 
