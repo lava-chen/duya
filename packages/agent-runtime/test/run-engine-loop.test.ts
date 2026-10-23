@@ -97,6 +97,15 @@ function harness(options: {
   readonly extensionVeto?: boolean;
   readonly manifestOverrides?: Partial<RunManifest>;
   readonly onAssemble?: () => void;
+  /**
+   * The messages the host's `assemble` hands the engine.
+   *
+   * A host that assembles from its own timeline projects the turn's user row
+   * into these messages -- and that row IS the run's prompt. The default is
+   * empty, which is the case where the engine has to put the prompt in
+   * itself.
+   */
+  readonly assembledMessages?: readonly ModelMessage[];
 } ): Harness {
   const log: string[] = [];
   const dispatched: ToolCallRequest[] = [];
@@ -190,7 +199,7 @@ function harness(options: {
         options.onAssemble?.();
         return {
           systemPrompt: 'you are a test',
-          messages: [],
+          messages: options.assembledMessages ?? [],
           tools: [{ name: 'write', description: 'write a file', inputSchema: {} }],
           catalogRevision: 'cat-1',
           revision: 'rev-1',
@@ -359,12 +368,12 @@ function engineWith(clock: { now: () => number }, maxTurns?: number): RunEngineI
 async function run(
   engine: RunEngineImpl,
   h: Harness,
-  options: { signal?: AbortSignal; manifest?: RunManifest } = {},
+  options: { signal?: AbortSignal; manifest?: RunManifest; input?: RunInputSnapshot } = {},
 ): Promise<void> {
   const controller = new AbortController();
   const handle = engine.execute({
     manifest: options.manifest ?? manifestFor(),
-    input: inputFor(),
+    input: options.input ?? inputFor(),
     signal: options.signal ?? controller.signal,
     ports: h.ports,
   });
@@ -1034,5 +1043,78 @@ describe('the engine is an implementation, not a delegating port', () => {
     // And the store's own surface offers no allocator to call.
     const storeKeys = Object.keys(h.ports.events).sort();
     expect(storeKeys).toEqual(['proposeTerminal', 'publish']);
+  });
+});
+
+/**
+ * The prompt reaches the model EXACTLY ONCE.
+ *
+ * ## Why this is its own file section
+ *
+ * The engine puts the run's prompt into the first turn's request, and a host
+ * that assembles the turn from its own timeline ALSO has that turn's user row
+ * in the messages it hands over -- the row and the prompt are the same
+ * message, reached by two different roads. Adding both sent the user's prompt
+ * twice in one request: the model saw the question twice, and the input
+ * tokens of the first turn doubled.
+ *
+ * ## What the cases pin
+ *
+ *  - the host's assembled messages ALREADY carrying the prompt (by id) means
+ *    the engine must not add it again;
+ *  - a history that does NOT carry it still gets the prompt, and it still
+ *    goes FIRST, because the prompt is the turn's opening question.
+ */
+describe('the prompt reaches the model exactly once', () => {
+  it('does not add the prompt again when the host already assembled it', async () => {
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'done' }] }],
+      assembledMessages: [
+        { role: 'user', id: 'p1', content: 'write a file' },
+        { role: 'user', id: 'rail-1', content: 'a context rail block' },
+      ],
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, {
+      input: inputFor({
+        history: { kind: 'by_ref', digest: 'd-hist', locator: 'transcript:run-1' },
+      }),
+    });
+
+    const sent = h.sentMessages[0]!;
+    expect(sent.filter((m) => m.id === 'p1')).toHaveLength(1);
+    // And the order is unchanged: the prompt opens the turn, the host's own
+    // context follows it.
+    expect(sent.map((m) => m.id)).toEqual(['p1', 'rail-1']);
+  });
+
+  it('still sends the prompt first when the history does not carry it', async () => {
+    const h = harness({ turns: [{ frames: [{ type: 'text', text: 'done' }] }] });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h);
+
+    const sent = h.sentMessages[0]!;
+    expect(sent.map((m) => m.id)).toEqual(['p1']);
+    expect(sent[0]!.content).toBe('write a file');
+  });
+
+  it('leaves a history message that merely LOOKS like the prompt alone', async () => {
+    // Same text, different id: two rows, so both belong in the request.
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'done' }] }],
+      assembledMessages: [{ role: 'user', id: 'other-row', content: 'write a file' }],
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, {
+      input: inputFor({
+        history: { kind: 'by_ref', digest: 'd-hist', locator: 'transcript:run-1' },
+      }),
+    });
+
+    const sent = h.sentMessages[0]!;
+    expect(sent.map((m) => m.id)).toEqual(['p1', 'other-row']);
   });
 });
