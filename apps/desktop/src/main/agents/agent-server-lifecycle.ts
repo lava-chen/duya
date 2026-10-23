@@ -11,7 +11,6 @@ import { handleDbRequest } from './db-bridge';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../control-plane/spawned-workers';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
-import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
 import { getConnectorService } from '../services/app-connections/connector-service';
 import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
 import { handleBotIdentityRpc } from '../config/bot-identity-rpc';
@@ -28,7 +27,6 @@ let isShuttingDown = false;
 // M8: Track consecutive restart attempts to avoid infinite restart loops
 let restartCount = 0;
 const MAX_RESTART_ATTEMPTS = 10;
-let conductorExecutorProxy: ConductorExecutorProxy | null = null;
 const pendingPluginAppServerRequests = new Map<string, {
   child: ChildProcess;
   resolve: (response: DesktopPluginAppServerResponse) => void;
@@ -100,9 +98,6 @@ function rejectPluginAppServerRequests(child: ChildProcess): void {
   }
 }
 
-export function setConductorExecutorProxy(proxy: ConductorExecutorProxy | null): void {
-  conductorExecutorProxy = proxy;
-}
 
 function getAgentServerPath(): string {
   if (app.isPackaged) {
@@ -270,47 +265,6 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
-      if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string') {
-        if (!conductorExecutorProxy) {
-          if (!child.killed) {
-            child.send({
-              type: 'conductor:executor:rpc:response',
-              requestId: msg.requestId,
-              success: false,
-              error: { code: 'NO_PROXY', message: 'ConductorExecutorProxy not injected' },
-            });
-          }
-          return;
-        }
-        const request: ExecutorRpcRequest = {
-          requestId: msg.requestId,
-          action: msg.action,
-          payload: msg.payload,
-          sessionId: msg.sessionId,
-        };
-        conductorExecutorProxy
-          .execute(request)
-          .then((response) => {
-            if (!child.killed) {
-              child.send({
-                type: 'conductor:executor:rpc:response',
-                requestId: msg.requestId,
-                ...response,
-              });
-            }
-          })
-          .catch((err) => {
-            if (!child.killed) {
-              child.send({
-                type: 'conductor:executor:rpc:response',
-                requestId: msg.requestId,
-                success: false,
-                error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
-              });
-            }
-          });
-        return;
-      }
 
       // Plan 312: route appConnection:invoke to ConnectorService (main process).
       // The agent-side tool executor sends this via context.ipcRequest; the

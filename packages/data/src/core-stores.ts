@@ -52,7 +52,6 @@ import { SessionStore } from './session-store.js';
 import { Mailbox } from './mailbox.js';
 import { ProjectStore } from './project-store.js';
 import { ResearchStore } from './research-store.js';
-import { ConductorStore } from './conductor-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
 import { RunStore } from './run-store.js';
 import { WorkflowRunStore } from './workflow-run-store.js';
@@ -1203,7 +1202,6 @@ export interface CoreDataStores {
   wakes: PendingWakeStore;
   projects: ProjectStore;
   research: ResearchStore;
-  conductor: ConductorStore;
   runs: RunStore;
   workflowRuns: WorkflowRunStore;
   workspaces: WorkspaceStore;
@@ -1231,7 +1229,6 @@ export function createCoreDataStores(
     wakes: new PendingWakeStore(db),
     projects: new ProjectStore(db),
     research: new ResearchStore(db),
-    conductor: new ConductorStore(db),
     runs: new RunStore(db),
     workflowRuns: new WorkflowRunStore(db),
     workspaces: new WorkspaceStore(db),
@@ -1255,7 +1252,6 @@ export function collectCoreDataMigrations(): Migration[] {
     ...PendingWakeStore.migrations,
     ...ProjectStore.migrations,
     ...ResearchStore.migrations,
-    ...ConductorStore.migrations,
     ...RunStore.migrations,
     ...WorkflowRunStore.migrations,
     ...WorkspaceStore.migrations,

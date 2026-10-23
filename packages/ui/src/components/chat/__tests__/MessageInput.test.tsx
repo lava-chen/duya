@@ -59,7 +59,6 @@ vi.mock('@/components/icons', () => ({
   PinIcon: () => null,
   // MessageInput's render tree pulls in icons via the tools/registry
   // chain (working-tree WIP); mock them so the smoke tests mount.
-  ChalkboardIcon: () => null,
   TargetArrowIcon: () => null,
   // Session mode chips (plan 413e) render ChatCircleIcon while a
   // session-level mode chip is visible.
@@ -135,17 +134,15 @@ vi.mock('@/lib/ipc-client', () => ({
 import { MessageInput, pickMessageMode, clearMessageModes } from '../MessageInput';
 
 describe('MessageInput mode helpers (plan 413e)', () => {
-  it('pickMessageMode returns plan-task (session-level) but skips conductor', () => {
+  it('pickMessageMode returns an active mode', () => {
     expect(pickMessageMode(new Set(['plan-task']))).toBe('plan-task');
     expect(pickMessageMode(new Set(['research']))).toBe('research');
-    expect(pickMessageMode(new Set(['conductor']))).toBeUndefined();
-    expect(pickMessageMode(new Set(['plan-task', 'conductor']))).toBe('plan-task');
+    expect(pickMessageMode(new Set(['goal']))).toBe('goal');
   });
 
-  it('clearMessageModes keeps session modes (plan-task, research, conductor — plan 423 made research session-level)', () => {
-    const next = clearMessageModes(new Set(['plan-task', 'research', 'conductor']));
+  it('clearMessageModes keeps session modes', () => {
+    const next = clearMessageModes(new Set(['plan-task', 'research']));
     expect(next.has('plan-task')).toBe(true);
-    expect(next.has('conductor')).toBe(true);
     expect(next.has('research')).toBe(true);
   });
 });

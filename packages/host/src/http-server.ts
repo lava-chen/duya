@@ -158,13 +158,6 @@ import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
 import { routePluginAppGrants } from './plugin-app-grant-routes.js';
 import type {
-  CreateDataSourceInput,
-  HostLocalWorkbenchApiV1,
-  UpdateDataSourceInput,
-  WorkbenchSourceConfig,
-  WorkbenchSourceType,
-} from '@duya/agent-protocol/workbench';
-import type {
   HostLocalSidebarSectionsApiV1,
   SidebarSectionCreateInput,
   SidebarSectionPatch,
@@ -354,8 +347,6 @@ export interface HostSessionHttpServerOptions {
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
   readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
-  /** Local-only Workbench persistence; source configs may contain credentials. */
-  readonly localWorkbenchApi?: HostLocalWorkbenchApiV1;
   /** Local-only sidebar groups; project paths are local filesystem values. */
   readonly localSidebarSectionsApi?: HostLocalSidebarSectionsApiV1;
   /** Local-only usage source index; includes user session metadata and pricing. */
@@ -680,10 +671,6 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
-      return;
-    }
-    if (url.pathname.startsWith('/v1/local/workbench/')) {
-      await this.#routeLocalWorkbench(req, url, res);
       return;
     }
     if (url.pathname === '/v1/local/import-batches' || url.pathname.startsWith('/v1/local/import-batches/')) {
@@ -4045,120 +4032,6 @@ export class HostSessionHttpServer {
     }
   }
 
-  async #routeLocalWorkbench(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
-    const api = this.#options.localWorkbenchApi;
-    if (!api) {
-      this.#sendJson(res, 404, { error: { code: 'workbench_api_unavailable' } });
-      return;
-    }
-
-    const requiredQuery = (key: string): string | null => {
-      const value = url.searchParams.get(key);
-      return isBoundedString(value, 1, 4096) ? value : null;
-    };
-
-    try {
-      if (req.method === 'GET' && url.pathname === '/v1/local/workbench/sources') {
-        const canvasId = requiredQuery('canvasId');
-        if (!canvasId) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { sources: await api.listDataSourcesByCanvas(canvasId) });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/local/workbench/source') {
-        const id = requiredQuery('id');
-        if (!id) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { source: await api.getDataSource(id) });
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/v1/local/workbench/sources') {
-        const body = await this.#readJson(req, res);
-        if (body === null) return;
-        const input = parseWorkbenchCreate(body);
-        if (!input) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_source' } });
-          return;
-        }
-        this.#sendJson(res, 201, { source: await api.createDataSource(input) });
-        return;
-      }
-      if (url.pathname === '/v1/local/workbench/source' && req.method === 'PATCH') {
-        const id = requiredQuery('id');
-        const body = await this.#readJson(req, res);
-        if (body === null) return;
-        const patch = parseWorkbenchPatch(body);
-        if (!id || !patch) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_source_patch' } });
-          return;
-        }
-        const source = await api.updateDataSource(id, patch);
-        this.#sendJson(res, source ? 200 : 404, { source });
-        return;
-      }
-      if (url.pathname === '/v1/local/workbench/source' && req.method === 'DELETE') {
-        const id = requiredQuery('id');
-        if (!id) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { deleted: await api.deleteDataSource(id) });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/local/workbench/canvas-project-path') {
-        const canvasId = requiredQuery('canvasId');
-        if (!canvasId) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { projectPath: await api.getCanvasProjectPath(canvasId) });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/local/workbench/element-belongs') {
-        const elementId = requiredQuery('elementId');
-        const canvasId = requiredQuery('canvasId');
-        if (!elementId || !canvasId) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { belongs: await api.elementBelongsToCanvas(elementId, canvasId) });
-        return;
-      }
-      if (req.method === 'GET' && url.pathname === '/v1/local/workbench/due') {
-        const now = parseQueryInteger(url.searchParams.get('now'));
-        const minimumIntervalSec = parseQueryInteger(url.searchParams.get('minimumIntervalSec'));
-        if (now === undefined || minimumIntervalSec === undefined || minimumIntervalSec < 0) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_query' } });
-          return;
-        }
-        this.#sendJson(res, 200, { sources: await api.listDueDataSources(now, minimumIntervalSec) });
-        return;
-      }
-      if (req.method === 'POST' && url.pathname === '/v1/local/workbench/source-refresh') {
-        const id = requiredQuery('id');
-        const body = await this.#readJson(req, res);
-        if (body === null) return;
-        if (!id || ('error' in body && body.error !== null && typeof body.error !== 'string')) {
-          this.#sendJson(res, 400, { error: { code: 'invalid_workbench_refresh' } });
-          return;
-        }
-        await api.saveDataSourceRefresh(id, {
-          ...(body.snapshot === undefined ? {} : { snapshot: body.snapshot }),
-          ...(body.error === undefined ? {} : { error: body.error as string | null }),
-        });
-        this.#sendJson(res, 200, { success: true });
-        return;
-      }
-      this.#sendJson(res, 404, { error: { code: 'not_found' } });
-    } catch (error) {
-      this.#sendApiError(res, error);
-    }
-  }
-
   async #routeLocalPendingWakes(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
     const api = this.#options.localPendingWakeApi;
     if (!api) {
@@ -5277,64 +5150,7 @@ function parseHostImportBatchItem(
   };
 }
 
-function isWorkbenchSourceType(value: unknown): value is WorkbenchSourceType {
-  return value === 'http' || value === 'project_db';
-}
 
-function isWorkbenchSourceConfig(value: unknown): value is WorkbenchSourceConfig {
-  if (!isRecord(value)) return false;
-  if ('url' in value) {
-    return typeof value.url === 'string' &&
-      (value.method === undefined || value.method === 'GET' || value.method === 'POST') &&
-      (value.body === undefined || typeof value.body === 'string') &&
-      (value.path === undefined || typeof value.path === 'string') &&
-      (value.headers === undefined || (
-        isRecord(value.headers) && Object.values(value.headers).every((header) => typeof header === 'string')
-      ));
-  }
-  return isRecord(value.command);
-}
-
-function parseWorkbenchCreate(value: Record<string, unknown>): CreateDataSourceInput | null {
-  if (
-    !isBoundedString(value.canvasId, 1, 4096) ||
-    !isBoundedString(value.name, 1, 200) ||
-    !isWorkbenchSourceType(value.type) ||
-    !isWorkbenchSourceConfig(value.config) ||
-    (value.type === 'http' && !('url' in value.config)) ||
-    (value.type === 'project_db' && !('command' in value.config)) ||
-    (value.refreshIntervalSec !== undefined && (!isFiniteNumber(value.refreshIntervalSec) || value.refreshIntervalSec < 0)) ||
-    (value.enabled !== undefined && typeof value.enabled !== 'boolean')
-  ) {
-    return null;
-  }
-  return {
-    canvasId: value.canvasId,
-    name: value.name,
-    type: value.type,
-    config: value.config,
-    ...(value.refreshIntervalSec === undefined ? {} : { refreshIntervalSec: value.refreshIntervalSec }),
-    ...(value.enabled === undefined ? {} : { enabled: value.enabled }),
-  };
-}
-
-function parseWorkbenchPatch(value: Record<string, unknown>): UpdateDataSourceInput | null {
-  if (
-    (value.name !== undefined && !isBoundedString(value.name, 1, 200)) ||
-    (value.config !== undefined && !isWorkbenchSourceConfig(value.config)) ||
-    (value.refreshIntervalSec !== undefined && (!isFiniteNumber(value.refreshIntervalSec) || value.refreshIntervalSec < 0)) ||
-    (value.enabled !== undefined && typeof value.enabled !== 'boolean') ||
-    Object.keys(value).some((key) => !['name', 'config', 'refreshIntervalSec', 'enabled'].includes(key))
-  ) {
-    return null;
-  }
-  return {
-    ...(value.name === undefined ? {} : { name: value.name }),
-    ...(value.config === undefined ? {} : { config: value.config }),
-    ...(value.refreshIntervalSec === undefined ? {} : { refreshIntervalSec: value.refreshIntervalSec }),
-    ...(value.enabled === undefined ? {} : { enabled: value.enabled }),
-  };
-}
 
 function parseGoalCreateInput(value: unknown): GoalCreateInput | null {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0) return null;

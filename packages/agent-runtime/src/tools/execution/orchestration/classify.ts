@@ -60,26 +60,7 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   // mailbox row for the target agent and fires the wake bus.
   send_to_agent: ToolBatch.SYSTEM,
 
-  // Canvas Conductor tools (plan 221) — SYSTEM (mutate canvas state)
-  canvas_create_element: ToolBatch.SYSTEM,
-  canvas_delete_element: ToolBatch.SYSTEM,
-  canvas_move_element: ToolBatch.SYSTEM,
-  canvas_resize_element: ToolBatch.SYSTEM,
-  canvas_fill_content: ToolBatch.SYSTEM,
-  canvas_style_element: ToolBatch.SYSTEM,
-  // canvas_capture is read-only but kept SYSTEM to avoid parallel
-  // screenshot races on the html2canvas renderer.
-  canvas_capture: ToolBatch.SYSTEM,
 
-  // Legacy Canvas Orchestrator tools — kept for backward compat.
-  // canvas_update_element / canvas_arrange_elements / canvas_get_snapshot /
-  // canvas_align / canvas_layout_grid are no longer registered by plan 221
-  // but remain in the batch map so any stale references classify safely.
-  canvas_update_element: ToolBatch.SYSTEM,
-  canvas_arrange_elements: ToolBatch.SYSTEM,
-  canvas_get_snapshot: ToolBatch.SYSTEM,
-  canvas_align: ToolBatch.SYSTEM,
-  canvas_layout_grid: ToolBatch.SYSTEM,
 }
 
 export function classifyTool(toolName: string, onWarning?: (message: string) => void): ToolBatch {

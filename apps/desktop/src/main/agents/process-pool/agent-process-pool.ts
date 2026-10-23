@@ -660,7 +660,7 @@ export class AgentProcessPool {
 
       const readyHandler = (msg: ProcessMessage) => {
         const msgType = (msg as { type?: string }).type;
-        if (msgType === 'ready' || msgType === 'conductor:ready') {
+        if (msgType === 'ready') {
           clearTimeout(timeout);
           this.removeMessageHandler(sessionId, readyHandler);
           const status = (msg as { status?: string }).status;

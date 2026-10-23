@@ -173,8 +173,6 @@ interface ChatStartMessage {
         maxTurns?: number;
         allowedTools?: string[];
         permissionSurface?: 'bot' | 'default';
-        conductorMode?: boolean;
-        conductorCanvasId?: string;
         backgroundTaskResume?: boolean;
         llmRequestTimeoutMs?: number;
         wakeRun?: boolean;
@@ -598,53 +596,6 @@ const pendingIpcRequests = new Map<string, {
     reject: (error: Error) => void;
     timeoutHandle?: ReturnType<typeof setTimeout>;
 }>();
-function conductorIpcRequest<T = unknown>(channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const outerPayload = payload as {
-            action?: string;
-            payload?: unknown;
-            sessionId?: string;
-        } | undefined;
-        const action = outerPayload?.action ?? channel;
-        const innerPayload = outerPayload?.payload ?? payload;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        sendToMain({
-            type: 'conductor:executor:rpc',
-            requestId,
-            action,
-            payload: innerPayload,
-            sessionId: outerPayload?.sessionId,
-        });
-    });
-}
 function appConnectionIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
     timeout?: number;
 }): Promise<{
@@ -836,7 +787,7 @@ function toolIpcRequest<T = unknown>(channel: string, payload: unknown, options?
     if (channel === 'bot-identity:rpc') {
         return botIdentityIpcRequest<T>(channel, payload, options);
     }
-    return conductorIpcRequest<T>(channel, payload, options);
+    return Promise.resolve({ success: false, error: { code: 'UNSUPPORTED_CHANNEL', message: `Unsupported host IPC channel: ${channel}` } });
 }
 function fetchAppConnectionDescriptors(): Promise<{
     success: boolean;
@@ -1703,8 +1654,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         sessionId: msg.sessionId,
         promptLength: msg.prompt.length,
         agentProfileId: msg.options?.agentProfileId || '(none)',
-        conductorMode: msg.options?.conductorMode ?? false,
-        hasConductorCanvasId: !!msg.options?.conductorCanvasId,
     });
     if (agent) {
         log('[Agent-Process] Agent LLM config:', {
@@ -2261,9 +2210,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             effort: msg.options?.effort,
             maxTurns: msg.options?.maxTurns,
             allowedTools: msg.options?.allowedTools,
-            conductorMode: msg.options?.conductorMode ? true : undefined,
-            conductorCanvasId: msg.options?.conductorCanvasId,
-            conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
+            hostIpc: { sendToMain, ipcRequest: toolIpcRequest },
             backgroundTaskResume: msg.options?.backgroundTaskResume,
             llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
             wakeRun: msg.options?.wakeRun === true,
@@ -3380,34 +3327,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             break;
         }
         case 'db:response': {
-            break;
-        }
-        case 'conductor:executor:rpc:response': {
-            const { requestId, success, result, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                result?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data: result });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending IPC request found for requestId:', requestId);
-            }
             break;
         }
         case 'appConnection:invoke:response': {

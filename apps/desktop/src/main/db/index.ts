@@ -19,5 +19,4 @@ export {
 export type { DbInitResult, DatabaseStats } from './connection';
 
 // Queries layer
-export * from './queries/conductors';
 export * from './queries/settings';

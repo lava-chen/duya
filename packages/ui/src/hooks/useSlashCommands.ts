@@ -15,7 +15,6 @@ import {
   ListChecksIcon,
   FeatherIcon,
   PlugIcon,
-  ChalkboardIcon,
   ArrowsInLineVerticalIcon,
   TelescopeIcon,
   TargetArrowIcon,
@@ -285,16 +284,7 @@ export function useSlashCommands(opts: {
         group: 'mode' as const,
         category,
       },
-      {
-        label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
-        value: '__mode_conductor',
-        description: isZh ? '注入画布操作工具，agent 可控制 conductor 画布' : 'Inject canvas tools, agent can control conductor canvas',
-        icon: ChalkboardIcon,
-        kind: 'mode' as const,
-        modeValue: 'conductor',
-        group: 'mode' as const,
-        category,
-      },
+
       {
         label: 'Goal',
         value: '__mode_goal',

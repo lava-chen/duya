@@ -68,7 +68,7 @@ export interface CommandAppBridge {
   setEffort(effort: string | undefined): void;
   /** Switch the permission mode (ask / auto / bypass). */
   setPermissionMode(mode: 'ask' | 'auto' | 'bypass'): void;
-  /** Toggle a session/message mode (plan-task, research, goal, conductor...). */
+  /** Toggle a session/message mode (plan-task, research, goal). */
   toggleMode(mode: ModeModifierId): void;
   /** Open the composer's model/provider picker. */
   openModelPicker(): void;

@@ -111,7 +111,7 @@ The pipeline itself is not a `this.` member: it is constructed per turn at
 | `baseSystemPromptWithoutModes` | `:1858` | |
 | `widgetStyleHistory` | `:1863` | |
 | `forkTurn` | `:1944` | |
-| `canvasFreshness` | `:1978` | |
+| Canvas runtime state (removed) | `:1978` | |
 | `currentProjectId` | `:1983` | |
 | `projectHome` | `:2003` | |
 | `visualAnalysis` | `:2009` | |

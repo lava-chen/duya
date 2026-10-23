@@ -629,11 +629,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Channel adapters (Feishu, Weixin) and their transports. Host-bound integration surfaces.',
   },
   {
-    prefix: 'packages/conductor/src',
-    category: 'host-ui',
-    why: 'Conductor canvas UI and its renderer components. UI in a workspace package, which is why 23 renderer->conductor deep imports exist.',
-  },
-  {
     prefix: 'packages/cli/src',
     category: 'host-ui',
     why: 'CLI commands. M5.2 splits the pure descriptor from the runner that constructs an agent.',

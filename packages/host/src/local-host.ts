@@ -21,7 +21,6 @@ import {
   ModelCapabilityStore,
   AppConnectionStore,
   PluginSetupStore,
-  WorkbenchDataStore,
   ImportBatchStore,
   SidebarSectionsStore,
   ProviderModelPricingStore,
@@ -72,7 +71,6 @@ import { createHostPluginAppInvocationApi, type HostPluginAppInvocationAuthority
 import { createHostPluginAppGrantApi } from './local-plugin-app-grant-api.js';
 import { createHostPluginAppGrantAuthority } from './local-plugin-app-grant-authority.js';
 import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
-import { createHostLocalWorkbenchApi } from './local-workbench-api.js';
 import { createHostLocalSidebarSectionsApi } from './local-sidebar-sections-api.js';
 import { createHostLocalUsageApi } from './local-usage-api.js';
 import { createHostLocalImportBatchApi } from './local-import-batch-api.js';
@@ -592,7 +590,6 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       pluginAppInstanceApi,
       pluginAppInvocationApi,
       pluginAppGrantApi,
-      localWorkbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(mainDatabase.db)),
       localSidebarSectionsApi: createHostLocalSidebarSectionsApi(new SidebarSectionsStore(mainDatabase.db)),
       localUsageApi: createHostLocalUsageApi({
         stores: core.stores,

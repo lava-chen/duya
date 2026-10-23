@@ -155,7 +155,7 @@ describe('NewChatView mode passthrough', () => {
   it('plan-task mode reaches onSendMessage', async () => {
     const args = await sendWithMode('Plan Mode');
     // App.handleSendMessage signature: content, model, files, agentProfileId,
-    // outputStyleConfig, mode, effort, displayContent, conductorMode, ...
+    // outputStyleConfig, mode, effort, displayContent, ...
     expect(args[5]).toBe('plan-task');
     // Session-level mode is persisted so ChatView restores the chip and
     // later turns keep the mode after the view switch.

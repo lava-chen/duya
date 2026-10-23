@@ -7,7 +7,7 @@
  * Types:
  *   - 'error': Stream failed or message send failed
  *   - 'compact': Compact summary marker (separates old/new content)
- *   - 'mode-switch': Mode changed (plan/research/conductor/goal)
+ *   - 'mode-switch': Mode changed (plan/research/goal)
  */
 
 import React from 'react';

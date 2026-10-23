@@ -19,7 +19,6 @@
     "@duya/ai": "0.1.0",
     "@duya/client-core": "0.1.0",
     "@duya/command-catalog": "0.1.0",
-    "@duya/conductor": "0.1.0",
     "@duya/connectors": "0.1.0",
     "@duya/input-completion": "0.1.0",
     "@duya/plugin-core": "0.1.0",

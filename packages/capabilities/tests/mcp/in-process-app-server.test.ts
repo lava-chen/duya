@@ -54,7 +54,7 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
 
   it('MCPManager connects to an in-process server and lists its tools', async () => {
     const manager = new MCPManager();
-    const server = makeInProcessServer(['canvas_manage', 'send_message']);
+    const server = makeInProcessServer(['save_note', 'send_message']);
 
     await manager.addServer({
       name: 'duya_app',
@@ -69,7 +69,7 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
     expect(client).toBeDefined();
     expect(client!.isConnected()).toBe(true);
     expect(client!.getTools().map((t) => t.name).sort()).toEqual([
-      'canvas_manage',
+      'save_note',
       'send_message',
     ]);
 
@@ -78,7 +78,7 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
 
   it('in-process tools get the same internal key / provider name as a real MCP server', async () => {
     const manager = new MCPManager();
-    const server = makeInProcessServer(['canvas_manage']);
+    const server = makeInProcessServer(['save_note']);
 
     await manager.addServer({
       name: 'duya_app',
@@ -98,10 +98,10 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
     });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].internalKey).toBe('mcp__duya_app__canvas_manage');
-    expect(tools[0].name).toBe('mcp_duya_app_canvas_manage');
+    expect(tools[0].internalKey).toBe('mcp__duya_app__save_note');
+    expect(tools[0].name).toBe('mcp_duya_app_save_note');
     expect(tools[0].mcpInfo?.serverName).toBe('duya_app');
-    expect(tools[0].mcpInfo?.toolName).toBe('canvas_manage');
+    expect(tools[0].mcpInfo?.toolName).toBe('save_note');
 
     await manager.disconnectAll();
   });
@@ -111,11 +111,11 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
       name: 'duya_app',
       tools: [
         {
-          name: 'canvas_manage',
-          description: 'Manage the session canvas target.',
+          name: 'save_note',
+          description: 'Save a note in the current session.',
           inputSchema: {
             type: 'object',
-            properties: { action: { type: 'string', enum: ['list', 'create'] } },
+            properties: { action: { type: 'string', enum: ['save'] } },
             required: ['action'],
           },
         },
@@ -131,7 +131,7 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
     } as MCPServerConfig);
 
     const client = manager.getClient('duya_app');
-    expect(client!.getTools().map((t) => t.name)).toEqual(['canvas_manage']);
+    expect(client!.getTools().map((t) => t.name)).toEqual(['save_note']);
     expect(client!.getTools()[0].input_schema).toMatchObject({
       type: 'object',
       required: ['action'],
@@ -144,8 +144,8 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
     // The reload path reuses a client when the signature matches. If two
     // distinct app servers looked identical, a reload would keep the old
     // client (and its old transport pair) pointed at a discarded server.
-    const first = makeInProcessServer(['canvas_manage']);
-    const second = makeInProcessServer(['canvas_manage']);
+    const first = makeInProcessServer(['save_note']);
+    const second = makeInProcessServer(['save_note']);
 
     const signatureOf = (server: Server) =>
       MCPManager.configSignature({

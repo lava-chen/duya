@@ -49,13 +49,6 @@ const SCENARIOS = [
     needsShowcaseMode: true,
   },
   {
-    id: '04-canvas-conductor',
-    title: 'Conductor canvas with smart layout',
-    selector: '[data-conductor-ready="true"]',
-    waitMs: 5000,
-    needsShowcaseMode: true,
-  },
-  {
     id: '05-permission-prompt',
     title: 'Permission prompt before sensitive action',
     selector: '[data-permission-open="true"]',

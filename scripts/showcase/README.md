@@ -30,7 +30,6 @@ they open the app.
 | 01 launcher                     | `[data-showcase-ready="true"]`              | ✅ works today      |
 | 02 research + browser tool card | `[data-tool-card-ready="browser.snapshot"]` | ⏳ needs Stage 2    |
 | 03 local file edit              | `[data-tool-card-ready="edit.diff"]`        | ⏳ needs Stage 2    |
-| 04 Conductor canvas             | `[data-conductor-ready="true"]`             | ⏳ needs Stage 2    |
 | 05 permission prompt            | `[data-permission-open="true"]`             | ⏳ needs Stage 2    |
 
 ### Stage 1 (this commit)

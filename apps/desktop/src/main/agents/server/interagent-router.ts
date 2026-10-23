@@ -285,10 +285,6 @@ export class InteragentRouter {
         process.send(msg);
         return;
       }
-      if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
-        process.send(msg);
-      }
       // Plan 481: forward memory-tier:rpc to the main process.
       if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
         this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);

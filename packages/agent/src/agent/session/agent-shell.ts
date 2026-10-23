@@ -40,7 +40,7 @@ import { ToolCatalogTool, type ToolCatalogView } from '../../tool/ToolCatalogToo
 import { ToolInvokeTool } from '../../tool/ToolInvokeTool/ToolInvokeTool.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
 import type { SubagentRunDeps } from '../../tool/SubagentTool/runAgent.js';
-import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
+import type { ChatOptions, Message, MessageContent, SSEEvent, Tool } from '../../types.js';
 import { logger } from '../../utils/logger.js';
 import { buildAgentIdentityBlock, EMPTY_DISCOVERED } from '../utils/agent-helpers.js';
 import { collectActiveModes } from '../../modes/apply-modes.js';
@@ -78,7 +78,6 @@ export interface AgentShellContext {
   activeMCPRegistry: ToolRegistry;
   messages: () => Message[];
   timelineSnapshot: () => readonly MessageTimelineEntry[];
-  widgetStyleHistory: WidgetStyleSignature[];
   /** Plan 487: host-level standing permission switch (mirrors DuyaAgent.hostToolPermission). */
   hostToolPermission?: LocalToolPermission;
 }
@@ -482,8 +481,6 @@ export async function* dispatchOrchestratorMode(
       workingDirectory: ctx.workingDirectory ?? '',
       subagentDeps,
       state: {
-        conductorCanvasId: options?.conductorCanvasId,
-        widgetStyleHistory: ctx.widgetStyleHistory,
       },
     };
     for (const inject of orchestratorResolved.tools.injects) {

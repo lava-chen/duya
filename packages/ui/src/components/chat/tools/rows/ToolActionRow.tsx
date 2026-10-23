@@ -49,7 +49,6 @@ import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
 import { TodoToolRow } from './TodoToolRow';
 import { VisionToolRow } from './VisionToolRow';
-import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
 import { McpToolRow } from './McpToolRow';
 import { InvokeToolRow } from './InvokeToolRow';
@@ -192,13 +191,6 @@ const ROUTES: RouteEntry[] = [
     // search-result card with a magnifier header and expandable link list.
     match: (t) => isBrowserTool(t.name),
     render: (tool) => <BrowserToolRow tool={tool} />,
-  },
-  {
-    // Canvas Conductor tools (canvas_*) are rendered by a dedicated
-    // row that maps each tool to a per-action verb and summary so the
-    // user sees "正在绘制画布元素" instead of the raw JSON payload.
-    match: (t) => t.name.toLowerCase().startsWith('canvas_') || t.name.toLowerCase() === 'database_manage',
-    render: (tool) => <CanvasConductorToolRow tool={tool} />,
   },
   {
     // MCP-provided tools (any name starting with the `mcp_` provider

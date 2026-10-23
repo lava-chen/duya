@@ -13,7 +13,6 @@ export type PageId =
   | "preview"
   | "review"
   | "workflow"
-  | "conductor"
   | "terminal"
   | "browser"
   | "bot-settings"

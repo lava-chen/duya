@@ -43,7 +43,6 @@ export interface UiPlatformCapabilities {
   readonly localFileAccess: boolean;
   readonly settings: boolean;
   readonly extensions: boolean;
-  readonly conductor: boolean;
   readonly bots: boolean;
   readonly automation: boolean;
   readonly workflows: boolean;

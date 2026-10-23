@@ -315,11 +315,6 @@ export async function createWindow(): Promise<void> {
       mainWindow?.webContents.postMessage('config-port', null, [configChannel.port2]);
       logger.info('Config port sent to renderer', undefined, LogComponent.Main);
 
-      const conductorChannel = new MessageChannelMain();
-      channelManager.registerChannel('conductor', conductorChannel.port1);
-      mainWindow?.webContents.postMessage('conductor-port', null, [conductorChannel.port2]);
-
-      logger.info('Conductor port sent to renderer', undefined, LogComponent.Main);
     }
   });
 

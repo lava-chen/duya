@@ -1,6 +1,5 @@
 import type { DataLogger } from './core-database.js';
 import { ensureToolApprovalTables } from './tool-approval-state.js';
-import { ensureWorkbenchTables } from './workbench-store.js';
 import { createSendMessageStateTables } from './send-message-state.js';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
@@ -49,9 +48,7 @@ export function initializeSchema(
       agent_profile_id TEXT DEFAULT NULL,
       parent_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
       agent_type TEXT NOT NULL DEFAULT 'main',
-      agent_name TEXT NOT NULL DEFAULT '',
-      conductor_mode_enabled INTEGER NOT NULL DEFAULT 0,
-      conductor_canvas_id TEXT DEFAULT NULL
+      agent_name TEXT NOT NULL DEFAULT ''
     )
   `);
 
@@ -284,88 +281,6 @@ export function initializeSchema(
     )
   `);
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_canvases (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      layout_config TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      is_favorite INTEGER NOT NULL DEFAULT 0,
-      group_id TEXT,
-      tags TEXT NOT NULL DEFAULT '[]'
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_canvas_groups (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      project_path TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_widgets (
-      id TEXT PRIMARY KEY,
-      canvas_id TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      type TEXT NOT NULL,
-      position TEXT NOT NULL,
-      config TEXT NOT NULL,
-      data TEXT NOT NULL,
-      data_version INTEGER NOT NULL DEFAULT 1,
-      source_code TEXT,
-      state TEXT NOT NULL DEFAULT 'idle',
-      permissions TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (canvas_id) REFERENCES conductor_canvases(id) ON DELETE CASCADE
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_actions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      canvas_id TEXT NOT NULL,
-      widget_id TEXT,
-      actor TEXT NOT NULL,
-      action_type TEXT NOT NULL,
-      payload TEXT,
-      result_patch TEXT,
-      merged_from TEXT,
-      reversible INTEGER NOT NULL DEFAULT 1,
-      ts INTEGER NOT NULL,
-      undone_at INTEGER,
-      FOREIGN KEY (canvas_id) REFERENCES conductor_canvases(id) ON DELETE CASCADE
-    )
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_elements (
-      id TEXT PRIMARY KEY,
-      canvas_id TEXT NOT NULL,
-      element_kind TEXT NOT NULL,
-      native_kind TEXT,
-      position TEXT NOT NULL DEFAULT '{"x":0,"y":0,"w":4,"h":3,"zIndex":0,"rotation":0}',
-      config TEXT NOT NULL DEFAULT '{}',
-      viz_spec TEXT,
-      source_code TEXT,
-      state TEXT NOT NULL DEFAULT 'idle',
-      data_version INTEGER NOT NULL DEFAULT 1,
-      permissions TEXT NOT NULL DEFAULT '{"agentCanRead":true,"agentCanWrite":true,"agentCanDelete":false}',
-      metadata TEXT NOT NULL DEFAULT '{"label":"","tags":[],"createdBy":"user"}',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      FOREIGN KEY (canvas_id) REFERENCES conductor_canvases(id) ON DELETE CASCADE
-    )
-  `);
-
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id)`);
@@ -382,28 +297,13 @@ export function initializeSchema(
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_bindings_active ON channel_bindings(channel_type, active)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_offsets_updated ON channel_offsets(updated_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_widgets_canvas ON conductor_widgets(canvas_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_canvas_ts ON conductor_actions(canvas_id, ts)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_widget_ts ON conductor_actions(widget_id, ts)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_undone ON conductor_actions(undone_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_canvas ON conductor_elements(canvas_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_kind ON conductor_elements(element_kind)`);
 
   // Migration: add native_kind column for existing databases
-  try { db.exec(`ALTER TABLE conductor_elements ADD COLUMN native_kind TEXT`); } catch { /* already exists */ }
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
 
   // Additional indexes for query optimization
   // messages table indexes
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role)`);
-
-  // conductor_actions table indexes
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_actions_type ON conductor_actions(action_type)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_actions_type_canvas ON conductor_actions(canvas_id, action_type)`);
-
-  // conductor_widgets table indexes
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_widgets_type ON conductor_widgets(type)`);
 
   // Gateway tables: platform user → session mapping, message tracking
   db.exec(`
@@ -501,13 +401,6 @@ export function initializeSchema(
   insertSetting.run('permissionMode', 'auto', Date.now());
   insertSetting.run('cronPermissionMode', 'auto', Date.now());
 
-  const insertCanvas = db.prepare(`
-    INSERT OR IGNORE INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const now = Date.now();
-  insertCanvas.run('default', '工作台', null, '{}', 0, now, now);
-
   // Plan 489 P0.2 — SendMessage card side-state tables (widget / cursor-agent /
   // secret-request). Idempotent self-repair, reused by migration 55 so fresh and
   // legacy DBs converge on the same shape.
@@ -517,8 +410,6 @@ export function initializeSchema(
   // Plan 498: module-owned side tables, self-repaired on every boot so a
   // partially-migrated database heals without waiting for the migration gate.
   ensureToolApprovalTables(db);
-  // Plan 570: canvas workbench runtime (data sources + handler code).
-  ensureWorkbenchTables(db);
 }
 
 /**
@@ -766,7 +657,7 @@ interface Migration {
 function ensureCriticalSchema(db: BetterSqlite3Db): void {
   // Runs on every startup, independent of the migration system. The tables
   // and column self-repairs here are required for the app to boot at all
-  // (createSession INSERTs, canvas IPC, etc.), so they cannot rely on
+  // (createSession INSERTs, IPC, etc.), so they cannot rely on
   // _schema_migrations being in sync — a DB restored from backup or a
   // partially-applied migration set must still recover. The CREATE TABLE IF
   // NOT EXISTS and PRAGMA-based column checks make this idempotent and cheap.
@@ -817,85 +708,6 @@ function ensureCriticalSchema(db: BetterSqlite3Db): void {
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_pmc_provider_id ON provider_model_capabilities(provider_id)`);
 
-  // Self-repair: ensure chat_sessions has conductor columns.
-  // Migration #37 adds these, but if _schema_migrations is out of sync
-  // (e.g. id=37 marked applied by a prior different migration, or DB
-  // restored from backup without rolling back migration records), the
-  // migration would be skipped and createSession INSERTs would fail with
-  // "no such column". This check runs on every startup, independent of
-  // the migration system, so the app can always boot.
-  ensureChatSessionColumns(db, [
-    { name: 'conductor_mode_enabled', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_mode_enabled INTEGER NOT NULL DEFAULT 0' },
-    { name: 'conductor_canvas_id', ddl: 'ALTER TABLE chat_sessions ADD COLUMN conductor_canvas_id TEXT DEFAULT NULL' },
-  ]);
-
-  // Self-repair: ensure conductor_canvases has project_path.
-  // Migration #38 adds it, but if the packaged binary is older than #38,
-  // or the DB was restored from backup without rolling back migration
-  // records, the migration is skipped and canvas IPC calls fail with
-  // "no such column: project_path". This check runs on every startup,
-  // independent of the migration system, so the app can always boot.
-  ensureConductorCanvasColumns(db);
-}
-
-/** Add missing columns to chat_sessions. Idempotent — skips columns that already exist. */
-function ensureChatSessionColumns(
-  db: BetterSqlite3Db,
-  columns: Array<{ name: string; ddl: string }>,
-): void {
-  const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-  const existing = new Set(tableInfo.map((col) => col.name));
-  for (const col of columns) {
-    if (!existing.has(col.name)) {
-      db.exec(col.ddl);
-    }
-  }
-}
-
-/**
- * Self-repair for `conductor_canvases.project_path`.
- *
- * Mirrors `ensureChatSessionColumns`: this column is added by migration #38,
- * but the packaged Beta build for users who upgraded from a pre-#38 binary
- * (or restored a DB whose `_schema_migrations` row was lost) will report
- * `SqliteError: no such column: project_path` on every canvas IPC call.
- *
- * We re-create the unique partial index here too — `CREATE UNIQUE INDEX IF
- * NOT EXISTS` is idempotent, so this is safe to run on every startup.
- */
-function ensureConductorCanvasColumns(db: BetterSqlite3Db): void {
-  const tableInfo = db.prepare('PRAGMA table_info(conductor_canvases)').all() as Array<{ name: string }>;
-  const existing = new Set(tableInfo.map((col) => col.name));
-  if (!existing.has('project_path')) {
-    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN project_path TEXT`);
-  }
-  if (!existing.has('is_favorite')) {
-    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0`);
-  }
-  if (!existing.has('group_id')) {
-    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN group_id TEXT`);
-  }
-  if (!existing.has('tags')) {
-    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`);
-  }
-  db.exec(
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`,
-  );
-
-  // Self-repair: ensure the canvas groups table exists. Older packaged
-  // binaries (pre asset-library) have no groups table, and the asset
-  // library UI would throw "no such table" on every group IPC call.
-  // CREATE TABLE IF NOT EXISTS is idempotent, so this is safe on every startup.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS conductor_canvas_groups (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      project_path TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {
@@ -1381,68 +1193,7 @@ const migrations: Migration[] = [
       db.prepare("UPDATE agent_profiles SET name = 'Main', description = 'General conversation mode' WHERE id = 'general-purpose' AND name = 'General Purpose'").run();
     },
   },
-  {
-    id: 17,
-    name: 'create_conductor_tables',
-    migrate: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS conductor_canvases (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          description TEXT,
-          layout_config TEXT NOT NULL,
-          sort_order INTEGER NOT NULL DEFAULT 0,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `);
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS conductor_widgets (
-          id TEXT PRIMARY KEY,
-          canvas_id TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          type TEXT NOT NULL,
-          position TEXT NOT NULL,
-          config TEXT NOT NULL,
-          data TEXT NOT NULL,
-          data_version INTEGER NOT NULL DEFAULT 1,
-          source_code TEXT,
-          state TEXT NOT NULL DEFAULT 'idle',
-          permissions TEXT NOT NULL,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          FOREIGN KEY (canvas_id) REFERENCES conductor_canvases(id) ON DELETE CASCADE
-        )
-      `);
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS conductor_actions (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          canvas_id TEXT NOT NULL,
-          widget_id TEXT,
-          actor TEXT NOT NULL,
-          action_type TEXT NOT NULL,
-          payload TEXT,
-          result_patch TEXT,
-          merged_from TEXT,
-          reversible INTEGER NOT NULL DEFAULT 1,
-          ts INTEGER NOT NULL,
-          undone_at INTEGER,
-          FOREIGN KEY (canvas_id) REFERENCES conductor_canvases(id) ON DELETE CASCADE
-        )
-      `);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_widgets_canvas ON conductor_widgets(canvas_id)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_canvas_ts ON conductor_actions(canvas_id, ts)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_widget_ts ON conductor_actions(widget_id, ts)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_undone ON conductor_actions(undone_at)`);
-
-      const insertCanvas = db.prepare(`
-        INSERT OR IGNORE INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
-      const now = Date.now();
-      insertCanvas.run('default', '工作台', null, '{}', 0, now, now);
-    },
-  },
+  { id: 17, name: 'retired_canvas_migration_17', migrate: () => {} },
   {
     id: 18,
     name: 'add_parent_id_and_agent_meta_to_chat_sessions',
@@ -1497,7 +1248,7 @@ const migrations: Migration[] = [
       db.prepare(`UPDATE agent_profiles SET user_visible = 0, description = 'Planning and architecture — sub-agent only', allowed_tools = '["file:read*","search:*"]', disallowed_tools = '["file:write*","file:edit*","exec:*","browser:*","gateway:*"]' WHERE id = 'plan' AND is_preset = 1`).run();
 
       // Delete obsolete presets
-      db.prepare(`DELETE FROM agent_profiles WHERE id IN ('code-review', 'verification', 'coordinator', 'personal-assistant', 'conductor') AND is_preset = 1`).run();
+      db.prepare(`DELETE FROM agent_profiles WHERE id IN ('code-review', 'verification', 'coordinator', 'personal-assistant') AND is_preset = 1`).run();
 
       // Drop tool_profiles (no longer needed)
       try {
@@ -1505,79 +1256,7 @@ const migrations: Migration[] = [
       } catch { /* already gone */ }
     },
   },
-  {
-    id: 22,
-    name: 'create_conductor_elements_table',
-    migrate: (db) => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS conductor_elements (
-          id           TEXT PRIMARY KEY,
-          canvas_id    TEXT NOT NULL REFERENCES conductor_canvases(id) ON DELETE CASCADE,
-          element_kind TEXT NOT NULL,
-          native_kind  TEXT,
-          position     TEXT NOT NULL DEFAULT '{"x":0,"y":0,"w":4,"h":3,"zIndex":0,"rotation":0}',
-          config       TEXT NOT NULL DEFAULT '{}',
-          viz_spec     TEXT,
-          source_code  TEXT,
-          state        TEXT NOT NULL DEFAULT 'idle',
-          data_version INTEGER NOT NULL DEFAULT 1,
-          permissions  TEXT NOT NULL DEFAULT '{"agentCanRead":true,"agentCanWrite":true,"agentCanDelete":false}',
-          metadata     TEXT NOT NULL DEFAULT '{"label":"","tags":[],"createdBy":"user"}',
-          created_at   INTEGER NOT NULL,
-          updated_at   INTEGER NOT NULL
-        )
-      `);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_canvas ON conductor_elements(canvas_id)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_kind ON conductor_elements(element_kind)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
-
-      const widgetRows = db.prepare('SELECT id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at FROM conductor_widgets WHERE id NOT IN (SELECT id FROM conductor_elements)').all() as Array<{
-        id: string;
-        canvas_id: string;
-        kind: string;
-        type: string;
-        position: string;
-        config: string;
-        data: string;
-        data_version: number;
-        source_code: string | null;
-        state: string;
-        permissions: string;
-        created_at: number;
-        updated_at: number;
-      }>;
-
-      const insertStmt = db.prepare(`
-        INSERT OR IGNORE INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      for (const row of widgetRows) {
-        const elementKind = `widget/${row.type}`;
-        const metadata = JSON.stringify({
-          label: `${row.kind}:${row.type}`,
-          description: row.data ? JSON.stringify(row.data).substring(0, 200) : undefined,
-          tags: [],
-          createdBy: 'user',
-        });
-
-        insertStmt.run(
-          row.id,
-          row.canvas_id,
-          elementKind,
-          row.position,
-          row.config,
-          row.source_code,
-          row.state,
-          row.data_version,
-          row.permissions,
-          metadata,
-          row.created_at,
-          row.updated_at,
-        );
-      }
-    },
-  },
+  { id: 22, name: 'retired_canvas_migration_22', migrate: () => {} },
   {
     id: 23,
     name: 'add_attachments_to_messages',
@@ -1589,18 +1268,7 @@ const migrations: Migration[] = [
       }
     },
   },
-  {
-    id: 24,
-    name: 'add_native_kind_to_conductor_elements',
-    migrate: (db) => {
-      const tableInfo = db.prepare('PRAGMA table_info(conductor_elements)').all() as Array<{ name: string }>;
-      const columns = tableInfo.map(col => col.name);
-      if (!columns.includes('native_kind')) {
-        db.exec(`ALTER TABLE conductor_elements ADD COLUMN native_kind TEXT`);
-        db.exec(`CREATE INDEX IF NOT EXISTS idx_elements_native_kind ON conductor_elements(canvas_id, native_kind)`);
-      }
-    },
-  },
+  { id: 24, name: 'retired_canvas_migration_24', migrate: () => {} },
   {
     id: 25,
     name: 'add_draft_message_to_chat_sessions',
@@ -1947,61 +1615,7 @@ const migrations: Migration[] = [
       db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_research_events_run_seq ON research_events(run_id, sequence)`);
     },
   },
-  {
-    id: 34,
-    name: 'prune_disabled_conductor_element_kinds',
-    migrate(db: BetterSqlite3Db): void {
-      // Canvas element kinds removed in the conductor experience overhaul.
-      // Keep only: native/sticky, native/connector, native/mindmap,
-      // widget/task-list, widget/note-pad, widget/pomodoro, widget/news-board.
-      const allowedKinds = [
-        'native/sticky',
-        'native/connector',
-        'native/mindmap',
-        'widget/task-list',
-        'widget/note-pad',
-        'widget/pomodoro',
-        'widget/news-board',
-      ];
-      const allowedNativeKinds = ['sticky', 'connector', 'mindmap'];
-
-      const placeholders = allowedKinds.map(() => '?').join(',');
-      const nativePlaceholders = allowedNativeKinds.map(() => '?').join(',');
-
-      // Drop elements whose kind is not in the allowlist. Also drop their
-      // mirrored widget rows and any actions that referenced them.
-      const elementIds = db
-        .prepare(
-          `SELECT id FROM conductor_elements
-           WHERE element_kind NOT IN (${placeholders})
-              OR (native_kind IS NOT NULL
-                  AND native_kind != ''
-                  AND native_kind NOT IN (${nativePlaceholders}))`
-        )
-        .all(...allowedKinds, ...allowedNativeKinds) as Array<{ id: string }>;
-
-      if (elementIds.length === 0) {
-        return;
-      }
-
-      const ids = elementIds.map((row) => row.id);
-      const idPlaceholders = ids.map(() => '?').join(',');
-      const txn = db.transaction(() => {
-        db.prepare(
-          `DELETE FROM conductor_widgets WHERE id IN (${idPlaceholders})`
-        ).run(...ids);
-        db.prepare(
-          `DELETE FROM conductor_actions
-           WHERE widget_id IN (${idPlaceholders})`
-        ).run(...ids);
-        db.prepare(
-          `DELETE FROM conductor_elements
-           WHERE id IN (${idPlaceholders})`
-        ).run(...ids);
-      });
-      txn();
-    },
-  },
+  { id: 34, name: 'retired_canvas_migration_34', migrate: () => {} },
   {
     id: 35,
     name: 'add_display_content_to_messages',
@@ -2014,69 +1628,9 @@ const migrations: Migration[] = [
       db.exec(`UPDATE messages SET display_content = NULL WHERE display_content = ''`);
     },
   },
-  {
-    id: 36,
-    name: 'prune_conductor_mindmap_elements',
-    migrate(db: BetterSqlite3Db): void {
-      // Mind map elements are removed in the conductor toolbar simplification.
-      // Drop any native/mindmap elements along with their mirrored widget rows
-      // and action-log entries so stale data does not linger on the canvas.
-      const mindmapIds = db
-        .prepare(
-          `SELECT id FROM conductor_elements
-           WHERE element_kind = 'native/mindmap' OR native_kind = 'mindmap'`
-        )
-        .all() as Array<{ id: string }>;
-
-      if (mindmapIds.length === 0) {
-        return;
-      }
-
-      const ids = mindmapIds.map((row) => row.id);
-      const idPlaceholders = ids.map(() => '?').join(',');
-      const txn = db.transaction(() => {
-        db.prepare(
-          `DELETE FROM conductor_widgets WHERE id IN (${idPlaceholders})`
-        ).run(...ids);
-        db.prepare(
-          `DELETE FROM conductor_actions
-           WHERE widget_id IN (${idPlaceholders})`
-        ).run(...ids);
-        db.prepare(
-          `DELETE FROM conductor_elements
-           WHERE id IN (${idPlaceholders})`
-        ).run(...ids);
-      });
-      txn();
-    },
-  },
-  {
-    id: 37,
-    name: 'add_conductor_session_binding_columns',
-    migrate(db: BetterSqlite3Db): void {
-      const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-      const columns = tableInfo.map((col) => col.name);
-      if (!columns.includes('conductor_mode_enabled')) {
-        db.exec(`ALTER TABLE chat_sessions ADD COLUMN conductor_mode_enabled INTEGER NOT NULL DEFAULT 0`);
-      }
-      if (!columns.includes('conductor_canvas_id')) {
-        db.exec(`ALTER TABLE chat_sessions ADD COLUMN conductor_canvas_id TEXT DEFAULT NULL`);
-      }
-    },
-  },
-  {
-    id: 38,
-    name: 'add_conductor_canvas_project_path',
-    migrate(db: BetterSqlite3Db): void {
-      const tableInfo = db.prepare('PRAGMA table_info(conductor_canvases)').all() as Array<{ name: string }>;
-      const columns = tableInfo.map((col) => col.name);
-      if (!columns.includes('project_path')) {
-        db.exec(`ALTER TABLE conductor_canvases ADD COLUMN project_path TEXT`);
-      }
-      // Unique index so a project maps to at most one canvas.
-      db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`);
-    },
-  },
+  { id: 36, name: 'retired_canvas_migration_36', migrate: () => {} },
+  { id: 37, name: 'retired_canvas_migration_37', migrate: () => {} },
+  { id: 38, name: 'retired_canvas_migration_38', migrate: () => {} },
   {
     id: 39,
     name: 'add_automation_cron_working_directory',
@@ -2515,7 +2069,7 @@ const migrations: Migration[] = [
       }
       db.prepare(`UPDATE agent_profiles SET profile_kind = 'main' WHERE id IN ('general-purpose', 'code-expert', 'research') AND is_preset = 1`).run();
       db.prepare(`UPDATE agent_profiles SET profile_kind = 'subagent' WHERE id IN ('explore', 'plan') AND is_preset = 1`).run();
-      // gateway / cron / conductor-refine / memory-curator live only in the
+      // gateway / cron / memory-curator live only in the
       // agent-process in-memory presets, not in this table.
     },
   },
@@ -2825,7 +2379,7 @@ export function selfCheckAndRepairSchema(db: BetterSqlite3Db, logger?: DataLogge
       level: 'info',
       category: 'database-migration',
       message: 'Schema self-check completed',
-      data: { repaired: ['message_attachments', 'chat_sessions_conductor_columns'] },
+      data: { repaired: ['message_attachments'] },
     });
   } catch (error) {
     logger?.({

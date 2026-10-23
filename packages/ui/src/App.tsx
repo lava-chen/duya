@@ -631,7 +631,6 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
       mode?: string,
       effort?: string,
       displayContent?: string,
-      conductorMode?: boolean,
       queuedMailboxId?: string,
       permissionMode?: 'ask' | 'auto' | 'bypass',
     ) => {
@@ -712,9 +711,6 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         updateThreadTitle(activeThreadId, provisionalTitle);
       }
       const sessionProviderId = activeThread?.providerId;
-      // Conductor canvas binding lives on the session row; read it here so
-      // both enqueueMessage and startStream carry the durable canvasId.
-      const conductorCanvasId = activeThread?.conductorCanvasId ?? undefined;
       const permissionModeOverride = permissionMode === 'bypass' ? 'bypassPermissions'
         : permissionMode === 'ask' ? 'default'
         : 'auto';
@@ -734,8 +730,6 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
           titleGenerationModel: settings.titleGenerationModel,
           providerId: sessionProviderId,
           effort,
-          conductorMode,
-          conductorCanvasId,
           queuedMailboxId,
         });
         return;
@@ -789,8 +783,6 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         defaultWorkspaceDirectory: settings.workspaceDir,
         providerId: sessionProviderId,
         effort,
-        conductorMode,
-        conductorCanvasId,
       });
 
       setToolTimeoutCallback(activeThreadId, (retryContent: string) => {

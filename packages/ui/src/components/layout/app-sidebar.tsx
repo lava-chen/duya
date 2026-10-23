@@ -32,7 +32,6 @@ import {
   ShieldCheckIcon,
   ChartBarIcon as BarChartIcon,
   CpuIcon as CubeIcon,
-  ChalkboardIcon,
   SquaresFourIcon,
   RobotIcon,
   QuestionIcon,
@@ -1227,7 +1226,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         {/* Sidebar top: segmented work/bots switcher + a single create "+"
             + search icon button on the same row (search opens the Cmd/K
             palette; the "+" behaves per tab: new chat on Work, chooser on
-            Bots). The primary nav (canvas / channels / automation /
+            Bots). The primary nav (channels / automation /
             extensions) only renders on the Work tab — the Bots view is a flat
             contact list. */}
         <div className="sidebar-top">

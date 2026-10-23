@@ -30,8 +30,6 @@ const GATEWAY_PERMISSION_PROFILE = 'auto';
  */
 const SESSION_EXTENSION_KEYS = new Set([
   'system_prompt',
-  'conductor_mode_enabled',
-  'conductor_canvas_id',
   'context_summary',
   'context_summary_updated_at',
   'source',
@@ -123,7 +121,7 @@ export async function createGatewaySessionRecord(
  *
  * Standard snake_case columns (title, working_directory, permission_profile,
  * project_name, status, model, mode, etc.) are routed to `sessions.update`.
- * Extension-bound fields (system_prompt, conductor_*, context_summary,
+ * Extension-bound fields (system_prompt, context_summary,
  * source) are routed to `sessions.setExtension` one key at a time.
  */
 export async function updateGatewaySessionMeta(

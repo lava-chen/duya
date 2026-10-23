@@ -323,14 +323,6 @@
       "types": "./dist/send-to-agent-tool.d.ts",
       "import": "./dist/send-to-agent-tool.js"
     },
-    "./canvas": {
-      "types": "./dist/canvas/index.d.ts",
-      "import": "./dist/canvas/index.js"
-    },
-    "./canvas/*": {
-      "types": "./dist/canvas/*.d.ts",
-      "import": "./dist/canvas/*.js"
-    },
     "./widget-tool": {
       "types": "./dist/widget-tool.d.ts",
       "import": "./dist/widget-tool.js"
@@ -406,7 +398,6 @@
     "@duya/agent-protocol": "0.1.0",
     "@duya/sandbox": "0.1.0",
     "@duya/tooling": "0.1.0",
-    "@duya/computer-use": "0.0.1",
     "axios": "^1.14.0",
     "diff": "^8.0.4",
     "picomatch": "^4.0.4",

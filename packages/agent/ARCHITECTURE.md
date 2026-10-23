@@ -215,7 +215,7 @@ Manages concurrent tool execution with queue-based scheduling.
 | Tool Type | Behavior |
 |-----------|----------|
 | Read-batch tools (read, grep, glob, browser, session search, etc.) | Can run in parallel |
-| System tools (shell, Agent, mode changes, canvas writes) | Run alone unless registry metadata explicitly marks them concurrency-safe |
+| System tools (shell, Agent, mode changes, extension writes) | Run alone unless registry metadata explicitly marks them concurrency-safe |
 
 **Key Methods**:
 - `addTool(block)` - Queue a tool for execution
@@ -527,11 +527,7 @@ file-parser contracts:
 @duya/agent/utils/shellDetector
 ```
 
-The declarative `conductor` mode lives in `src/modes/conductor-mode.ts` and
-injects Agent-owned `src/tool/CanvasConductor/` tools into the main chat
-runtime. The former dedicated Conductor worker, prompt system, and
-`@duya/agent/conductor/profile` contract were retired in Plan 242; canvas UI,
-state, capture, and database contracts remain owned by `@duya/conductor`.
+Canvas responsibility has moved to the Marketplace `conductor-canvas` plugin. The Agent package does not register Canvas modes or tools.
 
 The standalone Agent CLI remains available through
 `node packages/agent/dist/cli/index.js`; it is not a package manifest `bin`.

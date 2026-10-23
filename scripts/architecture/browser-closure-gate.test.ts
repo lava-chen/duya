@@ -196,7 +196,7 @@ describe('G10 on the live tree', { timeout: 30_000 }, () => {
     const closure = browserClosure(seedsFor('packages/ui/src') ?? []);
     const crossed = [...closure.keys()].filter((f) => f.startsWith('packages/'));
     expect(crossed.length).toBeGreaterThan(50);
-    expect(crossed).toContain('packages/conductor/src/renderer/index.ts');
+    expect(crossed).not.toContain('packages/conductor/src/renderer/index.ts');
   });
 
   it('names the web entry as measured, and an absent entry as absent', () => {

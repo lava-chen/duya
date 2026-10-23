@@ -162,7 +162,6 @@ interface MessageInputProps {
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
     mode?: string,
     displayContent?: string,
-    conductorMode?: boolean,
   ) => void | Promise<void>;
   onRecapRequest?: () => Promise<{
     success: boolean;
@@ -207,12 +206,9 @@ interface MessageInputProps {
    */
   contextWindow?: number;
   contextPricing?: ModelPricing;
-  // Conductor mode toggle state (independent of plan/research modes).
-  conductorEnabled?: boolean;
-  onConductorChange?: (enabled: boolean) => void;
   /**
    * Plan 413e: plan-task is a session-level toggle persisted to
-   * `sessions.extensions.plan_mode_enabled` (mirrors conductor). The prop
+   * `sessions.extensions.plan_mode_enabled`. The prop
    * is the DB-restored value; changes flow up via `onPlanModeChange` so
    * ChatView can persist them. The popover toggle keeps this state across
    * messages — `clearMessageModes` preserves plan-task after each send.
@@ -272,25 +268,24 @@ interface EffortOption {
  *
  * plan-task (session-level), research (message-level) and goal are passed
  * to `onSend` as the `mode` argument; the agent reads this to resolve its
- * mode dispatch. Conductor is excluded here — it is the only mode with its
- * own flag (`conductorMode`).
+ * mode dispatch.
  *
  * Goal takes precedence when it coexists with plan-task: goal is a
  * self-driven execution mode (plan 411) and must reach the agent even if
  * plan-task (a parallel, non-exclusive tracker) is also toggled on.
- * Otherwise the first non-conductor mode wins.
+ * Otherwise the first active mode wins.
  */
 export function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
   if (activeModes.has('goal')) return 'goal';
   for (const mode of activeModes) {
-    if (mode !== 'conductor') return mode;
+    return mode;
   }
   return undefined;
 }
 
 /**
  * State updater that clears message-level modes (research) while keeping
- * session-level modes (conductor, plan-task). Used after each send so
+ * session-level modes (plan-task, goal). Used after each send so
  * per-message modes reset but session toggles persist across messages.
  */
 export function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
@@ -465,8 +460,6 @@ export function MessageInput({
   messages = [],
   contextWindow,
   contextPricing,
-  conductorEnabled,
-  onConductorChange,
   planModeEnabled,
   onPlanModeChange,
   goalModeEnabled,
@@ -578,15 +571,7 @@ export function MessageInput({
   }>>([]);
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
-  // Plan 224 Phase 5: unified activeModes set. Holds all active popover
-  // modes (plan-task | research | conductor). Conductor and plan-task
-  // (session-level) are synced with the `conductorEnabled` / `planModeEnabled`
-  // props via the effects below; research (message-level) is pure local
-  // state cleared after each send.
   const [activeModes, setActiveModes] = useState<Set<ModeModifierId>>(new Set());
-  // Tracks the last known conductor slot state to prevent sync loops
-  // between the `conductorEnabled` prop and `activeModes`.
-  const conductorSlotRef = useRef<boolean>(false);
   // Plan 413e: same slot guard for the plan-task session toggle
   // (`planModeEnabled` prop ↔ activeModes).
   const planModeSlotRef = useRef<boolean>(false);
@@ -595,10 +580,7 @@ export function MessageInput({
   const goalModeSlotRef = useRef<boolean>(false);
   // Mirror activeModes in a ref so handleToggleMode can read the latest
   // value synchronously without adding activeModes to its dependency
-  // array. This also lets us call onConductorChange OUTSIDE the
-  // setActiveModes updater — calling a parent setState from inside an
-  // updater runs during render and throws "Cannot update a component
-  // while rendering a different component".
+  // array. Keeping the current set in a ref avoids stale values in callbacks.
   const activeModesRef = useRef<Set<ModeModifierId>>(activeModes);
   activeModesRef.current = activeModes;
 
@@ -609,32 +591,8 @@ export function MessageInput({
   // agentPlanMode prop). Both paths drive the same blue glow + chip.
   const planModeActive = activeModes.has('plan-task') || agentPlanMode;
 
-  // Sync conductor slot from the prop (DB is the source of truth for
-  // session-level conductor). When the parent passes a new
-  // `conductorEnabled` value (e.g. session switch, external toggle),
-  // update `activeModes` to match. The ref prevents re-triggering when
-  // the change originated from user action (which already updated the ref).
-  // This is a one-way sync (prop → state); the reverse path (state → parent)
-  // is handled explicitly in `handleToggleMode` and `handleForwardMessage`
-  // to avoid a render-frame race where the effect would read stale
-  // `activeModes` and call `onConductorChange(false)`, clobbering the DB.
-  useEffect(() => {
-    const next = !!conductorEnabled;
-    if (next === conductorSlotRef.current) return;
-    conductorSlotRef.current = next;
-    setActiveModes((prev) => {
-      const hasConductor = prev.has('conductor');
-      if (next === hasConductor) return prev;
-      const updated = new Set(prev);
-      if (next) updated.add('conductor');
-      else updated.delete('conductor');
-      return updated;
-    });
-  }, [conductorEnabled]);
-
   // Plan 413e: sync the plan-task slot from the prop (DB is the source of
-  // truth for the session-level plan toggle). Mirrors the conductor sync
-  // above — one-way (prop → state); the reverse path is handled in
+  // truth for the session-level plan toggle). This is a one-way sync; the reverse path is handled in
   // `handleToggleMode` via `onPlanModeChange`.
   useEffect(() => {
     const next = !!planModeEnabled;
@@ -668,9 +626,8 @@ export function MessageInput({
     });
   }, [goalModeEnabled]);
 
-  // Unified mode toggle — applies mutual-exclusion rules. Research is pure
-  // local state; conductor and plan-task persistence is handled by
-  // explicitly calling `onConductorChange` / `onPlanModeChange` here (user
+  // Unified mode toggle — applies mutual-exclusion rules. Mode persistence
+  // is handled by the plan and goal callbacks here (user
   // action) rather than via an effect, to avoid the render-frame race
   // described above.
   const handleToggleMode = useCallback((mode: ModeModifierId) => {
@@ -680,17 +637,12 @@ export function MessageInput({
       return;
     }
     const next = toggleModeInSet(prev, mode);
-    // Persist conductor/plan-task changes to the parent (DB) immediately.
+    // Persist plan and goal changes to the parent (DB) immediately.
     // We compare against `prev` (not `next`) to detect the actual toggle
     // direction. NOTE: these callbacks MUST be called outside the
     // setActiveModes updater — updaters run during render, and calling a
     // parent setState from inside one throws "Cannot update a component
     // while rendering a different component".
-    if (mode === 'conductor') {
-      const willEnable = !prev.has('conductor');
-      conductorSlotRef.current = willEnable;
-      onConductorChange?.(willEnable);
-    }
     if (mode === 'plan-task') {
       const willEnable = !prev.has('plan-task');
       planModeSlotRef.current = willEnable;
@@ -703,7 +655,7 @@ export function MessageInput({
     }
     setActiveModes(next);
     textareaRef.current?.focus();
-  }, [onConductorChange, onPlanModeChange, onGoalModeChange]);
+  }, [onPlanModeChange, onGoalModeChange]);
 
   // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -1168,44 +1120,6 @@ export function MessageInput({
     };
     window.addEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
 
-    // Conductor canvas UI (ObjectAgentPrompt / ConductorComposer) forwards
-    // submissions here. We enable conductor mode on the current session and
-    // populate the input box with the forwarded text (+ element context).
-    const handleForwardMessage = (e: Event) => {
-      const detail = (e as CustomEvent).detail as {
-        text?: string;
-        canvasId?: string;
-        sessionId?: string;
-        elementContext?: unknown;
-      } | undefined;
-      if (!detail?.text) return;
-      // Implicitly enable conductor mode on the current session.
-      // Call `onConductorChange` directly (user-driven path) instead of
-      // relying on an effect, to avoid the render-frame race that
-      // previously clobbered the DB value during session restore.
-      if (detail.sessionId && onConductorChange) {
-        setActiveModes((prev) => {
-          if (prev.has('conductor')) return prev;
-          const next = new Set(prev);
-          next.add('conductor');
-          return next;
-        });
-        conductorSlotRef.current = true;
-        onConductorChange(true);
-      }
-      // Compose forwarded text. If element context is provided, prepend it as
-      // a synthetic block so the agent knows what was selected on the canvas.
-      const ctxPrefix = detail.elementContext
-        ? `[Selected canvas element context: ${JSON.stringify(detail.elementContext)}]\n\n`
-        : '';
-      const forwarded = `${ctxPrefix}${detail.text}`;
-      setInputValue(forwarded);
-      requestAnimationFrame(() => {
-        textareaRef.current?.focus();
-        adjustTextareaHeight();
-      });
-    };
-    window.addEventListener('conductor:forward-message', handleForwardMessage as EventListener);
 
     return () => {
       window.removeEventListener(ADD_ATTACHMENT_EVENT, handleAddAttachment as EventListener);
@@ -1214,10 +1128,9 @@ export function MessageInput({
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
       window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
       window.removeEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
-      window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachments, onConductorChange]);
+  }, [attachments]);
 
   // Plan 311: consume a pending workflow prefill that arrived while
   // `MessageInput` was unmounted (e.g. the user launched a workflow
@@ -1691,7 +1604,6 @@ export function MessageInput({
           null,
           pickMessageMode(activeModesRef.current),
           prompt,
-          activeModesRef.current.has('conductor') || undefined,
         ),
       getSessionSnapshot: () => ({
         sessionId,
@@ -1967,12 +1879,11 @@ export function MessageInput({
           // The executor decided the agent should handle it — send as a
           // normal message; the composer shows the raw command text.
           const sendMode = pickMessageMode(activeModes);
-          const conductorMode = activeModes.has('conductor') || undefined;
           sendingRef.current = true;
           setIsSubmitting(true);
           setSendError(null);
           try {
-            await onSend(result.prompt, allAttachments, styleOpts, sendMode, trimmedValue, conductorMode);
+            await onSend(result.prompt, allAttachments, styleOpts, sendMode, trimmedValue);
           } catch (error) {
             setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
             return;
@@ -1980,7 +1891,7 @@ export function MessageInput({
             sendingRef.current = false;
             setIsSubmitting(false);
           }
-          // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+          // Clear message-level modes after send; keep session toggles.
           setActiveModes(clearMessageModes);
         } else if (result.type === 'text') {
           setCommandResult({ title: cmd, content: result.content });
@@ -2000,12 +1911,11 @@ export function MessageInput({
       if (cliBadge) setCliBadge(null);
 
       const sendMode = pickMessageMode(activeModes);
-      const conductorMode = activeModes.has('conductor') || undefined;
       sendingRef.current = true;
       setIsSubmitting(true);
       setSendError(null);
       try {
-        await onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser, conductorMode);
+        await onSend(modelContent, allAttachments, styleOpts, sendMode, displayContentForUser);
       } catch (error) {
         setSendError(error instanceof Error ? error.message : t('chat.pendingSaveFailed'));
         return;
@@ -2016,7 +1926,7 @@ export function MessageInput({
       // and the next message doesn't re-attach the same comments. The
       // inline cards in the review panel stay for ongoing review.
       if (workingDirectory) markCodeCommentsSent(workingDirectory);
-      // Clear message-level modes (plan-task/research) after send; keep conductor (session-level).
+      // Clear message-level modes after send; keep session toggles.
       setActiveModes(clearMessageModes);
       setInputValue('');
       setHiddenPrompt('');
@@ -2070,11 +1980,6 @@ export function MessageInput({
             case 'settings_submenu':
               // Sub-view navigation is click-only; ignore keyboard activation.
               return;
-            case 'conductor_toggle': {
-              // Deprecated kind — route through unified toggle.
-              handleToggleMode('conductor');
-              return;
-            }
             case 'mode': {
               const modeValue = item.modeValue as ModeModifierId | undefined;
               if (!modeValue) return;
@@ -2126,8 +2031,7 @@ export function MessageInput({
       '或使用 voice-setup 技能，通过 duya_cli 依次执行 voice doctor 诊断环境、' +
       'voice setup 下载模型、voice enable / voice set 写入配置，最后复检确保语音立即可用。';
     const sendMode = pickMessageMode(activeModes);
-    const conductorMode = activeModes.has('conductor') || undefined;
-    onSend(guide, undefined, undefined, sendMode, guide, conductorMode);
+    onSend(guide, undefined, undefined, sendMode, guide);
   }, [onSend, activeModes]);
 
   // Dictation appends to the input instead of replacing it: snapshot the
@@ -2421,7 +2325,7 @@ export function MessageInput({
                 }}
               />
 
-              {/* Mode Badges — one chip per active mode (plan-task / research / conductor).
+              {/* Mode Badges — one chip per active mode (plan-task / research / goal).
                   Plan 224 follow-up: if the agent self-entered plan mode via a
                   tool call (agentPlanMode) and the user hasn't ALSO toggled
                   plan-task in the popover, render a read-only "Agent Plan Mode"
@@ -2432,9 +2336,7 @@ export function MessageInput({
                   ? 'Deep Research'
                   : mode === 'plan-task'
                     ? 'Plan Mode'
-                    : mode === 'conductor'
-                      ? 'Conductor'
-                      : mode;
+                    : mode;
                 return (
                   <button
                     key={mode}

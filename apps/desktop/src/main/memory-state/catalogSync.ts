@@ -78,8 +78,6 @@ interface ChatSessionRow {
   parent_id: string | null;
   agent_type: string;
   agent_name: string;
-  conductor_mode_enabled: number;
-  conductor_canvas_id: string | null;
 }
 
 interface ExistingRolloutRow {
@@ -120,8 +118,6 @@ function coreSessionToChatRow(s: CoreSession): ChatSessionRow {
     parent_id: s.parentSessionId,
     agent_type: s.agentType,
     agent_name: s.agentName,
-    conductor_mode_enabled: (ext.conductor_mode_enabled as number) ?? 0,
-    conductor_canvas_id: (ext.conductor_canvas_id as string) ?? null,
   };
 }
 

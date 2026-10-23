@@ -36,7 +36,6 @@ import { stripPastedContentMarkers } from '@duya/agent-core/context/pasted-conte
 import { StreamingToolExecutor } from '@duya/host/worker-execution/streaming-tool-executor';
 import { ToolExecutionPipeline } from '@duya/host/worker-execution/tool-execution-pipeline';
 import type { CanUseToolFn } from '@duya/host/worker-execution/streaming-tool-executor';
-import type { WidgetStyleSignature, CanvasFreshnessState } from '@duya/host/worker-run-contracts';
 import { createHasPermissionsToUseTool } from '@duya/host/authorization/worker-permission-evaluator';
 import { resolveCacheRetention } from '@duya/host/worker-config/cache-config';
 import { readToolExposureConfig } from '@duya/host/worker-config/tool-exposure';
@@ -186,8 +185,6 @@ export class WorkerSession implements AgentRuntime {
             abortController: abortController,
             getAppState: () => turnAppState,
             setAppState: (updater) => { turnAppState = updater(turnAppState); },
-            widgetStyleHistory: this.widgetStyleHistory,
-            canvasFreshness: this.canvasFreshness,
             currentProjectId: this.currentProjectId ?? null,
             options: {
                 recentImageAttachments: collectRecentImageAttachments(request.messages).map(definedProperties),
@@ -213,23 +210,8 @@ export class WorkerSession implements AgentRuntime {
                 mcpToolExecutors: this.buildMCPToolExecutors(request.tools)
             },
             ...definedProperties({ requestPermission: options?.requestPermission }),
-            ...definedProperties({ sendToMain: options?.conductorIpc?.sendToMain }),
-            ...definedProperties({ ipcRequest: options?.conductorIpc?.ipcRequest }),
-            ...definedProperties({ conductorCanvasId: (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-                    options?.conductorCanvasId }),
-            canvasTarget: {
-                ...definedProperties({ canvasId: (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-                        options?.conductorCanvasId })
-            },
-            ...definedProperties({ updateModeCanvasId: this.modeCtx
-                    ? (canvasId: string) => {
-                        this.modeCtx!.state.conductorCanvasId = canvasId;
-                        this.modeCtx!.toolUseContextPatch = {
-                            ...(this.modeCtx!.toolUseContextPatch ?? {}),
-                            conductorCanvasId: canvasId,
-                        };
-                    }
-                    : undefined })
+            ...definedProperties({ sendToMain: options?.hostIpc?.sendToMain }),
+            ...definedProperties({ ipcRequest: options?.hostIpc?.ipcRequest }),
         };
         this.currentToolUseContext = toolUseContext;
         request.bindToolUseContext(toolUseContext);
@@ -268,7 +250,6 @@ export class WorkerSession implements AgentRuntime {
             this.resolvedModes.prompt.prefixes.length === 0) {
             return systemPrompt;
         }
-        this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
         let prefix = '';
         for (const p of this.resolvedModes.prompt.prefixes) {
             prefix += typeof p === 'function' ? p(this.modeCtx, this.baseSystemPromptWithoutModes) : p;
@@ -308,8 +289,6 @@ export class WorkerSession implements AgentRuntime {
             subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
             state: {
-                conductorCanvasId: options?.conductorCanvasId,
-                widgetStyleHistory: this.widgetStyleHistory,
             },
         };
         const baseToolRegistrations: ToolRegistration[] = input.resolved.tools.map((t) => ({
@@ -859,7 +838,6 @@ export class WorkerSession implements AgentRuntime {
     private mcpReady: Promise<void> = new Promise((resolve) => {
         this.mcpReadyResolve = resolve;
     });
-    private widgetStyleHistory: WidgetStyleSignature[] = [];
     private promptContexts: string[] = [];
     private promptContextBlocks: string[] = [];
     private injectedSkillParts: Map<string, number> = new Map();
@@ -875,9 +853,6 @@ export class WorkerSession implements AgentRuntime {
     static readonly MIN_TURNS_SINCE_COMPACT = 3;
     static readonly MIN_TOKENS_GROWTH_SINCE_COMPACT = 30000;
     private readonly pendingHookMessages = new PendingHookMessages();
-    private canvasFreshness: CanvasFreshnessState = {
-        recentlyCreatedElementIds: new Set(),
-    };
     private baseSystemPromptWithoutModes: string | undefined;
     private resolvedModes: ResolvedMode | undefined;
     private lastSystemContextTokensEstimate = 0;
@@ -1778,8 +1753,6 @@ export class WorkerSession implements AgentRuntime {
                 subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
                 state: {
-                    conductorCanvasId: options?.conductorCanvasId,
-                    widgetStyleHistory: this.widgetStyleHistory,
                 },
             };
             for (const inject of orchestratorResolved.tools.injects) {

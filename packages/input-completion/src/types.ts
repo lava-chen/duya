@@ -27,7 +27,7 @@ export type PopoverItemKind =
   | 'settings_action'
   /** Open a sub-view (thinking, style, mcp). */
   | 'settings_submenu'
-  /** Toggle a product mode (plan-task | research | conductor). */
+  /** Toggle a product mode (plan-task | research). */
   | 'mode'
   /**
    * A workspace file path, offered under `@`.
@@ -37,12 +37,7 @@ export type PopoverItemKind =
    * ranked rather than substring-filtered (see `filterItemsFuzzy`).
    */
   | 'file'
-  /**
-   * @deprecated Conductor is a regular `mode` item with
-   * `modeValue: 'conductor'`. Retained for persisted state and external
-   * callers; new items use `kind: 'mode'`.
-   */
-  | 'conductor_toggle';
+  ;
 
 export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills' | 'apps';
 

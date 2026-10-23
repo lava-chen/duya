@@ -102,8 +102,6 @@ export const HOST_CAPABILITIES = [
   'inbox',
   /** Installed plugins and their trust state. `host-local`. */
   'plugins',
-  /** The canvas surface. `host-local`. */
-  'canvas',
   /** The Orb surface. `host-local`. */
   'orb',
 ] as const;
@@ -138,7 +136,6 @@ export const HOST_CAPABILITY_OWNERS: Readonly<Record<HostCapability, CapabilityO
   hooks: 'host-local',
   inbox: 'both',
   plugins: 'host-local',
-  canvas: 'host-local',
   orb: 'host-local',
 };
 

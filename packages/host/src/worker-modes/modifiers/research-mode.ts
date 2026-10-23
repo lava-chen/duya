@@ -2,7 +2,7 @@
  * researchMode — modifier-paradigm ModeModifier for Deep Research (plan 423).
  *
  * Research mode shapes agent behavior through a prompt prefix (research
- * methodology), a tool block list (no writes, no canvas), and a session-level
+ * methodology), a tool block list (no writes), and a session-level
  * state machine {@link ResearchTracker} that drives lifecycle state, per-round
  * reminders, and runtime tool gating. It does NOT take over the stream — the
  * standard DuyaAgent.streamChat loop drives the entire workflow. Every search,
@@ -75,7 +75,6 @@ You are now in **Deep Research Mode**. Your goal is to conduct a rigorous resear
 ## Constraints
 
 - **Do NOT modify, create, or delete files.** Write/edit/bash are blocked.
-- **Do NOT use canvas/conductor tools.** They are blocked in research mode.
 - Use \`ask_user_question\` when you genuinely need user input — do not guess on scope-critical decisions.
 - Every factual claim in your final report must be traceable to a source you actually consulted during this session.
 
@@ -118,9 +117,7 @@ Do not stop early just because the first search returned results. Depth matters 
 
 /**
  * Research mode modifier — session-level, read-only, mutually exclusive
- * with plan-task. Composes with conductor at the registry level, but all
- * canvas tools are blocked so conductor's injections are inert under
- * research mode (intentional — research is read-only).
+ * with plan-task. Research is read-only.
  */
 export const researchMode: ModeModifier = {
   id: 'research',
@@ -148,8 +145,7 @@ export const researchMode: ModeModifier = {
     },
     overrideFilter: true,
 
-    // Block write/execute/side-effect tools (same set as plan-task) plus
-    // all conductor canvas tools. Uses `block` (blacklist) instead of
+    // Block write/execute/side-effect tools (same set as plan-task). Uses
     // `allow` (whitelist) so read-only tools added in the future remain
     // available without updating this list.
     block: [
@@ -159,20 +155,6 @@ export const researchMode: ModeModifier = {
       'write',
       'module',
 
-      // Conductor canvas tools (13)
-      'canvas_create_element',
-      'canvas_batch_create',
-      'canvas_delete_element',
-      'canvas_move_element',
-      'canvas_resize_element',
-      'canvas_fill_content',
-      'canvas_style_element',
-      'canvas_list_elements',
-      'canvas_find_empty_space',
-      'canvas_auto_layout',
-      'canvas_apply_layout',
-      'canvas_capture',
-      'canvas_get_knowledge',
     ],
   },
 

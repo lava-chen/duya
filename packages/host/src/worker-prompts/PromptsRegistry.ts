@@ -9,10 +9,6 @@
  * 2. Profile changes now just create a new instance (cheap).
  * 3. The profileKey serialization was a non-trivial source of complexity.
  *
- * Overlay patches (for @duya/conductor runtime registration) are kept —
- * the modes/ layer is flat now, but subsystems may still want to register
- * section-level patches. Currently no subsystem uses this; the API is
- * retained for backward compat.
  */
 
 import type { PromptProfile } from './modes/types.js'
@@ -93,26 +89,4 @@ export class PromptsRegistry {
     return this.configs.delete(name)
   }
 
-  // ---------------------------------------------------------------
-  // Overlay patches — retained for backward compat.
-  // Currently unused (modes/ is flat now), but @duya/conductor may
-  // still reference the API. Safe to remove once confirmed unused.
-  // ---------------------------------------------------------------
-
-  private static overlayPatches = new Map<string, { enable?: string[]; disable?: string[] }>()
-
-  /** @deprecated modes/ is flat now; overlay patches are no longer used. */
-  static registerOverlayPatch(name: string, patch: { enable?: string[]; disable?: string[] }): void {
-    this.overlayPatches.set(name, patch)
-  }
-
-  /** @deprecated modes/ is flat now; overlay patches are no longer used. */
-  static getOverlayPatch(name: string): { enable?: string[]; disable?: string[] } | undefined {
-    return this.overlayPatches.get(name)
-  }
-
-  /** @deprecated */
-  static getRegisteredOverlayPatchNames(): string[] {
-    return Array.from(this.overlayPatches.keys())
-  }
 }

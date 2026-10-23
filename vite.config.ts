@@ -19,8 +19,6 @@ export default defineConfig({
       { find: '@duya/ui/styles.css', replacement: path.resolve(__dirname, './packages/ui/src/styles/globals.css') },
       { find: /^@duya\/ui\/(.*)$/, replacement: path.resolve(__dirname, './packages/ui/src') + '/$1' },
       { find: '@duya/ui', replacement: path.resolve(__dirname, './packages/ui/src/index.ts') },
-      { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(__dirname, './packages/conductor/src/renderer/') + '/$1' },
-      { find: '@duya/conductor/renderer', replacement: path.resolve(__dirname, './packages/conductor/src/renderer/index') },
     ],
   },
   // Pre-bundle heavy UI / state libs up-front so the first browser
@@ -63,7 +61,6 @@ export default defineConfig({
       'remark-gfm',
       'react-syntax-highlighter',
       'react-grid-layout',
-      'html2canvas',
       '@xterm/xterm',
       '@xterm/addon-fit',
       '@xterm/addon-web-links',

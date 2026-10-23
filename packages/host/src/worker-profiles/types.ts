@@ -55,10 +55,6 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     // send_artifact is a gateway-channel delivery tool (no channel consumes
     // it in desktop sessions) — keep it gateway-only.
     disallowedTools: ['send_artifact'],
-    // Conductor canvas tools are gated by the per-session conductorMode
-    // toggle, not by the agent profile. Removing canvas_* from the default
-    // denylist lets the tools appear when the user explicitly enables
-    // conductor mode.
     promptProfile: {
       // General sessions need core operating guidance, but must not inherit
       // every volatile session-history section. Expressed as a DENYLIST, not
@@ -88,7 +84,7 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     name: 'Code',
     description: 'Code development and software engineering',
     allowedTools: ['*'],
-    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory', 'send_artifact'],
+    disallowedTools: ['show_widget', 'cron', 'duya:*', 'memory', 'send_artifact'],
     promptSystem: 'code',
     userVisible: true,
     isPreset: true,
@@ -102,9 +98,6 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     name: 'Research',
     description: 'Research, investigation and deep analysis',
     allowedTools: ['*'],
-    // canvas_* removed: conductor canvas tools are gated by the session
-    // conductorMode toggle. Research mode can still use canvas tools when
-    // the user explicitly enables conductor mode.
     disallowedTools: ['task', 'duya_*', 'send_artifact'],
     promptProfile: {
       disableSections: ['rules'],
@@ -129,7 +122,7 @@ export const SUBAGENT_AGENT_PROFILES: AgentProfile[] = [
     // 'file:read*' / 'search:*' matched zero tools because the registry
     // stores names without namespace prefixes.
     allowedTools: ['read', 'glob', 'grep'],
-    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser', 'canvas:*'],
+    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser'],
     promptProfile: {
       disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'visionGuidelines'],
     },
@@ -145,7 +138,7 @@ export const SUBAGENT_AGENT_PROFILES: AgentProfile[] = [
     name: 'Plan',
     description: 'Planning and architecture design — sub-agent only',
     allowedTools: ['read', 'glob', 'grep'],
-    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser', 'canvas:*'],
+    disallowedTools: ['write', 'edit', 'bash', 'powershell', 'browser'],
     promptProfile: {
       disableSections: ['memory', 'memoryContent', 'skills', 'sessionGuidance', 'visionGuidelines'],
     },
@@ -166,7 +159,7 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
     // Gateway is a capable channel agent with full desktop-level tooling
     // (write/edit, shell, todo, vision, self-management via duya_cli).
     // It still denies:
-    //   - interactive/UI/canvas tools (no desktop surface in a channel)
+    //   - interactive tools that require a desktop UI
     //   - recursive subagent spawning (avoid runaway)
     //   - interactive permission/mode flows that need a desktop UI
     identityPrompt:
@@ -175,8 +168,6 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       'Use other sessions only when their existing context is genuinely relevant.',
     allowedTools: ['*'],
     disallowedTools: [
-      // Interactive/UI/canvas — no desktop surface in a channel.
-      'canvas:*',
       'show_widget',
       'AskUserQuestion',
       // Recursive subagent spawning — avoid runaway in a stateless channel.
@@ -212,7 +203,6 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       'AskUserQuestion',
       'show_widget',
       'task',
-      'canvas:*',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
       'send_artifact',
     ],
@@ -222,46 +212,6 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       // the user before proceeding" — in a cron context there is no
       // user to ask, so the agent would hang. Remove it.
       disableSections: ['rules'],
-    },
-    promptSystem: 'general',
-    userVisible: false,
-    isPreset: true,
-    isEnabled: true,
-    createdAt: 0,
-    updatedAt: 0,
-  },
-  {
-    id: 'conductor-refine',
-    kind: 'special',
-    name: 'Conductor Refine',
-    description:
-      'Side-panel agent that iteratively refines a single Conductor widget’s data from a screenshot + user instruction. Returns strict JSON only — the renderer applies the result via widget.update_data.',
-    allowedTools: ['Read', 'vision_analyze'],
-    disallowedTools: [
-      'task',
-      'canvas_*',
-      'show_widget',
-      'file:write*',
-      'file:edit*',
-      'exec:*',
-      'browser:*',
-      'gateway:*',
-      'cron',
-      'duya:*',
-      'memory',
-      'SessionSearch',
-    ],
-    promptProfile: {
-      disableSections: [
-        'rules',
-        'memory',
-        'skills',
-        'sessionGuidance',
-        'agentsMd',
-        'projectContinuity',
-        'widgetGuidelines',
-        'visionGuidelines',
-      ],
     },
     promptSystem: 'general',
     userVisible: false,
@@ -285,8 +235,8 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       'bash', 'powershell',
       // No recursive subagent spawning.
       'task',
-      // No interactive / UI / canvas surface — curator runs headless.
-      'canvas:*', 'show_widget', 'AskUserQuestion',
+      // Curator runs headless.
+      'show_widget', 'AskUserQuestion',
       // No browser, no self-management, no module loader.
       'browser', 'duya_cli', 'read_module', 'todo', 'tool_catalog', 'skill',
       // No mode-switching side effects.

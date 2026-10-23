@@ -185,8 +185,6 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
   switch (pageId) {
     case "files":
       return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
-    case "conductor":
-      return `conductor::${(params?.canvasId as string | undefined) ?? "__active__"}`;
     case "preview":
       return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "review":
@@ -751,23 +749,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("duya:open-skill-preview", handleOpenSkillPreview as EventListener);
     };
   }, []);
-
-  // Chat-surface canvas links (markdown pills, tool rows) open the canvas
-  // in the sidebar Conductor panel. `dedupKey` folds on `canvasId`, so a
-  // repeated click activates the existing tab for that canvas.
-  useEffect(() => {
-    const handleOpenConductorPanel = (event: Event) => {
-      const detail = (event as CustomEvent<{ canvasId?: string }>).detail;
-      const canvasId = typeof detail?.canvasId === "string" ? detail.canvasId : "";
-      if (!canvasId.trim()) return;
-      openOrActivatePage("conductor", { canvasId });
-    };
-
-    window.addEventListener("duya:open-conductor-panel", handleOpenConductorPanel as EventListener);
-    return () => {
-      window.removeEventListener("duya:open-conductor-panel", handleOpenConductorPanel as EventListener);
-    };
-  }, [openOrActivatePage]);
 
   // Workflow run cards' ↗ lands the run in the side panel's workflow page.
   // The page's own component also listens for this event to expand the run

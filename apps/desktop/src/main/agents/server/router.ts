@@ -993,8 +993,6 @@ async function handlePostChat(
       optionsKeys: parsed.options ? Object.keys(parsed.options) : [],
       agentProfileId: parsed.options?.agentProfileId,
       mode: parsed.options?.mode,
-      conductorMode: parsed.options?.conductorMode,
-      conductorCanvasId: parsed.options?.conductorCanvasId,
     });
 
     const prompt = parsed.prompt || '';
@@ -1143,11 +1141,6 @@ async function handlePostChat(
         child.on('message', (msg: Record<string, unknown>) => {
           if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
             forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
-            return;
-          }
-          if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-            workerDbRequests.set(`rpc:${msg.requestId}`, child);
-            process.send(msg);
             return;
           }
           // Plan 312: forward appConnection:invoke to the main process
@@ -2624,11 +2617,6 @@ async function lazySpawnWorkerForCompact(
       forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
       return;
     }
-    if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-      workerDbRequests.set(`rpc:${msg.requestId}`, child);
-      process.send(msg);
-      return;
-    }
     // Plan 312: forward appConnection:invoke to the main process.
     if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
@@ -2715,8 +2703,8 @@ async function lazySpawnWorkerForCompact(
 /**
  * Plan 508: shared worker-ready handshake helper.
  *
- * The worker signals ready by emitting either `ready` (with optional
- * `status: 'error' | 'deferred'`) or `conductor:ready`. We resolve on the
+ * The worker signals ready by emitting `ready` (with optional
+ * `status: 'error' | 'deferred'`). We resolve on the
  * first successful ready, and reject with a structured reason on:
  *  - `status: 'error'`  → surface the worker's `error` message (503 upstream)
  *  - `status: 'deferred'` → init deferred to a later handshake (409 upstream)
@@ -2748,7 +2736,7 @@ export function waitForWorkerReady(
         if (!line || !line.startsWith('{')) continue;
         try {
           const m = JSON.parse(line) as { type?: string; status?: string; error?: string; reason?: string };
-          if (m.type === 'ready' || m.type === 'conductor:ready') {
+          if (m.type === 'ready') {
             clearTimeout(timeout);
             cleanup();
             if (m.status === 'error') {
@@ -3785,11 +3773,6 @@ export function createHandleRequest(
           child.on('message', (msg: Record<string, unknown>) => {
             if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
               workerDbRequests.set(msg.id, child);
-              process.send(msg);
-              return;
-            }
-            if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-              workerDbRequests.set(`rpc:${msg.requestId}`, child);
               process.send(msg);
               return;
             }

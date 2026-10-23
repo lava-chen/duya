@@ -7,7 +7,6 @@ import {
   FileTextIcon,
   GitDiffIcon,
   GlobeIcon,
-  ChalkboardIcon,
   TerminalIcon,
   GearSixIcon,
   RepeatIcon,
@@ -23,13 +22,8 @@ import { FilePreviewPanel } from "./FilePreviewPanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
 
-// Heavy, low-frequency panels are lazy-loaded so their dependencies
-// (conductor canvas engine, diff viewer, office suite) stay out of the
-// entry chunk (plan 426 Phase 5.2). Rendered inside <Suspense> in
-// PanelZone; chunks load from local disk in Electron.
-const SidebarConductorView = lazy(() =>
-  import("./SidebarConductorView").then((m) => ({ default: m.SidebarConductorView }))
-);
+// Heavy, low-frequency panels stay out of the entry chunk (plan 426 Phase 5.2).
+// Rendered inside <Suspense> in PanelZone; chunks load from local disk in Electron.
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
 );
@@ -120,17 +114,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     defaultExpanded: false,
     component: WorkflowPanel as unknown as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
-  conductor: {
-    id: "conductor",
-    labelKey: "panel.conductor",
-    icon: ChalkboardIcon,
-    multiInstance: true,
-    available: true,
-    minWidth: 420,
-    widthRatio: 0.6,
-    defaultExpanded: false,
-    component: SidebarConductorView as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
+
   terminal: {
     id: "terminal",
     labelKey: "panel.terminal",

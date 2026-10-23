@@ -84,7 +84,7 @@ export { FileSnapshotStore, sha256Of, getSnapshotRootDir } from './file-snapshot
 export * from './permissions/index.js';
 
 // App server — the host-owned, in-process MCP server (`duya_app`).
-// Plan 616: first-party product capabilities (canvas / bot / browser)
+// Plan 616: first-party product capabilities (bot / browser)
 // speak the MCP contract so they reach the model through the same
 // pipeline as external MCP servers.
 export {

@@ -171,7 +171,6 @@ forbiddenDependencies:
   - from: packages/agent-*/
     to:
       - packages/ui/**
-      - packages/conductor/**
     reason: agent must not depend on UI (2 measured violations).
 
 # ── Capability edges that are explicitly permitted ─────────────────────────
@@ -456,7 +455,7 @@ modules:
   - id: ui
     roots: [packages/ui]
     managed: false
-    requires: [agent-protocol, client-core, legacy-ai, command-catalog, connectors, legacy-conductor, input-completion, legacy-plugin-core]
+    requires: [agent-protocol, client-core, legacy-ai, command-catalog, connectors, input-completion, legacy-plugin-core]
     owner: ui
 
   - id: desktop-host
@@ -816,12 +815,6 @@ modules:
     managed: false
     requires: []
     owner: platform
-
-  - id: legacy-conductor
-    roots: [packages/conductor]
-    managed: false
-    requires: []
-    owner: canvas
 
   - id: legacy-computer-use
     roots: [packages/computer-use]

@@ -96,7 +96,6 @@ export const LogComponent = {
 
   // Automation
   Automation: 'Automation',
-  Conductor: 'Conductor',
   Orb: 'Orb',
   RecorderProcess: 'RecorderProcess',
 

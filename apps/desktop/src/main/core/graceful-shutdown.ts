@@ -11,7 +11,6 @@ import { getDatabase } from '../ipc/db-handlers';
 import { closeDatabase, stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
 import { cleanupUpdater } from '../services/updater';
-import { shutdownProjectDatabaseService } from '../project-database/service';
 
 let isShuttingDown = false;
 
@@ -93,22 +92,6 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error stopping Browser Daemon', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
-  // 6.45 Stop computer-use-demo daemon (Plan 453 Task D).
-  try {
-    const { getComputerUseDaemon } = await import('../services/computer-use-daemon');
-    const cuDaemon = getComputerUseDaemon();
-    await cuDaemon.stop();
-    logger.info('ComputerUseDaemon stopped', undefined, 'Main');
-  } catch (err) {
-    // getComputerUseDaemon throws when init() never ran; that's OK
-    // when the user hasn't enabled wake-agent.
-    logger.info(
-      'ComputerUseDaemon not initialized; skipping',
-      undefined,
-      'Main',
-    );
-  }
-
   // 6.5 Stop automation scheduler
   try {
     getAutomationScheduler()?.shutdown();
@@ -173,7 +156,6 @@ export async function performGracefulShutdown(): Promise<void> {
 
   // 7.6 Checkpoint and close project-local database connections.
   try {
-    await shutdownProjectDatabaseService();
   } catch (err) {
     logger.error('Error shutting down project database service', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
   }

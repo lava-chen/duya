@@ -24,15 +24,13 @@ layer.
 - `RunStore` owns the `runs` and `run_events` schema migrations and durable
   run/event persistence operations.
 - Durable Task, PermissionLedger, Lock, Goal, SpawnEdge, Attachment, ModeState,
-  Session, Mailbox, Project, Research, Conductor, and PendingWake stores are
-  shared here. Desktop's `db/core/stores.ts`, `session-store.ts`, `mailbox.ts`,
-  `project-store.ts`, `research-store.ts`, `conductor-store.ts`, and
-  `pending-wakes.ts` paths remain compatibility exports.
+  Session, Mailbox, Project, Research, and PendingWake stores are shared here.
+  Desktop's `db/core/stores.ts`, `session-store.ts`, `mailbox.ts`,
+  `project-store.ts`, `research-store.ts`, and `pending-wakes.ts` paths remain
+  compatibility exports.
 - Tool approval and SendMessage side-state persistence are also implemented
   here. Their old Desktop Main module paths remain compatibility exports while
   existing IPC handlers and schema initialization keep their current callers.
-- Workbench data-source and handler persistence is shared here as well; the
-  Desktop conductor service remains the caller during this migration.
 - `createCoreDataStores()` builds those stores over a Host-owned SQLite handle;
   `collectCoreDataMigrations()` returns their sorted migration set.
 - `MessageLog` owns append-only rollout JSONL, the `message_index` projection,

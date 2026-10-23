@@ -213,7 +213,6 @@ function shortcutFor(id: PageId): string | null {
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
     case "files": return "Ctrl+P";
-    case "conductor": return "Ctrl+Alt+S";
     default: return null;
   }
 }

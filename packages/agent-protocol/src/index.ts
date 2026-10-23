@@ -83,7 +83,6 @@ export * from './app-connections.js';
 export * from './plugin-setup.js';
 export * from './plugin-app-instances.js';
 export * from './plugin-app-invocations.js';
-export * from './workbench.js';
 export * from './import-batches.js';
 export * from './turn-review.js';
 export * from './sidebar-sections.js';

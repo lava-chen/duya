@@ -3,7 +3,7 @@
  *
  * The `sessions` table is the metadata index for chat sessions. The message
  * payload lives in rollout files (see MessageLog); `rollout_path` is the bridge.
- * Subsystem-specific fields (conductor_canvas_id, system_prompt, etc.) are
+ * Legacy or subsystem-specific fields are
  * stored in the `extensions` JSON column, accessed via key-level get/set.
  *
  * Search uses parameterized LIKE (no FTS) — at session-count scale (thousands)

@@ -1,6 +1,5 @@
 import { modeModifierRegistry } from './registry.js';
 import { researchMode } from './research-mode.js';
-import { conductorMode } from './conductor-mode.js';
 import { planTaskMode } from './plan/plan-task-mode.js';
 import { automationMode } from './automation-mode.js';
 import { goalMode } from './goal/goal-mode.js';
@@ -24,7 +23,6 @@ import type {
 
 for (const mode of [
   researchMode,
-  conductorMode,
   planTaskMode,
   automationMode,
   goalMode,

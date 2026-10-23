@@ -89,18 +89,6 @@ process.on('message', (msg: Record<string, unknown>) => {
     return;
   }
 
-  if (msg.type === 'conductor:executor:rpc:response' && typeof msg.requestId === 'string') {
-    const key = `rpc:${msg.requestId}`;
-    const workerChild = workerDbRequests.get(key);
-    if (workerChild) {
-      // H5: Always delete the entry, even if the worker has exited
-      workerDbRequests.delete(key);
-      if (!workerChild.killed) {
-        workerChild.send(msg);
-      }
-    }
-    return;
-  }
   // Plan 312: route appConnection:invoke:response back to the worker.
   if (msg.type === 'appConnection:invoke:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;

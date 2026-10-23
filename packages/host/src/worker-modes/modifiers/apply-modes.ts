@@ -3,7 +3,7 @@
  *
  * This is the single entry point used by `DuyaAgent.streamChat` (Phase
  * 2+ of plan 224). It:
- *   1. Runs `onEnter` hooks (modes may resolve canvasId, open sidebar…)
+ *   1. Runs `onEnter` hooks for each active mode
  *   2. Applies prompt prefixes/suffixes to the base system prompt
  *   3. Merges tool adjustments (inject / block / allow / overrideFilter)
  *   4. Merges `toolUseContextPatch` into the base ToolUseContext
@@ -28,7 +28,7 @@ export interface ApplyModesInput {
   baseTools: ToolRegistration[];
   /** Base ToolUseContext fields (e.g. sessionId, workingDirectory). */
   baseToolUseContext?: Record<string, unknown>;
-  /** Mode runtime context. `state` may be pre-populated for session-level modes (e.g. conductorCanvasId from DB). */
+  /** Mode runtime context. */
   ctx: ModeModifierContext;
   /** Output of `ModeModifierRegistry.resolve(activeModeIds)`. */
   resolved: ResolvedMode;
@@ -47,7 +47,7 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
   const { basePrompt, baseTools, baseToolUseContext, ctx, resolved } = input;
 
   // 1. Run onEnter hooks in registration order. Modes may mutate ctx.state
-  //    and set ctx.toolUseContextPatch (e.g. conductor resolves canvasId).
+  //    and set ctx.toolUseContextPatch.
   for (const mod of resolved.modes) {
     await mod.hooks?.onEnter?.(ctx);
   }
@@ -73,8 +73,7 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
 
   // 4. Compose final tool set.
   //    - overrideFilter=true: profile filtering is bypassed; injected tools
-  //      are appended unconditionally. (Conductor needs this so canvas tools
-  //      survive even under the `code` profile.)
+  //      are appended unconditionally.
   //    - otherwise: blocked tools are removed, allow-list is applied, then
   //      injected tools are appended.
   let tools: ToolRegistration[];
@@ -97,7 +96,7 @@ export async function applyModes(input: ApplyModesInput): Promise<ApplyModesResu
   // 5. Merge toolUseContextPatch from ctx. All onEnter hooks share the
   //    same ctx, so the final patch reflects whatever the last writer
   //    left in ctx.toolUseContextPatch. In practice modes write their
-  //    own keys (conductor writes `conductorCanvasId`), so collision is
+  //    own keys, so collision is
   //    not a concern.
   const toolUseContext: Record<string, unknown> = {
     ...(baseToolUseContext ?? {}),
@@ -135,20 +134,15 @@ export async function runExitHooks(
 }
 
 /**
- * Convenience helper: collect all active mode ids from a ChatOptions-like
- * object. Centralizes the `mode` + `conductorMode` → `activeModes[]`
- * translation so callers don't repeat the same if/else.
+ * Convenience helper: collect the active mode id from a ChatOptions-like
+ * object so callers don't repeat the same if/else.
  *
  * Phase 2 of plan 224 wires this into `DuyaAgent.streamChat`. For now
  * it's exported but unused — kept here so the call site in Phase 2 is
  * a one-liner.
  */
-export function collectActiveModes(options: {
-  mode?: string;
-  conductorMode?: boolean;
-}): string[] {
+export function collectActiveModes(options: { mode?: string }): string[] {
   const ids: string[] = [];
   if (options.mode) ids.push(options.mode);
-  if (options.conductorMode) ids.push('conductor');
   return ids;
 }

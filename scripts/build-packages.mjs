@@ -133,19 +133,17 @@ const BUILD_ORDER = [
   // type, same edge `@duya/memory` declares) plus npm `diff`/`picomatch`/
   // `zod`.
   '@duya/data', //             -> @duya/agent-protocol
-  '@duya/conductor',
   '@duya/gateway',
   '@duya/voice',
 
   // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
   '@duya/client-core', // -> @duya/agent-protocol
-  '@duya/computer-use', // -> @duya/ai
 
   // Source-only shared React renderer. Its build step typechecks the public
   // source tree (it intentionally emits no JS because both Vite surfaces
   // consume the same source entry and stylesheet).
-  '@duya/ui', // -> protocol, ai, client-core, conductor, plugin-core, input-completion
+  '@duya/ui', // -> protocol, ai, client-core, plugin-core, input-completion
 
   // Concrete browser/CUA and connector adapters consume the platform and
   // plugin contracts, while Runtime consumes their public tool contracts.
@@ -221,7 +219,6 @@ const BUILD_PROFILES = {
     targets: [
       '@duya/ai',
       '@duya/cli',
-      '@duya/computer-use',
       '@duya/gateway',
       '@duya/voice',
       '@duya/plugin-core',

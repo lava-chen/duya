@@ -18,7 +18,6 @@ import { ModelCapabilityStore } from '@duya/data/model-capability-store';
 import { AppConnectionStore } from '@duya/data/app-connection-store';
 import { PluginSetupStore } from '@duya/data/plugin-setup-store';
 import { MainAttachmentStore } from '@duya/data/main-attachment-store';
-import { WorkbenchDataStore } from '@duya/data/workbench-store';
 import { ImportBatchStore } from '@duya/data/import-batch-store';
 import { SidebarSectionsStore } from '@duya/data/sidebar-sections-store';
 import { ProviderModelPricingStore } from '@duya/data/provider-model-pricing-store';
@@ -44,7 +43,6 @@ import type {
   HostLocalModelCapabilityApiV1,
   HostLocalAppConnectionApiV1,
   HostLocalPluginSetupApiV1,
-  HostLocalWorkbenchApiV1,
   HostLocalSidebarSectionsApiV1,
   HostLocalUsageApiV1,
   HostLocalImportBatchApiV1,
@@ -82,7 +80,6 @@ import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-inst
 import { createHostPluginAppGrantApi } from '@duya/host/local-plugin-app-grant-api';
 import { createHostPluginAppInvocationApi, type HostPluginAppInvocationInternalApi, type HostPluginAppInvocationAuthority } from '@duya/host/local-plugin-app-invocation-api';
 import { createDesktopPluginAppAuthority } from '../plugins/plugin-app-authority';
-import { createHostLocalWorkbenchApi } from '@duya/host/local-workbench-api';
 import { createHostLocalSidebarSectionsApi } from '@duya/host/local-sidebar-sections-api';
 import { createHostLocalUsageApi } from '@duya/host/local-usage-api';
 import { createHostLocalImportBatchApi } from '@duya/host/local-import-batch-api';
@@ -359,7 +356,6 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     pluginAppInstanceApi,
     pluginAppGrantApi,
     pluginAppInvocationApi,
-    localWorkbenchApi: createHostLocalWorkbenchApi(new WorkbenchDataStore(mainDatabase)),
     localSidebarSectionsApi: createHostLocalSidebarSectionsApi(new SidebarSectionsStore(mainDatabase)),
     localUsageApi: createHostLocalUsageApi({
       stores,
@@ -532,11 +528,6 @@ export function getDesktopHostLocalAppConnectionApi(): HostLocalAppConnectionApi
 
 export function getDesktopHostLocalPluginSetupApi(): HostLocalPluginSetupApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host plugin-setup API is not running');
-  return sessionApiClient;
-}
-
-export function getDesktopHostLocalWorkbenchApi(): HostLocalWorkbenchApiV1 {
-  if (!sessionApiClient) throw new Error('Desktop Host Workbench API is not running');
   return sessionApiClient;
 }
 

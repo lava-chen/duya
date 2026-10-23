@@ -615,7 +615,7 @@ export async function dispatchDbAction(
 
     case 'session:update': {
       const id = p.id as string;
-      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
+      const extKeys = ['system_prompt', 'context_summary', 'context_summary_updated_at', 'source'] as const;
       const patch = ipcSessionToUpdate(p);
       const changesWorkingDirectory = patch.workingDirectory !== undefined;
       const requestedWorkingDirectory = typeof patch.workingDirectory === 'string'
