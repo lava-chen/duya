@@ -39179,7 +39179,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -39203,13 +39203,13 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -42434,7 +42434,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4439661
+      "bytes": 4439700
     }
   }
 }
