@@ -31,15 +31,12 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { computeSegments } from './tools/segments';
 import {
   renderFlatActions,
-  renderFlattenedBody,
   renderOrderedBody,
   getLastRunningToolAction,
   computeSegmentActionKeys,
 } from './tools/flatRenderer';
 import { formatDuration } from './tools/hooks/useTopLevelChrome';
 import { ResearchStageSections } from './ResearchStageSections';
-import { buildToolSummary } from './tools/group/buildToolSummary';
-import { DiffStatBadge } from './tools/chrome/DiffStatBadge';
 import { getExpansion, writeExpansion } from './tools/expansionStore';
 import type { ToolAction, ActionItem } from './tools/types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
@@ -134,8 +131,8 @@ function ToolActionsGroupImpl({
   const hasRunningTool = actions.some(
     (a) => a.kind === 'tool' && a.tool.result === undefined
   );
-  // Every tool call of this round — the collapsed summary line counts
-  // them by category and sums their diff stats.
+  // Every tool call of this round — the count feeds the collapsed
+  // round line.
   const toolActions = React.useMemo(
     () => actions
       .filter((a): a is Extract<ActionItem, { kind: 'tool' }> => a.kind === 'tool')
@@ -143,13 +140,6 @@ function ToolActionsGroupImpl({
     [actions],
   );
   const roundKey = React.useMemo(() => computeRoundKey(actions), [actions]);
-  // Round-level headline: category verb phrases + aggregated diff stat
-  // ("Edited 2 files, ran 13 commands +272 -77"), matching the
-  // reference transcripts.
-  const roundSummary = React.useMemo(
-    () => buildToolSummary(toolActions, t, locale),
-    [toolActions, t, locale],
-  );
   // Always start collapsed once the round is done — unless the user
   // explicitly expanded this round earlier. The flag lives in the
   // shared expansion store, so an expanded round stays expanded across
@@ -263,14 +253,14 @@ function ToolActionsGroupImpl({
 
   const toolCount = toolActions.length;
   const hasDuration = totalDurationMs > 0;
-  // Rounds that carried tool calls lead with the category verbs (and
-  // carry the aggregated diff stat next to them); a round without any
-  // tool call keeps the plain "worked for Xs" wording.
-  const collapsedSummary = toolCount > 0
-    ? roundSummary.text
-    : hasDuration
-      ? t('streaming.actions.processed', { duration: formatDuration(totalDurationMs) })
-      : t('streaming.actions.completed', { count: toolCount });
+  // The collapsed round line answers one question only: how long this
+  // turn took. The statistics (category verbs + diff stat) belong to the
+  // groups inside the expanded body — one collapsed line per run of
+  // tool calls between two text blocks, the way the reference
+  // transcripts fold each burst of tool calls.
+  const collapsedSummary = hasDuration
+    ? t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })
+    : t('streaming.actions.completed', { count: toolCount });
 
   const handleToggle = () => {
     setUserExpanded((prev) => {
@@ -290,17 +280,6 @@ function ToolActionsGroupImpl({
         <span className="text-muted-foreground/60 truncate min-w-0 text-left">
           {collapsedSummary}
         </span>
-        {roundSummary.hasDiff && (
-          <DiffStatBadge
-            additions={roundSummary.additions}
-            removals={roundSummary.removals}
-          />
-        )}
-        {hasDuration && (
-          <span className="text-muted-foreground/40 shrink-0 whitespace-nowrap">
-            · {t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}
-          </span>
-        )}
         {/* Expand caret at the tail of the line — always visible, same
             position as the reference transcripts (Codex / Claude Code). */}
         <CaretRightIcon
@@ -324,12 +303,12 @@ function ToolActionsGroupImpl({
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
-              {/* No left rule here: the expanded body is a card of tool
-                  rows now, and a rule next to a card reads as a double
-                  border. The card carries the structure. */}
+              {/* No left rule here: every group inside the body is a
+                  card of tool rows, and a rule next to a card reads as a
+                  double border. The card carries the structure. */}
               <div className="mt-1">
                 {focusMode || !hasResearchStage
-                  ? renderFlattenedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)
+                  ? renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)
                   : renderResearchBody()}
               </div>
             </motion.div>

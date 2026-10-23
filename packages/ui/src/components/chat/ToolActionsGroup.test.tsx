@@ -557,22 +557,31 @@ describe('ToolActionsGroup round summary', () => {
     durationMs: 10,
   });
 
-  it('renders the collapsed round as category verbs plus the aggregated diff stat', () => {
+  it('keeps the round line on the duration and moves the statistics to the group', () => {
     const tools: ToolAction[] = [
       finished('round-1', 'edit', { file_path: 'src/a.ts', old_string: 'a\nb', new_string: 'a\nc' }),
       finished('round-2', 'bash', { command: 'npm test' }),
     ];
 
-    const { container } = render(<ToolActionsGroup tools={tools} />);
+    const { container } = render(
+      <ToolActionsGroup tools={tools} totalDurationMs={68000} />,
+    );
 
-    // Category verbs instead of the old "N completed" wording — the
-    // mocked t renders "one 1" for the singular templates.
-    expect(container.textContent).toContain('one 1');
-    // The round-level diff stat is summed from the very same numbers
-    // the rows show (one line replaced → +1 -1).
-    expect(container.querySelector('[data-testid="diff-stat"]')?.textContent).toBe('+1-1');
-    // Collapsed: the tool rows are still hidden behind the headline.
+    // The round line answers one question: how long the turn took.
+    expect(container.textContent).toContain('1m 8s');
+    // No statistics on the round line — no diff stat, no category verbs.
+    expect(container.querySelector('[data-testid="diff-stat"]')).toBeNull();
+    expect(container.textContent).not.toContain('one 1');
+    // Collapsed: the group line is still hidden behind the headline.
     expect(container.querySelector('.tool-group')).toBeNull();
+
+    // Expand the round — the statistics moved to the group line.
+    fireEvent.click(container.querySelector('button')!);
+    expect(container.querySelector('.tool-group')).not.toBeNull();
+    expect(container.textContent).toContain('one 1');
+    // The group's diff stat is summed from the very same numbers the
+    // rows show (one line replaced → +1 -1).
+    expect(container.querySelector('[data-testid="diff-stat"]')?.textContent).toBe('+1-1');
   });
 
   it('keeps a round expanded after the component remounts', () => {
@@ -582,23 +591,22 @@ describe('ToolActionsGroup round summary', () => {
     ];
 
     const first = render(<ToolActionsGroup tools={tools} />);
-    expect(first.container.querySelector('.tool-round-card')).toBeNull();
+    expect(first.container.querySelector('.tool-group')).toBeNull();
 
     fireEvent.click(first.container.querySelector('button')!);
-    expect(first.container.querySelector('.tool-round-card')).not.toBeNull();
+    expect(first.container.querySelector('.tool-group')).not.toBeNull();
 
     // A remount (another message arriving, the list re-rendering) must
     // not drop the user's expansion.
     first.unmount();
     const second = render(<ToolActionsGroup tools={tools} />);
-    expect(second.container.querySelector('.tool-round-card')).not.toBeNull();
+    expect(second.container.querySelector('.tool-group')).not.toBeNull();
   });
 
-  it('flattens the expanded round into a card of tool rows', () => {
-    // Two consecutive tool calls used to need three clicks to reach the
-    // rows: round → group header → group body. The round's summary
-    // line already carries the category verbs, so the group header is
-    // dropped and the rows sit in one card.
+  it('folds a run of tool calls into one collapsed group line', () => {
+    // The tools between two text blocks form ONE group. Its header
+    // carries the group's statistics (category verbs + diff stat) and
+    // the rows stay folded away until the user opens the group.
     const tools: ToolAction[] = [
       finished('flat-1', 'read', { file_path: 'src/a.ts' }),
       finished('flat-2', 'read', { file_path: 'src/b.ts' }),
@@ -607,11 +615,14 @@ describe('ToolActionsGroup round summary', () => {
     const { container } = render(<ToolActionsGroup tools={tools} />);
     fireEvent.click(container.querySelector('button')!);
 
-    expect(container.querySelector('.tool-round-card')).not.toBeNull();
-    // No group header row is left behind.
-    expect(container.querySelectorAll('[data-title-source]')).toHaveLength(0);
-    // Both rows are visible without a second click.
-    expect(container.textContent).toMatch(/a\.ts/);
-    expect(container.textContent).toMatch(/b\.ts/);
+    // Exactly one group header, with the group's summary.
+    expect(container.querySelectorAll('[data-title-source]')).toHaveLength(1);
+    expect(container.textContent).toContain('other 2');
+    // The rows are still folded away.
+    expect(container.querySelector('.tool-group-body')).toBeNull();
+
+    // Opening the group reveals the card of tool rows.
+    fireEvent.click(container.querySelector('.tool-group button')!);
+    expect(container.querySelector('.tool-group-body')).not.toBeNull();
   });
 });

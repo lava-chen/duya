@@ -247,7 +247,6 @@ const zh: Record<TranslationKey, string> = {
   'streaming.actions.completed': '{count} 个已完成',
   'streaming.actions.generating': '正在生成回复',
   'streaming.actions.workedFor': '耗时 {duration}',
-  'streaming.actions.processed': '已处理 {duration}',
 
   // 居中记忆 / routine 提示：作为聊天流中安静的状态更新文字，而不是可折叠的工具 chrome 行
   'chat.notice.memoryRunning': '正在记住…',

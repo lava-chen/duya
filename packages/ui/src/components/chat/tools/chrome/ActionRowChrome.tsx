@@ -58,6 +58,11 @@ interface ActionRowChromeProps {
    *  shouldn't disturb the duration / StatusDot tail (e.g. the
    *  FileEditToolRow's +N/-M stats). */
   rightSlot?: React.ReactNode;
+  /** Extra classes for the summary slot. The default is a truncating
+   *  text span that grows to fill the row; a caller that renders an
+   *  inline row (a truncating label followed by a fixed-width badge)
+   *  passes its own flex layout instead. */
+  summaryClassName?: string;
   children: React.ReactNode;
 }
 
@@ -75,6 +80,7 @@ export function ActionRowChrome({
   onMouseEnter,
   onMouseLeave,
   rightSlot,
+  summaryClassName,
   children,
 }: ActionRowChromeProps) {
   const { t } = useTranslation();
@@ -103,9 +109,9 @@ export function ActionRowChrome({
         <span className="font-medium text-muted-foreground/80 shrink-0 mr-2">{verb}</span>
       )}
       <span
-        className={`font-mono truncate flex-1 text-left transition-colors ${
+        className={`font-mono text-left transition-colors ${
           hovered ? 'text-foreground' : 'text-muted-foreground/90'
-        }`}
+        } ${summaryClassName ?? 'truncate flex-1'}`}
       >
         {children}
       </span>

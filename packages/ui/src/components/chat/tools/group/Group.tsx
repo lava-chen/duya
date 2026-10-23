@@ -41,18 +41,16 @@ const EXPANSION_SCOPE = 'group';
 
 interface GroupProps {
   entries: SegmentEntry[];
-  flat?: boolean;
   /**
-   * `header` (default) — the group renders a summary header plus a
-   * collapsible body. Used while the round is still streaming, where
-   * the header is what folds a run of tool calls into one quiet line.
+   * `flat` renders the header AND the body at once — the streaming
+   * path, where the round has no collapsed chrome of its own and the
+   * group must not hide the tool calls that are still arriving.
    *
-   * `card` — the group renders ONLY its body, inside a bordered card.
-   * Used by a finished round's expanded body: the round's own summary
-   * line already carries the category verbs, so a second header row
-   * would only repeat them (and cost the user two extra clicks).
+   * Without it the group is a collapsible line: the header carries the
+   * group's semantic description plus its diff stat, and the rows show
+   * only after the user opens it.
    */
-  variant?: 'header' | 'card';
+  flat?: boolean;
   /** Whether the owning round's stream is still live. Gates the thinking
    *  rows' live shimmer/typewriter so they stop when the stream ends even
    *  if the entry's own flag was set while it was the trailing event. */
@@ -64,7 +62,6 @@ interface GroupProps {
 export function Group({
   entries,
   flat,
-  variant = 'header',
   streamLive,
   streamingToolOutput,
   agentProgressEvents,
@@ -172,37 +169,19 @@ export function Group({
       onClick={toggleExpanded}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      rightSlot={
-        <DiffStatBadge additions={diffStat.additions} removals={diffStat.removals} />
-      }
+      // The diff stat sits right behind the summary text — the reference
+      // transcripts read "Edited 3 files, ran 2 commands +28 -0", with
+      // the numbers glued to the phrase they belong to. The summary is
+      // content-sized (no `flex-1`) so the status dot and the caret
+      // follow the phrase instead of drifting to the far end of the row.
+      summaryClassName="flex items-center gap-2 min-w-0"
     >
-      <span data-title-source={displayTitle.source}>{displayTitle.title}</span>
+      <span data-title-source={displayTitle.source} className="truncate">
+        {displayTitle.title}
+      </span>
+      <DiffStatBadge additions={diffStat.additions} removals={diffStat.removals} />
     </ActionRowChrome>
   );
-
-  if (variant === 'card') {
-    // The card variant drops the header row, but the header carried one
-    // thing the round line does NOT have: the model's own semantic
-    // title for this run of calls ("Ran architecture gate"). The
-    // generic category summary is dropped — the round line already
-    // shows it — while a real progress title survives as a quiet
-    // label on top of the card.
-    const semanticTitle =
-      displayTitle.source === 'tool_fallback' ? null : displayTitle.title;
-    return (
-      <div key={groupKey} className="tool-round-card mt-1.5">
-        {semanticTitle && (
-          <div className="tool-round-card__label">
-            <span data-title-source={displayTitle.source} className="truncate">
-              {semanticTitle}
-            </span>
-          </div>
-        )}
-        {showBrowserFallback && <BrowserFallbackBanner />}
-        {rows}
-      </div>
-    );
-  }
 
   if (flat) {
     return (

@@ -269,11 +269,9 @@ export function renderFlatActions(
 // (thinking → tool → text → widget …). Walk `actions` and emit either
 // a grouped render unit (≥2 entries) or the original action item.
 //
-// `groupVariant` decides how a group renders: `header` keeps the
-// summary header (the streaming path needs it to fold a run of tool
-// calls into one quiet line), `card` renders the rows only — a
-// finished round's expanded body already carries the category verbs on
-// its own summary line.
+// A group renders its summary header as a collapsible line — the
+// category verbs plus the group's diff stat — and only reveals its
+// rows when the user opens it.
 export function renderOrderedBody(
   actions: ActionItem[],
   segments: Segment[],
@@ -282,7 +280,6 @@ export function renderOrderedBody(
   agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
   isStreaming: boolean | undefined,
   focus?: boolean,
-  groupVariant: 'header' | 'card' = 'header',
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const lastTextIdx = findLastTextIndex(actions);
@@ -298,7 +295,6 @@ export function renderOrderedBody(
         <Group
           key={`group-${toolIdx}`}
           entries={seg.entries}
-          variant={groupVariant}
           streamLive={!!isStreaming}
           streamingToolOutput={streamingToolOutput}
           agentProgressEvents={agentProgressEvents}
@@ -332,32 +328,6 @@ export function renderOrderedBody(
     }
   }
   return out;
-}
-
-// The finished round's expanded body: same action order as
-// `renderOrderedBody`, but the group headers are gone — the round's
-// own summary line already carries the category verbs, so a second
-// header row would only repeat them and cost two extra clicks before
-// the first tool call is visible.
-export function renderFlattenedBody(
-  actions: ActionItem[],
-  segments: Segment[],
-  lastRunningTool: ToolAction | undefined,
-  streamingToolOutput: string | undefined,
-  agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
-  isStreaming: boolean | undefined,
-  focus?: boolean,
-): React.ReactNode[] {
-  return renderOrderedBody(
-    actions,
-    segments,
-    lastRunningTool,
-    streamingToolOutput,
-    agentProgressEvents,
-    isStreaming,
-    focus,
-    'card',
-  );
 }
 
 export function computeSummaryFromActions(

@@ -523,42 +523,18 @@ html[data-message-font-size="large"] .prose h3 {
    Code), where the expanded tool list is one card with one line per
    tool call instead of a left indent rule. The card is nudged right so
    it clears the round's left rule and lines up with the header text. */
-.tool-group-body,
-.tool-round-card {
+.tool-group-body {
   display: flex;
   flex-direction: column;
+  margin: 0.3rem 0 0.45rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
   background: var(--surface);
   overflow: hidden;
 }
 
-.tool-group-body {
-  margin: 0.3rem 0 0.45rem 0.5rem;
-}
-
-/* The flattened round card replaces the round's left rule, so it lines
-   up with the prose above it. */
-.tool-round-card {
-  margin: 0.3rem 0 0.45rem 0;
-}
-
-.tool-group-body > * + *,
-.tool-round-card > * + * {
+.tool-group-body > * + * {
   border-top: 1px solid var(--border-weak);
-}
-
-/* Quiet label on top of a flattened round card. It carries the model's
-   own title for the run of calls (the category verbs live on the
-   round's summary line, so they are not repeated here). */
-.tool-round-card__label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 11px;
-  color: var(--muted);
-  background: var(--surface-hover);
 }
 
 .tool-group-fallback {

@@ -1,9 +1,9 @@
 // Shared diff-stat computation for the file edit / create tool family.
 //
 // This module used to live inside FileEditToolRow.tsx as a private
-// helper. It is now shared so the *round* summary row can sum the very
-// same numbers the per-row chrome shows: one source of truth means the
-// collapsed round line ("已编辑 2 个文件 +272 -77") can never disagree
+// helper. It is now shared so a group's header can sum the very same
+// numbers the per-row chrome shows: one source of truth means the
+// collapsed group line ("已编辑 2 个文件 +272 -77") can never disagree
 // with the two rows underneath it.
 //
 // Pure functions, no React. Safe to unit test in isolation.

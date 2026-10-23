@@ -244,7 +244,6 @@ const en = {
   'streaming.actions.completed': '{count} completed',
   'streaming.actions.generating': 'generating response',
   'streaming.actions.workedFor': 'Worked for {duration}',
-  'streaming.actions.processed': 'Processed {duration}',
 
   // Centered memory / routine hints that surface as a quiet status update
   // in the message flow instead of a collapsible tool chrome row.
