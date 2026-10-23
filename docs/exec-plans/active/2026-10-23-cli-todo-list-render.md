@@ -66,6 +66,7 @@
 | a89e65a7 | Windows / Node | `npm run architecture:check` | 0（2608 baselined / 0 新增违规） | 架构门禁 |
 | a89e65a7 | Windows / Node | `npx vite-node docs-local/preview-todo.ts` | 0 | 走真实渲染路径打印 ANSI:清单成形、两次写入各自成块、thinking 折叠成两行 |
 | a89e65a7 | Windows / Node | `npx vitest run packages/cli/src/tui/__tests__/perf/baseline.test.ts` | 0（4 passed） | 全量并行跑时该 suite 报过一次失败,**单独复跑即绿** —— 机器负载造成的假失败,非本次改动 |
+| ba3ab9b4 | Windows / Node | CI（PR #387） | 全绿：architecture / test scope / typecheck / test / build | GitHub Actions |
 
 ## 渲染实录
 
@@ -93,8 +94,9 @@ renderer)打印一个完整回合,ANSI 去掉后:
 
 ## 接续 / 结果
 
-已提交三个 commit：`f324857a`（todo 清单渲染）、`a89e65a7`（thinking 折叠一行）、
-`d39d0d5d`（本计划文档）。PR #387(draft)，门禁与渲染实录见上。
+已提交四个 commit：`f324857a`（todo 清单渲染）、`a89e65a7`（thinking 折叠一行）、
+`d39d0d5d`（本计划文档）、`ba3ab9b4`（验证记录 + PR）。
+PR #387(draft)：https://github.com/lava-chen/duya/pull/387 —— CI 全绿，门禁与渲染实录见上。
 
 未提交路径：无。worktree `.claude/worktrees/tui-todo-list` 独占 `packages/cli/src/tui/**`。
 下一步:等 review 与 CI；获集成授权后合并并重验,再回收检出。
