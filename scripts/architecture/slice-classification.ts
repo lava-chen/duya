@@ -522,11 +522,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'SQLite access and migrations. Storage is CP-owned; the store is the durable substrate the CAS rules write through.',
   },
   {
-    prefix: 'apps/desktop/src/main/project-database',
-    category: 'cp-durable',
-    why: 'Per-project database access. Same durable substrate, separate database.',
-  },
-  {
     prefix: 'apps/desktop/src/main/automation',
     category: 'cp-durable',
     why: 'Schedule ownership and automation persistence. The 16 agent->main edges in M5.2 end here.',
@@ -572,11 +567,6 @@ export const RULES: readonly ClassificationRule[] = [
     prefix: 'apps/desktop/src/main/gateway',
     category: 'host-ui',
     why: 'Gateway process supervision and config events. Host transport wiring.',
-  },
-  {
-    prefix: 'apps/desktop/src/main/conductor',
-    category: 'host-ui',
-    why: 'Conductor layout and workbench host services. Presentation-side host state.',
   },
   {
     prefix: 'apps/desktop/src/main/messaging',
