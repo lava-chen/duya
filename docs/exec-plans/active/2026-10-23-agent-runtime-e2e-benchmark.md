@@ -110,8 +110,12 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | af6e7eb6（clean） | Windows / Node 24.16.0 | `git worktree add … -b codex/tui-perf-benchmark origin/master` | 0 | 检出在 `.claude/worktrees/tui-perf-benchmark` |
 | af6e7eb6（clean） | Windows | `node scripts/junction-worktree.mjs .` | 0 | 56 link(s) created |
 | af6e7eb6（clean） | Windows | `npm run build:packages` | 0 | built 20 package(s) |
-| af6e7eb6 + 本任务改动 | Windows / Node 24.16.0 / 20 核 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（PERF_RUNTIME_SAMPLES=5） | 0 | 2 passed，8.9 s；报告 `evals/agent/reports/runtime-latest.json` |
 | af6e7eb6（clean） | Windows | `npx vitest run packages/cli/tests/integration/shared-client-vertical.test.ts` | 0 | 1 passed，7.3 s（参照用例，同一套真实 Host + worker） |
+| 1b0bbef4 + 本任务改动 | Windows / Node 24.16.0 / 20 核 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（PERF_RUNTIME_SAMPLES=5） | 0 | 2 passed；报告 `evals/agent/reports/runtime-latest.json` |
+| 1b0bbef4 + 本任务改动 | Windows | `npm run typecheck:all` | 0 | 含 `typecheck:evals`：no new type errors |
+| 1b0bbef4 + 本任务改动 | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| 1b0bbef4 + 本任务改动 | Windows | `npm run bundle:verify` | 0 | FRESH，0/921 输入变更 |
+| 7d63953b（合并 origin/master 后） | Windows / Node 24.16.0 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；结论不变：mint→client p50 0.99 ms / 1.86 ms，accepted→provider p50 506 ms，token→paint p50 76 ms，工具执行 p50 11.9 ms |
 
 ## 接续 / 结果
 
