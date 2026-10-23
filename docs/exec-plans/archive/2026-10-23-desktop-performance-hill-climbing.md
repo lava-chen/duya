@@ -1,7 +1,23 @@
 # Duya Desktop 性能爬坡
 
-状态：active · 负责人：mavis（goal `tg_1cyt7y0er7mvkwyms8`）· 更新：2026-10-23
-分支：`codex/perf-integration` · worktree：`.claude/worktrees/perf-integration` · base：`670a862c`
+状态：**移交（未完成）** · 原负责人：mavis（goal `tg_1cyt7y0er7mvkwyms8`）· 更新：2026-10-23
+原分支：`codex/perf-integration` · 原 worktree：`.claude/worktrees/perf-integration`（Windows）· base：`670a862c`
+
+> **交接说明（2026-10-23，owner 指示）**
+>
+> Desktop UI 性能与 TUI 性能这两项任务**不再由 mavis 负责**，本计划撤出活动队列、移入归档。
+> **这不是「完成」**：验收从未重新跑过，五条独占路径没有认领记录，也没有任何按路径落地的 PR。
+>
+> | 项 | 实际状态（2026-10-23 核对） |
+> | --- | --- |
+> | 计划与 PR | PR #382 → `766db972` 已合并；PR #383 → `d9eb7dba` **只含 perf fixture 与测量锁的文档**，**不含任何性能收益 PR** |
+> | A 的 Harness v1 | **未落地**：`scripts/perf/**` 与 `e2e/perf/**` 在 master 上都不存在 |
+> | B/C/D/E 基线 | **未产出**：五条独占路径没有认领记录，也没有任何按路径落地的 PR |
+> | 测量互斥锁 | `E:\Projects\duya\.claude\perf-bench-lock.mjs`（gitignore 区，不进仓库）。计划在**另一台 Windows 机器**上推进，本机（macOS）没有那 6 个检出 |
+> | 可复用资产 | 正文的「指标契约」与「固定 fixture」两节**可复用**；接手时先读这两节 |
+> | TUI 侧 | 基准 harness 已在 [615](../active/615-cli-unified-tui-engine.md) Phase 0 落地（`packages/cli/src/tui/__tests__/perf/`）；真实链路基准在 `origin/codex/tui-perf-benchmark`（**未并入 master**，且不属本计划分支） |
+>
+> 下文保留原计划全文作为交接依据；「进度」一节的 checkbox **未重新验收**，按原样记录。
 
 ## 目标与边界
 
@@ -92,7 +108,7 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [ ] 集成者按 CI + 证据定合并顺序，合并后重跑 Profile
 - [ ] 产出按实测收益排序的下一轮机会清单
 
-派工状态：A/B/C/D 已开工（并发上限 4），E 待空位。
+派工状态（2026-10-23 核对）：**A–E 五条路径均未认领落地产出**。原文记的是「A/B/C/D 已开工（并发上限 4），E 待空位」，该状态在移交时**已失效**——见文首交接说明。
 
 ## 发现与决策
 
@@ -109,7 +125,8 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 
 ## 接续 / 结果
 
-实现中。集成者：mavis。合并顺序：A 先合（Harness 是其它 agent 的取证工具），B/C/D/E 并行，其间由集成者重跑 Profile 定下一轮。
+**已移交（2026-10-23）**：Desktop UI 性能与 TUI 性能两项任务不再由 mavis 负责。集成者：待认领。
 
-回收：未回收。6 个检出均未集成，owner 会话在线。
-下一步：派工 5 个 Agent，各带基线要求与证据标准。
+回收：本机（macOS）没有本计划的检出，无可回收物。原 Windows 机器上的 6 个检出**由该机器的 owner 自行核对**，本仓不代为删除、不代为强制清理。
+
+下一步（交给接手方）：先认领「指标契约」与「固定 fixture」两节是否仍适用，再按 A → B/C/D/E 的顺序开工——**A 的 Harness v1 是其余四条路径的取证前提**，没有它，B/C/D/E 的数字无法横向比较。

@@ -10,7 +10,6 @@
 | [2026-10-22-panel-column-layout](active/2026-10-22-panel-column-layout.md) | — | 侧面板从单列 tab 改为多列 + 列内堆叠 + 可脱窗；切片 A/B 并行，C/D 第二波 |
 | [2026-10-21-public-tree-cleanup](active/2026-10-21-public-tree-cleanup.md) | — | 清理公开根目录，迁移文档入口和打包配置，核对链接与产物 |
 | [2026-10-23-multi-agent-orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | — | 多 agent 编排的测试体系与优化方案；Phase 1 补子 agent 状态机测试（当前零覆盖），Phase 2 做 DAG 并行与失败级联 |
-| [2026-10-23-desktop-performance-hill-climbing](active/2026-10-23-desktop-performance-hill-climbing.md) | — | Desktop 性能爬坡：5 Agent 独占路径并行，A 先交 Harness，B/C/D/E 各自建基线并各出一个可证明收益的 PR |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |
@@ -73,6 +72,7 @@
 - [2026-10-21 master CI 修复](archive/2026-10-21-ci-green-master.md)：收敛 master 上 95 个失败测试文件与 17 个 E2E 失败；根因、Linux 独有失败与三个 E2E 产品 bug 的修法见正文。
 - [Claude Code 式工具组 UI 对齐（P1）](archive/2026-10-23-claude-code-tool-group-parity.md)：轮级汇总行、caret 行尾常显、展开态持久、分组卡片化；PR #368 已合并 `2c91e9b7`。**其中轮级统计已被 P2 回退**，见下一条。
 - [工具组 P2：组级折叠态 / diff 增强 / 路径头](archive/2026-10-23-tool-group-flatten-and-diff.md)：路径头 + 复制、diff 语法高亮，以及把折叠态改回「轮级只报耗时、组级承载统计」；PR #374 已合并 `43df59f4`。两份计划的「发现与决策」记了各自的取舍与被改回去的原因。
+- [Desktop 性能爬坡](archive/2026-10-23-desktop-performance-hill-climbing.md)：5 个 Agent 独占路径并行（A 的 Harness v1 + B/C/D/E 各自建基线）。**2026-10-23 移交，未完成**——A 的 Harness 与五条基线均未落地，验收从未重跑；「指标契约」与「固定 fixture」两节可复用。
 
 ## Backlog
 
