@@ -45,6 +45,8 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 - [x] 更新 `README.md` / `METRICS.md` 与根 `package.json` 脚本。
 - [x] 修复批次 1：提示词只发一次、时间线只投影一次、TUI 首帧 leading edge、
       基准帧封口口径（`firstChar*` 指标）、jimp 惰性加载。
+- [x] 修复批次 2：技能威胁扫描预筛（−65 ms）、提示词去重**删错副本**的修正、
+      turn review 的 git 快照复用 stat 缓存（1426 → 189 ms）、desktop IPC 普查解析常量。
 - [ ] 门禁 + PR。
 
 ## 发现与决策
@@ -136,6 +138,38 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 > 真实热点是 `loadSkillsFromDirectory(user)` 的 **118–169 ms**：本机 `~/.duya/skills`
 > 有 4 个技能目录、236 个文件、3 MB、18 个 SKILL.md。
 
+### 另一个瓶颈：turn review 的 git 快照（已修）
+
+每个用户回合要取**两次**「工作树快照」（回合开始前、回合结束后），用来算这一回合
+agent 改了什么。旧实现用一个**全新索引**跑 `git add -A`：新索引没有任何 stat 信息，
+git 必须把全仓文件重新读一遍、重新哈希一遍。
+
+| | 一次快照 | 每回合（两次） |
+| --- | --- | --- |
+| 改前（全新索引） | **1426 ms**（中位数，5 样本） | ~2.9 s |
+| 改后（复用仓库 index 的 stat 缓存） | **189 ms** | ~0.4 s |
+
+回合开始那一次就在**首 token 关键路径**上：worker 起来 → `handleChatStart` → 快照
+→ 才发模型请求。改法是让隔离索引**先复制仓库自己的 index**，git 就能复用 stat
+缓存，只重新哈希 stat 变了的文件。两种路径产出的 tree 对象**完全一致**（同一个
+SHA），仓库自己的 index 只读不写；没有 index 可复用时回退到旧路径。
+
+> 这个瓶颈是被 `packages/cli/tests/integration/host-child-sessions.test.ts` 的
+> 15 秒预算暴露的：每个 worker 付 ~1.5 s，4 个 worker 就是 ~6 s，父会话来不及
+> 走到第 6 张审批卡，测试按超时失败。
+
+### CI 的盲区：master 的 push 不跑 test job
+
+master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只跑
+`test scope` 与 `architecture`）。所以 desktop 的两个 IPC 契约测试在 master 上
+**一直是红的**，直到本 PR 第一次跑全量才暴露：
+
+- `gpu-diagnostics.ts` 用**常量**注册 channel（`ipcMain.handle(GPU_STATUS_CHANNEL, ...)`），
+  而契约普查的正则只认字面量 → 把 `GPU_STATUS_CHANNEL` 当成了 channel 名，
+  真正的 `gpu:get-status` 被判成「preload 能调、主进程没注册」。
+- 修法：普查**解析常量**（先收集 `const X = 'ch'`，再解析标识符）。不是放宽断言——
+  实测注入一个无 handler 的 channel，两个用例仍然会报。
+
 ### 其它实测结论
 
 - **Node 的 compile cache 帮不到 worker bundle。** `module.enableCompileCache()` 只缓存
@@ -191,12 +225,18 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | 待提交（scanner 优化） | Windows / Node 24.16.0 | `npx vitest run packages/agent-core/test/skills/` | 0 | 2 files / 24 passed（含新增 3 个等价性对拍用例） |
 | 待提交（scanner 优化） | Windows / Node 24.16.0 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；`acceptedToProviderRequestMs` p50 **512.6 → 448 ms**（-65 ms） |
 | 待提交（prompt 去重修正） | Windows / Node 24.16.0 | `npx vitest run packages/cli/tests/integration/host-child-sessions.test.ts packages/cli/tests/integration/shared-client-vertical.test.ts` | 0 | 2 files / 2 passed（修前这 2 个用例都失败） |
+| e9f9daec | Windows / Node 24.16.0 | `npx vitest run packages/host/tests` | 0 | 176 files / 1632 passed，1 skipped |
+| e9f9daec | Windows | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | no new boundary violations；FRESH 0/921 |
+| e9f9daec | Windows | `node docs-local/research/tui-perf-benchmark/measure-turn-review.cjs`（5 样本） | 0 | 快照中位数 **189 ms**（同脚本的旧算法复现：1426 ms） |
+| e10e0587（合并 origin/master 后） | Windows | `npx vitest run apps/desktop` | 0 | 292 files / 3477 passed，1 skipped |
+| e10e0587 | Windows | `npx vitest run apps/desktop/src/main/ipc/__tests__/ipc-contract.test.ts apps/desktop/src/main/ipc/__tests__/ipc-channel-contract.test.ts` | 0 | 2 files / 7 passed（合并前这 2 个文件都失败） |
 
 ## 接续 / 结果
 
 本分支（PR #381，base `master`，未合并）已交付：基准套件 + 修复 commit
 （提示词去重、单次投影、Host compile cache、TUI leading edge、帧封口口径、jimp 惰性加载）
-+ 技能威胁扫描预筛 + 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
++ 技能威胁扫描预筛 + turn review 的 git 快照复用 stat 缓存 + desktop IPC 普查解析常量
++ 每次源码变更后重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
 
 ### 提示词去重的坑：删错了副本
 
