@@ -23,7 +23,24 @@
 
 import { execFile as nodeExecFile } from 'node:child_process';
 import type { IntegrationStore } from '@duya/data';
+import type {
+  HostIntegrationSyncFailure,
+  HostIntegrationSyncResult,
+  HostIntegrationSyncStatus,
+  HostIntegrationSyncWritten,
+} from '@duya/agent-protocol';
 import { observePrsForRefs, type ScmObserverDeps } from './observe.js';
+
+/**
+ * The sync result is a WIRE contract: it travels over the Host's HTTP surface
+ * to every surface that may ask for a refresh, so it is defined once in
+ * `@duya/agent-protocol` and re-exported here under the names this module has
+ * always used.
+ */
+export type IntegrationSyncStatus = HostIntegrationSyncStatus;
+export type IntegrationSyncWritten = HostIntegrationSyncWritten;
+export type IntegrationSyncFailure = HostIntegrationSyncFailure;
+export type IntegrationSyncResult = HostIntegrationSyncResult;
 
 /** How long one git invocation may run before sync gives up on it. */
 const GIT_TIMEOUT_MS = 10_000;
@@ -37,38 +54,6 @@ const GIT_MAX_BUFFER_BYTES = 1024 * 1024;
  * shell string.
  */
 export type SyncGitRunner = (args: readonly string[], cwd: string) => Promise<string>;
-
-/** Outcome of one `syncSession` call, distinguishable at a glance. */
-export type IntegrationSyncStatus =
-  | 'synced'
-  | 'no_origin_remote'
-  | 'no_checkpoints'
-  | 'observation_failed';
-
-/** One PR whose observation was written and session-linked during this run. */
-export interface IntegrationSyncWritten {
-  readonly repo: string;
-  readonly prNumber: number;
-}
-
-/** One ref whose PR could not be observed; nothing was written for it. */
-export interface IntegrationSyncFailure {
-  readonly ref: string;
-  /** The observation failure reason, as carried by `observedError`. */
-  readonly reason: string;
-}
-
-export interface IntegrationSyncResult {
-  readonly status: IntegrationSyncStatus;
-  /** Observations written to the store in this run. */
-  readonly written: readonly IntegrationSyncWritten[];
-  /**
-   * Matched PRs whose observation came back `unknown`. Partial success is
-   * reported as it happened: `status` is `observation_failed` whenever this
-   * is non-empty, even though `written` may also be non-empty.
-   */
-  readonly failed: readonly IntegrationSyncFailure[];
-}
 
 export interface IntegrationSyncDeps {
   /** The observed projection. Written only for successfully observed PRs. */

@@ -30,6 +30,7 @@ import { AgentListSection } from './AgentListSection';
 import { BashTaskSection } from './BashTaskSection';
 import { SourcesSection } from './SourcesSection';
 import { ArtifactsSection } from './ArtifactsSection';
+import { WorkspaceLifecycleSection } from './WorkspaceLifecycleSection';
 
 export function TaskDrawer() {
   const open = useTaskDrawerOpen();
@@ -97,6 +98,8 @@ export function TaskDrawer() {
                   artifacts={artifacts}
                   cwd={thread?.workingDirectory ?? null}
                 />
+
+                <WorkspaceLifecycleSection />
               </div>
             </div>
           </motion.aside>

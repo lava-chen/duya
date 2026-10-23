@@ -43,6 +43,7 @@ import type {
   HostCheckoutObserved,
   HostCheckoutRetainReason,
   HostIntegrationRecord,
+  HostIntegrationSyncResult,
   HostSessionCheckoutView,
   SessionId,
 } from '@duya/agent-protocol';
@@ -78,12 +79,18 @@ export interface WorkspaceLifecyclePort {
     /** Every integration associated with a session, across all its PRs. */
     observeForSession(sessionId: SessionId): Promise<readonly HostIntegrationRecord[]>;
     /**
-     * Re-read one PR from the hosting service.
+     * Re-read the session's pull requests from the hosting service.
      *
      * This is the explicit refresh. The projection read above never touches
      * the network, so without this the projection only ever gets older.
+     *
+     * It is session-scoped because that is the Host's write side: one pass
+     * walks session → cwd → origin → checkpoint refs → PRs and lands every
+     * observation it managed to read. A PR that could not be read is reported
+     * in `failed`, and the previous good observation is kept — a failed pass
+     * never overwrites what it did not manage to observe.
      */
-    observeForPr(repo: string, prNumber: number): Promise<HostIntegrationRecord>;
+    refreshForSession(sessionId: SessionId): Promise<HostIntegrationSyncResult>;
   };
 }
 

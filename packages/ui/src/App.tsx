@@ -47,6 +47,8 @@ import { interruptChat } from "@/lib/agent-sse-client";
 import { SearchCommandPalette } from "@/components/SearchCommandPalette";
 import { UiServicesProvider } from "@/hooks/useUiServices";
 import { getUiServices, type UiServices } from "@/services";
+import { WorkspaceLifecycleProvider } from "@/hooks/useWorkspaceLifecycle";
+import { peekWorkspaceLifecycle } from "@/services";
 import type { UiRunSession } from "@/services/ui-services";
 import type { RunSessionSnapshot } from "@duya/client-core";
 import type { HostPermissionRequest } from "@duya/agent-protocol";
@@ -120,17 +122,24 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
     [],
   );
   const uiServices = resolveUiServices();
+  // The workspace-lifecycle port (plan 621). A surface that installed no
+  // adapter has no checkout / pull-request questions to answer; the provider
+  // carries `null` so the panel says "this surface cannot answer" instead of
+  // pretending the session has no checkout.
+  const workspaceLifecycle = peekWorkspaceLifecycle();
   const app = (
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <FontProvider>
-          {uiServices?.platform === 'web' || uiServices?.capabilities.conductor === false ? (
-            <AppShellInner onReady={onReady} uiServices={uiServices} />
-          ) : (
-            <ConductorHostProvider>
+          <WorkspaceLifecycleProvider port={workspaceLifecycle}>
+            {uiServices?.platform === 'web' || uiServices?.capabilities.conductor === false ? (
               <AppShellInner onReady={onReady} uiServices={uiServices} />
-            </ConductorHostProvider>
-          )}
+            ) : (
+              <ConductorHostProvider>
+                <AppShellInner onReady={onReady} uiServices={uiServices} />
+              </ConductorHostProvider>
+            )}
+          </WorkspaceLifecycleProvider>
         </FontProvider>
       </I18nProvider>
     </QueryClientProvider>

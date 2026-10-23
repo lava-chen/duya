@@ -142,6 +142,13 @@ import type {
   LockOrigin,
 } from '@duya/agent-protocol';
 import type {
+  HostCheckoutObserved,
+  HostCheckoutRetainReason,
+  HostIntegrationRecord,
+  HostIntegrationSyncResult,
+  HostSessionCheckoutView,
+} from '@duya/agent-protocol';
+import type {
   HostLocalMailboxApiV1,
   HostMailboxApplyInput,
   HostMailboxClaimBatchInput,
@@ -2091,6 +2098,69 @@ export class HostSessionHttpClient implements
       `/v1/projects/${encodeURIComponent(projectId)}`,
     );
     return result.deleted;
+  }
+
+  // ── Plan 621: checkout and integration observations ───────────────────
+  //
+  // Every surface — Desktop, TUI, Web — asks the Host through these methods
+  // and nowhere else. A surface that reached into git or GitHub itself would
+  // rebuild the mapping the Host already owns (plan 621 §4.3), and a surface
+  // that decided on an observed `reclaimable` would be deciding on a
+  // snapshot. The Host re-evaluates every condition at the moment of the
+  // action, which is why `requestCheckoutReclaim` is a call and not a flag.
+
+  /** The checkout the given session sits in, and whether it owns it. */
+  async observeCheckoutForSession(sessionId: SessionId): Promise<HostSessionCheckoutView> {
+    const result = await this.request<{ checkout: HostSessionCheckoutView }>(
+      'GET',
+      `/v1/checkouts?${new URLSearchParams({ sessionId }).toString()}`,
+    );
+    return result.checkout;
+  }
+
+  /** One checkout, observed by root path. */
+  async observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved> {
+    const result = await this.request<{ checkout: HostCheckoutObserved }>(
+      'GET',
+      `/v1/checkouts?${new URLSearchParams({ root }).toString()}`,
+    );
+    return result.checkout;
+  }
+
+  /**
+   * Ask the Host to remove one checkout.
+   *
+   * A refusal is a normal answer, not a failure: `{ removed: false, reason }`
+   * means the Host refused and nothing was deleted.
+   */
+  async requestCheckoutReclaim(
+    root: string,
+  ): Promise<
+    { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason }
+  > {
+    const result = await this.request<{
+      result: { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason };
+    }>('POST', '/v1/checkouts/reclaim', { root });
+    return result.result;
+  }
+
+  /** The integrations associated with a session, as last observed. Never hits the network. */
+  async observeIntegrationsForSession(sessionId: SessionId): Promise<readonly HostIntegrationRecord[]> {
+    const result = await this.request<{ records: readonly HostIntegrationRecord[] }>(
+      'GET',
+      `/v1/integrations?${new URLSearchParams({ sessionId }).toString()}`,
+    );
+    return result.records;
+  }
+
+  /**
+   * Ask the Host to re-read the session's pull requests NOW.
+   *
+   * This is the only call that touches the hosting service; the read above
+   * never does. It is the explicit refresh the contract asks for (§4.6).
+   */
+  async syncIntegrations(sessionId: SessionId): Promise<HostIntegrationSyncResult> {
+    return this.request<HostIntegrationSyncResult>('POST', '/v1/integrations/sync', { sessionId });
   }
 
   private async request<T>(
