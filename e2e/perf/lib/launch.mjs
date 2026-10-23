@@ -140,12 +140,25 @@ export async function waitForAppReady(page, timeoutMs = 60_000) {
 
 async function waitForFirstWindow(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  let page = app.windows()[0];
+  let page = null;
   while (!page && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 25));
-    page = app.windows()[0];
+    const windows = app.windows();
+    // The app opens a SAFE-MODE window (a `data:` URL) when it cannot reach
+    // its database. That window has no localStorage and no renderer, so the
+    // harness must not measure it: the real renderer is the `file:` one.
+    const usable = windows.filter((window) => !window.url().startsWith('data:'));
+    page = usable.find((window) => window.url().startsWith('file:')) ?? usable[0] ?? null;
   }
-  if (!page) throw new Error('Electron did not create a BrowserWindow in time');
+  if (!page) {
+    const safeMode = app.windows().find((window) => window.url().startsWith('data:'));
+    throw new Error(
+      safeMode
+        ? 'Electron only opened its SAFE-MODE window (the app could not reach its database), '
+          + 'so there is no renderer to measure'
+        : 'Electron did not create a BrowserWindow in time',
+    );
+  }
   return page;
 }
 
@@ -413,11 +426,53 @@ export async function readHydrationState(page) {
  *
  * Nothing is written behind the product's back: the rows land in the same
  * store the app reads from, in the same shape the app writes.
+ *
+ * The seed RETRIES while the Host is not up yet: the desktop Host answers
+ * "Desktop Host session API is not running" for the first seconds of a cold
+ * launch, and a seed that lands in that window would fail the whole sample
+ * for a reason that has nothing to do with the measurement.
  */
 export async function seedSession(page, options) {
   const { sessionId, title, workingDirectory, messages } = options;
-  const result = await page.evaluate(
-    async (args) => {
+  const deadline = Date.now() + (options.timeoutMs ?? 90_000);
+  let lastError = null;
+  for (;;) {
+    try {
+      const result = await seedSessionOnce(page, {
+        sessionId,
+        title,
+        workingDirectory,
+        messages,
+        permissionProfile: options.permissionProfile,
+      });
+      if (result.replaced?.success === false) {
+        throw new Error(
+          `seeding ${sessionId} failed: ${result.replaced.reason ?? 'unknown reason'}`,
+        );
+      }
+      if (result.readBackCount !== messages.length) {
+        throw new Error(
+          `seeding ${sessionId} wrote ${messages.length} rows but the product reads back `
+            + `${result.readBackCount}`,
+        );
+      }
+      return result;
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message ?? error);
+      const hostNotReady =
+        message.includes('is not running')
+        || message.includes('not ready')
+        || message.includes('Session API');
+      if (!hostNotReady || Date.now() >= deadline) throw error;
+      await page.waitForTimeout(1000);
+    }
+  }
+}
+
+async function seedSessionOnce(page, args) {
+  return page.evaluate(
+    async (input) => {
       const api = window.electronAPI;
       if (!api) throw new Error('window.electronAPI is not available');
       // The folder becomes a project of the profile, the way it does when a
@@ -428,52 +483,35 @@ export async function seedSession(page, options) {
       let projectRegistered = null;
       try {
         if (api.projects?.addRecentFolder) {
-          projectRegistered = await api.projects.addRecentFolder(args.workingDirectory);
+          projectRegistered = await api.projects.addRecentFolder(input.workingDirectory);
         }
       } catch (error) {
         projectRegistered = `ERROR: ${String(error?.message ?? error).slice(0, 160)}`;
       }
       const created = await api.thread.create({
-        id: args.sessionId,
-        title: args.title,
-        working_directory: args.workingDirectory,
+        id: input.sessionId,
+        title: input.title,
+        working_directory: input.workingDirectory,
         // 'auto' keeps a tool call from waiting for an approval prompt, which
         // would stall a measurement instead of exercising the streaming path.
-        permission_profile: args.permissionProfile,
+        permission_profile: input.permissionProfile,
       });
-      const replaced = await api.message.replace(args.sessionId, args.messages, 0);
+      const replaced = await api.message.replace(input.sessionId, input.messages, 0);
       // Read the transcript back through the same bridge: a seed that the
       // product cannot read back is not a seed, and a scenario that measures
       // an empty transcript reports numbers about nothing.
-      const readBack = await api.message.getBySession(args.sessionId, {
+      const readBack = await api.message.getBySession(input.sessionId, {
         includeSuperseded: true,
       });
       return {
         createdId: created?.id ?? null,
         replaced,
         readBackCount: Array.isArray(readBack) ? readBack.length : null,
+        projectRegistered,
       };
     },
-    {
-      sessionId,
-      title,
-      workingDirectory,
-      messages,
-      permissionProfile: options.permissionProfile ?? 'auto',
-    },
+    args,
   );
-  if (result.replaced?.success === false) {
-    throw new Error(
-      `seeding ${sessionId} failed: ${result.replaced.reason ?? 'unknown reason'}`,
-    );
-  }
-  if (result.readBackCount !== messages.length) {
-    throw new Error(
-      `seeding ${sessionId} wrote ${messages.length} rows but the product reads back `
-        + `${result.readBackCount}`,
-    );
-  }
-  return result;
 }
 
 /**
