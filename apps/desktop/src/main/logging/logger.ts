@@ -233,7 +233,25 @@ class Logger extends EventEmitter {
       })
 
       this.writeStream.on('error', (err) => {
-        this.emit('error', err)
+        // A write failure must never take the process down. `emit('error')`
+        // on an EventEmitter with no 'error' listener THROWS the error as an
+        // uncaught exception (Node's documented behaviour), so the previous
+        // unguarded emit turned every recoverable condition -- the log
+        // directory removed underneath us, a full disk, a revoked permission
+        // -- into a crash of the whole Electron main process, and into a
+        // red CI job for any PR that happened to schedule this test file.
+        //
+        // The stream is also unusable after an open error, so it is dropped:
+        // `write()` falls back to the synchronous path, which already
+        // swallows its own failures.
+        this.writeStream = null
+        this.logQueue.length = 0
+        // Re-emit only when somebody is listening. Node's convention is that
+        // an unhandled 'error' is fatal, so silence is the safe default here
+        // and observers opt in by subscribing.
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', err)
+        }
       })
     } catch (error) {
       // Fallback: cannot use logger here since it's being initialized
@@ -388,8 +406,13 @@ class Logger extends EventEmitter {
     this.writeStream.write(batch, (err) => {
       this.isWriting = false
       if (err) {
-        // Put failed logs back to queue for retry
-        this.logQueue.unshift(batch)
+        // Put failed logs back to queue for retry -- but only while the
+        // stream is still usable. After a stream-level error the stream is
+        // dropped (see initWriteStream), and re-queueing the batch would
+        // grow the queue without any writer to drain it.
+        if (this.writeStream) {
+          this.logQueue.unshift(batch)
+        }
       }
     })
   }
