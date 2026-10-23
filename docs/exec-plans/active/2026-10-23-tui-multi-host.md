@@ -90,6 +90,13 @@
 | 85d74c86 | Windows / Node 24.16 | `npm run electron:build` | 0；`Electron build complete`，native 模块已复制 | 桌面端打包链路未被本次改动破坏 |
 | 85d74c86 | Windows / Node 24.16 | `npm run check:encoding` | 0；OK（11 known） | 编码门禁 |
 | 45feb62f | Windows / Node 24.16 | `npx vitest run --changed=<origin/master> --maxWorkers=2`（与 CI 同范围） | 0；**183 文件 / 1766 用例通过**，6 skipped | 本地复现 CI 的测试范围，全绿 |
+| e269c53e | Windows / Node 24.16 | `npx vitest run apps/desktop/src/main/__tests__/logger-write-stream-error.test.ts` | 0；2 用例通过 | logger 回归测试 |
+| e269c53e | Windows / Node 24.16 | **回退修复后重跑同一测试** | 1；报出同样的 `ENOENT ... app.log` 未捕获异常 | 证明该测试确实能抓住此 bug |
+| e269c53e | Windows / Node 24.16 | `npx vitest run apps/desktop` | 0；**293 文件 / 3461 用例通过**，9 skipped | desktop 无回归 |
+| e269c53e | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 末步 eval check 4/4 |
+| e269c53e | Windows / Node 24.16 | `npm run architecture:check` | 0；无新增越界 | 2611 条全部 baselined |
+| e269c53e | Windows / Node 24.16 | `npm run check:encoding` | 0；OK（11 known） | 编码门禁 |
+| e269c53e | Windows / Node 24.16 | `npm run bundle:verify` | 0；`FRESH 0/922` | desktop 的 logger **不在** worker bundle 输入集内（1950 个输入中无 `main/logging/logger.ts`），故本次修复不要求重建 bundle |
 
 ## CI 状态（run 39981375971）
 
@@ -110,6 +117,25 @@ Uncaught Exception: ENOENT: no such file or directory, open '/tmp/duya-cron-test
 3. **本地同范围全绿**：以 CI 相同的 `--changed` 口径跑，183 文件 / 1766 用例通过，exit 0。
 
 注：master 上的 push run（run 39975324429，SHA `c81ed169`）虽然 `test` job 显示 success，但按 `scripts/ci/test-scope.mjs:210`，push 事件的 `unit_scope=skip`，**测试步骤根本没执行**，因此不能作为对照基线；PR 触发的 run 才是可比口径。
+
+### 顺带修掉的 CI 阻塞：desktop logger 的未捕获异常
+
+第二次 run 仍是同一签名，且已证明是**任何改动 `packages/host/src` / `packages/data/src` 的 PR 都会中招**的陷阱：这类 PR 会把 `apps/desktop` 的测试拉进 CI 的 affected 集合 → `crons.test.ts` 开始跑 → 撞上一个 2026-05 就存在的潜伏竞态。
+
+根因（两处既有代码的交互，均早于本改动）：
+
+- `apps/desktop/src/main/logging/logger.ts:235-237` 的写流错误处理是裸的 `this.emit('error', err)`。`Logger extends EventEmitter`，而**全仓没有任何地方给它注册 `error` 监听器**——Node 的标准语义是「`error` 事件无监听器即抛成未捕获异常」。
+- `apps/desktop/src/main/cli/handlers/crons.test.ts:109` 的 `afterEach` 用 `rmSync` 删掉临时数据根，此时 logger 的写流还开着。
+
+结果：**日志目录被删 / 磁盘满 / 权限变更，都会让整个 Electron 主进程崩溃**——这不只是测试问题，是生产缺陷。
+
+修法（`fix(desktop): stop a logger write failure from crashing the process`）：
+
+1. 写流报错时丢弃该流并清空队列（流已不可用，`write()` 自动回落到吞掉自身失败的同步路径）。
+2. **只在有外部监听者时才 `emit('error')`**，静默作为安全默认。
+3. `flush()` 的写回调在流已失效时不再把 batch 塞回队列（否则队列只涨不消）。
+
+回归测试 `apps/desktop/src/main/__tests__/logger-write-stream-error.test.ts` 已验证**能抓住这个 bug**：`git stash` 掉修复后立刻报出同样的 `ENOENT ... app.log` 未捕获异常。
 
 ## 接续 / 结果
 
