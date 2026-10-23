@@ -2,6 +2,7 @@
 
 状态：done · 负责人：mvs_82ed50bdb9b04e228b7d48bcb2ea011a · 更新：2026-10-23
 分支：codex/claude-code-tool-group-parity · worktree：E:\Projects\duya\.claude\worktrees\claude-code-parity · base：a37c5d68 · owner：mavis
+PR：https://github.com/lava-chen/duya/pull/368（已合并 `2c91e9b7`）
 
 ## 目标与边界
 
@@ -55,7 +56,7 @@
 
 已实现：轮级汇总行（分类动词 + 聚合 diffstat）、分类顺序文件优先、create 独立成类、caret 行尾常显、轮级展开态持久化、分组展开体卡片化。
 已验证：`typecheck:all` / `architecture:check` / packages/ui 全量 vitest / Electron dev 实跑（双主题，断言 + 截图）。
-PR URL：见提交记录。
+PR URL：https://github.com/lava-chen/duya/pull/368（已合并 `2c91e9b7`）。
 
-回收：未回收（PR 未集成）。
-下一步：P2 —— 压平 3 层结构（轮展开直接给行列表）、diff 语法高亮 + 上下文行 + 内部滚动、展开卡片完整路径头。
+回收：已合并回收。
+下一步：P2（[工具组 P2](2026-10-23-tool-group-flatten-and-diff.md)）已合并 `43df59f4`。**注意 P2 把本计划的轮级统计回退了**——轮级折叠行改回只报耗时，统计移回组级折叠行（分层契约见 P2 计划的「发现与决策」）。本计划里的「轮级 diffstat 紧跟动词短语」不再是当前形态。
