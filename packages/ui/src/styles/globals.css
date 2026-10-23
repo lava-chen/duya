@@ -21,6 +21,7 @@
 @import "./pages.css";
 @import "./file-workspace.css";
 @import "./sidebar-sections.css";
+@import "./workspace-lifecycle.css";
 
 @plugin "@tailwindcss/typography";
 
