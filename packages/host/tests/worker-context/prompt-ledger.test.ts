@@ -14,15 +14,19 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildPromptSnapshot,
   newPromptLedgerState,
+  promptLedgerEnabled,
   promptLedgerQuota,
   toRecordedBlocks,
 } from '@duya/host/worker-context/prompt-ledger';
 
 const ORIGINAL_QUOTA = process.env.DUYA_PROMPT_LEDGER_MAX_FULL;
+const ORIGINAL_SWITCH = process.env.DUYA_PROMPT_LEDGER;
 
 afterEach(() => {
   if (ORIGINAL_QUOTA === undefined) delete process.env.DUYA_PROMPT_LEDGER_MAX_FULL;
   else process.env.DUYA_PROMPT_LEDGER_MAX_FULL = ORIGINAL_QUOTA;
+  if (ORIGINAL_SWITCH === undefined) delete process.env.DUYA_PROMPT_LEDGER;
+  else process.env.DUYA_PROMPT_LEDGER = ORIGINAL_SWITCH;
 });
 
 describe('plan 619 phase 4 — the prompt ledger', () => {
@@ -120,6 +124,16 @@ describe('plan 619 phase 4 — the prompt ledger', () => {
       overridden: true,
     });
     expect(snapshot?.overridden).toBe(true);
+  });
+
+  it('turns the whole ledger off on request', () => {
+    // The snapshot stores the prompt TEXT. The rollout already holds the
+    // user's messages and the tool results, so this is not a new class of
+    // content — but it is a copy of the system prompt, so the switch has
+    // to exist.
+    expect(promptLedgerEnabled()).toBe(true);
+    process.env.DUYA_PROMPT_LEDGER = 'off';
+    expect(promptLedgerEnabled()).toBe(false);
   });
 
   it('turns rail blocks into the recorded shape', () => {
