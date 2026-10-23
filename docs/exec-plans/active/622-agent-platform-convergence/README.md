@@ -1,6 +1,10 @@
 # 622 — 平台收口系列（依赖测量先行）
 
 > **一句话**：先把「依赖图测不准」这件事修好，再谈拆包、提层、退役。
+>
+> **交接（2026-10-23）**：第一波卡 01 / 07 / 08 / 09 的执行 agent 会话丢失，
+> 其工作区改动已由父 agent 提交为 **WIP 快照并推送到远端**（**未验证、未开 PR**）。
+> 远端分支状态、重建检出命令与环境坑见 [HANDOFF.md](./HANDOFF.md)。
 > 本系列是 622 号工作项的**唯一状态源**；卡片状态只认**具名测试 + commit**。
 
 - 编号：622（610–621 已占用）
@@ -350,15 +354,15 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 
 | 卡 | 状态 | 首个失败证据（今天长什么样） | 验收命令 | 依赖 |
 | --- | --- | --- | --- | --- |
-| [01](01-import-graph-resolver.md) | todo | `import-graph.test.ts` 里**没有任何**裸 `@duya/*` 用例；`resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts` | T19 |
+| [01](01-import-graph-resolver.md) | `ee29d9cb`（WIP 快照，无绿测试 → **未完成**） | `import-graph.test.ts` 里**没有任何**裸 `@duya/*` 用例；`resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts` | T19 |
 | [02](02-gate-wiring-and-single-resolver.md) | todo | `.github/workflows/test.yml` 里 `architecture:slice-graph` 命中 **0** 次；`agent-retirement-gate` 命中 **0** 次 | `grep -c "architecture:slice-graph" .github/workflows/test.yml` ≥ 1 且 `npm run architecture:check` 仍绿 | 01 |
 | [03](03-host-layer-verdict.md) | todo | `boundary-gates.test.ts` 没有"每个包都有层"的断言；10/20 包无层；G1 只审 523/2593 条 | `npx vitest run scripts/architecture/boundary-gates.test.ts` + `npm run architecture:boundaries` | 01 02 |
 | [04](04-remaining-unlayered-packages.md) | todo | 同上，"无层包"清单仍含 10 个 | `npx vitest run scripts/architecture/boundary-gates.test.ts` | 03 |
 | [05](05-client-axis-reverse-gate.md) | todo | G11 只覆盖浏览器入口；`packages/client-core` / `packages/ui` / `packages/cli` 的反向边无人守 | `npx vitest run scripts/architecture/client-closure-gate.test.ts` | 03 04 |
 | [06](06-runtime-purity.md) | todo | `authorization/permissions/types.ts:1` / `policy.ts:1` 的 `export * from '@duya/capabilities/permissions'` 让 runtime 运行时依赖 capabilities | `npx vitest run packages/agent-runtime/test/**` | 04 |
-| [07](07-workflow-dag-parallel.md) | todo | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
-| [08](08-background-subagent-lifecycle.md) | todo | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
-| [09](09-security-and-governance.md) | todo | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
+| [07](07-workflow-dag-parallel.md) | `2b3db6b1`（WIP 快照，无绿测试 → **未完成**） | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
+| [08](08-background-subagent-lifecycle.md) | `8acbe4ce`（WIP 快照，仅 Phase 1 测试层 → **未完成**） | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
+| [09](09-security-and-governance.md) | `89569a63`（WIP 快照，无绿测试 → **未完成**） | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
 | [10](10-retirement-and-doc-truth.md) | todo | 退役门禁 `OPEN`（770 处引用）；`ARCHITECTURE_MAP.md:16` 写「23 packages」；`test-inventory.json` 162 处指向已删文件 | `node scripts/architecture/agent-retirement-gate.mjs` + `npm run test:inventory` | — |
 | [11](11-resident-reconciler.md) | todo | `packages/host` / `packages/cli` 无任何对账启动路径；`reconcileRollouts` 无开机调用 | `npx vitest run packages/host/tests/**reconcil**` | 08 |
 
@@ -370,6 +374,8 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
   base：`d9eb7dba96f63b3e07b4fba9c068acd017616913`。
 - 本系列**只产出文档**。所有卡片的执行由后续 agent 在各自独立检出完成，
   一卡一 PR，按 §5.1 的依赖顺序。
+- **2026-10-23 交接**：卡 01 / 07 / 08 / 09 已产出 WIP 提交并推送远端，
+  接手方从 [HANDOFF.md](./HANDOFF.md) 接手；先 rebase 到最新 master，再补验收与 PR。
 - **下一步（一条能开始执行的动作）**：
   认领 [01](01-import-graph-resolver.md)，先在 T19 的根因上补一条
   `import-graph.test.ts` 用例，证明裸 `@duya/*` 今天解析为 `null`，
