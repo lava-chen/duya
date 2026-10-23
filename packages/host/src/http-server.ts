@@ -77,6 +77,7 @@ import type {
 } from '@duya/agent-protocol';
 import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
+import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
 import type { JournalRecord } from '@duya/agent-protocol';
 import type { GoalCreateInput, GoalStatus, HostGoalApiV1 } from '@duya/agent-protocol/goals';
@@ -395,6 +396,14 @@ export interface HostSessionHttpServerOptions {
   readonly checkoutApi?: HostCheckoutApiV1;
   /** Observed PR/CI/review projection (plan 621). Absent answers 404, same reason. */
   readonly integrationApi?: HostIntegrationApiV1;
+  /**
+   * Session-level integration sync (plan 621 slice E). It is the explicit
+   * "re-read GitHub now" act that writes the projection; reading
+   * `integrationApi` never does. Optional for the same reason as the API
+   * above: a Host without a sync implementation answers 404 with a named code
+   * instead of pretending the projection is current.
+   */
+  readonly integrationSync?: IntegrationSync;
   readonly token: string;
   readonly host?: string;
   readonly port?: number;
@@ -2888,6 +2897,34 @@ export class HostSessionHttpServer {
       try {
         await api.linkSession(repo, prNumber as number, sessionId as SessionId);
         this.#sendJson(res, 200, { linked: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === '/v1/integrations/sync') {
+      const sync = this.#options.integrationSync;
+      if (!sync) {
+        this.#sendJson(res, 404, { error: { code: 'integration_sync_unavailable' } });
+        return;
+      }
+      if (req.method !== 'POST') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const sessionId = body.sessionId;
+      if (!isBoundedString(sessionId, 1, 4096)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_integration_sync' } });
+        return;
+      }
+      try {
+        // The result is reported as it happened: `written` is what landed,
+        // `failed` is what GitHub did not answer for. A partial sync is a
+        // partial sync, not a success.
+        this.#sendJson(res, 200, await sync.syncSession(sessionId));
       } catch (error) {
         this.#sendApiError(res, error);
       }
