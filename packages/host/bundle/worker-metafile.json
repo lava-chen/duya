@@ -28660,7 +28660,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session/turn-review.ts": {
-      "bytes": 6860,
+      "bytes": 9629,
       "imports": [
         {
           "path": "node:child_process",
@@ -38217,7 +38217,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -38391,7 +38391,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -38430,7 +38430,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -41241,10 +41241,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50718
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1879
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41259,16 +41259,16 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1694
+          "bytesInOutput": 1695
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3078
+          "bytesInOutput": 3079
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1525
+          "bytesInOutput": 1526
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41277,10 +41277,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50728
+          "bytesInOutput": 50730
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1885
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41667,7 +41667,7 @@
           "bytesInOutput": 117
         },
         "packages/host/src/worker-session/turn-review.ts": {
-          "bytesInOutput": 2872
+          "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
           "bytesInOutput": 246
@@ -41958,7 +41958,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1877
+          "bytesInOutput": 1883
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -42153,7 +42153,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42711,7 +42711,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43551,7 +43551,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4595990
+      "bytes": 4596459
     }
   }
 }
