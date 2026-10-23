@@ -518,11 +518,23 @@ html[data-message-font-size="large"] .prose h3 {
   width: 100%;
 }
 
+/* Expanded group body — a bordered rounded card with hairline dividers
+   between the rows, matching the reference transcripts (Codex / Claude
+   Code), where the expanded tool list is one card with one line per
+   tool call instead of a left indent rule. The card is nudged right so
+   it clears the round's left rule and lines up with the header text. */
 .tool-group-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 0.15rem 0;
+  margin: 0.3rem 0 0.45rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.tool-group-body > * + * {
+  border-top: 1px solid var(--border-weak);
 }
 
 .tool-group-fallback {

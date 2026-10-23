@@ -13,19 +13,23 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
+import { DiffStatBadge } from '../chrome/DiffStatBadge';
 import { resolveGroupDisplayTitle } from './buildGroupDisplayTitle';
+import { aggregateFileEditStats } from '../fileEditStats';
 import { isBrowserFallbackMode } from '../registry';
 import { isBrowserTool } from '../classify';
+import { getExpansion, writeExpansion } from '../expansionStore';
 import { ToolActionRow } from '../rows/ToolActionRow';
 import { ThinkingRow } from '../rows/ThinkingRow';
 import { HookActionRow } from '../rows/HookActionRow';
 import type { SegmentEntry, ToolAction, ToolStatus } from '../types';
 
-// Module-level expansion-state store. Keyed by the group's stable
-// identity (first tool's id, or a positional fallback). This survives
-// streaming updates that rebuild the `entries` array — the Group
-// component re-renders with new entries but its `expanded` state is
-// rehydrated from this Map instead of resetting to false.
+// Expansion state lives in the shared module-level store (see
+// ../expansionStore) — keyed by the group's stable identity (first
+// tool's id, or a positional fallback). This survives streaming
+// updates that rebuild the `entries` array — the Group component
+// re-renders with new entries but its `expanded` state is rehydrated
+// from the store instead of resetting to false.
 //
 // Without this, when the agent is mid-flight and the user clicks to
 // expand a group, the next streaming SSE event rebuilds the actions
@@ -33,24 +37,7 @@ import type { SegmentEntry, ToolAction, ToolStatus } from '../types';
 // remount the Group subtree (new segment identity even though the
 // logical group is the same) — losing the user's expansion state and
 // forcing them to re-click.
-//
-// The Map is bounded to prevent unbounded growth across a long
-// session; when it exceeds the limit the oldest entry is evicted
-// (Map preserves insertion order in JS).
-const GROUP_EXPANSION_LIMIT = 500;
-const groupExpansionState = new Map<string, boolean>();
-
-function getGroupExpansion(key: string): boolean {
-  return groupExpansionState.get(key) ?? false;
-}
-
-function setGroupExpansion(key: string, value: boolean): void {
-  if (groupExpansionState.size >= GROUP_EXPANSION_LIMIT) {
-    const firstKey = groupExpansionState.keys().next().value;
-    if (firstKey !== undefined) groupExpansionState.delete(firstKey);
-  }
-  groupExpansionState.set(key, value);
-}
+const EXPANSION_SCOPE = 'group';
 
 interface GroupProps {
   entries: SegmentEntry[];
@@ -107,19 +94,30 @@ export function Group({
   // initializer can read the persisted value.
   const groupKey = `grp-${tools[0]?.tool.groupId ?? tools[0]?.tool.id ?? `idx0-${entries[0]?.kind ?? 'unknown'}`}`;
 
-  // Rehydrate expansion state from the module-level Map. The lazy
-  // initializer only runs on mount, so subsequent updates to the Map
+  // Rehydrate expansion state from the shared store. The lazy
+  // initializer only runs on mount, so subsequent updates to the store
   // (from this or other Group instances) don't override local state.
-  const [expanded, setExpanded] = useState(() => getGroupExpansion(groupKey));
+  const [expanded, setExpanded] = useState(() => getExpansion(EXPANSION_SCOPE, groupKey) ?? false);
   const [hovered, setHovered] = useState(false);
 
   const toggleExpanded = () => {
     setExpanded((prev) => {
       const next = !prev;
-      setGroupExpansion(groupKey, next);
+      writeExpansion(EXPANSION_SCOPE, groupKey, next);
       return next;
     });
   };
+
+  // Round-level diff stat for this group — summed from the same
+  // per-row numbers the expanded rows show, so the header stat and the
+  // rows underneath can never disagree. `entries` is the stable
+  // identity of this group (the segment array is memoized upstream),
+  // so the memo survives re-renders that rebuild `tools`.
+  const diffStat = React.useMemo(
+    () => aggregateFileEditStats(tools.map((entry) => entry.tool)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entries],
+  );
 
   const body = (
     <div className="tool-group-body">
@@ -160,6 +158,9 @@ export function Group({
       onClick={toggleExpanded}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      rightSlot={
+        <DiffStatBadge additions={diffStat.additions} removals={diffStat.removals} />
+      }
     >
       <span data-title-source={displayTitle.source}>{displayTitle.title}</span>
     </ActionRowChrome>

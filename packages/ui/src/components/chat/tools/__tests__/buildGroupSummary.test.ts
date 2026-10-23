@@ -30,14 +30,44 @@ describe('buildGroupSummary', () => {
     expect(out).toBe('other 3');
   });
 
-  it('preserves the canonical category order (commands → edit → read → search → browser → agent → ask → memory → skill → tools)', () => {
+  it('preserves the canonical category order (files → commands → others)', () => {
+    // Category-aware mock: the shared `t` renders every category as
+    // "one N" / "other N", which cannot tell the categories apart.
+    const categoryT = (key: string, params?: Record<string, string | number>) => {
+      if (key === 'streaming.toolAction.groupSummary.andMore') {
+        return `+${params?.count ?? 0} more`;
+      }
+      const category = key
+        .replace('streaming.toolAction.groupSummary.', '')
+        .replace(/\.(one|other)$/, '');
+      return `${category}:${params?.count ?? 0}`;
+    };
+
     const out = buildGroupSummary([
       tool('skill'),
       tool('bash'),
+      tool('read'),
       tool('edit'),
-    ], t, 'en');
-    // bash first (commands), then edit (editFiles), then skill.
-    expect(out).toBe('one 1, one 1, one 1');
+    ], categoryT, 'en');
+    // File work first, then commands, then the rest — and the 4th
+    // category folds into the "+N more" tail (the group header keeps
+    // the 3-part budget).
+    expect(out).toBe('editFiles:1, readFiles:1, commands:1, +1 more');
+  });
+
+  it('counts file creation separately from file edits', () => {
+    const categoryT = (key: string, params?: Record<string, string | number>) => {
+      const category = key
+        .replace('streaming.toolAction.groupSummary.', '')
+        .replace(/\.(one|other)$/, '');
+      return `${category}:${params?.count ?? 0}`;
+    };
+
+    const out = buildGroupSummary([
+      tool('write', { file_path: 'b.ts', content: 'x' }),
+      tool('edit', { file_path: 'a.ts' }),
+    ], categoryT, 'en');
+    expect(out).toBe('editFiles:1, createFiles:1');
   });
 
   it('falls back to a locale-aware count string when no category matches', () => {

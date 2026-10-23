@@ -432,6 +432,8 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.groupSummary.commands.other': '已运行 {count} 次命令',
   'streaming.toolAction.groupSummary.editFiles.one': '已编辑 1 个文件',
   'streaming.toolAction.groupSummary.editFiles.other': '已编辑 {count} 个文件',
+  'streaming.toolAction.groupSummary.createFiles.one': '已创建 1 个文件',
+  'streaming.toolAction.groupSummary.createFiles.other': '已创建 {count} 个文件',
   'streaming.toolAction.groupSummary.readFiles.one': '已读 1 个文件',
   'streaming.toolAction.groupSummary.readFiles.other': '已读 {count} 个文件',
   'streaming.toolAction.groupSummary.search.one': '已搜索 1 次',

@@ -430,6 +430,8 @@ const en = {
   'streaming.toolAction.groupSummary.commands.other': 'Ran {count} commands',
   'streaming.toolAction.groupSummary.editFiles.one': 'Edited 1 file',
   'streaming.toolAction.groupSummary.editFiles.other': 'Edited {count} files',
+  'streaming.toolAction.groupSummary.createFiles.one': 'Created 1 file',
+  'streaming.toolAction.groupSummary.createFiles.other': 'Created {count} files',
   'streaming.toolAction.groupSummary.readFiles.one': 'Read 1 file',
   'streaming.toolAction.groupSummary.readFiles.other': 'Read {count} files',
   'streaming.toolAction.groupSummary.search.one': 'Searched 1 time',
