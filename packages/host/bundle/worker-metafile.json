@@ -92,7 +92,7 @@
       "format": "esm"
     },
     "packages/data/src/integration-store.ts": {
-      "bytes": 10672,
+      "bytes": 14844,
       "imports": [],
       "format": "esm"
     },
@@ -10257,7 +10257,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/contextFingerprint.ts": {
-      "bytes": 3157,
+      "bytes": 3252,
       "imports": [
         {
           "path": "node:crypto",
@@ -27703,7 +27703,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 30763,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -38291,7 +38291,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-context/context-rail.ts": {
-      "bytes": 3928,
+      "bytes": 4039,
       "imports": [
         {
           "path": "node:crypto",
@@ -38307,7 +38307,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-context/prompt-ledger.ts": {
-      "bytes": 5423,
+      "bytes": 5596,
       "imports": [
         {
           "path": "node:crypto",
@@ -43720,7 +43720,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -45526,7 +45526,7 @@
           "bytesInOutput": 6016
         },
         "packages/capabilities/src/BrowserTool/CDPClient.ts": {
-          "bytesInOutput": 21606
+          "bytesInOutput": 21619
         },
         "packages/capabilities/src/BrowserTool/SnapshotEngine.ts": {
           "bytesInOutput": 42365
@@ -46009,7 +46009,7 @@
           "bytesInOutput": 3922
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "../../../node_modules/ajv/dist/compile/codegen/code.js": {
           "bytesInOutput": 2614
@@ -46519,7 +46519,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 321
+          "bytesInOutput": 308
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2556
@@ -46549,7 +46549,7 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -49780,7 +49780,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5548432
+      "bytes": 5548445
     }
   }
 }
