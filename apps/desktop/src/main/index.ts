@@ -78,6 +78,7 @@ import { registerExtensionInstallerHandlers } from './ipc/extension-installer-ha
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
+import { registerWorkspaceLifecycleHandlers } from './ipc/workspace-lifecycle-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
 import { registerBangHandlers } from './ipc/bang-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
@@ -1247,6 +1248,9 @@ registerBrowserCookieHandlers();
 // "No handler registered for 'extensionInstaller:detect'".
 registerExtensionInstallerHandlers();
 registerGitHandlers();
+// Plan 621 slice F: the renderer's window onto the Host's checkout and
+// integration observations.
+registerWorkspaceLifecycleHandlers();
 // Plan 552 Phase 7: workflow console reads (run list / journal).
 registerWorkflowHandlers();
 // Plan 556 Phase 5: recorder control + session library + badge overlay.

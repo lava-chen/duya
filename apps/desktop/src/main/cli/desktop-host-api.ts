@@ -54,7 +54,12 @@ import type {
   HostLockApiV1,
   HostHealthApiV1,
   HostLocalProviderModelCapabilityApiV1,
+  HostCheckoutObserved,
+  HostIntegrationRecord,
+  HostIntegrationSyncResult,
+  HostSessionCheckoutView,
 } from '@duya/agent-protocol';
+import type { WorkspaceLifecycleReclaimResult } from '../../contracts/workspace-lifecycle';
 import type { HostLocalAttachmentApiV1 } from '@duya/agent-protocol/session-api';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { HostSessionHttpServer } from '@duya/host/http-server';
@@ -443,6 +448,28 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
 
 export function getDesktopHostSessionApi(): HostSessionApiV1 & HostWorkspaceRegistrationApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host session API is not running');
+  return sessionApiClient;
+}
+
+/**
+ * The Host client's workspace-lifecycle half (plan 621).
+ *
+ * The Desktop's main process talks to the Host it embeds through the same
+ * authenticated HTTP client every other Host capability uses, and the
+ * checkout / integration methods are part of that client. This accessor hands
+ * out exactly the surface the renderer needs: no second client, and no
+ * mapping rebuilt here.
+ */
+export interface DesktopHostWorkspaceLifecycleApi {
+  observeCheckoutForSession(sessionId: string): Promise<HostSessionCheckoutView>;
+  observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved>;
+  requestCheckoutReclaim(root: string): Promise<WorkspaceLifecycleReclaimResult>;
+  observeIntegrationsForSession(sessionId: string): Promise<readonly HostIntegrationRecord[]>;
+  syncIntegrations(sessionId: string): Promise<HostIntegrationSyncResult>;
+}
+
+export function getDesktopHostWorkspaceLifecycleApi(): DesktopHostWorkspaceLifecycleApi {
+  if (!sessionApiClient) throw new Error('Desktop Host API is not running');
   return sessionApiClient;
 }
 

@@ -21,6 +21,7 @@ import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerProjectEntityHandlers } from './project-entity-handlers';
 import { registerGitHandlers } from './git-handlers';
+import { registerWorkspaceLifecycleHandlers } from './workspace-lifecycle-handlers';
 import { registerMemoryWakeupHandlers } from './memory-wakeup';
 import {
   registerMemoryListHandlers,
@@ -61,6 +62,7 @@ export {
   registerProjectDatabaseHandlers,
   registerProjectEntityHandlers,
   registerGitHandlers,
+  registerWorkspaceLifecycleHandlers,
   registerMemoryWakeupHandlers,
   registerMemoryListHandlers,
   registerMemorySystemLogHandlers,
