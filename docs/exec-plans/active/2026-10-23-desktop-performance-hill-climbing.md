@@ -87,18 +87,38 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [x] 冻结路径所有权，建 6 个检出（5 agent + 1 集成）
 - [x] 写计划并提 PR #382 → 已合并 `766db972`
 - [x] 建测量互斥锁（`E:\Projects\duya\.claude\perf-bench-lock.mjs`）
-- [ ] A 交付 Harness v1，其它 agent 用它取证
-- [ ] B/C/D/E 各自建立基线 → 定位瓶颈 → 一个 PR 一个问题
-- [ ] 集成者按 CI + 证据定合并顺序，合并后重跑 Profile
+- [x] A 交付 Harness v1（PR #386，CI 全绿）
+- [x] B 交付流式渲染优化（PR #385，主线程占用 −49.4%）
+- [x] D 交付 GPU 观测（PR #391，结论：无 GPU 侧可证明收益）
+- [ ] C 交付 React 状态优化 / 侧栏重渲染
+- [ ] E 交付 UI 包架构优化（懒加载与首屏资源）
+- [ ] 集成者按 CI + 证据定合并顺序，合并后**串行**重跑 Profile
 - [ ] 产出按实测收益排序的下一轮机会清单
 
-派工状态：A/B/C/D 已开工（并发上限 4），E 待空位。
+派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径。B 已交付（PR #385）；D 已交付（PR #391）；A 在续做（PR #386）；C 在续做；E 刚开工。A/B/C/D 的首轮会话曾因网络错误与运行丢失中断，已在同一检出上续做。
+
+## 集成记录
+
+| PR | Agent | 内容 | 状态 |
+| --- | --- | --- | --- |
+| #386 | A | 真实 Electron 性能 Harness（`e2e/perf/**`、`scripts/perf/**`） | CI 全绿，待续做收尾后合 |
+| #385 | B | 流式渲染：`CodeBlock` memo 化，停止重高亮已完成代码围栏 | CI 全绿 |
+| #391 | D | GPU 观测：合成状态 + WebGL Context Lost 观测通道 | CI 全绿 |
+| — | C | React 状态更新 / 侧栏重渲染 | 进行中 |
+| — | E | UI 包架构：懒加载与首屏资源 | 进行中 |
+
+合并顺序（A 先合 → B/C/D/E），合并后由集成者**串行**重跑 Profile 出一份权威数字。
+
+PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档、声称「Desktop UI 性能与 TUI 性能不再由 mavis 负责」。**不合并**：它的前提（只查 `master`）与实际不符——#385/#386/#391 已存在且带实测数据；owner 已确认本线继续由 mavis 推进。已在该 PR 下留事实更正评论。
 
 ## 发现与决策
 
 - 本 harness 没有 managed worktree 工具，按 `docs/development/worktree.md` 第 1 节手工建 linked worktree；6 个检出均已用 `scripts/junction-worktree.mjs` 配好依赖覆盖层。
 - 基准不能复用 3000 端口：`dev-detector` 只探 3000–3005，命中的是别的 worktree 的 vite，量到的不是被测代码。走 preview 模式或显式端口。
 - 目标文件规模：`App.tsx` 1192、`ChatView.tsx` 1366、`conversation-store.ts` 1694、`MessageList.tsx` 1209、`MessageInput.tsx` 2356 行。规模不是证据，先 Profile 再动手。
+- **B 的结论**：流式时增长中的消息块每帧重解析整篇 markdown，连**早已写完的代码围栏**也被每帧重新分词 + 重新高亮。判定性实验——同文本把围栏去掉语言（不 tokenize）后主线程占用 1298.6 → 297.5ms，说明**语法高亮占约 78%**。改 `CodeBlock` 为 `React.memo` 后主线程占用 1276.3 → 645.5ms（−49.4%）、帧 p95 33.3 → 16.7ms，`dom.nodes` / `dom.mutations` 全 0% 变化，视觉逐字节一致。**增长中的那段 markdown 仍每帧整篇重解析（约 300ms 量级），是下一轮的候选。**
+- **D 的结论**：GPU 侧**没有**可证明的收益。软件合成（`--disable-gpu`）对终端帧耗时无可证明影响（83.5 vs 99.9ms，落在轮间噪声内）；唯一可证明的差异是**渲染器选择**——终端从 WebGL 回退到 DOM 后帧 p95 116.9 → 183.7ms（+57%）、Long Task 167 → 369。因此本 PR 只交付观测能力，不做 GPU 开关实验。
+- **A 查出的疑似产品缺陷**：全新 profile 且无持久化状态时，`isHydrated` 一直是 false，启动遮罩不消失、composer 保持禁用。根因线索是 zustand v5 下 `onRehydrateStorage` 直接 mutate state 不通知订阅者。落在 `conversation-store.ts`（C 的范围），已转给 C 复核。
 
 ## 验证记录
 
@@ -109,7 +129,11 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 
 ## 接续 / 结果
 
-实现中。集成者：mavis。合并顺序：A 先合（Harness 是其它 agent 的取证工具），B/C/D/E 并行，其间由集成者重跑 Profile 定下一轮。
+实现中。集成者：mavis。合并顺序：A 先合（Harness 是其它 agent 的取证工具），再 B/C/D/E；合并后由集成者**串行**重跑 Profile 出一份权威数字，再出下一轮机会清单。
+
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）。
+待合并：#386（A）、#385（B）、#391（D）。进行中：C、E。
+未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
 
 回收：未回收。6 个检出均未集成，owner 会话在线。
-下一步：派工 5 个 Agent，各带基线要求与证据标准。
+下一步：A 续做收尾后合并 #386；B/D 依次合并；C/E 交付后审阅合并；全部合并后串行重跑 Profile。
