@@ -16,7 +16,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers, registerPanelWindowHandlers } from './ipc/index';
+import { registerDbHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers, registerPanelWindowHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -46,7 +46,6 @@ import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './a
 // imported before database composition. Host Control Plane services are loaded
 // below after the Desktop repository and worker registry are ready.
 import { liveSpawnedWorkerPids } from './control-plane/spawned-workers';
-import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
 import { initRoutineListenerHub } from './automation/listener-hub';
@@ -71,26 +70,18 @@ import { reconcilePluginAppDeclarations } from './services/app-connections/decla
 import { getAppConnectionService } from './services/app-connections/app-connection-service';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
-import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
-// Plan 532: one-click local browser extension install (detect/install/uninstall).
-import { registerExtensionInstallerHandlers } from './ipc/extension-installer-handlers';
-import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
 import { registerBangHandlers } from './ipc/bang-handlers';
 import { registerWorkflowHandlers } from './ipc/workflow-handlers';
-import { registerComputerUsePermissionsHandlers } from './ipc/computer-use-permissions';
-import { registerCuaHandlers } from './ipc/cua-handlers';
 // Plan 556 Phase 5: event recorder IPC + recording badge.
 import { registerRecorderHandlers } from './ipc/recorder-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
 import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
-import { ConductorExecutorProxy } from './conductor/executor-proxy';
-import { workbenchService } from './conductor/workbench-service';
 
 // =============================================================================
 // Core modules (refactored from inline code)
@@ -265,7 +256,6 @@ if (gotTheLock) {
     // Register this handler before boot DB initialization so renderer code can
     // never observe the preload API without its matching main-process route,
     // including when the application falls back to Safe Mode.
-    registerProjectDatabaseHandlers();
     // Plan 525 Phase 2.5: expose the `projects` table to the renderer so
     // downstream UI plans (Plan 530: multi-path sidebar) can read
     // `projects.paths` without re-deriving client-side.
@@ -302,7 +292,6 @@ if (gotTheLock) {
     if (!dbResult.success) {
       logger.error('Database initialization failed', undefined, { error: dbResult.error }, 'Main');
       registerDbHandlers();
-      registerConductorHandlers();
       registerSidebarSectionsHandlers();
       registerMailboxHandlers();
       registerAgentHandlers();
@@ -393,7 +382,6 @@ if (gotTheLock) {
     }
 
     registerDbHandlers();
-    registerConductorHandlers();
     registerSidebarSectionsHandlers();
 
     // Plan 560 §6.2 — crash reconciliation. This process has just booted, so no
@@ -440,26 +428,6 @@ if (gotTheLock) {
       getBotConnectorManager().start();
     } catch (err) {
       logger.warn('Bot connector runtime failed to start', err instanceof Error ? err : new Error(String(err)), 'Main');
-    }
-
-    // Plan 454 follow-up: register the DesktopBackend singleton so
-    // apps/desktop/src/main/ipc/computer-use.ts can dispatch actions. The init
-    // is best-effort — if nut.js / sharp fail to load (headless CI,
-    // missing prebuilt binary), the mode still registers but every
-    // call returns a structured error from the dispatcher.
-    try {
-      const { initializeComputerUseBackend } = await import(
-        './services/computer-use-backend'
-      );
-      initializeComputerUseBackend();
-    } catch (err) {
-      logger.warn(
-        'Computer Use backend bootstrap import failed',
-        {
-          error: err instanceof Error ? err.message : String(err),
-        },
-        'Main',
-      );
     }
 
     // Plan 429 #3 cleanup strategy: sweep pre-image snapshot blobs whose
@@ -555,20 +523,6 @@ if (gotTheLock) {
     // `mailbox:list` calls returned "No handler registered".
     registerMailboxHandlers();
     registerTerminalHandlers();
-    // Plan 454: register the computer-use IPC handler so the agent
-    // process can dispatch `computer-use:execute` messages to the
-    // DesktopBackend singleton. Without this, every computer_use
-    // tool call times out at the IPC layer with "No handler
-    // registered" after 30s — exactly the drift signature reported
-    // when this registration was missing.
-    registerComputerUseHandlers();
-    registerComputerUsePermissionsHandlers();
-    // Plan 575: CUA channel — the 14-tool ZCode-aligned computer-use
-    // surface (list_apps/get_app_state/left_click/...). Without this
-    // the computer_cua tool call fails the same "No handler
-    // registered" way plan 454 documented above.
-    registerCuaHandlers();
-
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)
     // ============================================================
@@ -662,32 +616,23 @@ if (gotTheLock) {
     }
 
 
-    // ============================================================
-    // Step 0.85: computer-use-demo daemon (Plan 453 Task D)
-    // ============================================================
-    // The daemon runs as a long-lived child process and writes
-    // `~/.duya/context/<sessionId>.json` for the OSContextBridge. Only
-    // initialised when `[wake] enabled = true`; if disabled, we skip
-    // spawn entirely (the bridge stays quiet per its default state).
+    // Shared OS context producer used by Wake, Orb, and context consumers.
     try {
-      const { setComputerUseDaemonOptions, getComputerUseDaemon } =
-        await import('./services/computer-use-daemon');
+      const { setRecorderProcessDaemonOptions, getRecorderProcessDaemon } =
+        await import('./services/recorder/process-daemon');
       const configStore = getConfigStore();
-      // Default `wake.enabled` is true when unset (privacy-by-default
-      // means we ship with the bridge on; the daemon itself is opt-in
-      // by file presence).
       const wakeEnabled = (configStore.getByPath('wake.enabled') ?? true) !== false;
       if (wakeEnabled) {
         const resolved = await resolveComputerUseDaemonEntry();
         if (resolved) {
           const { entry, runtime } = resolved;
-          setComputerUseDaemonOptions({
+          setRecorderProcessDaemonOptions({
             entry,
             runtime,
             cwd: path.dirname(entry),
             contextDir: path.join(homedir(), '.duya', 'context'),
           });
-          await getComputerUseDaemon().start();
+          await getRecorderProcessDaemon().start();
         } else {
           logger.info(
             'ComputerUseDaemon entry not found; skipping spawn. ' +
@@ -699,12 +644,13 @@ if (gotTheLock) {
       }
     } catch (error) {
       logger.error(
-        'Failed to start computer-use-demo daemon',
+        'Failed to start shared OS context daemon',
         error instanceof Error ? error : new Error(String(error)),
         undefined,
         'Main',
       );
     }
+
 
     // ============================================================
     // Step 0.9: Wake Agent hotkey + Orb (Plan 453 Task E)
@@ -878,163 +824,11 @@ if (gotTheLock) {
     // ============================================================
     // Step 6: Launch UI
     // ============================================================
-    const agentPool = getAgentProcessPool();
-
-    // Executor RPC handler - delegates to ConductorExecutorProxy
-    const conductorExecutorProxy = new ConductorExecutorProxy();
-
-    // ── Canvas capture: main → renderer → main round-trip ───────────
-    // Pending capture requests keyed by requestId. The renderer responds
-    // via the `conductor:capture:response` IPC handler.
-    const pendingCaptures = new Map<
-      string,
-      {
-        resolve: (data: unknown) => void;
-        reject: (err: Error) => void;
-        timer: NodeJS.Timeout;
-      }
-    >();
-
-    ipcMain.handle('conductor:capture:response', (_event, data: Record<string, unknown>) => {
-      const requestId = data.requestId as string;
-      const pending = pendingCaptures.get(requestId);
-      if (!pending) return; // Stale response, ignore
-
-      pendingCaptures.delete(requestId);
-      clearTimeout(pending.timer);
-
-      if (data.error) {
-        pending.reject(new Error(String(data.error)));
-        return;
-      }
-
-      const result = data.result as {
-        dataUrl?: string;
-        pngBase64?: string;
-        width?: number;
-        height?: number;
-        scope?: string;
-        capturedAt?: string;
-      } | undefined;
-
-      // Save screenshot to a file and return the file path instead of the
-      // base64 dataUrl. This keeps the value passed back to the agent
-      // (and ultimately the LLM) as a short string, avoiding the large
-      // token cost of inlining base64 image data.
-      const dataUrl = result?.dataUrl;
-      if (!dataUrl) {
-        pending.resolve(result);
-        return;
-      }
-
-      try {
-        const base64Match = /^data:image\/(\w+);base64,(.+)$/.exec(dataUrl);
-        if (!base64Match) {
-          pending.resolve(result);
-          return;
-        }
-        const ext = base64Match[1] === 'jpeg' ? 'jpg' : base64Match[1];
-        const buffer = Buffer.from(base64Match[2], 'base64');
-
-        const capturesDir = path.join(tmpdir(), 'duya-captures');
-        fs.mkdirSync(capturesDir, { recursive: true });
-        const filename = `canvas_${Date.now()}.${ext}`;
-        const filePath = path.join(capturesDir, filename);
-        fs.writeFileSync(filePath, buffer);
-
-        pending.resolve({
-          filePath,
-          width: result?.width,
-          height: result?.height,
-          scope: result?.scope,
-          capturedAt: result?.capturedAt ?? new Date().toISOString(),
-        });
-      } catch (err) {
-        getLogger().warn(
-          '[capture] Failed to save screenshot to file, returning raw result',
-          { error: err instanceof Error ? err.message : String(err) },
-          LogComponent.Main,
-        );
-        pending.resolve(result);
-      }
-    });
-
-    // Inject the capture function into the proxy. When the agent calls
-    // `canvas.capture`, the proxy calls this function, which sends a
-    // request to the renderer via the conductor channel and waits for
-    // the renderer to respond via `conductor:capture:response` IPC.
-    conductorExecutorProxy.setCaptureFn(
-      (canvasId, scope, elementId?, region?) =>
-        new Promise((resolve, reject) => {
-          const requestId = randomUUID();
-          // Match the worker-side timeout (CanvasCaptureTool uses 30s).
-          // html2canvas can be slow on large canvases; 15s was too tight
-          // and caused spurious timeouts before the renderer responded.
-          const timeoutMs = 30000;
-          const timer = setTimeout(() => {
-            pendingCaptures.delete(requestId);
-            logger.warn(
-              'Canvas capture timed out waiting for renderer',
-              { requestId, canvasId, scope, timeoutMs },
-              LogComponent.Main,
-            );
-            reject(new Error(`Canvas capture timed out after ${timeoutMs}ms (renderer did not respond). Ensure a canvas view (ConductorView or SidebarConductorView) is mounted.`));
-          }, timeoutMs);
-
-          pendingCaptures.set(requestId, { resolve, reject, timer });
-
-          logger.debug(
-            'Sending canvas capture request to renderer',
-            { requestId, canvasId, scope, elementId, hasRegion: !!region },
-            LogComponent.Main,
-          );
-          channelManager.sendToChannel('conductor', {
-            type: 'conductor:capture:request',
-            requestId,
-            canvasId,
-            scope,
-            elementId,
-            region,
-          });
-        }),
-    );
-
-    // Inject the broadcast function so agent edits (canvas_create_element,
-    // canvas_fill_content, etc.) push state:patch messages to the
-    // renderer's conductor channel. Without this, the canvas only sees
-    // agent edits on the next full snapshot reload — no live update.
-    conductorExecutorProxy.setBroadcastPatch((patch) => {
-      channelManager.sendToChannel('conductor', {
-        type: 'conductor:state:patch',
-        _v2: true,
-        ...patch,
-      });
-    });
-    conductorExecutorProxy.setCanvasManagementChangedFn((event) => {
-      channelManager.sendToChannel('conductor', {
-        type: 'conductor:canvas:changed',
-        ...event,
-      });
-    });
-
-    // Plan 570: canvas workbench runtime — data-source refresh scheduler +
-    // data/sources broadcast over the same conductor channel.
-    workbenchService.setBroadcastFn((message) => {
-      channelManager.sendToChannel('conductor', message);
-    });
-    workbenchService.startScheduler();
-
-    // Inject the proxy into the agent-server lifecycle so the main chat
-    // worker can also reach it via the `conductor:executor:rpc` bridge.
-    const { setConductorExecutorProxy } = await import('./agents/agent-server-lifecycle');
-    setConductorExecutorProxy(conductorExecutorProxy);
-
     // ============================================================
     // Step 7: Deferred non-critical services (plan 426 Phase 6.3)
     // ============================================================
-    // Browser Daemon and the CLI API server don't block first paint —
-    // start them after the main window finished loading. Error handling
-    // mirrors the pre-move inline blocks (unchanged).
+    // Browser downloads and the CLI API server don't block first paint —
+    // initialize them after the main window finished loading.
     runAfterWindowReady(() => {
       void (async () => {
         // Recap service and tray depend on the main window handle, which
@@ -1075,37 +869,9 @@ if (gotTheLock) {
         try {
           const { getDesktopHostLocalSettingsApi } = await import('./cli/desktop-host-api');
           const settings = getDesktopHostLocalSettingsApi();
-          const readJsonSetting = <T>(raw: string | null, fallback: T): T => {
-            if (raw === null) return fallback;
-            try {
-              return JSON.parse(raw) as T;
-            } catch {
-              return fallback;
-            }
-          };
-          const allowedExtensionIds = readJsonSetting<unknown>(
-            await settings.getSetting('browserExtensionAllowedIds'),
-            [],
-          );
-          const normalizedExtensionIds = Array.from(new Set(
-            (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
-              .filter((id) => typeof id === 'string')
-              .map((id) => id.trim())
-              .filter((id) => id.length > 0),
-          ));
-          setAllowedExtensionIds(normalizedExtensionIds);
-          // Seed the daemon with the user-configured max agent browser pages so
-          // both the built-in webview backend and the extension cap applies from
-          // the first command. Falls back to the default when unset.
-          const storedMaxTabs = readJsonSetting<unknown>(
-            await settings.getSetting('browserMaxTabs'),
-            DEFAULT_MAX_WEBVIEW_SESSIONS,
-          );
-          setBrowserMaxTabs(typeof storedMaxTabs === 'number' ? storedMaxTabs : DEFAULT_MAX_WEBVIEW_SESSIONS);
-          await startBrowserDaemon();
           attachBrowserDownloadHandler(await settings.getSetting('browserDownloadPath'));
         } catch (error) {
-          logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+          logger.error('Failed to initialize Browser downloads', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
         }
       })();
 
@@ -1240,12 +1006,7 @@ registerLazyIpcHandlers({
     mod.registerImportHandlers(register);
   },
 });
-registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
-// Plan 532: renderer polls `extensionInstaller:detect` on mount via
-// `useBrowserExtension`; without this registration every call rejects with
-// "No handler registered for 'extensionInstaller:detect'".
-registerExtensionInstallerHandlers();
 registerGitHandlers();
 // Plan 552 Phase 7: workflow console reads (run list / journal).
 registerWorkflowHandlers();
@@ -1324,29 +1085,12 @@ app.on('before-quit', (event) => {
   }
 });
 
-/**
- * Resolve the computer-use-demo daemon entry point.
- *
- * Order of attempts:
- *   1. `DUYA_COMPUTER_USE_DEMO_ENTRY` env override (explicit, wins).
- *   2. Production: `process.resourcesPath/computer-use-demo/dist/main.js`
- *      (set up by electron-builder extraResources).
- *   3. Dev: `../computer-use-demo/src/main.ts` sibling checkout, resolved
- *      against `app.getAppPath()` and `process.cwd()` (no machine-specific
- *      absolute paths — plan 552 Phase 0), paired with the bundled `tsx`
- *      from the repo's `node_modules`.
- *
- * Returns `{ entry, runtime }` on success, null when no path resolves.
- * Callers should log a "daemon not available" message and skip spawn
- * rather than crashing startup.
- */
+/** Resolve the bundled or development entry point for the shared OS context daemon. */
 async function resolveComputerUseDaemonEntry(): Promise<
   { entry: string; runtime: string } | null
 > {
   const fs = await import('node:fs/promises');
   const pathMod = await import('node:path');
-
-  // 1. Explicit env override (dev / custom installs).
   const envEntry = process.env.DUYA_COMPUTER_USE_DEMO_ENTRY;
   if (envEntry) {
     try {
@@ -1356,51 +1100,29 @@ async function resolveComputerUseDaemonEntry(): Promise<
         : pathMod.join(process.cwd(), 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
       return { entry: envEntry, runtime };
     } catch {
-      logger.warn(
-        `DUYA_COMPUTER_USE_DEMO_ENTRY="${envEntry}" does not resolve; falling back to discovery`,
-        undefined,
-        'Main',
-      );
+      logger.warn(`DUYA_COMPUTER_USE_DEMO_ENTRY="${envEntry}" does not resolve; falling back to discovery`, undefined, 'Main');
     }
   }
 
-  // 2. Production packaged path.
-  const prodEntry = pathMod.join(
-    process.resourcesPath ?? '',
-    'computer-use-demo',
-    'dist',
-    'main.js',
-  );
+  const prodEntry = pathMod.join(process.resourcesPath ?? '', 'computer-use-demo', 'dist', 'main.js');
   try {
     await fs.access(prodEntry);
     return { entry: prodEntry, runtime: process.execPath };
   } catch {
-    // not packaged; fall through
+    // Not packaged; try the development checkout.
   }
 
-  // 3. Dev path: tsx + daemon source. Sibling-checkout relative only.
-  const tsxBin = pathMod.join(
-    process.cwd(),
-    'node_modules',
-    '.bin',
-    process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
-  );
-  const appRoots = [app.getAppPath(), process.cwd()];
-  const candidates = appRoots.flatMap((root) => [
+  const tsxBin = pathMod.join(process.cwd(), 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+  const candidates = [app.getAppPath(), process.cwd()].map((root) =>
     pathMod.join(root, '..', 'computer-use-demo', 'src', 'main.ts'),
-  ]);
-  for (const c of candidates) {
+  );
+  for (const entry of candidates) {
     try {
-      await fs.access(c);
-      try {
-        await fs.access(tsxBin);
-        return { entry: c, runtime: tsxBin };
-      } catch {
-        // no tsx; bail
-        return null;
-      }
+      await fs.access(entry);
+      await fs.access(tsxBin);
+      return { entry, runtime: tsxBin };
     } catch {
-      // try next
+      // Try the next checkout root.
     }
   }
   return null;

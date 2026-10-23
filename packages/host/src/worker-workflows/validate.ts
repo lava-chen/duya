@@ -108,11 +108,6 @@ export function nodeDependencies(node: WorkflowNode): { deps: Set<string>; error
   }
   checkTemplate(node.agent !== undefined ? node.prompt : undefined, `${node.id}.prompt`);
   checkObject(node.input, `${node.id}.input`);
-  if (node.gui) {
-    node.gui.steps.forEach((step, i) => {
-      if ('text' in step) checkTemplate(step.text, `${node.id}.gui.steps[${i}].text`);
-    });
-  }
   if (node.human) checkTemplate(node.human.prompt, `${node.id}.human.prompt`);
   if (node.decision) {
     if ('output' in node.decision.state && typeof node.decision.state.output === 'string') {

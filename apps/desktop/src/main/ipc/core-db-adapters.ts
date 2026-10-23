@@ -36,8 +36,6 @@ import type {
  */
 const SESSION_EXTENSION_KEYS = [
   'system_prompt',
-  'conductor_mode_enabled',
-  'conductor_canvas_id',
   'context_summary',
   'context_summary_updated_at',
   'plan_mode_enabled',
@@ -52,7 +50,7 @@ const SESSION_EXTENSION_KEYS = [
  *
  * Old `parent_id` / `parent_session_id` are merged into `parentSessionId`.
  * Old `draft_message` → `draft`. Old `permission_profile` → `permissionMode`.
- * Extension-bound fields (system_prompt, conductor_*, etc.) go to `extensions`.
+ * Extension-bound fields (system_prompt, context summaries, etc.) go to `extensions`.
  */
 export function ipcSessionToCoreCreate(
   data: Record<string, unknown>,
@@ -93,7 +91,7 @@ export function ipcSessionToCoreCreate(
  * Map an IPC session update payload to SessionPatch.
  * Only fields present in `data` are included in the patch.
  * Extension-bound fields are NOT handled here — callers use setExtension
- * for those (e.g. set_conductor_mode).
+ * for those.
  */
 export function ipcSessionToUpdate(data: Record<string, unknown>): SessionPatch {
   const patch: SessionPatch = {};

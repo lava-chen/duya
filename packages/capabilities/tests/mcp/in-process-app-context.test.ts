@@ -8,7 +8,7 @@
  *
  *   - `ipcRequest` — a FUNCTION that reaches the main process;
  *   - `options.sessionId` — which session is calling;
- *   - `conductorCanvasId` / `canvasTarget` — per-turn canvas binding;
+ *   - `toolUseContext` extension fields — per-turn host binding;
  *   - `abortController` — so a cancelled turn cancels the tool.
  *
  * None of that survives a JSON boundary, and none of it belongs in the
@@ -75,7 +75,7 @@ function makeProbingServer() {
     if (!context) {
       return { content: [{ type: 'text', text: 'NO_CONTEXT' }] };
     }
-    const echoed = await context.ipcRequest('conductor:executor:rpc');
+    const echoed = await context.ipcRequest('app:host-rpc');
     return {
       content: [
         { type: 'text', text: `${context.tag}|${context.options?.sessionId ?? ''}|${echoed}` },
@@ -116,7 +116,7 @@ describe('plan 616 T610b — in-process app server context pipeline', () => {
 
     const text = await withAppToolContext(context, () => callWithContext(manager, context));
 
-    expect(text).toBe('ctx-A|sess-1|ipc:conductor:executor:rpc');
+    expect(text).toBe('ctx-A|sess-1|ipc:app:host-rpc');
     await manager.disconnectAll();
   });
 
@@ -224,18 +224,18 @@ describe('plan 616 T610b — in-process app server context pipeline', () => {
       name: 'duya_app',
       tools: [
         {
-          name: 'canvas_probe',
-          description: 'Reads the host context like a canvas tool would.',
+          name: 'context_probe',
+          description: 'Reads the live host context.',
           inputSchema: { type: 'object', properties: {} },
           execute: async (_input, context) => {
             const probe = context as ProbeContext | undefined;
             if (!probe) {
-              return { id: 'x', name: 'canvas_probe', result: 'NO_CONTEXT', error: true };
+              return { id: 'x', name: 'context_probe', result: 'NO_CONTEXT', error: true };
             }
-            const echoed = await probe.ipcRequest('conductor:executor:rpc');
+            const echoed = await probe.ipcRequest('app:host-rpc');
             return {
               id: 'x',
-              name: 'canvas_probe',
+              name: 'context_probe',
               result: `${probe.tag}|${probe.options?.sessionId ?? ''}|${echoed}`,
               metadata: { probeMeta: true },
             };
@@ -258,10 +258,10 @@ describe('plan 616 T610b — in-process app server context pipeline', () => {
       ipcRequest: async (channel: string) => `ipc:${channel}`,
     };
     const text = await withAppToolContext(context, () =>
-      callWithContext(manager, context, 'canvas_probe'),
+      callWithContext(manager, context, 'context_probe'),
     );
 
-    expect(text).toBe('ctx-A|sess-1|ipc:conductor:executor:rpc');
+    expect(text).toBe('ctx-A|sess-1|ipc:app:host-rpc');
     await manager.disconnectAll();
   });
 

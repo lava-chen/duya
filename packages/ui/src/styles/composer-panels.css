@@ -63,42 +63,6 @@
     width: 100% !important;
   }
 }
-/* Canvas-native table editing rails keep structural controls outside the grid. */
-.canvas-table__column-rail {
-  position: absolute;
-  top: -20px;
-  left: 0;
-  right: 0;
-  height: 18px;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  align-items: center;
-  justify-items: center;
-  color: #963df2;
-  background: var(--bg-canvas);
-  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
-  border-radius: 4px;
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 2px;
-}
-
-.canvas-table__row-rail {
-  position: absolute;
-  top: 31px;
-  bottom: 0;
-  left: -26px;
-  width: 22px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
-  border-radius: 4px;
-  background: var(--bg-canvas);
-}
-
 /* Inline task row inside the composer (plan 416). Renders a single
    row above the textarea that grows the input box when present, and
    an absolutely-positioned popover with the same chrome as the
@@ -314,78 +278,6 @@
 .inline-task-popover-title-done {
   color: var(--command-menu-muted);
   text-decoration: line-through;
-}
-
-.canvas-table__add-column,
-.canvas-table__add-row {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, #963df2);
-  border-radius: 4px;
-  background: var(--bg-canvas);
-  color: #923df0;
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.canvas-table__add-column {
-  top: 31px;
-  right: -26px;
-  bottom: 0;
-  width: 22px;
-}
-
-.canvas-table__add-row {
-  right: 0;
-  bottom: -26px;
-  left: 0;
-  height: 22px;
-}
-
-.canvas-table__add-column:hover,
-.canvas-table__add-row:hover,
-.canvas-table__row-rail button:hover {
-  background: color-mix(in srgb, #963df2 14%, var(--bg-canvas));
-}
-
-.canvas-table__palette {
-  position: absolute;
-  z-index: 40;
-  top: -146px;
-  left: 50%;
-  display: grid;
-  grid-template-columns: repeat(4, 24px);
-  gap: 8px;
-  padding: 12px;
-  transform: translateX(-50%);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 12px;
-  background: rgba(40, 44, 52, 0.98);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-}
-
-.canvas-table__palette::after {
-  position: absolute;
-  bottom: -6px;
-  left: calc(50% - 6px);
-  width: 12px;
-  height: 12px;
-  content: "";
-  transform: rotate(45deg);
-  background: rgba(40, 44, 52, 0.98);
-}
-
-.canvas-table__palette button {
-  position: relative;
-  z-index: 1;
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: 999px;
-  cursor: pointer;
 }
 
 /* ── Goal status chip (plan 420) ─────────────────────────────────────
@@ -639,10 +531,7 @@
   background: var(--accent-soft, var(--surface));
 }
 
-/* ── Composer mode chips (goal / plan-task / research / conductor) ────
-   Blue button look: light-blue text, transparent border, blue hover fill. */
-
-/* Placeholder shown while a lazy panel chunk (conductor / code review /
+/* Placeholder shown while a lazy panel chunk (code review /
    office) loads. Local-disk chunks resolve in milliseconds, so a plain
    surface-colored block is enough (plan 426 Phase 5.2). */
 .sidebar-panel-lazy-fallback {
@@ -656,14 +545,6 @@
    blurs are a major frame cost on integrated GPUs, so the heaviest
    frosted-glass surfaces switch to solid translucent backgrounds and
    every remaining blur is disabled globally. */
-[data-lowpower] .conductor-panel,
-[data-lowpower] .conductor-zoom-pill,
-[data-lowpower] .conductor-popover {
-  background: var(--panel-bg-solid);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
 [data-lowpower] .app-header,
 [data-lowpower] .hero-card,
 [data-lowpower] .surface-card {

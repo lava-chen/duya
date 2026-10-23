@@ -43,7 +43,6 @@ vi.mock("./panels/registry", () => {
     PAGE_REGISTRY: {
       files: { id: "files", labelKey: "panel.files", icon },
       review: { id: "review", labelKey: "panel.review", icon },
-      conductor: { id: "conductor", labelKey: "panel.conductor", icon },
       terminal: { id: "terminal", labelKey: "panel.terminal", icon },
       browser: { id: "browser", labelKey: "panel.browser", icon },
       preview: { id: "preview", labelKey: "panel.preview", icon },

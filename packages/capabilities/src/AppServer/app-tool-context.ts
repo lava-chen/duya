@@ -6,7 +6,7 @@
  * MCP `tools/call` carries only `name` + `arguments`. The product
  * capabilities that live in `duya_app` need the LIVE host context:
  * `ipcRequest` (a function that reaches the main process),
- * `options.sessionId`, the per-turn canvas binding, and the turn's
+ * `options.sessionId`, per-turn app state, and the turn's
  * `abortController`. None of that survives a JSON boundary, and none of
  * it belongs in the tool's arguments — it is host state, not a
  * model-supplied value.
@@ -43,9 +43,7 @@ import type { ToolUseContext } from '../contracts/tool.js';
  *
  * Deliberately the capability-level structural type, not the host's
  * wide one: capabilities must not know who calls them, and the host's
- * `ToolUseContext` is structurally assignable to this one. Tools that
- * need more (the canvas tools need `ipcRequest`, `conductorCanvasId`,
- * `canvasTarget`) narrow it themselves, exactly as they do today.
+ * `ToolUseContext` is structurally assignable to this one. Tools that need more context narrow it themselves.
  */
 export type AppToolContext = ToolUseContext;
 
@@ -54,8 +52,8 @@ export type AppToolContext = ToolUseContext;
  *
  * Typed as `unknown` rather than `AppToolContext` on purpose: the
  * context that flows through here is the HOST's wide `ToolUseContext`
- * (which carries `ipcRequest`, `canvasTarget`, and other host fields
- * the capability-level type does not declare). Narrowing happens at the
+ * (which carries additional host fields the capability-level type does not
+ * declare). Narrowing happens at the
  * READ site, where the tool knows what it needs — the same discipline
  * the capability contracts already follow.
  */
@@ -64,10 +62,7 @@ const context = new AsyncLocalStorage<unknown>();
 /**
  * Run `action` with `value` as the ambient app-tool context.
  *
- * The value is stored BY REFERENCE, not copied: the canvas tools mutate
- * their context in place (`context.canvasTarget = {}`,
- * `context.canvasTarget.canvasId = undefined`), and a copy would
- * silently drop those mutations. Isolation between concurrent calls
+ * The value is stored by reference, and isolation between concurrent calls
  * comes from AsyncLocalStorage itself — each `run()` gets its own
  * store — not from copying the value.
  */

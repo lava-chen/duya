@@ -356,8 +356,8 @@ MessageLog, archive-row recovery, the idempotent import of legacy project rows
 from `memory-state.db`, and the `CoreDataStores` factory. It also owns
 the durable `RunStore` for `runs` and `run_events`, and the reusable Task,
 PermissionLedger, Lock, Goal, SpawnEdge, Attachment, ModeState, Session,
-Mailbox, Project, Research, Conductor, PendingWake, ToolApproval, SendMessage
-side-state, Workbench, and import-batch stores. Desktop's `db/core` files for these stores
+Mailbox, Project, Research, PendingWake, ToolApproval, SendMessage side-state,
+and import-batch stores. Desktop's `db/core` files for these stores
 are compatibility exports, and its `CoreStores` lifecycle uses `CoreDataHost`.
 `AppConnectionStore` also owns the `app_connections` table queries; connection
 metadata reads and writes from the Desktop service cross the local Host API.
@@ -644,10 +644,9 @@ Scheduled cron runs now create/reuse their session through the same
 reference before dispatch. The scheduler, timer, and Agent Server dispatch
 remain Electron-owned; this moves the cron session write contract, not scheduler
 or execution ownership.
-Conductor Canvas management now reads its local working-directory projection
-and persisted canvas binding through Host, and updates `conductor_canvas_id`
-through `HostSessionApiV1`; the canvas database and RPC executor remain in
-Desktop Main.
+Canvas runs as a Marketplace plugin. DUYA provides the generic Mini App
+lifecycle, sandbox, grants, and MCP session without a Canvas renderer,
+executor, or database integration.
 Mailbox persistence now has a versioned `HostLocalMailboxApiV1` contract and
 authenticated local routes. Desktop IPC, the Agent DB bridge, and Main's
 spawn-completion, idle-wake, and agent-DM adapters use the Host client for
@@ -1344,7 +1343,6 @@ Modes are declarative `ModeModifier` objects:
 
 - `plan-task` - Plan + task execution
 - `research` - Deep research (Plan 423)
-- `conductor` - Orchestration
 - `goal` - Goal tracking (Plan 411, v2 in Plan 553)
 - `computer-use` - OS desktop takeover (Plan 454; structural-first in Plan 564)
 
@@ -1617,70 +1615,13 @@ worker is no longer resident, which the panel treats as a no-op rather than an e
 rendering. A background launch receipt is a *successful* result that says nothing about the child —
 it must never be read as completion.
 
-## Workspace Subsystems
+## Canvas responsibility
 
-### Canvas Workbench Runtime (Plan 570)
-
-Turns a canvas into a long-running workbench (stock consoles / learning
-dashboards / project boards). Desktop Main owns the current fetch/scheduler and
-widget broadcast lifecycle; all Workbench database operations cross the
-authenticated local Host API, so standalone Host and Desktop use the same Data
-store.
-
-- **Persistence** (`packages/data/src/workbench-store.ts`,
-  `WorkbenchDataStore` over the Host-owned main database): `conductor_data_sources`
-  (id / canvas_id / name / type `http|project_db` / config / refresh_interval /
-  last_snapshot / last_error) + `conductor_handlers` (forward-looking, unused
-  in v1). `HostLocalWorkbenchApiV1` lives in Agent Protocol; authenticated
-  loopback routes provide CRUD, canvas/element checks, due-source queries, and
-  refresh-result writes. Source configs may contain credentials, so the API is
-  local-only.
-- **Service** (`apps/desktop/src/main/conductor/workbench-service.ts`, singleton
-  `workbenchService`): asynchronous Host API CRUD + `refreshSource` — http fetch
-  (main-process, no CORS; headers support `$env:NAME`) or project-DB query via
-  `ProjectDatabaseService.invoke` — saved through Host then broadcast as
-  `conductor:data:update`; scheduler tick every 5s refreshes due interval
-  sources (≥15s, in-flight dedupe, ≤6 concurrent); widget action intake
-  (`conductor:widget:action` IPC) validates element→canvas ownership and rate
-  limits 10/min/element.
-- **Agent tools**: `canvas_data_source`
-  (`packages/agent/src/tool/CanvasConductor/CanvasDataSourceTool.ts`) over
-  executor RPC actions `data_source.manage` / `data_source.refresh`
-  (`apps/desktop/src/main/conductor/executor-proxy.ts`).
-- **Renderer** (`packages/conductor/src/renderer/elements/workbench-runtime.ts`):
-  dynamic widget srcdocs get the runtime injected — `window.duya.data`,
-  `duya.onData(cb)`, `duya.action('refresh', sourceId)`, attribute-driven
-  buttons (`data-duya-refresh`), and agent-authored inline `<script>` blocks
-  re-enabled after the runtime (same trust model as the chat widget path).
-  `WidgetShell` pushes canvas snapshots into the iframe on load/change and
-  routes `workbench:action` intents to the main process. Store slice:
-  `conductor-store.workbenchData` (per-canvas snapshot map, merged per source).
-
-### Import history and rollback metadata
-
-`@duya/data` owns `ImportBatchStore` for the `import_batches` and
-`import_items` tables. Desktop's import apply, rollback, and history IPC use the
-authenticated local `HostLocalImportBatchApiV1`; file and session import work
-still runs in Desktop Main. The Host returns camelCase protocol records for
-history and rollback, so renderer DTOs no longer depend on SQLite row names.
-
-Desktop settings and browser-extension IPC use the authenticated local Host
-settings API for extension allowlists, blocked domains, sandbox state, and host
-tool permission. Startup also loads the browser allowlist and max-tab setting
-through Host before starting the browser daemon; the download directory is
-loaded from Host at startup and refreshed by the settings IPC handlers, so
-download events no longer read SQLite directly. The Desktop CLI's skill
-override list/read/write and capability snapshot also use Host settings.
-Provider reinitialization now reads each running session's working directory
-and `system_prompt` through Host's authenticated local session projection.
-Electron Main still performs browser-daemon and worker lifecycle actions. The
-process pool reads the browser backend setting through Host before initializing
-Desktop workers; a headless process-pool path retains the `auto` fallback when
-no Desktop Host is present.
+Canvas UI, persistence, and agent tools are provided by the Marketplace plugin in `plugins/conductor-canvas`. DUYA core has no Canvas renderer or Canvas tool runtime. Existing `conductor_*` SQLite tables and legacy session columns remain in place for the plugin's explicit legacy exporter; DUYA does not create, migrate, or delete their contents.
 
 ## Package Workspace
 
-26 workspace packages. The layering below is not advisory — it is enforced by
+25 workspace packages. The layering below is not advisory — it is enforced by
 `architecture-policy.yaml` and checked by `npm run architecture:check`.
 
 ```
@@ -1702,7 +1643,6 @@ packages/
 ├── command-catalog/      @duya/command-catalog - Canonical slash-command metadata
 ├── input-completion/     @duya/input-completion - Surface-neutral completion contract (pure functions)
 ├── connectors/           @duya/connectors - App Connector id vocabulary + `.app.json` schema (zero IO)
-├── conductor/            @duya/conductor - Canvas workspace UI
 ├── cli/                  @duya/cli - CLI control plane + reusable terminal TUI
 ├── gateway/              @duya/gateway - External channel gateway
 ├── voice/                @duya/voice - Voice input: mic -> streaming STT -> text

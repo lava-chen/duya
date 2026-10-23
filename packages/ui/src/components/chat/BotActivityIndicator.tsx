@@ -79,8 +79,6 @@ const TOOL_VERBS: Record<string, string> = {
   exitplanmode: '提交计划',
   notebookedit: '编辑 Notebook',
   workflow: '运行工作流',
-  computer_use: '操作电脑',
-  computer_use_decide: '操作电脑',
 };
 
 /** Semantic label for a tool call; unknown tools fall back to the name. */

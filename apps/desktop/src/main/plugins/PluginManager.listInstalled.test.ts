@@ -71,9 +71,9 @@ vi.mock('./catalog', () => ({
   getPluginCatalog: vi.fn(() => [state.catalogEntry]),
 }));
 
-vi.mock('./manifest', () => ({
+vi.mock('./manifest', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./manifest')>(),
   listCapabilityKinds: vi.fn(() => ['mcp']),
-  readPluginManifest: vi.fn(),
 }));
 
 vi.mock('./cache/layout', () => ({
@@ -121,6 +121,7 @@ import { PluginManager } from './PluginManager';
 let dir: string;
 
 beforeEach(() => {
+  state.resolveInstalledSymlink.mockReturnValue('');
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-list-installed-'));
   state.tempRoot = dir;
   fs.mkdirSync(path.join(dir, 'plugins'), { recursive: true });
@@ -192,5 +193,35 @@ describe('PluginManager.listInstalled merge', () => {
     // No catalog manifest -> no granted permissions / capabilities.
     expect(item.grantedPermissions).toEqual([]);
     expect(item.capabilityKinds).toEqual([]);
+  });
+
+  it('loads local App declarations from the installed package after registry reload', () => {
+    const pluginId = 'com.example.local-app';
+    const installPath = path.join(dir, 'installed-app');
+    fs.mkdirSync(path.join(installPath, '.duya-plugin'), { recursive: true });
+    fs.mkdirSync(path.join(installPath, 'apps'), { recursive: true });
+    fs.writeFileSync(path.join(installPath, 'apps', 'index.html'), '<!doctype html><title>Notes</title>');
+    const app = {
+      appId: 'notes', entry: 'apps/index.html', runtime: 'standalone',
+      requiredCapabilities: ['notes.read'], stateSchemaVersion: 1,
+      capabilityTools: [{ capability: 'notes.read', tools: [{ serverName: 'notes', toolName: 'list' }] }],
+    };
+    fs.writeFileSync(path.join(installPath, '.duya-plugin', 'plugin.json'), JSON.stringify({
+      id: pluginId, name: 'local-notes', version: '3.2.1',
+      extensions: { 'com.duya.client': { apps: [app] } },
+    }));
+    const cfg = new ConfigStore({
+      configPath: path.join(dir, 'config.toml'),
+      secretsPath: path.join(dir, 'secrets.json'),
+    });
+    cfg.set('plugins', { [`${pluginId}@local`]: { enabled: true } });
+    _setConfigStoreForTest(cfg);
+    state.resolveInstalledSymlink.mockReturnValue(installPath);
+
+    const item = new PluginManager().listInstalled()[0];
+    expect(item).toMatchObject({
+      id: pluginId, name: 'local-notes', version: '3.2.1', installPath,
+      capabilityKinds: ['mcp'], apps: [app],
+    });
   });
 });

@@ -13,7 +13,7 @@ where to re-check — that is the point of this file.
 
 ## 1. The package map
 
-24 workspace packages. Each has its own `AGENTS.md`.
+23 workspace packages. Each has its own `AGENTS.md`.
 
 | Package | Owns | Debug entry |
 | --- | --- | --- |
@@ -36,7 +36,6 @@ where to re-check — that is the point of this file.
 | `command-catalog` | Slash-command metadata only. No behavior. | `src/index.ts` |
 | `input-completion` | Pure completion rules. Candidates come from each surface. | `src/trigger.ts` |
 | `connectors` | App Connector id vocabulary + `.app.json` schema. Zero IO. | `src/app-schema.ts` |
-| `conductor` | Canvas: contracts, renderer, store, widget registry. | `src/renderer/stores/conductor-store.ts` |
 | `gateway` | External platform gateway (Telegram / Feishu / WeChat / Discord). | `src/gateway-manager.ts:188` |
 | `voice` | Voice input: mic → streaming STT → text. | `src/stt/engine.ts:20` |
 | `apps/desktop` | Electron main process, preload bridge, SQLite boot, Agent Server child. | `src/preload/index.ts` |
@@ -58,9 +57,9 @@ runtime   @duya/agent-runtime, @duya/agent, @duya/capabilities,
 host      @duya/desktop, @duya/cli, @duya/gateway
 ```
 
-13 packages (`host`, `ui`, `data`, `client-core`, `tooling`, `sandbox`,
+12 packages (`host`, `ui`, `data`, `client-core`, `tooling`, `sandbox`,
 `plugin-core`, `command-catalog`, `input-completion`, `computer-use`,
-`conductor`, `voice`, `web`) are in **no layer** — reverse edges into them are
+`voice`, `web`) are in **no layer** — reverse edges into them are
 not checked.
 
 ---
@@ -123,7 +122,7 @@ Producer-supplied `seq` is re-minted, never adopted.
 | State not updating | `packages/ui/src/stores/conversation-store.ts:610` |
 | IPC call fails | `apps/desktop/src/preload/index.ts` |
 | Web cannot reach Host | `apps/web/src/server/web-bff.ts:53` |
-| Canvas / widget broken | `packages/conductor/src/renderer/stores/conductor-store.ts` |
+| Marketplace Canvas app broken | `plugins/conductor-canvas/src` |
 | Slash popup broken | `packages/ui/src/lib/message-input-logic.ts` → `@duya/input-completion` |
 
 ---

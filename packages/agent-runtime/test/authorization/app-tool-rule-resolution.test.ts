@@ -1,21 +1,20 @@
 /**
  * Plan 616 C3–C5 — the rules must survive the `duya_app` namespace.
  *
- * The `duya_app` server's tools reach the model under a namespaced name
- * (`mcp_duya_app_canvas_manage`). Every rule that refers to them is
- * written against the ORIGINAL name (`canvas_manage`): the canvas
- * permission short-circuit, the always-allowed set, the agent profiles'
- * `canvas:*` patterns, the exact-name deny rules.
+ * The `duya_app` server's tools reach the model under a namespaced name.
+ * Every rule that refers to them is written against the ORIGINAL name
+ * (`update_state`): the always-allowed set, profile patterns, and
+ * exact-name deny rules.
  *
  * If the rules matched the visible name instead, the namespace would be a
  * hole in the permission model rather than a naming detail — a profile
- * that denies `canvas:*` would stop denying the canvas tools the moment
- * they moved behind the prefix.
+ * that denies `update_state` would stop denying the app tool the moment it
+ * moved behind the prefix.
  *
  * But matching the original name ALONE is not enough either. A rule names
  * a tool by ONE of its two spellings, and which one it uses is not
- * something the rule can know: a rule written before the migration says
- * `canvas_manage`, a rule written after it says the visible name the user
+ * something the rule can know: a rule written against the original name
+ * says `update_state`, while a newer rule can use the visible name the user
  * actually sees in the transcript. Both must apply — so the matcher tries
  * BOTH spellings.
  *
@@ -35,30 +34,18 @@ import type {
 import type { ToolPermissionCheckContext } from '../../src/authorization/permissions/permissions.js';
 import type { AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace';
 
-/** The model-visible name the shared allocator produces for a canvas tool. */
-const NAMESPACED = 'mcp_duya_app_canvas_manage';
+/** The model-visible name the shared allocator produces for an app tool. */
+const NAMESPACED = 'mcp_duya_app_update_state';
 /** A bot tool that is always allowed by name. */
 const NAMESPACED_ALWAYS_ALLOWED = 'mcp_duya_app_MessageSession';
 /** An app tool that is NOT unconditionally allowed, so a deny rule can bite. */
-const NAMESPACED_DENYABLE = 'mcp_duya_app_update_state';
+const NAMESPACED_DENYABLE = NAMESPACED;
 
-/** The registration the HOST records for the app layer's own canvas tool. */
-const APP_CANVAS_REGISTRATION: AppToolRegistration = {
+/** The registration the HOST records for the app layer's generic tool. */
+const APP_TOOL_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
-  toolName: 'canvas_manage',
+  toolName: 'update_state',
   source: 'app',
-};
-
-/**
- * A third-party server named `duya` that happens to expose a tool called
- * `app_canvas_manage`. The shared allocator folds `__` into `_`, so it is
- * allocated the very same model-visible name as our own canvas tool
- * (plan 616 §C16). Its registration is NOT ours.
- */
-const IMPOSTOR_CANVAS_REGISTRATION: AppToolRegistration = {
-  serverName: 'duya',
-  toolName: 'app_canvas_manage',
-  source: 'plugin',
 };
 
 function makeContext(
@@ -102,16 +89,14 @@ function createEvaluator() {
 }
 
 describe('the duya_app namespace does not defeat the permission rules', () => {
-  it('keeps the canvas short-circuit under the namespaced name', async () => {
-    // The short-circuit is earned by IDENTITY: the host registered this
-    // tool under the app server with the `app` provenance.
+  it('does not give a generic app tool an unconditional allow', async () => {
     const evaluate = createEvaluator();
     const decision = await evaluate(
       NAMESPACED,
       {},
-      makeContext('default', {}, { registrations: { [NAMESPACED]: APP_CANVAS_REGISTRATION } }),
+      makeContext('default', {}, { registrations: { [NAMESPACED]: APP_TOOL_REGISTRATION } }),
     );
-    expect(decision.behavior).toBe('allow');
+    expect(decision.behavior).not.toBe('allow');
   });
 
   it('keeps the always-allowed set under the namespaced name', async () => {
@@ -225,23 +210,18 @@ describe('the duya_app namespace does not defeat the permission rules', () => {
     expect(decision.behavior).not.toBe('deny');
   });
 
-  it('keeps the canvas short-circuit ahead of the user rules, as before', async () => {
-    // The canvas tools are unconditionally allowed BY DESIGN — the
-    // short-circuit sits above the user rules, and a deny rule for a
-    // canvas tool does not override it. That ordering predates the
-    // namespace; the point of this test is that the namespace did not
-    // move it.
+  it('honours a user deny rule for a registered app tool', async () => {
     const evaluate = createEvaluator();
     const decision = await evaluate(
       NAMESPACED,
       {},
       makeContext(
         'default',
-        { alwaysDenyRules: { userSettings: ['canvas_manage'] } },
-        { registrations: { [NAMESPACED]: APP_CANVAS_REGISTRATION } },
+        { alwaysDenyRules: { userSettings: ['update_state'] } },
+        { registrations: { [NAMESPACED]: APP_TOOL_REGISTRATION } },
       ),
     );
-    expect(decision.behavior).toBe('allow');
+    expect(decision.behavior).toBe('deny');
   });
 
   it('leaves a non-app tool alone', async () => {
@@ -252,23 +232,9 @@ describe('the duya_app namespace does not defeat the permission rules', () => {
 });
 
 describe('a name that only looks like an app tool earns no unconditional allow', () => {
-  it('refuses the canvas short-circuit to a namespaced name with no registration', async () => {
-    // The model-visible name is not a unique key: a third-party server
-    // named `duya` exposing `app_canvas_manage` is allocated the very
-    // same name. With no registration there is no proof of ownership, so
-    // the unconditional allow is refused and the full chain decides.
+  it('refuses an unconditional allow to a namespaced name with no registration', async () => {
     const evaluate = createEvaluator();
     const decision = await evaluate(NAMESPACED, {}, makeContext('default'));
-    expect(decision.behavior).not.toBe('allow');
-  });
-
-  it('refuses the canvas short-circuit to a namespaced name registered to somebody else', async () => {
-    const evaluate = createEvaluator();
-    const decision = await evaluate(
-      NAMESPACED,
-      {},
-      makeContext('default', {}, { registrations: { [NAMESPACED]: IMPOSTOR_CANVAS_REGISTRATION } }),
-    );
     expect(decision.behavior).not.toBe('allow');
   });
 
@@ -290,54 +256,40 @@ describe('a name that only looks like an app tool earns no unconditional allow',
     expect(decision.behavior).not.toBe('allow');
   });
 
-  it('still allows the ordinary builtin canvas tool, which is not an MCP registration', async () => {
-    // The builtin path: the tool's real name IS its name, no allocator
-    // was involved, and there is nothing to impersonate.
-    const evaluate = createEvaluator();
-    const decision = await evaluate('canvas_manage', {}, makeContext('default'));
-    expect(decision.behavior).toBe('allow');
-  });
 });
 
 describe('the duya_app namespace does not defeat the profile patterns', () => {
-  it('denies a namespaced canvas tool when the profile denies the original name', () => {
+  it('denies a namespaced app tool when the profile denies the original name', () => {
     const visible = isToolVisible(NAMESPACED, 'eager', new Set(), {
-      profileDisallowedPatterns: ['canvas_manage'],
+      profileDisallowedPatterns: ['update_state'],
     });
     expect(visible).toBe(false);
   });
 
-  it('denies a namespaced canvas tool when the profile denies the canvas family', () => {
+  it('allows a namespaced app tool when the profile allows the original name', () => {
     const visible = isToolVisible(NAMESPACED, 'eager', new Set(), {
-      profileDisallowedPatterns: ['canvas_*'],
-    });
-    expect(visible).toBe(false);
-  });
-
-  it('allows a namespaced canvas tool when the profile allows the original name', () => {
-    const visible = isToolVisible(NAMESPACED, 'eager', new Set(), {
-      profileAllowedPatterns: ['canvas_manage'],
+      profileAllowedPatterns: ['update_state'],
     });
     expect(visible).toBe(true);
   });
 
-  it('promotes a deferred namespaced tool named by its original name', () => {
+  it('promotes a deferred namespaced app tool named by its original name', () => {
     const visible = isToolVisible(NAMESPACED, 'deferred', new Set(), {
-      profileAllowedPatterns: ['canvas_manage'],
+      profileAllowedPatterns: ['update_state'],
     });
     expect(visible).toBe(true);
   });
 
-  it('honours a caller denylist written against the original name', () => {
+  it('honours a caller denylist written against the original app tool name', () => {
     const visible = isToolVisible(NAMESPACED, 'eager', new Set(), {
-      disabledTools: ['canvas_manage'],
+      disabledTools: ['update_state'],
     });
     expect(visible).toBe(false);
   });
 
   it('leaves a non-app tool alone', () => {
     const visible = isToolVisible('some_other_tool', 'eager', new Set(), {
-      profileDisallowedPatterns: ['canvas_manage'],
+      profileDisallowedPatterns: ['update_state'],
     });
     expect(visible).toBe(true);
   });

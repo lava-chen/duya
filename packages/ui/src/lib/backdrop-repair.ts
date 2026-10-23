@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 /**
  * Windows fullscreen→windowed glass repaint guard (plan 426 follow-up).
  *
- * The glasschrome surfaces (sidebar, header, hero-card, conductor panel,
+ * The glasschrome surfaces (sidebar, header, hero-card,
  * etc.) are GPU-composited via `backdrop-filter: blur(...)`. When the native
  * window enters and then leaves fullscreen on Windows, Chromium's compositor
  * retiles the window against the (re-applied) Mica material but can leave the

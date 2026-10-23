@@ -75,10 +75,6 @@
       "types": "./dist/research-store.d.ts",
       "import": "./dist/research-store.js"
     },
-    "./conductor-store": {
-      "types": "./dist/conductor-store.d.ts",
-      "import": "./dist/conductor-store.js"
-    },
     "./pending-wakes": {
       "types": "./dist/pending-wakes.d.ts",
       "import": "./dist/pending-wakes.js"
@@ -90,14 +86,6 @@
     "./send-message-state": {
       "types": "./dist/send-message-state.d.ts",
       "import": "./dist/send-message-state.js"
-    },
-    "./workbench-store": {
-      "types": "./dist/workbench-store.d.ts",
-      "import": "./dist/workbench-store.js"
-    },
-    "./workbench-types": {
-      "types": "./dist/workbench-types.d.ts",
-      "import": "./dist/workbench-types.js"
     },
     "./main-schema": {
       "types": "./dist/main-schema.d.ts",

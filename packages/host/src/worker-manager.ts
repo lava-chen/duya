@@ -419,15 +419,14 @@ export class WorkerManager {
           return;
         }
       }
-      // conductor:executor:rpc, appConnection:invoke,
-      // appConnection:listDescriptors, appConnection:catalog,
-      // computer-use:execute, and computer-use:cua are
+      // appConnection:invoke,
+      // appConnection:listDescriptors and appConnection:catalog are
       // handled by per-request handlers in the Desktop router (they forward
       // to main process) — this Host manager does not own those transports,
       // so they are dropped here. `db:request` is NOT dropped: when the HOST
       // owns execution (plan 12), the HostRunExecutionController serves it
       // from Host-owned stores via the centralized handler below.
-      if (msg.type === 'conductor:executor:rpc' || msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors' || msg.type === 'appConnection:catalog' || msg.type === 'computer-use:execute' || msg.type === 'computer-use:cua') {
+      if (msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors' || msg.type === 'appConnection:catalog') {
         return;
       }
       if (this.onWorkerMessage) {

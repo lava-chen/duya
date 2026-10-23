@@ -99,7 +99,6 @@ vi.mock('@/components/icons', () => ({
   ListChecksIcon: () => null,
   FeatherIcon: () => null,
   PlugIcon: () => null,
-  ChalkboardIcon: () => null,
   ArrowsInLineVerticalIcon: () => null,
   TelescopeIcon: () => null,
   TargetArrowIcon: () => null,

@@ -32,7 +32,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const STYLES_DIR = join(ROOT, 'packages', 'ui', 'src', 'styles');
 const SOURCE_DIRS = [
   join(ROOT, 'packages', 'ui', 'src'),
-  join(ROOT, 'packages', 'conductor', 'src'),
 ];
 const BASE_CSS = join(STYLES_DIR, 'base.css');
 const GLOBALS_CSS = join(STYLES_DIR, 'globals.css');

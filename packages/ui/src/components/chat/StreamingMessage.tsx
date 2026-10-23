@@ -220,8 +220,6 @@ const StreamingVizWidgets = React.memo(function StreamingVizWidgets({
             widgetCode={action.content}
             isStreaming={true}
             showOverlay={true}
-            sourceMessageId={action.sourceMessageId ?? sourceMessageId}
-            sourceLabel={action.sourceLabel ?? 'Streaming visualization'}
           />
         </WidgetErrorBoundary>
       ))}

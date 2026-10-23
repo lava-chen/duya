@@ -20,7 +20,6 @@
  *                 capped there in v1; a timeout surfaces to the script as
  *                 'deny' → DwfApprovalDeniedError('denied') regardless of
  *                 the declared onTimeout mode.
- *   - runBrowser → ExtensionCDPClient over the browser daemon (plan 564);
  *                 the daemon is localhost HTTP so the worker dials it
  *                 directly, no worker→main RPC hop.
  *
@@ -45,21 +44,11 @@ import {
 import { SavedWorkflowStore } from './dwf/store.js';
 import { runDwfScript, compileDwfScript, DwfCompileError, type DwfHostPorts } from './dwf/runtime.js';
 import { Journal, type JournalRecord, type JournalSink } from './journal.js';
-import {
-  runGuiNode,
-  type GuiNodeOutcome,
-  type GuiRunPorts,
-} from './gui-runner.js';
-import {
-  MemoryArtifactStore,
-  type ArtifactStore,
-} from './gui-artifacts.js';
+import { MemoryArtifactStore, type ArtifactStore } from './gui-artifacts.js';
 import { BudgetLedger, type HostAgentSpec, type HostCallResult, type WorkflowHost } from './host.js';
 import { openRunLog, type RunLog } from './run-log.js';
 import type { SavedWorkflowArgDeclaration } from './dwf/contracts.js';
 import { workflowRunDb } from '../worker-db-client.js';
-import { createIpcGuiBackend, type ComputerUseRequest } from './gui-backend.js';
-import { runBrowserWithExtensionBackend } from './browser-backend.js';
 
 // ─── deps supplied by the worker composition root ───
 
@@ -185,19 +174,6 @@ export interface WorkflowRunnerDeps {
     content: unknown,
     contentType: string,
   ) => WorkflowArtifactDescriptor | undefined | Promise<WorkflowArtifactDescriptor | undefined>;
-  /**
-   * Worker→main computer-use RPC (plan 556 Phase 4). Present → `wf.gui`
-   * executes through the real DesktopBackend dispatcher; absent → wf.gui
-   * keeps failing loudly instead of silently doing nothing.
-   */
-  computerUseRequest?: ComputerUseRequest;
-  /**
-   * Sink for gui capture screenshots. Absent → an in-memory store, which
-   * keeps journal refs resolvable for the lifetime of the run only. The
-   * run-anchored path binds the FsArtifactStore rooted at the run
-   * artifacts directory so captures survive the process.
-   */
-  guiArtifactStore?: ArtifactStore;
   /**
    * Worker-specific tool/sub-agent assembly. The workflow package owns
    * orchestration and journaling; the worker composition root owns concrete
@@ -454,8 +430,6 @@ function buildHostPorts(
   onArtifact?: (descriptor: WorkflowArtifactDescriptor) => void,
 ): DwfHostPorts {
   const execution = deps.execution.createPorts(cwd);
-  // One extension session tab per wf.browser call (plan 564 D2).
-  let browserSeq = 0;
 
   return {
     async publishArtifact(name, content, contentType) {
@@ -497,98 +471,6 @@ function buildHostPorts(
       // The worker composition root supplies the run engine or tool-backed
       // child adapter; the workflow runner does not call a legacy Agent loop.
       return execution.runAgent(spec, { toolUseId: randomUUID() });
-    },
-
-    async runGui(spec, annotation) {
-      // RPA steps (plan 556 Phase 4): execute through runGuiNode with the
-      // real computer-use backend port. Without the RPC bridge the node
-      // still fails loudly — a silent no-op would corrupt recorder
-      // workflows that assume their steps happened.
-      if (!deps.computerUseRequest) {
-        const outcome: GuiNodeOutcome = {
-          status: 'failed',
-          errorClass: 'tool_missing',
-          error:
-            'gui runtime has no computer-use bridge in this worker — set the [computer_use] access policy / check the main-process dispatcher',
-        };
-        return outcome;
-      }
-
-      // Best-effort foreground of the recorded app. The dispatcher's
-      // per-action access policy still applies to every step, so this
-      // cannot bypass anything — it only raises the window.
-      try {
-        await deps.computerUseRequest(
-          'focus_app',
-          { processName: spec.target_app, raise: true },
-          { timeout: 10_000 },
-        );
-      } catch {
-        // Focus is advisory; the on_stuck ladder owns real failures.
-      }
-      const ports: GuiRunPorts = {
-        backend: createIpcGuiBackend(deps.computerUseRequest),
-        artifacts: deps.guiArtifactStore ?? new MemoryArtifactStore(),
-        // on_stuck:'agent' escalation fallback (plan 565 Phase D) — see
-        // enterLadder in gui-runner.ts.
-        ...(deps.takePendingAnswer
-          ? { ask: (question: string) => runWorkflowAsk(deps, question).then((r) => r.answer) }
-          : {}),
-      };
-
-      // Minimal WorkflowHost for the needs_confirmation gate — approvals
-      // ride the same interactive pipeline as `wf.approve`.
-      const host: WorkflowHost = {
-        async runAgent() {
-          throw new Error('runAgent is not available on the gui node path');
-        },
-        async runTool() {
-          throw new Error('runTool is not available on the gui node path');
-        },
-        async requestApproval(approvalSpec) {
-          const decision = await deps.requestPermission({
-            id: randomUUID(),
-            toolName: 'workflow_approval',
-            toolInput: { prompt: approvalSpec.prompt },
-            expiresAt: Date.now() + (approvalSpec.timeoutMs ?? 300_000),
-          });
-          return { decision: decision === 'allow' ? 'approve' : 'deny' };
-        },
-      };
-
-      return runGuiNode({
-        nodeId: `gui:${spec.target_app}`,
-        gui: spec,
-        // dwf scripts interpolate args as plain JS (the script body closes
-        // over `args`), so the ${expr} scope stays empty here.
-        scope: { resolve: () => undefined },
-        host,
-        journal: gui.journal,
-        budget: new BudgetLedger(),
-        ports,
-        approvalMode: 'await',
-        runId: gui.runId,
-        ...(annotation !== undefined ? { annotation } : {}),
-      });
-    },
-
-    async runBrowser(spec) {
-      // Browser-extension steps (plan 564): the daemon is a localhost HTTP
-      // service, so the worker talks to it DIRECTLY — unlike computer-use,
-      // no worker→main RPC type is needed. Without the extension online the
-      // node fails loudly (on_stuck ladder owns skip semantics).
-      return runBrowserWithExtensionBackend(`wf-${gui.runId}-${browserSeq++}`, spec, {
-        runId: gui.runId,
-        ...(deps.guiArtifactStore ? { artifacts: deps.guiArtifactStore } : {}),
-        // on_stuck:'agent' escalation (plan 565 Phase D): the ladder asks the
-        // anchored session whether to retry; absent port → fail-as-before.
-        ...(deps.takePendingAnswer
-          ? {
-              ask: (question: string) =>
-                runWorkflowAsk(deps, question).then((r) => r.answer),
-            }
-          : {}),
-      });
     },
 
     async runAsk(question) {

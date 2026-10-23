@@ -80,17 +80,17 @@ export interface ComposerProps {
 
 /**
  * Message-level mode for the send payload: goal wins, otherwise the first
- * non-conductor active mode (conductor is session-level, not per-message).
+ * active mode.
  */
 function pickSendMode(activeModes: Set<ModeModifierId>): string | undefined {
   if (activeModes.has('goal')) return 'goal';
   for (const mode of activeModes) {
-    if (mode !== 'conductor') return mode;
+    return mode;
   }
   return undefined;
 }
 
-/** Keep session-level modes (conductor, plan-task); clear per-message ones. */
+/** Keep session-level modes; clear per-message ones. */
 function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
   const next = new Set<ModeModifierId>();
   for (const mode of prev) {

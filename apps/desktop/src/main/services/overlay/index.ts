@@ -10,7 +10,7 @@
  * are captured by the hook worker + probe attach; the overlay never
  * takes input).
  *
- * Modeled on `apps/desktop/src/main/services/computer-use-overlay.ts`: data-URL
+ * The page uses a data URL with no preload,
  * page, no preload, `setIgnoreMouseEvents(true)`, and content
  * protection ON so desktop captures never show the frames to the model.
  * Like the stop chip, the page hardcodes its colors — design tokens do
@@ -49,8 +49,7 @@ let screenListenersWired = false;
 // ────────────────────────────────────────────────────────────────────
 
 /**
- * Mirror of DEFAULT_INTERACTIVE_CONTROL_TYPES (packages/computer-use),
- * plan 576 vocabulary. `document` is deliberately excluded here even
+ * Recorder overlay control types. `document` is deliberately excluded here even
  * though the CUA tree whitelists it: the overlay draws a frame per
  * element and a frame over the whole page is pure noise for the
  * recorder user — Document content stays visible in the tree channel.
@@ -190,7 +189,7 @@ function wireScreenListeners(): void {
   screenListenersWired = true;
   screen.on('display-metrics-changed', () => {
     if (overlayWindow) {
-      logger.debug('overlay: display metrics changed — rebuilding on next show', undefined, LogComponent.ComputerUse);
+    logger.debug('overlay: display metrics changed — rebuilding on next show', undefined, LogComponent.Recorder);
       destroyOverlayWindow();
     }
   });
@@ -349,13 +348,13 @@ export function showOverlayElements(elements: readonly Record<string, unknown>[]
     logger.debug(
       'overlay: showing elements',
       { count: compactElements.length, total: elements.length, displayId: display.id },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
   } catch (err) {
     logger.warn(
       'overlay: failed to show elements',
       { error: err instanceof Error ? err.message : String(err) },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
   }
 }
@@ -364,7 +363,7 @@ export function showOverlayElements(elements: readonly Record<string, unknown>[]
 export function clearOverlayElements(): void {
   if (overlayWindow) {
     destroyOverlayWindow();
-    logger.debug('overlay: cleared', undefined, LogComponent.ComputerUse);
+    logger.debug('overlay: cleared', undefined, LogComponent.Recorder);
   }
 }
 

@@ -1166,7 +1166,7 @@ export const INTER_TURN_CHECKPOINTS_ARE_NAMED: readonly InterTurnCheckpoint[] = 
  *
  * Step 4 is the one link in this chain that rests on the transforms' declared
  * scope rather than on a read of every body. All five are tool-result
- * transforms -- reformat, offload, canvas history, micro cleanup, image
+ * transforms -- reformat, offload, extension history, micro cleanup, image
  * truncation (`compact/projectionCompress.ts:44-48`) -- and a `tool_result`
  * carrier is excluded by the same rule at `turn-time-reminder.ts:79-81`, so on
  * their declared scope none of them can add or remove a reminder-eligible human

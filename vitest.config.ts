@@ -149,10 +149,7 @@ export default defineConfig({
       // include array with a regex over quoted strings and does not strip
       // comments, so one apostrophe here would swallow the glob below.
       'packages/cli/test/**/*.test.ts',
-      'packages/computer-use/src/**/*.test.ts',
       'scripts/**/*.test.ts',
-      'packages/conductor/src/**/*.test.ts',
-      'packages/conductor/src/**/*.test.tsx',
       // Plan 587 E4.3: the eval tree. Collected deliberately rather than left to
       // a convention glob, because `check-test-coverage` treats a tracked test
       // file outside `include` as a test nobody ever runs.
@@ -279,11 +276,7 @@ export default defineConfig({
       { find: /^@duya\/capabilities\/(.*)$/, replacement: CAPABILITIES_SRC + '/$1' },
       { find: /^@duya\/capabilities$/, replacement: CAPABILITIES_SRC + '/index.ts' },
       // Mirror vite.config.ts aliases so vitest can resolve
-      // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file
-      // transitively pulls in WidgetRenderer / ConductorView / etc.
-      { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(__dirname, './packages/conductor/src/renderer/') + '/$1' },
-      { find: '@duya/conductor/renderer', replacement: path.resolve(__dirname, './packages/conductor/src/renderer/index') },
     ],
   },
 })

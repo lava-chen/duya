@@ -40,17 +40,6 @@ export interface ChatOptions {
    * undefined/Auto means no extended thinking.
    */
   effort?: string;
-  /**
-   * Conductor mode — per-turn trusted override. When true, the agent
-   * registers the 5 canvas conductor tools and injects the conductor
-   * prompt overlay.
-   */
-  conductorMode?: boolean;
-  /**
-   * Conductor canvas ID — durable binding from the session row.
-   * Injected into ToolUseContext.conductorCanvasId.
-   */
-  conductorCanvasId?: string;
   /** Internal background-task follow-up; never supplied by user input. */
   backgroundTaskResume?: boolean;
   /**
@@ -184,8 +173,6 @@ export class AgentServerClient {
       options: {
         agentProfileId: options?.agentProfileId,
         mode: options?.mode,
-        conductorMode: options?.conductorMode,
-        conductorCanvasId: options?.conductorCanvasId,
         effort: options?.effort,
       },
     });
@@ -233,8 +220,6 @@ export class AgentServerClient {
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
             securityScanEnabled: options?.securityScanEnabled,
             effort: options?.effort,
-            conductorMode: options?.conductorMode,
-            conductorCanvasId: options?.conductorCanvasId,
             backgroundTaskResume: options?.backgroundTaskResume,
             clientMsgId: options?.clientMsgId,
           },

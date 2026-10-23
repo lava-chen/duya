@@ -22,7 +22,6 @@ import type {
   WorkflowDef,
   WorkflowNode,
   DecisionNodeSpec,
-  GuiStep,
 } from '../schema.js';
 import { serializeSavedWorkflow } from './frontmatter.js';
 import type { SavedWorkflowMeta } from './contracts.js';
@@ -137,17 +136,6 @@ function objectToExpr(value: unknown, level: number): string {
 
 // ─── 节点编译（层级 L：0 = 函数体顶层） ───
 
-/** 单个 gui step → 对象字面量（text 字段插值）。 */
-function guiStepToExpr(step: GuiStep, level: number): string {
-  const parts = Object.entries(step).map(([k, v]) => {
-    if (k === 'text' && typeof v === 'string') return `${lit(k)}: ${textToExpr(v)}`;
-    return `${lit(k)}: ${lit(v)}`;
-  });
-  if (parts.length === 1) return `{ ${parts[0]} }`;
-  const pad = '  '.repeat(level + 1);
-  return `{\n${pad}${parts.join(`,\n${pad}`)},\n${'  '.repeat(level)}}`;
-}
-
 /** 主体调用行（不含 when/on_error 包装）。 */
 function callLines(node: WorkflowNode, varName: string, L: number, warnings: string[]): string[] {
   const pad = '  '.repeat(L);
@@ -161,17 +149,6 @@ function callLines(node: WorkflowNode, varName: string, L: number, warnings: str
   if (node.tool) {
     const args = node.input ? `${lit(node.tool)}, ${objectToExpr(node.input, inner)}` : lit(node.tool);
     return [`const ${varName} = await wf.tool(${args});`];
-  }
-
-  if (node.gui) {
-    const steps = node.gui.steps.map((s) => `${'  '.repeat(inner)}${guiStepToExpr(s, inner)},`).join('\n');
-    const spec =
-      `{\n${pad}  target_app: ${lit(node.gui.target_app)},\n${pad}  steps: [\n${steps}\n${pad}  ],` +
-      (node.gui.max_actions !== undefined ? `\n${pad}  max_actions: ${node.gui.max_actions},` : '') +
-      (node.gui.on_stuck !== undefined ? `\n${pad}  on_stuck: ${lit(node.gui.on_stuck)},` : '') +
-      `\n${pad}}`;
-    const opts = node.annotation ? `, { annotation: ${objectToExpr(node.annotation, inner)} }` : '';
-    return [`const ${varName} = await wf.gui(${spec}${opts});`];
   }
 
   if (node.agent) {

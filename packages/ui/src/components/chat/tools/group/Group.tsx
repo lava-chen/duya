@@ -2,9 +2,7 @@
 // actions. The header summarises the group by tool category
 // (commands / files / times / etc.); the expanded body lists each
 // entry in its original action order — tool rows are rendered through
-// `ToolActionRow`, thinking rows through `ThinkingRow`. The browser-
-// fallback banner only appears when the group contains a browser tool
-// running in fallback mode.
+// `ToolActionRow`, thinking rows through `ThinkingRow`.
 
 'use client';
 
@@ -16,8 +14,6 @@ import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { DiffStatBadge } from '../chrome/DiffStatBadge';
 import { resolveGroupDisplayTitle } from './buildGroupDisplayTitle';
 import { aggregateFileEditStats } from '../fileEditStats';
-import { isBrowserFallbackMode } from '../registry';
-import { isBrowserTool } from '../classify';
 import { getExpansion, writeExpansion } from '../expansionStore';
 import { ToolActionRow } from '../rows/ToolActionRow';
 import { ThinkingRow } from '../rows/ThinkingRow';
@@ -83,10 +79,6 @@ export function Group({
     locale,
   );
 
-  const containsBrowser = tools.some((entry) => isBrowserTool(entry.tool.name));
-  const showBrowserFallback = containsBrowser && isBrowserFallbackMode(
-    tools.map((entry) => entry.tool)
-  );
   const lastRunningTool = tools.find((entry) => entry.tool.result === undefined)
     ?.tool;
 
@@ -154,7 +146,6 @@ export function Group({
 
   const body = (
     <div className="tool-group-body">
-      {showBrowserFallback && <BrowserFallbackBanner />}
       {rows}
     </div>
   );
@@ -208,20 +199,6 @@ export function Group({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function BrowserFallbackBanner() {
-  const { t } = useTranslation();
-  return (
-    <div className="tool-group-fallback">
-      <span className="font-medium text-[11px] text-amber-500">
-        {t('streaming.toolAction.fallbackTitle')}
-      </span>
-      <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-        {t('streaming.toolAction.fallbackDesc')}
-      </p>
     </div>
   );
 }

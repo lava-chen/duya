@@ -346,14 +346,6 @@ export function SlashCommandPopover({
         return;
       }
 
-      // Deprecated: Conductor now uses kind='mode' with modeValue='conductor'.
-      // Retained for backward compat with any external caller still passing
-      // kind='conductor_toggle' items.
-      case 'conductor_toggle': {
-        onToggleMode('conductor');
-        return;
-      }
-
       default:
         // slash_command, agent_skill — insert into input.
         onInsertItem(item);
@@ -458,12 +450,9 @@ export function SlashCommandPopover({
     const IconComponent = item.icon ?? (item.group === 'skills' ? CubeIcon : undefined);
     const isSkill = item.group === 'skills';
 
-    // Mode items: check active state, mutual-exclusion status, and
-    // whether this item is the Conductor (which keeps the toggle switch
-    // visual instead of the check mark).
+    // Mode items show active state and mutual-exclusion status.
     const modeValue = item.kind === 'mode' ? (item.modeValue as ModeModifierId | undefined) : undefined;
     const isModeActive = !!modeValue && activeModes.has(modeValue);
-    const isConductorMode = modeValue === 'conductor' || item.kind === 'conductor_toggle';
     // A mode is disabled if it is NOT active AND conflicts with one of the
     // currently active modes. Active modes remain clickable (to toggle off).
     const isModeDisabled = !!modeValue
@@ -562,38 +551,12 @@ export function SlashCommandPopover({
           )}
         </div>
         {/* Right side indicators */}
-        {isModeActive && !isConductorMode && (
+        {isModeActive && (
           <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
         )}
         {/* Focus mode toggle — check mirrors the live per-session state. */}
         {item.value === '__focus' && focusEnabled && (
           <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
-        )}
-        {isConductorMode && (
-          <div
-            style={{
-              width: 28,
-              height: 16,
-              borderRadius: 8,
-              backgroundColor: isModeActive ? 'var(--accent)' : 'var(--command-menu-border)',
-              position: 'relative',
-              flexShrink: 0,
-              transition: 'background-color 0.15s',
-            }}
-          >
-            <div
-              style={{
-                position: 'absolute',
-                top: 2,
-                left: isModeActive ? 14 : 2,
-                width: 12,
-                height: 12,
-                borderRadius: 6,
-                backgroundColor: '#fff',
-                transition: 'left 0.15s',
-              }}
-            />
-          </div>
         )}
         {currentValueLabel && (
           <span style={{ fontSize: 11, color: 'var(--command-menu-muted)', flexShrink: 0 }}>

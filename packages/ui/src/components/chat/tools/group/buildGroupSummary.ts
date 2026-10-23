@@ -67,7 +67,6 @@ export function buildGroupSummary(
     'skill',
     'module',
     'tasks',
-    'canvas',
     'tools',
   ];
   const parts: SummaryPart[] = [];

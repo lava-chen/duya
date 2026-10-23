@@ -16,10 +16,8 @@
  * state-based runtime tool gating (plan 413d). The frontend session
  * toggle lands in plan 413e.
  *
- * Mutual exclusion: plan-task conflicts with research (research has its
- * own multi-stage flow that shouldn't be mixed with planning) and
- * conductor (conductor needs to write canvas elements, plan-task is
- * read-only).
+ * Mutual exclusion: plan-task conflicts with research, which has its own
+ * multi-stage flow that shouldn't be mixed with planning.
  */
 
 import type { ModeModifier } from '../types.js';
@@ -94,13 +92,13 @@ Do not begin implementation until the user explicitly approves the plan and exit
 
 /**
  * Plan-task mode modifier — session-level, read-only, mutually exclusive
- * with research and conductor. Carries the plan mode state machine
+ * with research. Carries the plan mode state machine
  * (plan 413b).
  */
 export const planTaskMode: ModeModifier = {
   id: 'plan-task',
   kind: 'session',
-  exclusiveWith: ['research', 'conductor'],
+  exclusiveWith: ['research'],
   display: { label: 'Plan Mode', icon: 'ListChecks' },
 
   tools: {

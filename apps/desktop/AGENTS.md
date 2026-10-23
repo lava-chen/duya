@@ -1,6 +1,6 @@
 # @duya/desktop
 
-> Electron 桌面外壳：拥有 main 进程、preload 桥、窗口、SQLite 启动、Agent Server 子进程、每 bot 频道管道，以及 app-connection / conductor 的桌面侧实现。
+> Electron 桌面外壳：拥有 main 进程、preload 桥、窗口、SQLite 启动、Agent Server 子进程、每 bot 频道管道，以及 app-connection 的桌面侧实现。
 
 ## 负责 / 不负责
 
@@ -34,5 +34,5 @@
 ## 边界
 
 - `architecture-policy.yaml:462` — 模块 `desktop-host`，`managed: false`（带基线债务）。`architecture-policy.yaml:377` 的 `legacy-desktop` 仍指向已删除的 `src` / `electron` 根，是过期条目。
-- 构建入口在 `scripts/build-electron.mjs:66`（main）、`:72`（preload）、`:78`（agent-server）、`:84`（project-database-worker）—— 改了入口必须重跑 `npm run electron:build`。
+- 构建入口在 `scripts/build-electron.mjs`（main、preload、agent-server）—— 改了入口必须重跑 `npm run electron:build`。
 - 唯一的 gotcha：**别混两套清单**——renderer↔main（Electron IPC）无普查脚本；worker↔main↔host 的通道散落在 `apps/desktop/src/main/agents/server/` 与 `packages/host/src/`，同样无门禁脚本。持久化 store 也别在 `apps/desktop/src/main/db/core/` 里找，那里只是 barrel，真身在 `packages/data`。

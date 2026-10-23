@@ -228,7 +228,7 @@ function repairHeadingSyntax(segment: string): string {
  * - Windows absolute paths (`C:/...`) — micromark parses the drive letter as
  *   an unknown scheme, and the default transform drops every non-allowlisted
  *   scheme, so `![x](E:/a.png)` rendered as `<img alt="x">` with no `src`.
- * - Unix absolute paths (`/home/...`) and internal routes (`/duya/canvas/..`).
+ * - Unix absolute paths (`/home/...`).
  *
  * Everything else keeps the default safe-URL behavior (javascript: etc.
  * are still stripped).

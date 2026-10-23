@@ -993,8 +993,6 @@ async function handlePostChat(
       optionsKeys: parsed.options ? Object.keys(parsed.options) : [],
       agentProfileId: parsed.options?.agentProfileId,
       mode: parsed.options?.mode,
-      conductorMode: parsed.options?.conductorMode,
-      conductorCanvasId: parsed.options?.conductorCanvasId,
     });
 
     const prompt = parsed.prompt || '';
@@ -1145,11 +1143,6 @@ async function handlePostChat(
             forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
             return;
           }
-          if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-            workerDbRequests.set(`rpc:${msg.requestId}`, child);
-            process.send(msg);
-            return;
-          }
           // Plan 312: forward appConnection:invoke to the main process
           // (ConnectorService lives in the Electron main process).
           if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
@@ -1165,18 +1158,6 @@ async function handlePostChat(
           // Plan 503: forward appConnection:catalog to the main process
           // (bot-only connector-management tools).
           if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
-            workerDbRequests.set(`rpc:${msg.requestId}`, child);
-            process.send(msg);
-          }
-          // Plan 454: forward computer-use:execute to the main process.
-          if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
-            workerDbRequests.set(`rpc:${msg.requestId}`, child);
-            process.send(msg);
-          }
-          // Plan 575 §0-⑥: forward computer-use:cua to the main process
-          // (the CUA dispatcher lives in Electron main). Without this relay
-          // the worker's computer_cua calls time out after 15s.
-          if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
             process.send(msg);
           }
@@ -2636,11 +2617,6 @@ async function lazySpawnWorkerForCompact(
       forwardWorkerDbRequest(sessionId, child, msg, deps, workerDbRequests);
       return;
     }
-    if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-      workerDbRequests.set(`rpc:${msg.requestId}`, child);
-      process.send(msg);
-      return;
-    }
     // Plan 312: forward appConnection:invoke to the main process.
     if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
@@ -2655,18 +2631,6 @@ async function lazySpawnWorkerForCompact(
     // Plan 503: forward appConnection:catalog to the main process
     // (bot-only connector-management tools).
     if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
-      workerDbRequests.set(`rpc:${msg.requestId}`, child);
-      process.send(msg);
-    }
-    // Plan 454: forward computer-use:execute to the main process.
-    if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
-      workerDbRequests.set(`rpc:${msg.requestId}`, child);
-      process.send(msg);
-    }
-    // Plan 575 §0-⑥: forward computer-use:cua to the main process
-    // (CUA dispatcher lives in Electron main); without the relay the
-    // worker's computer_cua calls time out after 15s.
-    if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }
@@ -2739,8 +2703,8 @@ async function lazySpawnWorkerForCompact(
 /**
  * Plan 508: shared worker-ready handshake helper.
  *
- * The worker signals ready by emitting either `ready` (with optional
- * `status: 'error' | 'deferred'`) or `conductor:ready`. We resolve on the
+ * The worker signals ready by emitting `ready` (with optional
+ * `status: 'error' | 'deferred'`). We resolve on the
  * first successful ready, and reject with a structured reason on:
  *  - `status: 'error'`  → surface the worker's `error` message (503 upstream)
  *  - `status: 'deferred'` → init deferred to a later handshake (409 upstream)
@@ -2772,7 +2736,7 @@ export function waitForWorkerReady(
         if (!line || !line.startsWith('{')) continue;
         try {
           const m = JSON.parse(line) as { type?: string; status?: string; error?: string; reason?: string };
-          if (m.type === 'ready' || m.type === 'conductor:ready') {
+          if (m.type === 'ready') {
             clearTimeout(timeout);
             cleanup();
             if (m.status === 'error') {
@@ -3825,11 +3789,6 @@ export function createHandleRequest(
               process.send(msg);
               return;
             }
-            if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-              workerDbRequests.set(`rpc:${msg.requestId}`, child);
-              process.send(msg);
-              return;
-            }
             if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
               workerDbRequests.set(`rpc:${msg.requestId}`, child);
               process.send(msg);
@@ -3841,17 +3800,6 @@ export function createHandleRequest(
               return;
             }
             if (msg.type === 'appConnection:catalog' && typeof msg.requestId === 'string' && process.send) {
-              workerDbRequests.set(`rpc:${msg.requestId}`, child);
-              process.send(msg);
-              return;
-            }
-            if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
-              workerDbRequests.set(`rpc:${msg.requestId}`, child);
-              process.send(msg);
-              return;
-            }
-            // Plan 575 §0-⑥: forward computer-use:cua to the main process.
-            if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
               workerDbRequests.set(`rpc:${msg.requestId}`, child);
               process.send(msg);
               return;

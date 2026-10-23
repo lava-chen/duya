@@ -11,7 +11,6 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { validateWorkflow } from '@duya/host/worker-workflows/validate';
 
 // ─── harness (vi.hoisted: mock factories are hoisted above the consts) ───
 
@@ -56,7 +55,7 @@ vi.mock('electron', () => ({
 
 vi.mock('../../logging/logger', () => ({
   getLogger: () => ({ info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }),
-  LogComponent: { Main: 'Main', ComputerUse: 'ComputerUse' },
+  LogComponent: { Main: 'Main', Recorder: 'Recorder' },
 }));
 
 vi.mock('../../services/recorder/badge', () => ({
@@ -103,13 +102,8 @@ vi.mock('../../services/recorder/service', () => ({
   }),
 }));
 
-// Partial mock: the session-store functions are stubbed, but the
-// converter (imported by the handler) needs the REAL zod schemas from
-// this package, so everything else stays authentic.
-vi.mock('@duya/computer-use', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@duya/computer-use')>();
-  return {
-    ...actual,
+// Session-store functions are stubbed for the IPC contract test.
+vi.mock('../../services/recorder/domain/index.js', () => ({
     getDefaultRecorderRootDir: () => 'C:/recorder-root',
     listSessions: async () => [
       { sessionId: 'sess-1', startedAt: 1_000, endedAt: 5_000, eventCount: 3, apps: [] },
@@ -131,8 +125,7 @@ vi.mock('@duya/computer-use', async (importOriginal) => {
     deleteSession: async (_root: string, sessionId: string) => {
       h.store.deleted.push(sessionId);
     },
-  };
-});
+}));
 
 // Imported AFTER the mocks so the module graph picks them up.
 const { registerRecorderHandlers } = await import('../recorder-handlers');
@@ -190,7 +183,6 @@ describe('recorder IPC handlers', () => {
     expect([...h.registered].sort()).toEqual(
       [
         'recorder:cancel',
-        'recorder:convert',
         'recorder:delete-session',
         'recorder:get-session',
         'recorder:list-sessions',
@@ -240,57 +232,6 @@ describe('recorder IPC handlers', () => {
     expect(loaded.events).toHaveLength(2);
     expect(await invoke('recorder:get-session', 'missing')).toBeNull();
     expect(await invoke('recorder:get-session', '')).toBeNull();
-  });
-
-  it('convert produces a schema-valid definition plus its dwf.ts source (plan 562 §8 contract)', async () => {
-    const result = (await invoke('recorder:convert', { sessionId })) as {
-      ok: boolean;
-      def: unknown;
-      meta: { name: string };
-      script: string;
-      source: string;
-      eventCount: number;
-      droppedLines: number;
-    };
-    expect(result.ok).toBe(true);
-    expect(result.eventCount).toBe(2);
-    expect(result.droppedLines).toBe(0);
-
-    // The .dwf.ts source the user reviews is exactly what
-    // `workflow:dwf:save` will persist — frontmatter meta + script body.
-    expect(result.source).toContain(result.meta.name);
-    expect(result.source.length).toBeGreaterThan(0);
-    expect(typeof result.script).toBe('string');
-    expect(validateWorkflow(result.def as never).ok).toBe(true);
-
-    const def = result.def as {
-      phases: Array<{ nodes: Array<{ gui?: { steps: Array<{ do: string }> } }> }>;
-    };
-    expect(def.phases[0]!.nodes[0]!.gui!.steps.map((step) => step.do)).toEqual(['capture', 'click']);
-  });
-
-  it('convert honours a caller-supplied name', async () => {
-    const result = (await invoke('recorder:convert', { sessionId, name: 'my-recorded-flow' })) as {
-      ok: boolean;
-      def: { name: string };
-    };
-    expect(result.ok).toBe(true);
-    expect(result.def.name).toBe('my-recorded-flow');
-  });
-
-  it('convert fails cleanly when nothing was recorded', async () => {
-    h.store.events = [];
-    const result = (await invoke('recorder:convert', { sessionId })) as {
-      ok: boolean;
-      errors: Array<{ message: string }>;
-    };
-    expect(result.ok).toBe(false);
-    expect(result.errors[0]!.message).toContain('no interactive events');
-  });
-
-  it('convert rejects an invalid payload without touching the disk', async () => {
-    expect(await invoke('recorder:convert', { sessionId: '' })).toMatchObject({ ok: false });
-    expect(await invoke('recorder:convert', undefined)).toMatchObject({ ok: false });
   });
 
   it('the status fan-out feeds the badge', () => {

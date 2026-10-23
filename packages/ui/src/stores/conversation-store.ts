@@ -55,10 +55,6 @@ export interface Thread {
   agentType?: string;
   /** Agent name for display */
   agentName?: string;
-  /** Conductor mode: 1 = enabled (canvas tools injected), 0 = disabled */
-  conductorModeEnabled?: number;
-  /** Conductor canvas ID bound to this session (when conductor mode is on) */
-  conductorCanvasId?: string | null;
   /** Plan 413e: 1 = plan-task session toggle on (persisted to sessions.extensions.plan_mode_enabled), 0 = off */
   planModeEnabled?: number;
   /** Plan 413e: 1 = goal mode session toggle on (persisted to sessions.extensions.goal_mode_enabled), 0 = off */
@@ -100,7 +96,7 @@ export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
 export type ProjectGroupBy = 'byProject' | 'singleList';
 
 // View types for state-driven UI
-export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'conductor' | 'extensions' | 'projects' | 'workflow';
+export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'apps' | 'extensions' | 'projects' | 'workflow';
 // Plan 205: sub-views inside the `providers` settings tab.
 // `provider-picker` lists the preset cards; `provider-edit` shows
 // the inline edit form for the chosen preset (create) or existing
@@ -239,8 +235,6 @@ interface ConversationState {
   updateThreadTitle: (id: string, title: string, options?: { sync?: boolean }) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   setThreadModel: (id: string, model: string, providerId?: string) => void;
-  /** Update conductor mode binding on the thread (local + DB IPC). */
-  setThreadConductorBinding: (id: string, enabled: boolean, canvasId: string | null) => void;
   /** Plan 413e: update the plan-task session toggle on the thread (local state only; DB persistence via session.setPlanMode IPC). */
   setThreadPlanMode: (id: string, enabled: boolean) => void;
   /** Plan 413e: update the goal mode session toggle on the thread (local state only; DB persistence via session.setGoalMode IPC). */
@@ -1355,22 +1349,6 @@ export const useConversationStore = create<ConversationState>()(
         if (thread) {
           get().syncThreadToDatabase(thread);
         }
-      },
-
-      setThreadConductorBinding: (id, enabled, canvasId) => {
-        set((state) => ({
-          threads: state.threads.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  conductorModeEnabled: enabled ? 1 : 0,
-                  conductorCanvasId: canvasId,
-                  updatedAt: Date.now(),
-                }
-              : t
-          ),
-        }));
-        // DB persistence is handled by the caller via session.setConductorMode IPC.
       },
 
       setThreadPlanMode: (id, enabled) => {

@@ -5,9 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { AppRef, RecorderEvent } from '@duya/computer-use';
 
-import { convertEventsToWorkflow } from '../../src/worker-workflows/converter.js';
 import {
   defToDwfSource,
   parseSavedWorkflow,
@@ -161,31 +159,6 @@ describe('defToDwfSource — mappings', () => {
     expect(source).toContain('await wf.log("noop: done")');
   });
 
-  it('gui node (from converter annotation) → wf.gui with inlined annotation', async () => {
-    const def: WorkflowDef = {
-      name: 'rpa-flow',
-      description: 'RPA 转换产物',
-      phases: [
-        {
-          phase: 'p1',
-          title: '操作',
-          nodes: [
-            {
-              id: 'fill-erp',
-              gui: { target_app: 'ERP*', steps: [{ do: 'capture' }, { do: 'click', element: 'som:1' }], on_stuck: 'agent' },
-              annotation: { source: 'recorder', app: 'ERP', windowTitle: 'w', som: {} },
-            },
-          ],
-        },
-      ],
-    };
-    const { source, warnings } = defToDwfSource(def);
-    expect(warnings).toEqual([]);
-    expect(source).toContain('await wf.gui(');
-    expect(source).toContain('target_app: "ERP*"');
-    expect(source).toContain('"som:1"');
-    await assertCompiles(source);
-  });
 });
 
 // ─── on_error 包装 ───
@@ -226,46 +199,5 @@ describe('defToDwfSource — error semantics', () => {
     expect(source).toContain('let flakyRetries = 0;');
     expect(source).toContain('if (flakyRetries >= 3) throw err;');
     await assertCompiles(source);
-  });
-});
-
-// ─── 端到端：录制事件 → def → dwf 源码 ───
-
-describe('defToDwfSource — recorder end-to-end', () => {
-  it('recorded events → def → dwf source passes both gates and carries wf.gui + approve', async () => {
-    const events: RecorderEvent[] = [
-      { type: 'app_focus', ts: ts(), app: CHROME },
-      {
-        type: 'click',
-        ts: ts(),
-        app: CHROME,
-        click: { x: 120, y: 80, button: 'left', count: 1 },
-        element: { name: 'Search box', controlType: 'Edit', source: 'uia-probe' },
-      },
-      {
-        type: 'type',
-        ts: ts(),
-        app: CHROME,
-        text: 'hello world',
-        element: { name: 'Text field', controlType: 'Edit', source: 'uia-probe' },
-      },
-      {
-        type: 'click',
-        ts: ts(),
-        app: CHROME,
-        click: { x: 10, y: 10, button: 'left', count: 1 },
-        element: { name: 'Delete all', controlType: 'MenuItem', source: 'uia-probe' },
-      },
-    ];
-    const converted = convertEventsToWorkflow(events);
-    expect(converted.def).toBeDefined();
-    const { source, warnings } = defToDwfSource(converted.def!);
-    // MenuItem 点击触发前插 human 节点 → wf.approve
-    expect(source).toContain('await wf.approve(');
-    expect(source).toContain('await wf.gui(');
-    // 转换器产出的 som annotation 完整内联进脚本
-    expect(source).toContain('"source": "recorder"');
-    await assertCompiles(source);
-    void warnings;
   });
 });

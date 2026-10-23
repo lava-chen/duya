@@ -4,7 +4,7 @@
  *
  * The uiohook-napi worker runs as an isolated Node subprocess
  * (design decision D2) using the SAME spawn/heartbeat/restart pipeline
- * as the computer-use daemon: `createComputerUseDaemon` with
+ * as the recorder process supervisor: `createRecorderProcessDaemon` with
  * `ELECTRON_RUN_AS_NODE` and a 90s dead-man timer. The uiohook prebuild
  * is N-API (`prebuildify --napi`), so it loads under the embedded Node
  * without any electron-rebuild.
@@ -15,17 +15,17 @@
  * which the recording degrades (recorder-service keeps running with no
  * input events, UI surfaces the state).
  *
- * Command surface: owned entirely by computer-use-daemon.ts (fixed pair
+ * Command surface: owned entirely by recorder/process-daemon.ts (fixed pair
  * `<runtime> <entry from the build layout>`, no shell). This module only
  * parses stdout lines and enforces the restart cap.
  */
 
-import { createComputerUseDaemon, type ComputerUseDaemon } from '../computer-use-daemon.js';
+import { createRecorderProcessDaemon, type RecorderProcessDaemon } from './process-daemon.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 
-import { parseWorkerLine, type WorkerEvent } from '@duya/computer-use';
+import { parseWorkerLine, type WorkerEvent } from './domain/index.js';
 
 const logger = getLogger();
 
@@ -52,25 +52,25 @@ export interface HookWorkerOptions {
   entryPath?: string;
   heartbeatTimeoutMs?: number;
   /** Test hook: forwarded to the daemon's spawnFn. */
-  spawnFn?: Parameters<typeof createComputerUseDaemon>[0]['spawnFn'];
+  spawnFn?: Parameters<typeof createRecorderProcessDaemon>[0]['spawnFn'];
 }
 
 /**
  * Resolve the compiled worker entry from the build layout only
- * (packaged `resources/computer-use/` vs dev workspace dist). No env or
+ * (packaged `resources/recorder/` vs the desktop TypeScript output). No env or
  * config input feeds this path.
  */
 export function resolveHookWorkerPath(): string {
   const isPackaged = !!process.resourcesPath && !process.defaultApp;
   if (isPackaged) {
-    const bundled = path.join(process.resourcesPath, 'computer-use', WORKER_ENTRY_BASENAME);
+    const bundled = path.join(process.resourcesPath, 'recorder', WORKER_ENTRY_BASENAME);
     if (existsSync(bundled)) return bundled;
   }
-  return path.join(process.cwd(), 'packages', 'computer-use', 'dist', 'recorder', WORKER_ENTRY_BASENAME);
+  return path.join(process.cwd(), 'dist-electron', 'main', 'services', 'recorder', 'domain', WORKER_ENTRY_BASENAME);
 }
 
 export class RecorderHookWorker {
-  private daemon: ComputerUseDaemon | null = null;
+  private daemon: RecorderProcessDaemon | null = null;
   private state: HookWorkerState = 'idle';
   private stopping = false;
   /** Highest restartCount already acted on (health patches replay it). */
@@ -112,7 +112,7 @@ export class RecorderHookWorker {
       return;
     }
     this.state = 'starting';
-    const daemon = createComputerUseDaemon({
+    const daemon = createRecorderProcessDaemon({
       runtime: process.execPath,
       entry: this.opts.entryPath,
       env: { ELECTRON_RUN_AS_NODE: '1' },
@@ -144,14 +144,14 @@ export class RecorderHookWorker {
         this.terminal = true;
         this.state = 'failed';
         const reason = health.lastError ?? 'hook worker restart limit reached';
-        logger.warn('recorder hook-worker failed after restart', { reason }, LogComponent.ComputerUse);
+        logger.warn('recorder hook-worker failed after restart', { reason }, LogComponent.Recorder);
         void daemon.stop().catch(() => undefined);
         this.daemon = null;
         this.callbacks.onFailed(reason);
       }
     });
     await daemon.start();
-    logger.info('recorder hook-worker starting', { entry: this.opts.entryPath }, LogComponent.ComputerUse);
+    logger.info('recorder hook-worker starting', { entry: this.opts.entryPath }, LogComponent.Recorder);
   }
 
   /** Stop: SIGTERM the worker and wait for exit. */
@@ -174,7 +174,7 @@ export class RecorderHookWorker {
 
   private handleLine(line: string): void {
     // The daemon-facing heartbeat ({"type":"heartbeat"}) drives the
-    // shared dead-man timer inside computer-use-daemon; skip it here.
+    // shared dead-man timer inside recorder process supervisor; skip it here.
     if (line.includes('"heartbeat"')) {
       if (this.state === 'starting') {
         this.state = 'running';
@@ -183,7 +183,7 @@ export class RecorderHookWorker {
     }
     const event = parseWorkerLine(line);
     if (event === null) {
-      logger.debug('recorder hook-worker unparseable line', { line: line.slice(0, 200) }, LogComponent.ComputerUse);
+      logger.debug('recorder hook-worker unparseable line', { line: line.slice(0, 200) }, LogComponent.Recorder);
       return;
     }
     if (this.state === 'starting') {

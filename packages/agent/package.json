@@ -43,7 +43,6 @@
     "@duya/capabilities": "0.1.0",
     "@duya/host": "0.1.0",
     "@duya/cli": "0.1.0",
-    "@duya/computer-use": "0.0.1",
     "@duya/memory": "0.1.0",
     "@duya/plugin-core": "0.1.0",
     "@duya/sandbox": "0.1.0",

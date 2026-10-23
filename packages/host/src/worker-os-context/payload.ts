@@ -1,8 +1,8 @@
 /**
  * payload.ts — Parse + validate + prune ContextPayload into OSContext.
  *
- * The daemon (`packages/computer-use/`) writes one
- * `~/.duya/context/<sessionId>.json` per session. Each file is a
+ * The desktop context service writes one `~/.duya/context/<sessionId>.json`
+ * per session. Each file is a
  * full `ContextPayload` (rich; includes windowList, uia tree, msaa
  * tree, etc.). This module:
  *
@@ -10,14 +10,11 @@
  *      never throws).
  *   2. Validates `schemaVersion` against `ACCEPTED_SCHEMA_VERSIONS`
  *      (unknown → WARN + drop).
- *   3. Prunes to the `OSContext` envelope (drops windowList / uia /
- *      msaa — not needed for grounding the first LLM turn). plan 519
- *      re-opens `uiaInputs` / `msaaInputs` / `windowList` for the
- *      computer-use SOM detector only (never the prompt).
+ *   3. Prunes the rich daemon payload to the small `OSContext` envelope.
  *   4. Caps `interactionTrail` at `MAX_TRAIL_EVENTS` (sliding window
  *      — daemon writes up to 50, we keep the most recent 30).
  *
- * Plan 453 Task B. Plan 519 Phase 1 Task A1.
+ * Plan 453 Task B.
  */
 
 import type { RedactionReason } from './daemon-schema.js';
@@ -35,8 +32,6 @@ import {
 /** Component tag for structured logs. */
 const COMPONENT = 'OSContextBridge';
 
-/** Cap on the re-opened top-level window list (extreme desktop enums). */
-const MAX_WINDOW_LIST = 64;
 
 /** Allowed redaction reasons. Anything else passes through as null. */
 const REDACTION_REASONS: ReadonlySet<RedactionReason> = new Set([
@@ -208,21 +203,6 @@ export function parseOSContext(
         .map((e) => e as unknown as OSContext['interactionTrail'][number]))
     : [];
 
-  // plan 519 — pass through the SOM inputs to the computer-use detector.
-  const uiaInputs = readInputsArray(parsed, 'uia', 'inputs') as unknown as
-    | OSContext['uiaInputs']
-    | undefined;
-  const msaaInputs = readInputsArray(parsed, 'msaa', 'inputs') as unknown as
-    | OSContext['msaaInputs']
-    | undefined;
-  const windowListRaw = (parsed as { windowList?: unknown }).windowList;
-  const windowList = Array.isArray(windowListRaw)
-    ? (windowListRaw
-        .filter(isObject)
-        .slice(0, MAX_WINDOW_LIST)
-        .map((e) => e as unknown as NonNullable<OSContext['windowList']>[number]))
-    : undefined;
-
   const ctx: OSContext = {
     schemaVersion: schemaVersion as AcceptedSchemaVersion,
     capturedAt,
@@ -234,9 +214,6 @@ export function parseOSContext(
       exeName: focusExe,
       title: typeof focusTitle === 'string' ? focusTitle : '',
     },
-    ...(uiaInputs ? { uiaInputs } : {}),
-    ...(msaaInputs ? { msaaInputs } : {}),
-    ...(windowList ? { windowList } : {}),
     redacted: redactedInfo.redacted,
     redactionReason: redactedInfo.reason,
   };
@@ -249,9 +226,6 @@ export function parseOSContext(
       hasFocusedEntity: focusedEntity !== null,
       hasIntent: intentCandidate !== null,
       redacted: redactedInfo.redacted,
-      uiaInputs: uiaInputs?.length,
-      msaaInputs: msaaInputs?.length,
-      windowList: windowList?.length,
     },
     COMPONENT,
   );

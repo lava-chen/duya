@@ -16,7 +16,7 @@
  *
  * Multi-provider model: if the deleted provider is the
  * SOFT DEFAULT, clear `defaultProviderId` too. Otherwise
- * the agent pool / conductor / vision / gateway still fall
+ * the agent pool / vision / gateway still fall
  * back to a provider the user just removed.
  */
 

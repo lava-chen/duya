@@ -73,9 +73,7 @@ const DENIED_BASENAMES: ReadonlySet<string> = new Set(['.env', '.npmrc', '.netrc
  * - the app's own installation: `app:get-asset-url` serves bundled
  *   `public/icon.png` etc. through this same scheme from
  *   `app.getAppPath()` (dev) and `process.resourcesPath` (packaged), and
- *   `electron/conductor/asset-service.ts` builds conductor asset URLs here
- *   too. Without these the splash icon, plugin icons and conductor assets
- *   would 404.
+ *   too. Without these the splash icon and plugin icons would 404.
  *
  * NOTE ON THE RELATIONSHIP BETWEEN THE TWO GATES: the extension gate is the
  * primary control — it is what stops `config.toml` and `secrets.json` from

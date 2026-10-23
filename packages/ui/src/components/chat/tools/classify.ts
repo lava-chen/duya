@@ -1,20 +1,11 @@
 // Tool name classification helpers and small constant sets.
 //
-// These predicates are used by both the renderer (`isBrowserTool` decides
-// whether a row uses the chrome icon, `isAskUserQuestionTool` decides
+// These predicates are used by the renderer (`isAskUserQuestionTool` decides
 // whether to route to a dedicated row) and the group summary builder
 // (`classifyToolForSummary` decides which SummaryCategoryKey bucket a
 // tool falls into).
 
 import type { SummaryCategoryKey, ToolAction } from './types';
-
-/**
- * Canonical browser tool names. Anything starting with `browser_` or
- * `browser-` is also treated as a browser tool — see `isBrowserTool`.
- */
-export const BROWSER_TOOLS = new Set([
-  'browser', 'browsertool', 'browser_tool', 'chrome',
-]);
 
 /** Edit tool names (canonical + common aliases). */
 export const FILE_EDIT_TOOLS = new Set([
@@ -64,26 +55,6 @@ export const MESSAGE_SESSION_TOOLS = new Set(['messagesession']);
  *  `action` field). */
 const TASK_ACTIONS = new Set(['create', 'get', 'list', 'update', 'output', 'stop']);
 
-/**
- * Browser tools (chrome / browser / browsertool / browser_tool).
- * Consecutive browser actions are collapsed into a single "已使用 浏览器"
- * group rather than rendered as a wall of JSON dumps.
- */
-export function isBrowserTool(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (BROWSER_TOOLS.has(lower)) return true;
-  // Match browser sub-actions like browser_navigate, browser_click,
-  // browser_screenshot, etc. — agents often expose browser capability
-  // as one base tool with an `operation` parameter, but they may also
-  // expose it as a family of namespaced tools. Treating any name
-  // starting with "browser_" as a browser tool keeps every consecutive
-  // call inside the same generic Group instead of leaking the last one
-  // out as a standalone row.
-  if (lower.startsWith('browser_') || lower.startsWith('browser-')) {
-    return true;
-  }
-  return false;
-}
 
 export function isAskUserQuestionTool(name: string): boolean {
   return ASK_USER_QUESTION_TOOLS.has(name.toLowerCase());
@@ -164,9 +135,6 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (['search', 'glob', 'grep', 'find_files', 'search_files', 'ls'].includes(name)) {
     return { count: 1, categoryKey: 'search' };
   }
-  if (isBrowserTool(name)) {
-    return { count: 1, categoryKey: 'browser' };
-  }
   if (['task', 'agent', 'subagent', 'sub_agent'].includes(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
@@ -186,9 +154,6 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   }
   if (isModuleTool(name)) {
     return { count: 1, categoryKey: 'module' };
-  }
-  if (name.startsWith('canvas_')) {
-    return { count: 1, categoryKey: 'canvas' };
   }
   return { count: 1, categoryKey: 'tools' };
 }

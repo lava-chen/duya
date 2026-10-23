@@ -69,7 +69,6 @@ const KIND_RULES = [
   [/^packages\/cli\//, 'cli'],
   [/^packages\/capabilities\//, 'capability'],
   [/^packages\/computer-use\//, 'computer-use'],
-  [/^packages\/conductor\//, 'conductor'],
   [/^packages\/plugin-core\//, 'plugin'],
   [/^packages\/connectors\//, 'connector'],
   [/^packages\/memory\//, 'memory'],

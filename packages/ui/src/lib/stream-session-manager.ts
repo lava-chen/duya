@@ -504,16 +504,6 @@ interface StartStreamParams {
    * to the `agent.max_turns` config (config.toml), then 100.
    */
   maxTurns?: number;
-  /**
-   * Conductor mode flag — when true, the agent runs in conductor mode
-   * and binds to the conductorCanvasId. Forwarded to ChatOptions.
-   */
-  conductorMode?: boolean;
-  /**
-   * Conductor canvas ID — durable binding from the session row.
-   * Injected into the agent's ToolUseContext.conductorCanvasId.
-   */
-  conductorCanvasId?: string;
   /** Mailbox row backing a user message queued while another run is active. */
   queuedMailboxId?: string;
   /** Internal follow-up turn that consumes queued background task results. */
@@ -1695,7 +1685,7 @@ export class StreamSessionManager {
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
-    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume, clientMsgId } = params;
+    const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, backgroundTaskResume, clientMsgId } = params;
 
     if (!backgroundTaskResume) {
       this.backgroundResumeTemplates.set(sessionId, {
@@ -1906,7 +1896,7 @@ export class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, maxTurns: params.maxTurns ?? (await readAgentMaxTurns()), systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume, clientMsgId },
+      { content, displayContent, model, maxTokens, maxTurns: params.maxTurns ?? (await readAgentMaxTurns()), systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, backgroundTaskResume, clientMsgId },
       nextGeneration
     );
 
@@ -1936,8 +1926,6 @@ export class StreamSessionManager {
       defaultWorkspaceDirectory?: string;
       securityScanEnabled?: boolean;
       effort?: string;
-      conductorMode?: boolean;
-      conductorCanvasId?: string;
       backgroundTaskResume?: boolean;
       clientMsgId?: string;
     },
@@ -2017,8 +2005,6 @@ export class StreamSessionManager {
         defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
         securityScanEnabled: params.securityScanEnabled,
         effort: params.effort,
-        conductorMode: params.conductorMode,
-        conductorCanvasId: params.conductorCanvasId,
         backgroundTaskResume: params.backgroundTaskResume,
         clientMsgId: params.clientMsgId,
       } satisfies ChatOptions);

@@ -11,16 +11,8 @@
  *     between renders to keep memory bounded.
  *   - `sanitizeForIframe` strips <script>/<iframe>/etc. so the headless page
  *     is safe even when widget_code is hostile.
- *   - WIDGET_CSS_BRIDGE / WIDGET_THEME_DARK_CSS used to be imported from
- *     `@duya/conductor` "so the headless preview matches the chat renderer,
- *     single source of truth". That claim was already false: the renderer has
- *     its own byte-identical copy at
- *     `packages/conductor/src/renderer/elements/widget-css-bridge.ts`, and
- *     nothing kept them in sync. They are still two copies. Plan M4 moved them
- *     here because this was the only consumer of the `elements/` copy, so the
- *     agent no longer depends on a host-side UI package to render a widget.
- *     Collapsing the duplication is NOT done — it is a separate change, and
- *     doing it here would have silently altered what the renderer ships.
+ *   - The renderer keeps local copies of its widget CSS bridge and theme.
+ *     The headless renderer has its own copy for process isolation.
  *
  * Crashed/disposed browser is re-created lazily on next render(). The class
  * is intentionally tolerant: failures are reported through the result rather
@@ -333,9 +325,7 @@ function buildHostHtml(
   width: number,
   height: number,
 ): string {
-  // Pull the CSS strings lazily to avoid a hard import cycle into
-  // @duya/conductor at module load (the host process is bundled).
-  // The async loader returns them by the time renderOnce() is called.
+  // CSS bridge and theme are loaded before renderOnce() is called.
   const cssLight = BRIDGE_LIGHT_CACHE;
   const cssDark = BRIDGE_DARK_CACHE;
 

@@ -312,7 +312,6 @@ import {
   IconPin as TablerIconPin,
   IconPinFilled as TablerIconPinFilled,
   IconTargetArrow as TablerIconTargetArrow,
-  IconChalkboard as TablerIconChalkboard,
   IconTelescope as TablerIconTelescope,
   IconCircleDotted as TablerIconCircleDotted,
   IconHexagon as TablerIconHexagon,
@@ -603,7 +602,6 @@ export const PathIcon = wrapTabler(TablerIconVector);
 export const FoldersIcon = wrapTabler(TablerIconFolders);
 export const SquareHalfIcon = wrapTabler(TablerIconSquareHalf);
 export const RectangleIcon = wrapTabler(TablerIconRectangle);
-export const ChalkboardIcon = wrapTabler(TablerIconChalkboard);
 export const TelescopeIcon = wrapTabler(TablerIconTelescope);
 export const ArrowsOutIcon = wrapTabler(TablerIconArrowsMaximize2);
 

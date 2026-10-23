@@ -7,14 +7,13 @@
  *
  *   - Walks every `tool_result` content block in user messages
  *   - Counts embedded `image` content blocks (base64 PNG / JPEG / WEBP)
- *     attributed to a `computer_use` tool call (the screenshot the
- *     dispatcher returns from `capture` / `zoom` / `type` follow-up)
+ *     attributed to image-producing tools
  *   - When the total exceeds the configured budget, drops the
  *     oldest image blocks in chunks (per-message granularity so we
  *     don't break prompt cache any more than necessary)
  *
  * Default budget: 5 screenshots per session. Configurable via
- * `DUYA_COMPUTER_USE_IMAGE_BUDGET` env var.
+ * `DUYA_IMAGE_BUDGET` env var.
  *
  * This is a projection-layer transform — the persisted message
  * history is left intact so the user can scroll back to see every
@@ -30,11 +29,11 @@
 import type { Message, MessageContent, ToolResultContent } from '../../types.js';
 import type { ProjectionTransform } from '../projectionCompress.js';
 
-const ENV_BUDGET = 'DUYA_COMPUTER_USE_IMAGE_BUDGET';
+const ENV_BUDGET = 'DUYA_IMAGE_BUDGET';
 const DEFAULT_BUDGET = 5;
 
 /** Tools whose tool_result payloads may include image content. */
-const IMAGE_TOOLS = new Set(['computer_use', 'Read', 'VisionAnalyze']);
+const IMAGE_TOOLS = new Set(['Read', 'VisionAnalyze']);
 
 const BUDGET = (() => {
   const raw = process.env[ENV_BUDGET];
@@ -66,10 +65,7 @@ function countImages(blocks: readonly unknown[]): number {
       count += 1;
       continue;
     }
-    // The computer_use dispatcher returns images as
-    // `{ type: 'image', source: { type: 'base64', ... } }`. Older
-    // tools may use a different shape; we trust the `type` field
-    // alone here.
+    // Older tools may use a different shape; we trust the `type` field alone.
     if (b.type === 'tool_result' && Array.isArray(b.content)) {
       count += countImages(b.content as readonly unknown[]);
     }
@@ -78,7 +74,7 @@ function countImages(blocks: readonly unknown[]): number {
 }
 
 /**
- * Image truncation transform (plan 454 follow-up). Drops the
+ * Image truncation transform. Drops the
  * oldest `image` content blocks from the message array when the
  * total exceeds the configured budget.
  *
@@ -87,11 +83,11 @@ function countImages(blocks: readonly unknown[]): number {
  * the env explicitly sets it to 0), every image is dropped.
  */
 export const imageTruncationTransform: ProjectionTransform = {
-  name: 'computer-use-image-truncation',
+  name: 'image-truncation',
   apply(messages: Message[]): Message[] {
     // First pass: count + collect the messages that contain
     // droppable image content. We only touch the messages that
-    // contain a `computer_use` (or other image-emitter) tool_result.
+    // contain an image-emitting tool result.
     const toolNameByUseId = new Map<string, string>();
     for (const msg of messages) {
       if (!Array.isArray(msg.content)) continue;
@@ -160,8 +156,8 @@ export const imageTruncationTransform: ProjectionTransform = {
         // was dropped by the truncation policy. This avoids
         // re-asking the user for content the model never sees.
         const notice =
-          '[computer-use image truncated by projection pipeline; ' +
-          'call capture again to re-fetch]';
+          '[image removed by projection size limit; ' +
+          'request the source again if needed]';
         const noticeBlock: ToolResultContent = {
           type: 'tool_result',
           tool_use_id: toolResult.tool_use_id,

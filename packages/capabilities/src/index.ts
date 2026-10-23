@@ -20,10 +20,6 @@
 
 // Contracts — the pure tool vocabulary.
 export * from './contracts/index.js';
-export * from './BrowserTool/index.js';
-export * from './BrowserTool/ports.js';
-export * from './OSTool/index.js';
-export * from './OSTool/ports.js';
 
 // BaseTool — the abstract tool base classes and execution error types.
 // The explicit class export shadows the `BaseTool` interface contributed by
@@ -86,7 +82,7 @@ export { FileSnapshotStore, sha256Of, getSnapshotRootDir } from './file-snapshot
 export * from './permissions/index.js';
 
 // App server — the host-owned, in-process MCP server (`duya_app`).
-// Plan 616: first-party product capabilities (canvas / bot / browser)
+// Plan 616: first-party product capabilities (bot / browser)
 // speak the MCP contract so they reach the model through the same
 // pipeline as external MCP servers.
 export {

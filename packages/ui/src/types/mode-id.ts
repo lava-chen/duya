@@ -14,13 +14,11 @@
 export type ModeModifierId =
  'plan-task'
  | 'research'
- | 'conductor'
- | 'goal'
- | 'computer-use';
+ | 'goal';
 
 /**
- * Mode lifecycle. Session-level modes persist across messages (conductor,
- * plan-task, goal, research); message-level modes are cleared after each send.
+ * Mode lifecycle. Session-level modes persist across messages; message-level
+ * modes are cleared after each send.
  *
  * Plan 423: research moved from `message` to `session` so its state machine
  * (`ResearchTracker`) survives across messages and can drive multi-round
@@ -34,13 +32,9 @@ export type ModeModifierKind = 'message' | 'session';
 export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
   'plan-task': 'session',
   'research': 'session',
-  'conductor': 'session',
-  // Plan 411: goal is a session-level mode like conductor — survives
+  // Goal is a session-level mode that survives
   // across messages so the tracker keeps driving rounds.
   'goal': 'session',
-  // Plan 454: Computer Use is session-level (the SOM overlay state
-  // + approval mode should survive across turns).
-  'computer-use': 'session',
 };
 
 /**
@@ -55,20 +49,15 @@ export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
  * directions.
  *
  * Keep in sync with:
- *   - `packages/agent/src/modes/plan/plan-task-mode.ts`    (exclusiveWith: research, conductor)
- *   - `packages/agent/src/modes/conductor-mode.ts`         (exclusiveWith: plan-task)
+ *   - `packages/agent/src/modes/plan/plan-task-mode.ts`    (exclusiveWith: research)
  *   - `packages/agent/src/modes/research-mode.ts`          (exclusiveWith: plan-task)
  */
 export const MODE_EXCLUSIVE_WITH: Record<ModeModifierId, ModeModifierId[]> = {
-  'plan-task': ['research', 'conductor'],
+  'plan-task': ['research'],
   'research': ['plan-task'],
-  'conductor': ['plan-task'],
   // Goal is a parallel tracker — no mutual exclusion with plan-task
   // (plan 411 §4.3).
   'goal': [],
-  // Plan 454: Computer Use is mutually exclusive with every other
-  // session-level mode — OS-level takeover should not compose.
-  'computer-use': ['plan-task', 'research', 'conductor', 'goal'],
 };
 
 /**
@@ -78,7 +67,7 @@ export const MODE_EXCLUSIVE_WITH: Record<ModeModifierId, ModeModifierId[]> = {
  * If the mode is inactive, it is added AND all modes it excludes are removed
  * from the set (so toggling plan-task on while research is active drops research).
  *
- * Session-level modes (conductor) are NOT auto-removed by message-level toggles
+ * Session-level modes are NOT auto-removed by message-level toggles
  * unless they are explicitly exclusiveWith — which is already encoded in
  * `MODE_EXCLUSIVE_WITH`.
  */

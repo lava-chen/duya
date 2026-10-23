@@ -161,13 +161,12 @@ describe('WorkflowRuntimeManager — handshake', () => {
     });
 
     expect(h.children).toHaveLength(1);
-    // The child is the chat-worker bundle under a different role — same env
-    // (daemon port, sqlite path), stamped role, and no session id.
+    // The child is the chat-worker bundle under a different role, stamped
+    // with its role and no session id.
     expect(h.forkArgs[0].modulePath).toBe('C:/fake/agent-process-entry.js');
     const env = h.forkArgs[0].options.env as Record<string, string>;
     expect(env.DUYA_AGENT_ROLE).toBe('workflow-runtime');
     expect(env.SESSION_ID).toBe('');
-    expect(env.DUYA_DAEMON_PORT).toBeTruthy();
 
     // The run description reaches the child on stdin, in the same shape the
     // child's `parseStdin` loop reads.

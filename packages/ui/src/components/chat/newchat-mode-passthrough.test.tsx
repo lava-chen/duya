@@ -155,17 +155,12 @@ describe('NewChatView mode passthrough', () => {
   it('plan-task mode reaches onSendMessage', async () => {
     const args = await sendWithMode('Plan Mode');
     // App.handleSendMessage signature: content, model, files, agentProfileId,
-    // outputStyleConfig, mode, effort, displayContent, conductorMode, ...
+    // outputStyleConfig, mode, effort, displayContent, ...
     expect(args[5]).toBe('plan-task');
     // Session-level mode is persisted so ChatView restores the chip and
     // later turns keep the mode after the view switch.
     expect(mocks.setPlanMode).toHaveBeenCalledWith('thread-1', true);
     expect(mocks.storeState.setThreadPlanMode).toHaveBeenCalledWith('thread-1', true);
-  });
-
-  it('computer-use mode reaches onSendMessage', async () => {
-    const args = await sendWithMode('Computer Use');
-    expect(args[5]).toBe('computer-use');
   });
 
   it('goal mode reaches onSendMessage and persists', async () => {

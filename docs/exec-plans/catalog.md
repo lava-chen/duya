@@ -49,6 +49,7 @@
 | [cli-markdown-rendering](active/614-cli-markdown-rendering.md) | P1 | 核对 Markdown 渲染与真实终端验收；先检查 615 的接管范围 |
 | [cli-unified-tui-engine](active/615-cli-unified-tui-engine.md) | P1 | 对照计划、PR 草稿与 Git 核对已交付项，再选择剩余验收 |
 | [duya-app-mcp-layer](active/616-duya-app-mcp-layer.md) | P1 | 按本计划的 T 卡与验证记录接续；桌面扩展另见 618 |
+| [外置能力迁移](active/2026-10-22-external-capability-migration.md) | P1 | Browser、Computer Use、Canvas 分别插件化；按阶段验证并保留旧模块 |
 | [612 rollout 恢复](active/612-rollout-recovery-hardening.md) | P1 | 先核对 Phase 1 的实际落地与证据，Phase 2/3 决策见正文 |
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |
 | [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | Phase 1–5 与 620 Phase A 已合入（PR #365）：两通道投递 + 分类学单源 + `prompt_snapshot` 留痕。**下一动作**：① 定 `prompt_snapshot` 全文落盘的保留期限 / 导出边界（`DUYA_PROMPT_LEDGER=off` 可整体关闭）；② 采真实会话的 hash 表验证 system 前缀逐轮恒定（Phase 0 的产品采样验收）；③ (g) 恢复 `BOT_BASIC_SYSTEM_PROMPT` 单独排期（会改 bot 人格） |

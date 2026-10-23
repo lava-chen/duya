@@ -35,13 +35,13 @@ import {
   type RecorderEvent,
   type SessionSummary,
   type WorkerEvent,
-} from '@duya/computer-use';
+} from './domain/index.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { RecorderHookWorker } from './hook-worker.js';
 import { RecorderFocusTracker } from './focus-tracker.js';
 import { createSharedUiaProbeAdapter, type UiaEnumerateResult, type UiaForegroundInfo } from './uia-probe.js';
 import { createSharedAxRecorderAdapter } from './ax-helper.js';
-import { getForegroundWindowInfo } from '../computer-use-backend.js';
+import { getForegroundWindowInfo } from './foreground-window.js';
 import { clearOverlayElements, showOverlayElements } from '../overlay/index.js';
 
 const logger = getLogger();
@@ -344,7 +344,7 @@ export class RecorderService {
           logger.warn(
             'recorder started degraded: permissions missing',
             undefined,
-            LogComponent.ComputerUse,
+            LogComponent.Recorder,
           );
           return; // recording surface exists; worker + tracker skipped
         }
@@ -361,13 +361,13 @@ export class RecorderService {
     this.pollTimer = setInterval(() => this.pollAggregator(), POLL_INTERVAL_MS);
     this.pollTimer.unref?.();
     this.maxDurationTimer = setTimeout(() => {
-      logger.info('recorder max duration reached; auto-stopping', undefined, LogComponent.ComputerUse);
+      logger.info('recorder max duration reached; auto-stopping', undefined, LogComponent.Recorder);
       void this.stop();
     }, this.opts.maxDurationMs);
     this.maxDurationTimer.unref?.();
 
     this.setStatus('recording');
-    logger.info('recorder session started', undefined, LogComponent.ComputerUse);
+    logger.info('recorder session started', undefined, LogComponent.Recorder);
   }
 
   private async doStop(): Promise<void> {
@@ -408,7 +408,7 @@ export class RecorderService {
           'recorder session summary write failed',
           err instanceof Error ? err : new Error(String(err)),
           undefined,
-          LogComponent.ComputerUse,
+          LogComponent.Recorder,
         );
       }
     }
@@ -422,7 +422,7 @@ export class RecorderService {
     logger.info(
       'recorder session stopped',
       { degraded: this.degraded, droppedNoApp: this.droppedNoApp, droppedFiltered: this.droppedFiltered },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
   }
 
@@ -578,7 +578,7 @@ export class RecorderService {
     // Restart budget spent: recording continues without input events
     // (design §5 degraded mode); the UI surfaces the flag.
     this.degraded = true;
-    logger.warn('recorder degraded: hook worker unavailable', { reason }, LogComponent.ComputerUse);
+    logger.warn('recorder degraded: hook worker unavailable', { reason }, LogComponent.Recorder);
     this.emitStatus();
   }
 
@@ -617,7 +617,7 @@ export class RecorderService {
           'recorder event append failed',
           err instanceof Error ? err : new Error(String(err)),
           undefined,
-          LogComponent.ComputerUse,
+          LogComponent.Recorder,
         );
       });
   }
@@ -673,7 +673,7 @@ export class RecorderService {
       logger.warn(
         'recorder element overlay clear failed',
         { error: err instanceof Error ? err.message : String(err) },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
     }
   }
@@ -776,7 +776,7 @@ export function getRecorderService(): RecorderService {
         logger.info(
           'recorder element overlay snapshot',
           { count: result.elements.length, app: app.title ?? '', pid: app.pid },
-          LogComponent.ComputerUse,
+          LogComponent.Recorder,
         );
         showOverlayElements(result.elements as unknown as Record<string, unknown>[]);
       },

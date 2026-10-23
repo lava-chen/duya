@@ -2089,8 +2089,7 @@ export class RunEngineImpl implements RunEngine {
    * ## NOT a phase, and the reason is measured rather than stylistic
    *
    * A mode's `onExit` returns `void` and its real work is a host side effect
-   * (`computer-use-mode.ts` clears a per-session trigger and disables the OS
-   * bridge). There is no `ExtensionContribution` that means "nothing, but I
+   * (a mode clears a per-session trigger and disables a host bridge). There is no `ExtensionContribution` that means "nothing, but I
    * ran" -- expressing it as one would be a contribution whose value is
    * discarded, which is the `ExtensionPort` doc's own failure. See
    * `ModeExitPort` for the full enumeration of why `after_finalize` is not

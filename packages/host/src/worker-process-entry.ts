@@ -28,7 +28,6 @@ let _appConnectionModule: any = null;
 import type { WorkerSession } from './worker-session-runtime.js';
 import { Journal } from '@duya/host/worker-journal/Journal';
 import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '@duya/host/skills';
-import { browserTool } from './worker-tool-bindings/browser-tool.js';
 import { modeModifierRegistry } from './worker-modes/modifiers/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from '@duya/agent-core/run-manifest-verification';
 import { type RunManifest, type RunId } from '@duya/agent-protocol';
@@ -43,7 +42,6 @@ import { getPendingInteragentCall } from '@duya/host/worker-interagent-calls';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { launchSavedWorkflow } from './worker-workflows/runner.js';
 import { runWorkflowRuntimeChild } from './worker-workflows/runtime-child.js';
-import { MemoryArtifactStore } from '@duya/host/worker-workflows/gui-artifacts';
 import { resolveChatStartAgentMode, manifestPermissionMode } from '@duya/agent-runtime/authorization/profile-bridge';
 import { hydrateWorkerSessionHistory } from '@duya/host/worker-session-history';
 import type { ModelContentBlock } from '@duya/agent-runtime';
@@ -96,8 +94,6 @@ interface InitMessage {
     systemPrompt?: string;
     skillPaths?: string[];
     communicationPlatform?: string;
-    blockedDomains?: string[];
-    browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
     language?: string;
     sandboxEnabled?: boolean;
     securityScanEnabled?: boolean;
@@ -173,8 +169,6 @@ interface ChatStartMessage {
         maxTurns?: number;
         allowedTools?: string[];
         permissionSurface?: 'bot' | 'default';
-        conductorMode?: boolean;
-        conductorCanvasId?: string;
         backgroundTaskResume?: boolean;
         llmRequestTimeoutMs?: number;
         wakeRun?: boolean;
@@ -598,53 +592,6 @@ const pendingIpcRequests = new Map<string, {
     reject: (error: Error) => void;
     timeoutHandle?: ReturnType<typeof setTimeout>;
 }>();
-function conductorIpcRequest<T = unknown>(channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const outerPayload = payload as {
-            action?: string;
-            payload?: unknown;
-            sessionId?: string;
-        } | undefined;
-        const action = outerPayload?.action ?? channel;
-        const innerPayload = outerPayload?.payload ?? payload;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        sendToMain({
-            type: 'conductor:executor:rpc',
-            requestId,
-            action,
-            payload: innerPayload,
-            sessionId: outerPayload?.sessionId,
-        });
-    });
-}
 function appConnectionIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
     timeout?: number;
 }): Promise<{
@@ -722,96 +669,6 @@ function appConnectionCatalogIpcRequest<T = unknown>(_channel: string, _payload:
             timeoutHandle,
         });
         sendToMain({ type: 'appConnection:catalog', requestId });
-    });
-}
-function computerUseIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        const outerPayload = payload as {
-            action?: string;
-            payload?: unknown;
-            sessionId?: string;
-        } | undefined;
-        sendToMain({
-            type: 'computer-use:execute',
-            requestId,
-            action: outerPayload?.action,
-            payload: outerPayload?.payload,
-            sessionId: outerPayload?.sessionId,
-        });
-    });
-}
-function computerCuaIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use:cua IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        const outerPayload = payload as {
-            tool?: string;
-            args?: Record<string, unknown>;
-            sessionId?: string;
-        } | undefined;
-        sendToMain({
-            type: 'computer-use:cua',
-            requestId,
-            tool: outerPayload?.tool,
-            args: outerPayload?.args,
-            sessionId: outerPayload?.sessionId,
-        });
     });
 }
 function memoryTierIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
@@ -920,19 +777,13 @@ function toolIpcRequest<T = unknown>(channel: string, payload: unknown, options?
     if (channel === 'appConnection:catalog') {
         return appConnectionCatalogIpcRequest<T>(channel, payload, options);
     }
-    if (channel === 'computer-use:execute') {
-        return computerUseIpcRequest<T>(channel, payload, options);
-    }
-    if (channel === 'computer-use:cua') {
-        return computerCuaIpcRequest<T>(channel, payload, options);
-    }
     if (channel === 'memory-tier:rpc') {
         return memoryTierIpcRequest<T>(channel, payload, options);
     }
     if (channel === 'bot-identity:rpc') {
         return botIdentityIpcRequest<T>(channel, payload, options);
     }
-    return conductorIpcRequest<T>(channel, payload, options);
+    return Promise.resolve({ success: false, error: { code: 'UNSUPPORTED_CHANNEL', message: `Unsupported host IPC channel: ${channel}` } });
 }
 function fetchAppConnectionDescriptors(): Promise<{
     success: boolean;
@@ -1412,7 +1263,7 @@ function summarizeConversation(messages: Message[], maxMessages = 12): string {
         .filter(Boolean)
         .join('\n\n');
 }
-async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like', permissionRules?: InitMessage['permissionRules'], currentProjectId?: string | null, projectHome?: string): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, permissionRules?: InitMessage['permissionRules'], currentProjectId?: string | null, projectHome?: string): Promise<void> {
     sessionSystemPrompt = sysPrompt;
     if (!config) {
         throw new Error('No provider config available. Please configure an API provider in Settings.');
@@ -1448,8 +1299,6 @@ async function initAgent(config: InitMessage['providerConfig'] | null | undefine
         projectHome,
         visionConfig: config.visionConfig,
         compactModelConfig: config.compactModelConfig,
-        blockedDomains,
-        browserBackendMode,
         language,
         defaultWorkspaceDirectory: defaultWorkspaceDir,
         permissionRules,
@@ -1799,8 +1648,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         sessionId: msg.sessionId,
         promptLength: msg.prompt.length,
         agentProfileId: msg.options?.agentProfileId || '(none)',
-        conductorMode: msg.options?.conductorMode ?? false,
-        hasConductorCanvasId: !!msg.options?.conductorCanvasId,
     });
     if (agent) {
         log('[Agent-Process] Agent LLM config:', {
@@ -2357,9 +2204,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             effort: msg.options?.effort,
             maxTurns: msg.options?.maxTurns,
             allowedTools: msg.options?.allowedTools,
-            conductorMode: msg.options?.conductorMode ? true : undefined,
-            conductorCanvasId: msg.options?.conductorCanvasId,
-            conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
+            hostIpc: { sendToMain, ipcRequest: toolIpcRequest },
             backgroundTaskResume: msg.options?.backgroundTaskResume,
             llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
             wakeRun: msg.options?.wakeRun === true,
@@ -2984,7 +2829,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             });
             let initError: string | null = null;
             try {
-                await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.browserBackendMode, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
+                await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
                 const restoredSession = requireWorkerSession();
                 try {
                     currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
@@ -3307,21 +3152,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             void reloadMCP();
             break;
         }
-        case 'config:update': {
-            const cfgMsg = msg as unknown as {
-                browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
-                blockedDomains?: string[];
-            };
-            log('[Agent-Process] Received config:update:', cfgMsg);
-            if (cfgMsg.browserBackendMode) {
-                browserTool.setBrowserConfig({
-                    mode: cfgMsg.browserBackendMode,
-                    extensionProbeTimeoutMs: 500,
-                });
-                log('[Agent-Process] Browser backend mode updated:', cfgMsg.browserBackendMode);
-            }
-            break;
-        }
         case 'mcp:status:get': {
             sendToMain(buildMcpStatusSnapshot());
             break;
@@ -3349,8 +3179,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 takePendingAnswer,
                 llm: workflowLlm,
                 workingDirectory: wf.projectDir || agent.readWorkingDirectory() || process.cwd(),
-                computerUseRequest: (action, payload, options) => computerUseIpcRequest('computer-use:execute', { action, payload, sessionId: wf.sessionId }, options),
-                guiArtifactStore: new MemoryArtifactStore(),
                 execution: { createPorts: (workingDirectory) => processAssembly.createWorkflowExecutionPorts({ sessionId: wf.sessionId, llm: workflowLlm, workingDirectory }) },
             }, {
                 runId: wf.runId,
@@ -3479,34 +3307,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'db:response': {
             break;
         }
-        case 'conductor:executor:rpc:response': {
-            const { requestId, success, result, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                result?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data: result });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending IPC request found for requestId:', requestId);
-            }
-            break;
-        }
         case 'appConnection:invoke:response': {
             const { requestId, success, data, error } = msg as unknown as {
                 requestId: string;
@@ -3588,62 +3388,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
             else {
                 warn('[Agent-Process] No pending appConnection catalog request found for requestId:', requestId);
-            }
-            break;
-        }
-        case 'computer-use:execute:response': {
-            const { requestId, success, data, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                data?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending computer-use IPC request found for requestId:', requestId);
-            }
-            break;
-        }
-        case 'computer-use:cua:response': {
-            const { requestId, success, data, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                data?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending computer-use:cua IPC request found for requestId:', requestId);
             }
             break;
         }

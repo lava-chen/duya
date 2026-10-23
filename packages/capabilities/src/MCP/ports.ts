@@ -30,7 +30,7 @@ export interface MCPSamplingRateLimitConfig {
  * A host-owned MCP server that lives in the SAME process as the MCP client
  * (plan 616 T610a).
  *
- * `duya_app` is the first such server: the product capabilities (canvas /
+ * `duya_app` is the first such server: the product capabilities (
  * bot / browser) are implemented in-process, so the server is handed to the
  * client as an object rather than spawned as a subprocess. Two consequences
  * the design depends on:

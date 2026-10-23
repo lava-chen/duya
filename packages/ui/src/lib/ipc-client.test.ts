@@ -50,7 +50,6 @@ function servicesWith(sessions: readonly HostSessionRecord[]): UiServices {
       localFileAccess: false,
       settings: false,
       extensions: false,
-      conductor: false,
       bots: false,
       automation: false,
       workflows: false,

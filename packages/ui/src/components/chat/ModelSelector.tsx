@@ -16,8 +16,8 @@ import {
   type OptionPanelItem,
   useOptionPanelPlacement,
 } from '@/components/ui/OptionPanel';
-import type { ModelOption } from '@duya/conductor/renderer';
-export type { ModelOption } from '@duya/conductor/renderer';
+import type { ModelOption } from './ModelProviderSelector';
+export type { ModelOption } from './ModelProviderSelector';
 import { ModelCapabilityBadges } from '@/components/providers/ModelCapabilityBadges';
 
 interface ModelSelectorProps {

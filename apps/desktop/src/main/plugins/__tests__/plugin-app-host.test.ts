@@ -93,6 +93,12 @@ beforeEach(() => {
   const entry = path.join(installPath, ...APP.entry.split('/'));
   fs.mkdirSync(path.dirname(entry), { recursive: true });
   fs.writeFileSync(entry, '<html></html>');
+  const manifestPath = path.join(installPath, '.duya-plugin', 'plugin.json');
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    id: PLUGIN_ID, name: 'canvas', version: '0.1.0',
+    extensions: { 'com.duya.client': { apps: [APP] } },
+  }));
   mocks.listInstalled.mockReturnValue([{
     id: PLUGIN_ID,
     enabled: true,

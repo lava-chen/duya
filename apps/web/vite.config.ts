@@ -17,8 +17,6 @@ export default defineConfig({
       { find: /^@\/(.*)$/, replacement: `${uiSource}/$1` },
       { find: '@duya/ui/styles.css', replacement: path.join(uiSource, 'styles/globals.css') },
       { find: '@duya/ui', replacement: path.join(uiSource, 'index.ts') },
-      { find: /^@duya\/conductor\/renderer\/(.*)$/, replacement: path.resolve(webRoot, '../../packages/conductor/src/renderer/$1') },
-      { find: '@duya/conductor/renderer', replacement: path.resolve(webRoot, '../../packages/conductor/src/renderer/index.ts') },
     ],
   },
   build: {

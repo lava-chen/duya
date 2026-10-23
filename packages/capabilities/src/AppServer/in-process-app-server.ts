@@ -3,10 +3,10 @@
  *
  * ## Why an in-process server
  *
- * The product capabilities duya wants in one place (canvas, the bot
+ * The product capabilities duya wants in one place (bot
  * channels, the browser) are **implemented in this process**: their
  * executors reach the host over an in-process IPC function
- * (`context.ipcRequest`) and read per-turn state (the bound canvas id,
+ * (`context.ipcRequest`) and read per-turn state,
  * the session id, the abort controller).
  *
  * A subprocess MCP server cannot carry that state across the process
