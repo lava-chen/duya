@@ -137,6 +137,8 @@ Uncaught Exception: ENOENT: no such file or directory, open '/tmp/duya-cron-test
 
 回归测试 `apps/desktop/src/main/__tests__/logger-write-stream-error.test.ts` 已验证**能抓住这个 bug**：`git stash` 掉修复后立刻报出同样的 `ENOENT ... app.log` 未捕获异常。
 
+**修复后的 CI 结论**：run 39986607472 **全绿**——`architecture` / `typecheck` / `test` / `build` / `test scope` 五个 job 全部 pass，run conclusion = success。即「全 passed + 1 error」的那 1 个 error 确实来自这个未捕获异常，修掉后 job 转绿。
+
 ## 接续 / 结果
 
 已实现（分支 `codex/tui-multi-host`，PR #397 未合并），共 8 个提交：
@@ -166,5 +168,5 @@ Uncaught Exception: ENOENT: no such file or directory, open '/tmp/duya-cron-test
 未覆盖：`duya chat` 的多客户端行为未做端到端验收（它复用同一个 Host 与租约端点，但本次只在 TUI 路径上验证）。
 
 回收：不适用，PR #397 未合并。
-下一步：等 CI 的 `test` job 这个既有 flake 消失或由集成者评估；合并需获授权集成者用 merge commit，随后重验并核对清单。
+下一步：等授权集成者用 merge commit 集成 #397，随后重验并核对清单。
 
