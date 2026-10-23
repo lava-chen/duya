@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 50722,
+      "bytes": 51150,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -10257,7 +10257,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/contextFingerprint.ts": {
-      "bytes": 3157,
+      "bytes": 3252,
       "imports": [
         {
           "path": "node:crypto",
@@ -24525,94 +24525,6 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/worker-subagents/background-lifecycle.ts": {
-      "bytes": 20948,
-      "imports": [
-        {
-          "path": "packages/host/src/worker-subagents/progress-tracker.ts",
-          "kind": "import-statement",
-          "original": "./progress-tracker.js"
-        },
-        {
-          "path": "packages/host/src/worker-subagents/output-file-writer.ts",
-          "kind": "import-statement",
-          "original": "./output-file-writer.js"
-        },
-        {
-          "path": "packages/host/src/worker-subagents/cleanup-registry.ts",
-          "kind": "import-statement",
-          "original": "./cleanup-registry.js"
-        },
-        {
-          "path": "packages/host/src/worker-subagents/progress-bridge.ts",
-          "kind": "import-statement",
-          "original": "./progress-bridge.js"
-        },
-        {
-          "path": "packages/host/src/worker-logger.ts",
-          "kind": "import-statement",
-          "original": "../worker-logger.js"
-        },
-        {
-          "path": "packages/agent-core/src/task-notifications/buildTaskNotification.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-core/task-notifications/buildTaskNotification"
-        },
-        {
-          "path": "packages/host/src/worker-subagents/task-verification.ts",
-          "kind": "import-statement",
-          "original": "./task-verification.js"
-        },
-        {
-          "path": "packages/host/src/worker-context/background-notification.ts",
-          "kind": "import-statement",
-          "original": "../worker-context/background-notification.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/capabilities/src/SubagentTool/subagentResult.ts": {
-      "bytes": 9826,
-      "imports": [
-        {
-          "path": "../../../node_modules/zod/index.js",
-          "kind": "import-statement",
-          "original": "zod"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/capabilities/src/SubagentTool/constants.ts": {
-      "bytes": 406,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/host/src/worker-subagents/continue-parent-work.ts": {
-      "bytes": 3839,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/host/src/worker-subagents/resume-target.ts": {
-      "bytes": 3892,
-      "imports": [
-        {
-          "path": "packages/host/src/worker-db-client.ts",
-          "kind": "import-statement",
-          "original": "../worker-db-client.js"
-        },
-        {
-          "path": "packages/host/src/worker-logger.ts",
-          "kind": "import-statement",
-          "original": "../worker-logger.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/worker-subagents/worktree-notice.ts": {
-      "bytes": 773,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/host/src/workspace/errors.ts": {
       "bytes": 1548,
       "imports": [],
@@ -24862,12 +24774,22 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/worktree.ts": {
-      "bytes": 5260,
+      "bytes": 12920,
       "imports": [
         {
           "path": "packages/host/src/workspace/index.ts",
           "kind": "import-statement",
           "original": "../workspace/index.js"
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "../workspace/fs-utils.js"
+        },
+        {
+          "path": "packages/host/src/worker-db-client.ts",
+          "kind": "import-statement",
+          "original": "../worker-db-client.js"
         },
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -24877,8 +24799,101 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-subagents/background-lifecycle.ts": {
+      "bytes": 22772,
+      "imports": [
+        {
+          "path": "packages/host/src/worker-subagents/progress-tracker.ts",
+          "kind": "import-statement",
+          "original": "./progress-tracker.js"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/output-file-writer.ts",
+          "kind": "import-statement",
+          "original": "./output-file-writer.js"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/cleanup-registry.ts",
+          "kind": "import-statement",
+          "original": "./cleanup-registry.js"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/progress-bridge.ts",
+          "kind": "import-statement",
+          "original": "./progress-bridge.js"
+        },
+        {
+          "path": "packages/host/src/worker-logger.ts",
+          "kind": "import-statement",
+          "original": "../worker-logger.js"
+        },
+        {
+          "path": "packages/agent-core/src/task-notifications/buildTaskNotification.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core/task-notifications/buildTaskNotification"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/task-verification.ts",
+          "kind": "import-statement",
+          "original": "./task-verification.js"
+        },
+        {
+          "path": "packages/host/src/worker-context/background-notification.ts",
+          "kind": "import-statement",
+          "original": "../worker-context/background-notification.js"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/worktree.ts",
+          "kind": "import-statement",
+          "original": "./worktree.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/SubagentTool/subagentResult.ts": {
+      "bytes": 9826,
+      "imports": [
+        {
+          "path": "../../../node_modules/zod/index.js",
+          "kind": "import-statement",
+          "original": "zod"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/SubagentTool/constants.ts": {
+      "bytes": 406,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/worker-subagents/continue-parent-work.ts": {
+      "bytes": 3839,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/worker-subagents/resume-target.ts": {
+      "bytes": 3892,
+      "imports": [
+        {
+          "path": "packages/host/src/worker-db-client.ts",
+          "kind": "import-statement",
+          "original": "../worker-db-client.js"
+        },
+        {
+          "path": "packages/host/src/worker-logger.ts",
+          "kind": "import-statement",
+          "original": "../worker-logger.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/worker-subagents/worktree-notice.ts": {
+      "bytes": 1094,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/worker-subagents/service.ts": {
-      "bytes": 39558,
+      "bytes": 49510,
       "imports": [
         {
           "path": "node:crypto",
@@ -24944,6 +24959,11 @@
           "path": "packages/host/src/worker-subagents/worktree.ts",
           "kind": "import-statement",
           "original": "./worktree.js"
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "../workspace/fs-utils.js"
         }
       ],
       "format": "esm"
@@ -27703,7 +27723,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 30763,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -35948,7 +35968,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 29447,
+      "bytes": 30005,
       "imports": [
         {
           "path": "node:crypto",
@@ -38291,7 +38311,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-context/context-rail.ts": {
-      "bytes": 3928,
+      "bytes": 4039,
       "imports": [
         {
           "path": "node:crypto",
@@ -38307,7 +38327,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-context/prompt-ledger.ts": {
-      "bytes": 5423,
+      "bytes": 5596,
       "imports": [
         {
           "path": "node:crypto",
@@ -42638,11 +42658,6 @@
           "external": true
         },
         {
-          "path": "node:crypto",
-          "kind": "require-call",
-          "external": true
-        },
-        {
           "path": "node:fs",
           "kind": "require-call",
           "external": true
@@ -42714,6 +42729,11 @@
         },
         {
           "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
           "kind": "require-call",
           "external": true
         },
@@ -43555,7 +43575,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14277
+          "bytesInOutput": 14360
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -43579,7 +43599,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -43615,7 +43635,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/rollout-events.ts": {
           "bytesInOutput": 266
@@ -43720,7 +43740,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -43798,7 +43818,7 @@
           "bytesInOutput": 415
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7353
+          "bytesInOutput": 7340
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43807,10 +43827,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 46
+          "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 45
+          "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 97
@@ -43822,13 +43842,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43837,7 +43857,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -43873,7 +43893,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -43885,7 +43905,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -43915,7 +43935,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -43939,10 +43959,10 @@
           "bytesInOutput": 334
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
-          "bytesInOutput": 3576
+          "bytesInOutput": 3589
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -45526,7 +45546,7 @@
           "bytesInOutput": 6016
         },
         "packages/capabilities/src/BrowserTool/CDPClient.ts": {
-          "bytesInOutput": 21606
+          "bytesInOutput": 21619
         },
         "packages/capabilities/src/BrowserTool/SnapshotEngine.ts": {
           "bytesInOutput": 42365
@@ -46009,13 +46029,13 @@
           "bytesInOutput": 3922
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "../../../node_modules/ajv/dist/compile/codegen/code.js": {
           "bytesInOutput": 2614
         },
         "../../../node_modules/ajv/dist/compile/codegen/scope.js": {
-          "bytesInOutput": 2592
+          "bytesInOutput": 2598
         },
         "../../../node_modules/ajv/dist/compile/codegen/index.js": {
           "bytesInOutput": 11894
@@ -46519,7 +46539,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 321
+          "bytesInOutput": 308
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2556
@@ -46537,7 +46557,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -46549,7 +46569,7 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -46789,7 +46809,7 @@
           "bytesInOutput": 131
         },
         "../../../node_modules/utif2/UTIF.js": {
-          "bytesInOutput": 62411
+          "bytesInOutput": 62409
         },
         "../../../node_modules/@jimp/js-tiff/dist/esm/index.js": {
           "bytesInOutput": 628
@@ -48475,28 +48495,10 @@
           "bytesInOutput": 1303
         },
         "packages/host/src/worker-subagents/background-lifecycle.ts": {
-          "bytesInOutput": 6715
+          "bytesInOutput": 7133
         },
         "packages/host/src/worker-subagents/task-verification.ts": {
           "bytesInOutput": 1817
-        },
-        "packages/host/src/worker-subagents/index.ts": {
-          "bytesInOutput": 0
-        },
-        "packages/host/src/worker-subagents/service.ts": {
-          "bytesInOutput": 13121
-        },
-        "packages/capabilities/src/SubagentTool/subagentResult.ts": {
-          "bytesInOutput": 2282
-        },
-        "packages/host/src/worker-subagents/continue-parent-work.ts": {
-          "bytesInOutput": 1166
-        },
-        "packages/host/src/worker-subagents/resume-target.ts": {
-          "bytesInOutput": 1817
-        },
-        "packages/host/src/worker-subagents/worktree-notice.ts": {
-          "bytesInOutput": 541
         },
         "packages/host/src/workspace/errors.ts": {
           "bytesInOutput": 195
@@ -48526,7 +48528,25 @@
           "bytesInOutput": 2619
         },
         "packages/host/src/worker-subagents/worktree.ts": {
-          "bytesInOutput": 1635
+          "bytesInOutput": 2934
+        },
+        "packages/host/src/worker-subagents/index.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/host/src/worker-subagents/service.ts": {
+          "bytesInOutput": 16099
+        },
+        "packages/capabilities/src/SubagentTool/subagentResult.ts": {
+          "bytesInOutput": 2282
+        },
+        "packages/host/src/worker-subagents/continue-parent-work.ts": {
+          "bytesInOutput": 1166
+        },
+        "packages/host/src/worker-subagents/resume-target.ts": {
+          "bytesInOutput": 1817
+        },
+        "packages/host/src/worker-subagents/worktree-notice.ts": {
+          "bytesInOutput": 621
         },
         "packages/host/src/worker-frame-codec.ts": {
           "bytesInOutput": 5051
@@ -48943,7 +48963,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 895
+          "bytesInOutput": 901
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -49780,7 +49800,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5548432
+      "bytes": 5553204
     }
   }
 }
