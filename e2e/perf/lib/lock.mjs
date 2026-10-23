@@ -67,8 +67,9 @@ export function acquireLock(options = {}) {
       `[perf] measurement lock is busy, waiting (${output.split('\n')[0] ?? ''})\n`,
     );
     spawnSync(process.execPath, [script, 'status'], { encoding: 'utf8', cwd: REPO_ROOT });
-    // Sleep synchronously: the harness is a sequential script.
-    sleepSync(15_000);
+    // Poll often: the lock is handed over in the gap between two agents, and
+    // a short gap is only won by the agent that asks for it most often.
+    sleepSync(options.retryMs ?? 2000);
   }
 }
 
@@ -105,6 +106,7 @@ export async function withMeasurementLock(fn, options = {}) {
     script,
     agent: options.agent,
     waitMs: options.waitMs ?? 0,
+    retryMs: options.retryMs ?? 2000,
   });
   if (!acquisition.acquired) {
     if (options.required) {
