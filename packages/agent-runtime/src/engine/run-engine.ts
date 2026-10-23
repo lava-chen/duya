@@ -3402,6 +3402,12 @@ class TurnMessage {
       inputTokens,
       outputTokens,
       totalTokens: frame.totalTokens ?? inputTokens + outputTokens,
+      // The provider's own request duration, when it reported one. OMITTED
+      // rather than set to zero when absent: a zero would say "the call took
+      // no time", which is a measurement nobody made.
+      ...(frame.requestDurationMs === undefined
+        ? {}
+        : { requestDurationMs: frame.requestDurationMs }),
     };
   }
 

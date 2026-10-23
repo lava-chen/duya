@@ -198,7 +198,16 @@ export type ModelFrame =
   | { readonly type: 'tool_use_started'; readonly call: ToolCallRequest }
   | { readonly type: 'tool_use_delta'; readonly callId: ToolCallId; readonly delta: string }
   | { readonly type: 'tool_use'; readonly call: ToolCallRequest }
-  | { readonly type: 'usage'; readonly inputTokens: number; readonly outputTokens: number; readonly totalTokens?: number }
+  | { readonly type: 'usage'; readonly inputTokens: number; readonly outputTokens: number; readonly totalTokens?: number; /**
+   * The physical duration of the provider request that produced this usage,
+   * in milliseconds.
+   *
+   * Measured at the provider call and carried as a number, because a
+   * consumer cannot reconstruct it from chunk timestamps — those may be
+   * buffered and would no longer describe when the provider produced the
+   * content. Absent when the producer did not measure it.
+   */
+   readonly requestDurationMs?: number }
   | { readonly type: 'turn_stopped'; readonly reason: ModelStopReason }
   | { readonly type: 'error'; readonly message: string; readonly code?: string; readonly retryable: boolean };
 
