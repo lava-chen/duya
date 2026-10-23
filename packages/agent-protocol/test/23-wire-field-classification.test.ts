@@ -298,11 +298,11 @@ describe('drift #23: union member inventories match their types', () => {
   });
 
   it('Message is classified over its full field set', () => {
-    // 31 fields. A field added to `Message` without a classification entry is
+    // 32 fields. A field added to `Message` without a classification entry is
     // a compile error against `Classified<Message>`; this pins the count so
     // the failure mode is obvious when it happens.
     const fields = Object.keys(MESSAGE_FIELDS).length;
-    expect(fields).toBe(31);
+    expect(fields).toBe(32);
     const message: Pick<Message, 'visibility' | 'displayContent' | 'metadata'> = {
       visibility: 'hidden',
       displayContent: 'rendered',

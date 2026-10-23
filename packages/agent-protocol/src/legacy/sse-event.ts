@@ -71,8 +71,9 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   Record<LegacySseEventType, readonly EventType[]>
 > = {
   // Today the declared type says `data: string` while the router actually sends
-  // `data.content` (router.ts:585) and the renderer reads
-  // `event.data.content` (packages/ui/src/lib/agent-http-client.ts:338). The declared type was a lie.
+  // `data.content` (apps/desktop/src/main/agents/server/router.ts:563-564)
+  // and the renderer forwards `event.data` (packages/ui/src/lib/agent-http-client.ts:577).
+  // The declared type was a lie.
   text: ['assistant.text_block'],
   text_delta: ['assistant.text_delta'],
   // signature/redacted/encrypted move from the top level into the payload.

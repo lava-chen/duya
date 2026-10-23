@@ -187,12 +187,12 @@ describe('CLI capability degradation over the Host handshake', () => {
     }
 
     // Pinned counts, not just "greater than zero". Measured on this tree:
-    // 23 provide-side names exist, this Host registers 2 of them, and the other
-    // 21 each carry a reason. A future edit that silently empties either side
+    // 22 provide-side names exist, this Host registers 2 of them, and the other
+    // 20 each carry a reason. A future edit that silently empties either side
     // lands here instead of quietly passing every ok-shaped assertion.
-    expect(HOST_CAPABILITIES.length).toBe(23);
+    expect(HOST_CAPABILITIES.length).toBe(22);
     expect(granted.provided).toEqual(['session_persistence', 'workspace_filesystem']);
-    expect(Object.keys(handshake.unsupported ?? {}).length).toBe(21);
+    expect(Object.keys(handshake.unsupported ?? {}).length).toBe(20);
     expect(handshake.consumedBy).toEqual([...CLI_HOST_DECLARATION.capabilities]);
     expect(handshake.limits?.absentCapabilityPolicy).toBe('error');
   });
