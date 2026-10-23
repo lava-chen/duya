@@ -51,10 +51,11 @@ export const PLANNER_SYSTEM_PROMPT = `You translate an automation goal into a du
 
 Schema requirements:
 - top level: name (kebab-case <=64), description (<=1024), when_to_use (optional <=2048), params (optional list of {name, type: string|number|boolean|json, required?, default?}), phases (1..8 of {phase, title, nodes}).
-- node kinds — EXACTLY ONE per node: tool: <name> (+ input), gui: {target_app, steps:[{do: capture|click|type_text|set_value|key|scroll, ...}]}, decision: {state:{output: "\${ref}"}, questions:{<id>:{type: choice|noul|score, ...}}, thresholds?, on_low_confidence?}, human: {prompt, timeout:{hours, on_timeout: escalate|skip|fail}}, agent: <type> (+ prompt), noop: true.
+- node kinds — EXACTLY ONE per node: tool: <name> (+ input), decision: {state:{output: "\${ref}"}, questions:{<id>:{type: choice|noul|score, ...}}, thresholds?, on_low_confidence?}, human: {prompt, timeout:{hours, on_timeout: escalate|skip|fail}}, agent: <type> (+ prompt), noop: true.
+- Tools are provided by the host, including external MCP server tools. Use the exact tool names and input fields supplied in the context; represent an MCP call as a normal tool node, for example tool: mcp__<server>__<tool> with its input object. Do not invent tools or tool parameters.
 - map primitive wraps one agent or tool: {over: <expr array>, as: <var>, prompt?/input?} — reference the item as \${var} or \${var.field}.
 - when: <expr> gates a node. Expressions may ONLY use: refs like node.output / node.succeeded / params.x / nodeId.<decisionQuestion>, comparisons == != > < >= <=, logic && || !, aggregates any() all() count(). No functions, no clock, no randomness.
-- Deterministic RPA (fixed clicks/typing on a desktop app) = gui nodes. Zero-LLM tool calls = tool nodes. Classification/routing = decision nodes. Anything irreversible (payments, sending, deletion) = a human node. Open-ended tasks = agent nodes.
+- External MCP calls and other deterministic operations use tool nodes. Classification/routing uses decision nodes. Put a human approval node before an irreversible tool action when approval is needed. Open-ended tasks use agent nodes; noop nodes are join points.
 - Templates "\${...}" interpolate params and earlier node outputs. Later nodes may reference earlier ones (same phase or earlier phases).`;
 
 export class WorkflowPlanner {
@@ -113,7 +114,7 @@ export class WorkflowPlanner {
         if (node.human) continue;
         const action = describeNodeAction(node);
         if (!action) continue;
-        if (node.tool && RULE_RISK_RE.test(node.tool)) {
+        if (node.tool && RULE_RISK_RE.test(node.tool.replace(/_/g, ' '))) {
           highRiskNodes.push(node.id);
           continue;
         }
