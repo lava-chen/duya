@@ -15,8 +15,7 @@ export type ModeModifierId =
  'plan-task'
  | 'research'
  | 'conductor'
- | 'goal'
- | 'computer-use';
+ | 'goal';
 
 /**
  * Mode lifecycle. Session-level modes persist across messages (conductor,
@@ -38,9 +37,6 @@ export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
   // Plan 411: goal is a session-level mode like conductor — survives
   // across messages so the tracker keeps driving rounds.
   'goal': 'session',
-  // Plan 454: Computer Use is session-level (the SOM overlay state
-  // + approval mode should survive across turns).
-  'computer-use': 'session',
 };
 
 /**
@@ -66,9 +62,6 @@ export const MODE_EXCLUSIVE_WITH: Record<ModeModifierId, ModeModifierId[]> = {
   // Goal is a parallel tracker — no mutual exclusion with plan-task
   // (plan 411 §4.3).
   'goal': [],
-  // Plan 454: Computer Use is mutually exclusive with every other
-  // session-level mode — OS-level takeover should not compose.
-  'computer-use': ['plan-task', 'research', 'conductor', 'goal'],
 };
 
 /**

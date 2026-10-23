@@ -4,7 +4,6 @@ import { conductorMode } from './conductor-mode.js';
 import { planTaskMode } from './plan/plan-task-mode.js';
 import { automationMode } from './automation-mode.js';
 import { goalMode } from './goal/goal-mode.js';
-import { computerUseMode } from './computer-use-mode.js';
 import { modeTrackerEngine } from '@duya/host/worker-modes/modifiers/index';
 import type {
   ModeModifier,
@@ -29,7 +28,6 @@ for (const mode of [
   planTaskMode,
   automationMode,
   goalMode,
-  computerUseMode,
 ]) {
   modeModifierRegistry.register(mode);
 }

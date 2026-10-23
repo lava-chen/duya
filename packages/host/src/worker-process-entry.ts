@@ -724,96 +724,6 @@ function appConnectionCatalogIpcRequest<T = unknown>(_channel: string, _payload:
         sendToMain({ type: 'appConnection:catalog', requestId });
     });
 }
-function computerUseIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        const outerPayload = payload as {
-            action?: string;
-            payload?: unknown;
-            sessionId?: string;
-        } | undefined;
-        sendToMain({
-            type: 'computer-use:execute',
-            requestId,
-            action: outerPayload?.action,
-            payload: outerPayload?.payload,
-            sessionId: outerPayload?.sessionId,
-        });
-    });
-}
-function computerCuaIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
-    timeout?: number;
-}): Promise<{
-    success: boolean;
-    data?: T;
-    error?: {
-        code: string;
-        message: string;
-    };
-}> {
-    return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
-        const timeout = options?.timeout || 30000;
-        const timeoutHandle = setTimeout(() => {
-            if (pendingIpcRequests.has(requestId)) {
-                pendingIpcRequests.delete(requestId);
-                resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use:cua IPC request timeout after ${timeout}ms` } });
-            }
-        }, timeout);
-        pendingIpcRequests.set(requestId, {
-            resolve: (v) => resolve(v as {
-                success: boolean;
-                data?: T;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            }),
-            reject: (e) => reject(e),
-            timeoutHandle,
-        });
-        const outerPayload = payload as {
-            tool?: string;
-            args?: Record<string, unknown>;
-            sessionId?: string;
-        } | undefined;
-        sendToMain({
-            type: 'computer-use:cua',
-            requestId,
-            tool: outerPayload?.tool,
-            args: outerPayload?.args,
-            sessionId: outerPayload?.sessionId,
-        });
-    });
-}
 function memoryTierIpcRequest<T = unknown>(_channel: string, payload: unknown, options?: {
     timeout?: number;
 }): Promise<{
@@ -919,12 +829,6 @@ function toolIpcRequest<T = unknown>(channel: string, payload: unknown, options?
     }
     if (channel === 'appConnection:catalog') {
         return appConnectionCatalogIpcRequest<T>(channel, payload, options);
-    }
-    if (channel === 'computer-use:execute') {
-        return computerUseIpcRequest<T>(channel, payload, options);
-    }
-    if (channel === 'computer-use:cua') {
-        return computerCuaIpcRequest<T>(channel, payload, options);
     }
     if (channel === 'memory-tier:rpc') {
         return memoryTierIpcRequest<T>(channel, payload, options);
@@ -3349,7 +3253,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 takePendingAnswer,
                 llm: workflowLlm,
                 workingDirectory: wf.projectDir || agent.readWorkingDirectory() || process.cwd(),
-                computerUseRequest: (action, payload, options) => computerUseIpcRequest('computer-use:execute', { action, payload, sessionId: wf.sessionId }, options),
                 guiArtifactStore: new MemoryArtifactStore(),
                 execution: { createPorts: (workingDirectory) => processAssembly.createWorkflowExecutionPorts({ sessionId: wf.sessionId, llm: workflowLlm, workingDirectory }) },
             }, {
@@ -3588,62 +3491,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
             else {
                 warn('[Agent-Process] No pending appConnection catalog request found for requestId:', requestId);
-            }
-            break;
-        }
-        case 'computer-use:execute:response': {
-            const { requestId, success, data, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                data?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending computer-use IPC request found for requestId:', requestId);
-            }
-            break;
-        }
-        case 'computer-use:cua:response': {
-            const { requestId, success, data, error } = msg as unknown as {
-                requestId: string;
-                success: boolean;
-                data?: unknown;
-                error?: {
-                    code: string;
-                    message: string;
-                };
-            };
-            const pending = pendingIpcRequests.get(requestId);
-            if (pending) {
-                if (pending.timeoutHandle) {
-                    clearTimeout(pending.timeoutHandle);
-                }
-                pendingIpcRequests.delete(requestId);
-                if (success) {
-                    pending.resolve({ success: true, data });
-                }
-                else {
-                    pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
-                }
-            }
-            else {
-                warn('[Agent-Process] No pending computer-use:cua IPC request found for requestId:', requestId);
             }
             break;
         }

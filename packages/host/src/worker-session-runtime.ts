@@ -1,5 +1,4 @@
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
-import { getWorkerComputerUseRuntimePorts } from './worker-tool-bindings/os-capability-adapter.js';
 import { definedProperties } from './worker-context/defined-properties.js';
 /** Host product session state and assembly; RunEngine owns model/tool scheduling. */
 import type { TurnOutputSink, ResolvedTurnTools, TurnPipelineRequest, TurnAssemblyRequest, TurnAssembly, RunStartRequest, RunHandle, RunAssemblyRequest, PromptUserRowCommit, LegacyTurnDelta, TurnModelProjection, RunTurnAssembly } from './worker-run-session-port.js';
@@ -308,7 +307,6 @@ export class WorkerSession implements AgentRuntime {
             workingDirectory: turnContext.workingDirectory ?? '',
             subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
             state: {
                 conductorCanvasId: options?.conductorCanvasId,
                 widgetStyleHistory: this.widgetStyleHistory,
@@ -1779,7 +1777,6 @@ export class WorkerSession implements AgentRuntime {
                 workingDirectory: this.workingDirectory ?? '',
                 subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
                 state: {
                     conductorCanvasId: options?.conductorCanvasId,
                     widgetStyleHistory: this.widgetStyleHistory,
@@ -1831,7 +1828,6 @@ export class WorkerSession implements AgentRuntime {
             workingDirectory: this.workingDirectory ?? '',
             subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
             state: {},
         };
         logger.info(`[Agent] Dispatching to orchestrator mode: ${mod.id}`);

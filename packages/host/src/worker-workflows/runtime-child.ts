@@ -38,7 +38,6 @@ import {
   type WorkflowRunnerDeps,
   type WorkflowRunnerTransport,
 } from './runner.js';
-import type { ComputerUseRequest } from './gui-backend.js';
 
 /** main → child: the whole run description (plan 560 §5.3). */
 export interface WorkflowRuntimeInitCommand {
@@ -185,72 +184,6 @@ export async function runWorkflowRuntimeChild(
 
   const store = new FsArtifactStore(init.artifactsRoot);
 
-  // ─── worker→main computer-use RPC (plan 556 Phase 4) ───
-  //
-  // The manager forwards `computer-use:execute` child-messages to main
-  // (workflow-runtime-manager FORWARDED_RPC_TYPES) and the agent server
-  // routes the response back over the fork IPC channel
-  // (server/index.ts `rpc:<requestId>` → child.send). Requests ride
-  // process.send, responses resolve the pending map below.
-  const pendingComputerUse = new Map<
-    string,
-    (res: { success: boolean; data?: unknown; error?: { code: string; message: string } }) => void
-  >();
-
-  if (typeof process.on === 'function') {
-    process.on('message', (msg: unknown) => {
-      const m = msg as
-        | {
-            type?: string;
-            requestId?: string;
-            success?: boolean;
-            data?: unknown;
-            error?: { code: string; message: string };
-          }
-        | undefined;
-      if (m?.type === 'computer-use:execute:response' && typeof m.requestId === 'string') {
-        // Do NOT delete here: settle() resolves only when its own delete
-        // wins, so pre-deleting made the real resolve unreachable — every
-        // computer-use RPC in this child hung until its (also-losing)
-        // timeout, wedging gui nodes forever.
-        const settle = pendingComputerUse.get(m.requestId);
-        if (settle) {
-          settle({
-            success: m.success === true,
-            ...(m.data !== undefined ? { data: m.data } : {}),
-            ...(m.error !== undefined ? { error: m.error } : {}),
-          });
-        }
-      }
-    });
-  }
-
-  const computerUseRequest: ComputerUseRequest = (action, payload, options) =>
-    new Promise((resolve) => {
-      const requestId = randomUUID();
-      const timeout = options?.timeout ?? 30_000;
-      const settle = (res: { success: boolean; data?: unknown; error?: { code: string; message: string } }) => {
-        if (pendingComputerUse.delete(requestId)) resolve(res);
-      };
-      const timer = setTimeout(() => {
-        settle({
-          success: false,
-          error: { code: 'TIMEOUT', message: `computer-use IPC request timeout after ${timeout}ms` },
-        });
-      }, timeout);
-      timer.unref?.();
-      pendingComputerUse.set(requestId, settle);
-      if (typeof process.send !== 'function') {
-        clearTimeout(timer);
-        settle({
-          success: false,
-          error: { code: 'NO_IPC', message: 'workflow runtime child has no IPC channel' },
-        });
-        return;
-      }
-      process.send({ type: 'computer-use:execute', requestId, action, payload, sessionId: undefined });
-    });
-
   const transport: WorkflowRunnerTransport = {
     // D3: main created the row before spawning this process — nothing to do.
     async createRun() {},
@@ -327,10 +260,6 @@ export async function runWorkflowRuntimeChild(
         return answers;
       },
       transport,
-      // Plan 556 Phase 4: gui nodes execute through the main-process
-      // computer-use dispatcher; captures land next to wf.publish
-      // artifacts under the run's artifact directory.
-      computerUseRequest,
       guiArtifactStore: store,
       publishArtifact: async (name, content, contentType) => {
         const { buffer, bytes } = artifactBytes(content);

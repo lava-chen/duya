@@ -98,9 +98,7 @@ export const LogComponent = {
   Automation: 'Automation',
   Conductor: 'Conductor',
   Orb: 'Orb',
-  ComputerUseDaemon: 'ComputerUseDaemon',
-  ComputerUse: 'ComputerUse',
-  ComputerUseAudit: 'ComputerUseAudit',
+  RecorderProcess: 'RecorderProcess',
 
   // Boot & settings
   BootConfig: 'BootConfig',

@@ -136,7 +136,6 @@ const FORWARDED_RPC_TYPES = new Set([
   'appConnection:invoke',
   'appConnection:listDescriptors',
   'appConnection:catalog',
-  'computer-use:execute',
   'memory-tier:rpc',
   'bot-identity:rpc',
 ]);

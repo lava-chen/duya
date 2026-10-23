@@ -17,7 +17,6 @@ import { toLLMProvider } from '../../config/provider-types.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers.js';
-import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
 
 interface ElectronApp {
   getLocale(): string;
@@ -363,10 +362,6 @@ export class AgentProcessPool {
           this.running.delete(sessionId);
           this.busySessions.delete(sessionId);
           this.providerReinitLock.delete(sessionId);
-
-          // Agent is gone — drop the computer-use control indicator if
-          // it was showing for this session (user request 2026-08-29).
-          hideComputerUseOverlayForSession(sessionId);
 
           if (!isCrash) {
             this.pendingMessages.delete(sessionId);

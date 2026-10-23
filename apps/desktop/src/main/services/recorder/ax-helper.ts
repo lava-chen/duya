@@ -2,7 +2,7 @@
  * services/recorder/ax-helper.ts — macOS AX helper client (plan 572).
  *
  * Owns the persistent Swift helper process (resources/ax-helper/) through
- * the shared computer-use daemon pipeline and multiplexes JSON-line
+ * the shared recorder process supervisor pipeline and multiplexes JSON-line
  * requests onto it. Mirrors the UiaProbeClient failure policy:
  *
  *   - per-request timeout   → consecutive counter; LIMIT consecutive
@@ -23,7 +23,7 @@
  * keyToPid / scrollToPid / activate / screenshotWindow.
  */
 
-import { createComputerUseDaemon, type ComputerUseDaemon } from '../computer-use-daemon.js';
+import { createRecorderProcessDaemon, type RecorderProcessDaemon } from './process-daemon.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -42,7 +42,7 @@ import {
   type AxPermissionSnapshot,
   type AxWindowInfo,
   type ElementDescriptor,
-} from '@duya/computer-use';
+} from './domain/index.js';
 
 const logger = getLogger();
 
@@ -106,7 +106,7 @@ interface PendingRequest {
 }
 
 export class AxHelperClient {
-  private daemon: ComputerUseDaemon | null = null;
+  private daemon: RecorderProcessDaemon | null = null;
   private state: AxHelperState = 'idle';
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
@@ -132,7 +132,7 @@ export class AxHelperClient {
     consecutiveTimeoutLimit: number;
     degradedRetryMs: number;
     enumerateCacheTtlMs: number;
-    spawnFn?: Parameters<typeof createComputerUseDaemon>[0]['spawnFn'];
+    spawnFn?: Parameters<typeof createRecorderProcessDaemon>[0]['spawnFn'];
   };
 
   constructor(opts: Partial<Record<string, unknown>> = {}) {
@@ -149,7 +149,7 @@ export class AxHelperClient {
       consecutiveTimeoutLimit: (opts.consecutiveTimeoutLimit as number) ?? CONSECUTIVE_TIMEOUT_LIMIT,
       degradedRetryMs: (opts.degradedRetryMs as number) ?? AX_DEGRADED_RETRY_MS,
       enumerateCacheTtlMs: (opts.enumerateCacheTtlMs as number) ?? 5 * 60_000,
-      spawnFn: opts.spawnFn as Parameters<typeof createComputerUseDaemon>[0]['spawnFn'],
+      spawnFn: opts.spawnFn as Parameters<typeof createRecorderProcessDaemon>[0]['spawnFn'],
     };
   }
 
@@ -170,7 +170,7 @@ export class AxHelperClient {
       this.state = 'idle';
       this.recycledOnce = false;
       this.consecutiveTimeouts = 0;
-      logger.info('ax helper degraded retry window elapsed; respawning', undefined, LogComponent.ComputerUse);
+      logger.info('ax helper degraded retry window elapsed; respawning', undefined, LogComponent.Recorder);
     }
     if (this.state === 'running') return;
     if (this.startInFlight) {
@@ -399,7 +399,7 @@ export class AxHelperClient {
 
   private async doStart(): Promise<void> {
     if (!existsSync(this.opts.helperPath)) {
-      logger.warn('ax helper binary not found', { path: this.opts.helperPath }, LogComponent.ComputerUse);
+      logger.warn('ax helper binary not found', { path: this.opts.helperPath }, LogComponent.Recorder);
       this.state = 'degraded';
       return;
     }
@@ -407,7 +407,7 @@ export class AxHelperClient {
     const readyPromise = new Promise<void>((resolve) => {
       this.readyWaiters.push(resolve);
     });
-    const daemon = createComputerUseDaemon({
+    const daemon = createRecorderProcessDaemon({
       runtime: this.opts.helperPath,
       entry: '',
       args: [],
@@ -446,13 +446,13 @@ export class AxHelperClient {
       return;
     }
     this.state = 'running';
-    logger.info('ax helper ready', undefined, LogComponent.ComputerUse);
+    logger.info('ax helper ready', undefined, LogComponent.Recorder);
   }
 
   private handleLine(line: string): void {
     const parsed = parseAxHelperLine(line);
     if (parsed === null) {
-      logger.debug('ax helper unparseable line', { line: line.slice(0, 200) }, LogComponent.ComputerUse);
+      logger.debug('ax helper unparseable line', { line: line.slice(0, 200) }, LogComponent.Recorder);
       return;
     }
     if (parsed.kind === 'ready') {
@@ -505,7 +505,7 @@ export class AxHelperClient {
       logger.debug(
         'ax helper request timed out',
         { consecutive: this.consecutiveTimeouts },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
       if (this.consecutiveTimeouts >= this.opts.consecutiveTimeoutLimit) {
         await this.recycleOnStall();
@@ -524,7 +524,7 @@ export class AxHelperClient {
     }
     this.recycledOnce = true;
     this.state = 'idle';
-    logger.warn('ax helper stalled; recycled once', undefined, LogComponent.ComputerUse);
+    logger.warn('ax helper stalled; recycled once', undefined, LogComponent.Recorder);
   }
 
   private async handleFatal(reason: string): Promise<void> {
@@ -532,7 +532,7 @@ export class AxHelperClient {
     await this.stopDaemon();
     this.state = 'degraded';
     this.degradedAt = Date.now();
-    logger.warn('ax helper degraded', { reason }, LogComponent.ComputerUse);
+    logger.warn('ax helper degraded', { reason }, LogComponent.Recorder);
   }
 
   private failAllPending(reason: string): void {
@@ -562,7 +562,7 @@ export class AxHelperClient {
     this.idleTimer = setInterval(() => {
       if (this.state !== 'running' || !this.daemon) return;
       if (Date.now() - this.lastActivityAt < this.opts.idleRecycleMs) return;
-      logger.info('ax helper idle; recycling', undefined, LogComponent.ComputerUse);
+      logger.info('ax helper idle; recycling', undefined, LogComponent.Recorder);
       this.consecutiveTimeouts = 0;
       this.recycledOnce = false;
       void this.stopDaemon().then(() => {

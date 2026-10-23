@@ -204,7 +204,7 @@ export interface ToolResult {
    * them with a fallback hint.
    *
    * Mirrors `ToolResult.images` from `@duya/ai/types` ({ data, mediaType }).
-   * Used by ReadTool (image files) and ComputerUseTool (capture / zoom).
+   * Used by tools that return image content.
    */
   images?: Array<{ data: string; mediaType: string }>;
   /**

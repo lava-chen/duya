@@ -11,7 +11,6 @@
 
 import type {
   LoadedRecorderSession,
-  RecorderConvertResult,
   RecorderSessionSummary,
   RecorderStatusSnapshot,
 } from './recorder-types';
@@ -24,11 +23,6 @@ export interface RecorderApi {
   listSessions: () => Promise<RecorderSessionSummary[]>;
   getSession: (sessionId: string) => Promise<LoadedRecorderSession | null>;
   deleteSession: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
-  convert: (payload: {
-    sessionId: string;
-    name?: string;
-    description?: string;
-  }) => Promise<RecorderConvertResult>;
   onStatusChanged: (callback: (snapshot: RecorderStatusSnapshot) => void) => () => void;
 }
 
@@ -62,14 +56,6 @@ export async function getRecorderSessionIPC(sessionId: string): Promise<LoadedRe
 
 export async function deleteRecorderSessionIPC(sessionId: string) {
   return api()?.deleteSession(sessionId) ?? { ok: false, error: 'recorder bridge unavailable' };
-}
-
-export async function convertRecorderSessionIPC(payload: {
-  sessionId: string;
-  name?: string;
-  description?: string;
-}): Promise<RecorderConvertResult> {
-  return (await api()?.convert(payload)) ?? { ok: false, error: 'recorder bridge unavailable' };
 }
 
 /** Subscribe to push status updates; returns the unsubscribe function. */

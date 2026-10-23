@@ -3,7 +3,7 @@
  * phase 2, design §4.4).
  *
  * Owns the persistent PowerShell probe process (resources/recorder/
- * uia-probe.ps1) through the shared computer-use daemon pipeline and
+ * uia-probe.ps1) through the shared recorder process supervisor pipeline and
  * multiplexes JSON-line requests onto it:
  *
  *   probe(x,y)    → ElementDescriptor (200ms budget inside the probe,
@@ -51,7 +51,7 @@
  *                             not disable enumeration for the session.
  */
 
-import { createComputerUseDaemon, type ComputerUseDaemon } from '../computer-use-daemon.js';
+import { createRecorderProcessDaemon, type RecorderProcessDaemon } from './process-daemon.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -64,7 +64,7 @@ import {
   type EnumeratedElementDescriptor,
   type UiaProbeRequest,
   type UiaProbeResponse,
-} from '@duya/computer-use';
+} from './domain/index.js';
 
 const logger = getLogger();
 
@@ -219,7 +219,7 @@ export interface UiaProbeClientOptions {
   /** Enumerate cache TTL (ms); an older entry is re-scanned. */
   enumerateCacheTtlMs?: number;
   /** Test hook: forwarded to the daemon spawnFn. */
-  spawnFn?: Parameters<typeof createComputerUseDaemon>[0]['spawnFn'];
+  spawnFn?: Parameters<typeof createRecorderProcessDaemon>[0]['spawnFn'];
 }
 
 /**
@@ -249,7 +249,7 @@ const ENUMERATE_CACHE_TTL_MS = 5 * 60_000;
 const ENUMERATE_EMPTY_CACHE_TTL_MS = 2_000;
 
 export class UiaProbeClient {
-  private daemon: ComputerUseDaemon | null = null;
+  private daemon: RecorderProcessDaemon | null = null;
   private state: UiaProbeState = 'idle';
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
@@ -328,7 +328,7 @@ export class UiaProbeClient {
       this.state = 'idle';
       this.recycledOnce = false;
       this.consecutiveTimeouts = 0;
-      logger.info('uia probe degraded retry window elapsed; respawning', undefined, LogComponent.ComputerUse);
+      logger.info('uia probe degraded retry window elapsed; respawning', undefined, LogComponent.Recorder);
     }
     if (this.state === 'running') {
       return;
@@ -667,7 +667,7 @@ export class UiaProbeClient {
 
   private async doStart(): Promise<void> {
     if (!existsSync(this.opts.scriptPath)) {
-      logger.warn('uia probe script not found', { path: this.opts.scriptPath }, LogComponent.ComputerUse);
+      logger.warn('uia probe script not found', { path: this.opts.scriptPath }, LogComponent.Recorder);
       this.state = 'degraded';
       return;
     }
@@ -675,7 +675,7 @@ export class UiaProbeClient {
     const readyPromise = new Promise<void>((resolve) => {
       this.readyWaiters.push(resolve);
     });
-    const daemon = createComputerUseDaemon({
+    const daemon = createRecorderProcessDaemon({
       runtime: 'powershell.exe',
       entry: this.opts.scriptPath,
       args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.opts.scriptPath],
@@ -719,13 +719,13 @@ export class UiaProbeClient {
       return; // fatal path already tore this instance down
     }
     this.state = 'running';
-    logger.info('uia probe ready', undefined, LogComponent.ComputerUse);
+    logger.info('uia probe ready', undefined, LogComponent.Recorder);
   }
 
   private handleLine(line: string): void {
     const parsed = parseUiaProbeLine(line);
     if (parsed === null) {
-      logger.debug('uia probe unparseable line', { line: line.slice(0, 200) }, LogComponent.ComputerUse);
+      logger.debug('uia probe unparseable line', { line: line.slice(0, 200) }, LogComponent.Recorder);
       return;
     }
     if (parsed.kind === 'ready') {
@@ -783,7 +783,7 @@ export class UiaProbeClient {
       logger.debug(
         'uia probe request timed out',
         { consecutive: this.consecutiveTimeouts },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
       if (this.consecutiveTimeouts >= this.opts.consecutiveTimeoutLimit) {
         await this.recycleOnStall();
@@ -799,7 +799,7 @@ export class UiaProbeClient {
     logger.debug(
       'uia probe target request timed out',
       { hwnd, consecutive: count },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
     if (count >= this.opts.consecutiveTimeoutLimit) {
       // Quarantine the TARGET, not the process: one heavy or wedged
@@ -810,7 +810,7 @@ export class UiaProbeClient {
       logger.warn(
         'uia probe target quarantined after consecutive stalls',
         { hwnd, quarantineMs: this.opts.targetQuarantineMs },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
     }
   }
@@ -865,7 +865,7 @@ export class UiaProbeClient {
     }
     this.recycledOnce = true;
     this.state = 'idle';
-    logger.warn('uia probe stalled; recycled once', undefined, LogComponent.ComputerUse);
+    logger.warn('uia probe stalled; recycled once', undefined, LogComponent.Recorder);
   }
 
   private async handleFatal(reason: string): Promise<void> {
@@ -873,7 +873,7 @@ export class UiaProbeClient {
     await this.stopDaemon();
     this.state = 'degraded';
     this.degradedAt = Date.now();
-    logger.warn('uia probe degraded; element-less recording', { reason }, LogComponent.ComputerUse);
+    logger.warn('uia probe degraded; element-less recording', { reason }, LogComponent.Recorder);
   }
 
   private failAllPending(reason: string): void {
@@ -912,7 +912,7 @@ export class UiaProbeClient {
       if (Date.now() - this.lastActivityAt < this.opts.idleRecycleMs) {
         return;
       }
-      logger.info('uia probe idle; recycling', undefined, LogComponent.ComputerUse);
+      logger.info('uia probe idle; recycling', undefined, LogComponent.Recorder);
       this.consecutiveTimeouts = 0;
       this.recycledOnce = false;
       void this.stopDaemon().then(() => {

@@ -117,12 +117,6 @@ export class WorkflowPlanner {
           highRiskNodes.push(node.id);
           continue;
         }
-        if (node.gui) {
-          // Declared desktop steps on someone else's UI: conservative
-          // default without a decision backend is to stop for confirm.
-          highRiskNodes.push(node.id);
-          continue;
-        }
         if (!this.decisionService) continue;
         if (!this.decisionService.available) continue;
         try {
@@ -147,7 +141,6 @@ export class WorkflowPlanner {
 
 function describeNodeAction(node: import('./schema.js').WorkflowNode): string | undefined {
   if (node.tool) return `run tool "${node.tool}"${node.input ? ` with ${JSON.stringify(node.input)}` : ''}`;
-  if (node.gui) return `drive the desktop app "${node.gui.target_app}" through ${node.gui.steps.length} steps`;
   if (node.agent) return `spawn agent "${node.agent}"`;
   return undefined;
 }

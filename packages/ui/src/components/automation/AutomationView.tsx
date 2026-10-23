@@ -28,7 +28,6 @@ import {
 } from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { CronEditorModal } from './CronEditorModal';
-import { MacPermissionsCard } from './MacPermissionsCard';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -414,10 +413,6 @@ export function AutomationView() {
         active={activeTab}
         onChange={(id) => setActiveTab(id as TabKey)}
       />
-
-      {/* macOS TCC onboarding for the computer-use stack (plan 572).
-          Self-hiding on Windows / when nothing needs attention. */}
-      <MacPermissionsCard />
 
       {/* Error Banner */}
       {error && (

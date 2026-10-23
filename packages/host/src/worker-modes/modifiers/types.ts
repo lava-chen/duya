@@ -1,7 +1,6 @@
 import type { AIClient, SSEEvent } from '@duya/ai';
 import type { Tool as RuntimeTool } from '../../worker-run-contracts.js';
 import type { ToolExecutor, ToolRegistry } from '../../worker-tool-registry.js';
-import type { ComputerUseRuntimePorts } from '@duya/capabilities/OSTool/ports';
 import type { ModeTracker } from '@duya/agent-core/modes/tracker';
 import type { GoalModeToolPorts, ResearchModeToolPorts } from '../tool-ports.js';
 
@@ -59,8 +58,6 @@ export interface ModeModifierContext {
     goal?: GoalModeToolPorts;
     research?: ResearchModeToolPorts;
   };
-  /** Capability ports for the session's OS computer-use tools. */
-  computerUsePorts?: ComputerUseRuntimePorts;
 }
 
 /**

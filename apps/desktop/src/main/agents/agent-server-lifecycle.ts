@@ -13,8 +13,6 @@ import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
 import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
 import { getConnectorService } from '../services/app-connections/connector-service';
-import { dispatchComputerUseAction } from '../ipc/computer-use';
-import { dispatchCuaTool } from '../ipc/cua-handlers';
 import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
 import { handleBotIdentityRpc } from '../config/bot-identity-rpc';
 import type { DesktopPluginAppServerCall, DesktopPluginAppServerRequest, DesktopPluginAppServerResponse } from './plugin-app-server-rpc';
@@ -417,105 +415,6 @@ export function spawnAgentServer(): Promise<number> {
                 error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
               });
             }
-          });
-        return;
-      }
-
-      // Plan 454: route computer-use:execute to the Computer Use IPC
-      // dispatcher (apps/desktop/src/main/ipc/computer-use.ts). The agent-side
-      // computer_use tool calls context.ipcRequest('computer-use:execute',
-      // ...); the agent-server forwards the message here; the dispatcher
-      // runs the action against the DesktopBackend singleton and writes
-      // an audit log entry. The response shape matches the envelope the
-      // computer_use tool executor expects.
-      if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string') {
-        const action = typeof msg.action === 'string' ? msg.action : null;
-        const payload = (msg.payload as Record<string, unknown> | undefined) ?? {};
-        const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
-        if (!action) {
-          if (!child.killed) {
-            child.send({
-              type: 'computer-use:execute:response',
-              requestId: msg.requestId,
-              success: false,
-              error: { code: 'SCHEMA_INVALID', message: 'missing action in computer-use:execute payload' },
-            });
-          }
-          return;
-        }
-        void dispatchComputerUseAction({ action, payload, sessionId })
-          .then((envelope) => {
-            if (child.killed) return;
-            child.send({
-              type: 'computer-use:execute:response',
-              requestId: msg.requestId,
-              success: envelope.success,
-              data: envelope,
-              error: envelope.error,
-            });
-          })
-          .catch((err) => {
-            if (child.killed) return;
-            child.send({
-              type: 'computer-use:execute:response',
-              requestId: msg.requestId,
-              success: false,
-              error: {
-                code: 'IPC_EXCEPTION',
-                message: err instanceof Error ? err.message : String(err),
-              },
-            });
-          });
-        return;
-      }
-
-      // Plan 575: route computer-use:cua the same way — the computer_cua
-      // tool (14-tool ZCode-aligned surface) calls context.ipcRequest(
-      // 'computer-use:cua', ...); the dispatcher owns the CuaService
-      // singleton and answers with the aligned envelope.
-      if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string') {
-        const tool = typeof msg.tool === 'string' ? msg.tool : null;
-        const args = (msg.args as Record<string, unknown> | undefined) ?? {};
-        const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
-        if (!tool) {
-          if (!child.killed) {
-            child.send({
-              type: 'computer-use:cua:response',
-              requestId: msg.requestId,
-              success: false,
-              error: { code: 'INVALID_APP', message: 'missing tool in computer-use:cua payload' },
-            });
-          }
-          return;
-        }
-        void dispatchCuaTool({ tool, args, sessionId })
-          .then((envelope) => {
-            if (child.killed) return;
-            child.send({
-              type: 'computer-use:cua:response',
-              requestId: msg.requestId,
-              success: envelope.success,
-              // Reply with the INNER data (observation/text/screenshot),
-              // not the whole envelope — the worker-side ipcRequest
-              // resolves `{success, data}` and the computer_cua executor
-              // reads `response.data.screenshot` directly. Sending the
-              // envelope would double-nest it and break the get_app_state
-              // screenshot lift.
-              data: envelope.data,
-              error: envelope.error,
-            });
-          })
-          .catch((err) => {
-            if (child.killed) return;
-            child.send({
-              type: 'computer-use:cua:response',
-              requestId: msg.requestId,
-              success: false,
-              error: {
-                code: 'IPC_EXCEPTION',
-                message: err instanceof Error ? err.message : String(err),
-              },
-            });
           });
         return;
       }

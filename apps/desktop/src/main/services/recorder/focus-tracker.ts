@@ -3,7 +3,7 @@
  * (plan 556 Phase 1).
  *
  * Polls the foreground window every 500ms via PowerShell (single-window
- * query in computer-use-backend.ts, same pattern as the other user32
+ * query in foreground-window.ts, same pattern as the other user32
  * P/Invoke helpers) and reports CHANGES only: hwnd, or pid, or title
  * moving triggers `onChange(prev, next)` — the recorder-service turns
  * that into an `app_focus` RecorderEvent and a typing-buffer flush.
@@ -13,7 +13,7 @@
  * focus changes).
  */
 
-import { getForegroundWindowInfo, type ForegroundWindowInfo } from '../computer-use-backend.js';
+import { getForegroundWindowInfo, type ForegroundWindowInfo } from './foreground-window.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 
 const logger = getLogger();
@@ -90,7 +90,7 @@ export class RecorderFocusTracker {
       logger.debug(
         'recorder focus poll failed',
         { error: err instanceof Error ? err.message : String(err) },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
     } finally {
       this.polling = false;

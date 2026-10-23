@@ -113,7 +113,7 @@ export function showRecorderBadge(): void {
     if (!badgeWindow || badgeWindow.isDestroyed()) {
       badgeWindow = createBadgeWindow();
       startPolling(badgeWindow);
-      logger.info('recorder: badge shown', undefined, LogComponent.ComputerUse);
+      logger.info('recorder: badge shown', undefined, LogComponent.Recorder);
     }
     badgeWindow.showInactive();
   } catch (err) {
@@ -122,7 +122,7 @@ export function showRecorderBadge(): void {
     logger.warn(
       'recorder: failed to show badge',
       { error: err instanceof Error ? err.message : String(err) },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
   }
 }

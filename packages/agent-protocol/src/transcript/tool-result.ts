@@ -70,7 +70,7 @@ export interface ToolResultMetadata {
   [key: string]: unknown;
 }
 
-/** One inline image attachment, as produced by ReadTool and ComputerUseTool. */
+/** One inline image attachment, as produced by image-emitting tools. */
 export interface ToolResultImage {
   data: string;
   mediaType: string;

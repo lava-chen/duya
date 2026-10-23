@@ -29,7 +29,6 @@ import {
 } from './memory-handlers';
 import { registerHooksHandlers } from './hooks-handlers';
 import { registerMcpReloadIpcHandler } from './mcp-handlers';
-import { registerComputerUseHandlers } from './computer-use';
 import { registerBotChannelHandlers } from './bot-channel-handlers';
 import { registerGroupHandlers } from './group-handlers';
 import { registerBotHandlers } from './bot-handlers';
@@ -66,7 +65,6 @@ export {
   registerMemoryRagRebuildHandler,
   registerHooksHandlers,
   registerMcpReloadIpcHandler,
-  registerComputerUseHandlers,
   registerBotChannelHandlers,
   registerGroupHandlers,
   registerBotHandlers,

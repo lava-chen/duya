@@ -2,8 +2,8 @@
  * browser-backend.ts — worker 侧生产 BrowserBackendPort（plan 564）。
  *
  * 把 browser-runner 的步骤契约映射到 ExtensionCDPClient（daemon HTTP /command
- * → 扩展 CDP 动作）。与 gui-backend 的差异：computer-use 走 worker→main RPC，
- * 而 daemon 是 localhost HTTP —— worker **直连**即可，不需要新的转发类型。
+ * → 扩展 CDP 动作）。The browser extension daemon uses localhost HTTP, so the
+ * worker connects directly.
  *
  * set_value 走页面内 evaluate（native setter + input/change 事件，React 受控
  * 组件友好）；逐字符 type 留给需要真实键击节奏的场景。

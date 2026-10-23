@@ -5,21 +5,18 @@
  * phases. Node level (§4.2): SIX node kinds —
  *
  *   ① tool      deterministic instruction, zero LLM, ToolRegistry direct call
- *   ② gui       computer-use deterministic step sequence + verdict + agent
- *               fallback (§4.3; consumed by gui-runner in Phase 3)
- *   ③ decision  System One typed decision over 551 DecisionService (§5)
- *   ④ human     human-in-the-loop approval card (498) — the ONLY channel
+ *   ② decision  System One typed decision over 551 DecisionService (§5)
+ *   ③ human     human-in-the-loop approval card (498) — the ONLY channel
  *               for irreversible side effects; timeout.on_timeout REQUIRED
  *               so a suspended run can never leak (§12 risk table)
- *   ⑤ agent     open-ended subtask (SubagentTool)
- *   ⑥ noop      placeholder / join point
+ *   ④ agent     open-ended subtask (SubagentTool)
+ *   ⑤ noop      placeholder / join point
  *
  * plus the two primitives `map` (dynamic fan-out over agent/tool) and
  * `when` (conditional edge, evaluated per node).
  *
  * Determinism rule (§6.5): NO clock/random/sleep constructs anywhere —
- * gui steps have no `wait` (the host owns settle timing), timeouts live
- * in host code or human-node `timeout`.
+ * timeouts live in host code or human-node `timeout`.
  */
 
 import { z } from 'zod';
@@ -53,54 +50,6 @@ export const HttpTriggerSchema = z.object({
 });
 export const WorkflowTriggerSchema = z.union([CronTriggerSchema, BotTriggerSchema, HttpTriggerSchema]);
 export type WorkflowTrigger = z.infer<typeof WorkflowTriggerSchema>;
-
-// ─── gui node (§4.3) ───
-
-/** SOM element ref format: "som:<1-based index>" (from a prior capture). */
-export const SOM_ELEMENT_RE = /^som:[0-9]+$/;
-
-export const GuiStepSchema = z.union([
-  z.object({ do: z.literal('capture') }).strict(),
-  z.object({ do: z.literal('click'), element: z.string().regex(SOM_ELEMENT_RE) }).strict(),
-  z
-    .object({
-      do: z.literal('type_text'),
-      text: z.string().min(1),
-      element: z.string().regex(SOM_ELEMENT_RE).optional(),
-      verify: z.boolean().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      do: z.literal('set_value'),
-      text: z.string().min(1),
-      element: z.string().regex(SOM_ELEMENT_RE).optional(),
-      verify: z.boolean().optional(),
-    })
-    .strict(),
-  z.object({ do: z.literal('key'), key: z.string().min(1) }).strict(),
-  z
-    .object({
-      do: z.literal('scroll'),
-      direction: z.enum(['up', 'down', 'left', 'right']).optional(),
-      amount: z.number().int().optional(),
-    })
-    .strict(),
-]);
-export type GuiStep = z.infer<typeof GuiStepSchema>;
-
-// NOTE: no `wait` step — determinism rule §6.5 (settle timing lives in the
-// host loop, never in the YAML; see gui-runner).
-
-export const GuiNodeSchema = z
-  .object({
-    target_app: z.string().min(1),
-    steps: z.array(GuiStepSchema).min(1),
-    max_actions: z.number().int().positive().max(200).optional(),
-    on_stuck: z.enum(['agent', 'fail', 'skip']).optional(),
-  })
-  .strict();
-export type GuiNodeSpec = z.infer<typeof GuiNodeSchema>;
 
 // ─── decision node (§5 — 551 DecisionService consumption) ───
 
@@ -200,14 +149,6 @@ const NodeBase = {
   max_retries: z.number().int().min(0).max(3).optional(),
   /** Verification annotation target (plan 552 §2 principle 4). */
   map: MapPrimitiveSchema.optional(),
-  /**
-   * Producer-provenance payload (plan 556 §4.6): definition producers
-   * attach metadata here — the recorder converter stores per-`som:<n>`
-   * recorded ElementDescriptors for the replay-time element-matcher.
-   * Never executed (engine/runners ignore it) and deliberately NOT
-   * template/ref-scanned by validate.ts — recorded text is literal.
-   */
-  annotation: z.record(z.string(), z.unknown()).optional(),
 };
 
 export const WorkflowNodeSchema = z
@@ -215,7 +156,6 @@ export const WorkflowNodeSchema = z
     ...NodeBase,
     tool: z.string().min(1).optional(),
     input: z.record(z.string(), z.unknown()).optional(),
-    gui: GuiNodeSchema.optional(),
     decision: DecisionNodeSchema.optional(),
     human: HumanNodeSchema.optional(),
     agent: z.string().min(1).optional(),
@@ -225,12 +165,12 @@ export const WorkflowNodeSchema = z
     noop: z.literal(true).optional(),
   })
   .refine((n) => {
-    const kinds = [n.tool, n.gui, n.decision, n.human, n.agent, n.noop].filter((v) => v !== undefined).length;
+    const kinds = [n.tool, n.decision, n.human, n.agent, n.noop].filter((v) => v !== undefined).length;
     if (kinds === 1) return true;
     // map wraps exactly one agent or tool
-    if (n.map && n.agent && !n.tool && !n.gui && !n.decision && !n.human && !n.noop) return true;
+    if (n.map && n.agent && !n.tool && !n.decision && !n.human && !n.noop) return true;
     return false;
-  }, 'node must declare exactly one of tool / gui / decision / human / agent / noop (map may wrap exactly one agent)');
+  }, 'node must declare exactly one of tool / decision / human / agent / noop (map may wrap exactly one agent)');
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 
 // ─── phase + top level (§4.1) ───

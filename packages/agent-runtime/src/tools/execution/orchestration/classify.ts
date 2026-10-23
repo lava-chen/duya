@@ -56,11 +56,6 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   exit_plan_mode: ToolBatch.SYSTEM,
   ExitPlanMode: ToolBatch.SYSTEM,
 
-  // Computer Use tool (plan 454) — SYSTEM (exclusive, serial). Desktop
-  // actions drive shared OS state (mouse position, keyboard focus);
-  // parallel clicks/drag would interleave and corrupt the gesture.
-  computer_use: ToolBatch.SYSTEM,
-
   // Agent-to-agent DM (plan 477) — SYSTEM (exclusive, serial). Writes a
   // mailbox row for the target agent and fires the wake bus.
   send_to_agent: ToolBatch.SYSTEM,

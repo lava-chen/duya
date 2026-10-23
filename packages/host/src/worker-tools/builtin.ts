@@ -41,8 +41,6 @@ import { createAgentTool, updateAgentTool, } from '@duya/host/worker-tool-bindin
 import { manageRoutineTool } from '@duya/host/worker-tool-bindings/routine';
 import { listAppConnectorsTool, connectAppTool } from '@duya/host/worker-tool-bindings/app-connector-manage-tools';
 import { planTool } from '@duya/host/worker-tool-bindings/plan';
-import { getComputerUseToolsWithDecide } from '@duya/host/worker-tool-bindings/os-tools';
-import { definition as computerCuaDefinition, executor as computerCuaExecutor } from '@duya/host/worker-tool-bindings/computer-cua-tool';
 const bashTool = new BashTool();
 const powerShellTool = new PowerShellTool();
 const writeTool = new WriteTool();
@@ -130,15 +128,5 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'deferred' });
     registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });
     registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
-    for (const tr of getComputerUseToolsWithDecide(false)) {
-        registry.register(tr.definition, tr.executor, {
-            exposure: 'deferred',
-            inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
-        });
-    }
-    registry.register(computerCuaDefinition, computerCuaExecutor, {
-        exposure: 'deferred',
-        inputSchemaSummary: 'CUA tools (list_apps/list_windows/get_app_state/left_click/scroll/type/set_value/select_text/key/perform_action/paste/request_access/stop)',
-    });
     return registry;
 }

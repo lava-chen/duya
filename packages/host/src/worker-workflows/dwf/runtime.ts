@@ -26,8 +26,7 @@ import { BudgetLedger, Semaphore, type HostAgentSpec, type HostCallContext, type
 import { classifyError, type WorkflowErrorClass } from '../error-class.js';
 import { validateLooseJsonSchema, type LooseSchema } from '../output-schema.js';
 import { uncertainOutcomeFor, type DecisionRunOutcome } from '../decision-adapter.js';
-import type { DecisionQuestionSpec, GuiNodeSpec } from '../schema.js';
-import type { GuiNodeOutcome } from '../gui-runner.js';
+import type { DecisionQuestionSpec } from '../schema.js';
 import type { BrowserNodeOutcome, BrowserNodeSpec, BrowserStep } from '../browser-runner.js';
 import type { Question } from '@duya/ai';
 
@@ -49,11 +48,6 @@ export interface DwfDecisionPort {
 export interface DwfHostPorts {
   runTool(tool: string, input: unknown, ctx: HostCallContext): Promise<HostCallResult>;
   runAgent(spec: HostAgentSpec, ctx: HostCallContext): Promise<HostCallResult>;
-  /**
-   * RPA 步骤序列执行（gui-runner 的 runGuiNode 语义由宿主绑定层包装）。
-   * 缺席时 wf.gui 抛明确错误——录制转换的脚本必须绑定此端口才有意义。
-   */
-  runGui(spec: GuiNodeSpec, annotation: Record<string, unknown> | undefined, ctx: HostCallContext): Promise<GuiNodeOutcome>;
   /**
    * 浏览器插件步骤序列（plan 564，browser-runner 的 runBrowserNode 语义由宿主
    * 绑定层包装）。缺席时 wf.browser 抛明确错误——扩展驱动的脚本必须绑定此端口。
@@ -177,12 +171,6 @@ export interface DwfAgentObjectSpec {
 export interface DwfApi {
   /** 零 LLM 的确定性工具调用（ToolRegistry 直达）。 */
   tool(tool: string, input?: Record<string, unknown>): Promise<unknown>;
-  /**
-   * RPA：对目标应用执行确定性步骤序列（capture/click/type_text/key/scroll）。
-   * `som:<n>` 引用 annotation.som 里记录的元素（录制转换产物）或自己上一次
-   * capture 的新索引。失败抛错；skipped resolve null；成功 resolve outcome.output。
-   */
-  gui(spec: GuiNodeSpec, opts?: { annotation?: Record<string, unknown> }): Promise<unknown>;
   /**
    * 浏览器插件节点（plan 564）：对真实浏览器执行确定性步骤序列（navigate/
    * click/type/set_value/key/scroll/wait/screenshot，CSS selector 定位）。
@@ -339,60 +327,6 @@ function pickSummaryText(value: unknown, max = 200): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** 单个 RPA 步骤的一行摘要（`click som:3`、`capture`…）。 */
-function describeGuiStep(
-  step: {
-    do?: string | undefined;
-    element?: string | undefined;
-    key?: string | undefined;
-    direction?: string | undefined;
-  } | undefined,
-): string {
-  if (!step) return 'no steps';
-  const element = typeof step.element === 'string' && step.element !== '' ? ` ${step.element}` : '';
-  switch (step.do) {
-    case 'capture':
-      return 'capture';
-    case 'click':
-      return `click${element}`;
-    case 'type_text':
-      return `type_text${element}`;
-    case 'set_value':
-      return `set_value${element}`;
-    case 'key':
-      return `key ${step.key ?? ''}`.trim();
-    case 'scroll':
-      return `scroll ${step.direction ?? 'down'}`;
-    default:
-      return step.do ?? 'step';
-  }
-}
-
-/** 单个 browser 步骤的一行摘要（`navigate https://…`、`click #submit`…）。 */
-function describeBrowserStep(step: BrowserStep | undefined): string {
-  if (!step) return 'no steps';
-  switch (step.do) {
-    case 'navigate':
-      return `navigate ${step.url}`;
-    case 'click':
-      return `click ${step.selector}`;
-    case 'click_text':
-      return `click_text ${step.text}`;
-    case 'type':
-      return `type ${step.selector}`;
-    case 'set_value':
-      return `set_value ${step.selector}`;
-    case 'key':
-      return `key ${step.key}`;
-    case 'scroll':
-      return `scroll ${step.direction ?? 'down'}`;
-    case 'wait':
-      return step.selector ? `wait ${step.selector}` : step.text ? `wait text:${step.text}` : 'wait';
-    case 'screenshot':
-      return `screenshot${step.name ? ` ${step.name}` : ''}`;
-  }
-}
-
 /**
  * cachedCall 的输入摘要 —— run 卡片步骤行显示的那一行（plan 560 §7.2）。
  * 由 payload 推导而不是各原语手传，保证「同一个 payload → 同一个摘要」，
@@ -403,13 +337,6 @@ function summarizeCall(action: string, nodeKind: string, payload: unknown): stri
   switch (nodeKind) {
     case 'tool':
       return pickSummaryText(obj.input);
-    case 'gui': {
-      const spec = obj.spec as GuiNodeSpec | undefined;
-      const steps = spec?.steps ?? [];
-      const head = describeGuiStep(steps[0]);
-      const rest = steps.length > 1 ? ` +${steps.length - 1}` : '';
-      return `${spec?.target_app ?? 'gui'}: ${head}${rest}`;
-    }
     case 'browser': {
       const spec = obj.spec as BrowserNodeSpec | undefined;
       const steps = spec?.steps ?? [];
@@ -555,19 +482,6 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         const res = await ports.runTool(tool, input ?? {}, ctx);
         if (!res.ok) throw new Error(res.error ?? `tool "${tool}" failed`);
         return { value: res.output, meta: { exitCode: res.exitCode ?? null } };
-      });
-      return value;
-    },
-
-    async gui(spec, guiOpts) {
-      const { value } = await cachedCall('node_result', `gui:${spec.target_app}`, 'gui', { spec, annotation: guiOpts?.annotation }, async () => {
-        budget.countHostCall();
-        const outcome = await ports.runGui(spec, guiOpts?.annotation, ctx);
-        if (outcome.status === 'failed') {
-          throw new Error(outcome.error ?? `gui "${spec.target_app}" failed`);
-        }
-        if (outcome.status === 'skipped') return { value: null };
-        return { value: outcome.output ?? null };
       });
       return value;
     },
