@@ -27,12 +27,12 @@ function makeRecord(overrides: Partial<JournalRecord> = {}): JournalRecord {
   return {
     seq: 3,
     kind: 'node_result',
-    nodeId: 'gui:desktop',
+    nodeId: 'mcp-call',
     attempt: 1,
     status: 'failed',
-    nodeKind: 'gui',
-    action: 'gui:desktop',
-    inputSummary: 'capture',
+    nodeKind: 'tool',
+    action: 'mcp__erp__lookup_invoice',
+    inputSummary: 'lookup invoice',
     errorClass: 'tool_error',
     durationMs: 15021,
     atMs: Date.now(),
@@ -54,35 +54,35 @@ describe('run-log', () => {
 
   it('creates <workflow>-<runId>.log with a header line', () => {
     const dir = tmpRoot();
-    const log = openRunLog(fs, 'run-abc', 'hello-browser', { origin: 'library' });
+    const log = openRunLog(fs, 'run-abc', 'hello-invoices', { origin: 'library' });
     log.close();
 
     expect(log.path).toBeDefined();
     expect(path.dirname(log.path!)).toBe(dir);
-    expect(path.basename(log.path!)).toBe('hello-browser-run-abc.log');
+    expect(path.basename(log.path!)).toBe('hello-invoices-run-abc.log');
     const content = fs.readFileSync(log.path!, 'utf8');
     expect(content).toContain('[info] workflow run log —');
     expect(content).toContain('"runId":"run-abc"');
-    expect(content).toContain('"workflow":"hello-browser"');
+    expect(content).toContain('"workflow":"hello-invoices"');
     expect(content).toContain('"origin":"library"');
   });
 
   it('appends levelled lines and journal record projections', () => {
     tmpRoot();
     const log = openRunLog(fs, 'run-xyz', 'nightly');
-    log.line('info', 'launch args={"url":"https://example.com"}');
+    log.line('info', 'tool args={"invoice_id":"42"}');
     log.record(makeRecord());
-    log.line('error', 'run failed: browser step 1 (wait input[name=q]) failed: Timeout');
+    log.line('error', 'run failed: MCP invoice lookup returned a timeout');
     log.close();
 
     const content = fs.readFileSync(log.path!, 'utf8');
-    expect(content).toContain('[info] launch args={"url":"https://example.com"}');
-    expect(content).toContain('[error] #3 node_result failed <browser>');
-    expect(content).toContain('— wait input[name=q]');
+    expect(content).toContain('[info] tool args={"invoice_id":"42"}');
+    expect(content).toContain('[error] #3 node_result failed <tool>');
+    expect(content).toContain('mcp__erp__lookup_invoice');
     expect(content).toContain('errorClass=tool_error');
     expect(content).toContain('(15021ms)');
     expect(content).toContain(
-      '[error] run failed: browser step 1 (wait input[name=q]) failed: Timeout',
+      '[error] run failed: MCP invoice lookup returned a timeout',
     );
     // Every row is timestamped.
     for (const line of content.split('\n').filter((l) => l.length > 0)) {

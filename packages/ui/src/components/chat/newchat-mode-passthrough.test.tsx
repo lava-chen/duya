@@ -163,11 +163,6 @@ describe('NewChatView mode passthrough', () => {
     expect(mocks.storeState.setThreadPlanMode).toHaveBeenCalledWith('thread-1', true);
   });
 
-  it('computer-use mode reaches onSendMessage', async () => {
-    const args = await sendWithMode('Computer Use');
-    expect(args[5]).toBe('computer-use');
-  });
-
   it('goal mode reaches onSendMessage and persists', async () => {
     const args = await sendWithMode('Goal');
     expect(args[5]).toBe('goal');

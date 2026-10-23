@@ -1,14 +1,13 @@
 /**
- * payload.test.ts — parseOSContext pass-through of the plan 519 SOM
- * fields (uiaInputs / msaaInputs / windowList) plus non-regression on
- * existing envelope fields.
+ * payload.test.ts — parseOSContext keeps the supported OS context envelope
+ * while ignoring rich legacy accessibility and window payloads.
  */
 
 import { describe, expect, it } from 'vitest';
 import { parseOSContext } from '../../src/worker-os-context/payload.js';
 import type { OSContext } from '../../src/worker-os-context/types.js';
 
-/** Valid v0.4.0 payload carrying all three plan 519 fields. */
+/** Valid v0.4.0 payload with legacy fields no longer projected into OSContext. */
 const fullPayload = {
   schemaVersion: '0.4.0',
   capturedAt: '2026-09-11T00:00:00Z',
@@ -99,64 +98,27 @@ function minimalPayload(extra: Record<string, unknown>): unknown {
   };
 }
 
-describe('parseOSContext — plan 519 SOM pass-through', () => {
-  it('passes uiaInputs / msaaInputs / windowList on a full payload', () => {
+describe('parseOSContext — supported envelope', () => {
+  it('ignores removed SOM arrays while preserving supported envelope fields', () => {
     const outcome = parse(fullPayload);
     if (!outcome.ok) throw new Error(`expected ok, got ${outcome.reason}`);
 
     const ctx = outcome.context;
-    expect(ctx.uiaInputs?.length).toBe(1);
-    expect(ctx.uiaInputs?.[0].name).toBe('Edit field');
-    expect(ctx.uiaInputs?.[0].value).toBe('typed text');
-    expect(ctx.msaaInputs?.length).toBe(1);
-    expect(ctx.msaaInputs?.[0].name).toBe('OK');
-    expect(ctx.msaaInputs?.[0].value).toBe('OK');
-    expect(ctx.windowList?.length).toBe(2);
-    expect(ctx.windowList?.[0].title).toBe('Untitled - Notepad');
-    expect(ctx.windowList?.[0].hwnd).toBe('0x100');
+    expect(ctx).not.toHaveProperty('uiaInputs');
+    expect(ctx).not.toHaveProperty('msaaInputs');
+    expect(ctx).not.toHaveProperty('windowList');
+    expect(ctx.foreground.pid).toBe(1234);
+    expect(ctx.foreground.exeName).toBe('notepad.exe');
   });
 
-  it('leaves the SOM fields undefined when the payload omits them', () => {
+  it('preserves supported envelope fields on a minimal payload', () => {
     const outcome = parse(minimalPayload({}));
     if (!outcome.ok) throw new Error(`expected ok, got ${outcome.reason}`);
 
     const ctx: OSContext = outcome.context;
-    expect(ctx.uiaInputs).toBeUndefined();
-    expect(ctx.msaaInputs).toBeUndefined();
-    expect(ctx.windowList).toBeUndefined();
     // Existing envelope fields intact.
     expect(ctx.foreground.pid).toBe(1);
     expect(ctx.focusedEntity).toBeNull();
   });
 
-  it('degrades gracefully when uia.inputs is malformed (not an array)', () => {
-    const outcome = parse(
-      minimalPayload({ uia: { ok: true, source: 'focused', inputs: 'oops' } }),
-    );
-    if (!outcome.ok) throw new Error(`expected ok, got ${outcome.reason}`);
-    expect(outcome.context.uiaInputs).toBeUndefined();
-    expect(() => parse(minimalPayload({ uia: { ok: true, inputs: 'oops' } }))).not.toThrow();
-  });
-
-  it('degrades gracefully when uia / msaa holders are null or missing', () => {
-    const outcome = parse(minimalPayload({ uia: null, msaa: null }));
-    if (!outcome.ok) throw new Error(`expected ok, got ${outcome.reason}`);
-    expect(outcome.context.uiaInputs).toBeUndefined();
-    expect(outcome.context.msaaInputs).toBeUndefined();
-  });
-
-  it('caps windowList at MAX_WINDOW_LIST', () => {
-    const many = Array.from({ length: 80 }, (_, i) => ({
-      hwnd: `0x${i}`,
-      title: `w${i}`,
-      className: 'App',
-      processId: i,
-      processName: 'app.exe',
-      isFocused: false,
-      bounds: { x: 0, y: 0, w: 10, h: 10 },
-    }));
-    const outcome = parse(minimalPayload({ windowList: many }));
-    if (!outcome.ok) throw new Error(`expected ok, got ${outcome.reason}`);
-    expect(outcome.context.windowList?.length).toBe(64);
-  });
 });
