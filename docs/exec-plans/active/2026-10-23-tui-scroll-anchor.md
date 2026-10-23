@@ -29,7 +29,7 @@
 - [x] `TUIApp` 滚动状态、滚动操作、块选择定位、inline `viewEnd` 全部改写
 - [x] 单元测试改写 + 新增「文档增长时视窗不动」用例
 - [x] TUIApp 层行为测试 + 变异验证
-- [ ] 门禁 + commit + PR
+- [x] 门禁 + commit + PR
 
 ## 发现与决策
 
@@ -58,10 +58,18 @@
 | 工作区（滚动改造） | Windows / Node | `npx vitest run packages/cli/src/tui/` | 0（70 files / 900 passed） | 改造后全绿 |
 | 工作区（滚动改造） | Windows / Node | `npx vitest run .../virtual-doc.test.ts` | 1（1 failed） | 首版断言沿用「距尾」语义,已改为「距顶」并补「越过底部」用例 |
 | 工作区（+变异） | Windows / Node | 在 `paintTranscript` 里把视窗重新锚回尾部 | 1（新用例转红） | 证明用例有牙齿,非恒绿 |
+| `aec08d75` | Windows / Node | `npx vitest run packages/cli/` | 0（85 files / 1035 passed） | CLI 全包绿 |
+| `aec08d75` | Windows / Node | `npm run typecheck:all` | 0 | 类型门禁 |
+| `aec08d75` | Windows / Node | `npm run architecture:check` | 0 | 架构门禁 |
+| `aec08d75` | Windows / Node | CI（PR #388） | 全绿：architecture / test scope / typecheck / test / build | GitHub Actions |
 
 ## 接续 / 结果
 
-未提交。worktree `.claude/worktrees/tui-scroll-anchor` 独占 `packages/cli/src/tui/**` 的滚动相关路径
+已提交 `aec08d75`（实现 + 本计划文档）。PR #388(draft)：https://github.com/lava-chen/duya/pull/388
+门禁：`typecheck:all` 0、`architecture:check` 0、CLI 全包 85 files / 1035 passed、CI 全绿。
+变异证据见上（把视窗重新锚回尾部 → 新用例转红）。
+
+未提交路径：无。worktree `.claude/worktrees/tui-scroll-anchor` 独占 `packages/cli/src/tui/**` 的滚动相关路径
 (与 `tui-todo-list` 分支的改动不重叠:后者改 `todo.ts`/`blocks.ts`/thinking 预览,前者改
 `visible-window.ts`/`transcript-pane.ts`/滚动状态)。
-下一步:跑 `npm run typecheck:all` 与 `npm run architecture:check`,提交并开 PR。
+下一步:等 review 与 CI；获集成授权后合并并重验,再回收检出。
