@@ -582,15 +582,36 @@ describe('ToolActionsGroup round summary', () => {
     ];
 
     const first = render(<ToolActionsGroup tools={tools} />);
-    expect(first.container.querySelector('.tool-group')).toBeNull();
+    expect(first.container.querySelector('.tool-round-card')).toBeNull();
 
     fireEvent.click(first.container.querySelector('button')!);
-    expect(first.container.querySelector('.tool-group')).not.toBeNull();
+    expect(first.container.querySelector('.tool-round-card')).not.toBeNull();
 
     // A remount (another message arriving, the list re-rendering) must
     // not drop the user's expansion.
     first.unmount();
     const second = render(<ToolActionsGroup tools={tools} />);
-    expect(second.container.querySelector('.tool-group')).not.toBeNull();
+    expect(second.container.querySelector('.tool-round-card')).not.toBeNull();
+  });
+
+  it('flattens the expanded round into a card of tool rows', () => {
+    // Two consecutive tool calls used to need three clicks to reach the
+    // rows: round → group header → group body. The round's summary
+    // line already carries the category verbs, so the group header is
+    // dropped and the rows sit in one card.
+    const tools: ToolAction[] = [
+      finished('flat-1', 'read', { file_path: 'src/a.ts' }),
+      finished('flat-2', 'read', { file_path: 'src/b.ts' }),
+    ];
+
+    const { container } = render(<ToolActionsGroup tools={tools} />);
+    fireEvent.click(container.querySelector('button')!);
+
+    expect(container.querySelector('.tool-round-card')).not.toBeNull();
+    // No group header row is left behind.
+    expect(container.querySelectorAll('[data-title-source]')).toHaveLength(0);
+    // Both rows are visible without a second click.
+    expect(container.textContent).toMatch(/a\.ts/);
+    expect(container.textContent).toMatch(/b\.ts/);
   });
 });

@@ -42,6 +42,17 @@ const EXPANSION_SCOPE = 'group';
 interface GroupProps {
   entries: SegmentEntry[];
   flat?: boolean;
+  /**
+   * `header` (default) — the group renders a summary header plus a
+   * collapsible body. Used while the round is still streaming, where
+   * the header is what folds a run of tool calls into one quiet line.
+   *
+   * `card` — the group renders ONLY its body, inside a bordered card.
+   * Used by a finished round's expanded body: the round's own summary
+   * line already carries the category verbs, so a second header row
+   * would only repeat them (and cost the user two extra clicks).
+   */
+  variant?: 'header' | 'card';
   /** Whether the owning round's stream is still live. Gates the thinking
    *  rows' live shimmer/typewriter so they stop when the stream ends even
    *  if the entry's own flag was set while it was the trailing event. */
@@ -53,6 +64,7 @@ interface GroupProps {
 export function Group({
   entries,
   flat,
+  variant = 'header',
   streamLive,
   streamingToolOutput,
   agentProgressEvents,
@@ -119,32 +131,34 @@ export function Group({
     [entries],
   );
 
+  const rows = entries.map((entry, i) =>
+    entry.kind === 'tool' ? (
+      <GroupToolRow
+        key={entry.tool.id || `g-${i}`}
+        tool={entry.tool}
+        streamingToolOutput={
+          lastRunningTool?.id === entry.tool.id ? streamingToolOutput : undefined
+        }
+        agentProgressEvents={agentProgressEvents}
+      />
+    ) : entry.kind === 'thinking' ? (
+      <ThinkingRow
+        key={`thinking-${i}`}
+        content={entry.content}
+        isStreaming={!!streamLive && !!entry.isStreaming}
+      />
+    ) : (
+      // Plan 437: hook entries route through HookActionRow, which
+      // reuses the shared ActionRowChrome so the group body stays
+      // visually uniform.
+      <HookActionRow key={entry.hook.id || `hook-${i}`} hook={entry.hook} />
+    )
+  );
+
   const body = (
     <div className="tool-group-body">
       {showBrowserFallback && <BrowserFallbackBanner />}
-      {entries.map((entry, i) =>
-        entry.kind === 'tool' ? (
-          <GroupToolRow
-            key={entry.tool.id || `g-${i}`}
-            tool={entry.tool}
-            streamingToolOutput={
-              lastRunningTool?.id === entry.tool.id ? streamingToolOutput : undefined
-            }
-            agentProgressEvents={agentProgressEvents}
-          />
-        ) : entry.kind === 'thinking' ? (
-          <ThinkingRow
-            key={`thinking-${i}`}
-            content={entry.content}
-            isStreaming={!!streamLive && !!entry.isStreaming}
-          />
-        ) : (
-          // Plan 437: hook entries route through HookActionRow, which
-          // reuses the shared ActionRowChrome so the group body stays
-          // visually uniform.
-          <HookActionRow key={entry.hook.id || `hook-${i}`} hook={entry.hook} />
-        )
-      )}
+      {rows}
     </div>
   );
 
@@ -165,6 +179,30 @@ export function Group({
       <span data-title-source={displayTitle.source}>{displayTitle.title}</span>
     </ActionRowChrome>
   );
+
+  if (variant === 'card') {
+    // The card variant drops the header row, but the header carried one
+    // thing the round line does NOT have: the model's own semantic
+    // title for this run of calls ("Ran architecture gate"). The
+    // generic category summary is dropped — the round line already
+    // shows it — while a real progress title survives as a quiet
+    // label on top of the card.
+    const semanticTitle =
+      displayTitle.source === 'tool_fallback' ? null : displayTitle.title;
+    return (
+      <div key={groupKey} className="tool-round-card mt-1.5">
+        {semanticTitle && (
+          <div className="tool-round-card__label">
+            <span data-title-source={displayTitle.source} className="truncate">
+              {semanticTitle}
+            </span>
+          </div>
+        )}
+        {showBrowserFallback && <BrowserFallbackBanner />}
+        {rows}
+      </div>
+    );
+  }
 
   if (flat) {
     return (

@@ -31,6 +31,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { computeSegments } from './tools/segments';
 import {
   renderFlatActions,
+  renderFlattenedBody,
   renderOrderedBody,
   getLastRunningToolAction,
   computeSegmentActionKeys,
@@ -323,9 +324,12 @@ function ToolActionsGroupImpl({
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
-              <div className="mt-0.5 border-l-2 border-border/50">
+              {/* No left rule here: the expanded body is a card of tool
+                  rows now, and a rule next to a card reads as a double
+                  border. The card carries the structure. */}
+              <div className="mt-1">
                 {focusMode || !hasResearchStage
-                  ? renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)
+                  ? renderFlattenedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)
                   : renderResearchBody()}
               </div>
             </motion.div>
