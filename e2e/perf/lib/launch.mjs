@@ -70,8 +70,32 @@ export function assertProductionBuild() {
  * `DUYA_TEST=1` is required and is not a mock: it is the product's own test
  * mode, which skips the single-instance lock (so a developer's running Duya
  * does not swallow the launch) and isolates userData per namespace.
+ *
+ * A launch that lands in the app's SAFE-MODE window is retried once. On a
+ * fresh profile the app can open its database before the `databases`
+ * directory exists ("Cannot open database because the directory does not
+ * exist"), and it then shows the recovery window instead of the shell. That
+ * is a product-side first-boot ordering problem, not a measurement: the
+ * retry measures the same thing the second time round.
  */
 export async function launchPerfElectron(options = {}) {
+  const attempts = options.attempts ?? 2;
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await launchPerfElectronOnce(options);
+    } catch (error) {
+      lastError = error;
+      const message = String(error?.message ?? error);
+      if (!message.includes('SAFE-MODE')) throw error;
+      if (attempt + 1 >= attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  }
+  throw lastError;
+}
+
+async function launchPerfElectronOnce(options) {
   const namespace = options.namespace ?? `perf-${Date.now()}`;
   const userDataRoot = userDataRootFor(namespace);
   fs.mkdirSync(userDataRoot, { recursive: true });
@@ -102,7 +126,13 @@ export async function launchPerfElectron(options = {}) {
   const consoleErrors = [];
   const pageErrors = [];
 
-  const page = await waitForFirstWindow(app, options.timeoutMs ?? 60_000);
+  const page = await waitForFirstWindow(app, options.timeoutMs ?? 60_000).catch(async (error) => {
+    // A launch that did not produce a renderer must not leave the app
+    // behind: the retry (or the next sample) would measure a machine that
+    // already runs an app.
+    await closePerfElectron(app);
+    throw error;
+  });
   page.on('console', (message) => {
     if (message.type() === 'error') consoleErrors.push(message.text());
   });
