@@ -401,3 +401,140 @@ function buildTimeline(events: RecorderEventView[]): TimelineGroup[] {
   });
   return groups;
 }
+
+function EventRow({
+  row,
+  open,
+  onToggle,
+}: {
+  row: TimelineRow;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  const { event } = row;
+  const element = "element" in event ? event.element : undefined;
+  const hasDetail = element !== undefined && !isRedacted(event);
+
+  return (
+    <div className="border-b border-border/50 last:border-b-0" data-testid={`recorder-event-${row.index}`}>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-xs hover:bg-[var(--surface-hover)]"
+        aria-expanded={open}
+        aria-label={open ? t("recorder.detail.collapse") : t("recorder.detail.expand")}
+        onClick={() => hasDetail && onToggle()}
+      >
+        <span className="w-16 shrink-0 font-mono text-muted-foreground">{formatRecorderClock(event.ts)}</span>
+        <span className="flex w-16 shrink-0 items-center gap-1 text-muted-foreground">
+          <EventIcon type={event.type} />
+          {eventLabel(event, t)}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-foreground">{eventSummary(event, t)}</span>
+        {hasDetail && (
+          <span className="shrink-0 text-muted-foreground">
+            {open ? <CaretDownIcon size={12} /> : <CaretRightIcon size={12} />}
+          </span>
+        )}
+      </button>
+
+      {open && element && (
+        <div className="bg-[var(--surface)] px-4 py-2">
+          <ElementDetail element={element} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EventIcon({ type }: { type: RecorderEventView["type"] }) {
+  const className = "shrink-0";
+  if (type === "click") return <CursorClickIcon size={12} className={className} />;
+  if (type === "type") return <TextAaIcon size={12} className={className} />;
+  if (type === "key") return <KeyIcon size={12} className={className} />;
+  if (type === "scroll") return <ListChecksIcon size={12} className={className} />;
+  return <GlobeIcon size={12} className={className} />;
+}
+
+type Translate = (key: TranslationKey) => string;
+
+function eventLabel(event: RecorderEventView, t: Translate): string {
+  switch (event.type) {
+    case "click":
+      return t("recorder.detail.click");
+    case "type":
+      return t("recorder.detail.type");
+    case "key":
+      return t("recorder.detail.key");
+    case "scroll":
+      return t("recorder.detail.scroll");
+    case "app_focus":
+      return t("recorder.detail.focus");
+    case "window_open":
+      return t("recorder.detail.open");
+    case "window_close":
+      return t("recorder.detail.close");
+  }
+}
+
+/** One-line human summary; never render a raw event object. */
+function eventSummary(event: RecorderEventView, t: Translate): string {
+  switch (event.type) {
+    case "click": {
+      const label = elementLabel(event.element) ?? `(${event.click.x}, ${event.click.y})`;
+      return `${label}${event.click.count === 2 ? " ×2" : ""} @ (${event.click.x}, ${event.click.y})`;
+    }
+    case "type":
+      return isRedacted(event) ? `"${t("recorder.detail.redacted")}"` : `"${truncate(event.text, 80)}"`;
+    case "key":
+      return event.modifiers.length > 0 ? `${event.modifiers.join("+")}+${event.key}` : event.key;
+    case "scroll":
+      return `${event.direction} ×${event.amount}`;
+    case "app_focus":
+      return event.browserUrl ? `${event.app.title || event.app.name} — ${event.browserUrl}` : event.app.title || event.app.name;
+    default:
+      return event.app.title || event.app.name;
+  }
+}
+
+function isRedacted(event: RecorderEventView): boolean {
+  return event.type === "type" && (event.element.isPassword === true || event.text === "<redacted>");
+}
+
+function elementLabel(element: RecorderElement): string | null {
+  if (element.name) return element.name;
+  if (element.automationId) return element.automationId;
+  if (element.controlType) return element.controlType;
+  return null;
+}
+
+function ElementDetail({ element }: { element: RecorderElement }) {
+  const { t } = useTranslation();
+  const rows: Array<[string, string]> = [];
+  if (element.name) rows.push(["Name", element.name]);
+  if (element.controlType) rows.push(["ControlType", element.controlType]);
+  if (element.automationId) rows.push(["AutomationId", element.automationId]);
+  if (element.className) rows.push(["ClassName", element.className]);
+  if (element.rect) rows.push(["Rect", `${element.rect.x},${element.rect.y} ${element.rect.w}×${element.rect.h}`]);
+  rows.push(["Source", element.source]);
+  if (element.isPassword) rows.push(["IsPassword", "true"]);
+
+  if (element.source === "none" && rows.length === 1) {
+    return <p className="text-xs text-muted-foreground">{t("recorder.detail.noElement")}</p>;
+  }
+
+  return (
+    <dl className="grid grid-cols-[120px_1fr] gap-x-3 gap-y-0.5 text-[11px]">
+      {rows.map(([key, value]) => (
+        <div key={key} className="contents">
+          <dt className="text-muted-foreground">{key}</dt>
+          <dd className="truncate font-mono text-foreground">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function truncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 3)}...` : value;
+}
