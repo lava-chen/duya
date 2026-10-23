@@ -207,17 +207,33 @@ Base 统一 `2e6f265d`；每条分支一个独立 worktree、一个独立 PR；�
 
 | 切片 | owner | worktree | 分支 | HEAD | PR | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 契约 | 主会话 | `.claude/worktrees/worktree-lifecycle` | `codex/worktree-lifecycle` | `3da7bd85` | #359 | 已验证，待集成授权 |
-| A Provider | agent `wl-a-provider` | `.claude/worktrees/wl-a` | `codex/wl-a-checkout-provider` | `97f334bf` | #361 | 已验证（58 例），待 review |
-| B 协议 | agent `wl-b-protocol` | `.claude/worktrees/wl-b` | `codex/wl-b-checkout-protocol` | `4e703cf5` | #363 | 已验证（35 例），待 review |
-| C Observer | agent `wl-c-observer` | `.claude/worktrees/wl-c` | `codex/wl-c-scm-observer` | `1292e05b` | #362 | 已验证（61 例），待 review |
+| 契约 | 主会话 | `.claude/worktrees/worktree-lifecycle` | `codex/worktree-lifecycle` | `3da7bd85` | #359 | 已合并 |
+| A Provider | agent `wl-a-provider` | `.claude/worktrees/wl-a` | `codex/wl-a-checkout-provider` | `133e4c77` | #361 | 已合并（58 例） |
+| B 协议 | agent `wl-b-protocol` | `.claude/worktrees/wl-b` | `codex/wl-b-checkout-protocol` | `4d7af9b3` | #363 | 已合并（35 例） |
+| C Observer | agent `wl-c-observer` | `.claude/worktrees/wl-c` | `codex/wl-c-scm-observer` | `eb819f02` | #362 | 已合并（61 例） |
+
+## 派工记录（第二波，2026-10-23）
+
+Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 master（master 在此期间并入 #364/#365/#367/#369），源码零冲突，冲突只在 `packages/host/bundle/` 生成物（两边都重建过 worker bundle）——按 `docs/development/build.md`「生成物不手工合并」处理：取 master 版本后从源码重建并单独提交。
+
+| 切片 | owner | worktree | 分支 | PR | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| 接缝 | 主会话 | `.claude/worktrees/wl-seam` | `codex/wl-seam-integration` | #370 | 已合并 |
+| E Integration 同步 | agent | `.claude/worktrees/wl-e` | `codex/wl-e-integration-sync` | #371 | 已合并（90 例） |
+| D Session 生命周期 | agent（成果由主会话接手） | `.claude/worktrees/wl-d` | `codex/wl-d-session-lifecycle` | #372 | 已合并（114 例） |
+| 组装接线 | 主会话 | `.claude/worktrees/wl-seam` | `codex/wl-seam2-host-wiring` | #373 | 见下方接续点 |
 
 ### 已知的跨切片接续点（合并不是终点）
 
-1. **B 先于 C 合**。C 在自己树里建了 `scm/integration-state.ts`（因为 B 的 `HostIntegrationState` 当时不在 master）。B 合并后 C 必须删该文件改 `import type`，`scm/index.ts` 对外名字不变。
-2. **B 的 `checkout-api.ts` 目前用结构端口**，没接 A 的实现。A + B 合并后需要一个接线提交：`createCheckoutProvider({ isSessionAlive, cwdInUse })` 注入，并补 `resolveSessionCheckoutRoot(sessionId)`。
-3. **A 改了 `IsolatedWorktree.branch` 的语义**：detached 下返回 12 位短 SHA，不再是分支名。D 必须同时改 `service.ts:186` 的 "on branch …" 文案，以及 `IsolatedWorktree.path` 现在是 `cwd` 而非 worktree 根。
-4. **`integrations` 表是单行 upsert**，契约 §4.4 要求「状态迁移不覆盖历史」还没有落点。E 必须决定：加 `integration_events` 表，还是把迁移写进 rollout。
+1. **B 先于 C 合**。C 在自己树里建了 `scm/integration-state.ts`（因为 B 的 `HostIntegrationState` 当时不在 master）。B 合并后 C 必须删该文件改 `import type`，`scm/index.ts` 对外名字不变。**已解决**：接缝提交 #370 删除该文件，union 改从 `@duya/agent-protocol` 导入。
+2. **B 的 `checkout-api.ts` 用结构端口，没接 A 的实现**。需要接线提交：`createCheckoutProvider({ isSessionAlive, cwdInUse })` 注入，并补 `resolveSessionCheckoutRoot(sessionId)`。**已解决**：#370 注入 A 的 Provider 并补 resolver；D 切片提供 aliveness port 的真实判据，本波的组装提交把两者接进 `local-host`。
+3. **A 改了 `IsolatedWorktree.branch` 的语义**：detached 下返回 12 位短 SHA，不再是分支名。D 必须同时改 `service.ts:186` 的 "on branch …" 文案，以及 `IsolatedWorktree.path` 现在是 `cwd` 而非 worktree 根。**已解决**：#372 改了文案（notice 与后台回执两处）。
+4. **`integrations` 表是单行 upsert**，契约 §4.4 要求「状态迁移不覆盖历史」还没有落点。E 必须决定：加 `integration_events` 表，还是把迁移写进 rollout。**已解决**：E 加了 migration 44 `integration_events`，**状态变化才追加**。
+
+### 仍然开放的接续点
+
+5. **归属历史的临时载体**。D 用 `sessions.extensions.checkout` 承载 checkout 归属历史，因为 rollout 事件分类学归 plan 620。620 落地后必须迁移——**这是已知偏离，不是终态设计**。
+6. **`resume_from` 的错误码与 rollout 记录**。契约风险 §4 要求 resume 从 warning 改为拒绝时「需要明确错误码与 rollout 记录」；#372 实现的是 typed 错误文案，但 rollout 事件仍待 620 补齐。
 
 ## 验收
 
@@ -271,8 +287,11 @@ Base 统一 `2e6f265d`；每条分支一个独立 worktree、一个独立 PR；�
 - [x] 契约定稿（本文件 4.1–4.6）
 - [x] Provider 接口签名 v0（附录 A，B 可据此并行）
 - [x] 派发 A / B / C（各自 worktree + PR：#361 / #363 / #362）
-- [ ] 第一波合并后启动 D / E
-- [ ] D / E 合并后启动 F
+- [x] 第一波合并（#359–#363）
+- [x] 接缝提交（#370）：删 C 的临时 union 副本，A 的 Provider + C 的 observer 接进 local-host
+- [x] 第二波 D / E（#371 / #372）
+- [x] 组装接线：aliveness 判据与 integration sync 接进 local-host
+- [ ] 启动 F（三端 UI + E2E）
 - [ ] 场景 1–7 全绿，三端连通
 
 ## 验证记录
@@ -284,8 +303,20 @@ Base 统一 `2e6f265d`；每条分支一个独立 worktree、一个独立 PR；�
 | 同上 | 同上 | `node scripts/architecture/architecture-check.mjs` | 0 — `tolerated 2800 / baseline 2785`，无新增违规 | 终端输出 |
 | 同上 | 同上 | `env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` | 0 — 11m15s；`typecheck-electron-gate: no new type errors (231 known)`；`eval:agent:core:check` 4/4 pass | 终端输出 |
 | 同上 | 同上 | 目标测试 | 不适用：本次仅新增文档，未触碰 `packages/**` 实现 | — |
+| 接缝 `57941472` | Windows 11 / Node 22.22.2 | `npm run typecheck:all` | 0 — electron gate 231 known / 111 keys | 终端输出 |
+| 同上 | 同上 | 目标 vitest（scm + checkout-api + checkout-integration-http + workspace） | 0 — 123 passed / 1 skipped（8 files） | 终端输出 |
+| 同上 | 同上 | `npm run bundle:verify` | 0 — FRESH，`0/1106 bundle inputs changed` | 终端输出 |
+| 同上 | 同上 | `npm run architecture:check` | 0 — `tolerated 2822 / baseline 2785`，无新增违规 | 终端输出 |
+| E `478dcdb2` | 同上 | `npm run typecheck:all` | 0 — 全量 | 终端输出 |
+| 同上 | 同上 | 目标 vitest（scm + integration-store） | 0 — 90 passed（5 files） | 终端输出 |
+| 同上 | 同上 | `npm run bundle:verify` / `architecture:check` | 0 — FRESH / 无新增违规 | 终端输出 |
+| D `cd5f6e2a` | 同上 | `npm run typecheck:all` | 0 — `typecheck-electron-gate: OK — no new type errors (231 known across 111 key(s))` | 终端输出 |
+| 同上 | 同上 | 目标 vitest（workspace + worker-subagents + agent-protocol/hash） | 0 — 114 passed / 1 skipped（9 files） | 终端输出 |
+| 同上 | 同上 | `npm run bundle:verify` / `architecture:check` | 0 — FRESH / 无新增违规 | 终端输出 |
+| 接线 | 同上 | 目标 vitest（checkout-aliveness-wiring + checkout-integration-http） | 0 — 10 passed | 终端输出 |
+| 同上 | 同上 | 反证：把 aliveness port 换成空实现后重跑 | **1** — 用例变红，证明该用例真的覆盖接线 | 终端输出 |
 
-构建副作用核对：`build:packages` 后 `git diff --numstat` 无内容差异，`packages/capabilities/src/ModuleTool/inline-content.ts` 只是 CRLF/LF 的 stat-dirty 条目，未纳入提交。
+构建副作用核对：`build:packages` 后 `git diff --numstat` 无内容差异，`packages/capabilities/src/ModuleTool/inline-content.ts` 只是 CRLF/LF 的 stat-dirty 条目，未纳入提交。第二波三个切片都遇到过这一条：构建脚本改写了该文件的换行符，提交前已 `git checkout --` 还原。
 
 ## 附录 A — Provider 接口签名（v0，冻结给 B 并行）
 
@@ -370,9 +401,10 @@ export interface CheckoutProvider {
 
 ## 接续 / 结果
 
-已实现：无（契约阶段）。
-已合并：无。
+已实现：Provider（A）、协议与投影表（B）、只读 observer（C）、Session 生命周期（D）、Integration 同步（E）、组装接线（本波）。
+已合并：#359 契约 · #361 A · #362 C · #363 B · #370 接缝 · #371 E · #372 D。
 未提交路径：本文件与 `docs/exec-plans/{README,catalog}.md` 的登记行。
 外部副作用：无。
-回收：worktree 保留（任务未完成），owner 即本计划。
-下一步：把 A / B / C 的路径所有权与接口签名写进各自的派工记录，A 先出 Provider 接口签名供 B 并行；接口签名落定后三路同时开工。
+回收：worktree 保留（任务未完成，F 未开工），owner 即本计划。
+下一步：开工 F（三端 UI + E2E）。F 开工前必须先定「Web 端接入方式」（待决 §2）——
+Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。
