@@ -12,7 +12,7 @@
 | 本次文档整理 | [2026-10-20 文档体系](active/2026-10-20-documentation-system.md) | 文档已整理；待处理文档范围外的两处门禁失败，见接续记录 |
 | 单 Host 多客户端 | [2026-10-22 Desktop 与 TUI 共用 Host](active/2026-10-22-single-host-multiclient.md) | 先做 health 能力字段与 TUI 自动 attach |
 | 架构主线 | [610 执行队列](active/610-architecture-series/19-fast-track-queue.md) | 只从该文档追踪表选择未完成卡；不从旧编号重排 |
-| 工作区生命周期 | [621 生命周期 Harness](active/621-coding-workspace-lifecycle-harness.md) | 契约已定；派发 A/B/C，各自 worktree + PR |
+| 工作区生命周期 | [621 生命周期 Harness](active/621-coding-workspace-lifecycle-harness.md) | 已合并（含 F 三端 UI，#378 → `39f2314f`）；场景 1–7 全绿 |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。

@@ -303,6 +303,7 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
   - [x] F-5 共享面板 + 接入 TaskDrawer
   - [x] F-6 场景 1 / 2 / 7：Host 层 + 三端连通
 - [x] 场景 1–7 全绿，三端连通
+- [x] F 合并（#378 → `39f2314f`），CI 5/5 pass
 
 ## 验证记录
 
@@ -354,6 +355,7 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 | 同上 | 同上 | `npm run architecture:check` | 0 — `tolerated 2608 / baseline 2785`，无新增违规 | 终端输出 |
 | 同上 | 同上 | `npm run bundle:worker` 后 `npm run bundle:verify` | 0 — FRESH，`0/921 bundle inputs changed` | 终端输出 |
 | 同上 | 同上 | 目标 vitest（host + web + desktop + ui + cli/slash + command-catalog） | 0 — 696 files passed / 1 skipped，7512 passed / 12 skipped，0 failed | 终端输出 |
+| PR #378（`39f2314f`） | GitHub Actions / ubuntu-latest 22.x | `gh pr checks 378` | 0 — 5/5 job pass（build 2m57s · typecheck 5m51s · test 8m29s · architecture 1m42s · test scope 9s） | Actions run 39932014204 |
 
 环境备注：`wl-f` worktree 里裸 builtin import（`from 'stream'`）在 vitest 下解析失败，`packages/cli/src/tui/__tests__/*` 与 2 个既有 desktop 测试文件因此**收集失败**（`Cannot find module '<worktree>/stream'`）。同样文件在主检出与 `wl-f-tui` 通过，`apps/web` 侧全部通过；与本次改动无关（这两个文件未被本分支触及），CI 的干净检出不受影响。
 
@@ -442,10 +444,11 @@ export interface CheckoutProvider {
 
 ## 接续 / 结果
 
-已实现：Provider（A）、协议与投影表（B）、只读 observer（C）、Session 生命周期（D）、Integration 同步（E）、组装接线（本波）。
-已合并：#359 契约 · #361 A · #362 C · #363 B · #370 接缝 · #371 E · #372 D。
-未提交路径：本文件与 `docs/exec-plans/{README,catalog}.md` 的登记行。
+已实现：Provider（A）、协议与投影表（B）、只读 observer（C）、Session 生命周期（D）、Integration 同步（E）、组装接线、F（三端 UI + 真实链路验证）。
+已合并：#359 契约 · #361 A · #362 C · #363 B · #370 接缝 · #371 E · #372 D · #373 组装接线 · #378 F（merge `39f2314f`）。
+未提交路径：无。
 外部副作用：无。
-回收：worktree 保留（任务未完成，F 未开工），owner 即本计划。
-下一步：开工 F（三端 UI + E2E）。F 开工前必须先定「Web 端接入方式」（待决 §2）——
-Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。
+回收：`wl-f`、`wl-f-web`、`wl-f-tui`、`wl-f-desktop` 四个 worktree 已摘除，owner 即本计划。
+下一步：无。场景 1–7 全部落地并验证。
+
+遗留（需用户手工处理）：`C:\Users\lavachen\.duya\worktrees\` 下有 6 个早期测试残留的 checkout 目录（`duya-identity-repo-*` 2 个、`duya-questions-repo-*` 4 个）。根因已修（`isolateCheckoutStorage()` 改为 `await` 且用 `DUYA_APP_DATA_PATH` 隔离，新跑不再产生残留），但这 6 个目录在工作区外，回收站策略不允许 agent 删除。
