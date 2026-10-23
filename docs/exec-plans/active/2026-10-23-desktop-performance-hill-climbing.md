@@ -21,6 +21,8 @@
 | D | `apps/desktop/src/main/core/**`、`apps/desktop/src/main/index.ts`、`apps/desktop/src/preload/**`、`components/layout/panels/TerminalPanel.tsx`、`panels/registry.ts`、`panels/layout-model.ts` | 合成状态、帧耗时、WebGL 回退 |
 | E | `packages/ui/src/App.tsx`、`packages/ui/src/index.ts`、`packages/ui/package.json`、`packages/ui/tsconfig.json`、`vite.config.ts`、`apps/web/vite.config.ts` | 懒加载、依赖闭包、首屏资源 |
 
+例外：`e2e/perf/agents/agent-{a,b,c,d,e}/**` 按 Agent 切分，各自独占，互不冲突。给 B/C/D/E 放自己的测量脚本与 fixture 生成器——留在检出里不提交，等于这份改前/改后数据不可复现。Agent A 不进这个目录。
+
 共享文件（根 `package.json`、`e2e/playwright.config.ts`、`packages/ui/src/styles/**`、其余 store 与 hooks）只由集成者改；agent 需要时把 diff 写进 PR 正文交集成者应用。
 
 ## 指标契约（各 Agent 通用）
@@ -45,6 +47,33 @@
 
 每次报告必须附环境：CPU 型号、内存、Node 版本、OS、构建类型（production）、会话 fixture 标识、采样次数。
 
+## 固定 fixture（跨 Agent 可比）
+
+所有 Agent 用同一套标识与规模，报告里写 fixture 标识。Agent A 负责生成，其余 Agent 可在自己的检出里生成等价 fixture。
+
+| fixture | 内容 |
+| --- | --- |
+| `perf/session-100` | 100 条历史消息的会话 |
+| `perf/session-1000` | 1,000 条历史消息的会话 |
+| `perf/session-10000` | 10,000 条历史消息的会话 |
+| `perf/stream-long-reply` | 一条长回复逐 token 流式输出 |
+| `perf/stream-tool-storm` | 大量工具事件持续流入 |
+| `perf/typing-30s` | 输入框连续打字 30 秒 |
+
+## 测量互斥
+
+5 个 Agent 在同一台机器上并行测量。别的 Agent 在构建或测量时，数字量到的是争抢而非被测代码。
+
+测量脚本：`E:\Projects\duya\.claude\perf-bench-lock.mjs`（gitignore 区，不进仓库）。
+
+```powershell
+node E:\Projects\duya\.claude\perf-bench-lock.mjs acquire <agent>
+# ...跑测量...
+node E:\Projects\duya\.claude\perf-bench-lock.mjs release
+```
+
+`acquire` 成功退出码 0；被占用退出码 2 并打印占用者，此时先做不需要计时的准备工作，不要硬跑。超过 30 分钟的锁视为失效可被接管。报告里写明每个数字是否在持锁状态下取得。
+
 ## 验收
 
 - `e2e/perf/**` 一条命令出报告：p50/p95 交互延迟、帧时间、主线程 Long Task、React Commit、DOM 节点数、CPU/GPU、内存峰值与增长曲线。
@@ -56,11 +85,14 @@
 ## 进度
 
 - [x] 冻结路径所有权，建 6 个检出（5 agent + 1 集成）
-- [x] 写计划并提 PR
+- [x] 写计划并提 PR #382 → 已合并 `766db972`
+- [x] 建测量互斥锁（`E:\Projects\duya\.claude\perf-bench-lock.mjs`）
 - [ ] A 交付 Harness v1，其它 agent 用它取证
 - [ ] B/C/D/E 各自建立基线 → 定位瓶颈 → 一个 PR 一个问题
 - [ ] 集成者按 CI + 证据定合并顺序，合并后重跑 Profile
 - [ ] 产出按实测收益排序的下一轮机会清单
+
+派工状态：A/B/C/D 已开工（并发上限 4），E 待空位。
 
 ## 发现与决策
 
