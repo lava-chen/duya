@@ -24,6 +24,7 @@
 
 import { describe, expect, it, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -50,6 +51,7 @@ import {
   releaseInternalLock,
   resolveLockDir,
 } from '../../e2e/perf/lib/lock.mjs';
+import { closePerfElectron } from '../../e2e/perf/lib/launch.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -258,5 +260,37 @@ describe('the measurement lock', () => {
     const dir = resolveLockDir();
     expect(path.isAbsolute(dir)).toBe(true);
     expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+});
+
+describe('the app shutdown', () => {
+  it('never kills a pid that was recycled by another process', async () => {
+    // When the app is already gone its pid can be handed to ANOTHER
+    // process. Killing that one takes the harness down with it, so the
+    // process name is checked before the tree is killed.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      await closePerfElectron({
+        process: () => ({ pid: child.pid }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      });
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('survives a pid that is already gone', async () => {
+    await expect(
+      closePerfElectron({
+        process: () => ({ pid: 0x7ffffff0 }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      }),
+    ).resolves.toBeUndefined();
   });
 });

@@ -17,7 +17,7 @@
 import { _electron as electron } from 'playwright';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -205,8 +205,22 @@ export async function closePerfElectron(app) {
     if (pid) {
       try {
         if (process.platform === 'win32') {
-          const { execSync } = await import('node:child_process');
-          execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+          // The app may already be gone, and a pid that was freed can be
+          // handed to ANOTHER process — killing that one would take the
+          // harness down with it. The name is checked first.
+          const name = execFileSync(
+            'powershell.exe',
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName`,
+            ],
+            { encoding: 'utf8' },
+          ).trim();
+          if (name.toLowerCase() === 'electron') {
+            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+          }
         } else {
           process.kill(pid, 'SIGKILL');
         }
