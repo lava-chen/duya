@@ -47,6 +47,32 @@ function stallStdout(): { setStalled: (stalled: boolean) => void } {
   return { setStalled: (value: boolean) => { stalled = value; } };
 }
 
+function nativeRunEvent(seq: number, text = 'native event'): Record<string, unknown> {
+  return {
+    type: 'run:event',
+    epoch: 7,
+    envelope: {
+      runId: 'run-pressure-test',
+      sessionId: 'session-pressure-test',
+      seq,
+      payload: { type: 'assistant.text_block', text },
+    },
+  };
+}
+
+function captureDrain(setStalled: (stalled: boolean) => void): string[] {
+  const spy = vi.mocked(process.stdout.write);
+  const written: string[] = [];
+  setStalled(false);
+  spy.mockImplementation(((chunk: unknown) => {
+    written.push(String(chunk));
+    return true;
+  }) as never);
+  process.stdout.emit('drain');
+  spy.mockRestore();
+  return written;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -57,12 +83,12 @@ describe('sendEvent backpressure queue', () => {
     const spy = vi.mocked(process.stdout.write);
 
     // First event: written, write() returns false, so the queue parks on drain.
-    sendEvent({ type: 'chat:text', n: 0 });
+    sendEvent({ type: 'chat:text_delta', n: 0 });
     expect(spy).toHaveBeenCalledTimes(1);
 
     // Pile on far more than the 2000-frame cap while stalled.
     for (let i = 1; i <= 2500; i++) {
-      sendEvent({ type: 'chat:text', n: i });
+      sendEvent({ type: 'chat:text_delta', n: i });
     }
 
     setStalled(false);
@@ -72,8 +98,8 @@ describe('sendEvent backpressure queue', () => {
     // One frame went out before stalling; the rest drained on `drain`.
     const total = drained.length;
     expect(total).toBeGreaterThan(0);
-    // Unbounded this would be 2501. Bounded by frames, with the cap at 2000
-    // plus the one already written.
+    // Unbounded this would be 2501. Disposable deltas are bounded by the
+    // queue cap plus the one already written.
     expect(total).toBeLessThanOrEqual(2001);
 
     // The newest event is the one that must survive the shed.
@@ -91,5 +117,63 @@ describe('sendEvent backpressure queue', () => {
 
     expect(written).toHaveLength(50);
     expect(written[49]).toContain('"n":49');
+  });
+
+  it('sheds disposable frames before native events under frame pressure', () => {
+    const { setStalled } = stallStdout();
+    const spy = vi.mocked(process.stdout.write);
+    sendEvent(nativeRunEvent(1));
+
+    for (let seq = 2; seq <= 1000; seq++) sendEvent(nativeRunEvent(seq));
+    for (let n = 1; n <= 1500; n++) sendEvent({ type: 'chat:text_delta', n });
+
+    const output = [String(spy.mock.calls[0]?.[0]), ...captureDrain(setStalled)];
+    const observedSeqs = output
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((frame) => frame.type === 'run:event')
+      .map((frame) => (frame.envelope as { seq: number }).seq);
+    expect(observedSeqs).toEqual(Array.from({ length: 1000 }, (_, index) => index + 1));
+  });
+
+  it('preserves completion frames while shedding incremental display updates', () => {
+    const { setStalled } = stallStdout();
+    const spy = vi.mocked(process.stdout.write);
+    sendEvent({ type: 'chat:text_delta', n: 0 });
+    for (let n = 1; n <= 2100; n++) sendEvent({ type: 'chat:text_delta', n });
+    sendEvent({ type: 'chat:done', sessionId: 'session-pressure-test' });
+
+    const output = [String(spy.mock.calls[0]?.[0]), ...captureDrain(setStalled)];
+    const types = output.map((line) => (JSON.parse(line) as { type: string }).type);
+    expect(types).toContain('chat:done');
+    expect(types.filter((type) => type === 'chat:text_delta').length).toBeLessThan(2101);
+  });
+
+  it('terminates non-zero instead of shedding native events at the frame cap', () => {
+    stallStdout();
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    expect(() => {
+      for (let seq = 1; seq <= 2101; seq++) sendEvent(nativeRunEvent(seq));
+    }).toThrow('process.exit(70)');
+    expect(exit).toHaveBeenCalledWith(70);
+    // The first native event reached stdout before it stalled; the rest were
+    // not converted into a success-shaped terminal after the queue failed.
+    expect(vi.mocked(process.stdout.write).mock.calls).toHaveLength(1);
+  });
+
+  it('terminates non-zero instead of shedding native events at the character cap', () => {
+    stallStdout();
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+
+    expect(() => {
+      for (let seq = 1; seq <= 80; seq++) {
+        sendEvent(nativeRunEvent(seq, 'x'.repeat(60_000)));
+      }
+    }).toThrow('process.exit(70)');
+    expect(exit).toHaveBeenCalledWith(70);
   });
 });
