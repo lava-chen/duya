@@ -87,6 +87,13 @@ import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
 import { createHostResearchApi } from './research-api.js';
+import { createHostIntegrationApi } from './integration-api.js';
+import { createHostCheckoutApi } from './checkout-api.js';
+import { createCheckoutProvider, gitOrNull, inspectRegistration } from './workspace/index.js';
+import { canonicalPath } from './workspace/fs-utils.js';
+import { createAlivenessInputs } from './workspace/aliveness.js';
+import { observePr as observeIntegrationPr } from './scm/index.js';
+import { createIntegrationSync } from './scm/sync.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
 import { HostRunExecutionController } from './run-execution.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
@@ -611,6 +618,64 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
       lockApi,
       workspaceApi,
+      // Plan 621 slice B: the observed PR/CI/review projection reads the same
+      // core handle as every other store, and slice C's read-only `gh` observer
+      // is the one writer `observeForPr` uses on an explicit refresh.
+      integrationApi: createHostIntegrationApi({ store: core.stores.integrations, observePr: observeIntegrationPr }),
+      // Plan 621 slice E: the sync is the explicit "re-read GitHub now" act.
+      // It is separate from the read API on purpose — reading the projection
+      // must never hit the network, and the sync is the only writer of
+      // `observed_*` columns.
+      integrationSync: createIntegrationSync({
+        store: core.stores.integrations,
+        getSessionWorkingDirectory: async (sessionId) => {
+          const session = core.stores.sessions.get(sessionId);
+          if (!session || session.workingDirectory === '') return null;
+          return session.workingDirectory;
+        },
+      }),
+      // Plan 621 seam: A's provider IS the observation port structurally, so
+      // the wiring is one object literal — no adapter, no second implementation
+      // of §4.5. The resolver maps a session to its checkout by asking git for
+      // the toplevel of the session's working directory and keeping it only
+      // when registration says it is a managed linked worktree; a session in
+      // the user's own checkout resolves to `null`, which the API renders as
+      // "not in a checkout" rather than as an error.
+      checkoutApi: createHostCheckoutApi({
+        // Plan 621 slice D: the provider's fail-closed ports now read the run
+        // ledger instead of standing in as "always alive" / "never in use".
+        // Without these, every reclaim of an owned checkout is refused with
+        // `owner_alive` and no owner is ever provable dead.
+        port: createCheckoutProvider(
+          createAlivenessInputs({
+            listRunsBySession: (sessionId, limit) =>
+              core.stores.runs.listRunsBySession(sessionId, limit ?? 50),
+            listRunningRunCwds: async () => {
+              // A `running` run is by construction the session's NEWEST run, so
+              // reading one row per session is enough to find every live run —
+              // no cross-session query over the whole ledger.
+              const cwds: string[] = [];
+              for (const session of core.stores.sessions.list()) {
+                const newest = core.stores.runs.listRunsBySession(session.id, 1)[0];
+                if (newest?.status !== 'running') continue;
+                if (session.workingDirectory === '') continue;
+                cwds.push(session.workingDirectory);
+              }
+              return cwds;
+            },
+          }),
+        ),
+        resolveSessionCheckoutRoot: async (sessionId) => {
+          const session = core.stores.sessions.get(sessionId);
+          if (!session || session.workingDirectory === '') return null;
+          const toplevel = await gitOrNull(session.workingDirectory, ['rev-parse', '--show-toplevel']);
+          const trimmed = toplevel?.trim();
+          if (!trimmed) return null;
+          const root = canonicalPath(trimmed);
+          const registration = await inspectRegistration(root);
+          return registration.registered ? root : null;
+        },
+      }),
       host: HOST,
       port: options.port ?? DEFAULT_PORT,
       token,

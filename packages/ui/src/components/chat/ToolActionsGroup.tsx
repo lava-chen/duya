@@ -37,10 +37,46 @@ import {
 } from './tools/flatRenderer';
 import { formatDuration } from './tools/hooks/useTopLevelChrome';
 import { ResearchStageSections } from './ResearchStageSections';
+import { buildToolSummary } from './tools/group/buildToolSummary';
+import { DiffStatBadge } from './tools/chrome/DiffStatBadge';
+import { getExpansion, writeExpansion } from './tools/expansionStore';
 import type { ToolAction, ActionItem } from './tools/types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 
 export type { ToolAction, ActionItem };
+
+// Scope for the round-level expansion flag inside the shared
+// expansion store (see ./tools/expansionStore).
+const EXPANSION_SCOPE = 'round';
+
+/** Small non-cryptographic hash — only used to derive a stable key for
+ *  legacy rounds whose tool calls carry no id. */
+function hashString(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+/**
+ * Stable identity of one round (one assistant turn's tool activity).
+ *
+ * The first tool call's id anchors it: tool_use ids are unique per
+ * call, so the key survives every re-render and every remount of the
+ * round's chrome. Legacy rounds without ids fall back to a hash of the
+ * first tool's name + input so two different rounds never share their
+ * expansion state.
+ */
+function computeRoundKey(actions: ActionItem[]): string {
+  const firstTool = actions.find(
+    (a): a is Extract<ActionItem, { kind: 'tool' }> => a.kind === 'tool',
+  );
+  if (!firstTool) return 'round-empty';
+  if (firstTool.tool.id) return `id:${firstTool.tool.id}`;
+  const seed = `${firstTool.tool.name}:${JSON.stringify(firstTool.tool.input ?? null)}`;
+  return `hash:${hashString(seed)}`;
+}
 
 interface ToolActionsGroupProps {
   tools?: ToolAction[];
@@ -97,17 +133,35 @@ function ToolActionsGroupImpl({
   const hasRunningTool = actions.some(
     (a) => a.kind === 'tool' && a.tool.result === undefined
   );
-  // Always start collapsed once the round is done. We deliberately do
-  // NOT remember a previous expansion via `userExpandedState` here —
-  // a new round deserves a fresh, quiet state, and there's no user
-  // expectation that one round's expansion leaks into the next.
+  // Every tool call of this round — the collapsed summary line counts
+  // them by category and sums their diff stats.
+  const toolActions = React.useMemo(
+    () => actions
+      .filter((a): a is Extract<ActionItem, { kind: 'tool' }> => a.kind === 'tool')
+      .map((a) => a.tool),
+    [actions],
+  );
+  const roundKey = React.useMemo(() => computeRoundKey(actions), [actions]);
+  // Round-level headline: category verb phrases + aggregated diff stat
+  // ("Edited 2 files, ran 13 commands +272 -77"), matching the
+  // reference transcripts.
+  const roundSummary = React.useMemo(
+    () => buildToolSummary(toolActions, t, locale),
+    [toolActions, t, locale],
+  );
+  // Always start collapsed once the round is done — unless the user
+  // explicitly expanded this round earlier. The flag lives in the
+  // shared expansion store, so an expanded round stays expanded across
+  // re-renders and remounts (the reference transcripts keep several
+  // groups open at the same time).
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
   // During streaming the body is rendered without a summary row, so
   // `expanded` is only meaningful for the collapsed-mode chrome. When
   // a round is mid-flight, force expanded so the body code-path stays
   // consistent (no one ever sees the summary, but the underlying
   // segmenter / renderOrderedBody output is the same).
-  const expanded = userExpanded ?? (hasRunningTool || isStreaming);
+  const persistedExpanded = getExpansion(EXPANSION_SCOPE, roundKey);
+  const expanded = userExpanded ?? persistedExpanded ?? (hasRunningTool || isStreaming);
 
   if (actions.length === 0) return null;
 
@@ -206,17 +260,23 @@ function ToolActionsGroupImpl({
     );
   }
 
-  const toolCount = actions.reduce(
-    (n, a) => (a.kind === 'tool' ? n + 1 : n),
-    0,
-  );
+  const toolCount = toolActions.length;
   const hasDuration = totalDurationMs > 0;
-  const collapsedSummary = hasDuration
-    ? t('streaming.actions.processed', { duration: formatDuration(totalDurationMs) })
-    : t('streaming.actions.completed', { count: toolCount });
+  // Rounds that carried tool calls lead with the category verbs (and
+  // carry the aggregated diff stat next to them); a round without any
+  // tool call keeps the plain "worked for Xs" wording.
+  const collapsedSummary = toolCount > 0
+    ? roundSummary.text
+    : hasDuration
+      ? t('streaming.actions.processed', { duration: formatDuration(totalDurationMs) })
+      : t('streaming.actions.completed', { count: toolCount });
 
   const handleToggle = () => {
-    setUserExpanded((prev) => prev !== null ? !prev : !expanded);
+    setUserExpanded((prev) => {
+      const next = prev !== null ? !prev : !expanded;
+      writeExpansion(EXPANSION_SCOPE, roundKey, next);
+      return next;
+    });
   };
 
   return (
@@ -226,13 +286,26 @@ function ToolActionsGroupImpl({
         onClick={handleToggle}
         className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
       >
+        <span className="text-muted-foreground/60 truncate min-w-0 text-left">
+          {collapsedSummary}
+        </span>
+        {roundSummary.hasDiff && (
+          <DiffStatBadge
+            additions={roundSummary.additions}
+            removals={roundSummary.removals}
+          />
+        )}
+        {hasDuration && (
+          <span className="text-muted-foreground/40 shrink-0 whitespace-nowrap">
+            · {t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}
+          </span>
+        )}
+        {/* Expand caret at the tail of the line — always visible, same
+            position as the reference transcripts (Codex / Claude Code). */}
         <CaretRightIcon
           size={12}
           className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
-        <span className="text-muted-foreground/60 truncate">
-          {collapsedSummary}
-        </span>
       </button>
 
       <AnimatePresence initial={false}>

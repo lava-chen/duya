@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent-core/message';
+import type { PromptSnapshotEvent } from '@duya/agent-protocol/rollout-events';
 import { MessageLog, type NewEvent } from '../message-log';
 import { SessionStore } from '../session-store';
 import type { SqliteDatabase } from '../database';
@@ -959,6 +960,40 @@ describe('MessageLog', () => {
           expect.stringContaining('new needle term'),
         ]),
       );
+    });
+
+    it('stores a prompt snapshot as an audit row: indexed, out of search, out of the message view', () => {
+      // Plan 619 Phase 4: the prompt snapshot is an EVENT row. It must be
+      // indexed (so it can be found), it must not be searchable (it is
+      // not something the user typed), and it must not reach the
+      // LLM-visible timeline (it is not a message).
+      insertSessionFixture(db, 's1', 1000);
+      const snapshot: PromptSnapshotEvent = {
+        type: 'prompt_snapshot',
+        id: 'ps-1',
+        turnId: 'turn-1',
+        createdAt: 1100,
+        systemPrompt: { hash: 'a'.repeat(64), length: 9, content: 'YOU AGENT' },
+        contextBlocks: [
+          { id: 'environment', source: 'volatile_context', role: 'user', hash: 'b'.repeat(64), length: 8, content: 'cwd=/w' },
+        ],
+      };
+      log.appendBatch([
+        { id: snapshot.id, sessionId: 's1', turnId: 'turn-1', payload: snapshot, createdAt: 1100 },
+      ]);
+
+      const indexed = db
+        .prepare('SELECT kind, turn_id FROM message_index WHERE id = ?')
+        .get('ps-1') as { kind: string; turn_id: string | null };
+      expect(indexed.kind).toBe('prompt_snapshot');
+      expect(indexed.turn_id).toBe('turn-1');
+
+      // The audit view sees it.
+      const rows = log.timeline('s1');
+      expect(rows.some((row) => row.entry.type === 'prompt_snapshot')).toBe(true);
+
+      // The search index does not: an event row is not user text.
+      expect(searchRows('s1')).toHaveLength(0);
     });
 
     it('rebase drops superseded rows and keeps survivors', () => {

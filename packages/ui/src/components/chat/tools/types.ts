@@ -145,6 +145,7 @@ export type Segment =
 export type SummaryCategoryKey =
   | 'commands'
   | 'editFiles'
+  | 'createFiles'
   | 'readFiles'
   | 'search'
   | 'browser'

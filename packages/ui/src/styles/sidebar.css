@@ -150,10 +150,15 @@
      reads as glass. A CSS blur would re-sample the full-height surface on
      every repaint (double-blur cost + fullscreen/repaint instability). */
   background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
-  padding: 0.95rem 0.5rem 0.95rem 0.5rem;
+  /* Codex parity (2026-10-22): the sidebar chrome is tight. The old
+     0.95rem padding + 0.95rem column gap gave every block a 15px cushion,
+     which is what made duya's sidebar read as "loose" next to Claude Code's.
+     Measured off a side-by-side capture: Claude Code's nav rows sit 33px
+     apart, duya's sat 40px. */
+  padding: 0.5rem 0.5rem 0.5rem 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.95rem;
+  gap: 0.5rem;
   min-height: 0;
   overflow: hidden;
 }
@@ -188,8 +193,9 @@ html[data-backdrop] .app-main-wrapper,
 html[data-backdrop] .app-main {
   background: transparent;
 }
-html[data-backdrop] .titlebar-drag-region,
+html[data-backdrop] .titlebar,
 html[data-backdrop] .app-sidebar,
+html[data-backdrop] .app-sidebar-column,
 html[data-backdrop] .app-status-bar {
   background: var(--glass-chrome);
 }
@@ -256,11 +262,15 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  /* Codex parity (2026-10-22): a nav row is a 26px line, matching the
+     session rows below it. The old 0.4rem vertical padding made each nav
+     row 40px tall — looser than the session rows it sits above, which is
+     what read as "not compact". */
+  padding: 0.25rem 0.5rem;
   margin: 0 0.5rem;
   border-radius: 0.375rem;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.875rem;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
   width: calc(100% - 1rem);
@@ -306,11 +316,13 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  /* Codex parity (2026-10-22): same 26px line as the nav rows below it,
+     so 新对话 sits on the same rhythm as everything else. */
+  padding: 0.25rem 0.5rem;
   margin: 0 0.5rem;
   border-radius: 0.375rem;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.875rem;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
   width: calc(100% - 1rem);
@@ -405,6 +417,19 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 .sidebar-project-menu-item:hover:not(:disabled) {
   background: var(--surface-hover);
+}
+
+/* Claude parity (2026-10-22): a filter row shows its current value on the
+   right (`分组方式   文件夹 ›`) so the mode is readable without opening the
+   flyout. Muted and small — it is state, not an action. */
+.sidebar-project-menu-item-value {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
 }
 
 .sidebar-project-menu-item.disabled,
@@ -604,17 +629,21 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  height: 38px;
+  /* Codex parity (2026-10-22): a group header is a compact caption, not a
+     full-height row. Codex's "最近" caption occupies 26px with the session
+     rows below it; duya's 38px header pushed the first session a full row
+     down before the user saw anything. */
+  height: 28px;
   padding: 0 0.625rem;
   margin: 0 0.5rem;
   width: calc(100% - 1rem);
   box-sizing: border-box;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 13px;
   font-weight: 450;
   cursor: pointer;
   position: relative;
-  border-radius: 9px;
+  border-radius: 6px;
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
@@ -785,8 +814,15 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 .project-group-threads {
   /* Match the project header's side margins so thread hover/active
-   * surfaces span the same width, while row titles keep their alignment. */
+   * surfaces span the same width, while row titles keep their alignment.
+   * Reference parity (2026-10-22): 1px between the nested session rows.
+   * Measured off a Claude Code desktop capture: the selected row's highlight
+   * is 26.4 CSS px tall and consecutive titles sit 27.2 CSS px apart, so the
+   * rows are 1px apart. duya's old 5px gap was a full extra 4px per row. */
   margin: 0.1rem 0.5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .project-group-expand-all {
@@ -817,7 +853,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 .thread-list {
   display: grid;
-  gap: 0;
+  /* Codex parity (2026-10-22): 5px between rows on top of the 26px row
+     height gives Codex's measured 31px pitch. */
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
 }
@@ -883,6 +921,45 @@ html[data-glass-repair] .attachment-preview-overlay {
   color: var(--text);
 }
 
+/* Codex parity (2026-10-22): the session state mark lives in the TRAILING
+ * slot, not in a leading glyph.
+ *
+ * A leading glyph was tried (Claude Code's hollow idle ring) and dropped:
+ * it reserved 12px on every row, pushed the titles off the group header's
+ * left edge, and made an idle list look busy. Codex renders the title flush
+ * and signals only the non-idle states:
+ *   running (spinner) / awaiting (amber dot) / error (warning).
+ * `idle` renders nothing at all — the resting state is not news. */
+.thread-item-status {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+.thread-item-status-running {
+  color: var(--accent);
+}
+
+.thread-item-status-awaiting {
+  color: var(--warning);
+}
+
+.thread-item-status-awaiting .thread-item-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warning);
+}
+
+.thread-item-status-error {
+  color: var(--error);
+}
+
 .thread-item-title {
   flex: 1;
   min-width: 0;
@@ -914,9 +991,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   transition: opacity 0.15s ease;
 }
 
-/* The pin + menu buttons are a sibling of `.thread-item-actions`, positioned
-   against the row itself so they always sit inside its right padding and are
-   never clipped by the list's overflow. On hover they overlay the default
+/* The ⋯ 更多 button is a sibling of `.thread-item-actions`, positioned
+   against the row itself so it always sits inside its right padding and is
+   never clipped by the list's overflow. On hover it overlays the default
    content (which fades out), giving a clean replace-not-overlap effect. */
 .thread-item-actions-hover {
   position: absolute;
@@ -956,14 +1033,20 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 /* Sidebar navigation rows use a consistent, full-width hit target. The
    shared ThreadListItem also appears outside the sidebar, so keep this
-   geometry and the softer state colors scoped to the navigation surface. */
+   geometry and the softer state colors scoped to the navigation surface.
+   Reference parity (2026-10-22): the row is 26px tall with a 1px gap, so
+   the pitch is 27px. Measured off a Claude Code desktop capture at
+   devicePixelRatio 1.25: the selected row's highlight is 26.4 CSS px tall
+   and consecutive titles sit 27.2 CSS px apart. duya shipped 38px rows with
+   a 5px gap (39px pitch), which is why a 20-session list needed a scroll
+   the reference does not: the extra 12px per row costs 240px over 20 rows. */
 .app-sidebar .thread-item {
-  height: 38px;
-  min-height: 38px;
-  flex: 0 0 38px;
+  height: 26px;
+  min-height: 26px;
+  flex: 0 0 26px;
   padding: 0 10px;
-  border-radius: 9px;
-  font-size: 14px;
+  border-radius: 6px;
+  font-size: 13px;
   font-weight: 450;
 }
 
@@ -978,7 +1061,11 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .app-sidebar .thread-item:hover .thread-item-title {
-  padding-right: 52px;
+  /* Reserve room for the hover overlay. The row now carries a single action
+     button (⋮ 更多, 20px, 6px from the right edge) instead of the old pin + ⋮
+     pair, so the reservation drops from 48px to 8px - the title keeps more of
+     its length on hover instead of ellipsising early. */
+  padding-right: 8px;
 }
 
 .app-sidebar .thread-item-actions-hover {
@@ -1063,27 +1150,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   color: var(--text);
 }
 
-/* Plan 331 Phase 4: pin toggle button (shown on hover) and the always-on
-   pinned indicator. The pin button sits just left of the three-dots menu
-   button; the indicator replaces the timestamp on pinned threads. */
-.thread-item-pin-btn {
-  border: none;
-  border-radius: 0.3rem;
-  background: transparent;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  padding: 0.15rem;
-}
-
-.thread-item-pin-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
+/* The always-on pinned indicator. The quick-pin BUTTON is gone: every row
+   action now lives inside the ⋯ 更多 menu (which already carried a 固定 /
+   取消固定 entry), so hovering a session reveals one button instead
+   of a row of icons. The indicator still replaces the timestamp on pinned
+   threads. */
 
 .thread-item-pinned-indicator {
   color: var(--accent);

@@ -120,8 +120,14 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (['shell', 'bash', 'execute', 'run', 'execute_command', 'run_command', 'duya_cli', 'duya-cli', 'duyacli', 'powershell'].includes(name)) {
     return { count: 1, categoryKey: 'commands' };
   }
-  if (['edit', 'edit_file', 'str_replace_editor', 'write', 'writefile', 'write_file', 'create_file', 'createfile'].includes(name)) {
+  if (FILE_EDIT_TOOLS.has(name)) {
     return { count: 1, categoryKey: 'editFiles' };
+  }
+  // Creating a file is its own verb in the reference transcripts
+  // ("Created a file" vs "edited 2 files"), so the create family gets
+  // a dedicated bucket instead of folding into `editFiles`.
+  if (FILE_CREATE_TOOLS.has(name)) {
+    return { count: 1, categoryKey: 'createFiles' };
   }
   if (['read', 'readfile', 'read_file', 'read_multiple_files'].includes(name)) {
     return { count: 1, categoryKey: 'readFiles' };

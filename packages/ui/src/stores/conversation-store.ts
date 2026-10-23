@@ -700,9 +700,11 @@ export const useConversationStore = create<ConversationState>()(
           }
         }
 
-        // Web cannot open/register a local folder. New sessions can only reuse
-        // a workspace binding already issued by Host for the selected session.
-        if (hostManagedWeb && !sourceSessionId) {
+        // A Host-backed surface that CAN register a directory starts a session
+        // in a folder the user named. One that cannot reuses the binding an
+        // existing Host session already holds — the worker still needs a
+        // workspace to run in, and inventing one is not an option.
+        if (hostManagedWeb && !sourceSessionId && !workingDirectory) {
           return null;
         }
         // If still no workingDirectory, return null to signal caller to prompt for folder selection.
@@ -779,14 +781,19 @@ export const useConversationStore = create<ConversationState>()(
           agentProfileId,
         };
 
-        if (hostManagedWeb && sourceSessionId) {
+        if (hostManagedWeb) {
           try {
+            // A directory the user named becomes a workspace BINDING the Host
+            // issues; a session with no directory of its own reuses the
+            // binding the selected Host session already holds. Either way the
+            // session carries a binding, never a raw path.
             const hostThread = await createThreadIPC({
               id: thread.id,
               title: thread.title,
               model: thread.model,
               providerId: thread.providerId,
-              sourceSessionId,
+              ...(workingDirectory ? { registerDirectory: workingDirectory } : {}),
+              ...(sourceSessionId ? { sourceSessionId } : {}),
             });
             if (!hostThread) return null;
             set((state) => ({

@@ -128,8 +128,52 @@ export interface PromptSection {
    * Use for dynamic content like environment info, MCP instructions, etc.
    */
   volatile: boolean
+  /**
+   * Which channel the section is delivered on.
+   *
+   * - `'system'` — part of the provider's system prompt.
+   * - `'context'` — delivered as a message-channel block instead, so the
+   *   system prompt stays byte-identical between turns.
+   *
+   * Defaults to `'system'`. A `'context'` section is always recomputed
+   * every build: it is by definition the content that changes.
+   */
+  placement?: PromptPlacement
   /** Optional description for debugging */
   description?: string
+}
+
+/**
+ * Which channel a prompt section is delivered on.
+ *
+ * `'system'` is the provider's system prompt. `'context'` is the message
+ * channel — the same slot the runtime uses for hook contexts, carrying a
+ * `<system-reminder>` envelope so the model reads it as system information
+ * rather than as something the user typed.
+ */
+export type PromptPlacement = 'system' | 'context'
+
+/** One rendered prompt section, with the name it was declared under. */
+export interface RenderedPromptSection {
+  /** Section name (registry key or explicit `name`). */
+  readonly name: string
+  /** The rendered text. */
+  readonly content: string
+  /** True when the section is recomputed on every build. */
+  readonly volatile: boolean
+}
+
+/**
+ * The assembled prompt, split by delivery channel.
+ *
+ * `stable` goes into the provider's system prompt; it does not change
+ * between turns. `context` changes every turn and is delivered through
+ * the message channel, so the volatile half stops invalidating the
+ * system prefix.
+ */
+export interface PromptPartition {
+  readonly stable: readonly RenderedPromptSection[]
+  readonly context: readonly RenderedPromptSection[]
 }
 
 /**
@@ -382,16 +426,6 @@ export interface PromptBuildContextOptions {
 // ============================================================
 // Constants
 // ============================================================
-
-/**
- * Boundary marker separating static (cacheable) content from dynamic content.
- * Everything BEFORE this marker can use persistent caching.
- * Everything AFTER contains session-specific content.
- *
- * Note: This is a string that should appear in the prompt array. The actual
- * splitting for cache optimization happens at the API layer.
- */
-export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
 /**
  * Default system prompt used when no custom prompt is provided.

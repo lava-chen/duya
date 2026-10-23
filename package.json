@@ -163,7 +163,7 @@
     "tailwindcss": "^4.2.2",
     "terser": "^5.46.2",
     "typescript": "^5.3.3",
-    "vite": "^6.4.3",
+    "vite": "^6.4.5",
     "vitest": "^3.0.0",
     "wait-on": "^9.0.4"
   },

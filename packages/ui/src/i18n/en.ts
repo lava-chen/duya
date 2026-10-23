@@ -180,6 +180,10 @@ const en = {
   'chat.header.copyTitle': 'Copy title',
   'chat.header.addAutomation': 'Add automation...',
   'chat.header.more': 'More',
+  'chat.header.project.showInExplorer': 'Show in File Explorer',
+  'chat.header.project.openInTerminal': 'Open in Terminal',
+  'chat.header.project.copyPath': 'Copy path',
+  'chat.header.project.copyName': 'Copy project name',
   'chat.header.projectWorkspace': 'Workspace',
 
   'messageInput.attachFiles': 'Attach files',
@@ -389,6 +393,8 @@ const en = {
   'streaming.toolAction.groupSummary.commands.other': 'Ran {count} commands',
   'streaming.toolAction.groupSummary.editFiles.one': 'Edited 1 file',
   'streaming.toolAction.groupSummary.editFiles.other': 'Edited {count} files',
+  'streaming.toolAction.groupSummary.createFiles.one': 'Created 1 file',
+  'streaming.toolAction.groupSummary.createFiles.other': 'Created {count} files',
   'streaming.toolAction.groupSummary.readFiles.one': 'Read 1 file',
   'streaming.toolAction.groupSummary.readFiles.other': 'Read {count} files',
   'streaming.toolAction.groupSummary.search.one': 'Searched 1 time',
@@ -1279,6 +1285,15 @@ const en = {
   'thread.noThreads': 'No threads yet',
   'thread.running': 'Agent is running...',
   'thread.options': 'Thread options',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // session it belongs to, so a screen reader can tell two rows apart.
+  'thread.optionsFor': '{title} options',
+  'thread.openFolder': 'Open folder in file manager',
+  // Leading status glyph on a session row.
+  'thread.status.idle': 'Idle',
+  'thread.status.running': 'Running',
+  'thread.status.awaitingInput': 'Waiting for input',
+  'thread.status.error': 'Failed',
   'thread.archiveThread': 'Archive Thread',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': 'Unarchive',
@@ -1336,6 +1351,7 @@ const en = {
   'subAgent.status.killed': 'Stopped',
 
   'panel.files': 'Files',
+  'panel.launchersAria': 'Panels',
   'panel.preview': 'Preview',
   'panel.review': 'Code Review',
   'panel.workflow.title': 'Workflows',
@@ -1621,6 +1637,9 @@ const en = {
   'project.folderPathPlaceholderMac': 'e.g., ~/Projects/my-project',
   'project.folderPathPlaceholderLinux': 'e.g., /home/name/Projects/my-project',
   'project.options': 'Project options',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // project it belongs to, so a screen reader can tell two rows apart.
+  'project.optionsFor': '{name} options',
   'project.recentProjects': 'Recent Projects',
   'project.noRecent': 'No recent projects',
   'project.openFolder': 'Open Folder',
@@ -1669,6 +1688,13 @@ const en = {
   'sidebar.section.pinned': 'Pinned',
   // Plan 549 (Track B): archived-section label.
   'sidebar.section.archived': 'Archived',
+  // Claude parity (2026-10-22): group-header actions and the filter popover.
+  'sidebar.section.searchInGroup': 'Search in this group',
+  'sidebar.section.searchPlaceholder': 'Search sessions',
+  'sidebar.filter.title': 'Filter',
+  'sidebar.filter.groupBy': 'Group by',
+  'sidebar.filter.sortBy': 'Sort by',
+  'sidebar.filter.showEmptyGroups': 'Show empty groups',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': 'Work',

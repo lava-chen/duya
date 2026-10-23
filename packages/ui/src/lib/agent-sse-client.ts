@@ -680,8 +680,32 @@ export interface CompactCallbacks {
 
 /**
  * Compact (compress) context for a session
+ *
+ * ## Failures are REPORTED, not thrown
+ *
+ * Every failure reaches the caller through `callbacks.onError`, and this
+ * function does not reject.
+ *
+ * The HTTP failure path already did that. The failures that used to escape
+ * did not: a surface with no agent server at all (the Web has none — the
+ * compaction route lives on the CLI's agent server, not on the Host), a
+ * network error, a response with no body. The caller awaits nothing here,
+ * so an escaped rejection was an unhandled rejection AND a compaction
+ * spinner that never stopped — a failure that looks like a hang.
  */
 export async function compactContext(
+  sessionId: string,
+  callbacks?: CompactCallbacks
+): Promise<void> {
+  try {
+    await compactContextInner(sessionId, callbacks);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    callbacks?.onError?.(message);
+  }
+}
+
+async function compactContextInner(
   sessionId: string,
   callbacks?: CompactCallbacks
 ): Promise<void> {

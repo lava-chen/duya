@@ -39,6 +39,7 @@ import type {
 } from '@duya/agent-protocol/goals';
 import type { ModeStateRow } from '@duya/agent-protocol/mode-state';
 import type { Migration, SqliteDatabase } from './core-database.js';
+import { IntegrationStore } from './integration-store.js';
 import type { LockOrigin } from '@duya/agent-protocol/locks';
 export type { LockOrigin } from '@duya/agent-protocol/locks';
 export type {
@@ -1205,6 +1206,8 @@ export interface CoreDataStores {
   runs: RunStore;
   workflowRuns: WorkflowRunStore;
   workspaces: WorkspaceStore;
+  /** Plan 621: observed PR/CI/review projection. Cache of GitHub, never identity. */
+  integrations: IntegrationStore;
   /** Plan 610 T31b: durable Plugin App instance identity + opaque state. */
   appInstances: PluginAppInstanceStore;
   /** Durable user grants for Plugin App capabilities. */
@@ -1232,6 +1235,7 @@ export function createCoreDataStores(
     runs: new RunStore(db),
     workflowRuns: new WorkflowRunStore(db),
     workspaces: new WorkspaceStore(db),
+    integrations: new IntegrationStore(db),
     appInstances: new PluginAppInstanceStore(db),
     appGrants: new PluginAppGrantStore(db),
   };
@@ -1255,6 +1259,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...RunStore.migrations,
     ...WorkflowRunStore.migrations,
     ...WorkspaceStore.migrations,
+    ...IntegrationStore.migrations,
     ...PluginAppInstanceStore.migrations,
     ...PluginAppGrantStore.migrations,
   ].sort((a, b) => a.id - b.id);

@@ -546,3 +546,51 @@ describe('ToolActionsGroup generic group', () => {
     expect(container.textContent).toContain('Moved to the next research phase');
   });
 });
+
+describe('ToolActionsGroup round summary', () => {
+  const finished = (id: string, name: string, input: Record<string, unknown> = {}): ToolAction => ({
+    id,
+    name,
+    input,
+    result: 'ok',
+    isError: false,
+    durationMs: 10,
+  });
+
+  it('renders the collapsed round as category verbs plus the aggregated diff stat', () => {
+    const tools: ToolAction[] = [
+      finished('round-1', 'edit', { file_path: 'src/a.ts', old_string: 'a\nb', new_string: 'a\nc' }),
+      finished('round-2', 'bash', { command: 'npm test' }),
+    ];
+
+    const { container } = render(<ToolActionsGroup tools={tools} />);
+
+    // Category verbs instead of the old "N completed" wording — the
+    // mocked t renders "one 1" for the singular templates.
+    expect(container.textContent).toContain('one 1');
+    // The round-level diff stat is summed from the very same numbers
+    // the rows show (one line replaced → +1 -1).
+    expect(container.querySelector('[data-testid="diff-stat"]')?.textContent).toBe('+1-1');
+    // Collapsed: the tool rows are still hidden behind the headline.
+    expect(container.querySelector('.tool-group')).toBeNull();
+  });
+
+  it('keeps a round expanded after the component remounts', () => {
+    const tools: ToolAction[] = [
+      finished('persist-1', 'read', { file_path: 'src/a.ts' }),
+      finished('persist-2', 'read', { file_path: 'src/b.ts' }),
+    ];
+
+    const first = render(<ToolActionsGroup tools={tools} />);
+    expect(first.container.querySelector('.tool-group')).toBeNull();
+
+    fireEvent.click(first.container.querySelector('button')!);
+    expect(first.container.querySelector('.tool-group')).not.toBeNull();
+
+    // A remount (another message arriving, the list re-rendering) must
+    // not drop the user's expansion.
+    first.unmount();
+    const second = render(<ToolActionsGroup tools={tools} />);
+    expect(second.container.querySelector('.tool-group')).not.toBeNull();
+  });
+});

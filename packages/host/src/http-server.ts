@@ -1,4 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
+import { logger } from '@duya/host/worker-logger';
 import {
   createServer,
   type IncomingMessage,
@@ -74,7 +75,9 @@ import type {
   HostToolApprovalInput,
   HostToolApprovalScopeType,
 } from '@duya/agent-protocol';
-import type { HostLockApiV1 } from '@duya/agent-protocol';
+import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
+import { HostCheckoutApiError } from './checkout-api.js';
+import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
 import type { JournalRecord } from '@duya/agent-protocol';
 import type { GoalCreateInput, GoalStatus, HostGoalApiV1 } from '@duya/agent-protocol/goals';
@@ -376,6 +379,22 @@ export interface HostSessionHttpServerOptions {
   readonly workspaceApi?: HostWorkspaceRegistrationApiV1;
   /** Local-only reads of workspace files, addressed by Workspace identity. */
   readonly workspaceFileApi?: HostLocalWorkspaceFileApiV1;
+  /**
+   * Checkout observation and reclaim (plan 621). Optional: a Host composed
+   * without A's provider has no checkout authority, and its routes answer 404
+   * with a named code instead of pretending every session is checkout-free.
+   */
+  readonly checkoutApi?: HostCheckoutApiV1;
+  /** Observed PR/CI/review projection (plan 621). Absent answers 404, same reason. */
+  readonly integrationApi?: HostIntegrationApiV1;
+  /**
+   * Session-level integration sync (plan 621 slice E). It is the explicit
+   * "re-read GitHub now" act that writes the projection; reading
+   * `integrationApi` never does. Optional for the same reason as the API
+   * above: a Host without a sync implementation answers 404 with a named code
+   * instead of pretending the projection is current.
+   */
+  readonly integrationSync?: IntegrationSync;
   readonly token: string;
   readonly host?: string;
   readonly port?: number;
@@ -432,6 +451,10 @@ function registeredHostCapabilities(options: HostSessionHttpServerOptions): read
   }
   // Local settings key/value access.
   if (options.localSettingsApi) provided.push('settings_store');
+  // Starting and cancelling runs needs an execution API behind the route. A
+  // Host assembled for the run ledger alone cannot serve this, and advertising
+  // it would make a client attach and then fail on its first turn.
+  if (options.runExecutionApi !== undefined) provided.push('agent_run_execution');
   return provided;
 }
 
@@ -646,6 +669,14 @@ export class HostSessionHttpServer {
     }
     if (url.pathname === '/v1/projects' || url.pathname.startsWith('/v1/projects/')) {
       await this.#routeProjects(req, url, res);
+      return;
+    }
+    if (url.pathname === '/v1/checkouts' || url.pathname.startsWith('/v1/checkouts/')) {
+      await this.#routeCheckouts(req, url, res);
+      return;
+    }
+    if (url.pathname === '/v1/integrations' || url.pathname.startsWith('/v1/integrations/')) {
+      await this.#routeIntegrations(req, url, res);
       return;
     }
     if (url.pathname === '/v1/local/mailbox' || url.pathname.startsWith('/v1/local/mailbox/')) {
@@ -2744,6 +2775,152 @@ export class HostSessionHttpServer {
     this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
   }
 
+  /**
+   * Checkout observation (plan 621 §4.6, first two reconcile entries).
+   *
+   * A Host without a checkout provider answers 404 rather than "no checkout":
+   * the two are different answers and only one of them is true.
+   */
+  async #routeCheckouts(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    const api = this.#options.checkoutApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'checkout_api_unavailable' } });
+      return;
+    }
+
+    if (url.pathname === '/v1/checkouts') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const sessionId = url.searchParams.get('sessionId');
+      const root = url.searchParams.get('root');
+      // Exactly one selector: a request naming both is ambiguous, and a request
+      // naming neither would have to fall back to a scan of every checkout.
+      if ((sessionId === null) === (root === null)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      try {
+        if (sessionId !== null) {
+          this.#sendJson(res, 200, { checkout: await api.observeForSession(sessionId as SessionId) });
+        } else {
+          this.#sendJson(res, 200, { checkout: await api.observeCheckout(root as string) });
+        }
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === '/v1/checkouts/reclaim') {
+      if (req.method !== 'POST') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isBoundedString(body.root, 1, 4096)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      try {
+        // `removed: false` is a 200: the refusal is the answer, not a failure.
+        this.#sendJson(res, 200, { result: await api.requestReclaim(body.root) });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    this.#sendJson(res, 404, { error: { code: 'not_found' } });
+  }
+
+  /** Observed PR / CI / review projection (plan 621 §4.6, Integration row). */
+  async #routeIntegrations(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    const api = this.#options.integrationApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'integration_api_unavailable' } });
+      return;
+    }
+
+    if (url.pathname === '/v1/integrations') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const sessionId = url.searchParams.get('sessionId');
+      if (!isNonEmptyString(sessionId)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_integration_query' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, { records: await api.observeForSession(sessionId as SessionId) });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === '/v1/integrations/link') {
+      if (req.method !== 'POST') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const repo = body.repo;
+      const prNumber = body.prNumber;
+      const sessionId = body.sessionId;
+      if (
+        !isBoundedString(repo, 1, 200) ||
+        !Number.isSafeInteger(prNumber) ||
+        (prNumber as number) <= 0 ||
+        !isBoundedString(sessionId, 1, 4096)
+      ) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_integration_link' } });
+        return;
+      }
+      try {
+        await api.linkSession(repo, prNumber as number, sessionId as SessionId);
+        this.#sendJson(res, 200, { linked: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    if (url.pathname === '/v1/integrations/sync') {
+      const sync = this.#options.integrationSync;
+      if (!sync) {
+        this.#sendJson(res, 404, { error: { code: 'integration_sync_unavailable' } });
+        return;
+      }
+      if (req.method !== 'POST') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const sessionId = body.sessionId;
+      if (!isBoundedString(sessionId, 1, 4096)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_integration_sync' } });
+        return;
+      }
+      try {
+        // The result is reported as it happened: `written` is what landed,
+        // `failed` is what GitHub did not answer for. A partial sync is a
+        // partial sync, not a success.
+        this.#sendJson(res, 200, await sync.syncSession(sessionId));
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
+    this.#sendJson(res, 404, { error: { code: 'not_found' } });
+  }
+
   #parseProjectCreate(value: Record<string, unknown>): HostProjectCreateInput | null {
     if (!isNonEmptyString(value.name)) return null;
     const paths = parseProjectPathEntries(value.paths);
@@ -4561,6 +4738,12 @@ export class HostSessionHttpServer {
   }
 
   #sendApiError(res: ServerResponse, error: unknown): void {
+    if (error instanceof HostCheckoutApiError) {
+      // A Host missing the provider or the resolver is a composition gap, not a
+      // client mistake: it must not read like "no checkout".
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      return;
+    }
     if (error instanceof HostPluginAppInstanceApiError) {
       this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
       return;
@@ -5085,8 +5268,59 @@ function isDurableTimelineEntry(value: unknown): value is DurableTimelineEntry {
         && (value.reason === 'compaction' || value.reason === 'manual')
         && isFiniteNumber(value.seqBeforeRotation)
         && isFiniteNumber(value.createdAt);
+    case 'hook_invoked':
+      return typeof value.turnId === 'string' && isFiniteNumber(value.createdAt);
+    case 'prompt_snapshot':
+      return typeof value.turnId === 'string'
+        && isFiniteNumber(value.createdAt)
+        && isPromptSnapshotPart(value.systemPrompt)
+        && Array.isArray(value.contextBlocks)
+        && value.contextBlocks.every(isPromptSnapshotBlock);
     default:
+      // A type the taxonomy does not know. The whole batch is rejected —
+      // one unknown line fails every line — so the reason is counted and
+      // reported instead of vanishing into a bare 400 (plan 620 Phase A4).
+      if (typeof value.type === 'string') {
+        noteUnknownTimelineEntryType(value.type);
+      }
       return false;
+  }
+}
+
+/** One recorded piece of a prompt. */
+function isPromptSnapshotPart(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.hash !== 'string' || !isFiniteNumber(value.length)) return false;
+  if (value.content !== undefined && typeof value.content !== 'string') return false;
+  return true;
+}
+
+/** One recorded volatile-context block. */
+function isPromptSnapshotBlock(value: unknown): boolean {
+  if (!isPromptSnapshotPart(value) || !isRecord(value)) return false;
+  return typeof value.id === 'string' && typeof value.source === 'string';
+}
+
+/**
+ * Unknown timeline entry types, counted.
+ *
+ * The HTTP endpoint validates a whole batch at once, so an unrecognized
+ * `type` used to fail every line of the batch with one bare
+ * `invalid_timeline_entries` and no hint about what was wrong. The count
+ * makes the gap visible: a type the taxonomy does not know is a client
+ * and a server that disagree.
+ */
+const UNKNOWN_TIMELINE_ENTRY_TYPES = new Map<string, number>();
+
+function noteUnknownTimelineEntryType(type: string): void {
+  const count = (UNKNOWN_TIMELINE_ENTRY_TYPES.get(type) ?? 0) + 1;
+  UNKNOWN_TIMELINE_ENTRY_TYPES.set(type, count);
+  if (count === 1 || count % 20 === 0) {
+    logger.warn(
+      `Rejecting timeline entry with unknown type "${type}" (${count} seen). ` +
+        `The rollout taxonomy has no such discriminator — a client is sending ` +
+        `a shape the server does not know.`,
+    );
   }
 }
 

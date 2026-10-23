@@ -104,6 +104,8 @@ export const HOST_CAPABILITIES = [
   'plugins',
   /** The Orb surface. `host-local`. */
   'orb',
+  /** Start and cancel agent runs over the Host HTTP surface. `host-local`. */
+  'agent_run_execution',
 ] as const;
 
 export type HostCapability = (typeof HOST_CAPABILITIES)[number];
@@ -137,6 +139,7 @@ export const HOST_CAPABILITY_OWNERS: Readonly<Record<HostCapability, CapabilityO
   inbox: 'both',
   plugins: 'host-local',
   orb: 'host-local',
+  agent_run_execution: 'host-local',
 };
 
 /** A host's identity, distinct from the RUNTIME's identity in `RuntimeCapabilities`. */

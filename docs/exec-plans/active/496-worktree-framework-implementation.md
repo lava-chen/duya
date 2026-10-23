@@ -37,6 +37,9 @@
 
 > 拆分与回收的执行细则见 `docs/development/worktree.md`；多 Agent 闭环契约见
 > `docs/development/engineering-loop.md`。
+>
+> **接续**：上面第 1–4 项的产品化上层（归属、独占写入、ChangeSet、PR 对账、三端入口）已由
+> [621 工作区生命周期](./621-coding-workspace-lifecycle-harness.md) 承接；496 只保留隔离创建本身。
 
 ---
 

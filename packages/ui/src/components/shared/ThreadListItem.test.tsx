@@ -109,8 +109,12 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   } as Thread;
 }
 
-function openMenu(): void {
-  fireEvent.click(screen.getByRole('button', { name: 'thread.options' }));
+function openMenu(title = 'My Thread'): void {
+  // Claude parity (2026-10-22): the trigger's accessible name now names its
+  // own row (`<title> options`), so two rows are distinguishable.
+  fireEvent.click(
+    screen.getByRole('button', { name: `thread.optionsFor ${title}` }),
+  );
 }
 
 describe('ThreadListItem menu (Plan 506)', () => {
@@ -258,7 +262,151 @@ describe('ThreadListItem awaiting-input pill (Plan 516)', () => {
   });
 });
 
-describe('ThreadListItem archive lifecycle (Plan 549)'  , () => {
+describe('ThreadListItem status mark (Codex parity)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    streamMocks.permissionListeners.length = 0;
+    streamMocks.authListeners.length = 0;
+    streamMocks.phaseListeners.length = 0;
+  });
+
+  it('renders NO status mark for an idle session', () => {
+    // Codex parity (2026-10-22): the row has no leading glyph and idle
+    // renders nothing at all — the resting state is not news. A hollow
+    // ring on every row cost 12px each and made the list look busy.
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    expect(screen.queryByRole('img', { name: 'thread.status.idle' })).toBeNull();
+    expect(document.querySelector('.thread-item-status')).toBeNull();
+  });
+
+  it('shows the running spinner in the trailing slot while a turn is in flight', () => {
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    act(() => {
+      streamMocks.phaseListeners[0]('streaming');
+    });
+    const glyph = screen.getByRole('img', { name: 'thread.status.running' });
+    expect(glyph.className).toContain('thread-item-status-running');
+    expect(glyph.querySelector('.animate-spin')).toBeTruthy();
+    // The mark lives in the trailing slot, after the title — not before it.
+    const title = document.querySelector('.thread-item-title');
+    expect(title).toBeTruthy();
+    // DOCUMENT_POSITION_FOLLOWING means "glyph comes after title" in
+    // document order.
+    expect(
+      title!.compareDocumentPosition(glyph) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('keeps a failed turn visible as the error mark', () => {
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    act(() => {
+      streamMocks.phaseListeners[0]('streaming');
+    });
+    act(() => {
+      streamMocks.phaseListeners[0]('error');
+    });
+    expect(screen.getByRole('img', { name: 'thread.status.error' })).toBeTruthy();
+  });
+
+  it('lets "awaiting" win over "running" — a blocked turn is the actionable state', () => {
+    // `awaiting_permission` is itself an active phase, so a naive
+    // "running first" priority would hide the amber dot forever.
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    act(() => {
+      streamMocks.phaseListeners[0]('awaiting_permission');
+    });
+    expect(screen.getByRole('img', { name: 'thread.status.running' })).toBeTruthy();
+    act(() => {
+      streamMocks.permissionListeners[0]({ id: 'perm-9', toolName: 'Bash' });
+    });
+    expect(
+      screen.getByRole('img', { name: 'thread.status.awaitingInput' }),
+    ).toBeTruthy();
+  });
+});
+
+describe('ThreadListItem row menu set (Claude parity)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('orders the menu 固定 / 重命名 / 复制 / 归档 / 删除 with single-key hints', () => {
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    openMenu();
+
+    const labels = Array.from(
+      document.querySelectorAll('.sidebar-project-menu-item-label'),
+    ).map((el) => el.textContent);
+    expect(labels).toEqual([
+      'thread.pinThread',
+      'thread.renameThread',
+      'thread.copyThreadId',
+      'thread.exportRollout',
+      'thread.archiveThread',
+      'thread.deleteThread',
+    ]);
+
+    // The letters are shown only because the row implements them.
+    for (const shortcut of ['P', 'R', 'A', 'D']) {
+      expect(screen.getByText(shortcut)).toBeTruthy();
+    }
+  });
+
+  it('shows "open folder" only when the session has a working directory', () => {
+    const { unmount } = render(
+      <ThreadListItem thread={makeThread()} isActive={false} />,
+    );
+    openMenu();
+    expect(screen.queryByText('thread.openFolder')).toBeNull();
+    unmount();
+
+    render(
+      <ThreadListItem
+        thread={makeThread({ workingDirectory: 'E:/Projects/duya' })}
+        isActive={false}
+      />,
+    );
+    openMenu();
+    expect(screen.getByText('thread.openFolder')).toBeTruthy();
+  });
+
+  it('row key commands drive the same handlers as the menu', () => {
+    const { container } = render(
+      <ThreadListItem thread={makeThread()} isActive={false} />,
+    );
+    const row = container.querySelector('.thread-item')!;
+
+    fireEvent.keyDown(row, { key: 'p' });
+    expect(storeMocks.setThreadPinned).toHaveBeenCalledWith('s-1', true);
+
+    fireEvent.keyDown(row, { key: 'a' });
+    expect(screen.getByTestId('archive-confirm')).toBeTruthy();
+
+    fireEvent.keyDown(row, { key: 'Escape' });
+    fireEvent.keyDown(row, { key: 'd' });
+    expect(storeMocks.deleteThread).toHaveBeenCalledWith('s-1');
+  });
+
+  it('typing in the rename input never reaches the row commands', () => {
+    // Regression: the row's keydown bubbles from the inline rename input, so
+    // without an `e.target !== e.currentTarget` guard renaming to "docs"
+    // would fire 删除 on the "d".
+    render(<ThreadListItem thread={makeThread()} isActive={false} />);
+    openMenu();
+    fireEvent.click(screen.getByText('thread.renameThread'));
+
+    const input = document.querySelector('.thread-item-rename-input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    for (const key of ['d', 'a', 'p']) {
+      fireEvent.keyDown(input, { key });
+    }
+    expect(storeMocks.deleteThread).not.toHaveBeenCalled();
+    expect(storeMocks.setThreadPinned).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('archive-confirm')).toBeNull();
+  });
+});
+
+describe('ThreadListItem archive lifecycle (Plan 549)', () => {
   beforeEach(() => {
     storeMocks.archiveThread.mockClear();
     storeMocks.unarchiveThread.mockClear();

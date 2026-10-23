@@ -3,10 +3,19 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PageTab } from "./panels/registry";
+import type { WorkspaceLayout } from "./panels/layout-model";
 
 const mocks = vi.hoisted(() => ({
   activeTabId: "agent-one",
   tabs: [] as PageTab[],
+  layout: {
+    panes: [],
+    columns: 1,
+    columnRatios: [1],
+    rowRatios: [1],
+    expandedPaneId: null,
+    activePaneId: null,
+  } as WorkspaceLayout,
 }));
 
 vi.mock("@/hooks/usePanel", () => ({
@@ -21,12 +30,18 @@ vi.mock("@/hooks/usePanel", () => ({
     setPanelWidth: vi.fn(),
     togglePanel: vi.fn(),
     openOrActivatePage: vi.fn(),
+    activateTab: vi.fn(),
+    closePanel: vi.fn(),
     rememberUserWidth: vi.fn(),
     resetPanelWidth: vi.fn(),
     tabs: mocks.tabs,
     activeTabId: mocks.activeTabId,
+    layout: mocks.layout,
     workspaceExpanded: false,
     setWorkspaceExpanded: vi.fn(),
+    setColumnWidths: vi.fn(),
+    setRowHeights: vi.fn(),
+    togglePaneExpanded: vi.fn(),
   }),
 }));
 
@@ -42,43 +57,155 @@ vi.mock("@/stores/conversation-store", () => ({
   }),
 }));
 
-vi.mock("./PanelHeader", () => ({ PanelHeader: () => <div data-testid="panel-header" /> }));
-vi.mock("./ResizeHandle", () => ({ ResizeHandle: () => null }));
+// The real handle carries the accessible name of the separator, so the mock
+// keeps the same attributes: the naming of the wall is what is under test.
+vi.mock("./ResizeHandle", () => ({
+  ResizeHandle: ({ label, side }: { label?: string; side?: string }) => (
+    <div data-testid={`resize-handle-${side}`} role="separator" aria-label={label} />
+  ),
+}));
 vi.mock("./task-drawer-store", () => ({
   setTaskDrawerOpen: vi.fn(),
   useTaskDrawerOpen: () => false,
 }));
 vi.mock("./panels/registry", () => {
   const Browser = ({ tab }: { tab: PageTab }) => <div data-testid={`browser-${tab.id}`}>{tab.title}</div>;
-  const descriptor = {
-    id: "browser",
-    labelKey: "panel.browser",
-    minWidth: 460,
+  const Icon = () => <span data-testid="page-icon" />;
+  const make = (id: string) => ({
+    id,
+    labelKey: `panel.${id}`,
+    minWidth: 300,
+    available: true,
+    icon: Icon,
     component: Browser,
+  });
+  const registry = {
+    files: make("files"),
+    review: make("review"),
+    browser: make("browser"),
+    terminal: make("terminal"),
   };
   return {
-    PAGE_REGISTRY: { browser: descriptor },
-    getPageDescriptor: () => descriptor,
+    PAGE_REGISTRY: registry,
+    getPageDescriptor: (id: keyof typeof registry) => registry[id],
   };
 });
 
 import { PanelZone } from "./PanelZone";
 
-describe("PanelZone browser tabs", () => {
-  it("keeps inactive browser tabs mounted while another browser tab is active", () => {
+function wall(panes: string[], overrides: Partial<WorkspaceLayout> = {}): WorkspaceLayout {
+  const columns = panes.length <= 2 ? 1 : 2;
+  const rows = panes.length === 0 ? 0 : Math.ceil(panes.length / columns);
+  return {
+    panes,
+    columns,
+    columnRatios: new Array(columns).fill(1 / columns),
+    rowRatios: new Array(rows).fill(1 / Math.max(1, rows)),
+    expandedPaneId: null,
+    activePaneId: panes[0] ?? null,
+    ...overrides,
+  };
+}
+
+describe("PanelZone panel wall", () => {
+  it("keeps every open card mounted", () => {
     mocks.tabs = [
       { id: "agent-one", pageId: "browser", title: "First agent tab", params: { kind: "agent", sessionId: "one" } },
       { id: "agent-two", pageId: "browser", title: "Second agent tab", params: { kind: "agent", sessionId: "two" } },
     ];
     mocks.activeTabId = "agent-one";
+    mocks.layout = wall(["agent-one", "agent-two"]);
 
     const { rerender } = render(<PanelZone />);
     expect(screen.getByTestId("browser-agent-one")).toBeTruthy();
     expect(screen.getByTestId("browser-agent-two")).toBeTruthy();
 
     mocks.activeTabId = "agent-two";
+    mocks.layout = wall(["agent-one", "agent-two"], { activePaneId: "agent-two" });
     rerender(<PanelZone />);
     expect(screen.getByTestId("browser-agent-one")).toBeTruthy();
     expect(screen.getByTestId("browser-agent-two")).toBeTruthy();
+  });
+
+  it("renders one card per open page", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "files", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+    ];
+    mocks.activeTabId = "terminal";
+    mocks.layout = wall(["files", "terminal"]);
+
+    const { container } = render(<PanelZone />);
+    expect(container.querySelectorAll(".panel-wall-cell")).toHaveLength(2);
+    expect(container.querySelectorAll(".panel-card")).toHaveLength(2);
+  });
+
+  it("shows the card title in the card header", () => {
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    const { container } = render(<PanelZone />);
+    expect(container.querySelector(".panel-card-title")?.textContent).toBe("Files");
+  });
+
+  it("splits the wall into two columns from the third card on", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "files", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+      { id: "browser", pageId: "browser", title: "Browser" },
+    ];
+    mocks.activeTabId = "browser";
+    mocks.layout = wall(["files", "terminal", "browser"]);
+
+    const { container } = render(<PanelZone />);
+    expect(container.querySelector(".panel-zone")?.getAttribute("data-wall-columns")).toBe("2");
+    // Three cards plus the empty cell that offers another panel.
+    expect(container.querySelectorAll(".panel-wall-cell")).toHaveLength(4);
+    expect(container.querySelectorAll(".panel-card")).toHaveLength(3);
+  });
+
+  it("names the separator between two columns after the cards on both sides", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "files", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+      { id: "browser", pageId: "browser", title: "Browser" },
+    ];
+    mocks.activeTabId = "browser";
+    mocks.layout = wall(["files", "terminal", "browser"]);
+
+    render(<PanelZone />);
+    const labels = screen.getAllByRole("separator")
+      .map((separator) => separator.getAttribute("aria-label"));
+    expect(labels).toContain("调整 Files 和 Terminal 和 Browser 的大小");
+  });
+
+  it("names the separator between two rows after the cards above and below", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "files", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+    ];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files", "terminal"]);
+
+    render(<PanelZone />);
+    const labels = screen.getAllByRole("separator")
+      .map((separator) => separator.getAttribute("aria-label"));
+    expect(labels).toContain("调整 Files 和 Terminal 的大小");
+  });
+
+  it("hides the other cards while one card fills the wall", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "files", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+    ];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files", "terminal"], { expandedPaneId: "files" });
+
+    const { container } = render(<PanelZone />);
+    const cells = container.querySelectorAll<HTMLElement>(".panel-wall-cell");
+    expect(cells).toHaveLength(2);
+    const hidden = Array.from(cells).find((cell) => cell.style.display === "none");
+    expect(hidden?.getAttribute("data-pane-id")).toBe("terminal");
   });
 });

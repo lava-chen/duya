@@ -32,7 +32,6 @@
   flex-direction: column;
   overflow: hidden;
   background: var(--main-bg);
-  border-left: 1px solid var(--border);
 }
 
 .sidebar-panel-content {
@@ -41,6 +40,184 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ============================================
+   Panel wall
+   ============================================
+   The side panel is a grid of panel cards. Every card owns its header
+   (icon + title + actions) and its body; the grid gaps carry the
+   draggable separators. The grid columns and rows are set inline in
+   `fr` units, so the wall reflows with its region.
+*/
+
+.panel-wall {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  /* The inset turns every card into a small window floating inside the
+     app (reference: Claude Desktop), instead of a flush split. */
+  padding: 8px;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+.panel-wall-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  /* Re-declaring the canvas token (rather than setting `background` to a new
+     one) lifts every surface the card hosts — its own fill and the page
+     bodies inside it, which all paint --main-bg — by one step. The wall
+     around the cards is outside this subtree, so it stays flush with the
+     conversation. */
+  --main-bg: var(--panel-surface);
+  background: var(--main-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* The dashed outline marks the add-a-panel slot. */
+.panel-wall-cell-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.panel-wall-add-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.panel-wall-add-tile:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.panel-card {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel-card-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.panel-card-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.panel-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.panel-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.panel-card-action:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.panel-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The separators sit in the gaps between the cards. */
+.panel-wall-separator {
+  position: absolute;
+  z-index: 6;
+}
+
+.panel-wall-separator-column {
+  top: 0;
+  height: 100%;
+  width: 9px;
+  margin-left: -4px;
+}
+
+.panel-wall-separator-row {
+  left: 0;
+  width: 100%;
+  height: 9px;
+  margin-top: -4px;
+}
+
+/* The zone's own edge handle is absolutely positioned against the zone;
+   the wall's separators are positioned against the wall, so they opt out
+   of that. */
+.panel-zone .panel-wall-separator .resize-handle {
+  position: relative;
+  left: auto;
+  top: auto;
+  bottom: auto;
+  z-index: 6;
+  width: 100%;
+  height: 100%;
+}
+
+.panel-zone .panel-wall-separator-column .resize-handle {
+  cursor: col-resize;
+}
+
+.panel-zone .panel-wall-separator-row .resize-handle {
+  cursor: row-resize;
+}
+
+.panel-zone .panel-wall-separator .resize-handle-bar {
+  width: 3px;
+  height: 40px;
 }
 
 /* Browser guests are stateful. Keep every browser tab mounted so switching
@@ -375,13 +552,20 @@
   display: inline-flex;
   align-items: center;
   max-width: 220px;
-  padding: 0;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-hover);
   color: var(--text-muted);
   font-size: 12px;
+  font-family: inherit;
+  line-height: 1.2;
+  cursor: pointer;
   flex-shrink: 1;
   min-width: 0;
-  line-height: 1;
-  opacity: 0.95;
+}
+.chat-header-project:hover {
+  color: var(--text);
 }
 .chat-header-project-text {
   overflow: hidden;

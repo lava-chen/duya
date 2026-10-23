@@ -13,11 +13,13 @@ export type {
   OutputStyleConfig,
   MCPServerConnection,
   PromptBuildContextOptions,
+  PromptPlacement,
+  PromptPartition,
+  RenderedPromptSection,
 } from './types.js'
 
 export {
   asSystemPrompt,
-  SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   DEFAULT_SYSTEM_PROMPT,
   CYBER_RISK_INSTRUCTION,
   KNOWLEDGE_CUTOFFS,
@@ -27,6 +29,7 @@ export {
 
 // Cache
 export { PromptCache, createPromptCache } from './cache.js'
+export { cacheKeyFor, promptContextFingerprint } from './contextFingerprint.js'
 
 // Constants
 export { cachedPromptSection, volatilePromptSection, prependBullets } from './constants/promptSections.js'

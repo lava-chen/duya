@@ -36,6 +36,23 @@ export function mcpExposureToToolExposure(exposure: MCPExposureMode): 'eager' | 
   return exposure === 'search' ? 'deferred' : 'eager';
 }
 
+/**
+ * Whether the MCP capability catalog belongs in the system prompt.
+ *
+ * The catalog only carries information the model cannot otherwise see: it
+ * lists the MCP tools that are NOT declared on the request. Under `full`
+ * and `hint` the tools ride every request with their full schema, so a
+ * catalog duplicates what the request already says.
+ *
+ * Two call sites used to answer this differently (`=== 'search'` in the
+ * session runtime, `!== 'full'` in the legacy agent shell), which made the
+ * default `hint` configuration inject the catalog on one path and not the
+ * other. One predicate, one answer.
+ */
+export function shouldInjectMcpCatalog(exposure: MCPExposureMode): boolean {
+  return exposure === 'search';
+}
+
 export interface ToolExposureConfig {
   /**
    * Legacy MCP policy. Default `'hint'`, mapped to eager for compatibility.

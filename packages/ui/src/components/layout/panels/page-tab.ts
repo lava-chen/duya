@@ -11,8 +11,8 @@
 export type PageId =
   | "files"
   | "preview"
+  | "workspace"
   | "review"
-  | "workflow"
   | "terminal"
   | "browser"
   | "bot-settings"

@@ -31,7 +31,8 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 - [x] 清理 trusted Computer Use skill、锁文件、共享 recorder 内无调用方输入方法及专属协议/原生 worker 操作。
 - [x] 最终静态类型门禁、架构门禁、完整桌面构建、编码/manifest/coverage清单/抑制规则/静态产物检查通过；未扩大 baseline。
 - [ ] Chrome/Edge 扩展真实启动、Linux AT-SPI 与其他 OS、真实外部模型请求和代表性用户旧数据库迁移仍须对应环境验收，不列为本环境通过。
-- [ ] 两个 PR 待 review / CI / 用户授权合并；不直接合并 master。
+- [x] 用户明确授权合并；Marketplace #2 已用 merge commit 合入 main。
+- [ ] DUYA #355 已同步最新 master 并解决冲突，重验后按仓库规则合并；最终 merge SHA 以 PR 状态为准。
 
 ## 发现与决策
 
@@ -92,6 +93,17 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 | 同上；`PluginManager{,.listInstalled.test}.ts` | Linux x64, Node 24.19.0 | 定向 Vitest，真实 Electron 隔离 namespace 下 installLocal → App open → bind → MCP invoke | 3 tests passed；本地插件 App 声明可见；模拟一次授权后绑定 31 个工具，`canvas_manage list` 返回插件空数据。尚未验证 App 页面访客通信 | 当前会话命令输出 |
 | DUYA `acb9ec56` + App assets 切片 | Linux x64, Node 24, Electron 44.2.0, Xvfb `:99` | assets/host 定向 Vitest；Electron Main 构建与类型门禁；真实 preview `file://` 和 dev `http://localhost:3000` 页面内注入隔离 iframe并使用生产 MainIPC relay | 4 tests passed；构建/类型门禁退出 0；两模式均显示 Canvas 插件服务已连接，关闭后 entry URL 返回 404。此处是实际资源/MCP链路探针，生产 PluginAppHost UI 集成仍待验收 | 当前会话命令输出 |
 
+## 用户授权集成（2026-10-23）
+
+- 用户已明确要求合并，允许按依赖顺序集成两个 PR，不使用 admin bypass。
+- Marketplace #2 已合并到 `main`，merge commit `38970870dde580a860b2c795a73e1ca0f1708722`。本任务 worktree 已同步到该提交；合并树的 catalog、四个插件 manifest 与 MCP/模板声明均可解析，树内容与此前验收 head 一致。
+- DUYA 主干前进到 `7b339024`（Host lifecycle/integration sync、工具组、侧栏与面板重构）。在迁移 worktree 中合入它，重新生成 worker 产物；冲突解决保留主干的面板列树、FileWorkspace、新 PanelWindow IPC、工具组统计/展开持久化与通用 prompt composer，同时不恢复 Canvas、AgentBrowser 或 Computer Use 的旧注册。
+- 已核对 GitHub ruleset：DUYA 必需审批数为0、必需状态检查列表为空；市场分支没有匹配的 ruleset。classic protection 读取返回403，因此合并只走 GitHub 正常 PR merge 路径，由服务端继续执行其保护规则；不以本地权限替代服务器检查。
+- 独立只读审阅已完成：主干面板列树/FileWorkspace/PanelWindow IPC、工具组展开/diff统计、通用prompt composer（含suffix）均保留，未恢复三项旧能力注册。共享OS context采集继续按前述Recorder/Orb/Wake范围保留。
+- 整合重验通过：完整 `electron:build` 退出0；Electron/CLI/Web/evals静态类型门禁全部退出0（Electron仍206 known，0新增）；架构2581条均为基线、0新增；编码/manifest/coverage收集/no-ts-suppress/静态产物检查均退出0。首次workspace构建暴露主干新增工具摘要中的旧Canvas分类，修复后完整桌面闭包构建通过。
+- 使用当前构建出的 `file://.../dist/index.html` 在Electron44/Linux/Xvfb重新打开真实Canvas App，既有内容显示、MCP full PNG1232×333（含dynamic widget）通过；CLI disable自动关闭iframe，Host仍运行时旧asset URL404。初次诊断的CLI初始化等待和file-origin首次引导由验收脚本修正，未修改产品去绕过这两步。
+- 最终合并仍走服务端普通merge路径；最终merge SHA以PR状态为准。合并后保留含依赖 junction 和本地验收材料的任务 worktree，不强制删除或回收其他 agent 检出。
+
 ## 最终验证补充
 
 | 检查点 | 命令或操作 | 结果 |
@@ -104,6 +116,6 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 
 ## 接续 / 结果
 
-本分支已实现并完成本环境可执行的迁移验收：三个具体能力都由官方市场插件提供；DUYA保留通用桌面Plugin/Mini App/MCP入口；Agent可使用App Builder模板建立并安装自己的App。核心旧实现分别移除，生产构建通过。两个PR保持draft交付，等待review/CI及用户授权合并。
+本分支已实现并完成本环境可执行的迁移验收：三个具体能力都由官方市场插件提供；DUYA保留通用桌面Plugin/Mini App/MCP入口；Agent可使用App Builder模板建立并安装自己的App。核心旧实现分别移除，生产构建通过。用户已授权集成；Marketplace已合并，DUYA在同步主干与重验后按正常PR merge流程集成。最终merge SHA以PR状态为准。
 
 剩余环境覆盖：Chrome/Edge扩展真实安装启动、Windows/macOS与AT-SPI、真实外部模型请求、代表性旧用户数据库迁移、带provider的安装包聊天验收。按当前接续的限制记录，不将源码迁移或静态检查当作这些场景的通过证据。

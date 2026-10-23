@@ -1,9 +1,9 @@
 # CI 提速与测试瘦身
 
-状态：active · 负责人：mavis 会话 · 更新：2026-10-21
+状态：active（#339 已合并；#342 仍待合并）· 负责人：mavis 会话 · 更新：2026-10-21
 分支：codex/ci-speed-and-test-diet（性能与质量）· codex/agent-test-retirement（测试退役，**独立 PR 单独审查**）
 worktree：E:\Projects\duya\.claude\worktrees\ci-speed-diet · E:\Projects\duya\.claude\worktrees\agent-test-retirement
-base：5b12f721 · owner：mavis
+base：052f85cb · owner：mavis
 
 ## 目标与边界
 
@@ -107,11 +107,12 @@ base：5b12f721 · owner：mavis
 
 ## 接续 / 结果
 
-PR #339（性能与质量，8 个 commit）：https://github.com/lava-chen/duya/pull/339
+PR #339（性能与质量，10 个 commit）：https://github.com/lava-chen/duya/pull/339
+—— **已合并** `052f85cb`。
 独立 PR（测试退役，3 个 commit）：分支 `codex/agent-test-retirement`（PR #342），
-单独审查覆盖率与迁移依据。
+单独审查覆盖率与迁移依据。**open**，head `09dfbac3`。
 
-回收：未回收（PR 未集成，未经授权不合并）。
+回收：未回收（#342 未合并，未经授权不合并）。
 
 CI 归因结论（相对对照 run 的双向差集）：
 
@@ -121,10 +122,11 @@ CI 归因结论（相对对照 run 的双向差集）：
 | 单元测试（#342） | **0** | 36 | 59 |
 | E2E | **0** | 2 | 15 |
 
-CI 提速效果：Vitest 阶段 34 分钟 → 12.7 分钟；E2E 移出 PR 路径后，
-`build` job 从 17 分钟降到约 3 分钟（只剩 `electron:build`）。
+CI 提速效果（均带 run id，可追溯）：
+Vitest 阶段 **33分49秒 → 12分41秒**（对照 run `39547010020` 串行 → 本 PR run `39577074692`
+并行，均 full scope）；E2E 移出 PR 路径后 `build` job 从 17 分钟降到 4分56秒
+（只剩 `electron:build` 3分55秒）；整轮墙钟 **10分51秒**（run `39596968226`，四个 job 全绿）。
 
-遗留（已写入 PR body 的"本次不做"）：
-最慢 7 个测试文件的内部重构、E2E 复用单次 Electron 启动（等 E2E 重回 PR 路径时再做）、
-`typecheck:all` 按依赖图拆分、12 个"实现已迁移、无人测试"的契约补测试、
-把触碰进程全局状态的测试文件（静态扫出 23 个）单独分组串行跑。
+遗留的四项（最慢 7 个测试文件重构、`typecheck:all` 按依赖图拆分、
+全局状态测试分组串行、12 个契约补测试）——**权威在
+[CI 提速的后续四项](2026-10-21-ci-followups.md)**，含实测数据、设计与验收。

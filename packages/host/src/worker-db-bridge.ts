@@ -232,6 +232,16 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const id = requireString(payload, 'id', 'session:get');
           return legacySessionRow(id);
         }
+        case 'session:setExtension': {
+          // Plan 621 D: key-level extension write, served by the same
+          // SessionStore the HTTP surface reads — `setExtension` preserves
+          // every other key, so concurrent extension writers cannot clobber
+          // each other.
+          const id = requireString(payload, 'id', 'session:setExtension');
+          const key = requireString(payload, 'key', 'session:setExtension');
+          options.sessions.setExtension(id, key, payload.value);
+          return { ok: true };
+        }
         case 'session:list': {
           return options.sessions.list();
         }

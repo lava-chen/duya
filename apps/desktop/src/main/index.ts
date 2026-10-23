@@ -16,7 +16,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers } from './ipc/index';
+import { registerDbHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerBotChannelHandlers, registerGroupHandlers, registerBotHandlers, registerPanelWindowHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -1028,6 +1028,10 @@ registerBashTaskHandlers();
 // the raw command line, the main process runs it in a shell with a bounded
 // timeout and returns the captured output.
 registerBangHandlers();
+// Detached panel windows: a side panel can leave the column tree and
+// become its own OS window. The main window keeps the layout; this
+// registration only owns the window lifecycle.
+registerPanelWindowHandlers();
 
 // =============================================================================
 // Graceful Shutdown

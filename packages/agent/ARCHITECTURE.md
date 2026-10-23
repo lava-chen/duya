@@ -334,7 +334,7 @@ interface PromptSection {
 
 ### Dynamic Boundary
 
-`__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__` separates cached and volatile sections, enabling intelligent caching.
+A section declares its channel with `placement` (`'system'` or `'context'`). Context-channel sections are delivered as a message, not as system prompt, so the system prefix stays byte-identical between turns.
 
 ---
 

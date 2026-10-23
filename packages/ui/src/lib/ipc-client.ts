@@ -12,7 +12,8 @@ import type { ContentBlock } from '@/types/message'
 import type { SendMessageCardMeta } from '@/types/message'
 import type { MemoryEntry } from '@/types'
 import type { UsageSummary } from '@/types/usage'
-import type { HostMessageItem, HostSessionRecord } from '@duya/agent-protocol'
+import type { HostMessageItem, HostSessionRecord, HostWorkspaceBinding } from '@duya/agent-protocol'
+import type { HostProviderCatalog, HostProviderCatalogProvider } from '@duya/agent-protocol'
 import { peekUiServices } from '@/services'
 
 // Types matching the store's expected format (camelCase)
@@ -588,16 +589,33 @@ export async function createThreadIPC(data: {
   agentName?: string
   /** Host-backed source whose registered workspace binding may be reused. */
   sourceSessionId?: string
+  /**
+   * A local directory to register as the session's workspace.
+   *
+   * The surface names a DIRECTORY and the Host resolves it into a workspace
+   * BINDING; the binding is what the session carries. The browser never names
+   * the path the worker runs in.
+   */
+  registerDirectory?: string
 }): Promise<Thread | null> {
   const services = peekUiServices()
   if (services) {
-    if (data.sourceSessionId === undefined) {
-      throw new Error('workspace_binding_required: Select an existing Host-registered workspace session before creating a Web chat.')
+    // Two ways to a workspace binding, and only two. A surface either
+    // registers a directory of its own, or reuses the binding an existing
+    // Host session already holds. Anything else would be a session with no
+    // workspace, which the worker cannot run in.
+    let workspace: HostWorkspaceBinding | undefined
+    if (data.registerDirectory !== undefined) {
+      if (services.registerWorkspace === undefined) {
+        throw new Error('workspace_registration_unavailable: This surface cannot register a local directory.')
+      }
+      workspace = await services.registerWorkspace(data.registerDirectory)
+    } else if (data.sourceSessionId !== undefined) {
+      const sourceSession = await services.sessions.get(data.sourceSessionId as HostSessionRecord['id'])
+      workspace = sourceSession?.workspace
     }
-    const sourceSession = await services.sessions.get(data.sourceSessionId as HostSessionRecord['id'])
-    const workspace = sourceSession?.workspace
-    if (workspace?.state !== 'bound') {
-      throw new Error('workspace_binding_required: The selected Host session has no registered workspace binding.')
+    if (workspace === undefined || workspace.state !== 'bound') {
+      throw new Error('workspace_binding_required: The session has no registered workspace binding.')
     }
     const session = await services.sessions.create({
       id: data.id as HostSessionRecord['id'],
@@ -1045,11 +1063,71 @@ export async function truncateMessagesFromInclusiveIPC(
 }
 
 // Provider operations
+
+/**
+ * The Host's provider roster, when this surface has a Host that has one.
+ *
+ * `null` means "no roster to read here": the Desktop, whose roster is its own
+ * provider rows, or a Host composed without the local provider catalog. The
+ * caller then falls back to the surface's own source, which is the truth
+ * about where the roster comes from.
+ */
+async function readHostProviderCatalog(): Promise<HostProviderCatalog | null> {
+  const services = peekUiServices()
+  if (services?.providers === undefined) return null
+  return await services.providers.catalog()
+}
+
+/**
+ * One catalog provider as the renderer's provider row.
+ *
+ * The catalog is the Host's own view of the configuration; the renderer's row
+ * is a wider display shape. The fields the catalog does NOT carry are left
+ * empty rather than invented — `apiKey` is never in a catalog, and a row that
+ * pretended to hold one would be a row holding a secret the Host
+ * deliberately did not send.
+ *
+ * The model list travels in `options`, which is where the model picker reads
+ * it from — the same place the Desktop's provider rows keep it.
+ */
+function hostCatalogProviderToProvider(
+  provider: HostProviderCatalogProvider,
+  catalog: HostProviderCatalog,
+  index: number,
+): Provider {
+  const options: Record<string, unknown> = {
+    enabled_models: provider.models.map((model) => model.modelId),
+  };
+  if (provider.defaultModel !== undefined) options['defaultModel'] = provider.defaultModel;
+  return {
+    id: provider.providerId,
+    name: provider.name,
+    providerType: provider.providerType,
+    baseUrl: provider.baseUrl ?? '',
+    apiKey: '',
+    isDefault: provider.providerId === catalog.activeProviderId,
+    hasApiKey: provider.hasApiKey,
+    sortOrder: index,
+    extraEnv: '',
+    protocol: '',
+    headers: '',
+    options: JSON.stringify(options),
+    notes: '',
+    createdAt: 0,
+    updatedAt: 0,
+    ...(provider.defaultModel === undefined ? {} : { defaultModel: provider.defaultModel }),
+  };
+}
+
 export async function listProvidersIPC(): Promise<Provider[]> {
-  // Providers are a local configuration the browser surface does not manage:
-  // the Host owns the model a run uses, and the Web has no settings surface
-  // that could change it. An empty roster is the truthful answer; reaching
-  // for the preload would fail the whole fetch.
+  // A Host-backed surface reads the HOST's catalog. It is the roster the Host
+  // adjudicates a turn's model against, so the picker and the Host agree on
+  // what may be picked — a browser offering a model the Host would refuse
+  // would be offering a lie.
+  const catalog = await readHostProviderCatalog()
+  if (catalog !== null) {
+    return catalog.providers.map((provider, index) => hostCatalogProviderToProvider(provider, catalog, index))
+  }
   if (window.electronAPI?.provider === undefined) return []
   const raw = await window.electronAPI!.provider!.list() as BackendProvider[]
   return raw.map(backendProviderToProvider)
@@ -1061,6 +1139,18 @@ export async function getProviderIPC(id: string): Promise<Provider | null> {
 }
 
 export async function getActiveProviderIPC(): Promise<Provider | null> {
+  // The active provider is the one the configuration selected, and on a
+  // Host-backed surface the configuration is the Host's. Without this the
+  // browser had no default model at all: every new conversation started with
+  // an empty model, and the Host silently used its own.
+  const catalog = await readHostProviderCatalog()
+  if (catalog !== null) {
+    const active = catalog.providers.find((provider) => provider.providerId === catalog.activeProviderId)
+    return active === undefined
+      ? null
+      : hostCatalogProviderToProvider(active, catalog, catalog.providers.indexOf(active))
+  }
+  if (window.electronAPI?.provider === undefined) return null
   const raw = await window.electronAPI!.provider!.getActive() as BackendProvider | null
   return raw ? backendProviderToProvider(raw) : null
 }

@@ -182,6 +182,10 @@ const zh: Record<TranslationKey, string> = {
   'chat.header.copyTitle': '复制标题',
   'chat.header.addAutomation': '添加自动化...',
   'chat.header.more': '更多',
+  'chat.header.project.showInExplorer': '在资源管理器中显示',
+  'chat.header.project.openInTerminal': '在终端中打开',
+  'chat.header.project.copyPath': '复制路径',
+  'chat.header.project.copyName': '复制项目名',
   'chat.header.projectWorkspace': '工作区',
 
   'messageInput.attachFiles': '附加文件',
@@ -391,6 +395,8 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.groupSummary.commands.other': '已运行 {count} 次命令',
   'streaming.toolAction.groupSummary.editFiles.one': '已编辑 1 个文件',
   'streaming.toolAction.groupSummary.editFiles.other': '已编辑 {count} 个文件',
+  'streaming.toolAction.groupSummary.createFiles.one': '已创建 1 个文件',
+  'streaming.toolAction.groupSummary.createFiles.other': '已创建 {count} 个文件',
   'streaming.toolAction.groupSummary.readFiles.one': '已读 1 个文件',
   'streaming.toolAction.groupSummary.readFiles.other': '已读 {count} 个文件',
   'streaming.toolAction.groupSummary.search.one': '已搜索 1 次',
@@ -1264,6 +1270,15 @@ const zh: Record<TranslationKey, string> = {
   'thread.noThreads': '暂无对话',
   'thread.running': 'Agent 运行中...',
   'thread.options': '对话选项',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // session it belongs to, so a screen reader can tell two rows apart.
+  'thread.optionsFor': '{title} 的更多选项',
+  'thread.openFolder': '在文件管理器中打开',
+  // Leading status glyph on a session row.
+  'thread.status.idle': '空闲',
+  'thread.status.running': '运行中',
+  'thread.status.awaitingInput': '等待输入',
+  'thread.status.error': '出错',
   'thread.archiveThread': '归档对话',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': '取消归档',
@@ -1314,6 +1329,7 @@ const zh: Record<TranslationKey, string> = {
   'subAgent.status.killed': '已停止',
 
   'panel.files': '文件',
+  'panel.launchersAria': '面板',
   'panel.preview': '预览',
   'panel.review': '代码审阅',
   'panel.workflow.title': '工作流',
@@ -1598,6 +1614,9 @@ const zh: Record<TranslationKey, string> = {
   'project.folderPathPlaceholderMac': '例如：~/Projects/my-project',
   'project.folderPathPlaceholderLinux': '例如：/home/name/Projects/my-project',
   'project.options': '项目选项',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // project it belongs to, so a screen reader can tell two rows apart.
+  'project.optionsFor': '{name} 的更多选项',
   'project.recentProjects': '最近的项目',
   'project.noRecent': '暂无最近项目',
   'project.openFolder': '打开文件夹',
@@ -1646,6 +1665,13 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.section.pinned': '置顶',
   // Plan 549 (Track B): archived-section label.
   'sidebar.section.archived': '已归档',
+  // Claude parity (2026-10-22): group-header actions and the filter popover.
+  'sidebar.section.searchInGroup': '在本组中搜索',
+  'sidebar.section.searchPlaceholder': '搜索会话',
+  'sidebar.filter.title': '过滤器',
+  'sidebar.filter.groupBy': '分组方式',
+  'sidebar.filter.sortBy': '排序方式',
+  'sidebar.filter.showEmptyGroups': '显示空分组',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': '工作',

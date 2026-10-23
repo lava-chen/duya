@@ -15,7 +15,19 @@ export interface WebUiServicesOptions {
   readonly stallTimeoutMs?: number;
 }
 
-/** Bind the shared renderer to the same-origin BFF and its durable Host APIs. */
+/**
+ * Bind the shared renderer to the same-origin BFF and its durable Host APIs.
+ *
+ * The composition of a bridge into a `UiServices` is NOT written here: it is
+ * the shared one in `@duya/ui` (`createUiServices`), so the Web and the
+ * Desktop cannot drift on the parts that are hard to see — a run list that
+ * filters differently, a cancellation that swallows a refusal, an approval
+ * that resolves against a different id space.
+ *
+ * What IS the Web's own is the transport: the BFF's routes, the CSRF token,
+ * and the fact that the BFF's stream is the only way to reach the Host's
+ * events.
+ */
 export function createWebUiServices(options: WebUiServicesOptions = {}): UiServices {
   const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   const api = new ApiClient({ fetchImpl });
@@ -28,6 +40,11 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
       bots: false,
       automation: false,
       workflows: false,
+      // The Web transport carries the turn's configuration: the permission
+      // mode, the agent profile and the declared modes reach the Host, and the
+      // Host adjudicates them the same way it does for the Desktop. So the
+      // composer may offer the controls.
+      turnConfiguration: true,
     },
     sessions: {
       list: (query) => api.listHostSessions(query),
@@ -139,6 +156,17 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
         const decision = resolveDecision(input);
         return await api.resolveApproval(requestId, decision);
       },
+    },
+    // The Web CAN register a workspace: the browser names a directory, the
+    // Host resolves it against the machine it runs on, and the BFF returns the
+    // binding. That is what lets a Web user start a conversation in a folder
+    // of their own instead of only reusing a session that already has one.
+    registerWorkspace: async (directory) => await api.registerLocalDirectory(directory),
+    // The provider roster comes from the Host too: it is the roster the Host
+    // adjudicates a turn's model against, so the browser's model picker and
+    // the Host agree on what may be picked.
+    providers: {
+      catalog: async () => await api.getProviderCatalog(),
     },
   };
 }

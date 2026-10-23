@@ -9,7 +9,6 @@ import {
   GlobeIcon,
   TerminalIcon,
   GearSixIcon,
-  RepeatIcon,
   ChatCircleIcon,
   type IconProps,
 } from "@/components/icons";
@@ -19,6 +18,7 @@ import { FileTreePanel } from "./FileTreePanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
+import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
 
@@ -26,9 +26,6 @@ import { RoomSettingsPanel } from "./RoomSettingsPanel";
 // Rendered inside <Suspense> in PanelZone; chunks load from local disk in Electron.
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
-);
-const WorkflowPanel = lazy(() =>
-  import("./WorkflowPanel").then((m) => ({ default: m.WorkflowPanel }))
 );
 const SessionMessagesPanel = lazy(() =>
   import("./SessionMessagesPanel").then((m) => ({ default: m.SessionMessagesPanel }))
@@ -76,6 +73,19 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     defaultExpanded: false,
     component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
+  workspace: {
+    id: "workspace",
+    labelKey: "panel.files",
+    icon: FolderIcon,
+    // One page holds every open file; the files themselves are tabs inside
+    // the panel, so the outer page tab must not multiply per file.
+    multiInstance: false,
+    available: true,
+    minWidth: 420,
+    preferredWidth: 620,
+    defaultExpanded: false,
+    component: FileWorkspacePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
   preview: {
     id: "preview",
     labelKey: "panel.preview",
@@ -103,18 +113,6 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     defaultExpanded: false,
     component: CodeReviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
-  workflow: {
-    id: "workflow",
-    labelKey: "panel.workflow.title",
-    icon: RepeatIcon,
-    multiInstance: false,
-    available: true,
-    minWidth: 380,
-    widthRatio: 0.5,
-    defaultExpanded: false,
-    component: WorkflowPanel as unknown as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
-
   terminal: {
     id: "terminal",
     labelKey: "panel.terminal",

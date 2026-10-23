@@ -215,7 +215,7 @@ describe('applyModes', () => {
     });
 
     expect(entered).toEqual(['session-mode']);
-    expect(result.systemPrompt).toBe('[SESSION]BASE');
+    expect(result.systemPrompt).toBe('[SESSION]\n\nBASE');
     expect(result.tools.map((t) => t.definition.name).sort()).toEqual(['read', 'session_extension']);
     expect(result.toolUseContext.extensionValue).toBe('value-123');
     expect(ctx.state.extensionValue).toBe('value-123');
@@ -331,10 +331,10 @@ describe('applyModes', () => {
       resolved,
     });
 
-    // a prefix first: "A_BASE"
-    // then b prefix function: "B(test-session)|A_BASE"
-    // then b suffix: "B(test-session)|A_BASE_B_END"
-    expect(result.systemPrompt).toBe('B(test-session)|A_BASE_B_END');
+    // a prefix first: "A_\n\nBASE"
+    // then b prefix function: "B(test-session)|A_\n\nBASE"
+    // then b suffix: "B(test-session)|A_\n\nBASE\n\n_B_END"
+    expect(result.systemPrompt).toBe('B(test-session)|A_\n\nBASE\n\n_B_END');
   });
 });
 

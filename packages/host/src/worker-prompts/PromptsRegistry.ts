@@ -2,12 +2,20 @@
  * PromptsRegistry - Registry for PromptSystem configs.
  *
  * Previous design: registered factories, cached instances per (name, profileKey).
- * Current design:  register configs, create instances on demand (no cache).
+ * Current design:  register configs, create instances on demand, cached per
+ *                  (name, profileKey).
  *
- * Instance caching was removed because:
- * 1. Only 4 promptSystems are used in the main flow — cache hit rate was low.
- * 2. Profile changes now just create a new instance (cheap).
- * 3. The profileKey serialization was a non-trivial source of complexity.
+ * Instance caching was removed at one point because only 4 promptSystems are
+ * used in the main flow and the profileKey serialization looked like
+ * needless complexity. It came back with plan 619 Phase 2, because the
+ * instance owns the section cache: without a shared instance every build
+ * started with an empty cache and `cachePolicy: 'once'` never actually
+ * cached anything. The profile key is now a plain stable serialization of
+ * the two lists a profile carries.
+ *
+ * The cache key of a section ALSO carries a fingerprint of the context it
+ * was rendered against (see `contextFingerprint.ts`), so a shared instance
+ * cannot serve stale bytes when the tool set or the model changes.
  *
  */
 
@@ -15,18 +23,25 @@ import type { PromptProfile } from './modes/types.js'
 import type { PromptSystemConfig } from './PromptSystem.js'
 import { PromptSystem } from './PromptSystem.js'
 import { DEFAULT_PROMPT_PROFILE } from './modes/index.js'
+import { promptProfileKey } from './modes/index.js'
 
 /**
  * Registry for managing PromptSystem configs.
  */
 export class PromptsRegistry {
   private static configs = new Map<string, PromptSystemConfig>()
+  /** One live instance per (config name, profile key). */
+  private static instances = new Map<string, PromptSystem>()
 
   /**
    * Register a prompt system config.
    */
   static register(name: string, config: PromptSystemConfig): void {
     this.configs.set(name, config)
+    // A new config invalidates the instances built from the old one.
+    for (const key of [...this.instances.keys()]) {
+      if (key.startsWith(`${name}#`)) this.instances.delete(key)
+    }
   }
 
   /**
@@ -38,13 +53,21 @@ export class PromptsRegistry {
 
   /**
    * Get or create a system instance for the given name and profile.
-   * Always creates a fresh instance — no caching. Profile is applied
-   * via setProfile if provided.
+   *
+   * The instance is shared per (name, profile key): it owns the section
+   * cache, and a fresh instance would start with an empty cache — which
+   * is how `cachePolicy: 'once'` came to mean nothing.
    */
   static getOrCreate(name: string, profile?: PromptProfile): PromptSystem | undefined {
     const config = this.configs.get(name)
     if (!config) return undefined
-    return new PromptSystem(config, profile ?? DEFAULT_PROMPT_PROFILE)
+    const resolved = profile ?? DEFAULT_PROMPT_PROFILE
+    const key = `${name}#${promptProfileKey(resolved)}`
+    const existing = this.instances.get(key)
+    if (existing) return existing
+    const created = new PromptSystem(config, resolved)
+    this.instances.set(key, created)
+    return created
   }
 
   /**
@@ -73,6 +96,7 @@ export class PromptsRegistry {
    */
   static reset(): void {
     this.configs.clear()
+    this.instances.clear()
   }
 
   /**
