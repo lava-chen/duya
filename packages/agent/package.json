@@ -48,7 +48,7 @@
     "@duya/sandbox": "0.1.0",
     "@duya/agent-runtime": "0.1.0",
     "@inquirer/prompts": "^7.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "ajv": "^8.20.0",
     "axios": "^1.14.0",
     "better-sqlite3": "^13.0.3",
