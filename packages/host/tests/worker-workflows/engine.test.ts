@@ -16,8 +16,6 @@ import {
   parseWorkflowDef,
   createResumeToken,
   verifyResumeToken,
-  runGuiNode,
-  MemoryArtifactStore,
   BudgetLedger,
   type WorkflowHost,
   type HostCallContext,
@@ -628,29 +626,5 @@ describe('journal step evidence', () => {
     expect(record.usage).toEqual({ inputTokens: 10, outputTokens: 4 });
   });
 
-  it('gui step + screenshot records carry gui evidence', async () => {
-    const journal = new Journal(new MemoryJournalSink());
-    const outcome = await runGuiNode({
-      nodeId: 'fill',
-      gui: { target_app: 'ERP*', steps: [{ do: 'click', element: 'som:1', verify: true }], on_stuck: 'fail' },
-      scope: { resolve: () => undefined },
-      host: fixtureHost({}),
-      journal,
-      budget: new BudgetLedger(4, 100),
-      ports: {
-        backend: { step: async () => ({ ok: true, effect: 'confirmed' }), capture: async () => ({ base64: 'PNG' }) },
-        artifacts: new MemoryArtifactStore(),
-      },
-      approvalMode: 'await',
-      runId: 'r-gui',
-    });
-    expect(outcome.status).toBe('succeeded');
-    const stepRecord = journal.all().find((r) => r.kind === 'node_result' && r.status === 'succeeded')!;
-    expect(stepRecord.nodeKind).toBe('gui');
-    expect(stepRecord.action).toBe('click');
-    expect(typeof stepRecord.durationMs).toBe('number');
-    const shot = journal.all().find((r) => r.kind === 'artifact')!;
-    expect(shot.action).toBe('capture');
-    expect(shot.outputSize).toBe(3);
-  });
+
 });

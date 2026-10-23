@@ -14,16 +14,6 @@ const SHOW_WIDGET_TOOL_NAME = 'show_widget'
 const DUYA_INFO_TOOL_NAME = 'duya_info'
 const DUYA_HEALTH_TOOL_NAME = 'duya_health'
 
-const CANVAS_TOOL_NAMES = [
-  'canvas_create_element',
-  'canvas_update_element',
-  'canvas_delete_element',
-  'canvas_arrange_elements',
-  'canvas_get_snapshot',
-  'canvas_align',
-  'canvas_layout_grid',
-]
-
 function getResearchSystemPrompt(_params: {
   toolUseContext: Pick<ToolUseContext, 'options'>
 }): string {
@@ -112,7 +102,6 @@ export const RESEARCH_AGENT: BuiltInAgentDefinition = {
     SUBAGENT_TOOL_NAME,
     DUYA_INFO_TOOL_NAME,
     DUYA_HEALTH_TOOL_NAME,
-    ...CANVAS_TOOL_NAMES,
   ],
   source: 'built-in',
   baseDir: 'built-in',

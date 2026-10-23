@@ -29,7 +29,7 @@
  *     OSContext changes every ~500ms; injecting it there would
  *     invalidate system-prompt cache on every turn.
  *   - `applyModes.toolUseContextPatch` carries semantic fields
- *     (canvasId, etc.). Not appropriate for bulk telemetry.
+ *     (projectId, etc.). Not appropriate for bulk telemetry.
  *   - This fragment lives in user-message content, which most
  *     providers cache independently of system prompt.
  *

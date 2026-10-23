@@ -470,11 +470,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Connector, MCP and marketplace machinery. Every real integration lives behind an adapter here.',
   },
   {
-    prefix: 'packages/computer-use/src',
-    category: 'capability-adapter',
-    why: 'OS-level input, screen capture and automation backends. A capability in the most literal sense.',
-  },
-  {
     prefix: 'packages/voice/src',
     category: 'capability-adapter',
     why: 'STT/TTS providers and their process management. Audio devices plus child processes.',
@@ -527,11 +522,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'SQLite access and migrations. Storage is CP-owned; the store is the durable substrate the CAS rules write through.',
   },
   {
-    prefix: 'apps/desktop/src/main/project-database',
-    category: 'cp-durable',
-    why: 'Per-project database access. Same durable substrate, separate database.',
-  },
-  {
     prefix: 'apps/desktop/src/main/automation',
     category: 'cp-durable',
     why: 'Schedule ownership and automation persistence. The 16 agent->main edges in M5.2 end here.',
@@ -579,11 +569,6 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Gateway process supervision and config events. Host transport wiring.',
   },
   {
-    prefix: 'apps/desktop/src/main/conductor',
-    category: 'host-ui',
-    why: 'Conductor layout and workbench host services. Presentation-side host state.',
-  },
-  {
     prefix: 'apps/desktop/src/main/messaging',
     category: 'host-ui',
     why: 'Chat message assembly for the UI. Presentation concern.',
@@ -627,11 +612,6 @@ export const RULES: readonly ClassificationRule[] = [
     prefix: 'packages/gateway/src',
     category: 'host-ui',
     why: 'Channel adapters (Feishu, Weixin) and their transports. Host-bound integration surfaces.',
-  },
-  {
-    prefix: 'packages/conductor/src',
-    category: 'host-ui',
-    why: 'Conductor canvas UI and its renderer components. UI in a workspace package, which is why 23 renderer->conductor deep imports exist.',
   },
   {
     prefix: 'packages/cli/src',

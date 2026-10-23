@@ -31,7 +31,9 @@ export interface PluginAppSession {
   /** Durable App instance this session is bound to. */
   instanceId: string;
   /** Chat session the App acts in. Chosen at launch, never by the guest. */
-  chatSessionId: string;
+  chatSessionId?: string;
+  runtime: 'agent-run' | 'standalone';
+  packageRevision?: string;
   createdAt: number;
 }
 
@@ -125,7 +127,9 @@ export class PluginAppSessionStore {
     pluginId: string;
     appId: string;
     instanceId: string;
-    chatSessionId: string;
+    chatSessionId?: string;
+    runtime?: 'agent-run' | 'standalone';
+    packageRevision?: string;
   }): PluginAppSession {
     const session: PluginAppSession = {
       sessionId: randomUUID(),
@@ -134,6 +138,8 @@ export class PluginAppSessionStore {
       appId: input.appId,
       instanceId: input.instanceId,
       chatSessionId: input.chatSessionId,
+      runtime: input.runtime ?? 'agent-run',
+      packageRevision: input.packageRevision,
       createdAt: Date.now(),
     };
     this.#sessions.set(session.sessionId, session);
@@ -142,6 +148,14 @@ export class PluginAppSessionStore {
 
   get(sessionId: string): PluginAppSession | null {
     return this.#sessions.get(sessionId) ?? null;
+  }
+
+  all(): PluginAppSession[] {
+    return [...this.#sessions.values()];
+  }
+
+  forPlugin(pluginId: string): PluginAppSession[] {
+    return [...this.#sessions.values()].filter((session) => session.pluginId === pluginId);
   }
 
   /** Record the binding this session minted. */

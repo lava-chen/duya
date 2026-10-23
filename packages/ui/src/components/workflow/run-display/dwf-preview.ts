@@ -36,7 +36,6 @@ export interface DwfPreviewResult {
  * wf.phase('name')          → divider (cuts the rail into stage columns)
  * wf.agent('agent:研究员')  → agent chip
  * wf.tool('Bash', ...)      → script chip (aggregated per column)
- * wf.gui({ ... })           → script chip
  * wf.approve('...')         → human chip (prompt truncated)
  * wf.decide([...])          → decision chip
  * wf.publish('name')        → script chip (the deliverable itself is unknown
@@ -52,7 +51,6 @@ const KNOWN_VERBS: ReadonlySet<string> = new Set([
   'tool',
   'publish',
   'approve',
-  'gui',
   'browser',
   'decide',
   'map',

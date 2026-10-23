@@ -148,14 +148,11 @@ const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
   'lsp',
 ]);
 
-const CANVAS_TOOL_PREFIX = 'canvas_';
-
 export function isAutoModeAllowlistedTool(toolName: string): boolean {
   if (SAFE_YOLO_ALLOWLISTED_TOOLS.has(toolName.toLowerCase())) {
     return true;
   }
-  // Conductor tools operate entirely on internal project state; never classify.
-  return toolName.startsWith(CANVAS_TOOL_PREFIX) || toolName === 'database_manage';
+  return false;
 }
 
 // ============================================================================

@@ -1,9 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations'
-import type {
-  ProjectDatabaseChangeEvent,
-  ProjectDatabaseRequest,
-} from '../../../../packages/conductor/src/database/types'
 
 // Sandboxed preloads can only require electron/events/timers/vm — node:crypto
 // is unavailable here. The preload runs in a Chromium context, so Web Crypto's
@@ -176,25 +172,6 @@ export interface ConfigPortAPI {
   onConfigResponse: (callback: (data: { key: string; value: unknown }) => void) => () => void
 }
 
-export interface ConductorPortAPI {
-  onStatePatch: (callback: (data: Record<string, unknown>) => void) => () => void
-  onCanvasChanged: (callback: (data: {
-    operation: 'create' | 'switch' | 'rename'
-    sessionId?: string
-    canvas: Record<string, unknown>
-    currentCanvasId?: string
-  }) => void) => () => void
-  /** Listen for canvas capture requests from the agent (via main process). */
-  onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => () => void
-  /** Send a capture response back to the main process (which forwards to the agent). */
-  sendCaptureResponse: (data: { requestId: string; result?: unknown; error?: string }) => void
-}
-
-export interface ProjectDatabaseAPI {
-  invoke: (request: ProjectDatabaseRequest) => Promise<unknown>
-  onChanged: (callback: (event: ProjectDatabaseChangeEvent) => void) => () => void
-}
-
 export interface ThreadAPI {
   list: () => Promise<unknown[]>
   get: (id: string) => Promise<unknown>
@@ -214,7 +191,6 @@ export interface ThreadAPI {
 export interface SessionAPI {
   saveDraft: (sessionId: string, draft: string) => Promise<void>
   getDraft: (sessionId: string) => Promise<string>
-  setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) => Promise<unknown>
   setPinned: (sessionId: string, pinned: boolean) => Promise<unknown>
   setPlanMode: (sessionId: string, enabled: boolean) => Promise<unknown>
   setGoalMode: (sessionId: string, enabled: boolean) => Promise<unknown>
@@ -840,72 +816,6 @@ export interface HooksAPI {
   setDisabled: (id: string, enabled: boolean) => Promise<HookWriteResult>;
 }
 
-export interface BrowserExtensionStatus {
-  daemonRunning: boolean;
-  extensionConnected: boolean;
-  extensionVersion: string | null;
-  extensionName: string | null;
-  extensionId: string | null;
-  pendingExtensionApproval: {
-    extensionId: string | null;
-    extensionName: string;
-    extensionVersion: string | null;
-    requestedAt: number;
-  } | null;
-  pendingCommands: number;
-  port: number;
-}
-
-export interface BrowserExtensionAPI {
-  getStatus: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
-  getExtensionPath: () => Promise<string>
-  approvePending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
-  denyPending: () => Promise<{ success: boolean; status?: BrowserExtensionStatus; error?: string }>
-}
-
-export type LocalInstallState =
-  | 'not-installed'
-  | 'installed-current'
-  | 'installed-outdated'
-  | 'unsupported';
-
-export interface DetectLocalExtensionResult {
-  state: LocalInstallState;
-  expectedVersion: string;
-  installedVersion: string | null;
-  expectedPath: string | null;
-  installedIn: string[];
-}
-
-export interface InstallLocalExtensionResult {
-  ok: boolean;
-  error?: string;
-  registryKeysWritten: string[];
-  expectedPath: string;
-  expectedVersion: string;
-}
-
-export interface UninstallLocalExtensionResult {
-  ok: boolean;
-  error?: string;
-  registryKeysRemoved: string[];
-}
-
-export interface BrowserExtensionInstallerAPI {
-  detect: () => Promise<DetectLocalExtensionResult>
-  install: () => Promise<InstallLocalExtensionResult>
-  uninstall: () => Promise<UninstallLocalExtensionResult>
-}
-
-export interface BrowserWebviewAPI {
-  registerWebview: (sessionId: string, webContentsId: number) => Promise<{ ok: boolean; error?: string }>
-  unregisterWebview: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
-  closeAgentBrowser: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
-  onOpenAgentTab: (callback: (sessionId: string, focus: boolean) => void) => () => void
-  onCloseAgentTab: (callback: (sessionId: string) => void) => () => void
-  onActivateAgentTab: (callback: (sessionId: string, focus: boolean) => void) => () => void
-}
-
 export interface BrowserCookieProfile {
   browser: 'chrome' | 'edge';
   dir: string;
@@ -915,13 +825,10 @@ export interface BrowserCookieProfile {
 
 export interface BrowserCookieAPI {
   detectProfiles: (browser: 'chrome' | 'edge') => Promise<{ ok: boolean; profiles?: BrowserCookieProfile[]; error?: string }>
-  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; source?: 'extension'; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_EXTENSION_UNAVAILABLE' }>
+  importCookies: (browser: 'chrome' | 'edge', profile?: string) => Promise<{ ok: boolean; count?: number; failed?: number; unsupported?: number; error?: string; errorCode?: 'COOKIE_DATABASE_BUSY' | 'APP_BOUND_COOKIE_UNSUPPORTED' }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
 }
 
-export interface BrowserBackendAPI {
-  updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') => Promise<{ success: boolean; reason?: string }>
-}
 
 export interface MailboxAPI {
   send: (params: {
@@ -1065,7 +972,7 @@ export interface PluginAppAPI {
    * package and mints the session. The App itself never names its own
    * authority.
    */
-  open: (payload: { pluginId: string; appId: string; chatSessionId: string }) => Promise<{
+  open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) => Promise<{
     ok: boolean
     error?: string
     sessionId?: string
@@ -1080,6 +987,8 @@ export interface PluginAppAPI {
   }>
   /** Close the session and revoke the binding it minted. */
   close: (payload: { sessionId: string }) => Promise<{ ok: boolean }>
+  /** Reopen the App after its installed package, grants, or setup changes. */
+  onChanged: (callback: (payload: { pluginId: string }) => void) => () => void
 }
 
 export interface PluginAPI {
@@ -1442,7 +1351,6 @@ export interface ElectronAPI {
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
-  getConductorPort: () => ConductorPortAPI | null
   // Agent Server port for SSE client (Phase 7.1 - plan 53)
   getAgentServerPort: () => Promise<number | null>
   // Port status API for checking if ports are ready
@@ -1450,44 +1358,6 @@ export interface ElectronAPI {
   // Session port API for per-session MessagePort communication
   getSessionPort: (sessionId: string) => SessionPortAPI | null
   closeAllSessionPorts: () => void
-  // Database IPC APIs
-  conductor: {
-    listCanvases: () => Promise<unknown[]>
-    getCanvasByProjectPath: (projectPath: string) => Promise<unknown>
-    createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => Promise<unknown>
-    updateCanvas: (
-      id: string,
-      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }
-    ) => Promise<unknown>
-    deleteCanvas: (id: string) => Promise<boolean>
-    listCanvasGroups: (projectPath?: string | null) => Promise<unknown[]>
-    createCanvasGroup: (data: { name: string; projectPath?: string | null }) => Promise<unknown>
-    updateCanvasGroup: (id: string, data: { name?: string; sortOrder?: number }) => Promise<unknown>
-    deleteCanvasGroup: (id: string) => Promise<boolean>
-    snapshot: (canvasId: string) => Promise<unknown>
-    action: (request: Record<string, unknown>) => Promise<unknown>
-    undo: (canvasId: string) => Promise<unknown>
-    redo: (canvasId: string) => Promise<unknown>
-    uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) => Promise<unknown>
-    captureLinkSnapshot: (payload: {
-      canvasId: string
-      elementId: string
-      url: string
-      mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full'
-    }) => Promise<unknown>
-    widgetAction: (payload: {
-      canvasId: string
-      elementId: string
-      action: { kind: 'refresh'; sourceId?: string }
-    }) => Promise<unknown>
-  }
-  /**
-   * Plan 471: user-defined sidebar sections. Sections wrap one or more
-   * projects (`workingDirectory`) into a top-level sidebar group at the
-   * same level as the built-in system sections (cron / gateway / wakeup
-   * / uncategorized / pinned). All access is fire-and-forget and goes
-   * through the legacy DB IPC.
-   */
   sidebarSections: {
     list: () => Promise<{
       sections: Array<{
@@ -1528,7 +1398,6 @@ export interface ElectronAPI {
     reorderProjects: (sectionId: string, orderedDirs: string[]) => Promise<void>
     findSectionForProject: (workingDirectory: string) => Promise<string | null>
   }
-  projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
   session: SessionAPI
   rollout: RolloutAPI
@@ -1585,25 +1454,12 @@ export interface ElectronAPI {
     listSessions: () => Promise<unknown[]>
     getSession: (sessionId: string) => Promise<unknown>
     deleteSession: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
-    convert: (payload: { sessionId: string; name?: string; description?: string }) => Promise<unknown>
     onStatusChanged: (callback: (snapshot: unknown) => void) => () => void
   }
   // Plan 583 ISS-24: the element-tree visualization overlay was removed from
   // the contract. `overlay:show-elements` / `overlay:clear` were exposed with
   // no handler, so both rejected; no renderer code called them. See the note
   // in the runtime bridge above.
-  /** Plan 572: macOS TCC permission surface for the computer-use stack. */
-  computerUsePermissions: {
-    get: () => Promise<{
-      platform: string
-      helperAvailable: boolean
-      accessibility: 'granted' | 'denied' | 'not-determined' | 'unknown'
-      screen: 'granted' | 'denied' | 'not-determined' | 'unknown'
-      listen: 'granted' | 'denied' | 'not-determined' | 'unknown'
-      secureInputPid: number | null
-    }>
-    openPane: (pane: 'accessibility' | 'screen' | 'listen') => Promise<boolean>
-  }
   project: ProjectAPI
   lock: LockAPI
   net: NetAPI
@@ -1618,11 +1474,7 @@ export interface ElectronAPI {
   // so the bridge cannot invent an answer of its own.
   workspaceLifecycle: WorkspaceLifecycleAPI
   weixin: WeixinAccountAPI
-  browserExtension: BrowserExtensionAPI
-  browserExtensionInstaller: BrowserExtensionInstallerAPI
-  browserWebview: BrowserWebviewAPI
   browserCookie: BrowserCookieAPI
-  browserBackend: BrowserBackendAPI
   agentProfile: AgentProfileAPI
   botChannels: BotChannelsAPI
   configAgents: ConfigAgentsAPI
@@ -1868,11 +1720,6 @@ let configPortHandlers: {
   onConfigResponse?: (data: { key: string; value: unknown }) => void
 } = {}
 
-// Conductor port handlers
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let conductorPort: any = null
-const conductorPortHandlers: Map<string, Set<(data: unknown) => void>> = new Map()
-
 // Port handlers shared by session-port communication
 const agentPortHandlers: Map<string, Set<(data: unknown) => void>> = new Map()
 
@@ -1954,45 +1801,6 @@ ipcRenderer.on('config-port', (event) => {
   }
 })
 
-// Listen for conductor port from main process
-ipcRenderer.on('conductor-port', (event) => {
-  console.log('[preload] conductor-port received, ports count:', event.ports?.length, 'time:', Date.now());
-  const [port] = event.ports
-  if (port) {
-    conductorPort = port
-    console.log('[preload] conductorPort assigned, time:', Date.now());
-    port.onmessage = (e) => {
-      console.log('[preload] conductorPort.onmessage:', e.data?.type, 'time:', Date.now());
-      const { type, ...payload } = e.data
-      const handlers = conductorPortHandlers.get(type as string)
-      if (handlers) {
-        handlers.forEach(handler => {
-          try {
-            handler(payload)
-          } catch (err) {
-            console.error('[preload] conductorPort handler error:', err);
-          }
-        })
-      }
-    }
-    port.onmessageerror = (e) => {
-      console.error('[preload] conductorPort messageerror:', e, '— port may be detached or closed');
-    }
-    try {
-      console.log('[preload] calling port.start()...');
-      port.start()
-      console.log('[preload] port.start() succeeded');
-    } catch (err) {
-      console.error('[preload] port.start() FAILED:', err);
-    }
-    // Dispatch event to notify renderer that conductorPort is ready
-    console.log('[preload] dispatching conductor-port-ready event, time:', Date.now());
-    window.dispatchEvent(new CustomEvent('conductor-port-ready'));
-  } else {
-    console.error('[preload] ERROR: conductor-port received but no ports in event!');
-  }
-})
-
 // Listen for sync events from main process
 ipcRenderer.on('sync:threads-changed', () => {
   syncCallbacks.forEach(callback => {
@@ -2033,54 +1841,6 @@ function getConfigPortAPI(): ConfigPortAPI | null {
       return () => {
         configPortHandlers.onConfigResponse = undefined
       }
-    },
-  };
-}
-
-// Helper functions for conductorPort API
-function getConductorPortAPI(): ConductorPortAPI | null {
-  if (!conductorPort) {
-    // The MessagePort is delivered asynchronously via webContents.postMessage
-    // from the main process (window-manager.ts). Renderer consumers
-    // (useCanvasCaptureRequest, useCanvasManagement, conductor-bridge) all
-    // listen for the `conductor-port-ready` CustomEvent the preload dispatches
-    // once the port lands, so this null path is a legitimate mid-boot state
-    // rather than a fault. Callers handle null gracefully; no log needed.
-    return null;
-  }
-
-  const registerHandler = (type: string, handler: (data: unknown) => void): () => void => {
-    let handlers = conductorPortHandlers.get(type);
-    if (!handlers) {
-      handlers = new Set();
-      conductorPortHandlers.set(type, handlers);
-    }
-    const wrapped = (payload: unknown) => {
-      handler(payload);
-    };
-    handlers.add(wrapped);
-    return () => {
-      handlers?.delete(wrapped);
-    };
-  };
-
-  return {
-    onStatePatch: (callback: (data: Record<string, unknown>) => void) => {
-      return registerHandler('conductor:state:patch', (data) => callback(data as Record<string, unknown>));
-    },
-    onCanvasChanged: (callback) => {
-      return registerHandler('conductor:canvas:changed', (data) => callback(data as {
-        operation: 'create' | 'switch' | 'rename';
-        sessionId?: string;
-        canvas: Record<string, unknown>;
-        currentCanvasId?: string;
-      }));
-    },
-    onCaptureRequest: (callback: (data: { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }) => void) => {
-      return registerHandler('conductor:capture:request', (data) => callback(data as { requestId: string; canvasId: string; scope: string; elementId?: string; region?: { x: number; y: number; w: number; h: number } }));
-    },
-    sendCaptureResponse: (data: { requestId: string; result?: unknown; error?: string }) => {
-      ipcRenderer.invoke('conductor:capture:response', data);
     },
   };
 }
@@ -2353,7 +2113,6 @@ const electronAPI: ElectronAPI = {
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
-  getConductorPort: getConductorPortAPI,
   // Agent Server port for SSE client (Phase 7.1 - plan 53)
   getAgentServerPort: () => ipcRenderer.invoke('agent-server:get-port'),
   // Session port API for per-session MessagePort communication
@@ -2395,39 +2154,6 @@ const electronAPI: ElectronAPI = {
     }
     sessionPorts.clear()
   },
-  // Database IPC APIs
-  conductor: {
-    listCanvases: () => ipcRenderer.invoke('conductor:canvas:list'),
-    getCanvasByProjectPath: (projectPath: string) => ipcRenderer.invoke('conductor:canvas:getByProjectPath', projectPath),
-    createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => ipcRenderer.invoke('conductor:canvas:create', data),
-    updateCanvas: (
-      id: string,
-      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }
-    ) => ipcRenderer.invoke('conductor:canvas:update', id, data),
-    deleteCanvas: (id: string) => ipcRenderer.invoke('conductor:canvas:delete', id),
-    listCanvasGroups: (projectPath?: string | null) => ipcRenderer.invoke('conductor:canvas:group:list', projectPath),
-    createCanvasGroup: (data: { name: string; projectPath?: string | null }) => ipcRenderer.invoke('conductor:canvas:group:create', data),
-    updateCanvasGroup: (id: string, data: { name?: string; sortOrder?: number }) => ipcRenderer.invoke('conductor:canvas:group:update', id, data),
-    deleteCanvasGroup: (id: string) => ipcRenderer.invoke('conductor:canvas:group:delete', id),
-    snapshot: (canvasId: string) => ipcRenderer.invoke('conductor:snapshot', canvasId),
-    action: (request: Record<string, unknown>) => ipcRenderer.invoke('conductor:action', request),
-    undo: (canvasId: string) => ipcRenderer.invoke('conductor:undo', canvasId),
-    redo: (canvasId: string) => ipcRenderer.invoke('conductor:redo', canvasId),
-    uploadAsset: (payload: { canvasId: string; buffer: ArrayBuffer; fileName: string; mimeType?: string }) =>
-      ipcRenderer.invoke('conductor:asset:upload', payload),
-    captureLinkSnapshot: (payload: {
-      canvasId: string;
-      elementId: string;
-      url: string;
-      mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full';
-    }) => ipcRenderer.invoke('conductor:link:captureSnapshot', payload),
-    // Plan 570: widget iframe actions (strategy buttons) → main-process runtime.
-    widgetAction: (payload: {
-      canvasId: string;
-      elementId: string;
-      action: { kind: 'refresh'; sourceId?: string };
-    }) => ipcRenderer.invoke('conductor:widget:action', payload),
-  },
   sidebarSections: {
     list: () => ipcRenderer.invoke('sidebar-sections:list'),
     create: (input: { name: string; icon?: string | null; color?: string | null; collapsed?: boolean }) =>
@@ -2447,14 +2173,6 @@ const electronAPI: ElectronAPI = {
     findSectionForProject: (workingDirectory: string) =>
       ipcRenderer.invoke('sidebar-sections:findSectionForProject', workingDirectory),
   },
-  projectDatabase: {
-    invoke: (request: ProjectDatabaseRequest) => ipcRenderer.invoke('project-database:invoke', request),
-    onChanged: (callback: (event: ProjectDatabaseChangeEvent) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, data: ProjectDatabaseChangeEvent) => callback(data)
-      ipcRenderer.on('project-database:changed', handler)
-      return () => ipcRenderer.removeListener('project-database:changed', handler)
-    },
-  },
   thread: {
     list: () => ipcRenderer.invoke('db:session:list'),
     get: (id: string) => ipcRenderer.invoke('db:session:get', id),
@@ -2473,8 +2191,6 @@ const electronAPI: ElectronAPI = {
   session: {
     saveDraft: (sessionId: string, draft: string) => ipcRenderer.invoke('db:session:saveDraft', sessionId, draft),
     getDraft: (sessionId: string) => ipcRenderer.invoke('db:session:getDraft', sessionId),
-    setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) =>
-      ipcRenderer.invoke('db:session:set_conductor_mode', { sessionId, enabled, canvasId }),
     setPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke('db:session:set_pinned', { sessionId, pinned }),
     setPlanMode: (sessionId: string, enabled: boolean) =>
@@ -2675,8 +2391,6 @@ const electronAPI: ElectronAPI = {
     listSessions: () => ipcRenderer.invoke('recorder:list-sessions'),
     getSession: (sessionId: string) => ipcRenderer.invoke('recorder:get-session', sessionId),
     deleteSession: (sessionId: string) => ipcRenderer.invoke('recorder:delete-session', sessionId),
-    convert: (payload: { sessionId: string; name?: string; description?: string }) =>
-      ipcRenderer.invoke('recorder:convert', payload),
     onStatusChanged: (callback: (snapshot: unknown) => void) => {
       const listener = (_event: unknown, snapshot: unknown) => callback(snapshot);
       ipcRenderer.on('recorder:status-changed', listener);
@@ -2692,12 +2406,6 @@ const electronAPI: ElectronAPI = {
    * renderer never called them. Removed rather than wired up — if the
    * overlay comes back it needs a real handler and a real consumer.
    */
-  /** Plan 572: macOS TCC permission surface for the computer-use stack. */
-  computerUsePermissions: {
-    get: () => ipcRenderer.invoke('computer-use:permissions:get'),
-    openPane: (pane: 'accessibility' | 'screen' | 'listen') =>
-      ipcRenderer.invoke('computer-use:permissions:open', pane),
-  },
   toolApproval: {
     listBySession: (sessionId: string) =>
       ipcRenderer.invoke('db:toolApproval:listBySession', sessionId),
@@ -2842,42 +2550,6 @@ const electronAPI: ElectronAPI = {
     getContextToken: (accountId: string, peerUserId: string) => ipcRenderer.invoke('db:weixin:getContextToken', accountId, peerUserId),
     setContextToken: (accountId: string, peerUserId: string, contextToken: string) => ipcRenderer.invoke('db:weixin:setContextToken', accountId, peerUserId, contextToken),
   },
-  browserExtension: {
-    getStatus: () => ipcRenderer.invoke('browser-extension:get-status'),
-    getExtensionPath: () => ipcRenderer.invoke('browser-extension:get-path'),
-    approvePending: () => ipcRenderer.invoke('browser-extension:approve-pending'),
-    denyPending: () => ipcRenderer.invoke('browser-extension:deny-pending'),
-  },
-  browserExtensionInstaller: {
-    detect: () => ipcRenderer.invoke('extensionInstaller:detect'),
-    install: () => ipcRenderer.invoke('extensionInstaller:install'),
-    uninstall: () => ipcRenderer.invoke('extensionInstaller:uninstall'),
-  },
-  browserWebview: {
-    registerWebview: (sessionId: string, webContentsId: number) =>
-      ipcRenderer.invoke('browser:register-webview', { sessionId, webContentsId }),
-    unregisterWebview: (sessionId: string) =>
-      ipcRenderer.invoke('browser:unregister-webview', { sessionId }),
-    closeAgentBrowser: (sessionId: string) =>
-      ipcRenderer.invoke('browser:close-agent-browser', { sessionId }),
-    onOpenAgentTab: (callback: (sessionId: string, focus: boolean) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string; focus?: boolean }) => {
-        callback(payload.sessionId, payload.focus !== false);
-      };
-      ipcRenderer.on('browser:open-agent-tab', handler);
-      return () => ipcRenderer.removeListener('browser:open-agent-tab', handler);
-    },
-    onCloseAgentTab: (callback: (sessionId: string) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => callback(payload.sessionId);
-      ipcRenderer.on('browser:close-agent-tab', handler);
-      return () => ipcRenderer.removeListener('browser:close-agent-tab', handler);
-    },
-    onActivateAgentTab: (callback: (sessionId: string, focus: boolean) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { sessionId: string; focus?: boolean }) => callback(payload.sessionId, payload.focus !== false);
-      ipcRenderer.on('browser:activate-agent-tab', handler);
-      return () => ipcRenderer.removeListener('browser:activate-agent-tab', handler);
-    },
-  },
   browserCookie: {
     detectProfiles: (browser: 'chrome' | 'edge') =>
       ipcRenderer.invoke('browser:detect-cookie-profiles', browser),
@@ -2885,10 +2557,6 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('browser:import-cookies', browser, profile),
     clearData: () =>
       ipcRenderer.invoke('browser:clear-browser-data'),
-  },
-  browserBackend: {
-    updateMode: (mode: 'auto' | 'extension' | 'built-in' | 'human-like') =>
-      ipcRenderer.invoke('browser:update-backend-mode', mode),
   },
   agentProfile: {
     list: () => ipcRenderer.invoke('db:agentProfile:list'),
@@ -3101,11 +2769,16 @@ const electronAPI: ElectronAPI = {
   // and can only post a message to the renderer that hosts it, which
   // relays it here with the session handle.
   pluginApp: {
-    open: (payload: { pluginId: string; appId: string; chatSessionId: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
       ipcRenderer.invoke('plugin-app:open', payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       ipcRenderer.invoke('plugin-app:call', payload),
     close: (payload: { sessionId: string }) => ipcRenderer.invoke('plugin-app:close', payload),
+    onChanged: (callback: (payload: { pluginId: string }) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { pluginId: string }) => callback(data);
+      ipcRenderer.on('plugin-app:changed', listener);
+      return () => ipcRenderer.removeListener('plugin-app:changed', listener);
+    },
   },
   // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
   // in the main process.
@@ -3372,11 +3045,7 @@ const duya = {
     ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.favicon ?? null),
   getPageTitle: (url: string): Promise<string | null> =>
     ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.title ?? null),
-  /** Plan 575 §CUA toolrow: get app icon data URL for a bundleId (exe path on Windows). */
-  cua: {
-    getApplicationIcon: (bundleId: string): Promise<string | null> =>
-      ipcRenderer.invoke('cua:get-application-icon', bundleId).then((r) => r?.iconDataUrl ?? null),
-  },
+
 };
 contextBridge.exposeInMainWorld('duya', duya);
 

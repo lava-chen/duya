@@ -16,9 +16,6 @@ import { killTaskTool } from '@duya/host/worker-tools/background-task';
 import { enterPlanModeTool } from '@duya/host/worker-tool-bindings/enter-plan-mode';
 import { exitPlanModeTool } from '@duya/host/worker-tool-bindings/exit-plan-mode';
 import { switchModeTool } from '@duya/host/worker-tool-bindings/switch-mode';
-import { browserTool } from '@duya/host/worker-tool-bindings/browser-tool';
-import type { DomainBlockerConfig } from '@duya/capabilities/BrowserTool/DomainBlocker';
-import type { BrowserBackendMode } from '@duya/capabilities/BrowserTool/backend-resolver';
 import { skillTool } from '@duya/host/worker-tool-bindings/skill';
 import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
 import { sessionSearchTool } from '@duya/host/worker-tool-bindings/session-search';
@@ -41,26 +38,14 @@ import { createAgentTool, updateAgentTool, } from '@duya/host/worker-tool-bindin
 import { manageRoutineTool } from '@duya/host/worker-tool-bindings/routine';
 import { listAppConnectorsTool, connectAppTool } from '@duya/host/worker-tool-bindings/app-connector-manage-tools';
 import { planTool } from '@duya/host/worker-tool-bindings/plan';
-import { getComputerUseToolsWithDecide } from '@duya/host/worker-tool-bindings/os-tools';
-import { definition as computerCuaDefinition, executor as computerCuaExecutor } from '@duya/host/worker-tool-bindings/computer-cua-tool';
 const bashTool = new BashTool();
 const powerShellTool = new PowerShellTool();
 const writeTool = new WriteTool();
 const grepTool = new GrepTool();
-export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: SubagentRunDeps, domainBlockerConfig?: DomainBlockerConfig, options?: {
+export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: SubagentRunDeps, options?: {
     enabledPluginIds?: Set<string>;
-    browserBackendMode?: BrowserBackendMode;
 }): ToolRegistry {
     const registry = new ToolRegistry();
-    if (domainBlockerConfig) {
-        browserTool.setDomainBlockerConfig(domainBlockerConfig);
-    }
-    if (options?.browserBackendMode) {
-        browserTool.setBrowserConfig({
-            mode: options.browserBackendMode,
-            extensionProbeTimeoutMs: 500,
-        });
-    }
     registry.register(bashTool.toTool(), bashTool, {
         exposure: 'eager',
     });
@@ -91,10 +76,6 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(enterPlanModeTool, enterPlanModeTool, { exposure: 'deferred' });
     registry.register(exitPlanModeTool, exitPlanModeTool, { exposure: 'deferred' });
     registry.register(switchModeTool, switchModeTool, { exposure: 'deferred' });
-    registry.register(browserTool.toTool(), browserTool, {
-        exposure: 'deferred',
-        inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
-    });
     registry.register(skillTool, skillTool, { exposure: 'eager' });
     registry.register(briefTool, briefTool, { exposure: 'deferred' });
     registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
@@ -130,15 +111,5 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'deferred' });
     registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });
     registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
-    for (const tr of getComputerUseToolsWithDecide(false)) {
-        registry.register(tr.definition, tr.executor, {
-            exposure: 'deferred',
-            inputSchemaSummary: 'computer-use actions (capture/click/type/key/scroll/drag/set_value/wait/zoom + delegated decide loop)',
-        });
-    }
-    registry.register(computerCuaDefinition, computerCuaExecutor, {
-        exposure: 'deferred',
-        inputSchemaSummary: 'CUA tools (list_apps/list_windows/get_app_state/left_click/scroll/type/set_value/select_text/key/perform_action/paste/request_access/stop)',
-    });
     return registry;
 }

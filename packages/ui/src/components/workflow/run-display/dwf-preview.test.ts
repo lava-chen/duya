@@ -32,11 +32,10 @@ describe('parseDwfPreviewSteps', () => {
     expect(steps.every((s) => s.status === 'pending')).toBe(true);
   });
 
-  it('maps gui, browser and decide without string first args', () => {
-    const { steps } = p("await wf.gui({ target_app: 'x' });\nawait wf.browser({ steps: [] });\nawait wf.decide(q, {});");
-    expect(steps[0]).toMatchObject({ nodeKind: 'gui' });
-    expect(steps[1]).toMatchObject({ nodeKind: 'browser' });
-    expect(steps[2]).toMatchObject({ nodeKind: 'decision' });
+  it('maps browser and decide without string first args', () => {
+    const { steps } = p("await wf.browser({ steps: [] });\nawait wf.decide(q, {});");
+    expect(steps[0]).toMatchObject({ nodeKind: 'browser' });
+    expect(steps[1]).toMatchObject({ nodeKind: 'decision' });
   });
 
   it('truncates long approve prompts for the human chip', () => {
@@ -50,12 +49,10 @@ describe('parseDwfPreviewSteps', () => {
   it('marks optional / on_stuck:skip nodes with a skip suffix (AST-read options)', () => {
     const { steps } = p([
       "await wf.tool('Bash', { cmd: 'ls' }, { optional: true });",
-      "await wf.gui({ target_app: 'x' }, { on_stuck: 'skip' });",
       "await wf.tool('Bash', { cmd: 'pwd' });",
     ].join('\n'));
     expect(steps[0].label).toBe('Bash ·skip');
-    expect(steps[1].label).toBe('·skip');
-    expect(steps[2].label).toBe('Bash');
+    expect(steps[1].label).toBe('Bash');
   });
 
   it('ignores wf.* calls inside comments, strings and non-wf receivers', () => {

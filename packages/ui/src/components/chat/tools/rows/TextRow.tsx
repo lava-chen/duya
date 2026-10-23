@@ -71,7 +71,6 @@ export function TextRow({ content, isStreaming }: TextRowProps) {
               <WidgetRenderer
                 widgetCode={seg.data.widget_code}
                 isStreaming={false}
-                sourceLabel="Tool result"
               />
             </WidgetErrorBoundary>
           );

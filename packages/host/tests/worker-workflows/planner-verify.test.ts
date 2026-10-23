@@ -86,23 +86,21 @@ describe('WorkflowPlanner', () => {
     expect(highRiskNodes).toEqual(['send-money']);
   });
 
-  it('gui nodes default to high-risk (conservative without prescreen evidence)', async () => {
+  it('MCP tool names with irreversible actions are high-risk', async () => {
     const planner = new WorkflowPlanner(async () => GOOD_YAML);
     const def = parseWorkflowDef({
-      name: 'gui-run',
+      name: 'payment-run',
       description: 'x',
       phases: [
         {
           phase: 'p',
           title: 'P',
-          nodes: [
-            { id: 'fill', gui: { target_app: 'ERP*', steps: [{ do: 'click', element: 'som:1' }] } },
-          ],
+          nodes: [{ id: 'send-payment', tool: 'mcp__erp__send_payment' }],
         },
       ],
     });
     const { highRiskNodes } = await planner.prescreenRisk(def);
-    expect(highRiskNodes).toContain('fill');
+    expect(highRiskNodes).toContain('send-payment');
   });
 
   it('Jev pass flags irreversible agents (p ≥ threshold) — suggestion only', async () => {
@@ -158,7 +156,7 @@ function baseVerify(overrides?: Partial<Parameters<typeof runVerifyStage>[0]>) {
 describe('runVerifyStage — three tiers', () => {
   it('tier 0 deterministic: verified journal annotations settle it', async () => {
     const options = baseVerify();
-    // Seed verified annotations (e.g. gui confirm effects).
+    // Seed a verified annotation from a prior deterministic verification.
     options.journal.append({
       kind: 'node_result', nodeId: 'a', attempt: 1, reqHash: 'h1', status: 'succeeded', result: null, verification: 'verified',
     });

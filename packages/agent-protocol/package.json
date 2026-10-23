@@ -131,10 +131,6 @@
       "types": "./dist/plugin-setup.d.ts",
       "import": "./dist/plugin-setup.js"
     },
-    "./workbench": {
-      "types": "./dist/workbench.d.ts",
-      "import": "./dist/workbench.js"
-    },
     "./import-batches": {
       "types": "./dist/import-batches.d.ts",
       "import": "./dist/import-batches.js"

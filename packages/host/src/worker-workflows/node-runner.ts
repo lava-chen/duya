@@ -24,7 +24,6 @@ import { computeReqHash, type JournalKind, type JournalNodeKind } from './journa
 import { interpolateDeep, interpolate, interpolateString, type ExprScope } from './expr.js';
 import { classifyError, SuspensionSignal, RETRYABLE_CLASSES, type WorkflowErrorClass } from './error-class.js';
 import { runHumanNode, type HumanNodeResult } from './human-runner.js';
-import { runGuiNode, type GuiRunPorts, type GuiNodeOutcome } from './gui-runner.js';
 import {
   WorkflowDecisionAdapter,
   uncertainOutcomeFor,
@@ -43,8 +42,6 @@ export interface NodeRunContext {
   approvalMode: 'await' | 'suspend';
   /** Dry-run: plan but never call the host (§10.3 baseline). */
   dryRun?: boolean | undefined;
-  /** Gui node ports (backend + artifacts + optional decide channel). */
-  gui?: GuiRunPorts | undefined;
   /** Map fan-out item context (the loop variable is already in scope). */
   item?: { index: number; as: string } | undefined;
 }
@@ -132,7 +129,6 @@ export function nodeKindOf(node: WorkflowNode): JournalNodeKind {
   if (node.agent) return 'agent';
   if (node.decision) return 'decision';
   if (node.human) return 'human';
-  if (node.gui) return 'gui';
   return 'noop';
 }
 
@@ -443,41 +439,5 @@ async function runNodeOnce(ctx: NodeRunContext): Promise<NodeRunResult> {
   if (node.agent) return runAgentNode(ctx, node.map ? node.map.prompt : undefined, ctx.item?.index);
   if (node.decision) return runDecisionNode(ctx);
   if (node.human) return runHumanNodeSafe(ctx);
-  if (node.gui) return runGuiNodeSafe(ctx);
   return failResult('node declares no executable kind', 'tool_missing');
-}
-
-// ─── gui node (② RPA — Phase 3) ───
-
-async function runGuiNodeSafe(ctx: NodeRunContext): Promise<NodeRunResult> {
-  if (!ctx.gui) {
-    return failResult('gui node requires a computer-use backend port', 'tool_missing');
-  }
-  try {
-    const result: GuiNodeOutcome = await runGuiNode({
-      nodeId: ctx.node.id,
-      gui: ctx.node.gui!,
-      scope: ctx.scope,
-      host: ctx.host,
-      journal: ctx.journal,
-      budget: ctx.budget,
-      ports: ctx.gui,
-      approvalMode: ctx.approvalMode,
-      runId: ctx.runId,
-      ...(ctx.dryRun !== undefined ? { dryRun: ctx.dryRun } : {}),
-      // Plan 556 Phase 4: recorder provenance drives som:<n> resolution.
-      ...(ctx.node.annotation ? { annotation: ctx.node.annotation } : {}),
-    });
-    if (result.status === 'failed') {
-      return failResult(result.error ?? 'gui node failed', result.errorClass ?? 'tool_error');
-    }
-    return {
-      status: result.status,
-      output: result.output,
-      ...(result.verification !== undefined ? { verification: result.verification } : {}),
-    };
-  } catch (err) {
-    if (err instanceof SuspensionSignal) throw err;
-    return failResult(err instanceof Error ? err.message : String(err), classifyError(err));
-  }
 }

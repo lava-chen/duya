@@ -281,8 +281,6 @@ function AssistantContent({
               <WidgetRenderer
                 widgetCode={seg.data.widget_code}
                 isStreaming={false}
-                sourceMessageId={sourceMessageId}
-                sourceLabel="Chat message"
               />
             </WidgetErrorBoundary>
           );
@@ -308,8 +306,6 @@ function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[
                 <WidgetRenderer
                   widgetCode={action.content}
                   isStreaming={false}
-                  sourceMessageId={action.sourceMessageId ?? sourceMessageId}
-                  sourceLabel={action.sourceLabel ?? 'Chat message'}
                 />
               </WidgetErrorBoundary>
             );

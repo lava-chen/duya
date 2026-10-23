@@ -35,17 +35,14 @@ function fakePorts(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
   toolCalls: string[];
   agentCalls: string[];
   approvals: string[];
-  guiCalls: string[];
 } {
   const toolCalls: string[] = [];
   const agentCalls: string[] = [];
   const approvals: string[] = [];
-  const guiCalls: string[] = [];
   return {
     toolCalls,
     agentCalls,
     approvals,
-    guiCalls,
     async runTool(tool: string, input: unknown) {
       toolCalls.push(`${tool}:${JSON.stringify(input)}`);
       return { ok: true, output: { echoed: input, tool } } satisfies HostCallResult;
@@ -53,10 +50,6 @@ function fakePorts(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
     async runAgent(spec: HostAgentSpec) {
       agentCalls.push(`${spec.agent}:${spec.prompt}`);
       return { ok: true, output: { done: true, prompt: spec.prompt } } satisfies HostCallResult;
-    },
-    async runGui(spec) {
-      guiCalls.push(`${spec.target_app}:${spec.steps.length}`);
-      return { status: 'succeeded', output: { app: spec.target_app, steps: spec.steps.length } };
     },
     async requestApproval(spec) {
       approvals.push(spec.prompt);
@@ -160,164 +153,6 @@ describe('dwf runtime — wf primitives', () => {
     const ports2 = fakePorts();
     await runDwfScript(SIMPLE_SCRIPT, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
     expect(ports2.toolCalls).toHaveLength(0); // 缓存命中，宿主零调用
-  });
-
-  it('wf.gui resolves with the outcome output and journals a gui record', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        return await wf.gui(
-          { target_app: "ERP*", steps: [{ do: "capture" }, { do: "click", element: "som:1" }], on_stuck: "agent" },
-          { annotation: { source: "recorder", app: "ERP", windowTitle: "w", som: {} } },
-        );
-      }`;
-    const result = await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
-    expect(result).toMatchObject({ app: 'ERP*', steps: 2 });
-    const guiRecord = lastRecord(sink, (r) => r.nodeKind === 'gui');
-    expect(guiRecord?.status).toBe('succeeded');
-    expect(guiRecord?.action).toBe('gui:ERP*');
-  });
-
-  it('wf.gui resume hits the journal cache — runGui is not called twice', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        return await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
-      }`;
-    await runDwfScript(script, fakePorts(), { runId: 'r1', journal: new Journal(sink) });
-    const ports2 = fakePorts();
-    await runDwfScript(script, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
-    expect(ports2.guiCalls).toHaveLength(0);
-  });
-
-  it('wf.gui failure throws with the outcome error and journals the failure class', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        try {
-          await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
-          return 'no-throw';
-        } catch (e) {
-          return { threw: e.message };
-        }
-      }`;
-    const ports = fakePorts({
-      async runGui() {
-        return { status: 'failed', error: 'element som:1 not found', verification: 'unconfirmed' };
-      },
-    });
-    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
-    expect(result.threw).toBe('element som:1 not found');
-    const failed = lastRecord(sink, (r) => r.nodeKind === 'gui');
-    expect(failed?.status).toBe('failed');
-    expect(failed?.errorClass).toBeTruthy();
-  });
-
-  it('wf.gui skipped outcome resolves null and keeps the script going', async () => {
-    const script = `
-      export default async function (wf) {
-        const out = await wf.gui({ target_app: "ERP*", steps: [{ do: "capture" }], on_stuck: "agent" });
-        return { out };
-      }`;
-    const result = await runDwfScript(
-      script,
-      fakePorts({ async runGui() { return { status: 'skipped' }; } }),
-      { runId: 'r1', journal: Journal.memory() },
-    );
-    expect(result).toEqual({ out: null });
-  });
-
-  // ─── wf.browser（plan 564）───
-
-  function fakePortsWithBrowser(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
-    browserCalls: string[];
-  } {
-    const browserCalls: string[] = [];
-    return {
-      browserCalls,
-      async runBrowser(spec) {
-        browserCalls.push(spec.start_url ?? spec.steps[0]?.do ?? 'browser');
-        return {
-          status: 'succeeded',
-          output: { url: spec.start_url, steps: spec.steps.length },
-        };
-      },
-      ...overrides,
-    } as DwfHostPorts & { browserCalls: string[] };
-  }
-
-  it('wf.browser resolves the outcome output and journals nodeKind browser', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        return await wf.browser({
-          start_url: "https://example.com",
-          steps: [{ do: "click", selector: "#login" }],
-        });
-      }`;
-    const ports = fakePortsWithBrowser();
-    const result = await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) });
-    expect(result).toMatchObject({ url: 'https://example.com', steps: 1 });
-    const record = lastRecord(sink, (r) => r.nodeKind === 'browser');
-    expect(record?.status).toBe('succeeded');
-    expect(record?.action).toBe('browser:https://example.com');
-    // inputSummary 是卡片步骤行那一行（§6.1 display-only）：start_url 前缀 + 首步。
-    expect(record?.inputSummary).toBe('https://example.com: click #login');
-  });
-
-  it('wf.browser resume hits the journal cache — runBrowser is not called twice', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        return await wf.browser({ steps: [{ do: "click", selector: "#a" }] });
-      }`;
-    await runDwfScript(script, fakePortsWithBrowser(), { runId: 'r1', journal: new Journal(sink) });
-    const ports2 = fakePortsWithBrowser();
-    await runDwfScript(script, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
-    expect(ports2.browserCalls).toHaveLength(0);
-  });
-
-  it('wf.browser failure throws with the outcome error; skipped resolves null', async () => {
-    const sink = new MemoryJournalSink();
-    const script = `
-      export default async function (wf) {
-        try {
-          await wf.browser({ steps: [{ do: "click", selector: "#a" }] });
-          return 'no-throw';
-        } catch (e) {
-          return { threw: e.message };
-        }
-      }`;
-    const ports = fakePortsWithBrowser({
-      async runBrowser() {
-        return { status: 'failed', error: 'browser step 1 (click #a) failed: boom' };
-      },
-    });
-    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
-    expect(result.threw).toBe('browser step 1 (click #a) failed: boom');
-    const failed = lastRecord(sink, (r) => r.nodeKind === 'browser');
-    expect(failed?.status).toBe('failed');
-
-    const skipped = await runDwfScript(
-      'export default async function (wf) { return await wf.browser({ on_stuck: "skip", steps: [] }); }',
-      fakePortsWithBrowser({ async runBrowser() { return { status: 'skipped', output: { steps: 0 } }; } }),
-      { runId: 'r2', journal: Journal.memory() },
-    );
-    expect(skipped).toBe(null);
-  });
-
-  it('wf.browser without a bound port fails loudly', async () => {
-    const script = `
-      export default async function (wf) {
-        try {
-          await wf.browser({ steps: [] });
-          return 'no-throw';
-        } catch (e) {
-          return { threw: e.message };
-        }
-      }`;
-    const result = (await runDwfScript(script, fakePorts(), { runId: 'r1', journal: Journal.memory() })) as Record<string, unknown>;
-    expect(result.threw).toContain('wf.browser is not bound');
   });
 
   it('approve resolves on approve; deny throws; timeout+skip returns null', async () => {

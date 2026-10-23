@@ -154,7 +154,6 @@ export type SummaryCategoryKey =
   | 'skill'
   | 'module'
   | 'tasks'
-  | 'canvas'
   | 'tools';
 
 /**

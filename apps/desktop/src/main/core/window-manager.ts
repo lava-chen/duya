@@ -9,7 +9,6 @@ import { getChannelManager } from '../messaging/port-manager';
 import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
-import { setMainWindow } from '../services/browser/daemon';
 import { attachWebviewGuard } from './webview-guard';
 import { loadWindowState, saveWindowState } from './window-state';
 
@@ -217,9 +216,6 @@ export async function createWindow(): Promise<void> {
     mainWindow.on('leave-full-screen', reapplyMica);
   }
 
-  // Register the main window with the browser daemon so it can forward
-  // webview CDP commands to the renderer via IPC.
-  setMainWindow(mainWindow);
 
   mainWindow.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     if (isHttpUrl(targetUrl)) {
@@ -315,11 +311,6 @@ export async function createWindow(): Promise<void> {
       mainWindow?.webContents.postMessage('config-port', null, [configChannel.port2]);
       logger.info('Config port sent to renderer', undefined, LogComponent.Main);
 
-      const conductorChannel = new MessageChannelMain();
-      channelManager.registerChannel('conductor', conductorChannel.port1);
-      mainWindow?.webContents.postMessage('conductor-port', null, [conductorChannel.port2]);
-
-      logger.info('Conductor port sent to renderer', undefined, LogComponent.Main);
     }
   });
 
@@ -360,6 +351,5 @@ export async function createWindow(): Promise<void> {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    setMainWindow(null);
   });
 }

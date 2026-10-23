@@ -55,14 +55,12 @@ import type {
 import type { ToolPermissionCheckContext } from '../../src/authorization/permissions/permissions.js';
 import type { AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-namespace';
 
-/** A canvas tool of ours, under the name the allocator produces. */
-const APP_CANVAS = 'mcp_duya_app_canvas_manage';
-/** A tool that is NOT unconditionally allowed, so the chain has work to do. */
+/** A generic app tool of ours, under the allocator's visible name. */
 const APP_UPDATE_STATE = 'mcp_duya_app_update_state';
 
 const APP_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
-  toolName: 'canvas_manage',
+  toolName: 'update_state',
   source: 'app',
 };
 
@@ -117,15 +115,15 @@ describe('the source gate gives the app layer no verdict of its own', () => {
     // `undefined` is the answer: "this provenance carries no verdict —
     // keep going". It is NOT an allow (that would skip the checks) and
     // NOT an ask (that would prompt for our own tools).
-    expect(decideMcpSource('app', 'default', APP_CANVAS)).toBeUndefined();
-    expect(decideMcpSource('app', undefined, APP_CANVAS)).toBeUndefined();
+    expect(decideMcpSource('app', 'default', APP_UPDATE_STATE)).toBeUndefined();
+    expect(decideMcpSource('app', undefined, APP_UPDATE_STATE)).toBeUndefined();
   });
 
   it('returns no decision for the app source even in a bypass mode', () => {
     // The mode short-circuit belongs to the unified chain, which the app
     // source must reach — not to the source gate.
-    expect(decideMcpSource('app', 'bypassPermissions', APP_CANVAS)).toBeUndefined();
-    expect(decideMcpSource('app', 'dontAsk', APP_CANVAS)).toBeUndefined();
+    expect(decideMcpSource('app', 'bypassPermissions', APP_UPDATE_STATE)).toBeUndefined();
+    expect(decideMcpSource('app', 'dontAsk', APP_UPDATE_STATE)).toBeUndefined();
   });
 
   it('still trusts bundled and settings outright', () => {
@@ -220,23 +218,23 @@ describe('the app source does not skip the unified chain', () => {
     expect(app.behavior).toBe('deny');
   });
 
-  it('keeps the app layer own canvas shortcut, which is an identity decision', async () => {
+  it('keeps a registered generic app tool on the permission chain', async () => {
     const evaluate = createEvaluator();
     const decision = await evaluate(
-      APP_CANVAS,
+      APP_UPDATE_STATE,
       {},
-      makeContext('default', { source: 'app', registrations: { [APP_CANVAS]: APP_REGISTRATION } }),
+      makeContext('default', { source: 'app', registrations: { [APP_UPDATE_STATE]: APP_REGISTRATION } }),
     );
-    expect(decision.behavior).toBe('allow');
+    expect(decision.behavior).not.toBe('allow');
   });
 });
 
 describe('the source verdict is enforced by the MCP executor', () => {
   function harness(source: McpToolSource) {
     const requestPermission = vi.fn(async () => 'allow' as const);
-    const invoke = vi.fn(async () => ({ id: 'r', name: APP_CANVAS, result: 'ok' }));
+    const invoke = vi.fn(async () => ({ id: 'r', name: APP_UPDATE_STATE, result: 'ok' }));
     const executor = createMCPToolExecutor<Record<string, unknown>>({
-      toolName: APP_CANVAS,
+      toolName: APP_UPDATE_STATE,
       source,
       invoke,
       ports: {
@@ -266,7 +264,7 @@ describe('the source verdict is enforced by the MCP executor', () => {
     const requestPermission = vi.fn(async () => 'deny' as const);
     const invoke = vi.fn();
     const executor = createMCPToolExecutor<Record<string, unknown>>({
-      toolName: APP_CANVAS,
+      toolName: APP_UPDATE_STATE,
       source: 'plugin',
       invoke: invoke as never,
       ports: {
@@ -327,25 +325,25 @@ describe('the host wires the registry identity into the permission chain', () =>
     return built;
   }
 
-  it('lets the app layer own canvas tool keep its unconditional allow', async () => {
+  it('keeps the registered generic app tool on the permission chain', async () => {
     const built = buildWith({
-      name: APP_CANVAS,
-      description: 'canvas',
+      name: APP_UPDATE_STATE,
+      description: 'app tool',
       input_schema: { type: 'object', properties: {} },
-      mcpInfo: { serverName: 'duya_app', toolName: 'canvas_manage', source: 'app' },
+      mcpInfo: { serverName: 'duya_app', toolName: 'update_state', source: 'app' },
     });
-    const decision = await built.canUseTool(APP_CANVAS, {});
-    expect(decision.behavior).toBe('allow');
+    const decision = await built.canUseTool(APP_UPDATE_STATE, {});
+    expect(decision.behavior).not.toBe('allow');
   });
 
   it('refuses that allow to a third-party tool registered under the same visible name', async () => {
     const built = buildWith({
-      name: APP_CANVAS,
-      description: 'canvas',
+      name: APP_UPDATE_STATE,
+      description: 'app tool',
       input_schema: { type: 'object', properties: {} },
-      mcpInfo: { serverName: 'duya', toolName: 'app_canvas_manage', source: 'plugin' },
+      mcpInfo: { serverName: 'duya', toolName: 'app_update_state', source: 'plugin' },
     });
-    const decision = await built.canUseTool(APP_CANVAS, {});
+    const decision = await built.canUseTool(APP_UPDATE_STATE, {});
     expect(decision.behavior).not.toBe('allow');
   });
 
@@ -356,10 +354,10 @@ describe('the host wires the registry identity into the permission chain', () =>
     // changes, the executor tests above stop being the whole story and
     // this assertion is the place to notice.
     const built = buildWith({
-      name: APP_CANVAS,
-      description: 'canvas',
+      name: APP_UPDATE_STATE,
+      description: 'app tool',
       input_schema: { type: 'object', properties: {} },
-      mcpInfo: { serverName: 'duya_app', toolName: 'canvas_manage', source: 'app' },
+      mcpInfo: { serverName: 'duya_app', toolName: 'update_state', source: 'app' },
     });
     expect(built.permissionContext.source).toBeUndefined();
   });

@@ -36,7 +36,7 @@
  *    siblings. No package in this repo keeps an entry at its root (every entry is
  *    `src/index.ts`, never `index.ts`), so nothing matches and the specifier
  *    yields no edge. Measured 2026-10-20 against this tree: `@duya/agent-protocol`,
- *    `@duya/ai`, `@duya/client-core`, `@duya/conductor/renderer`,
+ *    `@duya/ai`, `@duya/client-core`,
  *    `@duya/input-completion`, `@duya/memory`, `@duya/ui` and
  *    `@duya/ui/lib/ipc-client` all resolve to `null`. Cross-package dependencies
  *    expressed by bare specifier are therefore INVISIBLE here in EVERY form,
@@ -224,7 +224,7 @@ export const CLOSED: readonly ClosedEdge[] = [
     edgesAfter: 0,
     slice: '610 M5.2, then the renderer extraction',
     moved: 'Both tolerated edges are gone, and neither went because its import was deleted — both went because the files carrying them left the renderer. `app-connection-ipc.ts` now lives in `packages/ui/src/lib/` and reads its DTO from `packages/ui/src/types/app-connection.ts`, so the reach into `main/services/app-connections/types.ts` became a same-package import. `permission-profile.contract.test.ts` now sits on the main side (`apps/desktop/src/main/__tests__/`), importing its own implementation and the renderer one from `@duya/ui/lib/permission-profile`: the edge reversed in intent rather than weakening, and the check that holds preload, main and renderer to one behaviour still exists, which is what the edge was for.',
-    paidFor: 'NOTHING in this direction. One caveat is recorded rather than hidden: the reversal the second file creates is NOT visible in this graph. `packages/ui/src` imports five workspace packages by value (`@duya/agent-protocol`, `@duya/ai`, `@duya/client-core`, `@duya/conductor/renderer`, `@duya/input-completion`) and `main` now imports `@duya/ui/lib/permission-profile`, but the measured pair list contains no `pkg:ui` row in either direction. The cause is the resolver blind spot described in this file\'s header, not a clean zero: bare `@duya/*` specifiers resolve only through a named `dist` path. So reading this closure as "the reversal cost nothing measured" would be reading a gap as a measurement, and closing that gap is its own work item because it would move every count in this file at once.',
+    paidFor: 'NOTHING in this direction. One caveat is recorded rather than hidden: the reversal the second file creates is NOT visible in this graph. `packages/ui/src` imports five workspace packages by value (`@duya/agent-protocol`, `@duya/ai`, `@duya/client-core`, `@duya/input-completion`) and `main` now imports `@duya/ui/lib/permission-profile`, but the measured pair list contains no `pkg:ui` row in either direction. The cause is the resolver blind spot described in this file\'s header, not a clean zero: bare `@duya/*` specifiers resolve only through a named `dist` path. So reading this closure as "the reversal cost nothing measured" would be reading a gap as a measurement, and closing that gap is its own work item because it would move every count in this file at once.',
   },
 ];
 

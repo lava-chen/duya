@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/Button";
 import { useConversationStore } from "@/stores/conversation-store";
 import { PluginAppHost } from "./PluginAppHost";
 
 interface PluginAppLauncherProps {
   pluginId: string;
-  apps: ReadonlyArray<{ appId: string; entry: string }>;
+  apps: ReadonlyArray<{ appId: string; entry: string; runtime?: 'agent-run' | 'standalone' }>;
   /** Shown when no chat session is selected — the App needs a running one to bind. */
   emptyHint?: string;
 }
@@ -15,13 +16,22 @@ interface PluginAppLauncherProps {
 /**
  * Entry point for one plugin's Apps.
  *
- * The App is hosted as an external mini app: it runs in a sandboxed
- * webview and reaches the agent only through the session this launcher
+ * The App is hosted as an external mini app: it runs in an opaque-origin
+ * sandboxed frame and reaches the agent only through the session this launcher
  * asks the Main process to mint.
  */
 export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLauncherProps) {
   const [openAppId, setOpenAppId] = useState<string | null>(null);
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
+
+  useEffect(() => {
+    if (!openAppId) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenAppId(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [openAppId]);
 
   if (apps.length === 0) return null;
 
@@ -42,14 +52,21 @@ export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLaunch
         ))}
       </div>
 
-      {open ? (
-        activeThreadId ? (
-          <PluginAppHost pluginId={pluginId} appId={open.appId} chatSessionId={activeThreadId} />
-        ) : (
-          <div className="plugin-app-host-error" role="alert">
-            {emptyHint ?? "Select a chat session before opening an App."}
+      {open ? createPortal(
+        <div className="plugin-app-overlay" role="dialog" aria-modal="true" aria-label={open.appId}>
+          <div className="plugin-app-overlay-bar">
+            <span>{open.appId}</span>
+            <Button variant="secondary" size="sm" onClick={() => setOpenAppId(null)}>Close</Button>
           </div>
-        )
+          {open.runtime === 'standalone' || activeThreadId ? (
+            <PluginAppHost pluginId={pluginId} appId={open.appId} chatSessionId={open.runtime === 'standalone' ? undefined : activeThreadId ?? undefined} />
+          ) : (
+            <div className="plugin-app-host-error" role="alert">
+              {emptyHint ?? "Select a chat session before opening an App."}
+            </div>
+          )}
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

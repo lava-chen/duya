@@ -5,13 +5,11 @@ import { getChannelManager } from '../messaging/port-manager';
 import { getPerformanceMonitor } from '../services/performance-monitor';
 import { stopGatewayProcess } from '../gateway/index';
 import { getSessionManager } from '../agents/session-manager';
-import { stopBrowserDaemon } from '../services/browser/daemon';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDatabase } from '../ipc/db-handlers';
 import { closeDatabase, stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
 import { cleanupUpdater } from '../services/updater';
-import { shutdownProjectDatabaseService } from '../project-database/service';
 
 let isShuttingDown = false;
 
@@ -25,6 +23,13 @@ export async function performGracefulShutdown(): Promise<void> {
 
   const logger = getLogger();
   logger.info('Starting graceful shutdown...', undefined, 'Main');
+
+  try {
+    const { shutdownPluginApps } = await import('../plugins/plugin-app-host');
+    await shutdownPluginApps();
+  } catch (err) {
+    logger.error('Error stopping Plugin Apps', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
 
   // 0. Stop CLI API server (Phase 0) — runs first so we don't accept new
   // requests after other subsystems begin tearing down.
@@ -85,25 +90,17 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error shutting down session manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
-  // 6. Stop Browser Daemon
+  // 6.45 Stop the shared OSContext producer.
   try {
-    await stopBrowserDaemon();
-    logger.info('Browser Daemon stopped', undefined, 'Main');
-  } catch (err) {
-    logger.error('Error stopping Browser Daemon', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
-  }
-
-  // 6.45 Stop computer-use-demo daemon (Plan 453 Task D).
-  try {
-    const { getComputerUseDaemon } = await import('../services/computer-use-daemon');
-    const cuDaemon = getComputerUseDaemon();
+    const { getRecorderProcessDaemon } = await import('../services/recorder/process-daemon');
+    const cuDaemon = getRecorderProcessDaemon();
     await cuDaemon.stop();
-    logger.info('ComputerUseDaemon stopped', undefined, 'Main');
+    logger.info('OSContext producer stopped', undefined, 'Main');
   } catch (err) {
-    // getComputerUseDaemon throws when init() never ran; that's OK
+    // getRecorderProcessDaemon throws when init() never ran; that's OK
     // when the user hasn't enabled wake-agent.
     logger.info(
-      'ComputerUseDaemon not initialized; skipping',
+      'OSContext producer not initialized; skipping',
       undefined,
       'Main',
     );
@@ -173,7 +170,6 @@ export async function performGracefulShutdown(): Promise<void> {
 
   // 7.6 Checkpoint and close project-local database connections.
   try {
-    await shutdownProjectDatabaseService();
   } catch (err) {
     logger.error('Error shutting down project database service', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
   }

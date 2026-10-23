@@ -10,12 +10,10 @@
 @import "./skills.css";
 @import "./workspace.css";
 @import "./preview.css";
-@import "./canvas.css";
 @import "./mailbox.css";
 @import "./preview-drawer.css";
 @import "../components/diff/diff-styles.css";
 @import "./office-browser.css";
-@import "./conductor.css";
 @import "./code-review.css";
 @import "./code-review-v2.css";
 @import "./composer-panels.css";

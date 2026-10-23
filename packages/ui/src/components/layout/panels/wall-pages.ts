@@ -9,9 +9,7 @@
 //   browser  — the embedded browser
 //   terminal — a shell
 //
-// The canvas page (`conductor`) is deliberately not part of the wall: it is
-// opened by events (chat pills) and keeps working, but the wall does not
-// offer it.
+// Plugin Apps use the generic Apps view rather than this panel registry.
 
 import type { PageId } from "./page-tab";
 

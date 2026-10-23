@@ -4,19 +4,15 @@
  * ## What this pins
  *
  * The model-visible name of every `duya_app` tool is a PURE prefix
- * concatenation — `canvas_manage` becomes `mcp_duya_app_canvas_manage` —
+ * concatenation for every app tool name.
  * with no truncation, no hash suffix, and no de-duplication suffix.
  *
  * That reversibility is load-bearing, not incidental. Three separate
- * consumers need to recognise "this is the canvas tool" (or the bot
- * tool, or the browser tool) from the model-visible name alone:
+ * consumers need to recognize the originating app tool from the model-visible name:
  *
  *   - the desktop renderer, which routes a tool to its dedicated row
  *     (the renderer never sees `mcpInfo` — plan 616 §C7);
- *   - the agent profiles, whose allow/deny patterns are written against
- *     the ORIGINAL name (`canvas:*`, `duya:*`);
- *   - the permission gate, which keeps the canvas tools' unconditional
- *     allow (`isCanvasTool`).
+ *   - the permission gate, which resolves app tool identities.
  *
  * If the naming ever stopped being invertible, all three would need a
  * registry lookup instead of a pure function — and the renderer could
@@ -39,7 +35,6 @@ import {
   resolveAppToolBaseNameFromInternalKey,
   isAppToolName,
 } from '../../src/AppServer/app-tool-namespace.js';
-import { getCanvasConductorTools } from '../../src/canvas/index.js';
 
 /** The tool names `duya_app` will carry (plan 616 §3 and §3.1). */
 const APP_TOOL_NAMES = DUYA_APP_TOOL_NAMES;
@@ -93,15 +88,7 @@ describe('plan 616 — the duya_app tool namespace', () => {
     expect(isAppToolName(DUYA_APP_TOOL_PREFIX)).toBe(false);
   });
 
-  it('the app tool set covers every canvas tool the app server serves', () => {
-    // The set is what makes name resolution unambiguous, so it must not
-    // drift from what the server actually registers. The canvas family
-    // is the largest group and is served by the capability layer today.
-    const canvasToolNames = getCanvasConductorTools().map((tool) => tool.definition.name);
-    for (const name of canvasToolNames) {
-      expect(DUYA_APP_TOOL_NAMES).toContain(name);
-    }
-  });
+
 });
 
 describe('plan 616 — the registry\'s internal key resolves to the same tool', () => {
@@ -130,8 +117,8 @@ describe('plan 616 — the registry\'s internal key resolves to the same tool', 
     expect(resolveAppToolBaseNameFromInternalKey('mcp__github__create_issue')).toBeUndefined();
     expect(appToolOriginalName('mcp__github__create_issue')).toBe('mcp__github__create_issue');
     // Not even when the tool segment is one of ours.
-    expect(resolveAppToolBaseNameFromInternalKey('mcp__duya__canvas_manage')).toBeUndefined();
-    expect(appToolOriginalName('mcp__duya__canvas_manage')).toBe('mcp__duya__canvas_manage');
+    expect(resolveAppToolBaseNameFromInternalKey('mcp__duya__save_note')).toBeUndefined();
+    expect(appToolOriginalName('mcp__duya__save_note')).toBe('mcp__duya__save_note');
   });
 
   it('leaves an unknown tool of our own server alone', () => {

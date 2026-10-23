@@ -89,18 +89,6 @@ process.on('message', (msg: Record<string, unknown>) => {
     return;
   }
 
-  if (msg.type === 'conductor:executor:rpc:response' && typeof msg.requestId === 'string') {
-    const key = `rpc:${msg.requestId}`;
-    const workerChild = workerDbRequests.get(key);
-    if (workerChild) {
-      // H5: Always delete the entry, even if the worker has exited
-      workerDbRequests.delete(key);
-      if (!workerChild.killed) {
-        workerChild.send(msg);
-      }
-    }
-    return;
-  }
   // Plan 312: route appConnection:invoke:response back to the worker.
   if (msg.type === 'appConnection:invoke:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;
@@ -128,37 +116,6 @@ process.on('message', (msg: Record<string, unknown>) => {
   // Plan 503: route appConnection:catalog:response back to the worker
   // (bot-only connector-management tools: provider directory + status DTOs).
   if (msg.type === 'appConnection:catalog:response' && typeof msg.requestId === 'string') {
-    const key = `rpc:${msg.requestId}`;
-    const workerChild = workerDbRequests.get(key);
-    if (workerChild) {
-      workerDbRequests.delete(key);
-      if (!workerChild.killed) {
-        workerChild.send(msg);
-      }
-    }
-    return;
-  }
-  // Plan 454: route computer-use:execute:response back to the worker.
-  // Without this branch every computer_use tool call times out after
-  // 30s — the worker's pendingIpcRequests map never receives the
-  // response. The request side (apps/desktop/src/main/agents/server/router.ts:465)
-  // and the main-side dispatcher (agent-server-lifecycle.ts:261) are
-  // both wired correctly; only this return path was missing.
-  if (msg.type === 'computer-use:execute:response' && typeof msg.requestId === 'string') {
-    const key = `rpc:${msg.requestId}`;
-    const workerChild = workerDbRequests.get(key);
-    if (workerChild) {
-      workerDbRequests.delete(key);
-      if (!workerChild.killed) {
-        workerChild.send(msg);
-      }
-    }
-    return;
-  }
-  // Plan 575 §0-⑥: route computer-use:cua:response back to the worker.
-  // Same gap class as the computer-use:execute branch above — without
-  // this return path every computer_cua call times out after 15s.
-  if (msg.type === 'computer-use:cua:response' && typeof msg.requestId === 'string') {
     const key = `rpc:${msg.requestId}`;
     const workerChild = workerDbRequests.get(key);
     if (workerChild) {

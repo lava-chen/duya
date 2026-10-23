@@ -2,13 +2,13 @@
  * Plugin App host protocol — the wire between a hosted mini app and the
  * renderer that hosts it.
  *
- * The guest runs in a sandboxed webview with no preload and no direct
+ * The guest runs in an opaque-origin sandboxed iframe with no preload and no direct
  * channel to the Main process. It reaches its host with `postMessage`, and
  * the host relays every message into the Main process, which re-checks it
  * against the session before it reaches the Host.
  *
  * Guest → host:
- *   { channel: 'duya.plugin-app', id, method: 'bind' | 'invoke' | 'revoke', toolId?, arguments? }
+ *   { channel: 'duya.plugin-app', documentToken, id, method: 'bind' | 'invoke' | 'revoke', toolId?, arguments? }
  *
  * Host → guest:
  *   { channel: 'duya.plugin-app', id, ok, result?, error? }
@@ -24,6 +24,8 @@ export type PluginAppGuestMethod = "bind" | "invoke" | "revoke";
 
 export interface PluginAppGuestRequest {
   channel: typeof PLUGIN_APP_CHANNEL;
+  /** Proves this request came from the launched package document, not a later navigation. */
+  documentToken: string;
   id: string;
   method: PluginAppGuestMethod;
   toolId?: string;
@@ -42,6 +44,52 @@ export interface PluginAppLaunch {
   sessionId: string;
   launchNonce: string;
   entryUrl: string;
+  documentToken: string;
+}
+
+const DOCUMENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+/** Extract the per-launch token from a trusted loopback asset URL. */
+export function getPluginAppDocumentToken(entryUrl: string): string | null {
+  if (!isPluginAppEntryUrl(entryUrl)) return null;
+  const token = new URL(entryUrl).pathname.split("/", 2)[1];
+  return token && DOCUMENT_TOKEN_PATTERN.test(token) ? token : null;
+}
+
+/** Accept only an asset URL served by the trusted loopback Plugin App host. */
+export function isPluginAppEntryUrl(raw: unknown): raw is string {
+  if (typeof raw !== "string") return false;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:"
+      && url.hostname === "127.0.0.1"
+      && url.port.length > 0
+      && url.username.length === 0
+      && url.password.length === 0
+      && url.pathname.split("/").length >= 3
+      && DOCUMENT_TOKEN_PATTERN.test(url.pathname.split("/", 2)[1] ?? "")
+      && url.search.length === 0
+      && url.hash.length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Narrow the untrusted value returned across the Plugin App IPC boundary. */
+export function parsePluginAppCallResult(raw: unknown): {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+} | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.ok !== "boolean") return null;
+  if (value.error !== undefined && typeof value.error !== "string") return null;
+  return {
+    ok: value.ok,
+    ...(value.result !== undefined ? { result: value.result } : {}),
+    ...(typeof value.error === "string" ? { error: value.error } : {}),
+  };
 }
 
 const MAX_ID_LENGTH = 128;
@@ -55,17 +103,21 @@ const MAX_ARGUMENT_KEYS = 64;
  * extra fields are refused rather than repaired, so a malformed message
  * never turns into a partially-understood call.
  */
-export function parsePluginAppGuestRequest(raw: unknown): PluginAppGuestRequest | null {
+export function parsePluginAppGuestRequest(
+  raw: unknown,
+  expectedDocumentToken: string,
+): PluginAppGuestRequest | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const message = raw as Record<string, unknown>;
   if (message.channel !== PLUGIN_APP_CHANNEL) return null;
+  if (message.documentToken !== expectedDocumentToken) return null;
 
   const id = message.id;
   if (typeof id !== "string" || id.length === 0 || id.length > MAX_ID_LENGTH) return null;
 
   const method = message.method;
   if (method === "bind" || method === "revoke") {
-    return { channel: PLUGIN_APP_CHANNEL, id, method };
+    return { channel: PLUGIN_APP_CHANNEL, documentToken: expectedDocumentToken, id, method };
   }
 
   if (method === "invoke") {
@@ -80,6 +132,7 @@ export function parsePluginAppGuestRequest(raw: unknown): PluginAppGuestRequest 
     if (!keys.every((key) => key.length > 0 && key.length <= MAX_TOOL_ID_LENGTH)) return null;
     return {
       channel: PLUGIN_APP_CHANNEL,
+      documentToken: expectedDocumentToken,
       id,
       method,
       toolId,
@@ -105,10 +158,11 @@ export function getPluginAppAPI() {
   const api = window.electronAPI?.pluginApp;
   if (!api) return null;
   return {
-    open: (payload: { pluginId: string; appId: string; chatSessionId: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
       api.open(payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       api.call(payload),
     close: (payload: { sessionId: string }) => api.close(payload),
+    onChanged: (callback: (payload: { pluginId: string }) => void) => api.onChanged(callback),
   };
 }

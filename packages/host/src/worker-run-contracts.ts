@@ -33,8 +33,6 @@ export interface AgentOptions {
     retryConfig?: import('@duya/ai').RetryConfig;
     visionConfig?: VisionConfig;
     compactModelConfig?: CompactModelConfig;
-    blockedDomains?: string[];
-    browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
     language?: string;
     defaultWorkspaceDirectory?: string;
     permissionRules?: {
@@ -103,7 +101,7 @@ export interface ChatOptions {
     };
     displayContent?: string;
     attachments?: FileAttachment[];
-    conductorIpc?: {
+    hostIpc?: {
         sendToMain: (msg: Record<string, unknown>) => void;
         ipcRequest: <T = unknown>(channel: string, payload: unknown, options?: {
             timeout?: number;
@@ -123,8 +121,6 @@ export interface ChatOptions {
     researchIntent?: import('./worker-prompts/research/types.js').ResearchTaskIntent;
     researchProjectId?: string;
     effort?: string;
-    conductorMode?: boolean;
-    conductorCanvasId?: string;
     backgroundTaskResume?: boolean;
     llmRequestTimeoutMs?: number;
     clientMsgId?: string;
@@ -199,26 +195,7 @@ export interface ToolUseContext {
             message: string;
         };
     }>;
-    conductorCanvasId?: string;
-    canvasTarget?: CanvasTargetState;
-    updateModeCanvasId?: (canvasId: string) => void;
-    canvasFreshness?: CanvasFreshnessState;
-    widgetStyleHistory?: WidgetStyleSignature[];
     currentProjectId?: string | null;
-}
-export interface CanvasFreshnessState {
-    lastListElementsTime?: number;
-    recentlyCreatedElementIds: Set<string>;
-}
-export interface CanvasTargetState {
-    canvasId?: string;
-    canvasName?: string;
-}
-export interface WidgetStyleSignature {
-    backgroundColor?: string;
-    textColor?: string;
-    fontFamily?: string;
-    layoutType?: string;
 }
 export interface ToolUseContextOptions {
     recentImageAttachments?: Array<{

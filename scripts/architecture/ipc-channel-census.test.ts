@@ -267,18 +267,15 @@ describe('live tree ledger', () => {
       'appConnection:invoke',
       'appConnection:listDescriptors',
       'bot-identity:rpc',
-      'computer-use:cua',
-      'computer-use:execute',
-      'conductor:executor:rpc',
       'memory-tier:rpc',
     ]);
   });
 
-  it('pins the current structural debt (asymmetry 5 / duplicate 8)', () => {
+  it('pins the current structural debt (asymmetry 4 / duplicate 5)', () => {
     const report = collectIpcChannelCensus();
     const tally = { error: 0, asymmetry: 0, duplicate: 0 };
     for (const finding of report.findings) tally[finding.severity as keyof typeof tally] += 1;
-    expect(tally).toEqual({ error: 0, asymmetry: 5, duplicate: 8 });
+    expect(tally).toEqual({ error: 0, asymmetry: 4, duplicate: 5 });
   });
 
   it('attributes the duplicates to the router and the asymmetries to the two known sites', () => {

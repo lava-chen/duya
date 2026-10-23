@@ -22,8 +22,6 @@ import type { CoreSession } from '@duya/data/session-store';
  */
 const SESSION_EXTENSION_KEYS = [
   'system_prompt',
-  'conductor_mode_enabled',
-  'conductor_canvas_id',
   'context_summary',
   'context_summary_updated_at',
   'plan_mode_enabled',
@@ -63,8 +61,6 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     agent_profile_id: session.agentProfileId,
     agent_type: session.agentType,
     agent_name: session.agentName,
-    conductor_mode_enabled: ext.conductor_mode_enabled ?? 0,
-    conductor_canvas_id: ext.conductor_canvas_id ?? null,
     plan_mode_enabled: ext.plan_mode_enabled ?? 0,
     goal_mode_enabled: ext.goal_mode_enabled ?? 0,
     draft_message: session.draft ?? '',

@@ -8,7 +8,7 @@ Electron 无关的数据根解析、SQLite 连接与迁移、持久化 store。�
 
 - 数据根与三个 DB 文件路径的解析（含测试 namespace 隔离）。
 - 主库（main）与核心库（core）的连接、schema 初始化、迁移执行、WAL checkpoint。
-- 持久化 store：session / task / goal / run / research / conductor / message-log 等。
+- 持久化 store：session / task / goal / run / research / message-log 等。
 
 **不负责**
 
@@ -47,5 +47,5 @@ Electron 无关的数据根解析、SQLite 连接与迁移、持久化 store。�
 
 - `architecture-policy.yaml:213-223`：模块 `data`，`managed: true`，`requires: [agent-protocol]`——只能依赖协议包。
 - **三套迁移注册表别混**：(1) 主库 `packages/data/src/main-schema.ts:23`；(2) 核心库 `packages/data/src/core-stores.ts:1197`（由 `packages/data/src/core-database.ts:69` 执行）；(3) `memory-state.db` 由**桌面 app** 拥有（`apps/desktop/src/main/memory-state/migrations/index.ts:42`），不归本包。
-- **已知表名重复**：`research_*` 同时出现在 `packages/data/src/main-schema.ts:1627`（主库）与 `packages/data/src/research-store.ts:434`（核心库）；`conductor_*` 同理（`packages/data/src/main-schema.ts:288` vs `packages/data/src/conductor-store.ts:257`）。两套都在本包内，别按表名猜库。
+- **已知表名重复**：`research_*` 同时出现在 `packages/data/src/main-schema.ts:1627`（主库）与 `packages/data/src/research-store.ts:434`（核心库）。两套都在本包内，别按表名猜库。
 - 本包依赖原生 `better-sqlite3`；Electron 与本地 Node 的 ABI 不同，切换运行时要用 `scripts/ensure-sqlite-abi.mjs`（见根 `AGENTS.md` 的 Footguns）。

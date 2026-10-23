@@ -43,14 +43,5 @@ describeLive('AxHelperClient (live helper binary)', () => {
     }
   }, 10_000);
 
-  it('surfaces permission-denied for AX reads while untrusted', async () => {
-    const permissions = await client.permissions();
-    // Only meaningful when the host process lacks the Accessibility grant.
-    if (permissions && permissions.accessibility !== 'granted') {
-      const code = await client.performAction(1, 'h-nonexistent', 'AXPress');
-      // untrusted → permission-denied before the handle lookup; trusted
-      // environments (manual runs) may see stale-handle instead.
-      expect(['permission-denied', 'stale-handle']).toContain(code);
-    }
-  }, 10_000);
+
 });

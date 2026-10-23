@@ -76,7 +76,6 @@ function makeClient(
     probeTimeoutMs: 200,
     fgTimeoutMs: 200,
     enumerateTimeoutMs: 200,
-    actionTimeoutMs: 200,
     queryTimeoutMs: 200,
     readUrlTimeoutMs: 200,
     readyTimeoutMs: 1_000,
@@ -119,35 +118,6 @@ describe('AxHelperClient', () => {
     );
     const fg = await done;
     expect(fg).toEqual({ windowId: 9, pid: 4242, processName: 'Safari', title: 'Home' });
-    await client.dispose();
-  });
-
-  it('maps a permission-denied action to its error code', async () => {
-    const { procs, spawnFn } = makeSpawnFns();
-    const client = makeClient(spawnFn);
-    const done = client.performAction(42, 'h1', 'AXPress');
-    await flush();
-    procs[0]!.pushStdout('{"ready":true}\n');
-    await flush();
-    procs[0]!.pushStdout(
-      '{"id":1,"ok":false,"error":{"code":"permission-denied","message":"not trusted"}}\n',
-    );
-    expect(await done).toBe('permission-denied');
-    await client.dispose();
-  });
-
-  it('returns null on success for performAction and reports stale-handle misses', async () => {
-    const { procs, spawnFn } = makeSpawnFns();
-    const client = makeClient(spawnFn);
-    const ok = client.performAction(42, 'h1', 'AXPress');
-    const stale = client.performAction(42, 'hZZ', 'AXPress');
-    await flush();
-    procs[0]!.pushStdout('{"ready":true}\n');
-    await flush();
-    procs[0]!.pushStdout('{"id":1,"ok":true,"performed":true}\n');
-    procs[0]!.pushStdout('{"id":2,"ok":false,"error":{"code":"stale-handle"}}\n');
-    expect(await ok).toBeNull();
-    expect(await stale).toBe('stale-handle');
     await client.dispose();
   });
 

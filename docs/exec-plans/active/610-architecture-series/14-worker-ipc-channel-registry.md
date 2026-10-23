@@ -37,20 +37,30 @@
 
 双见证是刻意的：单靠见证 A 时，**删掉那一行 `case` 会让通道静默离开宇宙**，普查对一条已挂死的通道报绿。并集意味着通道只有在两处独立产物都消失后才会不见。`db` 按名排除（不同传输族）；单向通知（`bash_task:update` / `hook_task:update`）无需豁免——它们从不被回应，因而不被任何见证匹配，这正是被断言的性质。
 
-当前红集：
+当前普查结果以 2026-10-23 的 `5adbd1a4` 为准（`node scripts/architecture/ipc-channel-census.mjs --json`；只读采集，未运行测试）。这轮有意删除了内置 computer-use 与 conductor runtime，因此双见证中已不存在的通道离开宇宙；现在为 **5 条通道 × 7 个站点**：
 
 | 级别 | 数量 | 站点 | 判定 |
 | --- | --- | --- | --- |
-| error | **0** | — | 每条通道都有出站、入站、执行路由、转发与回传 —— 家族今日结构完整 |
-| asymmetry | **5** | `host-manager-drop`（`memory-tier:rpc`、`bot-identity:rpc`）、`server-forward-interagent`（`appConnection:invoke/listDescriptors/catalog`） | 需显式立项或显式豁免 |
-| duplicate | **8** | `server-forward-router`（每通道 3 份） | 结构债，正确性无碍 |
+| error | **0** | — | 当前宇宙中的通道均满足 `exactly` / `min` 站点规则 |
+| asymmetry | **4** | `host-manager-drop`（`bot-identity:rpc`、`memory-tier:rpc`）；`server-forward-interagent`（同两条） | 需显式立项或豁免 |
+| duplicate | **5** | `server-forward-router`（每通道 3 份） | 结构债 |
 
-两处 asymmetry 的**根因已定位，均属良性但隐式**：
+当前通道为 `appConnection:catalog`、`appConnection:invoke`、`appConnection:listDescriptors`、`bot-identity:rpc`、`memory-tier:rpc`。被移除的 `computer-use:cua`、`computer-use:execute` 与 `conductor:executor:rpc` 已不再同时出现在两个发现见证中，因而不进入当前统计。当前报告确认 worker 出站、worker 入站、Main 执行路由和响应回传每条均为 1 处；router 每条为 3 处；Host manager 对前 3 条 appConnection 通道为 1 处、其余两条为 0；inter-agent 对 appConnection 通道为 0、其余两条为 1。
+
+以下根因与变异记录是 2026-10-16 的历史基线，不代表当前实现：
+
+| 级别 | 历史数量 | 站点 | 当时判定 |
+| --- | --- | --- | --- |
+| error | **0** | — | 当时 universe 的站点无缺失 |
+| asymmetry | **5** | `host-manager-drop`（`memory-tier:rpc`、`bot-identity:rpc`）、`server-forward-interagent`（`appConnection:invoke/listDescriptors/catalog`） | 历史 red set |
+| duplicate | **8** | `server-forward-router`（每通道 3 份） | 历史结构债 |
+
+历史基线的两处 asymmetry 根因如下；这些说明只描述当时的 `host-manager-drop` 与 inter-agent 分布：
 
 - `host-manager-drop` 缺的两条会流向 `onWorkerMessage` → `run-execution.ts:295` `#onWorkerMessage`，而它只认 `db:request` 与 `chat:*` / `compact:*`，其余静默忽略。净效果与"被丢弃"相同 —— 但白名单读起来像权威关卡，实际不是。
 - `server-forward-interagent` 缺的三条是 `appConnection:*`；同一文件对 `bot-identity:rpc` 留有一条注释，写明缺该转发会导致 15s 静默超时。兄弟站点的存在说明这更像遗漏而非设计，但需人工判定。
 
-**变异证明**（活性验证，非 fixture）：在真实源码上临时制造缺陷，确认脚本报红后原样还原 ——
+**历史变异证明**（2026-10-16，非当前验证）：在当时真实源码上临时制造缺陷，确认脚本报红后原样还原 ——
 
 | 变异 | 结果 |
 | --- | --- |

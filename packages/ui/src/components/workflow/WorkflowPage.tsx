@@ -132,13 +132,7 @@ export function WorkflowPage({
           onOpenDetail={(name, scope) => setDetail({ name, scope, tab: 'definition' })}
         />
       ) : (
-        <RecorderView
-          key={reloadKey}
-          projectDir={projectDir}
-          // A newly saved definition only needs the library to refetch the
-          // next time it mounts; bumping the key here does exactly that.
-          onDefinitionSaved={() => setReloadKey((key) => key + 1)}
-        />
+        <RecorderView key={reloadKey} />
       )}
     </PageFrame>
   );

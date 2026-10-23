@@ -131,10 +131,6 @@
       "types": "./dist/local-plugin-app-invocation-api.d.ts",
       "import": "./dist/local-plugin-app-invocation-api.js"
     },
-    "./local-workbench-api": {
-      "types": "./dist/local-workbench-api.d.ts",
-      "import": "./dist/local-workbench-api.js"
-    },
     "./local-import-batch-api": {
       "types": "./dist/local-import-batch-api.d.ts",
       "import": "./dist/local-import-batch-api.js"
@@ -618,7 +614,6 @@
     "@duya/plugin-core": "0.1.0",
     "jimp": "^1.6.0",
     "picomatch": "^4.0.4",
-    "@duya/computer-use": "0.0.1",
     "yaml": "^2.9.0",
     "esbuild": "^0.27.7",
     "playwright": "^1.59.1"

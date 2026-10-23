@@ -63,10 +63,6 @@ const INTERNAL = 'mcp__duya_app__update_state';
 const ALWAYS_VISIBLE = 'mcp_duya_app_MessageSession';
 const ALWAYS_INTERNAL = 'mcp__duya_app__MessageSession';
 
-/** The canvas short-circuit's tool, under both spellings. */
-const CANVAS_VISIBLE = 'mcp_duya_app_canvas_manage';
-const CANVAS_INTERNAL = 'mcp__duya_app__canvas_manage';
-
 const UPDATE_STATE_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
   toolName: 'update_state',
@@ -76,12 +72,6 @@ const UPDATE_STATE_REGISTRATION: AppToolRegistration = {
 const SESSION_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
   toolName: 'MessageSession',
-  source: 'app',
-};
-
-const CANVAS_REGISTRATION: AppToolRegistration = {
-  serverName: 'duya_app',
-  toolName: 'canvas_manage',
   source: 'app',
 };
 
@@ -152,16 +142,6 @@ describe('the deferred path decides the same as the direct path', () => {
       ALWAYS_INTERNAL,
       {},
       makeContext('default', {}, registrationsFor(ALWAYS_VISIBLE, ALWAYS_INTERNAL, SESSION_REGISTRATION)),
-    );
-    expect(decision.behavior).toBe('allow');
-  });
-
-  it('keeps the canvas short-circuit under the internal key', async () => {
-    const evaluate = createEvaluator();
-    const decision = await evaluate(
-      CANVAS_INTERNAL,
-      {},
-      makeContext('default', {}, registrationsFor(CANVAS_VISIBLE, CANVAS_INTERNAL, CANVAS_REGISTRATION)),
     );
     expect(decision.behavior).toBe('allow');
   });
@@ -298,15 +278,6 @@ describe('the internal key earns no unconditional allow on its own', () => {
     expect(decision.behavior).not.toBe('allow');
   });
 
-  it('refuses the canvas short-circuit to an internal key registered to somebody else', async () => {
-    const evaluate = createEvaluator();
-    const decision = await evaluate(
-      CANVAS_INTERNAL,
-      {},
-      makeContext('default', {}, registrationsFor(CANVAS_VISIBLE, CANVAS_INTERNAL, IMPOSTOR_REGISTRATION)),
-    );
-    expect(decision.behavior).not.toBe('allow');
-  });
 });
 
 describe('the host registry answers for both spellings', () => {
@@ -344,15 +315,15 @@ describe('the host registry answers for both spellings', () => {
     );
   }
 
-  it('keeps the app layer own canvas tool allowed under the internal key', async () => {
-    const built = buildWith({ serverName: 'duya_app', toolName: 'canvas_manage', source: 'app' });
-    const decision = await built.canUseTool(CANVAS_INTERNAL, {});
+  it('keeps the app layer own always-allowed tool allowed under the internal key', async () => {
+    const built = buildWith({ serverName: 'duya_app', toolName: 'MessageSession', source: 'app' });
+    const decision = await built.canUseTool(ALWAYS_INTERNAL, {});
     expect(decision.behavior).toBe('allow');
   });
 
   it('refuses that allow to a third-party tool under the internal key', async () => {
-    const built = buildWith({ serverName: 'duya', toolName: 'app_canvas_manage', source: 'plugin' });
-    const decision = await built.canUseTool('mcp__duya__app_canvas_manage', {});
+    const built = buildWith({ serverName: 'duya', toolName: 'app_MessageSession', source: 'plugin' });
+    const decision = await built.canUseTool('mcp__duya__app_MessageSession', {});
     expect(decision.behavior).not.toBe('allow');
   });
 });

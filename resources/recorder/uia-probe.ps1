@@ -1,9 +1,7 @@
-﻿# uia-probe.ps1 — persistent UIA point-probe service (plan 556 phase 2).
+# uia-probe.ps1 — persistent UIA point-probe service (plan 556 phase 2).
 #
-# Runs as a single PowerShell 5.1 child process (spawned by the shared
-# computer-use daemon pipeline). Line protocol on stdin/stdout; the
-# shapes are defined in packages/computer-use/src/recorder/
-# uia-probe-protocol.ts:
+# Runs as a single PowerShell 5.1 child process (spawned by the recorder process daemon). Line protocol on stdin/stdout; the
+# shapes are defined in the recorder uia-probe protocol:
 #
 #   → {"id":1,"op":"probe","x":123,"y":456}
 #   ← {"id":1,"ok":true,"element":{"name":"..","controlType":"Button",
@@ -35,24 +33,12 @@
 #   plan 576 walk semantics: the per-root-child shard is a recursive
 #   ControlView TreeWalker walk (not a flat FindAll), so every emitted
 #   node carries its REAL tree `depth`. Static Text nodes never occupy
-#   emission slots (the 1-based invoke cache order stays interactive-only,
+#   emission slots (
 #   plan 576 red line) — their text rides as a `label` on the next
 #   emitted element (forward attachment, capped). `maxNodes` budgets
 #   VISITED nodes (Text/containers included, so a virtualized list cannot
 #   flood the walk); offscreen subtrees are emitted as flagged leaves and
 #   NOT descended into, which keeps the budget on on-screen content.
-#   → {"id":5,"op":"invoke","hwnd":197144,"index":12,"method":"invoke",  — plan 564
-#        "value":null,"name":"Sign in","controlType":"Button"}   structural act op:
-#      {"id":5,"ok":true,"method":"invoke","pattern":"InvokePattern",  resolve the
-#         "element":{...},"value":null}              1-based element from the last
-#      {"id":5,"ok":false,"reason":"stale-tree"}     enumerate for that hwnd, verify
-#                                                    name/controlType when given,
-#                                                    dispatch a UIA pattern, return
-#                                                    the post-action element JSON.
-#                                                    Failure reasons: stale-tree,
-#                                                    no-element, no-pattern,
-#                                                    bad-index, no-window, timeout.
-#
 # The first stdout line is {"ready":true} once Add-Type finished — the
 # main-side client gates ensureStarted() on it. All UIA work (which can
 # block on hung/elevated targets) runs inside a .NET Task with a Wait
@@ -63,10 +49,8 @@ $ErrorActionPreference = 'Continue'
 try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 } catch { }
-# stdin is a redirected pipe; [Console]::In decodes with the console
-# input codepage (GBK on zh-CN hosts), which mangles every non-ASCII
-# name the request carries (invoke/selectText guards become mojibake and
-# fail closed as stale-tree). Decode explicitly as UTF-8 instead.
+# stdin is a redirected pipe; decode explicitly as UTF-8 so element names
+# and other non-ASCII request values are preserved.
 try {
     [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 } catch { }
@@ -374,29 +358,8 @@ namespace Duya.Recorder
         [DllImport("kernel32.dll")]
         private static extern bool CloseHandle(IntPtr handle);
 
-        // ---- plan 575 CUA surface: window/app enumeration + text selection ----
-
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern bool IsWindowVisible(IntPtr hWnd);
-
         [DllImport("user32.dll")]
         private static extern bool IsIconic(IntPtr hWnd);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-
-        [DllImport("user32.dll")]
-        private static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-
-        // DWMWA_CLOAKED = 14 — a UWP shell window reports visible to
-        // IsWindowVisible while actually suspended/hidden; DWM knows.
-        [DllImport("dwmapi.dll")]
-        private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
 
         private static bool IsProcessElevated(int pid)
         {
@@ -445,11 +408,6 @@ namespace Duya.Recorder
         private class EnumState
         {
             public readonly List<string> Nodes = new List<string>();
-            // Invoke-slot snapshots parallel to Nodes (plan 564): runtime
-            // id + name/type captured for free off the cached walk, so
-            // `invoke` can re-hydrate a LIVE element without the walk
-            // ever paying a per-node cross-process property read.
-            public readonly List<InvokeSlot> Slots = new List<InvokeSlot>();
             public readonly object Gate = new object();
             public readonly HashSet<string> ControlTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             public Stopwatch Clock;
@@ -481,25 +439,10 @@ namespace Duya.Recorder
                 get { return Visited >= MaxNodes || Clock.ElapsedMilliseconds >= TotalMs; }
             }
 
-            public void Add(string json, InvokeSlot slot)
+            public void Add(string json)
             {
-                lock (Gate)
-                {
-                    Nodes.Add(json);
-                    Slots.Add(slot);
-                }
+                lock (Gate) { Nodes.Add(json); }
             }
-        }
-
-        // One invoke-cache slot: everything `invoke` needs to re-hydrate
-        // the live element later. RuntimeId is the stable handle; name /
-        // controlType double as the staleness guards the model's invoke
-        // request carries.
-        private class InvokeSlot
-        {
-            public int[] RuntimeId;
-            public string Name;
-            public string ControlType;
         }
 
         // Bulk-cache request for the enumerate walk (plan 562 perf fix).
@@ -522,7 +465,6 @@ namespace Duya.Recorder
             cr.Add(AutomationElement.IsEnabledProperty);
             cr.Add(AutomationElement.HasKeyboardFocusProperty);
             cr.Add(AutomationElement.HelpTextProperty);
-            cr.Add(AutomationElement.RuntimeIdProperty);
             cr.Add(ValuePattern.Pattern);
             cr.Add(SelectionItemPattern.Pattern);
             cr.Add(TogglePattern.Pattern);
@@ -757,7 +699,7 @@ namespace Duya.Recorder
 
         // Phase 2: DFS emit over the collected wrapper tree. Static Text
         // nodes NEVER occupy emission slots (plan 576 red line — the
-        // 1-based invoke cache order stays interactive-only); their text
+        // emitted-node list stays limited to interactive controls); their text
         // is absorbed as `label` on the next emitted element (forward
         // attachment, capped). The run rides through anonymous containers,
         // which is the point: labels and their fields usually sit in
@@ -802,11 +744,7 @@ namespace Duya.Recorder
                 string json = CachedNodeJson(rec.El, c, depth, label);
                 if (json != null)
                 {
-                    InvokeSlot slot = new InvokeSlot();
-                    try { slot.Name = c.Name; } catch { }
-                    slot.ControlType = controlType;
-                    try { slot.RuntimeId = (int[])rec.El.GetCachedPropertyValue(AutomationElement.RuntimeIdProperty); } catch { slot.RuntimeId = null; }
-                    st.Add(json, slot);
+                    st.Add(json);
                 }
             }
 
@@ -824,22 +762,19 @@ namespace Duya.Recorder
         // success path and the hang-net salvage path below, so a walk
         // that got wedged mid-shard still returns the partial tree
         // instead of dropping every node it already landed.
-        private static string SerializeState(IntPtr hwnd, EnumState st)
+        private static string SerializeState(EnumState st)
         {
             string elements;
-            List<InvokeSlot> snapshot;
+            int count;
             lock (st.Gate)
             {
-                elements = st.Nodes.Count > 0
-                    ? "[" + string.Join(",", st.Nodes.ToArray()) + "]"
-                    : "[]";
-                snapshot = new List<InvokeSlot>(st.Slots);
+                count = st.Nodes.Count;
+                elements = count > 0 ? "[" + string.Join(",", st.Nodes.ToArray()) + "]" : "[]";
             }
-            RememberElements(hwnd, snapshot);
             return "{\"elements\":" + elements
                  + ",\"truncated\":" + (st.Truncated ? "true" : "false")
                  + ",\"reason\":null"
-                 + ",\"count\":" + snapshot.Count + "}";
+                 + ",\"count\":" + count + "}";
         }
 
         // Returns a complete JSON object
@@ -911,18 +846,8 @@ namespace Duya.Recorder
                     string rootJson;
                     if (TryMakeNode(st, root, out rootJson))
                     {
-                        InvokeSlot rootSlot = new InvokeSlot();
-                        try
-                        {
-                            AutomationElement.AutomationElementInformation rc = root.Current;
-                            rootSlot.Name = rc.Name;
-                            rootSlot.ControlType = rc.ControlType != null ? rc.ControlType.ProgrammaticName : null;
-                            if (rootSlot.ControlType != null) { rootSlot.ControlType = rootSlot.ControlType.Replace("ControlType.", ""); }
-                            rootSlot.RuntimeId = root.GetRuntimeId();
-                        }
-                        catch { }
                         st.Visited++;
-                        st.Add(rootJson, rootSlot);
+                        st.Add(rootJson);
                         if (st.BudgetBlown) { st.Truncated = true; }
                     }
 
@@ -989,7 +914,7 @@ namespace Duya.Recorder
                         int slice = subtreeTimeoutMs < remaining ? subtreeTimeoutMs : (int)remaining;
                         if (!shard.Wait(slice)) { st.Truncated = true; }
                     }
-                    return SerializeState(hwnd, st);
+                    return SerializeState(st);
                 }
                 catch { return null; }
             };
@@ -999,432 +924,10 @@ namespace Duya.Recorder
             Task<string> task = Task.Run(work);
             if (task.Wait(totalTimeoutMs + 500)) { return task.Result; }
             st.Truncated = true;
-            return SerializeState(hwnd, st);
+            return SerializeState(st);
         }
 
-        // ------------------------------------------------------------------
-        // Structural act channel (plan 564). The enumerate walk caches the
-        // live AutomationElement references per window; `invoke` resolves
-        // a 1-based index against that cache, verifies optional staleness
-        // guards, then dispatches a UIA pattern — the RPA-style structured
-        // alternative to synthetic mouse events. Pattern actions work on
-        // background windows and never depend on pixels.
-        // ------------------------------------------------------------------
 
-        private static readonly object CacheGate = new object();
-        private static Dictionary<IntPtr, List<InvokeSlot>> ElementCache = new Dictionary<IntPtr, List<InvokeSlot>>();
-
-        private static void RememberElements(IntPtr hwnd, List<InvokeSlot> slots)
-        {
-            if (slots == null || slots.Count == 0) { return; }
-            lock (CacheGate)
-            {
-                // Tiny window-bounded cache: more than four tracked
-                // windows means wholesale replacement (simplest correct
-                // eviction; windows are re-enumerated on demand anyway).
-                if (ElementCache.Count >= 4 && !ElementCache.ContainsKey(hwnd))
-                {
-                    ElementCache = new Dictionary<IntPtr, List<InvokeSlot>>();
-                }
-                ElementCache[hwnd] = slots;
-            }
-        }
-
-        // Resolve a 1-based slot out of the window's cached tree and run
-        // the optional staleness guards, then re-hydrate the LIVE element.
-        // The cached walk stores RuntimeId + name/type snapshots (free
-        // client-side reads), so the guard check costs no COM at all; the
-        // live element is re-located once via a RuntimeId lookup so the
-        // structural patterns act on the real thing, not a stale RCW.
-        // Returns "ok", "no-element" (nothing cached for the hwnd),
-        // "bad-index", "no-window", or "stale-tree" (the element died, or
-        // name/controlType no longer match).
-        private static string ResolveCached(IntPtr hwnd, int oneBasedIndex, string verifyName, string verifyType, out AutomationElement el)
-        {
-            el = null;
-            InvokeSlot slot = null;
-            lock (CacheGate)
-            {
-                List<InvokeSlot> list = null;
-                if (!ElementCache.TryGetValue(hwnd, out list) || list == null) { return "no-element"; }
-                if (oneBasedIndex < 1 || oneBasedIndex > list.Count) { return "bad-index"; }
-                slot = list[oneBasedIndex - 1];
-            }
-            if (slot == null || slot.RuntimeId == null)
-            {
-                try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=slot-rid-null slot=" + (slot == null ? "null" : (slot.Name ?? ""))); } catch { }
-                return "stale-tree";
-            }
-            // Snapshot guard: the slot must still be what the model saw
-            // when it read the tree listing. PS 5.1 binds an absent/null
-            // $vname to "" for the string parameter (plan 564 smoke), so
-            // the guard must treat empty as absent, not as a mismatch.
-            if (!string.IsNullOrEmpty(verifyName))
-            {
-                if (!string.Equals(slot.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=snap-name slot=" + (slot.Name ?? "") + " want=" + verifyName); } catch { }
-                    return "stale-tree";
-                }
-            }
-            if (!string.IsNullOrEmpty(verifyType))
-            {
-                if (!string.Equals(slot.ControlType ?? "", verifyType, StringComparison.OrdinalIgnoreCase))
-                {
-                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=snap-type slot=" + (slot.ControlType ?? "") + " want=" + verifyType); } catch { }
-                    return "stale-tree";
-                }
-            }
-            try
-            {
-                AutomationElement root = AutomationElement.FromHandle(hwnd);
-                if (root == null) { return "no-window"; }
-                AutomationElement live = root.FindFirst(TreeScope.Subtree,
-                    new PropertyCondition(AutomationElement.RuntimeIdProperty, slot.RuntimeId));
-                if (live == null)
-                {
-                    try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=refind-null ridLen=" + slot.RuntimeId.Length); } catch { }
-                    return "stale-tree";
-                }
-                // Live guard: the element may have changed since the
-                // snapshot even though the runtime id still resolves.
-                AutomationElement.AutomationElementInformation c = live.Current;
-                if (!string.IsNullOrEmpty(verifyName))
-                {
-                    if (!string.Equals(c.Name ?? "", verifyName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=live-name live=" + (c.Name ?? "") + " want=" + verifyName); } catch { }
-                        return "stale-tree";
-                    }
-                }
-                if (!string.IsNullOrEmpty(verifyType))
-                {
-                    string have = c.ControlType != null ? c.ControlType.ProgrammaticName : null;
-                    if (have != null) { have = have.Replace("ControlType.", ""); }
-                    if (!string.Equals(have ?? "", verifyType, StringComparison.OrdinalIgnoreCase))
-                    {
-                        try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=live-type live=" + (have ?? "") + " want=" + verifyType); } catch { }
-                        return "stale-tree";
-                    }
-                }
-                el = live;
-                return "ok";
-            }
-            catch (Exception refErr)
-            {
-                try { System.Console.Error.WriteLine("[uia-probe][resolve] stage=refind-throw " + refErr.GetType().Name + ": " + refErr.Message); } catch { }
-                return "stale-tree";
-            }
-        }
-
-        private static object GetPattern(AutomationElement el, AutomationPattern pattern)
-        {
-            try
-            {
-                object p;
-                if (el.TryGetCurrentPattern(pattern, out p)) { return p; }
-            }
-            catch { }
-            return null;
-        }
-
-        // Execute one structural method. Returns the UIA pattern class
-        // name used (null for SetFocus) and sets methodUsed to what
-        // actually ran (auto may downgrade to focus). Throws
-        // InvalidOperationException with a stable error code when the
-        // requested method cannot be performed.
-        private static string ExecuteMethod(AutomationElement el, string method, string value, out string methodUsed)
-        {
-            methodUsed = method;
-            string ct = null;
-            try
-            {
-                ct = el.Current.ControlType != null ? el.Current.ControlType.ProgrammaticName : null;
-                if (ct != null) { ct = ct.Replace("ControlType.", ""); }
-            }
-            catch { }
-
-            if (method == "focus")
-            {
-                el.SetFocus();
-                return null;
-            }
-
-            if (method == "setValue")
-            {
-                ValuePattern vp = GetPattern(el, ValuePattern.Pattern) as ValuePattern;
-                if (vp == null) { throw new InvalidOperationException("no-pattern"); }
-                vp.SetValue(value ?? "");
-                return "ValuePattern";
-            }
-
-            if (method == "invoke")
-            {
-                InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
-                if (ip == null) { throw new InvalidOperationException("no-pattern"); }
-                ip.Invoke();
-                return "InvokePattern";
-            }
-
-            if (method == "toggle")
-            {
-                TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
-                if (tp == null) { throw new InvalidOperationException("no-pattern"); }
-                tp.Toggle();
-                return "TogglePattern";
-            }
-
-            if (method == "expand" || method == "collapse")
-            {
-                ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
-                if (ep == null) { throw new InvalidOperationException("no-pattern"); }
-                if (method == "expand") { ep.Expand(); } else { ep.Collapse(); }
-                return "ExpandCollapsePattern";
-            }
-
-            if (method == "select")
-            {
-                SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
-                if (sp == null) { throw new InvalidOperationException("no-pattern"); }
-                sp.Select();
-                return "SelectionItemPattern";
-            }
-
-            // method == "auto": ControlType-driven chain, first supported
-            // pattern wins (UFO-style default chain).
-            if (method == "auto")
-            {
-                if (ct == "Edit" || ct == "Document")
-                {
-                    if (value != null)
-                    {
-                        ValuePattern vp = GetPattern(el, ValuePattern.Pattern) as ValuePattern;
-                        if (vp == null) { throw new InvalidOperationException("no-pattern"); }
-                        methodUsed = "setValue";
-                        vp.SetValue(value);
-                        return "ValuePattern";
-                    }
-                    el.SetFocus();
-                    methodUsed = "focus";
-                    return null;
-                }
-                if (ct == "CheckBox" || ct == "ToggleSwitch")
-                {
-                    TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
-                    if (tp != null) { methodUsed = "toggle"; tp.Toggle(); return "TogglePattern"; }
-                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
-                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
-                }
-                else if (ct == "ComboBox")
-                {
-                    ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
-                    if (ep != null) { methodUsed = "expand"; ep.Expand(); return "ExpandCollapsePattern"; }
-                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
-                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
-                }
-                else if (ct == "ListItem" || ct == "RadioButton" || ct == "TabItem")
-                {
-                    SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
-                    if (sp != null) { methodUsed = "select"; sp.Select(); return "SelectionItemPattern"; }
-                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
-                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
-                }
-                else
-                {
-                    InvokePattern ip = GetPattern(el, InvokePattern.Pattern) as InvokePattern;
-                    if (ip != null) { methodUsed = "invoke"; ip.Invoke(); return "InvokePattern"; }
-                    TogglePattern tp = GetPattern(el, TogglePattern.Pattern) as TogglePattern;
-                    if (tp != null) { methodUsed = "toggle"; tp.Toggle(); return "TogglePattern"; }
-                    SelectionItemPattern sp = GetPattern(el, SelectionItemPattern.Pattern) as SelectionItemPattern;
-                    if (sp != null) { methodUsed = "select"; sp.Select(); return "SelectionItemPattern"; }
-                    ExpandCollapsePattern ep = GetPattern(el, ExpandCollapsePattern.Pattern) as ExpandCollapsePattern;
-                    if (ep != null) { methodUsed = "expand"; ep.Expand(); return "ExpandCollapsePattern"; }
-                }
-                // No pattern supported: focus is the last-resort structural
-                // action so the caller can follow with keyboard input.
-                try { el.SetFocus(); methodUsed = "focus"; return null; }
-                catch { throw new InvalidOperationException("no-pattern"); }
-            }
-
-            throw new InvalidOperationException("bad-method");
-        }
-
-        // Structural invoke entry. Returns "OK:" + post-action JSON
-        // {"method":..,"pattern":..,"value":..[,"element":{..}]},
-        // "ERR:<code>" (stale-tree / no-element / no-pattern / bad-index /
-        // no-window), or null when the whole operation timed out.
-        public static string InvokeElement(IntPtr hwnd, int oneBasedIndex, string method, string verifyName, string verifyType, string value, int timeoutMs)
-        {
-            Func<string> work = delegate
-            {
-                try
-                {
-                    if (hwnd == IntPtr.Zero) { return "ERR:no-window"; }
-                    AutomationElement el2;
-                    string resolveCode = ResolveCached(hwnd, oneBasedIndex, verifyName, verifyType, out el2);
-                    if (resolveCode != "ok") { return "ERR:" + resolveCode; }
-                    string methodUsed;
-                    string pattern = ExecuteMethod(el2, method ?? "auto", value, out methodUsed);
-                    // Post-action read-back: the element JSON after the
-                    // action landed (lets the caller verify name/value),
-                    // plus the ValuePattern value after setValue.
-                    string readBack = "null";
-                    if (methodUsed == "setValue")
-                    {
-                        try
-                        {
-                            ValuePattern vp = GetPattern(el2, ValuePattern.Pattern) as ValuePattern;
-                            if (vp != null) { readBack = Escape(vp.Current.Value); }
-                        }
-                        catch { }
-                    }
-                    string postJson;
-                    try { postJson = ElementJson(el2); } catch { postJson = "null"; }
-                    string inner = postJson == "null" ? "" : postJson.Substring(1, postJson.Length - 2);
-                    return "OK:{\"method\":" + Escape(methodUsed)
-                         + ",\"pattern\":" + (pattern == null ? "null" : Escape(pattern))
-                         + ",\"value\":" + readBack
-                         + (inner.Length > 0 ? ",\"element\":{" + inner + "}" : "")
-                         + "}";
-                }
-                catch (InvalidOperationException err)
-                {
-                    string code = err.Message;
-                    if (string.IsNullOrEmpty(code)) { code = "error"; }
-                    return "ERR:" + code;
-                }
-                catch
-                {
-                    // Any other exception almost always means the element
-                    // reference died mid-action (window closed, UIA COM
-                    // failure) — report stale so the caller re-enumerates.
-                    return "ERR:stale-tree";
-                }
-            };
-            Task<string> task = Task.Run(work);
-            return task.Wait(timeoutMs) ? task.Result : null;
-        }
-
-        // ------------------------------------------------------------------
-        // CUA surface (plan 575): app/window enumeration for list_apps /
-        // list_windows, and TextPattern selection for select_text.
-        // ------------------------------------------------------------------
-
-        // list_apps: processes with a visible main window. exe is null for
-        // system/elevated processes where MainModule is unreadable. active
-        // marks the foreground pid. Returns a JSON array, null on timeout.
-        public static string ListApps()
-        {
-            Func<string> work = delegate
-            {
-                IntPtr fg = GetForegroundWindow();
-                int fgPid = 0;
-                try { GetWindowThreadProcessId(fg, out fgPid); } catch { }
-                List<string> rows = new List<string>();
-                foreach (System.Diagnostics.Process p in System.Diagnostics.Process.GetProcesses())
-                {
-                    try
-                    {
-                        if (p.MainWindowHandle == IntPtr.Zero) { continue; }
-                        string title = p.MainWindowTitle;
-                        if (string.IsNullOrEmpty(title)) { continue; }
-                        string exe = null;
-                        try { exe = p.MainModule.FileName; } catch { }
-                        string row = "{\"pid\":" + p.Id
-                            + ",\"exe\":" + (exe == null ? "null" : Escape(exe))
-                            + ",\"title\":" + Escape(title)
-                            + ",\"active\":" + (fgPid == p.Id ? "true" : "false") + "}";
-                        rows.Add(row);
-                    }
-                    catch { }
-                }
-                return "[" + string.Join(",", rows.ToArray()) + "]";
-            };
-            Task<string> task = Task.Run(work);
-            return task.Wait(3000) ? task.Result : null;
-        }
-
-        // list_windows: top-level windows (optionally one pid). UWP shell
-        // surfaces report DWMWA_CLOAKED so the caller can skip suspended
-        // ApplicationFrameHost hosts. Returns a JSON array, null on timeout.
-        public static string ListWindows(int pidFilter)
-        {
-            Func<string> work = delegate
-            {
-                List<string> rows = new List<string>();
-                EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
-                {
-                    try
-                    {
-                        if (!IsWindowVisible(hWnd)) { return true; }
-                        int pid;
-                        GetWindowThreadProcessId(hWnd, out pid);
-                        if (pidFilter > 0 && pid != pidFilter) { return true; }
-                        int cloaked = 0;
-                        try { DwmGetWindowAttribute(hWnd, 14, out cloaked, 4); } catch { }
-                        StringBuilder sb = new StringBuilder(512);
-                        GetWindowText(hWnd, sb, 512);
-                        RECT r;
-                        string rectJson = "null";
-                        if (GetWindowRect(hWnd, out r))
-                        {
-                            rectJson = "{\"x\":" + r.Left + ",\"y\":" + r.Top
-                                + ",\"w\":" + (r.Right - r.Left) + ",\"h\":" + (r.Bottom - r.Top) + "}";
-                        }
-                        string row = "{\"hwnd\":" + hWnd.ToInt64()
-                            + ",\"pid\":" + pid
-                            + ",\"title\":" + Escape(sb.ToString())
-                            + ",\"rect\":" + rectJson
-                            + ",\"minimized\":" + (IsIconic(hWnd) ? "true" : "false")
-                            + ",\"cloaked\":" + (cloaked != 0 ? "true" : "false") + "}";
-                        rows.Add(row);
-                    }
-                    catch { }
-                    return true;
-                }, IntPtr.Zero);
-                return "[" + string.Join(",", rows.ToArray()) + "]";
-            };
-            Task<string> task = Task.Run(work);
-            return task.Wait(3000) ? task.Result : null;
-        }
-
-        // select_text: resolve the cached element (same guards as invoke),
-        // find the needle inside its TextPattern document range, and select
-        // the first occurrence. Returns "OK:{...}" / "ERR:<code>" /
-        // null-on-timeout like InvokeElement; codes add no-pattern and
-        // not-found on top of the resolve family.
-        public static string SelectText(IntPtr hwnd, int oneBasedIndex, string needle, string verifyName, string verifyType, int timeoutMs)
-        {
-            Func<string> work = delegate
-            {
-                try
-                {
-                    if (hwnd == IntPtr.Zero) { return "ERR:no-window"; }
-                    if (string.IsNullOrEmpty(needle)) { return "ERR:not-found"; }
-                    AutomationElement el2;
-                    string resolveCode = ResolveCached(hwnd, oneBasedIndex, verifyName, verifyType, out el2);
-                    if (resolveCode != "ok") { return "ERR:" + resolveCode; }
-                    TextPattern tp = GetPattern(el2, TextPattern.Pattern) as TextPattern;
-                    if (tp == null) { return "ERR:no-pattern"; }
-                    System.Windows.Automation.Text.TextPatternRange doc = tp.DocumentRange;
-                    System.Windows.Automation.Text.TextPatternRange found = doc.FindText(needle, true, false);
-                    if (found == null) { return "ERR:not-found"; }
-                    found.Select();
-                    string postJson;
-                    try { postJson = ElementJson(el2); } catch { postJson = "null"; }
-                    string inner = postJson == "null" ? "" : postJson.Substring(1, postJson.Length - 2);
-                    return "OK:{\"pattern\":\"TextPattern\""
-                         + (inner.Length > 0 ? ",\"element\":{" + inner + "}" : "")
-                         + "}";
-                }
-                catch
-                {
-                    return "ERR:stale-tree";
-                }
-            };
-            Task<string> task = Task.Run(work);
-            return task.Wait(timeoutMs) ? task.Result : null;
-        }
     }
 }
 '@
@@ -1442,8 +945,7 @@ try {
 # Default interactive ControlType whitelist (plan 562 phase 0, widened by
 # plan 576 with the ZCode content/row vocabulary: DataItem/TreeItem rows,
 # Document page content, SplitButton, Spinner) — mirrored in
-# packages/computer-use/src/recorder/uia-probe-protocol.ts
-# (DEFAULT_INTERACTIVE_CONTROL_TYPES). Static Text is deliberately NOT
+# the recorder uia-probe protocol (DEFAULT_INTERACTIVE_CONTROL_TYPES). Static Text is deliberately NOT
 # whitelisted: Text nodes are absorbed as `label` on the next emitted
 # element and never occupy emission slots. An enumerate request may
 # override the list with a `controlTypes` array.
@@ -1563,87 +1065,6 @@ while ($true) {
             if ($parts.Count -ge 3) { $title = [string]$parts[2] }
             $o = @{ hwnd = [int64]$parts[0]; pid = [int]$parts[1]; processName = $name; title = $title }
             [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"fg":' + ($o | ConvertTo-Json -Compress) + '}')
-        }
-    }
-    elseif ($op -eq 'invoke') {
-        # Structural act op (plan 564): resolve a 1-based element from the
-        # last enumerate cache for this hwnd and dispatch a UIA pattern.
-        $hwnd = [IntPtr]::Zero
-        try { $hwnd = [IntPtr][int64]$req.hwnd } catch { }
-        $index = 0
-        try { if ($req.PSObject.Properties['index']) { $index = [int]$req.index } } catch { }
-        $method = 'auto'
-        try { if ($req.PSObject.Properties['method'] -and $req.method) { $method = [string]$req.method } } catch { }
-        $value = $null
-        try { if ($req.PSObject.Properties['value'] -and $null -ne $req.value) { $value = [string]$req.value } } catch { }
-        $vname = $null
-        try { if ($req.PSObject.Properties['name'] -and $null -ne $req.name) { $vname = [string]$req.name } } catch { }
-        $vtype = $null
-        try { if ($req.PSObject.Properties['controlType'] -and $null -ne $req.controlType) { $vtype = [string]$req.controlType } } catch { }
-        $json = [Duya.Recorder.UiaProbe]::InvokeElement($hwnd, $index, $method, $vname, $vtype, $value, 1000)
-        if ($null -eq $json) {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
-        }
-        elseif ($json.StartsWith('OK:')) {
-            # Splice the post-action object into the flat response line —
-            # strip "OK:" AND the inner object's braces, exactly like the
-            # enumerate path, or the line reads "ok":true,{...} (invalid
-            # JSON the client would drop on the floor).
-            $frag = $json.Substring(4, $json.Length - 5)
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $frag + '}')
-        }
-        else {
-            # "ERR:<code>" — the code is a stable ASCII identifier.
-            $code = $json.Substring(4)
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"' + $code + '"}')
-        }
-    }
-    elseif ($op -eq 'apps') {
-        # CUA list_apps (plan 575): processes with a visible main window.
-        $json = [Duya.Recorder.UiaProbe]::ListApps()
-        if ($null -eq $json) {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
-        } else {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"apps":' + $json + '}')
-        }
-    }
-    elseif ($op -eq 'windows') {
-        # CUA list_windows (plan 575): top-level windows, optionally one pid.
-        $pidFilter = 0
-        try { if ($req.PSObject.Properties['pid'] -and $req.pid) { $pidFilter = [int]$req.pid } } catch { }
-        $json = [Duya.Recorder.UiaProbe]::ListWindows($pidFilter)
-        if ($null -eq $json) {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
-        } else {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,"windows":' + $json + '}')
-        }
-    }
-    elseif ($op -eq 'selectText') {
-        # CUA select_text (plan 575): TextPattern search + Select on a
-        # cached enumerate element; same guard family as invoke.
-        $hwnd = [IntPtr]::Zero
-        try { $hwnd = [IntPtr][int64]$req.hwnd } catch { }
-        $index = 0
-        try { if ($req.PSObject.Properties['index']) { $index = [int]$req.index } } catch { }
-        $needle = $null
-        try { if ($req.PSObject.Properties['text'] -and $null -ne $req.text) { $needle = [string]$req.text } } catch { }
-        $vname = $null
-        try { if ($req.PSObject.Properties['name'] -and $null -ne $req.name) { $vname = [string]$req.name } } catch { }
-        $vtype = $null
-        try { if ($req.PSObject.Properties['controlType'] -and $null -ne $req.controlType) { $vtype = [string]$req.controlType } } catch { }
-        $json = [Duya.Recorder.UiaProbe]::SelectText($hwnd, $index, $needle, $vname, $vtype, 1000)
-        if ($null -eq $json) {
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"timeout"}')
-        }
-        elseif ($json.StartsWith('OK:')) {
-            # Strip "OK:" and the inner object's braces (same splice rule
-            # as invoke — Substring(3) alone left invalid JSON on the wire).
-            $frag = $json.Substring(4, $json.Length - 5)
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":true,' + $frag + '}')
-        }
-        else {
-            $code = $json.Substring(4)
-            [Console]::Out.WriteLine('{"id":' + $id + ',"ok":false,"reason":"' + $code + '"}')
         }
     }
     else {

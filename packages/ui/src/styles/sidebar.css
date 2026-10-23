@@ -221,13 +221,6 @@ html[data-backdrop] .app-main-inner {
    is imperceptible. Most of the heavy chrome uses Mica + translucent fill
    only (no CSS blur), so the rebuild cost is now bounded to the few small
    elements that still opt in. */
-html[data-glass-repair] .conductor-panel,
-html[data-glass-repair] .conductor-zoom-pill,
-html[data-glass-repair] .conductor-popover,
-html[data-glass-repair] .canvas-presentation-toggle,
-html[data-glass-repair] .finite-widget-drag-handle,
-html[data-glass-repair] .finite-freeform-drag-handle,
-html[data-glass-repair] .finite-canvas-only-note,
 html[data-glass-repair] .attachment-preview-close,
 html[data-glass-repair] .terminal-selection-menu,
 html[data-glass-repair] .image-preview-overlay,

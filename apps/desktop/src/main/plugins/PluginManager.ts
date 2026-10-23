@@ -100,6 +100,14 @@ export class PluginManager {
     this.migrateLegacyInstalledFile();
   }
 
+  private notifyAppsChanged(pluginId: string): void {
+    void import('./plugin-app-host').then(({ invalidatePluginAppSessions }) => {
+      invalidatePluginAppSessions(pluginId);
+    }).catch((error: unknown) => {
+      this.logger.warn('Failed to invalidate Plugin App sessions', { pluginId, error: String(error) }, LogComponent.Main);
+    });
+  }
+
   /**
    * P2 migration: the legacy `installed_plugins.json` has been merged
    * into `registry.json` (single source of truth). If the legacy file
@@ -182,27 +190,25 @@ export class PluginManager {
    */
   private hydrateViewItem(entry: PluginRegistryEntry): PluginViewItem {
     const catalogEntry = getPluginCatalogEntry(entry.id);
-    let manifest = catalogEntry?.manifest;
-    if (!manifest && entry.installPath) {
+    const installPath = entry.installPath || resolveInstalledSymlink(entry.id) || '';
+    let manifest: PluginManifest | undefined;
+    if (installPath) {
       try {
-        manifest = readPluginManifest(entry.installPath);
+        manifest = readPluginManifest(installPath);
       } catch {
         manifest = undefined;
       }
     }
+    manifest ??= catalogEntry?.manifest;
 
-    const name = catalogEntry?.name ?? entry.name ?? entry.id;
-    const version = catalogEntry?.version ?? entry.version ?? '0.1.0';
+    const name = manifest?.name ?? catalogEntry?.name ?? entry.name ?? entry.id;
+    const version = manifest?.version ?? catalogEntry?.version ?? entry.version ?? '0.1.0';
     const source = catalogEntry?.source ?? entry.source ?? 'local';
     const trustLevel = catalogEntry?.trustLevel ?? entry.trustLevel ?? 'local';
     const scope = entry.scope ?? 'user';
     const marketplace = entry.marketplace || catalogEntry?.source || 'official';
     const autoUpdate = entry.autoUpdate ?? false;
 
-    const installPath =
-      entry.installPath ||
-      resolveInstalledSymlink(entry.id) ||
-      '';
     const dataPath = entry.dataPath || path.join(this.store.getPaths().dataDir, entry.id);
 
     const grantedPermissions =
@@ -347,6 +353,7 @@ export class PluginManager {
     // pick up the new `${setup.X}` substitutions. Swallowed if the server
     // is not running.
     void notifyMcpConfigChanged();
+    this.notifyAppsChanged(pluginId);
   }
 
   async installFromCatalog(
@@ -533,6 +540,7 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
+      this.notifyAppsChanged(pluginId);
 
       this.logger.info('Plugin installed from catalog', { pluginId, version, scope, marketplace: marketplaceName }, LogComponent.Main);
       return entry;
@@ -614,6 +622,7 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
+      this.notifyAppsChanged(pluginId);
 
       this.logger.info('Plugin installed from path', { pluginId, version, path: resolvedPath }, LogComponent.Main);
       return entry;
@@ -653,6 +662,7 @@ export class PluginManager {
         },
       };
       this.store.upsertPlugin(updated);
+      this.notifyAppsChanged(pluginId);
       return updated;
     });
   }
@@ -672,6 +682,7 @@ export class PluginManager {
       if (!removed) {
         return { removed: false };
       }
+      this.notifyAppsChanged(pluginId);
 
       // Plan 334 decision 11 — config stores only `enabled`, so the removed
       // entry no longer carries the on-disk paths. Re-derive them from the

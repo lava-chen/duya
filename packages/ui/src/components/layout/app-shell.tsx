@@ -225,22 +225,10 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
     return () => window.removeEventListener(RESET_ONBOARDING_EVENT, handleResetOnboarding);
   }, []);
 
-  // Conductor has a dedicated top-level view; close the side panel when
-  // entering it so we don't render a duplicate canvas in the panel zone.
-  useEffect(() => {
-    if (currentView === 'conductor' && panelOpen) {
-      setPanelOpen(false);
-    }
-  }, [currentView, panelOpen, setPanelOpen]);
-
-  const activeTab = tabs.find((t) => t.id === activeTabId);
-  const activePageId = activeTab?.pageId;
-  const isConductorOpen = panelOpen && activePageId === 'conductor';
 
   return (
     <div
       className="app-shell-root"
-      data-conductor-open={isConductorOpen ? "true" : undefined}
       data-panel-expanded={workspaceExpanded ? "true" : undefined}
       data-platform={isMac ? "mac" : "win"}
       style={{ "--app-sidebar-width": `${effectiveSidebarWidth}px` } as CSSProperties}

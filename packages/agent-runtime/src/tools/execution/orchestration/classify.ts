@@ -56,35 +56,11 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   exit_plan_mode: ToolBatch.SYSTEM,
   ExitPlanMode: ToolBatch.SYSTEM,
 
-  // Computer Use tool (plan 454) — SYSTEM (exclusive, serial). Desktop
-  // actions drive shared OS state (mouse position, keyboard focus);
-  // parallel clicks/drag would interleave and corrupt the gesture.
-  computer_use: ToolBatch.SYSTEM,
-
   // Agent-to-agent DM (plan 477) — SYSTEM (exclusive, serial). Writes a
   // mailbox row for the target agent and fires the wake bus.
   send_to_agent: ToolBatch.SYSTEM,
 
-  // Canvas Conductor tools (plan 221) — SYSTEM (mutate canvas state)
-  canvas_create_element: ToolBatch.SYSTEM,
-  canvas_delete_element: ToolBatch.SYSTEM,
-  canvas_move_element: ToolBatch.SYSTEM,
-  canvas_resize_element: ToolBatch.SYSTEM,
-  canvas_fill_content: ToolBatch.SYSTEM,
-  canvas_style_element: ToolBatch.SYSTEM,
-  // canvas_capture is read-only but kept SYSTEM to avoid parallel
-  // screenshot races on the html2canvas renderer.
-  canvas_capture: ToolBatch.SYSTEM,
 
-  // Legacy Canvas Orchestrator tools — kept for backward compat.
-  // canvas_update_element / canvas_arrange_elements / canvas_get_snapshot /
-  // canvas_align / canvas_layout_grid are no longer registered by plan 221
-  // but remain in the batch map so any stale references classify safely.
-  canvas_update_element: ToolBatch.SYSTEM,
-  canvas_arrange_elements: ToolBatch.SYSTEM,
-  canvas_get_snapshot: ToolBatch.SYSTEM,
-  canvas_align: ToolBatch.SYSTEM,
-  canvas_layout_grid: ToolBatch.SYSTEM,
 }
 
 export function classifyTool(toolName: string, onWarning?: (message: string) => void): ToolBatch {

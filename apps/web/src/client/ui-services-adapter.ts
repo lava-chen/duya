@@ -42,7 +42,6 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
       localFileAccess: false,
       settings: false,
       extensions: false,
-      conductor: false,
       bots: false,
       automation: false,
       workflows: false,

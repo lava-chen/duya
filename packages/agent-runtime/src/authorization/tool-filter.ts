@@ -44,12 +44,9 @@ export function matchToolPattern(toolName: string, pattern: string): boolean {
  * Does any pattern match this tool?
  *
  * The pattern is tried against the model-visible name first, then against
- * the ORIGINAL name. The `duya_app` server's tools reach the model as
- * `mcp_duya_app_canvas_manage`, but the profiles that describe them are
- * written against `canvas_manage` — a profile saying `canvas:*` must keep
- * meaning the canvas tools after they move behind the namespace, and a
- * namespace that quietly defeated the profile rules would be a hole in
- * the permission model rather than a naming detail.
+ * the ORIGINAL name. App server tools may reach the model under an allocated MCP name while
+ * profiles use their original tool names. Match both names so namespacing
+ * does not change the meaning of profile rules.
  */
 function anyPatternMatches(toolName: string, patterns: string[]): boolean {
   if (patterns.some((p) => matchToolPattern(toolName, p))) return true;

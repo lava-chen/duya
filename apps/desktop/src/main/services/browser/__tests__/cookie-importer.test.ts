@@ -14,7 +14,7 @@ vi.mock('../../../logging/logger', () => ({
   LogComponent: new Proxy({}, { get: (_t, p) => String(p) }),
 }));
 
-import { decryptCookieValue, deriveMacosCookieKey, mapChromeCookieToElectron, mapLiveBrowserCookies, isCookieExpired } from '../cookie-importer';
+import { decryptCookieValue, deriveMacosCookieKey, mapChromeCookieToElectron, isCookieExpired } from '../cookie-importer';
 
 describe('mapChromeCookieToElectron', () => {
   it('maps a secure cookie with https url', () => {
@@ -72,32 +72,6 @@ describe('isCookieExpired', () => {
   it('returns false for future expiration', () => {
     const futureUtc = (Date.now() + 86400000) * 1000 + 11644473600000000; // tomorrow
     expect(isCookieExpired(futureUtc)).toBe(false);
-  });
-});
-
-describe('mapLiveBrowserCookies', () => {
-  it('maps extension cookies without persisting their raw export', () => {
-    expect(mapLiveBrowserCookies([{
-      name: 'session',
-      value: 'live-value',
-      domain: '.example.com',
-      path: '/',
-      secure: true,
-      httpOnly: true,
-      sameSite: 'lax',
-      expirationDate: Date.now() / 1000 + 3600,
-    }])).toEqual([expect.objectContaining({
-      url: 'https://example.com',
-      domain: '.example.com',
-      sameSite: 'lax',
-    })]);
-  });
-
-  it('drops malformed and expired extension cookies', () => {
-    expect(mapLiveBrowserCookies([
-      { name: 'missing-domain', value: 'x' },
-      { name: 'expired', value: 'x', domain: 'example.com', path: '/', expirationDate: 1 },
-    ])).toEqual([]);
   });
 });
 

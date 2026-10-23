@@ -621,8 +621,9 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       expect(row.agent_name).toBe('Agent');
       // Extension fields restored as top-level
       expect(row.system_prompt).toBe('You are a test agent');
-      expect(row.conductor_mode_enabled).toBe(1);
-      expect(row.conductor_canvas_id).toBe('canvas-1');
+      // Removed conductor Canvas sessions are not part of the current IPC row contract.
+      expect(row.conductor_mode_enabled).toBeUndefined();
+      expect(row.conductor_canvas_id).toBeUndefined();
       // Derived fields
       expect(row.is_deleted).toBe(0);
       expect(row.generation).toBe(0);

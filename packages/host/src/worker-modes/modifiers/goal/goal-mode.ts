@@ -9,7 +9,7 @@
  * on the 413 ModeTrackerEngine, the `update_goal` tool, and a prompt
  * prefix. Per plan 411 §4.3:
  *
- *  - `kind: 'session'` — state survives across messages (like conductor).
+ *  - `kind: 'session'` — state survives across messages across messages.
  *  - `tracker`         — the goal state machine; 413d's coordinator reads
  *                        it for per-round continuation injection.
  *  - `tools.inject`    — `update_goal` (model → harness completion report).
@@ -31,7 +31,7 @@ import { adaptWorkerModeToolRegistrations } from '../tool-registration.js';
 
 /**
  * Render the GOAL_RULES prefix block. Re-evaluated per turn by the
- * streamChat refresh loop (like conductor's prefix), so the current
+ * streamChat refresh loop (like its own prefix), so the current
  * objective/status can be surfaced once the coordinator drives rounds.
  * Returns only the prefix text — the loop prepends it to the base
  * profile prompt.

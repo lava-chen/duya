@@ -119,13 +119,10 @@ function makeRiskTierLookup(
 /**
  * Resolve a tool's HOST-REGISTERED identity from the registry.
  *
- * The app layer's unconditional allows (the canvas short-circuit) must be
- * earned by identity, not by a name that merely spells like ours: the
- * model-visible name is not a unique key — a third-party server named `duya`
- * exposing `app_canvas_manage` is allocated the very same
- * `mcp_duya_app_canvas_manage` (plan 616 §C16). The registry holds the
- * `mcpInfo` the HOST recorded, so it is the registry that answers "is this
- * ours".
+ * The app layer's name-based shortcuts must be earned by identity, not by a
+ * name that merely spells like ours: the model-visible name is not a unique
+ * key. The registry holds the `mcpInfo` the HOST recorded, so it is the
+ * registry that answers "is this ours".
  *
  * Returns `undefined` for tools that were never MCP registrations — the
  * ordinary builtin path, where the tool's real name is the name we were

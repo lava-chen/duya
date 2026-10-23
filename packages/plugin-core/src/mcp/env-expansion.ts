@@ -19,10 +19,13 @@
  *
  * Variables with default syntax are NEVER tracked as missing; the default
  * is the desired behavior.
+ * An optional variableNames scope leaves other placeholders and dollar
+ * escapes intact for a later expansion pass.
  */
 export function expandEnvVarsInString(
   value: string,
   environment: Record<string, string>,
+  variableNames?: ReadonlySet<string>,
 ): { expanded: string; missingVars: string[] } {
   const missingVars: string[] = [];
   let out = '';
@@ -36,7 +39,7 @@ export function expandEnvVarsInString(
     }
     // '$$' is a literal '$' escape.
     if (value[i + 1] === '$') {
-      out += '$';
+      out += variableNames ? '$$' : '$';
       i += 2;
       continue;
     }
@@ -71,7 +74,9 @@ export function expandEnvVarsInString(
         varName = inner.slice(0, sep);
         defaultValue = inner.slice(sep + 2);
       }
-      if (Object.prototype.hasOwnProperty.call(environment, varName)) {
+      if (variableNames && !variableNames.has(varName)) {
+        out += value.slice(i, close + 1);
+      } else if (Object.prototype.hasOwnProperty.call(environment, varName)) {
         out += environment[varName];
       } else if (defaultValue !== undefined) {
         out += defaultValue;
@@ -108,7 +113,9 @@ export function expandEnvVarsInString(
       i = j;
       continue;
     }
-    if (Object.prototype.hasOwnProperty.call(environment, varName)) {
+    if (variableNames && !variableNames.has(varName)) {
+      out += value.slice(i, j);
+    } else if (Object.prototype.hasOwnProperty.call(environment, varName)) {
       out += environment[varName];
     } else {
       out += value.slice(i, j);
@@ -132,18 +139,17 @@ export function substitutePluginVariables(
   value: string,
   plugin: { root?: string; dataPath?: string },
 ): { expanded: string; missingVars: string[] } {
-  const missingVars: string[] = [];
   const env: Record<string, string> = {};
   if (plugin.root !== undefined) env.DUYA_PLUGIN_ROOT = plugin.root;
   if (plugin.dataPath !== undefined) env.DUYA_PLUGIN_DATA = plugin.dataPath;
-  const result = expandEnvVarsInString(value, env);
-  // The 'missing' report from the inner pass is already accurate.
-  return result;
+  // Leave process environment defaults untouched until the environment pass.
+  return expandEnvVarsInString(value, env, new Set(['DUYA_PLUGIN_ROOT', 'DUYA_PLUGIN_DATA']));
 }
 
 /**
  * Substitute ${user_config.KEY} and ${setup.KEY} in `value` against the
- * userConfig map.
+ * userConfig map. An explicit `:-default` allows optional setup values to
+ * stay unset without disabling the whole MCP server.
  *
  * Both syntaxes are semantically equivalent — they reference per-plugin
  * user-supplied key/value pairs — so they share the same `userConfig`
@@ -159,7 +165,7 @@ export function substituteUserConfigVariables(
   const missingKeys: string[] = [];
   // Match both ${user_config.X} and ${setup.X}. Both resolve against
   // the same userConfig map.
-  const pattern = /\$\{(?:user_config|setup)\.([A-Za-z0-9_]+)\}/g;
+  const pattern = /\$\{(?:user_config|setup)\.([A-Za-z0-9_]+)(?::-([^}]*))?\}/g;
   let out = '';
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -168,6 +174,8 @@ export function substituteUserConfigVariables(
     const key = match[1];
     if (Object.prototype.hasOwnProperty.call(userConfig, key)) {
       out += userConfig[key];
+    } else if (match[2] !== undefined) {
+      out += match[2];
     } else {
       out += match[0];
       if (!missingKeys.includes(key)) missingKeys.push(key);

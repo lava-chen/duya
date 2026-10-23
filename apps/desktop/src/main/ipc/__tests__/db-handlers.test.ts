@@ -755,25 +755,6 @@ vi.mock('../../services/mcp-toml-config', () => ({
   writeUserMcpToml: vi.fn(),
 }));
 
-vi.mock('../../db/queries/conductors', () => ({
-  createCanvas: vi.fn(() => ({})),
-  getMaxZIndex: vi.fn(() => 0),
-}));
-
-vi.mock('../../conductor/asset-service', () => ({
-  uploadAsset: vi.fn(),
-  uploadProjectAsset: vi.fn(),
-}));
-
-vi.mock('../../conductor/link-snapshot-service', () => ({
-  captureWebsiteSnapshot: vi.fn(() => null),
-}));
-
-vi.mock('../../conductor/document-service', () => ({
-  prepareCanvasDocument: vi.fn(),
-  syncCanvasDocument: vi.fn(),
-}));
-
 // Import AFTER all vi.mock() calls so the module under test picks up
 // the mocked dependencies.
 import { registerDbHandlers } from '../db-handlers';

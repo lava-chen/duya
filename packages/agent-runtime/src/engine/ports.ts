@@ -1240,7 +1240,7 @@ export interface RunEnginePorts {
    *
    * The consequence of getting it wrong is a real teardown loss. A mode whose
    * `onExit` clears a per-session trigger or disables an OS bridge
-   * (`computer-use-mode.ts`) leaves that state behind for the NEXT run, and
+   * (for example, a mode's host side effect) leaves that state behind for the NEXT run, and
    * nothing reports it -- the run completed, every frame it published was
    * correct, and the side effect simply did not happen. A host that genuinely
    * has nothing to run binds a port whose promise resolves and does nothing,
@@ -2893,8 +2893,7 @@ export interface InterTurnInputPort {
  *     as a phase. But a phase's payload is `ExtensionContribution` -- text to
  *     commit or a veto to read -- and a mode's `onExit` is neither: it returns
  *     `void`, and its real work is a side effect on host state
- *     (`computer-use-mode.ts:199-210` clears a per-session trigger and disables
- *     the OS bridge). Forcing it through a phase would mean inventing a
+ *     clearing a per-session trigger or disabling an OS bridge). Forcing it through a phase would mean inventing a
  *     contribution shape whose only correct value is "nothing", which is the
  *     `ExtensionPort` doc's own "collected during assembly, never read back"
  *     failure wearing a new name.

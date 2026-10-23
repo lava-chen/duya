@@ -3,7 +3,7 @@
  * phase 2, design §4.4).
  *
  * Owns the persistent PowerShell probe process (resources/recorder/
- * uia-probe.ps1) through the shared computer-use daemon pipeline and
+ * uia-probe.ps1) through the shared recorder process supervisor pipeline and
  * multiplexes JSON-line requests onto it:
  *
  *   probe(x,y)    → ElementDescriptor (200ms budget inside the probe,
@@ -21,14 +21,6 @@
  *                    accessibility engine. Partial trees survive budget
  *                    hits (truncated:true). (hwnd,title) caching keeps
  *                    an unchanged application from being re-scanned.
- *   invoke(hwnd, i)  → structural act op (plan 564): resolve a 1-based
- *                    element from the probe's last enumerate cache for
- *                    the hwnd and dispatch a UIA pattern (Invoke /
- *                    Toggle / ExpandCollapse / SelectionItem / Value /
- *                    SetFocus). A `stale-tree` answer triggers ONE
- *                    auto-recovery (fresh enumerate + retry) before the
- *                    error is surfaced — the caller re-runs tree when it
- *                    still fails.
  *
  * Failure policy (design §5 + plan 562 D5, perf-fixed):
  *   - global-op timeout     → consecutive counter; LIMIT consecutive
@@ -51,7 +43,7 @@
  *                             not disable enumeration for the session.
  */
 
-import { createComputerUseDaemon, type ComputerUseDaemon } from '../computer-use-daemon.js';
+import { createRecorderProcessDaemon, type RecorderProcessDaemon } from './process-daemon.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -64,7 +56,7 @@ import {
   type EnumeratedElementDescriptor,
   type UiaProbeRequest,
   type UiaProbeResponse,
-} from '@duya/computer-use';
+} from './domain/index.js';
 
 const logger = getLogger();
 
@@ -89,11 +81,9 @@ export const UIA_ENUMERATE_TIMEOUT_MS = 3_000;
  */
 export const UIA_ENUMERATE_COLD_TOTAL_MS = 8_000;
 export const UIA_ENUMERATE_COLD_TIMEOUT_MS = 10_000;
-/** Main-side race for invoke(): the probe's internal budget is 1000ms. */
-export const UIA_INVOKE_TIMEOUT_MS = 2_500;
 
 /**
- * Quarantine for a window whose structural requests keep timing out
+ * Quarantine for a window whose enumeration requests keep timing out
  * (plan 562 perf fix): after LIMIT consecutive timeouts on the SAME
  * hwnd the client stops walking that window for the cooldown window
  * and answers with reason 'target-unresponsive' instead. One heavy or
@@ -104,47 +94,6 @@ export const UIA_INVOKE_TIMEOUT_MS = 2_500;
 export const UIA_TARGET_QUARANTINE_MS = 60_000;
 /** Stable reason string for a quarantined target (mirrors the renderer hint). */
 export const UIA_TARGET_UNRESPONSIVE = 'target-unresponsive';
-
-/**
- * Stable invoke failure reasons the probe can return (mirrored in
- * packages/computer-use uia-probe-protocol.ts UIA_INVOKE_FAILURE_REASONS).
- * Duplicated as string literals here so the electron tree does not have
- * to import the package at module-load time in tests.
- */
-export const UIA_INVOKE_ERRORS = {
-  STALE_TREE: 'stale-tree',
-  NO_ELEMENT: 'no-element',
-  NO_PATTERN: 'no-pattern',
-  BAD_INDEX: 'bad-index',
-  NO_WINDOW: 'no-window',
-} as const;
-
-/** Structural methods the probe's invoke op understands. */
-export type UiaInvokeMethod =
-  | 'auto'
-  | 'invoke'
-  | 'toggle'
-  | 'expand'
-  | 'collapse'
-  | 'select'
-  | 'focus'
-  | 'setValue';
-
-/** invoke() outcome — `null` means the probe could not answer at all. */
-export interface UiaInvokeOutcome {
-  /** True when the structural action dispatched successfully. */
-  ok: boolean;
-  /** Failure reason (stale-tree / no-element / no-pattern / ...). */
-  reason?: string;
-  /** The structural method that actually ran (auto may downgrade to focus). */
-  method?: string;
-  /** UIA pattern used ("InvokePattern", null for SetFocus). */
-  pattern?: string | null;
-  /** ValuePattern read-back after setValue (null otherwise). */
-  value?: string | null;
-  /** Post-action element JSON (provenance stamped downstream). */
-  element?: ElementDescriptor | null;
-}
 
 /**
  * Degraded auto-retry window (plan 562 D5): after this long in the
@@ -208,7 +157,6 @@ export interface UiaProbeClientOptions {
   enumerateColdTotalMs?: number;
   /** Cold-window main-side race (first scan of a hwnd). */
   enumerateColdTimeoutMs?: number;
-  invokeTimeoutMs?: number;
   readyTimeoutMs?: number;
   idleRecycleMs?: number;
   consecutiveTimeoutLimit?: number;
@@ -219,7 +167,7 @@ export interface UiaProbeClientOptions {
   /** Enumerate cache TTL (ms); an older entry is re-scanned. */
   enumerateCacheTtlMs?: number;
   /** Test hook: forwarded to the daemon spawnFn. */
-  spawnFn?: Parameters<typeof createComputerUseDaemon>[0]['spawnFn'];
+  spawnFn?: Parameters<typeof createRecorderProcessDaemon>[0]['spawnFn'];
 }
 
 /**
@@ -249,7 +197,7 @@ const ENUMERATE_CACHE_TTL_MS = 5 * 60_000;
 const ENUMERATE_EMPTY_CACHE_TTL_MS = 2_000;
 
 export class UiaProbeClient {
-  private daemon: ComputerUseDaemon | null = null;
+  private daemon: RecorderProcessDaemon | null = null;
   private state: UiaProbeState = 'idle';
   private pending = new Map<number, PendingRequest>();
   private nextId = 1;
@@ -274,7 +222,6 @@ export class UiaProbeClient {
     enumerateTimeoutMs: number;
     enumerateColdTotalMs: number;
     enumerateColdTimeoutMs: number;
-    invokeTimeoutMs: number;
     readyTimeoutMs: number;
     idleRecycleMs: number;
     consecutiveTimeoutLimit: number;
@@ -293,7 +240,6 @@ export class UiaProbeClient {
       enumerateTimeoutMs: opts.enumerateTimeoutMs ?? UIA_ENUMERATE_TIMEOUT_MS,
       enumerateColdTotalMs: opts.enumerateColdTotalMs ?? UIA_ENUMERATE_COLD_TOTAL_MS,
       enumerateColdTimeoutMs: opts.enumerateColdTimeoutMs ?? UIA_ENUMERATE_COLD_TIMEOUT_MS,
-      invokeTimeoutMs: opts.invokeTimeoutMs ?? UIA_INVOKE_TIMEOUT_MS,
       readyTimeoutMs: opts.readyTimeoutMs ?? READY_TIMEOUT_MS,
       idleRecycleMs: opts.idleRecycleMs ?? IDLE_RECYCLE_MS,
       consecutiveTimeoutLimit: opts.consecutiveTimeoutLimit ?? CONSECUTIVE_TIMEOUT_LIMIT,
@@ -328,7 +274,7 @@ export class UiaProbeClient {
       this.state = 'idle';
       this.recycledOnce = false;
       this.consecutiveTimeouts = 0;
-      logger.info('uia probe degraded retry window elapsed; respawning', undefined, LogComponent.ComputerUse);
+      logger.info('uia probe degraded retry window elapsed; respawning', undefined, LogComponent.Recorder);
     }
     if (this.state === 'running') {
       return;
@@ -490,165 +436,6 @@ export class UiaProbeClient {
     this.enumerateCache.clear();
   }
 
-  /**
-   * Structural act op (plan 564): dispatch a UIA pattern against the
-   * 1-based element index of the probe's last enumerate cache for
-   * `hwnd`. Never throws; `null` = the probe could not answer
-   * (timeout/degraded). A `stale-tree` answer triggers ONE auto-
-   * recovery — a fresh enumerate re-populates the probe's element
-   * cache, then the invoke is retried with the same slot; if the
-   * staleness guard (name/controlType) still mismatches the caller
-   * gets the error back and must re-run its tree listing.
-   */
-  async invoke(
-    hwnd: number,
-    opts: { index: number; method?: UiaInvokeMethod; value?: string; name?: string; controlType?: string },
-  ): Promise<UiaInvokeOutcome | null> {
-    if (this.isQuarantined(hwnd)) {
-      return { ok: false, reason: UIA_TARGET_UNRESPONSIVE };
-    }
-    const attempt = (): Promise<UiaProbeResponse | null> =>
-      this.request(
-        (id) => ({
-          id,
-          op: 'invoke',
-          hwnd,
-          index: opts.index,
-          ...(opts.method !== undefined ? { method: opts.method } : {}),
-          ...(opts.value !== undefined ? { value: opts.value } : {}),
-          ...(opts.name !== undefined ? { name: opts.name } : {}),
-          ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
-        }),
-        this.opts.invokeTimeoutMs,
-        { stallKey: `h:${hwnd}` },
-      );
-
-    const response = await attempt();
-    if (response === null || response.kind !== 'response') {
-      return null;
-    }
-    if (!response.ok) {
-      if (response.reason !== UIA_INVOKE_ERRORS.STALE_TREE) {
-        return { ok: false, reason: response.reason };
-      }
-      // Auto-recovery: re-enumerate (bypasses the main-side cache — the
-      // probe's OWN element cache is what went stale) and retry once.
-      const refreshed = await this.enumerate(hwnd);
-      if (refreshed === null) {
-        return { ok: false, reason: UIA_INVOKE_ERRORS.STALE_TREE };
-      }
-      const retry = await attempt();
-      if (retry === null || retry.kind !== 'response') {
-        return null;
-      }
-      if (!retry.ok) {
-        return { ok: false, reason: retry.reason };
-      }
-      return {
-        ok: true,
-        method: retry.method ?? undefined,
-        pattern: retry.pattern,
-        value: retry.value,
-        element: retry.element,
-      };
-    }
-    return {
-      ok: true,
-      method: response.method ?? undefined,
-      pattern: response.pattern,
-      value: response.value,
-      element: response.element,
-    };
-  }
-
-  /**
-   * CUA list_apps (plan 575): processes with a visible main window, plus
-   * which one is foreground. Returns null on timeout / probe unavailable.
-   */
-  async listApps(): Promise<
-    Array<{ pid: number; exe: string | null; title: string; active: boolean }> | null
-  > {
-    const response = await this.request((id) => ({ id, op: 'apps' as const }), 4_000);
-    if (response === null || response.kind !== 'response' || !response.ok) {
-      return null;
-    }
-    return response.apps;
-  }
-
-  /**
-   * CUA list_windows (plan 575): top-level windows (optionally one pid)
-   * with geometry, minimized and DWM-cloaked state.
-   */
-  async listWindows(
-    pid = 0,
-  ): Promise<
-    Array<{
-      hwnd: number;
-      pid: number;
-      title: string;
-      rect: { x: number; y: number; w: number; h: number } | null;
-      minimized: boolean;
-      cloaked: boolean;
-    }> | null
-  > {
-    const response = await this.request((id) => ({ id, op: 'windows' as const, pid }), 4_000);
-    if (response === null || response.kind !== 'response' || !response.ok) {
-      return null;
-    }
-    return response.windows;
-  }
-
-  /**
-   * CUA select_text (plan 575): locate text inside the cached element's
-   * TextPattern range and select it. Mirrors invoke()'s stale-tree
-   * auto-recovery: re-enumerate and retry once.
-   */
-  async selectText(
-    hwnd: number,
-    opts: { index: number; text: string; name?: string; controlType?: string },
-  ): Promise<{ ok: boolean; reason?: string; pattern?: string | null; element?: unknown } | null> {
-    if (this.isQuarantined(hwnd)) {
-      return { ok: false, reason: UIA_TARGET_UNRESPONSIVE };
-    }
-    const attempt = (): Promise<UiaProbeResponse | null> =>
-      this.request(
-        (id) => ({
-          id,
-          op: 'selectText' as const,
-          hwnd,
-          index: opts.index,
-          text: opts.text,
-          ...(opts.name !== undefined ? { name: opts.name } : {}),
-          ...(opts.controlType !== undefined ? { controlType: opts.controlType } : {}),
-        }),
-        this.opts.invokeTimeoutMs,
-        { stallKey: `h:${hwnd}` },
-      );
-
-    const response = await attempt();
-    if (response === null || response.kind !== 'response') {
-      return null;
-    }
-    if (!response.ok) {
-      if (response.reason !== UIA_INVOKE_ERRORS.STALE_TREE) {
-        return { ok: false, reason: response.reason };
-      }
-      const refreshed = await this.enumerate(hwnd);
-      if (refreshed === null) {
-        return { ok: false, reason: UIA_INVOKE_ERRORS.STALE_TREE };
-      }
-      const retry = await attempt();
-      if (retry === null || retry.kind !== 'response') {
-        return null;
-      }
-      if (!retry.ok) {
-        return { ok: false, reason: retry.reason };
-      }
-      return { ok: true, pattern: retry.pattern, element: retry.element };
-    }
-    return { ok: true, pattern: response.pattern, element: response.element };
-  }
-
   /** Stop the probe process and tear down timers. */
   async dispose(): Promise<void> {
     if (this.idleTimer) {
@@ -657,7 +444,6 @@ export class UiaProbeClient {
     }
     this.failAllPending('disposed');
     this.enumerateCache.clear();
-    this.stallsByTarget.clear();
     this.quarantinedAt.clear();
     await this.stopDaemon();
     this.state = 'idle';
@@ -667,7 +453,7 @@ export class UiaProbeClient {
 
   private async doStart(): Promise<void> {
     if (!existsSync(this.opts.scriptPath)) {
-      logger.warn('uia probe script not found', { path: this.opts.scriptPath }, LogComponent.ComputerUse);
+      logger.warn('uia probe script not found', { path: this.opts.scriptPath }, LogComponent.Recorder);
       this.state = 'degraded';
       return;
     }
@@ -675,7 +461,7 @@ export class UiaProbeClient {
     const readyPromise = new Promise<void>((resolve) => {
       this.readyWaiters.push(resolve);
     });
-    const daemon = createComputerUseDaemon({
+    const daemon = createRecorderProcessDaemon({
       runtime: 'powershell.exe',
       entry: this.opts.scriptPath,
       args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.opts.scriptPath],
@@ -719,13 +505,13 @@ export class UiaProbeClient {
       return; // fatal path already tore this instance down
     }
     this.state = 'running';
-    logger.info('uia probe ready', undefined, LogComponent.ComputerUse);
+    logger.info('uia probe ready', undefined, LogComponent.Recorder);
   }
 
   private handleLine(line: string): void {
     const parsed = parseUiaProbeLine(line);
     if (parsed === null) {
-      logger.debug('uia probe unparseable line', { line: line.slice(0, 200) }, LogComponent.ComputerUse);
+      logger.debug('uia probe unparseable line', { line: line.slice(0, 200) }, LogComponent.Recorder);
       return;
     }
     if (parsed.kind === 'ready') {
@@ -783,7 +569,7 @@ export class UiaProbeClient {
       logger.debug(
         'uia probe request timed out',
         { consecutive: this.consecutiveTimeouts },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
       if (this.consecutiveTimeouts >= this.opts.consecutiveTimeoutLimit) {
         await this.recycleOnStall();
@@ -799,7 +585,7 @@ export class UiaProbeClient {
     logger.debug(
       'uia probe target request timed out',
       { hwnd, consecutive: count },
-      LogComponent.ComputerUse,
+      LogComponent.Recorder,
     );
     if (count >= this.opts.consecutiveTimeoutLimit) {
       // Quarantine the TARGET, not the process: one heavy or wedged
@@ -810,7 +596,7 @@ export class UiaProbeClient {
       logger.warn(
         'uia probe target quarantined after consecutive stalls',
         { hwnd, quarantineMs: this.opts.targetQuarantineMs },
-        LogComponent.ComputerUse,
+        LogComponent.Recorder,
       );
     }
   }
@@ -856,7 +642,6 @@ export class UiaProbeClient {
    */
   private async recycleOnStall(): Promise<void> {
     this.consecutiveTimeouts = 0;
-    this.stallsByTarget.clear();
     this.failAllPending('recycled');
     await this.stopDaemon();
     if (this.recycledOnce) {
@@ -865,7 +650,7 @@ export class UiaProbeClient {
     }
     this.recycledOnce = true;
     this.state = 'idle';
-    logger.warn('uia probe stalled; recycled once', undefined, LogComponent.ComputerUse);
+    logger.warn('uia probe stalled; recycled once', undefined, LogComponent.Recorder);
   }
 
   private async handleFatal(reason: string): Promise<void> {
@@ -873,7 +658,7 @@ export class UiaProbeClient {
     await this.stopDaemon();
     this.state = 'degraded';
     this.degradedAt = Date.now();
-    logger.warn('uia probe degraded; element-less recording', { reason }, LogComponent.ComputerUse);
+    logger.warn('uia probe degraded; element-less recording', { reason }, LogComponent.Recorder);
   }
 
   private failAllPending(reason: string): void {
@@ -912,7 +697,7 @@ export class UiaProbeClient {
       if (Date.now() - this.lastActivityAt < this.opts.idleRecycleMs) {
         return;
       }
-      logger.info('uia probe idle; recycling', undefined, LogComponent.ComputerUse);
+      logger.info('uia probe idle; recycling', undefined, LogComponent.Recorder);
       this.consecutiveTimeouts = 0;
       this.recycledOnce = false;
       void this.stopDaemon().then(() => {
@@ -938,10 +723,8 @@ export interface RecorderProbeAdapter {
 let _shared: UiaProbeClient | null = null;
 
 /**
- * Shared singleton accessor (plan 564): the computer-use backend's
- * structural providers (tree / invoke) ride the SAME persistent probe
- * process the recorder uses — one Add-Type compile, one spawn, one
- * lifecycle. Lazily creates the client on first use.
+ * Shared singleton accessor. The recorder's tree provider and point
+ * probe use the same persistent process and lifecycle.
  */
 export function getSharedUiaProbeClient(): UiaProbeClient {
   if (!_shared) {

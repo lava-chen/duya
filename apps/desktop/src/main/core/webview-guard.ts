@@ -16,8 +16,8 @@
 //     *less* privileged guest is never made more privileged by this floor.
 //   - It strips `preload`. Electron documents this explicitly: a `<webview>`'s
 //     preload runs WITH node integration, and `will-attach-webview` is the
-//     recommended place to remove it. Neither webview in this repo
-//     (`BrowserPanel.tsx`, `AgentBrowserTab.tsx`) sets one, so stripping can
+//     recommended place to remove it. The ordinary BrowserPanel webview
+//     does not set one, so stripping can
 //     only remove a capability no legitimate caller uses.
 //   - It deliberately does NOT touch `sandbox`, `allowpopups` or `partition`.
 //     Those are behavior, not privilege: forcing `sandbox: true` changes how

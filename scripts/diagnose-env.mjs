@@ -179,16 +179,12 @@ function diagnoseExtraResources() {
   const resDir = modes.packaged.resourcesPath;
   const skillsDir = path.join(resDir, 'agent', 'skills');
   const publicDir = path.join(resDir, 'public');
-  const extensionDir = path.join(resDir, 'extension');
   const assetsDir = path.join(resDir, 'assets');
 
   addResult('Extra Resources', 'agent/skills/', 'packages/host/skills/', 'packages/host/skills/', `resources/agent/skills/`, checkFile(skillsDir, 'skills').status);
   addResult('Extra Resources', 'public/', 'public/', 'public/', `resources/public/`, checkFile(publicDir, 'public').status);
   addResult('Extra Resources', 'assets/', 'assets/', 'assets/', `resources/assets/`, checkFile(assetsDir, 'assets').status);
 
-  if (fs.existsSync(extensionDir)) {
-    addResult('Extra Resources', 'browser-extension/', 'resources/browser-extension/', 'resources/browser-extension/', `resources/extension/`, 'ok');
-  }
 }
 
 // =============================================================================
