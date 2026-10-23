@@ -24,7 +24,6 @@
 | `packages/agent/src/process/agent-process-entry.ts:8` | 转发给 `@duya/host/worker-process-entry` 的 `startWorkerProcess`（`:4`） |
 | `packages/agent/src/process/run-event-spine.ts:2` | 纯再导出 `@duya/host/run-event-spine` |
 | `packages/agent/src/tool/builtin.ts:1` | 转发 `@duya/host/worker-tools/builtin`；`:8` 把 Read/Write/Edit/Grep/Glob/Bash 的真实实现从 `@duya/capabilities` 转发出来 |
-| `packages/agent/src/tool/BrowserTool/BrowserTool.ts:1` | 2 行再导出，真实实现在 `@duya/host/worker-tool-bindings/browser-tool` |
 | `packages/agent/src/tool/DuyaCliTool/` | 唯一还有本地内容的目录：消费 `@duya/cli/contract` 的 `duya_cli` 工具 |
 
 目录名是**单数** `tool/`，复数形式 `tools/` 在磁盘上不存在（`packages/agent/src/` 下实测确认）。`packages/agent/src` 下仍有 803 个 `.ts` 文件，绝大多数是这种再导出 shim。
@@ -33,7 +32,7 @@
 
 | 症状 | 先看这里 | 为什么 |
 | --- | --- | --- |
-| 想改 BrowserTool 却找不到逻辑 | `packages/agent/src/tool/BrowserTool/BrowserTool.ts:1` | 这里只有一行再导出；实现在 `@duya/host/worker-tool-bindings/browser-tool` |
+| 想改浏览器自动化工具 | 官方 `duya-marketplace` 仓库的 `plugins/browser/` | Browser 已迁为外部 MCP 插件；本包不再提供 BrowserTool shim |
 | 想改 Bash/Write/Read 等工具 | `packages/agent/src/tool/builtin.ts:8` | 这一行说明真实实现在 `@duya/capabilities` |
 | 以为改 `DuyaAgent.ts` 能改行为 | `packages/agent/src/agent/DuyaAgent.ts:1` | 它只是 `WorkerSession` 的子类壳，行为在 `@duya/host` |
 | "这个包还在被谁用？" | `scripts/architecture/agent-retirement-gate.mjs` | 门禁扫描全仓引用；当前 `status: OPEN`、`legacyPackagePresent: true`、`runtimeVerificationRequired: true` |

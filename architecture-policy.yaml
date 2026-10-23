@@ -1041,7 +1041,15 @@ selfTest:
   # `.architecture-baseline.json` was NOT re-recorded for this: it holds 2785
   # fingerprints with 0 resolved, because the four departed fingerprints were
   # already gone from it.
-  module-dependency: 123
+  # 123 -> 96 (2026-10-23, external capability extraction, PR #355).
+  # Measured against master 7b339024 with the same checker: 27 removed
+  # findings, zero added. All removed edges target the retired conductor or
+  # computer-use packages, or originate in computer-use/src/decide. Retained
+  # Recorder code now imports its local observation domain. The seven removed
+  # package escapes all targeted conductor; its size-9 renderer SCC also left.
+  # Carrier details are recorded in the external capability migration plan.
+  # The fingerprint baseline is unchanged; new findings still block.
+  module-dependency: 96
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/
@@ -1689,7 +1697,7 @@ selfTest:
   # measurement. What makes this safe to pin is the mutation proof that must be
   # re-run whenever these numbers move: inject one real escape and this pin must
   # go red.
-  package-boundary-escape: 21
+  package-boundary-escape: 14
   # 115 -> 113 (2026-10-10, plan 610 A5 continuation): the two cross-package
   # relative imports in group-handlers.ts / group-turn-dispatcher.ts
   # (`../../../../../packages/agent/src/message/message-source`) became
@@ -1781,7 +1789,7 @@ selfTest:
   # each was observed to restore a cycle, with different fingerprints (size 15
   # anchored on DuyaAgent; size 4 anchored on SubagentTool) -- so this is two
   # genuinely separate edges, not one change reported twice.
-  cycle: 2
+  cycle: 1
   # Was 1: plugin-core was the only package under packages/ with no
   # `exports` map. The rule is declarative — it reads package.json only, so
   # this stays 0 regardless of whether dist/ has been built.

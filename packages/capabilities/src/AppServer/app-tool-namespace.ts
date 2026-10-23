@@ -3,8 +3,8 @@
  *
  * ## Why a namespace
  *
- * The product capabilities that leave the base toolset (the bot channels,
- * the browser, and other app tools) are served by ONE host-owned in-process MCP
+ * The host product capabilities (bot channels and other app tools) are
+ * served by ONE host-owned in-process MCP
  * server. The model sees them under a single prefix, which is what keeps
  * the base toolset readable: `mcp_duya_app_send_message` says "this is a duya app capability", the same way Codex's `codex_apps__gmail.…`
  * says "this is a connector tool".
@@ -13,7 +13,7 @@
  *
  * The model-visible name is a pure prefix concatenation:
  *
- *     browser        ->  mcp_duya_app_browser
+ *     send_message   ->  mcp_duya_app_send_message
  *
  * No truncation, no hash suffix, no de-duplication suffix. That is
  * because `duya_app` carries no `plugin:` namespace segment, its tool
@@ -56,7 +56,7 @@ export const DUYA_APP_TOOL_PREFIX = `mcp_${DUYA_APP_SERVER_NAME}_`;
  * Every tool name `duya_app` serves.
  *
  * This is the authoritative list of the app layer's capabilities: the
- * bot channels, the browser, and the remaining
+ * bot channels and the remaining
  * product capabilities (plan 616 §3 and §3.1).
  *
  * Keep it in sync with what the app server actually registers — a name
@@ -75,8 +75,7 @@ export const DUYA_APP_TOOL_NAMES: readonly string[] = [
   'manage_routine',
   'list_app_connectors',
   'connect_app',
-  // ── browser + the remaining product capabilities (plan 616 §3.1) ──
-  'browser',
+  // ── remaining host product capabilities (plan 616 §3.1) ──
   'vision_analyze',
   'image_generate',
   'show_widget',

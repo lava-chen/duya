@@ -145,8 +145,8 @@ const BUILD_ORDER = [
   // consume the same source entry and stylesheet).
   '@duya/ui', // -> protocol, ai, client-core, plugin-core, input-completion
 
-  // Concrete browser/CUA and connector adapters consume the platform and
-  // plugin contracts, while Runtime consumes their public tool contracts.
+  // Builtin filesystem, shell, and connector adapters consume the platform
+  // and plugin contracts, while Runtime consumes their public tool contracts.
   '@duya/capabilities',
 
   // Level 4 — depend on agent-core, agent-protocol, and client-core.
