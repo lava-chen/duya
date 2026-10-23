@@ -32,7 +32,7 @@ node e2e/perf/agents/agent-b/run-bench.mjs --scenario perf/stream-long-reply --r
 
 Flags: `--scenario`, `--runs`, `--profile`, `--out`, `--screenshot`,
 `--html-out`, `--no-build` (reuse the last build), `--no-lock` (development
-only — never for a reported number).
+only — never for a reported number), `--lock-script <path>`.
 
 ## The measurement lock
 
@@ -45,7 +45,19 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs acquire agentB-streaming
 node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 ```
 
-Override the script path with `DUYA_PERF_BENCH_LOCK=<path>`.
+The lock script lives outside the repository, so its path is resolved in this
+order:
+
+| Source | Example |
+| --- | --- |
+| `--lock-script <path>` | `--lock-script E:\Projects\duya\.claude\perf-bench-lock.mjs` |
+| `DUYA_PERF_LOCK_SCRIPT` | `$env:DUYA_PERF_LOCK_SCRIPT = '<path>'` |
+| `DUYA_PERF_BENCH_LOCK` | legacy alias for the variable above |
+| repository-relative candidates | `<repo>/.claude/perf-bench-lock.mjs`, `<repo>/perf-bench-lock.mjs`, `<repo>/../perf-bench-lock.mjs`, `<repo>/../../perf-bench-lock.mjs` |
+
+When none of them exists the run still happens: the driver prints a warning
+that the numbers are 未持锁测量 (taken without the lock) and the report records
+`lock.enabled = false` with the reason.
 
 ## Fixtures
 

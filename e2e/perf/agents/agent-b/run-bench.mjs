@@ -30,10 +30,24 @@
  *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario perf/stream-long-reply --runs 5
  *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario perf/stream-tool-storm --runs 5 --profile
  *
- * The run holds the shared measurement lock (`.claude/perf-bench-lock.mjs`)
- * for the whole build+measure window, so the numbers are not a measurement of
- * another agent's build. Override the lock script with
- * DUYA_PERF_BENCH_LOCK=<path>.
+ * The run holds the shared measurement lock for the whole build+measure
+ * window, so the numbers are not a measurement of another agent's build. The
+ * lock script lives outside the repository (it is a sprint artefact, not a
+ * product concern), so its path is resolved in this order:
+ *
+ *   --lock-script <path>          command line (canonical)
+ *   DUYA_PERF_LOCK_SCRIPT <path>  environment (canonical)
+ *   DUYA_PERF_BENCH_LOCK <path>   environment (legacy alias)
+ *   <repo>/.claude/perf-bench-lock.mjs
+ *   <repo>/perf-bench-lock.mjs
+ *   <repo>/../perf-bench-lock.mjs
+ *   <repo>/../../perf-bench-lock.mjs
+ *
+ * When no script can be found the run STILL HAPPENS: the driver prints a
+ * warning that the numbers are 未持锁测量 (taken WITHOUT the measurement lock)
+ * and the report records `lock.enabled = false` with the reason. A report that
+ * admits it was taken without the lock is better than a report that pretends
+ * otherwise.
  */
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -47,7 +61,6 @@ const REPO_ROOT = path.resolve(HERE, '../../../..');
 const HARNESS_DIR = path.join(REPO_ROOT, 'packages/ui/src/components/chat/__tests__/harness');
 const HARNESS_VITE_CONFIG = path.join(HARNESS_DIR, 'vite.config.ts');
 const DIST_DIR = path.join(REPO_ROOT, 'docs-local/perf-streaming/harness-dist');
-const LOCK_SCRIPT = process.env.DUYA_PERF_BENCH_LOCK ?? 'E:/Projects/duya/.claude/perf-bench-lock.mjs';
 const LOCK_AGENT = 'agentB-streaming';
 
 const MIME = {
@@ -62,13 +75,14 @@ const MIME = {
 };
 
 function parseArgs(argv) {
-  const args = { scenario: 'perf/stream-long-reply', runs: 5, profile: false, lock: true, build: true, out: null, screenshot: null, htmlOut: null, dist: null };
+  const args = { scenario: 'perf/stream-long-reply', runs: 5, profile: false, lock: true, build: true, out: null, screenshot: null, htmlOut: null, dist: null, lockScript: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--scenario') args.scenario = argv[++i];
     else if (arg === '--runs') args.runs = Number(argv[++i]);
     else if (arg === '--profile') args.profile = true;
     else if (arg === '--no-lock') args.lock = false;
+    else if (arg === '--lock-script') args.lockScript = argv[++i];
     else if (arg === '--no-build') args.build = false;
     else if (arg === '--out') args.out = argv[++i];
     else if (arg === '--screenshot') args.screenshot = argv[++i];
@@ -79,14 +93,38 @@ function parseArgs(argv) {
   return args;
 }
 
-function lock(action) {
-  const result = spawnSync(process.execPath, [LOCK_SCRIPT, action, action === 'acquire' ? LOCK_AGENT : ''], {
+/**
+ * Find the lock script, or null when there is none.
+ *
+ * The order matches the shared harness (`e2e/perf/lib/lock.mjs`): command
+ * line, environment, then the repository-relative candidates.
+ * `DUYA_PERF_BENCH_LOCK` is kept as a legacy alias for the canonical
+ * `DUYA_PERF_LOCK_SCRIPT`.
+ */
+function resolveLockScript(explicitPath) {
+  const candidates = [
+    explicitPath,
+    process.env.DUYA_PERF_LOCK_SCRIPT,
+    process.env.DUYA_PERF_BENCH_LOCK,
+    path.join(REPO_ROOT, '.claude', 'perf-bench-lock.mjs'),
+    path.join(REPO_ROOT, 'perf-bench-lock.mjs'),
+    path.join(REPO_ROOT, '..', 'perf-bench-lock.mjs'),
+    path.join(REPO_ROOT, '..', '..', 'perf-bench-lock.mjs'),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Run one lock command. Returns the exit status. */
+function runLock(lockScript, action) {
+  const result = spawnSync(process.execPath, [lockScript, action, action === 'acquire' ? LOCK_AGENT : ''], {
     encoding: 'utf8',
   });
   process.stdout.write(result.stdout ?? '');
-  if (result.status !== 0) {
-    throw new Error(`perf bench lock ${action} failed with status ${result.status}`);
-  }
+  if (result.stderr) process.stderr.write(result.stderr);
+  return result.status ?? 1;
 }
 
 function buildHarness({ unminified = false } = {}) {
@@ -292,7 +330,41 @@ function summarize(runs) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.lock) lock('acquire');
+
+  // The lock state travels with the report: a report that admits it was taken
+  // without the measurement lock is better than a report that pretends
+  // otherwise.
+  let lockState = { enabled: false, held: false, agent: LOCK_AGENT, reason: null };
+  let lockScript = null;
+
+  if (!args.lock) {
+    lockState.reason = 'measurement lock disabled with --no-lock';
+  } else {
+    lockScript = resolveLockScript(args.lockScript);
+    if (!lockScript) {
+      lockState.reason =
+        'no measurement lock script found (looked at --lock-script, DUYA_PERF_LOCK_SCRIPT, ' +
+        'DUYA_PERF_BENCH_LOCK and the repository-relative candidates)';
+      process.stderr.write(
+        `[bench] WARNING: 未持锁测量 — ${lockState.reason}. The numbers in the report are NOT contention-free.\n`,
+      );
+    } else {
+      const status = runLock(lockScript, 'acquire');
+      if (status !== 0) {
+        throw new Error(
+          `perf bench lock acquire failed with status ${status} (the lock is held by another agent)`,
+        );
+      }
+      lockState = {
+        enabled: true,
+        held: true,
+        agent: LOCK_AGENT,
+        script: lockScript,
+        at: new Date().toISOString(),
+      };
+    }
+  }
+
   try {
     if (args.build) buildHarness({ unminified: args.profile });
     // `--dist` serves an ALREADY BUILT harness. It exists so a before/after
@@ -334,6 +406,7 @@ async function main() {
         browser: 'chromium (playwright)',
       },
       runs: runs.length,
+      lock: lockState,
       summary: summarize(runs),
       details: runs,
     };
@@ -345,7 +418,7 @@ async function main() {
       process.stdout.write(`[bench] ${key}: median=${value.median} min=${value.min} max=${value.max}\n`);
     }
   } finally {
-    if (args.lock) lock('release');
+    if (lockState.held) runLock(lockScript, 'release');
   }
 }
 
