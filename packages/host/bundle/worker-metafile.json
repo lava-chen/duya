@@ -559,7 +559,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/integration-api.ts": {
-      "bytes": 3908,
+      "bytes": 5748,
       "imports": [],
       "format": "esm"
     },
@@ -27723,7 +27723,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -35124,7 +35124,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 82484,
+      "bytes": 85436,
       "imports": [],
       "format": "esm"
     },
@@ -35719,22 +35719,6 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/host/src/workspace/aliveness.ts": {
-      "bytes": 3517,
-      "imports": [
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/host/src/workspace/fs-utils.ts",
-          "kind": "import-statement",
-          "original": "./fs-utils.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/host/src/scm/gh-cli.ts": {
       "bytes": 12564,
       "imports": [
@@ -35784,7 +35768,7 @@
       "format": "esm"
     },
     "packages/host/src/scm/sync.ts": {
-      "bytes": 10188,
+      "bytes": 9756,
       "imports": [
         {
           "path": "node:child_process",
@@ -35795,6 +35779,63 @@
           "path": "packages/host/src/scm/observe.ts",
           "kind": "import-statement",
           "original": "./observe.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/workspace/aliveness.ts": {
+      "bytes": 3517,
+      "imports": [
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "./fs-utils.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/workspace-lifecycle-api.ts": {
+      "bytes": 5455,
+      "imports": [
+        {
+          "path": "packages/host/src/checkout-api.ts",
+          "kind": "import-statement",
+          "original": "./checkout-api.js"
+        },
+        {
+          "path": "packages/host/src/integration-api.ts",
+          "kind": "import-statement",
+          "original": "./integration-api.js"
+        },
+        {
+          "path": "packages/host/src/scm/index.ts",
+          "kind": "import-statement",
+          "original": "./scm/index.js"
+        },
+        {
+          "path": "packages/host/src/scm/sync.ts",
+          "kind": "import-statement",
+          "original": "./scm/sync.js"
+        },
+        {
+          "path": "packages/host/src/workspace/aliveness.ts",
+          "kind": "import-statement",
+          "original": "./workspace/aliveness.js"
+        },
+        {
+          "path": "packages/host/src/workspace/index.ts",
+          "kind": "import-statement",
+          "original": "./workspace/index.js"
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "./workspace/fs-utils.js"
         }
       ],
       "format": "esm"
@@ -36094,7 +36135,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 36585,
+      "bytes": 33435,
       "imports": [
         {
           "path": "node:crypto",
@@ -36357,39 +36398,9 @@
           "original": "./research-api.js"
         },
         {
-          "path": "packages/host/src/integration-api.ts",
+          "path": "packages/host/src/workspace-lifecycle-api.ts",
           "kind": "import-statement",
-          "original": "./integration-api.js"
-        },
-        {
-          "path": "packages/host/src/checkout-api.ts",
-          "kind": "import-statement",
-          "original": "./checkout-api.js"
-        },
-        {
-          "path": "packages/host/src/workspace/index.ts",
-          "kind": "import-statement",
-          "original": "./workspace/index.js"
-        },
-        {
-          "path": "packages/host/src/workspace/fs-utils.ts",
-          "kind": "import-statement",
-          "original": "./workspace/fs-utils.js"
-        },
-        {
-          "path": "packages/host/src/workspace/aliveness.ts",
-          "kind": "import-statement",
-          "original": "./workspace/aliveness.js"
-        },
-        {
-          "path": "packages/host/src/scm/index.ts",
-          "kind": "import-statement",
-          "original": "./scm/index.js"
-        },
-        {
-          "path": "packages/host/src/scm/sync.ts",
-          "kind": "import-statement",
-          "original": "./scm/sync.js"
+          "original": "./workspace-lifecycle-api.js"
         },
         {
           "path": "packages/host/src/workspace-access.ts",
@@ -43685,7 +43696,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14360
+          "bytesInOutput": 14347
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -43742,13 +43753,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
-        },
-        "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
         },
+        "packages/agent-protocol/src/session-fork.ts": {
+          "bytesInOutput": 22
+        },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43829,10 +43840,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -43850,7 +43861,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -43952,7 +43963,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -43967,7 +43978,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -44003,7 +44014,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -44069,7 +44080,7 @@
           "bytesInOutput": 334
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
           "bytesInOutput": 3576
@@ -45644,7 +45655,7 @@
           "bytesInOutput": 1949
         },
         "packages/capabilities/src/BrowserTool/ports.ts": {
-          "bytesInOutput": 240
+          "bytesInOutput": 227
         },
         "packages/capabilities/src/BrowserTool/stealth.ts": {
           "bytesInOutput": 7748
@@ -45656,7 +45667,7 @@
           "bytesInOutput": 6016
         },
         "packages/capabilities/src/BrowserTool/CDPClient.ts": {
-          "bytesInOutput": 21619
+          "bytesInOutput": 21606
         },
         "packages/capabilities/src/BrowserTool/SnapshotEngine.ts": {
           "bytesInOutput": 42365
@@ -46643,7 +46654,7 @@
           "bytesInOutput": 225
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -46667,7 +46678,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -49184,7 +49195,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 33606
+          "bytesInOutput": 34231
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -49922,7 +49933,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5553594
+      "bytes": 5554098
     }
   }
 }
