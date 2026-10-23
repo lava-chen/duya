@@ -268,6 +268,10 @@ export function renderFlatActions(
 // For the indented body, we want to preserve the original action order
 // (thinking → tool → text → widget …). Walk `actions` and emit either
 // a grouped render unit (≥2 entries) or the original action item.
+//
+// A group renders its summary header as a collapsible line — the
+// category verbs plus the group's diff stat — and only reveals its
+// rows when the user opens it.
 export function renderOrderedBody(
   actions: ActionItem[],
   segments: Segment[],

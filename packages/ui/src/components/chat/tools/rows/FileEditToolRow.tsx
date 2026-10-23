@@ -28,9 +28,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CheckCircleIcon,
+  CopyIcon,
   SpinnerGapIcon,
   XCircleIcon,
 } from '@/components/icons';
+import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useTheme } from '@/hooks/useTheme';
 import { SimpleDiffViewer } from '@/components/diff/SimpleDiffViewer';
@@ -40,6 +42,7 @@ import { getLanguageFromPath } from '@/lib/diff/diff-utils';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus, getFilePath } from '../registry';
 import { computeFileEditStats, parseEditResult } from '../fileEditStats';
+import { truncatePathMiddle } from '@/lib/path-display';
 import { openLocalArtifactTarget } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import type { ToolAction } from '../types';
@@ -240,6 +243,7 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
   const [userCollapsed, setUserCollapsed] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [fileHovered, setFileHovered] = useState(false);
+  const [copiedPath, setCopiedPath] = useState(false);
   const resultFilePath = typeof tool.metadata?.filePath === 'string' ? tool.metadata.filePath : '';
   const inputFilePath = getFilePath(tool.input);
   const filePath = resultFilePath || inputFilePath;
@@ -285,6 +289,20 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
     },
     [filePath, cwd],
   );
+
+  // Copy the FULL path — the row above only shows the file name, and
+  // the card's path header is truncated in the middle.
+  const copyPathLabel = t('streaming.toolAction.copyPath');
+  const handleCopyPath = useCallback(async () => {
+    if (!filePath) return;
+    try {
+      await navigator.clipboard.writeText(filePath);
+      setCopiedPath(true);
+      setTimeout(() => setCopiedPath(false), 1500);
+    } catch {
+      // clipboard unavailable — leave the button as-is
+    }
+  }, [filePath]);
 
   // Plan 461: while the model is still producing the arguments (no result
   // yet) and we already see content in `input`, treat the row as a live
@@ -418,43 +436,75 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="mx-0.5 my-0.5 rounded-lg tool-card p-1.5 relative">
-              {isStreamingInput ? (
-                // Live write preview — renders the new content as it streams.
-                <StreamingFilePreview
-                  newContent={liveNewContent}
-                  filePath={filePath}
-                  isCreate={isCreate}
-                  lineCount={stats.additions}
-                />
-              ) : (
-                <SimpleDiffViewer
-                  oldContent={diffPayload.oldContent}
-                  newContent={diffPayload.newContent}
-                  maxHeight={200}
-                />
+            <div className="mx-0.5 my-0.5 rounded-lg tool-card relative overflow-hidden">
+              {/* Path header — the row above shows the file NAME only;
+                  the card shows where the file actually lives (middle
+                  truncated) with a copy button for the full path. */}
+              {!isStreamingInput && filePath && (
+                <div className="tool-diff-path">
+                  <span className="truncate" title={filePath}>
+                    {truncatePathMiddle(filePath, 64)}
+                  </span>
+                  <IconButton
+                    type="button"
+                    variant="ghost"
+                    shape="square"
+                    size="sm"
+                    aria-label={copyPathLabel}
+                    title={copyPathLabel}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCopyPath();
+                    }}
+                    className="shrink-0"
+                  >
+                    {copiedPath ? (
+                      <CheckCircleIcon size={12} className="text-green-500" />
+                    ) : (
+                      <CopyIcon size={12} />
+                    )}
+                  </IconButton>
+                </div>
               )}
+              <div className="p-1.5">
+                {isStreamingInput ? (
+                  // Live write preview — renders the new content as it streams.
+                  <StreamingFilePreview
+                    newContent={liveNewContent}
+                    filePath={filePath}
+                    isCreate={isCreate}
+                    lineCount={stats.additions}
+                  />
+                ) : (
+                  <SimpleDiffViewer
+                    oldContent={diffPayload.oldContent}
+                    newContent={diffPayload.newContent}
+                    maxHeight={200}
+                    language={getLanguageFromPath(filePath)}
+                  />
+                )}
 
-              {/* Status badge - bottom right */}
-              <div className="mt-1 flex justify-end">
-                {status === 'success' && (
-                  <div className="flex items-center gap-1 text-[11px] text-green-500">
-                    <CheckCircleIcon size={12} />
-                    <span>Success</span>
-                  </div>
-                )}
-                {status === 'error' && (
-                  <div className="flex items-center gap-1 text-[11px] text-red-500">
-                    <XCircleIcon size={12} />
-                    <span>Failed</span>
-                  </div>
-                )}
-                {status === 'running' && (
-                  <div className="flex items-center gap-1 text-[11px] text-amber-500">
-                    <SpinnerGapIcon size={12} className="animate-spin" />
-                    <span>Running</span>
-                  </div>
-                )}
+                {/* Status badge - bottom right */}
+                <div className="mt-1 flex justify-end">
+                  {status === 'success' && (
+                    <div className="flex items-center gap-1 text-[11px] text-green-500">
+                      <CheckCircleIcon size={12} />
+                      <span>Success</span>
+                    </div>
+                  )}
+                  {status === 'error' && (
+                    <div className="flex items-center gap-1 text-[11px] text-red-500">
+                      <XCircleIcon size={12} />
+                      <span>Failed</span>
+                    </div>
+                  )}
+                  {status === 'running' && (
+                    <div className="flex items-center gap-1 text-[11px] text-amber-500">
+                      <SpinnerGapIcon size={12} className="animate-spin" />
+                      <span>Running</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>

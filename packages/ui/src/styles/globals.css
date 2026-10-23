@@ -13,6 +13,7 @@
 @import "./canvas.css";
 @import "./mailbox.css";
 @import "./preview-drawer.css";
+@import "../components/diff/diff-styles.css";
 @import "./office-browser.css";
 @import "./conductor.css";
 @import "./code-review.css";
