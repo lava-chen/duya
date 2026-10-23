@@ -4,36 +4,199 @@
  * Five agents benchmark the same machine at the same time. A CPU, GPU or
  * memory number taken while another agent is building or measuring is a
  * measurement of contention, not of the code under test — so every measured
- * run of this harness is wrapped in the shared lock.
+ * run of this harness is wrapped in a shared lock.
  *
- * The lock script lives outside the repository (it is shared infrastructure
- * between the agents, not a product file). Its location is configurable:
+ * THE LOCK IS SELF-CONTAINED
  *
- *   --lock-script <path>          command line
- *   DUYA_PERF_LOCK_SCRIPT <path>  environment
- *   <repo>/../../perf-bench-lock.mjs, then <repo>/perf-bench-lock.mjs
+ * The mutex lives HERE: an atomic `mkdir` is the lock, the owner is a small
+ * JSON file inside it, and a lock older than the timeout is stale and may be
+ * taken over. Nothing outside the repository is required, so a fresh clone
+ * on a fresh machine still excludes concurrent measurements.
  *
- * When no script can be found the harness still runs, and the report records
- * `lock.enabled = false` with the reason — a report that says it was taken
- * without the lock is better than a report that pretends otherwise.
+ * THE EXTERNAL SCRIPT IS AN OPTIONAL OVERRIDE
+ *
+ * `E:\Projects\duya\.claude\perf-bench-lock.mjs` (and any script passed with
+ * `--lock-script` or `DUYA_PERF_LOCK_SCRIPT`) is the same mutex with a
+ * command-line interface. It is used when it is CONFIGURED, and — more
+ * importantly — its location decides WHERE the shared lock lives, so an
+ * agent that uses the in-repo implementation and an agent that uses the
+ * script exclude EACH OTHER instead of taking two different locks.
+ *
+ * Resolution order:
+ *
+ *   1. `--lock-script <path>`      the external script, used as the mutex
+ *   2. `DUYA_PERF_LOCK_SCRIPT`      the same, from the environment
+ *   3. the in-repo implementation   the default, with the shared lock dir
+ *   4. the default external script  only to LOCATE the shared lock dir
+ *
+ * The shared lock directory:
+ *
+ *   `--lock-dir <path>`  →  `DUYA_PERF_LOCK_DIR`  →  `<the external script's
+ *   directory>/perf-bench.lock`  →  `<repo>/.claude/perf-bench.lock`
+ *
+ * The last one is inside the repository, in the gitignored `.claude` area.
  */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { REPO_ROOT } from './launch.mjs';
+import { fileURLToPath } from 'node:url';
 
-/** Find the lock script, or null when there is none. */
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** The repository root of this checkout (e2e/perf/lib -> e2e/perf -> e2e -> root). */
+export const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
+
+/** The name of the lock directory. The external script uses the same one. */
+export const LOCK_DIR_NAME = 'perf-bench.lock';
+
+/** A lock older than this is stale and may be taken over. */
+export const DEFAULT_TIMEOUT_MIN = 30;
+
+/**
+ * The external lock script, when one is CONFIGURED.
+ *
+ * `--lock-script` and `DUYA_PERF_LOCK_SCRIPT` are the override; without
+ * them the in-repo implementation is used.
+ */
 export function resolveLockScript(explicitPath) {
-  const candidates = [
-    explicitPath,
-    process.env.DUYA_PERF_LOCK_SCRIPT,
-    path.resolve(REPO_ROOT, '..', '..', 'perf-bench-lock.mjs'),
-    path.resolve(REPO_ROOT, 'perf-bench-lock.mjs'),
-  ].filter(Boolean);
+  const candidates = [explicitPath, process.env.DUYA_PERF_LOCK_SCRIPT].filter(Boolean);
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * The external script the SPRINT shares, when it is on this machine.
+ *
+ * It is not used as the mutex here — the in-repo implementation is — but its
+ * directory is where the shared lock lives, so that a script-driven agent
+ * and an in-repo agent exclude each other.
+ */
+export function findSharedLockScript() {
+  const candidates = [
+    path.resolve(REPO_ROOT, '.claude', 'perf-bench-lock.mjs'),
+    path.resolve(REPO_ROOT, '..', '..', 'perf-bench-lock.mjs'),
+    path.resolve(REPO_ROOT, '..', 'perf-bench-lock.mjs'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Where the shared lock lives. */
+export function resolveLockDir(options = {}) {
+  if (options.lockDir) return path.resolve(options.lockDir);
+  if (process.env.DUYA_PERF_LOCK_DIR) return path.resolve(process.env.DUYA_PERF_LOCK_DIR);
+  const shared = findSharedLockScript();
+  if (shared) return path.join(path.dirname(shared), LOCK_DIR_NAME);
+  return path.resolve(REPO_ROOT, '.claude', LOCK_DIR_NAME);
+}
+
+/** The owner of a lock, or null when it cannot be read. */
+export function readLockOwner(lockDir) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(lockDir, 'owner.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function lockAgeMs(owner) {
+  if (!owner || typeof owner.acquiredAt !== 'number') return Number.POSITIVE_INFINITY;
+  return Date.now() - owner.acquiredAt;
+}
+
+/** A human-readable description of the current holder. */
+export function describeLockHolder(lockDir) {
+  const owner = readLockOwner(lockDir);
+  if (!owner) {
+    // The owner file is written right after the directory is created, so a
+    // missing one means the lock was taken a moment ago. A fresh directory
+    // is NOT stale.
+    try {
+      const age = Date.now() - fs.statSync(lockDir).mtimeMs;
+      if (age < 60_000) return 'held (owner file not written yet)';
+    } catch {
+      return 'free';
+    }
+    return 'held (owner file unreadable)';
+  }
+  const mins = Math.round(lockAgeMs(owner) / 60000);
+  return `held by ${owner.agent} since ${new Date(owner.acquiredAt).toISOString()} (${mins} min)`;
+}
+
+/**
+ * Take the in-repo lock.
+ *
+ * `mkdir` is atomic, so exactly one caller creates the directory. The owner
+ * file is written immediately afterwards; a lock whose owner file is missing
+ * but whose directory is fresh is treated as held, not as stale.
+ */
+export function acquireInternalLock(options = {}) {
+  const lockDir = options.lockDir ?? resolveLockDir(options);
+  const agent = options.agent ?? 'agentA-harness';
+  const timeoutMin = options.timeoutMin ?? DEFAULT_TIMEOUT_MIN;
+
+  fs.mkdirSync(path.dirname(lockDir), { recursive: true });
+  try {
+    fs.mkdirSync(lockDir);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    const owner = readLockOwner(lockDir);
+    const stale = owner
+      ? lockAgeMs(owner) > timeoutMin * 60_000
+      : isDirectoryStale(lockDir);
+    if (!stale) {
+      return { acquired: false, lockDir, reason: describeLockHolder(lockDir), holder: owner };
+    }
+    // A crashed holder must not block the sprint forever.
+    releaseInternalLock(lockDir);
+    try {
+      fs.mkdirSync(lockDir);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      return { acquired: false, lockDir, reason: describeLockHolder(lockDir), holder: readLockOwner(lockDir) };
+    }
+  }
+
+  fs.writeFileSync(
+    path.join(lockDir, 'owner.json'),
+    JSON.stringify({ agent, pid: process.pid, acquiredAt: Date.now() }, null, 2),
+    'utf8',
+  );
+  return { acquired: true, lockDir, agent, at: new Date().toISOString() };
+}
+
+/** Whether a lock directory without an owner file is old enough to take over. */
+function isDirectoryStale(lockDir) {
+  try {
+    return Date.now() - fs.statSync(lockDir).mtimeMs > DEFAULT_TIMEOUT_MIN * 60_000;
+  } catch {
+    return false;
+  }
+}
+
+/** Release the in-repo lock. Safe to call when it was never acquired. */
+export function releaseInternalLock(lockDir) {
+  try {
+    fs.unlinkSync(path.join(lockDir, 'owner.json'));
+  } catch {
+    /* the owner file may already be gone */
+  }
+  try {
+    fs.rmdirSync(lockDir);
+  } catch {
+    /* the directory may be gone, or not empty */
+  }
+  return { released: true };
+}
+
+/** Who holds the lock right now. */
+export function lockStatus(lockDir) {
+  if (!fs.existsSync(lockDir)) return 'free';
+  return describeLockHolder(lockDir);
 }
 
 /**
@@ -45,32 +208,39 @@ export function resolveLockScript(explicitPath) {
  * lock is available — it waits instead.
  */
 export function acquireLock(options = {}) {
-  const script = options.script;
-  if (!script) return { acquired: false, reason: 'no lock script found' };
+  const script = options.script ?? null;
   const agent = options.agent ?? 'agentA-harness';
   const waitMs = options.waitMs ?? 0;
   const deadline = Date.now() + waitMs;
+  const lockDir = options.lockDir ?? resolveLockDir(options);
 
   for (;;) {
-    const result = spawnSync(process.execPath, [script, 'acquire', agent], {
-      encoding: 'utf8',
-      cwd: REPO_ROOT,
-    });
-    if (result.status === 0) {
-      return { acquired: true, script, agent, at: new Date().toISOString() };
+    const result = script
+      ? acquireThroughScript(script, agent)
+      : acquireInternalLock({ lockDir, agent, timeoutMin: options.timeoutMin });
+    if (result.acquired) {
+      return { ...result, script: script ?? null, lockDir };
     }
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
     if (Date.now() >= deadline) {
-      return { acquired: false, reason: output || 'lock busy', script, agent };
+      return { acquired: false, reason: result.reason, holder: result.holder ?? null, script, lockDir };
     }
     process.stdout.write(
-      `[perf] measurement lock is busy, waiting (${output.split('\n')[0] ?? ''})\n`,
+      `[perf] measurement lock is busy, waiting (${String(result.reason).split('\n')[0] ?? ''})\n`,
     );
-    spawnSync(process.execPath, [script, 'status'], { encoding: 'utf8', cwd: REPO_ROOT });
     // Poll often: the lock is handed over in the gap between two agents, and
     // a short gap is only won by the agent that asks for it most often.
     sleepSync(options.retryMs ?? 2000);
   }
+}
+
+function acquireThroughScript(script, agent) {
+  const result = spawnSync(process.execPath, [script, 'acquire', agent], {
+    encoding: 'utf8',
+    cwd: REPO_ROOT,
+  });
+  if (result.status === 0) return { acquired: true, at: new Date().toISOString() };
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  return { acquired: false, reason: output || 'lock busy' };
 }
 
 /** A synchronous sleep — the harness must not yield the process while it waits. */
@@ -81,17 +251,11 @@ function sleepSync(ms) {
 
 /** Release the lock. Safe to call when it was never acquired. */
 export function releaseLock(options = {}) {
-  if (!options.script) return { released: false };
-  spawnSync(process.execPath, [options.script, 'release'], { encoding: 'utf8', cwd: REPO_ROOT });
-  return { released: true };
-}
-
-/** Read the current holder, for the report. */
-export function lockStatus(script) {
-  if (!script) return null;
-  const result = spawnSync(process.execPath, [script, 'status'], { encoding: 'utf8', cwd: REPO_ROOT });
-  const output = `${result.stdout ?? ''}`.trim();
-  return output || null;
+  if (options.script) {
+    spawnSync(process.execPath, [options.script, 'release'], { encoding: 'utf8', cwd: REPO_ROOT });
+    return { released: true };
+  }
+  return releaseInternalLock(options.lockDir ?? resolveLockDir(options));
 }
 
 /**
@@ -102,8 +266,10 @@ export function lockStatus(script) {
  */
 export async function withMeasurementLock(fn, options = {}) {
   const script = resolveLockScript(options.lockScript);
+  const lockDir = resolveLockDir({ lockDir: options.lockDir });
   const acquisition = acquireLock({
     script,
+    lockDir,
     agent: options.agent,
     waitMs: options.waitMs ?? 0,
     retryMs: options.retryMs ?? 2000,
@@ -116,12 +282,31 @@ export async function withMeasurementLock(fn, options = {}) {
       `[perf] continuing WITHOUT the measurement lock: ${acquisition.reason}\n`,
     );
     const value = await fn({ held: false, reason: acquisition.reason });
-    return { value, lock: { enabled: false, held: false, reason: acquisition.reason } };
+    return {
+      value,
+      lock: {
+        enabled: false,
+        held: false,
+        reason: acquisition.reason,
+        implementation: script ? 'external-script' : 'in-repo',
+        dir: lockDir,
+      },
+    };
   }
   try {
     const value = await fn({ held: true });
-    return { value, lock: { enabled: true, held: true, agent: acquisition.agent, at: acquisition.at } };
+    return {
+      value,
+      lock: {
+        enabled: true,
+        held: true,
+        agent: acquisition.agent,
+        at: acquisition.at,
+        implementation: script ? 'external-script' : 'in-repo',
+        dir: lockDir,
+      },
+    };
   } finally {
-    releaseLock({ script });
+    releaseLock({ script, lockDir });
   }
 }

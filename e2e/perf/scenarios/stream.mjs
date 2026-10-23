@@ -33,11 +33,12 @@ import {
   seedSession,
   userDataRootFor,
   waitForAppReady,
+  wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { startLoopbackProvider } from '../lib/loopback-provider.mjs';
 import { buildStreamChunks, buildToolStormRows, fixtureDigest } from '../lib/fixtures.mjs';
-import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const MODEL = 'perf-loopback-model';
@@ -146,6 +147,7 @@ export default {
 
     for (const fixtureId of ['perf/stream-long-reply', 'perf/stream-tool-storm']) {
       const digest = fixtureDigest(fixtureId);
+      notes[fixtureId] = { digest };
       const isToolStorm = fixtureId === 'perf/stream-tool-storm';
       const chunks = isToolStorm ? null : buildStreamChunks(fixtureId);
       const storm = isToolStorm ? buildToolStormRows(fixtureId) : null;
@@ -178,15 +180,23 @@ export default {
           workingDirectory: workspace,
           messages: [],
         });
+        // The app syncs itself, so the sidebar lists the session and the
+        // store persists the state the instrumented reload will hydrate from.
+        await wakeConversationStore(measured.app, measured.page);
         await installCollector(measured.page);
         await measured.page.reload({ waitUntil: 'domcontentloaded' });
         await waitForAppReady(measured.page);
+        // The reloaded document does not hydrate on its own either (the same
+        // store defect), so the app is told to sync itself before the
+        // measurement starts.
+        await wakeConversationStore(measured.app, measured.page);
         // The chat is open for the session the turn is posted to, so the
         // renderer is subscribed to that session's stream.
         await openSeededSession(measured.page, { title: `perf stream ${index}` });
 
         const before = await readTranscriptState(measured.page);
         await resetCollector(measured.page);
+        const probe = await startResourceProbe(measured.page);
 
         let channel = 'agent-server-sse';
         let turnState = null;
@@ -260,6 +270,7 @@ export default {
 
         await measured.page.waitForTimeout(500);
         const snapshot = await readCollector(measured.page);
+        const resource = await probe.stop();
         const after = await readTranscriptState(measured.page);
         const longTasks = (snapshot?.longTasks ?? []).map((task) => task.duration);
 
@@ -272,6 +283,7 @@ export default {
             ),
             'stream.frames': snapshot?.frameCount ?? null,
             ...snapshotToMetrics(snapshot),
+            ...resource,
           },
           observed: {
             fixture: fixtureId,
@@ -306,6 +318,10 @@ export default {
         'the fallback: the main process broadcasts the rows through the product\'s own '
         + 'message:new event; the IPC bus and the store are real, the SSE path is not',
     };
+    notes.fixtureDigest = Object.entries(notes)
+      .filter(([key]) => key.startsWith('perf/'))
+      .map(([key, value]) => `${key}:${value.digest}`)
+      .join(' ');
     return {
       samples,
       notes,

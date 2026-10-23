@@ -19,10 +19,11 @@ import {
   userDataRootFor,
   waitForAppReady,
   waitForTypeable,
+  wakeConversationStore,
 } from '../lib/launch.mjs';
-import { installCollector, readCollector, readHeapUsage, resetCollector } from '../lib/collector.mjs';
+import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, buildTypingFixture, fixtureDigest } from '../lib/fixtures.mjs';
-import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const FIXTURE_ID = 'perf/typing-30s';
@@ -54,9 +55,16 @@ export default {
         workingDirectory: workspace,
         messages: transcript,
       });
+      // The app syncs itself, so the sidebar lists the session and the store
+      // persists the state the instrumented reload will hydrate from.
+      await wakeConversationStore(measured.app, measured.page);
       await installCollector(measured.page);
       await measured.page.reload({ waitUntil: 'domcontentloaded' });
       await waitForAppReady(measured.page);
+      // The reloaded document does not hydrate on its own either (the same
+      // store defect), so the app is told to sync itself before the
+      // measurement starts.
+      await wakeConversationStore(measured.app, measured.page);
 
       // The chat the user types into is opened through the sidebar, the way
       // they would open it.
@@ -90,50 +98,25 @@ export default {
       await measured.page.waitForTimeout(250);
 
       await resetCollector(measured.page);
-      const heapReadings = [];
-      const heapBefore = await readHeapUsage(null);
+      // The heap is sampled while the typing runs, so the report has a curve
+      // and not just two points.
+      const probe = await startResourceProbe(measured.page, { intervalMs: 2000 });
 
       const startedAt = Date.now();
       const typingPromise = measured.page.keyboard.type(typing.text, {
         delay: typing.intervalMs,
       });
-      // Sample the heap while the typing runs, so the report has a curve and
-      // not just two points.
-      while (true) {
-        const elapsed = Date.now() - startedAt;
-        if (elapsed >= typing.durationMs) break;
-        await measured.page.waitForTimeout(2000);
-        const reading = await measured.page
-          .evaluate(() => {
-            const memory = performance.memory;
-            return memory
-              ? { usedMB: memory.usedJSHeapSize / (1024 * 1024), totalMB: memory.jsHeapSizeLimit / (1024 * 1024) }
-              : null;
-          })
-          .catch(() => null);
-        if (reading) heapReadings.push(reading);
-      }
       await typingPromise;
       const durationMs = Date.now() - startedAt;
 
       const snapshot = await readCollector(measured.page);
-      const heapAfter = await measured.page
-        .evaluate(() => {
-          const memory = performance.memory;
-          return memory
-            ? { usedMB: memory.usedJSHeapSize / (1024 * 1024), totalMB: memory.jsHeapSizeLimit / (1024 * 1024) }
-            : null;
-        })
-        .catch(() => null);
-      if (heapAfter) heapReadings.push(heapAfter);
+      const resource = await probe.stop();
 
-      const used = heapReadings.map((reading) => reading?.usedMB).filter((value) => Number.isFinite(value));
       const metrics = {
         ...snapshotToMetrics(snapshot),
+        ...resource,
         'typing.duration_ms': round(durationMs),
         'typing.keystrokes': typing.keystrokes,
-        'mem.peakMB': used.length > 0 ? round(Math.max(...used)) : null,
-        'mem.growthMB': used.length > 1 ? round(used[used.length - 1] - used[0]) : null,
       };
 
       samples.push({
@@ -145,8 +128,7 @@ export default {
           transcriptFixture: TRANSCRIPT_FIXTURE,
           namespace,
           durationMs,
-          heapSamples: heapReadings.length,
-          heapBefore,
+          heapSamples: resource['mem.samples'] ?? 0,
           keystrokesObserved: snapshot?.keyLatencies?.length ?? 0,
           consoleErrors: measured.consoleErrors.slice(0, 5),
           pageErrors: measured.pageErrors.slice(0, 5),
@@ -170,7 +152,8 @@ export default {
         latencyDefinition:
           'keydown timestamp -> the animation frame after the frame in which the edit was '
           + 'painted (double requestAnimationFrame)',
-        heapSource: 'performance.memory in the renderer (Chromium), sampled every 2s',
+        heapSource:
+          'CDP Runtime.getHeapUsage in the renderer, sampled every 2s during the run',
       },
     };
   },

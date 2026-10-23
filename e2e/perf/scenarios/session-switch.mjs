@@ -34,6 +34,7 @@ import {
   seedSession,
   userDataRootFor,
   waitForAppReady,
+  wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
@@ -42,6 +43,7 @@ import {
   describeSidebar,
   showWorkTab,
   snapshotToMetrics,
+  startResourceProbe,
 } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
@@ -140,12 +142,20 @@ export default {
           workingDirectory: workspace,
           messages: messagesB,
         });
+        // The app syncs itself, so the sidebar lists the two sessions and the
+        // store persists the state the instrumented reload will hydrate from.
+        await wakeConversationStore(measured.app, measured.page);
 
         // The collector is installed before the reload, so the instrumented
         // document covers the whole navigation.
         await installCollector(measured.page);
         await measured.page.reload({ waitUntil: 'domcontentloaded' });
         await waitForAppReady(measured.page);
+        // The reloaded document does not hydrate on its own either (the same
+        // store defect), so the app is told to sync itself before the
+        // navigation is measured. This is setup: the collector is reset
+        // again right before the measured click.
+        await wakeConversationStore(measured.app, measured.page);
         await showWorkTab(measured.page);
 
         const lastIdA = messagesA[messagesA.length - 1].id;
@@ -155,6 +165,7 @@ export default {
           const sidebar = await describeSidebar(measured.page);
 
           // --- open the first heavy chat --------------------------------
+          const probe = await startResourceProbe(measured.page);
           const openStartedAt = Date.now();
           await clickSidebarThread(measured.page, titleA);
           await waitForMessageRow(measured.page, lastIdA);
@@ -171,6 +182,7 @@ export default {
 
           const scroll = await scrollTranscript(measured.page);
           const snapshot = await readCollector(measured.page);
+          const resource = await probe.stop();
 
           samples.push({
             index: samples.length,
@@ -191,6 +203,7 @@ export default {
               ...snapshotToMetrics(snapshot, {
                 'session.fixture.messages': messagesA.length,
               }),
+              ...resource,
             },
             observed: {
               fixture: fixtureId,
@@ -216,7 +229,7 @@ export default {
             index: samples.length,
             metrics: {},
             observed: { fixture: fixtureId, fixtureDigest: digest, namespace, sidebar },
-            error: String(error?.message ?? error),
+            error: String(error?.stack ?? error?.message ?? error),
           });
           ctx.log(`session-switch ${fixtureId} sample ${index} failed: ${error?.message}`);
         }
@@ -229,6 +242,7 @@ export default {
       samples,
       notes: {
         fixtures: notes,
+        fixtureDigest: FIXTURES.map((id) => `${id}:${notes[id].digest}`).join(' '),
         navigation:
           'the sessions are opened and switched by clicking their rows in the sidebar '
           + '(div.thread-item), not by a store poke',

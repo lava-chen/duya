@@ -131,6 +131,11 @@ export function renderMarkdown(report) {
         : `NOT held (${report.run?.lock?.reason ?? 'unknown'})`
     }`,
   );
+  lines.push(
+    `- lock implementation: \`${report.run?.lock?.implementation ?? 'unknown'}\``
+    + ` · dir: \`${report.run?.lock?.dir ?? 'unknown'}\``
+    + ` · mode: \`${report.run?.lock?.mode ?? 'unknown'}\``,
+  );
   lines.push(`- samples per scenario: ${report.run?.samplesPerScenario ?? '?'}`);
   lines.push('');
 

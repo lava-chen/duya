@@ -37,10 +37,11 @@ import {
   seedSession,
   userDataRootFor,
   waitForAppReady,
+  wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
-import { gpuMetrics, openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { gpuMetrics, openSeededSession, snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const FIXTURE_ID = 'perf/session-100';
@@ -182,9 +183,16 @@ export default {
           workingDirectory: workspace,
           messages: transcript,
         });
+        // The app syncs itself, so the sidebar lists the session and the
+        // store persists the state the instrumented reload will hydrate from.
+        await wakeConversationStore(measured.app, measured.page);
         await installCollector(measured.page);
         await measured.page.reload({ waitUntil: 'domcontentloaded' });
         await waitForAppReady(measured.page);
+        // The reloaded document does not hydrate on its own either (the same
+        // store defect), so the app is told to sync itself before the
+        // measurement starts.
+        await wakeConversationStore(measured.app, measured.page);
         await measured.page.waitForTimeout(1000);
         await openSeededSession(measured.page, {
           title,
@@ -192,6 +200,7 @@ export default {
         });
 
         const featureStatus = await gpuFeatureStatus(measured.app);
+        const probe = await startResourceProbe(measured.page);
         const terminal = await openTerminalPanel(measured.page);
         const probeBefore = await probeWebgl(measured.page);
         const rendererBefore = await readTerminalRenderer(measured.page);
@@ -222,11 +231,13 @@ export default {
         const probeAfter = await probeWebgl(measured.page);
         const rendererAfter = await readTerminalRenderer(measured.page);
         const snapshot = await readCollector(measured.page);
+        const resource = await probe.stop();
         const trackedContexts = snapshot?.webglContextsLost ?? [];
 
         const metrics = {
           ...gpuMetrics(featureStatus),
           ...snapshotToMetrics(snapshot),
+          ...resource,
           'gpu.probe.available': probeAfter.available ? 1 : 0,
           'gpu.contexts.lost': trackedContexts.filter(Boolean).length,
           'gpu.contexts.total': trackedContexts.length,

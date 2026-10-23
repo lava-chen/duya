@@ -19,10 +19,11 @@ import {
   seedSession,
   userDataRootFor,
   waitForAppReady,
+  wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
-import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const FIXTURE_ID = 'perf/session-100';
@@ -116,9 +117,16 @@ export default {
         workingDirectory: workspace,
         messages: transcript,
       });
+      // The app syncs itself, so the sidebar lists the session and the store
+      // persists the state the instrumented reload will hydrate from.
+      await wakeConversationStore(measured.app, measured.page);
       await installCollector(measured.page);
       await measured.page.reload({ waitUntil: 'domcontentloaded' });
       await waitForAppReady(measured.page);
+      // The reloaded document does not hydrate on its own either (the same
+      // store defect), so the app is told to sync itself before the
+      // measurement starts.
+      await wakeConversationStore(measured.app, measured.page);
       // The chat is open — with an agent session in it — before the panels
       // are opened on top of it.
       await openSeededSession(measured.page, {
@@ -128,6 +136,7 @@ export default {
 
       const before = await readPanelState(measured.page);
       await resetCollector(measured.page);
+      const probe = await startResourceProbe(measured.page);
       let opened = [];
       let openError = null;
       const openStartedAt = Date.now();
@@ -142,6 +151,7 @@ export default {
       // Give the newly mounted panels a moment to settle, then collect.
       await measured.page.waitForTimeout(1500);
       const snapshot = await readCollector(measured.page);
+      const resource = await probe.stop();
 
       samples.push({
         index,
@@ -150,6 +160,7 @@ export default {
           'panels.open_count': after.openPanels,
           'panels.dom.nodes': after.domNodes,
           ...snapshotToMetrics(snapshot),
+          ...resource,
         },
         observed: {
           fixture: FIXTURE_ID,

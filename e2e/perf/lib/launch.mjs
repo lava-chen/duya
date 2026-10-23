@@ -106,6 +106,18 @@ export async function launchPerfElectron(options = {}) {
     pageErrors.push(String(error?.message ?? error));
   });
 
+  // The first-launch wizard covers the whole window, so it would swallow
+  // every click the harness makes. The app writes this flag itself when the
+  // wizard is done or skipped; setting it at document-start means every
+  // navigation of this profile starts on the app's own shell.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('duya-onboarding-completed', 'true');
+    } catch {
+      /* a profile without localStorage is not a profile the app can use */
+    }
+  });
+
   return {
     app,
     page,
@@ -224,7 +236,13 @@ export async function readPaintTiming(page) {
  * `.duya-startup-landing` overlay while it boots, and the composer in that
  * DOM is already editable. Reporting that as "typeable" would report the
  * moment the shell mounted, not the moment the user could type. So the wait
- * requires the overlay to be unmounted as well.
+ * requires the overlay to stop COVERING the UI.
+ *
+ * It does NOT require the overlay to be GONE: in this build it never is.
+ * `App.tsx` fades the splash and schedules its unmount in the same effect
+ * whose cleanup cancels that very timer, so the element stays in the DOM in
+ * the `fading` phase (opacity 0, `pointer-events: none`) for the rest of the
+ * run. "Not covering" is what the user experiences.
  *
  * The wait does NOT throw when the composer never becomes typeable: a
  * composer that is rendered but disabled is a real state, and the report
@@ -239,7 +257,15 @@ export async function waitForTypeable(page, timeoutMs = 30_000) {
       (css) => {
         const el = document.querySelector(css);
         if (!el || !el.isConnected) return false;
-        return !document.querySelector('.duya-startup-landing');
+        const splash = document.querySelector('.duya-startup-landing');
+        if (!splash) return true;
+        // The overlay stops covering the UI when it is faded out. It is never
+        // unmounted in this build (App.tsx cancels its own unmount timer),
+        // so "gone" is the wrong condition — "not covering" is the truth.
+        if (splash.getAttribute('data-visible') === 'false') return true;
+        if (splash.getAttribute('data-phase') === 'fading') return true;
+        const style = window.getComputedStyle(splash);
+        return style.pointerEvents === 'none' || Number(style.opacity) <= 0.01;
       },
       selector,
       { timeout: timeoutMs, polling: 'raf' },
@@ -250,7 +276,7 @@ export async function waitForTypeable(page, timeoutMs = 30_000) {
       found: false,
       elapsedMs: Date.now() - startedAt,
       detectedAt: null,
-      reason: `no typeable composer (with the boot splash dismissed) within ${timeoutMs}ms`,
+      reason: `no typeable composer (with the boot splash out of the way) within ${timeoutMs}ms`,
       evidence,
     };
   }
@@ -274,11 +300,19 @@ export async function describeComposer(page) {
             }
           : null;
       const splash = document.querySelector('.duya-startup-landing');
+      const splashStyle = splash ? window.getComputedStyle(splash) : null;
       return {
         editable: pick(editable),
         textarea: pick(textarea),
         splash: splash ? splash.getAttribute('data-phase') : null,
         splashStatus: splash?.querySelector('.duya-startup-status')?.textContent ?? null,
+        splashCovering: Boolean(
+          splash
+          && splash.getAttribute('data-visible') !== 'false'
+          && splash.getAttribute('data-phase') !== 'fading'
+          && splashStyle?.pointerEvents !== 'none'
+          && Number(splashStyle?.opacity ?? '1') > 0.01,
+        ),
         domNodes: document.getElementsByTagName('*').length,
         bodyPreview: (document.body?.innerText ?? '').slice(0, 200),
       };
@@ -296,6 +330,84 @@ export async function gpuFeatureStatus(app) {
 }
 
 /**
+ * Wake the conversation store, so the session list and the project list arrive.
+ *
+ * WHY THIS EXISTS (a product defect, not a harness convenience)
+ *
+ * `packages/ui/src/stores/conversation-store.ts` persists itself to
+ * localStorage under `duya-conversations` and marks itself hydrated in
+ * `onRehydrateStorage` — by MUTATING the state object in place
+ * (`s.isHydrated = true`). Zustand v5 does not notify subscribers after
+ * `onRehydrateStorage`, so on a profile whose persisted state is absent the
+ * mutation is never observed: `isHydrated` stays false in React, and with it
+ * `app-sidebar.tsx` never calls `loadFromDatabase()`. The result is a booted
+ * app with an EMPTY session list and a welcome composer that stays disabled
+ * (`WelcomeView.tsx`: `disabled={!isHydrated || !selectedProject}`).
+ *
+ * The way out is the product's own sync path: the renderer receives
+ * `sync:threads-changed` -> `forceSync()` -> `loadFromDatabase()`, and THAT
+ * write is a real `set()`, so the subscribers are notified and the app
+ * hydrates. The main process only echoes that event to the OTHER windows
+ * (`system-handlers.ts`), so with a single window the harness sends it to
+ * every window itself.
+ *
+ * This is called in a PREPARE phase — never inside a measured window — so the
+ * measured boot is the product's own, unmodified, boot. The one exception is
+ * the startup scenario, which nudges the store inside its measured window and
+ * reports the nudge's cost separately; see its notes.
+ */
+export async function wakeConversationStore(app, page, options = {}) {
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('sync:threads-changed');
+    }
+  });
+  // The wake is a round trip through the IPC bus and a database read; the
+  // settle time is what the product itself needs before the list is painted.
+  await page.waitForTimeout(options.settleMs ?? 3000);
+  return readHydrationState(page);
+}
+
+/**
+ * What the renderer knows about its own hydration, for the report.
+ *
+ * `persisted` is the store's own persist payload — it is the proof that the
+ * NEXT boot will hydrate without any help (the persist middleware calls
+ * `set()` when a stored value exists, which is what notifies the subscribers).
+ */
+export async function readHydrationState(page) {
+  return page
+    .evaluate(() => {
+      const raw = localStorage.getItem('duya-conversations');
+      let persisted = null;
+      if (raw) {
+        try {
+          persisted = JSON.parse(raw).state ?? null;
+        } catch {
+          persisted = null;
+        }
+      }
+      const splash = document.querySelector('.duya-startup-landing');
+      const editable = document.querySelector('[role="textbox"]');
+      return {
+        persisted: persisted
+          ? {
+            currentView: persisted.currentView ?? null,
+            activeThreadId: persisted.activeThreadId ?? null,
+            lastSyncAt: persisted.lastSyncAt ?? null,
+          }
+          : null,
+        splash: splash ? splash.getAttribute('data-phase') : null,
+        threadRows: document.querySelectorAll('div.thread-item').length,
+        projectName: document.querySelector('.welcome-project-name')?.textContent ?? null,
+        composerEditable:
+          editable === null ? null : editable.getAttribute('contenteditable') === 'true',
+      };
+    })
+    .catch(() => null);
+}
+
+/**
  * Create a session and seed it with messages, through the product's own
  * bridge (preload -> ipcMain -> Host -> SQLite).
  *
@@ -308,6 +420,19 @@ export async function seedSession(page, options) {
     async (args) => {
       const api = window.electronAPI;
       if (!api) throw new Error('window.electronAPI is not available');
+      // The folder becomes a project of the profile, the way it does when a
+      // user opens one. Without it the session has no project group: the
+      // sidebar groups sessions by project, so it would list nothing, and
+      // the welcome view would have no project to select (and its composer
+      // stays disabled).
+      let projectRegistered = null;
+      try {
+        if (api.projects?.addRecentFolder) {
+          projectRegistered = await api.projects.addRecentFolder(args.workingDirectory);
+        }
+      } catch (error) {
+        projectRegistered = `ERROR: ${String(error?.message ?? error).slice(0, 160)}`;
+      }
       const created = await api.thread.create({
         id: args.sessionId,
         title: args.title,

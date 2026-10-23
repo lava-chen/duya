@@ -55,6 +55,62 @@ like the flat IPC message DTO, so they can be injected through the real
 bridge (`electronAPI.message.replace`). `fixtureDigest(id)` is the SHA-256 of
 the canonical payload and is printed in every report.
 
+**Seed the same fixture into two sessions? Give the rows different ids.**
+The transcript store appends with `INSERT OR IGNORE` on the message id, so
+two sessions carrying the same ids leave the second one empty:
+
+```js
+buildSessionMessages('perf/session-100', { idPrefix: sessionId })
+```
+
+The digest is over the canonical (un-namespaced) payload, so it does not
+change with the namespace.
+
+## How the scenarios drive the app
+
+**Prepare the profile, then measure an untouched boot.** The prepare launch
+seeds the sessions through the product's own IPC (`electronAPI.thread.create`
++ `electronAPI.message.replace`) and then lets the app sync itself
+(`wakeConversationStore`). The app therefore writes its own persisted store
+state, and the MEASURED launch is a plain product launch: it hydrates, lists
+the sessions and enables the composer on its own. The harness never writes
+the app's persisted state by hand.
+
+The seeded session is opened by CLICKING its row in the sidebar
+(`div.thread-item[title]`), and "the transcript is on screen" is the last
+fixture row appearing in the DOM. The harness does not restore a session
+across a restart: in this build the boot splash cannot resolve a session the
+worker does not know (it stays on "Preparing session…"), so a restored
+session never renders its transcript. Opening the session is the navigation
+the product supports.
+
+`startup.typeable_ms` waits for the composer to be editable AND the boot
+splash (`.duya-startup-landing`) to be gone — the welcome view is rendered
+behind that overlay, and its composer is editable while it is up.
+
+### The cold and the warm boot
+
+`startup.firstPaint_ms` is the **cold** boot (a profile the user has never
+seen); `startup.typeable_ms` is the **warm** boot (a profile the app can
+hydrate — a returning user). `startup.cold.*` and `startup.warm.*` carry both
+in full. The cold boot's composer is disabled on a profile with no project,
+so `startup.cold.typeable_ms` is null and the evidence is in the sample.
+
+### The hydration defect this harness works around
+
+`packages/ui/src/stores/conversation-store.ts` marks itself hydrated in
+`onRehydrateStorage` by MUTATING the state (`s.isHydrated = true`). Zustand
+v5 does not notify subscribers after that callback, so on a profile whose
+persisted store state is absent the mutation is never observed: `isHydrated`
+stays false in React, `app-sidebar.tsx` never calls `loadFromDatabase()`,
+the session list stays empty and the welcome composer stays disabled
+(`WelcomeView.tsx`: `disabled={!isHydrated || !selectedProject}`).
+
+The harness works around it by letting the app sync itself in the prepare
+phase (`sync:threads-changed` → `forceSync()` → `loadFromDatabase()`, which
+IS a `set()`). **The defect itself is not fixed here** — it belongs to the
+owner of the conversation store.
+
 ## Metric names
 
 Fixed by the plan: `startup.firstPaint_ms`, `startup.typeable_ms`,
@@ -69,7 +125,23 @@ the low-noise band are listed as CI candidates.
 
 ## The measurement lock
 
-Five agents share this machine, so every run takes
-`.claude/perf-bench-lock.mjs` (configurable via `--lock-script` /
-`DUYA_PERF_LOCK_SCRIPT`). The report records `run.lock.held`, so a reviewer
-can tell whether the numbers were taken uncontended.
+Five agents share this machine, so every measured scenario takes a shared
+lock. **The mutex lives in the repository** (`e2e/perf/lib/lock.mjs`): an
+atomic `mkdir` is the lock, the owner is a JSON file inside it, and a lock
+older than 30 minutes is stale and may be taken over.
+
+The external script (`E:\Projects\duya\.claude\perf-bench-lock.mjs`, or any
+path given by `--lock-script` / `DUYA_PERF_LOCK_SCRIPT`) is an optional
+overrides. Its location decides where the SHARED lock lives, so an agent
+that drives the script and an agent that uses the in-repo implementation
+exclude each other instead of taking two different locks:
+
+```
+--lock-script <path>  →  DUYA_PERF_LOCK_SCRIPT  →  the in-repo implementation
+lock dir: --lock-dir  →  DUYA_PERF_LOCK_DIR  →  <the external script's dir>/perf-bench.lock
+                       →  <repo>/.claude/perf-bench.lock
+```
+
+The lock is taken PER SCENARIO, not for the whole run, so the agents can
+rotate; the report records `run.lock.held` per scenario, so a reader can
+tell whether the numbers were taken uncontended.

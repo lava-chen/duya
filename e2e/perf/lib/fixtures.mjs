@@ -313,7 +313,12 @@ export function describeFixture(fixtureId) {
  */
 export function fixturePayload(fixtureId, options = {}) {
   if (HISTORY_SIZES.has(fixtureId)) {
-    return { kind: 'history-session', rows: buildSessionMessages(fixtureId, options) };
+    // The canonical payload is the UN-namespaced one: the per-session id
+    // namespace changes the row ids (the transcript store keys on them) but
+    // not the fixture content, so it must not change the digest. Every other
+    // option (the seed) DOES change the content and therefore the digest.
+    const { idPrefix: _namespace, ...canonical } = options;
+    return { kind: 'history-session', rows: buildSessionMessages(fixtureId, canonical) };
   }
   if (fixtureId === 'perf/stream-long-reply') {
     return { kind: 'streamed-text', ...buildStreamChunks(fixtureId, options) };

@@ -39,7 +39,7 @@ import * as path from 'node:path';
 import { REPO_ROOT, assertProductionBuild } from './lib/launch.mjs';
 import { captureAppEnvironment, captureHostEnvironment, captureRepositoryState } from './lib/env.mjs';
 import { buildReport, writeReport } from './lib/report.mjs';
-import { withMeasurementLock } from './lib/lock.mjs';
+import { resolveLockDir, resolveLockScript, withMeasurementLock } from './lib/lock.mjs';
 
 import startupScenario from './scenarios/startup.mjs';
 import sessionSwitchScenario from './scenarios/session-switch.mjs';
@@ -69,6 +69,7 @@ function parseArgs(argv) {
     agent: 'agentA-harness',
     panels: 3,
     baseline: null,
+    lockDir: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -77,6 +78,7 @@ function parseArgs(argv) {
     else if (arg === '--samples') options.samples = Number.parseInt(next(), 10);
     else if (arg === '--out') options.out = path.resolve(REPO_ROOT, next());
     else if (arg === '--lock-script') options.lockScript = path.resolve(REPO_ROOT, next());
+    else if (arg === '--lock-dir') options.lockDir = path.resolve(REPO_ROOT, next());
     else if (arg === '--lock-wait-min') options.lockWaitMin = Number.parseInt(next(), 10);
     else if (arg === '--no-lock') options.useLock = false;
     else if (arg === '--lock-mode') options.lockMode = next();
@@ -98,7 +100,7 @@ function usage() {
       'Duya Desktop performance harness',
       '',
       '  node e2e/perf/run.mjs [--scenarios a,b] [--samples N] [--out DIR]',
-      '                           [--lock-script PATH] [--lock-wait-min N]',
+      '                           [--lock-script PATH] [--lock-dir PATH] [--lock-wait-min N]',
       '                           [--no-lock] [--lock-mode MODE] [--agent NAME] [--panels N]',
       '',
       `scenarios: ${SCENARIOS.map((scenario) => scenario.id).join(', ')}`,
@@ -157,25 +159,30 @@ async function main() {
       const scenarioStartedAt = Date.now();
       let outcome;
       try {
-        outcome = await withMeasurementLock(
-          async () => {
-            // The app-level environment is read from a short-lived launch,
-            // inside the lock: a launch is CPU work.
-            if (!environment.electronVersion) {
-              const appEnvironment = await captureAppEnvironmentQuietly();
-              environment.electronVersion = appEnvironment.versions?.electron ?? null;
-              environment.chromiumVersion = appEnvironment.versions?.chrome ?? null;
-              environment.electronPlatform = appEnvironment.versions?.platform ?? null;
-            }
-            return scenario.run(ctx);
-          },
-          {
+        const measure = async () => {
+          // The app-level environment is read from a short-lived launch,
+          // inside the lock: a launch is CPU work.
+          if (!environment.electronVersion) {
+            const appEnvironment = await captureAppEnvironmentQuietly();
+            environment.electronVersion = appEnvironment.versions?.electron ?? null;
+            environment.chromiumVersion = appEnvironment.versions?.chrome ?? null;
+            environment.electronPlatform = appEnvironment.versions?.platform ?? null;
+          }
+          return scenario.run(ctx);
+        };
+        if (!options.useLock) {
+          // `--no-lock` really means no lock: the scenario runs without it and
+          // the report says so.
+          outcome = { value: await measure(), lock: { enabled: false, held: false, reason: '--no-lock was passed' } };
+        } else {
+          outcome = await withMeasurementLock(measure, {
             lockScript: options.lockScript,
+            lockDir: options.lockDir,
             agent: options.agent,
             waitMs: options.lockWaitMin * 60_000,
             required: options.lockMode === 'strict',
-          },
-        );
+          });
+        }
       } catch (error) {
         // Strict mode: the lock could not be taken within the budget, so the
         // scenario was NOT measured. A number taken while another agent
@@ -227,6 +234,11 @@ async function main() {
         samples: scenarioResult.samples ?? [],
         notes: {
           ...(scenarioResult.notes ?? {}),
+          lock: {
+            held: outcome.lock.held,
+            implementation: outcome.lock.implementation ?? 'in-repo',
+            dir: outcome.lock.dir ?? null,
+          },
           ...(outcome.lock.held
             ? {}
             : { lockWarning: `measured WITHOUT the measurement lock: ${outcome.lock.reason}` }),
@@ -237,6 +249,8 @@ async function main() {
     return results;
   };
   let lock;
+  const lockDir = resolveLockDir({ lockDir: options.lockDir });
+  const lockScript = resolveLockScript(options.lockScript);
   if (options.useLock) {
     // The lock is taken per scenario inside `runMeasurements`; this block
     // only records the mode for the report.
@@ -247,10 +261,20 @@ async function main() {
       held: skipped.length === 0,
       mode: 'per-scenario',
       agent: options.agent,
+      implementation: lockScript ? 'external-script' : 'in-repo',
+      dir: lockDir,
+      script: lockScript,
       skippedScenarios: skipped.map((result) => result.scenario),
     };
   } else {
-    lock = { enabled: false, held: false, mode: 'off', reason: '--no-lock was passed' };
+    lock = {
+      enabled: false,
+      held: false,
+      mode: 'off',
+      implementation: lockScript ? 'external-script' : 'in-repo',
+      dir: lockDir,
+      reason: '--no-lock was passed',
+    };
     await runMeasurements();
   }
 
