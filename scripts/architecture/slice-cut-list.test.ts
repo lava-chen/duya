@@ -118,6 +118,25 @@ describe('the cut list matches the graph it claims to describe', () => {
 });
 
 describe('the list is complete against the direction the plan targets', () => {
+  it('sees the cross-package edges that a bare @duya specifier names', () => {
+    // The resolver used to drop every bare `@duya/*` specifier, so this graph
+    // had NO cross-package value edge at all (measured: 0). Every count in the
+    // cut list is re-derived from it on every run, so a silent return to that
+    // blind spot would move every number in the file at once — and the numbers
+    // would still agree with each other.
+    //
+    // This pins the SHAPE, not a count: the count moves with the code, and a
+    // test that pinned a number would become the promise this repo forbids.
+    const bare = g.valueEdges.filter((e) => e.spec.startsWith('@duya/'));
+    expect(bare.length).toBeGreaterThan(0);
+    const crossOwner = bare.filter((e) => e.fromOwner !== e.toOwner);
+    expect(crossOwner.length).toBeGreaterThan(0);
+    expect(
+      crossOwner.some((e) => e.fromOwner.startsWith('pkg:') && e.toOwner.startsWith('pkg:')),
+      'no cross-PACKAGE edge is reached through a bare @duya specifier',
+    ).toBe(true);
+  });
+
   it('names every pair the plan asks to be cut', () => {
     const named = CUT_LIST.map((c) => c.pair);
     const missing = CUT_LIST_INVARIANTS.requiredPairs.filter((p) => !named.includes(p));
