@@ -2,6 +2,7 @@
 
 状态：active · 负责人：mavis / `mvs_ae3b38275b13437883faa5ef6f4d518c` · 更新：2026-10-23
 分支：`codex/tui-perf-benchmark` · worktree：`E:\Projects\duya\.claude\worktrees\tui-perf-benchmark` · base：`af6e7eb6` · owner：mavis
+追加分支：`codex/fix-run-prompt-order` · worktree：`E:\Projects\duya\.claude\worktrees\fix-run-prompt-order` · base：`7e49612a` —— 修「缺陷 4」（提示词被放到第一条）
 
 ## 目标与边界
 
@@ -45,6 +46,8 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 - [x] 更新 `README.md` / `METRICS.md` 与根 `package.json` 脚本。
 - [x] 修复批次 1：提示词只发一次、时间线只投影一次、TUI 首帧 leading edge、
       基准帧封口口径（`firstChar*` 指标）、jimp 惰性加载。
+- [x] 修复批次 1 引入的回归：首轮请求里提示词被放到**第一条** → 模型读成
+      「只有系统上下文，没有新提问」。改为提示词是请求的**最后一条**（见下）。
 - [ ] 门禁 + PR。
 
 ## 发现与决策
@@ -122,6 +125,40 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 真实的首帧 leading edge 只花 0.29 ms 就起帧，而旧口径把整个 70 ms 节流窗口算给了它。
 现在帧用「携带它最后一个字节的那次 write」封口。
 
+### 缺陷 4：修复批次 1 把提示词放到了首轮请求的**第一条**（回归）
+
+**现场**：TUI 会话里用户问「我们看看duya目前的ui package。你觉得设计的怎么样？」，
+模型答的是上一轮的内容，并自述「用户没有提出新问题——这只是系统上下文附加；
+上一条 user 消息是『jixu』（继续），我已经回答过了」。
+
+**证据**：本机 rollout
+`~/.duya/sessions/2026/10/23/rollout-2026-10-23T13-45-20-794Z-b2a93159-….jsonl`
+第 46 行是这条 user 行（`metadata.source: 'user'`），第 48 行是模型 thinking 原文。
+
+**根因**：`01344cd3`（修复批次 1 的「提示词只发一次」）把 `input.prompt` 放在
+`#modelRequest` 的**最前**：`[input.prompt, ...steering, ...carried, ...history, ...inbound]`。
+去重本身是对的（按 id，host 那条同 id 的 user 行确实被滤掉了，提问只发一次），
+但**位置错了**。真实链路实测，provider 收到的是：
+
+    [user(提问), user(旧对话), user(rail), user(rail), user(rail)]
+
+host 的 volatile context rail 永远在**尾部**，且每一条都是 `role: 'user'`、
+写着「This context was attached automatically by the system. It is not part of
+the user's message.」。于是请求的尾巴在明说「这些不是用户说的话」，
+而提问被埋在整段对话的最前面——模型从尾部读，自然读成「没有新提问」。
+
+**修法**：首轮请求里提示词是**最后一条**。host 的 assembled messages 若已带
+该 id 的那一行，就**移动**那一行到末尾（保留 host 自己的渲染：附件、引文前缀），
+不再另插一份 `input.prompt`；若没带，就把 `input.prompt` 放在末尾。
+第 2 轮起不动——那时提问已是历史，模型要反应的是工具结果。
+
+**回归测试**：
+
+- `packages/agent-runtime/test/run-engine-loop.test.ts`：提示词只出现一次、在末尾、
+  保留 host 的渲染、第 2 轮不移动。
+- `packages/host/tests/worker-product-runtime/engine-prompt-order-proof.test.ts`：
+  真实链路（真 agent + 真 driver + 真 engine）到 provider 边界，断言提问在最后一条。
+
 ### 剩余瓶颈（实测、均未修）
 
 | 瓶颈 | 代价 | 为什么没修 |
@@ -184,12 +221,27 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | 7509038a | Windows / Node 24.16.0 | `npx vitest run packages/host/tests` | 0 | 176 files / 1631 passed，1 skipped |
 | 7509038a | Windows | `npx vitest run packages/cli/src/tui/` | 0 | 71 files / 908 passed |
 | 7509038a | Windows | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；firstCharReceivedToPaintedMs p50 2.7 ms，Host→worker 313 ms |
+| 7e49612a（base，clean） | Windows / Node 24.16.0 | `git worktree add .claude/worktrees/fix-run-prompt-order -b codex/fix-run-prompt-order codex/tui-perf-benchmark` | 0 | 检出在 `.claude/worktrees/fix-run-prompt-order` |
+| 7e49612a（clean） | Windows | `node scripts/junction-worktree.mjs .` | 0 | 56 link(s) created |
+| 7e49612a（clean） | Windows | `npm run build:packages` | 0 | built 20 package(s) |
+| 85b877f6 | Windows | `npx vitest run packages/agent-runtime/test` | 0 | 102 files / 1136 passed |
+| 85b877f6 | Windows | `npx vitest run packages/host/tests/worker-product-runtime --maxWorkers=2` | 0 | 23 files / 128 passed（含新增 `engine-prompt-order-proof`） |
+| 7e49612a（**回退引擎改动**） | Windows | 同上一行（只跑 host 真实链路用例） | 1 | 变红：`expected '<system-reminder>…' to contain 'PROMPT-QUESTION-MARKER'` —— 该用例确实咬住这个缺陷 |
+| 85b877f6 | Windows | `npm run typecheck:all` | 0 | 含 `typecheck:evals`：no new type errors |
+| 85b877f6 | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| 85b877f6 | Windows | `npm run bundle:verify` | 0 | FRESH，0/921 输入变更 |
+| 85b877f6 与 7e49612a（**改动前后对比**） | Windows | `npx vitest run packages/cli/tests/integration/{shared-client-vertical,host-child-sessions}.test.ts` | 1 | 前后**同样失败**（需真实 provider）：`expected false to be true` / `condition did not become true within 15000 ms` —— 既有环境失败，非本次引入 |
 
 ## 接续 / 结果
 
 本分支（PR #381，base `master`，未合并）已交付：基准套件 + 五个修复 commit
 （提示词去重、单次投影、Host compile cache、TUI leading edge、帧封口口径）+ jimp 惰性加载
 + 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
+
+**缺陷 4（提示词被放到第一条）**在独立分支 `codex/fix-run-prompt-order`
+（worktree `.claude/worktrees/fix-run-prompt-order`，base `7e49612a`，commit `85b877f6`），
+PR 目标分支是 `codex/tui-perf-benchmark` 而非 master：它修的是 `01344cd3` 引入的**回归**，
+而 `01344cd3` 本身也只存在于该分支。回滚方式：`git revert 85b877f6`。
 
 未做（带实测数字见「剩余瓶颈」）：工具目录惰性化、bundle 编译缓存 launcher、
 Handlebars 模板预编译、三个 db action、标题生成去重。
