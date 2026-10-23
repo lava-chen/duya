@@ -61,10 +61,14 @@
 | 工作区（占用改造） | Windows / Node | `npm run -w @duya/cli typecheck` | 1（2 处 `Duplicate identifier` / 私有字段冲突） | 字段名与 getter 撞名,已改名 `contextCharCount` |
 | 工作区（占用改造） | Windows / Node | `npx vitest run packages/cli/src/tui/` | 0（71 files / 903 passed） | 含 6 个 `contextChars` 用例 |
 | 工作区（+变异） | Windows / Node | 把 `contextPercent` 改回用 `sessionTokens` | 1（新用例转红） | 证明用例有牙齿,非恒绿 |
+| `bb551901` | Windows / Node | `npm run typecheck:all` | 0 | 类型门禁 |
+| `bb551901` | Windows / Node | `npm run architecture:check` | 0 | 架构门禁 |
+| `a6987509` | Windows / Node | CI（PR #390） | 全绿：architecture / test scope / typecheck / test / build | GitHub Actions |
 
 ## 接续 / 结果
 
-已提交 `bb551901`,PR #390(draft)。门禁:`typecheck:all` 0、`architecture:check` 0、
+已提交 `bb551901`,PR #390(draft)：https://github.com/lava-chen/duya/pull/390 —— CI 全绿。
+门禁:`typecheck:all` 0、`architecture:check` 0、
 CLI 全包 86 files / 1038 passed;变异证据见上(把占用率改回会话累计 → 新用例转红)。
 
 worktree `.claude/worktrees/tui-context-usage` 独占 `packages/cli/src/tui/{blocks.ts,TUIApp.ts}`
