@@ -403,6 +403,6 @@
     "@types/node": "^20.0.0",
     "@types/picomatch": "^4.0.3",
     "typescript": "^5.3.3",
-    "vitest": "^3.0.0"
+    "vitest": "^5.0.5"
   }
 }
