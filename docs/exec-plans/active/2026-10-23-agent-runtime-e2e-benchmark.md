@@ -126,11 +126,15 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 
 | 瓶颈 | 代价 | 为什么没修 |
 | --- | --- | --- |
-| 工具目录初始化 | **116–129 ms** | `worker-tools/builtin.ts` 静态引入 ~45 个工具实现（浏览器、computer use、app connector…），注册表要一次性建完 42 个工具的定义 |
+| 技能加载 | 读文件 ~50 ms + 目录遍历 ~70 ms | 威胁扫描本身已优化（见下）；剩下的是**读 236 个文件**和**遍历 4 个技能目录**。跨进程磁盘缓存本轮不做：缓存放 data root 在生产有效，但基准每样本独立 data root，测不出收益 |
 | worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名 |
-| Handlebars 模板编译 | 30–98 ms | 每个 worker 进程首次渲染时编译 `.hbs`；跨进程无法复用（编译产物是函数） |
 | 三个 db action 未实现 | ~1 ms/次，但**功能坏** | `plugin:registry:list` / `plugin:setup:list-all` / `mailbox:claimBatch` 在 Host 侧仍抛 `unimplemented_domain`：CLI/TUI 路径因此**加载不到插件技能**、mailbox 领取每次失败。属功能缺口，不是延迟瓶颈，建议单独 PR |
 | 标题生成多一次 provider 调用 | 不在关键路径 | 代码上它在助手回复**完成后**才发起，不阻塞首 token；改它会动「标题何时出现」的用户可见行为 |
+
+> **更正**：上一版把「工具目录初始化」记为 116–129 ms，是**误判**。探针实测
+> `initToolCatalog` 只有 **8 ms**（registryList 2 ms + createBuiltinRegistry 5 ms + register 1 ms）。
+> 真实热点是 `loadSkillsFromDirectory(user)` 的 **118–169 ms**：本机 `~/.duya/skills`
+> 有 4 个技能目录、236 个文件、3 MB、18 个 SKILL.md。
 
 ### 其它实测结论
 
@@ -184,12 +188,32 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | 7509038a | Windows / Node 24.16.0 | `npx vitest run packages/host/tests` | 0 | 176 files / 1631 passed，1 skipped |
 | 7509038a | Windows | `npx vitest run packages/cli/src/tui/` | 0 | 71 files / 908 passed |
 | 7509038a | Windows | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；firstCharReceivedToPaintedMs p50 2.7 ms，Host→worker 313 ms |
+| 待提交（scanner 优化） | Windows / Node 24.16.0 | `npx vitest run packages/agent-core/test/skills/` | 0 | 2 files / 24 passed（含新增 3 个等价性对拍用例） |
+| 待提交（scanner 优化） | Windows / Node 24.16.0 | `npx vitest run evals/agent/performance/runtime-e2e.test.ts`（5 样本） | 0 | 2 passed；`acceptedToProviderRequestMs` p50 **512.6 → 448 ms**（-65 ms） |
+| 待提交（prompt 去重修正） | Windows / Node 24.16.0 | `npx vitest run packages/cli/tests/integration/host-child-sessions.test.ts packages/cli/tests/integration/shared-client-vertical.test.ts` | 0 | 2 files / 2 passed（修前这 2 个用例都失败） |
 
 ## 接续 / 结果
 
-本分支（PR #381，base `master`，未合并）已交付：基准套件 + 五个修复 commit
-（提示词去重、单次投影、Host compile cache、TUI leading edge、帧封口口径）+ jimp 惰性加载
-+ 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
+本分支（PR #381，base `master`，未合并）已交付：基准套件 + 修复 commit
+（提示词去重、单次投影、Host compile cache、TUI leading edge、帧封口口径、jimp 惰性加载）
++ 技能威胁扫描预筛 + 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
 
-未做（带实测数字见「剩余瓶颈」）：工具目录惰性化、bundle 编译缓存 launcher、
-Handlebars 模板预编译、三个 db action、标题生成去重。
+### 提示词去重的坑：删错了副本
+
+第一版「去重」按 id 过滤 **history** 里那条 prompt，留下 engine 前置的那份——这**删错了**。
+host 提交 prompt 行后，engine 前置的 prompt 与 timeline 里那一行是同一条消息的两个副本，
+但**位置不同**：engine 的在前，timeline 的在末尾（紧挨 context rail）。删掉末尾那份后，
+用户的提问从「最后一个 user 消息」变成「第一个」，末尾只剩 rail；而 Anthropic 边界
+（`mergeConsecutiveRoles`）会合并相邻 user 消息，于是 prompt 反而**同时出现在首尾**，
+既多花 token 又打乱对话顺序。
+
+修法是反过来：**删 engine 前置那份，留 host 那份**——host 那份的位置就是 legacy 的位置
+（legacy 的 transcript 就是 timeline）。修后 provider 请求里 prompt 出现 1 次，且仍是
+最后一条 user 消息。
+
+这个回归是被 CI 抓到的：`packages/cli/tests/integration/host-child-sessions.test.ts` 与
+`shared-client-vertical.test.ts` 里脚本化 provider 按「最新 user 消息」识别提问，
+收到 rail 就直接 500。本地 A/B 对拍（回退该 commit 后重建 bundle）定位到根因。
+
+未做（带实测数字见「剩余瓶颈」）：bundle 编译缓存 launcher、技能加载剩余开销
+（读文件 + 目录遍历）、三个 db action、标题生成去重。
