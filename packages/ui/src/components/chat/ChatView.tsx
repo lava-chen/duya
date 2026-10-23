@@ -1047,7 +1047,7 @@ export function ChatView({
     if (lastContent) {
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       // Use saved files and parsed docs for retry
-      onSendMessage(lastContent, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current, undefined, effort, undefined, undefined, undefined, permissionMode);
+      onSendMessage(lastContent, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current, undefined, effort, undefined, undefined, permissionMode);
     }
   }, [onSendMessage, sessionModel, parseModelName, agentProfileId, effort, permissionMode]);
 

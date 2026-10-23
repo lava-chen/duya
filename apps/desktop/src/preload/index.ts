@@ -1355,7 +1355,6 @@ export interface ElectronAPI {
     listSessions: () => Promise<unknown[]>
     getSession: (sessionId: string) => Promise<unknown>
     deleteSession: (sessionId: string) => Promise<{ ok: boolean; error?: string }>
-    convert: (payload: { sessionId: string; name?: string; description?: string }) => Promise<unknown>
     onStatusChanged: (callback: (snapshot: unknown) => void) => () => void
   }
   // Plan 583 ISS-24: the element-tree visualization overlay was removed from

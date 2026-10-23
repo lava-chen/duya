@@ -6,7 +6,6 @@
 
 import { registerSystemHandlers } from './system-handlers';
 import { registerSettingsHandlers } from './settings-handlers';
-import { registerExtensionInstallerHandlers } from './extension-installer-handlers';
 import { registerSkillsHandlers } from './skills-handlers';
 import { registerFilesHandlers } from './files-handlers';
 import { registerLoggerHandlers } from './logger-handlers';
@@ -68,5 +67,4 @@ export {
   registerSessionCardHandlers,
   registerBashTaskHandlers,
   registerBangHandlers,
-  registerExtensionInstallerHandlers,
 };

@@ -24,7 +24,7 @@ import { EventEmitter } from 'node:events';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { getLogger, LogComponent } from '../logging/logger.js';
+import { getLogger, LogComponent } from '../../logging/logger.js';
 
 const logger = getLogger();
 
