@@ -5,7 +5,7 @@
 
 ## 目标与边界
 
-`duya tui` 在同一台机器上可以同时开多个终端窗口，各自作��同一个 Host，读写同一份 `~/.duya` 数据库。
+`duya tui` 在同一台机器上可以同时开多个终端窗口，各自连到同一个 Host，读写同一份 `~/.duya` 数据库。
 
 允许修改 `packages/cli`、`packages/host`、`packages/agent-protocol`（如需要）。本次**不改 `DatabaseOwnerLock` 语义**，不做多进程共享 SQLite 写入，不建跨进程事件总线；`memory-state.db` 仍归 Desktop，TUI 不读。
 
@@ -24,11 +24,11 @@
 
 ## 进度
 
-- [ ] 1. worker 入口路径解析不再依赖 cwd（前置缺陷）
-- [ ] 2. `duya serve --client-scoped`：Host 跟踪客户端存活，最后一个客户端断开后自动退出
-- [ ] 3. `duya tui` 发现不到 Host 时拉起后台 Host 并附着
-- [ ] 4. owner 锁冲突转可操作提示
-- [ ] 5. 测试与验收
+- [x] 1. worker 入口路径解析不再依赖 cwd（前置缺陷）——`137e58c8`
+- [x] 2. `duya serve --client-scoped`：Host 跟踪客户端存活，最后一个客户端断开后自动退出
+- [x] 3. `duya tui` 发现不到 Host 时拉起后台 Host 并附着
+- [x] 4. owner 锁冲突转可操作提示；顺手修好三个静默失效的 Commander 选项
+- [x] 5. 测试与验收
 
 ## 发现与决策
 
@@ -63,14 +63,52 @@
 
 **已知取舍**：后台 Host 退出时会一并关闭它派生的 worker；宽限期取值让「刚关掉一个窗口再开一个」不必重启 Host。
 
+**实施中发现：Commander 按驼峰属性名存选项**。`serve.getOptionValue('client-scoped')` 返回 `undefined` 而不是抛错，选项被**静默丢弃**。同类问题已存在两处：`duya chat --runtime-file` 与 `duya chat/tui --api-format` 一直是失效的（`packages/cli/src/index.ts`）。只有单词选项两种写法同名，所以 bug 恰好只落在带连字符的选项上。本次一并修正，并在 `buildProgram` 的注释与 `packages/cli/AGENTS.md` 里写明这条规则；新增 `packages/cli/src/__tests__/cli-options.test.ts` 锁住它。
+
+**客户端在场用「租约」而不是「请求频率」**：一个正在流式输出的长轮次**完全不发请求**，只有一条打开的事件流；按请求频率判断会把这种客户端判成已离开。租约是客户端主动持有的长连接（`GET /v1/host/lease`），在它想 Host 活着期间一直开着。Host 侧只数租约个数，从不因此拒绝谁——它是**在场信号，不是锁**。
+
+**实施中发现：客户端租约端点必须先于 `server.close()` 拆掉**。Node 的 `server.close()` 会等所有连接结束，一个开着的租约会让关机永远等下去。所以 `close()` 先销毁租约响应，再关服务器。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | c81ed169（仅新增本计划） | Windows / Node 24.16 | 只读调研与实测，未运行门禁 | 未验证 | 见「发现与决策」实测表 |
+| 137e58c8 | Windows / Node 24.16 | `npm run -w @duya/cli typecheck` | 0 | 切片 1 |
+| 137e58c8 | Windows / Node 24.16 | `npx vitest run packages/cli/src/worker-path.test.ts` | 0；8 用例通过 | 切片 1 |
+| 137e58c8 | Windows / Node 24.16 | 仓库外 cwd 跑 `duya serve`（数据根 = 临时目录） | `Execution: enabled`；`provides` 含 `agent_run_execution`（此前是 LEDGER-ONLY） | 切片 1 真实链路 |
+| worktree dirty | Windows / Node 24.16 | `npm run -w @duya/data typecheck` / `-w @duya/host typecheck` / `-w @duya/cli typecheck` | 0 / 0 / 0 | 三个包 |
+| worktree dirty | Windows / Node 24.16 | `npx vitest run packages/host/tests/client-lease.test.ts` | 0；7 用例通过 | 租约与自动退出 |
+| worktree dirty | Windows / Node 24.16 | `npx vitest run packages/cli/src/__tests__/background-host.test.ts` | 0；4 用例通过 | 后台启动器（含双启动竞态） |
+| worktree dirty | Windows / Node 24.16 | `npx vitest run packages/cli/src/__tests__/cli-options.test.ts` | 0；4 用例通过 | Commander 驼峰属性名 |
+| worktree dirty | Windows / Node 24.16 | 端到端：独立数据根 + 两个真实 `duya tui` + 后台 `serve --client-scoped` | 两个窗口都连到 `http://127.0.0.1:55258`；45 s 后后台 Host 自行退出，descriptor / owner 锁 / `host.lock` 全部释放 | 验收 1–3 |
+| worktree dirty | Windows / Node 24.16 | `npm run architecture:check` | 0；**无新增越界** | 255 条 baseline 指纹不再触发（既有债务，未重录） |
+| worktree dirty | Windows / Node 24.16 | `npm run typecheck:all` | 0；整条链跑完，末步 eval check 4/4 | 首跑被 `check:encoding` 拦下（计划文档一个乱码字符），已修后重跑通过 |
+| worktree dirty | Windows / Node 24.16 | `npx vitest run packages/cli packages/host/tests` | 0；**273 文件 / 2804 用例通过**，1 skipped | 无回归 |
 
 ## 接续 / 结果
 
-计划已写，实现未开始。
+已实现（分支 `codex/tui-multi-host`，未合并），共 5 个提交：
 
-下一步：在本 worktree 完成切片 1（worker 路径解析），跑 `npm run -w @duya/cli typecheck` 与相关 vitest。
+| 提交 | 内容 |
+| --- | --- |
+| `13ddb9f0` | 本计划 |
+| `137e58c8` | 切片 1：worker 入口路径解析以 CLI 安装位置为锚 |
+| `1ded68d3` | 切片 2：Host 客户端租约端点与 client-scoped 自动退出 |
+| `2cf675f0` | 顺带修好三个静默失效的 Commander 选项（`--api-format`、`--runtime-file`） |
+| `dcb23acf` | 切片 3+4：TUI 拉起可共享的后台 Host；owner 锁冲突转可操作提示 |
+
+要点：
+
+- **切片 2**：新增 `packages/host/src/client-lease.ts` 与 `GET /v1/host/lease`。`startLocalHost({ clientScoped: true })` 的 Host 在最后一个客户端离开后自行关闭，释放 descriptor、`host.lock` 与数据库 owner 锁。租约是**在场信号**，不是锁：多个客户端可同时持有。
+- **切片 3**：新增 `packages/cli/src/tui/background-host.ts`。`duya tui` 找不到 Host 时拉起一个**独立进程**的 `duya serve --client-scoped`（detached，输出写 `<dataRoot>/logs/background-host.log`），等 descriptor 出现后附着。两个终端同时启动时以「读到 descriptor」为准，落败者附着到胜者。
+- **切片 4**：owner 锁冲突改为可操作提示（点名 pid、给出 `DUYA_DATA_ROOT` 旁路）。`DatabaseOwnerLockError` 现在带结构化的 `ownerPid` / `ownerHostname`，不用再解析报错文本。
+- 文档：`packages/cli/AGENTS.md`、`packages/host/AGENTS.md` 更新排障入口与关键文件表。
+
+验证范围：三个包 typecheck、`architecture:check`、`typecheck:all`、cli+host 全量 2804 用例、以及真实进程上的双窗口端到端场景。
+
+未覆盖：Electron 桌面端未重建（本次未改 main/preload，但 `packages/host` 的 dist 被 CLI 依赖，PR 前应跑一次 `npm run electron:build`）；`duya chat` 的多客户端行为未做端到端验收（它复用同一个 Host 与租约端点，但本次只在 TUI 路径上验证）。
+
+回收：不适用，PR 未创建、未合并。
+下一步：创建 PR；PR 描述里写清验收 1–6 的实测结果与上面「未覆盖」两项。
+
