@@ -149,3 +149,28 @@ export async function describeSidebar(page) {
     };
   });
 }
+
+/**
+ * Open a seeded session the way a user does: click its row in the sidebar.
+ *
+ * The app is NOT asked to restore a session across a restart — in this build
+ * the boot splash cannot resolve a session the worker does not know, so a
+ * restored session never renders its transcript. Clicking the row is the
+ * navigation the product supports, and it is what the numbers describe.
+ *
+ * `lastMessageId` is the signal that the transcript is really on screen: the
+ * message list always renders its trailing rows, so that row appearing is a
+ * paint signal and not a store signal.
+ */
+export async function openSeededSession(page, options) {
+  const { title, lastMessageId, timeoutMs = 120_000 } = options;
+  await showWorkTab(page);
+  await clickSidebarThread(page, title);
+  if (!lastMessageId) return { opened: true };
+  await page.waitForFunction(
+    (id) => Boolean(document.querySelector(`[data-message-id="${id}"]`)),
+    lastMessageId,
+    { timeout: timeoutMs, polling: 'raf' },
+  );
+  return { opened: true, lastMessageId };
+}

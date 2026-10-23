@@ -3,29 +3,35 @@
  *
  * The fixtures `perf/session-100`, `perf/session-1000` and `perf/session-10000`
  * are three sizes of the same conversation shape. For each size the harness
- * seeds TWO sessions of that size, restores one of them at boot, and then
- * switches to the other one by CLICKING its row in the sidebar — the
- * product's own navigation, not a store poke.
+ * seeds TWO sessions of that size through the product's own IPC and then
+ * navigates between them the way a user does: by CLICKING their rows in the
+ * sidebar — not by poking the store.
  *
  * MEASURED
  *
  *   session.open_ms          the click -> the new transcript is on screen
- *   session.boot.render_ms   process start -> the restored transcript is on
- *                            screen (the "reopen my last chat" number)
+ *   session.switch_ms        the same, for the second session
  *   scroll.frame.p95_ms      the frame p95 while the transcript is scrolled
+ *   commit.count / dom.nodes / longtask.*   the cost of that render
  *
  * The "on screen" signal is the LAST message of the fixture appearing in the
  * DOM with its `data-message-id`; the message list renders its trailing rows
  * unconditionally, so this is a real paint signal and not a store signal.
+ *
+ * WHY THE NAVIGATION IS IN ONE RUN
+ *
+ * The harness does not restore a session across a restart: in this build the
+ * boot splash cannot resolve a session the worker does not know, so a
+ * restored session never renders. Everything here therefore happens in one
+ * app run, which is also the journey the numbers describe: open a heavy
+ * chat, switch to another heavy chat, scroll it.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   closePerfElectron,
   launchPerfElectron,
-  readProcessStartMs,
   seedSession,
-  restoreSession,
   userDataRootFor,
   waitForAppReady,
 } from '../lib/launch.mjs';
@@ -102,9 +108,8 @@ export default {
     const notes = {};
 
     for (const fixtureId of FIXTURES) {
-      const messages = buildSessionMessages(fixtureId);
       const digest = fixtureDigest(fixtureId);
-      notes[fixtureId] = { digest, messageCount: messages.length };
+      notes[fixtureId] = { digest, messageCount: buildSessionMessages(fixtureId).length };
 
       for (let index = 0; index < ctx.options.samples; index += 1) {
         const namespace = `switch-${fixtureId.replace(/[^a-z0-9]+/gi, '-')}-${ctx.runId}-${index}`;
@@ -115,54 +120,54 @@ export default {
         const workspace = path.join(userDataRootFor(namespace), 'workspace');
         fs.mkdirSync(workspace, { recursive: true });
 
-        // --- seed ------------------------------------------------------
-        const seed = await launchPerfElectron({ namespace });
-        await waitForAppReady(seed.page);
-        await seedSession(seed.page, {
+        // The row ids are namespaced per session: the transcript store appends
+        // with INSERT OR IGNORE on the message id, so the SAME fixture seeded
+        // into two sessions of one database would leave the second one empty.
+        const messagesA = buildSessionMessages(fixtureId, { idPrefix: sessionA });
+        const messagesB = buildSessionMessages(fixtureId, { idPrefix: sessionB });
+
+        const measured = await launchPerfElectron({ namespace });
+        await waitForAppReady(measured.page);
+        await seedSession(measured.page, {
           sessionId: sessionA,
           title: titleA,
           workingDirectory: workspace,
-          messages,
+          messages: messagesA,
         });
-        await seedSession(seed.page, {
+        await seedSession(measured.page, {
           sessionId: sessionB,
           title: titleB,
           workingDirectory: workspace,
-          messages,
+          messages: messagesB,
         });
-        await restoreSession(seed.page, { activeThreadId: sessionA, currentView: 'chat' });
-        await closePerfElectron(seed.app);
 
-        // --- measure ---------------------------------------------------
-        const measured = await launchPerfElectron({ namespace });
-        const processStart = readProcessStartMs(measured.app) ?? ctx.launchMark;
-        await waitForAppReady(measured.page);
+        // The collector is installed before the reload, so the instrumented
+        // document covers the whole navigation.
         await installCollector(measured.page);
         await measured.page.reload({ waitUntil: 'domcontentloaded' });
         await waitForAppReady(measured.page);
+        await showWorkTab(measured.page);
 
-        const lastMessageId = messages[messages.length - 1].id;
+        const lastIdA = messagesA[messagesA.length - 1].id;
+        const lastIdB = messagesB[messagesB.length - 1].id;
+
         try {
-          await waitForMessageRow(measured.page, lastMessageId);
-          const bootDetectedAt = Date.now();
-          // The document's own time origin is the start of THIS renderer
-          // load; the process start is the start of the whole app. Both are
-          // reported.
-          const documentStart = await measured.page.evaluate(() => performance.timeOrigin);
-          const bootRenderMs = bootDetectedAt - documentStart;
-
-          await showWorkTab(measured.page);
           const sidebar = await describeSidebar(measured.page);
 
-          // The boot is measured on its own; the switch starts from a clean
-          // counter so the two do not share a window.
-          const bootSnapshot = await readCollector(measured.page);
+          // --- open the first heavy chat --------------------------------
+          const openStartedAt = Date.now();
+          await clickSidebarThread(measured.page, titleA);
+          await waitForMessageRow(measured.page, lastIdA);
+          const openMs = Date.now() - openStartedAt;
+          const openSnapshot = await readCollector(measured.page);
           await resetCollector(measured.page);
 
+          // --- switch to the second one ----------------------------------
           const switchStartedAt = Date.now();
           await clickSidebarThread(measured.page, titleB);
-          await waitForMessageRow(measured.page, lastMessageId);
+          await waitForMessageRow(measured.page, lastIdB);
           const switchMs = Date.now() - switchStartedAt;
+          const switchSnapshot = await readCollector(measured.page);
 
           const scroll = await scrollTranscript(measured.page);
           const snapshot = await readCollector(measured.page);
@@ -170,19 +175,21 @@ export default {
           samples.push({
             index: samples.length,
             metrics: {
-              'session.boot.render_ms': round(bootRenderMs),
-              'session.boot.fromProcessStart_ms': round(bootDetectedAt - processStart),
-              'session.boot.commit.count': bootSnapshot?.mutationBatches ?? null,
-              'session.boot.dom.nodes': bootSnapshot?.domNodes ?? null,
-              'session.boot.longtask.total_ms': round(
-                (bootSnapshot?.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
+              'session.open_ms': round(openMs),
+              'session.switch_ms': round(switchMs),
+              'session.open.commit.count': openSnapshot?.mutationBatches ?? null,
+              'session.open.longtask.total_ms': round(
+                (openSnapshot?.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
               ),
-              'session.open_ms': round(switchMs),
+              'session.switch.commit.count': switchSnapshot?.mutationBatches ?? null,
+              'session.switch.longtask.total_ms': round(
+                (switchSnapshot?.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
+              ),
               'scroll.frame.p95_ms': round(scroll.p95),
               'scroll.frame.p50_ms': round(scroll.p50),
               'scroll.frame.max_ms': round(scroll.max),
               ...snapshotToMetrics(snapshot, {
-                'session.fixture.messages': messages.length,
+                'session.fixture.messages': messagesA.length,
               }),
             },
             observed: {
@@ -199,7 +206,7 @@ export default {
 
           ctx.log(
             `session-switch ${fixtureId} sample ${index}: `
-              + `open=${switchMs}ms boot=${bootRenderMs}ms scrollP95=${scroll.p95}ms`,
+              + `open=${openMs}ms switch=${switchMs}ms scrollP95=${scroll.p95}ms`,
           );
         } catch (error) {
           // One sample that cannot navigate must not take the whole scenario
@@ -213,6 +220,8 @@ export default {
           });
           ctx.log(`session-switch ${fixtureId} sample ${index} failed: ${error?.message}`);
         }
+
+        await closePerfElectron(measured.app);
       }
     }
 
@@ -221,9 +230,13 @@ export default {
       notes: {
         fixtures: notes,
         navigation:
-          'the switch is a click on the session row in the sidebar (div.thread-item), '
-          + 'not a store poke',
+          'the sessions are opened and switched by clicking their rows in the sidebar '
+          + '(div.thread-item), not by a store poke',
         onScreenSignal: 'the last fixture message row appearing in the DOM',
+        sameRun:
+          'the whole journey happens in one app run: this build cannot restore a session '
+          + 'across a restart (the boot splash stays on "Preparing session…"), so the '
+          + 'heavy-transcript numbers describe the navigation, not the restart',
       },
     };
   },

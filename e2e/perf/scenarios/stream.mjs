@@ -31,14 +31,13 @@ import {
   closePerfElectron,
   launchPerfElectron,
   seedSession,
-  restoreSession,
   userDataRootFor,
   waitForAppReady,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { startLoopbackProvider } from '../lib/loopback-provider.mjs';
 import { buildStreamChunks, buildToolStormRows, fixtureDigest } from '../lib/fixtures.mjs';
-import { snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const MODEL = 'perf-loopback-model';
@@ -179,10 +178,12 @@ export default {
           workingDirectory: workspace,
           messages: [],
         });
-        await restoreSession(measured.page, { activeThreadId: sessionId, currentView: 'chat' });
         await installCollector(measured.page);
         await measured.page.reload({ waitUntil: 'domcontentloaded' });
         await waitForAppReady(measured.page);
+        // The chat is open for the session the turn is posted to, so the
+        // renderer is subscribed to that session's stream.
+        await openSeededSession(measured.page, { title: `perf stream ${index}` });
 
         const before = await readTranscriptState(measured.page);
         await resetCollector(measured.page);

@@ -214,10 +214,17 @@ export async function readPaintTiming(page) {
 }
 
 /**
- * Wait until the composer accepts keys.
+ * Wait until the app is usable: the composer accepts keys AND the boot
+ * splash is gone.
  *
  * "Typeable" means: a contenteditable textbox (the product's
  * `RichTextInput`) or a textarea is in the document and attached to it.
+ *
+ * The splash matters: the app renders the welcome view BEHIND the
+ * `.duya-startup-landing` overlay while it boots, and the composer in that
+ * DOM is already editable. Reporting that as "typeable" would report the
+ * moment the shell mounted, not the moment the user could type. So the wait
+ * requires the overlay to be unmounted as well.
  *
  * The wait does NOT throw when the composer never becomes typeable: a
  * composer that is rendered but disabled is a real state, and the report
@@ -231,7 +238,8 @@ export async function waitForTypeable(page, timeoutMs = 30_000) {
     await page.waitForFunction(
       (css) => {
         const el = document.querySelector(css);
-        return Boolean(el && el.isConnected);
+        if (!el || !el.isConnected) return false;
+        return !document.querySelector('.duya-startup-landing');
       },
       selector,
       { timeout: timeoutMs, polling: 'raf' },
@@ -242,7 +250,7 @@ export async function waitForTypeable(page, timeoutMs = 30_000) {
       found: false,
       elapsedMs: Date.now() - startedAt,
       detectedAt: null,
-      reason: `no typeable composer within ${timeoutMs}ms`,
+      reason: `no typeable composer (with the boot splash dismissed) within ${timeoutMs}ms`,
       evidence,
     };
   }
@@ -265,9 +273,12 @@ export async function describeComposer(page) {
               connected: element.isConnected,
             }
           : null;
+      const splash = document.querySelector('.duya-startup-landing');
       return {
         editable: pick(editable),
         textarea: pick(textarea),
+        splash: splash ? splash.getAttribute('data-phase') : null,
+        splashStatus: splash?.querySelector('.duya-startup-status')?.textContent ?? null,
         domNodes: document.getElementsByTagName('*').length,
         bodyPreview: (document.body?.innerText ?? '').slice(0, 200),
       };
@@ -341,49 +352,16 @@ export async function seedSession(page, options) {
 }
 
 /**
- * Publish renderer state through the product's own persistence.
+ * Mark the onboarding as done, through the app's own flag.
  *
- * `duya-conversations` is the zustand-persist key of the conversation store;
- * restoring `activeThreadId` + `currentView` is how the app itself comes
- * back to a session after a restart, so the harness uses the same door
- * instead of poking the store.
+ * The first-launch wizard covers the whole shell, so a profile that has not
+ * been through it cannot be measured at all. This is the same localStorage
+ * key the app itself writes when the wizard finishes.
  */
-export async function setRendererState(page, state) {
-  await page.evaluate((next) => {
+export async function completeOnboarding(page) {
+  await page.evaluate(() => {
     localStorage.setItem('duya-onboarding-completed', 'true');
-    const raw = localStorage.getItem('duya-conversations');
-    let parsed = { state: {}, version: 0 };
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        parsed = { state: {}, version: 0 };
-      }
-    }
-    parsed.state = { ...(parsed.state ?? {}), ...next };
-    if (parsed.version === undefined) parsed.version = 0;
-    localStorage.setItem('duya-conversations', JSON.stringify(parsed));
-  }, state);
-}
-
-/**
- * Restore a session through the product's own persistence, and let the
- * product persist it back.
- *
- * Writing `duya-conversations` directly is not enough: the conversation
- * store persists on every state change, so the app overwrites the value
- * with its own (still empty) state before the process exits — and the next
- * boot comes up on the welcome screen. Writing the value and then RELOADING
- * makes the app rehydrate from it and persist it back, which is the state
- * the next launch will find.
- */
-export async function restoreSession(page, state) {
-  await setRendererState(page, state);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await waitForAppReady(page);
-  // The store persists on its next state change; give it a moment to write.
-  await page.waitForTimeout(800);
-  return readChatViewState(page);
+  });
 }
 
 /** How many message rows the chat transcript currently shows. */

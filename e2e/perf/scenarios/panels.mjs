@@ -17,13 +17,12 @@ import {
   closePerfElectron,
   launchPerfElectron,
   seedSession,
-  restoreSession,
   userDataRootFor,
   waitForAppReady,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
-import { showWorkTab, snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const FIXTURE_ID = 'perf/session-100';
@@ -96,7 +95,6 @@ export default {
 
   async run(ctx) {
     const samples = [];
-    const transcript = buildSessionMessages(FIXTURE_ID);
     const digest = fixtureDigest(FIXTURE_ID);
     const panelTarget = ctx.options.panels ?? 3;
     const panelIds = (ctx.options.panelIds ?? 'files,terminal,browser').split(',');
@@ -104,23 +102,29 @@ export default {
     for (let index = 0; index < ctx.options.samples; index += 1) {
       const namespace = `panels-${ctx.runId}-${index}`;
       const sessionId = `perf-panels-${ctx.runId}-${index}`;
+      const title = `perf panels ${index}`;
       const workspace = path.join(userDataRootFor(namespace), 'workspace');
       fs.mkdirSync(workspace, { recursive: true });
       fs.writeFileSync(path.join(workspace, 'perf-fixture.txt'), 'perf fixture\n', 'utf8');
+      const transcript = buildSessionMessages(FIXTURE_ID, { idPrefix: sessionId });
 
       const measured = await launchPerfElectron({ namespace });
       await waitForAppReady(measured.page);
       await seedSession(measured.page, {
         sessionId,
-        title: `perf panels ${index}`,
+        title,
         workingDirectory: workspace,
         messages: transcript,
       });
-      await restoreSession(measured.page, { activeThreadId: sessionId, currentView: 'chat' });
       await installCollector(measured.page);
       await measured.page.reload({ waitUntil: 'domcontentloaded' });
       await waitForAppReady(measured.page);
-      await showWorkTab(measured.page);
+      // The chat is open — with an agent session in it — before the panels
+      // are opened on top of it.
+      await openSeededSession(measured.page, {
+        title,
+        lastMessageId: transcript[transcript.length - 1].id,
+      });
 
       const before = await readPanelState(measured.page);
       await resetCollector(measured.page);

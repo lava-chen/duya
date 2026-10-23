@@ -16,14 +16,13 @@ import {
   closePerfElectron,
   launchPerfElectron,
   seedSession,
-  restoreSession,
   userDataRootFor,
   waitForAppReady,
   waitForTypeable,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, readHeapUsage, resetCollector } from '../lib/collector.mjs';
 import { buildSessionMessages, buildTypingFixture, fixtureDigest } from '../lib/fixtures.mjs';
-import { snapshotToMetrics } from '../lib/scenario-kit.mjs';
+import { openSeededSession, snapshotToMetrics } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
 const FIXTURE_ID = 'perf/typing-30s';
@@ -38,26 +37,34 @@ export default {
     const samples = [];
     const typing = buildTypingFixture(FIXTURE_ID);
     const digest = fixtureDigest(FIXTURE_ID);
-    const transcript = buildSessionMessages(TRANSCRIPT_FIXTURE);
 
     for (let index = 0; index < ctx.options.samples; index += 1) {
       const namespace = `typing-${ctx.runId}-${index}`;
       const sessionId = `perf-typing-${ctx.runId}-${index}`;
+      const title = `perf typing ${index}`;
       const workspace = path.join(userDataRootFor(namespace), 'workspace');
       fs.mkdirSync(workspace, { recursive: true });
+      const transcript = buildSessionMessages(TRANSCRIPT_FIXTURE, { idPrefix: sessionId });
 
       const measured = await launchPerfElectron({ namespace });
       await waitForAppReady(measured.page);
       await seedSession(measured.page, {
         sessionId,
-        title: `perf typing ${index}`,
+        title,
         workingDirectory: workspace,
         messages: transcript,
       });
-      await restoreSession(measured.page, { activeThreadId: sessionId, currentView: 'chat' });
       await installCollector(measured.page);
       await measured.page.reload({ waitUntil: 'domcontentloaded' });
       await waitForAppReady(measured.page);
+
+      // The chat the user types into is opened through the sidebar, the way
+      // they would open it.
+      await openSeededSession(measured.page, {
+        title,
+        lastMessageId: transcript[transcript.length - 1].id,
+      });
+
       const typeable = await waitForTypeable(measured.page);
       if (!typeable.found) {
         samples.push({

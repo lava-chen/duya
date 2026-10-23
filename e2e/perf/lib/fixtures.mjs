@@ -101,6 +101,12 @@ export function historyRowKind(index) {
  * The rows are shaped like the flat IPC message DTO the product's own
  * `db:message:replace` handler accepts, so the fixture can be injected
  * through the real bridge and land in the real store.
+ *
+ * `options.idPrefix` namespaces the row ids. It is REQUIRED whenever the same
+ * fixture is seeded into more than one session of the same database: the
+ * transcript store appends with INSERT OR IGNORE on the message id, so two
+ * sessions carrying the same ids would leave the second session empty (and
+ * the product would read back zero rows).
  */
 export function buildSessionMessages(fixtureId, options = {}) {
   const total = HISTORY_SIZES.get(fixtureId);
@@ -109,12 +115,15 @@ export function buildSessionMessages(fixtureId, options = {}) {
   }
   const random = makeRandom(options.seed ?? 0x5eed1234);
   const baseTime = options.baseTime ?? 1_700_000_000_000;
+  const idPrefix = options.idPrefix
+    ? `${options.idPrefix.replace(/[^a-z0-9]+/gi, '-')}-`
+    : '';
   const rows = [];
   let toolCallSeq = 0;
 
   for (let index = 0; index < total; index += 1) {
     const kind = historyRowKind(index);
-    const id = `${fixtureId.replace(/[^a-z0-9]+/gi, '-')}-m${String(index).padStart(5, '0')}`;
+    const id = `${idPrefix}${fixtureId.replace(/[^a-z0-9]+/gi, '-')}-m${String(index).padStart(5, '0')}`;
     const createdAt = baseTime + index * 1000;
     if (kind === 'tool_use') {
       toolCallSeq += 1;
@@ -297,7 +306,10 @@ export function describeFixture(fixtureId) {
  * The canonical payload of a fixture, hashed into the report.
  *
  * The digest is over the payload the harness actually injected, so a report
- * can be verified against the fixture it claims to have used.
+ * can be verified against the fixture it claims to have used. The canonical
+ * payload is the UN-namespaced one: the per-session id namespace changes the
+ * row ids (the transcript store keys on them) but not the fixture content, so
+ * the digest stays the same whichever session the rows were seeded into.
  */
 export function fixturePayload(fixtureId, options = {}) {
   if (HISTORY_SIZES.has(fixtureId)) {

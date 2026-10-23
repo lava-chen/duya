@@ -1,16 +1,6 @@
 /**
  * e2e/perf/scenarios/startup.mjs — how long until the app is usable.
  *
- * TWO KINDS OF BOOT, BOTH REPORTED
- *
- *   cold  a fresh namespace: no database, no sessions. The app comes up on
- *         the welcome screen. This is the "user starts Duya" number.
- *   warm  a namespace seeded with the `perf/session-100` fixture and the
- *         session restored through the product's own persistence, so the
- *         app comes up straight into a chat. This is the "user reopens
- *         their last session" number, and it is the one the other agents
- *         change, because it includes loading a transcript.
- *
  * WHAT IS MEASURED
  *
  *   startup.firstPaint_ms   process start -> first contentful paint
@@ -19,6 +9,26 @@
  * The process start is read from the OS process table, not from the
  * harness, because the spawn happens inside `electron.launch()` and the
  * harness can only bracket it.
+ *
+ * THE PROFILE UNDER MEASUREMENT
+ *
+ * The measured boot is the boot of a profile that a user would recognise:
+ * the onboarding wizard is done, one project is registered, and one
+ * session exists in the sidebar. The profile is prepared in an earlier
+ * launch (the product's own IPC does the seeding), and the MEASURED launch
+ * is the first one that sees it. That matters for the composer: the
+ * welcome view only enables the composer once a project is known, so a
+ * profile with no project would report "no typeable composer" and measure
+ * nothing.
+ *
+ * The measured boot lands on the welcome screen. The app is not asked to
+ * restore a session across the restart: the boot splash of this build
+ * cannot resolve a session the worker does not know (the splash stays on
+ * "Preparing session…" and the transcript never renders), so the harness
+ * measures the heavy-transcript journey where it is reachable — opening
+ * and switching a seeded session — in the `session-switch` scenario.
+ *
+ * THE TWO BOOTS
  *
  * The in-page collector cannot cover the FIRST load (an init script only
  * reaches the next document), so the boot is measured twice: once on the
@@ -31,14 +41,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   closePerfElectron,
+  completeOnboarding,
   launchPerfElectron,
   readChatViewState,
   readPaintTiming,
   readProcessStartMs,
   readRenderedMessageCount,
-  restoreSession,
   seedSession,
-  setRendererState,
   userDataRootFor,
   waitForAppReady,
   waitForTypeable,
@@ -57,7 +66,6 @@ export default {
 
   async run(ctx) {
     const samples = [];
-    const messages = buildSessionMessages(FIXTURE_ID);
     const digest = fixtureDigest(FIXTURE_ID);
 
     for (let index = 0; index < ctx.options.samples; index += 1) {
@@ -68,105 +76,57 @@ export default {
 
       // --- prepare ------------------------------------------------------
       // The onboarding wizard covers the shell, so the flag is set first.
-      // The first load of a fresh profile therefore cannot be measured
-      // against a composer — it is measured against the wizard — and the
-      // cold number below comes from the SECOND load of the same profile,
-      // which has an empty database and no wizard.
+      // The session is seeded through the product's own IPC, which also
+      // registers the project the welcome view needs for its composer.
       const prepare = await launchPerfElectron({ namespace });
       await waitForAppReady(prepare.page);
-      await setRendererState(prepare.page, { currentView: 'home' });
-      await closePerfElectron(prepare.app);
-
-      // --- cold boot: empty database, welcome screen ---------------------
-      const cold = await launchPerfElectron({ namespace });
-      const coldProcessStart = readProcessStartMs(cold.app) ?? ctx.launchMark;
-      await waitForAppReady(cold.page);
-      const coldTypeable = await waitForTypeable(cold.page);
-      const coldPaint = await readPaintTiming(cold.page);
-      const coldMetrics = {
-        'startup.cold.firstPaint_ms': round(
-          coldPaint.timeOrigin + (coldPaint.firstContentfulPaintMs ?? 0) - coldProcessStart,
-        ),
-        'startup.cold.typeable_ms':
-          coldTypeable.found && coldTypeable.detectedAt !== null
-            ? round(coldTypeable.detectedAt - coldProcessStart)
-            : null,
-      };
-      await closePerfElectron(cold.app);
-
-      // --- warm boot: the same namespace, seeded, then launched again ----
-      const seed = await launchPerfElectron({ namespace });
-      await waitForAppReady(seed.page);
-      await seedSession(seed.page, {
+      await completeOnboarding(prepare.page);
+      const messages = buildSessionMessages(FIXTURE_ID, { idPrefix: sessionId });
+      await seedSession(prepare.page, {
         sessionId,
         title: `perf startup ${index}`,
         workingDirectory: workspace,
         messages,
       });
-      await restoreSession(seed.page, { activeThreadId: sessionId, currentView: 'chat' });
-      await closePerfElectron(seed.app);
+      await closePerfElectron(prepare.app);
 
-      const warm = await launchPerfElectron({ namespace });
-      const warmProcessStart = readProcessStartMs(warm.app) ?? ctx.launchMark;
-      await waitForAppReady(warm.page);
-      const warmTypeable = await waitForTypeable(warm.page);
-      const warmPaint = await readPaintTiming(warm.page);
-      const warmChatState = await readChatViewState(warm.page);
+      // --- the measured boot --------------------------------------------
+      const measured = await launchPerfElectron({ namespace });
+      const processStart = readProcessStartMs(measured.app) ?? ctx.launchMark;
+      await waitForAppReady(measured.page);
+      const typeable = await waitForTypeable(measured.page);
+      const paint = await readPaintTiming(measured.page);
+      const chatState = await readChatViewState(measured.page);
+      const renderedRows = await readRenderedMessageCount(measured.page);
 
       // The instrumented reload: the same boot path, this time observed from
       // inside the document.
-      await installCollector(warm.page);
-      await warm.page.reload({ waitUntil: 'domcontentloaded' });
-      await waitForAppReady(warm.page);
-      await waitForTypeable(warm.page);
-      const bootSnapshot = await readCollector(warm.page);
-      // The transcript arrives after the shell: wait for it, then read the
-      // collector again so the commit and DOM numbers describe a chat that
-      // is actually on screen.
-      let transcriptSnapshot = null;
-      let transcriptFound = false;
-      try {
-        await warm.page.waitForFunction(
-          (id) => Boolean(document.querySelector(`[data-message-id="${id}"]`)),
-          messages[messages.length - 1].id,
-          { timeout: 60_000, polling: 'raf' },
-        );
-        transcriptFound = true;
-        transcriptSnapshot = await readCollector(warm.page);
-      } catch {
-        transcriptSnapshot = null;
-      }
-      const reloadPaint = await readPaintTiming(warm.page);
-      const transcriptState = await readChatViewState(warm.page);
-      const renderedRows = await readRenderedMessageCount(warm.page);
+      await installCollector(measured.page);
+      await measured.page.reload({ waitUntil: 'domcontentloaded' });
+      await waitForAppReady(measured.page);
+      const reloadTypeable = await waitForTypeable(measured.page);
+      const bootSnapshot = await readCollector(measured.page);
+      const reloadPaint = await readPaintTiming(measured.page);
 
       const metrics = {
-        // The contract's names: the first paint of a fresh profile and the
-        // time to a composer that accepts keys.
-        'startup.firstPaint_ms': coldMetrics['startup.cold.firstPaint_ms'],
-        'startup.typeable_ms':
-          warmTypeable.found && warmTypeable.detectedAt !== null
-            ? round(warmTypeable.detectedAt - warmProcessStart)
-            : null,
-        ...coldMetrics,
-        'startup.warm.firstPaint_ms': round(
-          warmPaint.timeOrigin + (warmPaint.firstContentfulPaintMs ?? 0) - warmProcessStart,
+        // The contract's names.
+        'startup.firstPaint_ms': round(
+          paint.timeOrigin + (paint.firstContentfulPaintMs ?? 0) - processStart,
         ),
-        'startup.warm.typeable_ms':
-          warmTypeable.found && warmTypeable.detectedAt !== null
-            ? round(warmTypeable.detectedAt - warmProcessStart)
+        'startup.typeable_ms':
+          typeable.found && typeable.detectedAt !== null
+            ? round(typeable.detectedAt - processStart)
             : null,
+        'startup.domContentLoaded_ms': round(
+          paint.timeOrigin + (paint.domContentLoadedMs ?? 0) - processStart,
+        ),
         'startup.reload.firstPaint_ms': round(reloadPaint.firstContentfulPaintMs),
+        // Document-relative: the collector sees the composer become editable
+        // inside the page, so the number needs no external clock.
         'startup.reload.typeable_ms': round(bootSnapshot?.composerReadyAt ?? null),
         ...snapshotToMetrics(bootSnapshot, {
           'startup.reload.dom.nodes': bootSnapshot?.domNodes ?? null,
         }),
-        'startup.reload.transcript.commit.count':
-          transcriptSnapshot?.mutationBatches ?? null,
-        'startup.reload.transcript.dom.nodes': transcriptSnapshot?.domNodes ?? null,
-        'startup.reload.transcript.longtask.total_ms': round(
-          (transcriptSnapshot?.longTasks ?? []).reduce((sum, task) => sum + task.duration, 0),
-        ),
       };
 
       samples.push({
@@ -177,24 +137,20 @@ export default {
           fixture: FIXTURE_ID,
           fixtureDigest: digest,
           sessionId,
-          coldProcessStart,
-          warmProcessStart,
-          warmChatState,
-          transcriptState,
+          processStart,
+          chatState,
           renderedRows,
-          transcriptFound,
+          typeable: typeable.evidence ?? { found: typeable.found },
+          reloadTypeable: reloadTypeable.evidence ?? { found: reloadTypeable.found },
           collectorInstalledAt: bootSnapshot?.installedAt ?? null,
           collectorTimeOrigin: bootSnapshot?.timeOrigin ?? null,
-          coldTypeable: coldTypeable.evidence ?? { found: coldTypeable.found },
-          warmTypeable: warmTypeable.evidence ?? { found: warmTypeable.found },
-          coldConsoleErrors: cold.consoleErrors.slice(0, 5),
-          warmConsoleErrors: warm.consoleErrors.slice(0, 5),
-          pageErrors: warm.pageErrors.slice(0, 5),
+          consoleErrors: measured.consoleErrors.slice(0, 5),
+          pageErrors: measured.pageErrors.slice(0, 5),
         },
         error: null,
       });
 
-      await closePerfElectron(warm.app);
+      await closePerfElectron(measured.app);
       ctx.log(`startup sample ${index}: ${JSON.stringify(metrics)}`);
     }
 
@@ -203,21 +159,24 @@ export default {
       notes: {
         fixture: FIXTURE_ID,
         fixtureDigest: digest,
-        coldBoot:
-          'the profile is fresh (empty database); the onboarding flag is set in a prepare '
-          + 'launch, because the wizard covers the shell and has no composer',
-        coldTypeable:
-          'a fresh profile has no configured provider, so the welcome composer renders '
-          + 'DISABLED (contenteditable=false); startup.cold.typeable_ms is therefore null and '
-          + 'the evidence is in the sample. startup.typeable_ms is the warm boot, where the '
-          + 'restored chat has an enabled composer',
-        warmBoot: 'the same profile, seeded with perf/session-100, chat restored from localStorage',
+        profile:
+          'the measured boot is a profile with the onboarding done, one project registered and '
+          + 'one session in the sidebar — the state a user recognises as "my Duya"',
+        typeable:
+          'the composer is only enabled once the welcome view knows a project, so the profile '
+          + 'is prepared before the measured boot',
         typeableBasis:
-          'the composer is detected by a requestAnimationFrame poll from the harness, '
-          + 'so startup.typeable_ms is an upper bound of the true value',
+          'the composer is detected by a requestAnimationFrame poll from the harness, and the '
+          + 'boot splash (.duya-startup-landing) must be gone as well — the welcome view is '
+          + 'rendered behind that overlay, and its composer is editable while the overlay is up',
         instrumentedBoot:
           'the *.reload.* metrics come from an instrumented reload of the same boot path, '
           + 'because an init script cannot reach the first document',
+        crossRestartRestore:
+          'the app is NOT asked to restore a session across the restart: in this build the '
+          + 'boot splash cannot resolve a session the worker does not know (it stays on '
+          + '"Preparing session…" and the transcript never renders), so the heavy-transcript '
+          + 'journey is measured as an in-run navigation in the session-switch scenario',
       },
     };
   },
