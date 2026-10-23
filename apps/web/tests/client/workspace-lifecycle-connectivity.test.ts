@@ -52,7 +52,13 @@ const bffs: WebBffHandle[] = [];
 afterEach(async () => {
   for (const bff of bffs.splice(0)) await bff.close();
   for (const host of hosts.splice(0)) await host.close();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    // The checkout is a git worktree, and Windows refuses to unlink a
+    // directory git still holds. `maxRetries` waits that out; without it the
+    // TEARDOWN fails and the test reads as "the contract broke" when nothing
+    // broke.
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 });
 
 async function tempDir(prefix: string): Promise<string> {

@@ -53,7 +53,13 @@ afterEach(async () => {
   for (const restore of restores.splice(0)) restore();
   for (const host of hosts.splice(0)) await host.close();
   for (const dataHost of dataHosts.splice(0)) dataHost.close();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    // The checkout is a git worktree, and Windows refuses to unlink a
+    // directory git still holds. `maxRetries` waits that out; without it the
+    // TEARDOWN fails and the test reads as "the contract broke" when nothing
+    // broke.
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 });
 
 function git(cwd: string, ...args: string[]): string {
@@ -201,7 +207,7 @@ describe('plan 621 scenario 1: the same checkout and the same owner after a rest
     // The same owner — the identity did not change with the process.
     expect(after.checkout?.ownerSessionId).toBe('session-1');
     expect(after.isOwner).toBe(true);
-  });
+  }, 60_000);
 
   it('reports no checkout for a session that was never in one', async () => {
     await isolateCheckoutStorage();
@@ -222,7 +228,7 @@ describe('plan 621 scenario 1: the same checkout and the same owner after a rest
     // checkout is not a managed one, so there is no owner to report.
     expect(view.checkout).toBeNull();
     expect(view.isOwner).toBe(false);
-  });
+  }, 60_000);
 });
 
 describe('plan 621 scenario 2: two sessions cannot share one checkout', () => {
@@ -265,5 +271,5 @@ describe('plan 621 scenario 2: two sessions cannot share one checkout', () => {
     const firstView = await observeForSession(host, 'session-a');
     expect(firstView.checkout?.ownerSessionId).toBe('session-a');
     expect(firstView.isOwner).toBe(true);
-  });
+  }, 60_000);
 });

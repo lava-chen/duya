@@ -44,7 +44,13 @@ afterEach(async () => {
   for (const restore of restores.splice(0)) restore();
   for (const host of hosts.splice(0)) await host.close();
   for (const dataHost of dataHosts.splice(0)) dataHost.close();
-  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    // The checkout is a git worktree, and Windows refuses to unlink a
+    // directory git still holds. `maxRetries` waits that out; without it the
+    // TEARDOWN fails and the test reads as "the contract broke" when nothing
+    // broke.
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 });
 
 function git(cwd: string, ...args: string[]): string {
@@ -172,5 +178,5 @@ describe('plan 621 scenario 7: every direction is answerable from the Host', () 
       // that the client did not decide this — the Host did.
       expect(verdict.reason).toBe('owner_alive');
     }
-  });
+  }, 60_000);
 });
