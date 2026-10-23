@@ -50,6 +50,25 @@ TUI 在一次模型调用结束后显示该次调用的输出速度（`⚡ 63.0 
 | dirty（实现后） | Windows / Node 24 | `npm run architecture:check` | 0 —— `OK — no new boundary violations`（tolerated 2610 / baseline 2785） | 架构门禁 |
 | dirty（实现后） | Windows / Node 24 | `npm run typecheck:all` | 0 —— 全部 workspace typecheck 通过 | 类型门禁 |
 | dirty（实现后） | Windows / Node 24 | PTY 驱动真实 `packages/cli/bundle/cli.cjs tui`，发一条真实请求 | footer 出现 `↓37 Σ37 ⚡ 11.5 tok/s`（provider：minimax-cn / MiniMax-M3） | `docs-local/tui-pty.log` |
+| `9991a0db` | Windows / Node 24 | `npm run bundle:verify` | 0 —— `FRESH 0/922` | worker bundle 重建后新鲜 |
+| `1fb0b9c9` | Windows / Node 24 | `npx vitest run apps/desktop/src/main/__tests__/logger-write-stream-error.test.ts apps/desktop/src/main/cli/handlers/crons.test.ts` | 0（2 files / 10 tests） | cherry-pick 的 desktop logger 修复 |
+
+### 两个 CI 红灯的成因（都不是本次改动引入的）
+
+1. **`architecture` 红在 `bundle:verify`**：本次改了 `packages/ai/src/index.ts`，它在
+   `worker-metafile.json` 的输入列表里，而那个列表对应的 bundle commit 早于本次改动 →
+   门禁判 `stale`。修法就是门禁自己写的那句：**重建 worker bundle 并在同一个改动里提交**
+   （`chore(host): rebuild the worker bundle for the request duration`）。
+   这个门禁比的是 **git 历史**而不是字节——因为 esbuild 的 minify 输出不可复现，比字节会永远红。
+
+2. **`test` 红在 `apps/desktop/src/main/cli/handlers/crons.test.ts`**：症状是「用例全过但 job 红」，
+   唯一错误是 `Uncaught Exception: ENOENT ... /tmp/duya-cron-test-*/logs/app.log`。
+   本次改了 `packages/host/src/run-engine-model.ts`，CI 的 affected 集合因此把 `apps/desktop`
+   的测试拉了进来；那个测试的 `afterEach` 删临时数据根时 desktop logger 的写流还开着，
+   而 `Logger extends EventEmitter` 且全仓无人注册 `error` 监听器 → Node 语义下抛成未捕获异常。
+   修复在**别的分支**上（`codex/tui-multi-host` / PR #397，`e269c53e`），master 上还没有，
+   所以只能 cherry-pick 过来（`fix(desktop): stop a logger write failure from crashing the process`）。
+   两个文件，与本次改动完全不相干。#397 合并后集成者可以丢掉其中一份。
 
 ### 真实链路上的一个坑：worker bundle 可能是陈旧的
 
@@ -67,8 +86,12 @@ TUI 在一次模型调用结束后显示该次调用的输出速度（`⚡ 63.0 
 
 PR：https://github.com/lava-chen/duya/pull/396（draft，未合并）
 
-副作用已还原：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts` 均已
-`git checkout --` 还原，未入库。
+提交序列：`5b421d4b`（协议契约）→ `77a9bcd2`（ai 测时长 + 纯函数）→ `1cf89eab`（runtime/host 帧）
+→ `edc7112b`（CLI 展示）→ `4e2b15e0`（计划文档）→ `a82d6bc8`（PR 链接）→
+`9991a0db`（重建 worker bundle）→ `1fb0b9c9`（cherry-pick desktop logger 修复）。
+
+副作用已还原：`packages/capabilities/src/ModuleTool/inline-content.ts` 已 `git checkout --` 还原。
+`packages/host/bundle/*` 是**入库产物**，本次按门禁要求重建并提交，不算副作用。
 
 回收：未回收（PR 未合并）。
 下一步：交给集成者 review；Desktop 侧接入是另开一条 worker 通道的活，不在本计划范围。
