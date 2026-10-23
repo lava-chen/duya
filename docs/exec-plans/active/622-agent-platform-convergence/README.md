@@ -339,7 +339,6 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | [610 A8.2 / A8.3](../610-architecture-series/15-slice-a8-client-core.md) | **排序在…之前 / 被…覆盖**。A8.2（client-core 层定义）被 [04](04-remaining-unlayered-packages.md) 吸收；A8.3（客户端轴反向门禁）是 [05](05-client-axis-reverse-gate.md) 的**主体** |
 | [610 §12 / §13 退役](../610-architecture-series/12-agent-retirement-coordination.md) | **引用**。退役的消费者清单与顺序由既有计划拥有；[10](10-retirement-and-doc-truth.md) 只做**收尾 + CI 守卫 + 文档事实源**，不重写退役序列 |
 | [多 Agent 编排 Phase 1–4](../2026-10-23-multi-agent-orchestrator.md) | **引用 + 排序在…之前**。Phase 1（A1 补测 / A4 `FakeWorkflowHost`）**阻塞** [07](07-workflow-dag-parallel.md) 与 [08](08-background-subagent-lifecycle.md)；Phase 4（F1 落盘 / F3 状态映射）是 [08](08-background-subagent-lifecycle.md) 的**主体**，本系列不复制 |
-| [Desktop 性能爬坡](../2026-10-23-desktop-performance-hill-climbing.md) | **无交集**。该计划的 A–E 独占路径与本系列不重叠 |
 
 ---
 
