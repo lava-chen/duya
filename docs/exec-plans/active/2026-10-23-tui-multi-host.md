@@ -89,10 +89,31 @@
 | 85d74c86 | Windows / Node 24.16 | `npm run bundle:verify` | 0；`FRESH 0/922` bundle inputs | 被跟踪产物与新租约端点同步 |
 | 85d74c86 | Windows / Node 24.16 | `npm run electron:build` | 0；`Electron build complete`，native 模块已复制 | 桌面端打包链路未被本次改动破坏 |
 | 85d74c86 | Windows / Node 24.16 | `npm run check:encoding` | 0；OK（11 known） | 编码门禁 |
+| 45feb62f | Windows / Node 24.16 | `npx vitest run --changed=<origin/master> --maxWorkers=2`（与 CI 同范围） | 0；**183 文件 / 1766 用例通过**，6 skipped | 本地复现 CI 的测试范围，全绿 |
+
+## CI 状态（run 39981375971）
+
+`architecture`、`typecheck (ubuntu-latest)`、`build (ubuntu-latest)` 全过；`test (ubuntu-latest)` 唯一失败项是**一个未捕获异常**，而非用例失败：
+
+```
+Test Files  155 passed (155)      ← 全部测试文件通过
+Tests       1441 passed | 6 skipped (1447)
+Errors      1 error
+Uncaught Exception: ENOENT: no such file or directory, open '/tmp/duya-cron-test-SMdvkM/logs/app.log'
+  originated in apps/desktop/src/main/cli/handlers/crons.test.ts
+```
+
+**判定为 CI 上既有的共享 flake，与本改动无关**，三条独立证据：
+
+1. **改动面不重叠**：本 PR 的 19 个改动文件里**零个**涉及 `logger` / `crons` / `automation` / `logging`。成因是 `crons.test.ts` 的 `afterEach` 用 `rmSync` 删掉临时目录后，还有异步日志写入在飞（`apps/desktop/src/main/logging/logger.ts:44` 把 `DUYA_CLI_USER_DATA_DIR` 当日志根）。
+2. **同一时刻、同一签名的旁证**：并行跑的 **PR #396**（run 39980113738，不含本 PR 任何改动）报出**字节级相同**的错误：`ENOENT: open '/tmp/duya-cron-test-9YSI9Y/logs/app.log'`，同样是「Test Files 全 passed + 1 error」。
+3. **本地同范围全绿**：以 CI 相同的 `--changed` 口径跑，183 文件 / 1766 用例通过，exit 0。
+
+注：master 上的 push run（run 39975324429，SHA `c81ed169`）虽然 `test` job 显示 success，但按 `scripts/ci/test-scope.mjs:210`，push 事件的 `unit_scope=skip`，**测试步骤根本没执行**，因此不能作为对照基线；PR 触发的 run 才是可比口径。
 
 ## 接续 / 结果
 
-已实现（分支 `codex/tui-multi-host`，未合并），共 7 个提交：
+已实现（分支 `codex/tui-multi-host`，PR #397 未合并），共 8 个提交：
 
 | 提交 | 内容 |
 | --- | --- |
@@ -103,6 +124,7 @@
 | `dcb23acf` | 切片 3+4：TUI 拉起可共享的后台 Host；owner 锁冲突转可操作提示 |
 | `4e870109` | 文档：`packages/cli/AGENTS.md`、`packages/host/AGENTS.md` |
 | `85d74c86` | 重建被跟踪的 `packages/host/bundle/worker-entry.js`（新增租约端点后必须同步产物） |
+| `45feb62f` | 本计划的验证记录补记（bundle / electron:build / CI 判定） |
 
 要点：
 
@@ -111,12 +133,12 @@
 - **切片 4**：owner 锁冲突改为可操作提示（点名 pid、给出 `DUYA_DATA_ROOT` 旁路）。`DatabaseOwnerLockError` 现在带结构化的 `ownerPid` / `ownerHostname`，不用再解析报错文本。
 - 文档：`packages/cli/AGENTS.md`、`packages/host/AGENTS.md` 更新排障入口与关键文件表。
 
-验证范围：三个包 typecheck、`architecture:check`、`typecheck:all`、`bundle:verify`、`check:encoding`、cli+host 全量 2804 用例、`electron:build`，以及真实进程上的双窗口端到端场景。
+验证范围：三个包 typecheck、`architecture:check`、`typecheck:all`、`bundle:verify`、`check:encoding`、cli+host 全量 2804 用例、`electron:build`、CI 同口径 `--changed` 183 文件 / 1766 用例，以及真实进程上的双窗口端到端场景。
 
 **关于 `electron:build` 的产物噪音**：它内含 `bundle:worker`，重建的 `worker-entry.js` 与已提交版本**字节不同但语义相同**——esbuild 的 minify 标识符分配不可复现（`scripts/architecture/bundle-verify.mjs` 开头即记录了这一点），叠加 `packages/capabilities/src/ModuleTool/inline-content.ts` 被构建改行尾（-10 字节 / 10 行 CRLF→LF）。实测两份产物的 require 目标、HTTP 路径、路由、lease 引用四组锚点集合**完全一致**（41 / 158 / 35 / 83），metafile 输入集合也一致，唯一变化是 `inline-content.ts` 的行尾。`bundle:verify` 的判据是基于 Git 的新鲜度而非字节比对，因此这两份产物都算 FRESH。**处理方式是还原到已提交版本**（`git checkout -- packages/host/bundle/`）：已提交的那份才是 CI 验证过的，重建副本只会制造噪音 diff。
 
 未覆盖：`duya chat` 的多客户端行为未做端到端验收（它复用同一个 Host 与租约端点，但本次只在 TUI 路径上验证）。
 
-回收：不适用，PR 未创建、未合并。
-下一步：创建 PR；PR 描述里写清验收 1–6 的实测结果与上面「未覆盖」一项。
+回收：不适用，PR #397 未合并。
+下一步：等 CI 的 `test` job 这个既有 flake 消失或由集成者评估；合并需获授权集成者用 merge commit，随后重验并核对清单。
 
