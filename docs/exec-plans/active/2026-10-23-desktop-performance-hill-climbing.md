@@ -118,7 +118,11 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - 目标文件规模：`App.tsx` 1192、`ChatView.tsx` 1366、`conversation-store.ts` 1694、`MessageList.tsx` 1209、`MessageInput.tsx` 2356 行。规模不是证据，先 Profile 再动手。
 - **B 的结论**：流式时增长中的消息块每帧重解析整篇 markdown，连**早已写完的代码围栏**也被每帧重新分词 + 重新高亮。判定性实验——同文本把围栏去掉语言（不 tokenize）后主线程占用 1298.6 → 297.5ms，说明**语法高亮占约 78%**。改 `CodeBlock` 为 `React.memo` 后主线程占用 1276.3 → 645.5ms（−49.4%）、帧 p95 33.3 → 16.7ms，`dom.nodes` / `dom.mutations` 全 0% 变化，视觉逐字节一致。**增长中的那段 markdown 仍每帧整篇重解析（约 300ms 量级），是下一轮的候选。**
 - **D 的结论**：GPU 侧**没有**可证明的收益。软件合成（`--disable-gpu`）对终端帧耗时无可证明影响（83.5 vs 99.9ms，落在轮间噪声内）；唯一可证明的差异是**渲染器选择**——终端从 WebGL 回退到 DOM 后帧 p95 116.9 → 183.7ms（+57%）、Long Task 167 → 369。因此本 PR 只交付观测能力，不做 GPU 开关实验。
-- **A 查出的疑似产品缺陷**：全新 profile 且无持久化状态时，`isHydrated` 一直是 false，启动遮罩不消失、composer 保持禁用。根因线索是 zustand v5 下 `onRehydrateStorage` 直接 mutate state 不通知订阅者。落在 `conversation-store.ts`（C 的范围），已转给 C 复核。
+- **A 查出的疑似产品缺陷**：全新 profile 且无持久化状态时，`isHydrated` 一直是 false，启动遮罩不消失、composer 保持禁用。根因线索是 zustand v5 下 `onRehydrateStorage` 直接 mutate state 不通知订阅者。落在 `conversation-store.ts`（C 的范围），已转给 C 复核。**C 已复核并修复，PR #400。**
+- **zustand v5 persist 的关键机制**（C 查清）：`set(merge(persisted, current), true)` 是**唯一**一次写入；`onRehydrateStorage` 在这次写入**之后**运行且原地改写 state，所以字段值变了但**没有任何订阅者被通知**。把归一化搬进 `merge`，`isHydrated: true` 才随这次写入发布出去。用户可见后果有三个：启动遮罩只能等 5 秒看门狗、侧栏等 `isHydrated` 才去读 SQLite 会话列表、欢迎页 composer 等 `isHydrated` 才收输入。
+- **C 盘写满是本轮最大的隐形杀手**：所有 Agent 会话都死于 `ENOSPC: no space left on device`，与逻辑无关。根因是 `%LOCALAPPDATA%\Temp` 堆积 8.7 GB 陈年临时垃圾（.NET/VS 构建缓存、编辑器安装包）。**trash launcher 接受工作区外的单个文件、拒绝目录**，且回收站清空前不释放空间——必须 `rm --` 之后 `Clear-RecycleBin`。清理后 C 盘空闲 0.15 GB → 2.48 GB。
+- **git push 在本机会被服务端中断**（`POST /git-receive-pack` 30 秒后被关闭，报 `the remote end hung up unexpectedly`）。用 `git -c http.postBuffer=524288000 -c http.version=HTTP/1.1 push` 可稳定推送。
+- **PR #400 的 CI typecheck 失败是基础设施 flake**，不是代码问题：`npm ci` 编译 `node-pty` 时下载 Node headers 被中断（`gyp ERR! stack TypeError: terminated` / `Fetch.onAborted`），失败发生在**依赖安装阶段**，仓库代码还没开始类型检查。本地 `npm run -w @duya/ui typecheck` 通过。
 
 ## 验证记录
 
@@ -126,14 +130,22 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 | --- | --- | --- | --- | --- |
 | `670a862c` clean | Windows / Node | `git worktree add` × 6 | 0 | `git worktree list` 6 项 perf-* |
 | `670a862c` clean | Windows / Node | `node scripts/junction-worktree.mjs . --primary` | 0 | 每检出 56 个链接，`node_modules/.bin` 可用 |
+| PR #386 → `8721dc75` | Windows / Node v24.16.0 | `gh pr checks 386` | 0 | architecture / build / test / test scope / typecheck 全绿 |
+| PR #385 → `8492dbd9` | 同上 | `gh pr checks 385` | 0 | 五项全绿 |
+| PR #391 → `f617e4c1` | 同上 | `gh pr checks 391` | 0 | 五项全绿 |
+| PR #385 独立验证 | 同上 | `vi.mock` 注入回退版 `CodeBlock` + 逐帧 9 帧 DOM 比对 | 0 | 断言 #1 变红（`expected 1 but got 2`）；逐帧 DOM 全等；无产品文件改动 |
+| PR #400 hydrate 负对照 | 同上 | 临时把 `merge` 还原成 `onRehydrateStorage` 原地改写 → 跑 hydration 测试 → `git checkout --` 还原 | 1（**预期**） | 9 个用例中 4 个变红：`expected [ false ] to include true`、`expected false to be true`、`expected [ '/work/demo' ] to be an instance of Set` |
+| PR #400 还原后 | 同上 | 同上测试 | 0 | 9/9 绿；`git status` 干净；另两个测试文件 16 个用例绿 |
+| C 盘清理 | Windows | `rm -- <16 个陈年临时文件>` + `Clear-RecycleBin -DriveLetter C -Force` | 0 | C 盘空闲 0.15 GB → 2.48 GB；回收站清空前不释放空间 |
 
 ## 接续 / 结果
 
 实现中。集成者：mavis。合并顺序：A 先合（Harness 是其它 agent 的取证工具），再 B/C/D/E；合并后由集成者**串行**重跑 Profile 出一份权威数字，再出下一轮机会清单。
 
-已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）。
-待合并：#386（A）、#385（B）、#391（D）。进行中：C、E。
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）。
+待合并：#400（C hydrate + 侧栏），等 typecheck 复跑；#392（本计划状态同步）。进行中：E。
 未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
 
-回收：未回收。6 个检出均未集成，owner 会话在线。
-下一步：A 续做收尾后合并 #386；B/D 依次合并；C/E 交付后审阅合并；全部合并后串行重跑 Profile。
+回收：未回收。6 个检出均未全部集成，owner 会话在线。
+下一步：E 交付后审阅合并；全部合并后串行重跑 Profile，出权威数字与下一轮机会清单。
+
