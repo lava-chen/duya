@@ -95,6 +95,10 @@ export async function launchPerfElectron(options = {}) {
     },
   });
 
+  // The namespace is how the close finds this app again: the pid Playwright
+  // hands out belongs to its own launcher, not to the app.
+  LAUNCH_NAMESPACES.set(app, namespace);
+
   const consoleErrors = [];
   const pageErrors = [];
 
@@ -193,6 +197,22 @@ export function readProcessStartMs(app) {
 }
 
 /**
+ * The namespace of every launch, so the close can find the app's processes.
+ *
+ * Playwright launches the app THROUGH a `cmd.exe` wrapper on Windows, so the
+ * pid it hands out belongs to that wrapper and not to the app. A guard that
+ * looks at THAT name sees `cmd` and refuses to kill it — and the app stays
+ * alive: the profile stays locked, ~700 MB stay allocated, and the next
+ * sample measures a machine that is already busy. That is what happened
+ * until the close stopped trusting the pid.
+ *
+ * The namespace is unique per launch and it is in the app's own command
+ * line, so it finds exactly this app's processes and nothing of anybody
+ * else's.
+ */
+const LAUNCH_NAMESPACES = new WeakMap();
+
+/**
  * Close the app, and make sure it is GONE.
  *
  * WHY THE EXTRA WORK
@@ -204,12 +224,12 @@ export function readProcessStartMs(app) {
  * dozen samples the machine was measuring itself. The profile stayed locked
  * and the next sample measured a busy machine.
  *
- * So the process is checked after the graceful close, and the tree is
- * killed when it is still there.
+ * So the processes of THIS launch are killed after the graceful close.
  */
 export async function closePerfElectron(app) {
-  if (!app) return;
+  if (!app) return { killed: [] };
   const pid = app.process()?.pid;
+  const namespace = LAUNCH_NAMESPACES.get(app) ?? null;
   try {
     await Promise.race([
       app.close(),
@@ -218,7 +238,55 @@ export async function closePerfElectron(app) {
   } catch {
     /* the graceful close did not work: the forced path below takes over */
   }
-  await killPerfProcessTree(pid);
+  const killed = killLaunchProcesses(namespace);
+  if (killed.length === 0) await killPerfProcessTree(pid);
+  return { killed };
+}
+
+/**
+ * Kill the processes of one launch, by its namespace.
+ *
+ * Only the processes whose own command line carries this launch's namespace
+ * are touched, so another agent's app (which has another namespace) is never
+ * in the blast radius.
+ */
+export function killLaunchProcesses(namespace) {
+  if (!namespace) return [];
+  if (process.platform !== 'win32') return [];
+  let pids = [];
+  try {
+    const output = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `$ns = ${JSON.stringify(namespace)}; `
+          + "Get-CimInstance Win32_Process | Where-Object { $_.Name -in @('electron.exe','cmd.exe') "
+          + '-and $_.CommandLine '
+          + '-and '
+          + `$_.CommandLine -match ('--duya-namespace=' + [regex]::Escape($ns) + '("|\\s|$)') } `
+          + '| ForEach-Object { $_.ProcessId }',
+      ],
+      { encoding: 'utf8' },
+    );
+    pids = output
+      .split(/\s+/)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isInteger(value) && value > 0);
+  } catch {
+    return [];
+  }
+  const killed = [];
+  for (const target of pids) {
+    try {
+      execSync(`taskkill /F /T /PID ${target}`, { stdio: 'ignore' });
+      killed.push(target);
+    } catch {
+      /* the process died on its own */
+    }
+  }
+  return killed;
 }
 
 /**
