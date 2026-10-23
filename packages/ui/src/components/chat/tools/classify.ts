@@ -1,7 +1,6 @@
 // Tool name classification helpers and small constant sets.
 //
-// These predicates are used by both the renderer (`isBrowserTool` decides
-// whether a row uses the chrome icon, `isAskUserQuestionTool` decides
+// These predicates are used by the renderer (`isAskUserQuestionTool` decides
 // whether to route to a dedicated row) and the group summary builder
 // (`classifyToolForSummary` decides which SummaryCategoryKey bucket a
 // tool falls into).

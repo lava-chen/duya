@@ -12,7 +12,6 @@ import {
   MagnifyingGlassIcon,
   WrenchIcon,
   RobotIcon,
-  ChromeIcon,
   QuestionIcon,
   BookOpenIcon,
   ListChecksIcon,
@@ -24,7 +23,6 @@ import {
   ClockIcon,
 } from '@/components/icons';
 import {
-  isBrowserTool,
   isModuleTool,
   isMessageSessionTool,
 } from './classify';
@@ -166,19 +164,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
       return `${completed}/${total} completed`;
     },
   },
-  {
-    match: (n) => isBrowserTool(n),
-    icon: ChromeIcon,
-    labelKey: 'streaming.toolAction.label.browser',
-    getSummary: (input, name) => {
-      const inp = (input || {}) as Record<string, unknown>;
-      if (typeof inp.title === 'string' && inp.title.trim()) return inp.title.trim();
-      if (typeof inp.description === 'string' && inp.description.trim()) return inp.description.trim();
-      if (typeof inp.url === 'string' && inp.url) return inp.url;
-      if (typeof inp.operation === 'string' && inp.operation) return inp.operation as string;
-      return name || 'browser';
-    },
-  },
+
   {
     // AskUserQuestion. Mirrors BashToolRow's pattern — a dedicated
     // AskUserQuestionResultRow renders both the collapsed header and the
@@ -419,28 +405,4 @@ export function getRenderer(name: string): ToolRendererDef {
 export function getStatus(tool: ToolAction): 'running' | 'success' | 'error' {
   if (tool.result === undefined) return 'running';
   return tool.isError ? 'error' : 'success';
-}
-
-/**
- * Detect whether any tool in the list was a browser tool running in
- * fallback mode (extension not installed). Surfaced as a single banner
- * at the top of the group rather than repeated per action.
- */
-export function isBrowserFallbackMode(tools: ToolAction[]): boolean {
-  for (const t of tools) {
-    if (!t.result) continue;
-    try {
-      const data = JSON.parse(t.result);
-      if (data?.mode === 'fallback') return true;
-      if (typeof data?.error === 'string' &&
-          (data.error.includes('fallback') ||
-           data.error.includes('Extension') ||
-           data.error.includes('not available'))) {
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return false;
 }

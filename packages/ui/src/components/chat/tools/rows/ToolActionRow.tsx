@@ -22,7 +22,6 @@ import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { renderToolResult } from '../../ToolResultRenderer';
 import {
   isAskUserQuestionTool,
-  isBrowserTool,
   isLegacySubAgentToolAction,
   isMessageSessionTool,
   isModuleTool,
@@ -49,7 +48,6 @@ import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
 import { TodoToolRow } from './TodoToolRow';
 import { VisionToolRow } from './VisionToolRow';
-import { BrowserToolRow } from './BrowserToolRow';
 import { McpToolRow } from './McpToolRow';
 import { InvokeToolRow } from './InvokeToolRow';
 import { ResearchReportStatusRow } from './ResearchReportStatusRow';
@@ -186,12 +184,7 @@ const ROUTES: RouteEntry[] = [
     match: (t) => t.name.toLowerCase() === 'vision_analyze',
     render: (tool) => <VisionToolRow tool={tool} />,
   },
-  {
-    // Browser tools (parallel_fetch, navigate, etc.) render as a
-    // search-result card with a magnifier header and expandable link list.
-    match: (t) => isBrowserTool(t.name),
-    render: (tool) => <BrowserToolRow tool={tool} />,
-  },
+
   {
     // MCP-provided tools (any name starting with the `mcp_` provider
     // prefix) render with the AiGateway icon + bare tool name instead

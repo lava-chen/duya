@@ -14,8 +14,6 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { resolveGroupDisplayTitle } from './buildGroupDisplayTitle';
-import { isBrowserFallbackMode } from '../registry';
-import { isBrowserTool } from '../classify';
 import { ToolActionRow } from '../rows/ToolActionRow';
 import { ThinkingRow } from '../rows/ThinkingRow';
 import { HookActionRow } from '../rows/HookActionRow';
@@ -87,10 +85,6 @@ export function Group({
     locale,
   );
 
-  const containsBrowser = tools.some((entry) => isBrowserTool(entry.tool.name));
-  const showBrowserFallback = containsBrowser && isBrowserFallbackMode(
-    tools.map((entry) => entry.tool)
-  );
   const lastRunningTool = tools.find((entry) => entry.tool.result === undefined)
     ?.tool;
 
@@ -123,7 +117,6 @@ export function Group({
 
   const body = (
     <div className="tool-group-body">
-      {showBrowserFallback && <BrowserFallbackBanner />}
       {entries.map((entry, i) =>
         entry.kind === 'tool' ? (
           <GroupToolRow
@@ -190,20 +183,6 @@ export function Group({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  );
-}
-
-function BrowserFallbackBanner() {
-  const { t } = useTranslation();
-  return (
-    <div className="tool-group-fallback">
-      <span className="font-medium text-[11px] text-amber-500">
-        {t('streaming.toolAction.fallbackTitle')}
-      </span>
-      <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-        {t('streaming.toolAction.fallbackDesc')}
-      </p>
     </div>
   );
 }
