@@ -436,6 +436,7 @@ afterAll(async () => {
         userMessageCount: request.userMessages.length,
         userMessages: request.userMessages.map((text) => text.slice(0, 80)),
         newestUserContent: request.newestUserContent,
+        messagesJson: request.messagesJson,
       }))),
       persistedTimeline: samples.map((sample) => sample.persisted.map((entry) => ({
         role: entry.role,

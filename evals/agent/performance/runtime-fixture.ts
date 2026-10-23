@@ -112,6 +112,15 @@ export interface ProviderRequestRecord {
    * text first would hide the answer.
    */
   readonly newestUserContent: string;
+  /**
+   * The provider's `messages` array, verbatim (JSON, truncated).
+   *
+   * The per-message views above cannot tell "one message carrying two copies
+   * of the prompt" apart from "two messages carrying the prompt once each" --
+   * the Anthropic client merges consecutive same-role turns, so the wire shape
+   * is the only place that difference is visible.
+   */
+  readonly messagesJson: string;
 }
 
 export type ProviderScript = (
@@ -256,6 +265,7 @@ export async function startScriptedProvider(script: ProviderScript): Promise<Scr
         answeredWithToolResult: latestUserHasToolResult(messages),
         userMessages: userMessages(messages),
         newestUserContent: newestUserContent(messages),
+        messagesJson: JSON.stringify(messages).slice(0, 4000),
       };
       requests.push(record);
 
@@ -463,9 +473,21 @@ export async function startBenchHost(options: BenchHostOptions): Promise<BenchHo
 
   const productionWorkerPath = path.resolve(options.repoRoot, 'packages/host/bundle/worker-entry.js');
   const workerPath = path.join(dataRoot, 'worker-entry-bench-wrapper.cjs');
+  // The wrapper exists for two reasons, and both are measurements:
+  //
+  //  1. `delete process.env.VITEST` -- the worker loads the PRODUCTION
+  //     bundle, and vitest's marker would make the production DB client
+  //     refuse the pool's `process.send` channel.
+  //  2. `enableCompileCache()` -- Node's compile cache covers modules that
+  //     are REQUIRED, and the worker bundle is required here rather than
+  //     being the process entry point. That is what lets the benchmark
+  //     measure the bundle's compile cost with a warm cache; the production
+  //     path cannot get this for free (there the bundle IS the entry point),
+  //     so the difference between the two is the size of the prize for
+  //     making the bundle a required module.
   await writeFile(
     workerPath,
-    `delete process.env.VITEST;\nrequire(${JSON.stringify(productionWorkerPath)});\n`,
+    `delete process.env.VITEST;\nrequire('node:module').enableCompileCache();\nrequire(${JSON.stringify(productionWorkerPath)});\n`,
     'utf8',
   );
 
