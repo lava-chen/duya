@@ -2681,9 +2681,29 @@ export class RunEngineImpl implements RunEngine {
     // The prompt goes in on the FIRST turn only. Later turns are continuations
     // after tool results, and re-appending the prompt every turn is how a
     // conversation teaches a model to repeat itself.
+    //
+    // The prompt is NOT appended when the history already carries it. A host
+    // that assembles the turn from its own timeline projects this turn's user
+    // row into `assembled.messages`, and that row IS the prompt -- the host
+    // committed the prompt row under the id the run input names, so the two
+    // are one message reached twice. Measured on the agent-runtime benchmark:
+    // the model received the user's prompt TWICE in one request, which
+    // doubled the input tokens of the first turn and let the model answer the
+    // same question twice.
+    //
+    // Identity is the message ID, and that is the only thing it can be: the
+    // engine cannot compare prose (the host may have rendered the prompt into
+    // the row's content differently) and must not drop a message on a
+    // heuristic. A host whose assembled messages do NOT carry the prompt row
+    // keeps the prompt here, which is why the filter is on the history and
+    // the prompt stays unconditional.
+    const promptId = input.prompt.id;
+    const historyWithoutPrompt = promptId === undefined
+      ? history
+      : history.filter((message) => message.id !== promptId);
     const messages: readonly ModelMessage[] =
       ctx.turn === 1
-        ? [input.prompt, ...steering, ...carried, ...history, ...inbound]
+        ? [input.prompt, ...steering, ...carried, ...historyWithoutPrompt, ...inbound]
         : [...history, ...carried, ...steering, ...inbound];
 
     // Model selection is forwarded from the manifest when it names one, and
