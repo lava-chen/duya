@@ -13,6 +13,7 @@
 | 单 Host 多客户端 | [2026-10-22 Desktop 与 TUI 共用 Host](active/2026-10-22-single-host-multiclient.md) | 先做 health 能力字段与 TUI 自动 attach |
 | 架构主线 | [610 执行队列](active/610-architecture-series/19-fast-track-queue.md) | 只从该文档追踪表选择未完成卡；不从旧编号重排 |
 | 工作区生命周期 | [621 生命周期 Harness](active/621-coding-workspace-lifecycle-harness.md) | 已合并（含 F 三端 UI，#378 → `39f2314f`）；场景 1–7 全绿 |
+| 多 Agent 编排 | [2026-10-23 多 Agent Orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | 评估已出：codex 无队列/DAG/重试可抄；duya 依赖与重试已具备。Phase 1 补测（子 agent 状态机零覆盖）→ Phase 2 DAG 并行 + 失败级联 |
 | Agent Runtime 真实基准 | [2026-10-23 Agent Runtime 基准](active/2026-10-23-agent-runtime-e2e-benchmark.md) | 基准已跑通并定位瓶颈；待 PR 集成 |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
 

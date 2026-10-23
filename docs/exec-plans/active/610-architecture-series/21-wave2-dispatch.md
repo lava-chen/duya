@@ -82,6 +82,33 @@ T20 分支的测试文件。下一位 owner 在隔离分支 `git apply` 后运�
 若需要改 Desktop router/worker bootstrap，由协调者领取公共文件，不与 A 车道混写。
 保持 envelope 的 runId/seq/epoch 原值。数字 seq 可因 ephemeral 缺席而稀疏，不能猜空洞。
 
+2026-10-22 实现 owner：`fix/durable-worker-transport`，基于 `96dadf4d`
+（`/tmp/duya-durable-transport` 独立 worktree）。仅改本节授权的
+`packages/host/src/worker-transport.ts` 与 `packages/host/tests/worker-transport-write-queue.test.ts`。
+stdout 背压时只淘汰 `chat:text_delta`、`chat:thinking_delta`、`chat:tool_use_delta`；
+native `run:event` 与其他控制/结果帧无法留在有界队列时，记录错误并以 exit 70 结束 worker。
+队列测试断言帧数和字符数上限下不会静默删 native event，且完成帧保留；Host 故障测试另
+确认无事件 worker 经 settle 后得到非成功 durable terminal。未改变 envelope 的 runId/seq/epoch。
+
+具名验证：`npm exec vitest -- run packages/host/tests/worker-transport-write-queue.test.ts`
+6/6；`npm exec vitest -- run packages/host/tests/worker-product-runtime/native-channel-faults.test.ts`
+4/4；`git diff --check` 通过。Host typecheck 未通过验证：首次无依赖构建时 workspace
+模块未解析；全量 `build:packages` 被既有 `@duya/ui` → `@duya/client-core` 声明解析错误挡住；
+Host 依赖闭包构建随后被 `@duya/capabilities` → `@duya/sandbox` 和 `picomatch` 声明解析错误挡住。
+因此不记 Host typecheck 为通过，也未声称真实 Desktop SSE/IPC 端到端已验收。
+
+2026-10-23 复核 owner：`fix/durable-worker-transport` 重放到 `af6e7eb6`
+（`master`，原基线 `96dadf4d`）。重放无冲突：master 已删除 conductor / browser /
+computer-use 等子树，本分支未触碰这些路径。分支提交 `a2477781` 保留原实现语义。
+架构门禁 `npm run architecture:check` 通过（2608 total / 2608 tolerated / 0 new）；
+baseline 另有 255 条 master 删除代码后失效的旧指纹，属 master 既有债务，未重录、未新增指纹。
+worker bundle 因 `worker-transport.ts` 变更而失效，按 `npm run bundle:worker` 重新生成并
+随本提交一起入库，`npm run bundle:verify` 由 STALE 转为 fresh。
+
+具名验证：`npx vitest run packages/host/tests/worker-transport-write-queue.test.ts` 6/6；
+`npx vitest run packages/host/tests` 176 文件 / 1631 通过 / 1 skipped；`npm run typecheck:all`
+退出码 0。仍未声称真实 Desktop SSE/IPC 端到端已验收。
+
 ## C. T23：Desktop 的第一个共享状态消费者
 
 独占 renderer 的新 adapter、`stream-session-manager.ts` 与

@@ -261,16 +261,18 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-primary-link {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  /* Codex parity (2026-10-22): a nav row is a 26px line, matching the
-     session rows below it. The old 0.4rem vertical padding made each nav
-     row 40px tall — looser than the session rows it sits above, which is
-     what read as "not compact". */
-  padding: 0.25rem 0.5rem;
+  gap: 8px;
+  /* Claude parity (2026-10-23): a nav row is a 26.4px line — the height
+     measured off a real Claude Code desktop capture (DPR 1.25, physical px
+     ÷ 1.25) — carrying a 13px label and a 12.8px left inset. The previous
+     14px label on an 18px glyph sat on a 27.6px line, which is one type size
+     above Claude's whole sidebar.
+     4.1px vertical padding + 13px × 1.4 line-height = 26.4px. */
+  padding: 4.1px 12.8px;
   margin: 0 0.5rem;
-  border-radius: 0.375rem;
+  border-radius: 8px;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 13px;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
   width: calc(100% - 1rem);
@@ -278,8 +280,8 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .sidebar-primary-link svg {
-  width: 18px !important;
-  height: 18px !important;
+  width: 16px !important;
+  height: 16px !important;
   flex-shrink: 0;
   display: block;
   stroke-width: 1.75;
@@ -287,8 +289,8 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 /* Icon container for consistent alignment */
 .sidebar-primary-link .nav-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -296,8 +298,8 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .sidebar-new-chat-btn svg {
-  width: 18px !important;
-  height: 18px !important;
+  width: 16px !important;
+  height: 16px !important;
   stroke-width: 1.75;
 }
 
@@ -315,14 +317,15 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-new-chat-btn {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  /* Codex parity (2026-10-22): same 26px line as the nav rows below it,
-     so 新对话 sits on the same rhythm as everything else. */
-  padding: 0.25rem 0.5rem;
+  gap: 8px;
+  /* Claude parity (2026-10-23): 新对话 is the first row of the same nav list
+     as the rows below it, so it shares their 26.4px line, 13px label and
+     12.8px inset — see `.sidebar-primary-link` for the derivation. */
+  padding: 4.1px 12.8px;
   margin: 0 0.5rem;
-  border-radius: 0.375rem;
+  border-radius: 8px;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 13px;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
   width: calc(100% - 1rem);
@@ -365,14 +368,16 @@ html[data-glass-repair] .attachment-preview-overlay {
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  padding: 0.2rem;
+  /* Claude parity (2026-10-23): 20×20 so the button fits inside the 21px
+     group caption line instead of overflowing it. */
+  padding: 0;
   border-radius: 0.3rem;
   display: grid;
   place-items: center;
   transition: background-color 0.2s ease, color 0.2s ease;
   box-sizing: border-box;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
 }
 
 .sidebar-section-action:hover {
@@ -628,14 +633,14 @@ html[data-glass-repair] .attachment-preview-overlay {
 .project-group-header {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  /* Codex parity (2026-10-22): a group header is a compact caption, not a
-     full-height row. Codex's "最近" caption occupies 26px with the session
-     rows below it; duya's 38px header pushed the first session a full row
-     down before the user saw anything. */
-  height: 28px;
+  gap: 0.375rem;
+  /* Claude parity (2026-10-23): a project row is a compact 21px caption with
+     a 2.3px gap under it — measured off a real Claude Code desktop capture.
+     The previous 28px header was a whole session-row height, which pushed
+     every project's first session a full row down. */
+  height: 21px;
   padding: 0 0.625rem;
-  margin: 0 0.5rem;
+  margin: 0 0.5rem 2.3px;
   width: calc(100% - 1rem);
   box-sizing: border-box;
   color: var(--muted);
@@ -655,9 +660,12 @@ html[data-glass-repair] .attachment-preview-overlay {
 /* Plus button in project group header */
 .project-group-add-btn {
   box-sizing: border-box;
-  width: 22px;
-  height: 22px;
-  padding: 0.2rem;
+  /* Claude parity (2026-10-23): the header row is 21px tall, so the hover
+     actions shrink to 20×20 to stay inside it instead of overflowing the
+     header's hover wash by a pixel on each side. */
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: none;
   border-radius: 0.3rem;
   background: transparent;
@@ -683,9 +691,10 @@ html[data-glass-repair] .attachment-preview-overlay {
 /* Three dots menu button in project group header */
 .project-group-menu-btn {
   box-sizing: border-box;
-  width: 22px;
-  height: 22px;
-  padding: 0.2rem;
+  /* Same 20×20 as the "+" button — see `.project-group-add-btn`. */
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border: none;
   border-radius: 0.3rem;
   background: transparent;
@@ -792,8 +801,8 @@ html[data-glass-repair] .attachment-preview-overlay {
  *     = project-group-header.margin-left        (0.5rem)
  *     + project-group-header.padding-left       (0.625rem)
  *     + project-group-icon width                (16px)
- *     + project-group-header gap (icon→name)    (0.25rem)
- *     = 1.375rem + 16px = 38px
+ *     + project-group-header gap (icon→name)    (0.375rem)
+ *     = 1.5rem + 16px = 40px
  *
  * Read by:
  *   - .project-group-threads .thread-item → padding-left after the
@@ -806,7 +815,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 :root {
   --sidebar-icon-size: 16px;
   --sidebar-header-x-pad: 0.625rem;
-  --sidebar-header-gap: 0.25rem;
+  /* Claude parity (2026-10-23): 6px icon→name gap, as measured off a real
+     Claude Code desktop capture. */
+  --sidebar-header-gap: 0.375rem;
   --sidebar-name-column-x: calc(
     0.5rem + var(--sidebar-header-x-pad) + var(--sidebar-icon-size) + var(--sidebar-header-gap)
   );
@@ -815,11 +826,10 @@ html[data-glass-repair] .attachment-preview-overlay {
 .project-group-threads {
   /* Match the project header's side margins so thread hover/active
    * surfaces span the same width, while row titles keep their alignment.
-   * Reference parity (2026-10-22): 1px between the nested session rows.
-   * Measured off a Claude Code desktop capture: the selected row's highlight
-   * is 26.4 CSS px tall and consecutive titles sit 27.2 CSS px apart, so the
-   * rows are 1px apart. duya's old 5px gap was a full extra 4px per row. */
-  margin: 0.1rem 0.5rem 0;
+   * Claude parity (2026-10-23): the gap under a project row is the header's
+   * own 2.3px margin-bottom, so the thread container adds no top margin —
+   * otherwise the two stack up to 3.9px. */
+  margin: 0 0.5rem 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -829,7 +839,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  min-height: 28px;
+  /* Claude parity (2026-10-23): the "show more" row is a caption, not a
+     session row — it must not read as one. */
+  min-height: 22px;
   box-sizing: border-box;
   padding: 0 0.625rem 0 calc(var(--sidebar-name-column-x) - 0.5rem);
   margin: 0;
@@ -838,7 +850,7 @@ html[data-glass-repair] .attachment-preview-overlay {
   color: var(--muted);
   font-size: 12px;
   cursor: pointer;
-  border-radius: 9px;
+  border-radius: 8px;
   transition: background-color 0.15s ease, color 0.15s ease;
   width: 100%;
   text-align: left;
@@ -1034,20 +1046,25 @@ html[data-glass-repair] .attachment-preview-overlay {
 /* Sidebar navigation rows use a consistent, full-width hit target. The
    shared ThreadListItem also appears outside the sidebar, so keep this
    geometry and the softer state colors scoped to the navigation surface.
-   Reference parity (2026-10-22): the row is 26px tall with a 1px gap, so
-   the pitch is 27px. Measured off a Claude Code desktop capture at
-   devicePixelRatio 1.25: the selected row's highlight is 26.4 CSS px tall
-   and consecutive titles sit 27.2 CSS px apart. duya shipped 38px rows with
-   a 5px gap (39px pitch), which is why a 20-session list needed a scroll
-   the reference does not: the extra 12px per row costs 240px over 20 rows. */
+   Claude parity (2026-10-23): the row is 26.4px tall with a 1px gap, so the
+   title pitch is 27.4px — measured off a real Claude Code desktop capture at
+   devicePixelRatio 1.25 (the selected row's highlight is 26.4 CSS px tall and
+   consecutive titles sit 27.2 CSS px apart). */
 .app-sidebar .thread-item {
-  height: 26px;
-  min-height: 26px;
-  flex: 0 0 26px;
+  height: 26.4px;
+  min-height: 26.4px;
+  flex: 0 0 26.4px;
   padding: 0 10px;
-  border-radius: 6px;
+  /* Claude parity (2026-10-23): 8px corners, as measured on Claude Code's
+     selected session row. */
+  border-radius: 8px;
+  /* Claude parity (2026-10-23): 13px session title, matching the nav rows
+     and the group captions above it. */
   font-size: 13px;
   font-weight: 450;
+  /* Claude parity (2026-10-23): the trailing slot sits 8px off the title. */
+  column-gap: 8px;
+  gap: 8px;
 }
 
 .app-sidebar .thread-item:hover {
@@ -1057,7 +1074,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 .app-sidebar .thread-item.active {
   background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
-  font-weight: 500;
+  /* Claude parity (2026-10-23): the selected session is set at 600 — the
+     weight measured on Claude Code's selected row. */
+  font-weight: 600;
 }
 
 .app-sidebar .thread-item:hover .thread-item-title {
@@ -1223,7 +1242,11 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  padding: 0.5rem 0.75rem 0;
+  /* Claude parity (2026-10-23): the segmented control owns a 8px side inset
+     (measured off a real Claude Code capture: `margin: 5.2px 8px 0`). The
+     sidebar's own 0.5rem padding already provides the top offset, so this
+     block must not add a second one. */
+  padding: 0 0.5rem;
 }
 
 .sidebar-top-tabs {
@@ -1260,7 +1283,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 0.8rem;
+  /* Claude parity (2026-10-23): 13px segment label, matching the nav rows
+     and the session titles below. */
+  font-size: 13px;
   font-weight: 500;
   padding: 0.26rem 0.6rem;
   border-radius: 0.45rem;
@@ -1428,7 +1453,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   max-width: 100%;
   background: transparent;
   color: var(--muted);
-  font-size: 0.88rem;
+  /* Claude parity (2026-10-23): 13px, the same type scale as the nav rows
+     and the session titles. */
+  font-size: 13px;
   cursor: pointer;
   transition: background-color 0.2s ease, color 0.2s ease;
   display: flex;
@@ -1481,7 +1508,9 @@ html[data-glass-repair] .attachment-preview-overlay {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--text);
-  font-size: 0.88rem;
+  /* Claude parity (2026-10-23): 13px, the same type scale as the nav rows
+     and the session titles. */
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.3;
 }
@@ -1747,12 +1776,16 @@ html[data-glass-repair] .attachment-preview-overlay {
   gap: 0.5rem;
   width: 100%;
   box-sizing: border-box;
-  padding: 0.375rem 0.625rem; /* rakazo py-1.5 px-2.5 — aligns with bot rows */
+  /* Claude parity (2026-10-23): the Bots tab uses the same 21px caption
+     line as the Work tab's group headers, so switching tabs does not change
+     the sidebar's type scale. */
+  height: 21px;
+  padding: 0 10px;
   border: 0;
   border-radius: 0.5rem; /* rakazo rounded-lg */
   background: transparent;
   color: color-mix(in srgb, var(--muted) 80%, transparent);
-  font-size: 0.78rem; /* rakazo 12.5px */
+  font-size: 13px;
   font-weight: 500;
   line-height: 1.3;
   text-align: left;

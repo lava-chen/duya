@@ -14382,7 +14382,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-transport.ts": {
-      "bytes": 4023,
+      "bytes": 5698,
       "imports": [
         {
           "path": "node:readline",
@@ -29999,7 +29999,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace-lifecycle-api.ts": {
-      "bytes": 5455,
+      "bytes": 5578,
       "imports": [
         {
           "path": "packages/host/src/checkout-api.ts",
@@ -38309,7 +38309,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -40232,13 +40232,13 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -40262,13 +40262,13 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -41258,7 +41258,7 @@
           "bytesInOutput": 80
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1523
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41267,10 +41267,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50724
+          "bytesInOutput": 50726
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1881
+          "bytesInOutput": 1882
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41651,7 +41651,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -41948,7 +41948,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -42143,7 +42143,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1007
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -43541,7 +43541,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4593101
+      "bytes": 4593512
     }
   }
 }
