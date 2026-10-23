@@ -90,6 +90,10 @@ import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
 import { createHostResearchApi } from './research-api.js';
 import { createHostIntegrationApi } from './integration-api.js';
+import { createHostCheckoutApi } from './checkout-api.js';
+import { createCheckoutProvider, gitOrNull, inspectRegistration } from './workspace/index.js';
+import { canonicalPath } from './workspace/fs-utils.js';
+import { observePr as observeIntegrationPr } from './scm/index.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
 import { HostRunExecutionController } from './run-execution.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
@@ -616,18 +620,29 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       lockApi,
       workspaceApi,
       // Plan 621 slice B: the observed PR/CI/review projection reads the same
-      // core handle as every other store. No `observePr` yet — slice C owns the
-      // `gh` read, so an explicit refresh answers `unknown` /
-      // `observer_unavailable` rather than inventing `open`.
-      integrationApi: createHostIntegrationApi({ store: core.stores.integrations }),
-      // TODO(621-B): add `checkoutApi: createHostCheckoutApi({ port, resolveSessionCheckoutRoot })`
-      // to this same object literal once slice A's `CheckoutProvider`
-      // (`packages/host/src/workspace/`) and slice D's resolver are merged.
-      // Nothing in this tree implements `CheckoutObservationPort` yet, and
-      // building a second one here would be the duplicate implementation the
-      // plan forbids. Until then `/v1/checkouts` answers 404
-      // `checkout_api_unavailable`, which is a different answer from
-      // "this session has no checkout".
+      // core handle as every other store, and slice C's read-only `gh` observer
+      // is the one writer `observeForPr` uses on an explicit refresh.
+      integrationApi: createHostIntegrationApi({ store: core.stores.integrations, observePr: observeIntegrationPr }),
+      // Plan 621 seam: A's provider IS the observation port structurally, so
+      // the wiring is one object literal — no adapter, no second implementation
+      // of §4.5. The resolver maps a session to its checkout by asking git for
+      // the toplevel of the session's working directory and keeping it only
+      // when registration says it is a managed linked worktree; a session in
+      // the user's own checkout resolves to `null`, which the API renders as
+      // "not in a checkout" rather than as an error.
+      checkoutApi: createHostCheckoutApi({
+        port: createCheckoutProvider(),
+        resolveSessionCheckoutRoot: async (sessionId) => {
+          const session = core.stores.sessions.get(sessionId);
+          if (!session || session.workingDirectory === '') return null;
+          const toplevel = await gitOrNull(session.workingDirectory, ['rev-parse', '--show-toplevel']);
+          const trimmed = toplevel?.trim();
+          if (!trimmed) return null;
+          const root = canonicalPath(trimmed);
+          const registration = await inspectRegistration(root);
+          return registration.registered ? root : null;
+        },
+      }),
       host: HOST,
       port: options.port ?? DEFAULT_PORT,
       token,
