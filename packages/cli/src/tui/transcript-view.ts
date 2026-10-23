@@ -1263,11 +1263,12 @@ export function renderPlannedBlock(
  *   while it streams, `Thought for 1.2s` once it closes. A character count was
  *   the old evidence line; elapsed time is the same evidence with a number a
  *   reader can compare across turns.
- * - a collapsed block is a three-line PREVIEW, not an absence. Reasoning that
+ * - a collapsed block is a ONE-line PREVIEW, not an absence. Reasoning that
  *   is visible while it runs (tail-following, so the newest thought is the one
- *   on screen) and folded to its first three lines once done is what makes the
- *   transcript readable without a toggle. The `… N more lines` row is the
- *   disclosure, and `[+]`/`[-]` marks the toggle.
+ *   on screen) and folded to a single line once done is what makes the
+ *   transcript readable without a toggle. The head's `[+]`/`[-]` IS the
+ *   disclosure: a folded thought used to cost three preview rows PLUS a
+ *   `… N more lines` row, so one paragraph of reasoning took five rows.
  * - long blocks are bounded in CHARACTERS before any line work, because
  *   splitting and tagging tens of kilobytes to keep three lines is work no
  *   reader ever sees. The bound follows the same edge as the preview so the
@@ -1277,8 +1278,8 @@ export function renderPlannedBlock(
  * is an execution node, so it carries the same `├`/`└` as a tool call.
  */
 
-/** Preview budget in whole lines, matching minimax-code's collapsed cell. */
-const THINKING_PREVIEW_LINES = 3;
+/** Preview budget in whole lines. One row: the head's `[+]` is the disclosure. */
+const THINKING_PREVIEW_LINES = 1;
 
 /** Characters kept from a preview before line selection. See `renderThinking`. */
 const THINKING_PREVIEW_MAX_CHARS = 2_000;
@@ -1330,30 +1331,25 @@ function thinkingBody(
   if (expanded) return thinkingRows(source.split('\n'), styles, indent, width);
 
   const edge = block.finalized ? 'head' : 'tail';
-  const { text, truncated } = boundThinkingText(source, edge);
+  const { text } = boundThinkingText(source, edge);
   const rows = thinkingRows(text.split('\n'), styles, indent, width);
-  if (rows.length <= THINKING_PREVIEW_LINES && !truncated) return rows;
+  if (rows.length <= THINKING_PREVIEW_LINES) return rows;
 
-  // The preview is three ROWS, not three source lines: a folded line is
-  // several rows, and a budget counted in source lines would grow with the
-  // width of the reasoning. minimax-code bounds its previews the same way
-  // (`truncateToVisualLines`).
+  // ONE row of preview, and no separate overflow row: the head's `[+]`
+  // already says there is more, and the overflow row was what turned one
+  // paragraph of reasoning into five rows of transcript.
+  //
+  // The preview is one ROW, not one source line: a folded line is several
+  // rows, and a budget counted in source lines would grow with the width of
+  // the reasoning.
   const slice = edge === 'head'
     ? rows.slice(0, THINKING_PREVIEW_LINES)
     : rows.slice(-THINKING_PREVIEW_LINES);
-  // Blank rows are what separates paragraphs in reasoning, so a slice can end
-  // on one and waste a third of the budget on an empty line. Trim them from
-  // the edges only — an inner blank still separates the two thoughts it sits
-  // between. The omitted count is recomputed from what is actually shown.
-  const kept = trimBlankEdges(slice);
-  const omitted = rows.length - kept.length;
-  // A character bound can hide more than `omitted` lines, so it reports the
-  // kind of overflow rather than a count that would be a lie.
-  const overflow = truncated
-    ? `${edge === 'head' ? 'more' : 'earlier'} content`
-    : `${omitted} ${edge === 'head' ? 'more' : 'earlier'} ${omitted === 1 ? 'line' : 'lines'}`;
-  const hint = styles.muted(`${indent}… ${overflow}`);
-  return edge === 'head' ? [...kept, hint] : [hint, ...kept];
+  // Blank rows are what separates paragraphs in reasoning, so a slice can land
+  // on one and spend the whole budget on an empty line. Trim them from the
+  // edges only; an inner blank still separates the two thoughts it sits
+  // between.
+  return trimBlankEdges(slice);
 }
 
 /** Drop blank rows from both ends, keeping the blanks in between. */

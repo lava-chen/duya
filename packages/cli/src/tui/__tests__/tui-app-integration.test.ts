@@ -455,12 +455,13 @@ describe('renderTranscript', () => {
       showToolResults: false,
       toolResultLines: 5,
     });
-    // Collapsed is a three-line PREVIEW, not an absence: the head names the
-    // phase and the clipped tail is disclosed rather than dropped silently.
+    // Collapsed is a ONE-line PREVIEW, not an absence: the head names the
+    // phase and the newest line is on screen. The head's `[+]` is the
+    // disclosure, so there is no separate overflow row.
     expect(collapsed).toContain('Thinking…');
     expect(collapsed).toContain('line five');
     expect(collapsed).not.toContain('line one');
-    expect(collapsed).toContain('earlier lines');
+    expect(collapsed).not.toContain('earlier lines');
 
     const expanded = renderTranscript(model, {
       expanded: true,
