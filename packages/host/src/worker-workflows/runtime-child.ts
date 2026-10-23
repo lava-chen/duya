@@ -260,7 +260,6 @@ export async function runWorkflowRuntimeChild(
         return answers;
       },
       transport,
-      guiArtifactStore: store,
       publishArtifact: async (name, content, contentType) => {
         const { buffer, bytes } = artifactBytes(content);
         const relPath = await store.put(init.runId, name, buffer, extForContentType(contentType));

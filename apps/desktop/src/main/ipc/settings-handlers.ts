@@ -229,7 +229,7 @@ export function registerSettingsHandlers(): void {
       // Get sandbox enabled setting
       let sandboxEnabled = true;
       try {
-        const value = await settings.getSetting('sandboxEnabled');
+        const value = await getDesktopHostLocalSettingsApi().getSetting('sandboxEnabled');
         if (value !== null) {
           sandboxEnabled = value === 'true';
         }

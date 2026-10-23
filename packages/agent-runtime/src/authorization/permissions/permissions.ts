@@ -447,7 +447,7 @@ export function createHasPermissionsToUseTool(ports: PermissionEvaluationPorts):
     // written against the ORIGINAL name, so a tool that merely spells like
     // an app tool must not inherit the unconditional allow.
     if (
-      canUseAppNameShortcut(toolName, appToolRegistration) &&
+      canUseAppNameShortcut(toolName, context.resolveAppToolRegistration?.(toolName)) &&
       GLOBAL_ALWAYS_ALLOWED_TOOLS.has(appToolOriginalName(toolName))
     ) {
       return {

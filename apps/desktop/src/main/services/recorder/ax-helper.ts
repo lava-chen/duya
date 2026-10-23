@@ -340,10 +340,8 @@ export class AxHelperClient {
     if (response === null || response.kind !== 'response' || !response.ok) {
       return null;
     }
-    return {
-      enabled: response.data.secureInput.enabled,
-      pid: response.data.secureInput.pid ?? null,
-    };
+    const state = response.data.secureInput;
+    return state ? { enabled: state.enabled, pid: state.pid ?? null } : null;
   }
 
   /** Post a keyboard event (kVK code + flags) to one pid without activation. */

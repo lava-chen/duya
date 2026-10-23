@@ -42,7 +42,6 @@ import { getPendingInteragentCall } from '@duya/host/worker-interagent-calls';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { launchSavedWorkflow } from './worker-workflows/runner.js';
 import { runWorkflowRuntimeChild } from './worker-workflows/runtime-child.js';
-import { MemoryArtifactStore } from '@duya/host/worker-workflows/gui-artifacts';
 import { resolveChatStartAgentMode, manifestPermissionMode } from '@duya/agent-runtime/authorization/profile-bridge';
 import { hydrateWorkerSessionHistory } from '@duya/host/worker-session-history';
 import type { ModelContentBlock } from '@duya/agent-runtime';
@@ -3180,7 +3179,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 takePendingAnswer,
                 llm: workflowLlm,
                 workingDirectory: wf.projectDir || agent.readWorkingDirectory() || process.cwd(),
-                guiArtifactStore: new MemoryArtifactStore(),
                 execution: { createPorts: (workingDirectory) => processAssembly.createWorkflowExecutionPorts({ sessionId: wf.sessionId, llm: workflowLlm, workingDirectory }) },
             }, {
                 runId: wf.runId,
