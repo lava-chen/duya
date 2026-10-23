@@ -115,8 +115,12 @@ import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
 import { createHostResearchApi } from '@duya/host/research-api';
 import { createDatabaseWorkspaceAccess } from '@duya/host/workspace-access';
+import {
+  createHostWorkspaceLifecycleApis,
+  type HostWorkspaceLifecycleApis,
+} from '@duya/host/workspace-lifecycle-api';
 import { resolveRolloutRoot } from '../config/boot-config';
-import { getCoreStores } from '../db/core-connection';
+import { getCoreStores, type CoreStores } from '../db/core-connection';
 import { getDatabase } from '../db/connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { deriveConnectionSlug } from '@duya/plugin-core/mcp/core/alias';
@@ -216,6 +220,12 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     stores,
     legacyAttachments: new MainAttachmentStore(mainDatabase),
   });
+  // Plan 621: the checkout / integration namespaces. The Desktop's embedded
+  // Host answers the SAME routes the headless Host does, so the assembly is
+  // the Host's own entry point — a copy here would answer differently from
+  // the Host's authority, and the difference would only show up on this
+  // surface.
+  const workspaceLifecycle = createDesktopHostWorkspaceLifecycleApis(stores);
   // Plugin App authorization: the durable grant ledger plus the installed
   // plugin manifests are the only authority, and both Plugin App APIs read
   // the same one.
@@ -390,6 +400,13 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     toolApprovalApi: createHostToolApprovalApi(mainDatabase),
     lockApi: createHostLockApi(stores),
     workspaceApi: createHostWorkspaceRegistrationApi(workspaceAccess),
+    // Plan 621: the checkout observation / reclaim and the observed PR
+    // projection. Without them the Desktop's Host answers these routes with
+    // a named 404, which says "this Host cannot observe" — not the same
+    // fact as "this session has no checkout".
+    checkoutApi: workspaceLifecycle.checkoutApi,
+    integrationApi: workspaceLifecycle.integrationApi,
+    integrationSync: workspaceLifecycle.integrationSync,
     host: HOST,
     token,
   });
@@ -471,6 +488,29 @@ export interface DesktopHostWorkspaceLifecycleApi {
 export function getDesktopHostWorkspaceLifecycleApi(): DesktopHostWorkspaceLifecycleApi {
   if (!sessionApiClient) throw new Error('Desktop Host API is not running');
   return sessionApiClient;
+}
+
+/**
+ * The workspace-lifecycle namespaces the Desktop's Host serves (plan 621).
+ *
+ * The Desktop's embedded Host is a second Host for the same routes the
+ * headless one serves, and the two must not drift: an assembly copied here
+ * would answer differently from the Host's own authority, and the difference
+ * would only ever show up on this surface.
+ *
+ * So the assembly is the Host's entry point, and this function is only the
+ * mapping from the Desktop's stores onto the three facts the namespaces read:
+ * where a session works, what its runs are, and the observed-PR projection.
+ * One place, so a store rename breaks here rather than in two call sites.
+ */
+export function createDesktopHostWorkspaceLifecycleApis(
+  stores: CoreStores,
+): HostWorkspaceLifecycleApis {
+  return createHostWorkspaceLifecycleApis({
+    sessions: stores.sessions,
+    runs: stores.runs,
+    integrations: stores.integrations,
+  });
 }
 
 export function getDesktopHostLocalSessionApi(): HostLocalSessionApiV1 {
