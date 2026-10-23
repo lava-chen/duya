@@ -93,6 +93,11 @@ export {
   type RetryResult,
 } from './utils/retry.js';
 export { inferProvider, isMiniMaxURL, type LLMProvider } from './utils/infer-provider.js';
+export {
+  calculateOutputTokensPerSecond,
+  stampRequestDuration,
+  withRequestDuration,
+} from './utils/request-duration.js';
 export { resolveDefaultBaseURL } from './utils/default-base-url.js';
 export type { CacheRetention } from './utils/prompt-caching.js';
 export { createAIClientWithRetry, type RetryableAIClientOptions } from './retry-client.js';
@@ -262,6 +267,7 @@ export {
 } from './system-one/index.js';
 
 import type { AIClient, AIClientOptions } from './types.js';
+import { withRequestDuration } from './utils/request-duration.js';
 
 /**
  * Factory that creates an AIClient based on apiFormat.
@@ -314,7 +320,13 @@ function createLazyClient(loader: () => Promise<AIClient>): AIClient {
   return {
     async *streamChat(messages, options) {
       const client = await getClient();
-      const gen = client.streamChat(messages, options);
+      // The physical request duration is measured around the PROVIDER's own
+      // stream, not around this proxy: the clock starts when the provider's
+      // generator body runs (which is when the request is opened) and stops
+      // when the provider reports its usage. See
+      // `utils/request-duration.ts` for why the elapsed value is carried as a
+      // number instead of being reconstructed from chunk timestamps.
+      const gen = withRequestDuration(client.streamChat(messages, options));
       let next = await gen.next();
       while (!next.done) {
         yield next.value;
