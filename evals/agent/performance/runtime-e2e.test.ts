@@ -220,6 +220,7 @@ describe('Agent Runtime end-to-end performance', () => {
           const events = attributePaints(harness, observation.events);
           const request = provider.requests[before];
           const token = firstTokenEvent(events);
+          const firstDelta = events.find((event) => event.type === 'assistant.text_delta');
           const providerFirstByte = request === undefined
             ? undefined
             : provider.firstByteAt(request.index);
@@ -242,6 +243,23 @@ describe('Agent Runtime end-to-end performance', () => {
                 token === undefined || token.paintedAt === undefined
                   ? 0
                   : token.paintedAt - token.receivedAt,
+              /**
+               * The FIRST CHARACTER's latency -- the first text DELTA, not the
+               * first event that carries output.
+               *
+               * A text_block arrives first and is usually EMPTY: it opens the
+               * block, and the characters follow as deltas. Painting the block
+               * event is not painting anything the user can read, so the
+               * "first token" a person waits for is the first delta.
+               */
+              firstCharReceivedToPaintedMs:
+                firstDelta === undefined || firstDelta.paintedAt === undefined
+                  ? 0
+                  : firstDelta.paintedAt - firstDelta.receivedAt,
+              firstCharSubmitToPaintedMs:
+                firstDelta === undefined || firstDelta.paintedAt === undefined
+                  ? 0
+                  : firstDelta.paintedAt - observation.submittedAt,
               firstTokenSubmitToReceivedMs: token === undefined
                 ? 0
                 : token.receivedAt - observation.submittedAt,
