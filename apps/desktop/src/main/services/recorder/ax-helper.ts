@@ -37,6 +37,7 @@ import {
   type AxAppInfo,
   type AxEnumeratedElement,
   type AxHelperErrorCode,
+  type AxHelperError,
   type AxHelperRequest,
   type AxHelperResponse,
   type AxPermissionSnapshot,
@@ -339,7 +340,10 @@ export class AxHelperClient {
     if (response === null || response.kind !== 'response' || !response.ok) {
       return null;
     }
-    return response.data.secureInput;
+    return {
+      enabled: response.data.secureInput.enabled,
+      pid: response.data.secureInput.pid ?? null,
+    };
   }
 
   /** Post a keyboard event (kVK code + flags) to one pid without activation. */

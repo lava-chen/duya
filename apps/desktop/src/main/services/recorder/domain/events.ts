@@ -21,7 +21,7 @@
 
 import { z } from 'zod';
 
-export interface Bbox { x: number; y: number; width: number; height: number; }
+export interface Bbox { x: number; y: number; w: number; h: number; }
 
 /** Foreground window reference at the moment an event was captured. */
 export interface AppRef {
