@@ -137,7 +137,6 @@ forbiddenDependencies:
       - electron/**
       - apps/desktop/**
       - src/**
-      - packages/computer-use/**
     reason: agent-core must not depend on any host (16 measured violations).
 
   - from: src/**
@@ -224,7 +223,7 @@ modules:
   - id: duya-host
     roots: [packages/host]
     managed: true
-    requires: [agent-protocol, agent-runtime, agent-core, legacy-ai, data, capabilities, memory, legacy-plugin-core, legacy-computer-use]
+    requires: [agent-protocol, agent-runtime, agent-core, legacy-ai, data, capabilities, memory, legacy-plugin-core]
     publicEntrypoints:
       - packages/host/src/index.ts
       - packages/host/src/session-api.ts
@@ -282,9 +281,9 @@ modules:
     #
     # Measured: agent-runtime has 130 cross-module edges — 126 to
     # `agent-protocol`, 4 to `agent-core` — and ZERO to `packages/ai`,
-    # `packages/plugin-core`, `packages/computer-use`, or any `UNRESOLVED:`
-    # owner. The `agent-runtime -> plugin-core / computer-use / ai` edges that
-    # `allowedDependencies` below claims are granted do not exist.
+    # `packages/plugin-core` or any `UNRESOLVED:` owner. The
+    # `agent-runtime -> plugin-core / ai` edges that `allowedDependencies`
+    # below claims are granted do not exist.
     requires: [agent-protocol, client-core, agent-core, capabilities, legacy-plugin-core]
     publicEntrypoints:
       - packages/agent-runtime/src/index.ts
@@ -670,7 +669,7 @@ modules:
   - id: capabilities
     roots: [packages/capabilities]
     managed: true
-    requires: [legacy-ai, agent-protocol, sandbox, tooling, legacy-computer-use, legacy-plugin-core]
+    requires: [legacy-ai, agent-protocol, sandbox, tooling, legacy-plugin-core]
     publicEntrypoints:
       # Barrel + the two curated subpath barrels.
       - packages/capabilities/src/index.ts
@@ -700,83 +699,6 @@ modules:
       - packages/capabilities/src/utils/multimodal-detection.ts
       - packages/capabilities/src/utils/bash/shellQuote.ts
       - packages/capabilities/src/utils/bash/commands.ts
-      - packages/capabilities/src/BrowserTool/BrowserPool.ts
-      - packages/capabilities/src/BrowserTool/BrowserTool.ts
-      - packages/capabilities/src/BrowserTool/CDPClient.ts
-      - packages/capabilities/src/BrowserTool/DomainBlocker.ts
-      - packages/capabilities/src/BrowserTool/FallbackBrowser.ts
-      - packages/capabilities/src/BrowserTool/HumanLikeCDPClient.ts
-      - packages/capabilities/src/BrowserTool/ParallelFetcher.ts
-      - packages/capabilities/src/BrowserTool/ResultFormatter.ts
-      - packages/capabilities/src/BrowserTool/SchemaGenerator.ts
-      - packages/capabilities/src/BrowserTool/SnapshotEngine.ts
-      - packages/capabilities/src/BrowserTool/WebviewCDPClient.ts
-      - packages/capabilities/src/BrowserTool/actions/ActionRegistry.ts
-      - packages/capabilities/src/BrowserTool/actions/close.ts
-      - packages/capabilities/src/BrowserTool/actions/computer.ts
-      - packages/capabilities/src/BrowserTool/actions/cookies.ts
-      - packages/capabilities/src/BrowserTool/actions/evaluate.ts
-      - packages/capabilities/src/BrowserTool/actions/forms.ts
-      - packages/capabilities/src/BrowserTool/actions/index.ts
-      - packages/capabilities/src/BrowserTool/actions/interaction.ts
-      - packages/capabilities/src/BrowserTool/actions/navigation.ts
-      - packages/capabilities/src/BrowserTool/actions/network.ts
-      - packages/capabilities/src/BrowserTool/actions/parallel.ts
-      - packages/capabilities/src/BrowserTool/actions/post.ts
-      - packages/capabilities/src/BrowserTool/actions/screenshot.ts
-      - packages/capabilities/src/BrowserTool/actions/search.ts
-      - packages/capabilities/src/BrowserTool/actions/snapshot.ts
-      - packages/capabilities/src/BrowserTool/actions/tabs.ts
-      - packages/capabilities/src/BrowserTool/actions/twitterPost.ts
-      - packages/capabilities/src/BrowserTool/actions/types.ts
-      - packages/capabilities/src/BrowserTool/backend-resolver.ts
-      - packages/capabilities/src/BrowserTool/constants.ts
-      - packages/capabilities/src/BrowserTool/imageUtils.ts
-      - packages/capabilities/src/BrowserTool/index.ts
-      - packages/capabilities/src/BrowserTool/input-dispatch.ts
-      - packages/capabilities/src/BrowserTool/networkEnv.ts
-      - packages/capabilities/src/BrowserTool/platform-adapters/types.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/BaseExtractor.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/_shared/public-api.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/ali1688/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/article/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/arxiv/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/bilibili/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/capability-guides.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/github/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/google-search/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/hacker-news/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/instagram/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/jd/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/pubmed/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/reddit/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/rednote/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/taobao/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/tiktok/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/twitter/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/types.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/wechat-article/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/weibo/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/wikipedia/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/xianyu/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/youtube/index.ts
-      - packages/capabilities/src/BrowserTool/platform-extractors/zhihu/index.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/PlatformHookManager.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/bilibili.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/twitter.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/weixin-mp.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/platforms/youtube.ts
-      - packages/capabilities/src/BrowserTool/platform-hooks/types.ts
-      - packages/capabilities/src/BrowserTool/ports.ts
-      - packages/capabilities/src/BrowserTool/prompt.ts
-      - packages/capabilities/src/BrowserTool/safety.ts
-      - packages/capabilities/src/BrowserTool/selfHealing.ts
-      - packages/capabilities/src/BrowserTool/stealth.ts
-      - packages/capabilities/src/BrowserTool/types.ts
-      - packages/capabilities/src/OSTool/ComputerCuaTool.ts
-      - packages/capabilities/src/OSTool/ComputerUseDecideTool.ts
-      - packages/capabilities/src/OSTool/ComputerUseTool.ts
       - packages/capabilities/src/OSTool/constants.ts
       - packages/capabilities/src/OSTool/context-tool.ts
       - packages/capabilities/src/OSTool/index.ts
@@ -815,12 +737,6 @@ modules:
     managed: false
     requires: []
     owner: platform
-
-  - id: legacy-computer-use
-    roots: [packages/computer-use]
-    managed: false
-    requires: []
-    owner: os
 
   - id: legacy-voice
     roots: [packages/voice]
