@@ -396,7 +396,7 @@
     "playwright": "^1.59.1",
     "zod": "^4.3.6",
     "@duya/plugin-core": "0.1.0",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.32.1"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
