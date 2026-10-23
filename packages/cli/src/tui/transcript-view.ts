@@ -63,6 +63,7 @@
 
 import type { Block, TranscriptModel } from './blocks.js';
 import { splitStreamCommit } from './stream-commit.js';
+import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
   formatToolResult,
   isShellTool,
@@ -908,8 +909,107 @@ function toolNodeRow(
   styles: Styles,
   connector: '├' | '└',
 ): string {
+  // A todo write is a LIST, not a call with an argument: `todo(todo-1,
+  // todo-2)` says nothing a reader did not already know, while the head below
+  // says how far the list got.
+  if (isTodoTool(block.name)) {
+    return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
+  }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/**
+ * The head of a todo write: what the list is, and how far it got.
+ *
+ * The count is the same shape codex uses for `Updated Plan` (`N/M complete`) and
+ * minimax-code uses for its todo cell (`Todo list 2/4`): a reader who glances at
+ * the row learns the progress without reading the items under it.
+ */
+function todoHeadline(block: Extract<Block, { kind: 'tool' }>): string {
+  const items = block.todos;
+  if (items === undefined || items.length === 0) return 'Todo list';
+  const { completed, total } = countTodos(items);
+  return `Todo list ${completed}/${total}`;
+}
+
+/** Items drawn before the rest of a long list are folded away. */
+const TODO_MAX_ITEMS = 20;
+
+/**
+ * The list under a todo write's head: one marker per item.
+ *
+ * The markers are minimax-code's (`✓` done, `●` running, `○` to do) — a
+ * checklist without a box glyph per row. The list is drawn whether or not tool
+ * results are shown: the list IS the point of the call, so hiding it behind a
+ * disclosure would hide the only thing the reader came for.
+ */
+function todoBody(
+  items: readonly TuiTodoItem[],
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
+  if (items.length === 0) return [];
+  const shown = items.slice(0, TODO_MAX_ITEMS);
+  const lines: string[] = [];
+  for (const item of shown) lines.push(...todoRows(item, styles, indent, width));
+  if (items.length > shown.length) {
+    lines.push(`${indent}${styles.muted(`… ${items.length - shown.length} more`)}`);
+  }
+  return lines;
+}
+
+/** One item, folded to the pane width. */
+function todoRows(
+  item: TuiTodoItem,
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
+  const marker = todoMarker(item.status, styles);
+  // The marker takes one column and the space after it takes another, so the
+  // text starts two columns in — the continuation rows indent to match.
+  const budget = width === undefined
+    ? undefined
+    : Math.max(1, Math.floor(width) - indent.length - 2);
+  const folded = budget === undefined
+    ? [[item.content]]
+    : wrapAtoms([{ text: item.content, style: null }], budget, codePointWidth)
+      .map((row) => [row.map((atom) => atom.text).join('')]);
+  return folded.map((row, index) => {
+    const prefix = index === 0 ? `${indent}${marker} ` : `${indent}  `;
+    return prefix + todoText(row[0] ?? '', item.status, styles);
+  });
+}
+
+/** The status glyph of one item. */
+function todoMarker(status: TuiTodoStatus, styles: Styles): string {
+  switch (status) {
+    case 'completed': return styles.success('✔');
+    case 'in_progress': return styles.accent('●');
+    case 'pending': return styles.muted('○');
+  }
+}
+
+/** The text of one item, styled by its status. */
+function todoText(text: string, status: TuiTodoStatus, styles: Styles): string {
+  switch (status) {
+    case 'completed': {
+      // The style FUNCTIONS each wrap their argument in exactly one tag pair,
+      // so nesting two of them would escape the inner tags as text. The pairs
+      // are composed by hand instead, and the text is escaped exactly once.
+      const muted = rawTagPair(styles.muted);
+      // The own renderer can strike through; blessed folds it to muted.
+      const strike = styles.renderer === 'own' ? rawTagPair(styles.strike) : null;
+      const inner = strike === null
+        ? escapeTags(text)
+        : `${strike.open}${escapeTags(text)}${strike.close}`;
+      return `${muted.open}${inner}${muted.close}`;
+    }
+    case 'in_progress': return styles.bold(text);
+    case 'pending': return escapeTags(text);
+  }
 }
 
 /** One call inside a batch: the bare target, at the batch's child column. */
@@ -980,8 +1080,12 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
     if (block === undefined) break;
     if (block.kind === 'tool') {
       const family = toolGroupKey(block.name);
+      // Two todo writes are two DIFFERENT lists, not two calls of one batch:
+      // the second is the state AFTER the first. Batching them would hide the
+      // second list behind a `todo 2 calls` header.
+      const batchable = !isTodoTool(block.name);
       let end = index;
-      while (end + 1 < blocks.length) {
+      while (batchable && end + 1 < blocks.length) {
         const next = blocks[end + 1];
         if (next === undefined || next.kind !== 'tool' || toolGroupKey(next.name) !== family) break;
         end += 1;
@@ -1081,6 +1185,14 @@ function nodeBody(
     return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
+
+  // A todo write draws its list whether or not tool results are shown: the list
+  // IS the result of the call, and a disclosure that hid it would hide the only
+  // thing the reader came for.
+  if (isTodoTool(block.name)) {
+    if (block.status === 'running') return [];
+    return todoBody(block.todos ?? [], styles, plan.bodyIndent, options.width);
+  }
 
   const result = block.result?.trimEnd() ?? '';
   if (block.status === 'running' || result.trim() === '') return [];
