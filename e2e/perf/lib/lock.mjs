@@ -108,6 +108,28 @@ function lockAgeMs(owner) {
   return Date.now() - owner.acquiredAt;
 }
 
+/**
+ * Whether the process that took the lock is still running.
+ *
+ * A crashed holder leaves its lock behind, and the lock is then held by
+ * nobody: the sprint stalls until the stale timeout expires, which is 30
+ * minutes of a machine that is not being measured at all. A holder whose
+ * process is gone therefore never held the lock against anybody.
+ *
+ * A pid that cannot be checked (no pid in the owner file) counts as alive:
+ * an unreadable owner is not evidence that the holder is gone.
+ */
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user.
+    return error?.code === 'EPERM';
+  }
+}
+
 /** A human-readable description of the current holder. */
 export function describeLockHolder(lockDir) {
   const owner = readLockOwner(lockDir);
@@ -133,6 +155,10 @@ export function describeLockHolder(lockDir) {
  * `mkdir` is atomic, so exactly one caller creates the directory. The owner
  * file is written immediately afterwards; a lock whose owner file is missing
  * but whose directory is fresh is treated as held, not as stale.
+ *
+ * A lock is stale when it is older than the timeout OR when the process that
+ * took it is gone: a crashed holder leaves a lock that nobody holds, and
+ * waiting the whole timeout for it is a stall of the whole sprint.
  */
 export function acquireInternalLock(options = {}) {
   const lockDir = options.lockDir ?? resolveLockDir(options);
@@ -146,7 +172,7 @@ export function acquireInternalLock(options = {}) {
     if (error.code !== 'EEXIST') throw error;
     const owner = readLockOwner(lockDir);
     const stale = owner
-      ? lockAgeMs(owner) > timeoutMin * 60_000
+      ? lockAgeMs(owner) > timeoutMin * 60_000 || !isProcessAlive(owner.pid)
       : isDirectoryStale(lockDir);
     if (!stale) {
       return { acquired: false, lockDir, reason: describeLockHolder(lockDir), holder: owner };

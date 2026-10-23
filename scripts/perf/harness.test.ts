@@ -23,7 +23,7 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -251,6 +251,23 @@ describe('the measurement lock', () => {
     // A crashed holder must not block the sprint forever: a lock older than
     // the timeout is stale and may be taken over.
     const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b', timeoutMin: -1 });
+    expect(takeover.acquired).toBe(true);
+    expect(readLockOwner(dir)?.agent).toBe('agent-b');
+    releaseInternalLock(dir);
+  });
+
+  it('can be taken over when the holder process is gone', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    // A holder that crashed leaves a lock that nobody holds. Waiting the
+    // whole stale timeout for it would stall the sprint for 30 minutes of
+    // a machine that is not being measured at all.
+    writeFileSync(
+      path.join(dir, 'owner.json'),
+      JSON.stringify({ agent: 'agent-a', pid: 0x7ffffff0, acquiredAt: Date.now() }),
+      'utf8',
+    );
+    const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b' });
     expect(takeover.acquired).toBe(true);
     expect(readLockOwner(dir)?.agent).toBe('agent-b');
     releaseInternalLock(dir);
