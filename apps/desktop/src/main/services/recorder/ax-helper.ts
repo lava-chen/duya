@@ -18,9 +18,8 @@
  * target app cannot hang the helper — the main-side races are queue
  * insurance, not the primary defense.
  *
- * Ops: probe(x,y) / enumerate(pid) / action / setValue / readUrl /
- * fg / apps / windows / permissions / secureInput / manualAccessibility /
- * keyToPid / scrollToPid / activate / screenshotWindow.
+ * Ops: probe(x,y) / enumerate(pid) / readUrl / foreground /
+ * permissions / secureInput.
  */
 
 import { createRecorderProcessDaemon, type RecorderProcessDaemon } from './process-daemon.js';
@@ -34,14 +33,10 @@ import {
   buildAxRequestLine,
   parseAxHelperLine,
   type AxForegroundInfo,
-  type AxAppInfo,
   type AxEnumeratedElement,
-  type AxHelperErrorCode,
-  type AxHelperError,
   type AxHelperRequest,
   type AxHelperResponse,
   type AxPermissionSnapshot,
-  type AxWindowInfo,
   type ElementDescriptor,
 } from './domain/index.js';
 
@@ -55,9 +50,7 @@ export const AX_READURL_TIMEOUT_MS = 3_000;
 export const AX_FG_TIMEOUT_MS = 1_200;
 /** Main-side race for enumerate() — the helper's walk budget is 1.5s. */
 export const AX_ENUMERATE_TIMEOUT_MS = 3_000;
-/** Main-side race for action / setValue / activate / key / scroll / secureInput. */
-export const AX_ACTION_TIMEOUT_MS = 1_500;
-/** Main-side race for permissions / apps / windows / manualAccessibility. */
+/** Main-side race for permission and secure-input queries. */
 export const AX_QUERY_TIMEOUT_MS = 1_500;
 
 /** Degraded auto-retry window (plan 562 D5 semantics). */
@@ -126,7 +119,6 @@ export class AxHelperClient {
     readUrlTimeoutMs: number;
     fgTimeoutMs: number;
     enumerateTimeoutMs: number;
-    actionTimeoutMs: number;
     queryTimeoutMs: number;
     readyTimeoutMs: number;
     idleRecycleMs: number;
@@ -143,7 +135,6 @@ export class AxHelperClient {
       readUrlTimeoutMs: (opts.readUrlTimeoutMs as number) ?? AX_READURL_TIMEOUT_MS,
       fgTimeoutMs: (opts.fgTimeoutMs as number) ?? AX_FG_TIMEOUT_MS,
       enumerateTimeoutMs: (opts.enumerateTimeoutMs as number) ?? AX_ENUMERATE_TIMEOUT_MS,
-      actionTimeoutMs: (opts.actionTimeoutMs as number) ?? AX_ACTION_TIMEOUT_MS,
       queryTimeoutMs: (opts.queryTimeoutMs as number) ?? AX_QUERY_TIMEOUT_MS,
       readyTimeoutMs: (opts.readyTimeoutMs as number) ?? READY_TIMEOUT_MS,
       idleRecycleMs: (opts.idleRecycleMs as number) ?? IDLE_RECYCLE_MS,
@@ -249,41 +240,6 @@ export class AxHelperClient {
     this.enumerateCache.clear();
   }
 
-  /** Perform an AX action on a snapshot handle. Returns the error code or null on success. */
-  async performAction(pid: number, handle: string, action: string): Promise<AxHelperErrorCode | null> {
-    const response = await this.request(
-      (id) => ({ id, op: 'action', pid, handle, action }),
-      this.opts.actionTimeoutMs,
-    );
-    if (response === null) return 'timeout';
-    if (response.kind !== 'response' || !response.ok) {
-      return (response as { error?: AxHelperError }).error?.code ?? 'error';
-    }
-    return response.data.performed ? null : 'error';
-  }
-
-  /** AX-set the value of a snapshot handle. null on success. */
-  async setValue(pid: number, handle: string, value: string): Promise<AxHelperErrorCode | null> {
-    const response = await this.request(
-      (id) => ({ id, op: 'setValue', pid, handle, value }),
-      this.opts.actionTimeoutMs,
-    );
-    if (response === null) return 'timeout';
-    if (response.kind !== 'response' || !response.ok) {
-      return (response as { error?: AxHelperError }).error?.code ?? 'error';
-    }
-    return response.data.set ? null : 'not-settable';
-  }
-
-  /** Set AXManualAccessibility on a (Chromium/Electron) app so it builds its tree. */
-  async manualAccessibility(pid: number): Promise<boolean> {
-    const response = await this.request(
-      (id) => ({ id, op: 'manualAccessibility', pid }),
-      this.opts.queryTimeoutMs,
-    );
-    return response !== null && response.kind === 'response' && response.ok && response.data.manualAccessibility === true;
-  }
-
   /** Read the active-tab URL via the per-browser AppleScript dictionary. */
   async readUrl(pid: number, app: string): Promise<string | null> {
     const response = await this.request(
@@ -307,24 +263,6 @@ export class AxHelperClient {
     return response.data.fg;
   }
 
-  /** Running regular apps (NSWorkspace.runningApplications). */
-  async apps(): Promise<AxAppInfo[]> {
-    const response = await this.request((id) => ({ id, op: 'apps' }), this.opts.queryTimeoutMs);
-    if (response === null || response.kind !== 'response' || !response.ok) {
-      return [];
-    }
-    return response.data.apps ?? [];
-  }
-
-  /** On-screen layer-0 windows of one pid. */
-  async windows(pid: number): Promise<AxWindowInfo[]> {
-    const response = await this.request((id) => ({ id, op: 'windows', pid }), this.opts.queryTimeoutMs);
-    if (response === null || response.kind !== 'response' || !response.ok) {
-      return [];
-    }
-    return response.data.windows ?? [];
-  }
-
   /** TCC + Secure Input snapshot. null = helper unavailable. */
   async permissions(): Promise<AxPermissionSnapshot | null> {
     const response = await this.request((id) => ({ id, op: 'permissions' }), this.opts.queryTimeoutMs);
@@ -342,47 +280,6 @@ export class AxHelperClient {
     }
     const state = response.data.secureInput;
     return state ? { enabled: state.enabled, pid: state.pid ?? null } : null;
-  }
-
-  /** Post a keyboard event (kVK code + flags) to one pid without activation. */
-  async keyToPid(pid: number, vk: number, flags: string[] = []): Promise<boolean> {
-    const response = await this.request(
-      (id) => ({ id, op: 'keyToPid', pid, vk, flags }),
-      this.opts.actionTimeoutMs,
-    );
-    return response !== null && response.kind === 'response' && response.ok && response.data.performed === true;
-  }
-
-  /** Post a scroll gesture to one pid without activation. */
-  async scrollToPid(pid: number, ticks: number, direction: 'up' | 'down'): Promise<boolean> {
-    const response = await this.request(
-      (id) => ({ id, op: 'scrollToPid', pid, ticks, direction }),
-      this.opts.actionTimeoutMs,
-    );
-    return response !== null && response.kind === 'response' && response.ok && response.data.performed === true;
-  }
-
-  /** Activate (foreground) an app — NSRunningApplication.activate + AXRaise. */
-  async activate(pid: number): Promise<boolean> {
-    const response = await this.request((id) => ({ id, op: 'activate', pid }), this.opts.actionTimeoutMs);
-    return response !== null && response.kind === 'response' && response.ok && response.data.activated === true;
-  }
-
-  /** ScreenCaptureKit single-window capture (macOS 14+; null otherwise). */
-  async screenshotWindow(windowId: number): Promise<{ png: string; width: number; height: number } | null> {
-    const response = await this.request(
-      (id) => ({ id, op: 'screenshotWindow', windowId }),
-      5_000,
-    );
-    if (response === null || response.kind !== 'response' || !response.ok) {
-      return null;
-    }
-    if (!response.data.png) return null;
-    return {
-      png: response.data.png,
-      width: response.data.width ?? 0,
-      height: response.data.height ?? 0,
-    };
   }
 
   /** Stop the helper process and tear down timers. */

@@ -11,20 +11,11 @@
  * Requests (main → helper stdin):
  *   {"id":1,"op":"ping"}
  *   {"id":2,"op":"permissions"}
- *   {"id":3,"op":"apps"}
- *   {"id":4,"op":"fg"}
- *   {"id":5,"op":"secureInput"}
- *   {"id":6,"op":"windows","pid":123}
- *   {"id":7,"op":"enumerate","pid":123,"maxDepth":40,"maxNodes":500,"roles":[...]}
- *   {"id":8,"op":"probe","x":123,"y":456}
- *   {"id":9,"op":"action","pid":123,"handle":"h12","action":"AXPress"}
- *   {"id":10,"op":"setValue","pid":123,"handle":"h12","value":"text"}
- *   {"id":11,"op":"readUrl","pid":123,"app":"Google Chrome"}
- *   {"id":12,"op":"manualAccessibility","pid":123}
- *   {"id":13,"op":"keyToPid","pid":123,"vk":36,"flags":["cmd"]}
- *   {"id":14,"op":"scrollToPid","pid":123,"ticks":3,"direction":"up"}
- *   {"id":15,"op":"activate","pid":123}
- *   {"id":16,"op":"screenshotWindow","windowId":123}
+ *   {"id":3,"op":"fg"}
+ *   {"id":4,"op":"secureInput"}
+ *   {"id":5,"op":"enumerate","pid":123,"maxDepth":40,"maxNodes":500,"roles":[...]}
+ *   {"id":6,"op":"probe","x":123,"y":456}
+ *   {"id":7,"op":"readUrl","pid":123,"app":"Google Chrome"}
  *
  * Responses (helper stdout):
  *   {"ready":true}                          — first line after launch
@@ -52,32 +43,15 @@ export interface AxHelperRequest {
   op:
     | 'ping'
     | 'permissions'
-    | 'apps'
     | 'fg'
     | 'secureInput'
-    | 'windows'
     | 'enumerate'
     | 'probe'
-    | 'action'
-    | 'setValue'
-    | 'readUrl'
-    | 'manualAccessibility'
-    | 'keyToPid'
-    | 'scrollToPid'
-    | 'activate'
-    | 'screenshotWindow';
+    | 'readUrl';
   pid?: number;
-  windowId?: number;
   x?: number;
   y?: number;
-  handle?: string;
-  action?: string;
-  value?: string;
   app?: string;
-  vk?: number;
-  flags?: string[];
-  ticks?: number;
-  direction?: 'up' | 'down';
   maxDepth?: number;
   maxNodes?: number;
   /** enumerate: interactive AX-role override (helper default when absent). */
@@ -159,37 +133,14 @@ const AxElementWireSchema = ElementDescriptorSchema.omit({ source: true }).exten
   /** Raw AX role, e.g. "AXButton" / "AXSecureField". */
   role: z.string().optional(),
   subrole: z.string().optional(),
-  /** Snapshot handle ("h:<n>") for AX-action delivery. */
-  handle: z.string().optional(),
-  /** Action names reported by the element, e.g. ["AXPress","AXConfirm"]. */
-  actions: z.array(z.string()).optional(),
   interactive: z.boolean().optional(),
 });
 
 export type AxEnumeratedElement = ElementDescriptor & {
   role?: string;
   subrole?: string;
-  handle?: string;
-  actions?: string[];
   interactive?: boolean;
 };
-
-/** One running app from the `apps` op (NSWorkspace-backed). */
-export interface AxAppInfo {
-  pid: number;
-  name: string;
-  bundleId?: string | null;
-  isActive?: boolean;
-}
-
-/** One window from the `windows` op (CGWindowList-backed, layer 0). */
-export interface AxWindowInfo {
-  windowId: number;
-  pid: number;
-  ownerName?: string;
-  title?: string;
-  bounds: { x: number; y: number; w: number; h: number };
-}
 
 /** fg op payload — shape-compatible with the recorder's ForegroundWindowInfo. */
 export interface AxForegroundInfo {
@@ -216,9 +167,7 @@ export interface AxPermissionSnapshot {
 export type AxHelperErrorCode =
   | 'permission-denied'
   | 'timeout'
-  | 'stale-handle'
   | 'unsupported'
-  | 'not-settable'
   | 'applescript-denied'
   | 'no-url'
   | 'error';
@@ -231,27 +180,6 @@ export interface AxHelperError {
 const PermissionStateSchema = z.enum(['granted', 'denied', 'not-determined']);
 
 const successPayloadSchema = z.object({
-  apps: z
-    .array(
-      z.object({
-        pid: z.number(),
-        name: z.string(),
-        bundleId: z.string().nullable().optional(),
-        isActive: z.boolean().optional(),
-      }),
-    )
-    .optional(),
-  windows: z
-    .array(
-      z.object({
-        windowId: z.number(),
-        pid: z.number(),
-        ownerName: z.string().optional(),
-        title: z.string().optional(),
-        bounds: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
-      }),
-    )
-    .optional(),
   fg: z
     .object({
       windowId: z.number(),
@@ -276,13 +204,6 @@ const successPayloadSchema = z.object({
   truncated: z.boolean().optional(),
   reason: z.string().nullable().optional(),
   url: z.string().nullable().optional(),
-  performed: z.boolean().optional(),
-  set: z.boolean().optional(),
-  activated: z.boolean().optional(),
-  manualAccessibility: z.boolean().optional(),
-  png: z.string().optional(),
-  width: z.number().optional(),
-  height: z.number().optional(),
 });
 
 const failureSchema = z.object({
@@ -310,8 +231,6 @@ export type AxHelperResponse =
       id: number;
       ok: true;
       data: {
-        apps: AxAppInfo[] | null;
-        windows: AxWindowInfo[] | null;
         fg: AxForegroundInfo | null;
         permissions: AxPermissionSnapshot | null;
         secureInput: { enabled: boolean; pid?: number | null } | null;
@@ -320,13 +239,6 @@ export type AxHelperResponse =
         truncated: boolean;
         reason: string | null;
         url: string | null;
-        performed: boolean;
-        set: boolean;
-        activated: boolean;
-        manualAccessibility: boolean;
-        png: string | null;
-        width: number | null;
-        height: number | null;
       };
     }
   | { kind: 'response'; id: number; ok: false; error: AxHelperError };
@@ -373,8 +285,6 @@ export function parseAxHelperLine(line: string): AxHelperResponse | null {
       id: success.data.id,
       ok: true,
       data: {
-        apps: d.apps ?? null,
-        windows: d.windows ?? null,
         fg: d.fg ?? null,
         permissions: d.permissions ?? null,
         secureInput: d.secureInput ?? null,
@@ -383,13 +293,6 @@ export function parseAxHelperLine(line: string): AxHelperResponse | null {
         truncated: d.truncated ?? false,
         reason: d.reason ?? null,
         url: d.url ?? null,
-        performed: d.performed ?? false,
-        set: d.set ?? false,
-        activated: d.activated ?? false,
-        manualAccessibility: d.manualAccessibility ?? false,
-        png: d.png ?? null,
-        width: d.width ?? null,
-        height: d.height ?? null,
       },
     };
   }
@@ -422,13 +325,12 @@ export function axElementToDescriptor(element: unknown): ElementDescriptor {
     ...(wire.className !== undefined ? { className: wire.className } : {}),
     ...(wire.rect !== undefined ? { rect: wire.rect } : {}),
     ...(isPassword ? { isPassword: true } : {}),
-    ...(wire.handle !== undefined ? { handle: wire.handle } : {}),
     source: 'ax-helper',
   };
   return descriptor;
 }
 
-/** Map one enumerate element, preserving the handle + interactive flag. */
+/** Map one enumerate element while preserving its interactive flag. */
 export function axEnumeratedToDescriptor(element: unknown): AxEnumeratedElement | null {
   const parsed = AxElementWireSchema.safeParse(element);
   if (!parsed.success) return null;
@@ -443,8 +345,6 @@ export function axEnumeratedToDescriptor(element: unknown): AxEnumeratedElement 
     ...(wire.className !== undefined ? { className: wire.className } : {}),
     ...(wire.rect !== undefined ? { rect: wire.rect } : {}),
     ...(isPassword ? { isPassword: true } : {}),
-    ...(wire.handle !== undefined ? { handle: wire.handle } : {}),
-    ...(wire.actions !== undefined ? { actions: wire.actions } : {}),
     ...(wire.interactive !== undefined ? { interactive: wire.interactive } : {}),
     source: 'ax-helper',
   };

@@ -3,8 +3,7 @@
  *
  * Covers request serialization, response parsing (ready / heartbeat /
  * success / structured failure), AX-role → UIA ControlType mapping,
- * element descriptor conversion (incl. AXSecureField redaction and
- * handle pass-through), the mac browser vocabulary, and the
+ * element descriptor conversion (incl. AXSecureField redaction), the mac browser vocabulary, and the
  * AppleScript dictionary table.
  */
 
@@ -30,19 +29,11 @@ describe('request building', () => {
       pid: 42,
       maxNodes: 200,
     });
-    expect(JSON.parse(buildAxRequestLine({ id: 3, op: 'action', pid: 42, handle: 'h1', action: 'AXPress' }))).toEqual({
+    expect(JSON.parse(buildAxRequestLine({ id: 3, op: 'readUrl', pid: 42, app: 'Google Chrome' }))).toEqual({
       id: 3,
-      op: 'action',
+      op: 'readUrl',
       pid: 42,
-      handle: 'h1',
-      action: 'AXPress',
-    });
-    expect(JSON.parse(buildAxRequestLine({ id: 4, op: 'keyToPid', pid: 7, vk: 36, flags: ['cmd'] }))).toEqual({
-      id: 4,
-      op: 'keyToPid',
-      pid: 7,
-      vk: 36,
-      flags: ['cmd'],
+      app: 'Google Chrome',
     });
   });
 });
@@ -79,7 +70,7 @@ describe('response parsing', () => {
 
   it('parses an enumerate payload with elements and qualifiers', () => {
     const line =
-      '{"id":5,"ok":true,"elements":[{"role":"AXButton","name":"Sign In","handle":"h9","rect":{"x":1,"y":2,"w":80,"h":24},"interactive":true}],"truncated":true,"reason":"empty-tree"}';
+      '{"id":5,"ok":true,"elements":[{"role":"AXButton","name":"Sign In","rect":{"x":1,"y":2,"w":80,"h":24},"interactive":true}],"truncated":true,"reason":"empty-tree"}';
     const parsed = parseAxHelperLine(line);
     expect(parsed && parsed.kind === 'response' && parsed.ok).toBe(true);
     if (parsed && parsed.kind === 'response' && parsed.ok) {
@@ -118,18 +109,17 @@ describe('AX role mapping', () => {
 });
 
 describe('descriptor conversion', () => {
-  it('stamps source ax-helper and carries the handle', () => {
+  it('stamps source ax-helper on observed elements', () => {
     const d = axElementToDescriptor({
       role: 'AXButton',
       name: 'OK',
-      handle: 'h3',
       rect: { x: 0, y: 0, w: 10, h: 10 },
     });
-    expect(d).toMatchObject({ name: 'OK', controlType: 'Button', handle: 'h3', source: 'ax-helper' });
+    expect(d).toMatchObject({ name: 'OK', controlType: 'Button', source: 'ax-helper' });
   });
 
   it('flags AXSecureField as a password field from the role alone', () => {
-    const d = axEnumeratedToDescriptor({ role: 'AXSecureField', handle: 'h4' });
+    const d = axEnumeratedToDescriptor({ role: 'AXSecureField' });
     expect(d).toMatchObject({ isPassword: true, controlType: 'Edit', source: 'ax-helper' });
   });
 

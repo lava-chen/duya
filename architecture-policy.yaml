@@ -175,7 +175,7 @@ forbiddenDependencies:
 # ── Capability edges that are explicitly permitted ─────────────────────────
 #
 # REMOVED: an `allowedDependencies` block that granted
-# `packages/agent-runtime/**` -> {plugin-core, computer-use, ai}.
+# `packages/agent-runtime/**` -> {plugin-core, ai}.
 #
 # Two independent reasons, and the second is why this must not simply be
 # "wired up" later:

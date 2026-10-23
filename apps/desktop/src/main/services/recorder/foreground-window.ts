@@ -21,7 +21,7 @@ function runPowerShell(script: string): Promise<string> {
 }
 
 /**
- * Query the foreground OS window without loading the Computer Use backend.
+ * Query the foreground OS window through the recorder foreground adapter.
  * macOS uses the shared AX helper; Windows uses user32 via PowerShell.
  */
 export async function getForegroundWindowInfo(): Promise<ForegroundWindowInfo | null> {

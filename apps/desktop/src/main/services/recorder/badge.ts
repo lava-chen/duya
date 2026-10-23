@@ -9,14 +9,11 @@
  * — NOT a dialog in the duya window, which the user may have minimised
  * or be looking away from.
  *
- * Same construction as the computer-use control overlay
- * (services/computer-use-overlay.ts): a frameless transparent
- * BrowserWindow loading a data: URL, polled through executeJavaScript.
- * Two deliberate differences:
+ * The badge is a frameless transparent BrowserWindow loading a data: URL,
+ * polled through executeJavaScript. Two deliberate properties:
  *
  *   - `setContentProtection(true)` keeps the badge out of every
- *     desktopCapturer frame, so a recording never captures its own
- *     badge and a later computer-use run cannot see it either.
+ *     desktopCapturer frame, so recordings never capture the badge.
  *   - It never steals focus (`showInactive`) so it cannot become the
  *     foreground window and get recorded as an app_focus event.
  *
@@ -187,7 +184,7 @@ function createBadgeWindow(): BrowserWindow {
   });
   win.setAlwaysOnTop(true, 'screen-saver');
   // Clickable (that is the point) but invisible to any capture — neither
-  // this recording nor a later computer-use run may see the badge.
+  // this recording may see the badge.
   win.setContentProtection(true);
   void win.loadURL(BADGE_HTML);
   win.once('ready-to-show', () => win.showInactive());

@@ -50,8 +50,6 @@ export interface RecorderElement {
   className?: string;
   rect?: RecorderBbox;
   isPassword?: boolean;
-  /** plan 572: AX snapshot handle (macOS helper-sourced elements). */
-  handle?: string;
   source: 'uia-probe' | 'ax-helper' | 'none';
 }
 

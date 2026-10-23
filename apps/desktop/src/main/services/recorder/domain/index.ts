@@ -101,7 +101,6 @@ export {
   parseAxHelperLine,
 } from './ax-helper-protocol.js';
 export type {
-  AxAppInfo,
   AxForegroundInfo,
   AxEnumeratedElement,
   AxHelperError,
@@ -109,13 +108,4 @@ export type {
   AxHelperRequest,
   AxHelperResponse,
   AxPermissionSnapshot,
-  AxWindowInfo,
 } from './ax-helper-protocol.js';
-
-export {
-  KEY_NAME_TO_MAC_VK,
-  MAC_FLAG_MASKS,
-  VC_TO_MAC_VK,
-  macFlagsMask,
-  resolveMacVk,
-} from './keymap-darwin.js';
