@@ -192,7 +192,21 @@ export function readProcessStartMs(app) {
   }
 }
 
-/** Close the app; force-kill the tree when the graceful close hangs. */
+/**
+ * Close the app, and make sure it is GONE.
+ *
+ * WHY THE EXTRA WORK
+ *
+ * `app.close()` resolves when Playwright is done with the window — it does
+ * NOT promise that the Electron main process exited. This app keeps one
+ * alive (it owns a gateway and an agent server), so a "closed" sample left
+ * a whole app tree behind: 6+ processes and ~700 MB per sample, and after a
+ * dozen samples the machine was measuring itself. The profile stayed locked
+ * and the next sample measured a busy machine.
+ *
+ * So the process is checked after the graceful close, and the tree is
+ * killed when it is still there.
+ */
 export async function closePerfElectron(app) {
   if (!app) return;
   const pid = app.process()?.pid;
@@ -202,32 +216,53 @@ export async function closePerfElectron(app) {
       new Promise((_resolve, reject) => setTimeout(() => reject(new Error('close timeout')), 8000)),
     ]);
   } catch {
-    if (pid) {
-      try {
-        if (process.platform === 'win32') {
-          // The app may already be gone, and a pid that was freed can be
-          // handed to ANOTHER process — killing that one would take the
-          // harness down with it. The name is checked first.
-          const name = execFileSync(
-            'powershell.exe',
-            [
-              '-NoProfile',
-              '-NonInteractive',
-              '-Command',
-              `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName`,
-            ],
-            { encoding: 'utf8' },
-          ).trim();
-          if (name.toLowerCase() === 'electron') {
-            execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
-          }
-        } else {
-          process.kill(pid, 'SIGKILL');
-        }
-      } catch {
-        /* already dead */
-      }
+    /* the graceful close did not work: the forced path below takes over */
+  }
+  await killPerfProcessTree(pid);
+}
+
+/**
+ * Kill the app's process tree, when the app is still running.
+ *
+ * The name is checked first: the app may already be gone, and a pid that
+ * was freed can be handed to ANOTHER process — killing that one would take
+ * the harness down with it.
+ */
+export async function killPerfProcessTree(pid) {
+  if (!pid) return { killed: false, reason: 'no pid' };
+  const name = readProcessName(pid);
+  if (!name) return { killed: false, reason: 'the process is gone' };
+  if (name.toLowerCase() !== 'electron') {
+    return { killed: false, reason: `the pid belongs to ${name}, not to the app` };
+  }
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGKILL');
     }
+    return { killed: true, pid };
+  } catch {
+    return { killed: false, reason: 'the process died on its own' };
+  }
+}
+
+/** The name of the process with this pid, or null when there is none. */
+function readProcessName(pid) {
+  try {
+    const output = execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `(Get-Process -Id ${pid} -ErrorAction SilentlyContinue).ProcessName`,
+      ],
+      { encoding: 'utf8' },
+    ).trim();
+    return output || null;
+  } catch {
+    return null;
   }
 }
 
