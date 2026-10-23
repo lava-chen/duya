@@ -63,7 +63,9 @@ TUI 在一次模型调用结束后显示该次调用的输出速度（`⚡ 63.0 
 
 ## 接续 / 结果
 
-已实现、已验证（门禁全绿 + 真实 TUI 跑通）。PR 见下方。
+已实现、已验证（门禁全绿 + 真实 TUI 跑通）。
+
+PR：https://github.com/lava-chen/duya/pull/396（draft，未合并）
 
 副作用已还原：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts` 均已
 `git checkout --` 还原，未入库。
