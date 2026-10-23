@@ -21,9 +21,17 @@
  *
  * `architecture-check.mjs` is plain ESM and this repository has no TypeScript
  * runtime dependency (`tsx` is not a dependency, and adding one to run a single
- * scanner is a worse trade). `vite-node` IS present, as a transitive
- * dependency of vitest, and is what the test runner already uses to execute
- * the TypeScript. So the scanner runs through that.
+ * scanner is a worse trade). `esbuild` IS a dependency, and it is the very
+ * transform the test runner itself uses, so the scanner compiles the same
+ * TypeScript the same way and runs the result with plain node.
+ *
+ * This used to go through `vite-node`, which was present only as a
+ * TRANSITIVE dependency of vitest. Vitest 5 does not depend on `vite-node`
+ * any more, so the transitive copy disappeared and this scanner could not
+ * run at all: `architecture-check.mjs` reported "vite-node not found;
+ * cannot execute layer-purity.ts" as a boundary violation. A gate that cannot
+ * check has to say so — but it also has to keep checking, which is why the
+ * execution path now rests on a dependency this repository DECLARES.
  *
  * A load failure is a non-zero exit with the error on stderr, and
  * `architecture-check.mjs` turns that into a violation. It is never swallowed:
@@ -34,6 +42,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../..');
@@ -44,20 +53,10 @@ if (!existsSync(TARGET)) {
   process.exit(2);
 }
 
-const VITE_NODE = [
-  path.join(REPO_ROOT, 'node_modules', 'vite-node', 'vite-node.mjs'),
-  path.join(REPO_ROOT, 'node_modules', '.bin', 'vite-node.cmd'),
-].find((p) => existsSync(p));
-
-if (!VITE_NODE) {
-  process.stderr.write('vite-node not found; cannot execute layer-purity.ts\n');
-  process.exit(2);
-}
-
-// `vite-node` executes FILES, not `-e` snippets — passing `-e` gets "No files
-// specified". So the entry is written to a temp file next to this one (so its
-// relative imports resolve identically) and removed afterwards.
+// The entry is written to a temp file next to this one (so its relative
+// imports resolve identically) and removed afterwards.
 const entry = path.join(HERE, `.core-io-entry.${process.pid}.mjs`);
+const bundle = path.join(HERE, `.core-io-bundle.${process.pid}.mjs`);
 writeFileSync(
   entry,
   [
@@ -69,20 +68,41 @@ writeFileSync(
   'utf8',
 );
 
-const run = spawnSync(process.execPath, [VITE_NODE, entry], {
+// `bundle: true` so a relative import inside `layer-purity.ts` resolves
+// instead of being left for node to load as `.ts`. The bundle is written NEXT
+// TO the target on purpose: `layer-purity.ts` derives the repo root from its
+// own `import.meta.url`, and a bundle in the same directory resolves to the
+// same root.
+try {
+  buildSync({
+    entryPoints: [entry],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    outfile: bundle,
+    logLevel: 'silent',
+  });
+} catch (err) {
+  rmSync(entry, { force: true });
+  process.stderr.write(`esbuild failed: ${err.message}\n`);
+  process.exit(2);
+}
+
+const run = spawnSync(process.execPath, [bundle], {
   cwd: REPO_ROOT,
   encoding: 'utf8',
   maxBuffer: 32 * 1024 * 1024,
 });
 
 rmSync(entry, { force: true });
+rmSync(bundle, { force: true });
 
 if (run.error) {
-  process.stderr.write(`vite-node failed: ${run.message}\n`);
+  process.stderr.write(`scanner failed: ${run.message}\n`);
   process.exit(2);
 }
 if (run.status !== 0) {
-  process.stderr.write(run.stderr || `vite-node exited ${run.status}\n`);
+  process.stderr.write(run.stderr || `scanner exited ${run.status}\n`);
   process.exit(run.status ?? 2);
 }
 

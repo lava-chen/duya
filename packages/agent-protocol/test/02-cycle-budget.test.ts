@@ -78,10 +78,33 @@ const AUDIT_SKIP_DIRS = new Set([
  * A fixture-only import does not create a runtime cycle, so counting the test
  * trees would inflate the budget with edges no bundle ever has.
  */
+/**
+ * Transient test fixtures parked inside a scanned package tree.
+ *
+ * `scripts/architecture/client-closure-gate.test.ts` writes and removes
+ * `packages/cli/src/__g11_1_fixture__/` seven times while the suite runs. A
+ * walker that lists the tree inside that window picks the fixture up, and
+ * reading a file that was just deleted is a crash in the READER, not a
+ * finding. The fixture is a test artifact and never a source file, so it is
+ * not part of any dependency graph — and it contributes no cycle even when it
+ * is present, because its only relative edges form a chain. Skipping it
+ * therefore leaves the SCC counts this file compares unchanged.
+ */
+const TRANSIENT_FIXTURE_DIRS = ['__g11_1_fixture__'];
+
 const SKIP_DIRS = new Set([
   ...AUDIT_SKIP_DIRS,
   '__tests__', 'tests', '__mocks__', '__snapshots__',
+  ...TRANSIENT_FIXTURE_DIRS,
 ]);
+
+/**
+ * The AUDIT graph walks the same tree, so it skips the same transient
+ * fixtures. `AUDIT_SKIP_DIRS` itself stays byte-identical to the audit
+ * script's own list — that list is a claim about the script, not about this
+ * walk.
+ */
+const AUDIT_WALK_SKIP_DIRS = new Set([...AUDIT_SKIP_DIRS, ...TRANSIENT_FIXTURE_DIRS]);
 
 /**
  * A whole-statement `import type { X } from './y'` is erased by tsc, so it is
@@ -288,7 +311,19 @@ function buildGraph(files: string[], options: GraphOptions): Map<string, string[
     // exist, and comparing a comment-blind count against a comment-stripped
     // one would make the cross-check below fail for a difference that is
     // not a cycle at all.
-    const stripped = stripComments(readFileSync(f, 'utf8'));
+    let stripped: string;
+    try {
+      stripped = stripComments(readFileSync(f, 'utf8'));
+    } catch (err) {
+      // The tree is mutable while the suite runs: a test that writes and
+      // removes a fixture under a scanned package directory can delete a
+      // file between the walk and this read. A file that is gone is not in
+      // the graph, so it cannot close a cycle. Any other read error still
+      // propagates — this guard is about a vanished file, not about a
+      // broken one.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
     const text = options.dropTypeOnly ? stripped.replace(TYPE_ONLY_STMT_RE, '') : stripped;
     const deps: string[] = [];
     let m: RegExpExecArray | null;
@@ -353,7 +388,7 @@ const budgetSccs = tarjan(budgetFiles, budgetGraph);
 // The AUDIT graph: the same file set and the same edges
 // `audit-modules.mjs` counts, so the cross-check below compares two numbers
 // that mean the same thing.
-const auditFiles = walk(PACKAGES_DIR, AUDIT_SKIP_DIRS);
+const auditFiles = walk(PACKAGES_DIR, AUDIT_WALK_SKIP_DIRS);
 const auditGraph = buildGraph(auditFiles, { dropTypeOnly: true });
 const auditSccs = tarjan(auditFiles, auditGraph);
 
