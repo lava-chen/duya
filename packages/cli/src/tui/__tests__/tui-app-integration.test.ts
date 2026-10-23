@@ -294,6 +294,40 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
+  it('shows the measured output rate in the status bar', async () => {
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({ output: out.stream, input: stdin, onSubmit: () => {} });
+    app.start();
+    await settle();
+    // 20 output tokens over 250 ms is 80 tok/s. The rate comes from the
+    // provider's own request duration, so the frame has to carry it.
+    app.push({
+      type: 'token_usage',
+      data: {
+        input_tokens: 100,
+        output_tokens: 20,
+        total_tokens: 120,
+        request_duration_ms: 250,
+      },
+    });
+    await settleRendered();
+    expect(out.text()).toContain('⚡ 80.0 tok/s');
+    app.stop();
+  });
+
+  it('shows no rate in the status bar when the provider measured no duration', async () => {
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({ output: out.stream, input: stdin, onSubmit: () => {} });
+    app.start();
+    await settle();
+    app.push({ type: 'token_usage', data: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } });
+    await settleRendered();
+    expect(out.text()).not.toContain('tok/s');
+    app.stop();
+  });
+
   it('shows the active task state and tool progress in the status bar', async () => {
     const { app, out } = makeApp();
     app.start();

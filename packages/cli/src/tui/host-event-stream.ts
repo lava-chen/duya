@@ -69,6 +69,14 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
           input_tokens: event.usage.inputTokens,
           output_tokens: event.usage.outputTokens,
           total_tokens: event.usage.totalTokens,
+          // The physical duration of the provider request, when the provider
+          // measured one. It is what makes the output rate derivable: a
+          // consumer cannot reconstruct the elapsed time from chunk
+          // timestamps, because those may be buffered. OMITTED rather than
+          // zeroed when absent -- a zero would divide by zero downstream.
+          ...(event.usage.requestDurationMs === undefined
+            ? {}
+            : { request_duration_ms: event.usage.requestDurationMs }),
         },
       };
     case 'tool.call_preview':
