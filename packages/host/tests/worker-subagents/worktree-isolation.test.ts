@@ -95,21 +95,25 @@ describe('createIsolatedWorktree (the copy production calls)', () => {
         rmSync(duyaRoot, { recursive: true, force: true });
     });
 
-    it('creates a worktree outside the repository and reports its branch', async () => {
+    it('creates a worktree outside the repository and reports its base', async () => {
         const repo = makeRepo();
         try {
             const worktree = await createIsolatedWorktree(repo, 'fix tests');
 
             expect(worktree.repoRoot).toBe(path.resolve(repo));
-            expect(worktree.branch).toMatch(/^duya\/subagent\/fix-tests-[0-9a-f]{6}$/);
+            // Plan 621 A: checkouts are created with `--detach` (decision D3),
+            // so there is no branch to report. `branch` carries the short base
+            // SHA instead; slice D owns any user-facing wording change.
+            expect(worktree.branch).toMatch(/^[0-9a-f]{12}$/);
+            expect(worktree.branch).toBe(git(repo, 'rev-parse', 'HEAD').slice(0, 12));
             // Not inside the user's checkout: this is the whole point.
             expect(path.resolve(worktree.path).startsWith(path.resolve(repo) + path.sep)).toBe(false);
             // Under the duya-owned root.
             expect(path.resolve(worktree.path).startsWith(path.resolve(duyaRoot) + path.sep)).toBe(true);
 
-            // The worktree is a real checkout of the same commit.
+            // The worktree is a real, detached checkout of the same commit.
             expect(git(worktree.path, 'rev-parse', 'HEAD')).toBe(git(repo, 'rev-parse', 'HEAD'));
-            expect(git(worktree.path, 'branch', '--show-current')).toBe(worktree.branch);
+            expect(git(worktree.path, 'branch', '--show-current')).toBe('');
         } finally {
             rmSync(repo, { recursive: true, force: true });
         }

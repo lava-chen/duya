@@ -32,6 +32,8 @@ export * from './legacy-archive-migration.js';
 export * from './legacy-import.js';
 export * from './path-utils.js';
 export * from './workspace-store.js';
+// Plan 621 slice B — observed PR/CI/review projection (migration 43).
+export * from './integration-store.js';
 export * from './workspace-identity.js';
 export * from './workspace-resolver.js';
 export * from './plugin-app-instance-store.js';

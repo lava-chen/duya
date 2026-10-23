@@ -11,6 +11,7 @@
 export type PageId =
   | "files"
   | "preview"
+  | "workspace"
   | "review"
   | "conductor"
   | "terminal"

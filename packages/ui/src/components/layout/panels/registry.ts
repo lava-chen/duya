@@ -19,6 +19,7 @@ import { FileTreePanel } from "./FileTreePanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
+import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
 
@@ -77,6 +78,19 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 320,
     defaultExpanded: false,
     component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  workspace: {
+    id: "workspace",
+    labelKey: "panel.files",
+    icon: FolderIcon,
+    // One page holds every open file; the files themselves are tabs inside
+    // the panel, so the outer page tab must not multiply per file.
+    multiInstance: false,
+    available: true,
+    minWidth: 420,
+    preferredWidth: 620,
+    defaultExpanded: false,
+    component: FileWorkspacePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   preview: {
     id: "preview",

@@ -1,6 +1,7 @@
 # 619 — 提示词组装改造：单串 system + 消息通道分流 + rollout 留痕
 
-> **Status**: Active · **Priority**: P0 · **Owner**: /root/app_closeout (observer slice)
+> **Status**: Active · **Priority**: P0 · **Owner**: /root/app_closeout (observer slice) ·
+> `codex/619-phase1-prompt-defects`（Phase 1–5 与 620 Phase A）
 > **立项**: 2026-10-20（复盘：Claude Code 的原始 transcript 暴露了它的提示词注入模型——
 > system prompt 是**分段数组**，易变上下文走**独立注入通道**，每次注入**留痕**。duya 的结构
 > 几乎全有：分段数组、`SYSTEM_PROMPT_DYNAMIC_BOUNDARY`、`PromptSegment` 的 id/placement、
@@ -11,6 +12,8 @@
 > **硬前置**: [620 会话记录架构](./620-session-record-architecture.md) **Phase A**
 > （分类学单源）——Phase 4 要新增 `prompt_snapshot` 行类型，而今天加一种记录类型要在
 > **七处**锁步手抄。先做 Phase 4 就是亲手造出第八处。619 的 Phase 0–3 不受此约束，可并行。
+> **本分支状态**: Phase 1–5 与 620 Phase A 已一并落地（见 §4「Phase 2–4 实施记录」），
+> 620 Phase A 的分类学单源先于 `prompt_snapshot` 落地，所以 Phase 4 不再是「第八处手抄」。
 > **与 561 / 620 的边界**: 见 §7。**不重复它们的事**。`codex/integrate-prompt-observer` 基于 `325cdded`；observer 仅提供可选 hash 接缝，尚无生产 sink、rollout 写入或真实会话采样。
 
 ---
