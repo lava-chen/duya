@@ -42,6 +42,14 @@ export * from './contract/index.js';
  * Build the `duya` Commander program. Pure function — no I/O,
  * no argv mutation. The caller (`bin/duya`) wires argv to
  * `program.parse(argv)`.
+ *
+ * ## Reading an option
+ *
+ * Commander stores an option under its camelCase attribute name, so
+ * `--client-scoped` is read as `clientScoped` and `--runtime-file` as
+ * `runtimeFile`. Reading the hyphenated name returns `undefined` — the option
+ * is then silently ignored, which is how `--api-format` and `--runtime-file`
+ * stopped working. Only a single-word flag has the same name either way.
  */
 export function buildProgram(): Command {
   const program = new Command();
@@ -111,11 +119,11 @@ export function buildProgram(): Command {
     const options: ChatCommandOptions = {
       origin: asString(chat.getOptionValue('origin')),
       token: asString(chat.getOptionValue('token')),
-      runtimeFile: asString(chat.getOptionValue('runtime-file')),
+      runtimeFile: asString(chat.getOptionValue('runtimeFile')),
       session: asString(chat.getOptionValue('session')),
       model: asString(chat.getOptionValue('model')),
       providerId: asString(chat.getOptionValue('provider')),
-      apiFormat: asString(chat.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+      apiFormat: asString(chat.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
       print: asString(chat.getOptionValue('print')),
     };
     process.exitCode = await runChatCommand(options);
@@ -145,7 +153,7 @@ export function buildProgram(): Command {
       session: asString(tui.getOptionValue('session')),
       model: asString(tui.getOptionValue('model')),
       providerId: asString(tui.getOptionValue('provider')),
-      apiFormat: asString(tui.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+      apiFormat: asString(tui.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
     };
     process.exitCode = await runTuiCommand(options);
   });
