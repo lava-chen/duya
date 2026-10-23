@@ -7,12 +7,17 @@ import { ApiClient, ApiError, type FetchLike } from './api.js';
 import { RunEventStream } from './run-stream.js';
 import { delay } from './selection.js';
 import type { UiRunRecord, UiServices } from '@/services/ui-services';
+import type { PartialWorkspaceLifecyclePort } from '@/services/workspace-lifecycle';
 
 export interface WebUiServicesOptions {
   readonly fetchImpl?: FetchLike;
   readonly runLedgerPollIntervalMs?: number;
   readonly reconnectDelayMs?: number;
   readonly stallTimeoutMs?: number;
+}
+
+export interface WebWorkspaceLifecycleOptions {
+  readonly fetchImpl?: FetchLike;
 }
 
 /**
@@ -168,6 +173,44 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
     // the Host agree on what may be picked.
     providers: {
       catalog: async () => await api.getProviderCatalog(),
+    },
+  };
+}
+
+/**
+ * Bind the shared workspace-lifecycle panel to the same-origin BFF.
+ *
+ * ## What this adapter is allowed to do
+ *
+ * Forward. The Host owns the session -> checkout -> pull-request mapping, and
+ * the Host's authority decides whether a checkout may be reclaimed. An adapter
+ * that re-derived either of those would be a second answer to the same
+ * question, and the two would drift — which is exactly what plan 621 §4.3
+ * exists to prevent.
+ *
+ * So every method below is one BFF call and nothing else. In particular:
+ *
+ *   - an `unknown` integration is carried through unchanged, with its reason.
+ *     "We could not look" is not "the pull request is open";
+ *   - a reclaim refusal resolves. `{ removed: false, reason }` is the Host's
+ *     answer, and nothing was deleted — it is not a failure to report;
+ *   - a Host that cannot answer rejects. The panel then says so, which is
+ *     different from a session that has no checkout.
+ */
+export function createWebWorkspaceLifecycle(
+  options: WebWorkspaceLifecycleOptions = {},
+): PartialWorkspaceLifecyclePort {
+  const fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+  const api = new ApiClient({ fetchImpl });
+  return {
+    checkouts: {
+      observeForSession: async (sessionId: SessionId) => await api.observeCheckoutForSession(sessionId),
+      observeCheckout: async (root: string) => await api.observeCheckoutByRoot(root),
+      requestReclaim: async (root: string) => await api.requestCheckoutReclaim(root),
+    },
+    integrations: {
+      observeForSession: async (sessionId: SessionId) => await api.observeIntegrationsForSession(sessionId),
+      refreshForSession: async (sessionId: SessionId) => await api.refreshIntegrationsForSession(sessionId),
     },
   };
 }
