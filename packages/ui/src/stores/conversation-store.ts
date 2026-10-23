@@ -381,6 +381,101 @@ export function partializeConversationState<T extends Pick<ConversationState, 'a
 }
 
 /**
+ * The state persistence hands back: the store state, except that the two
+ * `Set` fields arrive as JSON arrays.
+ */
+type HydratedConversationInput = Omit<ConversationState, 'collapsedProjects' | 'expandedThreads'> & {
+  collapsedProjects: Set<string> | string[];
+  expandedThreads: Set<string> | string[];
+};
+
+/** Coerce a persisted array (or an already-restored Set) back into a Set. */
+function toStringSet(value: unknown): Set<string> {
+  if (value instanceof Set) {
+    return value as Set<string>;
+  }
+  if (Array.isArray(value)) {
+    return new Set(value.filter((entry): entry is string => typeof entry === 'string'));
+  }
+  return new Set<string>();
+}
+
+/**
+ * Normalise the state persistence just restored, and publish "hydration
+ * is complete" through it.
+ *
+ * WHY THIS EXISTS
+ *
+ * `zustand/persist` restores the saved state with a single write:
+ * `set(merge(persistedState, currentState), true)`. Everything the merge
+ * returns is therefore visible to every subscriber.
+ *
+ * The previous implementation did the normalisation in
+ * `onRehydrateStorage`, whose callback runs AFTER that write and mutates
+ * the state object in place. The field values changed, but no subscriber
+ * was ever told — the write had already happened.
+ *
+ * `isHydrated` was set that way, so the UI kept rendering
+ * `isHydrated === false` after persistence had already finished. The
+ * consequences were all user-visible:
+ *
+ *   - the boot splash waited for the 5s watchdog instead of for the
+ *     store,
+ *   - the sidebar waited for `isHydrated` before loading the session
+ *     list from SQLite,
+ *   - the welcome-screen project dropdown and composer waited for
+ *     `isHydrated` before accepting input.
+ *
+ * Doing the normalisation inside `merge` puts every restored value into
+ * the single write persistence already performs, so subscribers see the
+ * hydrated state — `isHydrated: true` included — on the same tick.
+ */
+export function normalizeHydratedConversationState(
+  state: HydratedConversationInput,
+): ConversationState {
+  const next = { ...state } as unknown as ConversationState;
+  next.isHydrated = true;
+  next.collapsedProjects = toStringSet(next.collapsedProjects);
+  next.expandedThreads = toStringSet(next.expandedThreads);
+  next.lastSyncAt = typeof next.lastSyncAt === 'number' ? next.lastSyncAt : 0;
+  next.newChatDraft = normalizePersistedDraft(next.newChatDraft);
+  next.projectSortBy = migratePersistedSort(next.projectSortBy);
+  next.projectGroupBy = migratePersistedGroup(next.projectGroupBy, state);
+  return next;
+}
+
+/**
+ * Normalise a persisted draft (older saves may lack `hasContent` or
+ * `attachments`). `hasContent` is derived so the composer can detect a
+ * non-empty draft reliably.
+ */
+function normalizePersistedDraft(value: unknown): NewChatDraft {
+  if (!value || typeof value !== 'object') {
+    return EMPTY_NEW_CHAT_DRAFT;
+  }
+  const draft = value as Partial<NewChatDraft>;
+  const text = typeof draft.text === 'string' ? draft.text : '';
+  const attachments = Array.isArray(draft.attachments) ? draft.attachments : [];
+  return { text, attachments, hasContent: text.trim().length > 0 || attachments.length > 0 };
+}
+
+/** Migrate old sort state to the new model. */
+function migratePersistedSort(value: unknown): ProjectSortBy {
+  if (value === 'createdAt') return 'priority';
+  if (value === 'name') return 'manual';
+  if (value === 'priority' || value === 'lastActivity' || value === 'manual') return value;
+  return 'lastActivity';
+}
+
+/** Migrate old group state to the new model. */
+function migratePersistedGroup(value: unknown, state: HydratedConversationInput): ProjectGroupBy {
+  const legacyGroup = (state as unknown as Record<string, unknown>).projectFilter as string | undefined;
+  if (legacyGroup && !value) return 'byProject';
+  if (value === 'byProject' || value === 'singleList') return value;
+  return 'byProject';
+}
+
+/**
  * Stable identity for the optimistic-dedupe bucket: (role, content
  * shape, time-window). Two user messages that land in the same bucket
  * are the same logical send — the renderer and the agent worker may
@@ -1739,49 +1834,20 @@ export const useConversationStore = create<ConversationState>()(
         // NOT persisted — it's a session-scoped UI flag.
         newChatDraft: state.newChatDraft,
       }),
-      onRehydrateStorage: () => (state) => {
-        // Mark hydration complete and restore collapsedProjects Set
-        if (state) {
-          const s = state as ConversationState;
-          s.isHydrated = true;
-          if (Array.isArray(s.collapsedProjects)) {
-            s.collapsedProjects = new Set(s.collapsedProjects as unknown as string[]);
-          }
-          if (Array.isArray(s.expandedThreads)) {
-            s.expandedThreads = new Set(s.expandedThreads as unknown as string[]);
-          }
-          // Ensure lastSyncAt is initialized
-          if (!s.lastSyncAt) {
-            s.lastSyncAt = 0;
-          }
-          // Normalize a persisted draft (older saves may lack `hasContent` or
-          // `attachments`). Derive `hasContent` so the composer can detect a
-          // non-empty draft reliably.
-          if (!s.newChatDraft || typeof s.newChatDraft !== 'object') {
-            s.newChatDraft = EMPTY_NEW_CHAT_DRAFT;
-          } else {
-            const d = s.newChatDraft;
-            d.text = typeof d.text === 'string' ? d.text : '';
-            d.attachments = Array.isArray(d.attachments) ? d.attachments : [];
-            d.hasContent = d.text.trim().length > 0 || d.attachments.length > 0;
-          }
-          // Migrate old sort/group state to the new model
-          const legacySort = s.projectSortBy as unknown as string;
-          if (legacySort === 'createdAt') {
-            s.projectSortBy = 'priority';
-          } else if (legacySort === 'name') {
-            s.projectSortBy = 'manual';
-          } else if (!['priority', 'lastActivity', 'manual'].includes(legacySort)) {
-            s.projectSortBy = 'lastActivity';
-          }
-          const legacyGroup = (s as unknown as Record<string, unknown>).projectFilter as string | undefined;
-          if (legacyGroup && !s.projectGroupBy) {
-            s.projectGroupBy = 'byProject';
-          }
-          if (!['byProject', 'singleList'].includes(s.projectGroupBy)) {
-            s.projectGroupBy = 'byProject';
-          }
-        }
+      // The restored state is normalised INSIDE the merge, so the single
+      // write persistence performs publishes `isHydrated: true` (and the
+      // restored Sets) to every subscriber. The previous
+      // `onRehydrateStorage` callback mutated the state object in place
+      // AFTER that write, which changed the field values without ever
+      // notifying a subscriber — see
+      // `normalizeHydratedConversationState` for the consequences.
+      merge: (persistedState, currentState) => {
+        const base = currentState as ConversationState;
+        const persisted = (persistedState ?? {}) as Partial<ConversationState>;
+        return normalizeHydratedConversationState({
+          ...base,
+          ...persisted,
+        } as unknown as HydratedConversationInput);
       },
     }
   )
