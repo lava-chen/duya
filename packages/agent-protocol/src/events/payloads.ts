@@ -328,7 +328,7 @@ export interface AssistantUsagePayload {
  * and what the renderer shows as the input-box chip.
  *
  * The values are the agent's own, verbatim. An earlier draft of this file
- * invented a third vocabulary (`default | plan | research | conductor | goal`)
+ * invented a third vocabulary (`default | plan | research | goal`)
  * by reading the legacy SSE union, where `mode` is only `string` and therefore
  * carries no information at all. That draft was wrong twice over: it invented
  * values the runtime never emits, and it mixed in the plan-224 popover

@@ -36,7 +36,6 @@ import { applyTimeout } from './human-runner.js';
 import { SuspensionSignal } from './error-class.js';
 import { nodeDependencies } from './validate.js';
 import { WorkflowDecisionAdapter } from './decision-adapter.js';
-import type { GuiRunPorts } from './gui-runner.js';
 import type { DecisionService } from '../decisions/index.js';
 import { createResumeToken, verifyResumeToken } from './resume-token.js';
 
@@ -59,8 +58,6 @@ export interface EngineOptions {
   agentBudget?: number | undefined;
   hostCallCap?: number | undefined;
   concurrency?: number | undefined;
-  /** Gui node ports (computer-use backend + artifact store + decide). */
-  gui?: GuiRunPorts | undefined;
   signal?: AbortSignal | undefined;
 }
 
@@ -186,7 +183,6 @@ export class WorkflowEngine {
       approvalMode,
       dryRun,
       scope,
-      gui: this.options.gui,
     };
 
     for (let phaseIndex = 0; phaseIndex < def.phases.length; phaseIndex++) {

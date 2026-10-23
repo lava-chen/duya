@@ -52,7 +52,6 @@ function getToolVerb(toolName?: string): string {
   if (name === 'askuserquestion') return '询问用户';
   if (name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') return '运行 CLI';
   if (name === 'task' || name === 'agent' || name === 'subagent' || name === 'sub_agent') return '运行子代理';
-  if (name.startsWith('canvas_')) return '操作画布';
   return '运行工具';
 }
 

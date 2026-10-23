@@ -285,20 +285,6 @@ export class InteragentRouter {
         process.send(msg);
         return;
       }
-      if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
-        process.send(msg);
-      }
-      // Plan 454: forward computer-use:execute to the main process.
-      if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
-        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
-        process.send(msg);
-      }
-      // Plan 575 §0-⑥: forward computer-use:cua to the main process.
-      if (msg.type === 'computer-use:cua' && typeof msg.requestId === 'string' && process.send) {
-        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
-        process.send(msg);
-      }
       // Plan 481: forward memory-tier:rpc to the main process.
       if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string' && process.send) {
         this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);

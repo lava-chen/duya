@@ -55,32 +55,6 @@ var trustedSystemWide: AXUIElement? = {
     return el
 }()
 
-/// Join an AXWindow to its CGWindowID by bounds matching against
-/// CGWindowList (AXUIElementGetWindow is not exported by the CLT 13.1
-/// SDK's tbd). Returns nil when the match is ambiguous — callers treat
-/// that as "window not found".
-func resolveWindowId(_ window: AXUIElement, pid: Int) -> UInt32? {
-    guard let pos = getPoint(window, kPosition), let size = getSize(window, kSize) else { return nil }
-    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return nil }
-    var matches: [UInt32] = []
-    for entry in list {
-        guard (entry["kCGWindowLayer"] as? Int) == 0 else { continue }
-        guard (entry["kCGWindowOwnerPID"] as? Int) == pid else { continue }
-        let b = entry["kCGWindowBounds"] as? [String: Any] ?? [:]
-        let x = (b["X"] as? NSNumber)?.doubleValue ?? -1
-        let y = (b["Y"] as? NSNumber)?.doubleValue ?? -1
-        let w = (b["Width"] as? NSNumber)?.doubleValue ?? -1
-        let h = (b["Height"] as? NSNumber)?.doubleValue ?? -1
-        if abs(x - pos.x) < 0.5 && abs(y - pos.y) < 0.5
-            && abs(w - size.width) < 0.5 && abs(h - size.height) < 0.5 {
-            if let wid = (entry["kCGWindowNumber"] as? NSNumber)?.uint32Value {
-                matches.append(wid)
-            }
-        }
-    }
-    return matches.count == 1 ? matches[0] : nil
-}
-
 func requireAxTrust() -> [String: Any]? {
     if AXIsProcessTrusted() { return nil }
     return err("permission-denied", "the DUYA app is not in the Accessibility TCC list — grant it in System Settings and retry")
@@ -93,13 +67,11 @@ func axErrorToCode(_ error: AXError) -> (String, String) {
     case .cannotComplete:
         return ("timeout", "target application did not answer the AX call in time")
     case .invalidUIElement:
-        return ("stale-handle", "the AXUIElement is no longer valid (app quit or element destroyed)")
+        return ("error", "the AXUIElement is no longer valid (app quit or element destroyed)")
     case .noValue:
         return ("no-value", "attribute has no value")
     case .attributeUnsupported:
         return ("unsupported", "attribute unsupported by the target element")
-    case .actionUnsupported:
-        return ("unsupported", "action unsupported by the target element")
     default:
         return ("error", "AXError \(error.rawValue)")
     }
@@ -115,17 +87,6 @@ func getBool(_ element: AXUIElement, _ attr: String) -> Bool? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success else { return nil }
     return value as? Bool
-}
-
-func getElement(_ element: AXUIElement, _ attr: String) -> AXUIElement? {
-    var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success else { return nil }
-    // AXUIElement attribute payloads come back as AXUIElementRef.
-    let raw = value!
-    if CFGetTypeID(raw) == AXUIElementGetTypeID() {
-        return (raw as! AXUIElement)
-    }
-    return nil
 }
 
 func getElements(_ element: AXUIElement, _ attr: String) -> [AXUIElement] {
@@ -155,42 +116,6 @@ func getSize(_ element: AXUIElement, _ attr: String) -> CGSize? {
     return size
 }
 
-func getActionNames(_ element: AXUIElement) -> [String] {
-    var names: CFArray?
-    guard AXUIElementCopyActionNames(element, &names) == .success else { return [] }
-    return (names as? [String]) ?? []
-}
-
-// MARK: - Snapshot handle registry
-
-/// Opaque short-lived element handles (plan 572 D3): every
-/// enumerate/probe registers the elements it returned; actions resolve
-/// through this table. Bounded — the oldest entries are evicted.
-var handleRegistry: [String: (element: AXUIElement, seq: Int)] = [:]
-var handleSeq = 0
-let registryLock = NSLock()
-let REGISTRY_CAP = 4096
-
-func registerHandle(_ element: AXUIElement) -> String {
-    registryLock.lock()
-    defer { registryLock.unlock() }
-    handleSeq += 1
-    let handle = "h\(handleSeq)"
-    handleRegistry[handle] = (element, handleSeq)
-    if handleRegistry.count > REGISTRY_CAP {
-        // Evict the oldest quarter (seq-ordered scan; registry is small).
-        let cutoff = handleSeq - REGISTRY_CAP + REGISTRY_CAP / 4
-        handleRegistry = handleRegistry.filter { $0.value.seq >= cutoff }
-    }
-    return handle
-}
-
-func resolveHandle(_ handle: String) -> AXUIElement? {
-    registryLock.lock()
-    defer { registryLock.unlock() }
-    return handleRegistry[handle]?.element
-}
-
 // MARK: - Element → JSON
 
 let kRole = kAXRoleAttribute as String
@@ -204,9 +129,8 @@ let kEnabled = kAXEnabledAttribute as String
 let kChildren = kAXChildrenAttribute as String
 let kWindows = kAXWindowsAttribute as String
 let kIdentifier = "AXIdentifier"
-let kFocused = kAXFocusedAttribute as String
 
-func elementJSON(_ element: AXUIElement, register: Bool) -> [String: Any] {
+func elementJSON(_ element: AXUIElement) -> [String: Any] {
     var out: [String: Any] = [:]
     let role = getString(element, kRole) ?? ""
     if !role.isEmpty { out["role"] = role }
@@ -232,11 +156,6 @@ func elementJSON(_ element: AXUIElement, register: Bool) -> [String: Any] {
     if let ident = getString(element, kIdentifier), !ident.isEmpty {
         out["automationId"] = ident
     }
-    let actions = getActionNames(element)
-    if !actions.isEmpty { out["actions"] = actions }
-    if register {
-        out["handle"] = registerHandle(element)
-    }
     return out
 }
 
@@ -260,26 +179,9 @@ func enumerateOp(_ req: [String: Any]) -> [String: Any] {
     let maxDepth = (req["maxDepth"] as? Int) ?? 40
     let maxNodes = (req["maxNodes"] as? Int) ?? 500
     let roleFilter = (req["roles"] as? [String]) ?? defaultInteractiveRoles
-    let windowId = req["windowId"] as? Int
-
     let appElement = AXUIElementCreateApplication(pid_t(pid))
-    var roots: [AXUIElement] = []
-    if let wid = windowId {
-        // Target one window: join AX windows to CGWindowIDs via bounds
-        // matching (AXUIElementGetWindow is unavailable on this SDK).
-        for window in getElements(appElement, kWindows) {
-            if resolveWindowId(window, pid: pid) == UInt32(wid) {
-                roots.append(window)
-                break
-            }
-        }
-        if roots.isEmpty {
-            return err("stale-handle", "window \(wid) not found under pid \(pid)")
-        }
-    } else {
-        let windows = getElements(appElement, kWindows)
-        roots = windows.isEmpty ? [appElement] : windows
-    }
+    let windows = getElements(appElement, kWindows)
+    let roots = windows.isEmpty ? [appElement] : windows
 
     var out: [[String: Any]] = []
     var truncated = false
@@ -298,7 +200,7 @@ func enumerateOp(_ req: [String: Any]) -> [String: Any] {
                 truncated = true
                 return
             }
-            var json = elementJSON(element, register: true)
+            var json = elementJSON(element)
             json["interactive"] = true
             out.append(json)
         }
@@ -317,8 +219,7 @@ func enumerateOp(_ req: [String: Any]) -> [String: Any] {
     if out.isEmpty {
         // An empty tree usually means the app has not built its
         // accessibility tree yet (Chromium/Electron). Surface the
-        // qualifier so the client can drive the AXManualAccessibility
-        // recipe and retry.
+        // qualifier for diagnostics and allow a later scan to retry.
         reason = "empty-tree"
     }
     return [
@@ -352,60 +253,10 @@ func probeOp(_ req: [String: Any]) -> [String: Any] {
         }
         return err(code, message)
     }
-    // The CF out-param reference is kept alive by the handle registry
-    // (bounded at REGISTRY_CAP entries — the helper is short-lived, so
-    // the bounded leak is intentional).
-    return ["ok": true, "element": elementJSON(hit, register: true)]
+    return ["ok": true, "element": elementJSON(hit)]
 }
 
-// MARK: - action / setValue / manualAccessibility
-
-func actionOp(_ req: [String: Any]) -> [String: Any] {
-    if let denied = requireAxTrust() { return denied }
-    guard let handle = req["handle"] as? String, let action = req["action"] as? String,
-          let element = resolveHandle(handle) else {
-        return err("stale-handle", "unknown handle \(req["handle"] ?? "?")")
-    }
-    let axErr = AXUIElementPerformAction(element, action as CFString)
-    guard axErr == .success else {
-        let (code, message) = axErrorToCode(axErr)
-        return err(code, message)
-    }
-    return ["ok": true, "performed": true]
-}
-
-func setValueOp(_ req: [String: Any]) -> [String: Any] {
-    if let denied = requireAxTrust() { return denied }
-    guard let handle = req["handle"] as? String, let value = req["value"] as? String,
-          let element = resolveHandle(handle) else {
-        return err("stale-handle", "unknown handle \(req["handle"] ?? "?")")
-    }
-    var settable: DarwinBoolean = false
-    guard AXUIElementIsAttributeSettable(element, kValue as CFString, &settable) == .success else {
-        return err("error", "IsAttributeSettable failed")
-    }
-    guard settable.boolValue else {
-        return err("not-settable", "kAXValue is not settable on this element")
-    }
-    let axErr = AXUIElementSetAttributeValue(element, kValue as CFString, value as CFTypeRef)
-    guard axErr == .success else {
-        let (code, message) = axErrorToCode(axErr)
-        return err(code, message)
-    }
-    return ["ok": true, "set": true]
-}
-
-func manualAccessibilityOp(_ req: [String: Any]) -> [String: Any] {
-    guard let pid = req["pid"] as? Int, pid > 0 else {
-        return err("error", "manualAccessibility requires a pid")
-    }
-    let appElement = AXUIElementCreateApplication(pid_t(pid))
-    let axErr = AXUIElementSetAttributeValue(
-        appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-    return ["ok": true, "manualAccessibility": axErr == .success]
-}
-
-// MARK: - window / app queries (no AX trust required)
+// MARK: - foreground window snapshot
 
 func windowBoundsToJSON(_ dict: [String: Any]) -> [String: Any] {
     // kCGWindowBounds is a CGRect dictionary: {X, Y, Width, Height} in points.
@@ -414,32 +265,6 @@ func windowBoundsToJSON(_ dict: [String: Any]) -> [String: Any] {
     let w = (dict["Width"] as? NSNumber)?.doubleValue ?? 0
     let h = (dict["Height"] as? NSNumber)?.doubleValue ?? 0
     return ["x": x, "y": y, "w": w, "h": h]
-}
-
-func windowsOp(_ req: [String: Any]) -> [String: Any] {
-    guard let pid = req["pid"] as? Int, pid > 0 else {
-        return err("error", "windows requires a pid")
-    }
-    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
-        return ["ok": true, "windows": []]
-    }
-    var out: [[String: Any]] = []
-    for window in list {
-        guard (window["kCGWindowLayer"] as? Int) == 0 else { continue }
-        guard (window["kCGWindowOwnerPID"] as? Int) == pid else { continue }
-        let windowId = (window["kCGWindowNumber"] as? Int) ?? 0
-        let entry: [String: Any] = [
-            "windowId": windowId,
-            "pid": pid,
-            "ownerName": (window["kCGWindowOwnerName"] as? String) ?? "",
-            // kCGWindowName is only present WITH Screen Recording —
-            // degrade to empty, never fail the op.
-            "title": (window["kCGWindowName"] as? String) ?? "",
-            "bounds": windowBoundsToJSON((window["kCGWindowBounds"] as? [String: Any]) ?? [:]),
-        ]
-        out.append(entry)
-    }
-    return ["ok": true, "windows": out]
 }
 
 func fgOp() -> [String: Any] {
@@ -469,41 +294,6 @@ func fgOp() -> [String: Any] {
         return ["ok": true, "fg": fg]
     }
     return ["ok": true, "fg": NSNull()]
-}
-
-func appsOp() -> [String: Any] {
-    let apps = NSWorkspace.shared.runningApplications.filter {
-        $0.activationPolicy == .regular
-    }
-    let out: [[String: Any]] = apps.map { app in
-        [
-            "pid": app.processIdentifier,
-            "name": app.localizedName ?? "",
-            "bundleId": app.bundleIdentifier ?? NSNull(),
-            "isActive": app.isActive,
-        ]
-    }
-    return ["ok": true, "apps": out]
-}
-
-func activateOp(_ req: [String: Any]) -> [String: Any] {
-    guard let pid = req["pid"] as? Int, pid > 0,
-          let app = NSRunningApplication(processIdentifier: pid_t(pid)) else {
-        return err("error", "no running app for pid \(req["pid"] ?? 0)")
-    }
-    // activate(options:) is deprecated on macOS 14 but the replacement
-    // activate(from:options:) needs a requesting app context we do not
-    // have from a CLI; the deprecated path keeps working.
-    let ok = app.activate(options: [.activateIgnoringOtherApps])
-    // Raise the app's AX windows too — activation alone can leave the
-    // wanted window behind others.
-    if ok {
-        let appElement = AXUIElementCreateApplication(pid_t(pid))
-        for window in getElements(appElement, kWindows) {
-            AXUIElementPerformAction(window, "AXRaise" as CFString)
-        }
-    }
-    return ["ok": true, "activated": ok]
 }
 
 // MARK: - permissions / secure input
@@ -557,52 +347,6 @@ func secureInputPid() -> Int? {
         return Int(s)
     }
     return nil
-}
-
-// MARK: - background delivery (CGEventPostToPid)
-
-func keyToPidOp(_ req: [String: Any]) -> [String: Any] {
-    guard let pid = req["pid"] as? Int, pid > 0, let vk = req["vk"] as? Int else {
-        return err("error", "keyToPid requires pid + vk")
-    }
-    let flags = (req["flags"] as? [String]) ?? []
-    var mask: CGEventFlags = []
-    for f in flags {
-        switch f.lowercased() {
-        case "cmd", "meta": mask.insert(.maskCommand)
-        case "ctrl": mask.insert(.maskControl)
-        case "alt", "option": mask.insert(.maskAlternate)
-        case "shift": mask.insert(.maskShift)
-        default: break
-        }
-    }
-    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(vk), keyDown: true),
-          let up = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(vk), keyDown: false) else {
-        return err("error", "CGEventCreateKeyboardEvent failed")
-    }
-    if !flags.isEmpty {
-        down.flags = mask
-        up.flags = mask
-    }
-    // Targeted delivery: the pid receives the event without being
-    // activated. Chromium filters pid-posted MOUSE events; keyboard
-    // events are accepted.
-    down.postToPid(pid_t(pid))
-    up.postToPid(pid_t(pid))
-    return ["ok": true, "performed": true]
-}
-
-func scrollToPidOp(_ req: [String: Any]) -> [String: Any] {
-    guard let pid = req["pid"] as? Int, pid > 0, let ticks = req["ticks"] as? Int else {
-        return err("error", "scrollToPid requires pid + ticks")
-    }
-    let direction = (req["direction"] as? String) ?? "down"
-    let signed = direction == "up" ? -ticks : ticks
-    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(clamping: signed), wheel2: 0, wheel3: 0) else {
-        return err("error", "CGEventCreateScrollWheelEvent failed")
-    }
-    event.postToPid(pid_t(pid))
-    return ["ok": true, "performed": true]
 }
 
 // MARK: - readUrl (AppleScript dictionaries)
@@ -679,19 +423,6 @@ func urlScript(for app: String) -> String? {
     return "tell application \"\(target)\" to if (count of windows) > 0 then get URL of active tab of front window"
 }
 
-// MARK: - screenshotWindow (ScreenCaptureKit, macOS 14+)
-//
-// The SCK implementation lives in screenshot.swift, compiled in only
-// when the build SDK is 14+ (scripts/build-ax-helper.sh passes
-// -DDUYA_HAS_SCK). Without it the op degrades to a structured
-// `unsupported` instead of failing the helper build on older SDKs.
-
-#if !DUYA_HAS_SCK
-func screenshotWindowOp(_ req: [String: Any]) -> [String: Any] {
-    return err("unsupported", "helper built without ScreenCaptureKit (SDK < 14)")
-}
-#endif
-
 // MARK: - dispatch
 
 func dispatch(_ req: [String: Any]) -> [String: Any] {
@@ -701,34 +432,16 @@ func dispatch(_ req: [String: Any]) -> [String: Any] {
         return ["ok": true]
     case "permissions":
         return permissionsOp()
-    case "apps":
-        return appsOp()
     case "fg":
         return fgOp()
     case "secureInput":
         return secureInputOp()
-    case "windows":
-        return windowsOp(req)
     case "enumerate":
         return enumerateOp(req)
     case "probe":
         return probeOp(req)
-    case "action":
-        return actionOp(req)
-    case "setValue":
-        return setValueOp(req)
-    case "manualAccessibility":
-        return manualAccessibilityOp(req)
     case "readUrl":
         return readUrlOp(req)
-    case "keyToPid":
-        return keyToPidOp(req)
-    case "scrollToPid":
-        return scrollToPidOp(req)
-    case "activate":
-        return activateOp(req)
-    case "screenshotWindow":
-        return screenshotWindowOp(req)
     default:
         return err("unsupported", "unknown op \(op)")
     }

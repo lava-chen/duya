@@ -1,6 +1,6 @@
 # @duya/capabilities
 
-工具实现层 + 纯工具契约 + 路径/命令权限策略。拥有 Read/Write/Edit/Glob/Grep/ApplyPatch/Shell/Browser/OSTool 的实现、MCP 客户端、以及决定"这条命令/这个路径能不能跑"的策略。
+工具实现层 + 纯工具契约 + 路径/命令权限策略。拥有 Read/Write/Edit/Glob/Grep/ApplyPatch/Shell/OSTool 的实现、MCP 客户端、以及决定"这条命令/这个路径能不能跑"的策略。浏览器自动化由官方市场 Browser 插件提供。
 
 ## 1. 负责 / 不负责
 
@@ -28,7 +28,6 @@
 | `packages/capabilities/src/ShellCommandTool/BashTool.ts:268` | Shell 工具；`packages/capabilities/src/ShellCommandTool/PowerShellTool.ts:22` 继承自它。 |
 | `packages/capabilities/src/MCP/MCPManager.ts:665` | `MCPManager`；内部 `MCPClient` 类 `:104`、`connect()` `:363`、超时默认 startup 30 s `:48` / tool 120 s `:49`。 |
 | `packages/capabilities/src/MCP/capability-catalog.ts:26` | 给模型看的"schema-free 目录"（`MAX_SERVERS = 12`）；必须逐字节稳定以喂 prompt cache。 |
-| `packages/capabilities/src/BrowserTool/CDPClient.ts:1059` | CDP daemon 出口；域名拦截 `packages/capabilities/src/BrowserTool/DomainBlocker.ts`。 |
 
 公共面：`packages/capabilities/src/index.ts`（barrel）+ `packages/capabilities/src/contracts/index.ts` + `packages/capabilities/src/permissions/index.ts`。
 
@@ -40,11 +39,10 @@
 | Shell 失败 / 输出乱码 | `packages/capabilities/src/ShellCommandTool/BashTool.ts:268` + `packages/capabilities/src/utils/shellDetector.ts:315` | `detectShell()` 决定实际用哪个 shell。 |
 | Shell 权限误判（该问不问 / 不该问却问） | `packages/capabilities/src/permissions/policy.ts:837` + `packages/capabilities/src/permissions/policy.ts:982` | `analyzeCommandSafety` 与 `isReadOnlyCommand` 是两套判定，别只看一个。 |
 | MCP server 连不上 | `packages/capabilities/src/MCP/MCPManager.ts:363`（`MCPClient.connect`） | 连接与握手在此；静态路径检查在 `@duya/plugin-core`（`packages/plugin-core/src/mcp/resolve.ts:415`）。 |
-| 浏览器打不开页面 / 域名被拦 | `packages/capabilities/src/BrowserTool/DomainBlocker.ts` + `packages/capabilities/src/BrowserTool/CDPClient.ts:1059` | 前者判域名，后者是唯一出网口。 |
 | 疑似 SSRF / 打到内网地址 | `packages/capabilities/src/utils/urlSafety.ts:152` + `packages/capabilities/src/utils/urlSafety.ts:199` | `resolvePublicIP` + `isSafeUrl`。 |
 
 ## 4. 边界约束
 
-- `architecture-policy.yaml:671-674`：模块 `capabilities`，`managed: true`，`requires: [legacy-ai, agent-protocol, sandbox, tooling, legacy-computer-use, legacy-plugin-core]`。零容忍，架构门禁直接阻断。
+- `architecture-policy.yaml`：模块 `capabilities`，`managed: true`。依赖边界以策略文件为准；不再依赖内置 Computer Use 包。零容忍，架构门禁直接阻断。
 - **`packages/agent/src/tool/` 下 335 个文件是 re-export shim**，实现都在这里。不要去 agent 包里找实现——例如 `packages/agent/src/tool/BaseTool.ts` 只是转发到 `@duya/capabilities/BaseTool`。
-- 本包做重 IO（fs、进程 spawn、到 `127.0.0.1:19825` 的 CDP 通信），**不是** `core` 层纯模块，不要往这里塞协议类型。
+- 本包做重 IO（fs、进程 spawn、MCP 通信），**不是** `core` 层纯模块，不要往这里塞协议类型。

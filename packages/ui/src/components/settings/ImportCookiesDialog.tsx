@@ -12,7 +12,6 @@ import {
   WarningIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
-import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { Modal } from '@/components/ui/page';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
@@ -24,7 +23,6 @@ interface ImportResult {
   count: number;
   failed: number;
   unsupported: number;
-  source?: 'extension';
 }
 
 interface ImportCookiesDialogProps {
@@ -41,10 +39,6 @@ interface ImportCookiesDialogProps {
  */
 export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProps) {
   const { t } = useTranslation();
-  const { status: extensionStatus, isInstalled: extensionInstalled, checkExtension } = useBrowserExtension({
-    autoCheck: true,
-    interval: 30000,
-  });
 
   const [browser, setBrowser] = useState<CookieBrowser>('chrome');
   const [profiles, setProfiles] = useState<BrowserCookieProfile[]>([]);
@@ -55,6 +49,7 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
   const [result, setResult] = useState<ImportResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [importErrorCode, setImportErrorCode] = useState<string | null>(null);
+  const [importUnsupportedCount, setImportUnsupportedCount] = useState(0);
 
   const detectProfiles = useCallback(async (target: CookieBrowser) => {
     setDetecting(true);
@@ -87,6 +82,7 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
       setResult(null);
       setImportError(null);
       setImportErrorCode(null);
+      setImportUnsupportedCount(0);
       void detectProfiles(browser);
     }
   }, [isOpen, browser, detectProfiles]);
@@ -97,6 +93,7 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
     setResult(null);
     setImportError(null);
     setImportErrorCode(null);
+    setImportUnsupportedCount(0);
     try {
       const response = await window.electronAPI?.browserCookie?.importCookies(browser, selectedDir);
       if (response?.ok) {
@@ -104,11 +101,11 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
           count: response.count ?? 0,
           failed: response.failed ?? 0,
           unsupported: response.unsupported ?? 0,
-          source: response.source,
         });
       } else {
         setImportError(response?.error ?? 'Unknown error');
         setImportErrorCode(response?.errorCode ?? null);
+        setImportUnsupportedCount(response?.unsupported ?? 0);
       }
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Unknown error');
@@ -116,26 +113,6 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
       setImporting(false);
     }
   }, [browser, selectedDir]);
-
-  const extensionHintButtons = (
-    <div className="mt-1.5 flex items-center gap-2">
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => window.open('chrome://extensions/', '_blank')}
-      >
-        {t('browserAdvanced.openExtensions')}
-      </Button>
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => void checkExtension()}
-        disabled={extensionStatus === 'checking'}
-      >
-        {t('browserAdvanced.refreshExtension')}
-      </Button>
-    </div>
-  );
 
   const platformHint = (() => {
     const ua = navigator.userAgent;
@@ -259,7 +236,6 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
                 count: result.count,
                 failed: result.failed + result.unsupported,
               })}
-              {result.source === 'extension' && ` ${t('browserAdvanced.importLiveSource')}`}
             </div>
           </div>
         )}
@@ -268,7 +244,6 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
             <WarningIcon size={12} className="shrink-0 mt-0.5" />
             <div className="flex-1">
               {t('browserAdvanced.importUnsupported', { count: result.unsupported })}
-              {!extensionInstalled && extensionHintButtons}
             </div>
           </div>
         )}
@@ -281,15 +256,9 @@ export function ImportCookiesDialog({ isOpen, onClose }: ImportCookiesDialogProp
                   {t('browserAdvanced.importSourceBusy', {
                     browser: browser === 'chrome' ? 'Google Chrome' : 'Microsoft Edge',
                   })}
-                  {!extensionInstalled && extensionHintButtons}
                 </>
               )}
-              {importErrorCode === 'APP_BOUND_EXTENSION_UNAVAILABLE' && (
-                <>
-                  {t('browserAdvanced.importAppBoundUnavailable')}
-                  {!extensionInstalled && extensionHintButtons}
-                </>
-              )}
+              {importErrorCode === 'APP_BOUND_COOKIE_UNSUPPORTED' && t('browserAdvanced.importUnsupported', { count: importUnsupportedCount })}
               {!importErrorCode && t('browserAdvanced.importFailed', { error: importError ?? 'Unknown error' })}
             </div>
           </div>

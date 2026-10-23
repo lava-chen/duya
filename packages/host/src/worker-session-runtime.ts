@@ -1,5 +1,4 @@
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
-import { getWorkerComputerUseRuntimePorts } from './worker-tool-bindings/os-capability-adapter.js';
 import { definedProperties } from './worker-context/defined-properties.js';
 /** Host product session state and assembly; RunEngine owns model/tool scheduling. */
 import type { TurnOutputSink, ResolvedTurnTools, TurnPipelineRequest, TurnAssemblyRequest, TurnAssembly, RunStartRequest, RunHandle, RunAssemblyRequest, PromptUserRowCommit, LegacyTurnDelta, TurnModelProjection, RunTurnAssembly } from './worker-run-session-port.js';
@@ -37,7 +36,6 @@ import { stripPastedContentMarkers } from '@duya/agent-core/context/pasted-conte
 import { StreamingToolExecutor } from '@duya/host/worker-execution/streaming-tool-executor';
 import { ToolExecutionPipeline } from '@duya/host/worker-execution/tool-execution-pipeline';
 import type { CanUseToolFn } from '@duya/host/worker-execution/streaming-tool-executor';
-import type { WidgetStyleSignature, CanvasFreshnessState } from '@duya/host/worker-run-contracts';
 import { createHasPermissionsToUseTool } from '@duya/host/authorization/worker-permission-evaluator';
 import { resolveCacheRetention } from '@duya/host/worker-config/cache-config';
 import { readToolExposureConfig, shouldInjectMcpCatalog } from '@duya/host/worker-config/tool-exposure';
@@ -195,8 +193,6 @@ export class WorkerSession implements AgentRuntime {
             abortController: abortController,
             getAppState: () => turnAppState,
             setAppState: (updater) => { turnAppState = updater(turnAppState); },
-            widgetStyleHistory: this.widgetStyleHistory,
-            canvasFreshness: this.canvasFreshness,
             currentProjectId: this.currentProjectId ?? null,
             options: {
                 recentImageAttachments: collectRecentImageAttachments(request.messages).map(definedProperties),
@@ -222,23 +218,8 @@ export class WorkerSession implements AgentRuntime {
                 mcpToolExecutors: this.buildMCPToolExecutors(request.tools)
             },
             ...definedProperties({ requestPermission: options?.requestPermission }),
-            ...definedProperties({ sendToMain: options?.conductorIpc?.sendToMain }),
-            ...definedProperties({ ipcRequest: options?.conductorIpc?.ipcRequest }),
-            ...definedProperties({ conductorCanvasId: (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-                    options?.conductorCanvasId }),
-            canvasTarget: {
-                ...definedProperties({ canvasId: (this.modeCtx?.toolUseContextPatch?.conductorCanvasId as string | undefined) ??
-                        options?.conductorCanvasId })
-            },
-            ...definedProperties({ updateModeCanvasId: this.modeCtx
-                    ? (canvasId: string) => {
-                        this.modeCtx!.state.conductorCanvasId = canvasId;
-                        this.modeCtx!.toolUseContextPatch = {
-                            ...(this.modeCtx!.toolUseContextPatch ?? {}),
-                            conductorCanvasId: canvasId,
-                        };
-                    }
-                    : undefined })
+            ...definedProperties({ sendToMain: options?.hostIpc?.sendToMain }),
+            ...definedProperties({ ipcRequest: options?.hostIpc?.ipcRequest }),
         };
         this.currentToolUseContext = toolUseContext;
         request.bindToolUseContext(toolUseContext);
@@ -274,10 +255,9 @@ export class WorkerSession implements AgentRuntime {
         if (!this.resolvedModes ||
             !this.modeCtx ||
             this.baseSystemPromptWithoutModes === undefined ||
-            this.resolvedModes.prompt.prefixes.length === 0) {
+            (this.resolvedModes.prompt.prefixes.length === 0 && this.resolvedModes.prompt.suffixes.length === 0)) {
             return systemPrompt;
         }
-        this.modeCtx.state.widgetStyleHistory = this.widgetStyleHistory;
         return composeModePrompt(
             this.baseSystemPromptWithoutModes,
             this.resolvedModes.prompt.prefixes,
@@ -345,10 +325,7 @@ export class WorkerSession implements AgentRuntime {
             workingDirectory: turnContext.workingDirectory ?? '',
             subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
             state: {
-                conductorCanvasId: options?.conductorCanvasId,
-                widgetStyleHistory: this.widgetStyleHistory,
             },
         };
         const baseToolRegistrations: ToolRegistration[] = input.resolved.tools.map((t) => ({
@@ -892,14 +869,11 @@ export class WorkerSession implements AgentRuntime {
     private alwaysAskRules: ToolPermissionRulesBySource = {};
     private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
     private visualAnalysis: VisualAnalysisService;
-    private blockedDomains: string[] = [];
-    private browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
     private mcpManager: MCPManager | null = null;
     private mcpReadyResolve: (() => void) | null = null;
     private mcpReady: Promise<void> = new Promise((resolve) => {
         this.mcpReadyResolve = resolve;
     });
-    private widgetStyleHistory: WidgetStyleSignature[] = [];
     private promptContexts: string[] = [];
     private promptContextBlocks: string[] = [];
     /**
@@ -934,9 +908,6 @@ export class WorkerSession implements AgentRuntime {
     static readonly MIN_TURNS_SINCE_COMPACT = 3;
     static readonly MIN_TOKENS_GROWTH_SINCE_COMPACT = 30000;
     private readonly pendingHookMessages = new PendingHookMessages();
-    private canvasFreshness: CanvasFreshnessState = {
-        recentlyCreatedElementIds: new Set(),
-    };
     private baseSystemPromptWithoutModes: string | undefined;
     private resolvedModes: ResolvedMode | undefined;
     private lastSystemContextTokensEstimate = 0;
@@ -1140,8 +1111,6 @@ export class WorkerSession implements AgentRuntime {
             const resolved = path.resolve(dir);
             this.additionalWorkingDirectories.set(resolved, { path: resolved, source: ruleSource });
         }
-        this.blockedDomains = options.blockedDomains ?? [];
-        this.browserBackendMode = options.browserBackendMode ?? 'auto';
         this.compactionController = new MessageCompactionController({
             timeline: this.timeline,
             compactionManager: this.compactionManager,
@@ -1842,10 +1811,7 @@ export class WorkerSession implements AgentRuntime {
                 workingDirectory: this.workingDirectory ?? '',
                 subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
                 state: {
-                    conductorCanvasId: options?.conductorCanvasId,
-                    widgetStyleHistory: this.widgetStyleHistory,
                 },
             };
             for (const inject of orchestratorResolved.tools.injects) {
@@ -1886,15 +1852,13 @@ export class WorkerSession implements AgentRuntime {
             ...definedProperties({ sessionId: this.sessionId }),
             ...definedProperties({ workingDirectory: this.workingDirectory }),
             toolRegistry,
-            ...definedProperties({ chatOptions: options as Record<string, unknown> | undefined }),
-            blockedDomains: this.blockedDomains
+            ...definedProperties({ chatOptions: options as Record<string, unknown> | undefined })
         };
         const ctx: ModeModifierContext = {
             sessionId: this.sessionId ?? '',
             workingDirectory: this.workingDirectory ?? '',
             subagentDeps: this.subagentDeps,
             workerModeToolPorts: { goal: createGoalModeToolPorts(this.subagentDeps), research: createResearchModeToolPorts(this.subagentDeps) },
-            computerUsePorts: getWorkerComputerUseRuntimePorts(options?.conductorIpc?.ipcRequest),
             state: {},
         };
         logger.info(`[Agent] Dispatching to orchestrator mode: ${mod.id}`);
@@ -2084,9 +2048,8 @@ export class WorkerSession implements AgentRuntime {
         }
         catch {
         }
-        const temp = createBuiltinRegistry(this.subagentDeps, this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined, {
+        const temp = createBuiltinRegistry(this.subagentDeps, {
             ...definedProperties({ enabledPluginIds: enabledPluginIds }),
-            browserBackendMode: this.browserBackendMode
         });
         for (const tool of temp.getAllTools()) {
             const executor = temp.getExecutor(tool.name);

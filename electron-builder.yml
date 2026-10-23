@@ -84,18 +84,21 @@ extraResources:
   - from: packages/voice/dist/
     to: voice/
     filter: ["**/*"]
-  # Plan 556 recorder hook worker: uiohook-napi child entry (ESM) plus its
-  # native dependency, laid out under resources/computer-use/ so the
-  # sibling node_modules/ resolves. The package.json marker (type: module)
-  # keeps the entry loading as ESM outside the workspace.
-  - from: packages/computer-use/dist/recorder/hook-worker-entry.js
-    to: computer-use/hook-worker-entry.js
-  - from: packages/computer-use/dist/recorder/keymap.js
-    to: computer-use/keymap.js
-  - from: packages/computer-use/recorder-worker.package.json
-    to: computer-use/package.json
+  # Recorder hook worker: independently compiled ESM files plus its native
+  # dependency, laid out together so the sibling node_modules/ resolves.
+  - from: dist-electron/main/services/recorder/domain/hook-worker-entry.js
+    to: recorder/hook-worker-entry.js
+  - from: dist-electron/main/services/recorder/domain/keymap.js
+    to: recorder/keymap.js
+  - from: dist-electron/main/services/recorder/domain/worker-protocol.js
+    to: recorder/worker-protocol.js
+  - from: apps/desktop/src/main/services/recorder/domain/recorder-worker.package.json
+    to: recorder/package.json
   - from: node_modules/uiohook-napi/
-    to: computer-use/node_modules/uiohook-napi/
+    to: recorder/node_modules/uiohook-napi/
+    filter: ["**/*"]
+  - from: node_modules/node-gyp-build/
+    to: recorder/node_modules/node-gyp-build/
     filter: ["**/*"]
   # Plan 556 phase 2: persistent PowerShell UIA probe spawned by the
   # recorder service (resources/recorder/ → resources/recorder/).
@@ -113,9 +116,6 @@ extraResources:
     filter: ["**/*"]
   - from: public/
     to: public/
-    filter: ["**/*"]
-  - from: resources/browser-extension/
-    to: extension/
     filter: ["**/*"]
   - from: node_modules/node-pty/
     to: node-pty/

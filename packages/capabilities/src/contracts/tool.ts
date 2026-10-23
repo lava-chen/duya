@@ -6,7 +6,7 @@
  * structural field set the capability tools actually read
  * (`toolUseId`, `workingDirectory`, `options.mainLoopModel`,
  * `options.workingDirectory`, `getAppState`). The agent's wide
- * `ToolUseContext` (sessions, IPC, canvas state, ...) is structurally
+ * `ToolUseContext` (sessions, IPC, ... ) is structurally
  * assignable to this type — capabilities must not know who calls them
  * (plan 610 G23), so the wide type stays in `packages/agent/src/types.ts`
  * and compatibility is enforced by every typechecked call site
@@ -204,7 +204,7 @@ export interface ToolResult {
    * them with a fallback hint.
    *
    * Mirrors `ToolResult.images` from `@duya/ai/types` ({ data, mediaType }).
-   * Used by ReadTool (image files) and ComputerUseTool (capture / zoom).
+   * Used by tools that return image content.
    */
   images?: Array<{ data: string; mediaType: string }>;
   /**

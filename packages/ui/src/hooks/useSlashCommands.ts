@@ -15,14 +15,12 @@ import {
   ListChecksIcon,
   FeatherIcon,
   PlugIcon,
-  ChalkboardIcon,
   ArrowsInLineVerticalIcon,
   TelescopeIcon,
   TargetArrowIcon,
   ChatCircleIcon,
   PaperclipIcon,
   EyeIcon,
-  MousePointerClickIcon,
 } from '@/components/icons';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
@@ -286,16 +284,7 @@ export function useSlashCommands(opts: {
         group: 'mode' as const,
         category,
       },
-      {
-        label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
-        value: '__mode_conductor',
-        description: isZh ? '注入画布操作工具，agent 可控制 conductor 画布' : 'Inject canvas tools, agent can control conductor canvas',
-        icon: ChalkboardIcon,
-        kind: 'mode' as const,
-        modeValue: 'conductor',
-        group: 'mode' as const,
-        category,
-      },
+
       {
         label: 'Goal',
         value: '__mode_goal',
@@ -303,22 +292,6 @@ export function useSlashCommands(opts: {
         icon: TargetArrowIcon,
         kind: 'mode' as const,
         modeValue: 'goal',
-        group: 'mode' as const,
-        category,
-      },
-      {
-        // Plan 454: Computer Use Mode — agent drives the OS desktop
-        // directly via the computer_use tool (capture / click / type /
-        // key / scroll / drag / etc.). Mutually exclusive with every
-        // other session-level mode.
-        label: 'Computer Use',
-        value: '__mode_computer_use',
-        description: isZh
-          ? 'agent 可直接驱动 OS 桌面（截图 + 鼠标 + 键盘）'
-          : 'Agent drives the OS desktop directly (capture + click + type + key)',
-        icon: MousePointerClickIcon,
-        kind: 'mode' as const,
-        modeValue: 'computer-use',
         group: 'mode' as const,
         category,
       },

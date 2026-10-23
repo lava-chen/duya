@@ -233,13 +233,6 @@ import type {
   PluginAppInvocationResult,
 } from '@duya/agent-protocol';
 import type {
-  CreateDataSourceInput,
-  DataSourceRefreshOutcome,
-  DataSourceRow,
-  HostLocalWorkbenchApiV1,
-  UpdateDataSourceInput,
-} from '@duya/agent-protocol/workbench';
-import type {
   HostLocalSidebarSectionsApiV1,
   SidebarSection,
   SidebarSectionCreateInput,
@@ -344,7 +337,6 @@ export class HostSessionHttpClient implements
   HostLocalPluginSetupApiV1,
   HostPluginAppInstanceApiV1,
   HostPluginAppInvocationApiV1,
-  HostLocalWorkbenchApiV1,
   HostLocalSidebarSectionsApiV1,
   HostLocalUsageApiV1,
   HostLocalImportBatchApiV1,
@@ -1584,80 +1576,6 @@ export class HostSessionHttpClient implements
       `/v1/local/sidebar-sections/project/section?${query.toString()}`,
     );
     return result.sectionId;
-  }
-
-  async createDataSource(input: CreateDataSourceInput): Promise<DataSourceRow> {
-    const result = await this.request<{ source: DataSourceRow }>('POST', '/v1/local/workbench/sources', input);
-    return result.source;
-  }
-
-  async updateDataSource(id: string, patch: UpdateDataSourceInput): Promise<DataSourceRow | null> {
-    const query = new URLSearchParams({ id });
-    const result = await this.request<{ source: DataSourceRow | null }>(
-      'PATCH',
-      `/v1/local/workbench/source?${query.toString()}`,
-      patch,
-    );
-    return result.source;
-  }
-
-  async deleteDataSource(id: string): Promise<boolean> {
-    const query = new URLSearchParams({ id });
-    const result = await this.request<{ deleted: boolean }>(
-      'DELETE',
-      `/v1/local/workbench/source?${query.toString()}`,
-    );
-    return result.deleted;
-  }
-
-  async getDataSource(id: string): Promise<DataSourceRow | null> {
-    const query = new URLSearchParams({ id });
-    const result = await this.request<{ source: DataSourceRow | null }>(
-      'GET',
-      `/v1/local/workbench/source?${query.toString()}`,
-    );
-    return result.source;
-  }
-
-  async listDataSourcesByCanvas(canvasId: string): Promise<DataSourceRow[]> {
-    const query = new URLSearchParams({ canvasId });
-    const result = await this.request<{ sources: DataSourceRow[] }>(
-      'GET',
-      `/v1/local/workbench/sources?${query.toString()}`,
-    );
-    return result.sources;
-  }
-
-  async getCanvasProjectPath(canvasId: string): Promise<string | null> {
-    const query = new URLSearchParams({ canvasId });
-    const result = await this.request<{ projectPath: string | null }>(
-      'GET',
-      `/v1/local/workbench/canvas-project-path?${query.toString()}`,
-    );
-    return result.projectPath;
-  }
-
-  async elementBelongsToCanvas(elementId: string, canvasId: string): Promise<boolean> {
-    const query = new URLSearchParams({ elementId, canvasId });
-    const result = await this.request<{ belongs: boolean }>(
-      'GET',
-      `/v1/local/workbench/element-belongs?${query.toString()}`,
-    );
-    return result.belongs;
-  }
-
-  async listDueDataSources(now: number, minimumIntervalSec: number): Promise<DataSourceRow[]> {
-    const query = new URLSearchParams({ now: String(now), minimumIntervalSec: String(minimumIntervalSec) });
-    const result = await this.request<{ sources: DataSourceRow[] }>(
-      'GET',
-      `/v1/local/workbench/due?${query.toString()}`,
-    );
-    return result.sources;
-  }
-
-  async saveDataSourceRefresh(id: string, outcome: DataSourceRefreshOutcome): Promise<void> {
-    const query = new URLSearchParams({ id });
-    await this.request('POST', `/v1/local/workbench/source-refresh?${query.toString()}`, outcome);
   }
 
   async createBatch(input: CreateHostImportBatchInput): Promise<HostImportBatch> {

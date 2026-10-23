@@ -26,7 +26,6 @@ import { WorkflowEngine, type EngineOutcome, type EngineOptions } from './engine
 import { Journal, type JournalRecord, type JournalSink } from './journal.js';
 import { verifyResumeToken, createResumeToken } from './resume-token.js';
 import type { WorkflowHost } from './host.js';
-import type { GuiRunPorts } from './gui-runner.js';
 import { runVerifyStage, type VerifyVerdict } from './verify.js';
 import type { PlannerResult } from './planner.js';
 
@@ -108,7 +107,6 @@ export interface WorkflowManagerOptions {
   host: WorkflowHost;
   store: WorkflowRunStoreLike;
   decisionService?: EngineOptions['decisionService'];
-  gui?: GuiRunPorts;
   /** Resume-token HMAC secret (production: host-provided, persistent). */
   secret?: string;
   approvalMode?: 'await' | 'suspend';
@@ -363,7 +361,6 @@ export class WorkflowManager {
       host: this.options.host,
       decisionService: this.options.decisionService,
       secret: this.options.secret,
-      gui: this.options.gui,
       approvalMode: this.options.approvalMode ?? 'await',
       agentBudget: this.options.agentBudget,
       concurrency: this.options.concurrency,

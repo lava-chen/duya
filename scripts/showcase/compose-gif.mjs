@@ -29,7 +29,6 @@ export async function composeGif(opts = {}) {
     '01-launcher',
     '02-research-browser',
     '03-files-edit',
-    '04-canvas-conductor',
     '05-permission-prompt',
   ];
 

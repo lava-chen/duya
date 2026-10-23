@@ -50,7 +50,6 @@ vi.mock('@/components/icons', () => ({
   // useSlashCommands item icons referenced during render.
   EyeIcon: () => null,
   MousePointerClickIcon: () => null,
-  ChalkboardIcon: () => null,
   TargetArrowIcon: () => null,
   ChatCircleIcon: () => null,
   HandIcon: () => null,

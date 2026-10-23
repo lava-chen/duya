@@ -4,8 +4,7 @@
 // Every `ipcMain.handle` in this app used to accept a call from ANY renderer
 // frame. The main window's navigation is pinned to the app origin, but that
 // protects the top-level document only: the app also creates auxiliary windows
-// (overlay, recorder badge, computer-use overlay, the Conductor link-snapshot
-// capture window), and `webviewTag` is still enabled, so a guest frame is a
+// (overlay, recorder badge, computer-use overlay), and `webviewTag` is still enabled, so a guest frame is a
 // live question. A handler that takes a filesystem path is exactly the kind of
 // handler that must not be reachable from an untrusted frame.
 //

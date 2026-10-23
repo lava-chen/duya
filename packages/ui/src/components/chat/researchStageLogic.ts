@@ -1,7 +1,7 @@
 // Pure logic for grouping tool actions by research lifecycle stage (plan 423
 // UI). Kept dependency-free so it can be unit-tested in isolation without
 // pulling in the React render tree (which transitively imports window-dependent
-// modules like the conductor canvas).
+// modules like app plugins).
 
 import type { ActionItem } from './tools/types';
 

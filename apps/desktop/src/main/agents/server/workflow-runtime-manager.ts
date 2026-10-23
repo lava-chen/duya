@@ -132,11 +132,9 @@ export interface WorkflowRuntimeManagerDeps {
 /** RPC families the request-scoped routes forward to main (worker parity). */
 const FORWARDED_RPC_TYPES = new Set([
   'db:request',
-  'conductor:executor:rpc',
   'appConnection:invoke',
   'appConnection:listDescriptors',
   'appConnection:catalog',
-  'computer-use:execute',
   'memory-tier:rpc',
   'bot-identity:rpc',
 ]);

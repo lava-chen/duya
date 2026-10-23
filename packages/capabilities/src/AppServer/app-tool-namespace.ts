@@ -3,19 +3,17 @@
  *
  * ## Why a namespace
  *
- * The product capabilities that leave the base toolset (canvas, the bot
- * channels, the browser) are served by ONE host-owned in-process MCP
+ * The host product capabilities (bot channels and other app tools) are
+ * served by ONE host-owned in-process MCP
  * server. The model sees them under a single prefix, which is what keeps
- * the base toolset readable: `mcp_duya_app_canvas_manage` says "this is
- * a duya app capability", the same way Codex's `codex_apps__gmail.…`
+ * the base toolset readable: `mcp_duya_app_send_message` says "this is a duya app capability", the same way Codex's `codex_apps__gmail.…`
  * says "this is a connector tool".
  *
  * ## The naming is reversible — deliberately
  *
  * The model-visible name is a pure prefix concatenation:
  *
- *     canvas_manage  ->  mcp_duya_app_canvas_manage
- *     browser        ->  mcp_duya_app_browser
+ *     send_message   ->  mcp_duya_app_send_message
  *
  * No truncation, no hash suffix, no de-duplication suffix. That is
  * because `duya_app` carries no `plugin:` namespace segment, its tool
@@ -23,8 +21,8 @@
  * the 64-character provider limit.
  *
  * Reversibility is what makes the rest of the migration tractable: the
- * renderer, the profile rules, and the permission gate all need to
- * recognise "this is the canvas tool" from the model-visible name, and a
+ * renderer, the profile rules, and the permission gate need to resolve
+ * app tools from the model-visible name, and a
  * single pure function is a far smaller surface than three parallel
  * prefix checks. It is also why the name must stay in this exact shape:
  * if a tool name ever needed the `__2` de-duplication suffix or the
@@ -39,9 +37,8 @@
  * actually serves removes that ambiguity exactly — a name is an app
  * tool only if its base name is one of ours.
  *
- * The set is closed and reviewed on purpose: it is the list of
- * capabilities the app layer owns, and adding to it is a deliberate act
- * (a new app tool declares itself here).
+ * The set is closed and reviewed on purpose: it lists the app layer's
+ * capabilities, and adding a name is a deliberate act.
  */
 
 /** The app server's name — also the namespace segment of its tools. */
@@ -59,7 +56,7 @@ export const DUYA_APP_TOOL_PREFIX = `mcp_${DUYA_APP_SERVER_NAME}_`;
  * Every tool name `duya_app` serves.
  *
  * This is the authoritative list of the app layer's capabilities: the
- * canvas family, the bot channels, the browser, and the remaining
+ * bot channels and the remaining
  * product capabilities (plan 616 §3 and §3.1).
  *
  * Keep it in sync with what the app server actually registers — a name
@@ -68,23 +65,6 @@ export const DUYA_APP_TOOL_PREFIX = `mcp_${DUYA_APP_SERVER_NAME}_`;
  * one of our tools unrecognisable.
  */
 export const DUYA_APP_TOOL_NAMES: readonly string[] = [
-  // ── canvas (plan 616 §3) ──
-  'canvas_manage',
-  'canvas_create_element',
-  'canvas_delete_element',
-  'canvas_move_element',
-  'canvas_resize_element',
-  'canvas_style_element',
-  'canvas_fill_content',
-  'canvas_list_elements',
-  'canvas_get_context',
-  'canvas_find_empty_space',
-  'canvas_auto_layout',
-  'canvas_apply_layout',
-  'canvas_capture',
-  'canvas_get_knowledge',
-  'canvas_data_source',
-  'database_manage',
   // ── bot channels (plan 616 §3) ──
   'send_message',
   'send_to_agent',
@@ -95,10 +75,7 @@ export const DUYA_APP_TOOL_NAMES: readonly string[] = [
   'manage_routine',
   'list_app_connectors',
   'connect_app',
-  // ── browser + the remaining product capabilities (plan 616 §3.1) ──
-  'browser',
-  'computer_use',
-  'computer_cua',
+  // ── remaining host product capabilities (plan 616 §3.1) ──
   'vision_analyze',
   'image_generate',
   'show_widget',
@@ -125,7 +102,7 @@ const APP_TOOL_NAME_SET: ReadonlySet<string> = new Set(DUYA_APP_TOOL_NAMES);
  * one is it" — used by the desktop renderer (to route a tool to its
  * dedicated row), by the agent profiles (to match allow/deny patterns
  * against the ORIGINAL name), and by the permission gate (to keep the
- * canvas tools' unconditional allow).
+ * app-specific authorization decisions).
  */
 export function resolveAppToolBaseName(modelVisibleName: string): string | undefined {
   if (!modelVisibleName.startsWith(DUYA_APP_TOOL_PREFIX)) {
@@ -184,15 +161,11 @@ export function appToolVisibleName(originalName: string): string {
 /**
  * The name every product rule is written against.
  *
- * The `duya_app` server's tools reach the model under a namespaced name
- * (`mcp_duya_app_canvas_manage`), while the rules that refer to them — the
- * canvas permission short-circuit, the always-allowed set, the agent
- * profiles' `canvas:*` patterns — are written against the ORIGINAL name
- * (`canvas_manage`).
+ * The `duya_app` server's tools reach the model under a namespaced name,
+ * while rules and profiles may use their original tool names.
  *
  * Resolving once, here, is what stops the namespace from becoming a way
- * around those rules: a rule that says "deny the canvas tools" has to deny
- * them under whichever name they arrive. A tool that is not one of ours
+ * around those rules: rules must still match the original tool name. A tool that is not one of ours
  * resolves to itself, so every caller can use this unconditionally.
  *
  * ## It accepts EVERY spelling the tool arrives under
@@ -209,19 +182,18 @@ export function appToolVisibleName(originalName: string): string {
  * name spell?". It does NOT answer "is this tool ours?" — the closed set
  * cannot answer that, because the model-visible name is not a unique key:
  *
- *     server=duya_app, tool=canvas_manage   ->  mcp_duya_app_canvas_manage
- *     server=duya,      tool=app_canvas_manage ->  mcp_duya_app_canvas_manage
+ *     server=duya_app, tool=send_message -> mcp_duya_app_send_message
+ *     server=duya, tool=app_send_message -> mcp_duya_app_send_message
  *
  * Both spellings land on the same visible name (the allocator folds `__`
  * into `_`), so a THIRD-PARTY server that happens to be named `duya` and
- * exposes a tool called `app_canvas_manage` produces a byte-identical
+ * exposes a similarly prefixed tool can produce an identical
  * model-visible name. A name-derived answer would then hand a third
  * party's tool the app layer's trust.
  *
- * So the name resolution stays for RULE MATCHING (a user writes
- * `canvas_manage`; the rule must keep meaning the canvas tools), while
- * AUTHORIZATION decisions use `isTrustedAppToolRegistration`, which reads
- * the identity the HOST registered rather than the name the model sees.
+ * So name resolution supports rule matching, while authorization decisions
+ * use `isTrustedAppToolRegistration`, which reads the identity the HOST
+ * registered rather than the name the model sees.
  */
 export function appToolOriginalName(toolName: string): string {
   return (

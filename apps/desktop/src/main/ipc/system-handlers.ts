@@ -191,14 +191,6 @@ export function registerSystemHandlers(): void {
   // Public export for tests
   ;(registerSystemHandlers as unknown as { __isHttpUrl?: typeof isHttpUrl }).__isHttpUrl = isHttpUrl;
 
-  // Browser extension path
-  ipcMain.handle('browser-extension:get-path', () => {
-    if (isDev) {
-      return path.join(app.getAppPath(), 'extension');
-    }
-    return path.join(process.resourcesPath, 'extension');
-  });
-
   // Notification handler
   //
   // payload: { title, body, sessionId?, type?, actions?, replyPlaceholder?,
@@ -486,8 +478,8 @@ export function registerSystemHandlers(): void {
   // only resolve under Vite's dev server — packaged builds load
   // `file://.../app.asar/dist/index.html`, where `/icon.png` would point
   // at the disk root and 404 silently. The protocol handler in main.ts
-  // already serves these URLs (same scheme used by agent avatars and
-  // conductor-assets), so renderer + Electron round-trip stays in-band.
+  // already serves these URLs (same scheme used by agent avatars), so
+  // renderer + Electron round-trip stays in-band.
   //
   // Known asset names:
   //   - `appIcon`            — public/icon.png (splash, install dialog hero)

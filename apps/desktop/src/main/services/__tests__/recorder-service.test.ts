@@ -44,8 +44,8 @@ vi.mock('../recorder/focus-tracker.js', () => {
 });
 
 import { RecorderService, DEFAULT_MAX_DURATION_MS } from '../recorder/service';
-import { listSessions, loadSession } from '@duya/computer-use';
-import type { AppRef } from '@duya/computer-use';
+import { listSessions, loadSession } from '../recorder/domain/index.js';
+import type { AppRef } from '../recorder/domain/index.js';
 import type { UiaEnumerateResult } from '../recorder/uia-probe.js';
 
 const mockModule = (await import('../recorder/focus-tracker.js')) as unknown as {

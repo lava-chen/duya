@@ -9,15 +9,30 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "typeRoots": ["./src/main/types", "../../node_modules/@types"],
+    "typeRoots": [
+      "./src/main/types",
+      "../../node_modules/@types"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/main/*"],
-      "@duya/ui": ["../../packages/ui/src/index.ts"],
-      "@duya/ui/*": ["../../packages/ui/src/*"],
-      "@duya/data": ["../../packages/data/dist/index.d.ts"],
-      "@duya/data/*": ["../../packages/data/dist/*"],
-      "@duya/host": ["../../packages/host/dist/index.d.ts"],
+      "@/*": [
+        "./src/main/*"
+      ],
+      "@duya/ui": [
+        "../../packages/ui/src/index.ts"
+      ],
+      "@duya/ui/*": [
+        "../../packages/ui/src/*"
+      ],
+      "@duya/data": [
+        "../../packages/data/dist/index.d.ts"
+      ],
+      "@duya/data/*": [
+        "../../packages/data/dist/*"
+      ],
+      "@duya/host": [
+        "../../packages/host/dist/index.d.ts"
+      ],
       "@duya/host/control-plane-service": [
         "../../packages/host/dist/control-plane-service.d.ts"
       ],
@@ -42,8 +57,12 @@
       "@duya/host/local-sidebar-sections-api": [
         "../../packages/host/dist/local-sidebar-sections-api.d.ts"
       ],
-      "@duya/host/*": ["../../packages/host/dist/*"],
-      "@duya/sandbox": ["../../packages/sandbox/dist/index.d.ts"],
+      "@duya/host/*": [
+        "../../packages/host/dist/*"
+      ],
+      "@duya/sandbox": [
+        "../../packages/sandbox/dist/index.d.ts"
+      ],
       "@duya/agent-protocol/transcript": [
         "../../packages/agent-protocol/dist/transcript/index.d.ts"
       ],
@@ -77,22 +96,44 @@
       "@duya/agent-protocol/research-api": [
         "../../packages/agent-protocol/dist/research-api.d.ts"
       ],
-      "@duya/agent-protocol/workbench": [
-        "../../packages/agent-protocol/dist/workbench.d.ts"
-      ],
       "@duya/agent-protocol/worker-protocol": [
         "../../packages/agent-protocol/dist/worker-protocol.d.ts"
       ],
-      "@duya/agent-core/*": ["../../packages/agent-core/dist/*"],
-      "@duya/capabilities/*": ["../../packages/capabilities/dist/*"],
-      "@duya/plugin-core": ["../../packages/plugin-core/dist/index.d.ts"],
-      "@duya/plugin-core/*": ["../../packages/plugin-core/dist/*"],
-      "@duya/connectors": ["../../packages/connectors/dist/index.d.ts"],
-      "@duya/connectors/*": ["../../packages/connectors/dist/*"],
-      "@duya/memory": ["../../packages/memory/dist/index.d.ts"],
-      "@duya/memory/*": ["../../packages/memory/dist/*"]
+      "@duya/agent-core/*": [
+        "../../packages/agent-core/dist/*"
+      ],
+      "@duya/capabilities/*": [
+        "../../packages/capabilities/dist/*"
+      ],
+      "@duya/plugin-core": [
+        "../../packages/plugin-core/dist/index.d.ts"
+      ],
+      "@duya/plugin-core/*": [
+        "../../packages/plugin-core/dist/*"
+      ],
+      "@duya/connectors": [
+        "../../packages/connectors/dist/index.d.ts"
+      ],
+      "@duya/connectors/*": [
+        "../../packages/connectors/dist/*"
+      ],
+      "@duya/memory": [
+        "../../packages/memory/dist/index.d.ts"
+      ],
+      "@duya/memory/*": [
+        "../../packages/memory/dist/*"
+      ]
     }
   },
-  "include": ["src/contracts/**/*.ts", "src/main/**/*.ts"],
-  "exclude": ["node_modules", "**/*.test.ts", "**/*.spec.ts", "**/__tests__/**", "**/__mocks__/**"]
+  "include": [
+    "src/contracts/**/*.ts",
+    "src/main/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/__tests__/**",
+    "**/__mocks__/**"
+  ]
 }

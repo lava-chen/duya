@@ -1,7 +1,6 @@
 import type { AIClient, SSEEvent } from '@duya/ai';
 import type { Tool as RuntimeTool } from '../../worker-run-contracts.js';
 import type { ToolExecutor, ToolRegistry } from '../../worker-tool-registry.js';
-import type { ComputerUseRuntimePorts } from '@duya/capabilities/OSTool/ports';
 import type { ModeTracker } from '@duya/agent-core/modes/tracker';
 import type { GoalModeToolPorts, ResearchModeToolPorts } from '../tool-ports.js';
 
@@ -12,7 +11,7 @@ export type { SSEEvent };
 // ============================================================
 //
 // A ModeModifier is a declarative description of how a popover "mode"
-// (plan-task / research / conductor) adjusts three dimensions of the
+// (plan-task / research) adjusts three dimensions of the
 // agent run: the tool set, the system prompt, and stream-time behavior.
 //
 // Unlike the removed BaseMode takeover API, a ModeModifier composes with the
@@ -30,16 +29,14 @@ export interface ToolRegistration {
 }
 
 /**
- * Mode-private runtime state. Examples:
- *  - conductor: `{ conductorCanvasId, widgetStyleHistory }`
- *  - research:  `{ runId, currentStage }`
+ * Mode-private runtime state.
  */
 export type ModeModifierState = Record<string, unknown>;
 
 /**
  * Runtime context passed to every {@link ModeModifier} hook. Modes read
- * their private state from `state` and surface tool-injection fields
- * (e.g. `conductorCanvasId`) via {@link toolUseContextPatch}.
+ * their private state from `state` and surface tool-injection fields via
+ * {@link toolUseContextPatch}.
  */
 export interface ModeModifierContext {
   sessionId: string;
@@ -48,8 +45,6 @@ export interface ModeModifierContext {
   state: ModeModifierState;
   /**
    * Fields merged into the agent's ToolUseContext before the run starts.
-   * Conductor sets `conductorCanvasId` here so every canvas tool sees it
-   * without the LLM having to pass it.
    */
   toolUseContextPatch?: Record<string, unknown>;
   /** Compatibility input while the legacy Agent worker binds Host mode ports. */
@@ -59,8 +54,6 @@ export interface ModeModifierContext {
     goal?: GoalModeToolPorts;
     research?: ResearchModeToolPorts;
   };
-  /** Capability ports for the session's OS computer-use tools. */
-  computerUsePorts?: ComputerUseRuntimePorts;
 }
 
 /**
@@ -78,7 +71,7 @@ export interface StreamOptionsPatch {
 /**
  * Prompt builder — receives the current context and the base prompt,
  * returns the modified prompt. Used for prefix/suffix when a mode needs
- * dynamic prompt content (e.g. conductor pulls from widgetStyleHistory).
+ * dynamic prompt content (for example, from the session state).
  */
 export type PromptBuilder = (ctx: ModeModifierContext, basePrompt: string) => string;
 
@@ -86,12 +79,10 @@ export type PromptBuilder = (ctx: ModeModifierContext, basePrompt: string) => st
  * Tool-set adjustments a mode declares. All fields optional; modes only
  * declare what they change.
  *
- *  - `inject`        : add new tools (e.g. 11 canvas tools for conductor)
+ *  - `inject`        : add new tools
  *  - `block`         : remove tools by name (e.g. write tools in plan-task)
  *  - `allow`         : whitelist — if set, only listed tools remain
- *  - `overrideFilter`: when true, `inject`-ed tools bypass profile
- *                      filtering (conductor needs this so canvas tools
- *                      survive even under the `code` profile).
+ *  - `overrideFilter`: when true, injected tools bypass profile filtering.
  */
 export interface ModeModifierTools {
   inject?: ToolRegistration[] | ((ctx: ModeModifierContext) => ToolRegistration[]);
@@ -110,7 +101,7 @@ export interface ModeModifierPrompt {
 }
 
 export interface ModeModifierHooks {
-  /** Called when the mode becomes active (resolve canvasId, open sidebar, etc.). */
+  /** Called when the mode becomes active. */
   onEnter?: (ctx: ModeModifierContext) => Promise<void> | void;
   /** Called when the mode is deactivated. Only fires for `kind: 'message'` modes after the run. */
   onExit?: (ctx: ModeModifierContext) => Promise<void> | void;
@@ -151,11 +142,8 @@ export interface OrchestratorDeps {
    * this registry.
    */
   toolRegistry: ToolRegistry;
-  /** Original ChatOptions, for orchestrators that need to read
-   * `conductorMode`, etc. */
+  /** Original ChatOptions, for orchestrators that need to read mode options. */
   chatOptions?: Record<string, unknown>;
-  /** Blocked domains for web tools. */
-  blockedDomains?: string[];
 }
 
 /**
@@ -183,19 +171,19 @@ export interface ModeModifierOrchestrator {
 }
 
 /**
- * Declarative mode overlay. One object per popover mode (plan-task,
- * research, conductor). See plan 224 for the design rationale.
+ * Declarative mode overlay. One object per popover mode. See plan 224
+ * for the design rationale.
  *
  * Two paradigms are supported:
  *  - **Modifier mode**: declares `tools` / `prompt` / `hooks`. Applied
- *    on top of the agent tool loop via `applyModes`. Example: Conductor.
+ *    on top of the agent tool loop via `applyModes`.
  *  - **Orchestrator mode**: declares `orchestrator`. Takes over the
  *    entire stream with its own multi-stage logic. Example: Research.
  *
  * A mode picks one paradigm — declaring both is a mode bug.
  */
 export interface ModeModifier {
-  /** Unique id, e.g. `'plan-task'` | `'research'` | `'conductor'`. */
+  /** Unique mode id. */
   id: string;
   /** Lifecycle: `'message'` = per-message (cleared after send), `'session'` = persisted across messages. */
   kind: 'message' | 'session';

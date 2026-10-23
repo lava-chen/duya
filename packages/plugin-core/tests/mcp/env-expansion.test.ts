@@ -163,12 +163,12 @@ describe('substituteUserConfigVariables', () => {
     expect(missingKeys.sort()).toEqual(['X', 'Y']);
   });
 
-  it('leaves ${setup.X:-default} as a literal (setup has no default syntax)', () => {
+  it('applies the same fallback syntax to ${setup.KEY} as other config variables', () => {
     const { expanded, missingKeys } = substituteUserConfigVariables(
       '${setup.foo:-fallback}',
       {},
     );
-    expect(expanded).toBe('${setup.foo:-fallback}');
+    expect(expanded).toBe('fallback');
     expect(missingKeys).toEqual([]);
   });
 });

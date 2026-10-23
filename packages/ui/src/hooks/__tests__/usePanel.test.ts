@@ -18,7 +18,7 @@ describe("PanelProvider tab metadata", () => {
     window.localStorage.clear();
     useConversationStore.setState({ activeThreadId: null });
     window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify({
-      tabs: [{ id: "canvas-tab", pageId: "conductor", title: "Canvas" }],
+      tabs: [{ id: "canvas-tab", pageId: "preview", title: "Preview" }],
       activeTabId: "canvas-tab",
       panelOpen: true,
       panelView: "content",
@@ -32,11 +32,11 @@ describe("PanelProvider tab metadata", () => {
     const initialContext = result.current;
 
     act(() => {
-      result.current.updateTabTitle("canvas-tab", "Canvas");
+      result.current.updateTabTitle("canvas-tab", "Preview");
     });
 
     expect(result.current).toBe(initialContext);
-    expect(result.current.tabs[0]?.title).toBe("Canvas");
+    expect(result.current.tabs[0]?.title).toBe("Preview");
   });
 });
 

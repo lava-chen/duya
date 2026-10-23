@@ -213,7 +213,7 @@ interface RegisteredTool<
   /**
    * Ownership tag. Phase 2A Batch A: defaults to 'non-mcp' for the
    * existing `register(definition, executor)` path (which is used
-   * for builtin, mode-specific, agent, conductor, and any other
+   * for builtin, mode-specific, agent, and any other
    * non-MCP tools — the old path is intentionally NOT scoped to a
    * specific source). Explicitly set to 'mcp' by `registerWithKey`
    * and to `connector:${connectionId}` by the App-Connection bucket
@@ -307,7 +307,7 @@ export class ToolRegistry<
    * Use this for MCP tools whose `internalKey` (e.g.
    * `mcp__plugin:foo:server__tool`) is distinct from the
    * provider-visible `definition.name`. Builtin / mode-specific /
-   * agent / conductor / any non-MCP tool continues to use
+   * agent / any non-MCP tool continues to use
    * `register(definition, executor)`.
    *
    * Defaults `owner` to 'mcp' so `replaceByOwner('mcp', …)` can
@@ -379,7 +379,7 @@ export class ToolRegistry<
    * `ownerId`. Plan 580 Phase 2C: accepts `'mcp'` (chain A) and
    * `` `connector:${connectionId}` `` (chain B buckets); non-MCP
    * entries (owner === 'non-mcp', i.e. builtin / mode-specific /
-   * agent / conductor / etc.) are NEVER touched by this method.
+   * agent / etc.) are NEVER touched by this method.
    * This is the single commit point for an MCP apply (Batch C) and
    * for connector replace-sets; failure here means the registry is
    * unchanged.

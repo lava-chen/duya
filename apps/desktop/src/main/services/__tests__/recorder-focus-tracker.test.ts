@@ -1,7 +1,7 @@
 /**
  * recorder/focus-tracker.ts — unit tests.
  *
- * The PowerShell query is mocked (vi.mock of computer-use-backend keeps
+ * The platform query is mocked (vi.mock of foreground-window keeps
  * the electron import out of the test run); covers change detection,
  * failed-query resilience, and stop().
  */
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   queryCalls: { value: 0 },
 }));
 
-vi.mock('../computer-use-backend.js', () => ({
+vi.mock('../recorder/foreground-window.js', () => ({
   getForegroundWindowInfo: async () => {
     mocks.queryCalls.value += 1;
     return mocks.queryResult.value;
@@ -24,7 +24,7 @@ vi.mock('../../logging/logger', () => {
   const noop = () => undefined;
   return {
     getLogger: () => ({ debug: noop, info: noop, warn: noop, error: noop, fatal: noop }),
-    LogComponent: { ComputerUse: 'ComputerUse' },
+    LogComponent: { Recorder: 'Recorder' },
   };
 });
 

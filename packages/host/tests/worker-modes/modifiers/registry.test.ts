@@ -2,9 +2,9 @@
  * ModeModifierRegistry — declarative mode resolution tests (plan 224 Phase 1.4).
  *
  * Covers:
- *   - Single mode resolution (plan-task, research, conductor)
- *   - Composable modes (research + conductor can both be active)
- *   - Mutually exclusive modes (plan-task conflicts with research and conductor)
+ *   - Single mode resolution (plan-task, research)
+ *   - Composable modes can both be active
+ *   - Mutually exclusive modes
  *   - Tool merging: inject (array + function form), block, allow, overrideFilter
  *   - Prompt merging: prefixes and suffixes concatenate in registration order
  *   - Unknown ids are silently dropped
@@ -77,7 +77,7 @@ describe('ModeModifierRegistry.resolve', () => {
 
   it('resolves a single mode', () => {
     const planTask = makeMode('plan-task', {
-      exclusiveWith: ['research', 'conductor'],
+      exclusiveWith: ['research', 'review'],
       tools: { block: ['bash'] },
     });
     registry.register(planTask);
@@ -93,49 +93,32 @@ describe('ModeModifierRegistry.resolve', () => {
     expect(resolved.modes.map((m) => m.id)).toEqual(['plan-task']);
   });
 
-  it('composes research + conductor (no exclusiveWith declared between them)', () => {
+  it('composes compatible modes', () => {
     const research = makeMode('research', { tools: { block: ['bash'] } });
-    const conductor = makeMode('conductor', {
+    const review = makeMode('review', {
       kind: 'session',
-      tools: { inject: [makeTool('canvas_create')], overrideFilter: true },
+      tools: { inject: [makeTool('review_notes')], overrideFilter: true },
     });
     registry.register(research);
-    registry.register(conductor);
+    registry.register(review);
 
-    const resolved = registry.resolve(['research', 'conductor']);
-    expect(resolved.modes.map((m) => m.id)).toEqual(['research', 'conductor']);
+    const resolved = registry.resolve(['research', 'review']);
+    expect(resolved.modes.map((m) => m.id)).toEqual(['research', 'review']);
     expect(resolved.tools.blocked).toEqual(['bash']);
     expect(resolved.tools.overrideFilter).toBe(true);
     expect(resolved.tools.injects).toHaveLength(1);
   });
 
   it('drops later mode when earlier one declares exclusiveWith', () => {
-    // plan-task excludes both research and conductor
-    const planTask = makeMode('plan-task', {
-      exclusiveWith: ['research', 'conductor'],
-    });
-    const research = makeMode('research', {
-      exclusiveWith: ['plan-task'],
-    });
-    const conductor = makeMode('conductor', {
-      exclusiveWith: ['plan-task'],
-      kind: 'session',
-    });
+    const planTask = makeMode('plan-task', { exclusiveWith: ['research', 'review'] });
+    const research = makeMode('research', { exclusiveWith: ['plan-task'] });
+    const review = makeMode('review', { exclusiveWith: ['plan-task'] });
     registry.register(planTask);
     registry.register(research);
-    registry.register(conductor);
+    registry.register(review);
 
-    // plan-task wins, research and conductor dropped
-    const r1 = registry.resolve(['plan-task', 'research', 'conductor']);
-    expect(r1.modes.map((m) => m.id)).toEqual(['plan-task']);
-
-    // research first → research wins, plan-task dropped; conductor also dropped (excluded by research? no — research doesn't exclude conductor)
-    const r2 = registry.resolve(['research', 'plan-task']);
-    expect(r2.modes.map((m) => m.id)).toEqual(['research']);
-
-    // conductor + research: both compose (neither excludes the other)
-    const r3 = registry.resolve(['conductor', 'research']);
-    expect(r3.modes.map((m) => m.id)).toEqual(['conductor', 'research']);
+    const result = registry.resolve(['plan-task', 'research', 'review']);
+    expect(result.modes.map((m) => m.id)).toEqual(['plan-task']);
   });
 
   it('merges blocked tool lists across modes (union)', () => {
@@ -167,19 +150,19 @@ describe('ModeModifierRegistry.resolve', () => {
 
   it('preserves function-form inject without evaluating it', () => {
     let callCount = 0;
-    const conductor = makeMode('conductor', {
+    const sessionMode = makeMode('session-mode', {
       kind: 'session',
       tools: {
         inject: () => {
           callCount++;
-          return [makeTool('canvas_create')];
+          return [makeTool('session_extension')];
         },
         overrideFilter: true,
       },
     });
-    registry.register(conductor);
+    registry.register(sessionMode);
 
-    const resolved = registry.resolve(['conductor']);
+    const resolved = registry.resolve(['session-mode']);
     // Function not called during resolve — ctx not available yet
     expect(callCount).toBe(0);
     expect(resolved.tools.injects).toHaveLength(1);
@@ -203,25 +186,25 @@ describe('ModeModifierRegistry.resolve', () => {
 describe('applyModes', () => {
   it('runs onEnter hooks in order, applies prompt + tools + context patch', async () => {
     const entered: string[] = [];
-    const conductor = makeMode('conductor', {
+    const sessionMode = makeMode('session-mode', {
       kind: 'session',
       tools: {
-        inject: [makeTool('canvas_create')],
+        inject: [makeTool('session_extension')],
         overrideFilter: true,
       },
-      prompt: { prefix: '[CONDUCTOR]' },
+      prompt: { prefix: '[SESSION]' },
       hooks: {
         onEnter: (ctx) => {
-          entered.push('conductor');
-          ctx.state.conductorCanvasId = 'canvas-123';
-          ctx.toolUseContextPatch = { conductorCanvasId: 'canvas-123' };
+          entered.push('session-mode');
+          ctx.state.extensionValue = 'value-123';
+          ctx.toolUseContextPatch = { extensionValue: 'value-123' };
         },
       },
     });
     const registry = new ModeModifierRegistry();
-    registry.register(conductor);
+    registry.register(sessionMode);
 
-    const resolved = registry.resolve(['conductor']);
+    const resolved = registry.resolve(['session-mode']);
     const ctx = makeCtx();
     const result = await applyModes({
       basePrompt: 'BASE',
@@ -231,13 +214,11 @@ describe('applyModes', () => {
       resolved,
     });
 
-    expect(entered).toEqual(['conductor']);
-    // The prefix joins the base with a blank line — one rule, shared with
-    // the per-turn refresh path (plan 619 defect h).
-    expect(result.systemPrompt).toBe('[CONDUCTOR]\n\nBASE');
-    expect(result.tools.map((t) => t.definition.name).sort()).toEqual(['canvas_create', 'read']);
-    expect(result.toolUseContext.conductorCanvasId).toBe('canvas-123');
-    expect(ctx.state.conductorCanvasId).toBe('canvas-123');
+    expect(entered).toEqual(['session-mode']);
+    expect(result.systemPrompt).toBe('[SESSION]\n\nBASE');
+    expect(result.tools.map((t) => t.definition.name).sort()).toEqual(['read', 'session_extension']);
+    expect(result.toolUseContext.extensionValue).toBe('value-123');
+    expect(ctx.state.extensionValue).toBe('value-123');
   });
 
   it('blocks tools but keeps injected tools (no overrideFilter)', async () => {
@@ -264,17 +245,17 @@ describe('applyModes', () => {
   });
 
   it('overrideFilter bypasses block + allow on base tools', async () => {
-    const conductor = makeMode('conductor', {
+    const sessionMode = makeMode('session-mode', {
       kind: 'session',
       tools: {
-        inject: [makeTool('canvas_create')],
+        inject: [makeTool('session_extension')],
         overrideFilter: true,
       },
     });
     const registry = new ModeModifierRegistry();
-    registry.register(conductor);
+    registry.register(sessionMode);
 
-    const resolved = registry.resolve(['conductor']);
+    const resolved = registry.resolve(['session-mode']);
     const result = await applyModes({
       basePrompt: 'BASE',
       baseTools: [makeTool('read'), makeTool('bash')],
@@ -283,21 +264,21 @@ describe('applyModes', () => {
     });
 
     // overrideFilter=true: base tools kept as-is, injected tools appended
-    expect(result.tools.map((t) => t.definition.name).sort()).toEqual(['bash', 'canvas_create', 'read']);
+    expect(result.tools.map((t) => t.definition.name).sort()).toEqual(['bash', 'read', 'session_extension']);
   });
 
   it('evaluates function-form inject with ctx', async () => {
-    const conductor = makeMode('conductor', {
+    const sessionMode = makeMode('session-mode', {
       kind: 'session',
       tools: {
-        inject: (ctx) => [makeTool(`canvas_for_${ctx.sessionId}`)],
+        inject: (ctx) => [makeTool(`extension_for_${ctx.sessionId}`)],
         overrideFilter: true,
       },
     });
     const registry = new ModeModifierRegistry();
-    registry.register(conductor);
+    registry.register(sessionMode);
 
-    const resolved = registry.resolve(['conductor']);
+    const resolved = registry.resolve(['session-mode']);
     const result = await applyModes({
       basePrompt: 'BASE',
       baseTools: [],
@@ -305,7 +286,7 @@ describe('applyModes', () => {
       resolved,
     });
 
-    expect(result.tools.map((t) => t.definition.name)).toEqual(['canvas_for_test-session']);
+    expect(result.tools.map((t) => t.definition.name)).toEqual(['extension_for_test-session']);
   });
 
   it('merges beforeStream patches (later modes override earlier)', async () => {
@@ -384,14 +365,9 @@ describe('runExitHooks', () => {
 // ── collectActiveModes ──────────────────────────────────────────
 
 describe('collectActiveModes', () => {
-  it('translates mode + conductorMode into activeModes array', () => {
+  it('translates mode into activeModes array', () => {
     expect(collectActiveModes({})).toEqual([]);
     expect(collectActiveModes({ mode: 'research' })).toEqual(['research']);
-    expect(collectActiveModes({ conductorMode: true })).toEqual(['conductor']);
-    expect(collectActiveModes({ mode: 'research', conductorMode: true })).toEqual([
-      'research',
-      'conductor',
-    ]);
   });
 });
 
@@ -448,15 +424,15 @@ describe('ModeModifierRegistry.resolve — orchestrator paradigm', () => {
     const research = makeMode('research', {
       orchestrator: { execute: orchExecute },
     });
-    const conductor = makeMode('conductor', {
+    const sessionMode = makeMode('session-mode', {
       kind: 'session',
-      tools: { inject: [makeTool('canvas_create')], overrideFilter: true },
+      tools: { inject: [makeTool('session_extension')], overrideFilter: true },
     });
     registry.register(research);
-    registry.register(conductor);
+    registry.register(sessionMode);
 
-    const resolved = registry.resolve(['research', 'conductor']);
-    expect(resolved.modes.map((m) => m.id)).toEqual(['research', 'conductor']);
+    const resolved = registry.resolve(['research', 'session-mode']);
+    expect(resolved.modes.map((m) => m.id)).toEqual(['research', 'session-mode']);
     // Both modes present — streamChat is responsible for detecting the
     // orchestrator and taking over the stream.
     expect(resolved.modes[0].orchestrator).toBeDefined();

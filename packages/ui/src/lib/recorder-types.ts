@@ -3,7 +3,7 @@
  * (plan 556 Phase 5).
  *
  * Declared structurally on purpose: the renderer never imports
- * `@duya/computer-use` (main-process package, native deps), so the
+ * desktop recorder service (main-process code), so the
  * shapes here mirror `recorder/events.ts` and `session-store.ts` for
  * the fields the UI actually renders. Keep in sync with
  * `apps/desktop/src/main/ipc/recorder-handlers.ts`.
@@ -50,8 +50,6 @@ export interface RecorderElement {
   className?: string;
   rect?: RecorderBbox;
   isPassword?: boolean;
-  /** plan 572: AX snapshot handle (macOS helper-sourced elements). */
-  handle?: string;
   source: 'uia-probe' | 'ax-helper' | 'none';
 }
 
@@ -91,32 +89,4 @@ export interface LoadedRecorderSession {
   events: RecorderEventView[];
   /** Lines the reader discarded (crash-truncated / schema drift). */
   dropped: RecorderDroppedLine[];
-  /** Absolute paths (main-provided) for skill-driven agent conversion. */
-  eventsPath?: string;
-  sessionPath?: string;
 }
-
-export interface RecorderConvertError {
-  path: string;
-  message: string;
-}
-
-export interface RecorderConvertResult {
-  ok: boolean;
-  /** Present even when `ok` is false so the UI can preview/hand-edit. */
-  def?: unknown;
-  /** Frontmatter metadata — pass through to `workflow:dwf:save`. */
-  meta?: unknown;
-  /** Script body (after the terminator line) — pairs with `meta`. */
-  script?: string;
-  /** Full `.dwf.ts` source (frontmatter + script) — the reviewable artifact. */
-  source?: string;
-  errors?: RecorderConvertError[];
-  warnings?: string[];
-  eventCount?: number;
-  droppedLines?: number;
-  error?: string;
-}
-
-/** Event kinds that represent a user interaction (vs. context). */
-export const RECORDER_INTERACTION_TYPES = ['click', 'type', 'key', 'scroll'] as const;

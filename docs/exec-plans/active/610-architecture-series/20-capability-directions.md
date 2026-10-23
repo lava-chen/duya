@@ -25,7 +25,7 @@ Date: 2026-10-18. Parent: [610](README.md) · 执行队列 [19](./19-fast-track-
 运行的红因，而不是本文数出来的：当时红因打印了 31 个「exported by code but absent from the census table」。
 
 2026-10-22 追加 `agent_run_execution`（[单 Host 多客户端](../2026-10-22-single-host-multiclient.md)），
-提供侧 22 → 23，合计 31 → 32；其余计数与 2026-10-18 基线一致。
+提供侧 22 → 23，合计 31 → 32。随后 Canvas 能力从 Host 词汇移除；当前基数为提供侧 22、合计 31。
 
 **消费侧是推导的，不是第二份字面量。** `capability-negotiation.ts:35` 写的是
 `RequiredCapability = NonNullable<MessageGate['requiresCapability']>`，真正枚举它的是
@@ -86,9 +86,8 @@ Date: 2026-10-18. Parent: [610](README.md) · 执行队列 [19](./19-fast-track-
 | `hooks` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:100 | owner=host-local。hook 清单与配置 |
 | `inbox` | both | provide | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:102 | host-local 侧满足：已投递、排队等待一轮的消息。runtime 侧满足：消息真正进入运行的是控制平面那份。见 `packages/agent-protocol/src/host-capabilities.ts:139` |
 | `plugins` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:104 | owner=host-local。已装插件与其信任态 |
-| `canvas` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:106 | owner=host-local。画布表面 |
-| `orb` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:108 | owner=host-local。Orb 表面 |
-| `agent_run_execution` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:110 | owner=host-local。Host 能通过 HTTP 启动与取消 agent run；只有注册了执行 API 才广播，纯账本 Host 不广播 |
+| `orb` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:106 | owner=host-local。Orb 表面 |
+| `agent_run_execution` | provide | — | `packages/agent-protocol/src/host-capabilities.ts` | packages/agent-protocol/src/host-capabilities.ts:108 | owner=host-local。Host 能通过 HTTP 启动与取消 agent run；只有注册了执行 API 才广播，纯账本 Host 不广播 |
 <!-- census:end -->
 
 三个 `both` 行不是本文发明的：`CapabilityOwner` 的第三个取值就是 `both`

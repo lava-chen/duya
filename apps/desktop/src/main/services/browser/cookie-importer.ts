@@ -45,17 +45,6 @@ export interface ElectronCookie {
   sameSite?: 'no_restriction' | 'lax' | 'strict';
 }
 
-export interface LiveBrowserCookie {
-  name?: unknown;
-  value?: unknown;
-  domain?: unknown;
-  path?: unknown;
-  secure?: unknown;
-  httpOnly?: unknown;
-  expirationDate?: unknown;
-  sameSite?: unknown;
-}
-
 export interface BrowserCookieSource {
   browser: 'chrome' | 'edge';
   profile: string;
@@ -120,48 +109,6 @@ export function mapChromeCookieToElectron(row: ChromeCookieRow, decryptedValue: 
       : undefined,
     sameSite: SAME_SITE_MAP[row.samesite] ?? 'no_restriction',
   };
-}
-
-/**
- * Validate and map cookies returned by the verified browser extension. This
- * path is used only when Windows prevents a read-only SQLite snapshot of a
- * running Chromium profile; cookie values are never logged or written to disk.
- */
-export function mapLiveBrowserCookies(cookies: unknown[]): ElectronCookie[] {
-  const mapped: ElectronCookie[] = [];
-  for (const rawCookie of cookies) {
-    const cookie = rawCookie as LiveBrowserCookie;
-    if (
-      !cookie ||
-      typeof cookie.name !== 'string' ||
-      typeof cookie.value !== 'string' ||
-      typeof cookie.domain !== 'string' ||
-      !cookie.domain ||
-      typeof cookie.path !== 'string'
-    ) continue;
-
-    const secure = cookie.secure === true;
-    const sameSite = cookie.sameSite === 'lax' || cookie.sameSite === 'strict'
-      ? cookie.sameSite
-      : 'no_restriction';
-    const expirationDate = typeof cookie.expirationDate === 'number' && Number.isFinite(cookie.expirationDate)
-      ? cookie.expirationDate
-      : undefined;
-    if (expirationDate !== undefined && expirationDate < Date.now() / 1000) continue;
-
-    mapped.push({
-      url: `${secure ? 'https' : 'http'}://${cookie.domain.replace(/^\./, '')}`,
-      name: cookie.name,
-      value: cookie.value,
-      domain: cookie.domain,
-      path: cookie.path || '/',
-      secure,
-      httpOnly: cookie.httpOnly === true,
-      expirationDate,
-      sameSite,
-    });
-  }
-  return mapped;
 }
 
 export function isCookieExpired(expiresUtc: number): boolean {

@@ -4,7 +4,7 @@
  *
  * The core store (`duya-core.db` + rollout files) holds the six core
  * aggregates (messages, sessions, mailbox, tasks, permissions, locks).
- * The legacy `duya-main.db` stays for subsystem tables (conductor, research,
+ * The legacy `duya-main.db` stays for subsystem tables (research,
  * gateway, etc.) until those are migrated in follow-up plans.
  *
  * See `docs/design-docs/2026-08-06-core-database-architecture.md` and

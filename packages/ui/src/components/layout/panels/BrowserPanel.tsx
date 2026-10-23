@@ -19,7 +19,6 @@ import { usePanel } from "@/hooks/usePanel";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { PageTab } from "./page-tab";
-import { AgentBrowserTab } from "./AgentBrowserTab";
 import { IconButton } from "@/components/ui/IconButton";
 import { NewTabPage } from "@/components/browser/NewTabPage";
 import { BrowserMenu } from "@/components/browser/BrowserMenu";
@@ -319,23 +318,6 @@ function dispatchBrowserScreenshot(dataUrl: string, pageUrl: string, title: stri
 
 export function BrowserPanel({ tab }: { tab?: PageTab; embedded?: boolean }) {
   const { updateTabTitle, updateTabFavicon } = usePanel();
-
-  // Agent-driven browser tab: render the AgentBrowserTab component which
-  // auto-registers its webview with the daemon for CDP command execution.
-  const agentSessionId = tab?.params?.kind === "agent"
-    ? typeof tab.params.sessionId === "string" ? tab.params.sessionId : undefined
-    : undefined;
-
-  if (agentSessionId) {
-    return (
-      <AgentBrowserTab
-        sessionId={agentSessionId}
-        onTitleChange={(title) => {
-          if (tab?.id) updateTabTitle(tab.id, title);
-        }}
-      />
-    );
-  }
 
   const { settings } = useSettings();
   const { t } = useTranslation();

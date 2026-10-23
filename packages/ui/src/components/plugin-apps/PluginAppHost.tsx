@@ -4,46 +4,47 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PLUGIN_APP_CHANNEL,
   getPluginAppAPI,
+  getPluginAppDocumentToken,
+  isPluginAppEntryUrl,
+  parsePluginAppCallResult,
   parsePluginAppGuestRequest,
   toPluginAppHostMessage,
   type PluginAppLaunch,
 } from "@/lib/plugin-app-ipc";
 import "./plugin-app.css";
 
-type WebviewElement = HTMLElement & {
-  contentWindow: Window | null;
-  getWebContentsId(): number;
-};
-
 interface PluginAppHostProps {
   pluginId: string;
   appId: string;
   /** The chat session the App acts in. Chosen by trusted code, not the App. */
-  chatSessionId: string;
+  chatSessionId?: string;
   onError?: (message: string) => void;
 }
 
 /**
  * Host one externally hosted Plugin App.
  *
- * The App runs in a sandboxed webview: no preload, no `electronAPI`, no
- * direct channel to the Main process. It can only post a message to this
- * window, and a message is only accepted when it comes from this App's own
- * guest (`event.source` is that webview's `contentWindow`) — an object
- * identity check no other frame can forge.
+ * The App runs in an opaque-origin sandboxed iframe: no preload, no
+ * `electronAPI`, no direct channel to the Main process. The iframe keeps the
+ * normal parent/postMessage contract expected by Plugin Apps. A message is
+ * only accepted when it comes from this App's own frame
+ * (`event.source === iframe.contentWindow`), has the opaque sandbox origin,
+ * and carries the launch token from the served document URL. The token stops
+ * a later remote navigation from reusing the frame's stable WindowProxy.
  *
  * The host attaches the session handle and the freshness token itself, so
  * the App never learns the plugin, the App id, the instance or the chat
  * session it is acting for.
  */
 export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: PluginAppHostProps) {
-  const [webviewNode, setWebviewNode] = useState<WebviewElement | null>(null);
+  const [guestFrame, setGuestFrame] = useState<HTMLIFrameElement | null>(null);
   const [launch, setLaunch] = useState<PluginAppLaunch | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [generation, setGeneration] = useState(0);
   const launchRef = useRef<PluginAppLaunch | null>(null);
 
-  const setWebviewRef = useCallback((node: HTMLElement | null) => {
-    setWebviewNode(node as WebviewElement | null);
+  const setGuestFrameRef = useCallback((node: HTMLIFrameElement | null) => {
+    setGuestFrame(node);
   }, []);
 
   const reportError = useCallback(
@@ -59,19 +60,36 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
   // input beyond the ids the host UI already knows.
   useEffect(() => {
     const api = getPluginAppAPI();
+    setLaunch(null);
+    setError(null);
     if (!api) {
       reportError("Plugin Apps are not available in this client.");
       return;
     }
     let cancelled = false;
+    let opened: PluginAppLaunch | null = null;
     void api
       .open({ pluginId, appId, chatSessionId })
       .then((result) => {
         if (cancelled) {
-          if (result.sessionId) void api.close({ sessionId: result.sessionId });
+          if (result.sessionId) void api.close({ sessionId: result.sessionId }).catch(() => {});
           return;
         }
-        if (!result.ok || !result.sessionId || !result.launchNonce || !result.entryUrl) {
+        const documentToken = typeof result.entryUrl === "string"
+          ? getPluginAppDocumentToken(result.entryUrl)
+          : null;
+        if (
+          !result.ok
+          || typeof result.sessionId !== "string"
+          || result.sessionId.length === 0
+          || typeof result.launchNonce !== "string"
+          || result.launchNonce.length === 0
+          || !isPluginAppEntryUrl(result.entryUrl)
+          || !documentToken
+        ) {
+          if (typeof result.sessionId === "string" && result.sessionId.length > 0) {
+            void api.close({ sessionId: result.sessionId }).catch(() => {});
+          }
           reportError(result.error ?? "Failed to launch the App.");
           return;
         }
@@ -79,7 +97,9 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
           sessionId: result.sessionId,
           launchNonce: result.launchNonce,
           entryUrl: result.entryUrl,
+          documentToken,
         };
+        opened = next;
         launchRef.current = next;
         setLaunch(next);
       })
@@ -89,28 +109,37 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
       });
     return () => {
       cancelled = true;
+      if (opened && launchRef.current === opened) {
+        launchRef.current = null;
+        void api.close({ sessionId: opened.sessionId }).catch(() => {});
+      }
     };
-  }, [pluginId, appId, chatSessionId, reportError]);
+  }, [pluginId, appId, chatSessionId, reportError, generation]);
 
-  // Close the session when the host goes away, so the Host revokes the
-  // binding the App minted.
   useEffect(() => {
-    return () => {
+    const api = getPluginAppAPI();
+    return api?.onChanged(({ pluginId: changedId }) => {
+      if (changedId !== pluginId) return;
       const current = launchRef.current;
       launchRef.current = null;
-      if (!current) return;
-      void getPluginAppAPI()?.close({ sessionId: current.sessionId }).catch(() => {});
-    };
-  }, []);
+      if (current) void api.close({ sessionId: current.sessionId }).catch(() => {});
+      setLaunch(null);
+      setError(null);
+      setGeneration((value) => value + 1);
+    });
+  }, [pluginId]);
 
-  // Relay guest messages into the Main process.
+  // Relay guest messages into the Main process. A sandbox without
+  // `allow-same-origin` gives the App an opaque origin; that is why the host
+  // checks both frame identity and the browser's `null` origin.
   useEffect(() => {
-    if (!launch || !webviewNode) return;
+    if (!launch || !guestFrame) return;
 
     const handler = (event: MessageEvent) => {
-      const guest = webviewNode.contentWindow;
+      const guest = guestFrame.contentWindow;
       if (!guest || event.source !== guest) return;
-      const request = parsePluginAppGuestRequest(event.data);
+      if (event.origin !== 'null') return;
+      const request = parsePluginAppGuestRequest(event.data, launch.documentToken);
       if (!request) return;
 
       const api = getPluginAppAPI();
@@ -122,19 +151,19 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
           launchNonce: launch.launchNonce,
           message: toPluginAppHostMessage(request),
         })
-        .then((result) => {
-          guest.postMessage(
-            {
-              channel: PLUGIN_APP_CHANNEL,
-              id: request.id,
-              ok: result.ok,
-              result: result.result,
-              error: result.error,
-            },
-            "*",
-          );
+        .then((rawResult: unknown) => {
+          if (!guestFrame.isConnected || launchRef.current !== launch || guestFrame.contentWindow !== guest) return;
+          const result = parsePluginAppCallResult(rawResult);
+          guest.postMessage({
+            channel: PLUGIN_APP_CHANNEL,
+            id: request.id,
+            ok: result?.ok ?? false,
+            ...(result?.result !== undefined ? { result: result.result } : {}),
+            ...(!result ? { error: "host_unavailable" } : result.error ? { error: result.error } : {}),
+          }, "*");
         })
         .catch(() => {
+          if (!guestFrame.isConnected || launchRef.current !== launch || guestFrame.contentWindow !== guest) return;
           guest.postMessage(
             { channel: PLUGIN_APP_CHANNEL, id: request.id, ok: false, error: "host_unavailable" },
             "*",
@@ -143,8 +172,10 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
     };
 
     window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  }, [launch, webviewNode]);
+    return () => {
+      window.removeEventListener("message", handler);
+    };
+  }, [launch, guestFrame]);
 
   if (error) {
     return (
@@ -160,10 +191,12 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
 
   return (
     <div className="plugin-app-host">
-      <webview
-        ref={setWebviewRef}
+      <iframe
+        ref={setGuestFrameRef}
         src={launch.entryUrl}
-        partition={`persist:duya-plugin-app-${pluginId}`}
+        title={`${pluginId} app`}
+        referrerPolicy="no-referrer"
+        sandbox="allow-scripts allow-forms allow-downloads allow-popups"
       />
     </div>
   );

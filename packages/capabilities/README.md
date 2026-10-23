@@ -35,6 +35,6 @@ A7's retirement gates (G26–G29) flip consumers to import
 ## Still in the agent (later slices)
 
 The Bash/PowerShell command executor and background-task lifecycle (+ `BashWorker.ts` second bundle entry, gate G22),
-BrowserTool family, CanvasConductor, OSTool / ComputerCuaTool, skills, mcp,
+CanvasConductor, remaining OSTool context capabilities, skills, mcp,
 ModuleTool, ImageGenerateTool / VisionTool — see
 `docs/exec-plans/active/610-architecture-series/01-layered-architecture/06-six-new-packages.md`.

@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseWorkflowDef, validateWorkflow, GuiStepSchema } from '../../src/worker-workflows/index.js';
+import { parseWorkflowDef, validateWorkflow } from '../../src/worker-workflows/index.js';
 import type { WorkflowDef } from '../../src/worker-workflows/index.js';
 
 function baseDef(overrides?: Partial<WorkflowDef>): unknown {
@@ -104,11 +104,18 @@ describe('schema shape', () => {
     expect(validateWorkflow(good).ok).toBe(true);
   });
 
-  it('gui steps have no wait — determinism rule §6.5', () => {
-    expect(GuiStepSchema.safeParse({ do: 'wait', ms: 500 }).success).toBe(false);
-    expect(GuiStepSchema.safeParse({ do: 'capture' }).success).toBe(true);
-    expect(GuiStepSchema.safeParse({ do: 'click', element: 'som:3' }).success).toBe(true);
-    expect(GuiStepSchema.safeParse({ do: 'click', element: '#3' }).success).toBe(false);
+  it('tool nodes accept MCP tools with structured inputs', () => {
+    const mcpTool = baseDef({
+      params: [{ name: 'invoice_id', type: 'string', required: true }],
+      phases: [
+        {
+          phase: 'work',
+          title: 'Work',
+          nodes: [{ id: 'lookup', tool: 'mcp__erp__lookup_invoice', input: { id: '${params.invoice_id}' } }],
+        },
+      ],
+    });
+    expect(validateWorkflow(mcpTool).ok).toBe(true);
   });
 
   it('params carry types; triggers are a closed union', () => {
@@ -143,7 +150,7 @@ describe('reference legality', () => {
     expect(res.errors.some((e) => e.message.includes('"nowhere"'))).toBe(true);
   });
 
-  it('template holes in prompts / inputs / gui text are validated', () => {
+  it('template holes in prompts and MCP tool inputs are validated', () => {
     const bad = baseDef({
       phases: [
         {
@@ -151,13 +158,7 @@ describe('reference legality', () => {
           title: 'P',
           nodes: [
             { id: 'a', tool: 'x', input: { q: '${nope.ref}' } },
-            {
-              id: 'g',
-              gui: {
-                target_app: 'ERP*',
-                steps: [{ do: 'type_text', text: '${phantom.v}' }],
-              },
-            },
+            { id: 'g', tool: 'mcp__erp__create_invoice', input: { note: '${phantom.v}' } },
           ],
         },
       ],

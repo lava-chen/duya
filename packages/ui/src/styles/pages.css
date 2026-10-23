@@ -5,8 +5,7 @@
  */
 /* ============================================
    Unified Page Framework (page-* / modal-*)
-   Shared by all main-window views: canvas,
-   automation, gateway, extensions.
+   Shared by all main-window views: automation, gateway, extensions.
    ============================================ */
 
 /* Page frame owns vertical scrolling + the centered max-width column.

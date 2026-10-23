@@ -48,6 +48,8 @@ export const PluginAppDefinitionSchema = z
   .object({
     appId: z.string().min(1).max(64).regex(APP_ID_PATTERN),
     entry: z.string().min(1).refine(isPackageRelativePosixPath),
+    /** Standalone Apps keep their own MCP session when no agent run is active. */
+    runtime: z.enum(['agent-run', 'standalone']).optional(),
     requiredCapabilities: z
       .array(z.string().min(1).max(128).regex(CAPABILITY_ID_PATTERN))
       .max(64),

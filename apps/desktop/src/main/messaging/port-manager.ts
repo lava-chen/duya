@@ -380,7 +380,6 @@ export function getChannelManager(): ChannelManager {
       { name: 'config' },
       { name: 'toolExec' },
       { name: 'toolStream' },
-      { name: 'conductor' },
     ]);
   }
   return channelManager;

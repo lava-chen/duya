@@ -6,7 +6,7 @@
  *   - drops oldest images first when over the budget
  *   - replaces dropped images with a truncation notice
  *   - only touches tool_result blocks from image-emitting tools
- *   - respects DUYA_COMPUTER_USE_IMAGE_BUDGET env override
+ *   - respects DUYA_IMAGE_BUDGET env override
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Message, MessageContent, ToolResultContent } from '../../../src/context/compact/types.js';
 import { imageTruncationTransform, isImageTool } from '../../../src/context/compact/transforms/imageTruncationTransform.js';
 
-const ORIGINAL_BUDGET = process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+const ORIGINAL_BUDGET = process.env.DUYA_IMAGE_BUDGET;
 
 interface ToolUse { type: 'tool_use'; id: string; name: string; input: unknown }
 interface ToolResult { type: 'tool_result'; tool_use_id: string; content: unknown[] }
@@ -28,11 +28,11 @@ function makeImage(seed: string): ImageBlock {
   };
 }
 
-function makeComputerUseCall(id: string): ToolUse {
-  return { type: 'tool_use', id, name: 'computer_use', input: { action: 'capture' } };
+function makeReadCall(id: string): ToolUse {
+  return { type: 'tool_use', id, name: 'Read', input: { file_path: '/tmp/test.png' } };
 }
 
-function makeComputerUseResult(toolUseId: string, seed: string): ToolResult {
+function makeReadResult(toolUseId: string, seed: string): ToolResult {
   return {
     type: 'tool_result',
     tool_use_id: toolUseId,
@@ -63,19 +63,18 @@ describe('imageTruncationTransform', () => {
     // Force a known budget for tests; the module reads env at load time
     // so we need to reload via require-cache reset in a real test, but
     // for the default-budget test we just use the module's default (5).
-    delete process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+    delete process.env.DUYA_IMAGE_BUDGET;
   });
 
   afterEach(() => {
     if (ORIGINAL_BUDGET === undefined) {
-      delete process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET;
+      delete process.env.DUYA_IMAGE_BUDGET;
     } else {
-      process.env.DUYA_COMPUTER_USE_IMAGE_BUDGET = ORIGINAL_BUDGET;
+      process.env.DUYA_IMAGE_BUDGET = ORIGINAL_BUDGET;
     }
   });
 
   it('isImageTool recognizes the registered image tools', () => {
-    expect(isImageTool('computer_use')).toBe(true);
     expect(isImageTool('Read')).toBe(true);
     expect(isImageTool('VisionAnalyze')).toBe(true);
     expect(isImageTool('Bash')).toBe(false);
@@ -84,10 +83,10 @@ describe('imageTruncationTransform', () => {
 
   it('returns messages unchanged when under the budget', () => {
     const messages: Message[] = [
-      makeAssistantUse(makeComputerUseCall('call-1')),
-      makeUserMessage([makeComputerUseResult('call-1', 'img-1')]),
-      makeAssistantUse(makeComputerUseCall('call-2')),
-      makeUserMessage([makeComputerUseResult('call-2', 'img-2')]),
+      makeAssistantUse(makeReadCall('call-1')),
+      makeUserMessage([makeReadResult('call-1', 'img-1')]),
+      makeAssistantUse(makeReadCall('call-2')),
+      makeUserMessage([makeReadResult('call-2', 'img-2')]),
     ];
     const result = imageTruncationTransform.apply(messages);
     expect(result).toBe(messages); // same reference — no-op
@@ -98,8 +97,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [];
     for (let i = 0; i < 7; i++) {
       const callId = `call-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     expect(result).not.toBe(messages);
@@ -122,8 +121,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [];
     for (let i = 0; i < 7; i++) {
       const callId = `call-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     // Find a tool_result that was modified.
@@ -138,7 +137,7 @@ describe('imageTruncationTransform', () => {
           (cb) =>
             cb.type === 'text' &&
             typeof cb.text === 'string' &&
-            cb.text.includes('truncated by projection pipeline'),
+            cb.text.includes('image removed by projection size limit'),
         );
         if (hasNotice) {
           foundNotice = true;
@@ -162,8 +161,8 @@ describe('imageTruncationTransform', () => {
     const messages: Message[] = [makeAssistantUse(bashUse), makeUserMessage([bashResult])];
     for (let i = 0; i < 7; i++) {
       const callId = `cu-${i}`;
-      messages.push(makeAssistantUse(makeComputerUseCall(callId)));
-      messages.push(makeUserMessage([makeComputerUseResult(callId, `img-${i}`)]));
+      messages.push(makeAssistantUse(makeReadCall(callId)));
+      messages.push(makeUserMessage([makeReadResult(callId, `img-${i}`)]));
     }
     const result = imageTruncationTransform.apply(messages);
     // The bash tool_result is preserved verbatim.

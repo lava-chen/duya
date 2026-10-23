@@ -329,29 +329,6 @@ describe('ToolActionsGroup generic group', () => {
     expect(spinners.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders a browser-fallback banner only when the group contains a browser tool', () => {
-    const tools: ToolAction[] = [
-      {
-        id: 'bf1',
-        name: 'browser',
-        input: { operation: 'navigate' },
-        result: JSON.stringify({ mode: 'fallback', snapshot: 'no-op' }),
-      },
-      {
-        id: 'bf2',
-        name: 'browser',
-        input: { operation: 'click' },
-        result: JSON.stringify({ mode: 'fallback', snapshot: 'no-op' }),
-      },
-    ];
-
-    const { container } = render(<ToolActionsGroup tools={tools} flat={true} />);
-
-    // fallbackBanner is rendered when isBrowserFallbackMode returns true
-    // and the group contains a browser tool. Look for the fallback class.
-    expect(container.querySelector('.tool-group-fallback')).toBeTruthy();
-  });
-
   it('truncates the header summary to 3 parts + a "+N more" tail when categories exceed 3', () => {
     // bash + edit + read + grep + agent → 5 distinct category buckets.
     // The first three render inline, the rest get rolled into a

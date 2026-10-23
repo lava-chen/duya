@@ -8,7 +8,7 @@
  * session's rollout.
  *
  * Interactive tools stay suppressed for headless runs via the `cron` agent
- * profile deny list (AskUserQuestion / show_widget / Agent / canvas:* /
+ * profile deny list (AskUserQuestion / show_widget / Agent /
  * mode-switch) passed as `options.agentProfileId`. See Scheduler.ts history:
  * without a restrictive profile the agent falls back to the full toolset and
  * interactive tools hang forever.

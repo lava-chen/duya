@@ -17,7 +17,6 @@ import { toLLMProvider } from '../../config/provider-types.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { registerSpawnedWorker, unregisterSpawnedWorker } from '../../control-plane/spawned-workers.js';
-import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
 
 interface ElectronApp {
   getLocale(): string;
@@ -364,10 +363,6 @@ export class AgentProcessPool {
           this.busySessions.delete(sessionId);
           this.providerReinitLock.delete(sessionId);
 
-          // Agent is gone — drop the computer-use control indicator if
-          // it was showing for this session (user request 2026-08-29).
-          hideComputerUseOverlayForSession(sessionId);
-
           if (!isCrash) {
             this.pendingMessages.delete(sessionId);
           }
@@ -538,17 +533,6 @@ export class AgentProcessPool {
     this.router.remove(sessionId, handler);
   }
 
-  /**
-   * Broadcast a runtime config update to all running agent processes.
-   * Used when a setting (e.g. browserBackendMode) changes while agents
-   * are alive — they pick it up without a full re-init.
-   */
-  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like' }): void {
-    for (const [sessionId] of this.running) {
-      this.send(sessionId, { type: 'config:update', sessionId, ...payload });
-    }
-  }
-
   // ========================================================================
   // Health Monitoring
   // ========================================================================
@@ -665,7 +649,7 @@ export class AgentProcessPool {
 
       const readyHandler = (msg: ProcessMessage) => {
         const msgType = (msg as { type?: string }).type;
-        if (msgType === 'ready' || msgType === 'conductor:ready') {
+        if (msgType === 'ready') {
           clearTimeout(timeout);
           this.removeMessageHandler(sessionId, readyHandler);
           const status = (msg as { status?: string }).status;
@@ -732,44 +716,21 @@ export class AgentProcessPool {
     if (!proc || proc.child.exitCode !== null) return;
 
     this.pendingProviderInit.add(sessionId);
-    void this.readBrowserBackendMode().then((browserBackendMode) => {
-      if (this.running.get(sessionId) !== proc || proc.child.exitCode !== null) return;
-      this.sendProviderInitWithMode(sessionId, browserBackendMode);
-    }).catch((error: unknown) => {
+    try {
+      this.sendProviderInitWithMode(sessionId);
+    } catch (error) {
       this.logger.error(
         'Failed to send provider initialization to agent process',
         error instanceof Error ? error : new Error(String(error)),
         { sessionId },
         LogComponent.AgentProcessPool,
       );
-    }).finally(() => {
+    } finally {
       this.pendingProviderInit.delete(sessionId);
-    });
-  }
-
-  private async readBrowserBackendMode(): Promise<'auto' | 'extension' | 'built-in' | 'human-like'> {
-    // Keep the process-pool module usable in standalone/headless composition.
-    // Desktop's authenticated Host API is only available when Electron is the
-    // supervisor; headless composition falls back to the previous default.
-    if (!electronApp()) return 'auto';
-    try {
-      const { getDesktopHostLocalSettingsApi } = await import('../../cli/desktop-host-api.js');
-      const mode = await getDesktopHostLocalSettingsApi().getSetting('browserBackendMode');
-      if (mode === 'extension' || mode === 'built-in' || mode === 'human-like') return mode;
-    } catch (error) {
-      this.logger.debug(
-        'Could not read browser backend mode through Host; using default',
-        { error: String(error) },
-        LogComponent.AgentProcessPool,
-      );
     }
-    return 'auto';
   }
 
-  private sendProviderInitWithMode(
-    sessionId: string,
-    browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like',
-  ): void {
+  private sendProviderInitWithMode(sessionId: string): void {
 
     const proc = this.running.get(sessionId);
     if (!proc || proc.child.exitCode !== null) return;
@@ -804,7 +765,6 @@ export class AgentProcessPool {
         localeCountryCode: systemLocaleCountryCode(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      browserBackendMode,
     });
   }
 

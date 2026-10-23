@@ -127,7 +127,6 @@ export function createWorkerEnvironment(
     SESSION_ID: sessionId,
     DUYA_AGENT_MODE: 'true',
     DUYA_AGENT_SERVER: 'true',
-    DUYA_DAEMON_PORT: process.env.DUYA_DAEMON_PORT ?? '19825',
     DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || betterSqlite3Path,
     DUYA_WORKER_LOG_DIR: process.env.DUYA_WORKER_LOG_DIR ?? path.join(resolveDataRoot(), 'logs'),
     DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH,

@@ -13,9 +13,6 @@ import type { SubagentRunDeps } from '@duya/host/worker-subagents/run-agent';
 import { todoTool } from '@duya/host/worker-tool-bindings/todo';
 import { getTaskOutputTool } from '@duya/host/worker-tools/background-task';
 import { killTaskTool } from '@duya/host/worker-tools/background-task';
-import { browserTool } from '@duya/host/worker-tool-bindings/browser-tool';
-import type { DomainBlockerConfig } from '@duya/capabilities/BrowserTool/DomainBlocker';
-import type { BrowserBackendMode } from '@duya/capabilities/BrowserTool/backend-resolver';
 import { skillTool } from '@duya/host/worker-tool-bindings/skill';
 import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
 import { sessionSearchTool } from '@duya/host/worker-tool-bindings/session-search';
@@ -37,20 +34,10 @@ import { createAgentTool, updateAgentTool, } from '@duya/host/worker-tool-bindin
 import { manageRoutineTool } from '@duya/host/worker-tool-bindings/routine';
 import { listAppConnectorsTool, connectAppTool } from '@duya/host/worker-tool-bindings/app-connector-manage-tools';
 import { planTool } from '@duya/host/worker-tool-bindings/plan';
-export function createBotRegistry( services: BuiltinRegistryServices, deps: SubagentRunDeps, domainBlockerConfig?: DomainBlockerConfig, options?: {
+export function createBotRegistry( services: BuiltinRegistryServices, deps: SubagentRunDeps, options?: {
     enabledPluginIds?: Set<string>;
-    browserBackendMode?: BrowserBackendMode;
 }): ToolRegistry {
     const registry = new ToolRegistry();
-    if (domainBlockerConfig) {
-        browserTool.setDomainBlockerConfig(domainBlockerConfig);
-    }
-    if (options?.browserBackendMode) {
-        browserTool.setBrowserConfig({
-            mode: options.browserBackendMode,
-            extensionProbeTimeoutMs: 500,
-        });
-    }
     registerBotTools(registry, deps, services);
     return registry;
 }
@@ -79,10 +66,6 @@ export function registerBotTools(registry: ToolRegistry, deps: SubagentRunDeps, 
     registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposure: 'eager' });
     registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'eager' });
     registry.register(sessionTool.toTool(), sessionTool, { exposure: 'eager' });
-    registry.register(browserTool.toTool(), browserTool, {
-        exposure: 'deferred',
-        inputSchemaSummary: 'Search, open, inspect, and interact with webpages using a persistent browser session.',
-    });
     registry.register(skillTool, skillTool, { exposure: 'eager' });
     const visionTool = new VisionTool();
     registry.register(visionTool, visionTool, { exposure: 'eager' });

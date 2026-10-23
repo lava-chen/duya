@@ -4,9 +4,7 @@
     "apps/desktop/src/renderer/**/*.ts",
     "apps/desktop/src/renderer/**/*.tsx",
     "packages/ui/src/**/*.ts",
-    "packages/ui/src/**/*.tsx",
-    "packages/conductor/src/renderer/**/*.ts",
-    "packages/conductor/src/renderer/**/*.tsx"
+    "packages/ui/src/**/*.tsx"
   ],
   "exclude": [
     "node_modules",

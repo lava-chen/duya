@@ -5,7 +5,7 @@
 ## 负责 / 不负责
 
 - **负责**：整个渲染器（23 个组件目录、19 个 zustand store、44 个 hook）、主题与 i18n、工具卡片行、面板注册表、命令注册表；orb 是独立 React 应用（`packages/ui/src/orb/main.tsx:1`），不是组件。
-- **不负责**：Electron IPC 处理器与 preload 桥 → `@duya/desktop`（`apps/desktop/src/preload/index.ts`）；Host / worker → `@duya/host`；斜杠命令元数据 → `@duya/command-catalog`；补全规则 → `@duya/input-completion`；画布 → `@duya/conductor`。
+- **不负责**：Electron IPC 处理器与 preload 桥 → `@duya/desktop`（`apps/desktop/src/preload/index.ts`）；Host / worker → `@duya/host`；斜杠命令元数据 → `@duya/command-catalog`；补全规则 → `@duya/input-completion`；Marketplace Mini App content is owned by its plugin.
 
 ## 关键文件
 

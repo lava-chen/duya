@@ -27,7 +27,7 @@
 | `packages/agent-runtime/src/events/event-emitter.ts:37` | **seq 是重铸不是采纳**：外来信封的 seq 被自己的 ledger 重新铸造，分歧记在 `producerSeqDisagreed`（`:502`） |
 | `packages/agent-runtime/src/events/event-emitter.ts:563` | 终止事件被"扣住"，直到 durable `run:complete` 落库才放行（`:557`） |
 | `packages/agent-runtime/src/run-session.ts:451` | `observe`：唯一把事件交给 ledger 的口；违规抛 `LifecycleViolation`，调用方转成 `run.failed` |
-| `packages/agent-runtime/src/authorization/permissions/permissions.ts:283` | 权限判定顺序：MCP 来源闸（`:306`→`decideMcpSource` `:238`）→ canvas 恒放行（`:313`）→ 内部白名单（`:326`）→ deny（`:338`）→ ask（`:351`）→ 风险档（`:370`）→ 灾难性操作（`:436`，任何模式都不可绕过，实现在 `packages/capabilities/src/permissions/policy.ts:1032`） |
+| `packages/agent-runtime/src/authorization/permissions/permissions.ts:283` | 权限判定顺序：MCP 来源闸（`:306`→`decideMcpSource` `:238`）→ 内部白名单（`:326`）→ deny（`:338`）→ ask（`:351`）→ 风险档（`:370`）→ 灾难性操作（`:436`，任何模式都不可绕过，实现在 `packages/capabilities/src/permissions/policy.ts:1032`） |
 | `packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts:519` | 工具执行超时默认 300000 ms；慢阶段告警 15 s（`:40`） |
 
 ## 3. 排障入口

@@ -184,7 +184,7 @@ export type MessageContentType = (typeof MESSAGE_CONTENT_TYPES)[number];
  * ## Why this lives in `src/` and not in `test/`
  *
  * `packages/agent-protocol/tsconfig.json` excludes `test`, and the root
- * tsconfig covers only the desktop renderer and conductor. So NOTHING in CI
+ * tsconfig covers only the desktop renderer. So NOTHING in CI
  * ever typechecks a protocol test file — vitest runs them through esbuild,
  * which strips types without checking them. A union-completeness assertion
  * written in a test is therefore decorative: it passes whether or not the

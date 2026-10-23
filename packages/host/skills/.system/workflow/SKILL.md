@@ -236,7 +236,7 @@ browser 节点不豁免。`start_url` 是重跑第一死因防线——永远从
    「导航」= 转换事故。
 3. **app 分段 → wf.gui 调用**：一个连续的同 app 段 = 一次
    `wf.gui({ target_app, steps })`。`target_app` 写 processName(如 `"chrome"`)，与
-   computer-use 匹配器的应用匹配约定一致。语义阶段边界（进入编辑器/开始录入/保存提交）
+   GUI 工具的应用匹配约定一致。语义阶段边界（进入编辑器/开始录入/保存提交）
    加 `await wf.phase("阶段名")`。
 4. **事件 → step 映射**：`click` → `{ do: "click", element: "som:<n>" }`；
    `type` → `{ do: "type_text", text: "...", element: "som:<n>" }`(字段类操作加

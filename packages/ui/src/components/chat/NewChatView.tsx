@@ -39,7 +39,6 @@ interface NewChatViewProps {
     mode?: string,
     effort?: string,
     displayContent?: string,
-    conductorMode?: boolean,
     queuedMailboxId?: string,
     permissionMode?: 'ask' | 'auto' | 'bypass',
   ) => void;
@@ -339,8 +338,7 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
       mode?: string,
       displayContent?: string,
-      conductorMode?: boolean,
-    ) => {
+      ) => {
       if (!content.trim() && (files?.length ?? 0) === 0) return;
       if (isSending) return;
       setIsSending(true);
@@ -441,7 +439,7 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, getProfileIdForMode('main'), outputStyleConfig, mode, effort, displayContent, conductorMode, undefined, permissionMode);
+            send?.(content, actualModel, files, getProfileIdForMode('main'), outputStyleConfig, mode, effort, displayContent, undefined, permissionMode);
           });
         });
       } catch (error) {

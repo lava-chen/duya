@@ -86,8 +86,6 @@ function renderActionItem(
         <WidgetActionItem
           key={key}
           content={action.content}
-          sourceMessageId={action.sourceMessageId}
-          sourceLabel={action.sourceLabel}
         />
       );
     case 'compact': {
@@ -143,12 +141,8 @@ const WidgetErrorBoundary = React.lazy(() => import('../WidgetErrorBoundary').th
 
 function WidgetActionItem({
   content,
-  sourceMessageId,
-  sourceLabel,
 }: {
   content: string;
-  sourceMessageId?: string;
-  sourceLabel?: string;
 }) {
   return (
     <React.Suspense fallback={null}>
@@ -156,8 +150,6 @@ function WidgetActionItem({
         <WidgetRenderer
           widgetCode={content}
           isStreaming={false}
-          sourceMessageId={sourceMessageId}
-          sourceLabel={sourceLabel}
         />
       </WidgetErrorBoundary>
     </React.Suspense>

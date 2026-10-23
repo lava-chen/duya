@@ -110,10 +110,10 @@ describe('deriveBotActivity', () => {
 });
 
 describe('toolLabel', () => {
-  it('maps known tools to semantic verbs regardless of case', () => {
+  it('maps known tools to semantic verbs and formats unknown tool names', () => {
     expect(toolLabel('Bash')).toBe('运行命令');
     expect(toolLabel('WebSearch')).toBe('搜索网页');
-    expect(toolLabel('computer_use')).toBe('操作电脑');
+    expect(toolLabel('some_unknown_tool')).toBe('Some Unknown Tool');
     expect(toolLabel('SendMessage')).toBe('发送消息');
     expect(toolLabel('Task')).toBe('派出子代理');
   });

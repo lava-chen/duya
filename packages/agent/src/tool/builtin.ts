@@ -17,7 +17,6 @@ export { killTaskTool, KILL_TASK_TOOL_NAME } from './BackgroundTaskTool/KillTask
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
-export { browserTool } from './BrowserTool/BrowserTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';

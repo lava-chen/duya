@@ -15,7 +15,7 @@
  * Context injection: when the OSContextBridge is enabled (the bridge
  * arms when the orb wakes), the focused window's title/selection/text
  * is prepended to the prompt and a screen thumbnail is attached as an
- * image file — the same `files` channel the conductor uses. Both are
+ * image file — the same `files` channel the capture worker uses. Both are
  * best-effort: no bridge snapshot or capture failure just means a
  * plain-prompt turn.
  *

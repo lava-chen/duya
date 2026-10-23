@@ -79,12 +79,6 @@ async function buildElectron() {
     outfile: 'dist-electron/agent-server.js',
   });
 
-  await build({
-    ...shared,
-    entryPoints: ['apps/desktop/src/main/project-database/worker.ts'],
-    outfile: 'dist-electron/project-database-worker.js',
-  });
-
   // Host worker and shell-child executables are emitted by build-host-worker-bundle.mjs.
 
   console.log('Electron build complete');

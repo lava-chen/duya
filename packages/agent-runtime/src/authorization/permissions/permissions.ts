@@ -90,10 +90,10 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
  * A rule names a tool by ONE of its spellings, and which one it uses
  * is not something the rule can know:
  *
- *   - the ORIGINAL name (`canvas_manage`) — how the rule was written
+ *   - the ORIGINAL tool name — how the rule was written
  *     before the tool moved behind the `duya_app` namespace, and how the
  *     agent profiles write it;
- *   - the FULL VISIBLE name (`mcp_duya_app_canvas_manage`) — what the
+ *   - the FULL VISIBLE name — what the
  *     model calls the tool today, and therefore what a user reading the
  *     transcript sees and copies into a rule.
  *
@@ -110,7 +110,7 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
  * The caller names the tool by the spelling IT holds: the streaming
  * executor holds the model-visible name, the deferred `tool_invoke`
  * dispatcher holds the registry's internal key
- * (`mcp__duya_app__canvas_manage`). The rule knows neither — it was
+ * (an internal MCP registry key). The rule knows neither — it was
  * written by a human. So the rule is matched against the visible
  * spelling too, which is what keeps a rule written as
  * `mcp_duya_app_update_state` firing on the deferred path as well.
@@ -239,18 +239,15 @@ const LOW_RISK_BROWSER_OPERATIONS = new Set([
   'close_window',
 ]);
 
-const CANVAS_TOOL_PREFIX = 'canvas_';
-
 /**
  * May this tool use the app layer's NAME-BASED shortcuts?
  *
- * Two shortcuts in this file are keyed by tool name: the canvas
- * short-circuit (an unconditional allow) and the always-allowed set. Both
+ * Shortcuts in this file are keyed by tool name. Both
  * existed before the `duya_app` namespace, when a tool's name WAS its
  * identity. After the namespace they are keyed by a MODEL-VISIBLE name,
  * and that name is not a unique key: a third-party server named `duya`
- * that exposes a tool called `app_canvas_manage` is allocated the very
- * same `mcp_duya_app_canvas_manage` (plan 616 §C16). Handing an
+ * with a matching name may be allocated an identical model-visible name.
+ * Handing an
  * unconditional allow to a name is therefore handing it to whoever spells
  * like us.
  *
@@ -279,18 +276,6 @@ function canUseAppNameShortcut(
   return appToolOriginalName(toolName) === toolName;
 }
 
-/**
- * Is this the app layer's own canvas tool?
- *
- * The canvas short-circuit is an UNCONDITIONAL allow — it sits above the
- * user rules, the risk tiers, the catastrophic check and the host switch.
- * See `canUseAppNameShortcut` for why the name alone is not enough.
- */
-function isCanvasTool(toolName: string, registration: AppToolRegistration | undefined): boolean {
-  if (!canUseAppNameShortcut(toolName, registration)) return false;
-  const original = appToolOriginalName(toolName);
-  return original.startsWith(CANVAS_TOOL_PREFIX) || original === 'database_manage';
-}
 
 export interface ToolPermissionCheckContext {
   getAppState: () => {
@@ -314,9 +299,8 @@ export interface ToolPermissionCheckContext {
   /**
    * The host-registered identity of a tool, when the caller can supply it.
    *
-   * The app layer's unconditional allows (the canvas short-circuit, the
-   * always-allowed set) need PROOF of ownership, not a name that merely
-   * looks right: the model-visible name is not a unique key, so a
+   * The app layer's name-based shortcuts need PROOF of ownership, not a name
+   * that merely looks right: the model-visible name is not a unique key, so a
    * third-party server can be allocated the same name our own tool gets
    * (plan 616 §C16). The host owns the registry, so it is the host that
    * answers "is this ours".
@@ -456,35 +440,14 @@ export function createHasPermissionsToUseTool(ports: PermissionEvaluationPorts):
       }
     }
 
-    // 1. Canvas and project-database tools operate entirely within the
-    // application's own project workspace. They do not touch external systems, so they
-    // must be unconditionally allowed regardless of permission mode or user
-    // rules.
-    //
-    // The short-circuit is earned by IDENTITY, not by spelling: a tool whose
-    // visible name claims the `duya_app` namespace only gets it when the host
-    // registered it under the app server with the `app` provenance
-    // (`resolveAppToolRegistration`). See `isCanvasTool`.
-    const appToolRegistration = context.resolveAppToolRegistration?.(toolName)
-    if (isCanvasTool(toolName, appToolRegistration)) {
-      return {
-        behavior: 'allow',
-        decisionReason: {
-          type: 'safetyCheck',
-          reason: `${toolName} is an internal canvas operation.`,
-          classifierApprovable: false,
-        },
-      }
-    }
-
-    // 2. Internal-only tools that only read or mutate the application's own
+    // 1. Internal-only tools that only read or mutate the application's own
     // state should not be gated by permission modes or user rules.
     //
-    // Same identity rule as the canvas short-circuit above: the set is
+    // The set is
     // written against the ORIGINAL name, so a tool that merely spells like
     // an app tool must not inherit the unconditional allow.
     if (
-      canUseAppNameShortcut(toolName, appToolRegistration) &&
+      canUseAppNameShortcut(toolName, context.resolveAppToolRegistration?.(toolName)) &&
       GLOBAL_ALWAYS_ALLOWED_TOOLS.has(appToolOriginalName(toolName))
     ) {
       return {
