@@ -51,7 +51,7 @@ import {
   releaseInternalLock,
   resolveLockDir,
 } from '../../e2e/perf/lib/lock.mjs';
-import { closePerfElectron } from '../../e2e/perf/lib/launch.mjs';
+import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -317,7 +317,7 @@ describe('the app shutdown', () => {
           throw new Error('close timeout');
         },
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ killed: [] });
   });
 
   // The leak this guards: `app.close()` resolves when Playwright is done
@@ -349,4 +349,39 @@ describe('the app shutdown', () => {
       }
     },
   );
+
+  // The pid Playwright hands out belongs to its own launcher (`cmd.exe` on
+  // Windows), not to the app, so the close finds the app by the namespace
+  // that is in the app's own command line.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the processes of one launch by its namespace',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const namespace = `perf-test-${Date.now()}`;
+      // `--` ends the option list, so the namespace reaches the command line
+      // instead of being read as an option the runtime does not know.
+      const child = spawn(
+        binary,
+        ['-e', 'setTimeout(() => {}, 30000)', '--', `--duya-namespace=${namespace}`],
+        { stdio: 'ignore' },
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const killed = killLaunchProcesses(namespace);
+        expect(killed.length).toBeGreaterThan(0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('leaves the processes of another launch alone', () => {
+    const killed = killLaunchProcesses('perf-test-namespace-that-does-not-exist');
+    expect(killed).toEqual([]);
+  });
 });
