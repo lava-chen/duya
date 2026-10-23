@@ -684,8 +684,15 @@ export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
 
   for (const file of files) {
     if (!file.content) continue
+    // The glob scope belongs to the file heading: the index that used to
+    // carry it is no longer rendered into the system prompt (plan 619
+    // defect e), so this is the only place the model can learn which
+    // paths a conditional instruction file applies to.
+    const scope = file.globs?.length
+      ? `; applies to ${file.globs.join(', ')}`
+      : ''
     memories.push(
-      `# AGENTS.md instructions for ${file.path}\n\n` +
+      `# AGENTS.md instructions for ${file.path}${scope}\n\n` +
         `<INSTRUCTIONS>\n${sanitizeSystemReminderBody(file.content)}\n</INSTRUCTIONS>`,
     )
   }

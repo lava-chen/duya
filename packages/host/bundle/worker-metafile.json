@@ -92,7 +92,7 @@
       "format": "esm"
     },
     "packages/data/src/integration-store.ts": {
-      "bytes": 10401,
+      "bytes": 10672,
       "imports": [],
       "format": "esm"
     },
@@ -208,7 +208,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/rollout-events.ts": {
-      "bytes": 10004,
+      "bytes": 14044,
       "imports": [],
       "format": "esm"
     },
@@ -554,12 +554,12 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/checkout-api.ts": {
-      "bytes": 8049,
+      "bytes": 8225,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-protocol/src/integration-api.ts": {
-      "bytes": 3812,
+      "bytes": 3908,
       "imports": [],
       "format": "esm"
     },
@@ -1099,7 +1099,7 @@
       "format": "esm"
     },
     "packages/data/src/message-log.ts": {
-      "bytes": 126718,
+      "bytes": 127086,
       "imports": [
         {
           "path": "node:fs",
@@ -10247,13 +10247,24 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/types.ts": {
-      "bytes": 27707,
+      "bytes": 28903,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-prompts/cache.ts": {
       "bytes": 3923,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/worker-prompts/contextFingerprint.ts": {
+      "bytes": 3157,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/worker-prompts/constants/promptSections.ts": {
@@ -10273,12 +10284,12 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/modes/types.ts": {
-      "bytes": 2853,
+      "bytes": 3000,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-prompts/modes/index.ts": {
-      "bytes": 3847,
+      "bytes": 4794,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/modes/types.ts",
@@ -10421,7 +10432,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-agents-md/loader.ts": {
-      "bytes": 22003,
+      "bytes": 22385,
       "imports": [
         {
           "path": "fs",
@@ -10655,7 +10666,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/modules/mappers/project.ts": {
-      "bytes": 1819,
+      "bytes": 1957,
       "imports": [
         {
           "path": "packages/host/src/worker-agents-md/index.ts",
@@ -13070,12 +13081,17 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/PromptSystem.ts": {
-      "bytes": 27675,
+      "bytes": 31285,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/types.ts",
           "kind": "import-statement",
           "original": "./types.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/contextFingerprint.ts",
+          "kind": "import-statement",
+          "original": "./contextFingerprint.js"
         },
         {
           "path": "packages/host/src/worker-prompts/cache.ts",
@@ -13131,12 +13147,17 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/PromptsRegistry.ts": {
-      "bytes": 3941,
+      "bytes": 5171,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/PromptSystem.ts",
           "kind": "import-statement",
           "original": "./PromptSystem.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/modes/index.ts",
+          "kind": "import-statement",
+          "original": "./modes/index.js"
         },
         {
           "path": "packages/host/src/worker-prompts/modes/index.ts",
@@ -13226,7 +13247,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/configs/general.ts": {
-      "bytes": 5164,
+      "bytes": 5646,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/dynamic/agentsMdSection.ts",
@@ -13252,7 +13273,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/configs/code.ts": {
-      "bytes": 4489,
+      "bytes": 4867,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/dynamic/agentsMdSection.ts",
@@ -13288,7 +13309,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/configs/research.ts": {
-      "bytes": 3084,
+      "bytes": 3519,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/dynamic/agentsMdSection.ts",
@@ -13309,7 +13330,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/configs/bot.ts": {
-      "bytes": 3806,
+      "bytes": 3987,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/dynamic/agentsMdSection.ts",
@@ -13893,7 +13914,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/index.ts": {
-      "bytes": 3436,
+      "bytes": 3548,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/types.ts",
@@ -13904,6 +13925,11 @@
           "path": "packages/host/src/worker-prompts/cache.ts",
           "kind": "import-statement",
           "original": "./cache.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/contextFingerprint.ts",
+          "kind": "import-statement",
+          "original": "./contextFingerprint.js"
         },
         {
           "path": "packages/host/src/worker-prompts/constants/promptSections.ts",
@@ -13989,7 +14015,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-journal/Journal.ts": {
-      "bytes": 13190,
+      "bytes": 13778,
       "imports": [
         {
           "path": "packages/host/src/worker-db-client.ts",
@@ -25032,7 +25058,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/context/reminder-sources.ts": {
-      "bytes": 7434,
+      "bytes": 7944,
       "imports": [
         {
           "path": "packages/agent-core/src/context/reminder-sanitizer.ts",
@@ -25043,7 +25069,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/context/reminders.ts": {
-      "bytes": 1922,
+      "bytes": 2946,
       "imports": [
         {
           "path": "packages/agent-core/src/context/reminder-sources.ts",
@@ -27677,7 +27703,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 30763,
       "imports": [],
       "format": "esm"
     },
@@ -28254,7 +28280,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-config/tool-exposure.ts": {
-      "bytes": 4378,
+      "bytes": 5124,
       "imports": [
         {
           "path": "fs",
@@ -35188,7 +35214,7 @@
       "format": "esm"
     },
     "packages/host/src/checkout-api.ts": {
-      "bytes": 6533,
+      "bytes": 6704,
       "imports": [],
       "format": "esm"
     },
@@ -35359,12 +35385,17 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 238735,
+      "bytes": 241011,
       "imports": [
         {
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/host/src/worker-logger.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-logger"
         },
         {
           "path": "node:http",
@@ -35664,7 +35695,7 @@
       "format": "esm"
     },
     "packages/host/src/integration-api.ts": {
-      "bytes": 4832,
+      "bytes": 4964,
       "imports": [],
       "format": "esm"
     },
@@ -38259,6 +38290,33 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-context/context-rail.ts": {
+      "bytes": 3928,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/agent-core/src/context/reminders.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core/context/reminders"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/worker-context/prompt-ledger.ts": {
+      "bytes": 5423,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/agent-core/src/message/agent-helpers.ts": {
       "bytes": 5601,
       "imports": [],
@@ -38633,7 +38691,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-modes/modifiers/apply-modes.ts": {
-      "bytes": 6095,
+      "bytes": 7073,
       "imports": [],
       "format": "esm"
     },
@@ -39131,7 +39189,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 125772,
+      "bytes": 129967,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -39397,6 +39455,16 @@
           "path": "packages/host/src/worker-hooks/injection.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-hooks/injection"
+        },
+        {
+          "path": "packages/host/src/worker-context/context-rail.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-context/context-rail"
+        },
+        {
+          "path": "packages/host/src/worker-context/prompt-ledger.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-context/prompt-ledger"
         },
         {
           "path": "packages/host/src/worker-hooks/builtin.ts",
@@ -42120,6 +42188,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "fs",
           "kind": "require-call",
           "external": true
@@ -43280,6 +43353,16 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:child_process",
           "kind": "require-call",
           "external": true
@@ -43496,7 +43579,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -43532,10 +43615,10 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43613,7 +43696,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 687
@@ -43715,7 +43798,7 @@
           "bytesInOutput": 415
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43724,10 +43807,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 97
@@ -43739,13 +43822,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43754,7 +43837,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/workbench-store.ts": {
           "bytesInOutput": 30
@@ -43790,7 +43873,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -43802,7 +43885,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -43832,7 +43915,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -45935,7 +46018,7 @@
           "bytesInOutput": 2592
         },
         "../../../node_modules/ajv/dist/compile/codegen/index.js": {
-          "bytesInOutput": 11891
+          "bytesInOutput": 11894
         },
         "../../../node_modules/ajv/dist/compile/util.js": {
           "bytesInOutput": 3691
@@ -46436,7 +46519,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 308
+          "bytesInOutput": 321
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2556
@@ -46466,16 +46549,16 @@
           "bytesInOutput": 1627
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
         },
         "packages/agent-core/src/context/reminder-sources.ts": {
-          "bytesInOutput": 1520
+          "bytesInOutput": 1631
         },
         "packages/agent-core/src/context/reminders.ts": {
-          "bytesInOutput": 224
+          "bytesInOutput": 526
         },
         "packages/sandbox/src/types.ts": {
           "bytesInOutput": 273
@@ -47696,13 +47779,16 @@
           "bytesInOutput": 750
         },
         "packages/host/src/worker-prompts/types.ts": {
-          "bytesInOutput": 5012
+          "bytesInOutput": 4967
         },
         "packages/host/src/worker-prompts/index.ts": {
           "bytesInOutput": 0
         },
         "packages/host/src/worker-prompts/cache.ts": {
           "bytesInOutput": 1195
+        },
+        "packages/host/src/worker-prompts/contextFingerprint.ts": {
+          "bytesInOutput": 841
         },
         "packages/host/src/worker-prompts/constants/promptSections.ts": {
           "bytesInOutput": 145
@@ -47711,16 +47797,16 @@
           "bytesInOutput": 270
         },
         "packages/host/src/worker-prompts/modes/types.ts": {
-          "bytesInOutput": 591
+          "bytesInOutput": 386
         },
         "packages/host/src/worker-prompts/modes/index.ts": {
-          "bytesInOutput": 197
+          "bytesInOutput": 371
         },
         "packages/capabilities/src/utils/shellDetector.ts": {
           "bytesInOutput": 3425
         },
         "packages/host/src/worker-prompts/PromptSystem.ts": {
-          "bytesInOutput": 6552
+          "bytesInOutput": 7425
         },
         "packages/host/src/worker-prompts/hbs/HbsPromptSystem.ts": {
           "bytesInOutput": 4987
@@ -47753,7 +47839,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-agents-md/loader.ts": {
-          "bytesInOutput": 4876
+          "bytesInOutput": 4955
         },
         "../../../node_modules/marked/lib/marked.esm.js": {
           "bytesInOutput": 41461
@@ -47795,7 +47881,7 @@
           "bytesInOutput": 505
         },
         "packages/host/src/worker-prompts/PromptsRegistry.ts": {
-          "bytesInOutput": 731
+          "bytesInOutput": 971
         },
         "packages/host/src/worker-prompts/dynamic/agentsMdSection.ts": {
           "bytesInOutput": 55
@@ -47810,10 +47896,10 @@
           "bytesInOutput": 611
         },
         "packages/host/src/worker-prompts/configs/general.ts": {
-          "bytesInOutput": 1764
+          "bytesInOutput": 1852
         },
         "packages/host/src/worker-prompts/configs/code.ts": {
-          "bytesInOutput": 2000
+          "bytesInOutput": 1999
         },
         "packages/host/src/worker-prompts/research/intentRouter.ts": {
           "bytesInOutput": 73
@@ -47822,10 +47908,10 @@
           "bytesInOutput": 1401
         },
         "packages/host/src/worker-prompts/configs/research.ts": {
-          "bytesInOutput": 1041
+          "bytesInOutput": 961
         },
         "packages/host/src/worker-prompts/configs/bot.ts": {
-          "bytesInOutput": 818
+          "bytesInOutput": 747
         },
         "packages/host/src/worker-prompts/registry.ts": {
           "bytesInOutput": 138
@@ -47912,7 +47998,7 @@
           "bytesInOutput": 42
         },
         "packages/host/src/worker-journal/Journal.ts": {
-          "bytesInOutput": 2218
+          "bytesInOutput": 2279
         },
         "packages/host/src/skills/index.ts": {
           "bytesInOutput": 5
@@ -48857,7 +48943,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 859
+          "bytesInOutput": 895
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -48986,7 +49072,7 @@
           "bytesInOutput": 20
         },
         "packages/host/src/http-server.ts": {
-          "bytesInOutput": 53
+          "bytesInOutput": 58
         },
         "packages/host/src/local-rollout-api.ts": {
           "bytesInOutput": 5
@@ -49184,7 +49270,7 @@
           "bytesInOutput": 3026
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 49804
+          "bytesInOutput": 50662
         },
         "packages/host/src/worker-mentions.ts": {
           "bytesInOutput": 5647
@@ -49330,6 +49416,12 @@
         "packages/host/src/worker-hooks/injection.ts": {
           "bytesInOutput": 1228
         },
+        "packages/host/src/worker-context/context-rail.ts": {
+          "bytesInOutput": 730
+        },
+        "packages/host/src/worker-context/prompt-ledger.ts": {
+          "bytesInOutput": 1227
+        },
         "packages/agent-core/src/message/agent-helpers.ts": {
           "bytesInOutput": 925
         },
@@ -49370,7 +49462,7 @@
           "bytesInOutput": 210
         },
         "packages/host/src/worker-modes/modifiers/apply-modes.ts": {
-          "bytesInOutput": 980
+          "bytesInOutput": 1044
         },
         "packages/agent-runtime/src/tools/discovery/ToolCatalogTool.ts": {
           "bytesInOutput": 7656
@@ -49688,7 +49780,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5542703
+      "bytes": 5548432
     }
   }
 }

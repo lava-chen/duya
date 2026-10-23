@@ -49,6 +49,7 @@ export type ReminderSourceId =
   | 'research_continuation'
   | 'loop_nudge'
   | 'hook_context_rail'
+  | 'volatile_context'
   | 'pre_tool_use_advisory'
   | 'git_safety'
   | 'turn_time'
@@ -117,6 +118,17 @@ const REMINDER_SOURCE_DESCRIPTORS: Record<ReminderSourceId, ReminderSourceDescri
     lifecycle: 'per_request',
     persisted: false,
     evidenceLabel: 'sr.hook_context_rail',
+  },
+  // The volatile-context rail (plan 619 Phase 3): the parts of the prompt
+  // that change every turn — environment, memory projection, skill
+  // catalog — are delivered as a message instead of as system prompt, so
+  // the system prefix stays byte-identical between turns. Re-rendered
+  // every request, never persisted.
+  volatile_context: {
+    channel: 'mid_turn',
+    lifecycle: 'per_request',
+    persisted: false,
+    evidenceLabel: 'sr.volatile_context',
   },
   // PreToolUse advisory envelopes: replace-last per tool, re-injected each
   // request when the hook fires again.
