@@ -23,7 +23,7 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -281,6 +281,15 @@ describe('the measurement lock', () => {
 });
 
 describe('the app shutdown', () => {
+  const isProcessAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+    }
+  };
+
   it('never kills a pid that was recycled by another process', async () => {
     // When the app is already gone its pid can be handed to ANOTHER
     // process. Killing that one takes the harness down with it, so the
@@ -310,4 +319,34 @@ describe('the app shutdown', () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  // The leak this guards: `app.close()` resolves when Playwright is done
+  // with the WINDOW, and this app keeps its main process alive (it owns a
+  // gateway and an agent server). A sample that left the app running kept
+  // its profile locked and ~700 MB allocated, and the next sample measured
+  // a machine that was already busy.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the app when it survives the graceful close',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      // The name is what the guard looks at, so the stand-in is named
+      // like the app it stands in for.
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const child = spawn(binary, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+      try {
+        await closePerfElectron({
+          process: () => ({ pid: child.pid }),
+          close: async () => {
+            /* the close resolves, and the app stays alive */
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });
