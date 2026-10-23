@@ -37,15 +37,23 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  height: 38px;
+  /* Codex parity (2026-10-22): the group caption is a compact line, not a
+     full row. Measured off a real Codex capture: the "最近" caption is a
+     13px label on a 28px line, and its text starts at the same x as the
+     session titles below it. duya used 38px, which pushed the first
+     session a whole row down. */
+  height: 28px;
   box-sizing: border-box;
   padding: 0 10px;
-  font-size: 0.875rem;
-  font-weight: 450;
-  color: var(--text);
+  /* Codex parity (2026-10-22): the group label is a small, quiet caption
+     rather than a headline — 13px, muted. The content below it (session
+     rows) carries the visual weight. */
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
   cursor: pointer;
   user-select: none;
-  border-radius: 9px;
+  border-radius: 6px;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .sidebar-section-item .sidebar-section-header:hover {
@@ -92,7 +100,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  letter-spacing: 0.01em;
+  /* Codex parity (2026-10-22): Codex's group caption ("最近") is set at
+     normal tracking — the earlier 0.03em tracked-out setting read as a
+     shouty uppercase label rather than a quiet caption. */
+  letter-spacing: 0;
   /* Keep the caret glued to the label ("项目 >"), not pushed to the
      far right. The trailing slot right-aligns via margin-left:auto. */
 }
@@ -139,6 +150,41 @@
   /* Children (ProjectGroupItem / ThreadListItem) manage their own
      padding; we only provide a small drop-shadow cue when open. */
   padding: 0;
+  /* Reference parity (2026-10-22): the flat session list (singleList mode)
+     is a direct child of this container, so the 1px inter-row gap has to
+     live here - without it the rows stack at their bare 26px height and
+     come out tighter than the measured 27.2 CSS px title pitch. */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Claude parity (2026-10-22): the group header's trailing action group
+   (新建 / 组内搜索 / 过滤器). Buttons are the shared 22×22 `.sidebar-section-action`
+   chrome; the group only owns the layout. */
+.sidebar-section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+/* Group-scoped search box, rendered under the section header. */
+.sidebar-section-search {
+  padding: 0 10px 0.35rem;
+}
+.sidebar-section-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.45rem;
+  outline: none;
+}
+.sidebar-section-search-input:focus {
+  border-color: var(--accent);
 }
 
 /* Kind-specific tints. Tuned to the codebase's existing icon palette. */

@@ -24,7 +24,12 @@ interface AppShellProps {
 
 const MIN_SIDEBAR_WIDTH = 200;
 const MAX_SIDEBAR_WIDTH = 400;
-const DEFAULT_SIDEBAR_WIDTH = 260;
+// Reference parity (2026-10-22): 300 CSS px, measured off a Claude Code
+// desktop capture whose sidebar is ~288 CSS px at devicePixelRatio 1.25.
+// duya needs a little more than the reference because its rows also carry a
+// trailing timestamp column that Claude Code's do not - at the old 260px
+// default, session titles were still truncating with an ellipsis.
+const DEFAULT_SIDEBAR_WIDTH = 300;
 // Collapsed sidebar (title-bar toggle): icon-only rail. Icons are ~34px
 // wide plus the sidebar's horizontal padding.
 const SIDEBAR_RAIL_WIDTH = 56;

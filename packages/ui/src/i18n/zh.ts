@@ -1309,6 +1309,15 @@ const zh: Record<TranslationKey, string> = {
   'thread.noThreads': '暂无对话',
   'thread.running': 'Agent 运行中...',
   'thread.options': '对话选项',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // session it belongs to, so a screen reader can tell two rows apart.
+  'thread.optionsFor': '{title} 的更多选项',
+  'thread.openFolder': '在文件管理器中打开',
+  // Leading status glyph on a session row.
+  'thread.status.idle': '空闲',
+  'thread.status.running': '运行中',
+  'thread.status.awaitingInput': '等待输入',
+  'thread.status.error': '出错',
   'thread.archiveThread': '归档对话',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': '取消归档',
@@ -1645,6 +1654,9 @@ const zh: Record<TranslationKey, string> = {
   'project.folderPathPlaceholderMac': '例如：~/Projects/my-project',
   'project.folderPathPlaceholderLinux': '例如：/home/name/Projects/my-project',
   'project.options': '项目选项',
+  // Claude parity (2026-10-22): the row menu's accessible name names the
+  // project it belongs to, so a screen reader can tell two rows apart.
+  'project.optionsFor': '{name} 的更多选项',
   'project.recentProjects': '最近的项目',
   'project.noRecent': '暂无最近项目',
   'project.openFolder': '打开文件夹',
@@ -1693,6 +1705,13 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.section.pinned': '置顶',
   // Plan 549 (Track B): archived-section label.
   'sidebar.section.archived': '已归档',
+  // Claude parity (2026-10-22): group-header actions and the filter popover.
+  'sidebar.section.searchInGroup': '在本组中搜索',
+  'sidebar.section.searchPlaceholder': '搜索会话',
+  'sidebar.filter.title': '过滤器',
+  'sidebar.filter.groupBy': '分组方式',
+  'sidebar.filter.sortBy': '排序方式',
+  'sidebar.filter.showEmptyGroups': '显示空分组',
   // Plan 483 — sidebar Bots section
   'sidebar.section.bots': 'Bots',
   'sidebar.tab.work': '工作',
