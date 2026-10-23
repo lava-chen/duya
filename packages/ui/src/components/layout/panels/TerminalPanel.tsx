@@ -39,8 +39,46 @@ import {
   useTerminalAppearanceStore,
 } from "@/stores/terminal-appearance-store";
 import { TERMINAL_THEME_PRESETS, resolveTerminalTheme } from "@/lib/terminal-themes";
+import { scopedLogger } from "@/lib/logger";
 import { BashTaskOutputView } from "./BashTaskOutputView";
 import type { PageTab } from "./page-tab";
+
+const log = scopedLogger("terminal");
+
+/**
+ * Tell the main process that this surface's WebGL context was lost.
+ *
+ * Without this, a terminal that degraded from the WebGL renderer to the DOM
+ * renderer left no trace anywhere: the fallback was visible only as a label
+ * in the appearance menu, and the main process had no way to learn that the
+ * GPU path had been lost. The main process counts these reports and writes
+ * them to the log, so "the terminal is slow because it fell back to DOM"
+ * becomes a fact rather than a guess.
+ *
+ * Deliberately defensive: the renderer also runs in a plain browser context
+ * (tests, `apps/web`), where there is no `electronAPI` at all.
+ */
+function reportWebglContextLoss(reason: string): void {
+  const gpu = (
+    window as unknown as {
+      electronAPI?: {
+        gpu?: {
+          reportWebglContextLoss?: (report: { surface: string; reason: string }) => Promise<unknown>;
+        };
+      };
+    }
+  ).electronAPI?.gpu;
+  const report = gpu?.reportWebglContextLoss;
+  if (!report) return;
+  try {
+    void Promise.resolve(report({ surface: "terminal", reason })).catch(() => {
+      // The report is diagnostics; a failed report must never break the
+      // terminal.
+    });
+  } catch {
+    // Same reason: never let diagnostics break the surface.
+  }
+}
 
 interface Props {
   tab: PageTab;
@@ -223,19 +261,30 @@ function TerminalPtyPanel({ tab }: Props) {
 
     // GPU-accelerated renderer, degrading gracefully to the DOM renderer when
     // WebGL2 is unavailable or the context is lost (e.g. GPU reset).
+    //
+    // Both degradation paths REPORT to the main process. A terminal that
+    // silently fell back to the DOM renderer looks slow for reasons that are
+    // invisible from the outside, and the only trace the product used to
+    // leave was a label in the appearance menu.
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => {
         webgl.dispose();
         webglRef.current = null;
         setRenderer("dom");
+        log.warn("terminal WebGL context lost; fell back to the DOM renderer");
+        reportWebglContextLoss("webgl-context-lost");
       });
       term.loadAddon(webgl);
       webglRef.current = webgl;
       setRenderer("webgl");
-    } catch {
+    } catch (err) {
       webglRef.current = null;
       setRenderer("dom");
+      log.warn("terminal WebGL renderer unavailable; using the DOM renderer", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      reportWebglContextLoss("webgl-unavailable");
     }
 
     // Ctrl/Cmd +/-/0 adjust the terminal font size. Consuming the event keeps
@@ -444,7 +493,7 @@ function TerminalPtyPanel({ tab }: Props) {
   }, [selection]);
 
   return (
-    <div ref={panelRef} className="terminal-panel terminal-panel-xterm">
+    <div ref={panelRef} className="terminal-panel terminal-panel-xterm" data-renderer={renderer}>
       {(status === "spawning" || status === "exited" || status === "error") && (
         <div className="terminal-panel-inline-status" data-status={status}>
           {status === "spawning"
