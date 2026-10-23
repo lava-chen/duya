@@ -16447,7 +16447,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-workflows/runtime-child.ts": {
-      "bytes": 12116,
+      "bytes": 12085,
       "imports": [
         {
           "path": "node:crypto",
@@ -21408,7 +21408,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-      "bytes": 34308,
+      "bytes": 34335,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/types.ts",
@@ -27997,7 +27997,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 163079,
+      "bytes": 162937,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -28173,11 +28173,6 @@
           "path": "packages/host/src/worker-workflows/runtime-child.ts",
           "kind": "import-statement",
           "original": "./worker-workflows/runtime-child.js"
-        },
-        {
-          "path": "packages/host/src/worker-workflows/gui-artifacts.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/worker-workflows/gui-artifacts"
         },
         {
           "path": "packages/agent-runtime/src/authorization/profile-bridge.ts",
@@ -37213,10 +37208,10 @@
           "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -39184,7 +39179,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -39208,7 +39203,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
@@ -40759,7 +40754,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 60622
+          "bytesInOutput": 60598
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -41284,13 +41279,13 @@
           "bytesInOutput": 370
         },
         "packages/host/src/worker-workflows/gui-artifacts.ts": {
-          "bytesInOutput": 675
+          "bytesInOutput": 496
         },
         "packages/host/src/worker-workflows/run-log.ts": {
           "bytesInOutput": 1270
         },
         "packages/host/src/worker-workflows/runtime-child.ts": {
-          "bytesInOutput": 2549
+          "bytesInOutput": 2530
         },
         "packages/capabilities/src/permissions/types.ts": {
           "bytesInOutput": 172
@@ -41578,7 +41573,7 @@
           "bytesInOutput": 24
         },
         "packages/agent-runtime/src/authorization/permissions/permissions.ts": {
-          "bytesInOutput": 7975
+          "bytesInOutput": 7989
         },
         "packages/agent-runtime/src/authorization/permissions/askWithoutUser.ts": {
           "bytesInOutput": 601
@@ -41839,7 +41834,7 @@
           "bytesInOutput": 7091
         },
         "packages/cli/src/commands/message.ts": {
-          "bytesInOutput": 3211
+          "bytesInOutput": 3210
         },
         "packages/cli/src/commands/gateway.ts": {
           "bytesInOutput": 3223
@@ -41863,7 +41858,7 @@
           "bytesInOutput": 343
         },
         "packages/cli/src/program/descriptors.ts": {
-          "bytesInOutput": 35086
+          "bytesInOutput": 35083
         },
         "packages/cli/src/contract/index.ts": {
           "bytesInOutput": 0
@@ -42439,7 +42434,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4439748
+      "bytes": 4439587
     }
   }
 }
