@@ -1058,10 +1058,19 @@ describe('the engine is an implementation, not a delegating port', () => {
  * twice in one request: the model saw the question twice, and the input
  * tokens of the first turn doubled.
  *
+ * ## Which copy survives is a question of POSITION
+ *
+ * The host's row sits where the conversation puts it -- after the turns it
+ * answers -- and that is the copy the legacy sent, because the legacy's
+ * transcript WAS the timeline. The engine's copy would sit at the FRONT,
+ * ahead of the turns it is answering. So when the host's copy is there, the
+ * engine's is the one that goes.
+ *
  * ## What the cases pin
  *
  *  - the host's assembled messages ALREADY carrying the prompt (by id) means
- *    the engine must not add it again;
+ *    the engine must not add its own copy -- and the host's row keeps its
+ *    place in the request;
  *  - a history that does NOT carry it still gets the prompt, and it still
  *    goes FIRST, because the prompt is the turn's opening question.
  */
@@ -1084,8 +1093,9 @@ describe('the prompt reaches the model exactly once', () => {
 
     const sent = h.sentMessages[0]!;
     expect(sent.filter((m) => m.id === 'p1')).toHaveLength(1);
-    // And the order is unchanged: the prompt opens the turn, the host's own
-    // context follows it.
+    // And the ORDER is the host's: the row the host committed keeps the place
+    // the conversation puts it, instead of being pushed to the front of the
+    // request.
     expect(sent.map((m) => m.id)).toEqual(['p1', 'rail-1']);
   });
 
@@ -1115,6 +1125,8 @@ describe('the prompt reaches the model exactly once', () => {
     });
 
     const sent = h.sentMessages[0]!;
+    // The host did NOT assemble the prompt row (only a look-alike), so the
+    // engine still has to carry the question itself.
     expect(sent.map((m) => m.id)).toEqual(['p1', 'other-row']);
   });
 });
