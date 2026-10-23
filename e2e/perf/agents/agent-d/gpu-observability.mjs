@@ -56,6 +56,30 @@ function step(message) {
 
 const MODES = ['gpu-normal', 'gpu-unavailable', 'webgl-context-lost'];
 
+/**
+ * The measurement lock state, handed over by `run-with-lock.mjs`.
+ *
+ * The wrapper resolves the lock script and acquires the lock, then passes the
+ * outcome down through the environment. The state is recorded even when the
+ * lock was never held: a report that admits it was taken without the lock is
+ * better than a report that pretends otherwise.
+ */
+function readLockState() {
+  const raw = process.env.DUYA_PERF_LOCK_STATE;
+  if (!raw) {
+    return {
+      enabled: false,
+      held: false,
+      reason: 'no lock state provided (harness started without run-with-lock.mjs)',
+    };
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return { enabled: false, held: false, reason: `unreadable lock state: ${String(err)}` };
+  }
+}
+
 /** How long each scenario runs. Long enough to be a measurement, short
  *  enough that a full three-mode sweep stays inside one bench-lock window. */
 const SCENARIO_MS = {
@@ -616,7 +640,7 @@ async function main() {
   }
 
   const outFile = args.out ?? path.join(RESULTS_DIR, `gpu-${stamp}.json`);
-  fs.writeFileSync(outFile, JSON.stringify({ runs }, null, 2), 'utf8');
+  fs.writeFileSync(outFile, JSON.stringify({ lock: readLockState(), runs }, null, 2), 'utf8');
   process.stdout.write(`[agent-d] wrote ${outFile}\n`);
 }
 

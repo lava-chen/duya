@@ -56,11 +56,25 @@ a run and release it right after, so a run is not measuring another agent's
 build:
 
 ```powershell
-node E:\Projects\duya\.claude\perf-bench-lock.mjs acquire agentD-gpu
-node E:\Projects\duya\.claude\perf-bench-lock.mjs release
+node e2e/perf/agents/agent-d/run-with-lock.mjs -- --mode all --repeats 3
 ```
 
 `acquire` exits `0` when the lock is yours and `2` when another agent holds it.
+
+The lock script lives outside the repository, so its path is resolved in this
+order:
+
+| Source | Example |
+| --- | --- |
+| `--lock-script <path>` | `--lock-script E:\Projects\duya\.claude\perf-bench-lock.mjs` |
+| `--lock <path>` | legacy alias for the flag above |
+| `DUYA_PERF_LOCK_SCRIPT` | `$env:DUYA_PERF_LOCK_SCRIPT = '<path>'` |
+| `DUYA_PERF_BENCH_LOCK` | legacy alias for the variable above |
+| repository-relative candidates | `<repo>/.claude/perf-bench-lock.mjs`, `<repo>/perf-bench-lock.mjs`, `<repo>/../perf-bench-lock.mjs`, `<repo>/../../perf-bench-lock.mjs` |
+
+When none of them exists the run still happens: the wrapper prints a warning
+that the numbers are 未持锁测量 (taken without the lock) and the result file
+records `lock.enabled = false` with the reason.
 
 ## Why this is not a Playwright test
 
