@@ -173,6 +173,21 @@ export interface StartLocalHostOptions {
    */
   readonly ephemeral?: boolean;
   /**
+   * Tie the Host's lifetime to its clients.
+   *
+   * A Host owns the SQLite files of one data directory, so a Host nobody
+   * talks to holds a lock nobody else can take. A Host that a client started
+   * in the background has no user to stop it, so it watches its clients and
+   * stops itself once the last one is gone. Foreground `duya serve` leaves
+   * this off: its user stops it with Ctrl+C.
+   */
+  readonly clientScoped?: boolean;
+  /**
+   * How long a client-scoped Host waits for its clients to come back before
+   * it gives up and releases the database.
+   */
+  readonly clientLeaseIdleTimeoutMs?: number;
+  /**
    * Where run diagnostics go. Defaults to `file` when `ephemeral` is set and
    * `stdio` otherwise — an embedded Host shares a terminal with someone else's
    * UI and must not write to it. See `host-diagnostics-log.ts`.
@@ -363,6 +378,14 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   const databaseHost = new DatabaseHost();
   let server: HostSessionHttpServer | null = null;
   let runtime: LocalHostRuntime | null = null;
+  /**
+   * The full shutdown, once the handle exists.
+   *
+   * The client-lease watcher calls it when the last client leaves, so it has
+   * to be reachable from the server options below — hence the forward
+   * reference rather than a closure over the returned handle.
+   */
+  let shutdownHost: (() => Promise<void>) | null = null;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -627,6 +650,21 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       host: HOST,
       port: options.port ?? DEFAULT_PORT,
       token,
+      // A client-scoped Host stops itself once its last client is gone. It
+      // owns the data directory's database, so a Host nobody talks to would
+      // keep a lock nobody else can take.
+      ...(options.clientScoped === true
+        ? {
+            clientLease: {
+              ...(options.clientLeaseIdleTimeoutMs === undefined
+                ? {}
+                : { idleTimeoutMs: options.clientLeaseIdleTimeoutMs }),
+              onIdle: () => {
+                void shutdownHost?.();
+              },
+            },
+          }
+        : {}),
     });
     await server.listen();
     runtime = {
@@ -640,6 +678,31 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     if (!options.ephemeral) writeRuntimeFile(runtimeFilePath, runtime);
 
     let closed = false;
+    shutdownHost = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      try {
+        await server?.close();
+      } finally {
+        // Stop supervised workers before the database handles they were
+        // writing through the bridge disappear underneath them.
+        try {
+          try {
+            await runExecution?.permissionRequests?.closeAll();
+          } finally {
+            runExecution?.supervision.workerManager.stopIdleReaper();
+            runExecution?.supervision.workerManager.killAll();
+          }
+        } catch {
+          // A worker that already exited is not a shutdown failure.
+        }
+        if (!options.ephemeral) {
+          removeOwnedFile(runtimeFilePath, (value) => value.pid === process.pid && value.token === runtime?.token);
+          removeOwnedFile(lockPath, (value) => value.pid === process.pid);
+        }
+        databaseHost.close();
+      }
+    };
     return {
       origin: `http://${HOST}:${server.port}`,
       port: server.port,
@@ -648,31 +711,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       ...(diagnosticsSink === 'file'
         ? { diagnosticsLogPath: resolveHostDiagnosticsLogPath(dataRoot) }
         : {}),
-      close: async () => {
-        if (closed) return;
-        closed = true;
-        try {
-          await server?.close();
-        } finally {
-          // Stop supervised workers before the database handles they were
-          // writing through the bridge disappear underneath them.
-          try {
-            try {
-              await runExecution?.permissionRequests?.closeAll();
-            } finally {
-              runExecution?.supervision.workerManager.stopIdleReaper();
-              runExecution?.supervision.workerManager.killAll();
-            }
-          } catch {
-            // A worker that already exited is not a shutdown failure.
-          }
-          if (!options.ephemeral) {
-            removeOwnedFile(runtimeFilePath, (value) => value.pid === process.pid && value.token === runtime?.token);
-            removeOwnedFile(lockPath, (value) => value.pid === process.pid);
-          }
-          databaseHost.close();
-        }
-      },
+      close: shutdownHost,
     };
   } catch (error) {
     try { await server?.close(); } finally {

@@ -77,6 +77,7 @@ import type {
 } from '@duya/agent-protocol';
 import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
+import { ClientLeaseTracker } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
 import type { JournalRecord } from '@duya/agent-protocol';
@@ -408,6 +409,18 @@ export interface HostSessionHttpServerOptions {
    * infer a capability, which is what `provides` is for.
    */
   readonly identity?: HostIdentity;
+  /**
+   * Client presence tracking.
+   *
+   * Present only on a Host whose lifetime is tied to its clients: the server
+   * holds one `GET /v1/host/lease` request open per client and calls
+   * `onIdle` once the last of them is gone. Absent means the Host is a
+   * service that runs until somebody stops it — the foreground `duya serve`.
+   */
+  readonly clientLease?: {
+    readonly idleTimeoutMs?: number;
+    readonly onIdle: () => void;
+  };
 }
 
 /**
@@ -427,6 +440,14 @@ const HOST_VERSION = '0.1.0';
  * and a limit the client invents is a comment, not a limit.
  */
 const HOST_MAX_FILE_BYTES = 32 * 1024 * 1024;
+
+/**
+ * How often a client-scoped Host checks whether its clients are gone.
+ *
+ * A second is frequent enough that the Host stops promptly and rare enough
+ * that an idle Host costs nothing measurable.
+ */
+const CLIENT_LEASE_CHECK_INTERVAL_MS = 1_000;
 
 /**
  * What this Host can serve, read off the APIs it actually registered.
@@ -545,6 +566,10 @@ export class HostSessionHttpServer {
   readonly #options: HostSessionHttpServerOptions;
   readonly #host: string;
   readonly #activeRunEventStreams = new Set<ServerResponse>();
+  readonly #activeClientLeases = new Set<ServerResponse>();
+  #clientLeaseTracker: ClientLeaseTracker | null = null;
+  #clientLeaseTimer: ReturnType<typeof setInterval> | null = null;
+  #clientIdleReported = false;
   #server: Server | null = null;
   #port = 0;
 
@@ -560,6 +585,13 @@ export class HostSessionHttpServer {
       throw new Error('HostSessionHttpServer port must be an integer between 0 and 65535');
     }
     this.#options = options;
+    this.#clientLeaseTracker = options.clientLease === undefined
+      ? null
+      : new ClientLeaseTracker(
+        options.clientLease.idleTimeoutMs === undefined
+          ? {}
+          : { idleTimeoutMs: options.clientLease.idleTimeoutMs },
+      );
   }
 
   get port(): number {
@@ -593,6 +625,7 @@ export class HostSessionHttpServer {
       const address = server.address() as AddressInfo | null;
       if (!address) throw new Error('HostSessionHttpServer did not receive a bound address');
       this.#port = address.port;
+      this.#startClientLeaseWatch();
     } catch (error) {
       this.#server = null;
       server.close();
@@ -604,11 +637,76 @@ export class HostSessionHttpServer {
     const server = this.#server;
     this.#server = null;
     this.#port = 0;
+    if (this.#clientLeaseTimer !== null) {
+      clearInterval(this.#clientLeaseTimer);
+      this.#clientLeaseTimer = null;
+    }
     if (!server) return;
     for (const response of this.#activeRunEventStreams) response.destroy();
+    // A held lease is an open response. `server.close()` waits for open
+    // connections, so the leases have to go first or shutdown never finishes.
+    for (const response of this.#activeClientLeases) response.destroy();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
     });
+  }
+
+  /**
+   * Start watching for clients leaving.
+   *
+   * The timer is only there for a client-scoped Host. It is unref'd so a
+   * pending check can never keep the process alive on its own.
+   */
+  #startClientLeaseWatch(): void {
+    if (this.#clientLeaseTracker === null) return;
+    if (this.#clientLeaseTimer !== null) return;
+    this.#clientLeaseTimer = setInterval(() => this.#reportIdleClients(), CLIENT_LEASE_CHECK_INTERVAL_MS);
+    this.#clientLeaseTimer.unref();
+  }
+
+  /** Tell the owner that nobody is attached any more. Reported once. */
+  #reportIdleClients(): void {
+    const tracker = this.#clientLeaseTracker;
+    const lease = this.#options.clientLease;
+    if (tracker === null || lease === undefined) return;
+    if (this.#clientIdleReported) return;
+    if (!tracker.isIdle()) return;
+    this.#clientIdleReported = true;
+    lease.onIdle();
+  }
+
+  /**
+   * Hold a client lease open for as long as the client wants this Host alive.
+   *
+   * The headers go out immediately so the client knows the lease was granted.
+   * The body is never written, which keeps the socket out of the server's
+   * keep-alive reaper: the connection is busy for as long as the lease is
+   * held, however long that is.
+   */
+  #holdClientLease(res: ServerResponse): void {
+    const tracker = this.#clientLeaseTracker;
+    if (tracker === null) {
+      this.#sendJson(res, 404, { error: { code: 'client_lease_unavailable' } });
+      return;
+    }
+    tracker.acquire();
+    this.#activeClientLeases.add(res);
+    res.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.#activeClientLeases.delete(res);
+      tracker.release();
+      this.#reportIdleClients();
+    };
+    res.once('close', release);
+    res.once('finish', release);
   }
 
   #authorise(req: IncomingMessage): { ok: true } | { ok: false; status: number; code: string } {
@@ -661,6 +759,12 @@ export class HostSessionHttpServer {
         unsupported: unsupportedReasons(identity, provides),
         consumedBy: consumedBy ?? [],
       });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/host/lease') {
+      // A lease is a presence signal, not a lock: the response stays open and
+      // the Host counts it until the client goes away.
+      this.#holdClientLease(res);
       return;
     }
     if (url.pathname === '/v1/research/actions') {
