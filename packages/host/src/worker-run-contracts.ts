@@ -33,8 +33,6 @@ export interface AgentOptions {
     retryConfig?: import('@duya/ai').RetryConfig;
     visionConfig?: VisionConfig;
     compactModelConfig?: CompactModelConfig;
-    blockedDomains?: string[];
-    browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
     language?: string;
     defaultWorkspaceDirectory?: string;
     permissionRules?: {

@@ -91,25 +91,10 @@ function panelStorageKey(sessionKey: string): string {
   return `${PANEL_STORAGE_PREFIX}${sessionKey}`;
 }
 
-function isTransientAgentBrowserTab(tab: PageTab): boolean {
-  return tab.pageId === "browser" && tab.params?.kind === "agent";
-}
-
-/**
- * Agent browser guests belong to a live tool process, not to a conversation's
- * saved layout. Persisting them recreates an empty webview when returning to a
- * thread and lets stale tool retries revive a browser the user already closed.
- */
 export function persistablePanelState(state: PersistedPanelState): PersistedPanelState {
-  const tabs = state.tabs.filter((tab) => !isTransientAgentBrowserTab(tab));
-  const removedOnlyTransientAgentTabs = tabs.length === 0 && state.tabs.length > 0;
   return {
     ...state,
-    tabs,
-    activeTabId: tabs.some((tab) => tab.id === state.activeTabId) ? state.activeTabId : null,
-    panelOpen: removedOnlyTransientAgentTabs ? false : state.panelOpen,
-    panelView: removedOnlyTransientAgentTabs ? "picker" : state.panelView,
-    workspaceExpanded: removedOnlyTransientAgentTabs ? false : state.workspaceExpanded,
+    tabs: state.tabs,
   };
 }
 
@@ -127,7 +112,6 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
     const parsed = JSON.parse(raw) as Partial<PersistedPanelState> | null;
     if (!parsed || !Array.isArray(parsed.tabs)) return null;
     const tabs: PageTab[] = [];
-    let droppedTransientAgentTab = false;
     for (const tab of parsed.tabs) {
       if (!tab || typeof tab.id !== "string" || !isPageId(tab.pageId)) continue;
       const normalizedTab: PageTab = {
@@ -140,10 +124,6 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
             ? (tab.params as Record<string, unknown>)
             : undefined,
       };
-      if (isTransientAgentBrowserTab(normalizedTab)) {
-        droppedTransientAgentTab = true;
-        continue;
-      }
       tabs.push(normalizedTab);
     }
     return {
@@ -153,11 +133,9 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
         tabs.some((t) => t.id === parsed.activeTabId)
           ? parsed.activeTabId
           : null,
-      panelOpen: droppedTransientAgentTab && tabs.length === 0 ? false : !!parsed.panelOpen,
-      panelView: droppedTransientAgentTab && tabs.length === 0
-        ? "picker"
-        : parsed.panelView === "picker" ? "picker" : "content",
-      workspaceExpanded: droppedTransientAgentTab && tabs.length === 0 ? false : parsed.workspaceExpanded === true,
+      panelOpen: !!parsed.panelOpen,
+      panelView: parsed.panelView === "picker" ? "picker" : "content",
+      workspaceExpanded: parsed.workspaceExpanded === true,
       workspaceTreeOpen: parsed.workspaceTreeOpen === true,
     };
   } catch {
@@ -198,10 +176,6 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
         + `::${(params?.sessionId as string | undefined) ?? ""}`
         + `::${(params?.reviewTurnId as string | undefined) ?? "__scoped__"}`;
     case "browser":
-      // Agent tabs dedup by sessionId; manual tabs dedup by url.
-      if (params?.kind === "agent") {
-        return `browser::agent::${(params?.sessionId as string | undefined) ?? ""}`;
-      }
       return `browser::${(params?.url as string | undefined) ?? ""}`;
     case "terminal":
       // Plan 566: a background-task output viewer keys on the task id so
@@ -376,14 +350,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   const panelStateRef = useRef<PersistedPanelState>(initial);
   panelStateRef.current = { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen };
 
-  // Tracks the active thread id for IPC handlers that are set up once but
-  // need to know whether an incoming agent-browser request belongs to the
-  // session the user is currently viewing.
-  const activeThreadIdRef = useRef(activeThreadId);
-  useEffect(() => {
-    activeThreadIdRef.current = activeThreadId;
-  }, [activeThreadId]);
-
   const activeTabIdRef = useRef(activeTabId);
   useEffect(() => {
     activeTabIdRef.current = activeTabId;
@@ -428,13 +394,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     const next = loadPersistedState(sessionKey, t) ?? emptyPanelState();
     currentSessionKeyRef.current = sessionKey;
 
-    // Live agent browser tabs belong to a running tool process, not to a
-    // conversation's saved layout. Destroying them on switch would unregister
-    // the webview from the daemon, so the agent's next browser command would
-    // fail (404) and re-create the tab in whatever session is now visible —
-    // popping the sidebar in the wrong session. Keep them mounted instead.
-    const preservedAgentTabs = tabsRef.current.filter(isTransientAgentBrowserTab);
-    setTabs([...next.tabs, ...preservedAgentTabs]);
+    setTabs(next.tabs);
     setActiveTabId(next.activeTabId);
     setPanelOpen(next.panelOpen);
     setPanelView(next.panelView);
@@ -571,50 +531,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     return () => {
       window.removeEventListener("duya:open-browser-panel", handleOpenBrowserPanel as EventListener);
     };
-  }, [openOrActivatePage]);
-
-  // Listen for agent-driven browser tab requests from the daemon.
-  // When the agent issues a browser command but no webview is registered,
-  // the daemon sends 'browser:open-agent-tab' IPC to trigger tab creation.
-  useEffect(() => {
-    const cleanup = window.electronAPI?.browserWebview?.onOpenAgentTab((sessionId: string, focus: boolean) => {
-      const isActiveSession = sessionId === activeThreadIdRef.current;
-      const existing = tabsRef.current.find(
-        (tab) => tab.pageId === "browser" && tab.params?.kind === "agent" && tab.params.sessionId === sessionId,
-      );
-      if (existing) {
-        // Only focus/open the sidebar when the agent belongs to the session
-        // the user is currently viewing. Other sessions' agent browsers stay
-        // mounted (so the tool keeps working) but never auto-open the sidebar.
-        if (focus && isActiveSession) openOrActivatePage("browser", existing.params);
-        return;
-      }
-
-      const params = {
-        kind: "agent",
-        sessionId,
-        title: "Agent Browser",
-      };
-      const hasVisibleAgentBrowser = tabsRef.current.some(
-        (tab) => tab.pageId === "browser" && tab.params?.kind === "agent",
-      );
-      // Mount the webview without stealing the sidebar when:
-      //   - the agent runs in a session the user isn't viewing, OR
-      //   - the tool explicitly requested a background tab and one is already visible.
-      if (!isActiveSession || (!focus && hasVisibleAgentBrowser)) {
-        setTabs((previous) => [...previous, {
-          id: genId(),
-          pageId: "browser",
-          title: "Agent Browser",
-          params,
-        }]);
-        return;
-      }
-      openOrActivatePage("browser", {
-        ...params,
-      });
-    });
-    return () => cleanup?.();
   }, [openOrActivatePage]);
 
   useEffect(() => {
@@ -860,16 +776,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, [openOrActivatePage]);
 
   const closePanel = useCallback<PanelContextValue["closePanel"]>((tabId) => {
-    const closingTab = tabsRef.current.find((tab) => tab.id === tabId);
-    if (
-      closingTab?.pageId === "browser" &&
-      closingTab.params?.kind === "agent" &&
-      typeof closingTab.params.sessionId === "string"
-    ) {
-      // A visible close is authoritative: suppress in-flight tool retries so
-      // they cannot recreate a blank agent browser after this tab disappears.
-      void window.electronAPI?.browserWebview?.closeAgentBrowser(closingTab.params.sessionId).catch(() => {});
-    }
     setTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
       if (idx === -1) return prev;
@@ -909,31 +815,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       setPanelView("content");
     }
   }, [applyPageLayout]);
-
-  useEffect(() => {
-    const api = window.electronAPI?.browserWebview;
-    const findAgentTab = (sessionId: string) => tabsRef.current.find(
-      (tab) => tab.pageId === "browser" && tab.params?.kind === "agent" && tab.params.sessionId === sessionId,
-    );
-    const stopClose = api?.onCloseAgentTab((sessionId) => {
-      const tab = findAgentTab(sessionId);
-      if (tab) closePanel(tab.id);
-    });
-    const stopActivate = api?.onActivateAgentTab((sessionId, focus) => {
-      if (!focus) return;
-      // The daemon sends activate on every browser command. Only steal the
-      // sidebar focus when the agent belongs to the session the user is
-      // viewing — otherwise the sidebar would pop open in every session the
-      // user switches to while a background agent is browsing.
-      if (sessionId !== activeThreadIdRef.current) return;
-      const tab = findAgentTab(sessionId);
-      if (tab) activateTab(tab.id);
-    });
-    return () => {
-      stopClose?.();
-      stopActivate?.();
-    };
-  }, [activateTab, closePanel]);
 
   const updateTabTitle = useCallback<PanelContextValue["updateTabTitle"]>((tabId, title) => {
     const nextTitle = title.trim();

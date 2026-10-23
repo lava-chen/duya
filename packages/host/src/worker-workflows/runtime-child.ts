@@ -3,9 +3,9 @@
  *
  * Spawned by `WorkflowRuntimeManager` with `DUYA_AGENT_ROLE=workflow-runtime`,
  * running the SAME `agent-process-entry.js` bundle a chat worker runs. That is
- * deliberate: a run needs the full builtin tool registry, the LLM runtime and
- * the browser daemon port, so a lean second entry point would rebuild half the
- * agent. What differs is the WIRING, not the code:
+ * deliberate: a run needs the full builtin tool registry and LLM runtime, so
+ * a lean second entry point would rebuild half the agent. What differs is the
+ * WIRING, not the code:
  *
  *   - No `init` handshake, no chat session, no agent instance. The child is a
  *     PURE EXECUTOR (D3): main creates the run row and the definition snapshot

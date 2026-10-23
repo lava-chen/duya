@@ -3,7 +3,6 @@
  *
  * Handlers for:
  * - Auto-start settings
- * - Browser extension status
  * - Agent re-initialization
  */
 
@@ -12,14 +11,6 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { resolveLlmClientDiscriminator } from '@duya/ai';
-import {
-  getBrowserExtensionStatus,
-  setAllowedExtensionIds,
-  getAllowedExtensionIds,
-  approvePendingExtensionApproval,
-  denyPendingExtensionApproval,
-  setOnAutoApprovedExtensionId,
-} from '../services/browser/daemon';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
 import {
   getDesktopHostLocalSessionApi,
@@ -29,64 +20,9 @@ import { getConfigStore } from '../config/store-instance';
 import { GatewayProxyConfig } from '../gateway/types';
 import { emitGatewayConfigChanged } from '../gateway/config-events';
 
-const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
-let allowedExtensionIdsLoaded = false;
-let allowedExtensionIdsLoad: Promise<void> | null = null;
-
-function normalizeExtensionIds(ids: string[]): string[] {
-  return Array.from(new Set(
-    ids
-      .filter((id) => typeof id === 'string')
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0),
-  ));
-}
-
 function parseJsonSetting<T>(value: string | null, defaultValue: T): T {
   if (value === null) return defaultValue;
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return defaultValue;
-  }
-}
-
-async function ensureAllowedExtensionIdsLoaded(): Promise<void> {
-  if (allowedExtensionIdsLoaded) return;
-  if (allowedExtensionIdsLoad) return allowedExtensionIdsLoad;
-  allowedExtensionIdsLoad = (async () => {
-    const persisted = parseJsonSetting<unknown>(
-      await getDesktopHostLocalSettingsApi().getSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY),
-      [],
-    );
-    setAllowedExtensionIds(normalizeExtensionIds(Array.isArray(persisted) ? persisted : []));
-    allowedExtensionIdsLoaded = true;
-  })().finally(() => {
-    allowedExtensionIdsLoad = null;
-  });
-  return allowedExtensionIdsLoad;
-}
-
-async function persistAllowedExtensionIds(ids: string[]): Promise<void> {
-  const normalized = normalizeExtensionIds(ids);
-  setAllowedExtensionIds(normalized);
-  await getDesktopHostLocalSettingsApi().setSetting(
-    BROWSER_EXTENSION_ALLOWED_IDS_KEY,
-    JSON.stringify(normalized),
-  );
-}
-
-async function syncAllowedExtensionIdsToSettings(): Promise<void> {
-  await ensureAllowedExtensionIdsLoaded();
-  const runtimeIds = normalizeExtensionIds(getAllowedExtensionIds());
-  const persisted = parseJsonSetting<unknown>(
-    await getDesktopHostLocalSettingsApi().getSetting(BROWSER_EXTENSION_ALLOWED_IDS_KEY),
-    [],
-  );
-  const persistedIds = normalizeExtensionIds(Array.isArray(persisted) ? persisted : []);
-  if (runtimeIds.length !== persistedIds.length || runtimeIds.some((id, index) => id !== persistedIds[index])) {
-    await persistAllowedExtensionIds(runtimeIds);
-  }
+  try { return JSON.parse(value) as T; } catch { return defaultValue; }
 }
 
 const HOST_LOCAL_TOOL_PERMISSION_KEY = 'host.localToolPermission';
@@ -113,22 +49,6 @@ async function setHostLocalToolPermission(value: 'ask' | 'always' | 'never'): Pr
 }
 
 export function registerSettingsHandlers(): void {
-  // Persist auto-approved extension IDs immediately
-  setOnAutoApprovedExtensionId((extensionId: string) => {
-    void (async () => {
-      await ensureAllowedExtensionIdsLoaded();
-      const current = getAllowedExtensionIds();
-      if (!current.includes(extensionId)) current.push(extensionId);
-      await persistAllowedExtensionIds(current);
-    })().catch((error: unknown) => {
-      getLogger().warn(
-        'Failed to persist auto-approved browser extension ID',
-        { error: String(error) },
-        LogComponent.Settings,
-      );
-    });
-  });
-
   // Plan 453 Task H: Wake Agent settings (config.toml [wake] section).
   ipcMain.handle('settings:get-wake-config', async () => {
     const configStore = getConfigStore();
@@ -231,49 +151,6 @@ export function registerSettingsHandlers(): void {
     }
   });
 
-  // Browser extension status
-  ipcMain.handle('browser-extension:get-status', async () => {
-    try {
-      await ensureAllowedExtensionIdsLoaded();
-      await syncAllowedExtensionIdsToSettings();
-      const status = getBrowserExtensionStatus();
-      return { success: true, status };
-    } catch (error) {
-      const logger = getLogger();
-      logger.error('Failed to get browser extension status', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-      return { success: false, error: String(error) };
-    }
-  });
-
-  ipcMain.handle('browser-extension:approve-pending', async () => {
-    try {
-      await ensureAllowedExtensionIdsLoaded();
-      const approvalResult = approvePendingExtensionApproval();
-      if (!approvalResult.success) {
-        return { success: false, error: approvalResult.error, status: getBrowserExtensionStatus() };
-      }
-
-      await persistAllowedExtensionIds(getAllowedExtensionIds());
-      return { success: true, status: getBrowserExtensionStatus() };
-    } catch (error) {
-      const logger = getLogger();
-      logger.error('Failed to approve pending browser extension', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
-      return { success: false, error: String(error) };
-    }
-  });
-
-  ipcMain.handle('browser-extension:deny-pending', async () => {
-    try {
-      await ensureAllowedExtensionIdsLoaded();
-      denyPendingExtensionApproval();
-      return { success: true, status: getBrowserExtensionStatus() };
-    } catch (error) {
-      const logger = getLogger();
-      logger.error('Failed to deny pending browser extension', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
-      return { success: false, error: String(error) };
-    }
-  });
-
   // Memory system toggle (settings → Memory section).
   // Writes config.toml `memory.memory_enabled` (the value every consumer
   // reads: boot worker gate, agent-server lifecycle env, process-pool env)
@@ -349,37 +226,12 @@ export function registerSettingsHandlers(): void {
 
       const agentPool = getAgentProcessPool();
       const status = agentPool.getStatus();
-      const settings = getDesktopHostLocalSettingsApi();
-
-      // Get blocked domains from settings
-      let blockedDomains: string[] = [];
-      try {
-        const raw = await settings.getSetting('blockedDomains');
-        if (raw) {
-          const parsed: unknown = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.every((domain) => typeof domain === 'string')) {
-            blockedDomains = parsed;
-          }
-        }
-      } catch {}
-
       // Get sandbox enabled setting
       let sandboxEnabled = true;
       try {
         const value = await settings.getSetting('sandboxEnabled');
         if (value !== null) {
           sandboxEnabled = value === 'true';
-        }
-      } catch {}
-
-      // Get browser backend mode
-      let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
-      try {
-        const parsed = await settings.getSetting('browserBackendMode');
-        if (parsed) {
-          if (parsed === 'extension' || parsed === 'built-in' || parsed === 'human-like') {
-            browserBackendMode = parsed;
-          }
         }
       } catch {}
 
@@ -407,9 +259,7 @@ export function registerSettingsHandlers(): void {
           },
           workingDirectory,
           systemPrompt,
-          blockedDomains,
           sandboxEnabled,
-          browserBackendMode,
         });
       }
 
@@ -454,19 +304,6 @@ export function registerSettingsHandlers(): void {
       const logger = getLogger();
       logger.error('Failed to set host tool permission', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
       return { success: false, error: String(error) };
-    }
-  });
-
-  // Live-update browser backend mode on running agents without full re-init
-  ipcMain.handle('browser:update-backend-mode', async (_event, mode: 'auto' | 'extension' | 'built-in' | 'human-like') => {
-    try {
-      const agentPool = getAgentProcessPool();
-      agentPool.broadcastConfigUpdate({ browserBackendMode: mode });
-      return { success: true };
-    } catch (error) {
-      const logger = getLogger();
-      logger.error('browser:update-backend-mode failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Main);
-      return { success: false, reason: String(error) };
     }
   });
 

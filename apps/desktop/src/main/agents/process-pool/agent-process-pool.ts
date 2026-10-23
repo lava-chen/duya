@@ -533,17 +533,6 @@ export class AgentProcessPool {
     this.router.remove(sessionId, handler);
   }
 
-  /**
-   * Broadcast a runtime config update to all running agent processes.
-   * Used when a setting (e.g. browserBackendMode) changes while agents
-   * are alive — they pick it up without a full re-init.
-   */
-  broadcastConfigUpdate(payload: { browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like' }): void {
-    for (const [sessionId] of this.running) {
-      this.send(sessionId, { type: 'config:update', sessionId, ...payload });
-    }
-  }
-
   // ========================================================================
   // Health Monitoring
   // ========================================================================
@@ -727,44 +716,21 @@ export class AgentProcessPool {
     if (!proc || proc.child.exitCode !== null) return;
 
     this.pendingProviderInit.add(sessionId);
-    void this.readBrowserBackendMode().then((browserBackendMode) => {
-      if (this.running.get(sessionId) !== proc || proc.child.exitCode !== null) return;
-      this.sendProviderInitWithMode(sessionId, browserBackendMode);
-    }).catch((error: unknown) => {
+    try {
+      this.sendProviderInitWithMode(sessionId);
+    } catch (error) {
       this.logger.error(
         'Failed to send provider initialization to agent process',
         error instanceof Error ? error : new Error(String(error)),
         { sessionId },
         LogComponent.AgentProcessPool,
       );
-    }).finally(() => {
+    } finally {
       this.pendingProviderInit.delete(sessionId);
-    });
-  }
-
-  private async readBrowserBackendMode(): Promise<'auto' | 'extension' | 'built-in' | 'human-like'> {
-    // Keep the process-pool module usable in standalone/headless composition.
-    // Desktop's authenticated Host API is only available when Electron is the
-    // supervisor; headless composition falls back to the previous default.
-    if (!electronApp()) return 'auto';
-    try {
-      const { getDesktopHostLocalSettingsApi } = await import('../../cli/desktop-host-api.js');
-      const mode = await getDesktopHostLocalSettingsApi().getSetting('browserBackendMode');
-      if (mode === 'extension' || mode === 'built-in' || mode === 'human-like') return mode;
-    } catch (error) {
-      this.logger.debug(
-        'Could not read browser backend mode through Host; using default',
-        { error: String(error) },
-        LogComponent.AgentProcessPool,
-      );
     }
-    return 'auto';
   }
 
-  private sendProviderInitWithMode(
-    sessionId: string,
-    browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like',
-  ): void {
+  private sendProviderInitWithMode(sessionId: string): void {
 
     const proc = this.running.get(sessionId);
     if (!proc || proc.child.exitCode !== null) return;
@@ -799,7 +765,6 @@ export class AgentProcessPool {
         localeCountryCode: systemLocaleCountryCode(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      browserBackendMode,
     });
   }
 

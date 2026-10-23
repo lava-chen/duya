@@ -26,8 +26,6 @@ export interface InitCommand {
   systemPrompt?: string;
   skillPaths?: string[];
   communicationPlatform?: string;
-  blockedDomains?: string[];
-  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   language?: string;
   sandboxEnabled?: boolean;
 }
@@ -198,13 +196,6 @@ export interface SideQuestionResponse {
   error?: string;
 }
 
-export interface ConfigUpdateCommand {
-  type: 'config:update';
-  sessionId: string;
-  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
-  blockedDomains?: string[];
-}
-
 export interface PermissionResolveCommand {
   type: 'permission:resolve';
   id: string;
@@ -274,7 +265,6 @@ export type WorkerCommand =
   | PluginAppInvokeCommand
   | CompactCommand
   | SideQuestionCommand
-  | ConfigUpdateCommand
   | PermissionResolveCommand
   | PermissionSetCommand
   | DbResponseCommand

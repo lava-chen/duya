@@ -27,7 +27,6 @@ import { classifyError, type WorkflowErrorClass } from '../error-class.js';
 import { validateLooseJsonSchema, type LooseSchema } from '../output-schema.js';
 import { uncertainOutcomeFor, type DecisionRunOutcome } from '../decision-adapter.js';
 import type { DecisionQuestionSpec } from '../schema.js';
-import type { BrowserNodeOutcome, BrowserNodeSpec, BrowserStep } from '../browser-runner.js';
 import type { Question } from '@duya/ai';
 
 // ─── 宿主端口（与 WorkflowHost 同构，decide/publish 为脚本专有扩展） ───
@@ -48,11 +47,6 @@ export interface DwfDecisionPort {
 export interface DwfHostPorts {
   runTool(tool: string, input: unknown, ctx: HostCallContext): Promise<HostCallResult>;
   runAgent(spec: HostAgentSpec, ctx: HostCallContext): Promise<HostCallResult>;
-  /**
-   * 浏览器插件步骤序列（plan 564，browser-runner 的 runBrowserNode 语义由宿主
-   * 绑定层包装）。缺席时 wf.browser 抛明确错误——扩展驱动的脚本必须绑定此端口。
-   */
-  runBrowser?(spec: BrowserNodeSpec, ctx: HostCallContext): Promise<BrowserNodeOutcome>;
   /**
    * 升级问询（plan 565 Phase D）：把问题投给锚定会话（AskUserQuestion 管线，
    * 复用 chat:permission 帧），受控答复后继续。缺席时 wf.ask 抛明确错误、
@@ -171,12 +165,6 @@ export interface DwfAgentObjectSpec {
 export interface DwfApi {
   /** 零 LLM 的确定性工具调用（ToolRegistry 直达）。 */
   tool(tool: string, input?: Record<string, unknown>): Promise<unknown>;
-  /**
-   * 浏览器插件节点（plan 564）：对真实浏览器执行确定性步骤序列（navigate/
-   * click/type/set_value/key/scroll/wait/screenshot，CSS selector 定位）。
-   * 需要 DUYA Browser Bridge 扩展在线；失败抛错；on_stuck:'skip' 时 resolve null。
-   */
-  browser(spec: BrowserNodeSpec): Promise<unknown>;
   /**
    * 开放式子任务（SubagentTool）。
    * - opts.outputSchema：宿主校验 + 一次同上下文 nudge 重试（plan 565 Phase C；
@@ -337,13 +325,6 @@ function summarizeCall(action: string, nodeKind: string, payload: unknown): stri
   switch (nodeKind) {
     case 'tool':
       return pickSummaryText(obj.input);
-    case 'browser': {
-      const spec = obj.spec as BrowserNodeSpec | undefined;
-      const steps = spec?.steps ?? [];
-      const head = describeBrowserStep(steps[0]);
-      const rest = steps.length > 1 ? ` +${steps.length - 1}` : '';
-      return `${spec?.start_url ?? 'browser'}: ${head}${rest}`;
-    }
     case 'agent':
     case 'human':
       return pickSummaryText(obj.prompt);
@@ -417,7 +398,7 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
   async function cachedCall<T>(
     kind: 'node_result' | 'decision' | 'approval',
     action: string,
-    nodeKind: 'tool' | 'gui' | 'browser' | 'agent' | 'decision' | 'human' | 'ask',
+    nodeKind: 'tool' | 'agent' | 'decision' | 'human' | 'ask',
     payload: unknown,
     execute: () => Promise<{ value: T; meta?: { childSessionId?: string; exitCode?: number | null; usage?: { inputTokens: number; outputTokens: number } } }>,
   ): Promise<{ value: T; cached: boolean }> {
@@ -482,22 +463,6 @@ export function createDwfApi(ports: DwfHostPorts, opts: DwfRunOptions): DwfApi {
         const res = await ports.runTool(tool, input ?? {}, ctx);
         if (!res.ok) throw new Error(res.error ?? `tool "${tool}" failed`);
         return { value: res.output, meta: { exitCode: res.exitCode ?? null } };
-      });
-      return value;
-    },
-
-    async browser(spec) {
-      const { value } = await cachedCall('node_result', `browser:${spec.start_url ?? spec.steps[0]?.do ?? 'browser'}`, 'browser', { spec }, async () => {
-        budget.countHostCall();
-        if (!ports.runBrowser) {
-          throw new Error('wf.browser is not bound in this worker — no browser bridge port');
-        }
-        const outcome = await ports.runBrowser(spec, ctx);
-        if (outcome.status === 'failed') {
-          throw new Error(outcome.error ?? 'browser node failed');
-        }
-        if (outcome.status === 'skipped') return { value: null };
-        return { value: outcome.output ?? null };
       });
       return value;
     },

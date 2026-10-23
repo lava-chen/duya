@@ -5,7 +5,6 @@ import { getChannelManager } from '../messaging/port-manager';
 import { getPerformanceMonitor } from '../services/performance-monitor';
 import { stopGatewayProcess } from '../gateway/index';
 import { getSessionManager } from '../agents/session-manager';
-import { stopBrowserDaemon } from '../services/browser/daemon';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDatabase } from '../ipc/db-handlers';
 import { closeDatabase, stopWalCheckpoint } from '../db/connection';
@@ -84,12 +83,20 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error shutting down session manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
-  // 6. Stop Browser Daemon
+  // 6.45 Stop the shared OSContext producer.
   try {
-    await stopBrowserDaemon();
-    logger.info('Browser Daemon stopped', undefined, 'Main');
+    const { getRecorderProcessDaemon } = await import('../services/recorder/process-daemon');
+    const cuDaemon = getRecorderProcessDaemon();
+    await cuDaemon.stop();
+    logger.info('OSContext producer stopped', undefined, 'Main');
   } catch (err) {
-    logger.error('Error stopping Browser Daemon', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+    // getRecorderProcessDaemon throws when init() never ran; that's OK
+    // when the user hasn't enabled wake-agent.
+    logger.info(
+      'OSContext producer not initialized; skipping',
+      undefined,
+      'Main',
+    );
   }
 
   // 6.5 Stop automation scheduler

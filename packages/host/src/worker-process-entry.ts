@@ -28,7 +28,6 @@ let _appConnectionModule: any = null;
 import type { WorkerSession } from './worker-session-runtime.js';
 import { Journal } from '@duya/host/worker-journal/Journal';
 import { loadSkills, getSkillRegistry, getAgentSkillDirectory } from '@duya/host/skills';
-import { browserTool } from './worker-tool-bindings/browser-tool.js';
 import { modeModifierRegistry } from './worker-modes/modifiers/index.js';
 import { verifyRunManifestBinding, manifestRejectionProtocolCode, type WorkerCapabilitySet } from '@duya/agent-core/run-manifest-verification';
 import { type RunManifest, type RunId } from '@duya/agent-protocol';
@@ -96,8 +95,6 @@ interface InitMessage {
     systemPrompt?: string;
     skillPaths?: string[];
     communicationPlatform?: string;
-    blockedDomains?: string[];
-    browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
     language?: string;
     sandboxEnabled?: boolean;
     securityScanEnabled?: boolean;
@@ -1267,7 +1264,7 @@ function summarizeConversation(messages: Message[], maxMessages = 12): string {
         .filter(Boolean)
         .join('\n\n');
 }
-async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, blockedDomains?: string[], language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like', permissionRules?: InitMessage['permissionRules'], currentProjectId?: string | null, projectHome?: string): Promise<void> {
+async function initAgent(config: InitMessage['providerConfig'] | null | undefined, workDir?: string, defaultWorkspaceDir?: string, sysPrompt?: string, language?: string, sandboxEnabled?: boolean, communicationPlatform?: string, permissionRules?: InitMessage['permissionRules'], currentProjectId?: string | null, projectHome?: string): Promise<void> {
     sessionSystemPrompt = sysPrompt;
     if (!config) {
         throw new Error('No provider config available. Please configure an API provider in Settings.');
@@ -1303,8 +1300,6 @@ async function initAgent(config: InitMessage['providerConfig'] | null | undefine
         projectHome,
         visionConfig: config.visionConfig,
         compactModelConfig: config.compactModelConfig,
-        blockedDomains,
-        browserBackendMode,
         language,
         defaultWorkspaceDirectory: defaultWorkspaceDir,
         permissionRules,
@@ -2835,7 +2830,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             });
             let initError: string | null = null;
             try {
-                await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.blockedDomains, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.browserBackendMode, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
+                await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
                 const restoredSession = requireWorkerSession();
                 try {
                     currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
@@ -3156,21 +3151,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
         case 'reload:mcp': {
             log('[Agent-Process] Received reload:mcp');
             void reloadMCP();
-            break;
-        }
-        case 'config:update': {
-            const cfgMsg = msg as unknown as {
-                browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
-                blockedDomains?: string[];
-            };
-            log('[Agent-Process] Received config:update:', cfgMsg);
-            if (cfgMsg.browserBackendMode) {
-                browserTool.setBrowserConfig({
-                    mode: cfgMsg.browserBackendMode,
-                    extensionProbeTimeoutMs: 500,
-                });
-                log('[Agent-Process] Browser backend mode updated:', cfgMsg.browserBackendMode);
-            }
             break;
         }
         case 'mcp:status:get': {

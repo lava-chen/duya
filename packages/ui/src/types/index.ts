@@ -107,16 +107,10 @@ export interface AppSettings {
   font?: string;
   compactMode?: boolean;
   messageFontSize?: 'small' | 'medium' | 'large';
-  // Browser security settings
-  blockedDomains: string[];
-  // Browser backend mode: auto (degradation chain) | extension | built-in
-  browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
   // Built-in browser default home URL
   browserHomeUrl?: string;
   // Built-in browser default download directory
   browserDownloadPath?: string;
-  // Max number of pages/tabs agents may open across browser backends
-  browserMaxTabs?: number;
   // Favorite agent profiles for quick access (max 3)
   favoriteAgentIds: string[];
   // Agent prompt language preference (e.g. 'Chinese', 'English')

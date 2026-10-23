@@ -831,8 +831,6 @@ export class WorkerSession implements AgentRuntime {
     private alwaysAskRules: ToolPermissionRulesBySource = {};
     private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
     private visualAnalysis: VisualAnalysisService;
-    private blockedDomains: string[] = [];
-    private browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
     private mcpManager: MCPManager | null = null;
     private mcpReadyResolve: (() => void) | null = null;
     private mcpReady: Promise<void> = new Promise((resolve) => {
@@ -1056,8 +1054,6 @@ export class WorkerSession implements AgentRuntime {
             const resolved = path.resolve(dir);
             this.additionalWorkingDirectories.set(resolved, { path: resolved, source: ruleSource });
         }
-        this.blockedDomains = options.blockedDomains ?? [];
-        this.browserBackendMode = options.browserBackendMode ?? 'auto';
         this.compactionController = new MessageCompactionController({
             timeline: this.timeline,
             compactionManager: this.compactionManager,
@@ -1793,8 +1789,7 @@ export class WorkerSession implements AgentRuntime {
             ...definedProperties({ sessionId: this.sessionId }),
             ...definedProperties({ workingDirectory: this.workingDirectory }),
             toolRegistry,
-            ...definedProperties({ chatOptions: options as Record<string, unknown> | undefined }),
-            blockedDomains: this.blockedDomains
+            ...definedProperties({ chatOptions: options as Record<string, unknown> | undefined })
         };
         const ctx: ModeModifierContext = {
             sessionId: this.sessionId ?? '',
@@ -1990,9 +1985,8 @@ export class WorkerSession implements AgentRuntime {
         }
         catch {
         }
-        const temp = createBuiltinRegistry(this.subagentDeps, this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined, {
+        const temp = createBuiltinRegistry(this.subagentDeps, {
             ...definedProperties({ enabledPluginIds: enabledPluginIds }),
-            browserBackendMode: this.browserBackendMode
         });
         for (const tool of temp.getAllTools()) {
             const executor = temp.getExecutor(tool.name);

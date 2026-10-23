@@ -51,35 +51,108 @@ function fakePorts(overrides: Partial<DwfHostPorts> = {}): DwfHostPorts & {
       agentCalls.push(`${spec.agent}:${spec.prompt}`);
       return { ok: true, output: { done: true, prompt: spec.prompt } } satisfies HostCallResult;
     },
-    async runBrowser() {
-        return { status: 'failed', error: 'browser step 1 (click #a) failed: boom' };
-      },
-    });
-    const result = (await runDwfScript(script, ports, { runId: 'r1', journal: new Journal(sink) })) as Record<string, unknown>;
-    expect(result.threw).toBe('browser step 1 (click #a) failed: boom');
-    const failed = lastRecord(sink, (r) => r.nodeKind === 'browser');
-    expect(failed?.status).toBe('failed');
+    async requestApproval(spec) {
+      approvals.push(spec.prompt);
+      return { decision: 'approve' as const };
+    },
+    ...overrides,
+  };
+}
 
-    const skipped = await runDwfScript(
-      'export default async function (wf) { return await wf.browser({ on_stuck: "skip", steps: [] }); }',
-      fakePortsWithBrowser({ async runBrowser() { return { status: 'skipped', output: { steps: 0 } }; } }),
-      { runId: 'r2', journal: Journal.memory() },
-    );
-    expect(skipped).toBe(null);
+const SIMPLE_SCRIPT = `
+export default async function (wf) {
+  const r = await wf.tool("Bash", { cmd: "echo hi" });
+  await wf.publish("result", r);
+  return r;
+}`;
+
+/**
+ * Plan 568: a cached node journals a `running` record BEFORE its terminal
+ * one — assertions mean the terminal (last) record for the predicate.
+ */
+function lastRecord(
+  sink: MemoryJournalSink,
+  pred: (r: JournalRecord) => boolean,
+): JournalRecord | undefined {
+  const all = sink.readAll().filter(pred);
+  return all.length > 0 ? all[all.length - 1] : undefined;
+}
+
+// ─── compile + sandbox ───
+
+describe('dwf runtime — compile & sandbox', () => {
+  it('compiles export default and returns the script value', async () => {
+    const fn = await compileDwfScript('export default async function (wf) { return 42; }');
+    const ports = fakePorts();
+    const result = await runDwfScript('export default async function (wf) { return 42; }', ports, {
+      runId: 'r1',
+      journal: Journal.memory(),
+    });
+    expect(result).toBe(42);
+    expect(fn).toBeTypeOf('function');
+    void ports;
   });
 
-  it('wf.browser without a bound port fails loudly', async () => {
+  it('missing default export fails with a named compile error', async () => {
+    await expect(compileDwfScript('export const x = 1;')).rejects.toBeInstanceOf(DwfCompileError);
+  });
+
+  it('syntax errors surface as DwfCompileError with the message', async () => {
+    await expect(compileDwfScript('export default async function (wf) { const = ; }')).rejects.toBeInstanceOf(
+      DwfCompileError,
+    );
+  });
+
+  it('sandbox has no process/require/fetch — wf is the only channel out', async () => {
     const script = `
       export default async function (wf) {
-        try {
-          await wf.browser({ steps: [] });
-          return 'no-throw';
-        } catch (e) {
-          return { threw: e.message };
-        }
+        return { proc: typeof process, req: typeof require, fetch: typeof fetch, setTimeout: typeof setTimeout };
       }`;
-    const result = (await runDwfScript(script, fakePorts(), { runId: 'r1', journal: Journal.memory() })) as Record<string, unknown>;
-    expect(result.threw).toContain('wf.browser is not bound');
+    const result = (await runDwfScript(script, fakePorts(), { runId: 'r1', journal: Journal.memory() })) as Record<string, string>;
+    expect(result.proc).toBe('undefined');
+    expect(result.req).toBe('undefined');
+    expect(result.fetch).toBe('undefined');
+    expect(result.setTimeout).toBe('undefined');
+  });
+
+  it('args global is injected; JSON/Math are available', async () => {
+    const script = `
+      export default async function (wf) {
+        return { name: args.name, sum: Math.round(JSON.parse("[1,2]").length * 1.5) };
+      }`;
+    const result = (await runDwfScript(script, fakePorts(), {
+      runId: 'r1',
+      journal: Journal.memory(),
+      args: { name: 'duya' },
+    })) as Record<string, unknown>;
+    expect(result.name).toBe('duya');
+    expect(result.sum).toBe(3);
+  });
+});
+
+// ─── wf primitives + journal economics ───
+
+describe('dwf runtime — wf primitives', () => {
+  it('tool/agent/publish flow journals node_result + artifact records', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts();
+    await runDwfScript(SIMPLE_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) });
+    expect(ports.toolCalls).toHaveLength(1);
+    const kinds = sink.readAll().map((r) => r.kind);
+    expect(kinds).toContain('node_result');
+    expect(kinds).toContain('artifact');
+    const publish = sink.readAll().find((r) => r.kind === 'artifact');
+    expect(publish?.result).toMatchObject({ name: 'result', content: { tool: 'Bash' } });
+  });
+
+  it('re-running against the same journal hits the cache — host is not called twice', async () => {
+    const sink = new MemoryJournalSink();
+    const ports = fakePorts();
+    await runDwfScript(SIMPLE_SCRIPT, ports, { runId: 'r1', journal: new Journal(sink) });
+    // resume：同一 sink 重建 journal（缓存从已成功记录重建）。
+    const ports2 = fakePorts();
+    await runDwfScript(SIMPLE_SCRIPT, ports2, { runId: 'r1', journal: new Journal(sink), resuming: true });
+    expect(ports2.toolCalls).toHaveLength(0); // 缓存命中，宿主零调用
   });
 
   it('approve resolves on approve; deny throws; timeout+skip returns null', async () => {

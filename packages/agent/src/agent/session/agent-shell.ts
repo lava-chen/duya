@@ -72,8 +72,6 @@ export interface AgentShellContext {
   alwaysAllowRules: ToolPermissionRulesBySource;
   alwaysDenyRules: ToolPermissionRulesBySource;
   alwaysAskRules: ToolPermissionRulesBySource;
-  blockedDomains: string[];
-  browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like';
   providerNameToInternalKey: Map<string, string>;
   activeMCPRegistry: ToolRegistry;
   messages: () => Message[];
@@ -498,7 +496,6 @@ export async function* dispatchOrchestratorMode(
     workingDirectory: ctx.workingDirectory,
     toolRegistry,
     chatOptions: options as Record<string, unknown> | undefined,
-    blockedDomains: ctx.blockedDomains,
   };
 
   const modeCtx: ModeModifierContext = {

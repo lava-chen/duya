@@ -22,7 +22,6 @@ import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { AgentProfileCreateSchema, AgentProfileUpdateSchema, parseIpcPayload, RecordIdSchema } from './contracts';
-import { setBrowserMaxTabs } from '../services/browser/daemon';
 import { setBrowserDownloadPathSetting } from '../services/browser/cookie-writer';
 import type { HostLocalRolloutImportInput } from '@duya/agent-protocol/session-api';
 import type { SidebarSectionCreateInput, SidebarSectionPatch } from '@duya/agent-protocol/sidebar-sections';
@@ -1193,9 +1192,6 @@ export function registerDbHandlers(): void {
     if (isGatewayConfigKey(key)) {
       emitGatewayConfigChanged(`db:setting:set:${key}`);
     }
-    if (key === 'browserMaxTabs') {
-      setBrowserMaxTabs(Number(value));
-    }
   });
 
   ipcMain.handle('db:setting:getAll', async () => {
@@ -1257,12 +1253,6 @@ export function registerDbHandlers(): void {
     // agent server is silently ignored by the helper.
     if (key === 'mcpServers') {
       void notifyMcpConfigChanged();
-    }
-    // Live-propagate the browser page cap to the daemon (built-in webview
-    // backend + Chrome extension) so the user's settings take effect
-    // immediately on running agents.
-    if (key === 'browserMaxTabs') {
-      setBrowserMaxTabs(typeof value === 'number' ? value : Number(value));
     }
   });
 

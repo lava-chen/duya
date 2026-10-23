@@ -144,8 +144,6 @@ export interface OrchestratorDeps {
   toolRegistry: ToolRegistry;
   /** Original ChatOptions, for orchestrators that need to read mode options. */
   chatOptions?: Record<string, unknown>;
-  /** Blocked domains for web tools. */
-  blockedDomains?: string[];
 }
 
 /**

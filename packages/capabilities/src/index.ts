@@ -20,8 +20,6 @@
 
 // Contracts — the pure tool vocabulary.
 export * from './contracts/index.js';
-export * from './BrowserTool/index.js';
-export * from './BrowserTool/ports.js';
 
 // BaseTool — the abstract tool base classes and execution error types.
 // The explicit class export shadows the `BaseTool` interface contributed by

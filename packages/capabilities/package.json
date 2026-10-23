@@ -3,21 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Capability implementations for Duya, starting with the filesystem capability: the FS tool stack (Read/Write/Edit/Glob/Grep/ApplyPatch), the tool contract types, BaseTool, the file read-state / mutation-queue / snapshot stores, and the path-permission policy. Capabilities do not know who calls them.",
+  "description": "Capability implementations for Duya, including filesystem and OS tools, contracts, BaseTool, file read-state / mutation-queue / snapshot stores, and path-permission policy. Capabilities do not know who calls them.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     "./shell/prepare-sandbox": {
       "types": "./dist/shell/prepare-sandbox.d.ts",
       "import": "./dist/shell/prepare-sandbox.js"
-    },
-    "./BrowserTool": {
-      "types": "./dist/BrowserTool/index.d.ts",
-      "default": "./dist/BrowserTool/index.js"
-    },
-    "./BrowserTool/*": {
-      "types": "./dist/BrowserTool/*.d.ts",
-      "default": "./dist/BrowserTool/*.js"
     },
     "./OSTool": {
       "types": "./dist/OSTool/index.d.ts",

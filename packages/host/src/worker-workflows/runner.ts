@@ -20,7 +20,6 @@
  *                 capped there in v1; a timeout surfaces to the script as
  *                 'deny' → DwfApprovalDeniedError('denied') regardless of
  *                 the declared onTimeout mode.
- *   - runBrowser → ExtensionCDPClient over the browser daemon (plan 564);
  *                 the daemon is localhost HTTP so the worker dials it
  *                 directly, no worker→main RPC hop.
  *
@@ -50,7 +49,6 @@ import { BudgetLedger, type HostAgentSpec, type HostCallResult, type WorkflowHos
 import { openRunLog, type RunLog } from './run-log.js';
 import type { SavedWorkflowArgDeclaration } from './dwf/contracts.js';
 import { workflowRunDb } from '../worker-db-client.js';
-import { runBrowserWithExtensionBackend } from './browser-backend.js';
 
 // ─── deps supplied by the worker composition root ───
 
@@ -432,8 +430,6 @@ function buildHostPorts(
   onArtifact?: (descriptor: WorkflowArtifactDescriptor) => void,
 ): DwfHostPorts {
   const execution = deps.execution.createPorts(cwd);
-  // One extension session tab per wf.browser call (plan 564 D2).
-  let browserSeq = 0;
 
   return {
     async publishArtifact(name, content, contentType) {
@@ -475,24 +471,6 @@ function buildHostPorts(
       // The worker composition root supplies the run engine or tool-backed
       // child adapter; the workflow runner does not call a legacy Agent loop.
       return execution.runAgent(spec, { toolUseId: randomUUID() });
-    },
-
-    async runBrowser(spec) {
-      // Browser-extension steps (plan 564): the daemon is a localhost HTTP
-      // service, so the worker talks to it DIRECTLY. Without the extension online the
-      // node fails loudly (on_stuck ladder owns skip semantics).
-      return runBrowserWithExtensionBackend(`wf-${gui.runId}-${browserSeq++}`, spec, {
-        runId: gui.runId,
-        ...(deps.guiArtifactStore ? { artifacts: deps.guiArtifactStore } : {}),
-        // on_stuck:'agent' escalation (plan 565 Phase D): the ladder asks the
-        // anchored session whether to retry; absent port → fail-as-before.
-        ...(deps.takePendingAnswer
-          ? {
-              ask: (question: string) =>
-                runWorkflowAsk(deps, question).then((r) => r.answer),
-            }
-          : {}),
-      });
     },
 
     async runAsk(question) {
