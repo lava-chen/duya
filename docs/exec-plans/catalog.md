@@ -12,6 +12,7 @@
 | [2026-10-23-multi-agent-orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | — | 多 agent 编排的测试体系与优化方案；Phase 1 补子 agent 状态机测试（当前零覆盖），Phase 2 做 DAG 并行与失败级联 |
 | [2026-10-23-desktop-performance-hill-climbing](active/2026-10-23-desktop-performance-hill-climbing.md) | — | Desktop 性能爬坡：5 Agent 独占路径并行，A 先交 Harness，B/C/D/E 各自建基线并各出一个可证明收益的 PR |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
+| [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |
 | [popover-autoflip](active/237-popover-autoflip.md) | P1 | Migrate `HoverPopover` to `usePopoverPlacement`, then `SlashCommandPopover` / `ModelSelector` |
 | [permission-decision-bus](active/419-permission-decision-bus.md) | P0 | Add `checkPermissions` + `riskTier` to the MCP tool registration path |
