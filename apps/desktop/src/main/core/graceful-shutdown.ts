@@ -24,6 +24,13 @@ export async function performGracefulShutdown(): Promise<void> {
   const logger = getLogger();
   logger.info('Starting graceful shutdown...', undefined, 'Main');
 
+  try {
+    const { shutdownPluginApps } = await import('../plugins/plugin-app-host');
+    await shutdownPluginApps();
+  } catch (err) {
+    logger.error('Error stopping Plugin Apps', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
   // 0. Stop CLI API server (Phase 0) — runs first so we don't accept new
   // requests after other subsystems begin tearing down.
   try {

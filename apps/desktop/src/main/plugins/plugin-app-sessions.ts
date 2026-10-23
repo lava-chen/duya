@@ -150,6 +150,10 @@ export class PluginAppSessionStore {
     return this.#sessions.get(sessionId) ?? null;
   }
 
+  all(): PluginAppSession[] {
+    return [...this.#sessions.values()];
+  }
+
   forPlugin(pluginId: string): PluginAppSession[] {
     return [...this.#sessions.values()].filter((session) => session.pluginId === pluginId);
   }

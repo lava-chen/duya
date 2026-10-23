@@ -41,6 +41,7 @@ import {
   closeStandaloneApp,
   invokeStandaloneApp,
   resolveStandaloneApp,
+  shutdownStandaloneApps,
 } from './standalone-app-runtime';
 
 export type PluginAppHostError =
@@ -85,6 +86,7 @@ export interface PluginAppCallResult {
 }
 
 const sessions = new PluginAppSessionStore();
+let shuttingDown = false;
 
 /**
  * Resolve the App's entry file inside the installed package.
@@ -171,6 +173,7 @@ async function resolveInstance(
 }
 
 async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenResult> {
+  if (shuttingDown) return { ok: false, error: 'host_unavailable' };
   if (typeof request?.pluginId !== 'string' || typeof request?.appId !== 'string') {
     return { ok: false, error: 'plugin_not_found' };
   }
@@ -194,6 +197,7 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     found.app.stateSchemaVersion,
   );
   if (!instanceId) return { ok: false, error: 'instance_unavailable' };
+  if (shuttingDown) return { ok: false, error: 'host_unavailable' };
 
   const session = sessions.open({
     pluginId: request.pluginId,
@@ -309,6 +313,7 @@ async function dispatch(sessionId: string, message: PluginAppGuestMessage): Prom
 }
 
 async function handleCall(request: PluginAppCallRequest): Promise<PluginAppCallResult> {
+  if (shuttingDown) return { ok: false, error: 'host_unavailable' };
   if (typeof request?.sessionId !== 'string') return { ok: false, error: 'unknown_session' };
   const authorized = authorizePluginAppCall(
     sessions.get(request.sessionId),
@@ -355,4 +360,11 @@ export function invalidatePluginAppSessions(pluginId: string): void {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed()) window.webContents.send('plugin-app:changed', { pluginId });
   }
+}
+
+export async function shutdownPluginApps(): Promise<void> {
+  shuttingDown = true;
+  await shutdownStandaloneApps();
+  for (const session of sessions.all()) handleClose({ sessionId: session.sessionId });
+  await pluginAppAssets.close();
 }

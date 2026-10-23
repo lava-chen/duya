@@ -196,7 +196,7 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
         src={launch.entryUrl}
         title={`${pluginId} app`}
         referrerPolicy="no-referrer"
-        sandbox="allow-scripts allow-forms allow-downloads"
+        sandbox="allow-scripts allow-forms allow-downloads allow-popups"
       />
     </div>
   );

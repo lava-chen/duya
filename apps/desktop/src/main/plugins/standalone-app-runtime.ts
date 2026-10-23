@@ -50,6 +50,8 @@ interface AppRuntime {
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const bindings = new Map<string, AppRuntime>();
+const pendingStarts = new Set<Promise<unknown>>();
+let shuttingDown = false;
 
 function installedApp(pluginId: string, appId: string): InstalledApp | null {
   const entry = getPluginManager().listInstalled().find((item) => item.id === pluginId && item.enabled);
@@ -127,7 +129,14 @@ export function resolveStandaloneApp(pluginId: string, appId: string): Installed
   return installedApp(pluginId, appId);
 }
 
-export async function bindStandaloneApp(sessionId: string, pluginId: string, appId: string, instanceId: string, launchRevision: string) {
+export function bindStandaloneApp(sessionId: string, pluginId: string, appId: string, instanceId: string, launchRevision: string) {
+  const task = bindStandaloneAppInternal(sessionId, pluginId, appId, instanceId, launchRevision);
+  pendingStarts.add(task);
+  return task.finally(() => pendingStarts.delete(task));
+}
+
+async function bindStandaloneAppInternal(sessionId: string, pluginId: string, appId: string, instanceId: string, launchRevision: string) {
+  if (shuttingDown) throw new Error('plugin_app_host_stopping');
   await closeStandaloneApp(sessionId);
   const app = installedApp(pluginId, appId);
   if (!app || app.revision !== launchRevision) throw new Error('plugin_app_changed');
@@ -149,7 +158,11 @@ export async function bindStandaloneApp(sessionId: string, pluginId: string, app
   if (configs.length !== requiredServers.size) throw new Error('plugin_app_mcp_unavailable');
   const manager = new MCPManager();
   try {
-    for (const config of configs) await manager.addServer(toMcpConfig(config));
+    for (const config of configs) {
+      if (shuttingDown) throw new Error('plugin_app_host_stopping');
+      await manager.addServer(toMcpConfig(config));
+    }
+    if (shuttingDown) throw new Error('plugin_app_host_stopping');
     const authority = getDesktopHostPluginAppAuthority();
     const grants = await authority.resolveGrantedCapabilities({ pluginId, appId, instanceId, sessionId, runId: '' });
     if (grants === null) throw new Error('plugin_app_grant_authority_unavailable');
@@ -218,4 +231,11 @@ export async function closeStandaloneApp(sessionId: string): Promise<void> {
   binding.active = false;
   bindings.delete(sessionId);
   await binding.manager.disconnectAll().catch(() => undefined);
+}
+
+/** Stop plugin-owned processes before Desktop tears down its Host APIs. */
+export async function shutdownStandaloneApps(): Promise<void> {
+  shuttingDown = true;
+  await Promise.allSettled([...pendingStarts]);
+  await Promise.allSettled([...bindings.keys()].map((sessionId) => closeStandaloneApp(sessionId)));
 }

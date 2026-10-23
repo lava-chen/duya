@@ -143,7 +143,8 @@ export function substitutePluginVariables(
 
 /**
  * Substitute ${user_config.KEY} and ${setup.KEY} in `value` against the
- * userConfig map.
+ * userConfig map. An explicit `:-default` allows optional setup values to
+ * stay unset without disabling the whole MCP server.
  *
  * Both syntaxes are semantically equivalent — they reference per-plugin
  * user-supplied key/value pairs — so they share the same `userConfig`
@@ -159,7 +160,7 @@ export function substituteUserConfigVariables(
   const missingKeys: string[] = [];
   // Match both ${user_config.X} and ${setup.X}. Both resolve against
   // the same userConfig map.
-  const pattern = /\$\{(?:user_config|setup)\.([A-Za-z0-9_]+)\}/g;
+  const pattern = /\$\{(?:user_config|setup)\.([A-Za-z0-9_]+)(?::-([^}]*))?\}/g;
   let out = '';
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -168,6 +169,8 @@ export function substituteUserConfigVariables(
     const key = match[1];
     if (Object.prototype.hasOwnProperty.call(userConfig, key)) {
       out += userConfig[key];
+    } else if (match[2] !== undefined) {
+      out += match[2];
     } else {
       out += match[0];
       if (!missingKeys.includes(key)) missingKeys.push(key);

@@ -109,7 +109,7 @@ export class PluginAppAssetServer {
       // Module scripts, fonts and fetch from a sandboxed iframe have an
       // opaque Origin. The unguessable mount grants assets, never Host APIs.
       'Access-Control-Allow-Origin': '*',
-      'Content-Security-Policy': "sandbox allow-scripts allow-forms allow-downloads; object-src 'none'; base-uri 'self'",
+      'Content-Security-Policy': "sandbox allow-scripts allow-forms allow-downloads allow-popups; object-src 'none'; base-uri 'self'",
     });
     if (head) { response.end(); return; }
     const stream = createReadStream(file);
