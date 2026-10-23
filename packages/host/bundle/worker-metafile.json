@@ -35124,7 +35124,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 85436,
+      "bytes": 86654,
       "imports": [],
       "format": "esm"
     },
@@ -43756,10 +43756,10 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -49084,7 +49084,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 895
+          "bytesInOutput": 901
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -49195,7 +49195,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 34231
+          "bytesInOutput": 34276
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -49933,7 +49933,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5554098
+      "bytes": 5554175
     }
   }
 }
