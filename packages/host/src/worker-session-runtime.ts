@@ -75,6 +75,7 @@ import { applyContextRail, type ContextBlock, } from '@duya/host/worker-context/
 import {
     buildPromptSnapshot,
     newPromptLedgerState,
+    promptLedgerEnabled,
     toRecordedBlocks,
     type PromptLedgerState,
 } from '@duya/host/worker-context/prompt-ledger';
@@ -294,6 +295,7 @@ export class WorkerSession implements AgentRuntime {
      */
     private _recordPromptSnapshot(systemPrompt: string, options?: ChatOptions): void {
         if (!this.journal || !this.currentTurnId) return;
+        if (!promptLedgerEnabled()) return;
         try {
             const snapshot = buildPromptSnapshot(this.promptLedgerState, {
                 turnId: this.currentTurnId,

@@ -64,6 +64,18 @@ export function promptLedgerQuota(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/**
+ * Whether the prompt is recorded at all.
+ *
+ * The snapshot stores the prompt TEXT, which is the same kind of content
+ * the rollout already holds (the user's messages, the tool results, the
+ * AGENTS.md bodies). It is still a copy of the system prompt, so the
+ * switch exists: set `DUYA_PROMPT_LEDGER=off` to record nothing at all.
+ */
+export function promptLedgerEnabled(): boolean {
+  return process.env.DUYA_PROMPT_LEDGER !== 'off';
+}
+
 /** Fresh ledger state for a session. */
 export function newPromptLedgerState(): PromptLedgerState {
   return { lastSystemHash: null, blockHashes: new Map(), fullWrites: 0 };
