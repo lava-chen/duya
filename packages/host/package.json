@@ -612,6 +612,7 @@
     "marked": "^17.0.6",
     "zod": "^4.3.6",
     "@duya/plugin-core": "0.1.0",
+    "@duya/sandbox": "0.1.0",
     "jimp": "^1.6.0",
     "picomatch": "^4.0.4",
     "yaml": "^2.9.0",

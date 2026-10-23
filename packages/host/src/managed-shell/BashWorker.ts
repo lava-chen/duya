@@ -21,6 +21,7 @@ import { getManagedShellOutputDirectory as getBashOutputDir } from './paths.js';
 import type { FileHandle } from 'fs/promises';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from '@duya/capabilities/ShellCommandTool/constants';
 import { resolveShellProvider, type ShellProviderKind } from '@duya/capabilities/utils/shell/providers';
+import { planShellExecution } from '@duya/capabilities/shell/sandbox-execution';
 
 const execAsync = promisify(exec);
 
@@ -217,9 +218,25 @@ function handleExecute(task: ExecuteTask): void {
 
   const shellInfo = shellProvider.shellInfo;
   const shell = shellInfo.path;
-  const shellArgs = shellProvider.buildArgs(command);
+
+  // The sandbox seam. This is the production call point that was missing:
+  // every command spawned from this worker used to go straight to the shell,
+  // so the sandbox the worker announced at startup was never applied to
+  // anything. The plan carries the command to spawn AND the isolation it
+  // really got, and both are reported — a run that was not isolated says so.
+  const plan = planShellExecution({
+    command,
+    cwd: task.workingDirectory || process.cwd(),
+  });
+  const shellArgs = shellProvider.buildArgs(plan.command);
 
   logger.info(`[BashWorker] Using shell: ${shellInfo.name} (${shell})`);
+
+  logger.info(`[BashWorker] ${plan.diagnostic}`, {
+    taskId,
+    sandboxProvider: plan.isolation.provider,
+    sandboxIsolated: plan.isolation.isolated,
+  });
 
   // Sanitize environment
   const sanitizedEnv = { ...process.env };
@@ -423,6 +440,11 @@ function handleExecute(task: ExecuteTask): void {
           error: errorMessage,
           exitCode,
           outputFile: filePath,
+          // The isolation this command actually ran under, so the host can
+          // report "ran without OS isolation" instead of implying it was
+          // sandboxed.
+          sandboxProvider: plan.isolation.provider,
+          sandboxIsolated: plan.isolation.isolated,
         });
       } else if (wasAborted) {
         const output = readOutputTail(1_000_000);

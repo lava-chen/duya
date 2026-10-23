@@ -11,6 +11,10 @@
       "types": "./dist/shell/prepare-sandbox.d.ts",
       "import": "./dist/shell/prepare-sandbox.js"
     },
+    "./shell/sandbox-execution": {
+      "types": "./dist/shell/sandbox-execution.d.ts",
+      "import": "./dist/shell/sandbox-execution.js"
+    },
     "./OSTool": {
       "types": "./dist/OSTool/index.d.ts",
       "default": "./dist/OSTool/index.js"

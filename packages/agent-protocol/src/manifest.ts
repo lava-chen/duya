@@ -55,7 +55,88 @@ export interface PermissionPolicy {
    *  packages/host/src/worker-process-entry.ts:507. */
   readonly defaultTimeoutMs: number;
   readonly rules?: PermissionRulesWire;
+  /**
+   * The allow / deny / ask split of the same rules, in wire form.
+   *
+   * {@link PermissionRulesWire} has one dimension — the source a rule came
+   * from — and no dimension for the behaviour a rule asks for. That is fine
+   * for a source that carries a single undifferentiated list, and it is NOT
+   * fine for the legacy permission-context blob, which carries three lists
+   * (`allow`, `deny`, `ask`) that mean different things. Merging the three
+   * into one bucket would put a value in the run row that no reader could
+   * interpret, which is the silent substitution this slice exists to prevent.
+   *
+   * So a converted legacy context keeps the split HERE, and `rules` carries
+   * the merged projection for readers that only need "the rules". Absent
+   * means the rules did not come from a behaviour-bearing source.
+   */
+  readonly ruleTables?: PermissionRuleTablesWire;
 }
+
+/**
+ * A rule table that keeps the allow / deny / ask split, in wire form.
+ *
+ * Each table is a {@link PermissionRulesWire}: source to rule strings.
+ */
+export type PermissionRuleTablesWire = Readonly<{
+  readonly allow?: PermissionRulesWire;
+  readonly deny?: PermissionRulesWire;
+  readonly ask?: PermissionRulesWire;
+}>;
+
+/**
+ * The isolation level a run's commands actually got.
+ *
+ * This is a FACT about the run, not a configuration the Control Plane chose,
+ * and it is recorded because the alternative is a system that announces a
+ * sandbox and then runs every command without one.
+ */
+export interface SandboxIsolationRecord {
+  /** The provider that was applied. `unresolved` means nothing resolved it. */
+  readonly provider: 'bubblewrap' | 'none' | 'unresolved';
+  /** True only when the command really ran inside an OS sandbox. */
+  readonly isolated: boolean;
+  /** Why this level, in words a user can read. */
+  readonly reason: string;
+  /**
+   * Where the record came from.
+   *
+   * This field IS the provenance for the sandbox: the isolation is a fact
+   * about the runtime rather than a configuration the Control Plane chose,
+   * and the run row says so instead of leaving it in a source comment.
+   */
+  readonly source: 'sandbox_adapter';
+}
+
+/**
+ * The resource ceilings a run is held to, and whether each one is measured.
+ *
+ * `measured` is a claim about the system, not about the run: it says a
+ * counter exists and enforces the limit. `unmeasured` says no such counter
+ * exists today. A ceiling that is neither is the failure this type exists to
+ * prevent — a limit that reads like a guarantee and is not one.
+ */
+export type BudgetCeiling =
+  | 'turns'
+  | 'toolCalls'
+  | 'shellCommands'
+  | 'tokens'
+  | 'concurrency'
+  | 'fileWrites'
+  | 'externalEffects'
+  | 'cpuMemory';
+
+export interface BudgetCeilingRecord {
+  readonly status: 'measured' | 'unmeasured';
+  /** The ceiling, when there is one. */
+  readonly limit?: number;
+  /** What was actually used, when the run has finished. */
+  readonly observed?: number;
+  /** Why this is unmeasured, or what enforces it when it is measured. */
+  readonly reason?: string;
+}
+
+export type BudgetCeilings = Readonly<Record<BudgetCeiling, BudgetCeilingRecord>>;
 
 export interface RunAgentSelection {
   readonly profileId: AgentProfileId | null;
@@ -112,6 +193,14 @@ export type ManifestSource =
   | 'runtime_fact'
   /** Computed by the Control Plane from the sources above. */
   | 'derived'
+  /**
+   * Converted at the boundary from the legacy permission-context shape.
+   *
+   * Not a configuration source: the conversion is a real, explicit step that
+   * the Control Plane performed, and saying so is what keeps a converted value
+   * from reading like a value the product resolved.
+   */
+  | 'legacy_context_converted'
   /** NO source exists. The value is a placeholder and is not configuration. */
   | 'unsupported';
 
@@ -134,6 +223,15 @@ export interface ManifestProvenance {
    * that is not marked synthesised would be claiming to be a fact.
    */
   readonly synthesised: boolean;
+  /**
+   * Per-item status for a field that covers several ceilings.
+   *
+   * The budget is one field with six ceilings under it, and "the budget is
+   * from the chat request" does not say which of them are actually measured.
+   * Without this, a ceiling that nothing counts is indistinguishable from one
+   * that does.
+   */
+  readonly items?: Readonly<Record<string, 'measured' | 'unmeasured'>>;
 }
 
 export interface RunManifest {
@@ -178,6 +276,22 @@ export interface RunManifest {
   readonly agent?: RunAgentSelection;
   readonly checkpoint?: RunCheckpoint;
   readonly budget: RunBudget;
+  /**
+   * The isolation level this run's commands actually got.
+   *
+   * Optional because a run that spawned no command has no isolation to
+   * report; absent then means "no command ran", which is different from
+   * "commands ran without isolation" — and the latter is what
+   * `provider: 'none'` says.
+   */
+  readonly sandbox?: SandboxIsolationRecord;
+  /**
+   * The resource ceilings this run is held to, and whether each is measured.
+   *
+   * Optional because the protocol's `budget` field predates the per-ceiling
+   * accounting and a manifest written by an older writer carries only that.
+   */
+  readonly budgetCeilings?: BudgetCeilings;
   readonly deterministic: boolean;
   readonly parentRunId?: RunId;
   readonly resumeFrom?: ResumeBoundary;

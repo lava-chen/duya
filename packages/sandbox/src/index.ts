@@ -11,11 +11,15 @@ export {
   getActiveProvider,
   executeIsolated,
   wrapCommand,
+  wrapCommandSync,
   setSandboxEnabled,
   isSandboxEnabled,
   getSandboxPolicy,
   updateSandboxPolicy,
   resetProviderCache,
+  resolveShellIsolation,
+  resolveShellIsolationSync,
+  getCachedShellIsolation,
   SandboxManager,
   addExcludedCommand,
 } from './sandbox-adapter.js';
@@ -51,6 +55,8 @@ export { isPathWithinRoots } from './allowed-roots.js';
 
 export type {
   SandboxExecuteResult,
+  ShellIsolation,
+  ShellIsolationProvider,
   ISandboxManager,
   FsReadRestrictionConfig,
   FsWriteRestrictionConfig,
