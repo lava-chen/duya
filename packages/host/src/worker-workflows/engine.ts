@@ -72,6 +72,13 @@ interface NodeState {
   errorClass?: string | undefined;
 }
 
+/** How one node of a layer ended. */
+type NodeStop =
+  | { kind: 'ok' }
+  | { kind: 'failed'; errorClass: string; error: string }
+  | { kind: 'waiting'; waitTill: number }
+  | { kind: 'cancelled' };
+
 function engineScope(params: Record<string, unknown>, outputs: Map<string, NodeState>): ExprScope {
   return {
     resolve(path) {
@@ -109,34 +116,44 @@ function engineScope(params: Record<string, unknown>, outputs: Map<string, NodeS
   };
 }
 
-/** Topological order of one phase's nodes (cycle-free per validate.ts). */
-function topoSort(nodes: WorkflowNode[]): WorkflowNode[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const inPhase = new Set(byId.keys());
-  const depsOf = new Map<WorkflowNode, string[]>();
+/**
+ * Layered topological order of one phase's nodes (Kahn by layers; cycles
+ * are rejected by validate.ts before execution).
+ *
+ * Every layer holds the nodes whose in-phase dependencies all landed in
+ * earlier layers — the nodes inside one layer are independent of each
+ * other. That is exactly the set the scheduler may interleave. The
+ * previous linear `topoSort` carried the same information as a sequence,
+ * which forced the executor to run every node one after another.
+ */
+function topoLayers(nodes: WorkflowNode[]): WorkflowNode[][] {
+  const inPhase = new Set(nodes.map((n) => n.id));
+  const depsOf = new Map<string, string[]>();
   for (const node of nodes) {
     const { deps } = nodeDependencies(node);
     depsOf.set(
-      node,
+      node.id,
       [...deps].filter((d) => inPhase.has(d) && d !== 'params'),
     );
   }
-  const out: WorkflowNode[] = [];
-  const done = new Set<string>();
-  const visiting = new Set<string>();
-  const visit = (node: WorkflowNode): void => {
-    if (done.has(node.id) || visiting.has(node.id)) return;
-    visiting.add(node.id);
-    for (const dep of depsOf.get(node) ?? []) {
-      const depNode = byId.get(dep);
-      if (depNode) visit(depNode);
+  const layers: WorkflowNode[][] = [];
+  const placed = new Set<string>();
+  let pending = nodes.filter((n) => !placed.has(n.id));
+  while (pending.length > 0) {
+    const layer = pending.filter((node) =>
+      (depsOf.get(node.id) ?? []).every((dep) => placed.has(dep)),
+    );
+    if (layer.length === 0) {
+      // Cycle — validate.ts rejects cycles before execution; keep the
+      // remaining nodes in one trailing layer instead of dropping them.
+      layers.push(pending);
+      break;
     }
-    visiting.delete(node.id);
-    done.add(node.id);
-    out.push(node);
-  };
-  for (const node of nodes) visit(node);
-  return out;
+    layers.push(layer);
+    for (const node of layer) placed.add(node.id);
+    pending = pending.filter((n) => !placed.has(n.id));
+  }
+  return layers;
 }
 
 function findNode(def: WorkflowDef, nodeId: string): WorkflowNode | undefined {
@@ -195,84 +212,14 @@ export class WorkflowEngine {
         result: { index: phaseIndex },
       });
 
-      for (const node of topoSort(phase.nodes)) {
+      for (const layer of topoLayers(phase.nodes)) {
         if (this.options.signal?.aborted) {
           return { status: 'cancelled', runId };
         }
-
-        // Conditional edge (415 §4.3): false → skipped, never blocking.
-        if (node.when) {
-          try {
-            if (!evaluateExpr(node.when, scope)) {
-              outputs.set(node.id, { status: 'skipped' });
-              journal.append({
-                kind: 'node_result',
-                nodeId: node.id,
-                attempt: 1,
-                status: 'skipped',
-                result: null,
-              });
-              continue;
-            }
-          } catch (err) {
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: 'expr_error',
-              error: err instanceof Error ? err.message : String(err),
-            };
-          }
-        }
-
-        const ctx = { ...baseCtx, node };
-        try {
-          const result = node.map ? await runMapNode(ctx, this.semaphore) : await runNode(ctx);
-          outputs.set(node.id, {
-            status: result.status,
-            output: result.output,
-            errorClass: result.errorClass,
-          });
-          if (result.status === 'failed') {
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: result.errorClass ?? 'unknown',
-              error: result.error ?? 'node failed',
-            };
-          }
-        } catch (err) {
-          if (err instanceof SuspensionSignal) {
-            // Park THIS branch only — map siblings keep their results (§6.3).
-            const waitTill = err.waitTill;
-            outputs.set(node.id, { status: 'waiting' });
-            const token = createResumeToken(this.options.secret ?? 'duya-workflow-dev-secret', {
-              runId,
-              nodeId: node.id,
-              issuedAt: Date.now(),
-            });
-            return { status: 'waiting', runId, nodeId: node.id, resumeToken: token, waitTill };
-          }
-          if (err instanceof BudgetExceededError) {
-            // Journal-free stop (415 §5.3) — a raised budget replays cleanly.
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: 'budget_exceeded',
-              error: err.message,
-            };
-          }
-          return {
-            status: 'failed',
-            runId,
-            nodeId: node.id,
-            errorClass: 'unknown',
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
+        const stop = await this.runLayer(layer, baseCtx, outputs);
+        if (stop) return stop;
       }
+
       journal.append({
         kind: 'phase',
         nodeId: phase.phase,
@@ -285,6 +232,135 @@ export class WorkflowEngine {
     const outputsOut: Record<string, unknown> = {};
     for (const [id, state] of outputs) outputsOut[id] = state.output;
     return { status: 'complete', runId, outputs: outputsOut };
+  }
+
+  /**
+   * Run one layer: every node of the layer starts together, so independent
+   * siblings interleave. The layer settles completely before the next one
+   * starts — a later layer may read the outputs of this one.
+   */
+  private async runLayer(
+    layer: WorkflowNode[],
+    baseCtx: Omit<NodeRunContext, 'node'>,
+    outputs: Map<string, NodeState>,
+  ): Promise<EngineOutcome | undefined> {
+    const settled = await Promise.all(
+      layer.map((node) => this.runLayerNode(node, baseCtx, outputs)),
+    );
+    // Layer order decides which node reports the stop (deterministic).
+    for (const { node, stop } of settled) {
+      if (stop.kind === 'failed') {
+        return {
+          status: 'failed',
+          runId: baseCtx.runId,
+          nodeId: node.id,
+          errorClass: stop.errorClass,
+          error: stop.error,
+        };
+      }
+      if (stop.kind === 'waiting') {
+        const token = createResumeToken(this.options.secret ?? 'duya-workflow-dev-secret', {
+          runId: baseCtx.runId,
+          nodeId: node.id,
+          issuedAt: Date.now(),
+        });
+        return {
+          status: 'waiting',
+          runId: baseCtx.runId,
+          nodeId: node.id,
+          resumeToken: token,
+          waitTill: stop.waitTill,
+        };
+      }
+      if (stop.kind === 'cancelled') {
+        return { status: 'cancelled', runId: baseCtx.runId };
+      }
+    }
+    return undefined;
+  }
+
+  /** Run one node of a layer; the caller settles the whole layer. */
+  private async runLayerNode(
+    node: WorkflowNode,
+    baseCtx: Omit<NodeRunContext, 'node'>,
+    outputs: Map<string, NodeState>,
+  ): Promise<{ node: WorkflowNode; stop: NodeStop }> {
+    if (this.options.signal?.aborted) {
+      return { node, stop: { kind: 'cancelled' } };
+    }
+
+    // Conditional edge (415 §4.3): false → skipped, never blocking.
+    if (node.when) {
+      try {
+        if (!evaluateExpr(node.when, baseCtx.scope)) {
+          outputs.set(node.id, { status: 'skipped' });
+          baseCtx.journal.append({
+            kind: 'node_result',
+            nodeId: node.id,
+            attempt: 1,
+            status: 'skipped',
+            result: null,
+          });
+          return { node, stop: { kind: 'ok' } };
+        }
+      } catch (err) {
+        return {
+          node,
+          stop: {
+            kind: 'failed',
+            errorClass: 'expr_error',
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+
+    const ctx = { ...baseCtx, node };
+    try {
+      // Map nodes take a semaphore slot per fan-out item (map-runner), so
+      // they must NOT hold a node-level slot — the node and its items
+      // would compete for the same limit and deadlock at limit 1.
+      const result = node.map
+        ? await runMapNode(ctx, this.semaphore)
+        : await this.semaphore.run(() => runNode(ctx));
+      outputs.set(node.id, {
+        status: result.status,
+        output: result.output,
+        errorClass: result.errorClass,
+      });
+      if (result.status === 'failed') {
+        return {
+          node,
+          stop: {
+            kind: 'failed',
+            errorClass: result.errorClass ?? 'unknown',
+            error: result.error ?? 'node failed',
+          },
+        };
+      }
+      return { node, stop: { kind: 'ok' } };
+    } catch (err) {
+      if (err instanceof SuspensionSignal) {
+        // Park THIS branch only — map siblings keep their results (§6.3).
+        outputs.set(node.id, { status: 'waiting' });
+        return { node, stop: { kind: 'waiting', waitTill: err.waitTill } };
+      }
+      if (err instanceof BudgetExceededError) {
+        // Journal-free stop (415 §5.3) — a raised budget replays cleanly.
+        return {
+          node,
+          stop: { kind: 'failed', errorClass: 'budget_exceeded', error: err.message },
+        };
+      }
+      return {
+        node,
+        stop: {
+          kind: 'failed',
+          errorClass: 'unknown',
+          error: err instanceof Error ? err.message : String(err),
+        },
+      };
+    }
   }
 
   /**
