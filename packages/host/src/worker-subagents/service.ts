@@ -50,7 +50,15 @@ import {
 } from './continue-parent-work.js';
 import { resolveResumeTarget } from './resume-target.js';
 import { buildWorktreeSpawnNotice } from './worktree-notice.js';
-import { createIsolatedWorktree, WorktreeError } from './worktree.js';
+import {
+  bindIsolatedWorktree,
+  createIsolatedWorktree,
+  finalizeCheckoutRun,
+  registeredCheckoutRoot,
+  WorktreeError,
+  type CheckoutRunRecord,
+} from './worktree.js';
+import { samePath } from '../workspace/fs-utils.js';
 
 const agentTypeAliases: Record<string, string> = {
   explore: 'Explore',
@@ -159,7 +167,8 @@ function formatSubagentStartedBackground(
     autoWake: boolean;
     outputFilePath: string;
     resumed?: boolean;
-    worktreeBranch?: string;
+    /** Short base commit the isolated checkout's detached HEAD starts from. */
+    worktreeBase?: string;
   },
 ): string {
   const guide = continueParentWork
@@ -181,9 +190,11 @@ function formatSubagentStartedBackground(
   } else {
     lines.push(`It runs independently of this session, and auto_wake is false: you will NOT be notified when it completes. Poll it yourself with get_task_output using task_id "${subagentId}"; the full transcript is at ${extras.outputFilePath}. Read that file for the complete output once the task reports a terminal status.`);
   }
-  if (extras.worktreeBranch) {
+  if (extras.worktreeBase) {
     lines.push(``);
-    lines.push(`It is working in an isolated git worktree on branch ${extras.worktreeBranch}. Its file changes do not touch this working copy — merge or cherry-pick the branch to adopt them.`);
+    // Plan 621 A: isolated checkouts are detached (decision D3), so there is
+    // no branch to name — the base commit is what the parent adopts from.
+    lines.push(`It is working in an isolated git worktree pinned at base commit ${extras.worktreeBase}. Its file changes do not touch this working copy — adopt them from the commits it leaves at HEAD (cherry-pick or patch), not from a branch.`);
   }
   lines.push(``, guide);
   return lines.join('\n');
@@ -246,9 +257,12 @@ export class WorkerSubagentService<
     // Plan 568: hoisted so the catch can attach it to the error result —
     // a failed agent's sub-session id is the watch-pane link.
     let subAgentSessionId: string | undefined;
-    // Worktree branch name, surfaced in the receipt so the model can report
-    // where its changes landed.
-    let worktreeBranch: string | undefined;
+    // Short base commit of the isolated checkout's detached HEAD, surfaced in
+    // the receipt so the model can report where its changes landed.
+    let worktreeBase: string | undefined;
+    // Checkout attachment for THIS run, if any (fresh isolation or a resume
+    // re-entering its own checkout). Drives the terminal close-out.
+    let checkoutEntry: CheckoutRunRecord | undefined;
 
     try {
       const agentDefinitions = context.options.agentDefinitions?.allAgents ?? [];
@@ -396,14 +410,83 @@ export class WorkerSubagentService<
             `resume_from "${resumeTarget.sessionId}" was continued with the default general-purpose agent; pass subagent_type to keep the original agent's role.`,
           );
         }
-        if (
-          resumeTarget.workingDirectory &&
-          context.options.workingDirectory &&
-          resumeTarget.workingDirectory !== context.options.workingDirectory
-        ) {
-          warnings.push(
-            `The resumed sub-agent originally ran in ${resumeTarget.workingDirectory}; this run uses the session's current working directory ${context.options.workingDirectory}.`,
-          );
+        const resumeDir = resumeTarget.workingDirectory;
+        const runDir = context.options.workingDirectory;
+        if (resumeDir && runDir) {
+          // Plan 621 D: a checkout-owned session must not silently move to the
+          // parent's cwd. When the original directory is a registered linked
+          // worktree, the accumulated history refers to files that only exist
+          // there — refuse instead of the legacy silent switch. An ordinary
+          // directory the user merely relocated keeps the legacy warning.
+          const original = await registeredCheckoutRoot(resumeDir);
+          if (original !== null && !samePath(resumeDir, runDir)) {
+            logger.warn('[SubAgent] resume_from rejected: checkout cwd mismatch', {
+              resumeFrom: resumeTarget.sessionId,
+              originalWorkingDirectory: resumeDir,
+              requestedWorkingDirectory: runDir,
+              checkoutRoot: original.root,
+              parentSessionId,
+            }, 'SubAgent')
+            return {
+              id: crypto.randomUUID(),
+              name: SUBAGENT_TOOL_NAME,
+              result: JSON.stringify({
+                error:
+                  `resume_from "${resumeTarget.sessionId}" originally ran in ${resumeDir}, ` +
+                  `which is inside the managed checkout at ${original.root}, but this run would use ` +
+                  `${runDir}. Resuming a checkout-owned sub-agent outside its checkout ` +
+                  `would point its history at files that do not exist here. Resume it with the original working ` +
+                  `directory, or start a new sub-agent in the current directory instead.`,
+              }),
+              error: true,
+            };
+          }
+          if (original !== null) {
+            // Same directory: the session re-enters its own checkout. The
+            // previous run released it at its terminal, so re-bind ownership
+            // for this run; a typed owner error here means another session
+            // bound the checkout meanwhile — refuse rather than run read-only.
+            try {
+              await bindIsolatedWorktree(original.root, resumeTarget.sessionId);
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err);
+              logger.warn('[SubAgent] resume checkout re-bind failed', {
+                resumeFrom: resumeTarget.sessionId,
+                checkoutRoot: original.root,
+                err,
+              }, 'SubAgent')
+              return {
+                id: crypto.randomUUID(),
+                name: SUBAGENT_TOOL_NAME,
+                result: JSON.stringify({
+                  error:
+                    `resume_from "${resumeTarget.sessionId}" runs in the checkout at ${original.root}, which ` +
+                    `could not be re-bound to this session: ${reason}. Another session may own it now; ` +
+                    `start a new sub-agent with isolation: "worktree" instead.`,
+                }),
+                error: true,
+              };
+            }
+            checkoutEntry = {
+              root: original.root,
+              cwd: resumeDir,
+              baseSha: original.head ?? '',
+              enteredAt: Date.now(),
+            };
+            try {
+              await sessionDb.setExtension(resumeTarget.sessionId, 'checkout', checkoutEntry);
+            } catch (err) {
+              logger.warn('[SubAgent] failed to record checkout re-entry on session', {
+                resumeFrom: resumeTarget.sessionId,
+                checkoutRoot: original.root,
+                err,
+              }, 'SubAgent')
+            }
+          } else if (!samePath(resumeDir, runDir)) {
+            warnings.push(
+              `The resumed sub-agent originally ran in ${resumeDir}; this run uses the session's current working directory ${runDir}.`,
+            );
+          }
         }
         logger.info('[SubAgent] resuming sub-agent session', {
           resumeFrom: resumeTarget.sessionId,
@@ -428,15 +511,29 @@ export class WorkerSubagentService<
         };
       }
 
+      // Resume keeps the original session (and its transcript); a new spawn
+      // mints a fresh id and a fresh `chat_sessions` row. Plan 621 D: the id
+      // is minted BEFORE the checkout is created so the checkout can be born
+      // owned (the codex order — identity first, then checkout).
+      const isResume = resumeTarget?.ok === true;
+      subAgentSessionId = isResume ? resumeTarget.sessionId : crypto.randomUUID();
+
       let childWorkingDirectory = context.options.workingDirectory;
+      // Present only on the isolation path (mutually exclusive with resume):
+      // the checkout identity the terminal paths need for checkpoint/release.
+      let checkoutRoot: string | undefined;
+      let checkoutBaseSha: string | undefined;
       if (agentInput.isolation === 'worktree') {
         try {
           const worktree = await createIsolatedWorktree(
             context.options.workingDirectory ?? process.cwd(),
             subAgentName,
+            subAgentSessionId,
           );
           childWorkingDirectory = worktree.path;
-          worktreeBranch = worktree.branch;
+          checkoutRoot = worktree.root;
+          checkoutBaseSha = worktree.baseSha;
+          worktreeBase = worktree.branch;
         } catch (err) {
           if (err instanceof WorktreeError) {
             // Not a repo / dirty tree / git refused: a specific sentence the
@@ -465,7 +562,7 @@ export class WorkerSubagentService<
           ? `\n\n${buildWorktreeSpawnNotice(
               context.options.workingDirectory ?? process.cwd(),
               childWorkingDirectory,
-              worktreeBranch ?? '(unknown branch)',
+              worktreeBase ?? '(unknown base)',
             )}`
           : '';
       const userMessage = {
@@ -486,10 +583,6 @@ export class WorkerSubagentService<
       // isolation reports the child's edits and not the parent's.
       const fileChangeBefore = await captureGitFileChanges(childWorkingDirectory);
 
-      // Resume keeps the original session (and its transcript); a new spawn
-      // mints a fresh id and a fresh `chat_sessions` row.
-      const isResume = resumeTarget?.ok === true;
-      subAgentSessionId = isResume ? resumeTarget.sessionId : crypto.randomUUID();
       if (!isResume) {
         try {
           await sessionDb.create({
@@ -517,6 +610,81 @@ export class WorkerSubagentService<
             agentType: agentDefinition.agentType,
             err,
           }, 'SubAgent')
+        }
+
+        // Plan 621 D: the checkout entry is recorded on the session so the
+        // identity survives a restart (`sessions.extensions.checkout`). This
+        // is the temporary carrier for ownership history, standing in for the
+        // rollout events owned by plan 620 — see the slice D report. The
+        // record is observability, never identity: a failed write must not
+        // block the run (the owner file and `working_directory` stay the only
+        // authority).
+        if (checkoutRoot !== undefined && checkoutBaseSha !== undefined && childWorkingDirectory !== undefined) {
+          checkoutEntry = {
+            root: checkoutRoot,
+            cwd: childWorkingDirectory,
+            baseSha: checkoutBaseSha,
+            enteredAt: Date.now(),
+          };
+          try {
+            await sessionDb.setExtension(subAgentSessionId, 'checkout', checkoutEntry);
+          } catch (err) {
+            logger.warn('[SubAgent] failed to record checkout entry on session', {
+              subAgentSessionId,
+              checkoutRoot,
+              err,
+            }, 'SubAgent')
+          }
+
+          // Readback check (the codex `cwds_differ` order): whatever the DB
+          // actually persisted as the child's working directory must be the
+          // checkout cwd we asked for. A mismatch means the child would run
+          // somewhere its history and its checkout disagree — keep the
+          // checkout (it may hold the session's later work), give up
+          // ownership so it stays reusable, and refuse to run.
+          let stored: { working_directory?: unknown } | null | undefined;
+          try {
+            stored = (await sessionDb.get(subAgentSessionId)) as { working_directory?: unknown } | null | undefined;
+          } catch (err) {
+            logger.warn('[SubAgent] checkout cwd readback failed', {
+              subAgentSessionId,
+              checkoutRoot,
+              err,
+            }, 'SubAgent')
+          }
+          const storedCwd = typeof stored?.working_directory === 'string' ? stored.working_directory : undefined;
+          // A missing row is not a mismatch: topologies that do not serve
+          // session creation have no row to verify, and refusing every
+          // isolated spawn there would break the tool outright. A row that
+          // EXISTS with a different cwd is the real defect.
+          if (storedCwd !== undefined && !samePath(storedCwd, childWorkingDirectory)) {
+            logger.error('[SubAgent] checkout cwd readback mismatch, refusing to run', new Error(
+              `session ${subAgentSessionId} recorded cwd ${storedCwd ?? '<missing>'}, expected ${childWorkingDirectory}`,
+            ), {
+              subAgentSessionId,
+              checkoutRoot,
+              storedCwd: storedCwd ?? null,
+              expectedCwd: childWorkingDirectory,
+            }, 'SubAgent')
+            await finalizeCheckoutRun({
+              sessionId: subAgentSessionId,
+              record: checkoutEntry,
+              outcome: 'cwd_mismatch',
+            });
+            return {
+              id: crypto.randomUUID(),
+              name: SUBAGENT_TOOL_NAME,
+              result: JSON.stringify({
+                error:
+                  `The isolated checkout at ${checkoutRoot} was created for this sub-agent, but the session row ` +
+                  `records working directory ${storedCwd ?? '<none>'} instead of ${childWorkingDirectory}. ` +
+                  `Refusing to run there: the checkout is kept on disk and its ownership released, so nothing ` +
+                  `is lost. Re-run the task with isolation: "worktree" to get a fresh checkout, or run without ` +
+                  `isolation if the checkout cannot be trusted.`,
+              }),
+              error: true,
+            };
+          }
         }
       }
 
@@ -600,6 +768,8 @@ export class WorkerSubagentService<
           description: agentInput.description || agentInput.name || subAgentName,
           abortController: taskAbortController,
           autoWake,
+          // Plan 621 D: the terminal paths checkpoint/release through this.
+          ...(checkoutEntry ? { checkout: checkoutEntry } : {}),
         })
 
         logger.info('[SubAgent] background task registered', {
@@ -627,7 +797,7 @@ export class WorkerSubagentService<
             autoWake,
             outputFilePath: record.outputFilePath,
             ...(isResume ? { resumed: true } : {}),
-            ...(worktreeBranch ? { worktreeBranch } : {}),
+            ...(worktreeBase ? { worktreeBase } : {}),
           },
         );
         const backgroundResult = serializeSubagentResult({
@@ -775,6 +945,15 @@ export class WorkerSubagentService<
           status: hasError ? 'error' : 'completed',
           updated_at: Date.now(),
         });
+        // Plan 621 D: the foreground terminal is one of the four close-out
+        // paths — checkpoint on success, release, and record the outcome.
+        if (checkoutEntry) {
+          await finalizeCheckoutRun({
+            sessionId: subAgentSessionId,
+            record: checkoutEntry,
+            outcome: hasError ? 'failed' : 'completed',
+          });
+        }
       } catch (err) {
         logger.warn('[SubAgent] failed to update foreground session status', {
           subAgentSessionId,
@@ -882,6 +1061,24 @@ export class WorkerSubagentService<
         message: errorMessage,
         parentSessionId: context?.options.sessionId,
       }, 'SubAgent')
+      // Plan 621 D: an exception after the checkout existed is the abnormal
+      // exit terminal — release ownership and record the outcome, or the
+      // checkout stays owned by a session that will never surrender it.
+      if (checkoutEntry && subAgentSessionId !== undefined) {
+        try {
+          await finalizeCheckoutRun({
+            sessionId: subAgentSessionId,
+            record: checkoutEntry,
+            outcome: 'failed',
+          });
+        } catch (finalizeErr) {
+          logger.warn('[SubAgent] checkout close-out failed after execution error', {
+            subAgentSessionId,
+            checkoutRoot: checkoutEntry.root,
+            err: finalizeErr,
+          }, 'SubAgent')
+        }
+      }
       return {
         id: crypto.randomUUID(),
         name: SUBAGENT_TOOL_NAME,
