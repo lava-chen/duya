@@ -34,7 +34,7 @@
 - [x] `transcript-cache.ts`：缓存 key 纳入 todos
 - [x] thinking 折叠预览由三行改一行，并去掉独立的 overflow 行
 - [x] 测试 + typecheck + architecture:check
-- [ ] commit + PR
+- [x] commit + PR（#387，draft）
 
 ## 发现与决策
 
@@ -64,10 +64,38 @@
 | a89e65a7 | Windows / Node | `npx vitest run packages/cli/src/tui/__tests__/` | 0（61 files / 710 passed） | thinking 改动后绿 |
 | a89e65a7 | Windows / Node | `npm run typecheck:all` | 0 | 全仓类型门禁 |
 | a89e65a7 | Windows / Node | `npm run architecture:check` | 0（2608 baselined / 0 新增违规） | 架构门禁 |
+| a89e65a7 | Windows / Node | `npx vite-node docs-local/preview-todo.ts` | 0 | 走真实渲染路径打印 ANSI:清单成形、两次写入各自成块、thinking 折叠成两行 |
+| a89e65a7 | Windows / Node | `npx vitest run packages/cli/src/tui/__tests__/perf/baseline.test.ts` | 0（4 passed） | 全量并行跑时该 suite 报过一次失败,**单独复跑即绿** —— 机器负载造成的假失败,非本次改动 |
+
+## 渲染实录
+
+`docs-local/preview-todo.ts` 走真实渲染路径(`TranscriptModel` + `renderTranscript` + `own`
+renderer)打印一个完整回合,ANSI 去掉后:
+
+```
+└ • Thought [+]
+    The task needs three steps. Let me write them down before touching code.
+
+● 先把这三步记下来,免得漏掉收尾。
+
+└ ✔ Todo list 1/3
+    ✔ 读 schema,确认 todo 工具的返回形状
+    ● 实现 parseTodoItems 与清单渲染
+    ○ 补测试:解析 / 渲染 / 不合批
+
+● 第一版清单写进去了,再更新一次状态。
+
+└ ✔ Todo list 2/3
+    ✔ 读 schema,确认 todo 工具的返回形状
+    ✔ 实现 parseTodoItems 与清单渲染
+    ● 补测试:解析 / 渲染 / 不合批
+```
 
 ## 接续 / 结果
 
-已提交两个 commit：`f324857a`（todo 清单渲染）、`a89e65a7`（thinking 折叠一行）。
-未提交路径：`docs/exec-plans/active/2026-10-23-cli-todo-list-render.md`（本文件，待最后更新后提交）。
-worktree `.claude/worktrees/tui-todo-list` 独占 `packages/cli/src/tui/**`。
-下一步：开 PR（draft），记录 PR URL 与未验证项。
+已提交三个 commit：`f324857a`（todo 清单渲染）、`a89e65a7`（thinking 折叠一行）、
+`d39d0d5d`（本计划文档）。PR #387(draft)，门禁与渲染实录见上。
+
+未提交路径：无。worktree `.claude/worktrees/tui-todo-list` 独占 `packages/cli/src/tui/**`。
+下一步:等 review 与 CI；获集成授权后合并并重验,再回收检出。
+Phase 2（底部常驻 todo 面板 + 快捷键）未开工。
