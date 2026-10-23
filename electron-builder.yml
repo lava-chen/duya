@@ -97,6 +97,9 @@ extraResources:
   - from: node_modules/uiohook-napi/
     to: recorder/node_modules/uiohook-napi/
     filter: ["**/*"]
+  - from: node_modules/node-gyp-build/
+    to: recorder/node_modules/node-gyp-build/
+    filter: ["**/*"]
   # Plan 556 phase 2: persistent PowerShell UIA probe spawned by the
   # recorder service (resources/recorder/ → resources/recorder/).
   - from: resources/recorder/

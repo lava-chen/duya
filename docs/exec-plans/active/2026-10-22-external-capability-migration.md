@@ -108,9 +108,9 @@ Marketplace 分支：`codex/browser-migration` · worktree：`/workspace/duya-ma
 
 ### 合并前 CI 收尾（2026-10-23）
 
-- GitHub Actions run `39918143421` 在 `5adbd1a4` 暴露干净安装缺少 Recorder 的 `uiohook-napi` 直接依赖，以及仍断言旧 Canvas/CU/Browser 行为存在的契约和普查快照。Recorder 的依赖现由根 manifest 显式持有；在独立临时目录执行 package-lock-only，锁文件仅新增该模块及 node-gyp-build，没有穿过共享 junction 安装。
+- GitHub Actions run `39918143421` 在 `5adbd1a4` 暴露干净安装缺少 Recorder 的 `uiohook-napi` 直接依赖，以及仍断言旧 Canvas/CU/Browser 行为存在的契约和普查快照。Recorder 的依赖最初补到根 manifest；后续 run `39920077753` 揭示 Electron postinstall 会错误地将仅供 Node 子进程使用的 N-API 包重新编译。最终依赖归属改为实际持有 Recorder 的 desktop workspace，打包资源补上 node-gyp-build 加载器；在独立临时目录执行 package-lock-only，锁文件仅新增该模块及 node-gyp-build，没有穿过共享 junction 安装。
 - 对照 master `7b339024`，用同一静态架构扫描器得到 module-dependency `123→96`、package-boundary-escape `21→14`、cycle `2→1`。逐项比较 carrier：27 条消失的 module edges 全部指向退休的 conductor/computer-use 包或来自 computer-use 的 decide；7 条 escape 全部指向 conductor；消失的 SCC 是 `CanvasArea.tsx` 锚定的9文件 renderer 环。三个规则均无新增 finding；未重录 fingerprint baseline、未放宽新增违规阻断。
-- 主代理拥有对照只读 worktree `/workspace/duya-migration-base-audit-20261023`，detached `7b339024`。四个 Luna/high 子代理分别在独立 worktree 更新 runtime、protocol、host/UI、architecture 的既有契约；此轮未手动执行测试套件。源码变更继续经过静态类型、构建与远端 CI。
+- 主代理拥有对照只读 worktree `/workspace/duya-migration-base-audit-20261023`，detached `7b339024`。四个 Luna/high 子代理分别在独立 worktree 更新 runtime、protocol、host/UI、architecture 的既有契约；此轮未手动执行测试套件。源码变更继续经过静态类型、构建与远端 CI。`7e39db57` 完整 electron:build、Electron/CLI/Web/evals 静态门禁、编码/manifest/coverage收集/no-ts-suppress/packaged-artifacts 均退出0；独立审阅未发现契约门禁或权限身份校验被削弱。
 - 用户询问残留 package 目录：迁移检出的两个目录只剩未跟踪依赖链接与 ignored dist/tsbuildinfo。已断开链接并把生成物移存 `/tmp/duya-retired-package-artifacts-jjvplotu`，没有访问链接目标。源码、workspace manifests、lockfile workspace 记录、build order 与 tsconfig 均不再引用退休包。共享主检出仍是旧 master `ebd76d48`，按隔离约束保持只读，最终结果以远端合并分支为准。
 
 | 检查点 | 命令或操作 | 结果 |
