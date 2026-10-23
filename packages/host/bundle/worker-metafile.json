@@ -27723,7 +27723,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -35405,7 +35405,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 241011,
+      "bytes": 242522,
       "imports": [
         {
           "path": "node:crypto",
@@ -35719,6 +35719,22 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/host/src/workspace/aliveness.ts": {
+      "bytes": 3517,
+      "imports": [
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "./fs-utils.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/scm/gh-cli.ts": {
       "bytes": 12564,
       "imports": [
@@ -35758,6 +35774,22 @@
           "path": "packages/host/src/scm/gh-cli.ts",
           "kind": "import-statement",
           "original": "./gh-cli.js"
+        },
+        {
+          "path": "packages/host/src/scm/observe.ts",
+          "kind": "import-statement",
+          "original": "./observe.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/scm/sync.ts": {
+      "bytes": 10188,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
         },
         {
           "path": "packages/host/src/scm/observe.ts",
@@ -36062,7 +36094,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 34644,
+      "bytes": 36585,
       "imports": [
         {
           "path": "node:crypto",
@@ -36345,9 +36377,19 @@
           "original": "./workspace/fs-utils.js"
         },
         {
+          "path": "packages/host/src/workspace/aliveness.ts",
+          "kind": "import-statement",
+          "original": "./workspace/aliveness.js"
+        },
+        {
           "path": "packages/host/src/scm/index.ts",
           "kind": "import-statement",
           "original": "./scm/index.js"
+        },
+        {
+          "path": "packages/host/src/scm/sync.ts",
+          "kind": "import-statement",
+          "original": "./scm/sync.js"
         },
         {
           "path": "packages/host/src/workspace-access.ts",
@@ -43667,7 +43709,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -43700,13 +43742,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43886,7 +43928,7 @@
           "bytesInOutput": 415
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -43895,10 +43937,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 97
@@ -43973,7 +44015,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -44003,7 +44045,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -44027,10 +44069,10 @@
           "bytesInOutput": 334
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "packages/capabilities/src/utils/urlSafety.ts": {
-          "bytesInOutput": 3589
+          "bytesInOutput": 3576
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -49031,7 +49073,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 901
+          "bytesInOutput": 895
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -49197,6 +49239,9 @@
         },
         "packages/host/src/scm/observe.ts": {
           "bytesInOutput": 180
+        },
+        "packages/host/src/scm/sync.ts": {
+          "bytesInOutput": 18
         },
         "packages/host/src/run-execution.ts": {
           "bytesInOutput": 10
@@ -49877,7 +49922,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 5553463
+      "bytes": 5553594
     }
   }
 }

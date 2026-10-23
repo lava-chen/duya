@@ -141,3 +141,44 @@ describe('integration routes', () => {
     expect(await projected.json()).toEqual({ records: [] });
   });
 });
+
+describe('the sync route over the real composition', () => {
+  it('answers a session with no working directory as "nothing to sync"', async () => {
+    const host = await open();
+
+    // The session does not exist, so there is no cwd, so there is nothing to
+    // read git from. The answer is that verdict — not an error, and not a
+    // silent success that would let a caller believe the projection is
+    // current when it was never refreshed.
+    const response = await fetch(`${host.origin}/v1/integrations/sync`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ sessionId: 's-1' }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: 'no_checkpoints',
+      written: [],
+      failed: [],
+    });
+  });
+
+  it('rejects a missing sessionId and other methods', async () => {
+    const host = await open();
+
+    const missing = await fetch(`${host.origin}/v1/integrations/sync`, {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toEqual({ error: { code: 'invalid_integration_sync' } });
+
+    const wrongMethod = await fetch(`${host.origin}/v1/integrations/sync`, {
+      method: 'GET',
+      headers: headers(),
+    });
+    expect(wrongMethod.status).toBe(405);
+    expect(await wrongMethod.json()).toEqual({ error: { code: 'method_not_allowed' } });
+  });
+});
