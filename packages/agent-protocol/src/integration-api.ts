@@ -94,3 +94,49 @@ export interface HostIntegrationApiV1 {
   /** Record that a session contributed to a PR. Idempotent; repeat links only refresh recency. */
   linkSession(repo: string, prNumber: number, sessionId: SessionId): Promise<void>;
 }
+
+/**
+ * Outcome of one refresh pass, at a glance.
+ *
+ *   synced               — every matched PR was observed and written.
+ *   no_origin_remote     — the repository has no `origin`, so there is nothing to match.
+ *   no_checkpoints       — the repository has no checkpoint refs for this session.
+ *   observation_failed   — at least one PR came back `unknown`; the others may
+ *                          still have been written.
+ */
+export type HostIntegrationSyncStatus =
+  | 'synced'
+  | 'no_origin_remote'
+  | 'no_checkpoints'
+  | 'observation_failed';
+
+/** One PR whose observation was written and session-linked during this pass. */
+export interface HostIntegrationSyncWritten {
+  readonly repo: string;
+  readonly prNumber: number;
+}
+
+/** One ref whose PR could not be observed; nothing was written for it. */
+export interface HostIntegrationSyncFailure {
+  readonly ref: string;
+  /** The observation failure reason, as carried by `observedError`. */
+  readonly reason: string;
+}
+
+/**
+ * The result of one explicit refresh.
+ *
+ * This is the WRITE side of the Integration namespace and the only thing a
+ * client may call to make the projection current — the read side never touches
+ * the network. Partial success is reported as it happened: `status` is
+ * `observation_failed` whenever `failed` is non-empty, even though `written`
+ * may also be non-empty, and the records the failed pass left behind keep
+ * their previous good observation.
+ */
+export interface HostIntegrationSyncResult {
+  readonly status: HostIntegrationSyncStatus;
+  /** Observations written to the store in this pass. */
+  readonly written: readonly HostIntegrationSyncWritten[];
+  /** Matched PRs whose observation came back `unknown`. */
+  readonly failed: readonly HostIntegrationSyncFailure[];
+}

@@ -254,7 +254,7 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 ## 待决
 
 1. **跨 session 工作单元**（用户决定推后）：形态候选是 `agent_job_items.assigned_thread_id` 式派工记录（可重派、`attempt_count`），不是「Task 拥有 Session」的层级。第一波不需要。
-2. **Web 端接入方式**：Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。F 开工前必须在「同源反代 / localhost 例外 / 只读快照」三者中定一个，否则 F 会返工。
+2. **Web 端接入方式**：~~Host 强制 bearer 且拒绝带 `Origin` 的请求，浏览器 renderer 无法直连。F 开工前必须在「同源反代 / localhost 例外 / 只读快照」三者中定一个，否则 F 会返工。~~ **已定：同源反代。** `apps/web` 已有 Node BFF（浏览器只连同源 `/api/*`，BFF 持 bearer 连 Host），F 在 BFF 上加转发即可，不需要 localhost 例外或只读快照。
 3. **写入闸口的强制面**：只拦文件写入，还是也拦 Bash？场景 2 的「只读关联」只有在两者都拦时才是真的。
 
 ## 风险
@@ -279,6 +279,10 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 | 2026-10-22 | **D7** 不新增 agent 可调用的 worktree 工具 | codex 无此工具；agent 只需要「跑在被指定的 cwd 里」，创建属于 shell/UX |
 | 2026-10-22 | **D8** 回收实现下沉为 TS，`scripts/remove-worktree.sh` 保持独立，两边用同一份拒绝矩阵 fixture | 产品不能依赖仓库脚本（打包后不存在）；但两份实现必须有等价证明 |
 | 2026-10-22 | **D9** Task 方向推后到第二波，不新增 work_items | 用户决定；A/B/C 不依赖它 |
+| 2026-10-23 | **D10** F 的三端接入定为「窄契约 + 注册表 + 共享面板」，**不**把 Desktop 迁到 `UiServices` | `24-shared-renderer.md:88` 把 Desktop 的 `UiServices` 迁移明确 defer 到 T23；F 只需要 checkout / integration 两个命名空间，另立窄端口比提前动那次迁移更小 |
+| 2026-10-23 | **D11** Integration 的刷新是 **session 作用域**（`refreshForSession`），不是 per-PR | Host 的 HTTP 面只有 `GET /v1/integrations?sessionId=`、`POST /v1/integrations/sync`、`POST /v1/integrations/link`；per-PR 观测是 Host 内部 API（`HostIntegrationApiV1.observeForPr`），不是 HTTP 面的一部分。而且刷新本来就是 session → cwd → origin → checkpoint refs → PRs → store 这一条链 |
+| 2026-10-23 | **D12** 两个 Host 共用一处装配（`createHostWorkspaceLifecycleApis`） | headless `startLocalHost` 与 Desktop 内嵌 Host 服务同一组路由。装配写两遍 ⇒ 两个 Host 对同一问题给出不同答案，且 Desktop 那边会静默缺命名空间——这种缺口只在某端暴露 |
+| 2026-10-23 | **D13** checkout / integration 两个命名空间用**自己的请求预算**（观测 15s、刷新 30s），不用通用的 5s | 这两个命名空间读 git、打 hosting service，5s 预算在负载下会让「Host 答得出来」变成「Host 答不出来」，而界面分不清「慢」和「没有」——那会把一个可回答的问题渲染成错误 |
 
 ## 进度
 
@@ -291,8 +295,14 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 - [x] 接缝提交（#370）：删 C 的临时 union 副本，A 的 Provider + C 的 observer 接进 local-host
 - [x] 第二波 D / E（#371 / #372）
 - [x] 组装接线：aliveness 判据与 integration sync 接进 local-host
-- [ ] 启动 F（三端 UI + E2E）
-- [ ] 场景 1–7 全绿，三端连通
+- [x] 启动 F（三端 UI + E2E）
+  - [x] F-1 窄契约 + 注册表（`packages/ui/src/services/workspace-lifecycle.ts`）
+  - [x] F-2 Web 端：BFF 转发 + 浏览器适配器
+  - [x] F-3 Desktop 端：preload + IPC + renderer 包装
+  - [x] F-4 TUI 端：`/checkout` 与 `/pr`
+  - [x] F-5 共享面板 + 接入 TaskDrawer
+  - [x] F-6 场景 1 / 2 / 7：Host 层 + 三端连通
+- [x] 场景 1–7 全绿，三端连通
 
 ## 验证记录
 
@@ -315,6 +325,37 @@ Base 为第一波合并点 `a37c5d68`；三个切片各自 rebase 到最新 mast
 | 同上 | 同上 | `npm run bundle:verify` / `architecture:check` | 0 — FRESH / 无新增违规 | 终端输出 |
 | 接线 | 同上 | 目标 vitest（checkout-aliveness-wiring + checkout-integration-http） | 0 — 10 passed | 终端输出 |
 | 同上 | 同上 | 反证：把 aliveness port 换成空实现后重跑 | **1** — 用例变红，证明该用例真的覆盖接线 | 终端输出 |
+| F 契约 `a617bbb3` / 客户端 `8c093a65` / port `ef033849` | 同上 | `npm run -w @duya/agent-protocol build`、`npm run -w @duya/host build` | 0 | 终端输出 |
+| 同上 | 同上 | 目标 vitest（host checkout + integration + workspace + agent-protocol/hash） | 0 — 76 passed / 1 skipped（9 files） | 终端输出 |
+| F 面板 `ff145da3` | 同上 | 目标 vitest（ui/workspace + TaskDrawer） | 0 — 面板 10 passed，TaskDrawer 全绿 | 终端输出 |
+| 同上 | 同上 | 反证：回收按钮改成按观测禁用，并把 `unknown` 渲染成 `open` | **1** — 恰好 3 条变红，证明 §4.3 与「`unknown` 不折成 `open`」被真正覆盖 | 终端输出 |
+| 场景 1/2 `418b02d4` | 同上 | `npm run typecheck:all` | 0 — `typecheck-electron-gate: OK — no new type errors (231 known across 111 key(s))` | 终端输出 |
+| 同上 | 同上 | `npm run architecture:check` | 0 — `tolerated 2832 / baseline 2785`，无新增违规 | 终端输出 |
+| 同上 | 同上 | 反证 ×3：resolver 返回 null / owner 读取返回 null / 去掉独占检查 | **1** — 每次 2 条变红 | 终端输出 |
+| F 装配 `c52d2c47` | 同上 | `npm run bundle:worker` 后 `npm run bundle:verify` | 0 — FRESH，`0/1109 bundle inputs changed` | 终端输出 |
+| TUI `a46fcb84` | 同上 | `npx vitest run packages/cli/src/tui/slash/`、`packages/command-catalog/` | 0 — 84 passed + 20 passed | 终端输出 |
+| 同上 | 同上 | `npx tsc --noEmit -p packages/cli/tsconfig.json`、`npm run architecture:check` | 0 — 2836 total / 2836 tolerated，无新增违规 | 终端输出 |
+| Web `8d318765` | 同上 | `npx vitest run apps/web/tests/` | 0 — 102 passed（11 files） | 终端输出 |
+| 同上 | 同上 | `tsc --noEmit -p apps/web/tsconfig.json` + `tsconfig.browser.json`、`npm run architecture:check` | 0 — 无新增违规 | 终端输出 |
+| 同上 | 同上 | 反证 ×4：`unknown`→`open` / BFF 不转发 / 去掉 CSRF 闸门 / reclaim 拒绝当错误 | **1** — 分别 3 / 2 / 2 / 2 条变红 | 终端输出 |
+| 场景 7 Host 层 `2423ec44` | 同上 | `npx vitest run packages/host/tests/workspace-lifecycle-questions.test.ts` | 0 — 1 passed（五问走真实 HTTP） | 终端输出 |
+| 同上 | 同上 | 反证 ×2：断掉 checkout 解析 / 断掉 aliveness 接线 | **1** — 各自变红（后者 reason 由 `owner_alive` 变 `cwd_inside`） | 终端输出 |
+| 三端连通 `3015e395` | 同上 | `npx vitest run apps/web/tests/client/workspace-lifecycle-connectivity.test.ts` | 0 — 2 passed（真 Host + 真 BFF + 真适配器，两条传输同一答案） | 终端输出 |
+| 同上 | 同上 | 反证 ×2：BFF 重建 `reclaimable` / 客户端把 `dirty_tracked` 折成 `clean` | **1** — 各自变红 | 终端输出 |
+| Desktop `8e0d7744` | 同上 | 目标 vitest（workspace-lifecycle 全链路 5 files） | 0 — 32 passed | 终端输出 |
+| 同上 | 同上 | `npx vitest run apps/desktop packages/ui/src` | 0 — 516 files passed / 1 skipped，5853 passed / 13 skipped | 终端输出 |
+| 同上 | 同上 | `node scripts/typecheck-electron-gate.mjs`、`npm run architecture:check`、`node scripts/check-text-encoding.mjs`、`node scripts/build-electron.mjs` | 全 0 — electron gate 231 known / 111 keys；无新增边界违规 | 终端输出 |
+| 同上 | 同上 | 反证 ×3：拔掉 `checkoutApi` / `integrationApi` / `integrationSync` | **1** — 分别 1 / 2 / 1 条变红 | 终端输出 |
+| 同上 | 同上 | Desktop 内嵌 Host 真启动后的三条路由实际响应 | `GET /v1/checkouts?sessionId=s-1` → 200 `{"checkout":{"sessionId":"s-1","checkout":null,"isOwner":false}}`；`GET /v1/integrations?sessionId=s-1` → 200 `{"records":[]}`；`POST /v1/integrations/sync` → 200 `{"status":"no_checkpoints","written":[],"failed":[]}` | 真实 SQLite + 真 `startDesktopHostApi()` + 真 bearer |
+| 合入 master 后 | 同上 | `npm run typecheck:all` | 0 | 终端输出 |
+| 同上 | 同上 | 目标 vitest（cli/slash + command-catalog + ui/workspace + TaskDrawer） | 0 — 118 passed（5 files） | 终端输出 |
+| 同上 | 同上 | 浏览器实跑（web dev server + 共享面板 harness） | 三态渲染正确；`unknown` 显示为 `unknown` 并带原因，未折成 `open`；观测为「保留」时回收按钮**无** `disabled`；console 零应用级 error/warn（仅 vite HMR websocket） | 浏览器快照 |
+| 合入 master（PR #355）后 | 同上 | `npm run typecheck:all` | 0 — `typecheck-electron-gate: OK — no new type errors (206 known across 102 key(s))` | 终端输出 |
+| 同上 | 同上 | `npm run architecture:check` | 0 — `tolerated 2608 / baseline 2785`，无新增违规 | 终端输出 |
+| 同上 | 同上 | `npm run bundle:worker` 后 `npm run bundle:verify` | 0 — FRESH，`0/921 bundle inputs changed` | 终端输出 |
+| 同上 | 同上 | 目标 vitest（host + web + desktop + ui + cli/slash + command-catalog） | 0 — 696 files passed / 1 skipped，7512 passed / 12 skipped，0 failed | 终端输出 |
+
+环境备注：`wl-f` worktree 里裸 builtin import（`from 'stream'`）在 vitest 下解析失败，`packages/cli/src/tui/__tests__/*` 与 2 个既有 desktop 测试文件因此**收集失败**（`Cannot find module '<worktree>/stream'`）。同样文件在主检出与 `wl-f-tui` 通过，`apps/web` 侧全部通过；与本次改动无关（这两个文件未被本分支触及），CI 的干净检出不受影响。
 
 构建副作用核对：`build:packages` 后 `git diff --numstat` 无内容差异，`packages/capabilities/src/ModuleTool/inline-content.ts` 只是 CRLF/LF 的 stat-dirty 条目，未纳入提交。第二波三个切片都遇到过这一条：构建脚本改写了该文件的换行符，提交前已 `git checkout --` 还原。
 

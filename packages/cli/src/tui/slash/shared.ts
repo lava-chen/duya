@@ -41,6 +41,7 @@ import {
   type Message as TranscriptMessage,
 } from '@duya/agent-protocol/transcript';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
+import type { TuiSlashContext } from './types.js';
 
 const MESSAGE_PAGE_SIZE = 200;
 
@@ -89,6 +90,47 @@ export function formatUsd(value: number): string {
   if (value === 0) return '$0.00';
   if (value < 0.01) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Render a scrollable panel, falling back to plain notices.
+ *
+ * The production TUI always supplies `showPanel` and renders this as a
+ * window; a small command harness may supply only `printNotice`, and the
+ * command must still show its result there.
+ */
+export function showPanel(
+  ctx: TuiSlashContext,
+  title: string,
+  lines: readonly string[],
+  options: { readonly footer: string; readonly scrollable: boolean },
+): void {
+  if (ctx.tui.showPanel !== undefined) {
+    ctx.tui.showPanel(title, lines, options);
+    return;
+  }
+  ctx.tui.printNotice(title);
+  for (const line of lines) ctx.tui.printNotice(line);
+}
+
+/**
+ * A Host error's machine-readable code, when it has one.
+ *
+ * The Host answers a namespace it does not serve with a NAMED 404
+ * (`checkout_api_unavailable`), and that name is the difference between "this
+ * Host cannot answer" and "there is nothing to report". The code is read off
+ * the error rather than off the HTTP status, because several codes share a
+ * status.
+ */
+export function hostErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/** A readable message for anything thrown. */
+export function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export interface TokenTotals {

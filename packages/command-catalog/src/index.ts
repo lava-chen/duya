@@ -418,6 +418,38 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    // Plan 621 slice F. The checkout this session sits in, as the Host
+    // observes it. `cli` only — the Desktop renders it in the shared
+    // workspace-lifecycle panel, not as a composer command, so advertising
+    // it there without a Desktop executor would be the advertised-but-
+    // unrunnable state the catalog's integrity tests forbid.
+    name: 'checkout',
+    label: 'Checkout status',
+    labelZh: '工作副本状态',
+    description: 'Show the checkout this session sits in',
+    descriptionZh: '查看当前会话所在的工作副本',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: true,
+  },
+  {
+    // Plan 621 slice F. The pull requests this session is associated with.
+    // `refresh` is the only network-touching form: the plain read is a
+    // projection read that never leaves the machine.
+    name: 'pr',
+    label: 'Pull requests',
+    labelZh: 'Pull Request',
+    description: 'Show the pull requests associated with this session',
+    descriptionZh: '查看与当前会话关联的 Pull Request',
+    argsHint: '[refresh]',
+    subcommands: ['refresh'],
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: true,
+  },
+  {
     name: 'recap',
     label: 'Recap conversation',
     labelZh: '回顾对话',

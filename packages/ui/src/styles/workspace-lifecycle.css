@@ -1,0 +1,167 @@
+/*
+ * workspace-lifecycle.css — the shared checkout / integration panel (plan 621, slice F).
+ *
+ * One panel, three surfaces. The colours come from the shared tokens only, so
+ * the panel follows the theme without knowing which theme it is in.
+ */
+
+.wsl-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.wsl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wsl-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.wsl-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.wsl-block-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.wsl-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.wsl-notice {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.wsl-facts {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 4px 10px;
+  margin: 0;
+}
+
+.wsl-facts dt {
+  color: var(--muted);
+}
+
+.wsl-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.wsl-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.wsl-action {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-solid);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.wsl-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.wsl-action:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.wsl-footnote {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.wsl-prs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wsl-pr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.wsl-pr-name {
+  font-weight: 600;
+}
+
+.wsl-pr-state {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.wsl-pr-state.is-merged {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.wsl-pr-state.is-checks_failing,
+.wsl-pr-state.is-changes_requested {
+  background: var(--error-soft);
+  color: var(--error);
+}
+
+.wsl-pr-state.is-unknown {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.wsl-pr-reason {
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.wsl-pr-url {
+  color: var(--accent);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.wsl-pr-observed {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+}

@@ -24,11 +24,20 @@
 import type {
   CancelAgentRunResult,
   DurableTimelineEntry,
+  HostCheckoutObserved,
+  HostCheckoutRetainReason,
+  HostIntegrationRecord,
+  HostIntegrationState,
+  HostIntegrationSyncFailure,
+  HostIntegrationSyncResult,
+  HostIntegrationSyncStatus,
+  HostIntegrationSyncWritten,
   HostMessagePage,
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestStatus,
   HostProviderCatalog,
+  HostSessionCheckoutView,
   HostSessionCreateInput,
   HostSessionDeleteResult,
   HostSessionListQuery,
@@ -379,6 +388,88 @@ export class ApiClient {
       return { requested: false, runId, reason: body['reason'] };
     }
     throw new ApiError(200, 'invalid_run_cancel_result');
+  }
+
+  /**
+   * The checkout the given session sits in, and whether it owns it.
+   *
+   * This is a READ of the Host's authority. It never decides whether the
+   * session may write there, and it never decides whether the checkout may be
+   * removed — the Host re-evaluates those at the moment of the action.
+   */
+  async observeCheckoutForSession(sessionId: SessionId): Promise<HostSessionCheckoutView> {
+    const query = new URLSearchParams({ sessionId });
+    const body = await this.#readJson(`/api/checkouts?${query.toString()}`, {});
+    const checkout = readSessionCheckoutView(body['checkout']);
+    if (checkout === null) throw new ApiError(200, 'invalid_checkout_view');
+    return checkout;
+  }
+
+  /** One checkout, observed by its root path. */
+  async observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved> {
+    const query = new URLSearchParams({ root });
+    const body = await this.#readJson(`/api/checkouts?${query.toString()}`, {});
+    const checkout = readCheckoutObserved(body['checkout']);
+    if (checkout === null) throw new ApiError(200, 'invalid_checkout');
+    return checkout;
+  }
+
+  /**
+   * Ask the Host to remove one checkout.
+   *
+   * A refusal is a NORMAL result and resolves: `{ removed: false, reason }`
+   * is the Host's answer to "may this be deleted", and nothing was deleted.
+   * Only a transport or I/O failure rejects — the caller renders the reason
+   * instead of retrying, because retrying cannot change a dirty tree.
+   */
+  async requestCheckoutReclaim(root: string): Promise<
+    { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason }
+  > {
+    const body = await this.#mutate('/api/checkouts/reclaim', { root }, {}, 'POST');
+    const result = body['result'];
+    if (!isRecord(result)) throw new ApiError(200, 'invalid_checkout_reclaim');
+    if (result['removed'] === true) return { removed: true };
+    const reason = result['reason'];
+    if (result['removed'] === false && isCheckoutRetainReason(reason)) {
+      return { removed: false, reason };
+    }
+    throw new ApiError(200, 'invalid_checkout_reclaim');
+  }
+
+  /**
+   * Every pull request associated with a session, as last observed.
+   *
+   * This reads the Host's projection and never touches the network; the
+   * explicit refresh below is the only call that does.
+   */
+  async observeIntegrationsForSession(sessionId: SessionId): Promise<readonly HostIntegrationRecord[]> {
+    const query = new URLSearchParams({ sessionId });
+    const body = await this.#readJson(`/api/integrations?${query.toString()}`, {});
+    const records = body['records'];
+    if (!Array.isArray(records)) throw new ApiError(200, 'invalid_integration_records');
+    const result: HostIntegrationRecord[] = [];
+    for (const entry of records) {
+      const record = readIntegrationRecord(entry);
+      // A record this transport cannot read is not dropped: a dropped pull
+      // request is a pull request the user never learns about, and naming an
+      // unreadable state `open` would be a fabrication.
+      if (record === null) throw new ApiError(200, 'invalid_integration_record');
+      result.push(record);
+    }
+    return result;
+  }
+
+  /**
+   * Ask the Host to re-read the session's pull requests NOW.
+   *
+   * The result is reported as it happened: `status` is what the pass was, and
+   * a partial pass is a partial pass, not a success.
+   */
+  async refreshIntegrationsForSession(sessionId: SessionId): Promise<HostIntegrationSyncResult> {
+    const body = await this.#mutate('/api/integrations/sync', { sessionId }, {}, 'POST');
+    const result = readIntegrationSyncResult(body['result']);
+    if (result === null) throw new ApiError(200, 'invalid_integration_sync');
+    return result;
   }
 
   async readMessages(
@@ -880,4 +971,201 @@ function readMessageItem(value: unknown):
       thinking,
     },
   };
+}
+
+/**
+ * The checkout observation, read without inventing a field.
+ *
+ * Every value here is a point-in-time read of the Host's authority, so a
+ * field this transport cannot read makes the whole observation unreadable —
+ * a half-known observation is how "reclaimable: true" turns into a decision
+ * nobody took.
+ */
+function readCheckoutObserved(value: unknown): HostCheckoutObserved | null {
+  if (!isRecord(value)) return null;
+  const root = value['root'];
+  const cwd = value['cwd'];
+  const registered = value['registered'];
+  const worktree = value['worktree'];
+  const ownerSessionId = value['ownerSessionId'];
+  const ownerUnreadable = value['ownerUnreadable'];
+  const locked = value['locked'];
+  const reclaimable = value['reclaimable'];
+  const retainReason = value['retainReason'];
+  const observedAt = value['observedAt'];
+  if (
+    typeof root !== 'string' || root === '' ||
+    typeof cwd !== 'string' || cwd === '' ||
+    typeof registered !== 'boolean' ||
+    !isCheckoutWorktreeState(worktree) ||
+    !(ownerSessionId === null || (typeof ownerSessionId === 'string' && ownerSessionId !== '')) ||
+    typeof ownerUnreadable !== 'boolean' ||
+    typeof locked !== 'boolean' ||
+    typeof reclaimable !== 'boolean' ||
+    !(retainReason === null || isCheckoutRetainReason(retainReason)) ||
+    typeof observedAt !== 'number' || !Number.isFinite(observedAt)
+  ) return null;
+  return {
+    root,
+    cwd,
+    registered,
+    worktree,
+    ownerSessionId,
+    ownerUnreadable,
+    locked,
+    reclaimable,
+    retainReason,
+    observedAt: observedAt as Millis,
+  };
+}
+
+/**
+ * Which checkout a session sits in, and whether it owns it.
+ *
+ * A session that is not inside a managed checkout is `checkout: null` — that
+ * is an answer, not a missing field, and it is not the same as "this surface
+ * cannot observe checkouts".
+ */
+function readSessionCheckoutView(value: unknown): HostSessionCheckoutView | null {
+  if (!isRecord(value)) return null;
+  const sessionId = value['sessionId'];
+  const isOwner = value['isOwner'];
+  if (typeof sessionId !== 'string' || sessionId === '' || typeof isOwner !== 'boolean') return null;
+  const checkout = value['checkout'];
+  if (checkout === null || checkout === undefined) {
+    return { sessionId: sessionId as SessionId, checkout: null, isOwner };
+  }
+  const observed = readCheckoutObserved(checkout);
+  if (observed === null) return null;
+  return { sessionId: sessionId as SessionId, checkout: observed, isOwner };
+}
+
+/**
+ * One observed pull request.
+ *
+ * `state` is carried through EXACTLY as the Host reported it, `unknown`
+ * included. `unknown` means "the observation failed", and folding it into
+ * `open` would turn "we could not look" into "the pull request is open" —
+ * a fabricated fact that every downstream decision would then rest on. The
+ * reason travels with it, unchanged.
+ */
+function readIntegrationRecord(value: unknown): HostIntegrationRecord | null {
+  if (!isRecord(value)) return null;
+  const repo = value['repo'];
+  const prNumber = value['prNumber'];
+  const state = value['state'];
+  const headSha = value['headSha'];
+  const baseRef = value['baseRef'];
+  const url = value['url'];
+  const observedAt = value['observedAt'];
+  const observedError = value['observedError'];
+  if (
+    typeof repo !== 'string' || repo === '' ||
+    typeof prNumber !== 'number' || !Number.isSafeInteger(prNumber) || prNumber <= 0 ||
+    !isIntegrationState(state) ||
+    !(headSha === null || typeof headSha === 'string') ||
+    !(baseRef === null || typeof baseRef === 'string') ||
+    !(url === null || typeof url === 'string') ||
+    typeof observedAt !== 'number' || !Number.isFinite(observedAt) ||
+    !(observedError === null || observedError === undefined || typeof observedError === 'string')
+  ) return null;
+  return {
+    repo,
+    prNumber,
+    state,
+    headSha,
+    baseRef,
+    url,
+    observedAt: observedAt as Millis,
+    observedError: observedError === undefined ? null : observedError,
+  };
+}
+
+/**
+ * The outcome of one explicit refresh, reported as it happened.
+ *
+ * `status` is carried through unchanged — a pass that wrote nothing and a
+ * pass that could not read anything are different facts, and this transport
+ * is not the one that decides which one it was.
+ */
+function readIntegrationSyncResult(value: unknown): HostIntegrationSyncResult | null {
+  if (!isRecord(value)) return null;
+  const status = value['status'];
+  const writtenRaw = value['written'];
+  const failedRaw = value['failed'];
+  if (!isIntegrationSyncStatus(status) || !Array.isArray(writtenRaw) || !Array.isArray(failedRaw)) return null;
+  const written: HostIntegrationSyncWritten[] = [];
+  for (const entry of writtenRaw) {
+    if (!isRecord(entry)) return null;
+    const repo = entry['repo'];
+    const prNumber = entry['prNumber'];
+    if (typeof repo !== 'string' || repo === '' ||
+        typeof prNumber !== 'number' || !Number.isSafeInteger(prNumber) || prNumber <= 0) return null;
+    written.push({ repo, prNumber });
+  }
+  const failed: HostIntegrationSyncFailure[] = [];
+  for (const entry of failedRaw) {
+    if (!isRecord(entry)) return null;
+    const ref = entry['ref'];
+    const reason = entry['reason'];
+    if (typeof ref !== 'string' || ref === '' || typeof reason !== 'string') return null;
+    failed.push({ ref, reason });
+  }
+  return { status, written, failed };
+}
+
+const CHECKOUT_WORKTREE_STATES = ['clean', 'dirty_tracked', 'untracked', 'ignored'] as const;
+
+function isCheckoutWorktreeState(value: unknown): value is HostCheckoutObserved['worktree'] {
+  return typeof value === 'string' &&
+    (CHECKOUT_WORKTREE_STATES as readonly string[]).includes(value);
+}
+
+const CHECKOUT_RETAIN_REASONS = [
+  'not_registered',
+  'unreadable',
+  'dirty_tracked',
+  'untracked',
+  'ignored',
+  'locked',
+  'detached_unreferenced',
+  'reparse_point',
+  'owner_alive',
+  'cwd_inside',
+] as const;
+
+function isCheckoutRetainReason(value: unknown): value is HostCheckoutRetainReason {
+  return typeof value === 'string' &&
+    (CHECKOUT_RETAIN_REASONS as readonly string[]).includes(value);
+}
+
+const INTEGRATION_STATES = [
+  'none',
+  'draft',
+  'open',
+  'checks_failing',
+  'checks_passing',
+  'review_requested',
+  'changes_requested',
+  'approved',
+  'merged',
+  'closed_unmerged',
+  'unknown',
+] as const;
+
+function isIntegrationState(value: unknown): value is HostIntegrationState {
+  return typeof value === 'string' &&
+    (INTEGRATION_STATES as readonly string[]).includes(value);
+}
+
+const INTEGRATION_SYNC_STATUSES = [
+  'synced',
+  'no_origin_remote',
+  'no_checkpoints',
+  'observation_failed',
+] as const;
+
+function isIntegrationSyncStatus(value: unknown): value is HostIntegrationSyncStatus {
+  return typeof value === 'string' &&
+    (INTEGRATION_SYNC_STATUSES as readonly string[]).includes(value);
 }

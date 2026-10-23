@@ -297,6 +297,59 @@ async function routeRequest(context: RequestContext): Promise<void> {
       return;
     }
 
+    // The checkout and integration namespaces (plan 621). The BFF is a
+    // FORWARDER here: the Host owns the session -> checkout -> pull-request
+    // mapping, and a facade that re-derived it would be a second answer to the
+    // same question. So the question goes up unchanged and the answer comes
+    // back unchanged — including a refusal, which is an answer and not a
+    // failure.
+    if (request.method === 'GET' && requestUrl.pathname === '/api/checkouts') {
+      const query = parseCheckoutQuery(requestUrl.searchParams);
+      if (query === null) {
+        sendJson(response, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      const checkout = query.kind === 'session'
+        ? await context.client.observeCheckoutForSession(query.sessionId)
+        : await context.client.observeCheckoutByRoot(query.root);
+      sendJson(response, 200, { checkout });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/checkouts/reclaim') {
+      const body = await readJsonBody(request);
+      if (!isReclaimInput(body)) {
+        sendJson(response, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      // `removed: false` is a 200: the Host declined and nothing was deleted.
+      const result = await context.client.requestCheckoutReclaim(body.root);
+      sendJson(response, 200, { result });
+      return;
+    }
+
+    if (request.method === 'GET' && requestUrl.pathname === '/api/integrations') {
+      const sessionId = requestUrl.searchParams.get('sessionId');
+      if (hasUnexpectedKeys(requestUrl.searchParams, ['sessionId']) || !isBoundedString(sessionId, 1, 4096)) {
+        sendJson(response, 400, { error: { code: 'invalid_integration_query' } });
+        return;
+      }
+      const records = await context.client.observeIntegrationsForSession(sessionId);
+      sendJson(response, 200, { records });
+      return;
+    }
+
+    if (request.method === 'POST' && requestUrl.pathname === '/api/integrations/sync') {
+      const body = await readJsonBody(request);
+      if (!isIntegrationSyncInput(body)) {
+        sendJson(response, 400, { error: { code: 'invalid_integration_sync' } });
+        return;
+      }
+      const result = await context.client.syncIntegrations(body.sessionId);
+      sendJson(response, 200, { result });
+      return;
+    }
+
     const cancelMatch = /^\/api\/runs\/([^/]+)\/cancel$/.exec(requestUrl.pathname);
     if (request.method === 'POST' && cancelMatch) {
       const runId = decodePathPart(cancelMatch[1]);
@@ -660,6 +713,54 @@ function isRegisterDirectoryInput(value: Record<string, unknown> | null): value 
 function isCancelRunInput(value: Record<string, unknown> | null): value is Record<string, unknown> & { readonly reason?: string } {
   return value !== null && hasOnlyKeys(value, ['reason']) &&
     (value.reason === undefined || isBoundedString(value.reason, 1, 200));
+}
+
+/**
+ * Which checkout the browser is asking about.
+ *
+ * Exactly one selector: naming both is ambiguous, and naming neither would
+ * have to fall back to a scan of every checkout on the machine — a question
+ * the browser has no business asking.
+ */
+type CheckoutQuery =
+  | { readonly kind: 'session'; readonly sessionId: string }
+  | { readonly kind: 'root'; readonly root: string };
+
+function parseCheckoutQuery(params: URLSearchParams): CheckoutQuery | null {
+  if (hasUnexpectedKeys(params, ['sessionId', 'root'])) return null;
+  const sessionId = params.get('sessionId');
+  const root = params.get('root');
+  if ((sessionId === null) === (root === null)) return null;
+  if (sessionId !== null) {
+    return isBoundedString(sessionId, 1, 4096) ? { kind: 'session', sessionId } : null;
+  }
+  return isBoundedString(root, 1, 4096) ? { kind: 'root', root } : null;
+}
+
+/**
+ * The checkout the browser asks the Host to remove.
+ *
+ * The path is the checkout's identity, so it travels in the body and it is
+ * bounded exactly like the Host bounds it. Nothing else may travel with it:
+ * a reclaim request that carried a verdict would be a client deciding on the
+ * Host's authority.
+ */
+function isReclaimInput(value: Record<string, unknown> | null): value is Record<string, unknown> & {
+  readonly root: string;
+} {
+  return value !== null && hasOnlyKeys(value, ['root']) && isBoundedString(value.root, 1, 4096);
+}
+
+/**
+ * The session whose pull requests the browser asks the Host to re-read.
+ *
+ * The refresh is session-scoped because that is the Host's write side: one
+ * pass walks session -> cwd -> origin -> checkpoint refs -> pull requests.
+ */
+function isIntegrationSyncInput(value: Record<string, unknown> | null): value is Record<string, unknown> & {
+  readonly sessionId: string;
+} {
+  return value !== null && hasOnlyKeys(value, ['sessionId']) && isBoundedString(value.sessionId, 1, 4096);
 }
 
 function isPermissionDecision(value: Record<string, unknown> | null): value is Record<string, unknown> & {

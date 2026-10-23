@@ -21,10 +21,12 @@ import { computeContextEstimate, resolveContextWindow } from '@duya/ai/context';
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 import {
   countByRole,
+  describeError,
   EMPTY_TOTALS,
   formatTokens,
   formatUsd,
   loadSessionMessages,
+  showPanel,
   sumMessageUsage,
   type HistoryView,
 } from './shared.js';
@@ -65,26 +67,6 @@ const WINDOW_SOURCE_LABELS: Record<'capability' | 'catalog' | 'default', string>
   catalog: 'built-in model catalog',
   default: 'DEFAULT (200K) — no capability row and no catalog entry for this model',
 };
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function showPanel(
-  ctx: TuiSlashContext,
-  title: string,
-  lines: readonly string[],
-  options: { readonly footer: string; readonly scrollable: boolean },
-): void {
-  if (ctx.tui.showPanel !== undefined) {
-    ctx.tui.showPanel(title, lines, options);
-    return;
-  }
-  // Small command harnesses can provide only the basic notice surface. The
-  // production TUI always supplies `showPanel` and renders this as a window.
-  ctx.tui.printNotice(title);
-  for (const line of lines) ctx.tui.printNotice(line);
-}
 
 const STATUS_COMMAND: TuiSlashCommandDef = {
   name: 'status',

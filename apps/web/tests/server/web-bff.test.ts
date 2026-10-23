@@ -768,3 +768,192 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(sourceClosed).toBe(true);
   }, 30_000);
 });
+
+/**
+ * The checkout and integration namespaces (plan 621).
+ *
+ * The BFF is a FORWARDER here, and the tests hold it to that: the Host owns
+ * the session -> checkout -> pull-request mapping, so the facade may not
+ * re-derive it. Every assertion below therefore checks the answer the Host
+ * gave, not a shape the facade invented — and the refusal cases check that a
+ * refusal travels as an answer rather than as an empty result.
+ */
+describe('Web BFF over the Host checkout and integration namespaces', () => {
+  it('forwards the checkout observation of a session', async () => {
+    const host = await startTestHost();
+    const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);
+    const session = await hostClient.create({ title: 'Checkout session', mode: 'code' });
+    const bff = await startTestBff(host);
+
+    const response = await fetch(`${bff.origin}/api/checkouts?sessionId=${encodeURIComponent(session.id)}`);
+    const body = await response.json() as {
+      checkout: { sessionId: string; checkout: unknown; isOwner: boolean };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.checkout.sessionId).toBe(session.id);
+    // "This session is not inside a managed checkout" is the Host's ANSWER.
+    // It is not the same as "this surface cannot observe checkouts", and the
+    // facade must not blur the two.
+    expect(body.checkout.checkout).toBeNull();
+    expect(body.checkout.isOwner).toBe(false);
+  }, 30_000);
+
+  it('forwards one checkout by its root path', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-web-checkout-'));
+    roots.push(directory);
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+
+    const response = await fetch(`${bff.origin}/api/checkouts?root=${encodeURIComponent(directory)}`);
+    const body = await response.json() as {
+      checkout: {
+        root: string;
+        registered: boolean;
+        reclaimable: boolean;
+        retainReason: string | null;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.checkout.root).toBe(directory);
+    // A plain directory is not a managed linked worktree, and the Host says
+    // so with the condition that refused it.
+    expect(body.checkout.registered).toBe(false);
+    expect(body.checkout.reclaimable).toBe(false);
+    expect(body.checkout.retainReason).toBe('not_registered');
+  }, 30_000);
+
+  it('refuses a checkout query that names no selector or names both', async () => {
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+
+    const neither = await fetch(`${bff.origin}/api/checkouts`);
+    const both = await fetch(`${bff.origin}/api/checkouts?sessionId=session-1&root=${encodeURIComponent('/tmp')}`);
+    const neitherBody = await neither.json() as { error: { code: string } };
+    const bothBody = await both.json() as { error: { code: string } };
+
+    expect(neither.status).toBe(400);
+    expect(both.status).toBe(400);
+    expect(neitherBody.error.code).toBe('invalid_checkout_query');
+    expect(bothBody.error.code).toBe('invalid_checkout_query');
+  }, 30_000);
+
+  it('treats a reclaim refusal as the Host\'s answer, not as a failure', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-web-reclaim-'));
+    roots.push(directory);
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+    const bootstrap = await readBootstrap(bff);
+
+    const response = await fetch(`${bff.origin}/api/checkouts/reclaim`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ root: directory }),
+    });
+    const body = await response.json() as { result: { removed: boolean; reason?: string } };
+
+    expect(response.status).toBe(200);
+    // The Host re-evaluated its conditions and declined; nothing was deleted,
+    // and that is an answer rather than an error.
+    expect(body.result.removed).toBe(false);
+    expect(body.result.reason).toBe('not_registered');
+  }, 30_000);
+
+  it('forwards the integration projection of a session and its explicit refresh', async () => {
+    const host = await startTestHost();
+    const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);
+    const session = await hostClient.create({ title: 'Integration session', mode: 'code' });
+    const bff = await startTestBff(host);
+    const bootstrap = await readBootstrap(bff);
+
+    const recordsResponse = await fetch(`${bff.origin}/api/integrations?sessionId=${encodeURIComponent(session.id)}`);
+    const records = await recordsResponse.json() as { records: unknown[] };
+    const syncResponse = await fetch(`${bff.origin}/api/integrations/sync`, {
+      method: 'POST',
+      headers: mutationHeaders(bff, bootstrap.csrfToken),
+      body: JSON.stringify({ sessionId: session.id }),
+    });
+    const sync = await syncResponse.json() as {
+      result: { status: string; written: unknown[]; failed: unknown[] };
+    };
+
+    expect(recordsResponse.status).toBe(200);
+    expect(records.records).toEqual([]);
+    expect(syncResponse.status).toBe(200);
+    // A session with no working directory has nothing to sync. The Host names
+    // that outcome instead of reporting a generic success.
+    expect(sync.result.status).toBe('no_checkpoints');
+    expect(sync.result.written).toEqual([]);
+    expect(sync.result.failed).toEqual([]);
+  }, 30_000);
+
+  it('refuses an integration query that names no session', async () => {
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+
+    const response = await fetch(`${bff.origin}/api/integrations`);
+    const body = await response.json() as { error: { code: string } };
+
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe('invalid_integration_query');
+  }, 30_000);
+
+  it('gates both mutations behind the same-origin CSRF token', async () => {
+    const host = await startTestHost();
+    const bff = await startTestBff(host);
+    const bootstrap = await readBootstrap(bff);
+
+    const reclaimWithoutToken = await fetch(`${bff.origin}/api/checkouts/reclaim`, {
+      method: 'POST',
+      headers: { origin: bff.origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ root: '/tmp/never-removed' }),
+    });
+    const reclaimFromForeignOrigin = await fetch(`${bff.origin}/api/checkouts/reclaim`, {
+      method: 'POST',
+      headers: {
+        origin: 'https://attacker.invalid',
+        'content-type': 'application/json',
+        'x-duya-csrf': bootstrap.csrfToken,
+      },
+      body: JSON.stringify({ root: '/tmp/never-removed' }),
+    });
+    const syncWithoutToken = await fetch(`${bff.origin}/api/integrations/sync`, {
+      method: 'POST',
+      headers: { origin: bff.origin, 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-1' }),
+    });
+    const reclaimBody = await reclaimWithoutToken.json() as { error: { code: string } };
+    const foreignBody = await reclaimFromForeignOrigin.json() as { error: { code: string } };
+    const syncBody = await syncWithoutToken.json() as { error: { code: string } };
+
+    expect(reclaimWithoutToken.status).toBe(403);
+    expect(reclaimBody.error.code).toBe('csrf_failed');
+    expect(reclaimFromForeignOrigin.status).toBe(403);
+    expect(foreignBody.error.code).toBe('origin_not_allowed');
+    expect(syncWithoutToken.status).toBe(403);
+    expect(syncBody.error.code).toBe('csrf_failed');
+  }, 30_000);
+
+  it('reports a Host that does not serve the namespace instead of an empty answer', async () => {
+    const host = new HostSessionHttpServer({
+      api: {} as HostSessionHttpServerOptions['api'],
+      taskApi: {} as HostSessionHttpServerOptions['taskApi'],
+      token: HOST_TOKEN,
+    });
+    const bff = await startBffForHostServer(host);
+
+    const checkoutResponse = await fetch(`${bff.origin}/api/checkouts?sessionId=session-1`);
+    const checkoutBody = await checkoutResponse.json() as { error: { code: string } };
+    const integrationResponse = await fetch(`${bff.origin}/api/integrations?sessionId=session-1`);
+    const integrationBody = await integrationResponse.json() as { error: { code: string } };
+
+    // A Host composed without the checkout authority says so with a named
+    // code. Answering "this session has no checkout" instead would let a
+    // client treat an unsupported Host as a supported one.
+    expect(checkoutResponse.status).toBe(404);
+    expect(checkoutBody.error.code).toBe('checkout_api_unavailable');
+    expect(integrationResponse.status).toBe(404);
+    expect(integrationBody.error.code).toBe('integration_api_unavailable');
+  }, 30_000);
+});

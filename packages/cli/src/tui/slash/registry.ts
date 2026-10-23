@@ -34,6 +34,8 @@ import {
 import type { TuiSlashCommandDef, TuiSlashGroup } from './types.js';
 import { SESSION_INFO_COMMANDS } from './session-info.js';
 import { SESSION_OPS_COMMANDS } from './session-ops.js';
+import { CHECKOUT_COMMANDS } from './checkout.js';
+import { PR_COMMANDS } from './pr.js';
 import { MODEL_COMMANDS } from './model.js';
 import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
@@ -50,6 +52,8 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...HOTKEYS_COMMANDS,
   ...SESSION_INFO_COMMANDS,
   ...SESSION_OPS_COMMANDS,
+  ...CHECKOUT_COMMANDS,
+  ...PR_COMMANDS,
   ...EXPORT_COMMANDS,
   ...CAPABILITIES_COMMANDS,
   ...READ_FILE_COMMANDS,

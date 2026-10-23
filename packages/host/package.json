@@ -155,6 +155,10 @@
       "types": "./dist/workspace-access.d.ts",
       "import": "./dist/workspace-access.js"
     },
+    "./workspace-lifecycle-api": {
+      "types": "./dist/workspace-lifecycle-api.d.ts",
+      "import": "./dist/workspace-lifecycle-api.js"
+    },
     "./task-api": {
       "types": "./dist/task-api.d.ts",
       "import": "./dist/task-api.js"

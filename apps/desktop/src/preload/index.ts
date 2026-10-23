@@ -27,6 +27,7 @@ import type {
   GitListBranchesResult,
   GitRepositoryState,
 } from '../contracts/git'
+import type { WorkspaceLifecycleAPI } from '../contracts/workspace-lifecycle'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
  *  row (ProjectRow) but with `paths` decoded from JSON to an array. */
@@ -1468,6 +1469,10 @@ export interface ElectronAPI {
   skills: SkillsAPI
   files: FilesAPI
   git: GitAPI
+  // Plan 621 slice F: the renderer's narrow window onto the Host's checkout
+  // and integration observations. The DTOs are the Host's own wire contract,
+  // so the bridge cannot invent an answer of its own.
+  workspaceLifecycle: WorkspaceLifecycleAPI
   weixin: WeixinAccountAPI
   browserCookie: BrowserCookieAPI
   agentProfile: AgentProfileAPI
@@ -2518,6 +2523,24 @@ const electronAPI: ElectronAPI = {
     // stage, commit, push, reset, or other mutating Git controls here).
     // Dropping them from the bridge also means a future handler cannot be
     // reached from the renderer by accident.
+  },
+  // Plan 621 slice F: checkout / integration observations. Read-only, except
+  // for the one reclaim request, and every answer is the Host's own DTO.
+  workspaceLifecycle: {
+    checkouts: {
+      observeForSession: (sessionId: string) =>
+        ipcRenderer.invoke('workspace-lifecycle:checkout:observe-for-session', sessionId),
+      observeCheckout: (root: string) =>
+        ipcRenderer.invoke('workspace-lifecycle:checkout:observe', root),
+      requestReclaim: (root: string) =>
+        ipcRenderer.invoke('workspace-lifecycle:checkout:reclaim', root),
+    },
+    integrations: {
+      observeForSession: (sessionId: string) =>
+        ipcRenderer.invoke('workspace-lifecycle:integration:observe-for-session', sessionId),
+      refreshForSession: (sessionId: string) =>
+        ipcRenderer.invoke('workspace-lifecycle:integration:refresh-for-session', sessionId),
+    },
   },
   weixin: {
     getAccounts: () => ipcRenderer.invoke('db:weixin:getAccounts'),

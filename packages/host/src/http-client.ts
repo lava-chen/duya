@@ -142,6 +142,13 @@ import type {
   LockOrigin,
 } from '@duya/agent-protocol';
 import type {
+  HostCheckoutObserved,
+  HostCheckoutRetainReason,
+  HostIntegrationRecord,
+  HostIntegrationSyncResult,
+  HostSessionCheckoutView,
+} from '@duya/agent-protocol';
+import type {
   HostLocalMailboxApiV1,
   HostMailboxApplyInput,
   HostMailboxClaimBatchInput,
@@ -258,6 +265,11 @@ import type {
 const REQUEST_TIMEOUT_MS = 5_000;
 // Leave headroom for the Agent Server's existing 30s IPC request deadline.
 const RUN_REQUEST_TIMEOUT_MS = 25_000;
+// Plan 621: the checkout and integration namespaces read git and reach the
+// hosting service, so they get their own budgets. See the note on the
+// namespace methods below for why the default is wrong for them.
+const CHECKOUT_REQUEST_TIMEOUT_MS = 15_000;
+const INTEGRATION_SYNC_REQUEST_TIMEOUT_MS = 30_000;
 
 export class HostSessionHttpError extends Error {
   constructor(
@@ -2009,6 +2021,89 @@ export class HostSessionHttpClient implements
       `/v1/projects/${encodeURIComponent(projectId)}`,
     );
     return result.deleted;
+  }
+
+  // ── Plan 621: checkout and integration observations ───────────────────
+  //
+  // Every surface — Desktop, TUI, Web — asks the Host through these methods
+  // and nowhere else. A surface that reached into git or GitHub itself would
+  // rebuild the mapping the Host already owns (plan 621 §4.3), and a surface
+  // that decided on an observed `reclaimable` would be deciding on a
+  // snapshot. The Host re-evaluates every condition at the moment of the
+  // action, which is why `requestCheckoutReclaim` is a call and not a flag.
+  //
+  // These five carry their OWN budget, and the reason is what they do rather
+  // than how much they return. The default 5s is sized for metadata reads, but
+  // a checkout observation runs git several times over — the registration
+  // check, the worktree state, the owner file, the retain conditions — and
+  // the refresh below reaches the hosting service. Under load the 5s budget
+  // expires on a question the Host could have answered, and the surface then
+  // reports "the Host could not answer" for a checkout that was right there.
+  // A surface that cannot tell "slow" from "absent" renders the wrong thing.
+
+  /** The checkout the given session sits in, and whether it owns it. */
+  async observeCheckoutForSession(sessionId: SessionId): Promise<HostSessionCheckoutView> {
+    const result = await this.request<{ checkout: HostSessionCheckoutView }>(
+      'GET',
+      `/v1/checkouts?${new URLSearchParams({ sessionId }).toString()}`,
+      undefined,
+      CHECKOUT_REQUEST_TIMEOUT_MS,
+    );
+    return result.checkout;
+  }
+
+  /** One checkout, observed by root path. */
+  async observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved> {
+    const result = await this.request<{ checkout: HostCheckoutObserved }>(
+      'GET',
+      `/v1/checkouts?${new URLSearchParams({ root }).toString()}`,
+      undefined,
+      CHECKOUT_REQUEST_TIMEOUT_MS,
+    );
+    return result.checkout;
+  }
+
+  /**
+   * Ask the Host to remove one checkout.
+   *
+   * A refusal is a normal answer, not a failure: `{ removed: false, reason }`
+   * means the Host refused and nothing was deleted.
+   */
+  async requestCheckoutReclaim(
+    root: string,
+  ): Promise<
+    { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason }
+  > {
+    const result = await this.request<{
+      result: { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason };
+    }>('POST', '/v1/checkouts/reclaim', { root }, CHECKOUT_REQUEST_TIMEOUT_MS);
+    return result.result;
+  }
+
+  /** The integrations associated with a session, as last observed. Never hits the network. */
+  async observeIntegrationsForSession(sessionId: SessionId): Promise<readonly HostIntegrationRecord[]> {
+    const records = await this.request<{ records: readonly HostIntegrationRecord[] }>(
+      'GET',
+      `/v1/integrations?${new URLSearchParams({ sessionId }).toString()}`,
+      undefined,
+      CHECKOUT_REQUEST_TIMEOUT_MS,
+    );
+    return records.records;
+  }
+
+  /**
+   * Ask the Host to re-read the session's pull requests NOW.
+   *
+   * This is the only call that touches the hosting service; the read above
+   * never does. It is the explicit refresh the contract asks for (§4.6).
+   */
+  async syncIntegrations(sessionId: SessionId): Promise<HostIntegrationSyncResult> {
+    return this.request<HostIntegrationSyncResult>(
+      'POST',
+      '/v1/integrations/sync',
+      { sessionId },
+      INTEGRATION_SYNC_REQUEST_TIMEOUT_MS,
+    );
   }
 
   private async request<T>(
