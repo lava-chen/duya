@@ -9,13 +9,29 @@
   --diff-added-bg: rgba(34, 197, 94, 0.12);
   --diff-added-text: #15803d;
   --diff-added-word-bg: rgba(34, 197, 94, 0.35);
+  --diff-added-border: #16a34a;
   --diff-removed-bg: rgba(239, 68, 68, 0.12);
   --diff-removed-text: #b91c1c;
   --diff-removed-word-bg: rgba(239, 68, 68, 0.35);
+  --diff-removed-border: #dc2626;
   --diff-hunk-header-bg: rgba(0, 0, 0, 0.04);
   --diff-hunk-header-text: #6b7280;
   --diff-line-number-text: #9ca3af;
   --diff-line-number-bg: rgba(0, 0, 0, 0.02);
+
+  /* Syntax palette for the diff rows. Same roles as the file workspace
+     palette (--fw-syn-*), folded into fewer buckets because a diff row
+     only needs to tell code apart from prose. */
+  --diff-syn-comment: #6a9955;
+  --diff-syn-string: #a31515;
+  --diff-syn-keyword: #0000ff;
+  --diff-syn-function: #795e26;
+  --diff-syn-number: #098658;
+  --diff-syn-type: #267f99;
+  --diff-syn-tag: #800000;
+  --diff-syn-attr: #0070c1;
+  --diff-syn-operator: #af00db;
+  --diff-syn-variable: #001080;
   
   /* Scrollbar colors - more subtle */
   --diff-scrollbar-track: transparent;
@@ -29,13 +45,27 @@
   --diff-added-bg: rgba(34, 197, 94, 0.15);
   --diff-added-text: #4ade80;
   --diff-added-word-bg: rgba(34, 197, 94, 0.45);
+  --diff-added-border: #22c55e;
   --diff-removed-bg: rgba(239, 68, 68, 0.15);
   --diff-removed-text: #f87171;
   --diff-removed-word-bg: rgba(239, 68, 68, 0.45);
+  --diff-removed-border: #ef4444;
   --diff-hunk-header-bg: rgba(255, 255, 255, 0.05);
   --diff-hunk-header-text: #9ca3af;
   --diff-line-number-text: #6b7280;
   --diff-line-number-bg: rgba(255, 255, 255, 0.02);
+
+  /* Syntax palette, dark variant */
+  --diff-syn-comment: #6a9955;
+  --diff-syn-string: #ce9178;
+  --diff-syn-keyword: #569cd6;
+  --diff-syn-function: #dcdcaa;
+  --diff-syn-number: #b5cea8;
+  --diff-syn-type: #4ec9b0;
+  --diff-syn-tag: #569cd6;
+  --diff-syn-attr: #9cdcfe;
+  --diff-syn-operator: #c586c0;
+  --diff-syn-variable: #9cdcfe;
   
   /* Scrollbar colors for dark theme - more subtle */
   --diff-scrollbar-track: transparent;
@@ -215,3 +245,21 @@
   opacity: 1;
   height: auto;
 }
+
+/* ============================================
+   SYNTAX COLOURS FOR THE DIFF ROWS
+   The diff viewer draws its own rows (it needs the original file line
+   numbers, which no syntax highlighter component provides), so the
+   tokens are rendered as plain spans and coloured here.
+   ============================================ */
+
+.diff-syn-comment { color: var(--diff-syn-comment); font-style: italic; }
+.diff-syn-string { color: var(--diff-syn-string); }
+.diff-syn-keyword { color: var(--diff-syn-keyword); }
+.diff-syn-function { color: var(--diff-syn-function); }
+.diff-syn-number { color: var(--diff-syn-number); }
+.diff-syn-type { color: var(--diff-syn-type); }
+.diff-syn-tag { color: var(--diff-syn-tag); }
+.diff-syn-attr { color: var(--diff-syn-attr); }
+.diff-syn-operator { color: var(--diff-syn-operator); }
+.diff-syn-variable { color: var(--diff-syn-variable); }

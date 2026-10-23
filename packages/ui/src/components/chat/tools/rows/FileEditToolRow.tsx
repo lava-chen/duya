@@ -480,6 +480,7 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
                     oldContent={diffPayload.oldContent}
                     newContent={diffPayload.newContent}
                     maxHeight={200}
+                    language={getLanguageFromPath(filePath)}
                   />
                 )}
 
