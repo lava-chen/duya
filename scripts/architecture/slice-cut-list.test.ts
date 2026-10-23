@@ -39,19 +39,42 @@ function measuredPairs(): Map<string, number> {
 
 const PAIRS = measuredPairs();
 
+function staleWholePairDeclarations(
+  entries: readonly (typeof CUT_LIST)[number][],
+  measured: ReadonlyMap<string, number>,
+) {
+  return entries
+    .filter((entry) => entry.subsetOf === undefined && measured.get(entry.pair) !== entry.edges)
+    .map((entry) => ({
+      id: entry.id,
+      pair: entry.pair,
+      stated: entry.edges,
+      measured: measured.get(entry.pair) ?? 0,
+    }));
+}
+
 describe('the cut list matches the graph it claims to describe', () => {
   it('states the measured edge count for every pair it claims wholly', () => {
     // The load-bearing assertion. An entry with no `subsetOf` claims the WHOLE
     // pair, so its count must equal the measured total. Subset entries are
     // checked separately below, against their parent's total.
-    const wrong = CUT_LIST.filter((c) => c.subsetOf === undefined && PAIRS.get(c.pair) !== c.edges)
-      .map((c) => ({
-        id: c.id,
-        pair: c.pair,
-        stated: c.edges,
-        measured: PAIRS.get(c.pair) ?? 0,
-      }));
-    expect(wrong).toEqual([]);
+    expect(staleWholePairDeclarations(CUT_LIST, PAIRS)).toEqual([]);
+  });
+
+
+
+  it('rejects the historical 60-edge main-to-agent declaration (mutation ②)', () => {
+    const distorted = CUT_LIST.map((entry) =>
+      entry.id === 'main-to-agent-value' ? { ...entry, edges: 60 } : entry,
+    );
+    expect(staleWholePairDeclarations(distorted, PAIRS)).toEqual([
+      {
+        id: 'main-to-agent-value',
+        pair: 'electron-main -> pkg:agent',
+        stated: 60,
+        measured: 1,
+      },
+    ]);
   });
 
   it('has subsets that sum to their parent, and name a parent that exists', () => {

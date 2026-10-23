@@ -16,9 +16,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   SPECIFIER_CLASS,
   importsOf,
@@ -28,6 +30,18 @@ import {
   tarjan,
   ROOT,
 } from './import-graph.mjs';
+
+function assertBarePackageRoot(
+  resolver: typeof resolveTarget,
+  specifier: string,
+  expected: string,
+): void {
+  expect(resolver(specifier, 'packages/host/src/x.ts')).toBe(expected);
+}
+
+function sha256(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
 
 describe('the specifier class is shared, not retyped', () => {
   it('is the same literal the two audit scripts use', () => {
@@ -248,7 +262,9 @@ describe('a bare @duya specifier resolves to the file that declares it', () => {
   // slice graph had no cross-package edge at all.
 
   it('resolves a bare @duya specifier to the file that declares it', () => {
-    expect(resolveTarget('@duya/agent-protocol', 'packages/host/src/x.ts')).toBe(
+    assertBarePackageRoot(
+      resolveTarget,
+      '@duya/agent-protocol',
       'packages/agent-protocol/src/index.ts',
     );
   });
@@ -286,6 +302,44 @@ describe('a bare @duya specifier resolves to the file that declares it', () => {
     expect(names.length).toBeGreaterThan(0);
     const unresolved = names.filter((n) => resolveTarget(n, 'packages/host/src/x.ts') === null);
     expect(unresolved).toEqual([]);
+  });
+
+
+
+  it('fails the bare-root assertion when the src/index.ts candidate is removed (mutation ①)', async () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'm51-mutation-1-'));
+    const architectureDir = path.join(fixtureRoot, 'scripts/architecture');
+    const sourceModule = path.join(ROOT, 'scripts/architecture/import-graph.mjs');
+    const sourceHashBefore = sha256(sourceModule);
+    const specifier = '@duya/mutation-fixture';
+    const expected = 'packages/mutation-fixture/src/index.ts';
+
+    try {
+      mkdirSync(architectureDir, { recursive: true });
+      for (const name of ['import-graph.mjs', 'strip-comments.mjs', 'workspace-exports.mjs']) {
+        copyFileSync(path.join(ROOT, 'scripts/architecture', name), path.join(architectureDir, name));
+      }
+
+      const packageRoot = path.join(fixtureRoot, 'packages/mutation-fixture');
+      mkdirSync(path.join(packageRoot, 'src'), { recursive: true });
+      writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: specifier }), 'utf8');
+      writeFileSync(path.join(packageRoot, 'src/index.ts'), 'export {};\n', 'utf8');
+
+      const mutantModule = path.join(architectureDir, 'import-graph.mjs');
+      const baseline = await import(`${pathToFileURL(mutantModule).href}?baseline`);
+      assertBarePackageRoot(baseline.resolveTarget, specifier, expected);
+
+      const source = readFileSync(mutantModule, 'utf8');
+      const indexCandidate = '`${srcRoot}/index.ts`, ';
+      expect(source.includes(indexCandidate)).toBe(true);
+      writeFileSync(mutantModule, source.replace(indexCandidate, ''), 'utf8');
+
+      const mutant = await import(`${pathToFileURL(mutantModule).href}?mutation`);
+      expect(() => assertBarePackageRoot(mutant.resolveTarget, specifier, expected)).toThrow();
+      expect(sha256(sourceModule)).toBe(sourceHashBefore);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it('returns null for a package that does not exist', () => {
