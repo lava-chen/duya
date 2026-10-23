@@ -1,8 +1,8 @@
 # 工具组 P2：组级折叠态 / diff 增强 / 路径头
 
-状态：active · 负责人：mvs_82ed50bdb9b04e228b7d48bcb2ea011a · 更新：2026-10-23
+状态：done · 负责人：mvs_82ed50bdb9b04e228b7d48bcb2ea011a · 更新：2026-10-23
 分支：codex/claude-code-tool-group-p2 · worktree：E:\Projects\duya\.claude\worktrees\claude-code-parity · base：origin/master 7b339024 · owner：mavis
-PR：https://github.com/lava-chen/duya/pull/374（P1 的 PR #368 已由用户合并，P2 另开 PR）
+PR：https://github.com/lava-chen/duya/pull/374（已合并 `43df59f4`）
 
 ## 目标与边界
 
@@ -51,6 +51,6 @@ P1 把折叠行改成了「分类动词 + 轮级 diffstat」，P2 原计划再�
 
 ## 接续 / 结果
 
-已实现：轮级回到「耗时」、组级折叠态恢复（语义描述 + 组级 diffstat）、diffstat 徽标对齐参考图；P2 的路径头 + 复制 / diff 语法高亮保留。已验证：typecheck、architecture、vitest、Electron dev 深浅双主题实跑（真实会话 + 组件 harness）。PR：https://github.com/lava-chen/duya/pull/374（未合并，未获授权）。
-回收：未回收（PR 未集成）。
-下一步：review / CI / 授权后合并。
+已实现：轮级回到「耗时」、组级折叠态恢复（语义描述 + 组级 diffstat）、diffstat 徽标对齐参考图；P2 的路径头 + 复制 / diff 语法高亮保留。已验证：typecheck、architecture、vitest、Electron dev 深浅双主题实跑（真实会话 + 组件 harness）。PR：https://github.com/lava-chen/duya/pull/374（已合并 `43df59f4`）。
+回收：已合并回收。
+下一步：无。后续若要再动工具组的折叠态分层，先读这份和 P1 那份归档计划——两份都记了各自改了什么、为什么被改回去。
