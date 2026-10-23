@@ -9,7 +9,14 @@ import { buildToolAction } from '@/components/chat/tools/normalize';
 import { useShowHookInvocations } from './useShowHookInvocations';
 import { useConversationStore } from '@/stores/conversation-store';
 
-function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
+/**
+ * Map the raw streaming event log onto the render actions.
+ *
+ * Exported so the streaming-render benchmark harness (packages/ui/src/components/
+ * chat/__tests__/harness) can drive the renderer with the SAME mapping the
+ * product uses, instead of a replica that could drift from it.
+ */
+export function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   const actions: ActionItem[] = [];
 
   // Pre-pass: build an id -> tool_result map so the tool_use branch can
