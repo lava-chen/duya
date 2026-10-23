@@ -1391,6 +1391,57 @@ The system prompt is fully template-driven (Handlebars, `packages/agent/src/prom
 - **Prompt caching**: static modules cache per section name, keyed by a fingerprint of the context they were rendered against; dynamic sections are volatile. A section declares its channel with `placement` — `'system'` goes into the system prompt, `'context'` is delivered as a message so the system prefix stays byte-identical between turns (plan 619).
 - **Byte-discipline**: every migration landed with byte-level parity tests; the remaining known whitespace artifacts (stray blank lines where gated blocks collapsed in the old monolith/legacy paths) are documented in plan 551.
 
+### Prompt Channels (Plan 619)
+
+The system prompt is the provider's cache prefix, so what changes between turns
+decides what the provider can reuse. The prompt is therefore delivered on two
+channels, and the split is declared per section rather than assembled by hand:
+
+- **system channel** — the provider's `system` field, one string. It holds the
+  behaviour rules and the session-level constants, and it is byte-identical
+  between turns.
+- **context channel** — a provider *user turn*, carrying a `<system-reminder>`
+  envelope that says the context came from the system and not from the person
+  (the shape Claude Code uses for its attachments). It holds what actually
+  changes: the working directory, the memory projection, the skill catalog, the
+  MCP and Apps directories.
+
+The mechanics:
+
+- A section declares its channel with `placement` (`packages/host/src/worker-prompts/PromptSystem.ts`).
+  `buildSystemPromptPartition()` returns the two halves; the session runtime
+  puts the stable half in the system prompt and hands the context half to the
+  rail.
+- The rail (`packages/host/src/worker-context/context-rail.ts`) delivers one
+  copy per slot per request with the current text, and removes a slot that
+  stopped rendering. It lives in the working array only — never in the session
+  timeline — so it cannot pile up and does not survive into the transcript.
+- The stable half is cacheable, so the cache has to work: one `PromptSystem`
+  per (config, profile) is shared, and every section's cache key carries a
+  fingerprint of the context it was rendered against. Without the fingerprint
+  a shared instance would serve a stale section when the tool set changed;
+  without the shared instance `cachePolicy: 'once'` never cached anything.
+- What the model was shown is recorded per turn as a `prompt_snapshot` rollout
+  row: the system prompt and the context blocks, with their text. A text that
+  did not change is recorded by hash, and `DUYA_PROMPT_LEDGER_MAX_FULL` caps
+  how often a full text is written, so a long session does not push the
+  rollout past its rotation gate.
+
+### Rollout Event Taxonomy (Plan 620 Phase A)
+
+The rollout event discriminators live in ONE table
+(`packages/agent-protocol/src/rollout-events.ts`), and the type union, the
+runtime guard, the storage layer's `kind` column, the HTTP validator and the
+worker-side journal mirror all derive from it. The table says who produces
+each type — `worker`, `storage` (the rotation marker) or `reserved` (schema
+kept, no producer today) — so the worker mirror is checked against the events
+a worker may emit.
+
+Adding a type used to mean editing seven places in lockstep, and only one of
+them failed loudly: everywhere else a forgotten update surfaced as a
+TypeError inside the write transaction, leaving an orphan line in the rollout
+file with no index row. `hook_invoked` was in exactly that state.
+
 ### Context Compaction (Plan 422)
 
 Single grok-style strategy in `packages/agent/src/compact/` (`micro`/`snip`/`reactive` deleted; only `SessionMemoryCompactStrategy` remains):

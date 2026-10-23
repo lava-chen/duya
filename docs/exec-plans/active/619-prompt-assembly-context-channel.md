@@ -222,6 +222,24 @@ CLAUDE.md 同款位置；改动频率极低）。
 - provider 侧 cache 命中率对比 Phase 2 前后。
 - 更新 `docs/exec-plans/README.md` Active 表 + `ARCHITECTURE.md` 增补「提示词三通道」小节。
 
+### Phase 2–4 实施记录（2026-10-23 · 同一分支 `codex/619-phase1-prompt-defects`）
+
+Phase 2 与 Phase 3 必须同一个 commit：把 volatile 段标成 `placement:'context'` 而
+host 侧还没接分区时，那些段会**从 system 串里消失**——中间态是坏的。
+
+| Phase | 落地形态 | 备注 |
+| --- | --- | --- |
+| 2 | `SectionDef.placement`（`'system'` 默认 / `'context'`）；`buildSystemPromptPartition()` 拆两路；`buildSystemPrompt()` 保留原签名给 legacy 调用方；4 个 config 逐段标注；**删除 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY`**（只写不读、还把哨兵文本送进模型） | 标注与 §3.2 的归类表一致 |
+| 2 | 缓存三件套：`PromptsRegistry` 按 (config, profile) 共享实例；缓存键带**上下文指纹**（`contextFingerprint.ts`，覆盖会影响渲染的全部 ctx 字段，排除 `sessionStartTime`）；`promptProfileKey()` 分桶 | 只做「共享实例」会造成陈旧缓存——工具集变了缓存仍给旧字节 |
+| 3 | **新** `packages/host/src/worker-context/context-rail.ts`；agent-core 注册 `volatile_context` source + `renderUserChannelReminder`（user 通道加「不是用户说的话」免责句）；rail 每轮整体覆盖、块消失即移除、独立 metadata key 命名空间 | 位置在尾部（hook rail 之后）；不进 timeline |
+| 4 | **新** `packages/host/src/worker-context/prompt-ledger.ts`；`Journal.promptSnapshot()` 走 `journal:emit`；`_recordPromptSnapshot()` 在最终 system 串算完后调用 | 全文记录，未变化的按 hash 记，配额 `DUYA_PROMPT_LEDGER_MAX_FULL` |
+| 620 A | rollout 分类学收成一张权威表（`packages/agent-protocol/src/rollout-events.ts`），并标注每个 type 的产生方（`worker` / `storage` / `reserved`）；`EventKind`、HTTP 校验器、worker 镜像全部派生 | 见下方裁定 |
+
+**620 A7 的兼容裁定**：`reasoning` / `tool_call` / `turn_started` / `system_context` 保留
+（schema 与读侧消费点齐备，「今天没有写入者」不是删除依据）；`rotation` 有生产者；
+`hook_invoked` **纳入**权威（它本来只有 worker 镜像一份，protocol 不认 → 真发出来
+`deriveKind` 抛 TypeError、rollout 文件留下孤儿行）；`prompt_snapshot` 新增。
+
 ---
 
 ## 5. 8 个既有缺陷的修法
@@ -369,4 +387,22 @@ system prompt 与注入块这一片；620 拥有分类学单源、运行时上�
   （mode 前缀分隔符）与 `worker-product-runtime/turn-assembly-seam.test.ts`（该测试断言
   「mode 拼接只有一处实现」——现在实现搬到了 `composeModePrompt`，文件里只留调用）。
 - **bundle**：`npm run bundle:worker` 重建后按仓库惯例单独成 `build(worker):` commit。
+
+### 9.6 Phase 2–4 验证（2026-10-23）
+
+- **回归**：`npx vitest run packages/host/tests/ packages/agent/tests/ packages/agent-protocol/test/
+  packages/agent-core/test/ packages/data/ apps/desktop/src/main/` — **516 文件 / 5902 用例
+  全绿**（1 文件 / 11 用例 skip）。新增测试：分段与缓存（`prompt-partition.test.ts` 7）、
+  context rail（`context-rail.test.ts` 6）、prompt ledger（`prompt-ledger.test.ts` 7）、
+  分类学单源（`rollout-events.test.ts` 6）、prompt_snapshot 落盘
+  （`message-log.test.ts` +1）。
+- **架构门禁**：`npm run architecture:check` — 无新增违规（total 2813，全部在基线内）。
+- **类型检查的 worktree 限制**：`npm run -w @duya/host typecheck` 在本 worktree 里报 4 条
+  `TS2742`（`app-connector-manage-tool.ts`），根因是 junction 让 `@duya/capabilities`
+  的声明无法生成可移植的相对引用——**不是代码问题**：清掉 `tsconfig.tsbuildinfo` 做全量
+  重建后错误数为 0。增量构建的产物会触发它，所以 worktree 里的类型结论要按「全量重建」
+  读，不能按增量读。
+- **磁盘**：worktree 的 `packages/*/dist` 全部是可重建产物，删掉后按依赖顺序重建即可；
+  验证期间 E 盘一度写满（`ENOSPC`），构建产物是主要占用。
+
 
