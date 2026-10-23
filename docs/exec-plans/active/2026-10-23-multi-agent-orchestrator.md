@@ -201,12 +201,15 @@ codex 原始调查见 `docs-local/research/multi-agent-orchestrator/codex-multi-
 
 - **已实现**：仅计划文档（`docs/exec-plans/active/2026-10-23-multi-agent-orchestrator.md`）与
   codex 调查（gitignored）。**未改任何运行时行为**——本次是评估任务。
-- **PR**：待创建（分支 `codex/multi-agent-orchestrator` → `master`）。
+- **PR**：https://github.com/lava-chen/duya/pull/380（分支 `codex/multi-agent-orchestrator` → `master`，
+  head `229c94f5`）。**未合并，未授权集成。**
 - **未提交路径**：无。
 - **副作用**：worktree `E:\Projects\duya\.claude\worktrees\multi-agent-orchestrator`（56 个
-  junction 指向主检出依赖）；主检出 `git status` 未变。
+  junction 指向主检出依赖 + 已构建的 20 个包产物）；主检出 `git status` 未变；
+  codex 调查已另存到主检出 `docs-local/research/multi-agent-orchestrator/codex-multi-agent-map.md`。
 - **阻塞**：无。
 - **回收**：不回收——PR 未合并，Phase 1–4 待由后续 agent 在本分支续做。
+  回收时注意 `docs-local/` 不在 Git 快照内（调查材料已单独备份到主检出）。
 - **下一步**：执行 Phase 1 / A1。新建
   `packages/host/tests/worker-subagents/background-lifecycle.test.ts`，
   首个用例直接锁定 `isLegalTransition` 的合法转移矩阵；
