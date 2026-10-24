@@ -1,7 +1,10 @@
 # Agent Harness 正确性审计
 
-> **Status**: Active · **Owner**: mavis · **分支**: `codex/harness-correctness-audit` ·
-> **基线**: `10db8786`（`codex/fix-prompt-last`）· **检出**: `.claude/worktrees/harness-audit`
+> **Status**: Active · **Owner**: mavis ·
+> **落地分支**: `codex/harness-correctness-to-master`（base `master`）·
+> **检出**: `.claude/worktrees/harness-to-master`
+> **审计分支**: `codex/harness-correctness-audit`（PR #413，base 指向特性分支、CI 不跑，
+> 已由 master 落地分支取代）
 > **立项**: 2026-10-24 — 用户要求对「模块边界清楚、语义边界不清」这一判断做实证审计，
 > 并建立一个可信的 Model Request 权威边界。
 
@@ -146,14 +149,14 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 
 ## 5. 后续动作（按优先级）
 
-| # | 动作 | 归属 | 备注 |
-| --- | --- | --- | --- |
-| 1 | 决定 **inbound 的语义**（H-1） | 契约 owner | 两个读法：inbound 也是系统注入 → 移到 prompt 前；或它是"人话" → 契约明写例外。**需要人裁定**，审计不替它决定 |
-| 2 | 修 **H-2**：compaction 替换要重新投影 rail | compaction owner | rail 是每请求状态，不能"保留"，只能"重投影" |
-| 3 | `toRuntimeMessage` 带上 `origin`（H-5） | runtime owner | 与 2 同批做，否则 2 的修复没有分类依据 |
-| 4 | 让 `fix-prompt-last` 进 master | PR owner | base 指向 `codex/tui-perf-benchmark`（PR #381,open），CI 不跑；需评估是否拆出独立 PR |
-| 5 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | 已被 `fix-prompt-last` 取代 |
-| 6 | 把 provider 矩阵挂进 CI | 审计 owner | 本 PR 已就位，需确认 CI 实际跑到 |
+| # | 动作 | 归属 | 状态 | 备注 |
+| --- | --- | --- | --- | --- |
+| 1 | 决定 **inbound 的语义**（H-1） | 契约 owner | ✅ 已裁定并修复 | 裁定：mailbox 每一行都过 `projectRuntimeContextToProviderMessage`，**没有一行是人打的** → 与 rail 同类，移到 prompt 前；后续轮按规则 4 不动 |
+| 2 | 修 **H-2**：compaction 替换要重新投影 rail | compaction owner | ✅ 已修复 | 划分而非合并：替换贡献非 context 行，宿主当前投影贡献 context 行；宿主在 context 上胜出 |
+| 3 | `toRuntimeMessage` 带上 `origin`（H-5） | runtime owner | ✅ 已修复 | 与 2 同批做，两侧用同一标记分类，不可能数两次 |
+| 4 | 让契约进 master | PR owner | ✅ 本分支落地 | 原分支 base 指向 `codex/tui-perf-benchmark`（PR #381，已 CONFLICTING 且无 checks）→ 改为把整条链移植到 `master` 基线，独立 PR，CI 正常跑 |
+| 5 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | ⏳ 待 owner 处理 | 已被 `fix-prompt-last` 取代；该分支从未推远端 |
+| 6 | 把 provider 矩阵挂进 CI | 审计 owner | ✅ 已就位 | base=master 的 PR 会跑 CI，需确认 CI 实际跑到 |
 
 ## 6. 验证记录
 
