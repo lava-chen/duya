@@ -102,10 +102,12 @@
 | `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；日志含既有 jsdom canvas 未实现提示 |
 | `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成；有既有 esbuild external 警告 |
 | `c073724c`（第二次 rebase 后） | Linux x86_64；Electron 二进制与 Xvfb 均不可用 | `test -x node_modules/electron/dist/electron; command -v xvfb-run` | 1 | 无法启动 Electron 桌面环境；真实 UI/IPC/worker 产品路径仍待具备 Electron 与显示服务的环境验证，未用 mock 代替 |
-| `c073724c`（第二次 rebase 后） | Linux，GitHub remote | Draft PR #440：`https://github.com/lava-chen/duya/pull/440` | 已创建 | 目标为 `master`；不合并；待将第二次 rebase 后分支安全更新到 PR head |
+| `e0dd4f51` | Linux x86_64，GitHub remote | `git push --force-with-lease=refs/heads/codex/plugin-ui-mcp-resources:4fb21546a2d30b1e4e8548ec9f739fff3395fc95 origin HEAD:refs/heads/codex/plugin-ui-mcp-resources` | 0 | PR 分支更新为 `e0dd4f51e9ce9a2d0fc9644ce64a73623baa41b2`；master 未变 |
+| `e0dd4f51` | Linux，GitHub remote | `github_get_pr_info(440)` | open / draft / mergeable | PR #440 base 为 `master` / `40787b394d08207ed78c863d9c78dc413a9d1038`，head 与远端任务分支一致；未合并 |
+| `e0dd4f51` | Linux x86_64；系统 Chromium 与 Playwright 存在，无 Electron binary、无显示服务 | `command -v electron chromium chromium-browser google-chrome Xvfb xvfb-run weston` 与 Electron package binary 检查 | Electron / display 不可用 | 只有系统 Chromium，不能覆盖 Electron main/preload IPC 与 worker 链路；真实产品路径仍待具备 Electron 和显示服务的环境验证 |
 
 ## 接续 / 结果
 
-S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已创建。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已更新到 `e0dd4f51e9ce9a2d0fc9644ce64a73623baa41b2`，base 与最新 master 一致，仍为 open/draft/mergeable 且未合并。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：用 `--force-with-lease` 更新 PR #440 的分支，再核对 PR head/base 与 draft 状态。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
+下一步：在具备 Electron 二进制与显示服务的环境运行真实产品 UI/IPC/worker smoke；当前 PR 保持 draft 并记录该验收阻塞，不合并。
