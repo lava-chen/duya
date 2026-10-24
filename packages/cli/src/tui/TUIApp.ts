@@ -1109,13 +1109,6 @@ export class TUIApp {
       scroll: this.inlineTranscriptLines,
       chrome,
       caret,
-      // Scrolling back must not commit: those rows may be wanted again, and the
-      // terminal cannot be told to take a committed row back. `viewEnd` is the
-      // line the live area ends at — everything above it is already in the
-      // terminal's scrollback.
-      ...(this.follow
-        ? {}
-        : { viewEnd: Math.max(0, this.scrollTop) }),
     });
   }
 
@@ -1227,7 +1220,7 @@ export class TUIApp {
    *
    * The windowing arithmetic that used to live here (maxStart, clamp, slice) is
    * `visibleWindow()` behind the pane now. Keeping it here meant the inline path
-   * had to re-express the same decision as a `viewEnd` offset, and two
+   * had to re-express the same decision as a viewport offset, and two
    * expressions of "which line is on top" is exactly the disagreement plan 615
    * Phase 4 set out to remove.
    */
@@ -2735,25 +2728,33 @@ exportHistory(): string[] {
     // process. It stays bound above, verbatim.
 
     // ── Mouse wheel ─────────────────────────────────────────────────────
-    // With mouse reporting ENABLED the terminal ships the wheel as SGR mouse
-    // sequences, which blessed parses into `mouse` events — and which
-    // therefore never reach the key path as synthesized ↑/↓. That is the
-    // whole point: without it, terminals like Warp translate the wheel into
-    // arrow keys, and the arrows in input focus recall HISTORY, so the wheel
-    // could never scroll the transcript at all. Only the wheel is consumed:
-    // clicks stay with the terminal, so text selection keeps working.
-    this.output.write(enableMouseReporting());
-    this.onMouse((event) => {
-      const action = event.action;
-      if (action !== 'wheelup' && action !== 'wheeldown') return;
-      if (this.interactivePrompt !== null || this.overlay.isActive) return;
-      if (this.windowMgr.isActive) {
-        this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
-        this.scheduler.requestImmediate();
-        return;
-      }
-      this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
-    });
+    // Full-screen mode owns its viewport, so it owns the wheel too: with mouse
+    // reporting ENABLED the terminal ships the wheel as SGR sequences instead
+    // of scrolling its own scrollback — and instead of a terminal like Warp
+    // translating it into ↑/↓, which would recall input history. Only the
+    // wheel is consumed; clicks stay with the terminal so text selection keeps
+    // working.
+    //
+    // Inline mode deliberately does the opposite. There the terminal owns the
+    // scrollback (that is the point of the mode), and the live area is only one
+    // screen deep, so an app-owned scroll would have nowhere to go. Capturing
+    // the wheel would take scrolling away from the one buffer that has the
+    // history. The popup windows lose wheel scrolling in inline; they still
+    // page with PgUp/PgDn.
+    if (this.inlineSurface === null) {
+      this.output.write(enableMouseReporting());
+      this.onMouse((event) => {
+        const action = event.action;
+        if (action !== 'wheelup' && action !== 'wheeldown') return;
+        if (this.interactivePrompt !== null || this.overlay.isActive) return;
+        if (this.windowMgr.isActive) {
+          this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
+          this.scheduler.requestImmediate();
+          return;
+        }
+        this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+      });
+    }
     this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.swallowForWindow()) return;
@@ -2855,13 +2856,20 @@ exportHistory(): string[] {
       });
     }
 
+    // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
+    // no app-owned viewport to page: the rows above the live area are already
+    // in the terminal's scrollback, and the terminal's own PgUp is the thing
+    // that reaches them. Paging here would set `follow = false`, which freezes
+    // the live area AND stops commits — the transcript would stop updating
+    // while the agent is still streaming. Windowed popups still get the keys in
+    // both modes; they own a pager of their own.
     this.bindKey(['pageup'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pageup');
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null) this.scrollBy(-1);
+      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(-1);
     });
     this.bindKey(['pagedown'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
@@ -2869,7 +2877,7 @@ exportHistory(): string[] {
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null) this.scrollBy(1);
+      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(1);
     });
 
     // Everything else is text. Notably this is where CJK arrives: measured on
@@ -3238,6 +3246,12 @@ exportHistory(): string[] {
   }
 
   private revealSelectedBlock(): void {
+    // Inline mode does not scroll itself. Moving `scrollTop` would set
+    // `follow = false`, and that is the state in which the live area stops
+    // committing — the reader would be left with a frozen screen while the
+    // agent kept streaming. Block selection still moves (and still collapses or
+    // expands); only the scroll-into-view is full-screen behaviour.
+    if (this.inlineSurface !== null) return;
     const blocks = this.model.blocks;
     const selected = blocks[this.selectedBlockIndex];
     if (selected === undefined) return;
