@@ -1,6 +1,6 @@
 # 621 — Coding Workspace Lifecycle Harness（Session → Checkout → ChangeSet → Integration）
 
-状态：active（既有 A–F 已合并，P0 PR #460 待 review/CI；P1a 执行屏障推进中）· 负责人：Codex `/root` · 更新：2026-10-24
+状态：active（既有 A–F 已合并；P0 PR #460 待 review/CI；P1a 执行屏障已实现与验证，待交付 draft PR）· 负责人：Codex `/root` · 更新：2026-10-24
 分支：`codex/worktree-p1` · worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（P0）；接续见文末。
 
 关联：[496 Worktree 框架](./496-worktree-framework-implementation.md)（提供隔离实现，本计划接续其「统一生命周期 / 回收 / journal」三项未完成范围）·
@@ -515,6 +515,9 @@ worktree：`/workspace/work/duya-worktree-p0` · base：`686f3c81eace1477010b3b9
 
 ### P0 CI 修正（2026-10-24）
 
+最新接续：`c4eeef11` 已在本任务检出接入 `master@f6120e04`。源代码无冲突，三个生成 bundle 由合并后的源码重新构建，未按冲突两侧选择旧产物。同步后的 `typecheck:all`、`electron:build`、`architecture:check`、`agent-retirement-gate`（772/772，新增 0）均 exit 0；workspace / subagents / Runtime discovery+execution 及 master 新增相关回归 25 files，222 passed / 1 skipped，exit 0。日志为 `/workspace/work/duya-worktree-p0-sync-*.log`。依赖变更来自 master，安装只在本检出真实 node_modules 进行，额外 lockfile 重排已精确撤销。
+同步前 GitHub 将 #460 标为生成产物冲突，未运行 `c4eeef11` 的新 CI；本次同步提交后重新核对最新 head。未授权集成，保留 draft 和两个证据检出。P1a 的 per-session 执行屏障在独立分支 `codex/worktree-p1` 继续推进。
+
 `d8e7b845` 的 GitHub 类型检查与测试已通过；architecture job 在独立的 Agent retirement reference ratchet 失败。新增真实 shell worker 测试重复硬编码了 worker 产物路径，增加一个 selector。测试现在复用生产 `resolveBashWorkerPath`，该函数支持注入 bundle 目录；不改门禁或 baseline。
 修正后的 `typecheck:all`、`electron:build`、`architecture:check`、`agent-retirement-gate`（772/772，新增 0）与真实 shell worker 测试均 exit 0。日志留在 `/workspace/work/duya-worktree-p0-ci-fix-*.log`；验证环境与上表一致。生成的 worker bundle 随源代码更新。P0 仍待最新远端 CI 与 review，不合并。
 
@@ -542,6 +545,19 @@ worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（依赖 #460
 
 本轮源码已接入 WorkerSession 与三条派发路径；run 活跃期间的裸 `setWorkingDirectory` 明确拒绝，不能伪装成一次完整的 worktree 切换。未来 enter/exit 需要独立的控制操作能力处理自身执行占用，并把 journal、后台任务与下一轮 prompt/permission/skills 重建连成一个事务；本轮不按工具名偷偷豁免屏障。
 Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/workspace/work/test-data-p1`。首次针对性验证 21 files / 161 passed / 1 skipped（包括真实 shell 子进程）。Host/Runtime 扩大回归 310 files / 304 passed / 6 failed；2933 passed / 34 failed / 1 expected fail / 1 skipped。6 个失败文件在 P0 `c4eeef11` 重跑，34 个 `(file, test, error)` 签名完全一致，无新增失败；见本地 `duya-worktree-p1-failure-comparison.json`。
-`architecture:check` exit 0（2726 tolerated，无新增违规）；`agent-retirement-gate` exit 0（772/772，新增 0）。完整类型检查运行中；最终 bundle 尚待生成。
-期间 master 更新到 `f6120e04`，P0 #460 只在三个生成 bundle 冲突，因此暂未触发最新 CI。P0 正在同步 master 并重建；本轮成果先保存后接入更新后的 P0，最终按新依赖验证。第三方依赖安装只在 P0 的真实 node_modules 执行，不穿过本 worktree 的链接安装。
-下一步：完成类型检查并保存 P1a；同步更新后的 P0，刷新本检出的 bundle，运行最终门禁并创建依赖 #460 的 draft PR。未合并、未回收。
+`architecture:check` exit 0（2726 tolerated，无新增违规）；`agent-retirement-gate` exit 0（772/772，新增 0）。首次完整类型检查与最后的同步回调类型收窄后 Host 构建均 exit 0。源码提交 `6f8c432d`。
+期间 master 更新到 `f6120e04`。P0 #460 的三个生成 bundle 冲突已通过源码重建解决，推送 `ac73b758` 后 CI 重新运行。本轮也接入该 master 并按新依赖验证，第三方依赖安装只在 P0 真实 node_modules 执行，没有穿过本 worktree 的链接安装。
+
+| 最终验证（`501299bf`，包含 master 同步与本检出产物） | 退出码与结果 |
+| --- | --- |
+| `npm run typecheck:all` | 0 |
+| `npm run electron:build` | 0；完整 desktop / worker / CLI / gateway / recorder 构建 |
+| `npm run architecture:check` | 0；无新增违规 |
+| `npm run agent-retirement-gate` | 0；772/772，新增 0 |
+| Host / Runtime vitest | 1；313 files，307 passed / 6 failed；2967 passed / 34 failed / 1 expected fail / 1 skipped |
+| 基线失败对比 | 0；34 个 `(file, test, error)` 与 P0 完全一致；新增 0 |
+| `npm run bundle:verify` | 0；FRESH，0/953 first-party inputs changed |
+| 显式 `check-packaged-artifacts.mjs --bundle` | 1；仅既有 `ajv-formats/dist/formats` finding；与 P0 `ac73b758` 报告逐项一致，未改扫描器或 baseline |
+
+日志为 `/workspace/work/duya-worktree-p1-final-*.log`；失败对比 `duya-worktree-p1-final-failure-comparison.json`。最后接入 P0 `ac73b758` 时，已用 `git diff --exit-code 501299bf -- . ':!docs' ':!packages/host/bundle'` 证明源码与依赖完全一致，复用本检出已验收的 P1 bundle，保留 P0 最新接续记录。没有用 P0 产物覆盖 P1 实现。
+下一步：创建依赖 #460 的 draft PR，核对远端 CI / review 并记录 URL。P1a 已验证；P1 主会话 enter/exit、journal 与背景任务占用尚未完成。未合并、未回收；未提交源码路径待交付提交后清零，第三方依赖 overlay 为本地 untracked 配置。
