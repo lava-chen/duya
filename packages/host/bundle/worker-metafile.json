@@ -16590,7 +16590,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 61544,
+      "bytes": 62670,
       "imports": [],
       "format": "esm"
     },
@@ -32616,7 +32616,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-      "bytes": 87199,
+      "bytes": 87572,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -41219,7 +41219,7 @@
           "bytesInOutput": 1002
         },
         "packages/plugin-core/src/mcp/core/alias.ts": {
-          "bytesInOutput": 82
+          "bytesInOutput": 69
         },
         "packages/capabilities/src/MCP/result-blocks.ts": {
           "bytesInOutput": 1119
@@ -42956,7 +42956,7 @@
           "bytesInOutput": 2261
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-          "bytesInOutput": 3882
+          "bytesInOutput": 4023
         },
         "packages/host/src/run-event-spine.ts": {
           "bytesInOutput": 440
@@ -43766,7 +43766,7 @@
           "bytesInOutput": 967
         },
         "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-          "bytesInOutput": 29851
+          "bytesInOutput": 29936
         },
         "packages/agent-runtime/src/tools/execution/retry/types.ts": {
           "bytesInOutput": 271
@@ -44240,7 +44240,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692207
+      "bytes": 4692420
     }
   }
 }
