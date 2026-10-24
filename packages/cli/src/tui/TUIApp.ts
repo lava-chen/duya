@@ -1791,14 +1791,14 @@ export class TUIApp {
         if (!this.thinkingBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.textBuffer, key);
         this.textBuffer.append(readContent(frame), now(), key);
-        this.drainBuffers();
+        this.pushContent();
         return;
       }
       case 'thinking_delta': {
         if (!this.textBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.thinkingBuffer, key);
         this.thinkingBuffer.append(readContent(frame), now(), key);
-        this.drainBuffers();
+        this.pushContent();
         return;
       }
       case 'permission': {
@@ -1967,6 +1967,29 @@ export class TUIApp {
   private commitIfBlockChanged(buffer: DeltaBuffer, key: string | null): void {
     if (buffer.isEmpty || buffer.key === key) return;
     if (this.commitBuffers()) this.noteTranscriptMutation();
+  }
+
+  /**
+   * Handle newly arrived CONTENT — a text or thinking delta.
+   *
+   * The first content of a burst is painted NOW rather than at the end of the
+   * throttle window. The user is watching the screen hardest exactly there,
+   * and the window it would otherwise land in was opened by a frame that did
+   * not contain the content, so the frame they wait for shows nothing.
+   *
+   * Everything after the first content of a burst keeps the ordinary path:
+   * the delta buffer's line quantisation decides when a fragment becomes
+   * visible, and the scheduler's trailing throttle decides when it is
+   * painted.
+   */
+  private pushContent(): void {
+    const painted = this.scheduler.requestContent(() => {
+      // The leading frame is painted right after this returns, so the content
+      // has to be in the model NOW: a frame painted before the commit shows
+      // nothing.
+      if (this.commitBuffers()) this.noteTranscriptMutation();
+    });
+    if (!painted) this.drainBuffers();
   }
 
   /**

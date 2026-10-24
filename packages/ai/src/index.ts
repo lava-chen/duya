@@ -3,8 +3,35 @@
  *
  * Public entry point. Re-exports public types and provides the
  * createAIClient factory with lazy loading for protocol modules.
+ *
+ * The vendor SDKs are NOT reachable from here: they live behind
+ * `@duya/ai/clients` (that file explains why).
  */
-export { createAnthropicClient } from './api/anthropic-messages.js';
+// ─── The Model Request boundary ───
+//
+// The invariants every provider request has to satisfy, and the reducers
+// that turn each adapter's payload into the boundary's own vocabulary.
+//
+// The payload builders themselves are NOT re-exported here: three of them
+// live in modules that statically import the vendor SDKs (`@anthropic-ai/sdk`,
+// `openai`), and a static re-export is a static edge -- the bundler cannot
+// drop the module behind it, so the SDKs would land in the renderer's first
+// screen. They are exported from `@duya/ai/clients` instead, which is where
+// the provider surface already lives.
+export {
+  SYSTEM_ATTACHED_MARKER,
+  checkModelRequest,
+  canonicalizeGenericPayload,
+  canonicalizeAnthropicPayload,
+  canonicalizeOpenAIResponsesPayload,
+  canonicalizeOpenAICompletionsPayload,
+  canonicalizeGeminiPayload,
+  canonicalizeBedrockPayload,
+  type CanonicalRequestMessage,
+  type ModelRequestExpectation,
+  type ModelRequestViolation,
+  type ModelRequestViolationCode,
+} from './model-request-invariants.js';
 export {
   computeContextEstimate,
   estimateMessageTokens as estimateContextMessageTokens,
@@ -47,7 +74,6 @@ export {
   type ContextSnapshotEstimateSource,
   type ContextSnapshotConfidence,
 } from './utils/context-snapshot.js';
-export { createOpenAICompletionsClient } from './api/openai-completions.js';
 export { transformMessages, isSameModel } from './api/transform-messages.js';
 export { ThinkTagParser } from './utils/think-tag-parser.js';
 export {
@@ -209,7 +235,8 @@ export { createProvider, type CreateProviderOptions } from './providers/create-p
 export { createModels, type Models, type CreateModelsOptions } from './providers/models.js';
 export { lazyApi, lazyStream, type ProviderStreams } from './providers/lazy.js';
 export type { Provider, ProviderAuthConfig, ProviderOAuth, ProviderApi } from './providers/types.js';
-export { anthropicStreams, openAICompletionsStreams, openAIResponsesStreams } from './providers/adapters.js';
+// The protocol adapters live in `@duya/ai/clients` (this entry must stay
+// free of a static edge to the vendor SDKs).
 export { ModelsError, type ModelsErrorCode } from './auth/error.js';
 export { InMemoryCredentialStore } from './auth/credential-store.js';
 export { envApiKeyAuth, lazyOAuth, type EnvResolver } from './auth/helpers.js';

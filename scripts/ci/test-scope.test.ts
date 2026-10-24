@@ -21,6 +21,42 @@ describe('classifyChangedFiles', () => {
     });
   });
 
+  it('runs the tests of the package that owns a changed stylesheet', () => {
+    // A stylesheet has no unit test of its own, but it decides what the tests
+    // of its package SEE. Without this mapping the changed scope of a CSS-only
+    // PR is empty, and the workflow refuses to run tests at all.
+    const scopes = classifyChangedFiles(['packages/ui/src/styles/workspace.css'], {
+      trackedTestFiles: [
+        'packages/ui/src/styles/__tests__/workspace-layout.test.ts',
+        'packages/ui/src/components/chat/MessageList.test.tsx',
+        'packages/host/src/run.test.ts',
+      ],
+    });
+    expect(scopes.unitScope).toBe('changed');
+    expect(scopes.unitFiles).toEqual([
+      'packages/ui/src/components/chat/MessageList.test.tsx',
+      'packages/ui/src/styles/__tests__/workspace-layout.test.ts',
+    ]);
+  });
+
+  it('falls back to every tracked test when the stylesheet owns a package without tests', () => {
+    const scopes = classifyChangedFiles(['packages/legacy/theme.css'], {
+      trackedTestFiles: ['packages/ui/src/styles/__tests__/workspace-layout.test.ts'],
+    });
+    expect(scopes.unitScope).toBe('changed');
+    expect(scopes.unitFiles).toEqual(['packages/ui/src/styles/__tests__/workspace-layout.test.ts']);
+  });
+
+  it('keeps a stylesheet outside every known root on the fail-closed full scope', () => {
+    // An unknown path is not narrowed down to a package: it stays on the full
+    // suite, which is the safe direction.
+    const scopes = classifyChangedFiles(['assets/theme.css'], {
+      trackedTestFiles: ['packages/ui/src/styles/__tests__/workspace-layout.test.ts'],
+    });
+    expect(scopes.unitScope).toBe('full');
+    expect(scopes.unitFiles).toEqual([]);
+  });
+
   it('runs only the changed Playwright spec for a focused E2E test edit', () => {
     expect(classifyChangedFiles(['e2e/smoke/smoke.spec.ts'])).toEqual({
       unitScope: 'skip',

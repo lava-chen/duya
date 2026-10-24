@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { useConversationStore, type Thread, type ProjectGroup, type ProjectSortBy } from "@/stores/conversation-store";
 import { sortThreadsBy } from "./section-system";
@@ -73,7 +74,17 @@ export function ProjectGroupItem({
   sortableBindings,
 }: ProjectGroupItemProps) {
   const { t } = useTranslation();
-  const { startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
+  // Narrow subscription: this component is rendered once per project group,
+  // so a whole-store subscription multiplied the re-render cost by the
+  // number of groups on every unrelated conversation-store write — and the
+  // new-chat composer writes its draft to that store on every keystroke.
+  const { startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore(
+    useShallow((state) => ({
+      startNewChat: state.startNewChat,
+      collapsedProjects: state.collapsedProjects,
+      toggleProjectExpanded: state.toggleProjectExpanded,
+    })),
+  );
   // Plan 471: project ↔ section assignment. The selector subscribes to the
   // store so the right-click menu label flips to "添加 / 移动" the moment a
   // project is assigned via the sidebar UI. Reading via getState() (the
@@ -81,12 +92,21 @@ export function ProjectGroupItem({
   const currentSectionId = useSidebarSectionsStore((state) =>
     state.findSectionForProject(project.workingDirectory),
   );
+  // The group renders the section menu, so it needs the section list; the
+  // hydration flag and the loading flag are none of its business.
   const {
     sections: userSections,
     assignProjectToSection,
     unassignProject,
     createSection,
-  } = useSidebarSectionsStore();
+  } = useSidebarSectionsStore(
+    useShallow((state) => ({
+      sections: state.sections,
+      assignProjectToSection: state.assignProjectToSection,
+      unassignProject: state.unassignProject,
+      createSection: state.createSection,
+    })),
+  );
   const [isHovered, setIsHovered] = useState(false);
   const [visibleCount, setVisibleCount] = useState(THREAD_COLLAPSE_THRESHOLD);
   // Inline dialog for creating a brand-new section from the project menu.

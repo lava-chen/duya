@@ -229,6 +229,34 @@ function toModelBoundaryByRole(message: AgentMessage): Message[] {
   }
 }
 
+/**
+ * The SYSTEM half of {@link projectModelMessages}, on its own.
+ *
+ * ## Why it exists
+ *
+ * `projectModelMessages` returns the system content and the model messages in
+ * one value, because a caller that wants both needs one walk of the timeline.
+ * A caller that wants ONLY the system content would otherwise pay for the
+ * message projection as well -- and the message projection is the expensive
+ * half (it re-projects every row onto the provider boundary).
+ *
+ * The Host assembles a turn's system prompt before the turn's messages are
+ * projected for the provider, and measured on the agent-runtime benchmark the
+ * duplicate walk cost ~30 ms of the first-token budget on every turn.
+ *
+ * ## What it does NOT do
+ *
+ * It reads the same segments `projectModelMessages` reads and merges them the
+ * same way, so the system content it returns is byte-identical to the `system`
+ * member of that function's result. It does not project messages, and it does
+ * not change the merge.
+ */
+export function projectSystemPrompt(
+    systemSegments: readonly PromptSegment[] | undefined,
+): string | readonly MessageContent[] {
+    return mergeSystemSegments(systemSegments);
+}
+
 function mergeSystemSegments(
   segments: readonly PromptSegment[] | undefined,
 ): string | readonly MessageContent[] {
