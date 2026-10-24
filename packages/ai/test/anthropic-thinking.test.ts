@@ -15,13 +15,27 @@ import { describe, it, expect } from 'vitest';
 import { resolveAnthropicThinking } from '../src/api/anthropic-messages.js';
 import { anthropicModels } from '../src/providers/anthropic.models.js';
 import { minimaxModels } from '../src/providers/minimax.models.js';
+import type { Model } from '../src/types.js';
 
 describe('resolveAnthropicThinking', () => {
   // Look models up BY ID — positional indexing broke when the catalog
   // gained new entries (claude-3.5 was removed upstream entirely).
   const claudeSonnet4 = anthropicModels.find(m => m.id === 'claude-sonnet-5')
     ?? anthropicModels.find(m => m.reasoning === true)!; // reasoning: true
-  const claude35 = anthropicModels.find(m => m.reasoning === false)!; // non-reasoning
+  // Every Claude model the catalogue lists today reasons, so the
+  // non-reasoning branch is exercised with a synthetic entry rather than a
+  // retired catalog row (claude-3.5-haiku is gone upstream).
+  const claude35: Model<'anthropic'> = {
+    id: 'claude-non-reasoning',
+    name: 'Claude (non-reasoning)',
+    api: 'anthropic',
+    providerId: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    reasoning: false,
+    input: ['text'],
+    contextWindow: 200000,
+    maxTokens: 8192,
+  };
   const minimaxM3 = minimaxModels[0]; // forceAdaptiveThinking: true
 
   describe('effort "off" → undefined', () => {
@@ -151,7 +165,7 @@ describe('resolveAnthropicThinking', () => {
   });
 
   describe('non-reasoning models → undefined', () => {
-    it('Claude 3.5 Sonnet has reasoning disabled', () => {
+    it('the non-reasoning model has reasoning disabled', () => {
       expect(claude35.reasoning).toBe(false);
     });
 
