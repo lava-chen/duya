@@ -395,11 +395,11 @@ describe('the engine compacts when the port says to', () => {
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
 
     // THE load-bearing assertion of this file. Turn 1 is composed as
-    // `[prompt, ...carried, ...history]` (`#modelRequest`), and `history` must be
-    // the REPLACEMENT. Without the override the engine would publish
+    // `[...carried, ...history, prompt]` (`#modelRequest`), and `history` must
+    // be the REPLACEMENT. Without the override the engine would publish
     // `compaction.completed` and then send the inline history, and every frame
     // assertion in existence would still pass.
-    expect(h.sentMessages[0]).toEqual([PROMPT, ...replacement()]);
+    expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
     // And the thing it must NOT contain, so the line above cannot pass by the
     // arrays coinciding.
     expect(h.sentMessages[0]).not.toContainEqual(INLINE_HISTORY);
@@ -457,7 +457,7 @@ describe('the engine compacts when the port says to', () => {
     // that happened to be in flight would leave every later turn on the original
     // history, which is the failure `COMPACTION_REPLACEMENT_IS_REQUIRED` in
     // `port-guards.ts` exists to make visible.
-    expect(h.sentMessages[0]).toEqual([PROMPT, ...replacement()]);
+    expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
     // Turn 2 is `[...history, ...carried]`, and `carried` is the tool result the
     // drain produced -- so the replacement is the BASE, not the whole request.
     expect(h.sentMessages[1]).toEqual([
@@ -530,7 +530,7 @@ describe('the engine does not compact when the port declines', () => {
     // The request still went out, on the ORIGINAL inline history. The model's
     // copy against the input literal: two sources.
     expect(h.sentMessages[0]).toContainEqual(INLINE_HISTORY);
-    expect(h.sentMessages[0]).not.toEqual([PROMPT, ...replacement()]);
+    expect(h.sentMessages[0]).not.toEqual([...replacement(), PROMPT]);
   });
 
   it('measures the assembled transcript, not the inline one, at the proactive site', async () => {
@@ -680,7 +680,7 @@ describe('the emergency path is not the normal path', () => {
     // The retry carried the replacement. Without `turn -= 1` this would be turn 2
     // built from the ORIGINAL history -- the same oversized request, one turn
     // later, which is exactly what the emergency exists to prevent.
-    expect(h.sentMessages[1]).toEqual([PROMPT, ...replacement()]);
+    expect(h.sentMessages[1]).toEqual([...replacement(), PROMPT]);
     expect(h.sentMessages[1]).not.toContainEqual(INLINE_HISTORY);
 
     // `turnId` is reused, which is the observable proof the turn index was not
@@ -1024,7 +1024,7 @@ describe('a turn that compacts still ends correctly', () => {
     // is the distinction `ports.ts` draws between a lost anchor and a lost
     // transcript.
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
-    expect(h.sentMessages[0]).toEqual([PROMPT, ...replacement()]);
+    expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
     expect(h.terminals[0]?.state).toBe('completed');
   });
 });
