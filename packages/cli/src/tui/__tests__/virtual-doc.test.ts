@@ -191,8 +191,8 @@ describe('TranscriptPane', () => {
     const canvas = new SceneCanvas(80, 10);
     pane.paint(canvas, { row: 0, column: 0, width: 80, height: 10 });
     const window = pane.window(80, 10);
-    // The reader scrolled back to the top: the same query answers it, which is
-    // what the inline path will read instead of its own viewEnd.
+    // The reader scrolled back to the top, and the same query answers it
+    // without a second window implementation to disagree with.
     expect(window.lineStart).toBe(0);
     expect(window.following).toBe(false);
     expect(canvas.textAt(0).trimEnd()).toBe(plainLine(renderer, model, window.lineStart));

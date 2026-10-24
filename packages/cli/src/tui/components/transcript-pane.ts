@@ -6,9 +6,9 @@
  *
  * Before, the same two numbers were computed in three places: `paintTranscript`
  * sliced the assembled lines, `visibleTranscriptRows()` re-derived the pane
- * height from the terminal, and the inline path handed the whole transcript to
- * `InlineSurface` with a `viewEnd`. Three consumers, three chances to disagree
- * about which line is at the top.
+ * height from the terminal, and the inline path kept a separate claim about
+ * where its window started. Three consumers, three chances to disagree about
+ * which line is at the top.
  *
  * Now the pane answers `measure()` with the document height and paints exactly
  * `visibleWindow()`'s range. The caller supplies the scroll offset; nothing here
