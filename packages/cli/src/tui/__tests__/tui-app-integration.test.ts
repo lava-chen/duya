@@ -328,6 +328,39 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
+  it('reports context occupancy in the usage window, not the session spend', async () => {
+    // The two numbers used to be the same one. The session spend is every
+    // billed call summed; the context is what the window holds. A second call
+    // doubles the spend and leaves the context where it was, and reading the
+    // spend as occupancy is how a long session ends up claiming a full window
+    // while the model still has room to work.
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      onSubmit: () => {},
+      contextBudgetTokens: () => 1000,
+    });
+    app.start();
+    await settle();
+
+    app.push({ type: 'token_usage', data: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } });
+    await settleRendered();
+    app.push({ type: 'token_usage', data: { input_tokens: 100, output_tokens: 20, total_tokens: 120 } });
+    await settleRendered();
+
+    stdin.write('\x10'); // Ctrl+P
+    await settleRendered();
+    const rendered = out.text();
+    // The session sum is 240: that is the SPEND.
+    expect(rendered).toContain('240');
+    // The window holds what the last request carried: 120 of 1000.
+    expect(rendered).toContain('12%');
+    expect(rendered).not.toContain('24%');
+    app.stop();
+  });
+
   it('shows the active task state and tool progress in the status bar', async () => {
     const { app, out } = makeApp();
     app.start();
