@@ -8,6 +8,7 @@ import type {
   PluginHealthReport,
   PluginIpcListResponse,
   PluginIpcDetailResponse,
+  PluginUiSurfaceDirectoryResponse,
   CapabilityIndexItem,
   PluginSetupLoadResult,
 } from './plugin-types';
@@ -86,6 +87,11 @@ export function getPluginAPI() {
       },
       remove: async (payload: { pluginId: string; deleteData?: boolean }): Promise<{ success: boolean; data?: { removed: boolean }; error?: string }> => {
         return api.plugin.remove(payload) as unknown as Promise<{ success: boolean; data?: { removed: boolean }; error?: string }>;
+      },
+    },
+    uiSurfaces: {
+      list: async (): Promise<PluginUiSurfaceDirectoryResponse> => {
+        return api.plugin.uiSurfaces.list() as Promise<PluginUiSurfaceDirectoryResponse>;
       },
     },
     detail: {

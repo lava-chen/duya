@@ -17,6 +17,7 @@ import { join } from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
 import { getPluginCatalogEntry } from '../plugins/catalog';
+import { buildPluginUiSurfaceDirectory } from '../plugins/plugin-ui-surface-directory';
 import {
   addMarketplace,
   listMarketplaces,
@@ -159,6 +160,23 @@ export function registerPluginHandlers(): void {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:registry:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:ui-surfaces:list ---
+  ipcMain.handle('plugin:ui-surfaces:list', async () => {
+    try {
+      const directory = buildPluginUiSurfaceDirectory(manager.listInstalled());
+      if (directory.conflicts.length > 0) {
+        logger.warn('Duplicate Plugin UI surface ids excluded from directory', {
+          surfaceIds: directory.conflicts.map((conflict) => conflict.id),
+        }, COMPONENT);
+      }
+      return { success: true, data: directory };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:ui-surfaces:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: { surfaces: [], conflicts: [] }, error: message };
     }
   });
 

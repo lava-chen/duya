@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations'
+import type {
+  PluginAppDefinition,
+  PluginUiSurfaceDirectory,
+} from '@duya/plugin-core/apps/declarations'
 
 // Sandboxed preloads can only require electron/events/timers/vm — node:crypto
 // is unavailable here. The preload runs in a Chromium context, so Web Crypto's
@@ -1055,6 +1058,9 @@ export interface PluginAPI {
   }
   registry: {
     list: () => Promise<{ success: boolean; data: PluginRegistryEntry[]; error?: string }>
+  }
+  uiSurfaces: {
+    list: () => Promise<{ success: boolean; data: PluginUiSurfaceDirectory; error?: string }>
   }
   detail: {
     get: (pluginId: string) => Promise<{ success: boolean; data: PluginCatalogEntry | null; error?: string }>
@@ -2806,6 +2812,9 @@ const electronAPI: ElectronAPI = {
     },
     registry: {
       list: () => ipcRenderer.invoke('plugin:registry:list'),
+    },
+    uiSurfaces: {
+      list: () => ipcRenderer.invoke('plugin:ui-surfaces:list'),
     },
     detail: {
       get: (pluginId: string) => ipcRenderer.invoke('plugin:detail:get', pluginId),

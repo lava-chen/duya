@@ -163,6 +163,7 @@ export function getPluginAppAPI() {
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       api.call(payload),
     close: (payload: { sessionId: string }) => api.close(payload),
+    /** Refetch the surface directory after plugin install, enable, disable, remove, or App changes. */
     onChanged: (callback: (payload: { pluginId: string }) => void) => api.onChanged(callback),
   };
 }

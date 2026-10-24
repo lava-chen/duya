@@ -193,6 +193,12 @@ metadata: resource reads and surface rendering remain subsequent slices. App
 IDs, requested capabilities and state schema versions remain metadata, not
 grants or live instance state. The installed-plugin view projects only these
 App declarations, without exposing the rest of a manifest's MCP configuration.
+The Main process also exposes a read-only UI surface directory projected from
+installed Plugin Apps. It returns enabled plugins' surfaces, omits every
+surface id claimed more than once across installed plugins, and reports those
+conflicts for diagnosis. Plugin install, enable, disable, remove, and setup
+changes reuse the existing `plugin-app:changed` notification so directory
+consumers can refetch; this directory is metadata and does not own tab state.
 Codex's root `apps` connector-file reference is unchanged. Launch must recheck
 entry containment; instance persistence and iframe launch are subsequent
 slices. See `610-architecture-series/22-wave3-dispatch.md`.

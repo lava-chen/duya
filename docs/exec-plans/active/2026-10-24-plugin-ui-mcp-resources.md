@@ -23,7 +23,7 @@
 ## 进度
 
 - [x] S1 契约：定义 surface schema，校验所属 MCP server、`ui://` URI、插件内唯一 ID；保持静态 `entry` 双向兼容。
-- [ ] S2 发现与目录：投影到已安装插件目录，拒绝跨插件同名 surface，安装态变化刷新目录。
+- [x] S2 发现与目录：投影到已安装插件目录，拒绝跨插件同名 surface，安装态变化刷新目录。
 - [ ] S3 宿主资源解析：调用 MCP `resources/read`，校验 MIME、大小、来源 server，再通过现有文档通道签发 token 与 nonce。
 - [ ] S4 UI 入口：插件应用区与侧栏 tab 渲染 surface，复用安装/启用进度及失败提示；按会话可用性隐藏入口。
 - [ ] S5 双向通道：保留 guest→host invoke，新增 host→guest `select` / `highlight` / `refresh`，仅寻址当前 launch 的 surface。
@@ -38,6 +38,8 @@
 - worktree 链接脚本读取了旧共享检出的 workspace 列表，缺少 master 新增包；仅在任务 worktree 补齐 `packages/` 与 `apps/` 的当前 master overlay。锁文件有 `@types/picomatch@4.0.3`，共享依赖目录缺失；包安装在 `/tmp` 并从 worktree overlay 引用，未写入共享依赖目录。
 - 完整 `electron:build` 需要下载 ripgrep 与 Electron 二进制；下载失败。共享 `node_modules/electron` 无二进制且未被修改；单独执行仓库 main/preload bundle 构建成功。
 - 当前上下文未提供 Playwright MCP 工具，完整 Electron 二进制也未下载；surface 的真实应用 UI 验收记录在 S4/S6，不在 S1 声称完成。
+- 参考官方 `zai-org/ZCode` 开源仓库（浅克隆 SHA `3c5b227649371507ddc4eb46ac5133afe6db1cab`）：`plugins/listUiSurfaces` 是与 tab 状态分离的只读目录投影，仅返回启用插件的 surface；本任务采用目录投影与资源归属检查的经验，不引入其 MCP Apps 页面 API、工具注册、订阅或 widgetState 协议。
+- S2 从已安装 Plugin App 声明生成独立只读 surface 目录；跨已安装插件重复 ID 全部隔离并返回 owner 冲突，目录仅提供启用插件的唯一 surface。安装、启用、停用、卸载和设置变化复用既有 `plugin-app:changed` 事件供目录消费者刷新。
 
 ## 验证记录
 
@@ -54,9 +56,14 @@
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux，Node v24.19.0；允许网络但资源下载失败 | `npm run electron:build` | 1 | ripgrep / Electron 二进制 fetch 失败；未写入共享 `node_modules/electron` |
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux，Node v24.19.0 | `node scripts/build-electron.mjs` | 0 | Electron main/preload bundle 编译完成并复制运行时 native modules |
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux | `git diff --check` | 0 | 无空白错误 |
+| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0 | `npm run build:plugin-core` | 0 | 新增目录投影契约类型编译通过 |
+| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run apps/desktop/src/main/plugins/plugin-ui-surface-directory.test.ts` | 0 | 1 个文件、2 个测试通过；覆盖启用态投影与跨插件冲突隔离 |
+| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0；授权执行以允许检查脚本启动 git 子进程 | `npm run typecheck:all` | 0 | 全仓类型检查通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 可收紧 |
+| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0；授权执行以允许架构脚本启动 node 子进程 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
+| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。完整 `electron:build` 因官方资源下载失败未通过，但 `node scripts/build-electron.mjs` 已重编 main/preload bundle。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已实现，切片提交与当前 SHA 待记录。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：向用户报告 S1 契约 diff、受影响调用方及验证记录；得到接续后从 S2 发现与目录切片开始。
+下一步：推进 S3 MCP resources/read 宿主解析，并沿用 S2 的安装态 surface 目录。
