@@ -85,7 +85,7 @@ rail 是**工作数组状态**，不进 timeline（plan 619 Phase 3）。compact
 
 **后果**:compaction 之后,本轮剩余每一次请求都**没有** environment / memory / skills / hook block。
 
-**与计划冲突**:619 Phase 3 明写「compaction 后自动重建」——这句是错的。
+**与计划冲突**:619 Phase 3 明写「compaction 后自动重建」——**审计当时**代码不兑现这句;本次修的就是这个缺口(修完是**代码兑现计划**,不是改计划)。
 
 **实证**:`packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts`
 （本次新增的缺陷探针）——不压缩时 rail 在请求里（`['rail-1']`），压缩后为 `[]`，而问题仍在末尾。
