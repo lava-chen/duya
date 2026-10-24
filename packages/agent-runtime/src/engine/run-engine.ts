@@ -171,6 +171,7 @@ import type {
   TurnAssemblyInput,
 } from './ports.js';
 import { openRequestScope } from './request-scope.js';
+import { assembleRequestMessages } from './request-assembly.js';
 import { runCompactionPass, type CompactionPassResult } from './compaction.js';
 
 // ============================================================================
@@ -2678,61 +2679,28 @@ export class RunEngineImpl implements RunEngine {
     // behind a history the model has already read.
     const inbound = ctx.injected.current;
 
-    // The prompt goes in on the FIRST turn only. Later turns are continuations
-    // after tool results, and re-appending the prompt every turn is how a
-    // conversation teaches a model to repeat itself.
+    // The prompt goes in on the FIRST turn only, and it goes in LAST -- and
+    // both of those are the REQUEST CONTRACT, not a fact about this method.
+    // The contract, the reasons behind it, and the request shapes it
+    // produces are in `request-assembly.ts`; this method only collects the
+    // parts and hands them over.
     //
-    // It goes in LAST, and that is the whole fix.
-    //
-    // A model reads a conversation from the END: the last turns are what it is
-    // being asked about now. The host's own context rail rides at the end of
-    // the request -- every rail row is a `user` turn wrapped in
-    // `<system-reminder> ... This context was attached automatically by the
-    // system. It is not part of the user's message.` -- so a request that
-    // ends with the rail ends with rows that say, in the model's own words,
-    // that they are NOT the user's message.
-    //
-    // Putting the prompt FIRST therefore did not "open the turn": it buried
-    // the user's question BEHIND the whole conversation and put the system
-    // context between the question and the reader. Measured on a real TUI
-    // session, the model received
-    //
-    //     [user(question), user(older conversation), user(rail), user(rail)]
-    //
-    // and answered "the user hasn't asked a new question -- this is just
-    // system context attached; the last user message was 'jixu', which I
-    // already answered". The question was in the request the whole time; it
-    // was simply not the newest thing in it.
-    //
-    // Identity is the message ID, and that is the only thing it can be: the
-    // engine cannot compare prose (the host may have rendered the prompt into
-    // the row's content differently) and must not drop a message on a
-    // heuristic.
-    //
-    // When the host's assembled messages DO carry the prompt row, that row IS
-    // the prompt -- the host committed it under the id the run input names --
-    // and it is MOVED to the end rather than copied there. Moving it keeps the
-    // host's own rendering of the turn (its attachments, its quote prefix)
-    // instead of substituting the engine's plainer copy of it.
-    //
-    // A host whose assembled messages do NOT carry the prompt row keeps the
-    // prompt, unchanged, and it lands at the end for the same reason.
-    const promptId = input.prompt.id;
-    const hostPrompt = promptId === undefined
-      ? undefined
-      : history.find((message) => message.id === promptId);
-    const prompt: ModelMessage = hostPrompt ?? input.prompt;
-    // Every row carrying the prompt's id leaves the conversation, and exactly
-    // one of them -- the host's own -- is re-appended at the end. A history
-    // that carried the id twice would otherwise answer the question twice,
-    // which is the failure this arrangement exists to remove.
-    const conversation: readonly ModelMessage[] = hostPrompt === undefined
-      ? history
-      : history.filter((message) => message.id !== promptId);
-    const messages: readonly ModelMessage[] =
-      ctx.turn === 1
-        ? [...conversation, ...carried, ...steering, prompt, ...inbound]
-        : [...history, ...carried, ...steering, ...inbound];
+    // The short version, because it is the part that is easy to get wrong:
+    // a model reads a conversation from the END, and the host's context rail
+    // rides at the end of the request -- every rail row is a `user` turn
+    // wrapped in "This context was attached automatically by the system. It
+    // is not part of the user's message." A prompt at the front is a
+    // question the model has to dig out from under the whole conversation.
+    // Measured on a real TUI session, the model answered "the user hasn't
+    // asked a new question -- this is just system context attached".
+    const messages = assembleRequestMessages({
+      hostMessages: history,
+      prompt: input.prompt,
+      carried,
+      steering,
+      inbound,
+      isFirstTurn: ctx.turn === 1,
+    });
 
     // Model selection is forwarded from the manifest when it names one, and
     // omitted when it does not: `RunManifest.agent` is optional, and a request
