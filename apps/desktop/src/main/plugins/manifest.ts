@@ -26,7 +26,7 @@ import path from 'path';
 import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
 import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import { parseAppDeclarationFile } from '@duya/connectors/app-schema';
-import { PluginAppDefinitionsSchema } from '@duya/plugin-core/apps/declarations';
+import { pluginAppDefinitionsSchemaForMcpServers } from '@duya/plugin-core/apps/declarations';
 import {
   allPluginManifestPaths,
   isNativeManifestPath,
@@ -233,11 +233,12 @@ function getDuyaClientExtension(extensions: unknown): Record<string, unknown> | 
 function readPluginAppDefinitions(
   pluginRoot: string,
   extension: Record<string, unknown> | undefined,
+  mcpServerNames: readonly string[],
 ): PluginManifest['apps'] {
   const rawApps = extension?.apps;
   if (rawApps === undefined) return undefined;
 
-  const parsed = PluginAppDefinitionsSchema.safeParse(rawApps);
+  const parsed = pluginAppDefinitionsSchemaForMcpServers(mcpServerNames).safeParse(rawApps);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const fieldPath = issue?.path.length ? `.${issue.path.join('.')}` : '';
@@ -255,6 +256,8 @@ function readPluginAppDefinitions(
   }
 
   return parsed.data.map((app) => {
+    if (!app.entry) return app;
+
     const entryPath = path.resolve(packageRealPath, ...app.entry.split('/'));
     let canonicalEntry: string;
     try {
@@ -441,7 +444,11 @@ function readMinimalManifest(
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: interfaceBlock,
     extensions: parseExtensions(raw.extensions),
-    apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
+    apps: readPluginAppDefinitions(
+      pluginRoot,
+      getDuyaClientExtension(raw.extensions),
+      mcpServers.map((server) => server.name),
+    ),
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
@@ -496,6 +503,17 @@ function parseLegacyV1V2Manifest(
     throw new Error('Invalid plugin manifest field: capabilities');
   }
   const capsRaw = isObject(capabilitiesRaw) ? capabilitiesRaw : {};
+  const mcpServers: NonNullable<PluginManifest['capabilities']['mcpServers']> | undefined =
+    Array.isArray(capsRaw.mcpServers)
+      ? capsRaw.mcpServers.map((item, index) => {
+          if (!isObject(item)) throw new Error(`Invalid capabilities.mcpServers[${index}]`);
+          return {
+            name: asString(item.name, `capabilities.mcpServers[${index}].name`),
+            command: asString(item.command, `capabilities.mcpServers[${index}].command`),
+            args: item.args ? asStringArray(item.args, `capabilities.mcpServers[${index}].args`) : undefined,
+          };
+        })
+      : undefined;
 
   const permissionsRaw = raw.permissions;
   if (!Array.isArray(permissionsRaw)) {
@@ -562,19 +580,14 @@ function parseLegacyV1V2Manifest(
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: parseInterfaceBlock(raw.interface),
     extensions: parseExtensions(raw.extensions),
-    apps: readPluginAppDefinitions(pluginRoot, getDuyaClientExtension(raw.extensions)),
+    apps: readPluginAppDefinitions(
+      pluginRoot,
+      getDuyaClientExtension(raw.extensions),
+      mcpServers?.map((server) => server.name) ?? [],
+    ),
     capabilities: {
       skills: capsRaw.skills ? asStringArray(capsRaw.skills, 'capabilities.skills') : undefined,
-      mcpServers: Array.isArray(capsRaw.mcpServers)
-        ? capsRaw.mcpServers.map((item, index) => {
-            if (!isObject(item)) throw new Error(`Invalid capabilities.mcpServers[${index}]`);
-            return {
-              name: asString(item.name, `capabilities.mcpServers[${index}].name`),
-              command: asString(item.command, `capabilities.mcpServers[${index}].command`),
-              args: item.args ? asStringArray(item.args, `capabilities.mcpServers[${index}].args`) : undefined,
-            };
-          })
-        : undefined,
+      mcpServers,
       cli: Array.isArray(capsRaw.cli)
         ? capsRaw.cli.map((item, index) => {
             if (!isObject(item)) throw new Error(`Invalid capabilities.cli[${index}]`);
@@ -656,6 +669,7 @@ interface DuyaClientExtension {
 function parseDuyaClientExtension(
   raw: unknown,
   pluginRoot: string,
+  mcpServerNames: readonly string[],
 ): DuyaClientExtension {
   const empty: DuyaClientExtension = {
     permissions: [],
@@ -738,7 +752,7 @@ function parseDuyaClientExtension(
         }))
     : undefined;
 
-  const apps = readPluginAppDefinitions(pluginRoot, raw);
+  const apps = readPluginAppDefinitions(pluginRoot, raw, mcpServerNames);
 
   return {
     permissions,
@@ -792,6 +806,7 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
   const duyaExt = parseDuyaClientExtension(
     getDuyaClientExtension(raw.extensions),
     pluginRoot,
+    mcpServers.map((server) => server.name),
   );
 
   return {

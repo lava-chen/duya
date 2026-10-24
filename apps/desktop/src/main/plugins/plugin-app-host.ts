@@ -96,6 +96,8 @@ let shuttingDown = false;
  * the containment check is repeated here.
  */
 function resolveAppEntry(installPath: string, app: PluginAppDefinition): string | null {
+  if (!app.entry) return null;
+
   let packageRealPath: string;
   try {
     packageRealPath = fs.realpathSync(installPath);

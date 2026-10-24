@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   PluginAppDefinitionsSchema,
+  PluginUiSurfaceSchema,
+  pluginAppDefinitionsSchemaForMcpServers,
   pluginAppCapabilityMappingExpands,
   pluginAppCapabilityTools,
 } from '../../src/apps/declarations';
@@ -11,6 +13,14 @@ describe('PluginAppDefinitionsSchema', () => {
     entry: 'apps/dashboard/index.html',
     requiredCapabilities: ['mcp:dashboard.read'],
     stateSchemaVersion: 1,
+  };
+  const validSurface = {
+    id: 'overview',
+    title: { en: 'Overview', zh: '概览' },
+    icon: 'chart-bar',
+    server: 'dashboard',
+    resourceUri: 'ui://dashboard/overview',
+    availability: 'always' as const,
   };
 
   it('accepts multiple unique app definitions and empty capability requests', () => {
@@ -58,6 +68,63 @@ describe('PluginAppDefinitionsSchema', () => {
         PluginAppDefinitionsSchema.parse([{ ...validApp, entry }]),
       ).toThrow(/entry/i);
     }
+  });
+
+  it('accepts resource-only Apps while retaining static entry compatibility', () => {
+    const parsed = PluginAppDefinitionsSchema.parse([
+      {
+        appId: 'resource-dashboard',
+        ui: { surfaces: [validSurface] },
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      },
+      validApp,
+    ]);
+
+    expect(parsed[0]?.entry).toBeUndefined();
+    expect(parsed[0]?.ui?.surfaces).toEqual([validSurface]);
+    expect(parsed[1]?.entry).toBe(validApp.entry);
+  });
+
+  it('requires each App to declare either a static entry or at least one surface', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([
+        { appId: 'empty', requiredCapabilities: [], stateSchemaVersion: 1 },
+      ]),
+    ).toThrow(/static entry or at least one UI surface/i);
+  });
+
+  it('validates surface fields and requires a ui:// resource URI', () => {
+    expect(PluginUiSurfaceSchema.parse(validSurface)).toEqual(validSurface);
+    for (const resourceUri of ['https://example.com/view', 'ui://', 'ui:// bad/path']) {
+      expect(() => PluginUiSurfaceSchema.parse({ ...validSurface, resourceUri })).toThrow(/resourceUri/i);
+    }
+    expect(() =>
+      PluginUiSurfaceSchema.parse({ ...validSurface, title: { en: 'Overview' } }),
+    ).toThrow(/title/i);
+  });
+
+  it('rejects duplicate surface IDs anywhere in one plugin', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([
+        { ...validApp, ui: { surfaces: [validSurface] } },
+        {
+          ...validApp,
+          appId: 'reports',
+          ui: { surfaces: [{ ...validSurface, server: 'reports' }] },
+        },
+      ]),
+    ).toThrow(/duplicate UI surface id/i);
+  });
+
+  it('binds surface server references to the plugin MCP server list', () => {
+    const definitions = [
+      { ...validApp, ui: { surfaces: [validSurface] } },
+    ];
+    expect(() => pluginAppDefinitionsSchemaForMcpServers(['dashboard']).parse(definitions)).not.toThrow();
+    expect(() => pluginAppDefinitionsSchemaForMcpServers(['reports']).parse(definitions)).toThrow(
+      /server dashboard is not declared.*mcpServers/i,
+    );
   });
 
   describe('capability tool mappings', () => {
