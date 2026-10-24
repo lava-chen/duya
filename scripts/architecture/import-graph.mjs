@@ -47,6 +47,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./strip-comments.mjs";
 import { workspaceExportTargets } from "./workspace-exports.mjs";
+import { loadWorkspacePackages } from "./workspace-packages.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SRC_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
@@ -285,24 +286,7 @@ export const isHostBoundary = (owner) => HOST_BOUNDARIES.has(owner);
 let workspaceRegistry = null;
 
 function workspacePackages() {
-  if (workspaceRegistry) return workspaceRegistry;
-  workspaceRegistry = new Map();
-  const packagesDir = path.join(ROOT, "packages");
-  if (!fs.existsSync(packagesDir)) return workspaceRegistry;
-  for (const entry of fs.readdirSync(packagesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const dir = `packages/${entry.name}`;
-    const manifestPath = path.join(ROOT, dir, "package.json");
-    if (!fs.existsSync(manifestPath)) continue;
-    let manifest;
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    } catch {
-      continue;
-    }
-    if (!manifest.name) continue;
-    workspaceRegistry.set(manifest.name, { dir, manifest });
-  }
+  if (workspaceRegistry === null) workspaceRegistry = loadWorkspacePackages(ROOT);
   return workspaceRegistry;
 }
 
