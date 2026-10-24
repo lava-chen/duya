@@ -9429,7 +9429,7 @@
       "format": "esm"
     },
     "packages/ai/src/model-request-invariants.ts": {
-      "bytes": 13658,
+      "bytes": 14013,
       "imports": [],
       "format": "esm"
     },
@@ -15454,7 +15454,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 194529,
+      "bytes": 198900,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -21907,7 +21907,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -40287,13 +40287,13 @@
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 18875
+          "bytesInOutput": 18925
         },
         "packages/agent-runtime/src/index.ts": {
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -42204,7 +42204,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42762,7 +42762,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43602,7 +43602,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4602503
+      "bytes": 4602545
     }
   }
 }
