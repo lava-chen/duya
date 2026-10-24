@@ -88,8 +88,19 @@ import {
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
+import type { FileAttachment } from '@duya/agent-protocol';
 import type { CommandLocale } from '@duya/command-catalog';
 import { calculateOutputTokensPerSecond } from '@duya/ai';
+import {
+  attachmentChipLabel,
+  extractPathPasteCandidate,
+  findAttachmentLimitViolation,
+  resolveClipboardFileAttachment,
+  resolvePathAttachment,
+  takeAttachmentsForSubmit,
+  type TuiDraftAttachment,
+} from './attachments.js';
+import { disposeClipboardTempDir, readClipboardAttachments } from './clipboard-image.js';
 
 /** DECSET 2026: begin synchronized update. */
 const SYNC_BEGIN = '\x1b[?2026h';
@@ -218,8 +229,12 @@ export interface TUIAppOptions {  /** Window title. */
   /** Status bar text, recomputed on every render. */
   readonly statusText?: () => string;  /** Seed history, e.g. from `~/.duya/.cli_history`. */
   readonly history?: readonly string[];
-  /** Called with each submitted prompt. */
-  readonly onSubmit: (text: string) => void | Promise<void>;
+  /**
+   * Called with each submitted prompt. `attachments` carries the files whose
+   * chip labels survived in the submitted text (see `attachments.ts`); it is
+   * empty for the common no-attachment prompt.
+   */
+  readonly onSubmit: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
   /** Let the controller own accepted-message echo and pending drafts. */
   readonly echoSubmitted?: boolean;
   readonly canSubmit?: () => boolean;
@@ -436,6 +451,18 @@ export class TUIApp {
   private deltaDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pacer = new Pacer();
   private readonly paste = new PasteBurstDetector();
+  /**
+   * Attachments queued for the NEXT submission, each standing in the editor
+   * buffer through its chip `label`. Plain-text labels over interval mapping:
+   * the editor stays a text buffer, and an attachment whose label was edited
+   * or deleted away simply does not appear in the submitted text, which is
+   * exactly the "delete the chip to drop the attachment" semantic.
+   */
+  private draftAttachments: TuiDraftAttachment[] = [];
+  /** Counter for chip labels; grows for the session, never resets on submit. */
+  private chipSeq = 0;
+  /** Counter for local `!` shell cards. */
+  private localShellSeq = 0;
 
   /** Transcript-wide expansion; the same flag `/settings` calls expand blocks. */
   private expanded: boolean;
@@ -771,6 +798,9 @@ export class TUIApp {
       this.inputDriver.stop();
     }
     this.terminal.dispose();
+    // Clipboard images live in a temp directory the worker reads by path only
+    // during a turn, so this process exiting ends the file's useful life.
+    void disposeClipboardTempDir();
   }
 
   /** Repaint external controller state, such as pending follow-ups. */
@@ -2704,6 +2734,16 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
+    // Clipboard attachments. Ctrl+V is also the paste chord many terminals
+    // intercept (Windows Terminal pastes text itself and sends bracketed
+    // paste), so Alt+V repeats the action for the terminals that never deliver
+    // Ctrl+V to the application.
+    this.bindKey(['C-v', 'M-v'], () => {
+      if (this.swallowForWindow()) return;
+      if (this.interactivePrompt === null && this.focus === 'input') {
+        void this.pasteClipboardAttachment();
+      }
+    });
     // Rebindable global actions, dispatched from the action table with this
     // session's overrides applied. The editor and completion keys stay on
     // their fixed bindings: their routing is priority-ordered, not flat.
@@ -3076,12 +3116,122 @@ exportHistory(): string[] {
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
     if (this.focus === 'transcript') this.focus = 'input';
+    // A paste that is one absolute path to an attachable file becomes a chip
+    // instead of text (terminal file drags arrive exactly this way). The shape
+    // test is synchronous; the `stat` is not, so the fallback — pasting the
+    // raw text — happens from the async continuation.
+    const pathCandidate = extractPathPasteCandidate(text);
+    if (pathCandidate !== null) {
+      void this.acceptPathPaste(pathCandidate, text);
+      return;
+    }
     this.editor.insert(text);
     // Bracketed paste already tells us exactly where the payload ends, so its
     // embedded newlines are literal and must not arm the burst Enter heuristic.
     this.paste.reset();
     this.refreshCompletion();
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Resolve a pasted path into a draft attachment, or fall back to pasting
+   * the raw text when it resolves to nothing (missing file, non-attachable
+   * extension, directory).
+   */
+  private async acceptPathPaste(candidate: string, rawText: string): Promise<void> {
+    const attachment = await resolvePathAttachment(candidate);
+    if (attachment === null) {
+      // Not an attachable file — the paste is ordinary text after all. The
+      // burst heuristic is still reset: bracketed paste delivered this as one
+      // payload, so its newlines are literal regardless of what we do with it.
+      this.paste.reset();
+      this.editor.insert(rawText);
+      this.refreshCompletion();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.addDraftAttachment(attachment);
+  }
+
+  /**
+   * Queue an attachment and insert its chip label at the cursor.
+   *
+   * Returns without any effect when the draft would exceed the count or size
+   * limits, or when the same file is already queued — the user sees the chip
+   * not appearing rather than an error for a redundant gesture.
+   */
+  private addDraftAttachment(attachment: Omit<TuiDraftAttachment, 'label'>): void {
+    if (this.draftAttachments.some((existing) => existing.filePath === attachment.filePath)) return;
+    const violation = findAttachmentLimitViolation(this.draftAttachments, attachment.size);
+    if (violation === 'count') {
+      this.printError(`Attachment limit reached (${this.draftAttachments.length}/10). Submit before attaching more.`);
+      return;
+    }
+    if (violation === 'total-size') {
+      this.printError('Attachments exceed the 100 MB total limit.');
+      return;
+    }
+    this.chipSeq += 1;
+    const labelled: TuiDraftAttachment = { ...attachment, label: attachmentChipLabel(attachment, this.chipSeq) };
+    this.draftAttachments.push(labelled);
+    if (this.focus === 'transcript') this.focus = 'input';
+    this.editor.insert(labelled.label + ' ');
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Open a local `!` shell card and return the callId to complete it with.
+   *
+   * Rendered through the ordinary bash tool card (`upsertTool` with a
+   * `{ command }` input): the running spinner, the output disclosure and the
+   * failure styling already exist there, and a locally-run command is visually
+   * the same animal as an agent-run one.
+   */
+  beginLocalShell(command: string): string {
+    this.localShellSeq += 1;
+    const callId = `local-shell:${this.localShellSeq}`;
+    this.model.upsertTool(callId, 'bash', { command });
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+    return callId;
+  }
+
+  /** Complete a local `!` shell card with its combined output. */
+  finishLocalShell(callId: string, output: string, failed: boolean): void {
+    this.model.completeTool(callId, output, failed);
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Read the clipboard for an image or copied files and queue what comes
+   * back. Bound to Ctrl+V and Alt+V (terminals like Windows Terminal consume
+   * Ctrl+V for their own text paste, which never reaches this process).
+   */
+  private async pasteClipboardAttachment(): Promise<void> {
+    let result: Awaited<ReturnType<typeof readClipboardAttachments>>;
+    try {
+      result = await readClipboardAttachments();
+    } catch (error) {
+      this.printError('Could not read the clipboard: ' + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    if (result.kind === 'empty') return;
+    if (result.kind === 'unsupported') {
+      this.printNotice('Clipboard attachments need Windows (Ctrl+V); paste a file path instead.');
+      return;
+    }
+    if (result.kind === 'image') {
+      const attachment = await resolveClipboardFileAttachment(result.filePath, 'image/png');
+      if (attachment !== null) this.addDraftAttachment(attachment);
+      return;
+    }
+    for (const filePath of result.paths) {
+      // A copied file is explicit intent: any extension is accepted.
+      const attachment = await resolveClipboardFileAttachment(filePath, null);
+      if (attachment !== null) this.addDraftAttachment(attachment);
+    }
   }
 
   private movePromptCursor(cursor: number): void {
@@ -3170,6 +3320,10 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
+    // Attachments ride along only if their chip labels survived in the
+    // submitted text; edited-away or undone chips drop their attachment here.
+    const attachments = takeAttachmentsForSubmit(this.draftAttachments, text);
+    this.draftAttachments = [];
     this.refreshCompletion();
     if (this.options.echoSubmitted !== false) {
       this.model.addUser(text);
@@ -3180,7 +3334,7 @@ exportHistory(): string[] {
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
     this.scheduler.requestImmediate();
-    void this.options.onSubmit(text);
+    void this.options.onSubmit(text, attachments);
   }
 
   private onCtrlC(): void {

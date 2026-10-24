@@ -6,7 +6,7 @@ function harness() {
   const releases: Array<(outcome: TurnOutcome) => void> = [];
   const errors: unknown[] = [];
   const queue = new TurnQueue({
-    execute: (text) => {
+    runTurn: (text) => {
       started.push(text);
       return new Promise<TurnOutcome>((resolve) => releases.push(resolve));
     },
@@ -86,7 +86,7 @@ describe('local turn admission', () => {
   it('reports unexpected failures and preserves pending drafts', async () => {
     const error = new Error('disconnected');
     const queue = new TurnQueue({
-      execute: async () => { throw error; },
+      runTurn: async () => { throw error; },
       onChange: () => {},
       onError: (actual) => expect(actual).toBe(error),
     });
