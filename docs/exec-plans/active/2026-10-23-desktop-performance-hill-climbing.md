@@ -106,18 +106,33 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 
 第一轮的权威基线指向两个最大的剩余瓶颈，第二轮就攻这两条。仍然一个 PR 只钉一个问题，各 Agent 独占路径，集成者定合并顺序。
 
+第二轮的集成者侧工作也遵守同一条规矩：**一个 PR 只做一件事**。原本打包在一起的 5 件事被拆成 5 个 PR（#406 锁、#407 fixture 消歧、#408 首屏预算闸门、#409 围栏 fixture、#410 计划），不合的那个 PR（#404）被关掉，并在它下面留下拆分去向。
+
 | Agent | 独占路径 | 检出 / 分支 | 目标 |
 | --- | --- | --- | --- |
 | F · 首屏依赖闭包 | `packages/ai/src/**`、`packages/ai/package.json`、`packages/ui/src/components/chat/{ChatView,MessageInput,SlashCommandPopover}.tsx`、`packages/ui/src/hooks/useContextUsage.ts`、`packages/ui/src/lib/providers/**`、`packages/ui/src/stores/context-usage-store.ts` | `.claude/worktrees/perf-bundle` / `codex/perf-bundle` | 把 `openai`（141 模块）与 `@anthropic-ai/sdk`（69 模块）移出首屏 entry chunk |
 | G · 消息列表虚拟化 | `packages/ui/src/components/chat/MessageList.tsx` + 该目录下新增文件 | `.claude/worktrees/perf-virtual` / `codex/perf-virtual` | 万条消息会话打开从 32–37 秒降下来 |
 
-base：`origin/master` = `18a144e8`。两个检出都已用 `scripts/junction-worktree.mjs` 配好 56 个依赖链接。
+base：`origin/master` = `18a144e8`（开工时）。两个检出都已用 `scripts/junction-worktree.mjs` 配好 56 个依赖链接。
 
 **F 的判据**：首屏 entry chunk 里 `openai` / `@anthropic-ai/sdk` 的模块数必须**归零**，而不是「字节数变小了」。根因有三个候选，都必须实测排除：桶文件同时导出纯函数与 SDK 客户端（`packages/ai/src/index.ts:7` 与 `:50`）、`packages/ai/package.json` 缺 `"sideEffects": false` 导致 Rollup 不能摇掉未用的再导出链、首屏急切引用点（`ChatView.tsx:27`、`MessageInput.tsx:52-57`、`useContextUsage.ts:18-19`、`lib/providers/**`）。
 
 **G 的判据**：按 fixture 分开报，不合并。10000 条的 `dom.nodes` 115354 → 目标量级下降，`longtask.total_ms` 14958 同步下降，且 `ChatMessageNavigator` 跳转到未挂载的消息、`hasMore` 向前加载、流式尾部、focus mode 都不回归。
 
-**共同的测量纪律**：先 `node E:\Projects\duya\.claude\perf-bench-lock.mjs status`，被占就等；**持锁跨越整个「构建 + 测量」窗口**；单次持锁不超过 30 分钟（脚本按年龄判失效，超过就会被别人抢走）；所有 harness 调用统一带 `--lock-script "E:\Projects\duya\.claude\perf-bench-lock.mjs"`。
+**共同的测量纪律**：先 `node E:\Projects\duya\.claude\perf-bench-lock.mjs status`，被占就等；**持锁跨越整个「构建 + 测量」窗口**；单次持锁控制在 **25 分钟**内（脚本按年龄判失效，跨过 30 分钟别人会直接抢走）；所有 harness 调用统一带 `--lock-script "E:\Projects\duya\.claude\perf-bench-lock.mjs"`。
+
+**并发会话的冲突**：另一个会话的两个 PR（#411、#413）也在改 `packages/ai/src/index.ts`。F 的改动被要求保持机械（只把 SDK 客户端的导出搬到新子路径，不动无关行），以便两边能共存；F 的 PR 开出来之前需要先把 master 合进去。
+
+## 第二轮集成者侧已合并的 PR
+
+| PR | 内容 | 状态 |
+| --- | --- | --- |
+| #406 | 测量锁的两种实现会互相拆台 → 修复 + 负对照 | **已合并** |
+| #407 | `perf/stream-long-reply` 一个 id 指向两份内容 → 本地 harness 换命名空间 + 守卫测试 | **已合并** |
+| #408 | 首个机器无关的性能闸门：首屏 JS 字节预算进 CI | **已合并**（`0e765ccf`，CI build job 实测通过） |
+| #409 | 共享 harness 新增带围栏的契约 fixture（机会清单 #2 的前置） | **已合并** |
+| #410 | 第二轮章程、两条新发现、验证记录 | **已合并** |
+| #412 | PR #391 留下的真实回归：GPU 通道用常量注册，IPC 契约闸门看不见 | **已合并** |
 
 ## 集成记录
 
@@ -153,6 +168,8 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **Agent A 还有 8 个未合并的 harness 修复，是真实资产，不能随检出一起回收**。`codex/perf-harness` 分支比 master 多 8 个提交，全部只碰 `e2e/perf/lib/{launch,lock}.mjs`、`e2e/perf/run.mjs`、`e2e/perf/scenarios/gpu.mjs`、`scripts/perf/harness.test.ts`（与 B/C/D/E 的改动**零重叠**，可干净合并）：安全模式窗口与 Host 未就绪时重试（`e9e12d6a`）、按 namespace 而非 pid 找 app 关闭（`836a30c8`）、优雅关闭失败时强杀整棵进程树（`65066896`）、pid 回收后误杀无关进程的保护（`a1a392f8`）、**从已死的持有者手里接管锁**（`da8c32b4`）、每个样本 4 分钟预算（`c97e9989`）、每场景落盘报告（`965fe696`）。这些正是本轮观察到的孤儿 Electron、僵尸锁、启动失败的根因——**A 修的是自己踩的坑，E 的 baseline 里 8 个样本只有 3 个成功也正是 safe-mode 窗口所致**。
 - **两种锁实现会互相拆台（第二轮发现，已修）**。仓库内实现 `e2e/perf/lib/lock.mjs` 有一条正确的规则：**持有者进程没了 = 持有者崩了 = 锁可以接管**（`da8c32b4` 加的，否则崩掉的 Agent 会把整轮卡 30 分钟）。但外部脚本 `E:\Projects\duya\.claude\perf-bench-lock.mjs` 的 `acquire` 把自己那个**一秒后就退出的 pid** 写进 `owner.json` —— 于是仓库内实现一看到「pid 已死」就立刻抢走锁，**脚本驱动的 Agent 和仓库内驱动的 Agent 会同时测量**，两边的数字量到的都是争抢。修法两侧对称：仓库内实现走脚本 acquire 成功后用 `claimOwnerPid()` 把 owner 文件改写成**自己**的活 pid；外部脚本改为记一个**哨兵进程**的 pid（`detached` 起、release 时杀、自己最多活 90 分钟）——因为脚本是一次性 CLI，自己和调用它的 shell 的 pid 都会随命令结束而死，只有哨兵能真正代表「有人正持着锁」。回归测试在 `scripts/perf/harness.test.ts`，负对照：回退修复后该用例精确变红（owner pid 是已死的 37000 而不是活进程 39260）。**实测**：修完之后 `acquire` 的那个 shell 退出 3 秒，哨兵仍活；`release` 之后哨兵消失。
 - **锁的「30 分钟即失效」是按年龄判的，不是按持有者判的**。脚本只看 `acquiredAt` 的年龄，**不看 pid 活不活**。所以一次「构建 + 测量」如果跨过 30 分钟，别人会直接 `[perf-lock] stale lock, stealing it` 抢走它，两个人同时测。**How to apply**：单次持锁控制在 25 分钟内；长测量分段做，每段之间 release → acquire 交接；报告里写明每个数字是否在持锁状态下取得。
+- **PR #391 的 GPU 通道注册是真实回归，不是闸门误报（已修，PR #412）**。#391 用常量 `ipcMain.handle(GPU_STATUS_CHANNEL, ...)` 注册，**运行时 handler 确实注册了**，但 IPC 契约闸门是**源码扫描**——扫的是字面量形式的 `ipcMain.handle('...')`，看不见常量，于是任何跑全量测试的 PR 都会变红。修法是改回**字面量**（与仓库其余 handler 一致）+ 加单测把常量与字面量绑定，防止再次漂移。负对照：回退修复后精确复现 CI 原报错（2 failed），还原后 3 文件 27/27 绿。**教训**：闸门是源码扫描而非运行时反射时，「代码能跑」不等于「闸门能看见」——改注册形式前先看闸门怎么找。
+- **CI 的 push 触发器跳过 test job**。所以 **master 绿 ≠ 没问题**：master 上可能带着某个 PR 的红，绿灯只说明「那次 push 没跑 test」。判断某 PR 是否真跑到了那些测试，必须看**该 PR head 的 test job**，不能看 master 的绿。同理，`test scope` 那个 job 绿只代表改动文件范围的 lint/format，不代表全量测试跑过。
 
 
 ## 权威基线（合并后串行重跑，master + A 的 harness 修复）
