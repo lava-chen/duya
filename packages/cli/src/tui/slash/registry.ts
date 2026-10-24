@@ -47,6 +47,7 @@ import { HOTKEYS_COMMANDS } from './hotkeys.js';
 import { DIFF_COMMANDS } from './diff.js';
 import { COMPACT_COMMANDS } from './compact.js';
 import { BTW_COMMANDS } from './btw.js';
+import { TASKS_COMMANDS } from './tasks.js';
 
 /** Every command this surface can actually run. */
 export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
@@ -64,6 +65,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...DIFF_COMMANDS,
   ...COMPACT_COMMANDS,
   ...BTW_COMMANDS,
+  ...TASKS_COMMANDS,
 ];
 
 const BY_NAME = new Map<string, TuiSlashCommandDef>();

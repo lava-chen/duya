@@ -27,7 +27,7 @@ export interface ActionDef {
   /** What it does, one line. */
   readonly label: string;
   /** Where it applies, so help can group. */
-  readonly context: 'global' | 'editor' | 'transcript';
+  readonly context: 'global' | 'editor' | 'tasks';
 }
 
 export const ACTION_DEFS: readonly ActionDef[] = [
@@ -37,7 +37,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'interrupt', keys: ['Ctrl+C'], label: 'Interrupt the running turn · press twice to exit', context: 'global' },
   { id: 'clear', keys: ['Ctrl+L'], label: 'Clear the transcript', context: 'global' },
   { id: 'expand-all', keys: ['Ctrl+T'], label: 'Expand / collapse every block', context: 'global' },
-  { id: 'focus', keys: ['F6'], label: 'Move focus between input and transcript', context: 'global' },
+  { id: 'focus', keys: ['F6'], label: 'Move focus between input and background tasks', context: 'global' },
   { id: 'scroll', keys: ['PgUp', 'PgDn'], label: 'Scroll the transcript (page)', context: 'global' },
   { id: 'wheel-scroll', keys: ['Wheel'], label: 'Scroll the transcript / window (3 lines per tick)', context: 'global' },
   { id: 'follow-tail', keys: ['Ctrl+End'], label: 'Jump back to the newest output', context: 'global' },
@@ -57,8 +57,10 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   // line — so here it only exits, and never on a line with text in it: a
   // reflexive press that costs half a sentence is the worse trade.
   { id: 'exit', keys: ['Ctrl+D'], label: 'Exit chat (only when the input is empty)', context: 'editor' },
-  { id: 'block-select', keys: ['↑', '↓'], label: 'Move through transcript blocks', context: 'transcript' },
-  { id: 'block-fold', keys: ['←', '→'], label: 'Fold / unfold the selected block', context: 'transcript' },
+  { id: 'task-select', keys: ['↑', '↓'], label: 'Move through background tasks', context: 'tasks' },
+  { id: 'task-fold', keys: ['←', '→'], label: 'Fold / unfold the task group', context: 'tasks' },
+  { id: 'task-open', keys: ['Enter'], label: 'Open the selected task · fold a group', context: 'tasks' },
+  { id: 'task-close', keys: ['Esc'], label: 'Return focus to the input', context: 'tasks' },
 ];
 
 /**
@@ -70,7 +72,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
 export const KEYMAP_HEADINGS: Readonly<Record<string, string>> = {
   global: 'Global',
   editor: 'Editor',
-  transcript: 'Transcript',
+  tasks: 'Background tasks',
 };
 
 /** Fixed width of the keys column in the help window. */
@@ -96,7 +98,7 @@ function keysColumn(def: ActionDef): string {
 export function helpGroups(
   defs: readonly ActionDef[] = ACTION_DEFS,
 ): ReadonlyArray<{ readonly heading: string; readonly rows: readonly ActionDef[] }> {
-  const order: ReadonlyArray<ActionDef['context']> = ['global', 'editor', 'transcript'];
+  const order: ReadonlyArray<ActionDef['context']> = ['global', 'editor', 'tasks'];
   return order.map((context) => ({
     heading: context,
     rows: defs.filter((def) => def.context === context),

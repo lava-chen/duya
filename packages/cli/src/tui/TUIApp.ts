@@ -80,6 +80,7 @@ import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
+  backgroundSummarySuffix,
   nextSpinnerFrame,
   spinnerGlyph,
   workingTailLine,
@@ -87,6 +88,8 @@ import {
 } from './working-tail.js';
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
+import { BackgroundTaskModel, formatTaskDuration, taskStatusGlyph, type BackgroundTaskGroup, type BackgroundTaskRow, type BackgroundTaskView } from './background-tasks.js';
+import type { BackgroundTaskListV1 } from '@duya/agent-protocol';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import type { CommandLocale } from '@duya/command-catalog';
 import { calculateOutputTokensPerSecond } from '@duya/ai';
@@ -338,6 +341,18 @@ export interface TUIAppOptions {  /** Window title. */
    * inside the app: how many rows the box is showing right now.
    */
   readonly maxInputRows?: number;
+  /**
+   * Ask the wiring for a fresh background-bash snapshot.
+   *
+   * The TUI cannot read the Host itself; opening the task view is the one
+   * moment it needs a reading the poller may have stopped making.
+   */
+  readonly onBackgroundTasksRefresh?: () => void;
+  /**
+   * Open one task's detail. The wiring reads the output tail (an I/O it owns)
+   * and calls `showPanel`; the TUI only knows what it has already seen.
+   */
+  readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
 }
 
 /**
@@ -451,10 +466,9 @@ export class TUIApp {
    * this one is a ceiling the user sets.
    */
   private maxInputRows: number;
-  private focus: 'input' | 'transcript' = 'input';
-  private selectedBlockIndex = -1;
-  private readonly expandedBlockIds = new Set<string>();
-  private readonly collapsedBlockIds = new Set<string>();
+  private focus: 'input' | 'tasks' = 'input';
+  /** Selected row in the task view, over `backgroundTaskRows()`. */
+  private selectedTaskRow = -1;
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -504,6 +518,12 @@ export class TUIApp {
    * only decides when to repaint it (plan 615 Phase 6).
    */
   private readonly activity = new ActivityTracker();
+  /**
+   * Background bash (polled from the Host) and subagents (from the run's own
+   * frames), merged for the summary line and the task view. Completed entries
+   * stay until the session is left so they can still be inspected.
+   */
+  private readonly backgroundTasks = new BackgroundTaskModel();
 
   /**
    * Whether a modal owns the input. Stored on the tracker (it decides the label)
@@ -776,6 +796,64 @@ export class TUIApp {
   /** Repaint external controller state, such as pending follow-ups. */
   refresh(): void {
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Adopt a fresh Host snapshot of background bash tasks.
+   *
+   * The task view is fed by two sources (see `background-tasks.ts`); this is
+   * the polled half. Subagents arrive through `push()` as run frames.
+   */
+  setBackgroundTasks(snapshot: BackgroundTaskListV1): void {
+    if (!this.backgroundTasks.applyBashSnapshot(snapshot)) return;
+    this.clampTaskSelection();
+    this.scheduler.requestImmediate();
+  }
+
+  /** True while any tracked task — bash or subagent — is still running. */
+  hasRunningBackgroundTasks(): boolean {
+    return this.backgroundTasks.hasRunning();
+  }
+
+  /** True while the task view owns the arrows (F6 / `/tasks`). */
+  isTaskViewOpen(): boolean {
+    return this.focus === 'tasks';
+  }
+
+  /** Grouped tasks for the task view and the summary line. */
+  backgroundTaskGroups(): readonly BackgroundTaskGroup[] {
+    return this.backgroundTasks.groups();
+  }
+
+  /** Flattened, selection-ordered rows for the task view. */
+  backgroundTaskRows(): readonly BackgroundTaskRow[] {
+    return this.backgroundTasks.rows();
+  }
+
+  /**
+   * Enter the task view. F6 and `/tasks` both land here so the two entrances
+   * cannot disagree about what "the task view" selects.
+   */
+  openTasks(): void {
+    if (this.disposed) return;
+    if (this.focus !== 'tasks') {
+      this.focus = 'tasks';
+      this.completion.close();
+      const rows = this.backgroundTaskRows();
+      this.selectedTaskRow = rows.length === 0 ? -1 : 0;
+    }
+    // The bash half is polled, not pushed; opening the view is the explicit
+    // request for a current reading while the timer is quiet.
+    this.options.onBackgroundTasksRefresh?.();
+    this.scheduler.requestImmediate();
+  }
+
+  /** Force a repaint after the wiring read a fresh snapshot out of band. */
+  private clampTaskSelection(): void {
+    const count = this.backgroundTasks.rows().length;
+    if (count === 0) this.selectedTaskRow = -1;
+    else if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
+    else if (this.selectedTaskRow >= count) this.selectedTaskRow = count - 1;
   }
 
   /** Open a keyboard-navigable modal and resolve with the selected value. */
@@ -1085,12 +1163,13 @@ export class TUIApp {
     }
 
     const tail = this.workingTailLines();
+    const tasks = this.taskViewLines();
     const queued = this.queuePreviewLines();
     // Composer, then popup, then footer — pi's order. The candidate list hangs
     // directly under the line being typed into, so the reader's eye does not
     // have to jump over the input to find it, and the footer stays at the
     // bottom of the page rather than being pushed up by a list that grew.
-    const chrome = [...tail, ...queued, ...this.inlineInputLines, ...this.inlinePopupLines, ...this.inlineStatusLines];
+    const chrome = [...tail, ...tasks, ...queued, ...this.inlineInputLines, ...this.inlinePopupLines, ...this.inlineStatusLines];
     // The caret's row is an index into `scroll`, so it is offset by everything
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
@@ -1099,6 +1178,7 @@ export class TUIApp {
         ? {
             row:
               tail.length +
+              tasks.length +
               queued.length +
               this.inputCursor.cursorRow - 1,
             column: this.inputCursor.cursorCol + 1,
@@ -1128,6 +1208,12 @@ export class TUIApp {
    * Shown only in inline mode. Full-screen mode has a fixed four-row layout and
    * the status line is where its activity has always lived; giving it a tail too
    * is a separate change to that layout, not something to smuggle in here.
+   *
+   * The row outlives the turn when background work does not: a promoted bash
+   * command or a subagent can still be running after the model is done, and a
+   * summary that vanished at `done` would leave the only working thing on
+   * screen invisible. The glyph goes static in that case — nothing in the TURN
+   * is moving, and a spinner would say otherwise.
    */
   private workingTailLines(): string[] {
     // Keyed on the inline surface, not on the absence of the status bar: the
@@ -1135,15 +1221,103 @@ export class TUIApp {
     // grows its own tail later must not be switched off by this line.
     if (this.inlineSurface === null) return [];
     const busy = this.options.isBusy?.() ?? this.busy;
-    if (!busy && !this.waitingForPermission) return [];
+    const counts = this.backgroundSummaryCounts();
+    const active = busy || this.waitingForPermission;
+    if (!active && counts.backgroundSummaryTotal === 0) return [];
     return [
       workingTailLine({
         frame: this.spinnerFrame,
-        label: this.activityLabel(busy),
+        label: this.activityLabel(busy) + backgroundSummarySuffix({
+          bashRunning: counts.bashRunning,
+          subagentRunning: counts.subagentRunning,
+          totalTasks: counts.backgroundSummaryTotal,
+        }),
         unicode: this.terminalEnv.unicodeBox,
         columns: this.terminalSize().columns,
+        active,
       }),
     ];
+  }
+
+  /**
+   * Chrome rows above the composer in inline mode: the working tail, the task
+   * list while it is focused, and the queued-prompt preview. Every layout
+   * budget subtracts exactly this, or a frame would claim a row it does not
+   * have and push the footer off the bottom.
+   */
+  private aboveComposerRows(): number {
+    return this.workingTailLines().length + this.taskViewLines().length + this.queuePreviewLines().length;
+  }
+
+  /** Running/total counts for the summary, computed once per paint. */
+  private backgroundSummaryCounts(): {
+    bashRunning: number;
+    subagentRunning: number;
+    backgroundSummaryTotal: number;
+  } {
+    let bashRunning = 0;
+    let subagentRunning = 0;
+    let total = 0;
+    for (const group of this.backgroundTasks.groups()) {
+      total += group.tasks.length;
+      if (group.id === 'bash') bashRunning = group.running;
+      else subagentRunning = group.running;
+    }
+    return { bashRunning, subagentRunning, backgroundSummaryTotal: total };
+  }
+
+  /**
+   * The task list, rendered into the chrome above the composer while the
+   * task focus owns the arrows. Empty in every other focus: it is a mode, not
+   * a permanently docked panel.
+   */
+  private taskViewLines(): string[] {
+    if (this.focus !== 'tasks' || this.inlineSurface === null) return [];
+    const width = Math.max(1, this.terminalSize().columns - 1);
+    const rows = this.backgroundTaskRows();
+    const lines: string[] = [];
+    lines.push(escapeTags(compactActivity(
+      'Tasks · ↑↓ select · ←→ fold · Enter open · Esc back',
+      width,
+    )));
+    if (rows.length === 0) {
+      lines.push(escapeTags(compactActivity(
+        this.backgroundTasks.observed ? 'No background tasks.' : 'Background task list unavailable for this Host.',
+        width,
+      )));
+      return lines;
+    }
+    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10));
+    const selected = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
+    const first = Math.max(0, Math.min(selected - (budget - 1), Math.max(0, rows.length - budget)));
+    for (let index = first; index < Math.min(rows.length, first + budget); index += 1) {
+      const row = rows[index]!;
+      lines.push(row.kind === 'group'
+        ? this.taskGroupLine(row.group, index === selected, width)
+        : this.taskRowLine(row.task, index === selected, width));
+    }
+    return lines;
+  }
+
+  private taskGroupLine(group: BackgroundTaskGroup, selected: boolean, width: number): string {
+    const marker = group.collapsed ? '▸' : '▾';
+    const running = group.running > 0 ? ` · ${group.running} running` : '';
+    const text = compactActivity(`${marker} ${group.label} (${group.tasks.length})${running}`, width - 2);
+    return selected ? `{cyan-fg}❯ ${text}{/cyan-fg}` : `{gray-fg}  ${text}{/gray-fg}`;
+  }
+
+  private taskRowLine(task: BackgroundTaskView, selected: boolean, width: number): string {
+    const elapsed = formatTaskDuration((task.endedAtMs ?? Date.now()) - task.startedAtMs);
+    const suffix = task.status === 'running'
+      ? ` · ${elapsed}`
+      : ` · ${task.status} · ${elapsed}`;
+    // Truncate the PLAIN text: fitting a line that already carries tags would
+    // count markup as columns and can cut a tag in half (see working-tail.ts).
+    const text = compactActivity(
+      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}`,
+      width,
+    );
+    return selected ? `{cyan-fg}${text}{/cyan-fg}` : text;
   }
 
   /**
@@ -1181,15 +1355,12 @@ export class TUIApp {
   }
 
   private renderOptions(): RenderOptions {
-    const selectedBlock = this.model.blocks[this.selectedBlockIndex];
     return {
       expanded: this.expanded,
       // Either switch opens a result body: `expanded` is the transcript-wide
       // toggle, this one is the standing preference from `/settings`.
       showToolResults: this.expanded || this.showToolResults,
       toolResultLines: 5,
-      expandedBlockIds: this.expandedBlockIds,
-      collapsedBlockIds: this.collapsedBlockIds,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
       // plan 615 Phase 0: markdown emphasis/strike map to italic/strike only
@@ -1204,9 +1375,6 @@ export class TUIApp {
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
         : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
-      ...(this.focus === 'transcript' && selectedBlock !== undefined
-        ? { selectedBlockId: selectedBlock.id }
-        : {}),
     };
   }
 
@@ -1244,7 +1412,9 @@ export class TUIApp {
       return;
     }
     this.fullScreen.update('transcript', {
-      borderColor: this.focus === 'transcript' ? 'cyan' : 'gray',
+      // The border is the focus tell in full-screen mode: the task list owns
+      // the arrows while the transcript does not respond to them at all.
+      borderColor: this.focus === 'tasks' ? 'cyan' : 'gray',
       lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
     });
   }
@@ -1293,7 +1463,7 @@ export class TUIApp {
       this.terminalSize().rows -
         this.footerRows() -
         (this.inlineSurface !== null
-          ? this.workingTailLines().length + this.queuePreviewLines().length
+          ? this.aboveComposerRows()
           : 0) -
         this.popupRows(),
     );
@@ -1348,7 +1518,7 @@ export class TUIApp {
     const size = this.terminalSize();
     const inline = this.inlineSurface !== null;
     const availableRows = Math.max(1, size.rows - this.footerRows() -
-      (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0) - this.popupRows());
+      (inline ? this.aboveComposerRows() : 0) - this.popupRows());
     if (!inline) {
       // Blessed computes padding from the presence of a border object, even
       // when individual edges are false. Remove the object on tiny screens.
@@ -1434,7 +1604,7 @@ export class TUIApp {
    */
   private paintDockPanel(body: readonly string[], inline: boolean, size: TerminalSize): void {
     const budget = Math.max(1, size.rows - this.footerRows() - 2
-      - (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0));
+      - (inline ? this.aboveComposerRows() : 0));
     const visible = body.slice(0, budget);
     if (inline) {
       const columns = Math.max(1, size.columns - 1);
@@ -1590,8 +1760,8 @@ export class TUIApp {
       ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} `
       : '';
     const tail = this.follow ? '' : ' [paused]';
-    const blockCount = this.model.blocks.length;
-    const selection = this.selectedBlockIndex < 0 ? 0 : this.selectedBlockIndex + 1;
+    const taskRows = this.backgroundTaskRows();
+    const taskSelection = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow + 1;
     const context = this.interactivePrompt?.kind === 'select'
       ? 'Enter select / Esc cancel'
       : this.interactivePrompt?.kind === 'text'
@@ -1602,9 +1772,9 @@ export class TUIApp {
         : 'Tab accept / arrows choose'
       : busy
         ? 'Ctrl+C stop / Ctrl+T expand'
-      : this.focus === 'transcript'
-        ? `history ${selection}/${blockCount} / arrows select / left-right fold`
-        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 focus / arrows prompts`;
+      : this.focus === 'tasks'
+        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
     // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
@@ -1630,7 +1800,12 @@ export class TUIApp {
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
-    const fixed = text + ' · ' + spinner + this.activityLabel(busy) + tail + usage + queueSegment + ' · ' + context;
+    const counts = this.backgroundSummaryCounts();
+    const fixed = text + ' · ' + spinner + this.activityLabel(busy) + backgroundSummarySuffix({
+      bashRunning: counts.bashRunning,
+      subagentRunning: counts.subagentRunning,
+      totalTasks: counts.backgroundSummaryTotal,
+    }) + tail + usage + queueSegment + ' · ' + context;
     this.fullScreen.update('status', {
       lines: ['{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}'],
     });
@@ -1814,6 +1989,12 @@ export class TUIApp {
   /** Feed one frame from the run. The only entry point for run output. */
   push(frame: LegacyFrame): void {
     const activityChanged = this.updateActivity(frame);
+    // Subagent rows are run-scoped, so they arrive as frames rather than in
+    // the Host snapshot (which knows only about bash tasks).
+    if (this.backgroundTasks.applyFrame(frame)) {
+      this.clampTaskSelection();
+      this.scheduleRender();
+    }
     const key = readBlockKey(frameRecord(frame.data));
     switch (frame.type) {
       case 'text_delta': {
@@ -2153,9 +2334,8 @@ export class TUIApp {
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
-    this.selectedBlockIndex = -1;
-    this.expandedBlockIds.clear();
-    this.collapsedBlockIds.clear();
+    this.selectedTaskRow = -1;
+    this.backgroundTasks.clear();
     this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.scheduler.requestImmediate();
@@ -2239,9 +2419,8 @@ export class TUIApp {
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
-    this.selectedBlockIndex = -1;
-    this.expandedBlockIds.clear();
-    this.collapsedBlockIds.clear();
+    this.selectedTaskRow = -1;
+    this.backgroundTasks.clear();
     this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.noteTranscriptMutation();
@@ -2556,14 +2735,14 @@ exportHistory(): string[] {
   get renderState(): {
     expanded: boolean;
     follow: boolean;
-    focus: 'input' | 'transcript';
-    selectedBlockIndex: number;
+    focus: 'input' | 'tasks';
+    selectedTaskRow: number;
   } {
     return {
       expanded: this.expanded,
       follow: this.follow,
       focus: this.focus,
-      selectedBlockIndex: this.selectedBlockIndex,
+      selectedTaskRow: this.selectedTaskRow,
     };
   }
 
@@ -2713,8 +2892,6 @@ exportHistory(): string[] {
     this.bindAction('expand-all', () => {
       if (this.interactivePrompt !== null) return;
       this.expanded = !this.expanded;
-      this.expandedBlockIds.clear();
-      this.collapsedBlockIds.clear();
       this.scheduler.requestImmediate();
     });
     this.bindAction('follow-tail', () => { if (this.interactivePrompt === null) this.followTail(); });
@@ -2758,7 +2935,7 @@ exportHistory(): string[] {
     this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.swallowForWindow()) return;
-      else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(false);
+      else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(true);
       else if (this.interactivePrompt === null) {
         this.editor.moveLeft();
         if (this.focus === 'input') this.refreshInputCompletion();
@@ -2767,7 +2944,7 @@ exportHistory(): string[] {
     this.bindKey(['right'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor + 1);
       else if (this.swallowForWindow()) return;
-      else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(true);
+      else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(false);
       else if (this.interactivePrompt === null) {
         this.editor.moveRight();
         if (this.focus === 'input') this.refreshInputCompletion();
@@ -2932,7 +3109,7 @@ exportHistory(): string[] {
         this.handleOverlayKey(ch, key);
         return;
       }
-      if (this.focus === 'transcript') this.focus = 'input';
+      if (this.focus === 'tasks') this.focus = 'input';
       this.editor.insert(ch);
       this.paste.feed(ch, now());
       this.refreshCompletion();
@@ -2980,19 +3157,19 @@ exportHistory(): string[] {
 
     const fallbacks: Record<CompletionKey, () => void> = {
       up: () => {
-        if (this.focus === 'transcript') this.moveSelectedBlock(-1);
+        if (this.focus === 'tasks') this.moveTaskSelection(-1);
         else this.editor.historyPrevious();
       },
       down: () => {
-        if (this.focus === 'transcript') this.moveSelectedBlock(1);
+        if (this.focus === 'tasks') this.moveTaskSelection(1);
         else this.editor.historyNext();
       },
       tab: () => {
-        if (this.focus === 'transcript' || this.editor.isEmpty) this.toggleFocus();
+        if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
         else this.editor.insert('  ');
       },
       escape: () => {
-        if (this.focus === 'transcript') this.focus = 'input';
+        if (this.focus === 'tasks') this.focus = 'input';
         else if (this.completion.isOpen) this.completion.close();
         else if (this.options.isBusy?.() ?? this.busy) this.options.onInterrupt?.();
         else if (this.editor.isEmpty) {
@@ -3002,7 +3179,7 @@ exportHistory(): string[] {
         else this.closeOverlay();
       },
       return: () => {
-        if (this.focus === 'transcript') this.focus = 'input';
+        if (this.focus === 'tasks') this.openSelectedTask();
         else this.onEnter();
       },
     };
@@ -3075,7 +3252,7 @@ exportHistory(): string[] {
     }
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
-    if (this.focus === 'transcript') this.focus = 'input';
+    if (this.focus === 'tasks') this.focus = 'input';
     this.editor.insert(text);
     // Bracketed paste already tells us exactly where the payload ends, so its
     // embedded newlines are literal and must not arm the burst Enter heuristic.
@@ -3202,7 +3379,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
-    if (this.focus === 'transcript') this.focus = 'input';
+    if (this.focus === 'tasks') this.focus = 'input';
     this.follow = true;
     this.scrollTop = 0;
     this.scheduler.requestImmediate();
@@ -3210,85 +3387,50 @@ exportHistory(): string[] {
 
   private toggleFocus(): void {
     if (this.focus === 'input') {
-      this.focus = 'transcript';
-      this.completion.close();
-      this.selectedBlockIndex = this.model.blocks.length - 1;
-      this.revealSelectedBlock();
+      this.openTasks();
     } else {
       this.focus = 'input';
       this.refreshCompletion();
+      this.scheduler.requestImmediate();
     }
-    this.scheduler.requestImmediate();
   }
 
-  private moveSelectedBlock(delta: number): void {
-    const count = this.model.blocks.length;
+  private moveTaskSelection(delta: number): void {
+    const count = this.backgroundTaskRows().length;
     if (count === 0) return;
-    const current = this.selectedBlockIndex < 0 ? count - 1 : this.selectedBlockIndex;
-    this.selectedBlockIndex = Math.max(0, Math.min(count - 1, current + delta));
-    this.revealSelectedBlock();
+    const current = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
+    this.selectedTaskRow = Math.max(0, Math.min(count - 1, current + delta));
     this.scheduler.requestImmediate();
   }
 
-  private setSelectedBlockExpanded(expanded: boolean): void {
-    const block = this.model.blocks[this.selectedBlockIndex];
-    if (block === undefined) return;
-    const hasDetails = block.kind === 'thinking' ||
-      (block.kind === 'tool' && block.result !== undefined && block.result.trim() !== '');
-    if (!hasDetails) return;
-
-    this.expandedBlockIds.delete(block.id);
-    this.collapsedBlockIds.delete(block.id);
-    if (expanded) this.expandedBlockIds.add(block.id);
-    else this.collapsedBlockIds.add(block.id);
-    this.revealSelectedBlock();
+  /** Fold (false) or unfold (true) the group the selection sits in. */
+  private setTaskGroupAtSelection(collapsed: boolean): void {
+    const rows = this.backgroundTaskRows();
+    const row = this.selectedTaskRow < 0 ? undefined : rows[this.selectedTaskRow];
+    if (row === undefined) return;
+    const group = row.kind === 'group' ? row.group : this.backgroundTasks.groups().find((g) => g.id === row.task.kind);
+    if (group === undefined) return;
+    this.backgroundTasks.setGroupCollapsed(group.id, collapsed);
+    this.clampTaskSelection();
     this.scheduler.requestImmediate();
   }
 
-  private revealSelectedBlock(): void {
-    // Inline mode does not scroll itself. Moving `scrollTop` would set
-    // `follow = false`, and that is the state in which the live area stops
-    // committing — the reader would be left with a frozen screen while the
-    // agent kept streaming. Block selection still moves (and still collapses or
-    // expands); only the scroll-into-view is full-screen behaviour.
-    if (this.inlineSurface !== null) return;
-    const blocks = this.model.blocks;
-    const selected = blocks[this.selectedBlockIndex];
-    if (selected === undefined) return;
-
-    const options = this.renderOptions();
-    // Heights come from the same cache the paint path reads, so the window
-    // arithmetic here can never disagree with what is on screen. Blocks are
-    // joined with '\n', and a stanza gap is the FIRST line of the block below
-    // it, so a block's start line is the plain sum of the heights before it —
-    // no per-block +1.
-    const heights = this.transcript.heights(this.model, options);
-    let selectedStart = 0;
-    for (let index = 0; index < this.selectedBlockIndex; index += 1) {
-      selectedStart += heights[index] ?? 0;
+  private openSelectedTask(): void {
+    const rows = this.backgroundTaskRows();
+    const row = this.selectedTaskRow < 0 ? undefined : rows[this.selectedTaskRow];
+    if (row === undefined) return;
+    if (row.kind === 'group') {
+      this.backgroundTasks.toggleGroup(row.group.id);
+      this.clampTaskSelection();
+      this.scheduler.requestImmediate();
+      return;
     }
+    this.openTaskDetail(row.task);
+  }
 
-    const selectedRows = heights[this.selectedBlockIndex] ?? 0;
-    const totalRows = heights.reduce((total, lines) => total + lines, 0);
-    const viewportRows = this.visibleTranscriptRows();
-    const maxStart = Math.max(0, totalRows - viewportRows);
-    // Following pins the window to the newest line; otherwise the viewport
-    // stays where the reader put it and the selected block is brought into it.
-    let start = this.follow
-      ? maxStart
-      : Math.max(0, Math.min(maxStart, this.scrollTop));
-    if (selectedStart < start) start = selectedStart;
-    else if (selectedStart + selectedRows > start + viewportRows) {
-      start = selectedStart + selectedRows - viewportRows;
-    }
-    start = Math.max(0, Math.min(maxStart, start));
-    this.scrollTop = start;
-    // Reaching the bottom IS following again, and it is the only way there:
-    // the reader scrolls to the last line and the transcript starts following
-    // again. Deriving this from the offset rather than setting it separately
-    // is what stops "I scrolled to the bottom but it still says paused" from
-    // being reachable.
-    this.follow = start >= maxStart;
+  /** Render the detail window; output is read on demand (Phase 8). */
+  private openTaskDetail(task: BackgroundTaskView): void {
+    this.options.onBackgroundTaskOpen?.(task);
   }
 
   private scrollBy(pages: number): void {

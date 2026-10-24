@@ -246,6 +246,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/background-tasks.ts": {
+      "bytes": 3053,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/capabilities.ts": {
       "bytes": 14407,
       "imports": [],
@@ -580,7 +585,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 4800,
+      "bytes": 4840,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -671,6 +676,11 @@
           "path": "packages/agent-protocol/src/locks.ts",
           "kind": "import-statement",
           "original": "./locks.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/background-tasks.ts",
+          "kind": "import-statement",
+          "original": "./background-tasks.js"
         },
         {
           "path": "packages/agent-protocol/src/capabilities.ts",
@@ -15676,7 +15686,7 @@
       "format": "esm"
     },
     "packages/host/src/managed-shell/task-registry.ts": {
-      "bytes": 12236,
+      "bytes": 13144,
       "imports": [
         {
           "path": "fs",
@@ -29686,7 +29696,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 91739,
+      "bytes": 92878,
       "imports": [],
       "format": "esm"
     },
@@ -29868,6 +29878,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/host/src/background-task-routes.ts": {
+      "bytes": 3281,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/local-plugin-app-invocation-api.ts": {
       "bytes": 13015,
       "imports": [
@@ -29983,7 +29998,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 246453,
+      "bytes": 247051,
       "imports": [
         {
           "path": "node:crypto",
@@ -30034,6 +30049,11 @@
           "path": "packages/host/src/plugin-app-instance-routes.ts",
           "kind": "import-statement",
           "original": "./plugin-app-instance-routes.js"
+        },
+        {
+          "path": "packages/host/src/background-task-routes.ts",
+          "kind": "import-statement",
+          "original": "./background-task-routes.js"
         },
         {
           "path": "packages/host/src/plugin-app-invocation-routes.ts",
@@ -30563,8 +30583,19 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/host/src/background-task-index.ts": {
+      "bytes": 5450,
+      "imports": [
+        {
+          "path": "packages/host/src/managed-shell/task-registry.ts",
+          "kind": "import-statement",
+          "original": "./managed-shell/task-registry.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/run-execution.ts": {
-      "bytes": 42147,
+      "bytes": 42833,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -30625,6 +30656,11 @@
           "path": "packages/host/src/live-run-event-hub.ts",
           "kind": "import-statement",
           "original": "./live-run-event-hub.js"
+        },
+        {
+          "path": "packages/host/src/background-task-index.ts",
+          "kind": "import-statement",
+          "original": "./background-task-index.js"
         }
       ],
       "format": "esm"
@@ -30925,7 +30961,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 37916,
+      "bytes": 38172,
       "imports": [
         {
           "path": "node:crypto",
@@ -38798,7 +38834,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14435
+          "bytesInOutput": 14422
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -38852,7 +38888,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -38885,6 +38921,9 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/locks.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/background-tasks.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/capabilities.ts": {
@@ -38963,7 +39002,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39032,7 +39071,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 415
         },
         "packages/data/src/run-store.ts": {
           "bytesInOutput": 7353
@@ -39104,7 +39143,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -39170,7 +39209,7 @@
           "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -40889,7 +40928,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -40901,7 +40940,7 @@
           "bytesInOutput": 2553
         },
         "packages/host/src/managed-shell/task-registry.ts": {
-          "bytesInOutput": 3722
+          "bytesInOutput": 3866
         },
         "packages/host/src/managed-shell/notifications.ts": {
           "bytesInOutput": 1358
@@ -40913,7 +40952,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42605,7 +42644,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -42800,7 +42839,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -43379,7 +43418,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43493,7 +43532,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 35003
+          "bytesInOutput": 35443
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -43575,6 +43614,9 @@
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
+        },
+        "packages/host/src/background-task-index.ts": {
+          "bytesInOutput": 21
         },
         "packages/host/src/worker-db-bridge.ts": {
           "bytesInOutput": 25
@@ -44240,7 +44282,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692395
+      "bytes": 4692990
     }
   }
 }

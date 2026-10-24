@@ -77,7 +77,12 @@ import type {
   HostToolApprovalInput,
   HostToolApprovalScopeType,
 } from '@duya/agent-protocol';
-import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
+import type {
+  HostCheckoutApiV1,
+  HostIntegrationApiV1,
+  HostLocalBackgroundTaskApiV1,
+  HostLockApiV1,
+} from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
 import { ClientLeaseTracker } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
@@ -159,6 +164,7 @@ import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setu
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
 import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.js';
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
+import { routeBackgroundTasks } from './background-task-routes.js';
 import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
@@ -364,6 +370,8 @@ export interface HostSessionHttpServerOptions {
   readonly localTurnReviewApi?: HostLocalTurnReviewApiV1;
   /** Local-only command history; values may contain user-entered secrets. */
   readonly localTerminalHistoryApi?: HostLocalTerminalHistoryApiV1;
+  /** Local-only read of background bash tasks reported by this Host's workers. */
+  readonly localBackgroundTaskApi?: HostLocalBackgroundTaskApiV1;
   /** Local-only mailbox persistence and run-loop state transitions. */
   readonly localMailboxApi?: HostLocalMailboxApiV1;
   /** Local-only durable wake queue markers. */
@@ -1520,6 +1528,13 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
+      return;
+    }
+    if (url.pathname === '/v1/local/background-tasks' ||
+        url.pathname.startsWith('/v1/local/background-tasks/')) {
+      await routeBackgroundTasks(req, url, res, this.#options.localBackgroundTaskApi, {
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
       return;
     }
     if (url.pathname === '/v1/local/plugin-app-instances' ||

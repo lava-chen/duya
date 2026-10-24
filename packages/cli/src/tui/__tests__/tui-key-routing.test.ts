@@ -51,6 +51,18 @@ async function settleRendered(): Promise<void> {
 }
 
 /**
+ * Wait out the lone-Escape timeout.
+ *
+ * A bare `\x1b` is ambiguous until the parser knows no sequence follows, so it
+ * holds the byte for 35 ms. Settling on the microtask queue alone would assert
+ * against a keypress that has not been delivered yet.
+ */
+async function settleEscape(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await settle();
+}
+
+/**
  * Gap between keystrokes that reads as human typing rather than one paste.
  * Comfortably past `PasteBurstDetector`'s 8 ms burst window.
  *
@@ -207,38 +219,74 @@ describe('TUIApp key routing', () => {
     app.stop();
   });
 
-  it('moves between input and transcript, selecting and folding individual blocks', async () => {
+  it('moves between the input and the task view, selecting and opening rows', async () => {
     const out = sink();
     const input = new PassThrough();
     const submitted: string[] = [];
+    const opened: string[] = [];
+    const refreshed: number[] = [];
     const app = new TUIApp({
       output: out.stream,
       input,
       onSubmit: (text) => { submitted.push(text); },
+      onBackgroundTaskOpen: (task) => { opened.push(task.id); },
+      onBackgroundTasksRefresh: () => { refreshed.push(1); },
     });
     app.start();
-    app.push({ type: 'tool_use', data: { id: 'call-1', name: 'read_file', input: { path: 'a.ts' } } });
-    app.push({ type: 'tool_result', data: { id: 'call-1', result: 'detail-line-one\ndetail-line-two' } });
-    app.printNotice('latest block');
+    app.setBackgroundTasks({
+      observed: true,
+      tasks: [
+        { id: 'bash-running', command: 'npm run dev', status: 'running', startedAtMs: 2_000 },
+        { id: 'bash-done', command: 'npm test', status: 'completed', startedAtMs: 1_000, endedAtMs: 1_500, exitCode: 0 },
+      ],
+    });
     await settleRendered();
 
+    // F6 enters the task view. Rows are the bash group heading followed by its
+    // tasks, running first — the same order the view paints.
+    input.write('\x1b[17~');
+    await settle();
+    expect(app.renderState.focus).toBe('tasks');
+    expect(app.backgroundTaskRows().map((row) => row.kind)).toEqual(['group', 'task', 'task', 'group']);
+    expect(app.renderState.selectedTaskRow).toBe(0);
+    expect(refreshed).toHaveLength(1);
+
+    // Arrows move the task selection, never the editor's history.
+    input.write('\x1b[B');
+    await settle();
+    expect(app.renderState.selectedTaskRow).toBe(1);
+    input.write('\x1b[B');
+    await settle();
+    expect(app.renderState.selectedTaskRow).toBe(2);
+    expect(app.inputText).toBe('');
+
+    // Enter on a task row asks the chat loop to open it; the row stays put.
+    input.write('\r');
+    await settle();
+    expect(opened).toEqual(['bash-done']);
+    expect(app.renderState.selectedTaskRow).toBe(2);
+
+    // Esc returns the arrows to the composer.
+    input.write('\x1b');
+    await settleEscape();
+    expect(app.renderState.focus).toBe('input');
+
+    // Re-entering starts at the first row again.
     input.write('\t');
     await settle();
-    expect(app.renderState.focus).toBe('transcript');
-    expect(app.renderState.selectedBlockIndex).toBe(2);
+    expect(app.renderState.focus).toBe('tasks');
+    expect(app.renderState.selectedTaskRow).toBe(0);
 
-    input.write('\x1b[A');
-    await settle();
-    expect(app.renderState.selectedBlockIndex).toBe(1);
-    input.write('\x1b[C');
-    await settle();
-    expect(out.text()).toContain('detail-line-one');
-
-    out.reset();
+    // Left folds the group the selection is on (a heading row folds its own
+    // group); right unfolds it.
     input.write('\x1b[D');
     await settle();
-    expect(out.text()).not.toContain('detail-line-one');
+    expect(app.backgroundTaskRows().map((row) => row.kind)).toEqual(['group', 'group']);
+    input.write('\x1b[C');
+    await settle();
+    expect(app.backgroundTaskRows()).toHaveLength(4);
 
+    // Tab leaves the task view and behaves as indent in the composer again.
     input.write('\t');
     await settle();
     expect(app.renderState.focus).toBe('input');
@@ -248,13 +296,46 @@ describe('TUIApp key routing', () => {
     expect(app.inputText).toBe('x  ');
     input.write('\x1b[17~');
     await settle();
-    expect(app.renderState.focus).toBe('transcript');
+    expect(app.renderState.focus).toBe('tasks');
     input.write('\t');
     await settle();
     expect(app.renderState.focus).toBe('input');
     input.write('\r');
     await settle();
     expect(submitted).toEqual(['x']);
+    app.stop();
+  });
+
+  it('enters an empty task view without a selection and leaves it on Esc', async () => {
+    const out = sink();
+    const input = new PassThrough();
+    const app = new TUIApp({
+      output: out.stream,
+      input,
+      onSubmit: () => {},
+    });
+    app.start();
+    app.setBackgroundTasks({ observed: true, tasks: [] });
+    await settleRendered();
+
+    input.write('\x1b[17~');
+    await settle();
+    expect(app.renderState.focus).toBe('tasks');
+    // Nothing to select: an index into an empty row list would be a phantom
+    // selection the arrows could move but Enter could never open.
+    expect(app.renderState.selectedTaskRow).toBe(-1);
+
+    input.write('\x1b[B');
+    await settle();
+    expect(app.renderState.selectedTaskRow).toBe(-1);
+    input.write('\r');
+    await settle();
+
+    input.write('\x1b');
+    await settleEscape();
+    expect(app.renderState.focus).toBe('input');
+    // The inline empty-state text is asserted in the wired view test; this
+    // suite drives the non-inline shell, which paints no chrome task list.
     app.stop();
   });
 });
