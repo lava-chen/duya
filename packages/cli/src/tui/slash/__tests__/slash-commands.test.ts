@@ -745,10 +745,10 @@ describe('/context', () => {
         message('assistant', 'x', { tokenUsage: { input_tokens: 100_000, output_tokens: 1 } }),
       ]),
       getProviderModelCapability: async () => null,
-    }, {}, { ...SESSION, model: 'claude-sonnet-4' } as HostSessionRecord);
+    }, {}, { ...SESSION, model: 'claude-sonnet-4-6' } as HostSessionRecord);
     await command('context').run(ctx, '');
     const out = ctx.notices.join('\n');
-    // 1M for claude-sonnet-4 in the built-in catalog — the same chain the
+    // 1M for claude-sonnet-4-6 in the built-in catalog — the same chain the
     // Desktop ring and auto-compaction resolve against.
     expect(out).toContain('1.0M');
     expect(out).toContain('built-in model catalog');
