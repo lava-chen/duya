@@ -56,7 +56,8 @@
 | `perf/session-100` | 100 条历史消息的会话 |
 | `perf/session-1000` | 1,000 条历史消息的会话 |
 | `perf/session-10000` | 10,000 条历史消息的会话 |
-| `perf/stream-long-reply` | 一条长回复逐 token 流式输出 |
+| `perf/stream-long-reply` | 一条长回复逐 token 流式输出（纯文本） |
+| `perf/stream-long-reply-fenced` | 同一条长回复，但正文里混了代码围栏（第二轮新增） |
 | `perf/stream-tool-storm` | 大量工具事件持续流入 |
 | `perf/typing-30s` | 输入框连续打字 30 秒 |
 
@@ -185,7 +186,7 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 | --- | --- | --- | --- | --- |
 | 0 | **首屏 entry chunk 里还拖着 `openai` 141 个模块 + `@anthropic-ai/sdk` 69 个模块** | E 实测发现：懒加载切走 8 个界面树后，首屏 entry chunk 仍静态含 `openai` 141 + `@anthropic-ai/sdk` 69 + `@lobehub/icons` 36 个三方模块。根因已核实：`packages/ai/src/index.ts` 这个**桶文件同时导出纯函数与 SDK 客户端**——`findModelById` / `computeContextEstimate` / `resolveContextWindow`（纯函数，首屏需要）与 `createAnthropicClient` / `createOpenAICompletionsClient`（SDK，首屏不需要）。首屏急切引用 `@duya/ai` 的点：`components/chat/ChatView.tsx:27`、`components/chat/MessageInput.tsx:57`、`hooks/useContextUsage.ts:18` | 需跨 Agent 边界（`packages/ai/**` + `packages/ui/src/lib/**` 不在 E 的独占范围） | **下一轮最有潜力的一条**：这两个 SDK 根本不是首屏需要的。修法是把桶文件拆成 `@duya/ai`（纯函数）+ `@duya/ai/clients`（SDK），首屏只引前者；或把 SDK 客户端改成动态 import |
 | 1 | **10000 条消息的会话打开/切换是 30–40 秒量级的卡顿** | 合并后串行重跑实测：100 条 open 197–225ms / switch 189–257ms；1000 条 open 549–670ms / switch 771–876ms；**10000 条 open 32154–37054ms / switch 37685–40668ms**，滚动帧 p95 **1000.8–1000.9ms**（60fps 完全丢帧） | B | 根因已定位：`MessageList.tsx:1254` 的 `groupedMessages.map(...)` **为每条消息都创建 React 组件实例 + IntersectionObserver + DOM 节点**（`LazyMessageRow` 只是让**内容**惰性，`content-visibility: auto` 并没有省掉组件与 observer 的创建）。10000 条 = 10000 个 observer。方向：真正的行虚拟化（只对可视区 ± overscan 挂载行），或把 observer 换成单一容器级测量 |
-| 2 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法）。**前置已解除**：共享 harness 的 `perf/stream-long-reply` 是纯文本、测不出围栏开销，所以要给共享 harness **新增**一个带围栏的契约 id（改内容必须新开 id，会改 digest），然后才能用共享 harness 验证这条 |
+| 2 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法）。**前置已解除（第二轮）**：共享 harness 新增契约 id `perf/stream-long-reply-fenced`（同尺寸、同节奏、同词表，正文里混了 ts/python/bash 三个围栏，围栏标记故意被切碎在 chunk 里），所以共享 harness 现在**能测出围栏高亮的开销**——原来 `stream.block_ms_total = 0` 只是因为没有围栏 |
 | 3 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7ms（+57%），Long Task 167 → 369 | D | 代价在**渲染器选择**而非 GPU 有无。方向是别让终端悄悄掉回 DOM：掉级时给用户可见信号，或自动尝试恢复 WebGL |
 | 4 | 首屏 JS 里那 8 个「点进去才到」的界面树 | E 已把首屏 JS 从 4081.2 KB 降到 3538.1 KB（−13.3%），`App.tsx` 静态闭包 524 → 392 个一方模块 | E | **本轮已完成**。下一轮看首屏 entry chunk 剩下的 2659 KB 里还有没有可切的 |
 | 5 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，并给侧栏 props 换成按值比较 | C | `app-sidebar.tsx` 还有 2086 行，下一轮查剩下的宽订阅与布局抖动来源 |
