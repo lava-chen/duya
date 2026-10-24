@@ -427,6 +427,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       legacyAttachments: new MainAttachmentStore(mainDatabase.db),
     });
     const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
+    // One instance for the HTTP surface and the worker db bridge: the bridge
+    // serves the legacy session row shape, and it must be the same rows the
+    // HTTP surface reads.
+    const localSessionApi = createHostLocalSessionApi({ stores: core.stores, sessions: api });
     const token = options.token ?? randomBytes(32).toString('base64url');
 
     // Host-owned execution (plan 12 gate 3): when a worker entry is available,
@@ -437,6 +441,17 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores);
     const lockApi = createHostLockApi(core.stores);
+    // ONE instance per API, shared by the HTTP surface and the worker db
+    // bridge: the bridge must answer the same rows the HTTP surface does,
+    // and two instances over one store would be two answers to the same
+    // question.
+    const localMailboxApi = createHostLocalMailboxApi(core.stores.mailbox);
+    const localPluginSetupApi = createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db));
+    // The same rule for the domains the worker writes through the bridge:
+    // one instance per API, shared by the HTTP surface and the bridge.
+    const localTurnReviewApi = createHostLocalTurnReviewApi(turnReviews);
+    const localSendMessageStateApi = createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db));
+    const workflowRunApi = createHostWorkflowRunApi(core.stores);
     const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
     // One authorization source for both Plugin App APIs. An injected
     // authority wins; otherwise the Host composes one from its own durable
@@ -539,10 +554,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           settings,
           mainDatabase,
           timeline: api,
-          localSessions: {
-            readLocalSession: (sessionId) =>
-              Promise.resolve(core.stores.sessions.get(sessionId)),
-          },
+          localSessions: localSessionApi,
+          workspaceRegistration: workspaceApi,
           imageAttachmentsForSession: (sessionId) =>
             localAttachmentApi.getImageAttachmentsForSession(sessionId),
           goalApi,
@@ -550,6 +563,12 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           modeStateApi,
           taskApi,
           pluginAppInvocationApi,
+          mailboxApi: localMailboxApi,
+          pluginSetupApi: localPluginSetupApi,
+          workflowRunApi,
+          turnReviewApi: localTurnReviewApi,
+          attachmentApi: localAttachmentApi,
+          sendMessageStateApi: localSendMessageStateApi,
           logger: executionLogger,
         }),
         logger: executionLogger,
@@ -571,7 +590,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
 
     server = new HostSessionHttpServer({
       api,
-      localSessionApi: createHostLocalSessionApi({ stores: core.stores, sessions: api }),
+      localSessionApi,
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
   // The dedicated read, so `workspace_filesystem` has a channel whose job is
   // reading a file rather than restoring a transcript through it.
@@ -586,7 +605,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localGatewayAllowlistApi: createHostLocalGatewayAllowlistApi(new GatewayAllowlistStore(mainDatabase.db)),
       localGatewayMessageMirrorApi: createHostLocalGatewayMessageMirrorApi(new GatewayMessageMirrorStore(mainDatabase.db)),
       localGatewayThreadApi: createHostLocalGatewayThreadApi(new GatewayThreadStore(mainDatabase.db)),
-      localSendMessageStateApi: createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db)),
+      localSendMessageStateApi,
       localModelCapabilityApi: createHostLocalModelCapabilityApi(new ModelCapabilityStore(mainDatabase.db)),
       localProviderModelCapabilityApi: createHostLocalProviderModelCapabilityApi(
         new ProviderModelCapabilityStore(mainDatabase.db),
@@ -595,7 +614,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localAppConnectionApi: createHostLocalAppConnectionApi(
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
-      localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db)),
+      localPluginSetupApi,
       pluginAppInstanceApi,
       pluginAppInvocationApi,
       pluginAppGrantApi,
@@ -605,10 +624,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         pricing: new ProviderModelPricingStore(mainDatabase.db),
       }),
       localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase.db)),
-      localTurnReviewApi: createHostLocalTurnReviewApi(turnReviews),
-      localMailboxApi: createHostLocalMailboxApi(core.stores.mailbox),
+      localTurnReviewApi,
+      localMailboxApi,
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
-      workflowRunApi: createHostWorkflowRunApi(core.stores),
+      workflowRunApi,
       runApi: createHostRunApi(core.stores),
       ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
       goalApi,
