@@ -94,9 +94,11 @@
 | `d34a4bab`（rebase 后） | Linux，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；日志含既有 jsdom canvas 未实现提示 |
 | `d34a4bab`（rebase 后） | Linux | `git diff --check origin/master...HEAD` | 0 | rebase 后任务 diff 无 whitespace error |
 | `d34a4bab`（rebase 后） | Linux，GitHub fetch | `git fetch origin master`；`git rebase origin/master` | 0 | master 为 `cb7513dbe4fb96a54f8e527934daec031bb37943`；12 个任务提交无冲突重放 |
+| `956b53db`（rebase 后） | Linux，Node v24.19.0 | `npm run build:electron` | 0 | main / preload Electron bundle 构建完成；有既有 esbuild external 警告 |
+| `956b53db` | Linux，GitHub remote | `git push --set-upstream origin codex/plugin-ui-mcp-resources` | 0 | 任务分支已推送；未推送 master |
 
 ## 接续 / 结果
 
 S1-S6 代码切片依次重放为 `6105e8b0`、`0c0c1e75`、`2f13ca98`、`603263aa`、`bf388580`、`99b0516a`；各计划进度文档也分别独立提交。分支已 rebase 到 `cb7513dbe4fb96a54f8e527934daec031bb37943`，rebase 后全仓类型检查、架构检查与 9 个相关测试文件均通过。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：将 rebase 后的任务分支推送到 `origin` 并创建指向 `master` 的 draft PR。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
+下一步：任务分支已推送，创建指向 `master` 的 draft PR 并回填 URL。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
