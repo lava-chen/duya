@@ -49,7 +49,15 @@ const SYNC_END = '\u001b[?2026l';
 export interface FrameSample {
   /** `performance.now()` when the frame's opening marker reached the stream. */
   readonly at: number;
-  /** `performance.now()` when the closing marker did, or `at` if it never came. */
+  /**
+   * `performance.now()` when this frame's LAST byte reached the stream.
+   *
+   * The pixels are written after the closing marker, so this is when the
+   * frame is fully on the wire -- the moment a user could see it. It is NOT
+   * the next frame's start: the frame is sealed with the time of its own
+   * last write, so a trailing-edge throttle's idle window does not get
+   * charged to the frame before it.
+   */
   readonly doneAt: number;
   /** Bytes in this frame, including both sync markers. */
   readonly bytes: number;
@@ -94,12 +102,37 @@ export function tapOutput(columns = 80, rows = 24): TappedOutput {
   let bytes = 0;
   let openStartByte = 0;
   let lastWriteAt = performance.now();
+  /**
+   * One entry per `write()`: the stream offset the chunk ended at, and the
+   * time it was written.
+   *
+   * The frame's last byte belongs to exactly one chunk, so this is what turns
+   * a byte offset into the moment those bytes hit the wire. Sealing with the
+   * CURRENT chunk's time instead reported the NEXT frame's opening marker --
+   * which, under a trailing-edge throttle, is a whole throttle window after
+   * the frame's pixels were already visible. A measurement keyed on that
+   * number reads the render INTERVAL, not the latency a user waits for.
+   */
+  const chunkEnds: number[] = [];
+  const chunkTimes: number[] = [];
+  /**
+   * Cursor into the chunk records. The sealed frames' last bytes advance
+   * monotonically, so the scan only ever moves forward.
+   */
+  let chunkCursor = 0;
+  /** When the byte at `index` was written. */
+  const writeTimeOf = (index: number): number => {
+    while (chunkCursor + 1 < chunkEnds.length && chunkEnds[chunkCursor]! <= index) {
+      chunkCursor += 1;
+    }
+    return chunkTimes[chunkCursor] ?? lastWriteAt;
+  };
   let openAt = -1;
   let openIndex = -1;
   const seal = (endByte = bytes): void => {
     if (openIndex === -1) return;
     const frame = frames[openIndex] as { doneAt: number; bytes: number };
-    frame.doneAt = lastWriteAt;
+    frame.doneAt = endByte > openStartByte ? writeTimeOf(endByte - 1) : frame.at;
     frame.bytes = endByte - openStartByte;
     openIndex = -1;
   };
@@ -109,6 +142,8 @@ export function tapOutput(columns = 80, rows = 24): TappedOutput {
       const scanStartByte = bytes - Buffer.byteLength(pending);
       bytes += Buffer.byteLength(text);
       lastWriteAt = performance.now();
+      chunkEnds.push(bytes);
+      chunkTimes.push(lastWriteAt);
       // A chunk may hold the tail of one frame and the head of the next, so the
       // scan runs over the carry-over rather than per chunk.
       const scan = pending + text;

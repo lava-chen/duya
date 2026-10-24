@@ -15,6 +15,8 @@
  * counts can be driven deterministically.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { App, IpcMain } from 'electron';
 import {
   GPU_STATUS_CHANNEL,
@@ -252,6 +254,19 @@ describe('readGpuStatus', () => {
 });
 
 describe('attachGpuDiagnostics', () => {
+  it('registers the channels under the literal names the preload calls', () => {
+    // The IPC contract gate proves that every channel the preload can invoke
+    // has a handler by scanning the source for `ipcMain.handle('ch', ...)`,
+    // so the names have to be literals at the call site. This test is what
+    // keeps those literals and the exported constants from drifting apart.
+    const source = readFileSync(
+      fileURLToPath(new URL('../gpu-diagnostics.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(source).toContain(`ipcMain.handle('${GPU_STATUS_CHANNEL}'`);
+    expect(source).toContain(`ipcMain.handle('${GPU_WEBGL_LOSS_CHANNEL}'`);
+  });
+
   it('counts GPU-process deaths and ignores other child processes', async () => {
     const { app, listeners } = fakeApp({ gpu_compositing: 'enabled' });
     const { ipcMain, handlers } = fakeIpcMain();

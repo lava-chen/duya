@@ -50,4 +50,30 @@ describe('turn review snapshots', () => {
     expect(review?.patch).toContain('diff --git a/tracked.txt b/tracked.txt');
     expect(git(cwd, ['diff', '--cached', '--name-only']).trim()).toBe('pre-existing.txt');
   });
+
+  it('captures the same working tree with and without a repository index to reuse', () => {
+    const cwd = createRepository();
+
+    // The fast path primes the isolated index from the repository's own
+    // index, so git can reuse its stat cache instead of hashing the whole
+    // working tree. Without a repository index there is no cache to reuse
+    // and the snapshot has to be taken the long way.
+    const primed = captureTurnReviewBaseline(cwd);
+    expect(primed).not.toBeNull();
+
+    rmSync(join(cwd, '.git', 'index'), { force: true });
+    const unprimed = captureTurnReviewBaseline(cwd);
+    expect(unprimed).not.toBeNull();
+
+    // Same working tree, same tree object: the two paths agree on content.
+    expect(unprimed!.tree).toBe(primed!.tree);
+
+    writeFileSync(join(cwd, 'tracked.txt'), 'after\n');
+    writeFileSync(join(cwd, 'new-file.txt'), 'new\n');
+    const review = completeTurnReview(unprimed!);
+    expect(review?.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'tracked.txt', status: 'modified', additions: 1, removals: 1 }),
+      expect.objectContaining({ path: 'new-file.txt', status: 'added', additions: 1, removals: 0 }),
+    ]));
+  });
 });

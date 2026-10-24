@@ -7,7 +7,18 @@
  * - Preserve aspect ratio
  */
 
-import { Jimp } from 'jimp';
+/**
+ * Jimp, loaded on demand.
+ *
+ * The image pipeline is part of the worker's startup import graph, but Jimp is
+ * only needed when an attachment is actually too large to send. Loading it
+ * eagerly cost every worker start ~50 ms of module initialisation for a code
+ * path that most turns never touch, so it is imported here instead.
+ */
+async function loadJimp(): Promise<typeof import('jimp')['Jimp']> {
+  const mod = await import('jimp');
+  return mod.Jimp;
+}
 
 // Anthropic API limits
 export const MAX_IMAGE_DIMENSION = 2048;
@@ -122,6 +133,7 @@ export async function resizeImageBuffer(
   }
 
   // Read image with Jimp for processing
+  const Jimp = await loadJimp();
   const image = await Jimp.read(buffer);
   let { width: imgWidth, height: imgHeight } = image;
 

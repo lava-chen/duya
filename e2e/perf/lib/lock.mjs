@@ -85,6 +85,23 @@ export function findSharedLockScript() {
   return null;
 }
 
+/**
+ * The directory the lock actually lives in.
+ *
+ * When the lock is taken through the external script, the script owns the
+ * directory: it creates it, removes it, and reads the owner file from there.
+ * Deriving the directory from the script that was PASSED (instead of from a
+ * search of the repository, which can find a different copy of the script) is
+ * what keeps the two implementations talking about the same lock — and keeps
+ * the release from operating on a directory nobody holds.
+ */
+export function resolveEffectiveLockDir(options = {}) {
+  if (options.lockDir) return path.resolve(options.lockDir);
+  const script = options.script ?? resolveLockScript(options.lockScript);
+  if (script) return path.join(path.dirname(script), LOCK_DIR_NAME);
+  return resolveLockDir(options);
+}
+
 /** Where the shared lock lives. */
 export function resolveLockDir(options = {}) {
   if (options.lockDir) return path.resolve(options.lockDir);
@@ -172,7 +189,7 @@ export function acquireInternalLock(options = {}) {
     if (error.code !== 'EEXIST') throw error;
     const owner = readLockOwner(lockDir);
     const stale = owner
-      ? lockAgeMs(owner) > timeoutMin * 60_000 || !isProcessAlive(owner.pid)
+      ? lockAgeMs(owner) > timeoutMin * 60_000 || !ownerIsAlive(owner)
       : isDirectoryStale(lockDir);
     if (!stale) {
       return { acquired: false, lockDir, reason: describeLockHolder(lockDir), holder: owner };
@@ -189,10 +206,35 @@ export function acquireInternalLock(options = {}) {
 
   fs.writeFileSync(
     path.join(lockDir, 'owner.json'),
-    JSON.stringify({ agent, pid: process.pid, acquiredAt: Date.now() }, null, 2),
+    JSON.stringify(
+      {
+        agent,
+        // `pid` is the field the shared lock script may KILL on release, so it
+        // stays empty here: the script must never be able to terminate the
+        // holder. The live pid of this process is recorded as `holderPid`.
+        pid: null,
+        holderPid: process.pid,
+        acquiredAt: Date.now(),
+      },
+      null,
+      2,
+    ),
     'utf8',
   );
   return { acquired: true, lockDir, agent, at: new Date().toISOString() };
+}
+
+/**
+ * Whether the recorded holder is still there.
+ *
+ * `holderPid` is the live pid of the process that holds the lock; `pid` is
+ * whatever the implementation that wrote the file put there (the shared
+ * script puts its SENTINEL there, because that is the process it stops on
+ * release). Either one being alive means the lock is held.
+ */
+function ownerIsAlive(owner) {
+  if (!owner) return true;
+  return isProcessAlive(owner.holderPid ?? owner.pid);
 }
 
 /** Whether a lock directory without an owner file is old enough to take over. */
@@ -238,13 +280,18 @@ export function acquireLock(options = {}) {
   const agent = options.agent ?? 'agentA-harness';
   const waitMs = options.waitMs ?? 0;
   const deadline = Date.now() + waitMs;
-  const lockDir = options.lockDir ?? resolveLockDir(options);
+  const lockDir = resolveEffectiveLockDir({ lockDir: options.lockDir, script });
 
   for (;;) {
     const result = script
       ? acquireThroughScript(script, agent)
       : acquireInternalLock({ lockDir, agent, timeoutMin: options.timeoutMin });
     if (result.acquired) {
+      // A script-driven acquisition leaves the script's own (already dead or
+      // sentinel) pid in the owner file. Record this process as the holder in
+      // a SEPARATE field, so the script's release keeps stopping the sentinel
+      // and never the harness.
+      if (script) claimOwnerHolder(lockDir, agent);
       return { ...result, script: script ?? null, lockDir };
     }
     if (Date.now() >= deadline) {
@@ -267,6 +314,45 @@ function acquireThroughScript(script, agent) {
   if (result.status === 0) return { acquired: true, at: new Date().toISOString() };
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   return { acquired: false, reason: output || 'lock busy' };
+}
+
+/**
+ * Record THIS process as the holder of a lock that was taken through the
+ * external script.
+ *
+ * The script writes the pid of its SENTINEL into `owner.json` — the process it
+ * stops when the lock is released. That pid must not be overwritten: the
+ * script kills whatever it finds in `pid`, so putting the harness's own pid
+ * there means the harness terminates itself at the end of the first
+ * scenario, with no error and no report.
+ *
+ * So the caller's live pid goes into `holderPid`, and the script's `pid` is
+ * left alone. The in-repo implementation reads `holderPid` first, so the two
+ * implementations still exclude each other: the script's sentinel is alive for
+ * as long as the lock is held, and the harness is alive for as long as it
+ * measures.
+ */
+function claimOwnerHolder(lockDir, agent) {
+  try {
+    const owner = readLockOwner(lockDir);
+    fs.writeFileSync(
+      path.join(lockDir, 'owner.json'),
+      JSON.stringify(
+        {
+          ...(owner ?? {}),
+          agent: owner?.agent ?? agent,
+          holderPid: process.pid,
+          acquiredAt: owner?.acquiredAt ?? Date.now(),
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  } catch {
+    // The owner file is a hint for the takeover rule; the directory itself is
+    // the mutex. Failing to refresh it must not fail the acquisition.
+  }
 }
 
 /** A synchronous sleep — the harness must not yield the process while it waits. */
@@ -292,7 +378,7 @@ export function releaseLock(options = {}) {
  */
 export async function withMeasurementLock(fn, options = {}) {
   const script = resolveLockScript(options.lockScript);
-  const lockDir = resolveLockDir({ lockDir: options.lockDir });
+  const lockDir = resolveEffectiveLockDir({ lockDir: options.lockDir, script });
   const acquisition = acquireLock({
     script,
     lockDir,

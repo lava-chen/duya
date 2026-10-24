@@ -36,8 +36,16 @@ export interface TranscriptPaneProps {
   readonly model: TranscriptModel;
   /** Render options WITHOUT the width; the viewport supplies it. */
   readonly options: RenderOptions;
-  /** How far back from the newest line the reader has scrolled. 0 = follow. */
-  readonly scrollLines: number;
+  /** Where the top of the viewport sits, in lines from the top of the document. */
+  readonly scrollTop: number;
+  /**
+   * True while the window is pinned to the newest line.
+   *
+   * A separate flag, not a derived one: an absolute offset and a tail-relative
+   * offset mean different things, and only this flag says which of them the
+   * reader is in.
+   */
+  readonly following: boolean;
   /**
    * Bumped by the owner whenever the document changed in a way the options key
    * cannot see — a commit, a clear, a replay. Optional so a one-shot caller
@@ -98,13 +106,13 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
   /** The window for a given viewport height — the same answer for both modes. */
   window(width: number, rows: number): VisibleWindow {
     const options = this.optionsFor(width);
-    return visibleWindow(this.props.renderer.heights(this.props.model, options), rows, this.props.scrollLines);
+    return visibleWindow(this.props.renderer.heights(this.props.model, options), rows, this.props.scrollTop, this.props.following);
   }
 
   paint(scene: SceneCanvas, viewport: Viewport): void {
     const options = this.optionsFor(viewport.width);
     const heights = this.props.renderer.heights(this.props.model, options);
-    const window = visibleWindow(heights, viewport.height, this.props.scrollLines);
+    const window = visibleWindow(heights, viewport.height, this.props.scrollTop, this.props.following);
     const blocks = this.props.renderer.blocks(this.props.model, options);
 
     let line = 0;

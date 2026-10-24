@@ -296,7 +296,7 @@ export type BedrockConverseContentBlock =
   | { toolResult: { toolUseId: string; content: Array<{ text: string }> | string; status?: 'success' | 'error' } };
 
 /** Convert duya's internal Message[] into Bedrock's Converse format. */
-function toBedrockMessages(messages: Message[]): BedrockConverseRequest['messages'] {
+export function toBedrockMessages(messages: Message[]): BedrockConverseRequest['messages'] {
   const out: BedrockConverseMessage[] = [];
   for (const m of messages) {
     if (m.role === 'system') continue; // system handled separately

@@ -42,6 +42,7 @@ export const FIXTURE_IDS = Object.freeze([
   'perf/session-1000',
   'perf/session-10000',
   'perf/stream-long-reply',
+  'perf/stream-long-reply-fenced',
   'perf/stream-tool-storm',
   'perf/typing-30s',
 ]);
@@ -191,6 +192,112 @@ export function buildStreamChunks(fixtureId = 'perf/stream-long-reply', options 
 }
 
 /**
+ * The code blocks of the fenced long-reply fixture.
+ *
+ * The plain long-reply fixture is prose only, so the shared harness cannot
+ * see what a syntax-highlighted code block costs while a reply is still
+ * growing: the fence arrives in pieces, and the highlighter re-tokenizes the
+ * whole block on every frame. These blocks are what that cost is made of.
+ */
+const FENCED_BLOCKS = [
+  {
+    language: 'ts',
+    code: [
+      'export function summarizeSession(rows: Row[]): string {',
+      '  const users = rows.filter((row) => row.role === \'user\');',
+      '  const replies = rows.filter((row) => row.role === \'assistant\');',
+      '  const ratio = replies.length === 0 ? 0 : users.length / replies.length;',
+      '  return `${users.length} user turns, ${replies.length} replies`;',
+      '}',
+    ],
+  },
+  {
+    language: 'python',
+    code: [
+      'def percentile(values, p):',
+      '    ordered = sorted(values)',
+      '    if not ordered:',
+      '        raise ValueError("no values")',
+      '    index = round((len(ordered) - 1) * p)',
+      '    return ordered[index]',
+    ],
+  },
+  {
+    language: 'bash',
+    code: [
+      'git diff --stat master..HEAD',
+      'git log --oneline -n 20',
+      'npm run typecheck:all',
+      'npm run architecture:check',
+    ],
+  },
+];
+
+/**
+ * The prose-and-code text of the fenced long-reply fixture.
+ *
+ * The prose is the same vocabulary as the plain fixture, so the difference
+ * between the two fixtures IS the code blocks and what highlighting them
+ * costs. The text is exactly `totalChars` long, and it never ends inside a
+ * code block: a reply that stops in the middle of a fence is not a shape the
+ * renderer has to survive.
+ */
+function buildFencedText(random, totalChars) {
+  const parts = [];
+  let length = 0;
+  let blockIndex = 0;
+  while (length < totalChars) {
+    const block = FENCED_BLOCKS[blockIndex % FENCED_BLOCKS.length];
+    const fenced = `\n\n\`\`\`${block.language}\n${block.code.join('\n')}\n\`\`\`\n\n`;
+    const prose = filler(random, 600);
+    if (length + prose.length + fenced.length > totalChars) {
+      parts.push(prose.slice(0, totalChars - length));
+      length = totalChars;
+      break;
+    }
+    parts.push(prose, fenced);
+    length += prose.length + fenced.length;
+    blockIndex += 1;
+  }
+  return parts.join('');
+}
+
+/**
+ * The streamed chunks of the FENCED long-reply fixture.
+ *
+ * Same size, same number of chunks and same piece lengths as the plain one —
+ * the two streams differ ONLY in the content. The fence markers are split
+ * across chunks on purpose: that is what a growing reply looks like, and it
+ * is the case the highlighter has to survive.
+ */
+export function buildFencedStreamChunks(fixtureId = 'perf/stream-long-reply-fenced', options = {}) {
+  const chunkCount = options.chunkCount ?? 2000;
+  const chunkChars = options.chunkChars ?? 12;
+  const intervalMs = options.intervalMs ?? 10;
+  const random = makeRandom(options.seed ?? 0x51ea3);
+  // The plain fixture decides the shape of the stream: how many pieces there
+  // are and how long each one is.
+  const plain = buildStreamChunks('perf/stream-long-reply', { ...options, chunkCount, chunkChars });
+  const text = buildFencedText(random, plain.totalChars);
+  const chunks = [];
+  let cursor = 0;
+  for (const piece of plain.chunks) {
+    const length = piece.text.length;
+    const text_ = text.slice(cursor, cursor + length);
+    cursor += length;
+    chunks.push({ index: chunks.length, text: text_, offset: cursor });
+  }
+  return {
+    fixtureId,
+    chunkCount,
+    chunkChars,
+    intervalMs,
+    totalChars: text.length,
+    chunks,
+  };
+}
+
+/**
  * The rows of the tool-storm fixture: a long run of tool_use / tool_result
  * pairs, delivered in batches so the renderer sees a sustained flow rather
  * than one giant synchronous write.
@@ -280,6 +387,16 @@ export function describeFixture(fixtureId) {
       intervalMs: 10,
     };
   }
+  if (fixtureId === 'perf/stream-long-reply-fenced') {
+    return {
+      id: fixtureId,
+      kind: 'streamed-text-with-code',
+      chunkCount: 2000,
+      chunkChars: 12,
+      intervalMs: 10,
+      codeBlocks: FENCED_BLOCKS.length,
+    };
+  }
   if (fixtureId === 'perf/stream-tool-storm') {
     return {
       id: fixtureId,
@@ -322,6 +439,9 @@ export function fixturePayload(fixtureId, options = {}) {
   }
   if (fixtureId === 'perf/stream-long-reply') {
     return { kind: 'streamed-text', ...buildStreamChunks(fixtureId, options) };
+  }
+  if (fixtureId === 'perf/stream-long-reply-fenced') {
+    return { kind: 'streamed-text-with-code', ...buildFencedStreamChunks(fixtureId, options) };
   }
   if (fixtureId === 'perf/stream-tool-storm') {
     const storm = buildToolStormRows(fixtureId, options);

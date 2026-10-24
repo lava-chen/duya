@@ -331,12 +331,21 @@ export function attachGpuDiagnostics(
   // Registering the same channel twice throws, and a throw here would take
   // the whole startup sequence down. The observer is diagnostics; it must not
   // be able to break the app.
+  //
+  // The channel names are written as LITERALS, not as the constants above.
+  // The IPC contract gate scans the source for `ipcMain.handle('ch', ...)` to
+  // prove that every channel the preload can invoke has a handler, and a
+  // constant is invisible to that scan: with `ipcMain.handle(GPU_STATUS_
+  // CHANNEL, ...)` the gate reported two channels as reachable-but-unhandled
+  // even though they were registered. Every other handler in this process
+  // writes the literal the same way. `gpu-diagnostics.test.ts` ties the two
+  // spellings together so they cannot drift.
   try {
-    ipcMain.handle(GPU_STATUS_CHANNEL, async () =>
+    ipcMain.handle('gpu:get-status', async () =>
       readGpuStatus(app, gpuProcessExitCount, webglContextLossCount),
     );
 
-    ipcMain.handle(GPU_WEBGL_LOSS_CHANNEL, async (_event, report: unknown) => {
+    ipcMain.handle('gpu:report-webgl-context-lost', async (_event, report: unknown) => {
       const normalized = normalizeWebglContextLossReport(report);
       webglContextLossCount += 1;
       logger.warn(
