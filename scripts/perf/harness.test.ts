@@ -53,7 +53,9 @@ import {
   acquireLock,
   readLockOwner,
   releaseInternalLock,
+  releaseLock,
   resolveLockDir,
+  resolveEffectiveLockDir,
   REPO_ROOT,
 } from '../../e2e/perf/lib/lock.mjs';
 import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
@@ -396,11 +398,11 @@ describe('the measurement lock', () => {
   });
 
   it('stays exclusive when the holder took it through the external script', () => {
-    // The external script records its own pid and exits immediately, so the
-    // pid in the owner file is already dead by the time the caller continues.
-    // The in-repo implementation treats a dead owner as a crashed holder and
-    // takes the lock over — which would let a script-driven agent and an
-    // in-repo agent measure on the same machine at the same time.
+    // The external script records the pid of its sentinel and keeps it alive
+    // for as long as the lock is held. The in-repo implementation treats a
+    // dead owner as a crashed holder and takes the lock over — which would let
+    // a script-driven agent and an in-repo agent measure on the same machine
+    // at the same time.
     const dir = lockDir();
     const scriptPath = path.join(path.dirname(dir), 'fake-lock-script.mjs');
     writeFileSync(
@@ -426,12 +428,78 @@ describe('the measurement lock', () => {
     // The live holder owns the lock, so the in-repo implementation must not
     // take it over.
     expect(readLockOwner(dir)?.agent).toBe('agent-script');
-    expect(readLockOwner(dir)?.pid).toBe(process.pid);
+    expect(readLockOwner(dir)?.holderPid).toBe(process.pid);
     const second = acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
     expect(second.acquired).toBe(false);
     expect(readLockOwner(dir)?.agent).toBe('agent-script');
 
     releaseInternalLock(dir);
+  });
+
+  it('never leaves the harness pid where the lock script would kill it', () => {
+    // The shared script stops the process recorded in `pid` when the lock is
+    // released. If the harness ever wrote its own pid there, the release
+    // would terminate the harness: the run dies after its first scenario,
+    // without an error message and without a report.
+    //
+    // The fake script below records the pid it WOULD kill instead of killing
+    // it, so the invariant can be asserted without ending the test runner.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-killing-lock-script.mjs');
+    const killLog = path.join(path.dirname(dir), 'fake-kill-log.txt');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        `const KILL_LOG = ${JSON.stringify(killLog)};`,
+        "const command = process.argv[2];",
+        "if (command === 'acquire') {",
+        '  fs.mkdirSync(LOCK_DIR, { recursive: true });',
+        '  fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '    agent: "script-agent", pid: 424242, acquiredAt: Date.now(),',
+        '  }), "utf8");',
+        '  process.exit(0);',
+        '}',
+        'const owner = JSON.parse(fs.readFileSync(path.join(LOCK_DIR, "owner.json"), "utf8"));',
+        'fs.writeFileSync(KILL_LOG, String(owner.pid));',
+        'fs.unlinkSync(path.join(LOCK_DIR, "owner.json"));',
+        'fs.rmdirSync(LOCK_DIR);',
+        'process.exit(0);',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+    releaseLock({ script: scriptPath, lockDir: dir });
+
+    const wouldKill = readFileSync(killLog, 'utf8');
+    expect(wouldKill).not.toBe(String(process.pid));
+    // The script's own pid is still the one it is allowed to stop.
+    expect(wouldKill).toBe('424242');
+  });
+
+  it('keeps the in-repo holder out of the field the script would kill', () => {
+    // The same hazard from the other side: an agent that measures with the
+    // in-repo lock writes its pid into the shared owner file, and a stray
+    // `node perf-bench-lock.mjs release` would stop it.
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    const owner = readLockOwner(dir);
+    expect(owner?.pid).toBeNull();
+    expect(owner?.holderPid).toBe(process.pid);
+    releaseInternalLock(dir);
+  });
+
+  it('takes the lock directory from the script that was passed', () => {
+    // The script owns its directory. Deriving it from a search of the
+    // repository can find a DIFFERENT copy of the script, and then the
+    // release operates on a directory nobody holds.
+    const scriptPath = path.join(tmpdir(), 'duya-perf-lock-script-dir', 'perf-bench-lock.mjs');
+    const expected = path.join(path.dirname(scriptPath), 'perf-bench.lock');
+    expect(resolveEffectiveLockDir({ script: scriptPath })).toBe(expected);
   });
 });
 
