@@ -238,21 +238,26 @@ const FENCED_BLOCKS = [
  *
  * The prose is the same vocabulary as the plain fixture, so the difference
  * between the two fixtures IS the code blocks and what highlighting them
- * costs.
+ * costs. The text is exactly `totalChars` long, and it never ends inside a
+ * code block: a reply that stops in the middle of a fence is not a shape the
+ * renderer has to survive.
  */
 function buildFencedText(random, totalChars) {
   const parts = [];
   let length = 0;
   let blockIndex = 0;
   while (length < totalChars) {
-    const prose = filler(random, 600);
-    parts.push(prose);
-    length += prose.length;
     const block = FENCED_BLOCKS[blockIndex % FENCED_BLOCKS.length];
-    blockIndex += 1;
     const fenced = `\n\n\`\`\`${block.language}\n${block.code.join('\n')}\n\`\`\`\n\n`;
-    parts.push(fenced);
-    length += fenced.length;
+    const prose = filler(random, 600);
+    if (length + prose.length + fenced.length > totalChars) {
+      parts.push(prose.slice(0, totalChars - length));
+      length = totalChars;
+      break;
+    }
+    parts.push(prose, fenced);
+    length += prose.length + fenced.length;
+    blockIndex += 1;
   }
   return parts.join('');
 }
@@ -260,21 +265,27 @@ function buildFencedText(random, totalChars) {
 /**
  * The streamed chunks of the FENCED long-reply fixture.
  *
- * Same size and same cadence as the plain one, with code blocks mixed into
- * the prose. The fence markers are split across chunks on purpose: that is
- * what a growing reply looks like, and it is the case the highlighter has to
- * survive.
+ * Same size, same number of chunks and same piece lengths as the plain one —
+ * the two streams differ ONLY in the content. The fence markers are split
+ * across chunks on purpose: that is what a growing reply looks like, and it
+ * is the case the highlighter has to survive.
  */
 export function buildFencedStreamChunks(fixtureId = 'perf/stream-long-reply-fenced', options = {}) {
   const chunkCount = options.chunkCount ?? 2000;
   const chunkChars = options.chunkChars ?? 12;
   const intervalMs = options.intervalMs ?? 10;
   const random = makeRandom(options.seed ?? 0x51ea3);
-  const text = buildFencedText(random, chunkCount * chunkChars);
+  // The plain fixture decides the shape of the stream: how many pieces there
+  // are and how long each one is.
+  const plain = buildStreamChunks('perf/stream-long-reply', { ...options, chunkCount, chunkChars });
+  const text = buildFencedText(random, plain.totalChars);
   const chunks = [];
-  for (let offset = 0; offset < text.length; offset += chunkChars) {
-    const piece = text.slice(offset, offset + chunkChars);
-    chunks.push({ index: chunks.length, text: piece, offset: offset + piece.length });
+  let cursor = 0;
+  for (const piece of plain.chunks) {
+    const length = piece.text.length;
+    const text_ = text.slice(cursor, cursor + length);
+    cursor += length;
+    chunks.push({ index: chunks.length, text: text_, offset: cursor });
   }
   return {
     fixtureId,
