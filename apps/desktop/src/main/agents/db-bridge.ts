@@ -2428,6 +2428,9 @@ export async function dispatchDbAction(
       return workflowRuns.saveSnapshot({
         runId: p.runId as string,
         definition: p.definition,
+        ...(typeof p.definitionHash === 'string' ? { definitionHash: p.definitionHash } : {}),
+        ...(p.definitionHashSource === 'dag' || p.definitionHashSource === 'dwf-script'
+          ? { definitionHashSource: p.definitionHashSource } : {}),
         nodeStack: (p.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
         journal: (p.journal as WorkflowRunSnapshot['journal']) ?? [],
       });
@@ -2439,6 +2442,10 @@ export async function dispatchDbAction(
     case 'workflowRun:appendJournal': {
       const workflowRuns = getDesktopHostWorkflowRunApi();
       return workflowRuns.appendJournalRecord(p.runId as string, p.record as WorkflowRunSnapshot['journal'][number]);
+    }
+    case 'workflowRun:replaceJournal': {
+      const workflowRuns = getDesktopHostWorkflowRunApi();
+      return workflowRuns.replaceJournal(p.runId as string, (p.records as WorkflowRunSnapshot['journal']) ?? []);
     }
     case 'workflowRun:loadJournal': {
       const workflowRuns = getDesktopHostWorkflowRunApi();

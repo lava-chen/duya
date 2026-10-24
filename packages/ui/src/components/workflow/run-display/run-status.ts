@@ -1,8 +1,8 @@
 /**
- * run-status.ts — plan 560 §7.3: the 15-value run lifecycle → 6 UI states.
+ * run-status.ts — plan 560 §7.3: the run lifecycle → 6 UI states.
  *
  * The store's `WorkflowRunStatus` is the engine's vocabulary: five values mean
- * "working on it", six mean "parked for a reason", four are terminal. A run card
+ * "working on it", six mean "parked for a reason", five are terminal. A run card
  * only needs to tell six things apart, and getting the mapping wrong shows up as
  * a pulsing "running" lamp on a dead run. So it lives in one pure function with
  * its own test instead of `status === 'active'` comparisons scattered through
@@ -48,6 +48,7 @@ const UI_STATUS_BY_STATUS: Record<string, WorkflowRunUiStatus> = {
   complete: 'complete',
   failed: 'failed',
   cancelled: 'cancelled',
+  stopped: 'interrupted',
   interrupted: 'interrupted',
 };
 

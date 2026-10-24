@@ -581,6 +581,9 @@ export class WorkflowRuntimeManager {
         this.enqueueWrite(entry, 'workflowRun:saveSnapshot', {
           runId: entry.runId,
           definition: frame.definition,
+          ...(typeof frame.definitionHash === 'string' ? { definitionHash: frame.definitionHash } : {}),
+          ...(frame.definitionHashSource === 'dag' || frame.definitionHashSource === 'dwf-script'
+            ? { definitionHashSource: frame.definitionHashSource } : {}),
           nodeStack: [],
           journal: [],
         });

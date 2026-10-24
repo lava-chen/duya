@@ -75,28 +75,56 @@ export class Journal {
     return this.all().filter((record) => record.nodeId === nodeId).at(-1)?.status;
   }
 
+  /** Settle crash-orphaned running markers without making them cache hits. */
+  reconcileOrphanRunning(): number {
+    if (!this.sink.replaceAll) return 0;
+    const records = this.all();
+    let reconciled = 0;
+    const settled = records.map((record) => {
+      if (record.status !== 'running') return record;
+      reconciled++;
+      return { ...record, status: 'skipped' as const, errorClass: 'orphan_running' };
+    });
+    if (reconciled === 0) return 0;
+    this.sink.replaceAll(settled);
+    this.rebuildCache(settled);
+    return reconciled;
+  }
+
   approvalFor(nodeId: string): JournalRecord | undefined {
     return this.all().filter((record) => record.kind === 'approval' && record.nodeId === nodeId).at(-1);
   }
 
   /**
-   * Trim trailing failed records so a resumed node can execute again. A sink
-   * must support replacement; otherwise the journal leaves persistence intact
-   * and reports zero so the Host can perform its own durable rewrite.
+   * Remove unresolved failure sentinels before a replay. A failed phase and
+   * dependency-blocked skips are execution markers, not cache facts; failed
+   * attempts followed by a later success remain as audit history. A sink
+   * without replacement support leaves durable storage untouched and reports
+   * zero so the Host can perform its own rewrite.
    */
   pruneTrailingFailures(): number {
     const records = this.all();
-    let cut = 0;
-    for (let index = records.length - 1; index >= 0; index--) {
-      if (records[index]?.status !== 'failed') break;
-      cut++;
+    if (!this.sink.replaceAll) return 0;
+
+    const lastNodeResult = new Map<string, JournalRecord>();
+    for (const record of records) {
+      if (record.kind === 'node_result') lastNodeResult.set(record.nodeId, record);
     }
-    if (cut === 0 || !this.sink.replaceAll) return 0;
-    const kept = records.slice(0, records.length - cut);
+    const unresolvedFailedNodes = new Set(
+      [...lastNodeResult].filter(([, record]) => record.status === 'failed').map(([nodeId]) => nodeId),
+    );
+    const kept = records.filter((record) => {
+      if (record.kind === 'phase' && record.status === 'failed') return false;
+      if (record.kind === 'node_result' && record.status === 'failed' && unresolvedFailedNodes.has(record.nodeId)) return false;
+      if (record.kind === 'node_result' && record.status === 'skipped' && record.errorClass === 'dependency_failed') return false;
+      return true;
+    });
+    const removed = records.length - kept.length;
+    if (removed === 0) return 0;
     this.sink.replaceAll(kept);
     this.seq = kept.reduce((max, record) => Math.max(max, record.seq + 1), 0);
     this.rebuildCache(kept);
-    return cut;
+    return removed;
   }
 
   static memory(options: JournalOptions): Journal {

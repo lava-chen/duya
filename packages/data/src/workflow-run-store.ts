@@ -460,14 +460,14 @@ export class WorkflowRunStore {
   /**
    * Crash reconciliation (§6.2): any run whose status says RUNNING-class
    * but which the live engine does not report as in-flight is marked
-   * `interrupted` — NEVER auto-rerun; resume (journal replay) is the
-   * user's / scheduler's explicit decision (n8n maxStalledCount:0).
+   * `stopped` — NEVER auto-rerun; the frozen definition + journal remain
+   * available for an explicit recovery resume.
    */
   reconcileStaleRuns(activeRunIds: ReadonlySet<string>): WorkflowRun[] {
     const rows = this.db
       .prepare(
         `SELECT * FROM workflow_runs
-         WHERE status IN ('active', 'verifying', 'planning', 'awaiting_confirm')`,
+         WHERE status IN ('active', 'verifying', 'planning')`,
       )
       .all() as WorkflowRunRow[];
     const stale: WorkflowRun[] = [];
@@ -477,12 +477,54 @@ export class WorkflowRunStore {
     const txn = this.db.transaction(() => {
       for (const row of rows) {
         if (activeRunIds.has(row.id)) continue;
-        mark.run('interrupted', 'crash reconciliation: engine not running this run', Date.now(), row.id);
-        stale.push(rowToRun({ ...row, status: 'interrupted', pause_message: 'crash reconciliation: engine not running this run' }));
+        this.reconcileRunningJournal(row.id);
+        mark.run('stopped', 'crash reconciliation: orphaned workflow run; explicit resume is available', Date.now(), row.id);
+        stale.push(rowToRun({ ...row, status: 'stopped', pause_message: 'crash reconciliation: orphaned workflow run; explicit resume is available' }));
       }
     });
     txn();
     return stale;
+  }
+
+  /** Running records from a dead engine are non-replayable evidence, not live work. */
+  private reconcileRunningJournal(runId: string): void {
+    const events = this.db.prepare(
+      'SELECT seq, record_json FROM workflow_run_events WHERE run_id = ? ORDER BY seq ASC',
+    ).all(runId) as Array<{ seq: number; record_json: string }>;
+    const update = this.db.prepare(
+      'UPDATE workflow_run_events SET record_json = ? WHERE run_id = ? AND seq = ?',
+    );
+    for (const event of events) {
+      try {
+        const record = JSON.parse(event.record_json) as JournalRecord;
+        if (record.status === 'running') {
+          update.run(JSON.stringify({ ...record, status: 'skipped', errorClass: 'orphan_running' }), runId, event.seq);
+        }
+      } catch {
+        // Keep unreadable evidence as-is; it cannot be used as a cache hit.
+      }
+    }
+
+    const snapshot = this.db.prepare('SELECT snapshot_json FROM workflow_run_snapshots WHERE run_id = ?').get(runId) as
+      | { snapshot_json: string }
+      | undefined;
+    if (!snapshot) return;
+    try {
+      const parsed = JSON.parse(snapshot.snapshot_json) as Record<string, unknown>;
+      if (!Array.isArray(parsed.journal)) return;
+      let changed = false;
+      parsed.journal = parsed.journal.map((raw) => {
+        if (!raw || typeof raw !== 'object' || (raw as JournalRecord).status !== 'running') return raw;
+        changed = true;
+        return { ...(raw as JournalRecord), status: 'skipped', errorClass: 'orphan_running' };
+      });
+      if (changed) {
+        this.db.prepare('UPDATE workflow_run_snapshots SET snapshot_json = ?, updated_at = ? WHERE run_id = ?')
+          .run(JSON.stringify(parsed), Date.now(), runId);
+      }
+    } catch {
+      // Keep unreadable snapshot bytes intact for diagnosis.
+    }
   }
 
   // ─── snapshot blob (1:1) ───
@@ -506,6 +548,8 @@ export class WorkflowRunStore {
           run_id: snapshot.runId,
           snapshot_json: JSON.stringify({
             definition: snapshot.definition,
+            ...(snapshot.definitionHash !== undefined ? { definitionHash: snapshot.definitionHash } : {}),
+            ...(snapshot.definitionHashSource !== undefined ? { definitionHashSource: snapshot.definitionHashSource } : {}),
             nodeStack: snapshot.nodeStack ?? [],
           }),
           updated_at: snapshot.updatedAt ?? Date.now(),
@@ -526,6 +570,10 @@ export class WorkflowRunStore {
     return {
       runId,
       definition: parsed.definition,
+      ...(typeof parsed.definitionHash === 'string' ? { definitionHash: parsed.definitionHash } : {}),
+      ...(parsed.definitionHashSource === 'dag' || parsed.definitionHashSource === 'dwf-script'
+        ? { definitionHashSource: parsed.definitionHashSource }
+        : {}),
       nodeStack: parsed.nodeStack ?? [],
       // Legacy read path: rows written before migration 31 still carry the
       // journal inline, and migration 31 may not have run on an old DB.
@@ -541,6 +589,36 @@ export class WorkflowRunStore {
    */
   appendJournalRecord(runId: string, record: JournalRecord): void {
     this.appendRecords(runId, [record]);
+  }
+
+  /** Atomically prune/reconcile journal history before a recovery replay. */
+  replaceJournal(runId: string, records: readonly JournalRecord[]): void {
+    const insert = this.db.prepare(
+      `INSERT INTO workflow_run_events (run_id, seq, record_json, created_at)
+       VALUES (?, ?, ?, ?)`,
+    );
+    const txn = this.db.transaction(() => {
+      this.db.prepare('DELETE FROM workflow_run_events WHERE run_id = ?').run(runId);
+      records.forEach((record, index) => {
+        insert.run(runId, recordSeq(record, index), JSON.stringify(record), eventTimestamp(record));
+      });
+      const snapshot = this.db.prepare('SELECT snapshot_json FROM workflow_run_snapshots WHERE run_id = ?').get(runId) as
+        | { snapshot_json: string }
+        | undefined;
+      if (snapshot) {
+        try {
+          const parsed = JSON.parse(snapshot.snapshot_json) as Record<string, unknown>;
+          if ('journal' in parsed) {
+            delete parsed.journal;
+            this.db.prepare('UPDATE workflow_run_snapshots SET snapshot_json = ?, updated_at = ? WHERE run_id = ?')
+              .run(JSON.stringify(parsed), Date.now(), runId);
+          }
+        } catch {
+          // An unreadable legacy snapshot must not roll back the event rewrite.
+        }
+      }
+    });
+    txn();
   }
 
   /** Shared INSERT path for one or more records; `(run_id, seq)` is idempotent. */

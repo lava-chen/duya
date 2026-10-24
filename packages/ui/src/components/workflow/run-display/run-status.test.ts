@@ -31,16 +31,17 @@ const EXPECTED: Record<WorkflowRunStatus, WorkflowRunUiStatus> = {
   blocked: 'paused',
   budget_limited: 'paused',
   complete: 'complete',
+  stopped: 'interrupted',
   interrupted: 'interrupted',
   cancelled: 'cancelled',
   failed: 'failed',
 };
 
 describe('run status mapping', () => {
-  it('classifies all 15 engine statuses', () => {
+  it('classifies all 16 engine statuses', () => {
     const entries = Object.entries(EXPECTED) as Array<[WorkflowRunStatus, WorkflowRunUiStatus]>;
     // Guards the guard: if the engine list shrinks, this test says so.
-    expect(entries).toHaveLength(15);
+    expect(entries).toHaveLength(16);
     for (const [engine, ui] of entries) {
       expect(`${engine} → ${runUiStatus(engine)}`).toBe(`${engine} → ${ui}`);
     }
@@ -76,11 +77,11 @@ describe('run status mapping', () => {
     }
   });
 
-  it('treats exactly the four terminal states as terminal', () => {
+  it('treats exactly the five terminal states as terminal', () => {
     const terminal = (Object.keys(EXPECTED) as WorkflowRunStatus[])
       .filter((status) => isRunUiTerminal(status))
       .sort();
-    expect(terminal).toEqual(['cancelled', 'complete', 'failed', 'interrupted']);
+    expect(terminal).toEqual(['cancelled', 'complete', 'failed', 'interrupted', 'stopped']);
     expect(isRunUiActive('active')).toBe(true);
     expect(isRunUiActive('blocked')).toBe(false);
   });

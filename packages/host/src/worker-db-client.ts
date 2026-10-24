@@ -1353,6 +1353,8 @@ export const workflowRunDb = {
   saveSnapshot: (input: {
     runId: string;
     definition: unknown;
+    definitionHash?: string;
+    definitionHashSource?: 'dag' | 'dwf-script';
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
   }): Promise<boolean> => sendDbRequest('workflowRun:saveSnapshot', input) as Promise<boolean>,
@@ -1360,12 +1362,16 @@ export const workflowRunDb = {
   loadSnapshot: (runId: string): Promise<{
     runId: string;
     definition: unknown;
+    definitionHash?: string;
+    definitionHashSource?: 'dag' | 'dwf-script';
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
     updatedAt: number;
   } | null> => sendDbRequest('workflowRun:loadSnapshot', { runId }) as Promise<{
     runId: string;
     definition: unknown;
+    definitionHash?: string;
+    definitionHashSource?: 'dag' | 'dwf-script';
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
     updatedAt: number;
@@ -1373,6 +1379,9 @@ export const workflowRunDb = {
 
   appendJournal: (runId: string, record: unknown): Promise<boolean> =>
     sendDbRequest('workflowRun:appendJournal', { runId, record }) as Promise<boolean>,
+
+  replaceJournal: (runId: string, records: unknown[]): Promise<boolean> =>
+    sendDbRequest('workflowRun:replaceJournal', { runId, records }) as Promise<boolean>,
 
   loadJournal: (runId: string): Promise<unknown[]> =>
     sendDbRequest('workflowRun:loadJournal', { runId }) as Promise<unknown[]>,
