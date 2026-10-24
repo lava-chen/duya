@@ -29,7 +29,7 @@
 | `packages/ai/src/utils/retry.ts:63` | `DEFAULT_RETRY_CONFIG`：maxRetries 10、base 500 ms、max 32 s、multiplier 2、jitter 0.25、persistent 上限 6 h。 |
 | `packages/ai/src/runtime-adapter.ts` | `toRuntimeConfig` / `buildHeaders` / `redactSecrets` 等，统一导出在 `packages/ai/src/index.ts:99`。 |
 
-公共面：`packages/ai/src/index.ts`（barrel）+ `packages/ai/src/context.ts`；另有 `packages/ai/src/retry-client.ts:23` 的 `createAIClientWithRetry`。
+公共面：`packages/ai/src/index.ts`（barrel）+ `packages/ai/src/context.ts` + `packages/ai/src/clients.ts`（vendor SDK 客户端面；**根入口不可再静态 re-export 它**——那会把 `@anthropic-ai/sdk` / `openai` 拖进 renderer 的 entry chunk）；另有 `packages/ai/src/retry-client.ts:23` 的 `createAIClientWithRetry`。
 
 ## 3. 排障入口
 
