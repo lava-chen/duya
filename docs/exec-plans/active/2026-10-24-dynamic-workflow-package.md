@@ -28,7 +28,7 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 - [x] S2：接线 workspace build order、tsconfig 与 architecture policy；登记 `managed: true`、声明窄 `requires`；Host 改从新包导入并移除已迁移重复实现。
 - [x] S3：就绪集并行调度、run 限流与 provider AIMD governor 分离、live retune 与观测事件。
 - [x] S4：依赖子树失败隔离、指数退避加抖动、预算耗尽/取消的 run 级停止。
-- [ ] S5：整份定义 hash 与 journal 恢复纪律、trailing failure 剪枝、orphan running 收敛。
+- [x] S5：整份定义 hash 与 journal 恢复纪律、trailing failure 剪枝、orphan running 收敛。
 - [ ] S6：补齐纯包 graph fixture 与数值轨迹，跑完整验收。
 
 ## S0 差异表
@@ -119,9 +119,18 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 | 同上 / S4 改动文件及新测试；`node_modules/`、`dist/` ignored | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 0 | 16 files / 215 tests passed；旧 Host error policy、workflow pure tests、layer purity 均通过 |
 | 同上 / 同上 | 同上 | `npm run typecheck:workflow` | 0 | 新包源码严格类型检查通过 |
 | 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2642 findings 全部已容忍；无新增违规；256 条旧指纹未触发，baseline 未改写 |
+| `51b8a631c435e7c59c160c32df228c9185b77f48` / S5 开工前 worktree clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 0 | S5 基线：16 files / 215 tests passed |
+| `51b8a631c435e7c59c160c32df228c9185b77f48` / S5 dirty；`node_modules/`、`dist/` ignored | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts scripts/architecture/layer-purity.test.ts`（首次） | 1 | `runtime-child.test.ts` 恢复用例的 mock 未携带 `workflow:ready` 保存的 snapshot hash，导致 fail-closed 后未读取 journal；修正 mock 以传递真实快照 hash/source |
+| 同上 / 同上 | 同上 | `npm run typecheck:all`（受限授权，首次） | 2 | `packages/ui/src/components/workflow/run-display/run-status.test.ts` TS2741：穷举 `WorkflowRunStatus` 未覆盖新增 `stopped`；补映射到已有 `interrupted` 展示态并增加终态断言，无交互改版 |
+| 同上 / S5 变更文件；`node_modules/`、`dist/` ignored | 同上 | `npm run build:packages -- --target @duya/workflow --target @duya/data --target @duya/host` | 0 | 13 包依赖闭包构建通过；覆盖最后的 stale-run 查询与 Host 恢复接线 |
+| 同上 / S5 变更文件及 UI 状态穷举映射；`node_modules/`、`dist/` ignored | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | 19 files / 259 tests passed；SQLite 用例覆盖 orphan running 收敛、原子 journal replacement 与 `awaiting_confirm` 持续保留 |
+| 同上 / 同上 | 同上 | `npm run typecheck:all`（受限授权，第二次） | 0 | 21 package build、protocol/core/workflow/runtime/web/Electron/CLI/voice/evals 检查通过；Electron ratchet 无新增错误、9 个旧 key 收缩；eval 4/4 |
+| 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2644 findings 均已容忍；无新增违规；256 条旧指纹未触发，未写 baseline |
 
 ## 接续 / 结果
 
-已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）、S1（`6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b`）、S2（`dda132b2b1ed382a89ff84ac08411553bb418d91`）和 S3（`fde7f7aac3916030b3915c3790a2820d8b3e9008`）。S3 在同阶段就绪集并发派发；run gate 与共享 provider AIMD governor 分离，提供 live retune、`concurrency-changed` 和 `run-stalled` 观察。S4 的 `on_error: fail` 失败节点仅阻断其依赖子树（含后续 phase），独立分支继续并把成功结果留在 journal；已有默认 `skip` 仍保持软跳过语义。重试通过注入时钟和随机源按 250ms 基数、指数增长、0.5–1.5 全抖动、30s 上限等待。budget 与 abort 作为 run 级停止；map fan-out 不再吞 budget/cancel，也不为停止写失败 node record。S4 Host/workflow/架构纯度为 16 files / 215 tests 全绿；workflow+Host 目标构建、workflow 类型检查和 architecture gate 通过。S4 第一轮新测试只因 fixture 使用了错误的 map 表达式语法而红，修正 fixture 后通过。全仓 typecheck 在 S2 已通过；最终验收会重跑。`node_modules/`、`dist/` 均 ignored。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
+已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）、S1（`6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b`）、S2（`dda132b2b1ed382a89ff84ac08411553bb418d91`）、S3（`fde7f7aac3916030b3915c3790a2820d8b3e9008`）和 S4（`51b8a631c435e7c59c160c32df228c9185b77f48`）。S3 在同阶段就绪集并发派发；run gate 与共享 provider AIMD governor 分离，提供 live retune、`concurrency-changed` 和 `run-stalled` 观察。S4 的 `on_error: fail` 失败节点仅阻断其依赖子树（含后续 phase），独立分支继续并把成功结果留在 journal；已有默认 `skip` 仍保持软跳过语义。重试通过注入时钟和随机源按 250ms 基数、指数增长、0.5–1.5 全抖动、30s 上限等待。budget 与 abort 作为 run 级停止；map fan-out 不再吞 budget/cancel，也不为停止写失败 node record。
 
-下一步：提交 S4；随后 S5 将整份定义 hash 绑定 journal/resume，拒绝不匹配定义，并修复 trailing failure 剪枝和 orphan `running` 收敛。
+S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的完整脚本正文和规范化 frontmatter（运行参数不参与）。resume 前置校验 hash 和 journal，缺失或损坏时拒绝冷启动回退；DAG 旧快照可由冻结定义计算并一次性回填 hash。恢复从持久 journal 剪掉未解决失败/依赖失败标记，保留独立成功缓存；orphan `running` 变为不可重放的 `skipped/orphan_running`，run 收敛到显式可恢复 `stopped`。`awaiting_confirm` 不参与 orphan reconciliation，保留高风险人工确认门。S5 定向测试 19 files / 259 tests、全仓 typecheck 和 architecture gate 通过；首次运行分别发现 DWF 恢复测试 mock 缺 hash 与 UI 穷举缺 stopped 展示映射，均已修正。`node_modules/`、`dist/` 均 ignored，architecture baseline 未新增指纹。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
+
+下一步：提交 S5；S6 增加可复用纯包 graph fixtures 和显式数值轨迹，并在最终 re-fetch/rebase 后重跑验收、推送分支并开 draft PR。

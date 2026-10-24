@@ -27,6 +27,32 @@ describe('@duya/workflow pure contracts', () => {
     expect(journal.append({ kind: 'phase', nodeId: 'done', attempt: 1, status: 'succeeded', result: null }).atMs).toBe(12);
   });
 
+  it('prunes unresolved failure markers around independent replay results', () => {
+    const journal = Journal.memory({ nowMs: () => 1 });
+    journal.append({ kind: 'phase', nodeId: 'work', attempt: 1, status: 'running', result: null });
+    journal.append({ kind: 'node_result', nodeId: 'broken', attempt: 1, status: 'failed', result: null });
+    journal.append({ kind: 'node_result', nodeId: 'steady', attempt: 1, reqHash: 'steady-key', status: 'succeeded', result: 'kept' });
+    journal.append({ kind: 'node_result', nodeId: 'blocked', attempt: 1, status: 'skipped', errorClass: 'dependency_failed', result: null });
+    journal.append({ kind: 'phase', nodeId: 'work', attempt: 1, status: 'failed', result: null });
+    journal.append({ kind: 'node_result', nodeId: 'retried', attempt: 1, status: 'failed', result: null });
+    journal.append({ kind: 'node_result', nodeId: 'retried', attempt: 2, reqHash: 'retried-key', status: 'succeeded', result: 'recovered' });
+
+    expect(journal.pruneTrailingFailures()).toBe(3);
+    expect(journal.all().map((record) => record.nodeId)).toEqual(['work', 'steady', 'retried', 'retried']);
+    expect(journal.hit('steady', 'steady-key')?.result).toBe('kept');
+    expect(journal.hit('retried', 'retried-key')?.result).toBe('recovered');
+  });
+
+  it('settles orphan running markers as non-replayable skipped records', () => {
+    const journal = Journal.memory({ nowMs: () => 1 });
+    journal.append({ kind: 'phase', nodeId: 'work', attempt: 1, status: 'running', result: null });
+    journal.append({ kind: 'node_result', nodeId: 'done', attempt: 1, reqHash: 'done-key', status: 'succeeded', result: 7 });
+
+    expect(journal.reconcileOrphanRunning()).toBe(1);
+    expect(journal.all()[0]).toMatchObject({ status: 'skipped', errorClass: 'orphan_running' });
+    expect(journal.hit('done', 'done-key')?.result).toBe(7);
+  });
+
   it('keeps only nodes whose dependencies are complete', () => {
     const nodes = [{ id: 'root' }, { id: 'left' }, { id: 'right' }, { id: 'tail' }];
     const dependencies = new Map([

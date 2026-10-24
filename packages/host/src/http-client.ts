@@ -820,6 +820,10 @@ export class HostSessionHttpClient implements
     return this.request('POST', `/v1/workflow-runs/${encodeURIComponent(runId)}/journal`, { record });
   }
 
+  async replaceJournal(runId: string, records: JournalRecord[]): Promise<boolean> {
+    return this.request('PUT', `/v1/workflow-runs/${encodeURIComponent(runId)}/journal`, { records });
+  }
+
   async listEvents(runId: string, afterSeq = -1): Promise<JournalRecord[]> {
     return this.request('GET', `/v1/workflow-runs/${encodeURIComponent(runId)}/events?afterSeq=${encodeURIComponent(String(afterSeq))}`);
   }

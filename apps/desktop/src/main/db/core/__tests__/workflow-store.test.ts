@@ -1,7 +1,7 @@
 /**
  * workflow-store.test.ts — plan 552 Phase 4: run metadata rows, dedup
  * idempotency, snapshot blob (definition + node stack), wait-tracker
- * queries, and crash reconciliation (§6.2: mark interrupted, never
+ * queries, and crash reconciliation (§6.2: recoverable stopped, never
  * auto-rerun).
  *
  * Plan 560 additions: the run-anchoring columns, the journal's move out
@@ -117,16 +117,21 @@ describe.skipIf(!nativeSqliteAvailable)('WorkflowRunStore', () => {
     expect(waiting.map((r) => r.id)).toEqual([a.id]);
   });
 
-  it('reconcileStaleRuns marks engine-orphaned runs interrupted, never in-flight ones', () => {
+  it('reconcileStaleRuns marks engine-orphaned runs stopped and recoverable, never in-flight ones', () => {
     const live = store.createRun({ workflowName: 'a', status: 'active' });
     const dead = store.createRun({ workflowName: 'b', status: 'active' });
     const done = store.createRun({ workflowName: 'c', status: 'complete' });
+    const awaitingConfirm = store.createRun({ workflowName: 'd', status: 'awaiting_confirm' });
+    store.saveSnapshot({ runId: dead.id, definition: {}, nodeStack: [] });
+    store.appendJournalRecord(dead.id, record(0, { status: 'running' }));
 
     const stale = store.reconcileStaleRuns(new Set([live.id]));
     expect(stale.map((r) => r.id)).toEqual([dead.id]);
-    expect(store.getRun(dead.id)?.status).toBe('interrupted');
+    expect(store.getRun(dead.id)?.status).toBe('stopped');
+    expect(store.loadJournal(dead.id)[0]).toMatchObject({ status: 'skipped', errorClass: 'orphan_running' });
     expect(store.getRun(live.id)?.status).toBe('active'); // engine still on it
     expect(store.getRun(done.id)?.status).toBe('complete'); // terminal untouched
+    expect(store.getRun(awaitingConfirm.id)?.status).toBe('awaiting_confirm'); // confirmation gate survives restart
   });
 
   it('deleteRun removes the row, the blob and the event stream', () => {
@@ -219,10 +224,14 @@ describe.skipIf(!nativeSqliteAvailable)('WorkflowRunStore', () => {
     store.saveSnapshot({
       runId: run.id,
       definition: { name: 'wf', phases: [] },
+      definitionHash: 'a'.repeat(64),
+      definitionHashSource: 'dag',
       nodeStack: [{ nodeId: 'n1', status: 'succeeded', output: 7 }],
     });
     const snap = store.loadSnapshot(run.id)!;
     expect((snap.definition as { name: string }).name).toBe('wf');
+    expect(snap.definitionHash).toBe('a'.repeat(64));
+    expect(snap.definitionHashSource).toBe('dag');
     expect(snap.nodeStack[0]).toMatchObject({ nodeId: 'n1', output: 7 });
     // New writes carry no journal in the blob.
     expect(snap.journal).toEqual([]);
@@ -266,6 +275,18 @@ describe.skipIf(!nativeSqliteAvailable)('WorkflowRunStore', () => {
     const events = store.listEvents(run.id);
     expect(events).toHaveLength(1);
     expect(events[0].status).toBe('succeeded'); // last write wins at the same cursor
+  });
+
+  it('atomically replaces pruned recovery journal records', () => {
+    const run = store.createRun({ workflowName: 'wf' });
+    store.saveSnapshot({ runId: run.id, definition: {}, nodeStack: [] });
+    store.appendJournalRecord(run.id, record(0));
+    store.appendJournalRecord(run.id, record(1));
+
+    store.replaceJournal(run.id, [record(0, { nodeId: 'kept' })]);
+
+    expect(store.loadJournal(run.id).map((entry) => entry.nodeId)).toEqual(['kept']);
+    expect(store.getEventCount(run.id)).toBe(1);
   });
 
   // ─── plan 560: migrations ─────────────────────────────────────────────────

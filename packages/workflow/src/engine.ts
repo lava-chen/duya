@@ -37,6 +37,7 @@ import { nodeDependencies } from './validate.js';
 import type { WorkflowDecisionPort } from './decision-port.js';
 import type { WorkflowRuntimePorts } from './ports.js';
 import { readyNodes } from './scheduler.js';
+import { computeDefinitionHash } from './hash.js';
 
 export type EngineOutcome =
   | { status: 'complete'; runId: string; outputs: Record<string, unknown> }
@@ -71,6 +72,8 @@ export type WorkflowObservationEvent =
 export interface ExecuteOptions {
   runId?: string;
   journal?: Journal;
+  /** Hash captured beside the persisted journal; mismatches are never resumed. */
+  expectedDefinitionHash?: string;
 }
 
 interface NodeState {
@@ -175,6 +178,12 @@ export class WorkflowEngine {
   /** Run a workflow from scratch (or continue with a primed journal). */
   async execute(def: WorkflowDef, params: Record<string, unknown>, exec?: ExecuteOptions): Promise<EngineOutcome> {
     const runId = exec?.runId ?? this.options.ports.ids.newId();
+    if (exec?.expectedDefinitionHash && computeDefinitionHash(def, this.options.ports.hash) !== exec.expectedDefinitionHash) {
+      return {
+        status: 'failed', runId, nodeId: 'definition', errorClass: 'definition_hash_mismatch',
+        error: 'workflow definition hash does not match the journal snapshot',
+      };
+    }
     const journal = exec?.journal ?? Journal.memory({ nowMs: this.options.ports.clock.nowMs });
     journal.listener = (record) => this.options.host.onJournalEvent?.(record);
     const outputs = new Map<string, NodeState>();
@@ -390,6 +399,18 @@ export class WorkflowEngine {
       };
     }
     const runId = payload.runId;
+    if (exec?.expectedDefinitionHash === undefined) {
+      return {
+        status: 'failed', runId, nodeId: 'definition', errorClass: 'definition_hash_missing',
+        error: 'resume requires the definition hash stored with its journal',
+      };
+    }
+    if (computeDefinitionHash(def, this.options.ports.hash) !== exec.expectedDefinitionHash) {
+      return {
+        status: 'failed', runId, nodeId: 'definition', errorClass: 'definition_hash_mismatch',
+        error: 'workflow definition hash does not match the journal snapshot',
+      };
+    }
     const nodeId = payload.nodeId;
     const node = findNode(def, nodeId);
     // The approval record must carry the SAME reqHash as the waiting

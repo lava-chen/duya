@@ -2775,6 +2775,16 @@ export class HostSessionHttpServer {
           this.#sendJson(res, 200, await api.appendJournalRecord(runId, body.record));
           return;
         }
+        if (req.method === 'PUT') {
+          const body = await this.#readJson(req, res);
+          if (body === null) return;
+          if (!Array.isArray(body.records) || !body.records.every(isJournalRecord)) {
+            this.#sendJson(res, 400, { error: { code: 'invalid_workflow_journal' } });
+            return;
+          }
+          this.#sendJson(res, 200, await api.replaceJournal(runId, body.records));
+          return;
+        }
       }
       if (parts.length === 2 && parts[1] === 'events' && req.method === 'GET') {
         const afterSeq = url.searchParams.has('afterSeq')
@@ -5579,6 +5589,8 @@ function parseWorkflowRunOutcome(value: unknown): WorkflowRunOutcomeInput | null
 
 function parseWorkflowRunSnapshot(runId: string, value: Record<string, unknown>): WorkflowRunSnapshotSaveInput | null {
   if (!Object.prototype.hasOwnProperty.call(value, 'definition')) return null;
+  if (value.definitionHash !== undefined && (typeof value.definitionHash !== 'string' || !/^[a-f0-9]{64}$/i.test(value.definitionHash))) return null;
+  if (value.definitionHashSource !== undefined && value.definitionHashSource !== 'dag' && value.definitionHashSource !== 'dwf-script') return null;
   if (value.nodeStack !== undefined && (!Array.isArray(value.nodeStack) || !value.nodeStack.every((entry) =>
     isRecord(entry) && typeof entry.nodeId === 'string' && typeof entry.status === 'string'))) return null;
   if (value.journal !== undefined && (!Array.isArray(value.journal) || !value.journal.every(isJournalRecord))) return null;
@@ -5586,6 +5598,9 @@ function parseWorkflowRunSnapshot(runId: string, value: Record<string, unknown>)
   return {
     runId,
     definition: value.definition,
+    ...(typeof value.definitionHash === 'string' ? { definitionHash: value.definitionHash } : {}),
+    ...(value.definitionHashSource === 'dag' || value.definitionHashSource === 'dwf-script'
+      ? { definitionHashSource: value.definitionHashSource } : {}),
     ...(Array.isArray(value.nodeStack)
       ? { nodeStack: value.nodeStack as NonNullable<WorkflowRunSnapshotSaveInput['nodeStack']> }
       : {}),
@@ -5609,7 +5624,7 @@ function isWorkflowRunStatus(value: unknown): value is WorkflowRunStatus {
   return typeof value === 'string' && [
     'inactive', 'planning', 'awaiting_confirm', 'active', 'verifying', 'user_paused',
     'backoff_paused', 'no_progress_paused', 'infra_paused', 'blocked', 'budget_limited',
-    'complete', 'interrupted', 'cancelled', 'failed',
+    'complete', 'stopped', 'interrupted', 'cancelled', 'failed',
   ].includes(value);
 }
 
