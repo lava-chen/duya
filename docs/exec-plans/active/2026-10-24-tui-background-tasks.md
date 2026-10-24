@@ -88,12 +88,16 @@
 | `686f3c81` + 未提交改动 | 同上 | `npx vitest run packages/cli/src/__tests__/chat-tui-foundation.test.ts` | 0 · 9 用例通过 | 新增 3 条 `chat.ts` 接线用例：打开视图触发一次读快照、`Enter` 读 bash 输出尾部并进面板、subagent 详情不读输出 |
 | `686f3c81` + 未提交改动 | 同上 | `npx vitest run packages/cli` | 0 · 102 文件 / 1260 用例通过 | 首轮 1 失败：`chat-tui-host-stop-continue.test.ts` 期望 1 条错误实得 6 条，按发现 10 补齐桩 `TUIApp` 后转绿 |
 | `686f3c81` + 未提交改动 | 同上 | `npm run build:cli-dev` 后 `node tmp/tui-bg-realrun.cjs` | 0 · 7 步全过（见验收"真机"行） | 日志 `tmp/tui-bg-realrun.log`：`• Completed · 1 background · 1 subagent · /tasks details`；`Tasks · ↑↓ select · ←→ fold · Enter open · Esc back` / `▾ Background bash (2) · 1 running` / `❯ ● sleep 60 · 16s`；详情面板 `command sleep 60 · pid 4242 · output 18 B · note promoted…` 且尾部正文 `listening on 3000` |
+| `068d3752`（feature commit） | 同上 | `git merge origin/master`（`379d990b`，PR #461 带进 `/compact` `/btw` `/diff` 与 session compaction） | 2 处冲突：`tui/slash/registry.ts`（导入与命令表并列）、`host/local-host.ts`（`runExecutionApi` 与 `localBackgroundTaskApi` 同一个 spread，再加 master 的 `sessionCompactionApi` / `sideQuestionApi`）；合并提交 `42066088` | 固定注册表清单合并后同时含 `btw/compact/diff/tasks`，未被任一侧覆盖 |
+| `42066088` + 未提交改动 | 同上 | `npm run build:packages` 后 `npm run typecheck:all`、`npm run architecture:check` | 均 0 · 2738 tolerated / baseline 2530，无新增违规 | 合并后重验：门禁仍只提示同样 2 条指纹消失 |
+| `42066088` + 未提交改动 | 同上 | `npx vitest run packages/cli`；host 4 文件 + catalog | 0 · CLI 106 文件 / 1298 用例；host+catalog 5 文件 / 63 用例 | 合并引入的 slash 用例与本任务用例同树通过 |
+| `42066088` + 未提交改动 | 同上 | `npm run build:cli-dev` 后 `node tmp/tui-bg-realrun.cjs` | 0 · 7 步全过 | 真机链路在合并后的树上复现，摘要行与详情文案与合并前一致 |
 
 ## 接续 / 结果
 
 已实现：Phase 1–9（契约、Host 缓存与只读路由、客户端方法、1s 轮询器、subagent 投影、任务模型、摘要行、任务视图与详情、`/tasks` 与 catalog 条目）。
 已验证：上表单元/集成/门禁项；`packages/cli` 全量 1260 用例；跨包 typecheck 与架构门禁；真机 PTY 7 步（`tmp/tui-bg-realrun.log`）。
 未验证：真模型驱动的 `sleep 60` 前台超时自动转后台触发链（发现 9）；Desktop 侧未改动。
-本地产物：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts` 因本地构建出现改动，但只含 esbuild 压缩标识符改名或行尾差异，本任务不提交——本功能的运行代码不在 worker bundle 里（路由在 Host 进程，`cli.cjs` 未被跟踪）。
-PR：待创建（下一步：推送 `codex/tui-background-tasks` 并开 PR，不在本地合并 master）。
+本任务未提交的本地改动：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts`。两者由本地 `build:packages` / `build:cli-dev` 再生，`inline-content.ts` 与 `bundle/package.json` 只有行尾差异，其余差异是 esbuild 压缩标识符改名（已用 `git diff --ignore-all-space` 逐文件确认）。本功能的运行代码不依赖 worker bundle 变更：读路由在 Host 进程，`cli.cjs` 未被跟踪，所以 PR 不带这些产物；合并后 `packages/host/bundle/*` 以 `79cad6bf` 的版本为准。
+PR：待创建（`codex/tui-background-tasks`，base `master`；不在本地合并 master）。
 回收：未开始；分支与 worktree 在 PR 集成前保留。
