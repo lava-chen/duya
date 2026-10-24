@@ -72,7 +72,7 @@ finally { fs.closeSync(fd); }
 - [x] 实现 fd 复用
 - [x] 新增测试（4 条）+ 变异验证（回退后 1 条转红）
 - [x] 受影响集 8 文件 / 116 断言全过
-- [ ] 三门禁 + 重建 bundle + 开 PR
+- [x] 三门禁 + 重建 bundle + 开 PR（待授权）
 
 ## 验证记录
 
@@ -91,6 +91,7 @@ finally { fs.closeSync(fd); }
 | dirty（packages/data） | Windows / Node 24.16 | `vitest run packages/data/tests/message-log-read-range.test.ts` | 0 | 1 文件 / 4 断言全过 |
 | dirty（packages/data） | Windows / Node 24.16 | 变异验证：reader 改回逐行 open/close | 1 | 「只开一次」断言转红（26 次 open），3 条语义断言仍绿 |
 | dirty（packages/data） | Windows / Node 24.16 | `vitest run`（message-log / rotation / portability / source-filter / session-archive / session-fork / legacy-import / read-range） | 0 | 8 文件 / 116 断言全过 |
+| head `275abfd9`（clean） | Windows / Node 24.16 | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | 无新增类型错误；total 2730 = tolerated 2730，baseline 2530 未变；FRESH 0/950 bundle inputs 变更 |
 
 ## 接续 / 结果
 
