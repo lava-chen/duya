@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · 初始 base：`21351df668adefc0357741a5f79a1513e297df61` · rebase base：`cb7513dbe4fb96a54f8e527934daec031bb37943` · S1：`6105e8b0` · S2：`0c0c1e75` · S3：`2f13ca98` · S4：`603263aa` · S5：`bf388580` · S6：`99b0516a` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · 初始 base：`21351df668adefc0357741a5f79a1513e297df61` · 最新 rebase base：`40787b394d08207ed78c863d9c78dc413a9d1038` · S1：`c79f9122` · S2：`2865357c` · S3：`a1b46a5e` · S4：`af8cc9aa` · S5：`ca3fa154` · S6：`b76776c5` · owner：`/root`
 
 ## 目标与边界
 
@@ -32,7 +32,7 @@
 ## 发现与决策
 
 - `origin/master` 基线为 `21351df668adefc0357741a5f79a1513e297df61`；旧 `work` 检出为 `2baa95df`，保持未修改。
-- PR 前 `git fetch origin master` 发现 master 已前进到 `cb7513dbe4fb96a54f8e527934daec031bb37943`；任务分支 12 个提交已无冲突 rebase 到此 SHA，所有切片代码提交 SHA 已更新为页眉所列短 SHA，rebase 后门禁重跑完成。
+- PR 前 `git fetch origin master` 发现 master 先前前进到 `cb7513dbe4fb96a54f8e527934daec031bb37943`，后又前进到 `40787b394d08207ed78c863d9c78dc413a9d1038`；任务分支 14 个提交已无冲突 rebase 到最新 SHA，所有切片代码提交 SHA 已更新为页眉所列短 SHA，第二次 rebase 后门禁重跑完成。
 - 当前 master 将架构入口放在 `docs/architecture/ARCHITECTURE.md`；`docs/exec-plans/README.md` 没有根规则旧版本提到的 “Verified baseline” 小节，基线将按本次工作重新测量。
 - `.codegraph/` 与 CodeGraph 工具均不可用；代码定位通过 `rg` 和源码交叉核对。
 - S1 将双语标题固定为当前产品的 `en` / `zh`；surface 位于 `apps[].ui.surfaces`，静态 `entry`、resource-only surface、两者并存均可声明。Desktop 三种 manifest 路径都把 surface 的 `server` 绑定到该插件实际声明的 `mcpServers`。
@@ -96,9 +96,16 @@
 | `d34a4bab`（rebase 后） | Linux，GitHub fetch | `git fetch origin master`；`git rebase origin/master` | 0 | master 为 `cb7513dbe4fb96a54f8e527934daec031bb37943`；12 个任务提交无冲突重放 |
 | `956b53db`（rebase 后） | Linux，Node v24.19.0 | `npm run build:electron` | 0 | main / preload Electron bundle 构建完成；有既有 esbuild external 警告 |
 | `956b53db` | Linux，GitHub remote | `git push --set-upstream origin codex/plugin-ui-mcp-resources` | 0 | 任务分支已推送；未推送 master |
+| `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0，npm 11.9.0 | `git fetch origin`；`git rebase origin/master` | 0 | master 为 `40787b394d08207ed78c863d9c78dc413a9d1038`；14 个任务提交无冲突重放 |
+| `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0，npm 11.9.0；额外子进程执行权限 | `npm run typecheck:all` | 0 | 20 个 workspace 包构建、web bundle 与全部 TS 门禁通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 收敛；recorder 4/4 |
+| `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0；额外子进程执行权限 | `npm run architecture:check` | 0 | 无新增边界违规；1 个既有 fingerprint 不再触发 |
+| `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；日志含既有 jsdom canvas 未实现提示 |
+| `c073724c`（第二次 rebase 后） | Linux x86_64，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成；有既有 esbuild external 警告 |
+| `c073724c`（第二次 rebase 后） | Linux x86_64；Electron 二进制与 Xvfb 均不可用 | `test -x node_modules/electron/dist/electron; command -v xvfb-run` | 1 | 无法启动 Electron 桌面环境；真实 UI/IPC/worker 产品路径仍待具备 Electron 与显示服务的环境验证，未用 mock 代替 |
+| `c073724c`（第二次 rebase 后） | Linux，GitHub remote | Draft PR #440：`https://github.com/lava-chen/duya/pull/440` | 已创建 | 目标为 `master`；不合并；待将第二次 rebase 后分支安全更新到 PR head |
 
 ## 接续 / 结果
 
-S1-S6 代码切片依次重放为 `6105e8b0`、`0c0c1e75`、`2f13ca98`、`603263aa`、`bf388580`、`99b0516a`；各计划进度文档也分别独立提交。分支已 rebase 到 `cb7513dbe4fb96a54f8e527934daec031bb37943`，rebase 后全仓类型检查、架构检查与 9 个相关测试文件均通过。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已创建。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：任务分支已推送，创建指向 `master` 的 draft PR 并回填 URL。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
+下一步：用 `--force-with-lease` 更新 PR #440 的分支，再核对 PR head/base 与 draft 状态。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
