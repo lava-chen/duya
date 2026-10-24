@@ -102,6 +102,13 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
   （master 上 2664 = 2664），baseline size 未增加，无新增违规。
 - **合并冲突只有 `docs/exec-plans/README.md`**（两边各加一行），Git 自动合并保留了两行；
   本线索引行与 catalog 行、计划文件均核对存在。
+- **第二次合并（master `cb7513db`，#397 tui-multi-host）的冲突在 bundle 产物上**：
+  `worker-entry.js` 与 `worker-metafile.json` 双双冲突。bundle 是构建产物，**不能手工解** ——
+  取一边让 merge 落地，再按合并后的源码重新 `build:packages -- --target @duya/host` + `bundle:worker`
+  产出唯一正确的产物，单独成一个 commit。`bundle:verify` 的基准因此从 `194ff067` 移到 `c95f2956`。
+- **重建后只有 2 个文件是真变更**：`worker-entry.js` 与 `worker-metafile.json`；
+  `packages/capabilities/src/ModuleTool/inline-content.ts`、`bundle/BashTool/BashWorker.js`、
+  `bundle/package.json` 三个是构建噪音（diff 为空），已 `git checkout --` 还原。
 
 ### 留给后续（不在本次范围）
 
@@ -129,6 +136,10 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
 | 2499b358（clean，merged master `55a8cfe9`） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 含 electron gate「9 baselined key(s) shrank」，无新增类型错误 |
 | 2499b358（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2678 = tolerated 2678（master 上 2664 = 2664），新增 14 条 import 边全部落在既有 permitted 内；baseline size 两边同为 2530 |
 | 2499b358（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/927，bundle commit = 194ff067 |
+| c95f2956（clean，merged master `cb7513db`） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 含 electron gate「9 baselined key(s) shrank」，无新增类型错误 |
+| c95f2956（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2681 = tolerated 2681，baseline size 2530 未变 |
+| c95f2956（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/928，bundle commit = c95f2956 |
+| c95f2956（clean） | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 219 文件 / 2110 passed / 6 skipped |
 
 ## 接续 / 结果
 
@@ -141,7 +152,7 @@ PR：#433（https://github.com/lava-chen/duya/pull/433），base `master`，**�
 分支：`codex/host-config-write`（worktree `E:\Projects\duya\.claude\worktrees\host-db-actions`）。
 提交序列：`0149eebb` 源码 → `9df284bd` bundle 重建 → `c7b40afa` 计划更新 →
 `d049fbc4` 合 master → `194ff067` 删死代码 + 重建 bundle → `ab6c8930` catalog 登记 →
-`2499b358` 合最新 master `55a8cfe9`。
+`2499b358` 合 master `55a8cfe9` → `fc2838b0` 计划刷新 → `c95f2956` 合 master `cb7513db` + 重建 bundle。
 
 未提交路径：无（提交信息与 PR 正文在 gitignored 的 `docs-local/`）。
 副作用：无外部副作用。
