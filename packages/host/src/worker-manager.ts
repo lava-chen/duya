@@ -29,17 +29,20 @@ export { createWorkerEnvironment };
  *
  * ## What it does NOT cover, and why that matters here
  *
- * The cache covers modules that are `require()`d. It does NOT cover the
- * PROCESS ENTRY POINT -- and `child_process.fork()` starts the worker by
- * naming the worker bundle as that entry point. So the worker's 4+ MB bundle
- * is still compiled from scratch on every spawn, and this switch does not
- * change that. Making it cover the bundle needs the bundle to be a required
- * module (a small launcher that requires it), which is a packaging-chain
- * change, not a one-line one.
+ * `fork()` starts a BRAND NEW Node process rather than duplicating this
+ * one, and `module.enableCompileCache()` does not export `NODE_COMPILE_CACHE`
+ * to children -- so this switch does not reach the worker by inheritance.
+ * It is also called after the Host's own entry point has been compiled, so
+ * it can only cover the modules loaded from here on.
  *
- * `fork()` also starts a BRAND NEW Node process rather than duplicating this
- * one, so the switch does not reach the worker by inheritance either; the
- * worker has to enable it itself.
+ * The worker gets the cache through the environment instead:
+ * `createWorkerEnvironment()` sets `NODE_COMPILE_CACHE`, which DOES cover
+ * the entry point -- the bundle itself is cached, verified against the real
+ * bundle -- and takes a bundle spawn from ~172 ms to ~103 ms (measured,
+ * Electron 44 / Node 24.20). The worker flushes the cache while it is
+ * alive, because Node only writes it on a clean exit and the Host kills its
+ * workers. This function stays because the HOST's own module loading is a
+ * separate win (Electron cold start), not the worker's.
  *
  * ## Why it is best-effort
  *
@@ -56,7 +59,7 @@ export function enableWorkerCompileCache(logger?: { info: (message: string, fiel
     }).enableCompileCache;
     if (typeof enable !== 'function') {
         compileCacheReported = true;
-        logger?.info('Worker compile cache unavailable in this runtime; workers compile the bundle on every spawn');
+        logger?.info('Worker compile cache unavailable in this runtime; the Host compiles its modules on every start');
         return;
     }
     try {
@@ -333,9 +336,12 @@ export class WorkerManager {
 
     const maxMemoryMB = getWorkerMaxMemoryMB();
 
-    // Before the fork, so the child inherits an ENABLED cache: the child is
-    // the process that compiles the bundle, and the parent's switch is what
-    // lets it read a cached code cache instead of parsing 4+ MB of source.
+    // The Host's own compile cache. The worker does NOT inherit it -- a
+    // forked child is a brand new Node process and `enableCompileCache()`
+    // exports no environment variable -- so the worker reaches the cache
+    // through `NODE_COMPILE_CACHE` in the environment below, and flushes it
+    // while it is alive: Node only writes the cache on a clean exit, and
+    // the Host kills its workers.
     enableWorkerCompileCache(this.logger);
 
     const env = createWorkerEnvironment(
