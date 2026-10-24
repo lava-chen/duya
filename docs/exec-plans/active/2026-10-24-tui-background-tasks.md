@@ -70,6 +70,7 @@
 8. **`←` 折叠、`→` 展开。** 初版把两个方向传反了（左传 `false`、右传 `true`），单测在真实按键路径上抓到；以 `setGroupCollapsed(id, true)` 为折叠修正。
 9. **真机验证用 stub worker，而不是真模型。** `tui-command.ts` 的 `DUYA_TUI_ATTACH=1` + `DUYA_TUI_HOST_ORIGIN/TOKEN` 是现成的入口：终端、Host、HTTP/SSE、缓存、路由、投影、渲染全走生产代码，只有 worker 换成会发 `bash_task:update` 与 `subagent.started` 的桩。因此"前台超 15s 自动转后台"这条触发链没有被端到端跑（`autoPromoted` 是桩直接给的字段的值），它由 BashTool 自身用例覆盖；本步的视图只负责如实显示注册表告诉它的东西。
 10. **桩 TUI 也要跟上生产选项面。** `chat-tui-host-stop-continue.test.ts` 的假 `TUIApp` 缺 `setBackgroundTasks` 等新方法，轮询器在真实 busy 期把快照推进去时抛错，`onError` 每轮重报，把本该唯一的 `runtime_crash` 挤成 6 条错误。补上四个方法后恢复。给 TUI 增加选项方法时，所有 mock `TUIApp` 都要同步。
+11. **"产物只是再生噪声"这个判断在这里不成立。** 首版 PR 不带 `packages/host/bundle/*`，CI 的 `bundle:verify` 直接失败：它按历史比较"bundle 提交"与"任一第一方输入的最后提交"，本任务改了 `agent-protocol/src/index.ts`（新增 `export * from './background-tasks.js'`），所以即使重新生成的 `worker-entry.js` 差异几乎全是 esbuild 标识符改名，也必须提交一次再生结果把 bundle 提交推到后面。命令是 `npm run bundle:worker`——`npm run build:packages` 不会更新 bundle，跑完 `git status` 仍然干净，容易误判成"没有变化"。
 
 ## 验证记录
 
@@ -94,13 +95,16 @@
 | `42066088` + 未提交改动 | 同上 | `npm run build:cli-dev` 后 `node tmp/tui-bg-realrun.cjs` | 0 · 7 步全过 | 真机链路在合并后的树上复现，摘要行与详情文案与合并前一致 |
 | `d9d365e1` | 同上 | `git merge origin/master`（`f6120e04`，PR #462 改了 `TUIApp.ts` 的 inline 滚动） | 1 处冲突：HEAD 的 `openSelectedTask()` 与 master 更新过的 `revealSelectedBlock()` 重叠；本步已删除 transcript 块选择，保留 HEAD 方法、丢弃后者（`grep revealSelectedBlock` 在 `src` 中已无调用点）。合并提交 `21af3db4` | 4 处注释仍点名已删除的方法，随 `docs(tui)` 提交改为 `visibleWindow()` / 滚动数学 |
 | `21af3db4` | 同上 | `npx tsc -p packages/cli/tsconfig.json --noEmit`；`npx vitest run packages/cli`；transcript 两文件 | 均 0 · CLI 106 文件 / 1297 用例；transcript 30 用例 | 二次同步后重验；PR #464 由 CONFLICTING 转 MERGEABLE，Test workflow 在 head `21af3db4` 上运行 |
+| `9b4bfc35` | 同上 | CI：Test workflow（architecture / test scope / typecheck / test） | architecture **FAIL** · `bundle:verify`：`STALE worker-entry.js`，6 个 bundle 输入在 bundle 提交 `41f5749b` 之后改动；其余 3 项 pass | 失败签名与发现 11；修复动作 = `npm run bundle:worker` 后提交 bundle（`26cef6db`） |
+| `26cef6db` | 同上 | `npm run bundle:verify`；`npm run architecture:check`；`npx vitest run packages/cli packages/host/tests/{background-task-index,background-task-routes,run-execution}.test.ts` | 0 · `FRESH 0/953 bundle inputs`；2738 tolerated 无新增违规；首轮 1 失败 / 1325，重跑两次均 109 文件 / 1325 全绿 | 首轮那条失败在随后两次同命令运行中不可复现（记录为 flake，未定位到用例） |
+| `26cef6db` | GitHub Actions | `gh pr view 464 --json statusCheckRollup` | 全 pass · architecture / test scope / typecheck / test / build | PR head 即本提交，五项检查均 COMPLETED SUCCESS |
 
 ## 接续 / 结果
 
 已实现：Phase 1–9（契约、Host 缓存与只读路由、客户端方法、1s 轮询器、subagent 投影、任务模型、摘要行、任务视图与详情、`/tasks` 与 catalog 条目）。
 已验证：上表单元/集成/门禁项；`packages/cli` 全量 1260 用例；跨包 typecheck 与架构门禁；真机 PTY 7 步（`tmp/tui-bg-realrun.log`）。
 未验证：真模型驱动的 `sleep 60` 前台超时自动转后台触发链（发现 9）；Desktop 侧未改动。
-本任务未提交的本地改动：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts`。两者由本地 `build:packages` / `build:cli-dev` 再生，`inline-content.ts` 与 `bundle/package.json` 只有行尾差异，其余差异是 esbuild 压缩标识符改名（已用 `git diff --ignore-all-space` 逐文件确认）。本功能的运行代码不依赖 worker bundle 变更：读路由在 Host 进程，`cli.cjs` 未被跟踪，所以 PR 不带这些产物；合并后 `packages/host/bundle/*` 以 `79cad6bf` 的版本为准。
+本任务不提交的本地改动：只剩 `packages/capabilities/src/ModuleTool/inline-content.ts` 与 `packages/host/bundle/package.json` 的行尾差异（`git diff --numstat` 为 0 行内容变化），已 `git restore`。worker bundle **必须**提交：`scripts/architecture/bundle-verify.mjs` 比较 bundle 提交与其第一方输入的最后改动，`packages/agent-protocol/src/index.ts` 现在多转出了契约文件，历史即判 STALE；重建命令是 `npm run bundle:worker`（`build:packages` 不含它），产物差异基本是 esbuild 压缩标识符改名，metafile 才记录真实新增输入。
 PR：[#464](https://github.com/lava-chen/duya/pull/464)（base `master`，head `codex/tui-background-tasks`，非 draft）；未合并，等待 review 与 Test workflow。
 回收：未开始；分支与 worktree 在 PR 集成前保留。
 下一步：等 PR #464 的最新 head 上必需检查通过后按授权集成；随后同步 master、重验并回收 worktree。第二步（kill / 子会话实时 transcript / 输出流式 / 自动展开收起）另立计划。
