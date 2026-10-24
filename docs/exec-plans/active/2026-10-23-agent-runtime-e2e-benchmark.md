@@ -47,6 +47,8 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
       基准帧封口口径（`firstChar*` 指标）、jimp 惰性加载。
 - [x] 修复批次 2：技能威胁扫描预筛（−65 ms）、提示词去重**删错副本**的修正、
       turn review 的 git 快照复用 stat 缓存（1426 → 189 ms）、desktop IPC 普查解析常量。
+- [x] 修复批次 3：把**请求装配顺序**抽成契约（`request-assembly.ts` + 契约矩阵），
+      并让「系统附带行」的身份跨 host→engine 边界可见（见下）。
 - [ ] 门禁 + PR。
 
 ## 发现与决策
@@ -123,6 +125,30 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 原 harness 用「下一帧的 SYNC_BEGIN」给帧封口，测的是**渲染间隔**而不是上屏延迟；
 真实的首帧 leading edge 只花 0.29 ms 就起帧，而旧口径把整个 70 ms 节流窗口算给了它。
 现在帧用「携带它最后一个字节的那次 write」封口。
+
+### 请求装配契约（修复批次 3）
+
+`b8dda429` 修好了「删错副本」，但**顺序规则本身仍是一行数组表达式**加一大段注释——
+注释能解释规则，却挡不住下一个改它的人。这条规则已经被改坏过两次：`01344cd3` 把引擎
+那份放到了请求最前，`b8dda429` 改回保留 host 那份，两次都是就地改表达式。
+
+于是规则本身被抽成契约：
+
+- `packages/agent-runtime/src/engine/request-assembly.ts`：五个来源、顺序，以及四条
+  受保护的规则——提示词只发一次；host 那份优先且**留在 host 放的位置**；host 没投影
+  提示词行时引擎那份落在**对话末尾**而不是最前；第 2 轮起不带提示词。
+- `packages/agent-runtime/test/request-assembly.test.ts`：**契约矩阵**，每个来源组合一行，
+  输出形状逐条钉死。
+- `ModelMessage` 新增 `origin?: 'conversation' | 'context'`；host 的 `toModelMessages`
+  从 `metadata.runtimeContext === true` 推出 `'context'`——那是 volatile context rail、
+  hook 块、附件正文三类「系统附带行」的共同标记，此前在 host→engine 边界被整个丢掉。
+  带上它，引擎才知道**对话在哪里结束**，fallback 的提示词因此落在与 host 那份相同的位置。
+- `packages/host/tests/worker-product-runtime/engine-prompt-order-proof.test.ts`：真实链路
+  到 provider 边界，断言「提问是这个人说过的最后一句话」（系统附带的行可以跟在后面）。
+  变异验证：把契约改回「引擎那份放最前」，该用例变红。
+
+行为变化只有一处，且是 latent 的：host **没有**投影提示词行时，引擎那份不再落在请求最前，
+而是落在对话末尾——`b8dda429` 之前落在最前，而那正是本缺陷的原始形态。
 
 ### 剩余瓶颈（实测、均未修）
 
@@ -246,6 +272,13 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 | e10e0587（合并 origin/master 后） | Windows | `npx vitest run apps/desktop` | 0 | 292 files / 3477 passed，1 skipped |
 | e10e0587 | Windows | `npx vitest run apps/desktop/src/main/ipc/__tests__/ipc-contract.test.ts apps/desktop/src/main/ipc/__tests__/ipc-channel-contract.test.ts` | 0 | 2 files / 7 passed（合并前这 2 个文件都失败） |
 | 1747d15f | Windows / Node 24.16.0 | `node --cpu-prof` 采样技能冷加载 + `measure-skill-load.cjs` | 0 | 冷 84–160 ms / 热 12–17 ms；分解：I/O 等待 ~60 ms、fingerprint ~10 ms、扫描 7.5 ms、读 5 ms、遍历 1–4 ms |
+| be5224e7（base，含 `b8dda429`） | Windows / Node 24.16.0 | `git reset --hard origin/codex/tui-perf-benchmark` | 0 | 位置修复已由 `b8dda429` 落在基线上，本分支只做契约化 |
+| 69a84dab | Windows | `npx vitest run packages/agent-runtime` | 0 | 103 files / 1142 passed（含新增契约矩阵 9 例） |
+| 69a84dab | Windows | `npx vitest run packages/host/tests/worker-product-runtime --maxWorkers=2` | 0 | 23 files / 128 passed（含新增真实链路回归） |
+| 69a84dab（**变异**） | Windows | 把契约改回「引擎那份放最前、丢掉 host 那份」 | 1 | 新增回归用例变红：`expected 'PRIOR-QUESTION-MARKER' to contain 'PROMPT-QUESTION-MARKER'` —— 该用例确实咬住这个缺陷 |
+| 69a84dab | Windows | `npm run typecheck:all` | 0 | OK |
+| 69a84dab | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| 69a84dab | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更 |
 
 ## 接续 / 结果
 
@@ -273,6 +306,17 @@ host 提交 prompt 行后，engine 前置的 prompt 与 timeline 里那一行是
 这个回归是被 CI 抓到的：`packages/cli/tests/integration/host-child-sessions.test.ts` 与
 `shared-client-vertical.test.ts` 里脚本化 provider 按「最新 user 消息」识别提问，
 收到 rail 就直接 500。本地 A/B 对拍（回退该 commit 后重建 bundle）定位到根因。
+
+### 顺序规则的固化（独立分支 `codex/fix-run-prompt-order`，PR #398）
+
+这条规则已经改坏过两次，两次都是就地改 `#modelRequest` 里那行数组表达式。契约化后
+规则有了名字和表格（见「请求装配契约」小节），并且补上了两处基线上还缺的判定：
+
+- host **没**投影提示词行时，引擎那份不再落在请求**最前**（`b8dda429` 之前落在最前，
+  而那正是这个缺陷的原始形态），而是落在**对话末尾**——与 host 那份所在的位置一致。
+  判定需要知道对话在哪里结束，所以 `ModelMessage` 增加了 `origin`，host 从
+  `metadata.runtimeContext` 推出「系统附带行」。
+- host 把提示词行投影了两次时，只发一次。
 
 未做（带实测数字见「剩余瓶颈」）：bundle 编译缓存 launcher、技能加载剩余开销
 （读文件 + 目录遍历）、三个 db action、标题生成去重。

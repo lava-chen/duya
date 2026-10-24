@@ -1071,8 +1071,11 @@ describe('the engine is an implementation, not a delegating port', () => {
  *  - the host's assembled messages ALREADY carrying the prompt (by id) means
  *    the engine must not add its own copy -- and the host's row keeps its
  *    place in the request;
- *  - a history that does NOT carry it still gets the prompt, and it still
- *    goes FIRST, because the prompt is the turn's opening question.
+ *  - a history that does NOT carry it still gets the prompt, and it goes at
+ *    the END of the conversation, because a question at the front of a
+ *    request is a question the model has to dig out from under the whole
+ *    conversation. (`request-assembly.ts` states the rule; its matrix states
+ *    the shapes.)
  */
 describe('the prompt reaches the model exactly once', () => {
   it('does not add the prompt again when the host already assembled it', async () => {
@@ -1099,7 +1102,7 @@ describe('the prompt reaches the model exactly once', () => {
     expect(sent.map((m) => m.id)).toEqual(['p1', 'rail-1']);
   });
 
-  it('still sends the prompt first when the history does not carry it', async () => {
+  it('sends the prompt when the history does not carry it', async () => {
     const h = harness({ turns: [{ frames: [{ type: 'text', text: 'done' }] }] });
     const clock = fakeClock();
 
@@ -1126,7 +1129,8 @@ describe('the prompt reaches the model exactly once', () => {
 
     const sent = h.sentMessages[0]!;
     // The host did NOT assemble the prompt row (only a look-alike), so the
-    // engine still has to carry the question itself.
-    expect(sent.map((m) => m.id)).toEqual(['p1', 'other-row']);
+    // engine still has to carry the question itself -- at the end of the
+    // conversation, which is where the host's own copy would have been.
+    expect(sent.map((m) => m.id)).toEqual(['other-row', 'p1']);
   });
 });

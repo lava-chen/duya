@@ -139,6 +139,22 @@ export interface ModelMessage {
   readonly id: string;
   /** Correlates a tool-role result with the assistant's originating call. */
   readonly toolCallId?: string;
+  /**
+   * What this row IS at the model boundary.
+   *
+   * `conversation` (the default) is something the person said, the model's own
+   * reply, or a tool result. `context` is a row the SYSTEM attached -- the
+   * volatile-context rail, a hook's block, an attachment's extracted text --
+   * and each of those says in so many words that it is not part of the user's
+   * message.
+   *
+   * The engine needs the difference to place the run's prompt at the end of
+   * the CONVERSATION rather than at the end of the request: the conversation
+   * is where the person's words are, and the rows after them are the system's.
+   * A host that does not mark its context rows simply has every row read as
+   * conversation, which is the conservative reading.
+   */
+  readonly origin?: 'conversation' | 'context';
 }
 
 /** Why the provider stopped producing. Drives the engine's stop decision. */

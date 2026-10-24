@@ -305,6 +305,13 @@ export function toModelMessages(messages: readonly Message[]): ModelMessage[] {
         content: message.content as ModelMessage['content'],
         id: message.id ?? `m${index}`,
         ...(message.tool_call_id === undefined ? {} : { toolCallId: message.tool_call_id }),
+        // The rows the SYSTEM attached keep their identity across this
+        // boundary. `runtimeContext: true` is the marker every producer of
+        // such a row already sets -- the volatile-context rail, a hook's
+        // block, an attachment's extracted text -- and it is what tells the
+        // engine where the conversation ends and the system's own context
+        // begins. Without it the two are one flat list of `user` rows.
+        ...(message.metadata?.runtimeContext === true ? { origin: 'context' as const } : {}),
     }));
 }
 export function toToolDescriptor(tool: Tool): ToolDescriptor {
