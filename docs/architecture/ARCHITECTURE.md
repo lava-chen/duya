@@ -184,12 +184,51 @@ Plugin UI Apps are declared under `extensions["com.duya.client"].apps` and
 normalized to optional `PluginManifest.apps`. The shared, browser-safe schema
 is exported from `@duya/plugin-core/apps/declarations`; Desktop's existing
 manifest reader validates canonical package containment and regular entry
-files. App IDs, requested capabilities and state schema versions remain
-metadata, not grants or live instance state. The installed-plugin view projects
-only these App declarations, without exposing the rest of a manifest's MCP
-configuration. Codex's root `apps` connector-file reference is unchanged.
-Launch must recheck entry containment; instance persistence and iframe launch
-are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
+files when the legacy `entry` is present. An App may keep that static entry,
+declare resource-backed `ui.surfaces`, or carry both. Each surface declares
+English and Chinese titles, an icon identifier, an `ui://` resource URI, and
+the name of an MCP server discovered from that same plugin; surface IDs are
+unique within the plugin. App IDs, requested capabilities and state schema
+versions remain metadata, not grants or live instance state. The installed-
+plugin view projects only these App declarations, without exposing the rest
+of a manifest's MCP configuration.
+The Main process also exposes a read-only UI surface directory projected from
+installed Plugin Apps. It returns enabled plugins' surfaces, omits every
+surface id claimed more than once across installed plugins, and reports those
+conflicts for diagnosis. Plugin install, enable, disable, remove, and setup
+changes reuse the existing `plugin-app:changed` notification so directory
+consumers can refetch; this directory is metadata and does not own tab state.
+The desktop Apps view opens each surface through the existing panel tab
+registry, keyed by plugin and surface identity. It mounts the iframe only while
+its panel card is open and visible, and closes session-only surfaces when no
+chat is active. The original static-entry launcher remains available for
+compatibility.
+Surface content is read through the declared plugin MCP server's existing
+client and must be one `text/html` text resource at the exact declared
+`ui://` URI, no larger than 8 MiB. The Main process rechecks server ownership
+and content shape, then serves that HTML as a single document at the existing
+tokenized loopback origin. Its mount cannot expose package files; the iframe
+keeps its opaque origin and launch nonce, and the document CSP blocks network
+connections. When a session worker is unavailable, the host connects the same
+MCP client implementation to only the declared server for the read. No MCP
+Apps widget protocol, tab state, or persistent panel DOM is introduced; the
+legacy static `entry` path remains supported. Codex's root `apps`
+connector-file reference is unchanged. See
+`610-architecture-series/22-wave3-dispatch.md`.
+
+The existing guest-to-host `bind` / `invoke` / `revoke` messages remain in
+place. A resource page may send `ready` with its launch document token after
+loading; the renderer accepts it only from the current opaque-origin iframe.
+While a session surface is mounted, the renderer watches that session's
+successful tool results for completed `duya_ui_select`,
+`duya_ui_highlight`, and `duya_ui_refresh` calls from the surface's exact
+plugin-scoped MCP server. Waiting for the result lets it use final arguments
+when the stream first reported a partial tool call. Each event must name the
+current surface, and select/highlight payloads are JSON-cloned and limited to
+8 KiB. The host sends the event only to the launched frame with its document
+token. Static entry pages need not implement this host-event handshake. This
+small event seam does not add MCP Apps widgets, tools, or subscriptions to the
+protocol.
 
 `@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
 Host-created source/origin/nonce and session/run binding. It accepts only

@@ -7,6 +7,7 @@ import type { WorkspaceLayout } from "./panels/layout-model";
 
 const mocks = vi.hoisted(() => ({
   activeTabId: "agent-one",
+  panelOpen: true,
   tabs: [] as PageTab[],
   layout: {
     panes: [],
@@ -24,7 +25,7 @@ vi.mock("@/hooks/usePanel", () => ({
   MIN_CHAT_WIDTH: 680,
   MIN_PANEL_WIDTH: 300,
   usePanel: () => ({
-    panelOpen: true,
+    panelOpen: mocks.panelOpen,
     panelWidth: 760,
     setPanelOpen: vi.fn(),
     setPanelWidth: vi.fn(),
@@ -84,6 +85,10 @@ vi.mock("./panels/registry", () => {
     review: make("review"),
     browser: make("browser"),
     terminal: make("terminal"),
+    "plugin-app": {
+      ...make("plugin-app"),
+      component: ({ tab }: { tab: PageTab }) => <iframe data-testid={`plugin-frame-${tab.id}`} />,
+    },
   };
   return {
     PAGE_REGISTRY: registry,
@@ -207,5 +212,26 @@ describe("PanelZone panel wall", () => {
     expect(cells).toHaveLength(2);
     const hidden = Array.from(cells).find((cell) => cell.style.display === "none");
     expect(hidden?.getAttribute("data-pane-id")).toBe("terminal");
+  });
+
+  it("unmounts plugin surfaces when their card is hidden or the panel is closed", () => {
+    mocks.panelOpen = true;
+    mocks.tabs = [
+      { id: "surface", pageId: "plugin-app", title: "Overview", params: { availability: "always" } },
+      { id: "browser", pageId: "browser", title: "Browser" },
+    ];
+    mocks.activeTabId = "browser";
+    mocks.layout = wall(["surface", "browser"], { expandedPaneId: "browser" });
+
+    const { rerender } = render(<PanelZone />);
+    expect(screen.queryByTestId("plugin-frame-surface")).toBeNull();
+
+    mocks.layout = wall(["surface", "browser"]);
+    rerender(<PanelZone />);
+    expect(screen.getByTestId("plugin-frame-surface")).toBeTruthy();
+
+    mocks.panelOpen = false;
+    rerender(<PanelZone />);
+    expect(screen.queryByTestId("plugin-frame-surface")).toBeNull();
   });
 });

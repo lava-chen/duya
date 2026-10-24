@@ -17,7 +17,8 @@ export type PageId =
   | "browser"
   | "bot-settings"
   | "room-settings"
-  | "session-messages";
+  | "session-messages"
+  | "plugin-app";
 
 export interface PageTab {
   id: string;
