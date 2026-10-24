@@ -1077,6 +1077,10 @@ export class StreamingToolExecutor<TContext extends object = object> {
           content,
           tool_call_id: tool.id,
           duration_ms: duration,
+          // The success bit is STATED, not inferred downstream: without it a
+          // result reaches the drain with no status and is reported as
+          // `indeterminate`, which the transcript paints as `?`.
+          status: 'success',
         })
 
         if (result.backgrounded) {
@@ -1515,6 +1519,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
                   : JSON.stringify(retryResult.result),
                 tool_call_id: tool.id,
                 duration_ms: Date.now() - startTime,
+                status: 'success',
               });
               this.finalizeTool(tool, messages);
               return;
@@ -1653,6 +1658,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
         content: resultContent,
         tool_call_id: tool.id,
         duration_ms: durationMs,
+        status: 'success',
         // Forward structured tool-result metadata (e.g. browserResults for
         // browser tool search/parallel_fetch) so the renderer can build
         // rich tool rows without parsing the markdown result. Provider
@@ -1771,6 +1777,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
             content: resultContent,
             tool_call_id: tool.id,
             duration_ms: Date.now() - startTime,
+            status: 'success',
           })
 
           this.finalizeTool(tool, messages)
@@ -1918,6 +1925,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
           : JSON.stringify(retryResult.result),
         tool_call_id: tool.id,
         duration_ms: Date.now() - startTime,
+        status: 'success',
       });
       this.finalizeTool(tool, messages);
       return;

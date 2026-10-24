@@ -16590,7 +16590,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 61544,
+      "bytes": 62670,
       "imports": [],
       "format": "esm"
     },
@@ -32616,7 +32616,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-      "bytes": 87199,
+      "bytes": 87572,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -38939,7 +38939,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 687
@@ -39062,10 +39062,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40889,7 +40889,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -42956,7 +42956,7 @@
           "bytesInOutput": 2261
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-          "bytesInOutput": 3882
+          "bytesInOutput": 4023
         },
         "packages/host/src/run-event-spine.ts": {
           "bytesInOutput": 440
@@ -43766,7 +43766,7 @@
           "bytesInOutput": 967
         },
         "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-          "bytesInOutput": 29851
+          "bytesInOutput": 29936
         },
         "packages/agent-runtime/src/tools/execution/retry/types.ts": {
           "bytesInOutput": 271
@@ -44240,7 +44240,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692273
+      "bytes": 4692524
     }
   }
 }
