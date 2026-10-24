@@ -74,6 +74,24 @@ export const PluginUiSurfaceSchema = z
 
 export type PluginUiSurface = z.infer<typeof PluginUiSurfaceSchema>;
 
+/** Safe projection of an installed Plugin App surface for the host directory. */
+export interface PluginUiSurfaceDirectoryEntry extends PluginUiSurface {
+  pluginId: string;
+  pluginName: string;
+  appId: string;
+}
+
+/** Surface identifiers excluded because more than one installed App owns them. */
+export interface PluginUiSurfaceDirectoryConflict {
+  id: string;
+  owners: Array<{ pluginId: string; pluginName: string; appId: string }>;
+}
+
+export interface PluginUiSurfaceDirectory {
+  surfaces: PluginUiSurfaceDirectoryEntry[];
+  conflicts: PluginUiSurfaceDirectoryConflict[];
+}
+
 /** A package-local App declaration; it describes metadata, not a grant. */
 export const PluginAppDefinitionSchema = z
   .object({

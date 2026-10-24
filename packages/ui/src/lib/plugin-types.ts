@@ -6,7 +6,10 @@ import type {
   PermissionTier,
 } from '@duya/plugin-core';
 import { PluginAppDefinitionsSchema } from '@duya/plugin-core/apps/declarations';
-import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
+import type {
+  PluginAppDefinition,
+  PluginUiSurfaceDirectory,
+} from '@duya/plugin-core/apps/declarations';
 
 // ============================================================================
 // MCP re-exports from @duya/plugin-core (plan 97, Phase 0)
@@ -585,6 +588,12 @@ export interface PermissionDisplayInfo {
 export interface PluginIpcListResponse<T> {
   success: boolean;
   data: T[];
+  error?: string;
+}
+
+export interface PluginUiSurfaceDirectoryResponse {
+  success: boolean;
+  data: PluginUiSurfaceDirectory;
   error?: string;
 }
 
