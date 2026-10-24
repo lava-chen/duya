@@ -1,7 +1,7 @@
 # Duya Desktop 性能爬坡
 
 状态：active · 负责人：mavis（goal `tg_1cyt7y0er7mvkwyms8`）· 更新：2026-10-24
-分支：`codex/perf-lock-owner-pid`（本分支）/ 集成分支 `codex/perf-integration` · worktree：`.claude/worktrees/perf-integration` · base：`18a144e8`
+分支：`codex/perf-plan-round4`（本分支）/ 集成检出 `.claude/worktrees/perf-integration` · base：`3ddbbfaf`（master）
 
 ## 目标与边界
 
@@ -96,13 +96,17 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [x] 集成者按 CI + 证据定合并顺序，合并后**串行**重跑 Profile（权威基线见下）
 - [x] 产出按实测收益排序的下一轮机会清单（10 条）
 - [x] 第一轮全部合并（#392，merge commit `18a144e8`）
-- [ ] 第二轮：#0 首屏 SDK 移出 entry chunk（Agent F）
-- [ ] 第二轮：#1 万条消息行虚拟化（Agent G）
-- [ ] 第二轮：合并后串行重跑，更新权威基线
+- [x] 第二轮：#0 首屏 SDK 移出 entry chunk（Agent F，PR #418）
+- [x] 第二轮：#1 万条消息行虚拟化（Agent G，PR #421）
+- [x] 第二轮：合并后串行重跑，更新权威基线
+- [x] 第三轮：布局缺陷修复（PR #422，恢复 `.app-workspace-row` 布局规则）
+- [x] 第四轮：harness 三个 P0（锁自杀 #429 / CI 路由 #430 / 信号预算 #431）
+- [x] 第四轮：同轮 before/after 权威重跑（before `73c22414` → after `8becf37c`，10k 三个有效样本）
+- [x] 第四轮：刷新快场景权威基线（startup / stream / typing / panels / gpu）
 
-派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径。B 已交付（PR #385）；D 已交付（PR #391）；A 在续做（PR #386）；C 在续做；E 刚开工。A/B/C/D 的首轮会话曾因网络错误与运行丢失中断，已在同一检出上续做。
+派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径并交付第一轮。第二轮的 F（首屏依赖闭包）与 G（虚拟化）由集成者直接派工；第四轮由集成者收口（harness 与 CSS 属共享范围）。
 
-## 第二轮（进行中）
+## 第二轮
 
 第一轮的权威基线指向两个最大的剩余瓶颈，第二轮就攻这两条。仍然一个 PR 只钉一个问题，各 Agent 独占路径，集成者定合并顺序。
 
@@ -134,6 +138,11 @@ base：`origin/master` = `18a144e8`（开工时）。两个检出都已用 `scri
 | #410 | 第二轮章程、两条新发现、验证记录 | **已合并** |
 | #412 | PR #391 留下的真实回归：GPU 通道用常量注册，IPC 契约闸门看不见 | **已合并** |
 | #418 | 首屏依赖闭包：SDK 客户端搬进 `@duya/ai/clients`，模块数归零 + 预算棘轮 | **已合并**（`aed0d13c`，CI 五项全绿） |
+| #421 | 万条消息虚拟化（Agent G） | **已合并**（`7e5f3d5e`，CI 五项全绿） |
+| #422 | 布局缺陷：恢复 `.app-workspace-row` + 3 条 `.panel-zone-expanded` 规则 + 布局契约测试 | **已合并**（`c76ef6e5`，CI 五项全绿） |
+| #429 | harness 锁自杀：活 holder 记到 `holderPid`，`pid` 留给脚本 | **已合并**（`dead6e4d`） |
+| #430 | CI 路由：纯 CSS 改动映射到拥有它的包的测试 | **已合并**（`bd20f6aa`） |
+| #431 | harness 信号预算：随 fixture 规模派生（60s / 240s） | **已合并**（`b31cd192`） |
 
 ## 第三轮：第二轮的实测结果，和一个改写了优先级的新发现
 
@@ -173,7 +182,7 @@ base：`origin/master` = `18a144e8`（开工时）。两个检出都已用 `scri
 
 **open 的主线程长任务只有 0.7 秒，却花了 32–37 秒。**所以「打开一条万条会话要 30 多秒」这件事，**渲染只占 0.7 秒**；剩下 30 多秒在等数据（主进程读库 / IPC 传输 / renderer 拿到 store 更新）。第一轮把这条机会记成「渲染太重」，**方向是错的**。
 
-G 的虚拟化实测把它照得更清楚（同一轮、持锁、`lock.held = true`、`skippedScenarios: []`）：
+G 的虚拟化实测把它照得更清楚（同一轮、持锁、`lock.held = true`、`skippedScenarios: []`）。**这张表是 G 那一轮的数字，第四轮在修好布局 + 预算后重测过，权威数字见「第四轮」章节**：
 
 | `perf/session-10000` | 改前（基线） | 改后（G） |
 | --- | --- | --- |
@@ -189,9 +198,76 @@ G 的虚拟化实测把它照得更清楚（同一轮、持锁、`lock.held = tr
 
 **下一轮的第一号机会因此改变**：不是继续抠渲染，而是先把 open/switch 的墙钟**拆成「数据到达」与「渲染」两段**（t_click → t_data → t_dom），定位那 30 秒落在主进程/DB/IPC 的哪一段。G 的探针正在做这个拆分。
 
-### G · 万条消息虚拟化（PR 待开）
+### G · 万条消息虚拟化（PR #421，已合并 `7e5f3d5e`）
 
 代码 + 24 个用例已就位（`messageVirtualizer.ts` 331 行 + 19 个单测、`messageListWindowing.test.tsx` 5 个集成用例）。集成者复核了实现：偏移与 spacer **同源**（`planRowItems` 从同一套 offset 算高度）、测量有 1 px 抖动阈值、内容尺寸列表单独算可见切片（`clientHeight` 在这个 app shell 里是**整篇**的高度，不是视口）、跳转目标用 `pendingJumpRef` 保持挂载直到视口真的到达、锚点校正用 generation 计数避免普通重渲染移动视口。四个回归点（跳转 / 向前加载 / 流式尾部 / focus mode）都有对应测试。
+
+## 第四轮：先修布局，再修 harness
+
+第三轮把「万条会话 30 秒」的瓶颈从渲染改判成数据路径，并留下了两个必须先补上的窟窿：**布局是坏的**，**harness 自己会死**。第四轮先补窟窿，再重新出数。
+
+### 布局缺陷（PR #422，已合并 `c76ef6e5`）
+
+`bcf0d946` 删 `conductor.css` 时连带删掉了仍在使用的 4 条规则：`.app-workspace-row` 一条 + `.panel-zone.panel-zone-expanded` 三条。它们被放回 `packages/ui/src/styles/workspace.css`（`.panel-zone` 规则所在地），并配了 4 个布局契约用例（读 CSS 源码断言选择器与属性）。
+
+实证（真实 Electron + 生产构建 + 产品 IPC 播种 1000 条会话）：
+
+| | 改前 | 改后 |
+| --- | --- | --- |
+| `.app-workspace-row` 高度 | **115585 px**（`display:block`、`containerType:normal`） | 818 px（`display:flex`、`container-type:inline-size`） |
+| `.message-list-scroll` client / scroll | 115187 / 115187 → **可滚动距离 0** | 694 / 113260 → max 112566 |
+| 末条消息 | bottom=115103，**在视口外 114k px** | `visibleInViewport: true` |
+| `dom.nodes` | 11842 | 3437 |
+
+**改前用户滚不到这条会话的结尾。** 负对照：把 `workspace.css` 还原成改前状态 → 4 条契约测试全红并点名缺失属性；还原后 4/4 绿。
+
+**这一条改写了后面所有数字的含义**：`scrollTranscript()` 在坏布局下 `max = scrollHeight - clientHeight` **恒为 0**，所以第一/二轮基线里的 `scroll.frame.*` 是**空操作**测出来的，`dom.nodes` 也是在坏布局下测的。**旧基线的滚动与 DOM 数字作废**，以第四轮的基线为准。连带影响：4 条 `@container` 查询（`composer-panels.css` 719px、`preview-drawer.css` 879px、`code-review.css` 720/864/1280px）依赖这个 container 上下文。
+
+### harness 的三个 P0（#429 / #430 / #431，均已合并）
+
+| PR | 问题 | 修法 |
+| --- | --- | --- |
+| #429 | **harness 静默自杀**：`--lock-script` 模式下 `claimOwnerPid()` 把 harness 自己的 pid 写进共享脚本 owner 文件的 `pid`，而脚本 `release` 会 `process.kill(owner.pid)` → 第一个场景结束后 exit 1、无报错、无报告，并泄漏一个哨兵进程 | 活 holder 记到新字段 `holderPid`，`pid` 原样留给脚本（脚本唯一允许杀的字段）；仓库内实现写 `pid: null`；存活判断读 `holderPid ?? pid`；锁目录从「传入的那个脚本」推导 |
+| #430 | **纯 CSS 改动进不了单测范围**：`test-scope.mjs` 只认 ts/tsx，`test` job 必红「Changed unit scope has no test or source targets」 | 样式文件映射到拥有它的包的测试（清单来自 `git ls-files`）；无归属则退回全部；未知路径仍走 fail-closed 的 `full` |
+| #431 | **信号预算不够**：`session-switch` 等「末条消息出现在 DOM」只有 120 秒，而 10k fixture 的数据路径 p100 超过 120 秒 → 3 个样本里 2 个记成 error | 预算随 fixture 规模派生（≤1000 条 60 秒，>1000 条 240 秒 = GPU 场景给单样本的预算），并把预算写进报告的 fixture notes 与每个样本 |
+
+#429 的负对照用的是**假脚本**：它记录「自己会杀的 pid」而不是真杀，断言那个 pid 是脚本自己的 `424242` 而不是 `process.pid`。
+
+### 同轮 before/after 权威重跑
+
+before = `73c22414`（master 在 #422 之前），after = `8becf37c`（master + #422 + #421）。同一台机器、同一天、两个跑次都持锁（`lock.held = true`、`skippedScenarios: []`）。**after 侧 10k 三个样本全部有效**（预算修好后）。
+
+`perf/session-10000`：
+
+| 指标 | before | after | 变化 |
+| --- | --- | --- | --- |
+| `dom.nodes` | 115354 | **569** | **−99.5 %** |
+| `dom.mutations` | 11976 | 2929 / 1445 / 1445 | −88 % |
+| `longtask.total_ms` | 93431 / 112297 / 46276 | **569 / 554 / 283** | **−99.5 %** |
+| `longtask.count` | 110 / 126 / 56 | **3 / 3 / 3** | −97 % |
+| `session.switch.longtask.total_ms` | 26676 / 21163 / 7189 | **569 / 554 / 283** | −99 % |
+| `mem.peakMB` | 827.99 / 817.80 / 857.45 | **70.76 / 79.84 / 68.34** | **−91 %** |
+| `cpu.renderer_pct` | 41.07 / 44.02 / 29.15 | **3.09 / 5.81 / 3.61** | −90 % |
+| `frame.max_ms` | 1918.3 / 1001.1 / 1985 | 1016.7 / 216.7 / 100.1 | −90 % |
+| `session.open_ms` | 82073 / 76572 / 73520 | 75292 / 80128 / 74844 | −2 %（数据路径主导） |
+| `session.switch_ms` | 102274 / 99835 / 76496 | 114611 / 136352 / 111673 | **+15 %（未解释，见下）** |
+| `commit.count` | 3 | 42 / 42 / 43 | +39（**是滚动时虚拟化器的挂载**，不是打开/切换变重） |
+
+`commit.count` 的 +39 需要说清楚：打开阶段的提交数 before/after **完全一样**（9 / 9），切换阶段也一样（2 / 2）。多出来的批次全部产生在**滚动**阶段——虚拟化器在滚动时挂载/卸载行。before 树之所以只有 3 次提交，是因为它的布局坏了、**根本滚不动**，滚动测量是空操作。
+
+`scroll.frame.p95_ms`：after 侧 2/3 样本 16.8 ms，1/3 样本 1001 ms。**这一条不是渲染回归**：该样本的主线程几乎空闲（`longtask.total_ms` 569 ms、`cpu.renderer_pct` 3.09 %），而帧间隔 p50 也是 1000.8 ms——**每一帧**都隔了 1 秒，这是 rAF 被节流的特征，不是被长任务饿死。before 侧的 1000.8 ms 是另一回事：那里主线程被 46–112 秒的长任务占满，帧是真的被饿死的。
+
+### 还没解释清楚的：切换墙钟 +15 %
+
+after 侧的切换多花了约 12–15 秒，而这 12–15 秒里主线程几乎没事干（长任务 0.28–0.57 秒，CPU 3–6 %）——**全是等待**。同轮的 open 没变（−2 %），切换阶段的提交数也没变。
+
+三条事实：
+
+1. 这个 +10 ~ 14 秒在 G 的 A/B/A 轮里也出现过，两轮独立观测到同一量级，所以**不是偶发**。
+2. 探针（G 的 `probe-rows.mjs`，240 秒预算）给出数据路径的分解：open 的 `t_click → t_data = 73048 ms`、`data → dom = 0 ms`；switch 的 `getThreadIPC` 一段就是 **103691 ms**，CPU profile **97.4 % idle**。
+3. 因此这 12–15 秒落在**主进程侧**（读库 / 投影 / IPC），不在渲染。
+
+**下一步要回答的问题**：切换时主进程做了多少次 `db:message:getBySession`、每次投影多少条记录。已知根因是「每页全量重投影」O(n²)；如果虚拟化让 store 发布了更多次更新、每次都触发一次全量重投影，那墙钟就会随**发布次数**而不是**数据量**增长。**这是下一轮第一号机会。**
 
 ## 集成记录
 
@@ -225,7 +301,12 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **`perf/stream-long-reply` 这个 id 指向两份不同的内容**。共享 harness 的 `e2e/perf/lib/fixtures.mjs` 里它是 30551 字符的**纯文本**（无围栏）；B 的取证 fixture 在 `packages/ui/src/components/chat/__tests__/harness/fixture.ts`，同名 id 却是**含 3 个带语言代码围栏**的长回复。id 在本计划里是 fixture 契约的键（「固定 fixture」），同名不同内容会让任何跨 harness 的数字对比失去意义。**已消歧（第二轮）**：共享契约的 6 个 `perf/*` id **一个字都没改**（权威基线是拿它们测的，改 id 等于改 digest），而是把 UI 取证 harness 的场景 id 挪进自己的 `ui-harness/` 命名空间（`ui-harness/stream-long-reply`、`ui-harness/stream-tool-storm`），并在 `e2e/perf/agents/agent-b/README.md` 里给出旧标签 → 新标签的映射，让第一轮归档的证据仍然可读。`scripts/perf/harness.test.ts` 加了守卫：本地 harness 的标签一旦撞上契约 id，测试直接变红。**顺带查清**：那个 id 在 UI 侧只是 `SCENARIOS` 的键（`__tests__/harness/main.tsx:209`），不是内容查找键，所以消歧不需要动任何产品代码。
 - **E 报告的「首屏体积 after 只有一个来源」这个缺口，由集成者串行重跑补上了**。E 承认它没能在拿到锁后独立复现 after 的数字（`startup.typeable_ms` 的 after 未测）。集成者的权威重跑用 `first-screen-payload.mjs` 在合并后的构建上实测：**首屏 JS 3541.1 KB / 7 chunk，entry chunk 2726133 B = 2662.2 KB**；PR #401 声称的是 3538.1 KB / 2659.2 KB。差 0.08% / 0.11%（3112 字节），是构建产物内容与时间戳的微差。**体积收益成立、可复现**。但**启动时间收益不成立**：E 测的基线 `startup.typeable_ms` p50=1934（n=5，cv 12.9%），波动区间 1715–2453ms 由 Electron 进程启动主导，**与首屏 JS 体积无可分辨关联**。所以 #401 的真实收益是「打开设置/工作流等页面时首帧略晚」的反面——即**用首帧延迟换首屏体积**，而不是「启动更快」。**How to apply**：报告启动时间时必须区分「进程启动主导」和「首屏资源主导」，否则会把噪声当收益。
 - **Agent A 还有 8 个未合并的 harness 修复，是真实资产，不能随检出一起回收**。`codex/perf-harness` 分支比 master 多 8 个提交，全部只碰 `e2e/perf/lib/{launch,lock}.mjs`、`e2e/perf/run.mjs`、`e2e/perf/scenarios/gpu.mjs`、`scripts/perf/harness.test.ts`（与 B/C/D/E 的改动**零重叠**，可干净合并）：安全模式窗口与 Host 未就绪时重试（`e9e12d6a`）、按 namespace 而非 pid 找 app 关闭（`836a30c8`）、优雅关闭失败时强杀整棵进程树（`65066896`）、pid 回收后误杀无关进程的保护（`a1a392f8`）、**从已死的持有者手里接管锁**（`da8c32b4`）、每个样本 4 分钟预算（`c97e9989`）、每场景落盘报告（`965fe696`）。这些正是本轮观察到的孤儿 Electron、僵尸锁、启动失败的根因——**A 修的是自己踩的坑，E 的 baseline 里 8 个样本只有 3 个成功也正是 safe-mode 窗口所致**。
-- **两种锁实现会互相拆台（第二轮发现，已修）**。仓库内实现 `e2e/perf/lib/lock.mjs` 有一条正确的规则：**持有者进程没了 = 持有者崩了 = 锁可以接管**（`da8c32b4` 加的，否则崩掉的 Agent 会把整轮卡 30 分钟）。但外部脚本 `E:\Projects\duya\.claude\perf-bench-lock.mjs` 的 `acquire` 把自己那个**一秒后就退出的 pid** 写进 `owner.json` —— 于是仓库内实现一看到「pid 已死」就立刻抢走锁，**脚本驱动的 Agent 和仓库内驱动的 Agent 会同时测量**，两边的数字量到的都是争抢。修法两侧对称：仓库内实现走脚本 acquire 成功后用 `claimOwnerPid()` 把 owner 文件改写成**自己**的活 pid；外部脚本改为记一个**哨兵进程**的 pid（`detached` 起、release 时杀、自己最多活 90 分钟）——因为脚本是一次性 CLI，自己和调用它的 shell 的 pid 都会随命令结束而死，只有哨兵能真正代表「有人正持着锁」。回归测试在 `scripts/perf/harness.test.ts`，负对照：回退修复后该用例精确变红（owner pid 是已死的 37000 而不是活进程 39260）。**实测**：修完之后 `acquire` 的那个 shell 退出 3 秒，哨兵仍活；`release` 之后哨兵消失。
+- **两种锁实现会互相拆台（第二轮发现，第四轮才真正修对）**。仓库内实现 `e2e/perf/lib/lock.mjs` 有一条正确的规则：**持有者进程没了 = 持有者崩了 = 锁可以接管**（`da8c32b4` 加的，否则崩掉的 Agent 会把整轮卡 30 分钟）。但外部脚本 `E:\Projects\duya\.claude\perf-bench-lock.mjs` 的 `acquire` 把自己那个**一秒后就退出的 pid** 写进 `owner.json` —— 于是仓库内实现一看到「pid 已死」就立刻抢走锁，**脚本驱动的 Agent 和仓库内驱动的 Agent 会同时测量**，两边的数字量到的都是争抢。
+  - **第二轮的修法是错的**：仓库内实现走脚本 acquire 成功后用 `claimOwnerPid()` 把 owner 文件改写成**自己**的活 pid，外部脚本改为记一个**哨兵进程**的 pid（`detached` 起、release 时杀、最多活 90 分钟）。
+  - **第四轮发现的语义漂移（PR #429 已修）**：脚本的 `release` 会 `process.kill(owner.pid)` —— 它**只认 `pid` 字段**。第二轮的修法把 harness 自己的 pid 写进了那个字段，于是**脚本 release 时把 harness 自己杀了**：`--lock-script` 模式下 harness 在第一个场景结束后静默退出（exit 1、无报错、无报告），并泄漏一个哨兵进程。探针 `docs-local/research/perf-workspace-row/kill-probe.mjs` 直接复现：owner pid == probe 自己的 pid，release 之后 `SURVIVED` 永不打印。
+  - **现在的修法**：`pid` 是脚本**唯一允许杀**的字段，原样留给脚本；harness 的活 pid 记到新字段 `holderPid`，仓库内实现写 `pid: null`；存活判断读 `holderPid ?? pid`，所以脚本持有的锁（哨兵活着）与仓库内持有的锁（harness 活着）仍然互斥。负对照用**假脚本**（它记录「自己会杀的 pid」而不是真杀），断言那个 pid 是脚本自己的 `424242` 而不是 `process.pid`。
+  - **教训**：「谁写这个字段」和「谁有权杀这个字段」是两个问题，第二轮的修法只回答了前一个。**How to apply**：给外部脚本写的文件做修改前，先读脚本本身怎么用这个字段，别只看自己这边的读写约定。
+- **仓库内实现与共享脚本是同一个锁目录**：脚本的锁目录是 `path.dirname(script)/perf-bench.lock`，仓库内实现原本从**仓库里搜**脚本（可能找到另一份副本）。修法是从「传入的那个脚本」推导锁目录（`resolveEffectiveLockDir`），否则 release 操作的是一个没人持有的目录。
 - **锁的「30 分钟即失效」是按年龄判的，不是按持有者判的**。脚本只看 `acquiredAt` 的年龄，**不看 pid 活不活**。所以一次「构建 + 测量」如果跨过 30 分钟，别人会直接 `[perf-lock] stale lock, stealing it` 抢走它，两个人同时测。**How to apply**：单次持锁控制在 25 分钟内；长测量分段做，每段之间 release → acquire 交接；报告里写明每个数字是否在持锁状态下取得。
 - **PR #391 的 GPU 通道注册是真实回归，不是闸门误报（已修，PR #412）**。#391 用常量 `ipcMain.handle(GPU_STATUS_CHANNEL, ...)` 注册，**运行时 handler 确实注册了**，但 IPC 契约闸门是**源码扫描**——扫的是字面量形式的 `ipcMain.handle('...')`，看不见常量，于是任何跑全量测试的 PR 都会变红。修法是改回**字面量**（与仓库其余 handler 一致）+ 加单测把常量与字面量绑定，防止再次漂移。负对照：回退修复后精确复现 CI 原报错（2 failed），还原后 3 文件 27/27 绿。**教训**：闸门是源码扫描而非运行时反射时，「代码能跑」不等于「闸门能看见」——改注册形式前先看闸门怎么找。
 - **CI 的 push 触发器跳过 test job**。所以 **master 绿 ≠ 没问题**：master 上可能带着某个 PR 的红，绿灯只说明「那次 push 没跑 test」。判断某 PR 是否真跑到了那些测试，必须看**该 PR head 的 test job**，不能看 master 的绿。同理，`test scope` 那个 job 绿只代表改动文件范围的 lint/format，不代表全量测试跑过。
@@ -234,27 +315,35 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **拆桶文件 vs `sideEffects: false`**：后者实测也能让 SDK 归零（entry chunk 还小 583 B），但它是「本包没有导入期副作用」的**全包承诺**，会连带改变 Electron main / worker / CLI 三个 bundle 的 tree-shaking 语义，每加一个模块都要重新论证。**结构性拆分**（把 SDK 客户端搬进独立子路径）拿到同样的结果，且不依赖打包器启发式、不可能被一次 re-export 悄悄 undo。
 
 
-## 权威基线（合并后串行重跑，master + A 的 harness 修复）
+## 权威基线（第四轮：master + #422 + #421）
 
-命令：`node scripts/perf/run.mjs --samples 3 --agent mavis-reprofile --lock-mode strict --lock-wait-min 25`
+命令：`node scripts/perf/run.mjs --scenarios <…> --samples 3 --lock-mode strict --lock-wait-min 25 --agent mavis-after`
 环境：Intel Core i5-14600KF / 31.8 GB / Node v24.16.0 / Windows 10.0.26200 x64 / Electron 44.2.0 / Chromium 152.0.7977.76 / 生产构建（`file://` 预览模式，非 dev server）
-SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedScenarios: []`（**全程持锁，无一个场景被跳过或无锁测量**）/ 用时 31.2 分钟 / **6 场景 33 样本，零失败**
+SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁，与 master **逐字节一致**）/ 锁：`held: true`，`implementation: in-repo`，锁目录与共享脚本**同一个**（`E:\Projects\duya\.claude\perf-bench.lock`）/ **6 场景 33 样本，零失败**
 
 | 场景 | 关键指标（p50） | 说明 |
 | --- | --- | --- |
-| startup | `startup.typeable_ms` **1632**（CV 2.28%）、`startup.firstPaint_ms` 1468.2（3.53%）、`dom.nodes` 183（0%）、`commit.count` 4（0%）、`longtask.total_ms` 76（18.17%） | 首屏 DOM 只有 183 个节点，提交数 4 |
-| session-switch | `session.open_ms` 610 / `session.switch_ms` 806（**跨 3 个 fixture 合并统计，CV 137%**——因为 10000 条把分布拉成三个簇） | 分 fixture 看：100 条 open 197–225ms；1000 条 549–670ms；**10000 条 32154–37054ms** |
-| session-switch（10000 条） | `dom.nodes` **115354**、`dom.mutations` 11976、`longtask.total_ms` **14958**、`mem.peakMB` 430.32、`mem.growthMB` 394.57、`scroll.frame.p95_ms` **1017.6** | 10 万个 DOM 节点 + 每次切换近 15 秒长任务 |
-| stream | `stream.block_ms_total` **0**、`longtask.count` 0、`frame.p95_ms` 16.8（0%）、`commit.count` 9（5.44%）、`dom.nodes` 376（0.27%）、`stream.frames` 1568 | **零阻塞是真的**——共享 fixture 无代码围栏（见「发现与决策」） |
-| typing | `interact.p50_ms` **25.6**（CV 0.49%）、`interact.p95_ms` **32.2**（0.15%）、`frame.p95_ms` 16.8（0.28%）、`dom.nodes` 1378（0%）、`commit.count` 1 | 输入延迟最稳的一组，是最可靠的 CI 候选来源 |
-| panels | 3 个面板打开 298–438ms、`frame.p95_ms` 16.8（0%）、`dom.nodes` 1533（0%）、`longtask.total_ms` 56（22.31%） | |
-| gpu | `cpu.renderer_pct` **99.4**（CV 0.12%）、`longtask.count` **305**、`longtask.total_ms` **37230**、`frame.p95_ms` 183.5（4.27%） | 三种 GPU 状态（normal / unavailable / context-lost）合并；`webgl-context-lost` 三样本都观测到 `lost=1`，**注入真实生效** |
+| startup | `startup.firstPaint_ms` **1399.5**（CV 3.44%）、`startup.typeable_ms` **1741**（CV 9.33%）、`dom.nodes` 183（0%）、`commit.count` 4（0%）、`longtask.total_ms` 0 | 首屏 DOM 只有 183 个节点，提交数 4 |
+| stream（无围栏） | `stream.block_ms_total` **0**、`longtask.count` 0、`frame.p95_ms` 16.8（0%）、`dom.nodes` 377、`stream.frames` 2582–2772 | 共享 fixture 无代码围栏 ⇒ 没有高亮开销 |
+| stream（**有围栏**） | `stream.block_ms_total` **56 / 63 / 0**、`longtask.worst_ms` 56–63、`dom.nodes` **797**（无围栏的 2.1 倍）、`dom.mutations` **238**（无围栏的 9.2 倍）、`commit.count` 17 | **#409 加的围栏 fixture 第一次在共享 harness 里露出真实开销**：主线程被占最多 63 ms |
+| stream（工具风暴） | `stream.block_ms_total` 0、`dom.nodes` 375、`stream.frames` 444–465 | 工具事件持续流入不阻塞主线程 |
+| typing | `interact.p50_ms` **25.75**（CV 0.33%）、`interact.p95_ms` **32.30**（CV 0.25%）、`frame.p95_ms` 16.8（0%）、`dom.nodes` **557**（第一轮 1378）、`commit.count` 1、`longtask.total_ms` 0 | 输入延迟最稳的一组，是最可靠的 CI 候选来源 |
+| panels | `panels.open_ms` 449（3 个面板）、`dom.nodes` **697**（第一轮 1533）、`frame.p95_ms` 16.8（0%）、`longtask.total_ms` 112（CV 33.5%） | |
+| gpu | `cpu.renderer_pct` **5.04**（第一轮 99.4）、`longtask.count` 2（第一轮 305）、`longtask.total_ms` **111**（第一轮 **37230**）、`frame.p95_ms` 16.8（CV 0.28%）、`dom.nodes` 580 | 三种 GPU 状态（normal / unavailable / context-lost）合并；`webgl-context-lost` 三个样本都观测到 `lost=1`，**注入真实生效**；`gpu.terminal.degraded` 0 |
+| session-switch（100 条） | `session.open_ms` **218**、`session.switch_ms` **174**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 24–31 | |
+| session-switch（1000 条） | `session.open_ms` **601**、`session.switch_ms` **706**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 31–45 | |
+| session-switch（**10000 条**） | `session.open_ms` **75292**、`session.switch_ms` **114611**、`dom.nodes` **569**、`longtask.total_ms` **283–569**、`mem.peakMB` **68–80**、`cpu.renderer_pct` **3.09–5.81** | 墙钟由数据路径主导（见「第四轮」） |
+
+**GPU 那一行的巨大落差**：旧基线（坏布局）测到 37.2 秒长任务与 99.4 % 渲染器 CPU，布局修好后是 **111 ms / 5.04 %**。**没有做受控对照**，所以不能断定是 #422 还是 #421 的功劳；但幅度排除了虚拟化（该场景的 fixture 只有 100 条消息，DOM 少挂载 800 个节点不可能省下 37 秒），最可能是终端的 WebGL 画布落在坏掉的 flex 容器里、尺寸反复重算。
+
+**第一/二轮基线里与 DOM、滚动有关的数字作废**：那时布局是坏的（`.message-list-scroll` 的可滚动距离为 0），`scrollTranscript()` 是空操作。`dom.nodes` 的变化（typing 1378 → 557、panels 1533 → 697）来自虚拟化器只挂载可见行。
 
 ### 可进 CI 的代理指标（低噪声，机器无关）
 
-按本轮实测的 CV，**只有这些够稳**：typing 的 `interact.p95_ms`（0.15%）、`interact.p50_ms`（0.49%）、`frame.p95_ms`（0.28%）；stream 的 `dom.nodes`（0.27%）、`dom.mutations`（1.84%）；startup 的 `dom.nodes`/`commit.count`（0%）、`startup.typeable_ms`（2.28%）；gpu 的 `longtask.total_ms`（1.63%）、`longtask.count`（2.65%）、`cpu.renderer_pct`（0.12%）；session-switch 的 `session.open.commit.count`（5.05%）。
+按本轮实测的 CV，**只有这些够稳**：`interact.p95_ms`（typing，0.25%）、`interact.p50_ms`（typing，0.33%）、`panels.dom.nodes`（0.27%）、`frame.p50_ms`（startup，0.28%）、`frame.p95_ms`（panels 0.28% / gpu 0.28%）、`dom.mutations`（panels，1.87%）、`mem.peakMB`（typing 1.63% / panels 2.76% / stream 3.33% / gpu 4.70%）、`startup.firstPaint_ms`（3.44%）、`dom.nodes` 与 `commit.count`（startup，0%）、`longtask.worst_ms`（stream 有围栏，5.88%）、`gpu.probe.available`（0%）。
 
-**仍然不能进 CI 的**：任何跨 fixture 合并的 session-switch 壁钟时间（CV 137%，因为 10000 条是另一个数量级）；`stream.block_ms_total`（恒为 0，没有区分度）。**注意 B 的收益不会被这些代理捕获**——它省的是重复计算，DOM 与提交数完全不变。
+**仍然不能进 CI 的**：任何跨 fixture 合并的 session-switch 壁钟时间（10000 条是另一个数量级，CV 100%+）；`stream.block_ms_total` 的 p50 恒为 0（只有围栏那组有区分度）；`startup.typeable_ms`（CV 9.33%，比第一轮差，因为机器负载变了）。**注意 B 的收益不会被这些代理捕获**——它省的是重复计算，DOM 与提交数完全不变。
+
 
 ## 下一轮机会清单（按实测收益排序）
 
@@ -262,17 +351,19 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 
 | # | 机会 | 已测收益 / 证据 | 状态 | 归属 |
 | --- | --- | --- | --- | --- |
-| **0** | **万条会话的 30–45 秒墙钟 = 数据路径，不是渲染** | 基线自身的事实：`session.open.longtask.total_ms` 只有 **670 / 748 / 857** ms，而 `session.open_ms` 是 **32154 / 36881 / 37054** ms——渲染只占 0.7 秒。G 的虚拟化把 switch 的主线程成本从 7376 ms 压到 612 ms，**墙钟却没动** | **新的第一号** | 待定（主进程 / host / DB / IPC） |
-| 1 | 首屏 entry chunk 里拖着 `openai` 141 个模块 + `@anthropic-ai/sdk` 69 个模块 | 根因是 `packages/ai/src/index.ts` 桶文件同时导出纯函数与 SDK 客户端 | **已完成**（#418）：模块数 **141 → 0**、**69 → 0**，首屏 3626123 → **3378253 B**（−6.83 %），entry chunk −9.09 % | F |
-| 2 | 10000 条消息的会话切换是 30–40 秒量级的卡顿（**渲染那一半**） | 根因是 `MessageList.tsx` 为每条消息创建 React 实例 + IntersectionObserver + DOM 节点（10000 条 = 10000 个 observer） | **已完成**（G，待 PR）：`dom.nodes` 115354 → **22563**、`longtask.total_ms` 14958 → **618**、`mem.peakMB` 430 → **93**、`scroll.frame.p95_ms` 1017.6 → **16.8**、switch 长任务 7376 → **612 ms**。**墙钟不变**——瓶颈在数据路径（见 #0） | G |
-| 3 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5 ms；B 修完已完成围栏后仍剩 645.5 ms，其中约 300 ms 是增长尾巴的整篇重解析 | **待做**。前置已解除：#409 的契约 fixture `perf/stream-long-reply-fenced`（同尺寸、同节奏、同词表，围栏标记故意切碎在 chunk 里）让共享 harness **能测出**围栏高亮的开销 | B |
+| **0** | **数据路径：`db:message:getBySession` 每页全量重投影 O(n²)** | 第四轮把墙钟拆成两段：open 的 `t_click → t_data = 73048 ms`、`data → dom = **0 ms**`；switch 的 `getThreadIPC` 一段就是 **103691 ms**，CPU profile **97.4 % idle**。**渲染只占 0 毫秒，其余全在等主进程** | **第一号**。具体动作：数清一次切换里主进程做了多少次重投影、每次投影多少条记录 | 主进程 / host / DB / IPC |
+| **1** | **虚拟化之后切换墙钟 +15 %（未解释）** | 同轮对照：switch 墙钟 99835 → **114611 ms**（p50），而 switch 的主线程成本从 21163–26676 ms 掉到 283–569 ms——多出来的 12–15 秒**全是等待**。G 的 A/B/A 轮独立观测到同一量级（+10 ~ 14 s），所以不是偶发 | **待查**。候选：store 发布次数变多 → 每次都触发一次全量重投影（与 #0 同一个根因） | 与 #0 一起查 |
+| 2 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
+| 3 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
 | 4 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
 | 5 | 首屏 entry chunk 里剩下的一方模块 | 首屏 entry chunk 现为 **2478263 B**（#418 之后）；E 已切走 8 个界面树 | **待做**：用 E 的 `module-closure.mjs` 看还剩哪些是「点击才到」的 | E |
 | 6 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
-| 7 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253） | 集成者 + A |
-| 8 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交** | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
+| 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
+| 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253） | 集成者 + A |
 | 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
 | 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
+
+**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由 #0 决定。
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 | 证据 |
@@ -305,22 +396,34 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 | PR #418 预算棘轮（本地） | `114a0ae8` | `node scripts/perf/first-screen-budget.mjs --dist <worktree>\dist` | 0 | `firstScreen.bytes: 3378253 (baseline 3378253 / limit 3547166) +0%` → `OK` |
 | PR #418 预算棘轮（负对照） | 同上 | 预算临时改 3000000 → 跑闸门 → 还原 | 1（**预期**） | `FAIL: the first screen grew to 3378253 bytes (3299 KB, +12.61%), over the budget of 3150000 bytes`；还原后 exit 0 |
 | PR #418 bundle 新鲜度 | `065fa4aa` | `npm run bundle:verify` | 0 | `FRESH 0/918 bundle inputs changed after the bundle commit`——**提交顺序（源码 → bundle → 预算）是硬约束**：`bundle:verify` 按 git 历史判定，源码 commit 必须在 bundle commit 之前 |
+| PR #422 布局负对照 | `c76ef6e5` | 把 `packages/ui/src/styles/workspace.css` 还原成改前状态 → 跑 `packages/ui/src/styles/__tests__/workspace-layout.test.ts` → 还原 | 1（**预期**） | 4 条用例全红并点名缺失属性；还原后 4/4 绿 |
+| PR #422 布局实证 | `c76ef6e5`（真实 Electron + 生产构建 + 产品 IPC 播种 1000 条） | 读 `.app-workspace-row` / `.message-list-scroll` 的计算样式与尺寸 | 0 | 改前：row 高 115585 px、client=scroll=115187（**可滚动距离 0**）、末条消息在视口外 114k px；改后：row 高 818 px、client 694 / scroll 113260、末条消息 `visibleInViewport: true`、`dom.nodes` 11842 → 3437 |
+| PR #422 门禁 | `c76ef6e5` | `npm run typecheck:all` / `npm run architecture:check` | 0 / 0 | `OK — no new boundary violations` |
+| PR #429 锁负对照 | `9165ee74` | `vitest run scripts/perf/harness.test.ts` | 0 | 39/39 绿；假脚本记录的「会杀的 pid」是 `424242`（脚本自己的），**不是** `process.pid`；仓库内实现的 `pid === null`、`holderPid === process.pid` |
+| PR #430 CI 路由 | `a4d55563` | `vitest run scripts/ci/test-scope.test.ts` | 0 | 40/40 绿（新增 3 个用例：按包映射、无测试的包退回全部、未知路径仍走 fail-closed `full`） |
+| PR #431 信号预算 | `3222a7d6` | `vitest run scripts/perf/harness.test.ts` | 0 | 37/37 绿；`signalBudgetMs(100/1000/10000)` = 60000 / 60000 / 240000 |
+| PR #429/#430/#431 CI | master `bd20f6aa` / `b31cd192` | `gh pr checks 429 430 431` | 0 | #429 五项全绿；#430 architecture + test + test scope 绿（typecheck/build 按 CI-only 变更跳过）；#431 五项全绿 |
+| PR #421 CI | `8becf37c` | `gh pr checks 421` | 0 | architecture / build / test / test scope / typecheck **全绿** |
+| 第四轮 before 权威重跑 | `73c22414`（master 在 #422 之前） | `node scripts/perf/run.mjs --scenarios session-switch --samples 3 --lock-mode strict --lock-wait-min 25 --agent mavis-before` | 0 | 9 样本零失败，`lock.held = true`、`skippedScenarios: []`；10k 三样本 open 73520–82073 ms / switch 76496–102274 ms，`dom.nodes` 115354、`longtask.total_ms` 93431、`mem.peakMB` 827.99 |
+| 第四轮 after 权威重跑 | `8becf37c`（master + #422 + #421） | 同上（`--agent mavis-after`），本地另带 #431 的 harness 补丁（与 master 逐字节一致） | 0 | **9 样本零失败**（预算修好后 10k 三样本全部有效）；`dom.nodes` 569、`longtask.total_ms` 283–569、`mem.peakMB` 68–80、`cpu.renderer_pct` 3.09–5.81 |
+| 第四轮快场景基线 | `8becf37c` | `node scripts/perf/run.mjs --scenarios startup,stream,typing,panels --samples 3 …` + `--scenarios gpu --samples 3` | 0 | 5 场景 18 样本零失败；startup typeable 1741 / dom 183；typing interact p50 25.75 / p95 32.30 / dom 557；panels dom 697；gpu 长任务 111 ms / CPU 5.04 % / `lost=1` 注入生效 |
+| 第四轮数据路径探针 | `8becf37c` | `node docs-local/research/perf-harness/probe-rows.mjs --fixture perf/session-10000`（240 秒预算） | 0 | openMs 73077；`t_click → t_data` **73048 ms**、`data → dom` **0 ms**；switch 的 `getThreadIPC` 一段 **103691 ms**、总 109986 ms；CPU profile **97.4 % idle**；DOM `domNodes 569 / navDots 20 / rowCount 18 / scrollHeight 1334213 / clientHeight 694 / scrollTop 1333518` |
+| 第四轮锁负对照（真实脚本） | `8becf37c` | `docs-local/research/perf-workspace-row/kill-probe.mjs` | 1（**预期**） | owner pid == probe 自己的 pid；release 之后 `SURVIVED` 永不打印 |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
-已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）。
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）。
 未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
 
-回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。
+回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
 第二轮已开工：Agent F（`perf-bundle`，首屏 SDK）与 Agent G（`perf-virtual`，万条消息虚拟化）并行，见「第二轮」章节。
 
-第二轮集成者侧已合并：**#406** 锁（两种实现互相拆台）、**#407** fixture 命名空间、**#408** 首屏字节预算进 CI、**#409** 带围栏契约 fixture、**#410** 第二轮章程、**#412** #391 留下的 IPC 注册回归、**#415** 第二轮集成记录、**#418** 首屏依赖闭包（模块数归零 + 预算棘轮，master `aed0d13c`）。
-→ 未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
+第二轮集成者侧已合并：**#406** 锁（两种实现互相拆台）、**#407** fixture 命名空间、**#408** 首屏字节预算进 CI、**#409** 带围栏契约 fixture、**#410** 第二轮章程、**#412** #391 留下的 IPC 注册回归、**#415** 第二轮集成记录、**#418** 首屏依赖闭包（模块数归零 + 预算棘轮，master `aed0d13c`）、**#421** 万条消息虚拟化、**#422** 布局缺陷修复、**#429 / #430 / #431** harness 的三个 P0。
 
-下一步：G 的 PR（还差同轮 before 对照与 t_click/t_data/t_dom 拆分）→ 独立验证 → 合并 → **持锁串行**重跑 Profile 刷新权威基线。
+下一步：**数据路径**（机会清单 #0）——数清一次切换里主进程做了多少次全量重投影，并解释虚拟化之后切换墙钟 +15 % 的来源（#1）。
 
 **这一轮最重要的产出不是某个 PR，而是把「万条会话 30–45 秒」的靶子从渲染换到了数据路径**：基线的 `session.open.longtask.total_ms` 只有 0.7 秒，而 open 要 32–37 秒；G 的虚拟化把 switch 的主线程成本压掉 92 %，墙钟一动不动。**下一轮该测的是数据路径（主进程 / DB / IPC），不是继续抠渲染。**
 
