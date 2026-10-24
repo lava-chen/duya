@@ -122,6 +122,22 @@ rail 是**工作数组状态**，不进 timeline（plan 619 Phase 3）。compact
 compaction 的替换转写全走这条路 → 替换里的行**没有**「这是系统注入行」的标记，
 rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题。
 
+### H-6（P1）compaction 探针量的是替换，不是请求 ← 修复 H-2 时才发现
+
+探针量的是「替换转写」本身。volatile context 从不进 timeline，替换里**不可能**有它，
+于是探针**少算整个 rail**——而 rail 恰恰是每轮都在变的部分。触发因此比应有时晚了 rail 的体积。
+
+修法不是给探针补一份 rail，而是让探针量**请求实际携带的行集**：替换的对话行 + 宿主当前的 context 行。
+划分规则因此必须只有一份派生——抽成 `#compactedHistory`，请求与探针都调它；
+两处各自推导的话，漂移会一直藏着，直到触发在错误的时刻开火。
+
+未动任何阈值与触发门控（`turnWork.drained > 0`、cooldown、`soft_stop`），
+emergency / preflight 仍按原样把 `ctx.deferred.current` 并入基线。
+
+**遗留**：`inline history` 形态下探针与请求的行集仍不一致，且方向相反（探针**多**算）。
+该行为早于 H-2，被既有断言 `run-engine-compaction.test.ts` 钉住；生产 host 走 `by_ref`
+（`packages/host/src/worker-run-composition.ts:402`），该形态下两者一致，故未改。
+
 ### 观察项（P3）两套并行的提醒分类法
 
 `STARTS_PROMPT_TURN`（`agent-core/src/message/message-framework.ts:64`）按 `RuntimeContextSource` 穷尽，
@@ -139,8 +155,14 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 | `packages/ai/test/model-request-invariants.test.ts` | provider 矩阵：5 个 adapter × (正常 / 回归反例) |
 | `packages/host/tests/worker-product-runtime/engine-payload-invariants.test.ts` | **端到端**：真实 Host → Runtime → 真实 Anthropic adapter → 检查器，含反例臂 |
 | `packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | H-2 缺陷探针（characterization，修复后断言翻转） |
+| `packages/agent-runtime/test/compaction-probe-context.test.ts` | H-6：探针量的行集 == 请求携带的行集（压缩后 / 压缩前对照 + 反例臂） |
 | `packages/ai/src/api/{google-generative-ai,bedrock-converse}.ts` | 导出 `toGeminiContents` / `toBedrockMessages`，让边界可断言 |
 | `packages/ai/src/index.ts` | 导出边界模块与 5 个 payload 构造器 |
+| `packages/agent-runtime/src/engine/request-assembly.ts` | **契约本体**：规则 1–5 |
+| `packages/agent-runtime/test/request-assembly.test.ts` | 契约矩阵（装配顺序 + 例外） |
+| `packages/agent-runtime/test/to-runtime-message-origin.test.ts` | H-5：`origin` 标记随替换转写存活 |
+| `packages/agent-runtime/test/compaction-context-reattachment.test.ts` | H-2：压缩后 context 重新挂载 |
+| `packages/host/tests/worker-product-runtime/harness-scenario-*.test.ts` | 五个真实场景回归：长对话 / 工具续轮 / 运行中 steering / 中断与续话 / 多 provider |
 
 检查器**报告而不抛异常**（`checkModelRequest` 返回 violation 列表）——
 一个默认抛异常的边界无法用来证明「缺陷仍然可被检测」。
@@ -157,6 +179,7 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 | 4 | 让契约进 master | PR owner | ✅ 本分支落地 | 原分支 base 指向 `codex/tui-perf-benchmark`（PR #381，已 CONFLICTING 且无 checks）→ 改为把整条链移植到 `master` 基线，独立 PR，CI 正常跑 |
 | 5 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | ⏳ 待 owner 处理 | 已被 `fix-prompt-last` 取代；该分支从未推远端 |
 | 6 | 把 provider 矩阵挂进 CI | 审计 owner | ✅ 已就位 | base=master 的 PR 会跑 CI，需确认 CI 实际跑到 |
+| 7 | 修 **H-6**：探针量请求携带的行集 | runtime owner | ✅ 已修复 | 划分规则抽成唯一方法 `#compactedHistory`，请求与探针共用；未动阈值与触发门控 |
 
 ## 6. 验证记录
 
