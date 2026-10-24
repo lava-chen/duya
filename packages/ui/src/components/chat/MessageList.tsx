@@ -728,24 +728,32 @@ function ChatMessageNavigator({
         visibleIndices.push(total - 1);
       }
     } else {
-      // Always show items around the active one (within windowSize).
+      // Always show items around the active one (within windowSize) — but the
+      // cap still wins. The window around the active turn is 30 % of the
+      // transcript, so on a long session it holds thousands of items; letting
+      // it through rendered one dot per turn (and a 156 000px rail) instead of
+      // the twenty the rail is designed for.
+      let nearStart = Math.max(0, activeIndex - windowSize);
+      let nearEnd = Math.min(total - 1, activeIndex + windowSize);
+      if (nearEnd - nearStart + 1 > MAX_VISIBLE_DOTS) {
+        nearStart = Math.max(0, Math.min(activeIndex - Math.floor(MAX_VISIBLE_DOTS / 2), total - MAX_VISIBLE_DOTS));
+        nearEnd = Math.min(total - 1, nearStart + MAX_VISIBLE_DOTS - 1);
+      }
       const nearActive = new Set<number>();
-      for (
-        let i = Math.max(0, activeIndex - windowSize);
-        i <= Math.min(total - 1, activeIndex + windowSize);
-        i++
-      ) {
+      for (let i = nearStart; i <= nearEnd; i += 1) {
         nearActive.add(i);
       }
       // Fill remaining slots with evenly-spread indices from the non-near regions.
-      const remainingSlots = MAX_VISIBLE_DOTS - nearActive.size;
-      const nonNearIndices = items
-        .map((_, i) => i)
-        .filter((i) => !nearActive.has(i));
-      const step = Math.max(1, Math.ceil(nonNearIndices.length / remainingSlots));
+      const remainingSlots = Math.max(0, MAX_VISIBLE_DOTS - nearActive.size);
       const farIndices: number[] = [];
-      for (let i = 0; i < nonNearIndices.length; i += step) {
-        farIndices.push(nonNearIndices[i]);
+      if (remainingSlots > 0) {
+        const nonNearIndices = items
+          .map((_, i) => i)
+          .filter((i) => !nearActive.has(i));
+        const step = Math.max(1, Math.ceil(nonNearIndices.length / remainingSlots));
+        for (let i = 0; i < nonNearIndices.length; i += step) {
+          farIndices.push(nonNearIndices[i]);
+        }
       }
       // Merge and sort: nearActive + farIndices (evenly spread from edges).
       const allVisible = [...nearActive, ...farIndices].sort((a, b) => a - b);

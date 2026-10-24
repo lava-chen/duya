@@ -94,23 +94,43 @@ describe('windowed transcript list', () => {
     // The middle of the transcript is not mounted before the jump.
     expect(container.querySelector('#message-row-session-windowing-msg-20')).toBeNull();
 
-    // The navigator dot of that message (the dots are the user turns).
-    const dot = screen.getByLabelText('Jump to message 21');
+    // Pick a navigator dot whose turn is NOT mounted. The rail only renders a
+    // capped number of dots, so the dot to click is looked up, not assumed.
+    const dots = screen.getAllByRole('button', { name: /^Jump to message \d+$/ });
+    const target = dots.find((dot) => {
+      const index = Number.parseInt(dot.getAttribute('aria-label')?.replace(/\D+/g, '') ?? '0', 10) - 1;
+      return !container.querySelector(`#message-row-session-windowing-msg-${index}`);
+    });
+    expect(target).toBeDefined();
+    const targetIndex = Number.parseInt(
+      target?.getAttribute('aria-label')?.replace(/\D+/g, '') ?? '0',
+      10,
+    ) - 1;
+
     await act(async () => {
-      fireEvent.click(dot);
+      fireEvent.click(target as HTMLElement);
     });
 
     // The jump mounts the target, so the row is on screen.
-    expect(container.querySelector('#message-row-session-windowing-msg-20')).not.toBeNull();
+    expect(container.querySelector(`#message-row-session-windowing-msg-${targetIndex}`)).not.toBeNull();
     // The rows the jump scrolled past are replaced by a spacer, not dropped:
     // the scroll height of the transcript stays the same.
     const mounted = mountedRowIds(container);
-    expect(mounted).toContain('msg-20');
+    expect(mounted).toContain(`msg-${targetIndex}`);
     expect(mounted).toContain('msg-39');
-    expect(mounted).not.toContain('msg-0');
     const spacer = container.querySelector('div[aria-hidden="true"][style*="height"]');
     expect(spacer).not.toBeNull();
     expect(Number.parseFloat((spacer as HTMLElement).style.height)).toBeGreaterThan(0);
+  });
+
+  it('caps the navigator rail instead of rendering one dot per turn', () => {
+    render(<MessageList messages={userMessages(400)} sessionId={SESSION_ID} />);
+
+    const dots = screen.getAllByRole('button', { name: /^Jump to message \d+$/ });
+    // The rail is designed for MAX_VISIBLE_DOTS dots; one dot per turn made
+    // the rail 156 000px tall on a 10 000 message session.
+    expect(dots.length).toBeGreaterThan(0);
+    expect(dots.length).toBeLessThanOrEqual(21);
   });
 
   it('keeps the "load earlier messages" button working', async () => {
