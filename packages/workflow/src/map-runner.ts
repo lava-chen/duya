@@ -12,7 +12,7 @@ import type { Semaphore } from './host.js';
 import { interpolateDeep, interpolateString, evaluateExpr, NOT_FOUND, type ExprScope } from './expr.js';
 import { computeReqHash } from './journal.js';
 import { classifyError } from './error-class.js';
-import { failResult, ctxFor, type NodeRunContext, type NodeRunResult } from './node-runner.js';
+import { failResult, ctxFor, runAgentWithProviderGovernor, type NodeRunContext, type NodeRunResult } from './node-runner.js';
 
 function safeSize(value: unknown): number {
   try {
@@ -80,7 +80,7 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
       item: { index, as: map.as },
     };
 
-    const release = parallel ? await semaphore.acquire() : () => {};
+    const release = await semaphore.acquire();
     try {
       // Tool fan-out: input from map.input (falling back to node.input).
       if (node.tool) {
@@ -134,7 +134,7 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
       const ticket = ctx.budget.reserveAgent();
       const startedAgent = ctx.ports.clock.nowMs();
       try {
-        const result = await ctx.host.runAgent(
+        const result = await runAgentWithProviderGovernor(ctx,
           {
             agent: node.agent!,
             prompt,

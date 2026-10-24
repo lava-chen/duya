@@ -1,6 +1,7 @@
 import type { JournalRecord } from './journal.js';
 import { WORKFLOW_BUDGET_DEFAULTS } from './schema.js';
 import { ConcurrencyGate } from './scheduler.js';
+import type { AimdConcurrencyGovernor } from './scheduler.js';
 
 export interface HostAgentSpec {
   agent: string;
@@ -33,6 +34,8 @@ export interface HostCallContext {
 
 export interface WorkflowHost {
   runAgent(spec: HostAgentSpec, ctx: HostCallContext): Promise<HostCallResult>;
+  /** Host returns a shared governor for the upstream provider selected for this agent call. */
+  providerGovernorForAgent?(spec: HostAgentSpec): AimdConcurrencyGovernor | undefined;
   runTool(tool: string, input: unknown, ctx: HostCallContext): Promise<HostCallResult>;
   requestApproval(spec: HostApprovalSpec, ctx: HostCallContext): Promise<{ decision: 'approve' | 'deny' | 'timeout' }>;
   onJournalEvent?(record: JournalRecord): void;

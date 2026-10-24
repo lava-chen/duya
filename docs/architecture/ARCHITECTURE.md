@@ -1020,6 +1020,9 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   contracts. Zero IO.
 - `@duya/agent-runtime` - `RunEngineImpl`, the single run execution engine, plus
   run identity, event ordering, and the model/tool/context port contracts.
+- `@duya/workflow` - dynamic YAML/DAG workflow engine: schema, expression
+  validation, journal replay, and scheduling. Host injects persistence,
+  progress, worker execution, clocks, hashes, and token crypto.
 - `@duya/host` - the product worker: `WorkerSession` (the agent class), the
   concrete tool registry, compaction coordination, hooks, modes, and
   `driveRunWithEngine`.
@@ -1621,7 +1624,7 @@ Canvas UI, persistence, and agent tools are provided by the Marketplace plugin i
 
 ## Package Workspace
 
-25 workspace packages. The layering below is not advisory — it is enforced by
+26 workspace packages. The layering below is not advisory — it is enforced by
 `architecture-policy.yaml` and checked by `npm run architecture:check`.
 
 ```
@@ -1629,6 +1632,7 @@ packages/
 ├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract (zero runtime deps)
 ├── agent-core/           @duya/agent-core - Pure run reasoning: terminal state, budget, durability (zero IO)
 ├── agent-runtime/        @duya/agent-runtime - Run execution engine: run identity, sequence, RunEvent stream
+├── workflow/             @duya/workflow - Pure YAML/DAG workflow engine and scheduler; Host injects effects
 ├── host/                 @duya/host - Electron-independent Host services, worker session, tool registry, RunOrchestrator
 ├── ai/                   @duya/ai - Multi-protocol LLM adapter
 ├── capabilities/         @duya/capabilities - Tool implementations: FS tool stack, tool contracts, path policy
@@ -1663,10 +1667,10 @@ module its root, `managed` flag, and its `requires:` list.
 | --- | --- | --- |
 | `protocol` | `agent-protocol` | Zero runtime dependencies. Everything speaks it. |
 | `core` | `agent-core`, `ai` | `agent-core` performs no IO. `ai` is core by declaration — its IO is inventoried as a carve-out, not smuggled. |
-| `runtime` | `agent-runtime` | Provider-independent run execution. |
+| `runtime` | `agent-runtime`, `workflow` | Provider-independent turn execution and pure product workflow orchestration. |
 | `host` | `desktop`, `cli`, `gateway` | Composition layer. |
 
-`agent-protocol`, `agent-core`, and `agent-runtime` are `managed: true`
+`agent-protocol`, `agent-core`, `agent-runtime`, and `workflow` are `managed: true`
 boundaries — zero tolerance, never baselined. `requires:` lists are *declared*
 edges: counted and visible, never blocking on their own. A dependency edge that
 is not declared is what the gate blocks on.
