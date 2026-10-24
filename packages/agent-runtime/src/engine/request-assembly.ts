@@ -38,8 +38,7 @@
  *
  * The FIRST turn of a run is:
  *
- *     [steering…, carried…, conversation…, system-attached…, the prompt,
- *      inbound…]
+ *     [steering…, carried…, conversation…, system-attached…, inbound…, the prompt]
  *
  * and every later turn is:
  *
@@ -70,18 +69,43 @@
  *     turn is how a conversation teaches a model to repeat itself. A tool
  *     continuation is also NOT a turn that ends with the question: Anthropic
  *     carries tool results in `user` rows too, so a later turn's order is
- *     left exactly as the host built it.
- *  5. **THE REQUEST ENDS WITH THE QUESTION.** The system-attached rows are
- *     moved in FRONT of the prompt, so the prompt is the request's last row.
- *     This is the rule the defect above turns on, and it is why the host's
- *     position for the prompt is not the host's to keep: the host appends
- *     the rail, the hook blocks and the attachment text to the END of its
- *     projection, and a request whose last row is one of those reads to the
- *     model as a turn with no question in it.
+ *     left exactly as the host built it -- including the `inbound` rows,
+ *     which stay at the END of a later turn's request. Rule 5 is a rule
+ *     about the turn that ASKS something, and a later turn does not.
+ *  5. **THE REQUEST ENDS WITH THE QUESTION.** Every row the SYSTEM attached
+ *     is moved in FRONT of the prompt -- the rail, the hook blocks, the
+ *     attachment text AND the `inbound` rows -- so the prompt is the
+ *     request's last row. This is the rule the defect above turns on, and
+ *     it is why the host's position for the prompt is not the host's to
+ *     keep: the host appends the rail, the hook blocks and the attachment
+ *     text to the END of its projection, and a request whose last row is one
+ *     of those reads to the model as a turn with no question in it.
  *
  * Identity is the message ID, and it is the only thing it can be: the engine
  * cannot compare prose (the host may have rendered the prompt into the row's
  * content differently) and must not drop a message on a heuristic.
+ *
+ * ## What `inbound` IS, and why rule 5 covers it
+ *
+ * `inbound` is the text the HOST injected into this request: the rows the
+ * inter-turn sweep claimed and projected into the request
+ * (`run-engine.ts`, the `interTurn.sweep({checkpoint: 'before_model_turn'})`
+ * call). The sweep runs on EVERY turn, the first one included.
+ *
+ * Every one of those rows was built by `projectRuntimeContextToProviderMessage`
+ * (`packages/agent-core/src/message/message-projectors.ts:150`), which
+ * stamps `metadata.runtimeContext = true`. The kinds are
+ * `background_notification` -- explicitly wrapped in "system context, not a
+ * user message" by the host (`packages/host/src/worker-session-runtime.ts:1423`)
+ * -- and agent-to-agent guidance. NOT ONE of them is a message the person
+ * typed: they are system-attached rows of exactly the same class as the
+ * rail, which is why they are `user` rows that say in so many words that
+ * they are not part of the user's message.
+ *
+ * So they are moved with the other system-attached rows, and the first
+ * turn's request ends with the question whether the sweep claimed anything
+ * or not. Leaving them at the END was an unnamed exception to rule 5, and
+ * an unnamed exception is a rule the next editor does not have to obey.
  *
  * ## What the contract does NOT say
  *
@@ -91,6 +115,13 @@
  * a project file's instructions are not the same thing as the agent's own
  * identity, and only the provider adapter knows which channel can carry
  * which. The engine moves them and nothing else.
+ *
+ * Nor does it say the engine RECOGNISES a system row. The `inbound` rows are
+ * system rows by the port's construction -- the port is the injected-rows
+ * port, and the sweep only ever hands over rows the host projected as
+ * runtime context -- so the engine moves that ARRAY and never inspects the
+ * rows inside it. Nothing here depends on a row carrying an `origin` marker
+ * it may or may not carry.
  */
 
 import type { ModelMessage } from './ports.js';
@@ -114,7 +145,15 @@ export interface RequestAssemblyParts {
   readonly carried: readonly ModelMessage[];
   /** Steering directives in force for this turn. */
   readonly steering: readonly ModelMessage[];
-  /** Text the host injected into this request. */
+  /**
+   * Text the host injected into this request.
+   *
+   * The rows the inter-turn sweep claimed: background-task notifications and
+   * agent-to-agent guidance. They are SYSTEM rows by construction -- every one
+   * of them was projected by `projectRuntimeContextToProviderMessage`, which
+   * stamps `metadata.runtimeContext = true` -- and not one of them is a
+   * message the person typed. See the module header, "What `inbound` IS".
+   */
   readonly inbound: readonly ModelMessage[];
   /** Whether this is the run's first turn -- the only one that carries the prompt. */
   readonly isFirstTurn: boolean;
@@ -123,7 +162,7 @@ export interface RequestAssemblyParts {
 /**
  * Assemble a provider request's messages.
  *
- * See the module header for the contract and the four rules it protects.
+ * See the module header for the contract and the five rules it protects.
  */
 export function assembleRequestMessages(parts: RequestAssemblyParts): readonly ModelMessage[] {
   if (!parts.isFirstTurn) {
@@ -132,6 +171,15 @@ export function assembleRequestMessages(parts: RequestAssemblyParts): readonly M
     // asks a question: the tool result is the newest thing the model has to
     // react to, and Anthropic carries tool results in `user` rows too, so the
     // order of the host's rows is load-bearing here and is not touched.
+    //
+    // The `inbound` rows stay at the END of a later turn's request, and that
+    // is deliberate rather than an oversight: they ride every request for the
+    // rest of the run because they edited the transcript, and the legacy's
+    // reason for putting them last is that the injected message is the most
+    // recent thing in the conversation, so it must not be reordered BEHIND a
+    // history the model has already read. Rule 5 does not apply here -- it
+    // is the rule about the turn that ASKS something, and a tool continuation
+    // does not ask anything.
     return [...parts.hostMessages, ...parts.carried, ...parts.steering, ...parts.inbound];
   }
 
@@ -149,6 +197,12 @@ export function assembleRequestMessages(parts: RequestAssemblyParts): readonly M
     // is the whole point of the reordering: the host appends them to the END
     // of its projection, and a request whose LAST row is a system-attached
     // row reads to the model as a turn with no question in it.
+    //
+    // The `inbound` rows are moved with them, and for the same reason: the
+    // sweep runs on the first turn too, so a request that ended with them
+    // ended with a notification rather than with the question. They are
+    // placed AFTER the host's own context rows and BEFORE the prompt, so the
+    // prompt is the request's last row whatever the sweep claimed.
     const promptRow = firstCopyOf(parts.hostMessages, promptId);
     const context = parts.hostMessages.filter((message) => message.origin === 'context');
     const rest = parts.hostMessages.filter(
@@ -159,14 +213,16 @@ export function assembleRequestMessages(parts: RequestAssemblyParts): readonly M
       ...parts.carried,
       ...rest,
       ...context,
-      promptRow,
       ...parts.inbound,
+      promptRow,
     ];
   }
 
   // Rules 1, 3 and 5. The host did not project the prompt row, so the engine
   // supplies its own -- and the request still ENDS with it: the rows the
-  // system attached are moved in front of it, never behind it.
+  // system attached are moved in front of it, never behind it. The `inbound`
+  // rows are system rows too (the module header says why), so they move with
+  // them.
   const context = parts.hostMessages.filter((message) => message.origin === 'context');
   const rest = parts.hostMessages.filter((message) => message.origin !== 'context');
   return [
@@ -174,8 +230,8 @@ export function assembleRequestMessages(parts: RequestAssemblyParts): readonly M
     ...parts.carried,
     ...rest,
     ...context,
-    parts.prompt,
     ...parts.inbound,
+    parts.prompt,
   ];
 }
 
