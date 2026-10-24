@@ -9,9 +9,14 @@
  *
  * Guest → host:
  *   { channel: 'duya.plugin-app', documentToken, id, method: 'bind' | 'invoke' | 'revoke', toolId?, arguments? }
+ *   { channel: 'duya.plugin-app', documentToken, method: 'ready' }
  *
  * Host → guest:
  *   { channel: 'duya.plugin-app', id, ok, result?, error? }
+ *   { channel: 'duya.plugin-app', type: 'event', documentToken, surfaceId, eventName, payload }
+ *
+ * The guest sends `ready` after loading its document before it can receive
+ * host events. Events are launched only to that frame and the current surface.
  *
  * The guest never names the plugin, the App, the instance or the chat
  * session: the host owns those, and the Main process re-derives them from

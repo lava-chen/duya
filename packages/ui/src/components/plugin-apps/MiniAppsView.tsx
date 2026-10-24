@@ -107,6 +107,7 @@ export function MiniAppsView() {
                               pluginId: surface.pluginId,
                               appId: surface.appId,
                               surfaceId: surface.id,
+                              server: surface.server,
                               title: surface.title[locale],
                               icon: surface.icon,
                               availability: surface.availability,

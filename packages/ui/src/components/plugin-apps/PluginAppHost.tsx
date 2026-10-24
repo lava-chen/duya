@@ -2,6 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
+import { subscribeToStreamingEvents } from "@/lib/stream-session-manager";
+import {
+  isPluginAppGuestReady,
+  pluginUiEventFromToolUse,
+  type PluginAppUiEvent,
+} from "@/lib/plugin-app-ui-events";
 import {
   PLUGIN_APP_CHANNEL,
   getPluginAppAPI,
@@ -18,6 +24,7 @@ interface PluginAppHostProps {
   pluginId: string;
   appId: string;
   surfaceId?: string;
+  server?: string;
   title?: string;
   /** The chat session the App acts in. Chosen by trusted code, not the App. */
   chatSessionId?: string;
@@ -55,7 +62,7 @@ function launchErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>
  * the App never learns the plugin, the App id, the instance or the chat
  * session it is acting for.
  */
-export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId, onError }: PluginAppHostProps) {
+export function PluginAppHost({ pluginId, appId, surfaceId, server, title, chatSessionId, onError }: PluginAppHostProps) {
   const { t } = useTranslation();
   const translateRef = useRef(t);
   translateRef.current = t;
@@ -64,9 +71,30 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
   const launchRef = useRef<PluginAppLaunch | null>(null);
+  const guestFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const guestReadyRef = useRef(false);
+  const pendingHostEventsRef = useRef<Array<Omit<PluginAppUiEvent, "channel" | "type" | "documentToken">>>([]);
 
   const setGuestFrameRef = useCallback((node: HTMLIFrameElement | null) => {
+    guestFrameRef.current = node;
     setGuestFrame(node);
+  }, []);
+
+  const postHostEvent = useCallback((event: Omit<PluginAppUiEvent, "channel" | "type" | "documentToken">) => {
+    const launchNow = launchRef.current;
+    const frame = guestFrameRef.current;
+    if (!launchNow || !frame?.isConnected || !frame.contentWindow) return;
+    if (!guestReadyRef.current) {
+      pendingHostEventsRef.current.push(event);
+      if (pendingHostEventsRef.current.length > 64) pendingHostEventsRef.current.shift();
+      return;
+    }
+    frame.contentWindow.postMessage({
+      channel: PLUGIN_APP_CHANNEL,
+      type: "event",
+      documentToken: launchNow.documentToken,
+      ...event,
+    } satisfies PluginAppUiEvent, "*");
   }, []);
 
   const reportError = useCallback(
@@ -84,6 +112,8 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
     const api = getPluginAppAPI();
     setLaunch(null);
     setError(null);
+    guestReadyRef.current = false;
+    pendingHostEventsRef.current = [];
     if (!api) {
       reportError(translateRef.current("apps.unavailable"));
       return;
@@ -131,12 +161,45 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
       });
     return () => {
       cancelled = true;
+      guestReadyRef.current = false;
+      pendingHostEventsRef.current = [];
       if (opened && launchRef.current === opened) {
         launchRef.current = null;
         void api.close({ sessionId: opened.sessionId }).catch(() => {});
       }
     };
   }, [pluginId, appId, surfaceId, chatSessionId, reportError, generation]);
+
+  useEffect(() => {
+    if (!chatSessionId || !surfaceId || !server || !launch) return;
+    let observedEventCount: number | undefined;
+    return subscribeToStreamingEvents(chatSessionId, (events) => {
+      if (observedEventCount === undefined) {
+        observedEventCount = events.length;
+        return;
+      }
+
+      // Tool-use rows can first arrive as `tool_use_started` and then be
+      // replaced by the final arguments under the same id. Wait for the
+      // matching result event, then read the latest row so partial input
+      // cannot consume the event before it is complete.
+      if (events.length < observedEventCount) {
+        observedEventCount = events.length;
+        return;
+      }
+      const newEvents = events.slice(observedEventCount);
+      observedEventCount = events.length;
+      for (const event of newEvents) {
+        if (event.type !== "tool_result" || event.toolResult.is_error) continue;
+        const toolUse = [...events].reverse().find((candidate) =>
+          candidate.type === "tool_use" && candidate.toolUse.id === event.toolResult.tool_use_id,
+        );
+        if (!toolUse || toolUse.type !== "tool_use") continue;
+        const uiEvent = pluginUiEventFromToolUse(toolUse.toolUse, { pluginId, server, surfaceId });
+        if (uiEvent) postHostEvent(uiEvent);
+      }
+    });
+  }, [chatSessionId, launch, pluginId, postHostEvent, server, surfaceId]);
 
   useEffect(() => {
     const api = getPluginAppAPI();
@@ -161,6 +224,12 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
       const guest = guestFrame.contentWindow;
       if (!guest || event.source !== guest) return;
       if (event.origin !== 'null') return;
+      if (isPluginAppGuestReady(event.data, launch.documentToken)) {
+        guestReadyRef.current = true;
+        const pending = pendingHostEventsRef.current.splice(0);
+        for (const hostEvent of pending) postHostEvent(hostEvent);
+        return;
+      }
       const request = parsePluginAppGuestRequest(event.data, launch.documentToken);
       if (!request) return;
 
@@ -197,7 +266,7 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
     return () => {
       window.removeEventListener("message", handler);
     };
-  }, [launch, guestFrame]);
+  }, [launch, guestFrame, postHostEvent]);
 
   if (error) {
     return (
@@ -219,6 +288,9 @@ export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId
         title={title ?? `${pluginId} app`}
         referrerPolicy="no-referrer"
         sandbox="allow-scripts allow-forms allow-downloads allow-popups"
+        onLoad={() => {
+          guestReadyRef.current = false;
+        }}
       />
     </div>
   );

@@ -216,6 +216,20 @@ legacy static `entry` path remains supported. Codex's root `apps`
 connector-file reference is unchanged. See
 `610-architecture-series/22-wave3-dispatch.md`.
 
+The existing guest-to-host `bind` / `invoke` / `revoke` messages remain in
+place. A resource page may send `ready` with its launch document token after
+loading; the renderer accepts it only from the current opaque-origin iframe.
+While a session surface is mounted, the renderer watches that session's
+successful tool results for completed `duya_ui_select`,
+`duya_ui_highlight`, and `duya_ui_refresh` calls from the surface's exact
+plugin-scoped MCP server. Waiting for the result lets it use final arguments
+when the stream first reported a partial tool call. Each event must name the
+current surface, and select/highlight payloads are JSON-cloned and limited to
+8 KiB. The host sends the event only to the launched frame with its document
+token. Static entry pages need not implement this host-event handshake. This
+small event seam does not add MCP Apps widgets, tools, or subscriptions to the
+protocol.
+
 `@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
 Host-created source/origin/nonce and session/run binding. It accepts only
 captured MCP descriptors, validates an isolated argument snapshot, and calls
