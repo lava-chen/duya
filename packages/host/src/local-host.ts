@@ -427,6 +427,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       legacyAttachments: new MainAttachmentStore(mainDatabase.db),
     });
     const workspaceApi = createHostWorkspaceRegistrationApi(workspaceAccess);
+    // One instance for the HTTP surface and the worker db bridge: the bridge
+    // serves the legacy session row shape, and it must be the same rows the
+    // HTTP surface reads.
+    const localSessionApi = createHostLocalSessionApi({ stores: core.stores, sessions: api });
     const token = options.token ?? randomBytes(32).toString('base64url');
 
     // Host-owned execution (plan 12 gate 3): when a worker entry is available,
@@ -550,10 +554,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           settings,
           mainDatabase,
           timeline: api,
-          localSessions: {
-            readLocalSession: (sessionId) =>
-              Promise.resolve(core.stores.sessions.get(sessionId)),
-          },
+          localSessions: localSessionApi,
+          workspaceRegistration: workspaceApi,
           imageAttachmentsForSession: (sessionId) =>
             localAttachmentApi.getImageAttachmentsForSession(sessionId),
           goalApi,
@@ -588,7 +590,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
 
     server = new HostSessionHttpServer({
       api,
-      localSessionApi: createHostLocalSessionApi({ stores: core.stores, sessions: api }),
+      localSessionApi,
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
   // The dedicated read, so `workspace_filesystem` has a channel whose job is
   // reading a file rather than restoring a transcript through it.

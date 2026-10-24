@@ -23,7 +23,6 @@ import { createHostLocalModelCapabilityApi } from './local-model-capability-api.
 import type { MainDatabase } from '@duya/data/main-database';
 import type { MainSettingsStore } from '@duya/data/main-settings-store';
 import type { SessionStore } from '@duya/data/session-store';
-import type { CoreSession } from '@duya/data/session-store';
 import type {
   HostGoalApiV1,
   HostLocalImageAttachment,
@@ -65,7 +64,10 @@ import type {
 import type {
   HostLocalAttachmentApiV1,
   HostLocalParsedDocumentInput,
+  HostWorkspaceRegistrationApiV1,
+  SessionPermissionProfile,
 } from '@duya/agent-protocol/session-api';
+import type { HostLocalSessionApiV1 } from './local-session-api.js';
 import type {
   WorkflowRunApiV1,
   WorkflowArtifactRef,
@@ -88,6 +90,7 @@ import {
   coreMailboxToIpcRow,
   coreSessionToIpcRow,
   hostTaskToIpcRow,
+  ipcSessionToCoreCreate,
   ipcTaskToHostCreate,
   ipcTaskToHostUpdate,
 } from './ipc-row-adapters.js';
@@ -105,16 +108,28 @@ export class WorkerDbBridgeError extends Error {
 /** Timeline-facing subset of the Host session API the bridge serves. */
 export type WorkerBridgeSessionApi = Pick<
   HostSessionApiV1,
-  'get' | 'create' | 'update' | 'countTimeline' | 'readMessages' | 'appendTimeline' | 'deleteTimeline'
+  | 'get'
+  | 'create'
+  | 'update'
+  | 'countTimeline'
+  | 'readMessages'
+  | 'appendTimeline'
+  | 'deleteTimeline'
+  | 'searchSessions'
+  | 'resolveSessionPermissionProfile'
 >;
 
-/** Local-session subset used to emit legacy row shapes for `session:get`. */
-export interface WorkerBridgeLocalSessions {
-  readLocalSession(
-    sessionId: string,
-    options?: { includeAllSessions?: boolean },
-  ): Promise<CoreSession | null>;
-}
+/**
+ * Local-session subset used to emit legacy row shapes for the session domain.
+ *
+ * `listLocalSessions` is what makes `session:list` answer in the legacy row
+ * shape: the worker's session-search tool reads `parent_id` and
+ * `working_directory` from these rows, which the raw core rows do not have.
+ */
+export type WorkerBridgeLocalSessions = Pick<
+  HostLocalSessionApiV1,
+  'readLocalSession' | 'listLocalSessions'
+>;
 
 export interface HostWorkerDbBridgeOptions {
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
@@ -128,8 +143,19 @@ export interface HostWorkerDbBridgeOptions {
   readonly mainDatabase: MainDatabase;
   /** Host timeline APIs — serve the message domain. */
   readonly timeline?: WorkerBridgeSessionApi;
-  /** Host local-session reads — legacy row shapes for `session:get`. */
+  /**
+   * Host local-session reads — legacy row shapes for the session domain.
+   *
+   * `session:list` used to answer with the raw core rows, which have no
+   * `parent_id` / `working_directory`; the worker's session-search tool read
+   * those legacy names and found nothing.
+   */
   readonly localSessions?: WorkerBridgeLocalSessions;
+  /**
+   * Loopback-only workspace registration — serves the working directory of a
+   * session the worker creates.
+   */
+  readonly workspaceRegistration?: HostWorkspaceRegistrationApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly lockApi?: HostLockApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
@@ -342,12 +368,61 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
     }
     return options.sendMessageStateApi;
   };
+  const requireSessionApi = (): NonNullable<HostWorkerDbBridgeOptions['timeline']> => {
+    if (timeline === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session domain requires the Host session API (options.timeline)',
+      );
+    }
+    return timeline;
+  };
+  const requireLocalSessions = (): NonNullable<HostWorkerDbBridgeOptions['localSessions']> => {
+    if (options.localSessions === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session domain requires the Host local-session API (options.localSessions)',
+      );
+    }
+    return options.localSessions;
+  };
+  const requireWorkspaceRegistration = (): HostWorkspaceRegistrationApiV1 => {
+    if (options.workspaceRegistration === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session creation requires the Host workspace registration (options.workspaceRegistration)',
+      );
+    }
+    return options.workspaceRegistration;
+  };
   const legacySessionRow = async (sessionId: string): Promise<Record<string, unknown> | undefined> => {
     if (options.localSessions === undefined) return undefined;
     const session = await options.localSessions.readLocalSession(sessionId, {
       includeAllSessions: true,
     });
     return session ? coreSessionToIpcRow(session) : undefined;
+  };
+  /**
+   * Every visible session as a legacy row, one page at a time.
+   *
+   * The legacy shape is the contract at the worker boundary: the worker's
+   * session-search tool reads `parent_id`, `working_directory` and
+   * `project_name` from these rows, and the core rows carry none of them.
+   */
+  const legacySessionRows = async (): Promise<Array<Record<string, unknown>>> => {
+    const localSessions = requireLocalSessions();
+    const rows: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await localSessions.listLocalSessions({
+        includeAllSessions: true,
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      for (const session of page.sessions) rows.push(coreSessionToIpcRow(session));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return rows;
   };
 
   return {
@@ -391,6 +466,97 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const id = requireString(payload, 'id', 'session:get');
           return legacySessionRow(id);
         }
+        case 'session:create': {
+          // The worker creates the child session row when it spawns a
+          // sub-agent, so this write is the only thing that makes the child
+          // visible in the session list afterwards.
+          const api = requireSessionApi();
+          const localSessions = requireLocalSessions();
+          const parentSessionId =
+            (payload.parent_session_id as string | undefined) ?? (payload.parent_id as string | undefined) ?? null;
+          const permissionProfile = await api.resolveSessionPermissionProfile({
+            explicit: typeof payload.permission_profile === 'string' ? payload.permission_profile : null,
+            parentSessionId,
+            trustedOverride: payload.is_trusted_permission_override === true,
+          });
+          const input = ipcSessionToCoreCreate(payload, permissionProfile);
+          const requestedCwd = typeof input.workingDirectory === 'string' ? input.workingDirectory.trim() : '';
+          const workspace = requestedCwd === ''
+            ? undefined
+            : await requireWorkspaceRegistration().registerLocalDirectory(requestedCwd);
+          const created = await api.create({
+            id: input.id,
+            ...(workspace === undefined
+              ? {}
+              : {
+                  workspaceId: workspace.workspaceId,
+                  workspaceRootId: workspace.rootId,
+                  workspaceRelativePath: workspace.relativePath,
+                }),
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+            ...(input.mode !== undefined ? { mode: input.mode } : {}),
+            ...(input.permissionMode !== undefined
+              ? { permissionMode: input.permissionMode as SessionPermissionProfile }
+              : {}),
+            ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),
+            ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+            ...(input.parentSessionId === undefined || input.parentSessionId === null
+              ? {}
+              : {
+                  spawn: {
+                    type: (payload.spawn_type as string | undefined) ?? 'subagent',
+                    ...(typeof payload.spawn_reason === 'string' ? { reason: payload.spawn_reason } : {}),
+                    ...(typeof payload.spawn_turn_id === 'string' ? { turnId: payload.spawn_turn_id } : {}),
+                  },
+                }),
+            ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            ...(input.draft !== undefined ? { draft: input.draft } : {}),
+            ...(input.extensions !== undefined ? { extensions: input.extensions as JsonObject } : {}),
+            ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+          });
+          const persisted = await localSessions.readLocalSession(created.id, {
+            includeAllSessions: true,
+          });
+          if (persisted === null) {
+            throw new WorkerDbBridgeError(
+              'unimplemented_domain',
+              `session:create could not read the session back: ${created.id}`,
+            );
+          }
+          return coreSessionToIpcRow(persisted);
+        }
+        case 'session:search': {
+          // The worker asks for sessions by title and by content; the answer
+          // carries a snippet so the tool can show what matched.
+          const api = requireSessionApi();
+          const localSessions = requireLocalSessions();
+          const query = requireString(payload, 'query', 'session:search');
+          const opts = payload.opts as { limit?: number } | undefined;
+          const limit = typeof opts?.limit === 'number' && opts.limit > 0 ? opts.limit : 10;
+          const results = await api.searchSessions(query, { limit, includeContent: true });
+          const rows: Array<Record<string, unknown> | null> = await Promise.all(results.map(async (result) => {
+            const session = await localSessions.readLocalSession(result.session.id, {
+              includeAllSessions: true,
+            });
+            return session === null
+              ? null
+              : { ...coreSessionToIpcRow(session), snippet: result.snippet };
+          }));
+          return rows.filter((row): row is Record<string, unknown> => row !== null);
+        }
+        case 'session:list': {
+          return legacySessionRows();
+        }
+        case 'session:listByWorkingDirectory': {
+          const workingDirectory = typeof payload.workingDirectory === 'string' ? payload.workingDirectory : '';
+          const rows = await legacySessionRows();
+          return rows.filter((row) => row.working_directory === workingDirectory);
+        }
         case 'session:setExtension': {
           // Plan 621 D: key-level extension write, served by the same
           // SessionStore the HTTP surface reads — `setExtension` preserves
@@ -400,9 +566,6 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const key = requireString(payload, 'key', 'session:setExtension');
           options.sessions.setExtension(id, key, payload.value);
           return { ok: true };
-        }
-        case 'session:list': {
-          return options.sessions.list();
         }
         case 'session:update': {
           const api = requireTimeline();

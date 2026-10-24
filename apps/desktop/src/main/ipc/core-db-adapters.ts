@@ -18,7 +18,6 @@
 
 import type { HostPermissionRequest } from '@duya/agent-protocol';
 import type {
-  SessionCreateInput,
   SessionPatch,
   CoreTask,
   TaskCreateInput,
@@ -30,61 +29,11 @@ import type {
 // ─── Session adapters ───
 
 /**
- * Extension keys stored in `sessions.extensions` that map to top-level
- * columns in the old `chat_sessions` table.
+ * `ipcSessionToCoreCreate` moved to `@duya/host/ipc-row-adapters` (the Host
+ * worker db bridge creates sessions from the same flat payload, so both
+ * bridges must agree on the mapping).
  */
-const SESSION_EXTENSION_KEYS = [
-  'system_prompt',
-  'context_summary',
-  'context_summary_updated_at',
-  'plan_mode_enabled',
-  'goal_mode_enabled',
-  'source',
-] as const;
-
-/**
- * Map an IPC session create payload to SessionCreateInput.
- * `permissionMode` is resolved by the caller (via resolvePermissionProfile)
- * before calling this function — the adapter does not do business logic.
- *
- * Old `parent_id` / `parent_session_id` are merged into `parentSessionId`.
- * Old `draft_message` → `draft`. Old `permission_profile` → `permissionMode`.
- * Extension-bound fields (system_prompt, context summaries, etc.) go to `extensions`.
- */
-export function ipcSessionToCoreCreate(
-  data: Record<string, unknown>,
-  permissionMode: string,
-): SessionCreateInput {
-  const parentSessionId =
-    (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
-
-  const extensions: Record<string, unknown> = {};
-  for (const key of SESSION_EXTENSION_KEYS) {
-    if (data[key] !== undefined) {
-      extensions[key] = data[key];
-    }
-  }
-
-  return {
-    id: data.id as string,
-    title: data.title as string | undefined,
-    workingDirectory: data.working_directory as string | undefined,
-    projectName: data.project_name as string | undefined,
-    status: data.status as string | undefined,
-    model: data.model as string | undefined,
-    providerId: data.provider_id as string | undefined,
-    mode: data.mode as string | undefined,
-    permissionMode,
-    agentProfileId: (data.agent_profile_id as string | null | undefined) ?? null,
-    parentSessionId,
-    agentType: data.agent_type as string | undefined,
-    agentName: data.agent_name as string | undefined,
-    draft: (data.draft_message as string | null | undefined) ?? null,
-    extensions,
-    createdAt: data.created_at as number | undefined,
-    updatedAt: data.updated_at as number | undefined,
-  };
-}
+export { ipcSessionToCoreCreate } from '@duya/host/ipc-row-adapters';
 
 /**
  * Map an IPC session update payload to SessionPatch.
