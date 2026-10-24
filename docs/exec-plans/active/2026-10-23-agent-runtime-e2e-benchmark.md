@@ -331,6 +331,11 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 | 7065881e | Windows | `npm run typecheck:all` | 0 | OK（typecheck-electron-gate 无新增类型错误） |
 | 7065881e | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
 | 7065881e | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更（bundle commit 07958196） |
+| 94cd1079（合并 `origin/codex/tui-perf-benchmark` 后） | Windows / Node 24.16.0 | `npx vitest run packages/host packages/agent-runtime apps/desktop/src/main` | 1 | 575 files / 6262 passed；唯一失败是 hook 用例的 500 ms 计时阈值（满载抖动），隔离重跑 `packages/host/tests/worker-hooks` 178/178 通过 |
+| 94cd1079 | Windows | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | no new boundary violations；FRESH 0/922 |
+| 76a0f023 + 未提交修复（工作区 dirty） | Windows / Node 24.16.0 | `npm run eval:agent:runtime`（7 样本 × 3 轮，cache 开/关对照） | 0 | 热样本中位数 `acceptedToProviderRequestMs` 411.5 → 342.8 ms（**−68.7 ms**）；`runDurationMs` −67.1 ms；缓存条目 1,926,188 B |
+| 94cd1079 | Ubuntu / Node 22.x（CI run 40062973157） | `Test` workflow | 1 | `test` job 变红：新用例硬编码了 Windows 分隔符（`expected '/home/runner/.duya/cache/node-compile' to contain 'cache\node-compile'`）；architecture / test scope / typecheck / build 均绿 |
+| 404103eb | Ubuntu / Node 22.x（CI run 40063606946） | `Test` workflow | 0 | 五项全绿 |
 
 ## 接续 / 结果
 
