@@ -77,6 +77,8 @@ import { createHostLocalImportBatchApi } from './local-import-batch-api.js';
 import { createHostLocalTurnReviewApi } from './local-turn-review-api.js';
 import { createHostLocalMailboxApi } from './local-mailbox-api.js';
 import { createHostLocalPendingWakeApi } from './local-pending-wakes-api.js';
+import { createHostMcpInventoryApi } from './mcp-inventory-api.js';
+import { readUserMcpToml } from './connector-services/config.js';
 import { createHostWorkflowRunApi } from './workflow-run-api.js';
 import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
@@ -698,6 +700,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
       ...(sessionCompactionApi === undefined ? {} : { sessionCompactionApi }),
       ...(sideQuestionApi === undefined ? {} : { sideQuestionApi }),
+      // The MCP inventory reads the SAME `config.toml` the rest of this Host
+      // reads, from the Host's own data root — so a Host started against a
+      // custom data root reports the servers THAT root configures, and not
+      // the ones the machine's default root happens to carry.
+      mcpInventoryApi: createHostMcpInventoryApi({
+        listServers: () => readUserMcpToml({ configRoot: dataRoot }),
+      }),
       goalApi,
       modeStateApi,
       taskApi,

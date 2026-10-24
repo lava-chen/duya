@@ -30,6 +30,7 @@ import type {
   HostRunExecutionApiV1,
   HostSessionCompactionApiV1,
   HostSessionSideQuestionApiV1,
+  HostMcpInventoryApiV1,
   HostTaskApiV1,
   HostProjectApiV1,
   HostProjectCreateInput,
@@ -383,6 +384,12 @@ export interface HostSessionHttpServerOptions {
    * compaction capability above.
    */
   readonly sideQuestionApi?: HostSessionSideQuestionApiV1;
+  /**
+   * Read-only inventory of the user's configured MCP servers. Optional: a
+   * Host that was not given a configuration source answers 404 with a named
+   * code instead of pretending the user configured no servers.
+   */
+  readonly mcpInventoryApi?: HostMcpInventoryApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi: HostTaskApiV1;
@@ -779,6 +786,18 @@ export class HostSessionHttpServer {
       // A lease is a presence signal, not a lock: the response stays open and
       // the Host counts it until the client goes away.
       this.#holdClientLease(res);
+      return;
+    }
+    // The MCP inventory is matched BEFORE every namespaced route below, on
+    // purpose: it is a top-level path, and a matcher registered earlier that
+    // swallows `/v1/<anything>` would make this answer "unknown route"
+    // instead of "this Host has no inventory capability".
+    if (url.pathname === '/v1/mcps') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      await this.#listMcpServers(res);
       return;
     }
     if (url.pathname === '/v1/research/actions') {
@@ -4722,6 +4741,28 @@ export class HostSessionHttpServer {
     }
     try {
       this.#sendJson(res, 200, await api.ask({ sessionId, question }));
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * The MCP servers the user configured.
+   *
+   * A Host without the capability answers 404 with a named code. "This Host
+   * cannot tell you" and "this user configured nothing" are different
+   * answers, and only the second one is an empty list — collapsing them
+   * would let a client render "no MCP servers" on a Host that simply was
+   * not given a configuration source.
+   */
+  async #listMcpServers(res: ServerResponse): Promise<void> {
+    const api = this.#options.mcpInventoryApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'mcp_inventory_unavailable' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.listServers());
     } catch (error) {
       this.#sendApiError(res, error);
     }
