@@ -51,6 +51,30 @@ import type {
   HostMailboxStatus,
 } from '@duya/agent-protocol/mailbox';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type {
+  HostLocalSendMessageStateApiV1,
+  CreateWidgetPendingInput,
+  CreateSecretPendingInput,
+  CursorAgentRunInput,
+} from '@duya/agent-protocol/send-message-state';
+import type {
+  HostLocalTurnReviewApiV1,
+  TurnReviewFile,
+  TurnReviewWriteInput,
+} from '@duya/agent-protocol/turn-review';
+import type {
+  HostLocalAttachmentApiV1,
+  HostLocalParsedDocumentInput,
+} from '@duya/agent-protocol/session-api';
+import type {
+  WorkflowRunApiV1,
+  WorkflowArtifactRef,
+  WorkflowRunOrigin,
+  WorkflowRunScope,
+  WorkflowRunStatus,
+  WorkflowRunSnapshot,
+  WorkflowTriggerKind,
+} from '@duya/agent-protocol/workflow-runs';
 import {
   createHostLocalPluginRegistryApi,
   type HostLocalPluginRegistryApiV1,
@@ -137,6 +161,36 @@ export interface HostWorkerDbBridgeOptions {
    * directory, so they are not part of this answer.
    */
   readonly pluginRegistryApi?: HostLocalPluginRegistryApiV1;
+  /**
+   * Durable workflow runs — serves the `workflowRun:*` domain.
+   *
+   * The workflow runner creates a run, drives it, and journals it from the
+   * worker. Without this the whole workflow feature failed at its first
+   * write in the standalone Host.
+   */
+  readonly workflowRunApi?: WorkflowRunApiV1;
+  /**
+   * Host turn review store — serves `turn-review:save`.
+   *
+   * The worker snapshots the turn's file changes after every turn. The
+   * Desktop renders them in the code-review panel; the standalone Host
+   * keeps them for its own review surface.
+   */
+  readonly turnReviewApi?: HostLocalTurnReviewApiV1;
+  /**
+   * Host attachment store — serves `attachment:store`.
+   *
+   * The worker persists the parsed-document context it attaches to a
+   * message. Without this the parsed document was dropped on the floor.
+   */
+  readonly attachmentApi?: HostLocalAttachmentApiV1;
+  /**
+   * Host message-card state store — serves the `sendMessageState:*` domain.
+   *
+   * The interactive card shapes (widget / cursor-agent / secret request)
+   * persist their pending state here so a later turn can resolve it.
+   */
+  readonly sendMessageStateApi?: HostLocalSendMessageStateApiV1;
   /**
    * Parsed-document attachments for `session:loadMessages`. Desktop serves
    * this from its attachment store; a standalone Host returns an empty list
@@ -263,6 +317,30 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       throw new WorkerDbBridgeError('unimplemented_domain', 'plugin setup domain requires options.pluginSetupApi');
     }
     return options.pluginSetupApi;
+  };
+  const requireWorkflowRun = (): WorkflowRunApiV1 => {
+    if (options.workflowRunApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'workflow run domain requires options.workflowRunApi');
+    }
+    return options.workflowRunApi;
+  };
+  const requireTurnReview = (): HostLocalTurnReviewApiV1 => {
+    if (options.turnReviewApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'turn review domain requires options.turnReviewApi');
+    }
+    return options.turnReviewApi;
+  };
+  const requireAttachment = (): HostLocalAttachmentApiV1 => {
+    if (options.attachmentApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'attachment domain requires options.attachmentApi');
+    }
+    return options.attachmentApi;
+  };
+  const requireSendMessageState = (): HostLocalSendMessageStateApiV1 => {
+    if (options.sendMessageStateApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'send message state domain requires options.sendMessageStateApi');
+    }
+    return options.sendMessageStateApi;
   };
   const legacySessionRow = async (sessionId: string): Promise<Record<string, unknown> | undefined> => {
     if (options.localSessions === undefined) return undefined;
@@ -831,6 +909,159 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           // install path because the package files live under the
           // Desktop's Electron userData, not under the shared data root.
           return (options.pluginRegistryApi ?? defaultPluginRegistryApi).listPlugins();
+
+        // ==================== Workflow runs ====================
+        // The same actions the Desktop bridge serves, from the same Host-owned
+        // workflow run API. The workflow runner creates a run, drives it, and
+        // journals it from the worker; without these the whole feature
+        // failed at its first write in the standalone Host.
+        case 'workflowRun:create':
+          return requireWorkflowRun().createRun({
+            ...(optionalString(payload.id) === undefined ? {} : { id: optionalString(payload.id)! }),
+            workflowName: requireString(payload, 'workflowName', action),
+            workflowVersionId: optionalString(payload.workflowVersionId) ?? null,
+            ...(optionalString(payload.status) === undefined
+              ? {}
+              : { status: optionalString(payload.status)! as WorkflowRunStatus }),
+            ...(payload.triggerKind === undefined || payload.triggerKind === null
+              ? {}
+              : { triggerKind: payload.triggerKind as WorkflowTriggerKind }),
+            dedupKey: optionalString(payload.dedupKey) ?? null,
+            params: (payload.params as Record<string, unknown> | undefined) ?? {},
+            retryOf: optionalString(payload.retryOf) ?? null,
+            // Plan 560: run anchoring always crosses the bridge explicitly.
+            // The session-anchored runner sends 'session' — relying on the
+            // column default would label it 'library' and corrupt the
+            // origin filter.
+            ...(payload.origin === undefined
+              ? {}
+              : { origin: payload.origin as WorkflowRunOrigin }),
+            scope: (payload.scope as WorkflowRunScope | null | undefined) ?? null,
+            projectDir: optionalString(payload.projectDir) ?? null,
+            parentSessionId: optionalString(payload.parentSessionId) ?? null,
+            agentModel: optionalString(payload.agentModel) ?? null,
+          });
+        case 'workflowRun:updateStatus':
+          return requireWorkflowRun().updateStatus(
+            requireString(payload, 'id', action),
+            requireString(payload, 'status', action) as WorkflowRunStatus,
+            (payload.pauseMessage as string | null | undefined) ?? undefined,
+          );
+        case 'workflowRun:finish':
+          // Plan 560 terminal write. The optional keys are forwarded only
+          // when the caller sent them, so a partial outcome never clobbers
+          // an earlier summary / artifact list.
+          return requireWorkflowRun().finishRun(requireString(payload, 'id', action), {
+            status: requireString(payload, 'status', action) as WorkflowRunStatus,
+            ...(payload.summary === undefined ? {} : { summary: payload.summary as string | null }),
+            ...(payload.artifacts === undefined
+              ? {}
+              : { artifacts: payload.artifacts as WorkflowArtifactRef[] }),
+            ...(payload.spentTokens === undefined
+              ? {}
+              : { spentTokens: payload.spentTokens as number | null }),
+          });
+        case 'workflowRun:saveSnapshot':
+          return requireWorkflowRun().saveSnapshot({
+            runId: requireString(payload, 'runId', action),
+            definition: payload.definition,
+            nodeStack: (payload.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
+            journal: (payload.journal as WorkflowRunSnapshot['journal']) ?? [],
+          });
+        case 'workflowRun:loadSnapshot':
+          return requireWorkflowRun().loadSnapshot(requireString(payload, 'runId', action));
+        case 'workflowRun:appendJournal':
+          return requireWorkflowRun().appendJournalRecord(
+            requireString(payload, 'runId', action),
+            payload.record as WorkflowRunSnapshot['journal'][number],
+          );
+        case 'workflowRun:loadJournal':
+          return requireWorkflowRun().loadJournal(requireString(payload, 'runId', action));
+
+        // ==================== Turn review ====================
+        case 'turn-review:save': {
+          const sessionId = optionalString(payload.sessionId) ?? '';
+          const turnId = optionalString(payload.turnId) ?? '';
+          const workingDirectory = optionalString(payload.workingDirectory) ?? '';
+          if (!sessionId || !turnId || !workingDirectory) {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} requires sessionId, turnId and workingDirectory`);
+          }
+          const input: TurnReviewWriteInput = {
+            id: optionalString(payload.id) ?? randomUUID(),
+            sessionId,
+            turnId,
+            workingDirectory,
+            files: (Array.isArray(payload.files) ? payload.files : []) as TurnReviewFile[],
+            patch: optionalString(payload.patch) ?? '',
+            additions: typeof payload.additions === 'number' ? payload.additions : 0,
+            removals: typeof payload.removals === 'number' ? payload.removals : 0,
+            truncated: payload.truncated === true,
+            binary: payload.binary === true,
+            capturedAt: typeof payload.capturedAt === 'number' ? payload.capturedAt : Date.now(),
+          };
+          await requireTurnReview().saveTurnReview(input);
+          return true;
+        }
+
+        // ==================== Attachments ====================
+        case 'attachment:store': {
+          const messageId = optionalString(payload.messageId) ?? '';
+          if (!messageId) {
+            // The Desktop bridge answers with a soft failure here rather than
+            // throwing: the worker has no message to attach the document to.
+            return { success: false, error: 'messageId is required' };
+          }
+          const input: HostLocalParsedDocumentInput = {
+            messageId,
+            sessionId: optionalString(payload.sessionId) ?? '',
+            filename: optionalString(payload.filename) ?? '',
+            filePath: optionalString(payload.filePath) ?? '',
+            charCount: typeof payload.charCount === 'number' ? payload.charCount : 0,
+            text: optionalString(payload.text) ?? '',
+            ...(payload.extractMethod === undefined
+              ? {}
+              : { extractMethod: optionalString(payload.extractMethod)! }),
+            ...(payload.imageChunks === undefined
+              ? {}
+              : { imageChunks: payload.imageChunks as NonNullable<HostLocalParsedDocumentInput['imageChunks']> }),
+          };
+          return requireAttachment().storeParsedDocument(input);
+        }
+
+        // ==================== SendMessage side state ====================
+        // The Desktop bridge swallows the store error and answers with a
+        // soft failure, so the worker never sees an unhandled rejection
+        // from a best-effort side-state write. The same holds here — but
+        // the "the Host has not composed this API" failure stays OUTSIDE
+        // the catch: a misconfigured Host must fail fast and name the
+        // missing domain, not look like a store hiccup.
+        case 'sendMessageState:createWidgetPending': {
+          const api = requireSendMessageState();
+          try {
+            await api.createWidgetPending(payload as unknown as CreateWidgetPendingInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
+        case 'sendMessageState:createSecretPending': {
+          const api = requireSendMessageState();
+          try {
+            await api.createSecretPending(payload as unknown as CreateSecretPendingInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
+        case 'sendMessageState:upsertCursorAgentRun': {
+          const api = requireSendMessageState();
+          try {
+            await api.upsertCursorAgentRun(payload as unknown as CursorAgentRunInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
 
         default:
           throw new WorkerDbBridgeError(

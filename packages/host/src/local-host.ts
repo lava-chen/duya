@@ -443,6 +443,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // question.
     const localMailboxApi = createHostLocalMailboxApi(core.stores.mailbox);
     const localPluginSetupApi = createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db));
+    // The same rule for the domains the worker writes through the bridge:
+    // one instance per API, shared by the HTTP surface and the bridge.
+    const localTurnReviewApi = createHostLocalTurnReviewApi(turnReviews);
+    const localSendMessageStateApi = createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db));
+    const workflowRunApi = createHostWorkflowRunApi(core.stores);
     const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
     // One authorization source for both Plugin App APIs. An injected
     // authority wins; otherwise the Host composes one from its own durable
@@ -558,6 +563,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           pluginAppInvocationApi,
           mailboxApi: localMailboxApi,
           pluginSetupApi: localPluginSetupApi,
+          workflowRunApi,
+          turnReviewApi: localTurnReviewApi,
+          attachmentApi: localAttachmentApi,
+          sendMessageStateApi: localSendMessageStateApi,
           logger: executionLogger,
         }),
         logger: executionLogger,
@@ -594,7 +603,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localGatewayAllowlistApi: createHostLocalGatewayAllowlistApi(new GatewayAllowlistStore(mainDatabase.db)),
       localGatewayMessageMirrorApi: createHostLocalGatewayMessageMirrorApi(new GatewayMessageMirrorStore(mainDatabase.db)),
       localGatewayThreadApi: createHostLocalGatewayThreadApi(new GatewayThreadStore(mainDatabase.db)),
-      localSendMessageStateApi: createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db)),
+      localSendMessageStateApi,
       localModelCapabilityApi: createHostLocalModelCapabilityApi(new ModelCapabilityStore(mainDatabase.db)),
       localProviderModelCapabilityApi: createHostLocalProviderModelCapabilityApi(
         new ProviderModelCapabilityStore(mainDatabase.db),
@@ -613,10 +622,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         pricing: new ProviderModelPricingStore(mainDatabase.db),
       }),
       localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase.db)),
-      localTurnReviewApi: createHostLocalTurnReviewApi(turnReviews),
+      localTurnReviewApi,
       localMailboxApi,
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
-      workflowRunApi: createHostWorkflowRunApi(core.stores),
+      workflowRunApi,
       runApi: createHostRunApi(core.stores),
       ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
       goalApi,
