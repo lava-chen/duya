@@ -105,9 +105,11 @@
 | `e0dd4f51` | Linux x86_64，GitHub remote | `git push --force-with-lease=refs/heads/codex/plugin-ui-mcp-resources:4fb21546a2d30b1e4e8548ec9f739fff3395fc95 origin HEAD:refs/heads/codex/plugin-ui-mcp-resources` | 0 | PR 分支更新为 `e0dd4f51e9ce9a2d0fc9644ce64a73623baa41b2`；master 未变 |
 | `e0dd4f51` | Linux，GitHub remote | `github_get_pr_info(440)` | open / draft / mergeable | PR #440 base 为 `master` / `40787b394d08207ed78c863d9c78dc413a9d1038`，head 与远端任务分支一致；未合并 |
 | `e0dd4f51` | Linux x86_64；系统 Chromium 与 Playwright 存在，无 Electron binary、无显示服务 | `command -v electron chromium chromium-browser google-chrome Xvfb xvfb-run weston` 与 Electron package binary 检查 | Electron / display 不可用 | 只有系统 Chromium，不能覆盖 Electron main/preload IPC 与 worker 链路；真实产品路径仍待具备 Electron 和显示服务的环境验证 |
+| `37a22819` | Linux x86_64，GitHub remote | `git push origin HEAD:refs/heads/codex/plugin-ui-mcp-resources` | 0 | PR 进度记录已同步到任务分支；master 未变 |
+| `37a22819` | Linux，GitHub remote | `github_get_pr_info(440)` | open / draft / mergeable | PR #440 base 为 `master` / `40787b394d08207ed78c863d9c78dc413a9d1038`；head 与刚推送分支一致；未合并 |
 
 ## 接续 / 结果
 
-S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已更新到 `e0dd4f51e9ce9a2d0fc9644ce64a73623baa41b2`，base 与最新 master 一致，仍为 open/draft/mergeable 且未合并。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已同步任务分支，base 与最新 master 一致，仍为 open/draft/mergeable 且未合并。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
 下一步：在具备 Electron 二进制与显示服务的环境运行真实产品 UI/IPC/worker smoke；当前 PR 保持 draft 并记录该验收阻塞，不合并。
