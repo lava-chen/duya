@@ -73,6 +73,7 @@ import type {
   UnfencedRunWriteAuthorization,
   HostCapability,
   HostDeclaration,
+  HostMcpServerConfig,
   ProtocolCapability,
   ProtocolVersion,
 } from '@duya/agent-protocol';
@@ -2249,6 +2250,21 @@ export class HostSessionHttpClient implements
       { sessionId },
       INTEGRATION_SYNC_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /**
+   * The MCP servers the user configured, as the Host knows them.
+   *
+   * A READ: it needs no worker, no session and no Desktop app. The Host
+   * answers 404 with a named code when it was given no configuration
+   * source, which is a different answer from "the user configured none" —
+   * so a Host that cannot answer refuses instead of returning an empty list.
+   *
+   * `env` and `headers` never appear in the answer: they carry credentials,
+   * and the Host drops them before the response leaves the process.
+   */
+  async listMcpServers(): Promise<{ readonly servers: readonly HostMcpServerConfig[] }> {
+    return this.request('GET', '/v1/mcps');
   }
 
   private async request<T>(
