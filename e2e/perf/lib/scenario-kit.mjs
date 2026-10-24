@@ -223,6 +223,24 @@ export async function describeSidebar(page) {
 }
 
 /**
+ * How long the "on screen" signal of a heavy transcript may take.
+ *
+ * The transcript of a large fixture arrives through the product's own data
+ * path, and that path is the slow part of the journey: on a loaded machine the
+ * 10k fixture needed 73s to open and 104s to switch, while the render itself
+ * took 189ms and 284ms. A budget that is shorter than the data path turns a
+ * slow machine into a FAILED sample instead of a slow number — and a failed
+ * sample says nothing at all about the code under test.
+ *
+ * So the budget follows the size of the fixture: the small ones keep a short
+ * budget (they are done in well under two seconds), and the largest one gets
+ * the same 240s the GPU scenario gives a single sample.
+ */
+export function signalBudgetMs(messageCount) {
+  return messageCount > 1_000 ? 240_000 : 60_000;
+}
+
+/**
  * Open a seeded session the way a user does.
  *
  * Two product affordances open a session, and the harness uses whichever the

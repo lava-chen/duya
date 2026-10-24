@@ -59,6 +59,7 @@ import {
   REPO_ROOT,
 } from '../../e2e/perf/lib/lock.mjs';
 import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
+import { signalBudgetMs } from '../../e2e/perf/lib/scenario-kit.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -500,6 +501,19 @@ describe('the measurement lock', () => {
     const scriptPath = path.join(tmpdir(), 'duya-perf-lock-script-dir', 'perf-bench-lock.mjs');
     const expected = path.join(path.dirname(scriptPath), 'perf-bench.lock');
     expect(resolveEffectiveLockDir({ script: scriptPath })).toBe(expected);
+  });
+});
+
+describe('the signal budget', () => {
+  it('gives the small transcripts a short budget and the largest one room to arrive', () => {
+    // The transcript arrives through the product's data path, and that path
+    // grows with the number of messages: the 10k fixture needed 73s to open
+    // and 104s to switch on a loaded machine, while the render took 189ms and
+    // 284ms. A budget below the data path turns a slow machine into a failed
+    // sample, which measures nothing.
+    expect(signalBudgetMs(100)).toBe(60_000);
+    expect(signalBudgetMs(1_000)).toBe(60_000);
+    expect(signalBudgetMs(10_000)).toBe(240_000);
   });
 });
 
