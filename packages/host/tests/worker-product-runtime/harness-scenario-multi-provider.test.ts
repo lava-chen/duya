@@ -98,6 +98,8 @@ const {
   toOpenAIMessages,
   toGeminiContents,
   toBedrockMessages,
+} = await import('@duya/ai/clients');
+const {
   canonicalizeAnthropicPayload,
   canonicalizeOpenAIResponsesPayload,
   canonicalizeOpenAICompletionsPayload,

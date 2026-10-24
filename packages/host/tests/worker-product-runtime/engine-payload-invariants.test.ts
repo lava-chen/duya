@@ -77,12 +77,11 @@ const { makeWorkerSession, driveTurn, cleanupEngineTurnDirs } =
 const { initDbClient } = await import('@duya/host/worker-db-client');
 
 // The REAL adapter and the REAL boundary, straight out of the package the
-// product ships.
-const {
-  toAnthropicMessages,
-  canonicalizeAnthropicPayload,
-  checkModelRequest,
-} = await import('@duya/ai');
+// product ships. The adapter comes from the provider surface, because that is
+// where the vendor SDKs live; the boundary is on the root entry, which
+// imports nothing at all.
+const { toAnthropicMessages } = await import('@duya/ai/clients');
+const { canonicalizeAnthropicPayload, checkModelRequest } = await import('@duya/ai');
 
 const ANTHROPIC_MODEL = {
   id: 'claude-test',

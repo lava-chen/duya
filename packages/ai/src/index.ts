@@ -7,23 +7,17 @@
  * The vendor SDKs are NOT reachable from here: they live behind
  * `@duya/ai/clients` (that file explains why).
  */
-export { createAnthropicClient } from './api/anthropic-messages.js';
-export { toAnthropicMessages } from './api/anthropic-messages.js';
-export { toResponsesInput } from './api/openai-responses.js';
-export { toOpenAIMessages } from './api/openai-completions.js';
-export { toGeminiContents, type GeminiContent } from './api/google-generative-ai.js';
-export {
-  toBedrockMessages,
-  type BedrockConverseMessage,
-  type BedrockConverseRequest,
-} from './api/bedrock-converse.js';
-
 // ─── The Model Request boundary ───
 //
 // The invariants every provider request has to satisfy, and the reducers
-// that turn each adapter's payload into the boundary's own vocabulary. The
-// payload builders above are exported for the same reason: a request that
-// cannot be inspected from a test cannot be proved correct.
+// that turn each adapter's payload into the boundary's own vocabulary.
+//
+// The payload builders themselves are NOT re-exported here: three of them
+// live in modules that statically import the vendor SDKs (`@anthropic-ai/sdk`,
+// `openai`), and a static re-export is a static edge -- the bundler cannot
+// drop the module behind it, so the SDKs would land in the renderer's first
+// screen. They are exported from `@duya/ai/clients` instead, which is where
+// the provider surface already lives.
 export {
   SYSTEM_ATTACHED_MARKER,
   checkModelRequest,

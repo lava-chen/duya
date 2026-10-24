@@ -109,9 +109,8 @@ const { initDbClient } = await import('@duya/host/worker-db-client');
 
 // The REAL adapters and the REAL boundary, straight out of the package the
 // product ships.
+const { toAnthropicMessages, toResponsesInput } = await import('@duya/ai/clients');
 const {
-  toAnthropicMessages,
-  toResponsesInput,
   canonicalizeAnthropicPayload,
   canonicalizeOpenAIResponsesPayload,
   checkModelRequest,

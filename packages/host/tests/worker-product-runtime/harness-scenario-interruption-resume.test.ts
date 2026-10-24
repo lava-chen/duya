@@ -116,9 +116,8 @@ const { makeWorkerSession, driveTurn, cleanupEngineTurnDirs } =
   await import('./engine-turn-harness.js');
 const { initDbClient } = await import('@duya/host/worker-db-client');
 
+const { toAnthropicMessages, toResponsesInput } = await import('@duya/ai/clients');
 const {
-  toAnthropicMessages,
-  toResponsesInput,
   canonicalizeAnthropicPayload,
   canonicalizeOpenAIResponsesPayload,
   checkModelRequest,

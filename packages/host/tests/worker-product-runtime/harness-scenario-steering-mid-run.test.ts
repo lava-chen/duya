@@ -105,8 +105,8 @@ const { makeWorkerSession, driveTurn, cleanupEngineTurnDirs } =
 const { initDbClient } = await import('@duya/host/worker-db-client');
 const { ToolRegistry } = await import('@duya/host/worker-tool-registry');
 
-const { toAnthropicMessages, canonicalizeAnthropicPayload, checkModelRequest } =
-  await import('@duya/ai');
+const { toAnthropicMessages } = await import('@duya/ai/clients');
+const { canonicalizeAnthropicPayload, checkModelRequest } = await import('@duya/ai');
 
 const ANTHROPIC_MODEL = {
   id: 'claude-test',
