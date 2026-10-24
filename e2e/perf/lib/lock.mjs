@@ -245,6 +245,10 @@ export function acquireLock(options = {}) {
       ? acquireThroughScript(script, agent)
       : acquireInternalLock({ lockDir, agent, timeoutMin: options.timeoutMin });
     if (result.acquired) {
+      // A script-driven acquisition leaves the script's own (already dead) pid
+      // in the owner file. Claim it for this process so that the in-repo
+      // implementation does not treat the live holder as a crashed one.
+      if (script) claimOwnerPid(lockDir, agent);
       return { ...result, script: script ?? null, lockDir };
     }
     if (Date.now() >= deadline) {
@@ -267,6 +271,44 @@ function acquireThroughScript(script, agent) {
   if (result.status === 0) return { acquired: true, at: new Date().toISOString() };
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   return { acquired: false, reason: output || 'lock busy' };
+}
+
+/**
+ * Record THIS process as the owner of a lock that was taken through the
+ * external script.
+ *
+ * The script writes its own pid into `owner.json` and exits immediately, so
+ * the recorded pid is already dead by the time the caller continues. The
+ * in-repo implementation treats a dead owner as a crashed holder and takes the
+ * lock over — which means a script-driven agent and an in-repo agent would
+ * measure on the same machine at the same time, and both sets of numbers
+ * would be a measurement of contention instead of of the code under test.
+ * Writing the caller's live pid back into the owner file keeps the two
+ * implementations excluding each other.
+ *
+ * The takeover of a genuinely crashed holder still works: when the holder
+ * dies, its pid dies with it.
+ */
+function claimOwnerPid(lockDir, agent) {
+  try {
+    const owner = readLockOwner(lockDir);
+    fs.writeFileSync(
+      path.join(lockDir, 'owner.json'),
+      JSON.stringify(
+        {
+          agent: owner?.agent ?? agent,
+          pid: process.pid,
+          acquiredAt: owner?.acquiredAt ?? Date.now(),
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  } catch {
+    // The owner file is a hint for the takeover rule; the directory itself is
+    // the mutex. Failing to refresh it must not fail the acquisition.
+  }
 }
 
 /** A synchronous sleep — the harness must not yield the process while it waits. */

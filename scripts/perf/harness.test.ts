@@ -23,7 +23,7 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -38,7 +38,9 @@ import {
 } from '../../e2e/perf/lib/metrics.mjs';
 import {
   FIXTURE_IDS,
+  buildFencedStreamChunks,
   buildSessionMessages,
+  buildStreamChunks,
   buildToolStormRows,
   buildTypingFixture,
   fixtureDigest,
@@ -47,9 +49,11 @@ import {
 import { buildReport, renderMarkdown } from '../../e2e/perf/lib/report.mjs';
 import {
   acquireInternalLock,
+  acquireLock,
   readLockOwner,
   releaseInternalLock,
   resolveLockDir,
+  REPO_ROOT,
 } from '../../e2e/perf/lib/lock.mjs';
 import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
 
@@ -112,9 +116,46 @@ describe('the fixture generator', () => {
       'perf/session-1000',
       'perf/session-10000',
       'perf/stream-long-reply',
+      'perf/stream-long-reply-fenced',
       'perf/stream-tool-storm',
       'perf/typing-30s',
     ]);
+  });
+
+  it('puts code blocks in the fenced fixture and only there', () => {
+    // The plain long-reply fixture is prose, so the shared harness cannot see
+    // what a syntax-highlighted code block costs while a reply is growing.
+    // The fenced fixture is the same prose with code blocks mixed in, so the
+    // difference between the two IS the highlighting cost.
+    const plain = buildStreamChunks('perf/stream-long-reply');
+    const plainText = plain.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(plainText).not.toContain('```');
+
+    const fenced = buildFencedStreamChunks('perf/stream-long-reply-fenced');
+    const fencedText = fenced.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(fencedText).toContain('```ts');
+    expect(fencedText).toContain('```python');
+    expect(fencedText).toContain('```bash');
+    // The fence markers are split across chunks on purpose: that is what a
+    // growing reply looks like.
+    expect(fenced.chunks.length).toBeGreaterThan(1000);
+    expect(fenced.chunks.some((chunk: { text: string }) => chunk.text.includes('```'))).toBe(true);
+    // Same size and cadence as the plain fixture, so the two are comparable:
+    // the difference between their numbers is the highlighting, not the
+    // amount of text.
+    expect(fenced.chunkChars).toBe(plain.chunkChars);
+    expect(fenced.chunkCount).toBe(plain.chunkCount);
+    expect(fenced.chunks.length).toBe(plain.chunks.length);
+    expect(Math.abs(fenced.totalChars - plain.totalChars)).toBeLessThan(200);
+  });
+
+  it('keeps the fenced fixture deterministic', () => {
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).toBe(
+      fixtureDigest('perf/stream-long-reply-fenced'),
+    );
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).not.toBe(
+      fixtureDigest('perf/stream-long-reply'),
+    );
   });
 
   it('builds the requested number of rows', () => {
@@ -159,6 +200,30 @@ describe('the fixture generator', () => {
     const typing = buildTypingFixture('perf/typing-30s');
     expect(typing.keystrokes).toBe(500);
     expect(typing.text.length).toBe(500);
+  });
+
+  it('keeps the local evidence harness out of the fixture contract namespace', () => {
+    // A fixture id names ONE content. The shared harness owns the `perf/*`
+    // contract; a harness that renders different bytes under one of those ids
+    // would make every cross-harness number comparison meaningless. The local
+    // evidence harness therefore uses its own `ui-harness/` namespace.
+    const harnessSource = readFileSync(
+      path.join(REPO_ROOT, 'packages/ui/src/components/chat/__tests__/harness/main.tsx'),
+      'utf8',
+    );
+    const localIds = [...harnessSource.matchAll(/'([a-z][a-z0-9-]*\/[a-z0-9-]+)'/gi)].map((match) => match[1]!);
+    expect(localIds.length).toBeGreaterThan(0);
+    for (const id of localIds) {
+      expect(FIXTURE_IDS).not.toContain(id);
+    }
+
+    const driverSource = readFileSync(
+      path.join(REPO_ROOT, 'e2e/perf/agents/agent-b/run-bench.mjs'),
+      'utf8',
+    );
+    const defaultScenario = driverSource.match(/scenario:\s*'([^']+)'/)?.[1];
+    expect(defaultScenario).toBeDefined();
+    expect(FIXTURE_IDS).not.toContain(defaultScenario);
   });
 });
 
@@ -277,6 +342,45 @@ describe('the measurement lock', () => {
     const dir = resolveLockDir();
     expect(path.isAbsolute(dir)).toBe(true);
     expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+
+  it('stays exclusive when the holder took it through the external script', () => {
+    // The external script records its own pid and exits immediately, so the
+    // pid in the owner file is already dead by the time the caller continues.
+    // The in-repo implementation treats a dead owner as a crashed holder and
+    // takes the lock over — which would let a script-driven agent and an
+    // in-repo agent measure on the same machine at the same time.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-lock-script.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        'try { fs.mkdirSync(LOCK_DIR); } catch (error) {',
+        "  if (error.code !== 'EEXIST') throw error;",
+        '  process.exit(2);',
+        '}',
+        'fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '  agent: process.argv[3] ?? "script-agent", pid: process.pid, acquiredAt: Date.now(),',
+        '}, null, 2), "utf8");',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+
+    // The live holder owns the lock, so the in-repo implementation must not
+    // take it over.
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+    expect(readLockOwner(dir)?.pid).toBe(process.pid);
+    const second = acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    expect(second.acquired).toBe(false);
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+
+    releaseInternalLock(dir);
   });
 });
 

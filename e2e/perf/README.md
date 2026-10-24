@@ -46,14 +46,29 @@ the report says so.
 | `perf/session-1000` | 1 000 history messages |
 | `perf/session-10000` | 10 000 history messages |
 | `perf/stream-long-reply` | one long reply, streamed token by token |
+| `perf/stream-long-reply-fenced` | the same reply with code blocks in it |
 | `perf/stream-tool-storm` | 200 tool calls (400 rows) flowing in |
 | `perf/typing-30s` | 30 s of typing, one keystroke per 60 ms |
+
+The fenced long reply exists because the plain one is prose: without a code
+block there is no syntax highlighting, so the harness cannot see what a
+highlighted block costs while the reply is still growing. The two fixtures
+have the same size, the same cadence and the same vocabulary, so the
+difference between their numbers is the highlighting.
 
 A history fixture repeats a 10-row block: 40 % user text, 40 % assistant
 text, 20 % tool rows (`tool_use` + its `tool_result`). The rows are shaped
 like the flat IPC message DTO, so they can be injected through the real
 bridge (`electronAPI.message.replace`). `fixtureDigest(id)` is the SHA-256 of
 the canonical payload and is printed in every report.
+
+**An id names one content.** A report is only comparable to another report
+when both name the same fixture id AND that id resolves to the same bytes.
+A harness that renders different content under a `perf/*` id must use its own
+namespace instead — the local evidence harness under `e2e/perf/agents/agent-b/`
+uses `ui-harness/*` for exactly that reason (see its README). Changing the
+content of an existing id is not allowed: it changes the digest and silently
+invalidates every archived number that used it.
 
 **Seed the same fixture into two sessions? Give the rows different ids.**
 The transcript store appends with `INSERT OR IGNORE` on the message id, so
