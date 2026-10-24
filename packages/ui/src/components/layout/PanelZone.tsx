@@ -22,6 +22,7 @@ import {
   useTaskDrawerOpen,
 } from "./task-drawer-store";
 import type { CSSProperties } from "react";
+import { getPluginUiSurfaceIcon } from "@/components/plugin-apps/plugin-ui-surface-icons";
 
 /** The gap between two cards of the wall, in pixels. */
 const WALL_GAP = 4;
@@ -67,9 +68,12 @@ export function PanelZone() {
   const wallRef = useRef<HTMLDivElement | null>(null);
   const [wallSize, setWallSize] = useState({ width: 0, height: 0 });
   const taskDrawerOpen = useTaskDrawerOpen();
-  const isSessionView = currentView === "chat" && !!activeThreadId;
-
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const activePluginSurface = activeTab?.pageId === "plugin-app";
+  const activeSurfaceAvailable = activePluginSurface && (
+    activeTab.params?.availability === "always" || !!activeThreadId
+  );
+  const isSessionView = (currentView === "chat" && !!activeThreadId) || activeSurfaceAvailable;
   const activeDescriptor = activeTab ? getPageDescriptor(activeTab.pageId) : null;
   const activePanelMinWidth = activeDescriptor?.minWidth ?? 340;
   const activePanelMaxWidth = activeDescriptor?.maxWidth === null
@@ -106,6 +110,15 @@ export function PanelZone() {
     if (taskDrawerOpen) setTaskDrawerOpen(false);
     if (panelOpen) setPanelOpen(false);
   }, [isSessionView, currentView, panelOpen, setPanelOpen, taskDrawerOpen]);
+
+  useEffect(() => {
+    if (activeThreadId) return;
+    for (const tab of tabs) {
+      if (tab.pageId === "plugin-app" && tab.params?.availability === "session") {
+        closePanel(tab.id);
+      }
+    }
+  }, [tabs, activeThreadId, closePanel]);
 
   const openPage = useCallback(
     (pageId: PageId) => {
@@ -288,6 +301,9 @@ export function PanelZone() {
       if (!tab) return null;
       const descriptor = getPageDescriptor(tab.pageId);
       const Component = descriptor.component;
+      const Icon = tab.pageId === "plugin-app"
+        ? getPluginUiSurfaceIcon(tab.params?.icon)
+        : descriptor.icon;
       const isExpanded = expandedPaneId === paneId;
       const hidden = Boolean(expandedPaneId) && !isExpanded;
       // A lone card already fills the wall, so its header action expands the
@@ -307,7 +323,7 @@ export function PanelZone() {
         >
           <PanelCard
             tab={tab}
-            icon={descriptor.icon}
+            icon={Icon}
             expanded={controlsWorkspace ? workspaceExpanded : isExpanded}
             expandable={controlsWorkspace ? isSessionView : true}
             onActivate={() => activateTab(paneId)}
@@ -332,7 +348,9 @@ export function PanelZone() {
             expandTestId={controlsWorkspace ? "workspace-expand" : undefined}
           >
             <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
-              <Component tab={tab} embedded />
+              {(tab.pageId !== "plugin-app" || (panelOpen && !hidden))
+                ? <Component tab={tab} embedded />
+                : null}
             </Suspense>
           </PanelCard>
         </div>

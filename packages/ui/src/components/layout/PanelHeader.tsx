@@ -9,6 +9,7 @@ import { useOptionalPanel } from "@/hooks/usePanel";
 import { getPageDescriptor, PAGE_REGISTRY, type PageId, type PageTab } from "./panels/registry";
 import { fileExtensionFromName, getFileTypeIcon } from "@/components/file-tree/file-type-icon";
 import { useConversationStore } from "@/stores/conversation-store";
+import { getPluginUiSurfaceIcon } from "@/components/plugin-apps/plugin-ui-surface-icons";
 
 interface DragState {
   fromId: string;
@@ -83,7 +84,7 @@ export function PanelHeader() {
     // `preview` is event-driven (opens with a filePath) and
     // `session-messages` is event-driven (opens with a sessionId) — neither
     // has a meaningful empty-state, so both stay out of the add-page menu.
-    (entry) => entry.id !== "preview" && entry.id !== "session-messages",
+    (entry) => entry.id !== "preview" && entry.id !== "session-messages" && entry.id !== "plugin-app",
   );
 
   const menuItems: MenuAction[] = entries.map((entry) => ({
@@ -159,7 +160,9 @@ export function PanelHeader() {
       <div className="panel-header-tabs">
         {tabs.map((tab) => {
           const desc = getPageDescriptor(tab.pageId);
-          const Icon = desc.icon;
+          const Icon = tab.pageId === "plugin-app"
+            ? getPluginUiSurfaceIcon(tab.params?.icon)
+            : desc.icon;
           const active = tab.id === activeTabId;
           const dropClass =
             drag && drag.overId === tab.id

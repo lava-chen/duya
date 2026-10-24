@@ -55,6 +55,17 @@ const en = {
   'apps.emptyTitle': 'No apps installed',
   'apps.emptyDescription': 'Install or enable a plugin that provides an app to see it here.',
   'apps.selectChat': 'Select a chat session before opening this app.',
+  'apps.loadingSurface': 'Loading plugin view…',
+  'apps.launchFailed': 'Could not open this plugin view.',
+  'apps.surfaceNotFound': 'This plugin view is no longer available.',
+  'apps.resourceUnavailable': 'Could not load the plugin view from its MCP server.',
+  'apps.resourceInvalid': 'The plugin server returned invalid view content.',
+  'apps.resourceTooLarge': 'The plugin view is too large to display.',
+  'apps.resourceMimeUnsupported': 'The plugin server returned an unsupported view format.',
+  'apps.resourceServerMismatch': 'The plugin view came from a different plugin server.',
+  'apps.pluginDisabled': 'Enable this plugin to open its view.',
+  'apps.appUnavailable': 'This plugin app is no longer installed.',
+  'apps.instanceUnavailable': 'Could not prepare the plugin app. Try again.',
 
   // Plan 525 — Projects page.
   'projects.title': 'Projects',

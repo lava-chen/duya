@@ -198,6 +198,11 @@ surface id claimed more than once across installed plugins, and reports those
 conflicts for diagnosis. Plugin install, enable, disable, remove, and setup
 changes reuse the existing `plugin-app:changed` notification so directory
 consumers can refetch; this directory is metadata and does not own tab state.
+The desktop Apps view opens each surface through the existing panel tab
+registry, keyed by plugin and surface identity. It mounts the iframe only while
+its panel card is open and visible, and closes session-only surfaces when no
+chat is active. The original static-entry launcher remains available for
+compatibility.
 Surface content is read through the declared plugin MCP server's existing
 client and must be one `text/html` text resource at the exact declared
 `ui://` URI, no larger than 8 MiB. The Main process rechecks server ownership

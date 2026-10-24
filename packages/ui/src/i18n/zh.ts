@@ -57,6 +57,17 @@ const zh: Record<TranslationKey, string> = {
   'apps.emptyTitle': '尚未安装应用',
   'apps.emptyDescription': '安装或启用提供应用的插件后，它们会显示在这里。',
   'apps.selectChat': '请先选择一个聊天会话，再打开此应用。',
+  'apps.loadingSurface': '正在加载插件视图…',
+  'apps.launchFailed': '无法打开此插件视图。',
+  'apps.surfaceNotFound': '此插件视图已不可用。',
+  'apps.resourceUnavailable': '无法从 MCP 服务器加载插件视图。',
+  'apps.resourceInvalid': '插件服务器返回的视图内容无效。',
+  'apps.resourceTooLarge': '插件视图过大，无法显示。',
+  'apps.resourceMimeUnsupported': '插件服务器返回了不支持的视图格式。',
+  'apps.resourceServerMismatch': '插件视图来自其他插件的 MCP 服务器。',
+  'apps.pluginDisabled': '启用此插件后即可打开它的视图。',
+  'apps.appUnavailable': '此插件应用已不再安装。',
+  'apps.instanceUnavailable': '无法准备插件应用，请重试。',
 
   // Plan 525 — Projects page.
   'projects.title': '项目',

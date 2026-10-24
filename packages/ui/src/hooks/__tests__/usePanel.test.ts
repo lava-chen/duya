@@ -214,3 +214,43 @@ describe("PanelProvider turn-scoped review opens", () => {
     expect(result.current.tabs).toHaveLength(0);
   });
 });
+
+describe("PanelProvider plugin UI surfaces", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useConversationStore.setState({ activeThreadId: null });
+  });
+
+  it("activates the existing tab for repeated opens of the same plugin surface", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+    let firstTabId = "";
+    act(() => {
+      firstTabId = result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.viewer", appId: "reports", surfaceId: "overview", title: "Overview",
+      });
+    });
+    let secondTabId = "";
+    act(() => {
+      secondTabId = result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.viewer", appId: "reports", surfaceId: "overview", title: "Overview",
+      });
+    });
+
+    expect(secondTabId).toBe(firstTabId);
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.activeTabId).toBe(firstTabId);
+  });
+
+  it("keeps different surfaces as separate tabs", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+    act(() => {
+      result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.viewer", appId: "reports", surfaceId: "overview", title: "Overview",
+      });
+      result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.viewer", appId: "reports", surfaceId: "activity", title: "Activity",
+      });
+    });
+    expect(result.current.tabs).toHaveLength(2);
+  });
+});

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 import {
   PLUGIN_APP_CHANNEL,
   getPluginAppAPI,
@@ -17,9 +18,26 @@ interface PluginAppHostProps {
   pluginId: string;
   appId: string;
   surfaceId?: string;
+  title?: string;
   /** The chat session the App acts in. Chosen by trusted code, not the App. */
   chatSessionId?: string;
   onError?: (message: string) => void;
+}
+
+function launchErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>["t"]): string {
+  switch (error) {
+    case "surface_not_found": return t("apps.surfaceNotFound");
+    case "resource_unavailable": return t("apps.resourceUnavailable");
+    case "resource_invalid": return t("apps.resourceInvalid");
+    case "resource_too_large": return t("apps.resourceTooLarge");
+    case "resource_mime_unsupported": return t("apps.resourceMimeUnsupported");
+    case "resource_server_mismatch": return t("apps.resourceServerMismatch");
+    case "plugin_disabled": return t("apps.pluginDisabled");
+    case "plugin_not_found":
+    case "app_not_found": return t("apps.appUnavailable");
+    case "instance_unavailable": return t("apps.instanceUnavailable");
+    default: return t("apps.launchFailed");
+  }
 }
 
 /**
@@ -37,7 +55,10 @@ interface PluginAppHostProps {
  * the App never learns the plugin, the App id, the instance or the chat
  * session it is acting for.
  */
-export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onError }: PluginAppHostProps) {
+export function PluginAppHost({ pluginId, appId, surfaceId, title, chatSessionId, onError }: PluginAppHostProps) {
+  const { t } = useTranslation();
+  const translateRef = useRef(t);
+  translateRef.current = t;
   const [guestFrame, setGuestFrame] = useState<HTMLIFrameElement | null>(null);
   const [launch, setLaunch] = useState<PluginAppLaunch | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +85,7 @@ export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onErr
     setLaunch(null);
     setError(null);
     if (!api) {
-      reportError("Plugin Apps are not available in this client.");
+      reportError(translateRef.current("apps.unavailable"));
       return;
     }
     let cancelled = false;
@@ -91,7 +112,7 @@ export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onErr
           if (typeof result.sessionId === "string" && result.sessionId.length > 0) {
             void api.close({ sessionId: result.sessionId }).catch(() => {});
           }
-          reportError(result.error ?? "Failed to launch the App.");
+          reportError(launchErrorMessage(result.error, translateRef.current));
           return;
         }
         const next: PluginAppLaunch = {
@@ -104,9 +125,9 @@ export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onErr
         launchRef.current = next;
         setLaunch(next);
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (cancelled) return;
-        reportError(err instanceof Error ? err.message : String(err));
+        reportError(launchErrorMessage(undefined, translateRef.current));
       });
     return () => {
       cancelled = true;
@@ -187,7 +208,7 @@ export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onErr
   }
 
   if (!launch) {
-    return <div className="plugin-app-host-loading">Loading App…</div>;
+    return <div className="plugin-app-host-loading">{t("apps.loadingSurface")}</div>;
   }
 
   return (
@@ -195,7 +216,7 @@ export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onErr
       <iframe
         ref={setGuestFrameRef}
         src={launch.entryUrl}
-        title={`${pluginId} app`}
+        title={title ?? `${pluginId} app`}
         referrerPolicy="no-referrer"
         sandbox="allow-scripts allow-forms allow-downloads allow-popups"
       />
