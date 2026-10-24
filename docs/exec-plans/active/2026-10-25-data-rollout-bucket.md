@@ -81,7 +81,7 @@ CPU profile 归因：`renameSync` 11.8% + `moveRollout` 3.6% + `existsSync` ~12%
 - [x] `ensureFile` 先探文件再决定建目录，省掉每批的目录创建
 - [x] 新增测试（4 条）+ 变异验证（回退后 2 条转红）
 - [x] 受影响集 8 文件 / 116 断言全过
-- [ ] 三门禁 + 重建 bundle + 开 PR
+- [x] 三门禁 + 重建 bundle + 开 PR（#462，未合并，待用户授权）
 
 ## 验证记录
 
@@ -101,6 +101,9 @@ CPU profile 归因：`renameSync` 11.8% + `moveRollout` 3.6% + `existsSync` ~12%
 | dirty（packages/data） | Windows / Node 24.16 | `vitest run packages/data/tests/message-log-rollout-bucket.test.ts` | 0 | 1 文件 / 4 断言全过 |
 | dirty（packages/data） | Windows / Node 24.16 | 变异验证：桶判定改成「总是视为不同桶」 | 1 | 2 条稳定性断言转红（路径被改名、40 次变化），2 条语义断言仍绿 |
 | dirty（packages/data） | Windows / Node 24.16 | `vitest run`（message-log / rotation / portability / source-filter / session-archive / session-fork / legacy-import / rollout-bucket） | 0 | 8 文件 / 116 断言全过 |
+| head `51cdbc1a`（clean） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误（206 known / 102 key(s)） |
+| head `51cdbc1a`（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2721 = tolerated 2721，baseline 2530 未变 |
+| head `51cdbc1a`（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH，0/948 bundle inputs 在 bundle commit 后变更 |
 
 ## 接续 / 结果
 
@@ -112,8 +115,8 @@ CPU profile 归因：`renameSync` 11.8% + `moveRollout` 3.6% + `existsSync` ~12%
 中位数基准显示写路径耗时降 59%–68%，`rollout_path` 变化次数从「每批一次」降到
 「每会话一次」。
 
-未提交路径：待提交。
+未提交路径：无。
 副作用：无。
 阻塞：无。
 
-下一步：跑三门禁 + 重建 bundle + 开 PR（不合并，待用户授权）。
+下一步：等 PR #462 的 CI 绿，然后申请合并授权（不自行合并）。
