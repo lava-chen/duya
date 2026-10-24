@@ -417,6 +417,11 @@ exit 0; the nine `worker-db-bridge-*` files → 48/48; the Desktop adapter
 suites (`core-db-adapters`, `db-handlers`) → 75/75;
 `npm run typecheck:all` → exit 0; `npm run architecture:check` → exit 0
 (2648 tolerated, no new violations); `npm run bundle:verify` → FRESH 0/919.
+The local CI-equivalent scope (`npx vitest run --changed=origin/master --maxWorkers=2`)
+is 213 files / 2146 passed / 9 skipped, exit 0.
+
+- CI run 40070759848 (head `f7571596`): **all five jobs green** — `architecture`,
+  `test scope`, `typecheck`, `test`, `build`.
 
 - Next action: review PR #420 and, once authorized, integrate it. PR #381
   (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
