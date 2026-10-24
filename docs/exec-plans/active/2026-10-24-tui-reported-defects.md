@@ -105,6 +105,15 @@ master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `pac
 | 同上 | 同上，真 provider | 真 PTY 一轮真实 turn（`todo` 工具） | 0 | 转写区 `└ ✔ Todo list 0/1` 加 `○ 写解析`，底部 `↓6 Σ6 · ⚡ 4.3 tok/s`——`?` 已被 #457 换成 `✔`，证明两侧改动可叠加 |
 | 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | 架构仍 2730 条全在既有 baseline（「2 fingerprints no longer triggered」未重录，不用 `--write`）；bundle FRESH 0/950 |
 
+### PR head CI
+
+| SHA | 环境 | 命令或操作 | 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `fb78ed13`（本轮实录提交，即 PR head） | GitHub Actions ubuntu-latest / Node 22.x | `gh run view 40109121091` | success | 5 个 job 全绿：test scope 9s、architecture 2m27s、typecheck 6m55s、test 4m21s、build 2m10s；PR `MERGEABLE` / `mergeStateStatus CLEAN` |
+
+master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 `required_approving_review_count = 0`，
+所以这 5 项都是非必需检查——按仓库约定仍逐条记录，非必需失败由获授权的集成者评估，本次无失败。
+
 ### 在途 PR 冲突面（2026-10-24 对 16 个 open PR 逐个 `gh pr view --json files` 比对）
 
 - 源码零重叠：`todo.ts`、`footer.ts`、`slash/model.ts`、`slash/effort.ts`、协议目录、Host 目录读取器都只本任务在改。
@@ -119,7 +128,7 @@ master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `pac
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
 - 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；两次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457）后各重跑一遍，最新全量为 106 files / 1289 tests。
-- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（head `40d3de56`，状态 MERGEABLE，保持可 review，未获授权不合并）。
+- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（head `fb78ed13`，`MERGEABLE` / `CLEAN`，CI run `40109121091` 5 个 job 全绿；保持可 review，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
-- 下一步：等 PR #469 head 的必需 review 与必需 CI 全绿，再请用户授权集成；集成后同步 master 重验并回收检出。
+- 下一步：请用户授权集成——master 规则集没有必需 review 也没有必需状态检查，CI 已全绿，验收条件都满足；获授权后用 merge commit 合并，再同步 master 重验并回收检出。
