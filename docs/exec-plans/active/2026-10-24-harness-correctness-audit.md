@@ -182,22 +182,28 @@ emergency / preflight 仍按原样把 `ctx.deferred.current` 并入基线。
 | 1 | 决定 **inbound 的语义**（H-1） | 契约 owner | ✅ 已裁定并修复 | 裁定：mailbox 每一行都过 `projectRuntimeContextToProviderMessage`，**没有一行是人打的** → 与 rail 同类，移到 prompt 前；后续轮按规则 4 不动 |
 | 2 | 修 **H-2**：compaction 替换要重新投影 rail | compaction owner | ✅ 已修复 | 划分而非合并：替换贡献非 context 行，宿主当前投影贡献 context 行；宿主在 context 上胜出 |
 | 3 | `toRuntimeMessage` 带上 `origin`（H-5） | runtime owner | ✅ 已修复 | 与 2 同批做，两侧用同一标记分类，不可能数两次 |
-| 4 | 让契约进 master | PR owner | ✅ 本分支落地 | 原分支 base 指向 `codex/tui-perf-benchmark`（PR #381，已 CONFLICTING 且无 checks）→ 改为把整条链移植到 `master` 基线，独立 PR，CI 正常跑 |
+| 4 | 让契约进 master | PR owner | ✅ 已并入 master | 原分支 base 指向 `codex/tui-perf-benchmark`（PR #381，已 CONFLICTING 且无 checks）→ 改为把整条链移植到 `master` 基线，独立 PR #424（base = `master`，CI 正常跑），2026-10-24 以 merge commit `21351df6` 并入 |
 | 5 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | ⏳ 待 owner 处理 | 已被 `fix-prompt-last` 取代；该分支从未推远端 |
 | 6 | 把 provider 矩阵挂进 CI | 审计 owner | ✅ 已就位 | base=master 的 PR 会跑 CI，需确认 CI 实际跑到 |
 | 7 | 修 **H-6**：探针量请求携带的行集 | runtime owner | ✅ 已修复 | 划分规则抽成唯一方法 `#compactedHistory`，请求与探针共用；未动阈值与触发门控 |
 
 ## 6. 验证记录
 
-落地分支 `codex/harness-correctness-to-master`（PR #424，base `master`）· 环境 Windows / PowerShell 5.1 / Node 24。
+落地分支 `codex/harness-correctness-to-master`（PR #424，base `master`）· 已于 2026-10-24 以 merge commit `21351df6` 并入 `master` · 环境 Windows / PowerShell 5.1 / Node 24。
 
 | 门禁 | 命令 | 结果 |
 | --- | --- | --- |
 | 类型 | `npm run typecheck:all` | 退出码 0 |
 | 架构 | `npm run architecture:check` | 退出码 0，`OK — no new boundary violations`（tolerated 2617 / baseline 2785，未新增指纹） |
-| bundle | `npm run bundle:verify` | 退出码 0，`FRESH 0/922` |
+| bundle | `npm run bundle:verify` | 退出码 0，`FRESH 0/920` |
+| 首屏预算 | `npm run electron:build` → `npm run perf:first-screen-budget` | 退出码 0，`firstScreen.bytes: 3378253 (baseline 3378253 / limit 3547166) +0%`，`entryChunkBytes: 2478263` = baseline |
 | 核心套件 | `npx vitest run packages/ai packages/agent-runtime packages/host/tests/worker-product-runtime` | 685 套件 / 1874 用例，1874 通过，0 失败 |
 | host 全量 | `npx vitest run packages/host/tests` | 630 套件 / 1663 用例，1662 通过，0 失败，1 跳过 |
+| 桌面端 logger + crons | `npx vitest run apps/desktop/src/main/logging apps/desktop/src/main/cli/handlers/crons.test.ts` | 6 套件 / 10 用例，10 通过，0 失败 |
+
+CI：PR #424 最后一轮（run `40070208790`，base = `master` 所以矩阵全跑）`architecture` / `test scope` / `typecheck` / `test` / `build` 全绿，build job 的预算输出与本地一致；并入 master 后的 push run（`40070833619`）亦为 success。
+
+同一轮 CI 还暴露了两处与本次改动无关、但必须修的缺陷，均已在本 PR 内修掉：① 根 barrel 把 provider SDK 拖回渲染器首屏（+248 KB，预算门禁红）——5 个 payload 构造器改为只从 `@duya/ai/clients` 导出；② 日志器把写盘失败转发成 `EventEmitter.emit('error')`，而无人监听时它会抛成未捕获异常——改为先看有没有监听器，没有就丢掉坏 sink。详见 PR #424 正文。
 
 反例臂（证明的是「改回去会坏」，不是「改对了」）：
 
