@@ -23,7 +23,7 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -50,6 +50,7 @@ import {
   readLockOwner,
   releaseInternalLock,
   resolveLockDir,
+  REPO_ROOT,
 } from '../../e2e/perf/lib/lock.mjs';
 import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
 
@@ -159,6 +160,30 @@ describe('the fixture generator', () => {
     const typing = buildTypingFixture('perf/typing-30s');
     expect(typing.keystrokes).toBe(500);
     expect(typing.text.length).toBe(500);
+  });
+
+  it('keeps the local evidence harness out of the fixture contract namespace', () => {
+    // A fixture id names ONE content. The shared harness owns the `perf/*`
+    // contract; a harness that renders different bytes under one of those ids
+    // would make every cross-harness number comparison meaningless. The local
+    // evidence harness therefore uses its own `ui-harness/` namespace.
+    const harnessSource = readFileSync(
+      path.join(REPO_ROOT, 'packages/ui/src/components/chat/__tests__/harness/main.tsx'),
+      'utf8',
+    );
+    const localIds = [...harnessSource.matchAll(/'([a-z][a-z0-9-]*\/[a-z0-9-]+)'/gi)].map((match) => match[1]!);
+    expect(localIds.length).toBeGreaterThan(0);
+    for (const id of localIds) {
+      expect(FIXTURE_IDS).not.toContain(id);
+    }
+
+    const driverSource = readFileSync(
+      path.join(REPO_ROOT, 'e2e/perf/agents/agent-b/run-bench.mjs'),
+      'utf8',
+    );
+    const defaultScenario = driverSource.match(/scenario:\s*'([^']+)'/)?.[1];
+    expect(defaultScenario).toBeDefined();
+    expect(FIXTURE_IDS).not.toContain(defaultScenario);
   });
 });
 
