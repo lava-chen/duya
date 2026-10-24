@@ -102,6 +102,31 @@ export interface ModelRequestExpectation {
    * row's content into parts, and a part is not a row.
    */
   readonly question: string;
+  /**
+   * Which kind of turn this request is.
+   *
+   * A QUESTION TURN asks something, and its whole point is that the request
+   * ENDS with the question. A CONTINUATION does not: it is the turn after a
+   * tool result, where the question is history and the tool result is the
+   * newest thing the model has to react to. The request contract says so in
+   * rule 4 -- a later turn carries no prompt -- so a continuation that does
+   * NOT end with the question is correct, and checking it as if it did would
+   * report a defect that is not there.
+   *
+   * The two modes check DIFFERENT things, and the difference is not
+   * cosmetic:
+   *
+   * | | question turn | continuation |
+   * | --- | --- | --- |
+   * | the question appears more than once | violation | violation |
+   * | the question is nowhere in the request | violation | allowed (a compacted transcript may not carry it) |
+   * | the request does not end with the question | violation | allowed |
+   * | a system-attached row sits behind the question | violation | allowed |
+   *
+   * The duplicate check applies to BOTH, because a question sent twice is
+   * wrong in either: it makes the model answer the same thing twice.
+   */
+  readonly mode?: 'question-turn' | 'continuation';
 }
 
 /**
@@ -126,11 +151,41 @@ export function checkModelRequest(
   }
 
   const question = expectation.question;
-  const carriers = messages
-    .map((message, index) => ({ message, index }))
-    .filter(({ message }) => message.texts.some((text) => text.includes(question)));
+  const mode = expectation.mode ?? 'question-turn';
 
-  if (carriers.length === 0) {
+  // OCCURRENCES, not rows.
+  //
+  // Anthropic merges consecutive `user` rows into ONE block, so two copies of
+  // the question folded into that block are two OCCURRENCES in one row. A
+  // checker that counted ROWS would see one carrier and report nothing --
+  // which is how a duplicate question survives to the provider. Counting the
+  // occurrences inside every text of every row is what survives the merge.
+  const occurrences: { readonly messageIndex: number; readonly textIndex: number }[] = [];
+  messages.forEach((message, messageIndex) => {
+    message.texts.forEach((text, textIndex) => {
+      const count = countOccurrences(text, question);
+      for (let i = 0; i < count; i += 1) {
+        occurrences.push({ messageIndex, textIndex });
+      }
+    });
+  });
+
+  if (occurrences.length > 1) {
+    violations.push({
+      code: 'QUESTION_DUPLICATED',
+      detail:
+        `the question appears ${occurrences.length} times in the request ` +
+        `(rows ${occurrences.map((o) => o.messageIndex).join(', ')}); it must appear exactly once`,
+    });
+  }
+
+  if (mode === 'continuation') {
+    // A continuation turn: the duplicate check is the whole contract. The
+    // question is history there, and rule 4 says the turn carries no prompt.
+    return violations;
+  }
+
+  if (occurrences.length === 0) {
     violations.push({
       code: 'QUESTION_MISSING',
       detail: `the request carries no row containing the question: ${JSON.stringify(question)}`,
@@ -138,16 +193,9 @@ export function checkModelRequest(
     return violations;
   }
 
-  if (carriers.length > 1) {
-    violations.push({
-      code: 'QUESTION_DUPLICATED',
-      detail:
-        `the question appears in ${carriers.length} rows ` +
-        `(indexes ${carriers.map((c) => c.index).join(', ')}); it must appear exactly once`,
-    });
-  }
-
-  const first = carriers[0]!;
+  // The LAST occurrence is the one the model reads as the current ask.
+  const lastOccurrence = occurrences[occurrences.length - 1]!;
+  const carrier = messages[lastOccurrence.messageIndex]!;
   const last = messages[messages.length - 1]!;
 
   // The strong form of "last": the request's last row must END with the
@@ -160,7 +208,7 @@ export function checkModelRequest(
       code: 'QUESTION_NOT_LAST',
       detail:
         `the request's last row (index ${messages.length - 1}, role '${last.role}') does not END with ` +
-        `the question; the question sits at index ${first.index}`,
+        `the question; the question sits at index ${lastOccurrence.messageIndex}`,
     });
   }
 
@@ -174,13 +222,12 @@ export function checkModelRequest(
   // A row the SYSTEM attached behind the question: either a LATER row, or a
   // later TEXT inside the question's own row. The second case is the one an
   // adapter's role-merging creates, and a row-level check cannot see it.
-  const carrierTextIndex = first.message.texts.findIndex((text) => text.includes(question));
-  const systemTextBehindInRow = first.message.texts
-    .slice(carrierTextIndex + 1)
+  const systemTextBehindInRow = carrier.texts
+    .slice(lastOccurrence.textIndex + 1)
     .some((text) => text.includes(SYSTEM_ATTACHED_MARKER));
   const systemRowBehind = messages.findIndex(
     (message, index) =>
-      index > first.index &&
+      index > lastOccurrence.messageIndex &&
       message.texts.some((text) => text.includes(SYSTEM_ATTACHED_MARKER)),
   );
   if (systemTextBehindInRow || systemRowBehind >= 0) {
@@ -194,6 +241,18 @@ export function checkModelRequest(
   }
 
   return violations;
+}
+
+/** How many times `needle` occurs in `haystack`, counting overlaps once each. */
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    count += 1;
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return count;
 }
 
 /**

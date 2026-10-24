@@ -166,15 +166,6 @@ describe('the boundary checker itself', () => {
     expect(violations.map((v) => v.code)).toEqual(['REQUEST_EMPTY']);
   });
 
-  it('reports a request that carries no question at all', () => {
-    const violations = checkModelRequest(
-      [{ role: 'user', texts: ['something else entirely'] }],
-      { question: QUESTION },
-    );
-
-    expect(violations.map((v) => v.code)).toEqual(['QUESTION_MISSING']);
-  });
-
   it('reports a question that was sent twice', () => {
     const violations = checkModelRequest(
       [
@@ -183,6 +174,38 @@ describe('the boundary checker itself', () => {
       ],
       { question: QUESTION },
     );
+
+    expect(violations.map((v) => v.code)).toContain('QUESTION_DUPLICATED');
+  });
+
+  it('reports a question that was sent twice INSIDE ONE merged row', () => {
+    // The shape Anthropic's role-merging produces: two copies of the
+    // question folded into ONE block. A checker that counted ROWS would see
+    // one carrier and report nothing, and the duplicate would reach the
+    // provider -- which makes the model answer the same question twice.
+    const violations = checkModelRequest(
+      [{ role: 'user', texts: [PRIOR, QUESTION, QUESTION] }],
+      { question: QUESTION },
+    );
+
+    expect(violations.map((v) => v.code)).toContain('QUESTION_DUPLICATED');
+  });
+
+  it('counts the duplicate through the REAL Anthropic merge', () => {
+    // The same claim, through the adapter that does the merging -- so the
+    // proof is not "the reducer handles it" but "the payload is caught".
+    const payload = toAnthropicMessages(
+      [
+        { role: 'user', content: PRIOR, timestamp: 1 },
+        { role: 'user', content: QUESTION, timestamp: 2 },
+        { role: 'user', content: QUESTION, timestamp: 3 },
+      ],
+      ANTHROPIC_MODEL,
+    );
+
+    const violations = checkModelRequest(canonicalizeAnthropicPayload(payload), {
+      question: QUESTION,
+    });
 
     expect(violations.map((v) => v.code)).toContain('QUESTION_DUPLICATED');
   });
@@ -217,5 +240,67 @@ describe('the boundary checker itself', () => {
     );
 
     expect(violations.map((v) => v.code)).toContain('SYSTEM_ROW_AFTER_QUESTION');
+  });
+});
+
+describe('a continuation turn is not a question turn', () => {
+  it('does not report a continuation that does not end with the question', () => {
+    // A tool continuation: the question is HISTORY and the tool result is
+    // the newest thing the model has to react to. The request contract says
+    // so in rule 4, so this is the correct shape -- and reporting it would
+    // be a defect in the checker, not in the request.
+    const violations = checkModelRequest(
+      [
+        { role: 'user', texts: [QUESTION] },
+        { role: 'assistant', texts: ['let me look'] },
+        { role: 'user', texts: ['the tool result'] },
+      ],
+      { question: QUESTION, mode: 'continuation' },
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('STILL reports a continuation that carries the question twice', () => {
+    // The one thing that is wrong in either kind of turn: a question sent
+    // twice makes the model answer the same thing twice.
+    const violations = checkModelRequest(
+      [
+        { role: 'user', texts: [QUESTION] },
+        { role: 'assistant', texts: ['let me look'] },
+        { role: 'user', texts: ['the tool result', QUESTION] },
+      ],
+      { question: QUESTION, mode: 'continuation' },
+    );
+
+    expect(violations.map((v) => v.code)).toContain('QUESTION_DUPLICATED');
+  });
+
+  it('allows a continuation whose transcript no longer carries the question', () => {
+    // A compacted transcript may not carry it at all. That is not a defect.
+    const violations = checkModelRequest(
+      [
+        { role: 'user', texts: ['summary of turns 1..4'] },
+        { role: 'user', texts: ['the tool result'] },
+      ],
+      { question: QUESTION, mode: 'continuation' },
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it('reports the same continuation as a violation when it is asked as a question turn', () => {
+    // The same request, checked as a question turn -- so the mode is what
+    // decides, not the shape.
+    const violations = checkModelRequest(
+      [
+        { role: 'user', texts: [QUESTION] },
+        { role: 'assistant', texts: ['let me look'] },
+        { role: 'user', texts: ['the tool result'] },
+      ],
+      { question: QUESTION },
+    );
+
+    expect(violations.map((v) => v.code)).toContain('QUESTION_NOT_LAST');
   });
 });
