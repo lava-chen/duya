@@ -15,10 +15,17 @@
  *
  * ## Why the matrix is the thing that keeps the order from drifting
  *
- * The prompt's position has been broken twice in this same expression, both
- * times the same way: the rule lived in a comment, and the next edit to the
- * expression did not have to obey it. A rule that lives in a table, with a
+ * The prompt's position has been broken three times in this same expression,
+ * every time the same way: the rule lived in a comment, and the next edit to
+ * the expression did not have to obey it. A rule that lives in a table, with a
  * case per combination, breaks LOUDLY.
+ *
+ * ## The property under test
+ *
+ * THE REQUEST ENDS WITH THE QUESTION. Not "the question is after every row
+ * the person said" -- that was the previous contract, and it is too weak: the
+ * system-attached rows are `user` rows too, so a request that ends with the
+ * rail still reads to the model as a turn with no question in it.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -33,11 +40,25 @@ const HOST_PROMPT: ModelMessage = { role: 'user', id: 'p1', content: 'what does 
 const PRIOR_UTTERANCE: ModelMessage = { role: 'user', id: 'u-1', content: 'hello' };
 /** The model's own reply to it. */
 const REPLY: ModelMessage = { role: 'assistant', id: 'a-1', content: 'hi' };
-/** A row the SYSTEM attached: the volatile context rail. */
+/** The volatile context rail: a row the SYSTEM attached. */
 const RAIL: ModelMessage = {
   role: 'user',
   id: 'rail-1',
   content: '<system-reminder>the environment</system-reminder>',
+  origin: 'context',
+};
+/** A hook's block: also attached by the SYSTEM, also a `user` row. */
+const HOOK: ModelMessage = {
+  role: 'user',
+  id: 'hook-1',
+  content: '<system-reminder>a hook said this</system-reminder>',
+  origin: 'context',
+};
+/** An attachment's extracted text: the third kind of attached row. */
+const ATTACHMENT: ModelMessage = {
+  role: 'user',
+  id: 'attachment-1',
+  content: '<system-reminder>the attached file</system-reminder>',
   origin: 'context',
 };
 /** A fragment the engine carried over from earlier in the run. */
@@ -67,16 +88,29 @@ function assemble(overrides: {
 const ids = (messages: readonly ModelMessage[]): readonly string[] => messages.map((m) => m.id);
 
 describe('the request contract', () => {
-  it('keeps the host\'s prompt row where the host put it, and drops the engine\'s copy', () => {
-    // The host committed the row after the turns it answers, and that is the
-    // copy the legacy sent. The engine's copy would sit ahead of them.
+  it('ends with the question, moving the system-attached rows in front of it', () => {
+    // The shape the host actually produces: the prompt is committed to the
+    // timeline, and then the rail, the hook blocks and the attachment text
+    // are APPENDED to the projection. Rule 5 moves the attached rows in
+    // front of the question, so the request ENDS with what the person said.
+    const messages = assemble({
+      hostMessages: [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, HOOK, RAIL, ATTACHMENT],
+    });
+
+    expect(ids(messages)).toEqual(['u-1', 'a-1', 'hook-1', 'rail-1', 'attachment-1', 'p1']);
+    expect(messages.at(-1)?.id).toBe('p1');
+    expect(messages.at(-1)?.content).toBe(HOST_PROMPT.content);
+  });
+
+  it('keeps the conversation ahead of the system-attached rows', () => {
+    // The attached rows are moved, not promoted: they stay `user` rows with
+    // no privilege, and they stay after the conversation they describe.
     const messages = assemble({
       hostMessages: [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, RAIL],
     });
 
-    expect(ids(messages)).toEqual(['u-1', 'a-1', 'p1', 'rail-1']);
-    expect(messages.filter((m) => m.id === 'p1')).toHaveLength(1);
-    expect(messages.find((m) => m.id === 'p1')?.content).toBe(HOST_PROMPT.content);
+    expect(ids(messages)).toEqual(['u-1', 'a-1', 'rail-1', 'p1']);
+    expect(messages.find((m) => m.id === 'rail-1')?.origin).toBe('context');
   });
 
   it('sends the prompt once even when the host projected its id twice', () => {
@@ -84,21 +118,23 @@ describe('the request contract', () => {
     // copy is the one that survives, because that is the one in the
     // conversation's own order.
     const messages = assemble({
-      hostMessages: [HOST_PROMPT, PRIOR_UTTERANCE, HOST_PROMPT],
+      hostMessages: [HOST_PROMPT, PRIOR_UTTERANCE, HOST_PROMPT, RAIL],
     });
 
     expect(messages.filter((m) => m.id === 'p1')).toHaveLength(1);
-    expect(ids(messages)).toEqual(['p1', 'u-1']);
+    expect(ids(messages)).toEqual(['u-1', 'rail-1', 'p1']);
+    expect(messages.at(-1)?.id).toBe('p1');
   });
 
-  it('puts the engine\'s own copy at the end of the CONVERSATION when the host did not project it', () => {
-    // The fallback slot is where the host's copy would have been: after the
-    // last thing the person said, and before the rows the SYSTEM attached.
+  it('stands the engine\'s own copy in when the host did not project it', () => {
+    // The fallback stands where the host's copy would have been -- and the
+    // request still ends with it.
     const messages = assemble({
       hostMessages: [PRIOR_UTTERANCE, REPLY, RAIL],
     });
 
-    expect(ids(messages)).toEqual(['u-1', 'a-1', 'p1', 'rail-1']);
+    expect(ids(messages)).toEqual(['u-1', 'a-1', 'rail-1', 'p1']);
+    expect(messages.at(-1)?.content).toBe(PROMPT.content);
   });
 
   it('never puts the engine\'s copy at the front of the request', () => {
@@ -123,7 +159,7 @@ describe('the request contract', () => {
       inbound: [INBOUND],
     });
 
-    expect(ids(messages)).toEqual(['steer-1', 'fragment:tool_result:call-1', 'u-1', 'p1', 'rail-1', 'in-1']);
+    expect(ids(messages)).toEqual(['steer-1', 'fragment:tool_result:call-1', 'u-1', 'rail-1', 'p1', 'in-1']);
   });
 
   it('trails with the engine\'s own new material on a later turn', () => {
@@ -154,24 +190,60 @@ describe('the request contract', () => {
     expect(ids(messages)).toEqual(['u-1', 'a-1']);
   });
 
+  it('leaves the host\'s order alone on a tool continuation', () => {
+    // A tool continuation is NOT a turn that ends with the question. Anthropic
+    // carries tool results in `user` rows, so a later turn's order is the
+    // host's to keep -- moving rows there would break the tool call/result
+    // pairing the provider needs.
+    const toolResult: ModelMessage = {
+      role: 'user',
+      id: 'fragment:tool_result:call-1',
+      content: 'the tool result',
+    };
+    const messages = assemble({
+      hostMessages: [PRIOR_UTTERANCE, HOST_PROMPT, toolResult, RAIL],
+      isFirstTurn: false,
+    });
+
+    expect(ids(messages)).toEqual(['u-1', 'p1', 'fragment:tool_result:call-1', 'rail-1']);
+  });
+
   it('leaves an empty request empty', () => {
     expect(assemble({})).toEqual([PROMPT]);
   });
 
-  it('keeps the prompt after every row the PERSON said', () => {
-    // The property the whole contract exists for, stated over the source
-    // that matters: nothing the person said comes after the question. A row
-    // the SYSTEM attached may follow it -- the host owns where its own
-    // context sits -- but a later utterance would mean the question is no
-    // longer the newest thing said.
+  it('ends with the question whatever the host attached', () => {
+    // The property the whole contract exists for, over every kind of row the
+    // system can attach: the question is the request's LAST row.
+    const hosts: readonly (readonly ModelMessage[])[] = [
+      [PRIOR_UTTERANCE, REPLY, HOST_PROMPT],
+      [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, RAIL],
+      [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, HOOK],
+      [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, ATTACHMENT],
+      [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, HOOK, RAIL, ATTACHMENT],
+      [HOST_PROMPT, HOOK, RAIL, ATTACHMENT],
+    ];
+
+    for (const hostMessages of hosts) {
+      const messages = assemble({ hostMessages });
+      expect(messages.at(-1)?.id).toBe('p1');
+      expect(messages.filter((m) => m.id === 'p1')).toHaveLength(1);
+    }
+  });
+
+  it('never leaves a system-attached row behind the question', () => {
+    // The assertion that would have caught the defect: it is not enough for
+    // the question to be the last thing the PERSON said -- the rows the
+    // system attached are `user` rows too, and a request that ends with one
+    // of them reads to the model as a turn with no question in it.
     const messages = assemble({
-      hostMessages: [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, RAIL],
+      hostMessages: [PRIOR_UTTERANCE, REPLY, HOST_PROMPT, HOOK, RAIL, ATTACHMENT],
     });
 
     const promptIndex = ids(messages).indexOf('p1');
-    const laterUtterance = messages.findIndex(
-      (m, index) => index > promptIndex && m.origin !== 'context',
+    const attachedAfter = messages.findIndex(
+      (m, index) => index > promptIndex && m.origin === 'context',
     );
-    expect(laterUtterance).toBe(-1);
+    expect(attachedAfter).toBe(-1);
   });
 });

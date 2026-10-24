@@ -1,5 +1,5 @@
 /**
- * The question is the newest thing the PERSON said.
+ * The request ENDS with the question.
  *
  * ## The defect this pins
  *
@@ -8,11 +8,17 @@
  * new question -- this is just system context attached; the last user message
  * was 'continue', which I already answered".
  *
- * The question WAS in the request. It was not the newest thing in it: the
+ * The question WAS in the request. It was not the LAST thing in it: the
  * engine had put its own copy of the prompt at the FRONT, ahead of the
  * conversation it was answering, and the host's context rail -- every rail
  * row a `user` turn wrapped in "This context was attached automatically by
  * the system. It is not part of the user's message." -- closed the request.
+ *
+ * The FIRST version of this file asserted something weaker: that the question
+ * was the last thing THE PERSON said, with the system-attached rows allowed
+ * to follow it. That assertion passed while the defect was still live,
+ * because the system-attached rows ARE `user` rows -- which is exactly what
+ * the model reads. This file now asserts the whole request's last row.
  *
  * ## What this file claims
  *
@@ -20,15 +26,20 @@
  * real spine -- up to the provider boundary, where a scripted client records
  * the rows it was handed.
  *
- * The claim is deliberately about UTTERANCES, not about rows: the question
- * must come after every row the person said, and the rows the system attached
- * are allowed to follow it, because the host owns where its own context sits.
- * A claim about "the last row" would be a claim about the host's projection
- * order, which is not the engine's to decide.
+ * The claim is about the LAST ROW OF THE REQUEST, not about a filtered view
+ * of it. A model reads a conversation from the end, so the last row is the
+ * one that decides what it thinks it was asked.
  *
- * The rail rows are recognised by their own text -- the product's reminder
- * envelope -- rather than by an id, because the rail is minted fresh on every
- * request and its ids are not facts anyone can predict.
+ * ## The three kinds of attached row
+ *
+ * The host attaches context three ways, and all three land AFTER the prompt
+ * in its projection: the volatile-context rail, a hook's block, and an
+ * attachment's extracted text. All three are `user` rows. A fix that only
+ * moved one of them would leave the defect live for the other two, so the
+ * rows are recognised by their own TEXT -- the product's reminder envelope
+ * plus a per-source marker -- rather than by an id, because the rail is
+ * minted fresh on every request and its ids are not facts anyone can
+ * predict.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,7 +58,7 @@ const CLIENT_MSG_ID = 'client-msg-1';
 const PRIOR_ID = 'prior-user-1';
 const SESSION_ID = 's-prompt-order-proof';
 
-/** The envelope the volatile-context rail wraps every block in. */
+/** The envelope every system-attached row is wrapped in. */
 const RAIL_ENVELOPE = 'This context was attached automatically by the system';
 
 const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
@@ -60,12 +71,6 @@ interface ProviderRow {
 
 let rows: ProviderRow[] = [];
 
-/**
- * The scripted provider.
- *
- * The only fake in this file, and it stands in for nothing under test: it
- * records the rows the product handed the provider and then ends the turn.
- */
 vi.mock('@duya/ai', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const delegating = {
@@ -138,13 +143,8 @@ function installDbIpc(): void {
 }
 
 /** The rows the SYSTEM attached, by the envelope it wraps them in. */
-function railRows(): readonly ProviderRow[] {
+function attachedRows(): readonly ProviderRow[] {
   return rows.filter((r) => r.content.includes(RAIL_ENVELOPE));
-}
-
-/** The rows a PERSON said: everything the system did not attach. */
-function utteranceRows(): readonly ProviderRow[] {
-  return rows.filter((r) => !r.content.includes(RAIL_ENVELOPE));
 }
 
 beforeEach(() => {
@@ -170,7 +170,7 @@ afterEach(() => {
 });
 
 describe('a chat:start turn reaches the provider with the question last', () => {
-  it('sends the question once, after every row the person said', async () => {
+  it('sends the question once, as the request\'s LAST row', async () => {
     installDbIpc();
     const agent = makeWorkerSession({
       apiKey: 'test-key',
@@ -191,20 +191,78 @@ describe('a chat:start turn reaches the provider with the question last', () => 
     // Once. The host's own prompt row and the run's prompt are ONE message.
     expect(rows.filter((r) => r.content.includes(QUESTION))).toHaveLength(1);
 
-    // And last, among the rows a person said. The system-attached rows may
-    // follow it -- the host owns where its own context sits -- but nothing
-    // the person said may.
-    const said = utteranceRows();
-    expect(said.length).toBeGreaterThan(1);
-    expect(said.at(-1)?.content).toContain(QUESTION);
+    // And LAST -- the request's last row, not the last row of a filtered
+    // view of it. A model reads a conversation from the end, and the
+    // system-attached rows are `user` rows too, so "the last thing the person
+    // said" is not the same claim as "the last row".
+    expect(rows.at(-1)?.content).toContain(QUESTION);
 
     // The conversation the question belongs to is still in front of it.
-    expect(said.findIndex((r) => r.id === PRIOR_ID)).toBeGreaterThanOrEqual(0);
-    expect(said.findIndex((r) => r.id === PRIOR_ID)).toBeLessThan(said.length - 1);
+    const priorIndex = rows.findIndex((r) => r.id === PRIOR_ID);
+    expect(priorIndex).toBeGreaterThanOrEqual(0);
+    expect(priorIndex).toBeLessThan(rows.length - 1);
 
     // And the rail really did ride this request, so the claim above is a
     // claim about a request that HAS a rail -- not about a request that
     // happens to end with the question.
-    expect(railRows().length).toBeGreaterThan(0);
+    expect(attachedRows().length).toBeGreaterThan(0);
+
+    // The attached rows are all in FRONT of the question. They are `user`
+    // rows, so a request that ends with one of them reads to the model as a
+    // turn with no question in it -- which is the defect this file pins.
+    const questionIndex = rows.findIndex((r) => r.content.includes(QUESTION));
+    const attachedAfter = rows.findIndex(
+      (r, index) => index > questionIndex && r.content.includes(RAIL_ENVELOPE),
+    );
+    expect(attachedAfter).toBe(-1);
+  });
+});
+
+describe('the request ends with the question in every shape the host can produce', () => {
+  it('holds for a turn whose history is empty', async () => {
+    // No prior row: the prompt is the ONLY thing the person said, and the
+    // rail is the only thing after it. This is the shortest path to the
+    // defect, so it is the one that must not regress.
+    installDbIpc();
+    const agent = makeWorkerSession({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: `${SESSION_ID}-empty`,
+      workingDirectory: workspaceDir,
+      permissionMode: 'bypassPermissions',
+    });
+
+    await driveTurn(agent, QUESTION, {
+      options: { sessionId: `${SESSION_ID}-empty`, clientMsgId: CLIENT_MSG_ID } as never,
+    });
+
+    expect(rows.filter((r) => r.content.includes(QUESTION))).toHaveLength(1);
+    expect(rows.at(-1)?.content).toContain(QUESTION);
+  });
+
+  it('holds for a turn whose history already has an assistant reply', async () => {
+    // The realistic shape: a question, the model's answer, and then the next
+    // question. The prompt must still end the request.
+    installDbIpc();
+    const agent = makeWorkerSession({
+      apiKey: 'test-key',
+      model: 'claude-test',
+      provider: 'anthropic',
+      sessionId: `${SESSION_ID}-replied`,
+      workingDirectory: workspaceDir,
+      permissionMode: 'bypassPermissions',
+    });
+    agent.setMessages([
+      { id: PRIOR_ID, role: 'user', content: PRIOR, timestamp: Date.now() },
+      { id: 'prior-assistant-1', role: 'assistant', content: 'here is what I found', timestamp: Date.now() },
+    ] as never);
+
+    await driveTurn(agent, QUESTION, {
+      options: { sessionId: `${SESSION_ID}-replied`, clientMsgId: CLIENT_MSG_ID } as never,
+    });
+
+    expect(rows.filter((r) => r.content.includes(QUESTION))).toHaveLength(1);
+    expect(rows.at(-1)?.content).toContain(QUESTION);
   });
 });
