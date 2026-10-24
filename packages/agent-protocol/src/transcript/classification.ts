@@ -203,6 +203,10 @@ export const TOKEN_USAGE_FIELDS: Classified<import('./content.js').TokenUsage> =
   cache_creation_tokens: 'json-wire',
   // Aggregator name; absent for direct API calls.
   upstreamProvider: 'json-wire',
+  // Physical provider-request duration, measured at the provider call. A
+  // json-wire number because a consumer on the far side of the wire is what
+  // turns it into a throughput.
+  request_duration_ms: 'json-wire',
   // Per-call ledger, absent on legacy rows — parsers fall back to the
   // cumulative fields above.
   calls: 'json-wire',
