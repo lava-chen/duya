@@ -340,7 +340,18 @@ Every wave updates this file with completed facts and outstanding consumers.
   equivalent to the Desktop's answer (with `installPath` and `manifest`)
   needs the plugin manifest reader and the install-directory layout moved down
   into `plugin-core` — a separate slice.
+- CI run 40066793619 (head `3941cbad`): `architecture`, `typecheck` and `build`
+  green; the `test` job red with **every affected test green** (82 files, 668
+  passed, 6 skipped) plus one `Uncaught Exception: ENOENT ... /tmp/duya-cron-test-*/logs/app.log`
+  originating in `apps/desktop/src/main/cli/handlers/crons.test.ts`. That is the
+  known desktop logger defect fixed by PR #397 (`e269c53e`), which was still
+  OPEN and CONFLICTING against master on 2026-10-24 — so every PR touching
+  `packages/host/src` or `packages/data/src` hits it. This branch cherry-picks
+  `e269c53e`; once #397 lands, one of the two copies can be dropped, since the
+  content is identical and will not conflict.
 - Next action: review PR #420 and, once authorized, integrate it. PR #381
   (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
   same authorization to sync master and rebuild its bundle before it can be
-  integrated.
+  integrated. Note that PR #381's head commit `08f8de89` has no check run at
+  all (the last green run, 40063606946, covers `404103eb`); syncing master will
+  re-trigger CI for it.
