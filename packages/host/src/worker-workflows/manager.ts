@@ -77,6 +77,7 @@ export interface WorkflowRunStoreLike {
     definition: unknown;
     definitionHash?: string;
     definitionHashSource?: 'dag' | 'dwf-script';
+    maxConcurrency?: number;
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
   }): Promise<void>;
@@ -85,6 +86,7 @@ export interface WorkflowRunStoreLike {
     definition: unknown;
     definitionHash?: string;
     definitionHashSource?: 'dag' | 'dwf-script';
+    maxConcurrency?: number;
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
   } | null>;
@@ -146,6 +148,8 @@ export class WorkflowManager {
   private readonly inFlight = new Map<string, AbortController>();
   /** Live engine handle for run-scoped concurrency retuning. */
   private readonly liveEngines = new Map<string, WorkflowEngine>();
+  /** Serialize snapshot writes so concurrent retunes cannot reorder the gate and durable value. */
+  private readonly concurrencyRetuneTails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: WorkflowManagerOptions) {}
 
@@ -154,12 +158,44 @@ export class WorkflowManager {
     return [...this.inFlight.keys()];
   }
 
-  /** Change the run gate in place; returns false if this run is not executing. */
-  setRunConcurrency(runId: string, maxConcurrency: number): boolean {
-    const engine = this.liveEngines.get(runId);
-    if (!engine) return false;
-    engine.setMaxConcurrency(maxConcurrency, runId);
-    return true;
+  /** Persist a live run gate change before applying it; false means no live engine existed on entry. */
+  async setRunConcurrency(runId: string, maxConcurrency: number): Promise<boolean> {
+    if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+      throw new Error('concurrency limit must be an integer >= 1');
+    }
+
+    const prior = this.concurrencyRetuneTails.get(runId) ?? Promise.resolve();
+    let releaseTurn!: () => void;
+    const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    const tail = prior.then(() => turn);
+    this.concurrencyRetuneTails.set(runId, tail);
+    await prior;
+
+    try {
+      const engine = this.liveEngines.get(runId);
+      if (!engine) return false;
+      const snapshot = await this.options.store.loadSnapshot(runId);
+      if (!snapshot) throw new Error(`workflow snapshot missing for live run ${runId}`);
+
+      await this.options.store.saveSnapshot({
+        runId,
+        definition: snapshot.definition,
+        ...(snapshot.definitionHash !== undefined ? { definitionHash: snapshot.definitionHash } : {}),
+        ...(snapshot.definitionHashSource !== undefined ? { definitionHashSource: snapshot.definitionHashSource } : {}),
+        maxConcurrency,
+        nodeStack: snapshot.nodeStack,
+        journal: [],
+      });
+
+      // If execution settled while the snapshot write was in flight, the durable setting still applies to a later recovery.
+      if (this.liveEngines.get(runId) === engine && engine.maxConcurrency !== maxConcurrency) {
+        engine.setMaxConcurrency(maxConcurrency, runId);
+      }
+      return true;
+    } finally {
+      releaseTurn();
+      if (this.concurrencyRetuneTails.get(runId) === tail) this.concurrencyRetuneTails.delete(runId);
+    }
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
@@ -170,6 +206,7 @@ export class WorkflowManager {
     }
     const def = validation.def;
     const definitionHash = this.definitionHash(def);
+    const maxConcurrency = this.configuredMaxConcurrency();
 
     // Trigger idempotency (§7): at-least-once delivery must not double-run.
     if (input.dedupKey) {
@@ -193,6 +230,7 @@ export class WorkflowManager {
       definition: def,
       definitionHash,
       definitionHashSource: 'dag',
+      maxConcurrency,
       nodeStack: [],
       journal: [],
     });
@@ -203,6 +241,7 @@ export class WorkflowManager {
       const { outcome, verification } = await this.executeRun(run.id, def, input.params ?? {}, {
         signal: input.signal ?? abort.signal,
         expectedDefinitionHash: definitionHash,
+        maxConcurrency,
       });
       return this.toLaunchResult(outcome, verification);
     } finally {
@@ -225,6 +264,7 @@ export class WorkflowManager {
       return { status: 'invalid', errors: validation.errors };
     }
     const validatedDef = validation.def;
+    const maxConcurrency = this.configuredMaxConcurrency();
     const run = await this.options.store.createRun({
       workflowName: validatedDef.name,
       workflowVersionId: `${validatedDef.name}@${Date.now()}`,
@@ -239,6 +279,7 @@ export class WorkflowManager {
       definition: validatedDef,
       definitionHash: this.definitionHash(validatedDef),
       definitionHashSource: 'dag',
+      maxConcurrency,
       nodeStack: [],
       journal: [],
     });
@@ -254,7 +295,7 @@ export class WorkflowManager {
     }
     const prepared = await this.prepareDagSnapshot(snap);
     if ('error' in prepared) {
-      return { status: 'failed', runId, errorClass: 'definition_hash_mismatch', error: prepared.error };
+      return { status: 'failed', runId, errorClass: prepared.errorClass, error: prepared.error };
     }
     await this.options.store.updateStatus(runId, 'active', null);
     const abort = new AbortController();
@@ -263,6 +304,7 @@ export class WorkflowManager {
       const { outcome, verification } = await this.executeRun(runId, prepared.def, run.params, {
         signal: abort.signal,
         expectedDefinitionHash: prepared.definitionHash,
+        maxConcurrency: prepared.maxConcurrency,
       });
       return this.toLaunchResult(outcome, verification);
     } finally {
@@ -286,7 +328,7 @@ export class WorkflowManager {
     }
     const prepared = await this.prepareDagSnapshot(snap);
     if ('error' in prepared) {
-      return { status: 'failed', runId, errorClass: 'definition_hash_mismatch', error: prepared.error };
+      return { status: 'failed', runId, errorClass: prepared.errorClass, error: prepared.error };
     }
     const journal = await this.recoveryJournal(runId, snap.journal as JournalRecord[]);
 
@@ -300,6 +342,7 @@ export class WorkflowManager {
         token: resume.token,
         decision: resume.decision,
         expectedDefinitionHash: prepared.definitionHash,
+        maxConcurrency: prepared.maxConcurrency,
       });
       return this.toLaunchResult(outcome, verification);
     } finally {
@@ -319,7 +362,7 @@ export class WorkflowManager {
     }
     const prepared = await this.prepareDagSnapshot(snap);
     if ('error' in prepared) {
-      return { status: 'failed', runId, errorClass: 'definition_hash_mismatch', error: prepared.error };
+      return { status: 'failed', runId, errorClass: prepared.errorClass, error: prepared.error };
     }
     const journal = await this.recoveryJournal(runId, snap.journal as JournalRecord[]);
     await this.options.store.updateStatus(runId, 'active', null);
@@ -330,6 +373,7 @@ export class WorkflowManager {
         signal: abort.signal,
         journal,
         expectedDefinitionHash: prepared.definitionHash,
+        maxConcurrency: prepared.maxConcurrency,
       });
       return this.toLaunchResult(outcome, verification);
     } finally {
@@ -396,6 +440,14 @@ export class WorkflowManager {
 
   // ─── internals ───
 
+  private configuredMaxConcurrency(): number {
+    const maxConcurrency = this.options.maxConcurrency ?? this.options.concurrency ?? defaultConcurrency();
+    if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+      throw new Error('concurrency limit must be an integer >= 1');
+    }
+    return maxConcurrency;
+  }
+
   private definitionHash(def: WorkflowDef): string {
     return computeDefinitionHash(def, createWorkflowRuntimePorts(this.options.secret).hash);
   }
@@ -405,31 +457,48 @@ export class WorkflowManager {
     definition: unknown;
     definitionHash?: string;
     definitionHashSource?: 'dag' | 'dwf-script';
+    maxConcurrency?: number;
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: unknown[];
-  }): Promise<{ def: WorkflowDef; definitionHash: string } | { error: string }> {
+  }): Promise<
+    | { def: WorkflowDef; definitionHash: string; maxConcurrency: number }
+    | { error: string; errorClass: 'definition_hash_mismatch' | 'invalid_run_snapshot' }
+  > {
     if (snap.definitionHashSource !== undefined && snap.definitionHashSource !== 'dag') {
-      return { error: 'stored definition is not a DAG workflow' };
+      return { error: 'stored definition is not a DAG workflow', errorClass: 'definition_hash_mismatch' };
     }
     const validation = validateWorkflow(snap.definition);
-    if (!validation.ok || !validation.def) return { error: 'stored DAG definition is invalid' };
+    if (!validation.ok || !validation.def) {
+      return { error: 'stored DAG definition is invalid', errorClass: 'definition_hash_mismatch' };
+    }
+    if (snap.maxConcurrency !== undefined && (!Number.isInteger(snap.maxConcurrency) || snap.maxConcurrency < 1)) {
+      return {
+        error: 'stored maxConcurrency must be an integer >= 1',
+        errorClass: 'invalid_run_snapshot',
+      };
+    }
+    const maxConcurrency = snap.maxConcurrency ?? this.configuredMaxConcurrency();
     const definitionHash = this.definitionHash(validation.def);
     if (snap.definitionHash !== undefined && snap.definitionHash !== definitionHash) {
-      return { error: 'workflow definition hash does not match the stored snapshot' };
+      return {
+        error: 'workflow definition hash does not match the stored snapshot',
+        errorClass: 'definition_hash_mismatch',
+      };
     }
-    if (snap.definitionHash === undefined || snap.definitionHashSource === undefined) {
-      // Older snapshots are anchored by their frozen definition; write the
-      // calculated full hash once so all subsequent recoveries are checked.
+    if (snap.definitionHash === undefined || snap.definitionHashSource === undefined || snap.maxConcurrency === undefined) {
+      // Older snapshots are anchored by their frozen definition and current
+      // default cap; write both once so subsequent recoveries are stable.
       await this.options.store.saveSnapshot({
         runId: snap.runId,
         definition: validation.def,
         definitionHash,
         definitionHashSource: 'dag',
+        maxConcurrency,
         nodeStack: snap.nodeStack,
         journal: [],
       });
     }
-    return { def: validation.def, definitionHash };
+    return { def: validation.def, definitionHash, maxConcurrency };
   }
 
   private async recoveryJournal(runId: string, legacySnapshotJournal: JournalRecord[]): Promise<Journal> {
@@ -473,6 +542,7 @@ export class WorkflowManager {
       token?: string;
       decision?: 'approve' | 'deny' | 'timeout';
       expectedDefinitionHash?: string;
+      maxConcurrency?: number;
     },
   ): Promise<{ outcome: EngineOutcome; verification?: VerifyVerdict | undefined }> {
     const records: JournalRecord[] = [];
@@ -496,7 +566,7 @@ export class WorkflowManager {
       ports: createWorkflowRuntimePorts(this.options.secret),
       approvalMode: this.options.approvalMode ?? 'await',
       agentBudget: this.options.agentBudget,
-      maxConcurrency: this.options.maxConcurrency ?? this.options.concurrency ?? defaultConcurrency(),
+      maxConcurrency: opts.maxConcurrency ?? this.configuredMaxConcurrency(),
       onObservation: this.options.onObservation,
       signal: opts.signal,
     });

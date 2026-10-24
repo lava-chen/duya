@@ -119,12 +119,20 @@ describe('the standalone Host workflow run domain', () => {
       await host.dispatch('workflowRun:saveSnapshot', {
         runId: 'run-1',
         definition: { nodes: ['node-a'] },
+        maxConcurrency: 3,
         nodeStack: [{ nodeId: 'node-a', status: 'running' }],
         journal: [],
       });
 
       const snapshot = await host.dispatch('workflowRun:loadSnapshot', { runId: 'run-1' }) as Record<string, unknown>;
-      expect(snapshot).toMatchObject({ runId: 'run-1' });
+      expect(snapshot).toMatchObject({ runId: 'run-1', maxConcurrency: 3 });
+      await expect(host.dispatch('workflowRun:saveSnapshot', {
+        runId: 'run-1',
+        definition: { nodes: ['node-a'] },
+        maxConcurrency: 0,
+        nodeStack: [],
+        journal: [],
+      })).rejects.toMatchObject<Partial<WorkerDbBridgeError>>({ code: 'invalid_payload' });
     } finally {
       core.close();
       fs.rmSync(root, { recursive: true, force: true });
