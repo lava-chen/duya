@@ -9,13 +9,18 @@ interface FakeTuiOptions {
   readonly isBusy: () => boolean;
   readonly queuedPrompts: () => readonly string[];
   readonly queuePaused: () => boolean;
+  readonly onBackgroundTasksRefresh?: () => void;
+  readonly onBackgroundTaskOpen?: (task: unknown) => void;
 }
 
 interface FakeTui {
   readonly options: FakeTuiOptions;
   readonly users: string[];
   readonly frames: unknown[];
+  readonly snapshots: unknown[];
+  readonly panels: Array<{ title: string; lines: readonly string[] }>;
   readonly errors: string[];
+  taskViewOpen: boolean;
   stopped: boolean;
 }
 
@@ -25,7 +30,10 @@ vi.mock('../tui/index.js', () => ({
   TUIApp: class {
     readonly users: string[] = [];
     readonly frames: unknown[] = [];
+    readonly snapshots: unknown[] = [];
+    readonly panels: Array<{ title: string; lines: readonly string[] }> = [];
     readonly errors: string[] = [];
+    taskViewOpen = false;
     stopped = false;
     readonly options: FakeTuiOptions;
 
@@ -46,6 +54,10 @@ vi.mock('../tui/index.js', () => ({
     clearTranscript(): void {}
     chooseFiltered(): Promise<string | null> { return Promise.resolve(null); }
     choose(): Promise<string | null> { return Promise.resolve(null); }
+    setBackgroundTasks(snapshot: unknown): void { this.snapshots.push(snapshot); }
+    hasRunningBackgroundTasks(): boolean { return false; }
+    isTaskViewOpen(): boolean { return this.taskViewOpen; }
+    showPanel(title: string, lines: readonly string[]): void { this.panels.push({ title, lines }); }
   },
   shouldUseTui: () => true,
 }));
@@ -95,6 +107,8 @@ function makeClient(overrides: Record<string, unknown> = {}): HostSessionHttpCli
     watchAgentRunEvents: vi.fn(async function* (_runId: RunId) {}),
     getAgentRun: vi.fn(async () => ({ status: 'completed' })),
     cancelAgentRun: vi.fn(async () => undefined),
+    listBackgroundTasks: vi.fn(async () => ({ observed: false, tasks: [] })),
+    readBackgroundTaskOutput: vi.fn(async () => null),
   };
   return { ...defaults, ...overrides } as unknown as HostSessionHttpClient;
 }
@@ -305,5 +319,79 @@ describe('chatTui production callback wiring', () => {
     await expect(running).resolves.toBe(0);
     expect(starts).toEqual(['active']);
     expect(app.users).toEqual(['active']);
+  });
+
+  it('reads the background task snapshot when the task view asks for one', async () => {
+    const snapshot = {
+      observed: true,
+      tasks: [{ id: 'task-1', command: 'npm run dev', status: 'running', startedAtMs: 1 }],
+    };
+    const client = makeClient({ listBackgroundTasks: vi.fn(async () => snapshot) });
+    const { running, app } = await startChat(client);
+
+    app.taskViewOpen = true;
+    app.options.onBackgroundTasksRefresh?.();
+
+    await waitUntil(() => app.snapshots.length === 1);
+    expect(client.listBackgroundTasks).toHaveBeenCalledWith('session-1');
+    expect(app.snapshots[0]).toEqual(snapshot);
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('opens a bash task detail with the output tail', async () => {
+    const client = makeClient({
+      readBackgroundTaskOutput: vi.fn(async () => ({
+        taskId: 'task-1',
+        text: 'listening on 3000',
+        totalBytes: 18,
+        truncated: false,
+      })),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onBackgroundTaskOpen?.({
+      id: 'task-1',
+      kind: 'bash',
+      title: 'npm run dev',
+      status: 'running',
+      startedAtMs: Date.now(),
+    });
+
+    await waitUntil(() => app.panels.length === 1);
+    expect(client.readBackgroundTaskOutput).toHaveBeenCalledWith('session-1', 'task-1');
+    expect(app.panels[0]?.title).toBe('Background task');
+    expect(app.panels[0]?.lines.join('\n')).toContain('listening on 3000');
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('describes a subagent without reading bash output', async () => {
+    const client = makeClient();
+    const { running, app } = await startChat(client);
+    const now = Date.now();
+
+    app.options.onBackgroundTaskOpen?.({
+      id: 'agent-1',
+      kind: 'subagent',
+      title: 'Explore',
+      detail: 'finder',
+      status: 'completed',
+      startedAtMs: now,
+      endedAtMs: now,
+      summary: 'found the answer',
+    });
+
+    await waitUntil(() => app.panels.length === 1);
+    expect(client.readBackgroundTaskOutput).not.toHaveBeenCalled();
+    expect(app.panels[0]?.title).toBe('Subagent');
+    const body = app.panels[0]?.lines.join('\n') ?? '';
+    expect(body).toContain('found the answer');
+    expect(body).toContain('transcript is not shown here');
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
   });
 });

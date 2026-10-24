@@ -652,7 +652,14 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
       workflowRunApi,
       runApi: createHostRunApi(core.stores),
-      ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
+      ...(runExecution === undefined || runExecution === null
+        ? {}
+        : {
+          runExecutionApi: runExecution,
+          // The index lives on the execution controller because that is the
+          // only object holding the worker message link it is fed from.
+          localBackgroundTaskApi: runExecution.backgroundTasks,
+        }),
       goalApi,
       modeStateApi,
       taskApi,

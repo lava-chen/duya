@@ -19,10 +19,9 @@
  * These are not declarations with no producers. `tool.arguments_delta` is
  * published straight from `run-engine.ts:1320`; the whole `compaction.*` family
  * from `packages/agent-runtime/src/engine/compaction.ts`;
- * `subagent.*` / `assistant.mode_changed` / `assistant.goal_updated` /
- * `turn.retry_scheduled` / `hook.invoked` from
- * `chat-event-translator.ts`. Every one of those events is minted by the engine
- * leg that production actually runs.
+ * `assistant.mode_changed` / `assistant.goal_updated` / `turn.retry_scheduled`
+ * / `hook.invoked` from `chat-event-translator.ts`. Every one of those events
+ * is minted by the engine leg that production actually runs.
  *
  * ## What this test does and does not claim
  *
@@ -85,14 +84,6 @@ const DECLARED_UNPROJECTED: Record<string, { reason: string; suspicious?: true }
     },
     'assistant.goal_updated': {
         reason: 'Minted by `chat-event-translator.ts:378`. The goal tracker is a user-visible surface elsewhere; here it updates silently.',
-        suspicious: true,
-    },
-    'subagent.started': {
-        reason: 'Minted by `chat-event-translator.ts:490`. A sub-agent can run for minutes behind one tool call, and this is the only event that says so.',
-        suspicious: true,
-    },
-    'subagent.completed': {
-        reason: 'Minted by `chat-event-translator.ts:500`. The completion half of the pair above; dropping both makes the parent tool line the only signal.',
         suspicious: true,
     },
     'compaction.started': {
