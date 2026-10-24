@@ -339,11 +339,8 @@ Every wave updates this file with completed facts and outstanding consumers.
   reliable count). This branch now covers 11 of them — the workflow run
   domain (create / updateStatus / finish / saveSnapshot / loadSnapshot /
   appendJournal / loadJournal), `turn-review:save`, `attachment:store` and
-  the three `sendMessageState:*` writes. The 9 left are:
-  - `session:create` / `session:search` — not pure wiring: `session:create`
-    resolves the model from the provider config first, and
-    `session:search` goes through the Desktop's `searchHostSessionRows`
-    helper, which has no `packages/host` equivalent yet.
+  the three `sendMessageState:*` writes. The session domain (see the third
+  cut below) took `session:create` and `session:search`; **7 are left**:
   - `config:agents:create` / `config:agents:update` — the write side of
     `config.toml`'s `[agents.*]` still lives in
     `apps/desktop/src/main/config/agents.ts`; it has to move into packages.
@@ -372,9 +369,63 @@ Every wave updates this file with completed facts and outstanding consumers.
   unhandled exception; the local CI-equivalent scope
   (`npx vitest run --changed=origin/master --maxWorkers=2`) was 210 files /
   2128 cases with 2119 passed and 9 skipped, exit 0.
+- CI run 40068101938 (head `ca0eaee7`) and run 40069474501 (head `0bc45679`):
+  **all five jobs green** — the workflow-run cut and its bundle reached
+  master-base CI without a red job.
+
+## Third cut — the session domain (`7a3ae41b`, `571540a8`)
+
+The session domain was the next worker-facing surface that the standalone
+Host did not serve, and the first one where the Host answered with the
+WRONG SHAPE rather than with nothing:
+
+- `session:create` — not served. The worker writes it when it spawns a
+  sub-agent (`worker-subagents/service.ts`), so on the standalone Host the
+  child session row never existed. The write is wrapped in a `catch` that
+  only warns, so the run continued as if the row had been created.
+- `session:search` — not served. The session-search tool
+  (`worker-tool-services/session-search.ts`) then answered "no session
+  matched" for every query.
+- `session:list` — served, but with the raw core rows (`parentSessionId`,
+  `workingDirectory`). The worker reads the legacy `parent_id` /
+  `working_directory`, so its parent map was empty and the recent-session
+  list was blank. The Desktop bridge answers the same action with
+  `coreSessionToIpcRow` rows.
+- `session:listByWorkingDirectory` — not served, although the worker client
+  exposes it.
+
+What the cut does:
+
+- The bridge serves `session:create` (permission profile resolved through
+  the Host session API, the working directory registered as a workspace, the
+  spawn edge recorded), `session:search` (rows plus the matched snippet)
+  and `session:listByWorkingDirectory`, and answers `session:list` in the
+  legacy row shape by paging the local-session API.
+- `ipcSessionToCoreCreate` moved to `@duya/host/ipc-row-adapters`; the
+  Desktop re-exports it, the same way it re-exports `coreSessionToIpcRow`.
+  Both bridges now map the same flat payload with one implementation.
+- `local-host.ts` builds the local-session API once and shares it between
+  the HTTP surface and the bridge, and passes the workspace registration
+  API that the create path needs.
+- A missing Host API fails fast and names the domain
+  (`unimplemented_domain`), the same contract as the other cuts.
+
+Verification, all from the worktree root:
+`npx vitest run packages/host/tests/worker-db-bridge-session.test.ts` → 9/9;
+the whole `packages/host/tests` run → 183 files / 1675 passed / 1 skipped,
+exit 0; the nine `worker-db-bridge-*` files → 48/48; the Desktop adapter
+suites (`core-db-adapters`, `db-handlers`) → 75/75;
+`npm run typecheck:all` → exit 0; `npm run architecture:check` → exit 0
+(2648 tolerated, no new violations); `npm run bundle:verify` → FRESH 0/919.
+
 - Next action: review PR #420 and, once authorized, integrate it. PR #381
   (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
   same authorization to sync master and rebuild its bundle before it can be
   integrated. Note that PR #381's head commit `08f8de89` has no check run at
   all (the last green run, 40063606946, covers `404103eb`); syncing master will
   re-trigger CI for it.
+- The next worker surface after this one is the `[agents.*]` write side of
+  `config.toml`, which still lives in
+  `apps/desktop/src/main/config/agents.ts` and has to move into packages
+  before `config:agents:create` / `config:agents:update` can be served.
+  The automation (cron) API does not exist in the Host at all yet.
