@@ -22,6 +22,7 @@ export interface ResumeTarget {
   sessionId: string;
   agentName?: string;
   workingDirectory?: string;
+  checkout?: { root: string; cwd: string; baseSha: string };
   history: Message[];
 }
 
@@ -36,7 +37,9 @@ interface SubagentSessionRow {
   agent_type?: string | null;
   agent_name?: string | null;
   parent_session_id?: string | null;
+  parent_id?: string | null;
   working_directory?: string | null;
+  checkout?: unknown;
 }
 
 /** Resolve and replay a child session while enforcing parent ownership. */
@@ -78,12 +81,25 @@ export async function resolveResumeTarget(
       message: `resume_from "${resumeFrom}" is a top-level session, not a sub-agent session. Only sub-agent ids can be resumed.`,
     };
   }
-  if (input.parentSessionId && row.parent_session_id && row.parent_session_id !== input.parentSessionId) {
+  const parentId = row.parent_session_id ?? row.parent_id;
+  if (input.parentSessionId && parentId !== input.parentSessionId) {
     return {
       ok: false,
       code: 'foreign_session',
       message: `resume_from "${resumeFrom}" belongs to a different parent session and cannot be resumed from here.`,
     };
+  }
+
+  let checkout: ResumeTarget['checkout'];
+  if (row.checkout !== undefined && row.checkout !== null) {
+    const record = row.checkout;
+    if (typeof record !== 'object' || !('root' in record) || typeof record.root !== 'string'
+      || !('cwd' in record) || typeof record.cwd !== 'string'
+      || !('baseSha' in record) || typeof record.baseSha !== 'string'
+      || !record.root || !record.cwd) {
+      return { ok: false, code: 'load_failed', message: `Session ${resumeFrom} has an invalid checkout attachment; refusing to change its execution directory.` };
+    }
+    checkout = { root: record.root, cwd: record.cwd, baseSha: record.baseSha };
   }
 
   let history: Message[];
@@ -120,6 +136,7 @@ export async function resolveResumeTarget(
     sessionId: resumeFrom,
     ...(row.agent_name ? { agentName: row.agent_name } : {}),
     ...(row.working_directory ? { workingDirectory: row.working_directory } : {}),
+    ...(checkout ? { checkout } : {}),
     history,
   };
 }

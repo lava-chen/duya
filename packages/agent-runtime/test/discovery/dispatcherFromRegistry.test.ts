@@ -64,6 +64,30 @@ function makeDeps(
 
 const REQUEST = { tool_id: TOOL_ID, arguments: {} };
 
+describe('tool_invoke execution admission hook', () => {
+  it('returns the final admission refusal without calling the captured executor', async () => {
+    const { deps, execute } = makeDeps('bypassPermissions');
+    const acquire = vi.fn(() => ({ result: 'context changed', error: true as const, errorCode: 'stale_execution_context' }));
+    const outcome = await createToolInvokeDispatcherFromRegistry({ ...deps, acquireExecutionLease: acquire }).dispatch(REQUEST);
+    expect(outcome.errorCode).toBe('stale_execution_context');
+    expect(acquire).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('releases admission after the executor settles (throws=%s)', async (throws) => {
+    const { deps, execute } = makeDeps('bypassPermissions');
+    const release = vi.fn();
+    execute.mockImplementationOnce(async () => {
+      expect(release).not.toHaveBeenCalled();
+      if (throws) throw new Error('failed');
+      return { result: 'done' };
+    });
+    const outcome = await createToolInvokeDispatcherFromRegistry({ ...deps, acquireExecutionLease: () => ({ release }) }).dispatch(REQUEST);
+    expect(outcome.error === true).toBe(throws);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('tool_invoke dispatcher: ask with no interactive user', () => {
   it('denies rather than executing when the mode wants the user to be asked', async () => {
     for (const mode of ['default', 'auto', 'acceptEdits', 'plan'] as PermissionMode[]) {

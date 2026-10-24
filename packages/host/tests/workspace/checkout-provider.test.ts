@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { git, makeRepo, tempDir, useIsolatedDataRoot, withCeiling } from './fixtures.js';
 import { createCheckoutProvider, GitCheckoutProvider } from '../../src/workspace/checkout-provider.js';
@@ -123,6 +123,32 @@ describe('create', () => {
 });
 
 describe('list', () => {
+  it('keeps the creation base after HEAD advances and the provider restarts', async () => {
+    const repo = makeRepo({ subdirectory: 'src' });
+    const created = await provider().create({ sourceCwd: path.join(repo, 'src'), ownerSessionId: '', label: 'immutable base' });
+    writeFileSync(path.join(created.root, 'change.txt'), 'new commit');
+    git(created.root, 'add', '.');
+    git(created.root, 'commit', '-qm', 'advance detached HEAD');
+    expect(git(created.root, 'rev-parse', 'HEAD')).not.toBe(created.baseSha);
+    const listed = await new GitCheckoutProvider().list(path.join(repo, 'src'));
+    expect(listed[0]?.baseSha).toBe(created.baseSha);
+    expect(listed[0]?.cwd).toBe(created.cwd);
+  });
+
+  it('reports unknown base for a legacy checkout without creation metadata', async () => {
+    const repo = makeRepo();
+    const created = await provider().create({ sourceCwd: repo, ownerSessionId: '', label: 'legacy base' });
+    unlinkSync(git(created.root, 'rev-parse', '--path-format=absolute', '--git-path', 'duya-checkout.json'));
+    expect((await provider().list(repo))[0]?.baseSha).toBe('');
+  });
+
+  it('does not replace corrupt creation metadata with current HEAD', async () => {
+    const repo = makeRepo();
+    const created = await provider().create({ sourceCwd: repo, ownerSessionId: '', label: 'corrupt base' });
+    writeFileSync(git(created.root, 'rev-parse', '--path-format=absolute', '--git-path', 'duya-checkout.json'), '{broken');
+    await expect(provider().list(repo)).rejects.toMatchObject({ code: 'resolve_failed' });
+  });
+
   it('returns only managed checkouts of this repository', async () => {
     const repo = makeRepo();
     const managed = await provider().create({ sourceCwd: repo, ownerSessionId: '', label: 'listed' });

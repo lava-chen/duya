@@ -31,6 +31,8 @@ import { buildToolParamsDisplay } from '@duya/capabilities/AppConnectionTool/app
 import { WorkerPool, getWorkerPool, type WorkerTaskExtended } from '@duya/host/worker-tool-pool';
 import { logger } from '@duya/host/worker-logger';
 import { LEGACY_TODO_WIRE_NAMES, TODO_TOOL_NAME } from '@duya/capabilities/TodoTool/TodoTool';
+import { checkCheckoutToolWrite } from '../workspace/tool-write-gate.js';
+import { acquireExecutionLocation } from '../workspace/execution-location-fence.js';
 
 export type {
   CanUseToolDecision,
@@ -158,7 +160,12 @@ export function createAgentToolExecutionPorts(
   if (config?.workerTools && config.workerTools.length > 0) {
     const workerPool: WorkerPool = getWorkerPool();
     ports.worker = {
-      executeTask: (request) => {
+      executeTask: async (request) => {
+        const denial = await checkCheckoutToolWrite({
+          toolName: request.toolName, input: request.input,
+          workingDirectory: request.workingDirectory, sessionId: request.sessionId,
+        });
+        if (denial) return { taskId: request.id, success: false, result: denial.message, error: denial.code };
         const task: WorkerTaskExtended = {
           id: request.id,
           toolName: request.toolName,
@@ -170,7 +177,13 @@ export function createAgentToolExecutionPorts(
           ...(request.onOutput ? { onOutput: request.onOutput } : {}),
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
         };
-        return workerPool.executeTask(task);
+        const lease = acquireExecutionLocation(context, request.workingDirectory);
+        if (!lease.ok) return { taskId: request.id, success: false, result: `[${lease.code}] ${lease.message}`, error: lease.code };
+        try {
+          return await workerPool.executeTask(task);
+        } finally {
+          lease.release();
+        }
       },
     };
   }

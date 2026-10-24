@@ -1,7 +1,7 @@
 # 621 — Coding Workspace Lifecycle Harness（Session → Checkout → ChangeSet → Integration）
 
-状态：active（契约阶段）· 负责人：codex/worktree-lifecycle · 更新：2026-10-22
-分支：`codex/worktree-lifecycle` · worktree：`.claude/worktrees/worktree-lifecycle` · base：`2e6f265d`（origin/master）
+状态：active（既有 A–F 已合并；P0 PR #460 与 P1a draft PR #465 待 review/CI；执行屏障已实现与验证）· 负责人：Codex `/root` · 更新：2026-10-24
+分支：`codex/worktree-p1` · worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（P0）；接续见文末。
 
 关联：[496 Worktree 框架](./496-worktree-framework-implementation.md)（提供隔离实现，本计划接续其「统一生命周期 / 回收 / journal」三项未完成范围）·
 [587 C6 ControlPlane 与 Workspace](../active/587-agent-harness-monorepo/07-control-plane-and-workspace.md)（C6.2 身份、C6.3 resolver、C6.5 Goal/Task）·
@@ -42,7 +42,7 @@
 | 新建 checkouts / leases 表，或任何 Checkout 的 DB 镜像 | 归属权威是 checkout 内的 owner 文件；加了表就是第二份真相，且崩溃后无法与 git 对账（见决策 D2） |
 | 全自动 Merge、自动 GC、Worktree Pool | 用户明确不要求；先做可审计、可恢复、安全 |
 | 在 `packages/agent` 内新增权威实现 | 该包正在退役（根 `AGENTS.md`） |
-| 新增 agent 可调用的 worktree 工具 | codex 全仓 `core/src/tools/` 无此类工具，worktree 是 shell/UX 能力；duya 只保留既有的 `isolation:'worktree'` 与 CLI 入口 |
+| 在执行位置切换屏障完成前暴露 agent worktree 工具 | 用户于 2026-10-24 明确要求推进主会话工具；原“不新增工具”的决策被覆盖。先完成执行位置一致性，再接入工具与三端 |
 | 改 `.architecture-baseline.json` / `architecture-policy.yaml` | 根规则禁止用指纹掩盖新增违规 |
 | 跨 session 工作单元（Task 的第二套模型） | 用户决定推后到第二波；第一波 A/B/C 不依赖它，见「待决」 |
 
@@ -173,7 +173,7 @@ Integration ──N:M ──> Session（first_seen / last_seen，同一 PR 跨�
 | 起会话顺序 | 建 checkout → 在 checkout 起 thread → **回读 cwd 比对** → 绑定 → 失败则保留并报错 | **抄**（这是 duya 当前缺的最关键一步） |
 | resume cwd 不一致 | 提示用户选择，不静默切换 | **抄**（duya 现在静默） |
 | PR / CI / Merge | 不在本地；云端任务 + prompt 层署名 | **不抄**：本计划要求离线可答，需一张 `observed_*` 投影表 |
-| agent 工具面 | 无 worktree 工具 | **抄**，不新增 |
+| agent 工具面 | 无 worktree 工具 | **不抄**；按用户新要求，在 P1 执行屏障上接入 enter/exit |
 | 自动清理 | keep-count 15，Desktop 侧实现，CLI 禁用 | **不抄**：只做手动 + 显式授权 |
 
 ## 迁移与 schema
@@ -449,6 +449,117 @@ export interface CheckoutProvider {
 未提交路径：无。
 外部副作用：无。
 回收：`wl-f`、`wl-f-web`、`wl-f-tui`、`wl-f-desktop` 四个 worktree 已摘除，owner 即本计划。
-下一步：无。场景 1–7 全部落地并验证。
+下一步：既有场景 1–7 已验收；后续执行见下方 P0 接续。
 
 遗留（需用户手工处理）：`C:\Users\lavachen\.duya\worktrees\` 下有 6 个早期测试残留的 checkout 目录（`duya-identity-repo-*` 2 个、`duya-questions-repo-*` 4 个）。根因已修（`isolateCheckoutStorage()` 改为 `await` 且用 `DUYA_APP_DATA_PATH` 隔离，新跑不再产生残留），但这 6 个目录在工作区外，回收站策略不允许 agent 删除。
+
+## P0 接续：执行归属与隔离恢复（2026-10-24）
+
+状态：active · owner：Codex `/root` · 分支：`codex/worktree-p0`
+worktree：`/workspace/work/duya-worktree-p0` · base：`686f3c81eace1477010b3b94c74f59ac78732a36`
+
+### 目标与边界
+
+让现有隔离 checkout 在真实工具执行中校验写入归属；父会话可在自己的目录恢复隔离子代理，子代理仍使用原 checkout；创建基线在提交与重启后不漂移；模型不再被提示合并不存在的分支。
+独占范围：Host workspace / tool execution / subagent 链路、对应测试、capabilities 的子代理提示及本计划。当前没有共享任务查询工具，已通过版本化计划与 Git 对账；Harness 无 managed-worktree 创建工具，按开发指南手工创建独立 linked worktree。
+主会话 enter/exit、子会话隔离参数、三端操作 UI 与 sync-base 属于后续 P1–P4，本轮不改 UI。
+
+### 验收与进度
+
+- [x] 记录当前相关测试基线：8 files，84 passed / 1 skipped。
+- [x] 持久化创建基线；新 Provider 实例在 HEAD 前进后仍返回原 base，历史缺失时不把 HEAD 冒充 base。
+- [x] 恢复隔离子代理时验证原 checkout、重新绑定原 owner，并把原 cwd 传到前台/后台执行；丢失或被占用时拒绝。
+- [x] 在真实 registry 与 worker 派发边界校验写入；保留读能力，覆盖实际路径及 deferred 调用。
+- [x] detached HEAD 提示统一使用 commit / checkpoint，不承诺不存在的分支。
+- [x] 独立进程验收发现并修复 BashWorker CJS 的 `createRequire(import.meta.url)` 崩溃；真实 worker 的 owner 写入成功，非 owner 拒绝。
+- [x] 相关回归、`typecheck:all`、`architecture:check` 与必要构建；提交任务分支并创建 [draft PR #460](https://github.com/lava-chen/duya/pull/460)。
+
+### 发现与决策
+
+- `assertWritable` 当前只有定义和测试，生产 registry / worker 分支未接入。
+- `service.ts` 将子代理原 cwd 与父 cwd 比较后拒绝，工具没有让父会话指定原 cwd 的参数。
+- Provider `list()` 将注册 HEAD 填入 `baseSha`，与不可变创建基线契约相冲突。
+- 兼容现有 owner 文件；新增创建元数据不改变归属权威。文件/工具边界检查不宣称提供任意 shell 命令的 OS 级路径隔离。
+- 真实 worker DB bridge 返回 `parent_id`，原 resume 校验只读 `parent_session_id`；现在兼容两者并拒绝缺失或不同父会话。checkout 附件也随本地行适配器透传，缺失 checkout 不回退到父目录。
+- Shell 的“只读命令”分类不是写入隔离证据（包括解释器与复合命令），因此非 owner 保留 Read/Grep/Glob，shell 一律需要 owner；普通手工 linked worktree 未被 Duya 管理时不受 owner 文件限制。
+- 基线复现检出：`/workspace/work/duya-worktree-p0-base`，detached `686f3c81`，源码未改，仅独立 workspace overlay 与本检出相同的第三方依赖；未穿过共享链接安装。保留至任务交付后核对回收。
+- 安装的 Node 依赖和 SQLite 已验证可用。根 postinstall 的 Electron rebuild 最初因用户目录缓存不可写失败；后续以工作目录缓存准备 Electron，完整 `electron:build` 已通过。没有修改 home 或关掉 TLS 校验。
+- 扩展到 Host/Runtime 302 files：296 passed，6 failed；34 个失败全部在未修改源码的基线重现，按 `(file, test, error)` 比对无新增。原因均为旧测试硬编码写入受限的用户目录，与本轮改动无关，未修改这些测试。
+- 显式 `check-packaged-artifacts.mjs --bundle` 在本轮和原始 base 构建中都报 `ajv-formats/dist/formats` 自包含扫描 finding。命中位于依赖的代码生成模板字符串；本轮不改扫描器或缺陷 baseline，也不将此项报告为通过，交 PR review 评估。
+
+### 验证记录与接续
+
+环境：Linux / Node v24.19.0；验证源为 base `686f3c81` + 本轮源码，已提交至 `bcb2e7b9`（worker 产物提交）；随后仅修改文档。独立依赖与本检出产物。
+
+| 命令 / 操作 | 退出码 / 结果 | 范围 |
+| --- | --- | --- |
+| 变更前目标 vitest | 0；8 files，84 passed / 1 skipped | workspace、subagent 参数/隔离、deferred dispatcher |
+| `npm run build:packages` | 0 | base 的全包构建 |
+| 目标 vitest（含新增回归） | 0；19 files，177 passed / 1 skipped | workspace、subagents、runtime discovery/execution |
+| `npm run typecheck:all`（两轮） | 0 | 全仓类型与静态检查；最后一次 Host adapter 次序调整随最终完整构建重验 |
+| `npm run architecture:check` | 0；2725 tolerated，无新增违规 | 未改 baseline |
+| Host/Runtime vitest | 1；302 files，296 passed / 6 failed；2869 passed / 34 failed / 1 expected fail / 1 skipped | 失败集已在 base 逐项复现，新增失败 0 |
+| base 的上述 6 个失败文件 | 1；34 failed / 23 passed | `(file, test, error)` 与改动检出一致 |
+| `npm run electron:build` | 0 | 第一轮完整构建；真实 worker 随后暴露 URL 初始化问题，已修复并重建 worker |
+| `checkout-shell-worker.test.ts` | 0；1 passed | 真 pipeline → 真 pool → 本检出 bundled BashWorker 子进程；验证磁盘成果与拒绝路径 |
+| `check-packaged-artifacts.mjs --bundle` | 1；`ajv-formats/dist/formats` finding | 原始 base 同样复现，未改 baseline |
+| 最终 `npm run electron:build` | 0 | 包含 BashWorker URL 修复；Host 也重新类型构建 |
+| 最终 `npm run architecture:check` | 0；2725 tolerated，无新增违规 | 最终源代码，未改 baseline |
+| 最终 Host/Runtime vitest | 1；303 files，297 passed / 6 failed；2873 passed / 34 failed / 1 expected fail / 1 skipped | 包含真 BashWorker 子进程；34 个失败签名与 base 完全相同 |
+| `npm run bundle:verify` @ `bcb2e7b9` | 0；FRESH，0/950 | 主 worker 与独立 BashWorker 都已刷新 |
+
+已实现并验证 P0，交付 [draft PR #460](https://github.com/lava-chen/duya/pull/460)；未合并。代码、测试、构建脚本和产物已提交并推送，本文档随最后一个交付记录提交；无其他任务的改动。
+副作用：任务分支已推送、已创建 draft PR；独立依赖/构建/测试数据及基线检出保留。未发布或合并。
+回收：未回收；待 PR 集成与合并后验证。
+下一步：核对 #460 最新 head 的 review/CI，处理本 PR 引入的问题；后续 P1 实现主会话 enter/exit 与执行屏障。原有测试和显式 bundle 扫描的基线问题已在 PR 中列明，未作通过声明。
+
+### P0 CI 修正（2026-10-24）
+
+最新接续：`c4eeef11` 已在本任务检出接入 `master@f6120e04`。源代码无冲突，三个生成 bundle 由合并后的源码重新构建，未按冲突两侧选择旧产物。同步后的 `typecheck:all`、`electron:build`、`architecture:check`、`agent-retirement-gate`（772/772，新增 0）均 exit 0；workspace / subagents / Runtime discovery+execution 及 master 新增相关回归 25 files，222 passed / 1 skipped，exit 0。日志为 `/workspace/work/duya-worktree-p0-sync-*.log`。依赖变更来自 master，安装只在本检出真实 node_modules 进行，额外 lockfile 重排已精确撤销。
+同步前 GitHub 将 #460 标为生成产物冲突，未运行 `c4eeef11` 的新 CI；本次同步提交后重新核对最新 head。未授权集成，保留 draft 和两个证据检出。P1a 的 per-session 执行屏障在独立分支 `codex/worktree-p1` 继续推进。
+
+`d8e7b845` 的 GitHub 类型检查与测试已通过；architecture job 在独立的 Agent retirement reference ratchet 失败。新增真实 shell worker 测试重复硬编码了 worker 产物路径，增加一个 selector。测试现在复用生产 `resolveBashWorkerPath`，该函数支持注入 bundle 目录；不改门禁或 baseline。
+修正后的 `typecheck:all`、`electron:build`、`architecture:check`、`agent-retirement-gate`（772/772，新增 0）与真实 shell worker 测试均 exit 0。日志留在 `/workspace/work/duya-worktree-p0-ci-fix-*.log`；验证环境与上表一致。生成的 worker bundle 随源代码更新。P0 仍待最新远端 CI 与 review，不合并。
+
+## P1a 接续：执行位置版本与切换屏障（2026-10-24）
+
+状态：active · owner：Codex `/root` · 分支：`codex/worktree-p1`
+worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（依赖 #460；不合并）
+
+### 本轮目标与边界
+
+先完成 P1 的执行安全切片：每个 WorkerSession 持有单调递增的执行位置版本；一轮工具上下文捕获版本，排队或等待审批后的旧调用不得在切换后执行。切换必须等待当前前台工具结束；切换进行中阻止新工具进入。所有 registry、独立 shell worker、deferred executor 路径遵守同一屏障，异常时归还执行占用。
+本轮不暴露 enter/exit 工具或 UI：run manifest、权限与 prompt 当前按 run 冻结，必须在后续切片一起接续；本轮不能宣称主会话 enter/exit 已完成。屏障仅管本 worker 的前台工具执行，后台 shell 活跃性与持久化切换 journal 仍是主会话工具接入的前置条件。
+独占范围：Host session / tool dispatch、Runtime deferred dispatch 的零 IO lease hook、相应测试、生成 worker 产物与本文档。无 workspace_get_context 或 managed worktree 创建工具，使用版本化计划/Git 对账与手工 linked worktree；第三方依赖复用 P0，workspace overlay 和产物属于本检出。
+
+### 验收
+
+- [x] 记录相关测试基线：Host workspace 9 files / 84 passed / 1 skipped；Runtime discovery/execution 9 files / 61 passed。
+- [x] 单调版本防止 A→B→A 后旧调用重新有效；切换失败/取消也不恢复旧版本。
+- [x] 同步取得执行占用，在最后一个异步检查之后拒绝过期上下文；执行中拒绝目录切换，异常释放占用。
+- [x] 普通 registry、真 BashWorker 与 deferred 调用覆盖；等待审批或排队的旧调用没有磁盘副作用。
+- [x] 新一轮上下文可继续执行；既有未附带屏障的外部调用保持兼容。
+- [x] `typecheck:all`、`architecture:check`、`agent-retirement-gate`、必要构建与相关测试；提交依赖 P0 的 [draft PR #465](https://github.com/lava-chen/duya/pull/465)。
+
+### 验证与接续
+
+本轮源码已接入 WorkerSession 与三条派发路径；run 活跃期间的裸 `setWorkingDirectory` 明确拒绝，不能伪装成一次完整的 worktree 切换。未来 enter/exit 需要独立的控制操作能力处理自身执行占用，并把 journal、后台任务与下一轮 prompt/permission/skills 重建连成一个事务；本轮不按工具名偷偷豁免屏障。
+Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/workspace/work/test-data-p1`。首次针对性验证 21 files / 161 passed / 1 skipped（包括真实 shell 子进程）。Host/Runtime 扩大回归 310 files / 304 passed / 6 failed；2933 passed / 34 failed / 1 expected fail / 1 skipped。6 个失败文件在 P0 `c4eeef11` 重跑，34 个 `(file, test, error)` 签名完全一致，无新增失败；见本地 `duya-worktree-p1-failure-comparison.json`。
+`architecture:check` exit 0（2726 tolerated，无新增违规）；`agent-retirement-gate` exit 0（772/772，新增 0）。首次完整类型检查与最后的同步回调类型收窄后 Host 构建均 exit 0。源码提交 `6f8c432d`。
+期间 master 更新到 `f6120e04`。P0 #460 的三个生成 bundle 冲突已通过源码重建解决，推送 `ac73b758` 后 CI 重新运行。本轮也接入该 master 并按新依赖验证，第三方依赖安装只在 P0 真实 node_modules 执行，没有穿过本 worktree 的链接安装。
+
+| 最终验证（`501299bf`，包含 master 同步与本检出产物） | 退出码与结果 |
+| --- | --- |
+| `npm run typecheck:all` | 0 |
+| `npm run electron:build` | 0；完整 desktop / worker / CLI / gateway / recorder 构建 |
+| `npm run architecture:check` | 0；无新增违规 |
+| `npm run agent-retirement-gate` | 0；772/772，新增 0 |
+| Host / Runtime vitest | 1；313 files，307 passed / 6 failed；2967 passed / 34 failed / 1 expected fail / 1 skipped |
+| 基线失败对比 | 0；34 个 `(file, test, error)` 与 P0 完全一致；新增 0 |
+| `npm run bundle:verify` | 0；FRESH，0/953 first-party inputs changed |
+| 显式 `check-packaged-artifacts.mjs --bundle` | 1；仅既有 `ajv-formats/dist/formats` finding；与 P0 `ac73b758` 报告逐项一致，未改扫描器或 baseline |
+
+日志为 `/workspace/work/duya-worktree-p1-final-*.log`；失败对比 `duya-worktree-p1-final-failure-comparison.json`。最后接入 P0 `ac73b758` 时，已用 `git diff --exit-code 501299bf -- . ':!docs' ':!packages/host/bundle'` 证明源码与依赖完全一致，复用本检出已验收的 P1 bundle，保留 P0 最新接续记录。没有用 P0 产物覆盖 P1 实现。
+已交付：[draft PR #465](https://github.com/lava-chen/duya/pull/465)，依赖 [#460](https://github.com/lava-chen/duya/pull/460)，源码与产物 head 为 `f4854159`，本记录随交付文档提交；本轮源码无未提交改动。第三方依赖 overlay 为本地 untracked 配置，未进入 PR。
+远端：#460 的 `ac73b758` 已通过 architecture（包含修复后的退役引用门禁）与 test scope，类型、测试、构建继续运行；#465 刚创建，CI / review 待完成。两个 PR 均保留 draft，未合并、未发布、未回收。
+下一步：核对 #465 最新 head 的 CI / review，修复本 PR 引入的问题；P1b 接入 Host 持久化切换 journal、后台任务占用、主会话 enter/exit 工具，以及下一模型轮的 prompt / permission / skills / catalog 原子刷新。之后再接子会话隔离参数与三端共用入口。P1a 完成不代表 P1 主会话工具已完成。

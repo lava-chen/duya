@@ -172,6 +172,8 @@ export interface ChatRequestBody {
     systemPrompt?: string;
 }
 export interface ToolUseContext {
+    /** Host-owned process-local admission capability, captured when the turn is assembled. */
+    executionLocation?: import('./workspace/execution-location-fence.js').ExecutionLocationSnapshot;
     toolUseId: string;
     getAppState: () => AppState;
     setAppState: (f: (prev: AppState) => AppState) => void;
