@@ -98,7 +98,7 @@ master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `pac
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
 - 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；合入 `origin/master`（`4bf210cc`，12 个 commit，含重写行内绘制的 PR #455）后全部重跑一遍。
-- 未合并：PR 见下（保持可 review 状态，未获授权不合并）。
+- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（保持可 review 状态，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
 - 下一步：PR head 的必需 review 与必需 CI 全绿后同步 master 重验，再请用户授权集成。
