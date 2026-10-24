@@ -1,9 +1,14 @@
 /**
  * e2e/perf/scenarios/stream.mjs — the streaming display under load.
  *
- * Two fixtures:
- *   perf/stream-long-reply  one long reply, streamed token by token
- *   perf/stream-tool-storm  a large number of tool events flowing in
+ * Three fixtures:
+ *   perf/stream-long-reply          one long reply, streamed token by token
+ *   perf/stream-long-reply-fenced   the same reply with code blocks in it
+ *   perf/stream-tool-storm          a large number of tool events flowing in
+ *
+ * The fenced fixture is the one that shows what a syntax-highlighted code
+ * block costs while a reply is still growing: the plain fixture is prose, so
+ * it measures nothing but the prose path.
  *
  * CHANNELS
  *
@@ -37,7 +42,12 @@ import {
 } from '../lib/launch.mjs';
 import { installCollector, readCollector, resetCollector } from '../lib/collector.mjs';
 import { startLoopbackProvider } from '../lib/loopback-provider.mjs';
-import { buildStreamChunks, buildToolStormRows, fixtureDigest } from '../lib/fixtures.mjs';
+import {
+  buildFencedStreamChunks,
+  buildStreamChunks,
+  buildToolStormRows,
+  fixtureDigest,
+} from '../lib/fixtures.mjs';
 import { openSeededSession, snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
@@ -139,17 +149,25 @@ async function readTranscriptState(page) {
 export default {
   id: 'stream',
   title: 'Streaming display under a sustained flow of content',
-  fixture: 'perf/stream-long-reply, perf/stream-tool-storm',
+  fixture: 'perf/stream-long-reply, perf/stream-long-reply-fenced, perf/stream-tool-storm',
 
   async run(ctx) {
     const samples = [];
     const notes = {};
 
-    for (const fixtureId of ['perf/stream-long-reply', 'perf/stream-tool-storm']) {
+    for (const fixtureId of [
+      'perf/stream-long-reply',
+      'perf/stream-long-reply-fenced',
+      'perf/stream-tool-storm',
+    ]) {
       const digest = fixtureDigest(fixtureId);
       notes[fixtureId] = { digest };
       const isToolStorm = fixtureId === 'perf/stream-tool-storm';
-      const chunks = isToolStorm ? null : buildStreamChunks(fixtureId);
+      const chunks = isToolStorm
+        ? null
+        : fixtureId === 'perf/stream-long-reply-fenced'
+          ? buildFencedStreamChunks(fixtureId)
+          : buildStreamChunks(fixtureId);
       const storm = isToolStorm ? buildToolStormRows(fixtureId) : null;
 
       for (let index = 0; index < ctx.options.samples; index += 1) {

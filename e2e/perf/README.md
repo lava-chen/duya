@@ -46,8 +46,15 @@ the report says so.
 | `perf/session-1000` | 1 000 history messages |
 | `perf/session-10000` | 10 000 history messages |
 | `perf/stream-long-reply` | one long reply, streamed token by token |
+| `perf/stream-long-reply-fenced` | the same reply with code blocks in it |
 | `perf/stream-tool-storm` | 200 tool calls (400 rows) flowing in |
 | `perf/typing-30s` | 30 s of typing, one keystroke per 60 ms |
+
+The fenced long reply exists because the plain one is prose: without a code
+block there is no syntax highlighting, so the harness cannot see what a
+highlighted block costs while the reply is still growing. The two fixtures
+have the same size, the same cadence and the same vocabulary, so the
+difference between their numbers is the highlighting.
 
 A history fixture repeats a 10-row block: 40 % user text, 40 % assistant
 text, 20 % tool rows (`tool_use` + its `tool_result`). The rows are shaped
