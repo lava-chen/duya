@@ -20,6 +20,7 @@ export { volcengineModels } from './volcengine.models.js';
 export { bailianModels } from './bailian.models.js';
 export { bedrockModels } from './bedrock.models.js';
 export { googleModels } from './google.models.js';
+export { xiaomiModels } from './xiaomi.models.js';
 
 import type { Model } from '../types.js';
 import { minimaxModels } from './minimax.models.js';
@@ -39,6 +40,7 @@ import { volcengineModels } from './volcengine.models.js';
 import { bailianModels } from './bailian.models.js';
 import { bedrockModels } from './bedrock.models.js';
 import { googleModels } from './google.models.js';
+import { xiaomiModels } from './xiaomi.models.js';
 
 export const allProviderModels: Model[] = [
   ...minimaxModels,
@@ -59,4 +61,5 @@ export const allProviderModels: Model[] = [
   ...bailianModels,
   ...bedrockModels,
   ...googleModels,
+  ...xiaomiModels,
 ];
