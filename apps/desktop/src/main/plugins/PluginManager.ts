@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, getBuiltinPluginsSourceDir, resolveIconUrl } from './catalog';
+import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, resolveIconUrl } from './catalog';
+import { getBuiltinPluginsSourceDirs } from './builtin-manifest';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { clonePluginFromGit } from './marketplace/git-source';
 import { PluginRegistryStore } from './PluginRegistryStore';
@@ -438,10 +439,12 @@ export class PluginManager {
         if (hasPluginManifest(catalogEntry.marketplacePluginDir)) {
           copyDirectoryRecursive(catalogEntry.marketplacePluginDir, stagingPath);
         } else {
-          // Marketplace clone is empty/missing; fall back to builtin source if available
-          const builtinSourceDir = getBuiltinPluginsSourceDir();
-          const builtinPluginDir = path.join(builtinSourceDir, catalogEntry.name);
-          if (fs.existsSync(builtinPluginDir) && hasPluginManifest(builtinPluginDir)) {
+          // Marketplace clone is empty/missing; fall back to the shipped
+          // builtin sources if one of them holds this plugin.
+          const builtinPluginDir = getBuiltinPluginsSourceDirs()
+            .map((dir) => path.join(dir, catalogEntry.name))
+            .find((dir) => fs.existsSync(dir) && hasPluginManifest(dir));
+          if (builtinPluginDir) {
             this.logger.info('Marketplace plugin dir empty, falling back to builtin source', {
               pluginId: catalogEntry.id,
               marketplaceDir: catalogEntry.marketplacePluginDir,
@@ -453,7 +456,6 @@ export class PluginManager {
             this.logger.warn('Marketplace plugin dir empty and no builtin source found', {
               pluginId: catalogEntry.id,
               marketplaceDir: catalogEntry.marketplacePluginDir,
-              builtinDir: builtinPluginDir,
             }, LogComponent.Main);
             const manifestPath = path.join(stagingPath, 'plugin.json');
             fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
