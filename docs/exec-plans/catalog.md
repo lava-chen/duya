@@ -11,7 +11,8 @@
 | [2026-10-21-public-tree-cleanup](active/2026-10-21-public-tree-cleanup.md) | — | 清理公开根目录，迁移文档入口和打包配置，核对链接与产物 |
 | [2026-10-23-multi-agent-orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | — | 多 agent 编排的测试体系与优化方案；Phase 1 补子 agent 状态机测试（当前零覆盖），Phase 2 做 DAG 并行与失败级联 |
 | [2026-10-23-desktop-performance-hill-climbing](active/2026-10-23-desktop-performance-hill-climbing.md) | — | Desktop 性能爬坡：5 Agent 独占路径并行，A 先交 Harness，B/C/D/E 各自建基线并各出一个可证明收益的 PR |
-| [2026-10-25-host-config-agents-write](active/2026-10-25-host-config-agents-write.md) | — | config 写侧下沉：`[agents]` 规则与写侧进 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update` |
+| [2026-10-25-host-config-agents-write](active/2026-10-25-host-config-agents-write.md) | — | config 写侧下沉：`[agents]` 规则与写侧进 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update`；PR #433 已合并 |
+| [2026-10-25-host-plugin-install-path](active/2026-10-25-host-plugin-install-path.md) | — | 插件安装路径下沉：独立 Host 解析 `installPath` 与最小 manifest，恢复插件技能与 MCP |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |

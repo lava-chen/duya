@@ -420,23 +420,36 @@ export interface PluginCapabilities {
   mcpServers: McpServerCapability[]
 }
 
+/**
+ * The MCP server declarations of a plugin directory.
+ *
+ * The native `mcp/servers.json` wins when present; the standard Agent
+ * Plugins `mcp.json` is the fallback so a duya-authored plugin never gets
+ * the same server injected twice. `discoverAllCapabilities` resolves the
+ * servers through this same function, so both entry points agree.
+ *
+ * Callers that only need the servers use this directly: the full
+ * capability discovery also walks the commands, agents, skills, hooks and
+ * workflow directories.
+ */
+export function discoverPluginMcpServers(
+  pluginDir: string,
+  options?: AgentPluginsMcpOptions,
+): McpServerCapability[] {
+  const nativeMcp = discoverMcpServers(pluginDir)
+  return nativeMcp.length > 0 ? nativeMcp : discoverAgentPluginsMcpServers(pluginDir, options)
+}
+
 export function discoverAllCapabilities(
   pluginDir: string,
   options?: AgentPluginsMcpOptions,
 ): PluginCapabilities {
-  // Native `mcp/servers.json` wins when present; fall back to the standard
-  // Agent Plugins `mcp.json` otherwise so a duya-authored plugin never gets
-  // the same server injected twice.
-  const nativeMcp = discoverMcpServers(pluginDir)
   return {
     commands: discoverCommands(pluginDir),
     agents: discoverAgents(pluginDir),
     skills: discoverSkills(pluginDir),
     hooks: discoverHooks(pluginDir),
     workflows: discoverWorkflows(pluginDir),
-    mcpServers:
-      nativeMcp.length > 0
-        ? nativeMcp
-        : discoverAgentPluginsMcpServers(pluginDir, options),
+    mcpServers: discoverPluginMcpServers(pluginDir, options),
   }
 }
