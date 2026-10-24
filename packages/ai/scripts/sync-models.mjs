@@ -607,6 +607,22 @@ const perMillion = (value) => round6((value || 0) * 1e6);
 const toArray = (value) =>
   value === undefined ? [] : Array.isArray(value) ? value : [value];
 
+/**
+ * Order model ids by code unit, not by locale.
+ *
+ * `localeCompare` sorts through ICU collation, whose result depends on the
+ * default locale of the process. The nightly refresh runs on a Linux runner
+ * while the shards were written on a developer machine, so a locale-sensitive
+ * order can turn "nothing changed upstream" into a whole-shard reordering
+ * every single night. Code-unit order is the same on every machine and every
+ * Node build, which is what makes the nightly job's "no change" early exit
+ * mean what it says.
+ */
+function compareIds(a, b) {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 function matchesFilters(id, section) {
   if (section.include && !section.include.includes(id)) return false;
   for (const pattern of section.exclude ?? []) {
@@ -939,7 +955,7 @@ async function main() {
       }
 
       const blocks = [];
-      const ids = [...upstream.keys()].sort((a, b) => a.localeCompare(b));
+      const ids = [...upstream.keys()].sort(compareIds);
       for (const id of ids) {
         const model = upstream.get(id);
         const previous = existing.get(id);
@@ -965,7 +981,7 @@ async function main() {
           }
           blocks.sort((a, b) => {
             const idOf = (block) => block.match(/id: '([^']+)'/)?.[1] ?? '';
-            return idOf(a).localeCompare(idOf(b));
+            return compareIds(idOf(a), idOf(b));
           });
         }
       }
