@@ -86,6 +86,14 @@ import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
+import {
+  SessionCompactor,
+  SessionSideQuestioner,
+} from './session-compaction.js';
+import type {
+  HostSessionCompactionApiV1,
+  HostSessionSideQuestionApiV1,
+} from '@duya/agent-protocol';
 import { createHostResearchApi } from './research-api.js';
 import { createHostWorkspaceLifecycleApis } from './workspace-lifecycle-api.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
@@ -514,11 +522,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
       ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     });
+    // Hoisted out of the worker block below: the session-level exits are
+    // composed from the same run layer and log through the same sink.
+    const executionLogger: HostRunExecutionLogger =
+      diagnosticsSink === 'file'
+        ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
+        : createStdioDiagnosticsLogger();
     if (options.workerPath !== undefined) {
-      const executionLogger: HostRunExecutionLogger =
-        diagnosticsSink === 'file'
-          ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
-          : createStdioDiagnosticsLogger();
       const sessionService = createHostSessionService({
         sessions: api,
         runs: createHostRunApi(core.stores),
@@ -611,6 +621,39 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       integrations: core.stores.integrations,
     });
 
+    // The session-level exits. They exist only when this Host actually owns
+    // a worker manager: a Host that cannot reach a worker cannot compact a
+    // session or answer a side question, and saying so with a 404 and a named
+    // code is honest where a route that always fails is not.
+    let sessionCompactionApi: HostSessionCompactionApiV1 | undefined;
+    let sideQuestionApi: HostSessionSideQuestionApiV1 | undefined;
+    if (runExecution !== null) {
+      const workerManager = runExecution.supervision.workerManager;
+      const workerPort = {
+        hasWorker: (sessionId: string): boolean => workerManager.hasWorker(sessionId),
+        sendCommand: (sessionId: string, command: Record<string, unknown>): boolean =>
+          workerManager.sendCommand(sessionId, command),
+        onWorkerMessage: (
+          listener: (sessionId: string, message: Record<string, unknown>) => void,
+        ): (() => void) =>
+          workerManager.addMessageListener((sessionId, message) => {
+            listener(sessionId, message);
+          }),
+      };
+      sessionCompactionApi = new SessionCompactor(
+        {
+          ...workerPort,
+          // A session with a live, unsettled run is mid-turn. Compacting it
+          // underneath the running turn would rewrite the history the turn is
+          // still reasoning about.
+          isSessionBusy: (sessionId: string): boolean =>
+            runExecution.currentSessionAttempt(sessionId) !== null,
+        },
+        { logger: executionLogger },
+      );
+      sideQuestionApi = new SessionSideQuestioner(workerPort, { logger: executionLogger });
+    }
+
     server = new HostSessionHttpServer({
       api,
       localSessionApi,
@@ -660,6 +703,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           // only object holding the worker message link it is fed from.
           localBackgroundTaskApi: runExecution.backgroundTasks,
         }),
+      ...(sessionCompactionApi === undefined ? {} : { sessionCompactionApi }),
+      ...(sideQuestionApi === undefined ? {} : { sideQuestionApi }),
       goalApi,
       modeStateApi,
       taskApi,

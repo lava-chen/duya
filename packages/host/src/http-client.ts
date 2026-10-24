@@ -274,6 +274,13 @@ const RUN_REQUEST_TIMEOUT_MS = 25_000;
 // namespace methods below for why the default is wrong for them.
 const CHECKOUT_REQUEST_TIMEOUT_MS = 15_000;
 const INTEGRATION_SYNC_REQUEST_TIMEOUT_MS = 30_000;
+// A compaction is a multi-minute LLM call and a side question is a short one.
+// Both client budgets are LONGER than the server's own executor budgets
+// (10 minutes for a compaction, 2 minutes for a side question), so the
+// caller sees the SERVER's verdict rather than a client-side timeout that
+// would hide it.
+const COMPACT_REQUEST_TIMEOUT_MS = 11 * 60_000;
+const SIDE_QUESTION_REQUEST_TIMEOUT_MS = 3 * 60_000;
 
 export class HostSessionHttpError extends Error {
   constructor(
@@ -578,53 +585,113 @@ export class HostSessionHttpClient implements
       }
       throw hostErrorFromPayload(response.status, payload);
     }
-    if (!response.body) throw new HostSessionHttpError(502, 'missing_event_stream');
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
     // The durable log can omit non-durable envelopes, so seq may jump. It must
     // remain strictly increasing for a valid exclusive reconnect cursor.
     let lastSeq = query.afterSeq ?? 0;
-    try {
-      let done = false;
-      while (!done) {
-        const chunk = await reader.read();
-        done = chunk.done;
-        buffer += decoder.decode(chunk.value, { stream: !done });
-        for (;;) {
-          const boundary = /\r?\n\r?\n/.exec(buffer);
-          if (!boundary || boundary.index === undefined) break;
-          const frame = buffer.slice(0, boundary.index);
-          buffer = buffer.slice(boundary.index + boundary[0].length);
-          const parsed = parseServerSentFrame(frame);
-          if (!parsed) continue;
-          if (parsed.event === 'error') throw hostStreamError(parsed.data);
-          if (parsed.event !== 'run') continue;
-          const envelope = parseRunEventEnvelope(parsed.data, runId);
-          if (envelope.seq <= lastSeq) throw new HostSessionHttpError(502, 'run_event_sequence_regression');
-          lastSeq = envelope.seq;
-          yield envelope;
-        }
-      }
-      if (buffer.trim().length > 0) {
-        const parsed = parseServerSentFrame(buffer);
-        if (parsed?.event === 'error') throw hostStreamError(parsed.data);
-        if (parsed?.event === 'run') {
-          const envelope = parseRunEventEnvelope(parsed.data, runId);
-          if (envelope.seq <= lastSeq) throw new HostSessionHttpError(502, 'run_event_sequence_regression');
-          lastSeq = envelope.seq;
-          yield envelope;
-        }
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
+    for await (const parsed of readServerSentFrames(response)) {
+      if (parsed.event === 'error') throw hostStreamError(parsed.data);
+      if (parsed.event !== 'run') continue;
+      const envelope = parseRunEventEnvelope(parsed.data, runId);
+      if (envelope.seq <= lastSeq) throw new HostSessionHttpError(502, 'run_event_sequence_regression');
+      lastSeq = envelope.seq;
+      yield envelope;
     }
 
     if (!query.signal?.aborted) {
       const run = await this.getAgentRun(runId);
       if (run === null) throw new HostSessionHttpError(404, 'run_not_found');
       if (run.terminal === null) throw new HostSessionHttpError(502, 'run_event_stream_ended');
+    }
+  }
+
+  /**
+   * Compact a session's context.
+   *
+   * The answer is a STREAM, not a document: a compaction is a multi-minute
+   * LLM call, so the Host sends `compact:started`, keepalives while the
+   * worker works, and exactly one terminal frame (`compact:completed` or
+   * `compact:failed`).
+   *
+   * The client owns its own timeout instead of reusing the run budget: the
+   * run budget (25s) is shorter than a compaction takes, and the server's
+   * executor timeout (10 min) is what actually bounds the operation. This
+   * client's budget is LONGER than the server's, so the server's own verdict
+   * is what the caller sees rather than a client-side timeout.
+   */
+  async *compactSession(
+    sessionId: SessionId,
+    options?: { instructions?: string; signal?: AbortSignal },
+  ): AsyncIterable<{ event: string; data: unknown }> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.token}`,
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+    };
+    const body = JSON.stringify(
+      options?.instructions === undefined ? {} : { instructions: options.instructions },
+    );
+    const request = requestSignal(COMPACT_REQUEST_TIMEOUT_MS, options?.signal);
+    try {
+      const response = await fetch(
+        `${this.origin}/v1/sessions/${encodeURIComponent(sessionId)}/compact`,
+        { method: 'POST', headers, body, signal: request.signal },
+      );
+      if (!response.ok) {
+        let payload: unknown;
+        try {
+          payload = await response.json();
+        } catch {
+          throw new HostSessionHttpError(response.status, 'invalid_response');
+        }
+        throw hostErrorFromPayload(response.status, payload);
+      }
+      for await (const frame of readServerSentFrames(response)) {
+        yield { event: frame.event, data: parseServerSentData(frame.data) };
+      }
+    } finally {
+      request.dispose();
+    }
+  }
+
+  /**
+   * Ask a session a side question: one answer, no transcript change, no run.
+   *
+   * Plain JSON rather than a stream, because the answer is a single short
+   * LLM call. The timeout is LONGER than the server's own side-question
+   * budget, so a caller sees the server's verdict instead of a client-side
+   * timeout.
+   */
+  async askSideQuestion(
+    sessionId: SessionId,
+    question: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ answer: string }> {
+    const request = requestSignal(SIDE_QUESTION_REQUEST_TIMEOUT_MS, options?.signal);
+    try {
+      const response = await fetch(
+        `${this.origin}/v1/sessions/${encodeURIComponent(sessionId)}/btw`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.token}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ question }),
+          signal: request.signal,
+        },
+      );
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new HostSessionHttpError(response.status, 'invalid_response');
+      }
+      if (!response.ok) throw hostErrorFromPayload(response.status, payload);
+      const answer = isObject(payload) && typeof payload.answer === 'string' ? payload.answer : '';
+      return { answer };
+    } finally {
+      request.dispose();
     }
   }
 
@@ -2247,6 +2314,90 @@ export class HostSessionHttpClient implements
 interface ServerSentFrame {
   readonly event: string;
   readonly data: string;
+}
+
+/**
+ * Read a `text/event-stream` response into its frames.
+ *
+ * ONE reader for every SSE stream this client consumes. A second parser
+ * would be a second set of rules about frame boundaries and error frames,
+ * and the two would drift.
+ */
+async function* readServerSentFrames(response: Response): AsyncIterable<ServerSentFrame> {
+  if (!response.body) throw new HostSessionHttpError(502, 'missing_event_stream');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    let done = false;
+    while (!done) {
+      const chunk = await reader.read();
+      done = chunk.done;
+      buffer += decoder.decode(chunk.value, { stream: !done });
+      for (;;) {
+        const boundary = /\r?\n\r?\n/.exec(buffer);
+        if (!boundary || boundary.index === undefined) break;
+        const frame = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        const parsed = parseServerSentFrame(frame);
+        if (!parsed) continue;
+        yield parsed;
+      }
+    }
+    if (buffer.trim().length > 0) {
+      const parsed = parseServerSentFrame(buffer);
+      if (parsed) yield parsed;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
+/**
+ * The payload of a server-sent frame, parsed as JSON when it can be.
+ *
+ * A frame whose data is not JSON is returned as the raw string rather than
+ * dropped: a caller that asked for the stream still has to be able to see
+ * what the server said.
+ */
+function parseServerSentData(data: string): unknown {
+  try {
+    return JSON.parse(data) as unknown;
+  } catch {
+    return data;
+  }
+}
+
+/**
+ * A request signal that times out on its own AND honours a caller's signal.
+ *
+ * `AbortSignal.timeout` alone cannot express "abort when EITHER this budget
+ * runs out or the caller gives up", and the caller must always be able to
+ * cancel a request it started.
+ */
+function requestSignal(
+  timeoutMs: number,
+  external: AbortSignal | undefined,
+): { readonly signal: AbortSignal; readonly dispose: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new HostSessionHttpError(504, 'request_timeout'));
+  }, timeoutMs);
+  timer.unref?.();
+  const onExternalAbort = (): void => {
+    controller.abort(external?.reason);
+  };
+  if (external !== undefined) {
+    if (external.aborted) controller.abort(external.reason);
+    else external.addEventListener('abort', onExternalAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener('abort', onExternalAbort);
+    },
+  };
 }
 
 function parseServerSentFrame(frame: string): ServerSentFrame | null {

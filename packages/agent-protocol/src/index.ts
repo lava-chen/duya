@@ -30,6 +30,8 @@ export * from './tasks.js';
 export * from './projects.js';
 export * from './session-api.js';
 export * from './session-fork.js';
+// Session-level exits that create no run: manual compaction and side questions.
+export * from './session-compaction.js';
 export * from './rollout-events.js';
 export type { JournalRecord } from './workflow-journal.js';
 export * from './workflow-runs.js';

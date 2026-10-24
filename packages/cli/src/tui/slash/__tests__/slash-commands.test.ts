@@ -118,11 +118,13 @@ function makeActions() {
   const interrupt = vi.fn();
   const adoptSession = vi.fn(async () => {});
   const startFreshSession = vi.fn(async () => {});
+  const reloadTranscript = vi.fn(async () => {});
   return {
     interrupt,
     adoptSession,
     startFreshSession,
-    actions: { interrupt, adoptSession, startFreshSession } satisfies TuiSlashActions,
+    reloadTranscript,
+    actions: { interrupt, adoptSession, startFreshSession, reloadTranscript } satisfies TuiSlashActions,
   };
 }
 
@@ -225,12 +227,15 @@ describe('slash registry', () => {
     // values against the actual names would pass no matter what was added.
     expect([...names].sort()).toEqual([
       'archive',
+      'btw',
       'capabilities',
       'checkout',
+      'compact',
       'context',
       'copy',
       'cost',
       'delete',
+      'diff',
       'effort',
       'export',
       'fork',

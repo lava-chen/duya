@@ -28,6 +28,8 @@ import type {
   CreateAgentRunInput,
   HostRunApiV1,
   HostRunExecutionApiV1,
+  HostSessionCompactionApiV1,
+  HostSessionSideQuestionApiV1,
   HostTaskApiV1,
   HostProjectApiV1,
   HostProjectCreateInput,
@@ -206,6 +208,7 @@ import type {
 import { HostSessionApiError } from './session-api.js';
 import { HostTaskApiError } from './task-api.js';
 import { HostRunApiError } from './run-api.js';
+import { HostSessionCompactionError } from './session-compaction.js';
 import { HostProjectApiError } from './project-api.js';
 import { isHostResearchAction, type HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 
@@ -377,6 +380,17 @@ export interface HostSessionHttpServerOptions {
   readonly runApi?: HostRunApiV1;
   /** Host-owned execution: start/cancel real runs (plan 12 gate 3). */
   readonly runExecutionApi?: HostRunExecutionApiV1;
+  /**
+   * Session-level manual compaction. Optional: a Host without a worker behind
+   * it cannot compact, and it answers 404 with a named code rather than
+   * pretending the session can be compacted.
+   */
+  readonly sessionCompactionApi?: HostSessionCompactionApiV1;
+  /**
+   * Session-level side questions. Optional for the same reason as the
+   * compaction capability above.
+   */
+  readonly sideQuestionApi?: HostSessionSideQuestionApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi: HostTaskApiV1;
@@ -2498,6 +2512,26 @@ export class HostSessionHttpServer {
       return;
     }
 
+    // The session-level exits MUST be matched before the generic session
+    // matcher below: `/v1/sessions/{id}/compact` and `/v1/sessions/{id}/btw`
+    // are session paths, and a generic matcher registered first would
+    // swallow them.
+    const sessionCompactMatch = /^\/v1\/sessions\/([^/]+)\/compact$/.exec(url.pathname);
+    if (req.method === 'POST' && sessionCompactMatch) {
+      const sessionId = this.#decodePathPart(sessionCompactMatch[1]!, res);
+      if (sessionId === null) return;
+      await this.#compactSession(sessionId as SessionId, req, res);
+      return;
+    }
+
+    const sessionBtwMatch = /^\/v1\/sessions\/([^/]+)\/btw$/.exec(url.pathname);
+    if (req.method === 'POST' && sessionBtwMatch) {
+      const sessionId = this.#decodePathPart(sessionBtwMatch[1]!, res);
+      if (sessionId === null) return;
+      await this.#askSideQuestion(sessionId as SessionId, req, res);
+      return;
+    }
+
     const sessionMatch = /^\/v1\/sessions\/([^/]+)$/.exec(url.pathname);
     if (sessionMatch) {
       const sessionId = this.#decodePathPart(sessionMatch[1]!, res);
@@ -4614,6 +4648,113 @@ export class HostSessionHttpServer {
     this.#sendJson(res, 404, { error: { code: 'not_found' } });
   }
 
+  /**
+   * Manual compaction of a session's context.
+   *
+   * The success answer is an SSE stream, because a compaction is a multi-minute
+   * LLM call: a silent connection is a connection a proxy will cut, so the
+   * stream carries a keepalive while the worker works.
+   *
+   * The failures are JSON, and they are decided BEFORE any header is written.
+   * That is why the capability RESERVES synchronously: a refusal (no worker,
+   * a busy session, a compaction already in flight) is an HTTP status, and a
+   * status cannot be chosen after the response has started.
+   */
+  async #compactSession(sessionId: SessionId, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const api = this.#options.sessionCompactionApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'agent_compaction_unavailable' } });
+      return;
+    }
+    const body = await this.#readJson(req, res);
+    if (body === null) return;
+    if (body.instructions !== undefined && typeof body.instructions !== 'string') {
+      this.#sendJson(res, 400, { error: { code: 'invalid_compact_request' } });
+      return;
+    }
+    const instructions = typeof body.instructions === 'string' ? body.instructions : undefined;
+    if (!(await this.#sessionExists(sessionId))) {
+      this.#sendJson(res, 404, { error: { code: 'session_not_found' } });
+      return;
+    }
+    const reservation = api.reserve({
+      sessionId,
+      ...(instructions === undefined ? {} : { instructions }),
+    });
+    if (!reservation.ok) {
+      this.#sendJson(res, reservation.status, { error: { code: reservation.code, message: reservation.message } });
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    try {
+      for await (const event of reservation.events) {
+        if (res.destroyed) break;
+        res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+        if (event.event === 'compact:completed' || event.event === 'compact:failed') break;
+      }
+    } catch (error) {
+      logger.error('Session compaction stream failed', error instanceof Error ? error : new Error(String(error)), { sessionId });
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(`event: compact:failed\ndata: ${JSON.stringify({
+          status: 'error',
+          code: 'internal_error',
+          message: 'The compaction stream failed.',
+        })}\n\n`);
+      }
+    } finally {
+      if (!res.destroyed && !res.writableEnded) res.end();
+    }
+  }
+
+  /**
+   * A side question: one answer, no transcript change, no run.
+   *
+   * Deliberately NOT refused while a turn is running. That is the whole point
+   * of a side question, and the worker's own command handler answers it
+   * alongside the running turn.
+   */
+  async #askSideQuestion(sessionId: SessionId, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const api = this.#options.sideQuestionApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'agent_side_question_unavailable' } });
+      return;
+    }
+    const body = await this.#readJson(req, res);
+    if (body === null) return;
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (question.length === 0) {
+      this.#sendJson(res, 400, { error: { code: 'invalid_side_question_request' } });
+      return;
+    }
+    if (!(await this.#sessionExists(sessionId))) {
+      this.#sendJson(res, 404, { error: { code: 'session_not_found' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.ask({ sessionId, question }));
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /** Whether the Host's own session store knows this session. */
+  async #sessionExists(sessionId: SessionId): Promise<boolean> {
+    try {
+      return (await this.#options.api.get(sessionId)) !== null;
+    } catch {
+      // A store that cannot answer is not a store that says "no". Treating an
+      // unreadable store as "session missing" would refuse a request against
+      // a session that exists, which is a different failure from the one the
+      // caller asked about.
+      return true;
+    }
+  }
+
   async #readJson(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
     const contentType = req.headers['content-type'];
     if (typeof contentType !== 'string' || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
@@ -4882,6 +5023,13 @@ export class HostSessionHttpServer {
   }
 
   #sendApiError(res: ServerResponse, error: unknown): void {
+    if (error instanceof HostSessionCompactionError) {
+      // The status is carried by the error: "no live worker" and "the side
+      // question failed" are different problems, and a 500 for either would
+      // be a lie about what the Host knows.
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      return;
+    }
     if (error instanceof HostCheckoutApiError) {
       // A Host missing the provider or the resolver is a composition gap, not a
       // client mistake: it must not read like "no checkout".

@@ -206,7 +206,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'Compress conversation context to save tokens',
     descriptionZh: '压缩对话上下文以节省 token',
     category: 'session',
-    surfaces: ['desktop'],
+    // The CLI reaches the same worker-side compaction through a Host HTTP exit.
+    surfaces: ['desktop', 'cli'],
     requiresSession: true,
   },
   {
@@ -577,10 +578,13 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'diff',
     label: 'Code review',
     labelZh: '代码审查',
-    description: 'Open the code review panel (git diff)',
-    descriptionZh: '打开代码审查面板（git diff）',
+    // Desktop opens the code-review panel; the CLI prints the same working
+    // tree diff as text. One description, two surfaces — the wording stays
+    // true for both.
+    description: 'Show the code changes in the working tree (git diff)',
+    descriptionZh: '查看工作区的代码改动（git diff）',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // The panel reads git state; it does not touch the run.
     availableWhileBusy: true,
   },
@@ -648,7 +652,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '不打断当前对话的旁侧问答',
     argsHint: '[question]',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     requiresSession: true,
     // A side question is asked PRECISELY while a turn runs — that is the
     // whole point of the command, so it must not be gated on an idle turn.
