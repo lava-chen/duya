@@ -1,6 +1,6 @@
 # 动态工作流核心包与并发、恢复纪律
 
-状态：active · 负责人：Codex · 更新：2026-10-24
+状态：draft PR #436 · 负责人：Codex · 更新：2026-10-24
 分支：`codex/workflow-core-package` · worktree：`.claude/worktrees/workflow-core-package`
 base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 
@@ -29,7 +29,7 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 - [x] S3：就绪集并行调度、run 限流与 provider AIMD governor 分离、live retune 与观测事件。
 - [x] S4：依赖子树失败隔离、指数退避加抖动、预算耗尽/取消的 run 级停止。
 - [x] S5：整份定义 hash 与 journal 恢复纪律、trailing failure 剪枝、orphan running 收敛。
-- [ ] S6：补齐纯包 graph fixture 与数值轨迹，跑完整验收。
+- [x] S6：补齐纯包 graph fixture 与数值轨迹，跑完整验收。
 
 ## S0 差异表
 
@@ -126,11 +126,27 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 | 同上 / S5 变更文件及 UI 状态穷举映射；`node_modules/`、`dist/` ignored | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | 19 files / 259 tests passed；SQLite 用例覆盖 orphan running 收敛、原子 journal replacement 与 `awaiting_confirm` 持续保留 |
 | 同上 / 同上 | 同上 | `npm run typecheck:all`（受限授权，第二次） | 0 | 21 package build、protocol/core/workflow/runtime/web/Electron/CLI/voice/evals 检查通过；Electron ratchet 无新增错误、9 个旧 key 收缩；eval 4/4 |
 | 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2644 findings 均已容忍；无新增违规；256 条旧指纹未触发，未写 baseline |
+| `aebd78e76551d36e78d6ba0ab952bd34efad1d97` / S6 开工前 worktree clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | S6 基线：19 files / 259 tests passed |
+| `aebd78e76551d36e78d6ba0ab952bd34efad1d97` / S6 fixtures、调度与失败用例未提交 | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npx vitest run packages/workflow/tests` | 0 | 4 files / 17 tests passed；图 fixture 被 scheduler、失败隔离和纯内存恢复用例共同使用 |
+| 同上 / 同上；测试数据根 `/tmp/duya-workflow-data` | 同上 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | 20 files / 260 tests passed；并发轨迹峰值 2、retune 顺序稳定，含 DB/Host 集成与纯包图用例 |
+| 同上 / 同上 | 同上 | `npm run typecheck:workflow` | 0 | 新包源码严格类型检查通过 |
+| 同上 / 同上 | 同上 | `npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --esModuleInterop --skipLibCheck packages/workflow/tests/*.test.ts packages/workflow/tests/fixtures/*.ts` | 0 | 新增纯包 fixture 与测试通过严格 TypeScript 检查 |
+| 同上 / 同上 | 同上 | `npm run build:packages -- --target @duya/workflow --target @duya/host` | 0 | 13 包依赖闭包构建通过 |
+| 同上 / S6 文件与本计划；`node_modules/`、`dist/` ignored | 同上 | `npm run typecheck:all`（受限授权，最终） | 0 | 21 package 构建及全部 protocol/core/workflow/runtime/UI/Electron/CLI/Web/voice/evals 类型门禁通过；Electron ratchet 无新增错误、9 个旧 key 收缩；eval 4/4 |
+| 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权，最终） | 0 | 2644 findings 均为基线容忍项；无新增违规；256 条历史指纹未触发，baseline 未写入 |
+| `fe32f4f6c334fde2c80b0e1487b940212bafb6c7` / worktree clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `git fetch origin` | 0 | `origin/master` 从 `21351df668adefc0357741a5f79a1513e297df61` 前进到 `2ca7886fbae7197d30db4b4c553f59ca4b03fedf` |
+| 同上 / clean | 同上 | `git rebase origin/master` | 0 | 无冲突；7 个切片提交已重放到 `2ca7886fbae7197d30db4b4c553f59ca4b03fedf` 之上 |
+| `663b5043b506aba2d4278ae4fbab4a6fc8ed7ea1` / rebased worktree clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm run typecheck:all`（受限授权，rebase 后） | 0 | 21 package 构建及 protocol/core/workflow/runtime/UI/Electron/CLI/Web/voice/evals 全部通过；Electron ratchet 无新增错误、9 个旧 key 收缩；eval 4/4 |
+| 同上 / clean；测试数据根 `/tmp/duya-workflow-data` | 同上 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | 20 files / 260 tests passed |
+| 同上 / clean | 同上 | `npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --esModuleInterop --skipLibCheck packages/workflow/tests/*.test.ts packages/workflow/tests/fixtures/*.ts` | 0 | Workflow graph fixture 与纯包测试严格 TypeScript 检查通过 |
+| 同上 / clean | 同上 | `npm run architecture:check`（受限授权，rebase 后） | 0 | 2685 findings 均为基线容忍项；无新增违规；257 条旧指纹未触发，baseline 未写入 |
 
 ## 接续 / 结果
 
-已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）、S1（`6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b`）、S2（`dda132b2b1ed382a89ff84ac08411553bb418d91`）、S3（`fde7f7aac3916030b3915c3790a2820d8b3e9008`）和 S4（`51b8a631c435e7c59c160c32df228c9185b77f48`）。S3 在同阶段就绪集并发派发；run gate 与共享 provider AIMD governor 分离，提供 live retune、`concurrency-changed` 和 `run-stalled` 观察。S4 的 `on_error: fail` 失败节点仅阻断其依赖子树（含后续 phase），独立分支继续并把成功结果留在 journal；已有默认 `skip` 仍保持软跳过语义。重试通过注入时钟和随机源按 250ms 基数、指数增长、0.5–1.5 全抖动、30s 上限等待。budget 与 abort 作为 run 级停止；map fan-out 不再吞 budget/cancel，也不为停止写失败 node record。
+已完成并提交 S0（`6c915fd010105530b3f8139d35df5f528d29ff8f`）、S1（`6726e736dfd65b21a32e60e066c5a0b565d1181b`）、S2（`568439ff1cc5984b71a5276e333ba899e5feb2c2`）、S3（`ddfabc9e8546c041615abe0124e3e7e3dc45c912`）、S4（`f788d2c861320466ef4903380beb2752812ba7ea`）和 S5（`34c3dfd4650db746949fd38817d2376815d5e5b4`）。S6 的 fixture、数值轨迹及本次 rebase 验证记录与该计划同属当前提交。S3 在同阶段就绪集并发派发；run gate 与共享 provider AIMD governor 分离，提供 live retune、`concurrency-changed` 和 `run-stalled` 观察。S4 的 `on_error: fail` 失败节点仅阻断其依赖子树（含后续 phase），独立分支继续并把成功结果留在 journal；已有默认 `skip` 仍保持软跳过语义。重试通过注入时钟和随机源按 250ms 基数、指数增长、0.5–1.5 全抖动、30s 上限等待。budget 与 abort 作为 run 级停止；map fan-out 不再吞 budget/cancel，也不为停止写失败 node record。
 
 S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的完整脚本正文和规范化 frontmatter（运行参数不参与）。resume 前置校验 hash 和 journal，缺失或损坏时拒绝冷启动回退；DAG 旧快照可由冻结定义计算并一次性回填 hash。恢复从持久 journal 剪掉未解决失败/依赖失败标记，保留独立成功缓存；orphan `running` 变为不可重放的 `skipped/orphan_running`，run 收敛到显式可恢复 `stopped`。`awaiting_confirm` 不参与 orphan reconciliation，保留高风险人工确认门。S5 定向测试 19 files / 259 tests、全仓 typecheck 和 architecture gate 通过；首次运行分别发现 DWF 恢复测试 mock 缺 hash 与 UI 穷举缺 stopped 展示映射，均已修正。`node_modules/`、`dist/` 均 ignored，architecture baseline 未新增指纹。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
 
-下一步：提交 S5；S6 增加可复用纯包 graph fixtures 和显式数值轨迹，并在最终 re-fetch/rebase 后重跑验收、推送分支并开 draft PR。
+S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
+
+已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。PR 当前 mergeable、未合并；实现、验证和 rebase 已完成，等待 review。

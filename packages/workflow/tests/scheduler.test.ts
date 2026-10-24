@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowEngine, type WorkflowDef, type WorkflowHost, type WorkflowRuntimePorts } from '../src/index.js';
 import { AimdConcurrencyGovernor, ConcurrencyGate, ProviderGovernorRegistry } from '../src/scheduler.js';
+import { concurrencyRetuneGraph } from './fixtures/graphs.js';
 
 function deferred<T = void>(): { promise: Promise<T>; resolve(value: T extends void ? undefined : T): void } {
   let resolve!: (value: T extends void ? undefined : T) => void;
@@ -53,12 +54,25 @@ describe('@duya/workflow scheduler', () => {
     const releaseB = deferred();
     const releaseC = deferred();
     const calls: string[] = [];
+    const concurrencyTrace: string[] = [];
+    let active = 0;
+    let peakConcurrency = 0;
+    const start = (tool: string): void => {
+      active++;
+      peakConcurrency = Math.max(peakConcurrency, active);
+      calls.push(tool);
+      concurrencyTrace.push(`start:${tool}:${active}`);
+    };
+    const finish = (tool: string): void => {
+      active--;
+      concurrencyTrace.push(`finish:${tool}:${active}`);
+    };
     const host: WorkflowHost = {
       async runTool(tool) {
-        calls.push(tool);
-        if (tool === 'a') { aStarted.resolve(undefined); await releaseA.promise; aDone.resolve(undefined); }
-        if (tool === 'b') { bStarted.resolve(undefined); await releaseB.promise; }
-        if (tool === 'c') { cStarted.resolve(undefined); await releaseC.promise; }
+        start(tool);
+        if (tool === 'a') { aStarted.resolve(undefined); await releaseA.promise; finish(tool); aDone.resolve(undefined); }
+        if (tool === 'b') { bStarted.resolve(undefined); await releaseB.promise; finish(tool); }
+        if (tool === 'c') { cStarted.resolve(undefined); await releaseC.promise; finish(tool); }
         return { ok: true, output: tool };
       },
       async runAgent() { return { ok: true }; },
@@ -71,15 +85,11 @@ describe('@duya/workflow scheduler', () => {
       maxConcurrency: 2,
       onObservation: (event) => events.push(event),
     });
-    const def = phase([
-      { id: 'node-a', tool: 'a' },
-      { id: 'node-b', tool: 'b' },
-      { id: 'node-c', tool: 'c', when: 'node-a.succeeded == true' },
-    ]);
-
-    const run = engine.execute(def, {}, { runId: 'fixed-run' });
+    const run = engine.execute(concurrencyRetuneGraph, {}, { runId: 'fixed-run' });
     await Promise.all([aStarted.promise, bStarted.promise]);
     expect(calls).toEqual(['a', 'b']);
+    expect(peakConcurrency).toBe(2);
+    expect(active).toBe(2);
 
     engine.setMaxConcurrency(1, 'fixed-run');
     expect(events).toEqual([{ type: 'concurrency-changed', runId: 'fixed-run', previous: 2, current: 1 }]);
@@ -87,6 +97,7 @@ describe('@duya/workflow scheduler', () => {
     await aDone.promise;
     await Promise.resolve();
     expect(calls).toEqual(['a', 'b']);
+    expect(active).toBe(1); // retuning does not cancel already-admitted work
 
     releaseB.resolve(undefined);
     await cStarted.promise;
@@ -94,6 +105,10 @@ describe('@duya/workflow scheduler', () => {
     const outcome = await run;
     expect(outcome).toMatchObject({ status: 'complete', runId: 'fixed-run' });
     expect(calls).toEqual(['a', 'b', 'c']);
+    expect(peakConcurrency).toBe(2);
+    expect(concurrencyTrace).toEqual([
+      'start:a:1', 'start:b:2', 'finish:a:1', 'finish:b:0', 'start:c:1', 'finish:c:0',
+    ]);
   });
 
   it('reports a numeric additive increase and multiplicative decrease trace', async () => {
