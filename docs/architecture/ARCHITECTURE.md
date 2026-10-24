@@ -63,6 +63,18 @@ entry points. Its shared architecture separates these layers:
   parent wake delivery/restart reconciliation and Desktop delegation migration
   remain separate work (610 T21/T22).
 - **AI Layer**: `@duya/ai` multi-protocol adapter
+- **Managed checkout execution**: Host checks ownership for local Write/Edit/
+  ApplyPatch and shell dispatch, including deferred calls and shell workers,
+  after permission approval. Non-owners retain Read/Grep/Glob; shell commands
+  require ownership because command classification cannot prove read-only
+  execution. File targets are checked through existing path ancestors, and
+  a managed checkout cannot write back into the primary tree through a file
+  tool. These checks do not provide OS-level isolation for arbitrary shell or
+  plugin code. The transferable owner remains `codex-thread.json` in the
+  linked Git directory; immutable creation base lives separately in
+  `duya-checkout.json`. Missing legacy base is reported as unknown rather than
+  current HEAD. Resuming an isolated child restores its verified checkout,
+  independently of the parent's cwd, and refuses missing or occupied checkouts.
 - **Database**: SQLite via better-sqlite3; default data root is `~/.duya`,
   with `DUYA_DATA_ROOT` overriding the shared root for databases, rollouts, and
   attachments. The default main database is `duya-main.db` beside
