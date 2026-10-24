@@ -1,7 +1,7 @@
 # Duya Desktop 性能爬坡
 
-状态：active · 负责人：mavis（goal `tg_1cyt7y0er7mvkwyms8`）· 更新：2026-10-23
-分支：`codex/perf-integration` · worktree：`.claude/worktrees/perf-integration` · base：`670a862c`
+状态：active · 负责人：mavis（goal `tg_1cyt7y0er7mvkwyms8`）· 更新：2026-10-24
+分支：`codex/perf-lock-owner-pid`（本分支）/ 集成分支 `codex/perf-integration` · worktree：`.claude/worktrees/perf-integration` · base：`18a144e8`
 
 ## 目标与边界
 
@@ -56,7 +56,8 @@
 | `perf/session-100` | 100 条历史消息的会话 |
 | `perf/session-1000` | 1,000 条历史消息的会话 |
 | `perf/session-10000` | 10,000 条历史消息的会话 |
-| `perf/stream-long-reply` | 一条长回复逐 token 流式输出 |
+| `perf/stream-long-reply` | 一条长回复逐 token 流式输出（纯文本） |
+| `perf/stream-long-reply-fenced` | 同一条长回复，但正文里混了代码围栏（第二轮新增） |
 | `perf/stream-tool-storm` | 大量工具事件持续流入 |
 | `perf/typing-30s` | 输入框连续打字 30 秒 |
 
@@ -90,12 +91,33 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [x] A 交付 Harness v1（PR #386，CI 全绿）
 - [x] B 交付流式渲染优化（PR #385，主线程占用 −49.4%）
 - [x] D 交付 GPU 观测（PR #391，结论：无 GPU 侧可证明收益）
-- [ ] C 交付 React 状态优化 / 侧栏重渲染
-- [ ] E 交付 UI 包架构优化（懒加载与首屏资源）
-- [ ] 集成者按 CI + 证据定合并顺序，合并后**串行**重跑 Profile
-- [ ] 产出按实测收益排序的下一轮机会清单
+- [x] C 交付 React 状态优化 / 侧栏重渲染（PR #400）
+- [x] E 交付 UI 包架构优化（PR #401，懒加载与首屏资源）
+- [x] 集成者按 CI + 证据定合并顺序，合并后**串行**重跑 Profile（权威基线见下）
+- [x] 产出按实测收益排序的下一轮机会清单（10 条）
+- [x] 第一轮全部合并（#392，merge commit `18a144e8`）
+- [ ] 第二轮：#0 首屏 SDK 移出 entry chunk（Agent F）
+- [ ] 第二轮：#1 万条消息行虚拟化（Agent G）
+- [ ] 第二轮：合并后串行重跑，更新权威基线
 
 派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径。B 已交付（PR #385）；D 已交付（PR #391）；A 在续做（PR #386）；C 在续做；E 刚开工。A/B/C/D 的首轮会话曾因网络错误与运行丢失中断，已在同一检出上续做。
+
+## 第二轮（进行中）
+
+第一轮的权威基线指向两个最大的剩余瓶颈，第二轮就攻这两条。仍然一个 PR 只钉一个问题，各 Agent 独占路径，集成者定合并顺序。
+
+| Agent | 独占路径 | 检出 / 分支 | 目标 |
+| --- | --- | --- | --- |
+| F · 首屏依赖闭包 | `packages/ai/src/**`、`packages/ai/package.json`、`packages/ui/src/components/chat/{ChatView,MessageInput,SlashCommandPopover}.tsx`、`packages/ui/src/hooks/useContextUsage.ts`、`packages/ui/src/lib/providers/**`、`packages/ui/src/stores/context-usage-store.ts` | `.claude/worktrees/perf-bundle` / `codex/perf-bundle` | 把 `openai`（141 模块）与 `@anthropic-ai/sdk`（69 模块）移出首屏 entry chunk |
+| G · 消息列表虚拟化 | `packages/ui/src/components/chat/MessageList.tsx` + 该目录下新增文件 | `.claude/worktrees/perf-virtual` / `codex/perf-virtual` | 万条消息会话打开从 32–37 秒降下来 |
+
+base：`origin/master` = `18a144e8`。两个检出都已用 `scripts/junction-worktree.mjs` 配好 56 个依赖链接。
+
+**F 的判据**：首屏 entry chunk 里 `openai` / `@anthropic-ai/sdk` 的模块数必须**归零**，而不是「字节数变小了」。根因有三个候选，都必须实测排除：桶文件同时导出纯函数与 SDK 客户端（`packages/ai/src/index.ts:7` 与 `:50`）、`packages/ai/package.json` 缺 `"sideEffects": false` 导致 Rollup 不能摇掉未用的再导出链、首屏急切引用点（`ChatView.tsx:27`、`MessageInput.tsx:52-57`、`useContextUsage.ts:18-19`、`lib/providers/**`）。
+
+**G 的判据**：按 fixture 分开报，不合并。10000 条的 `dom.nodes` 115354 → 目标量级下降，`longtask.total_ms` 14958 同步下降，且 `ChatMessageNavigator` 跳转到未挂载的消息、`hasMore` 向前加载、流式尾部、focus mode 都不回归。
+
+**共同的测量纪律**：先 `node E:\Projects\duya\.claude\perf-bench-lock.mjs status`，被占就等；**持锁跨越整个「构建 + 测量」窗口**；单次持锁不超过 30 分钟（脚本按年龄判失效，超过就会被别人抢走）；所有 harness 调用统一带 `--lock-script "E:\Projects\duya\.claude\perf-bench-lock.mjs"`。
 
 ## 集成记录
 
@@ -126,9 +148,12 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **E 的 follow-up（把 `Suspense` 边界收窄到视图本身）经实测判定为 no-op，不做 PR**。E 的理由是「这个分支同时渲染聊天区和当前视图，边界会把聊天区一起隐藏」。代码不成立：`renderView()` 里聊天分支的条件是 `currentView === 'chat'`，视图分支是 `currentView === 'skills'` 等，`currentView` 是**单一枚举值**，两者互斥。实测也支持这个结论：切到懒加载视图时 `main.app-content` **没有出现空白期**（本地 `file://` 读 chunk 约 26ms，落在两帧之内）。**教训**：这类「边界会不会连坐」的问题必须用运行中的产品回答，不能靠读 JSX——第一版 probe 采错了元素（采到 `.app-body` 的最后一个非侧栏子元素，实际是 `PanelZone` 而不是 `main.app-content`），差点得出「聊天区消失 1196ms」的假结论。
 - **已丢失会话会留下持续污染机器的进程**。Agent A 的会话在 crash-recovery 里不断重启 `e2e/perf/run.mjs`，且用 `--lock-mode best-effort`（拿不到锁也照测），与集成者的权威重跑争抢 CPU 并抢占共享锁。清理方式：停掉子进程**并杀掉父 PowerShell**（否则它会再拉起），再释放已成孤儿的锁目录（持有者 pid 已不存在，但 30 分钟作废机制要等很久）。**How to apply**：发现锁被一个「持有者已死」的名字占着时，先核对 `owner.json` 的 pid 是否存活，存活再等，不存活直接释放。
 - **共享 harness 的 fixture 不含代码围栏，所以它测不出 B 那类收益**。`buildStreamChunks('perf/stream-long-reply')` 产出 2000 片 / 30551 字符的纯文本，`chunksWithFence = 0`；`buildSessionMessages('perf/session-100')` 的 100 条消息里 `withFence = 0`。而 B 的 645ms 收益**恰恰来自代码围栏的语法高亮**（去掉围栏语言的对照实验：1298.6 → 297.5ms）。所以集成重跑里 stream 场景的 `stream.block_ms_total = 0` 与 `longtask.count = 0` **是真实的、不是测量失败**——没有围栏就没有高亮开销，`stream.frames` 2643–2910 是流式期间的真实渲染帧。**How to apply**：这说明「共享 fixture」和「取证 fixture」是两套东西，合并后的权威数字**不能**用来判断 B 的修复是否还有收益；B 的结论要以它自己的 before/after 为准。要让共享 harness 也能覆盖这类收益，fixture 里得放围栏——但那会改变 fixture digest，**必须新开 fixture id**（如 `perf/stream-long-reply-fenced`），不能改现有 id 的内容。
-- **`perf/stream-long-reply` 这个 id 现在指向两份不同的内容**。共享 harness 的 `e2e/perf/lib/fixtures.mjs` 里它是 30551 字符的**纯文本**（无围栏）；B 的取证 fixture 在 `packages/ui/src/components/chat/__tests__/harness/fixture.ts`，同名 id 却是**含 3 个带语言代码围栏**的长回复。id 在本计划里是 fixture 契约的键（「固定 fixture」），同名不同内容会让任何跨 harness 的数字对比失去意义。**How to apply**：下一轮必须消歧——要么把带围栏那份改成新 id 并更新 B 的驱动脚本，要么把共享那份按围栏重做并重算 digest。在消歧之前，**不要把两个 harness 的同 id 数字放在同一张表里对比**。
+- **`perf/stream-long-reply` 这个 id 指向两份不同的内容**。共享 harness 的 `e2e/perf/lib/fixtures.mjs` 里它是 30551 字符的**纯文本**（无围栏）；B 的取证 fixture 在 `packages/ui/src/components/chat/__tests__/harness/fixture.ts`，同名 id 却是**含 3 个带语言代码围栏**的长回复。id 在本计划里是 fixture 契约的键（「固定 fixture」），同名不同内容会让任何跨 harness 的数字对比失去意义。**已消歧（第二轮）**：共享契约的 6 个 `perf/*` id **一个字都没改**（权威基线是拿它们测的，改 id 等于改 digest），而是把 UI 取证 harness 的场景 id 挪进自己的 `ui-harness/` 命名空间（`ui-harness/stream-long-reply`、`ui-harness/stream-tool-storm`），并在 `e2e/perf/agents/agent-b/README.md` 里给出旧标签 → 新标签的映射，让第一轮归档的证据仍然可读。`scripts/perf/harness.test.ts` 加了守卫：本地 harness 的标签一旦撞上契约 id，测试直接变红。**顺带查清**：那个 id 在 UI 侧只是 `SCENARIOS` 的键（`__tests__/harness/main.tsx:209`），不是内容查找键，所以消歧不需要动任何产品代码。
 - **E 报告的「首屏体积 after 只有一个来源」这个缺口，由集成者串行重跑补上了**。E 承认它没能在拿到锁后独立复现 after 的数字（`startup.typeable_ms` 的 after 未测）。集成者的权威重跑用 `first-screen-payload.mjs` 在合并后的构建上实测：**首屏 JS 3541.1 KB / 7 chunk，entry chunk 2726133 B = 2662.2 KB**；PR #401 声称的是 3538.1 KB / 2659.2 KB。差 0.08% / 0.11%（3112 字节），是构建产物内容与时间戳的微差。**体积收益成立、可复现**。但**启动时间收益不成立**：E 测的基线 `startup.typeable_ms` p50=1934（n=5，cv 12.9%），波动区间 1715–2453ms 由 Electron 进程启动主导，**与首屏 JS 体积无可分辨关联**。所以 #401 的真实收益是「打开设置/工作流等页面时首帧略晚」的反面——即**用首帧延迟换首屏体积**，而不是「启动更快」。**How to apply**：报告启动时间时必须区分「进程启动主导」和「首屏资源主导」，否则会把噪声当收益。
 - **Agent A 还有 8 个未合并的 harness 修复，是真实资产，不能随检出一起回收**。`codex/perf-harness` 分支比 master 多 8 个提交，全部只碰 `e2e/perf/lib/{launch,lock}.mjs`、`e2e/perf/run.mjs`、`e2e/perf/scenarios/gpu.mjs`、`scripts/perf/harness.test.ts`（与 B/C/D/E 的改动**零重叠**，可干净合并）：安全模式窗口与 Host 未就绪时重试（`e9e12d6a`）、按 namespace 而非 pid 找 app 关闭（`836a30c8`）、优雅关闭失败时强杀整棵进程树（`65066896`）、pid 回收后误杀无关进程的保护（`a1a392f8`）、**从已死的持有者手里接管锁**（`da8c32b4`）、每个样本 4 分钟预算（`c97e9989`）、每场景落盘报告（`965fe696`）。这些正是本轮观察到的孤儿 Electron、僵尸锁、启动失败的根因——**A 修的是自己踩的坑，E 的 baseline 里 8 个样本只有 3 个成功也正是 safe-mode 窗口所致**。
+- **两种锁实现会互相拆台（第二轮发现，已修）**。仓库内实现 `e2e/perf/lib/lock.mjs` 有一条正确的规则：**持有者进程没了 = 持有者崩了 = 锁可以接管**（`da8c32b4` 加的，否则崩掉的 Agent 会把整轮卡 30 分钟）。但外部脚本 `E:\Projects\duya\.claude\perf-bench-lock.mjs` 的 `acquire` 把自己那个**一秒后就退出的 pid** 写进 `owner.json` —— 于是仓库内实现一看到「pid 已死」就立刻抢走锁，**脚本驱动的 Agent 和仓库内驱动的 Agent 会同时测量**，两边的数字量到的都是争抢。修法两侧对称：仓库内实现走脚本 acquire 成功后用 `claimOwnerPid()` 把 owner 文件改写成**自己**的活 pid；外部脚本改为记一个**哨兵进程**的 pid（`detached` 起、release 时杀、自己最多活 90 分钟）——因为脚本是一次性 CLI，自己和调用它的 shell 的 pid 都会随命令结束而死，只有哨兵能真正代表「有人正持着锁」。回归测试在 `scripts/perf/harness.test.ts`，负对照：回退修复后该用例精确变红（owner pid 是已死的 37000 而不是活进程 39260）。**实测**：修完之后 `acquire` 的那个 shell 退出 3 秒，哨兵仍活；`release` 之后哨兵消失。
+- **锁的「30 分钟即失效」是按年龄判的，不是按持有者判的**。脚本只看 `acquiredAt` 的年龄，**不看 pid 活不活**。所以一次「构建 + 测量」如果跨过 30 分钟，别人会直接 `[perf-lock] stale lock, stealing it` 抢走它，两个人同时测。**How to apply**：单次持锁控制在 25 分钟内；长测量分段做，每段之间 release → acquire 交接；报告里写明每个数字是否在持锁状态下取得。
+
 
 ## 权威基线（合并后串行重跑，master + A 的 harness 修复）
 
@@ -160,7 +185,7 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 | --- | --- | --- | --- | --- |
 | 0 | **首屏 entry chunk 里还拖着 `openai` 141 个模块 + `@anthropic-ai/sdk` 69 个模块** | E 实测发现：懒加载切走 8 个界面树后，首屏 entry chunk 仍静态含 `openai` 141 + `@anthropic-ai/sdk` 69 + `@lobehub/icons` 36 个三方模块。根因已核实：`packages/ai/src/index.ts` 这个**桶文件同时导出纯函数与 SDK 客户端**——`findModelById` / `computeContextEstimate` / `resolveContextWindow`（纯函数，首屏需要）与 `createAnthropicClient` / `createOpenAICompletionsClient`（SDK，首屏不需要）。首屏急切引用 `@duya/ai` 的点：`components/chat/ChatView.tsx:27`、`components/chat/MessageInput.tsx:57`、`hooks/useContextUsage.ts:18` | 需跨 Agent 边界（`packages/ai/**` + `packages/ui/src/lib/**` 不在 E 的独占范围） | **下一轮最有潜力的一条**：这两个 SDK 根本不是首屏需要的。修法是把桶文件拆成 `@duya/ai`（纯函数）+ `@duya/ai/clients`（SDK），首屏只引前者；或把 SDK 客户端改成动态 import |
 | 1 | **10000 条消息的会话打开/切换是 30–40 秒量级的卡顿** | 合并后串行重跑实测：100 条 open 197–225ms / switch 189–257ms；1000 条 open 549–670ms / switch 771–876ms；**10000 条 open 32154–37054ms / switch 37685–40668ms**，滚动帧 p95 **1000.8–1000.9ms**（60fps 完全丢帧） | B | 根因已定位：`MessageList.tsx:1254` 的 `groupedMessages.map(...)` **为每条消息都创建 React 组件实例 + IntersectionObserver + DOM 节点**（`LazyMessageRow` 只是让**内容**惰性，`content-visibility: auto` 并没有省掉组件与 observer 的创建）。10000 条 = 10000 个 observer。方向：真正的行虚拟化（只对可视区 ± overscan 挂载行），或把 observer 换成单一容器级测量 |
-| 2 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法）。**前置**：先消歧 `perf/stream-long-reply` 这个 id 指向的两份不同内容（共享的是纯文本、B 的是带围栏），否则改完没法用共享 harness 验证 |
+| 2 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法）。**前置已解除（第二轮）**：共享 harness 新增契约 id `perf/stream-long-reply-fenced`（同尺寸、同节奏、同词表，正文里混了 ts/python/bash 三个围栏，围栏标记故意被切碎在 chunk 里），所以共享 harness 现在**能测出围栏高亮的开销**——原来 `stream.block_ms_total = 0` 只是因为没有围栏 |
 | 3 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7ms（+57%），Long Task 167 → 369 | D | 代价在**渲染器选择**而非 GPU 有无。方向是别让终端悄悄掉回 DOM：掉级时给用户可见信号，或自动尝试恢复 WebGL |
 | 4 | 首屏 JS 里那 8 个「点进去才到」的界面树 | E 已把首屏 JS 从 4081.2 KB 降到 3538.1 KB（−13.3%），`App.tsx` 静态闭包 524 → 392 个一方模块 | E | **本轮已完成**。下一轮看首屏 entry chunk 剩下的 2659 KB 里还有没有可切的 |
 | 5 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，并给侧栏 props 换成按值比较 | C | `app-sidebar.tsx` 还有 2086 行，下一轮查剩下的宽订阅与布局抖动来源 |
@@ -190,16 +215,24 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 | 合并后权威重跑 | `ed3882de`（dirty：计划文档 + agent-e 工具） | `node scripts/perf/run.mjs --samples 3 --agent mavis-reprofile --lock-mode strict --lock-wait-min 25` | 0 | **6 场景 33 样本零失败**；`lock.held = true`、`skippedScenarios = []`；报告 `docs-local/research/perf-harness/perf-2026-10-24T02-01-06-073Z.json` |
 | Suspense 边界实测 | 同上 | `docs-local/research/suspense-probe/probe.mjs`（真实 Electron，逐帧采样 `main.app-content`） | 0 | 切到懒加载视图时**空白帧 0**、视图约 26ms 落地 ⇒ E 的 follow-up 是 no-op |
 | 检出回收 | — | `bash scripts/remove-worktree.sh <name> --dry-run` → 实际执行 | 0 | 4 个检出（harness/streaming/state/gpu）各摘 56 个 junction 后由 `git worktree remove` 移除；**分支保留**；C 盘 2.47 → 7.63 GB |
+| 锁实现负对照 | `a1e4ce01`（集成检出） | `git stash push -- e2e/perf/lib/lock.mjs` → 跑 `scripts/perf/harness.test.ts` → `git stash pop` | 1（**预期**） | 精确变红：`expected 37000 to be 39260`（owner pid 是已死的脚本 pid，不是活进程），1 failed / 26 passed；还原后 27/27 绿 |
+| fixture 命名空间负对照 | `ae641a4d`（集成检出） | `git stash push -- packages/ui/src/components/chat/__tests__/harness/main.tsx` → 跑同一测试 → `git stash pop` | 1（**预期**） | 精确变红：`expected [ 'perf/session-100', …(5) ] to not include 'perf/stream-long-reply'`，1 failed / 27 passed；还原后 28/28 绿 |
+| 首屏预算门槛（本地） | `26e68f27` + 当前 master 的生产构建 | `npx vite build <worktree>` → `node scripts/perf/first-screen-budget.mjs` | 0 | 重建后的首屏 **3 626 123 B / 7 chunk**、entry **2 726 133 B**、总 JS 17 937 649 B / 339 chunk——与基线**逐字节一致**（entry 的 hash 变了，字节数没变） |
+| 首屏预算门槛（负对照） | 同上 | 用更小的预算（2 000 000 B）跑同一个构建 | 1（**预期**） | `FAIL: the first screen grew to 3626123 bytes (3541 KB, +81.31%), over the budget of 2100000 bytes`；另外「没有基线」「没有构建」分别返回 1 与 2 |
+| 首屏预算门槛（CI） | PR #404 `8b67dee4` | `gh pr checks 404` → `build` job | 0 | **CI 上真跑通了**：新加的 `First-screen JS budget` 步骤在 `electron:build` 之后执行并通过（这是本轮第一个机器无关的性能闸门） |
+| 本地门禁 | `26e68f27`（集成检出，dirty：无） | `npm run typecheck:all` / `npm run architecture:check` | 0 / 0 | typecheck 全过（含 `eval:agent:core:check` 4/4）；架构检查 `OK — no new boundary violations` |
 
 ## 接续 / 结果
 
-第一轮已完成。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
+第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
-已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）。
-待合并：#392（集成台账 + A 的 8 个 harness 修复 + E 的工具改进）。
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）。
 未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
 
-回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` 四个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`，检出待回收。`perf-integration` 是集成检出，保留。
+回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。
 
-下一步：#392 合并后，按机会清单第 1 名（流式时增长中的 markdown 每帧整篇重解析）开下一轮。
+第二轮已开工：Agent F（`perf-bundle`，#0 首屏 SDK）与 Agent G（`perf-virtual`，#1 万条消息虚拟化）并行，见「第二轮」章节。
+
+下一步：等 F / G 的 PR → 独立验证（负对照 + 门禁）→ 按证据定合并顺序 → 合并后**持锁串行**重跑 Profile，刷新权威基线与机会清单。
+
 
