@@ -113,4 +113,38 @@ describe('ApiClient message read', () => {
     await expect(client.readHostMessages('session-1' as never, { sources: ['user'] }))
       .rejects.toBeInstanceOf(ApiError);
   });
+
+  it('asks for the whole transcript in ONE request', async () => {
+    // The Host's paged read re-projects the ENTIRE transcript on every page, so
+    // a client that pages to the end of a 10k-message transcript pays for it
+    // 100 times. The whole read asks for one projection.
+    //
+    // The gate is the REQUEST COUNT, not a duration: it is exact on any
+    // machine, so a regression that reintroduces per-page projection fails
+    // here instead of showing up as a slow session.
+    const requests: string[] = [];
+    const fetchImpl: FetchLike = async (input) => {
+      const url = new URL(input, 'http://stub.local');
+      requests.push(`${url.pathname}${url.search}`);
+      if (url.pathname === '/api/bootstrap') {
+        return new Response(JSON.stringify({ apiVersion: 1, csrfToken: 'csrf-token' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ messages: [], nextCursor: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const client = new ApiClient({ fetchImpl });
+
+    await client.readAllHostMessages('session-1' as never);
+    await client.readAllMessages('session-1');
+
+    expect(requests.filter((entry) => entry.includes('/messages'))).toEqual([
+      '/api/sessions/session-1/messages?all=1',
+      '/api/sessions/session-1/messages?all=1',
+    ]);
+  });
 });
