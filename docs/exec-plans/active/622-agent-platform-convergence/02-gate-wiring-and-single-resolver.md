@@ -1,8 +1,9 @@
 # 02 — 两套解析器收敛 + 关键门禁接进 CI
 
-状态：in progress · 负责人：Codex · 更新：2026-10-24
+状态：verified · 负责人：Codex · 更新：2026-10-24
 分支：`codex/622-02-gate-wiring` · worktree：`.claude/worktrees/622-02-gate-wiring`
 base：`18a144e8ee25952cf19da3b45191cdc8a91e84bc` · owner：Codex
+实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open，latest-head CI/review pending）
 独占路径：`scripts/architecture/**`、`.github/workflows/test.yml`、`package.json` 的 script 行、`.architecture-baseline.json`、`docs/architecture/ARCHITECTURE_MAP.md`、本卡与 622 README 的状态记录
 
 关联：[622 README](./README.md) · 前置：[01](01-import-graph-resolver.md)
@@ -225,12 +226,12 @@ npm run plan:sync
 
 ## 接续 / 结果
 
-- **已实现 / 已验证**：共享 manifest registry、退役引用 ratchet、CI 接线和 baseline 收缩均完成；PR 尚未创建。
+- **已实现 / 已验证**：共享 manifest registry、退役引用 ratchet、CI 接线和 baseline 收缩均完成；本地验收通过，等待 PR #405 最新 head 的 CI/review。
 - **本地工作区**：`.claude/worktrees/622-02-gate-wiring`，分支 `codex/622-02-gate-wiring`。
 - **基线变更**：`.architecture-baseline.json` 只删除 255 条旧指纹；baseline ratchet 证明新增为 0。
-- **阻塞**：无。
+- **阻塞**：无代码阻塞；PR 最新 head 的 CI/review 尚未完成。
 
-**下一步**：提交分支并创建 PR，等待必需 review 和 CI。
+**下一步**：根据 PR CI/review 结果修正具体问题；不得在未授权时合并。
 **完成判据**：上述具名测试、architecture checks 与三组变异在 PR head 均通过；集成后重跑受影响门禁。
 
 **回退**：只动 `scripts/architecture/**`、`.github/workflows/test.yml`、`package.json`

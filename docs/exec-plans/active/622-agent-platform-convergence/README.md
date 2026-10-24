@@ -8,6 +8,7 @@
 - 基线：`d9eb7dba`（= `origin/master`，2026-10-23）
 - 状态：active · 负责人：Codex（`codex/622-02-gate-wiring`）· 更新：2026-10-24
 - 当前执行基线：`18a144e8ee25952cf19da3b45191cdc8a91e84bc`；初始测量基线仍记录于下文 §4.1。
+- 02 实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open，latest-head CI/review pending）。
 
 ---
 
@@ -73,7 +74,7 @@
 | 卡 | 标题 | 解决的审计断言 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
 | [01](01-import-graph-resolver.md) | 修 `import-graph` 裸 `@duya/*` 解析 | A1 | 610 T19 | done · PR #399 merged (`bb87d484`) |
-| [02](02-gate-wiring-and-single-resolver.md) | 两套解析器收敛 + 关键门禁接进 CI | A2 A3 A4 | 01 | verified · awaiting commit / PR |
+| [02](02-gate-wiring-and-single-resolver.md) | 两套解析器收敛 + 关键门禁接进 CI | A2 A3 A4 | 01 | done · `73c067c4` · PR #405 open, latest-head CI pending |
 | [03](03-host-layer-verdict.md) | `@duya/host` 层归属裁决 | A5 A6 | 01 02 | todo |
 | [04](04-remaining-unlayered-packages.md) | 其余无层包的层归属 | A5 | 03 | todo |
 | [05](05-client-axis-reverse-gate.md) | 客户端轴反向依赖门禁 G11 | B17 | 03 04 | todo |
@@ -349,7 +350,7 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | 卡 | 状态 | 基线失败证据 | 验收命令 | 依赖 |
 | --- | --- | --- | --- | --- |
 | [01](01-import-graph-resolver.md) | done · PR #399 merged (`bb87d484`) | 原始 `d9eb7dba` 上 `resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts`；`npm run architecture:slice-graph` | 610 T19 |
-| [02](02-gate-wiring-and-single-resolver.md) | verified · awaiting commit / PR | 原始 `d9eb7dba` 中 `architecture:slice-graph` 与 `agent-retirement-gate` 均未接入 workflow；旧 baseline 2785 条，255 条已失效 | 6 个架构测试文件 / 49 tests；`npm run architecture:slice-graph`；`npm run agent-retirement-gate`；`npm run architecture:check`；`npm run architecture:baseline-ratchet -- HEAD`；`npm run architecture:boundaries` | 01 |
+| [02](02-gate-wiring-and-single-resolver.md) | done · `73c067c4` · PR #405 open | 原始 `d9eb7dba` 中 `architecture:slice-graph` 与 `agent-retirement-gate` 均未接入 workflow；旧 baseline 2785 条，255 条已失效 | 6 个架构测试文件 / 49 tests；`npm run architecture:slice-graph`；`npm run agent-retirement-gate`；`npm run architecture:check`；`npm run architecture:baseline-ratchet -- HEAD`；`npm run architecture:boundaries` | 01 |
 | [03](03-host-layer-verdict.md) | todo | `boundary-gates.test.ts` 没有"每个包都有层"的断言；10/20 包无层；G1 只审 523/2593 条 | `npx vitest run scripts/architecture/boundary-gates.test.ts` + `npm run architecture:boundaries` | 01 02 |
 | [04](04-remaining-unlayered-packages.md) | todo | 同上，"无层包"清单仍含 10 个 | `npx vitest run scripts/architecture/boundary-gates.test.ts` | 03 |
 | [05](05-client-axis-reverse-gate.md) | todo | G11 只覆盖浏览器入口；`packages/client-core` / `packages/ui` / `packages/cli` 的反向边无人守 | `npx vitest run scripts/architecture/client-closure-gate.test.ts` | 03 04 |
@@ -367,8 +368,9 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 - 当前分支：`codex/622-02-gate-wiring`；worktree：`.claude/worktrees/622-02-gate-wiring`；
   base：`18a144e8ee25952cf19da3b45191cdc8a91e84bc`。
 - [01](01-import-graph-resolver.md) 已由 PR #399 合并（`bb87d484`）；[02](02-gate-wiring-and-single-resolver.md)
-  已实现并完成本地验收，待提交、推送和 PR CI/review。
-- **下一步**：提交并推送 02 分支，创建 PR；等必需 review 和 CI 通过后，获授权再集成。
+  已在实现提交 `73c067c4396d9cee4097cbee372136a32a96e342` 完成验收，PR [#405](https://github.com/lava-chen/duya/pull/405)
+  已创建；最新 PR head 的 CI/review 待完成。
+- **下一步**：查看最新 PR head 的 CI/review 并处理具体问题；必需检查通过后等待获授权集成。
   集成后启动 [03](03-host-layer-verdict.md)，按 §5.1 的依赖顺序推进。
 - **未做**：未合并任何 PR；未运行 `npm test` 全量；未运行 `electron:build`
   （本卡未改运行时或打包路径）。
@@ -405,4 +407,11 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 - **未验证的外部事实**：`packages/agent` 退役后的真实 worker 构建与加载
   （由既有 [12](../610-architecture-series/12-agent-retirement-coordination.md) 的
   运行时验收负责）。
+
+### 8.2 卡片执行状态（2026-10-24）
+
+| 卡 | 提交 / PR | 验收证据 |
+| --- | --- | --- |
+| [01](01-import-graph-resolver.md) | `bb87d484` · [PR #399 merged](https://github.com/lava-chen/duya/pull/399) | `import-graph.test.ts` 与 `architecture:slice-graph`，详见 01 卡 |
+| [02](02-gate-wiring-and-single-resolver.md) | `73c067c4396d9cee4097cbee372136a32a96e342` · [PR #405 open](https://github.com/lava-chen/duya/pull/405) | 6 files / 49 tests、全量 `typecheck:all`、架构门禁与变异证明，详见 02 卡；最新 PR head CI/review pending |
 
