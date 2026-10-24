@@ -2,7 +2,7 @@
 
 状态：draft PR #436 · CI 修复中（用户已授权合并，待门禁通过）· 负责人：Codex · 更新：2026-10-24
 分支：`codex/workflow-core-package` · worktree：`.claude/worktrees/workflow-core-package`
-base：`c426d029668ed0a0d6dae5ca9429b4a878925abd`（当前 `origin/master`）· owner：本会话
+base：`1296b7c7b6e1995b5220ec14ae6c00bff93057a1`（当前 `origin/master`）· owner：本会话
 
 ## 目标与边界
 
@@ -162,6 +162,12 @@ base：`c426d029668ed0a0d6dae5ca9429b4a878925abd`（当前 `origin/master`）· 
 | 同上 / 同范围 | 同上，受限授权 | `npm run typecheck:all`（rebase 后） | 0 | 21 包构建、protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 通过；Electron ratchet 无新增错误；eval 4/4 |
 | 同上 / 同范围 | 同上，受限授权 | `npx vitest run packages/workflow/tests scripts/architecture/slice-classification.test.ts` | 0 | 5 files / 47 tests passed：workflow graph/并发/失败/恢复全套及新包分类完整性 |
 | 同上 / 同范围 | 同上，受限授权 | `npm run bundle:verify`（rebase 后） | 0 | worker bundle commit 为 `82665fab`；两个产物 `ok`，0/945 输入在生成提交后变化 |
+| `e64aab3d340507e3176fb6bf248dfd3e3aa4081b` / clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `git fetch origin` | 0 | `origin/master` 从 `c426d029668ed0a0d6dae5ca9429b4a878925abd` 前进到 `1296b7c7b6e1995b5220ec14ae6c00bff93057a1`，与 GitHub PR base 一致 |
+| `e64aab3d340507e3176fb6bf248dfd3e3aa4081b` / clean | 同上 | `git rebase origin/master` | 0 | 9 个提交重放，无冲突；分支现在基于 `1296b7c7` |
+| `b5ed92d3b4d481a80beb5b7a833f9bcddd6a57e6` / 仅计划文档未提交；`origin/master=1296b7c7b6e1995b5220ec14ae6c00bff93057a1` | 同上，受限授权 | `npm run bundle:verify`（再次 rebase 后） | 0 | bundle commit 为 `e91d4302`；两个产物 `ok`，0/945 输入变化 |
+| 同上 / 仅计划文档未提交 | 同上，受限授权 | `npm run architecture:check`（第二次 rebase 后） | 0 | 2703 findings 均已容忍；0 新违规；2 条旧指纹消退；baseline 未写入 |
+| 同上 / 同范围 | 同上，受限授权 | `npx vitest run packages/workflow/tests scripts/architecture/slice-classification.test.ts`（第二次 rebase 后） | 0 | 5 files / 47 tests passed |
+| 同上 / 同范围 | 同上，受限授权 | `npm run typecheck:all`（第二次 rebase 后） | 0 | 21 包构建及 protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 通过；Electron ratchet 无新增错误，eval 4/4 |
 
 ## 接续 / 结果
 
@@ -171,4 +177,4 @@ S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的�
 
 S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
 
-已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；修复提交 `82665fab2e2fab581513f72b7749d0872e038b72` 已 rebase 到最新 `origin/master=c426d029668ed0a0d6dae5ca9429b4a878925abd`，冲突仅涉及生成 bundle，已按源码重建。最新 base 上 architecture、typecheck、workflow/classification 测试与 bundle freshness 均通过；计划文档的 rebase 后验证记录待提交，随后 force-with-lease 更新 PR 并等待 GitHub 全量 CI。若 CI 全绿则按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。
+已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；修复提交已先后 rebase 到 `c426d029` 与最新 `1296b7c7`。第二次 rebase 无冲突，bundle freshness 为 0/945 变化；最新 base 上 architecture、typecheck 与 workflow/classification 测试均通过。计划文档现有重跑记录待提交，随后 force-with-lease 更新 PR 并等待 GitHub 全量 CI；若全绿则按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。
