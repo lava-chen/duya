@@ -2,7 +2,7 @@
  * engine.ts — WorkflowEngine: phases → topologically ordered nodes →
  * journal (plan 415 §5.2 as amended by 552).
  *
- * The engine is a plain async function over the journal: every host
+ * The engine is a pure async scheduler over the journal: every host
  * effect goes through WorkflowHost ports, every result-bearing event
  * lands a journal record, and cache hits by `nodeId + reqHash` make a
  * re-run replay instead of re-pay (§6.4 — "可复跑/可修正").
@@ -36,6 +36,7 @@ import { SuspensionSignal } from './error-class.js';
 import { nodeDependencies } from './validate.js';
 import type { WorkflowDecisionPort } from './decision-port.js';
 import type { WorkflowRuntimePorts } from './ports.js';
+import { readyNodes } from './scheduler.js';
 
 export type EngineOutcome =
   | { status: 'complete'; runId: string; outputs: Record<string, unknown> }
@@ -55,9 +56,17 @@ export interface EngineOptions {
   approvalMode?: 'await' | 'suspend' | undefined;
   agentBudget?: number | undefined;
   hostCallCap?: number | undefined;
+  /** Per-run cap. Host/provider limits are a separate shared concern. */
+  maxConcurrency?: number | undefined;
+  /** @deprecated Use maxConcurrency. */
   concurrency?: number | undefined;
+  onObservation?: ((event: WorkflowObservationEvent) => void) | undefined;
   signal?: AbortSignal | undefined;
 }
+
+export type WorkflowObservationEvent =
+  | { type: 'concurrency-changed'; runId: string; previous: number; current: number }
+  | { type: 'run-stalled'; runId: string; phase: string; pendingNodeIds: string[]; settledNodeIds: string[] };
 
 export interface ExecuteOptions {
   runId?: string;
@@ -107,34 +116,15 @@ function engineScope(params: Record<string, unknown>, outputs: Map<string, NodeS
   };
 }
 
-/** Topological order of one phase's nodes (cycle-free per validate.ts). */
-function topoSort(nodes: WorkflowNode[]): WorkflowNode[] {
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const inPhase = new Set(byId.keys());
-  const depsOf = new Map<WorkflowNode, string[]>();
+/** Same-phase dependency map; earlier phases are already settled. */
+function phaseDependencies(nodes: WorkflowNode[]): Map<string, ReadonlySet<string>> {
+  const inPhase = new Set(nodes.map((node) => node.id));
+  const dependencies = new Map<string, ReadonlySet<string>>();
   for (const node of nodes) {
     const { deps } = nodeDependencies(node);
-    depsOf.set(
-      node,
-      [...deps].filter((d) => inPhase.has(d) && d !== 'params'),
-    );
+    dependencies.set(node.id, new Set([...deps].filter((dependency) => inPhase.has(dependency) && dependency !== 'params')));
   }
-  const out: WorkflowNode[] = [];
-  const done = new Set<string>();
-  const visiting = new Set<string>();
-  const visit = (node: WorkflowNode): void => {
-    if (done.has(node.id) || visiting.has(node.id)) return;
-    visiting.add(node.id);
-    for (const dep of depsOf.get(node) ?? []) {
-      const depNode = byId.get(dep);
-      if (depNode) visit(depNode);
-    }
-    visiting.delete(node.id);
-    done.add(node.id);
-    out.push(node);
-  };
-  for (const node of nodes) visit(node);
-  return out;
+  return dependencies;
 }
 
 function findNode(def: WorkflowDef, nodeId: string): WorkflowNode | undefined {
@@ -150,7 +140,25 @@ export class WorkflowEngine {
   private readonly semaphore: Semaphore;
 
   constructor(private readonly options: EngineOptions) {
-    this.semaphore = new Semaphore(options.concurrency ?? 4);
+    this.semaphore = new Semaphore(options.maxConcurrency ?? options.concurrency ?? 4);
+  }
+
+  get maxConcurrency(): number {
+    return this.semaphore.limit;
+  }
+
+  setMaxConcurrency(limit: number, runId: string): void {
+    const previous = this.semaphore.limit;
+    this.semaphore.setLimit(limit);
+    if (previous !== limit) this.observe({ type: 'concurrency-changed', runId, previous, current: limit });
+  }
+
+  private observe(event: WorkflowObservationEvent): void {
+    try {
+      this.options.onObservation?.(event);
+    } catch {
+      // Observability must not affect scheduling.
+    }
   }
 
   /** Run a workflow from scratch (or continue with a primed journal). */
@@ -189,83 +197,113 @@ export class WorkflowEngine {
         result: { index: phaseIndex },
       });
 
-      for (const node of topoSort(phase.nodes)) {
+      const dependencies = phaseDependencies(phase.nodes);
+      const pending = new Map(phase.nodes.map((node) => [node.id, node]));
+      const settled = new Set(outputs.keys());
+      const running = new Map<string, Promise<void>>();
+      let waiting: { nodeId: string; waitTill: number } | undefined;
+      let terminalFailure: Extract<EngineOutcome, { status: 'failed' }> | undefined;
+
+      while (pending.size > 0 || running.size > 0) {
         if (this.options.signal?.aborted) {
+          await Promise.allSettled([...running.values()]);
           return { status: 'cancelled', runId };
         }
 
-        // Conditional edge (415 §4.3): false → skipped, never blocking.
-        if (node.when) {
-          try {
-            if (!evaluateExpr(node.when, scope)) {
-              outputs.set(node.id, { status: 'skipped' });
-              journal.append({
-                kind: 'node_result',
-                nodeId: node.id,
-                attempt: 1,
-                status: 'skipped',
-                result: null,
-              });
-              continue;
+        const ready = readyNodes([...pending.values()], dependencies, settled);
+        let progressed = false;
+        for (const node of ready) {
+          if (terminalFailure || this.options.signal?.aborted) break;
+          pending.delete(node.id);
+          progressed = true;
+
+          if (node.when) {
+            try {
+              if (!evaluateExpr(node.when, scope)) {
+                outputs.set(node.id, { status: 'skipped' });
+                settled.add(node.id);
+                journal.append({ kind: 'node_result', nodeId: node.id, attempt: 1, status: 'skipped', result: null });
+                continue;
+              }
+            } catch (err) {
+              terminalFailure = {
+                status: 'failed', runId, nodeId: node.id, errorClass: 'expr_error',
+                error: err instanceof Error ? err.message : String(err),
+              };
+              break;
             }
-          } catch (err) {
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: 'expr_error',
-              error: err instanceof Error ? err.message : String(err),
-            };
           }
+
+          const ctx = { ...baseCtx, node };
+          const task = (async (): Promise<void> => {
+            try {
+              const result = node.map
+                ? await runMapNode(ctx, this.semaphore)
+                : await this.semaphore.run(() => runNode(ctx));
+              outputs.set(node.id, { status: result.status, output: result.output, errorClass: result.errorClass });
+              settled.add(node.id);
+              if (result.status === 'failed' && !terminalFailure) {
+                terminalFailure = {
+                  status: 'failed', runId, nodeId: node.id,
+                  errorClass: result.errorClass ?? 'unknown', error: result.error ?? 'node failed',
+                };
+              }
+            } catch (err) {
+              if (err instanceof SuspensionSignal) {
+                outputs.set(node.id, { status: 'waiting' });
+                waiting ??= { nodeId: node.id, waitTill: err.waitTill };
+              } else if (err instanceof BudgetExceededError) {
+                terminalFailure ??= {
+                  status: 'failed', runId, nodeId: node.id,
+                  errorClass: 'budget_exceeded', error: err.message,
+                };
+              } else {
+                terminalFailure ??= {
+                  status: 'failed', runId, nodeId: node.id,
+                  errorClass: 'unknown', error: err instanceof Error ? err.message : String(err),
+                };
+              }
+            } finally {
+              running.delete(node.id);
+            }
+          })();
+          running.set(node.id, task);
         }
 
-        const ctx = { ...baseCtx, node };
-        try {
-          const result = node.map ? await runMapNode(ctx, this.semaphore) : await runNode(ctx);
-          outputs.set(node.id, {
-            status: result.status,
-            output: result.output,
-            errorClass: result.errorClass,
+        if (terminalFailure) {
+          await Promise.allSettled([...running.values()]);
+          return terminalFailure;
+        }
+        if (running.size > 0) {
+          await Promise.race([...running.values()]);
+          continue;
+        }
+        if (progressed) continue;
+        if (waiting) {
+          const token = this.options.ports.resumeTokens.create({
+            runId, nodeId: waiting.nodeId, issuedAt: this.options.ports.clock.nowMs(),
           });
-          if (result.status === 'failed') {
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: result.errorClass ?? 'unknown',
-              error: result.error ?? 'node failed',
-            };
-          }
-        } catch (err) {
-          if (err instanceof SuspensionSignal) {
-            // Park THIS branch only — map siblings keep their results (§6.3).
-            const waitTill = err.waitTill;
-            outputs.set(node.id, { status: 'waiting' });
-            const token = this.options.ports.resumeTokens.create({
-              runId,
-              nodeId: node.id,
-              issuedAt: this.options.ports.clock.nowMs(),
-            });
-            return { status: 'waiting', runId, nodeId: node.id, resumeToken: token, waitTill };
-          }
-          if (err instanceof BudgetExceededError) {
-            // Journal-free stop (415 §5.3) — a raised budget replays cleanly.
-            return {
-              status: 'failed',
-              runId,
-              nodeId: node.id,
-              errorClass: 'budget_exceeded',
-              error: err.message,
-            };
-          }
           return {
-            status: 'failed',
-            runId,
-            nodeId: node.id,
-            errorClass: 'unknown',
-            error: err instanceof Error ? err.message : String(err),
+            status: 'waiting', runId, nodeId: waiting.nodeId, resumeToken: token, waitTill: waiting.waitTill,
           };
         }
+        if (pending.size > 0) {
+          const pendingNodeIds = [...pending.keys()];
+          this.observe({
+            type: 'run-stalled', runId, phase: phase.phase, pendingNodeIds, settledNodeIds: [...settled],
+          });
+          return {
+            status: 'failed', runId, nodeId: pendingNodeIds[0]!, errorClass: 'scheduler_stalled',
+            error: `no runnable nodes in phase ${phase.phase}: ${pendingNodeIds.join(', ')}`,
+          };
+        }
+      }
+      if (terminalFailure) return terminalFailure;
+      if (waiting) {
+        const token = this.options.ports.resumeTokens.create({
+          runId, nodeId: waiting.nodeId, issuedAt: this.options.ports.clock.nowMs(),
+        });
+        return { status: 'waiting', runId, nodeId: waiting.nodeId, resumeToken: token, waitTill: waiting.waitTill };
       }
       journal.append({
         kind: 'phase',

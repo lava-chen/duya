@@ -135,6 +135,45 @@ const WF_DEF = parseWorkflowDef({
 const SECRET = 'test-secret';
 
 describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
+  it('retunes a live run in place and emits the concurrency change', async () => {
+    const store = new MemoryRunStore();
+    let started = 0;
+    let signalStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let releaseAgents!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseAgents = resolve; });
+    const host = fixtureHost();
+    const concurrentHost: WorkflowHost = {
+      ...host,
+      async runAgent(spec) {
+        host.agentCalls.push(spec.prompt);
+        started++;
+        if (started === 2) signalStarted();
+        await blocked;
+        return { ok: true, output: `done:${spec.prompt}` };
+      },
+    };
+    const observations: unknown[] = [];
+    const manager = new WorkflowManager({
+      host: concurrentHost,
+      store,
+      maxConcurrency: 2,
+      onObservation: (event) => observations.push(event),
+    });
+
+    const launch = manager.launch({ def: WF_DEF, params: {} });
+    await bothStarted;
+    expect(manager.setRunConcurrency('run-1', 1)).toBe(true);
+    expect(observations).toEqual([{ type: 'concurrency-changed', runId: 'run-1', previous: 2, current: 1 }]);
+    expect(store.runs.size).toBe(1);
+    expect(host.agentCalls).toEqual(['step one', 'step two']);
+
+    releaseAgents();
+    expect((await launch).status).toBe('complete');
+    expect(store.runs.size).toBe(1);
+    expect(host.agentCalls).toHaveLength(2);
+  });
+
   it('suspend → crash reconcile → interrupted → resume replays cache → complete', async () => {
     const store = new MemoryRunStore();
     const host = fixtureHost();

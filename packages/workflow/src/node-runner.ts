@@ -17,7 +17,7 @@
  */
 
 import type { WorkflowNode } from './schema.js';
-import type { WorkflowHost, HostCallContext, HostCallResult } from './host.js';
+import type { WorkflowHost, HostAgentSpec, HostCallContext, HostCallResult } from './host.js';
 import { BudgetLedger, BudgetExceededError } from './host.js';
 import type { Journal } from './journal.js';
 import { computeReqHash, type JournalKind, type JournalNodeKind } from './journal.js';
@@ -63,6 +63,29 @@ export function ctxFor(base: NodeRunContext, nodeId: string, itemIndex?: number)
 
 export function failResult(error: string, errorClass: WorkflowErrorClass): NodeRunResult {
   return { status: 'failed', error, errorClass };
+}
+
+/** Apply a Host supplied shared provider governor without coupling it to run maxConcurrency. */
+export function runAgentWithProviderGovernor(
+  ctx: NodeRunContext,
+  spec: HostAgentSpec,
+  call: HostCallContext,
+): Promise<HostCallResult> {
+  const governor = ctx.host.providerGovernorForAgent?.(spec);
+  if (!governor) return ctx.host.runAgent(spec, call);
+  return governor.run(
+    () => ctx.host.runAgent(spec, call),
+    (value) => {
+      if (value && typeof value === 'object' && 'ok' in value) {
+        const result = value as HostCallResult;
+        const errorClass = result.errorClass ?? classifyError(result.error);
+        return errorClass === 'transient' || errorClass === 'timeout';
+      }
+      const errorClass = classifyError(value);
+      return errorClass === 'transient' || errorClass === 'timeout';
+    },
+    (result) => result.ok,
+  );
 }
 
 /** Journal + execute one host call with cache economics. */
@@ -182,7 +205,7 @@ async function runAgentNode(ctx: NodeRunContext, promptOverride?: string, itemIn
   const { value } = await cachedHostCall(ctx, 'node_result', node.id, payload, 1, async () => {
     const ticket = ctx.budget.reserveAgent(); // reserve → spawn → release (§6.5)
     try {
-      let result = await ctx.host.runAgent(
+      let result = await runAgentWithProviderGovernor(ctx,
         {
           agent: node.agent!,
           prompt,
@@ -197,7 +220,7 @@ async function runAgentNode(ctx: NodeRunContext, promptOverride?: string, itemIn
         const reason = validateLooseJsonSchema(result.output, schema);
         if (reason) {
           const retryPrompt = `${prompt}\n\nYour previous answer failed schema validation: ${reason}. Return the answer again as JSON matching the schema.`;
-          result = await ctx.host.runAgent(
+          result = await runAgentWithProviderGovernor(ctx,
             {
               agent: node.agent!,
               prompt: retryPrompt,

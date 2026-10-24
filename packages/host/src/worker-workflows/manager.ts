@@ -33,6 +33,7 @@ import { WorkflowDecisionAdapter } from './decision-adapter.js';
 import { createWorkflowRuntimePorts } from './runtime-ports.js';
 import { defaultConcurrency } from './host.js';
 import type { DecisionService } from '../decisions/index.js';
+import type { WorkflowObservationEvent } from '@duya/workflow';
 import { runVerifyStage, type VerifyVerdict } from './verify.js';
 import type { PlannerResult } from './planner.js';
 
@@ -118,7 +119,10 @@ export interface WorkflowManagerOptions {
   secret?: string;
   approvalMode?: 'await' | 'suspend';
   agentBudget?: number;
+  maxConcurrency?: number;
+  /** @deprecated Use maxConcurrency. */
   concurrency?: number;
+  onObservation?: (event: WorkflowObservationEvent) => void;
   /** Live progress tap (SSE) — receives every journal record. */
   onProgress?: (record: JournalRecord, runId: string) => void;
   /** Fresh-eyes verify stage after a complete outcome (plan 552 Phase 5). */
@@ -134,12 +138,22 @@ export interface WorkflowManagerOptions {
 export class WorkflowManager {
   /** runId → abort controller for in-flight runs (cancel + reconciliation). */
   private readonly inFlight = new Map<string, AbortController>();
+  /** Live engine handle for run-scoped concurrency retuning. */
+  private readonly liveEngines = new Map<string, WorkflowEngine>();
 
   constructor(private readonly options: WorkflowManagerOptions) {}
 
   /** Run ids the engine is currently executing (crash reconciliation input). */
   activeRunIds(): string[] {
     return [...this.inFlight.keys()];
+  }
+
+  /** Change the run gate in place; returns false if this run is not executing. */
+  setRunConcurrency(runId: string, maxConcurrency: number): boolean {
+    const engine = this.liveEngines.get(runId);
+    if (!engine) return false;
+    engine.setMaxConcurrency(maxConcurrency, runId);
+    return true;
   }
 
   async launch(input: LaunchInput): Promise<LaunchResult> {
@@ -372,15 +386,21 @@ export class WorkflowManager {
       ports: createWorkflowRuntimePorts(this.options.secret),
       approvalMode: this.options.approvalMode ?? 'await',
       agentBudget: this.options.agentBudget,
-      concurrency: this.options.concurrency ?? defaultConcurrency(),
+      maxConcurrency: this.options.maxConcurrency ?? this.options.concurrency ?? defaultConcurrency(),
+      onObservation: this.options.onObservation,
       signal: opts.signal,
     });
 
     let outcome: EngineOutcome;
-    if (opts.token && opts.decision) {
-      outcome = await engine.resume(def, params, journal, { token: opts.token, decision: opts.decision }, { runId, journal });
-    } else {
-      outcome = await engine.execute(def, params, { runId, journal });
+    this.liveEngines.set(runId, engine);
+    try {
+      if (opts.token && opts.decision) {
+        outcome = await engine.resume(def, params, journal, { token: opts.token, decision: opts.decision }, { runId, journal });
+      } else {
+        outcome = await engine.execute(def, params, { runId, journal });
+      }
+    } finally {
+      this.liveEngines.delete(runId);
     }
 
     // Terminal statuses → run row (journal-free stops already skipped
