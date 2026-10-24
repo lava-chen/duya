@@ -57,6 +57,7 @@
 
 ## 接续 / 结果
 
-进行中：worktree 已建（f6120e04）、junction 已建。
-下一步：跑基线 vitest，然后按进度清单实施。
+已实现、已验证（vitest 23 用例 + typecheck:all + architecture:check 全过），PR：https://github.com/lava-chen/duya/pull/468（codex/font-three-stacks → master，2 commits：f71fb840 三栈收敛、c015a171 FontContext 拆除）。
+待办：PR review/CI 通过后由获授权集成者合并；合并后 Electron 真机视觉验收（正文 sans、welcome/splash serif 标题、设置预设行仍在）。
+差距项（范围外，未实现）：CC 的 Code font 自定义等宽字体设置；OpenDyslexic 无障碍预设。
 回收：PR 集成并重验后走管理工具；ignored 文件（.vite 缓存等）不依赖快照。
