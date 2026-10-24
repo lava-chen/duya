@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · S3：`27a60f22809737dd26bffac748aeb7b3534f17d5` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · S3：`27a60f22809737dd26bffac748aeb7b3534f17d5` · S4：`5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` · owner：`/root`
 
 ## 目标与边界
 
@@ -25,7 +25,7 @@
 - [x] S1 契约：定义 surface schema，校验所属 MCP server、`ui://` URI、插件内唯一 ID；保持静态 `entry` 双向兼容。
 - [x] S2 发现与目录：投影到已安装插件目录，拒绝跨插件同名 surface，安装态变化刷新目录。
 - [x] S3 宿主资源解析：调用 MCP `resources/read`，校验 MIME、大小、来源 server，再通过现有文档通道签发 token 与 nonce。
-- [ ] S4 UI 入口：插件应用区与侧栏 tab 渲染 surface，复用安装/启用进度及失败提示；按会话可用性隐藏入口。
+- [~] S4 UI 入口已提交：插件应用区与侧栏 tab 渲染 surface，按会话可用性隐藏入口；UI 类型检查和目录/面板测试通过。真实 Electron UI 链路验证待有 Electron 二进制与显示服务的环境补跑。
 - [ ] S5 双向通道：保留 guest→host invoke，新增 host→guest `select` / `highlight` / `refresh`，仅寻址当前 launch 的 surface。
 - [ ] S6 示例与兼容：迁移一个纯查看型示例插件，并用静态 entry 插件回归。
 
@@ -41,6 +41,8 @@
 - 参考官方 `zai-org/ZCode` 开源仓库（浅克隆 SHA `3c5b227649371507ddc4eb46ac5133afe6db1cab`）：`plugins/listUiSurfaces` 是与 tab 状态分离的只读目录投影，仅返回启用插件的 surface；本任务采用目录投影与资源归属检查的经验，不引入其 MCP Apps 页面 API、工具注册、订阅或 widgetState 协议。
 - S2 从已安装 Plugin App 声明生成独立只读 surface 目录；跨已安装插件重复 ID 全部隔离并返回 owner 冲突，目录仅提供启用插件的唯一 surface。安装、启用、停用、卸载和设置变化复用既有 `plugin-app:changed` 事件供目录消费者刷新。
 - S3 经现有 MCP SDK `Client.readResource` 加载 surface：活动会话 worker 存活时复用其 MCPManager，并以 worker 身份与 generation 复核响应；无 worker 或 standalone/always 入口通过同一 MCPManager 实现短连接读取，仅连接 manifest 声明的 server。worker 和 Main 都要求 server `source=plugin`、插件归属匹配、资源 URI 完全匹配、唯一文本 `text/html` 内容且不超过 8 MiB。Main 将已校验 HTML 挂到随机 token 的 loopback `/index.html` 单文档路由；该 mount 不提供包内静态资源，文档 CSP 禁止网络连接，沿用既有 launch nonce 与 opaque-origin iframe。静态 `entry` 路径保持原样。
+- S4 的 Apps 目录将 surface 按插件归组并调用既有 `PanelProvider.openOrActivatePage`；tab 去重键为 `pluginId + surfaceId`。session surface 无活动会话时不出现在目录，PanelZone 同时关闭 session tab；插件 iframe 只在面板打开且卡片可见时挂载。旧 preload 没有 surface 目录能力或目录读取失败时，静态 `entry` launcher 仍从插件 registry 渲染。
+- S4 真实桌面 UI 验证受环境限制：`node_modules/electron/dist/electron` 不存在，`require('electron')` 尝试下载二进制但网络 fetch 失败，且没有 `Xvfb` / `xvfb-run`；未用 mock 替代 IPC/worker 链路验收。继续切片，最终仍需在具备 Electron 和显示服务的环境完成真实产品路径验证。
 
 ## 验证记录
 
@@ -72,9 +74,16 @@
 | `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
 | `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
 | `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux | `git diff --cached --check` | 0 | S3 暂存 diff 无空白错误 |
+| `72e30ee3783eeecf88a86823fb37db49f7c86e5b` + S4 初版 UI dirty | Linux，Node v24.19.0，npm 11.9.0 | `npm run typecheck:all` | 0 | 20 个包构建及全仓检查通过；Electron ratchet 无新增错误（206 已知），9 个基线项收敛；recorder 4/4 |
+| `72e30ee3783eeecf88a86823fb37db49f7c86e5b` + S4 dirty | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/components/layout/PanelZone.test.tsx packages/ui/src/components/layout/PanelHeader.test.tsx` | 0 | 4 个文件、31 项通过；覆盖目录投影、tab 去重及 iframe 隐藏/卸载 |
+| `72e30ee3783eeecf88a86823fb37db49f7c86e5b` + S4 dirty | Linux，Node v24.19.0，授权子进程 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
+| `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` | Linux，Node v24.19.0，npm 11.9.0 | `npm run typecheck -w @duya/ui` | 0 | 包级 UI 类型检查覆盖最终兼容回退与测试代码 |
+| `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/components/layout/PanelZone.test.tsx packages/ui/src/components/layout/PanelHeader.test.tsx` | 0 | 4 个文件、32 项通过；增加目录 API 不可用时静态入口仍可见 |
+| `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` | Linux | `git diff --cached --check` | 0 | S4 代码提交前无空白错误 |
+| `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` | Linux；无 Electron 二进制、无 Xvfb；网络受限 | `test -x node_modules/electron/dist/electron; command -v xvfb-run; node -p "require('electron')"` | 1 | Electron 包触发二进制下载后 fetch 失败；没有可运行桌面显示服务，因此真实 UI/IPC/worker 验收未完成 |
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。S3 MCP resource loader、worker bridge、tokenized loopback document mount 与架构说明已提交于 `27a60f22809737dd26bffac748aeb7b3534f17d5`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。S3 MCP resource loader、worker bridge、tokenized loopback document mount 与架构说明已提交于 `27a60f22809737dd26bffac748aeb7b3534f17d5`。S4 panel UI 与目录入口已提交于 `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：推进 S4 插件应用区入口、侧栏 tab 呈现、同 surface 单 tab 复用、session availability 隐藏和用户可见错误提示。
+下一步：推进 S5 Host→guest 受控事件 `select` / `highlight` / `refresh`，把目标限制到当前 launch 的 surface；随后处理 S6 示例迁移和静态 entry 回归。最终需重试真实桌面 UI 链路验证。
