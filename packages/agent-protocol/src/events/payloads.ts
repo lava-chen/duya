@@ -98,6 +98,22 @@ export interface TokenUsage {
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
   readonly totalTokens: number;
+  /**
+   * Physical duration of the provider request that produced this usage, in
+   * milliseconds.
+   *
+   * Measured at the provider call, from the moment the request is opened to
+   * the moment the provider reports its usage — so it INCLUDES the time to
+   * first token. Consumers use the elapsed duration directly instead of
+   * reconstructing throughput from downstream chunk timestamps, which may be
+   * buffered and would therefore understate the time the provider actually
+   * spent.
+   *
+   * Absent when the producer did not measure it. An absent duration is not a
+   * zero duration: a zero would divide by zero downstream, and an absent
+   * value says "nobody measured this".
+   */
+  readonly requestDurationMs?: number;
   /** Per-call breakdown. `last_call` is the aggregate for the turn. */
   readonly calls?: readonly UsageCall[];
   readonly last_call?: UsageCall;

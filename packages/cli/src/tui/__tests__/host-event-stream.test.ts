@@ -56,6 +56,31 @@ describe('projectHostEvent', () => {
       runtime: { name: 'duya-host', version: '1.0.0' },
     })).toBeNull();
   });
+
+  it('carries the request duration into the usage frame, and omits it when absent', () => {
+    // The duration is what makes the output rate derivable, so it has to
+    // survive the projection. It is OMITTED rather than zeroed when the
+    // provider measured nothing: a zero would divide by zero downstream.
+    expect(projectHostEvent({
+      type: 'assistant.usage',
+      usage: { inputTokens: 10, outputTokens: 1600, totalTokens: 1610, requestDurationMs: 20_000 },
+    })).toEqual({
+      type: 'token_usage',
+      data: {
+        input_tokens: 10,
+        output_tokens: 1600,
+        total_tokens: 1610,
+        request_duration_ms: 20_000,
+      },
+    });
+    expect(projectHostEvent({
+      type: 'assistant.usage',
+      usage: { inputTokens: 10, outputTokens: 1600, totalTokens: 1610 },
+    })).toEqual({
+      type: 'token_usage',
+      data: { input_tokens: 10, output_tokens: 1600, total_tokens: 1610 },
+    });
+  });
 });
 
 describe('HostEventStream', () => {

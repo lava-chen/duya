@@ -265,6 +265,7 @@ describe('StatusBar', () => {
       totalTokens: 1801,
       contextPercent: 42,
       contextBudget: 100_000,
+      outputTokensPerSecond: null,
     },
     model: { provider: 'deepseek', model: 'deepseek-flash', thinking: 'High' },
     styles: OWN,
