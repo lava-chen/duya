@@ -7,6 +7,31 @@
  * The vendor SDKs are NOT reachable from here: they live behind
  * `@duya/ai/clients` (that file explains why).
  */
+// ─── The Model Request boundary ───
+//
+// The invariants every provider request has to satisfy, and the reducers
+// that turn each adapter's payload into the boundary's own vocabulary.
+//
+// The payload builders themselves are NOT re-exported here: three of them
+// live in modules that statically import the vendor SDKs (`@anthropic-ai/sdk`,
+// `openai`), and a static re-export is a static edge -- the bundler cannot
+// drop the module behind it, so the SDKs would land in the renderer's first
+// screen. They are exported from `@duya/ai/clients` instead, which is where
+// the provider surface already lives.
+export {
+  SYSTEM_ATTACHED_MARKER,
+  checkModelRequest,
+  canonicalizeGenericPayload,
+  canonicalizeAnthropicPayload,
+  canonicalizeOpenAIResponsesPayload,
+  canonicalizeOpenAICompletionsPayload,
+  canonicalizeGeminiPayload,
+  canonicalizeBedrockPayload,
+  type CanonicalRequestMessage,
+  type ModelRequestExpectation,
+  type ModelRequestViolation,
+  type ModelRequestViolationCode,
+} from './model-request-invariants.js';
 export {
   computeContextEstimate,
   estimateMessageTokens as estimateContextMessageTokens,
