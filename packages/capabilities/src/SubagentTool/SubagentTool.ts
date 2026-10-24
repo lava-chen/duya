@@ -192,7 +192,7 @@ export class SubagentTool extends BaseTool {
       ];
       if (parsed.isolation === 'worktree') {
         footerLines.push(
-          `This run was isolated: its file changes are in the git worktree at ${parsed.workingDirectory || '(unknown path)'} and do not affect the session's working directory. Merge or cherry-pick that worktree's branch to adopt them.`,
+          `This run was isolated: its file changes are in the git worktree at ${parsed.workingDirectory || '(unknown path)'}. The checkout uses detached HEAD. Adopt its committed changes by commit SHA or checkpoint ref (cherry-pick), or inspect and apply its patch. Uncommitted changes remain in that worktree.`,
         );
       }
       for (const warning of warnings) footerLines.push(`Warning: ${String(warning)}`);
