@@ -125,7 +125,31 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **PR #400 的 CI typecheck 失败是基础设施 flake**，不是代码问题：`npm ci` 编译 `node-pty` 时下载 Node headers 被中断（`gyp ERR! stack TypeError: terminated` / `Fetch.onAborted`），失败发生在**依赖安装阶段**，仓库代码还没开始类型检查。本地 `npm run -w @duya/ui typecheck` 通过。
 - **E 的 follow-up（把 `Suspense` 边界收窄到视图本身）经实测判定为 no-op，不做 PR**。E 的理由是「这个分支同时渲染聊天区和当前视图，边界会把聊天区一起隐藏」。代码不成立：`renderView()` 里聊天分支的条件是 `currentView === 'chat'`，视图分支是 `currentView === 'skills'` 等，`currentView` 是**单一枚举值**，两者互斥。实测也支持这个结论：切到懒加载视图时 `main.app-content` **没有出现空白期**（本地 `file://` 读 chunk 约 26ms，落在两帧之内）。**教训**：这类「边界会不会连坐」的问题必须用运行中的产品回答，不能靠读 JSX——第一版 probe 采错了元素（采到 `.app-body` 的最后一个非侧栏子元素，实际是 `PanelZone` 而不是 `main.app-content`），差点得出「聊天区消失 1196ms」的假结论。
 - **已丢失会话会留下持续污染机器的进程**。Agent A 的会话在 crash-recovery 里不断重启 `e2e/perf/run.mjs`，且用 `--lock-mode best-effort`（拿不到锁也照测），与集成者的权威重跑争抢 CPU 并抢占共享锁。清理方式：停掉子进程**并杀掉父 PowerShell**（否则它会再拉起），再释放已成孤儿的锁目录（持有者 pid 已不存在，但 30 分钟作废机制要等很久）。**How to apply**：发现锁被一个「持有者已死」的名字占着时，先核对 `owner.json` 的 pid 是否存活，存活再等，不存活直接释放。
+- **共享 harness 的 fixture 不含代码围栏，所以它测不出 B 那类收益**。`buildStreamChunks('perf/stream-long-reply')` 产出 2000 片 / 30551 字符的纯文本，`chunksWithFence = 0`；`buildSessionMessages('perf/session-100')` 的 100 条消息里 `withFence = 0`。而 B 的 645ms 收益**恰恰来自代码围栏的语法高亮**（去掉围栏语言的对照实验：1298.6 → 297.5ms）。所以集成重跑里 stream 场景的 `stream.block_ms_total = 0` 与 `longtask.count = 0` **是真实的、不是测量失败**——没有围栏就没有高亮开销，`stream.frames` 2643–2910 是流式期间的真实渲染帧。**How to apply**：这说明「共享 fixture」和「取证 fixture」是两套东西，合并后的权威数字**不能**用来判断 B 的修复是否还有收益；B 的结论要以它自己的 before/after 为准。要让共享 harness 也能覆盖这类收益，fixture 里得放围栏——但那会改变 fixture digest，**必须新开 fixture id**（如 `perf/stream-long-reply-fenced`），不能改现有 id 的内容。
+- **`perf/stream-long-reply` 这个 id 现在指向两份不同的内容**。共享 harness 的 `e2e/perf/lib/fixtures.mjs` 里它是 30551 字符的**纯文本**（无围栏）；B 的取证 fixture 在 `packages/ui/src/components/chat/__tests__/harness/fixture.ts`，同名 id 却是**含 3 个带语言代码围栏**的长回复。id 在本计划里是 fixture 契约的键（「固定 fixture」），同名不同内容会让任何跨 harness 的数字对比失去意义。**How to apply**：下一轮必须消歧——要么把带围栏那份改成新 id 并更新 B 的驱动脚本，要么把共享那份按围栏重做并重算 digest。在消歧之前，**不要把两个 harness 的同 id 数字放在同一张表里对比**。
 - **Agent A 还有 8 个未合并的 harness 修复，是真实资产，不能随检出一起回收**。`codex/perf-harness` 分支比 master 多 8 个提交，全部只碰 `e2e/perf/lib/{launch,lock}.mjs`、`e2e/perf/run.mjs`、`e2e/perf/scenarios/gpu.mjs`、`scripts/perf/harness.test.ts`（与 B/C/D/E 的改动**零重叠**，可干净合并）：安全模式窗口与 Host 未就绪时重试（`e9e12d6a`）、按 namespace 而非 pid 找 app 关闭（`836a30c8`）、优雅关闭失败时强杀整棵进程树（`65066896`）、pid 回收后误杀无关进程的保护（`a1a392f8`）、**从已死的持有者手里接管锁**（`da8c32b4`）、每个样本 4 分钟预算（`c97e9989`）、每场景落盘报告（`965fe696`）。这些正是本轮观察到的孤儿 Electron、僵尸锁、启动失败的根因——**A 修的是自己踩的坑，E 的 baseline 里 8 个样本只有 3 个成功也正是 safe-mode 窗口所致**。
+
+## 权威基线（合并后串行重跑，master + A 的 harness 修复）
+
+命令：`node scripts/perf/run.mjs --samples 3 --agent mavis-reprofile --lock-mode strict --lock-wait-min 25`
+环境：Intel Core i5-14600KF / 31.8 GB / Node v24.16.0 / Windows 10.0.26200 x64 / Electron 44.2.0 / Chromium 152.0.7977.76 / 生产构建（`file://` 预览模式，非 dev server）
+SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedScenarios: []`（**全程持锁，无一个场景被跳过或无锁测量**）/ 用时 31.2 分钟 / **6 场景 33 样本，零失败**
+
+| 场景 | 关键指标（p50） | 说明 |
+| --- | --- | --- |
+| startup | `startup.typeable_ms` **1632**（CV 2.28%）、`startup.firstPaint_ms` 1468.2（3.53%）、`dom.nodes` 183（0%）、`commit.count` 4（0%）、`longtask.total_ms` 76（18.17%） | 首屏 DOM 只有 183 个节点，提交数 4 |
+| session-switch | `session.open_ms` 610 / `session.switch_ms` 806（**跨 3 个 fixture 合并统计，CV 137%**——因为 10000 条把分布拉成三个簇） | 分 fixture 看：100 条 open 197–225ms；1000 条 549–670ms；**10000 条 32154–37054ms** |
+| session-switch（10000 条） | `dom.nodes` **115354**、`dom.mutations` 11976、`longtask.total_ms` **14958**、`mem.peakMB` 430.32、`mem.growthMB` 394.57、`scroll.frame.p95_ms` **1017.6** | 10 万个 DOM 节点 + 每次切换近 15 秒长任务 |
+| stream | `stream.block_ms_total` **0**、`longtask.count` 0、`frame.p95_ms` 16.8（0%）、`commit.count` 9（5.44%）、`dom.nodes` 376（0.27%）、`stream.frames` 1568 | **零阻塞是真的**——共享 fixture 无代码围栏（见「发现与决策」） |
+| typing | `interact.p50_ms` **25.6**（CV 0.49%）、`interact.p95_ms` **32.2**（0.15%）、`frame.p95_ms` 16.8（0.28%）、`dom.nodes` 1378（0%）、`commit.count` 1 | 输入延迟最稳的一组，是最可靠的 CI 候选来源 |
+| panels | 3 个面板打开 298–438ms、`frame.p95_ms` 16.8（0%）、`dom.nodes` 1533（0%）、`longtask.total_ms` 56（22.31%） | |
+| gpu | `cpu.renderer_pct` **99.4**（CV 0.12%）、`longtask.count` **305**、`longtask.total_ms` **37230**、`frame.p95_ms` 183.5（4.27%） | 三种 GPU 状态（normal / unavailable / context-lost）合并；`webgl-context-lost` 三样本都观测到 `lost=1`，**注入真实生效** |
+
+### 可进 CI 的代理指标（低噪声，机器无关）
+
+按本轮实测的 CV，**只有这些够稳**：typing 的 `interact.p95_ms`（0.15%）、`interact.p50_ms`（0.49%）、`frame.p95_ms`（0.28%）；stream 的 `dom.nodes`（0.27%）、`dom.mutations`（1.84%）；startup 的 `dom.nodes`/`commit.count`（0%）、`startup.typeable_ms`（2.28%）；gpu 的 `longtask.total_ms`（1.63%）、`longtask.count`（2.65%）、`cpu.renderer_pct`（0.12%）；session-switch 的 `session.open.commit.count`（5.05%）。
+
+**仍然不能进 CI 的**：任何跨 fixture 合并的 session-switch 壁钟时间（CV 137%，因为 10000 条是另一个数量级）；`stream.block_ms_total`（恒为 0，没有区分度）。**注意 B 的收益不会被这些代理捕获**——它省的是重复计算，DOM 与提交数完全不变。
 
 ## 下一轮机会清单（按实测收益排序）
 
@@ -133,15 +157,16 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 
 | # | 机会 | 已测收益 / 证据 | 归属 | 备注 |
 | --- | --- | --- | --- | --- |
-| 1 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法） |
-| 2 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7ms（+57%），Long Task 167 → 369 | D | 代价在**渲染器选择**而非 GPU 有无。方向是别让终端悄悄掉回 DOM：掉级时给用户可见信号，或自动尝试恢复 WebGL |
-| 3 | 首屏 JS 里那 8 个「点进去才到」的界面树 | E 已把首屏 JS 从 4081.2 KB 降到 3538.1 KB（−13.3%），`App.tsx` 静态闭包 524 → 392 个一方模块 | E | **本轮已完成**。下一轮看首屏 entry chunk 剩下的 2659 KB 里还有没有可切的 |
-| 4 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，并给侧栏 props 换成按值比较 | C | `app-sidebar.tsx` 还有 2086 行，下一轮查剩下的宽订阅与布局抖动来源 |
-| 5 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟时间只能在固定机器上做趋势分析；GitHub runner 是共享虚拟化的，阈值不可用 | 集成者 + A | 候选代理：首屏 JS 字节数、chunk 数、DOM 节点数、MutationObserver 批次数。注意 B 的收益**不会**被这些代理捕获（省的是重复计算，DOM 完全不变）——所以代理指标只能覆盖一部分退化 |
-| 6 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交** | A | 要么找到生产可用的提交计数方式，要么在报告里把代理的漏计范围写清楚 |
-| 7 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | **已排除**：`onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 不走 persist，用 `set()` 设 `hydrated`（会通知）；`terminal-appearance-store` 走 persist 但没有 hydration 标志 | — | 这条是**负结论**，已核实，不必再做 |
-| 8 | 懒加载视图的 Suspense 边界收窄 | **已排除**：E 的 follow-up 被判定为 no-op。`currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26ms 落地） | — | 这条是**负结论**。若将来出现「加载慢的磁盘/网络导致可见空白」，再重开这条：那时需要的是 `fallback` 骨架屏，而不是移动边界 |
-| 9 | 首屏 JS 里剩下的 2659 KB entry chunk | E 已切走 8 个界面树；首屏 JS 仍 3538.1 KB | E | 下一轮用 E 的 `module-closure.mjs` 看 entry chunk 的一方模块里还有哪些是「点击才到」的 |
+| 1 | **10000 条消息的会话打开/切换是 30–40 秒量级的卡顿** | 合并后串行重跑实测：100 条 open 197–225ms / switch 189–257ms；1000 条 open 549–670ms / switch 771–876ms；**10000 条 open 32154–37054ms / switch 37685–40668ms**，滚动帧 p95 **1000.8–1000.9ms**（60fps 完全丢帧） | B | 根因已定位：`MessageList.tsx:1254` 的 `groupedMessages.map(...)` **为每条消息都创建 React 组件实例 + IntersectionObserver + DOM 节点**（`LazyMessageRow` 只是让**内容**惰性，`content-visibility: auto` 并没有省掉组件与 observer 的创建）。10000 条 = 10000 个 observer。方向：真正的行虚拟化（只对可视区 ± overscan 挂载行），或把 observer 换成单一容器级测量 |
+| 2 | 流式时**增长中**的 markdown 每帧整篇重解析 | 去掉围栏语言的对照实验把主线程占用从 1298.6 打到 297.5ms；B 修完已完成围栏后仍剩 645.5ms，其中约 300ms 是增长尾巴的整篇重解析 | B | 拆「稳定前缀 / 增长尾巴」，只重解析尾巴；或把围栏分词挪进 worker（Anthropic 的做法）。**前置**：先消歧 `perf/stream-long-reply` 这个 id 指向的两份不同内容（共享的是纯文本、B 的是带围栏），否则改完没法用共享 harness 验证 |
+| 3 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7ms（+57%），Long Task 167 → 369 | D | 代价在**渲染器选择**而非 GPU 有无。方向是别让终端悄悄掉回 DOM：掉级时给用户可见信号，或自动尝试恢复 WebGL |
+| 4 | 首屏 JS 里那 8 个「点进去才到」的界面树 | E 已把首屏 JS 从 4081.2 KB 降到 3538.1 KB（−13.3%），`App.tsx` 静态闭包 524 → 392 个一方模块 | E | **本轮已完成**。下一轮看首屏 entry chunk 剩下的 2659 KB 里还有没有可切的 |
+| 5 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，并给侧栏 props 换成按值比较 | C | `app-sidebar.tsx` 还有 2086 行，下一轮查剩下的宽订阅与布局抖动来源 |
+| 6 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟时间只能在固定机器上做趋势分析；GitHub runner 是共享虚拟化的，阈值不可用 | 集成者 + A | 候选代理：首屏 JS 字节数、chunk 数、DOM 节点数、MutationObserver 批次数。注意 B 的收益**不会**被这些代理捕获（省的是重复计算，DOM 完全不变）——所以代理指标只能覆盖一部分退化 |
+| 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交** | A | 要么找到生产可用的提交计数方式，要么在报告里把代理的漏计范围写清楚 |
+| 8 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | **已排除**：`onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 不走 persist，用 `set()` 设 `hydrated`（会通知）；`terminal-appearance-store` 走 persist 但没有 hydration 标志 | — | 这条是**负结论**，已核实，不必再做 |
+| 9 | 懒加载视图的 Suspense 边界收窄 | **已排除**：E 的 follow-up 被判定为 no-op。`currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26ms 落地） | — | 这条是**负结论**。若将来出现「加载慢的磁盘/网络导致可见空白」，再重开这条：那时需要的是 `fallback` 骨架屏，而不是移动边界 |
+| 10 | 首屏 JS 里剩下的 2659 KB entry chunk | E 已切走 8 个界面树；首屏 JS 仍 3538.1 KB | E | 下一轮用 E 的 `module-closure.mjs` 看 entry chunk 的一方模块里还有哪些是「点击才到」的 |
 
 ## 验证记录
 
@@ -156,15 +181,23 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 | PR #400 hydrate 负对照 | 同上 | 临时把 `merge` 还原成 `onRehydrateStorage` 原地改写 → 跑 hydration 测试 → `git checkout --` 还原 | 1（**预期**） | 9 个用例中 4 个变红：`expected [ false ] to include true`、`expected false to be true`、`expected [ '/work/demo' ] to be an instance of Set` |
 | PR #400 还原后 | 同上 | 同上测试 | 0 | 9/9 绿；`git status` 干净；另两个测试文件 16 个用例绿 |
 | C 盘清理 | Windows | `rm -- <16 个陈年临时文件>` + `Clear-RecycleBin -DriveLetter C -Force` | 0 | C 盘空闲 0.15 GB → 2.48 GB；回收站清空前不释放空间 |
+| A 的 8 个 harness 修复 | 同上 | `npx vitest run scripts/perf/harness.test.ts`（`perf-harness` 检出 + 集成检出各一次） | 0 | 两处均 **26/26 绿** |
+| A 的锁接管修复负对照 | 同上 | `git checkout da8c32b4^ -- e2e/perf/lib/lock.mjs` → 跑同一测试 → `git checkout HEAD --` 还原 | 1（**预期**） | 精确变红：`expected false to be true`，1 failed / 25 passed；还原后 26/26 绿、工作树干净 |
+| PR #392 门禁 | `352bf353` + `88eb3eff` | `node scripts/architecture/architecture-check.mjs` | 0 | `OK — no new boundary violations`（2608 项全部落在既有 baseline 内） |
+| PR #392 CI | 同上 | `gh pr checks 392` | 0 | architecture / build / test / test scope / typecheck **全绿** |
+| 合并后权威重跑 | `ed3882de`（dirty：计划文档 + agent-e 工具） | `node scripts/perf/run.mjs --samples 3 --agent mavis-reprofile --lock-mode strict --lock-wait-min 25` | 0 | **6 场景 33 样本零失败**；`lock.held = true`、`skippedScenarios = []`；报告 `docs-local/research/perf-harness/perf-2026-10-24T02-01-06-073Z.json` |
+| Suspense 边界实测 | 同上 | `docs-local/research/suspense-probe/probe.mjs`（真实 Electron，逐帧采样 `main.app-content`） | 0 | 切到懒加载视图时**空白帧 0**、视图约 26ms 落地 ⇒ E 的 follow-up 是 no-op |
+| 检出回收 | — | `bash scripts/remove-worktree.sh <name> --dry-run` → 实际执行 | 0 | 4 个检出（harness/streaming/state/gpu）各摘 56 个 junction 后由 `git worktree remove` 移除；**分支保留**；C 盘 2.47 → 7.63 GB |
 
 ## 接续 / 结果
 
-实现中。集成者：mavis。合并顺序：A 先合（Harness 是其它 agent 的取证工具），再 B/C/D/E；合并后由集成者**串行**重跑 Profile 出一份权威数字，再出下一轮机会清单。
+第一轮已完成。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
-已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）。
-待合并：#400（C hydrate + 侧栏），等 typecheck 复跑；#392（本计划状态同步）。进行中：E。
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）。
+待合并：#392（集成台账 + A 的 8 个 harness 修复 + E 的工具改进）。
 未合并：#389（另一个会话的归档提案，owner 已定本线继续，详见「集成记录」）。
 
-回收：未回收。6 个检出均未全部集成，owner 会话在线。
-下一步：E 交付后审阅合并；全部合并后串行重跑 Profile，出权威数字与下一轮机会清单。
+回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` 四个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`，检出待回收。`perf-integration` 是集成检出，保留。
+
+下一步：#392 合并后，按机会清单第 1 名（流式时增长中的 markdown 每帧整篇重解析）开下一轮。
 
