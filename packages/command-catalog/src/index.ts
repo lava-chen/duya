@@ -26,8 +26,10 @@
  *    implemented", and conflating them is how commands become dead letters.
  *
  * 2. **Availability is data, not a caller's judgement.**
- *    `surfaces` and `availableWhileBusy` are properties of the command. The
- *    popup asks the catalog what to show; it does not carry its own list.
+ *    `surfaces`, `requiresSession` and `availableWhileBusy` are properties of
+ *    the command. The popup asks the catalog what to show; it does not carry
+ *    its own list. A surface that cannot run a command says so — it never
+ *    drops the command silently and never lets it run and fail.
  *
  * 3. **Order is presentation order.**
  *    The array order below IS the order the popup renders — most-used first,
@@ -46,6 +48,24 @@ export type CommandLocale = 'en' | 'zh';
 
 /** Grouping for menus and `/help`. Shared so both surfaces section alike. */
 export type CommandCategory = 'session' | 'config' | 'info' | 'tools' | 'exit';
+
+/**
+ * What a surface knows about itself when it renders a command list.
+ *
+ * The catalog is pure data, so availability is expressed as a question about
+ * these facts rather than as a closure the catalog cannot serialize. A surface
+ * fills in what it knows and asks the catalog what to show.
+ *
+ * This mirrors minimax-code's `TuiCommandContext`, which carries the same
+ * facts (`hasSession` / `hasLiveRun` / `managedTokenPresent` / …) and lets
+ * each command decide for itself with a `visibleWhen` predicate.
+ */
+export interface CommandContext {
+  /** There is a session to act on. */
+  readonly hasSession: boolean;
+  /** A turn is currently streaming. */
+  readonly busy: boolean;
+}
 
 export interface CommandSpec {
   /** Canonical name, no leading slash. */
@@ -85,6 +105,18 @@ export interface CommandSpec {
    * Used by surfaces that hide commands until there is something to act on.
    */
   readonly requiresSession?: boolean;
+  /**
+   * Why this command cannot run right now, in the surface's own words.
+   *
+   * A command that is unavailable is still RESOLVABLE (rule 1), so the user
+   * can always type it. This string is what they are told when they do —
+   * without it the command either vanishes from the menu (the user concludes
+   * it does not exist) or runs and fails (the user concludes it is broken).
+   *
+   * minimax-code does the same thing with `unavailableReason`; the catalog
+   * stores the text so both surfaces explain themselves identically.
+   */
+  readonly unavailableReason?: string;
 }
 
 /**
@@ -187,6 +219,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'session',
     surfaces: ['desktop', 'cli'],
     requiresSession: true,
+    // Reading the transcript mid-turn is safe: it does not touch the run.
+    availableWhileBusy: true,
   },
   {
     // Plan 610 T15. The handshake answer is otherwise invisible: a refusal was
@@ -202,6 +236,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'session',
     surfaces: ['cli'],
     requiresSession: false,
+    // A capability handshake is a read; it does not touch the run.
+    availableWhileBusy: true,
   },
   {
     // Plan 610 T15. The first command that actually CONSUMES a Host capability:
@@ -217,6 +253,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'session',
     surfaces: ['cli'],
     requiresSession: true,
+    // A file read does not touch the run.
+    availableWhileBusy: true,
   },
   {
     // `copy` has a Desktop executor (executors/session.ts) that no popover entry
@@ -230,6 +268,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '复制最后一条回复',
     category: 'session',
     surfaces: ['desktop', 'cli'],
+    // Copying the last reply is a read; it does not touch the run.
+    availableWhileBusy: true,
   },
   {
     name: 'stop',
@@ -288,6 +328,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     argsHint: '[level]',
     category: 'config',
     surfaces: ['cli'],
+    // Effort applies to the NEXT turn; the running one is unaffected.
+    availableWhileBusy: true,
   },
   {
     name: 'permission',
@@ -300,6 +342,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     subcommands: ['ask', 'auto', 'bypass'],
     category: 'config',
     surfaces: ['desktop', 'cli'],
+    // The mode applies to the NEXT tool call; the running turn keeps the
+    // profile it started with.
+    availableWhileBusy: true,
   },
   {
     name: 'settings',
@@ -338,6 +383,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     subcommands: ['none', 'minimal', 'low', 'medium', 'high'],
     category: 'config',
     surfaces: ['desktop', 'cli'],
+    // Effort applies to the NEXT turn; the running one is unaffected.
+    availableWhileBusy: true,
   },
   {
     name: 'login',
@@ -371,6 +418,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'info',
     surfaces: ['desktop', 'cli'],
     gateway: true,
+    // Listing the commands is the one thing a user is most likely to want
+    // precisely while a turn is running — hiding it then is backwards.
+    availableWhileBusy: true,
   },
   {
     name: 'status',
@@ -468,48 +518,11 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '列出可用的技能',
     category: 'info',
     surfaces: ['desktop'],
+    // Listing skills is a read.
+    availableWhileBusy: true,
   },
 
   // ── tools ─────────────────────────────────────────────────────────────
-  {
-    name: 'review',
-    label: 'Review code',
-    labelZh: '代码审查',
-    description: 'Review code changes with detailed feedback',
-    descriptionZh: '审查代码变更并给出详细反馈',
-    category: 'tools',
-    surfaces: ['desktop'],
-    requiresSession: true,
-  },
-  {
-    name: 'simplify',
-    label: 'Simplify code',
-    labelZh: '简化代码',
-    description: 'Simplify and refactor complex code',
-    descriptionZh: '简化并重构复杂的代码',
-    category: 'tools',
-    surfaces: ['desktop'],
-    requiresSession: true,
-  },
-  {
-    name: 'doctor',
-    label: 'Diagnose project',
-    labelZh: '项目诊断',
-    description: 'Diagnose project issues and suggest fixes',
-    descriptionZh: '诊断项目问题并给出修复建议',
-    category: 'tools',
-    surfaces: ['desktop'],
-  },
-  {
-    name: 'commit',
-    label: 'Generate commit',
-    labelZh: '生成提交',
-    description: 'Generate a smart Git commit message',
-    descriptionZh: '智能生成 Git 提交信息',
-    category: 'tools',
-    surfaces: ['desktop'],
-    requiresSession: true,
-  },
   {
     name: 'plan',
     label: 'Enter plan mode',
@@ -554,6 +567,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '打开代码审查面板（git diff）',
     category: 'tools',
     surfaces: ['desktop'],
+    // The panel reads git state; it does not touch the run.
+    availableWhileBusy: true,
   },
   {
     name: 'loop',
@@ -575,6 +590,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '打开记忆面板',
     category: 'tools',
     surfaces: ['desktop'],
+    // Opening a panel does not touch the run.
+    availableWhileBusy: true,
   },
   {
     name: 'mcp',
@@ -584,6 +601,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '打开 MCP 连接设置',
     category: 'tools',
     surfaces: ['desktop'],
+    // Opening a panel does not touch the run.
+    availableWhileBusy: true,
   },
   {
     name: 'add-dir',
@@ -617,6 +636,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'tools',
     surfaces: ['desktop'],
     requiresSession: true,
+    // A side question is asked PRECISELY while a turn runs — that is the
+    // whole point of the command, so it must not be gated on an idle turn.
+    availableWhileBusy: true,
     supportsInlineArgs: true,
   },
 ];
@@ -656,6 +678,55 @@ export function specsForSurface(
     if (options.busy === true && spec.availableWhileBusy !== true) return false;
     return true;
   });
+}
+
+/**
+ * Whether a command can run right now, and why not when it cannot.
+ *
+ * This is the answer to "the user typed a command that exists but cannot
+ * work here". The command stays resolvable (rule 1) so the surface can tell
+ * the user WHY instead of forwarding the token to the model as prose.
+ *
+ * The reason text comes from the spec, so the Desktop and the CLI explain
+ * themselves the same way. `availableWhileBusy` and `requiresSession` are the
+ * two facts a spec can declare; a spec that declares neither is always
+ * available.
+ */
+export function commandAvailability(
+  spec: CommandSpec,
+  context: CommandContext,
+): { readonly available: true } | { readonly available: false; readonly reason: string } {
+  if (spec.requiresSession === true && !context.hasSession) {
+    return {
+      available: false,
+      reason: spec.unavailableReason ?? `Start a session before using /${spec.name}.`,
+    };
+  }
+  if (spec.availableWhileBusy !== true && context.busy) {
+    return {
+      available: false,
+      reason: spec.unavailableReason ?? `Stop the running turn before using /${spec.name}.`,
+    };
+  }
+  return { available: true };
+}
+
+/**
+ * The commands a surface should show, given what it knows about itself.
+ *
+ * Same list as `specsForSurface`, but the caller supplies a `CommandContext`
+ * instead of loose booleans, so a surface cannot half-fill the facts and get
+ * a menu that disagrees with what it can actually run.
+ */
+export function availableSpecsFor(
+  surface: CommandSurface,
+  context: CommandContext,
+): readonly CommandSpec[] {
+  return COMMAND_SPECS.filter(
+    (spec) =>
+      spec.surfaces.includes(surface) &&
+      commandAvailability(spec, context).available,
+  );
 }
 
 /** Chinese description when present, else the English one. */

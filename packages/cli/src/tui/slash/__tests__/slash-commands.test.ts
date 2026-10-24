@@ -274,6 +274,34 @@ describe('slash registry', () => {
     }
   });
 
+  it('has a handler for every command the catalog advertises to the CLI', () => {
+    // The reverse of the test above. The catalog said a command was a CLI
+    // command; the CLI must be able to run it. A catalog entry with no
+    // handler would be advertised and then answer "unknown command" — the
+    // failure mode the catalog's own integrity tests forbid.
+    //
+    // Six commands are implemented by the chat loop itself rather than by a
+    // `slash/` handler: they need the loop's queue, transcript and session
+    // transition, which a handler cannot reach. They are listed here so the
+    // exception is visible instead of implied.
+    const IMPLEMENTED_BY_THE_CHAT_LOOP = ['new', 'resume', 'clear', 'queue', 'exit', 'help'];
+    const advertised = specsForSurface('cli').map((spec) => spec.name);
+    const missing = advertised.filter(
+      (name) => !hasTuiSlashCommand(name) && !IMPLEMENTED_BY_THE_CHAT_LOOP.includes(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('keeps the chat-loop exceptions and the catalog in step', () => {
+    // The exception list above is a literal; if the catalog drops one of
+    // these commands, or a handler for one appears, this fails so the
+    // exception does not quietly become a lie.
+    for (const name of ['new', 'resume', 'clear', 'queue', 'exit', 'help']) {
+      expect(specsForSurface('cli').some((spec) => spec.name === name), name).toBe(true);
+      expect(hasTuiSlashCommand(name), name).toBe(false);
+    }
+  });
+
   it('offers the same commands in the completion popup and in /help', () => {
     const popup = buildSlashCompletionRows().map((row) => row.value);
     expect(popup).toContain('/model');

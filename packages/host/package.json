@@ -291,6 +291,10 @@
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
     },
+    "./config-agents": {
+      "types": "./dist/config-agents/index.d.ts",
+      "import": "./dist/config-agents/index.js"
+    },
     "./authorization/connector-approval-cache": {
       "types": "./dist/authorization/connector-approval-cache.d.ts",
       "import": "./dist/authorization/connector-approval-cache.js"
