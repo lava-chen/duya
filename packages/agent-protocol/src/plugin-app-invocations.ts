@@ -37,6 +37,19 @@ export type PluginAppInvocationResult =
   | { readonly ok: true; readonly result: unknown }
   | { readonly ok: false; readonly code: string; readonly message: string };
 
+/** Narrow resource data allowed to cross the worker boundary for a UI surface. */
+export interface PluginAppResourceRead {
+  readonly source: string;
+  readonly pluginId?: string;
+  readonly serverName: string;
+  readonly contents: ReadonlyArray<{
+    readonly uri: string;
+    readonly mimeType?: string;
+    readonly text?: string;
+    readonly blob?: string;
+  }>;
+}
+
 /** Called only by trusted Main code through the authenticated local Host API. */
 export interface HostPluginAppInvocationApiV1 {
   bindPluginAppInvocation(input: PluginAppInvocationBindInput): Promise<PluginAppInvocationBinding>;

@@ -3,6 +3,9 @@ import { z } from 'zod';
 const APP_ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const CAPABILITY_ID_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
 
+/** Maximum UTF-8 size accepted for an MCP-backed Plugin UI document. */
+export const PLUGIN_UI_RESOURCE_MAX_BYTES = 8 * 1024 * 1024;
+
 function isPluginUiResourceUri(value: string): boolean {
   if (!value.startsWith('ui://') || /[\s\u0000-\u001f]/.test(value)) return false;
   try {

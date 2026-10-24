@@ -158,7 +158,7 @@ export function getPluginAppAPI() {
   const api = window.electronAPI?.pluginApp;
   if (!api) return null;
   return {
-    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string; surfaceId?: string }) =>
       api.open(payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       api.call(payload),

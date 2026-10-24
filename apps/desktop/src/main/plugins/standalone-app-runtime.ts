@@ -9,7 +9,8 @@ import { resolveMCPDiscovery } from '@duya/plugin-core/mcp/resolve';
 import { computeSchemaRevision } from '@duya/plugin-core/mcp/core/descriptor';
 import { unscopedServerName } from '@duya/plugin-core';
 import { pluginAppCapabilityTools, type PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
-import type { PluginAppInvocationResult } from '@duya/agent-protocol';
+import type { PluginAppInvocationResult, PluginAppResourceRead } from '@duya/agent-protocol';
+import { scopedPluginServerName } from '@duya/plugin-core';
 import { getPluginManager } from './PluginManager';
 import { readPluginManifest } from './manifest';
 import {
@@ -127,6 +128,47 @@ export async function approveStandaloneApp(app: InstalledApp): Promise<boolean> 
 
 export function resolveStandaloneApp(pluginId: string, appId: string): InstalledApp | null {
   return installedApp(pluginId, appId);
+}
+
+/** Read a declared surface resource for launches without an agent worker. */
+export async function readPluginUiSurfaceResource(
+  pluginId: string,
+  appId: string,
+  server: string,
+  resourceUri: string,
+): Promise<PluginAppResourceRead> {
+  const entry = getPluginManager().listInstalled().find((item) => item.id === pluginId && item.enabled);
+  if (!entry?.installPath || !entry.dataPath) throw new Error('plugin_app_not_found');
+  const manifest = readPluginManifest(entry.installPath);
+  if (manifest.id !== pluginId) throw new Error('plugin_app_resource_server_mismatch');
+  const app = manifest.apps?.find((item) => item.appId === appId);
+  if (!app?.ui?.surfaces.some((surface) => surface.server === server && surface.resourceUri === resourceUri)) {
+    throw new Error('plugin_app_surface_not_found');
+  }
+
+  const candidates = buildCandidatesFromPluginEntry({
+    id: pluginId, name: manifest.name, enabled: true, installPath: entry.installPath, dataPath: entry.dataPath,
+    manifest: { capabilities: manifest.capabilities },
+  });
+  const setup = await getDesktopHostLocalPluginSetupApi().listPluginSetupValues();
+  const environment = Object.fromEntries(Object.entries(process.env).filter((pair): pair is [string, string] => typeof pair[1] === 'string'));
+  const resolved = await resolveMCPDiscovery(candidates, { environment, userConfigByPlugin: setup });
+  const serverName = scopedPluginServerName(pluginId, server);
+  const config = resolved.resolvedConfigs.find((item) => item.scopedServerName === serverName && item.pluginId === pluginId);
+  if (!config) throw new Error('plugin_app_resource_server_unavailable');
+
+  const manager = new MCPManager();
+  try {
+    const client = await manager.addServer(toMcpConfig(config));
+    const liveConfig = client.getConfig();
+    if (client.getName() !== serverName || client.getSource() !== 'plugin' || liveConfig.pluginId !== pluginId) {
+      throw new Error('plugin_app_resource_server_mismatch');
+    }
+    const contents = await client.readResource(resourceUri);
+    return { source: liveConfig.source ?? 'unknown', pluginId: liveConfig.pluginId, serverName, contents };
+  } finally {
+    await manager.disconnectAll().catch(() => undefined);
+  }
 }
 
 export function bindStandaloneApp(sessionId: string, pluginId: string, appId: string, instanceId: string, launchRevision: string) {

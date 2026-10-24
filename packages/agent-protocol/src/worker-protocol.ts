@@ -157,6 +157,24 @@ export interface PluginAppInvokeCommand {
   arguments: Record<string, unknown>;
 }
 
+/** Read one manifest-bound UI resource through the session's live MCP client. */
+export interface PluginAppReadResourceCommand {
+  type: 'plugin-app:read-resource';
+  sessionId: string;
+  requestId: string;
+  pluginId: string;
+  server: string;
+  resourceUri: string;
+}
+
+export interface PluginAppReadResourceResponse {
+  type: 'plugin-app:resource';
+  sessionId: string;
+  requestId: string;
+  result?: import('./plugin-app-invocations.js').PluginAppResourceRead;
+  error?: string;
+}
+
 export interface PluginAppDescribeToolsResponse {
   type: 'plugin-app:tools';
   sessionId: string;
@@ -263,6 +281,7 @@ export type WorkerCommand =
   | ChatInterruptCommand
   | PluginAppDescribeToolsCommand
   | PluginAppInvokeCommand
+  | PluginAppReadResourceCommand
   | CompactCommand
   | SideQuestionCommand
   | PermissionResolveCommand

@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { ReadResourceRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 import { MCPManager } from '../../src/MCP/MCPManager.js';
 import type { MCPServerConfig } from '../../src/MCP/ports.js';
@@ -73,6 +74,33 @@ describe('plan 616 T610a — duya_app in-process MCP server', () => {
       'send_message',
     ]);
 
+    await manager.disconnectAll();
+  });
+
+  it('MCPManager reads a resource through the connected MCP client', async () => {
+    const server = new Server(
+      { name: 'plugin-resource-fixture', version: '0.1.0' },
+      { capabilities: { tools: {}, resources: {} } },
+    );
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
+    server.setRequestHandler(ReadResourceRequestSchema, async () => ({
+      contents: [{ uri: 'ui://dashboard/overview', mimeType: 'text/html; charset=utf-8', text: '<main>snapshot</main>' }],
+    }));
+    const manager = new MCPManager();
+    await manager.addServer({
+      name: 'plugin:com.duya.viewer:dashboard',
+      transport: 'in-process',
+      source: 'plugin',
+      pluginId: 'com.duya.viewer',
+      inProcessServer: server,
+    } as MCPServerConfig);
+
+    await expect(manager.readResource('plugin:com.duya.viewer:dashboard', 'ui://dashboard/overview'))
+      .resolves.toEqual([{
+        uri: 'ui://dashboard/overview',
+        mimeType: 'text/html; charset=utf-8',
+        text: '<main>snapshot</main>',
+      }]);
     await manager.disconnectAll();
   });
 

@@ -188,20 +188,28 @@ files when the legacy `entry` is present. An App may keep that static entry,
 declare resource-backed `ui.surfaces`, or carry both. Each surface declares
 English and Chinese titles, an icon identifier, an `ui://` resource URI, and
 the name of an MCP server discovered from that same plugin; surface IDs are
-unique within the plugin. This schema change only defines and validates
-metadata: resource reads and surface rendering remain subsequent slices. App
-IDs, requested capabilities and state schema versions remain metadata, not
-grants or live instance state. The installed-plugin view projects only these
-App declarations, without exposing the rest of a manifest's MCP configuration.
+unique within the plugin. App IDs, requested capabilities and state schema
+versions remain metadata, not grants or live instance state. The installed-
+plugin view projects only these App declarations, without exposing the rest
+of a manifest's MCP configuration.
 The Main process also exposes a read-only UI surface directory projected from
 installed Plugin Apps. It returns enabled plugins' surfaces, omits every
 surface id claimed more than once across installed plugins, and reports those
 conflicts for diagnosis. Plugin install, enable, disable, remove, and setup
 changes reuse the existing `plugin-app:changed` notification so directory
 consumers can refetch; this directory is metadata and does not own tab state.
-Codex's root `apps` connector-file reference is unchanged. Launch must recheck
-entry containment; instance persistence and iframe launch are subsequent
-slices. See `610-architecture-series/22-wave3-dispatch.md`.
+Surface content is read through the declared plugin MCP server's existing
+client and must be one `text/html` text resource at the exact declared
+`ui://` URI, no larger than 8 MiB. The Main process rechecks server ownership
+and content shape, then serves that HTML as a single document at the existing
+tokenized loopback origin. Its mount cannot expose package files; the iframe
+keeps its opaque origin and launch nonce, and the document CSP blocks network
+connections. When a session worker is unavailable, the host connects the same
+MCP client implementation to only the declared server for the read. No MCP
+Apps widget protocol, tab state, or persistent panel DOM is introduced; the
+legacy static `entry` path remains supported. Codex's root `apps`
+connector-file reference is unchanged. See
+`610-architecture-series/22-wave3-dispatch.md`.
 
 `@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
 Host-created source/origin/nonce and session/run binding. It accepts only

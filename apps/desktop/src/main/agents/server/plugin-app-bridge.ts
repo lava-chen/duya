@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ChildProcess } from 'node:child_process';
-import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/agent-protocol';
+import type { PluginAppInvocationResult, PluginAppMcpDescriptor, PluginAppResourceRead } from '@duya/agent-protocol';
 import type { RunOrchestrator } from '@duya/host/run-orchestrator';
 import type { WorkerManager } from './worker-manager';
 import type { DesktopPluginAppServerRequest, DesktopPluginAppServerResponse, DesktopPluginAppServerResult } from '../plugin-app-server-rpc';
@@ -8,24 +8,22 @@ import type { DesktopPluginAppServerRequest, DesktopPluginAppServerResponse, Des
 type Pending = {
   readonly sessionId: string;
   readonly child: ChildProcess;
-  readonly runId: string;
-  readonly epoch: number;
+  readonly runId?: string;
+  readonly epoch?: number;
   readonly workerGeneration: number;
-  readonly operation: 'describe-tools' | 'invoke-tool';
-  readonly resolve: (value: PluginAppMcpDescriptor[] | PluginAppInvocationResult) => void;
+  readonly operation: 'describe-tools' | 'invoke-tool' | 'read-resource';
+  readonly resolve: (value: PluginAppMcpDescriptor[] | PluginAppInvocationResult | PluginAppResourceRead) => void;
   readonly reject: (reason: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 };
 
 /**
- * Finite Main→Agent Server bridge, fenced by the live run and worker process.
+ * Finite Main→Agent Server bridge, fenced by the session worker and generation.
  *
- * Every request is bound to four facts taken from the real producers — the
- * orchestrator's attempt (`runId`, `epoch`), the supervisor's live worker
- * (`child`), and the supervisor's worker generation — and a reply is only
- * accepted when it carries back the same four. A reply that names a different
- * worker, a different run, a different epoch, or a different generation is a
- * reply from a superseded attempt, and it is dropped rather than settled.
+ * Tool requests are bound to the live orchestrator attempt (`runId`, `epoch`),
+ * worker process (`child`) and worker generation. Read-only resource requests
+ * can run while a chat is idle, so they bind to the live session worker and
+ * generation instead. Replies from a superseded worker are dropped.
  */
 export class DesktopPluginAppServerBridge {
   readonly #orchestrator: RunOrchestrator;
@@ -72,6 +70,24 @@ export class DesktopPluginAppServerBridge {
           if (!result || typeof result !== 'object' || !('ok' in result)) throw new Error('plugin_app_worker_response_invalid');
           return this.#ok(request.requestId, { result });
         }
+        case 'read-resource': {
+          if (typeof request.pluginId !== 'string' || typeof request.server !== 'string' ||
+              typeof request.resourceUri !== 'string' || !request.resourceUri.startsWith('ui://')) {
+            throw new Error('plugin_app_resource_request_invalid');
+          }
+          const worker = this.#currentWorker(request.sessionId);
+          if (!worker) throw new Error('plugin_app_worker_unavailable');
+          const resource = await this.#requestWorker(
+            request.sessionId, worker.child, undefined, undefined, worker.workerGeneration, 'read-resource', {
+              type: 'plugin-app:read-resource', sessionId: request.sessionId, requestId: randomUUID(),
+              pluginId: request.pluginId, server: request.server, resourceUri: request.resourceUri,
+            },
+          );
+          if (!resource || typeof resource !== 'object' || !('contents' in resource)) {
+            throw new Error('plugin_app_worker_response_invalid');
+          }
+          return this.#ok(request.requestId, { resource: resource as PluginAppResourceRead, workerGeneration: worker.workerGeneration });
+        }
       }
     } catch (error) {
       return { type: 'desktop-plugin-app:response', requestId: request.requestId, success: false,
@@ -80,14 +96,16 @@ export class DesktopPluginAppServerBridge {
   }
 
   handleWorkerMessage(sessionId: string, message: Record<string, unknown>, child: ChildProcess): boolean {
-    if ((message.type !== 'plugin-app:tools' && message.type !== 'plugin-app:result') || typeof message.requestId !== 'string') return false;
+    if ((message.type !== 'plugin-app:tools' && message.type !== 'plugin-app:result' &&
+        message.type !== 'plugin-app:resource') || typeof message.requestId !== 'string') return false;
     const pending = this.#pending.get(message.requestId);
     // A reply with no pending request is a late answer to a request that was
     // already settled or timed out. It is consumed here so it cannot fall
     // through to another handler, and it settles nothing.
     if (!pending) return true;
     if (pending.child !== child || pending.sessionId !== sessionId || message.sessionId !== sessionId ||
-        message.runId !== pending.runId || message.epoch !== pending.epoch ||
+        (pending.operation !== 'read-resource' &&
+          (message.runId !== pending.runId || message.epoch !== pending.epoch)) ||
         this.#workers.getWorker(sessionId) !== child ||
         this.#workers.workerGeneration(sessionId) !== pending.workerGeneration) return true;
     this.#pending.delete(message.requestId);
@@ -96,6 +114,12 @@ export class DesktopPluginAppServerBridge {
       pending.resolve(message.tools as PluginAppMcpDescriptor[]);
     } else if (message.type === 'plugin-app:result' && pending.operation === 'invoke-tool' && message.result && typeof message.result === 'object') {
       pending.resolve(message.result as PluginAppInvocationResult);
+    } else if (message.type === 'plugin-app:resource' && pending.operation === 'read-resource' &&
+        message.result && typeof message.result === 'object') {
+      pending.resolve(message.result as PluginAppResourceRead);
+    } else if (message.type === 'plugin-app:resource' && pending.operation === 'read-resource' &&
+        typeof message.error === 'string') {
+      pending.reject(new Error(message.error));
     } else {
       pending.reject(new Error('plugin_app_worker_response_invalid'));
     }
@@ -130,15 +154,22 @@ export class DesktopPluginAppServerBridge {
     return { runId, epoch: attempt.epoch, workerGeneration, child };
   }
 
+  #currentWorker(sessionId: string): { workerGeneration: number; child: ChildProcess } | null {
+    const child = this.#workers.getWorker(sessionId);
+    if (!child || child.killed || child.exitCode !== null) return null;
+    const workerGeneration = this.#workers.workerGeneration(sessionId);
+    return workerGeneration === null ? null : { workerGeneration, child };
+  }
+
   #requestWorker(
     sessionId: string,
     child: ChildProcess,
-    runId: string,
-    epoch: number,
+    runId: string | undefined,
+    epoch: number | undefined,
     workerGeneration: number,
     operation: Pending['operation'],
     command: Record<string, unknown>,
-  ): Promise<PluginAppMcpDescriptor[] | PluginAppInvocationResult> {
+  ): Promise<PluginAppMcpDescriptor[] | PluginAppInvocationResult | PluginAppResourceRead> {
     if (this.#workers.getWorker(sessionId) !== child) return Promise.reject(new Error('plugin_app_worker_replaced'));
     const requestId = command.requestId as string;
     return new Promise((resolve, reject) => {
@@ -146,7 +177,7 @@ export class DesktopPluginAppServerBridge {
         this.#pending.delete(requestId);
         reject(new Error('plugin_app_worker_timeout'));
       }, operation === 'invoke-tool' ? 330_000 : 30_000);
-      this.#pending.set(requestId, { sessionId, child, runId, epoch, workerGeneration, operation, resolve, reject, timer });
+      this.#pending.set(requestId, { sessionId, child, ...(runId === undefined ? {} : { runId }), ...(epoch === undefined ? {} : { epoch }), workerGeneration, operation, resolve, reject, timer });
       if (child.killed || child.exitCode !== null || this.#workers.getWorker(sessionId) !== child) {
         this.#pending.delete(requestId);
         clearTimeout(timer);

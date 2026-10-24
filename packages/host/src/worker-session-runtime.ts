@@ -8,7 +8,9 @@ import { parseMailboxAttachments } from '@duya/host/worker-context/attachment-im
 import { isModelLikelyMultimodal } from '@duya/capabilities/utils/multimodal-detection';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { DEFAULT_MAX_OUTPUT_TOKENS, } from '@duya/host/worker-run-contracts';
-import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/agent-protocol';
+import type { PluginAppInvocationResult, PluginAppMcpDescriptor, PluginAppResourceRead } from '@duya/agent-protocol';
+import { scopedPluginServerName } from '@duya/plugin-core';
+import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declarations';
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
@@ -2156,6 +2158,39 @@ export class WorkerSession implements AgentRuntime {
                     },
                 };
             });
+    }
+    async readPluginUiSurfaceResource(input: {
+        pluginId: string;
+        server: string;
+        resourceUri: string;
+    }): Promise<PluginAppResourceRead> {
+        const serverName = scopedPluginServerName(input.pluginId, input.server);
+        const manager = this.mcpManager;
+        if (!manager) throw new Error('plugin_app_resource_server_unavailable');
+        const client = manager.getClient(serverName);
+        if (!client) throw new Error('plugin_app_resource_server_unavailable');
+        const config = client.getConfig();
+        if (client.getName() !== serverName || client.getSource() !== 'plugin' || config.pluginId !== input.pluginId) {
+            throw new Error('plugin_app_resource_server_mismatch');
+        }
+        const contents = await manager.readResource(serverName, input.resourceUri);
+        if (contents.length !== 1 || contents[0]?.uri !== input.resourceUri) {
+            throw new Error('plugin_app_resource_invalid');
+        }
+        const resource = contents[0];
+        if (typeof resource.text !== 'string' || typeof resource.mimeType !== 'string' ||
+            resource.mimeType.split(';', 1)[0]?.trim().toLowerCase() !== 'text/html') {
+            throw new Error('plugin_app_resource_mime_unsupported');
+        }
+        const sizeBytes = Buffer.byteLength(resource.text, 'utf8');
+        if (sizeBytes === 0) throw new Error('plugin_app_resource_invalid');
+        if (sizeBytes > PLUGIN_UI_RESOURCE_MAX_BYTES) throw new Error('plugin_app_resource_too_large');
+        return {
+            source: config.source ?? 'unknown',
+            pluginId: config.pluginId,
+            serverName,
+            contents,
+        };
     }
     async invokePluginAppMcpTool(input: {
         runId: string;

@@ -3030,6 +3030,31 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             });
             break;
         }
+        case 'plugin-app:read-resource': {
+            const command = msg as unknown as import('@duya/agent-protocol/worker-protocol').PluginAppReadResourceCommand;
+            if (command.sessionId !== sessionId || typeof command.requestId !== 'string' ||
+                typeof command.pluginId !== 'string' || typeof command.server !== 'string' ||
+                typeof command.resourceUri !== 'string' || !command.resourceUri.startsWith('ui://')) break;
+            try {
+                const result = await requireWorkerSession().readPluginUiSurfaceResource({
+                    pluginId: command.pluginId,
+                    server: command.server,
+                    resourceUri: command.resourceUri,
+                });
+                sendToMain({
+                    type: 'plugin-app:resource', sessionId: command.sessionId,
+                    requestId: command.requestId, result,
+                });
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                sendToMain({
+                    type: 'plugin-app:resource', sessionId: command.sessionId,
+                    requestId: command.requestId,
+                    error: message.startsWith('plugin_app_') ? message : 'plugin_app_resource_read_failed',
+                });
+            }
+            break;
+        }
         case 'chat:start': {
             const chatMsg = msg as unknown as ChatStartMessage;
             log('[Agent-Process] Received chat:start for session:', chatMsg.sessionId, 'initInProgress:', initializing);

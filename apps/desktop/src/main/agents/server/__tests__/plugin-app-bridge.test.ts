@@ -84,6 +84,30 @@ describe('DesktopPluginAppServerBridge', () => {
     expect(await pending).toMatchObject({ success: true, result: { tools: [] } });
   });
 
+  it('reads a UI resource from the current session worker without requiring an active run', async () => {
+    const { bridge, child, commands } = createBridge({ retired: true });
+    const pending = bridge.handle({
+      type: 'desktop-plugin-app:request', requestId: 'main-resource', operation: 'read-resource',
+      sessionId: 'session-1', pluginId: 'com.duya.viewer', server: 'reports',
+      resourceUri: 'ui://reports/overview',
+    });
+    const command = commands[0]!;
+    expect(command).toMatchObject({
+      type: 'plugin-app:read-resource', sessionId: 'session-1', pluginId: 'com.duya.viewer',
+      server: 'reports', resourceUri: 'ui://reports/overview',
+    });
+    const resource = {
+      source: 'plugin', pluginId: 'com.duya.viewer', serverName: 'plugin:com.duya.viewer:reports',
+      contents: [{ uri: 'ui://reports/overview', mimeType: 'text/html', text: '<main>ok</main>' }],
+    };
+    bridge.handleWorkerMessage('session-1', {
+      type: 'plugin-app:resource', requestId: command.requestId, sessionId: 'session-1', result: resource,
+    }, child);
+    expect(await pending).toMatchObject({
+      success: true, result: { workerGeneration: 1, resource: { source: 'plugin', contents: [{ text: '<main>ok</main>' }] } },
+    });
+  });
+
   it('drops a reply whose epoch does not match the request', async () => {
     const { bridge, child, commands } = createBridge();
     const pending = bridge.handle({

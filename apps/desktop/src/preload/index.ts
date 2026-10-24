@@ -1028,7 +1028,7 @@ export interface PluginAppAPI {
    * package and mints the session. The App itself never names its own
    * authority.
    */
-  open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) => Promise<{
+  open: (payload: { pluginId: string; appId: string; chatSessionId?: string; surfaceId?: string }) => Promise<{
     ok: boolean
     error?: string
     sessionId?: string
@@ -2846,7 +2846,7 @@ const electronAPI: ElectronAPI = {
   // and can only post a message to the renderer that hosts it, which
   // relays it here with the session handle.
   pluginApp: {
-    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string; surfaceId?: string }) =>
       ipcRenderer.invoke('plugin-app:open', payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       ipcRenderer.invoke('plugin-app:call', payload),

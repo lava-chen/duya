@@ -23,6 +23,9 @@ import { BrowserWindow, ipcMain } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
+import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declarations';
+import { scopedPluginServerName } from '@duya/plugin-core';
+import type { PluginAppResourceRead } from '@duya/agent-protocol';
 import {
   PluginAppSessionStore,
   authorizePluginAppCall,
@@ -35,11 +38,13 @@ import {
   getDesktopHostPluginAppInstanceApi,
   getDesktopHostPluginAppInvocationApi,
 } from '../cli/desktop-host-api';
+import { requestAgentServerPluginApp } from '../agents/agent-server-lifecycle';
 import {
   approveStandaloneApp,
   bindStandaloneApp,
   closeStandaloneApp,
   invokeStandaloneApp,
+  readPluginUiSurfaceResource,
   resolveStandaloneApp,
   shutdownStandaloneApps,
 } from './standalone-app-runtime';
@@ -49,6 +54,12 @@ export type PluginAppHostError =
   | 'plugin_disabled'
   | 'app_not_found'
   | 'entry_unavailable'
+  | 'surface_not_found'
+  | 'resource_unavailable'
+  | 'resource_invalid'
+  | 'resource_too_large'
+  | 'resource_mime_unsupported'
+  | 'resource_server_mismatch'
   | 'instance_unavailable'
   | 'host_unavailable'
   | 'unknown_session'
@@ -63,6 +74,7 @@ export interface PluginAppOpenRequest {
   pluginId: string;
   appId: string;
   chatSessionId?: string;
+  surfaceId?: string;
 }
 
 export interface PluginAppOpenResult {
@@ -149,6 +161,39 @@ function findInstalledApp(
   return null;
 }
 
+function validateSurfaceResource(
+  pluginId: string,
+  surface: NonNullable<PluginAppDefinition['ui']>['surfaces'][number],
+  resource: PluginAppResourceRead,
+): string {
+  const expectedServerName = scopedPluginServerName(pluginId, surface.server);
+  if (resource.source !== 'plugin' || resource.pluginId !== pluginId || resource.serverName !== expectedServerName) {
+    throw new Error('plugin_app_resource_server_mismatch');
+  }
+  if (resource.contents.length !== 1 || resource.contents[0]?.uri !== surface.resourceUri) {
+    throw new Error('plugin_app_resource_invalid');
+  }
+  const content = resource.contents[0];
+  if (typeof content.text !== 'string' || typeof content.mimeType !== 'string' ||
+      content.mimeType.split(';', 1)[0]?.trim().toLowerCase() !== 'text/html') {
+    throw new Error('plugin_app_resource_mime_unsupported');
+  }
+  const sizeBytes = Buffer.byteLength(content.text, 'utf8');
+  if (sizeBytes === 0) throw new Error('plugin_app_resource_invalid');
+  if (sizeBytes > PLUGIN_UI_RESOURCE_MAX_BYTES) throw new Error('plugin_app_resource_too_large');
+  return content.text;
+}
+
+function resourceOpenError(error: unknown): PluginAppHostError {
+  const code = error instanceof Error ? error.message : '';
+  if (code === 'plugin_app_surface_not_found') return 'surface_not_found';
+  if (code === 'plugin_app_resource_invalid') return 'resource_invalid';
+  if (code === 'plugin_app_resource_too_large') return 'resource_too_large';
+  if (code === 'plugin_app_resource_mime_unsupported') return 'resource_mime_unsupported';
+  if (code === 'plugin_app_resource_server_mismatch') return 'resource_server_mismatch';
+  return 'resource_unavailable';
+}
+
 /**
  * Bind the App to a durable instance.
  *
@@ -179,18 +224,75 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
   if (typeof request?.pluginId !== 'string' || typeof request?.appId !== 'string') {
     return { ok: false, error: 'plugin_not_found' };
   }
+  if (request.surfaceId !== undefined && typeof request.surfaceId !== 'string') {
+    return { ok: false, error: 'surface_not_found' };
+  }
+  if (request.chatSessionId !== undefined && typeof request.chatSessionId !== 'string') {
+    return { ok: false, error: 'host_unavailable' };
+  }
   const found = findInstalledApp(request.pluginId, request.appId);
   if (!found) return { ok: false, error: 'app_not_found' };
   const standalone = found.app.runtime === 'standalone';
-  if (!standalone && (typeof request.chatSessionId !== 'string' || request.chatSessionId.length === 0)) {
-    return { ok: false, error: 'host_unavailable' };
-  }
+  const surface = request.surfaceId === undefined
+    ? undefined
+    : found.app.ui?.surfaces.find((candidate) => candidate.id === request.surfaceId);
+  if (request.surfaceId !== undefined && !surface) return { ok: false, error: 'surface_not_found' };
+  const chatSessionId = request.chatSessionId?.length ? request.chatSessionId : undefined;
+  if (!standalone && !chatSessionId && surface?.availability !== 'always') return { ok: false, error: 'host_unavailable' };
 
   const standaloneApp = standalone ? resolveStandaloneApp(request.pluginId, request.appId) : null;
   if (standalone && !standaloneApp) return { ok: false, error: 'app_not_found' };
 
-  const entryPath = resolveAppEntry(found.installPath, found.app);
-  if (!entryPath) return { ok: false, error: 'entry_unavailable' };
+  const entryPath = surface ? null : resolveAppEntry(found.installPath, found.app);
+  if (!surface && !entryPath) return { ok: false, error: 'entry_unavailable' };
+  let surfaceHtml: string | undefined;
+  if (surface) {
+    try {
+      let resource: PluginAppResourceRead | undefined;
+      if (chatSessionId && !standalone) {
+        let fallbackToFreshClient = false;
+        try {
+          const response = await requestAgentServerPluginApp({
+            operation: 'read-resource',
+            sessionId: chatSessionId,
+            pluginId: request.pluginId,
+            server: surface.server,
+            resourceUri: surface.resourceUri,
+          });
+          if (!response.success) {
+            if (['plugin_app_worker_unavailable', 'plugin_app_resource_server_unavailable'].includes(response.error.code)) {
+              fallbackToFreshClient = true;
+            } else {
+              throw new Error(response.error.code);
+            }
+          } else if (!('resource' in response.result)) {
+            throw new Error('plugin_app_worker_response_invalid');
+          } else {
+            resource = response.result.resource;
+          }
+        } catch (error) {
+          if (error instanceof Error && ['plugin_app_agent_server_unavailable', 'plugin_app_worker_unavailable'].includes(error.message)) {
+            fallbackToFreshClient = true;
+          } else {
+            throw error;
+          }
+        }
+        if (fallbackToFreshClient) {
+          resource = await readPluginUiSurfaceResource(
+            request.pluginId, request.appId, surface.server, surface.resourceUri,
+          );
+        }
+      } else {
+        resource = await readPluginUiSurfaceResource(
+          request.pluginId, request.appId, surface.server, surface.resourceUri,
+        );
+      }
+      if (!resource) throw new Error('plugin_app_worker_response_invalid');
+      surfaceHtml = validateSurfaceResource(request.pluginId, surface, resource);
+    } catch (error) {
+      return { ok: false, error: resourceOpenError(error) };
+    }
+  }
   if (standaloneApp && !(await approveStandaloneApp(standaloneApp))) return { ok: false, error: 'grant_denied' };
 
   const instanceId = await resolveInstance(
@@ -205,13 +307,15 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     pluginId: request.pluginId,
     appId: request.appId,
     instanceId,
-    chatSessionId: request.chatSessionId,
+    chatSessionId,
     runtime: standalone ? 'standalone' : 'agent-run',
     packageRevision: standaloneApp?.revision,
   });
 
   try {
-    const entryUrl = await pluginAppAssets.open(session.sessionId, found.installPath, entryPath);
+    const entryUrl = surfaceHtml === undefined
+      ? await pluginAppAssets.open(session.sessionId, found.installPath, entryPath!)
+      : await pluginAppAssets.openDocument(session.sessionId, surfaceHtml);
     if (!sessions.get(session.sessionId)) {
       pluginAppAssets.revoke(session.sessionId);
       return { ok: false, error: 'unknown_session' };
@@ -219,7 +323,7 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     return { ok: true, sessionId: session.sessionId, launchNonce: session.launchNonce, entryUrl };
   } catch {
     sessions.close(session.sessionId);
-    return { ok: false, error: 'entry_unavailable' };
+    return { ok: false, error: surface ? 'resource_unavailable' : 'entry_unavailable' };
   }
 }
 
@@ -263,6 +367,7 @@ async function dispatch(sessionId: string, message: PluginAppGuestMessage): Prom
   }
 
   if (message.method === 'bind') {
+    if (!session.chatSessionId) return { ok: false, error: 'bind_failed' };
     let binding;
     try {
       binding = await invocationApi.bindPluginAppInvocation({

@@ -49,6 +49,7 @@ import { composeResultFromBlocks } from './result-blocks.js';
 // `toolTimeouts` (per-tool). These are the fallbacks when unset.
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000; // 30s: spawn + handshake + listTools
 const DEFAULT_TOOL_TIMEOUT_MS = 120_000;   // 120s: default per-tool-call cap
+const DEFAULT_RESOURCE_TIMEOUT_MS = 20_000;
 
 /** Plan 580 D2: debounce window for coalescing `tools/list_changed`. */
 const LIST_CHANGED_DEBOUNCE_MS = 500;
@@ -722,6 +723,33 @@ class MCPClient {
       return [];
     }
   }
+
+  /** Read one resource through the already-connected MCP client. */
+  async readResource(uri: string): Promise<Array<{
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  }>> {
+    if (!this.client || this.connectionStatus !== 'connected') {
+      throw new Error(`MCP server not connected: ${this.config.name}`);
+    }
+    const deadline = createDeadlineClock(DEFAULT_RESOURCE_TIMEOUT_MS);
+    try {
+      const result = await this.client.readResource(
+        { uri },
+        { timeout: deadline.remainingMs(), signal: deadline.signal },
+      );
+      return result.contents.map((content) => ({
+        uri: content.uri,
+        ...(content.mimeType === undefined ? {} : { mimeType: content.mimeType }),
+        ...('text' in content ? { text: content.text } : { blob: content.blob }),
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`MCP resource read failed for ${this.config.name}: ${sanitizeSecrets(message)}`);
+    }
+  }
 }
 
 /**
@@ -844,6 +872,18 @@ export class MCPManager {
    */
   getClient(name: string): MCPClient | undefined {
     return this.clients.get(name);
+  }
+
+  /** Read a resource using the live client identified by its scoped server name. */
+  async readResource(serverName: string, uri: string): Promise<Array<{
+    uri: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  }>> {
+    const client = this.clients.get(serverName);
+    if (!client) throw new Error(`MCP server not available: ${serverName}`);
+    return client.readResource(uri);
   }
 
   /**
