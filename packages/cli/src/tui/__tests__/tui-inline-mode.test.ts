@@ -214,6 +214,52 @@ describe('inline mode', () => {
     expect(text).toContain('(deepseek) deepseek-flash');
   });
 
+  it('shows the output rate when the usage frame carries a request duration', async () => {
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      workspaceDirectory: () => 'E:\\Projects\\duya',
+      modelLabel: () => ({ provider: 'deepseek', model: 'deepseek-flash' }),
+      contextBudgetTokens: () => 1_000_000,
+      onSubmit: () => {},
+    });
+    app.start();
+    // 1600 output tokens over 20000 ms is 80 tok/s. The rate comes from the
+    // provider's own request duration, so the frame has to carry it.
+    app.push({
+      type: 'token_usage',
+      data: {
+        input_tokens: 49_000,
+        output_tokens: 1600,
+        total_tokens: 50_600,
+        request_duration_ms: 20_000,
+      },
+    });
+    await settleRendered();
+    app.stop();
+    expect(out.text()).toContain('⚡ 80.0 tok/s');
+  });
+
+  it('shows no rate when the usage frame carries no request duration', async () => {
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      workspaceDirectory: () => 'E:\\Projects\\duya',
+      modelLabel: () => ({ provider: 'deepseek', model: 'deepseek-flash' }),
+      contextBudgetTokens: () => 1_000_000,
+      onSubmit: () => {},
+    });
+    app.start();
+    app.push({ type: 'token_usage', data: { input_tokens: 49_000, output_tokens: 1600, total_tokens: 50_600 } });
+    await settleRendered();
+    app.stop();
+    expect(out.text()).not.toContain('tok/s');
+  });
+
   it('colours the composer rules by reasoning effort', async () => {
     // pi's tell: the box you type into says how much thinking the next message
     // buys. `auto` stays the muted grey the border has always been.

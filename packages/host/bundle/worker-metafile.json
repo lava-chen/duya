@@ -543,7 +543,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/events/payloads.ts": {
-      "bytes": 29355,
+      "bytes": 30113,
       "imports": [],
       "format": "esm"
     },
@@ -1831,7 +1831,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/transcript/content.ts": {
-      "bytes": 18792,
+      "bytes": 19543,
       "imports": [],
       "format": "esm"
     },
@@ -1852,7 +1852,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/transcript/classification.ts": {
-      "bytes": 21642,
+      "bytes": 21866,
       "imports": [],
       "format": "esm"
     },
@@ -4374,6 +4374,11 @@
     },
     "packages/ai/src/utils/infer-provider.ts": {
       "bytes": 3458,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/request-duration.ts": {
+      "bytes": 4408,
       "imports": [],
       "format": "esm"
     },
@@ -9956,7 +9961,7 @@
       "format": "esm"
     },
     "packages/ai/src/index.ts": {
-      "bytes": 10750,
+      "bytes": 11408,
       "imports": [
         {
           "path": "packages/ai/src/model-request-invariants.ts",
@@ -10017,6 +10022,11 @@
           "path": "packages/ai/src/utils/infer-provider.ts",
           "kind": "import-statement",
           "original": "./utils/infer-provider.js"
+        },
+        {
+          "path": "packages/ai/src/utils/request-duration.ts",
+          "kind": "import-statement",
+          "original": "./utils/request-duration.js"
         },
         {
           "path": "packages/ai/src/utils/default-base-url.ts",
@@ -10107,6 +10117,11 @@
           "path": "packages/ai/src/system-one/index.ts",
           "kind": "import-statement",
           "original": "./system-one/index.js"
+        },
+        {
+          "path": "packages/ai/src/utils/request-duration.ts",
+          "kind": "import-statement",
+          "original": "./utils/request-duration.js"
         },
         {
           "path": "packages/ai/src/api/anthropic-messages.ts",
@@ -15376,7 +15391,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 198900,
+      "bytes": 199235,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -16423,7 +16438,7 @@
       "format": "esm"
     },
     "packages/host/src/run-engine-model.ts": {
-      "bytes": 44104,
+      "bytes": 44521,
       "imports": [],
       "format": "esm"
     },
@@ -38742,7 +38757,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14435
+          "bytesInOutput": 14422
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -38904,7 +38919,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39111,7 +39126,7 @@
           "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -39535,6 +39550,9 @@
         },
         "packages/ai/src/utils/infer-provider.ts": {
           "bytesInOutput": 801
+        },
+        "packages/ai/src/utils/request-duration.ts": {
+          "bytesInOutput": 355
         },
         "packages/ai/src/utils/default-base-url.ts": {
           "bytesInOutput": 239
@@ -40299,7 +40317,7 @@
           "bytesInOutput": 8462
         },
         "packages/ai/src/index.ts": {
-          "bytesInOutput": 4719
+          "bytesInOutput": 4832
         },
         "packages/agent-core/src/context/reminder-sanitizer.ts": {
           "bytesInOutput": 111
@@ -40677,7 +40695,7 @@
           "bytesInOutput": 4260
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1134
+          "bytesInOutput": 1121
         },
         "packages/agent-core/src/run-outcome.ts": {
           "bytesInOutput": 937
@@ -40821,13 +40839,13 @@
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 18925
+          "bytesInOutput": 19000
         },
         "packages/agent-runtime/src/index.ts": {
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41781,10 +41799,10 @@
           "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1525
+          "bytesInOutput": 1526
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41793,10 +41811,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50728
+          "bytesInOutput": 50729
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1884
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -42873,7 +42891,7 @@
           "bytesInOutput": 5771
         },
         "packages/host/src/run-engine-model.ts": {
-          "bytesInOutput": 3247
+          "bytesInOutput": 3336
         },
         "packages/host/src/worker-session/transcript-commands.ts": {
           "bytesInOutput": 1789
@@ -44175,7 +44193,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4686365
+      "bytes": 4686933
     }
   }
 }

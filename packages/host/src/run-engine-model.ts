@@ -169,6 +169,13 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
         // `input + output` when absent, so inventing `0` here would REPLACE a
         // correct fallback with a wrong number.
         ...(event.data.total_tokens === undefined ? {} : { totalTokens: event.data.total_tokens }),
+        // The physical request duration, measured at the provider call. It is
+        // what turns this usage into a throughput, and it cannot be
+        // reconstructed downstream — chunk timestamps may be buffered. Only
+        // when the provider reported one.
+        ...(event.data.request_duration_ms === undefined
+          ? {}
+          : { requestDurationMs: event.data.request_duration_ms }),
       };
 
     // ── The two decisions ─────────────────────────────────────────────────
