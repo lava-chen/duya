@@ -993,6 +993,22 @@ export async function chatTui(
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
   }
 
+  /**
+   * Re-read the durable transcript and repaint it, in place.
+   *
+   * This is NOT `adoptSession`: the session did not change, only its
+   * contents did. `/compact` rewrites the timeline behind the visible
+   * conversation, so the transcript on screen is stale the moment the
+   * compaction lands — but the user never switched anything, and a
+   * "Switched to ..." notice would be a lie about what happened.
+   *
+   * The projection is the same one the TUI renders (`llm-visible`), so
+   * the repaint shows the same rows the conversation had before.
+   */
+  async function reloadTranscript(sessionId: string): Promise<void> {
+    tui.replaceTranscript(await loadSessionMessages(client, sessionId));
+  }
+
   async function runTurn(prompt: string): Promise<TurnOutcome> {
     if (unsettledRunId !== null) {
       await requestRemoteCancellation(unsettledRunId, 'chat cancellation retry');
@@ -1202,6 +1218,10 @@ export async function chatTui(
                 interrupt,
                 adoptSession: adoptSession,
                 startFreshSession: startNewSession,
+                // `/compact` rewrote the timeline behind the conversation;
+                // the transcript on screen has to be re-read for it to
+                // show that.
+                reloadTranscript: reloadTranscript,
               },
             },
             args,
