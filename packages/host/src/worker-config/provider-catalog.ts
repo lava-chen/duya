@@ -25,7 +25,9 @@
  * OpenRouter provider carries hundreds of entries that way).
  *
  * READ-ONLY, like every other reader in this directory: `config.toml` is
- * hand-edited and a bad write there wipes every provider.
+ * hand-edited and a bad write there wipes every provider. The one writer in
+ * the Host is `../config-agents`, and it edits the `[agents]` namespace only
+ * — it never rewrites the provider tables this catalog reads.
  */
 
 import * as fs from 'fs';
