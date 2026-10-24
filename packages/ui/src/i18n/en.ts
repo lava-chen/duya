@@ -1829,16 +1829,6 @@ const en = {
   'sidebar.dialog.newSection.placeholder': 'e.g. Work / Study / Side projects',
   'sidebar.dialog.newSection.confirm': 'Create & move',
 
-  'slashCommands.title': 'Commands',
-  'slashCommands.help': 'Help',
-  'slashCommands.clear': 'Clear',
-  'slashCommands.cost': 'Cost',
-  'slashCommands.compact': 'Compact',
-  'slashCommands.doctor': 'Doctor',
-  'slashCommands.init': 'Init',
-  'slashCommands.review': 'Review',
-  'slashCommands.terminal': 'Terminal',
-
   // Onboarding - 3 Step Design
   'onboarding.stepWelcome': 'Welcome',
   'onboarding.stepConfig': 'Configuration',
