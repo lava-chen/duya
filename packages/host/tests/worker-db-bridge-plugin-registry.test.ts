@@ -14,13 +14,14 @@
  * `config.toml`'s `[plugins]` block is the only persisted source of the
  * installed-plugin list: the key is `<pluginId>@<marketplace>` and the value
  * carries the user's intent (`enabled`). The install path and the manifest
- * are derived by the Desktop from the package files under its Electron
- * `userData`, which a standalone Host does not have.
+ * are derived from the package files on disk, wherever they live — the
+ * Desktop's Electron `userData` or the shared data root.
  *
  * These assertions pin that contract:
  *  - the composite key is split into `id` and `marketplace`;
  *  - `enabled` is reported, and an entry that omits it counts as enabled;
- *  - an entry carries NO install path, because there is none to point at;
+ *  - an installed plugin carries its resolved path and MCP declarations;
+ *  - a plugin with no package directory on disk carries NO install path;
  *  - a missing or malformed `config.toml` yields an empty list, not a crash.
  */
 import * as fs from 'node:fs';
@@ -121,7 +122,7 @@ describe('the standalone Host plugin registry', () => {
     }
   });
 
-  it('carries no install path, because the standalone Host has no install directory', async () => {
+  it('carries no install path when the plugin package is not on disk', async () => {
     const root = configRootWith(
       ['[plugins."com.duya.documents@official"]', 'enabled = true', ''].join('\n'),
     );
@@ -131,8 +132,58 @@ describe('the standalone Host plugin registry', () => {
       const entries = await host.dispatch('plugin:registry:list', {}) as Array<Record<string, unknown>>;
 
       // The worker only loads a plugin's skills and MCP servers when it can
-      // resolve the package directory. A standalone Host stores nothing
-      // there, so it must not claim a path it cannot serve.
+      // resolve the package directory. A plugin that was never installed has
+      // no such directory, so the Host must not claim a path it cannot serve.
+      expect(entries[0].installPath).toBeUndefined();
+      expect(entries[0].manifest).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports the install path and the MCP declarations of an installed plugin', async () => {
+    const root = configRootWith(
+      ['[plugins."com.duya.documents@official"]', 'enabled = true', ''].join('\n'),
+    );
+    try {
+      const installed = path.join(root, 'plugins', 'installed', 'com.duya.documents');
+      fs.mkdirSync(path.join(installed, 'mcp'), { recursive: true });
+      fs.writeFileSync(
+        path.join(installed, 'mcp', 'servers.json'),
+        JSON.stringify({ servers: [{ name: 'documents', command: 'documents-mcp' }] }),
+        'utf8',
+      );
+
+      const host = bridge(createHostLocalPluginRegistryApi(root));
+
+      const entries = await host.dispatch('plugin:registry:list', {}) as Array<Record<string, unknown>>;
+
+      expect(entries[0].installPath).toBe(fs.realpathSync(installed));
+      const manifest = entries[0].manifest as {
+        capabilities?: { mcpServers?: Array<{ name: string; command?: string }> };
+      };
+      expect(manifest.capabilities?.mcpServers).toEqual([
+        { name: 'documents', command: 'documents-mcp' },
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not walk the package directory of a disabled plugin', async () => {
+    const root = configRootWith(
+      ['[plugins."com.duya.documents@official"]', 'enabled = false', ''].join('\n'),
+    );
+    try {
+      const installed = path.join(root, 'plugins', 'installed', 'com.duya.documents');
+      fs.mkdirSync(installed, { recursive: true });
+
+      const host = bridge(createHostLocalPluginRegistryApi(root));
+
+      const entries = await host.dispatch('plugin:registry:list', {}) as Array<Record<string, unknown>>;
+
+      // A disabled plugin is never loaded by the worker, so the Host does not
+      // spend a filesystem walk on it.
       expect(entries[0].installPath).toBeUndefined();
       expect(entries[0].manifest).toBeUndefined();
     } finally {

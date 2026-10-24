@@ -30248,8 +30248,60 @@
       ],
       "format": "esm"
     },
+    "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
+      "bytes": 16092,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/yaml/dist/index.js",
+          "kind": "import-statement",
+          "original": "yaml"
+        },
+        {
+          "path": "packages/plugin-core/src/workflows/index.ts",
+          "kind": "import-statement",
+          "original": "../../workflows/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-install-paths.ts": {
+      "bytes": 6912,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/agent-profile-config.ts",
+          "kind": "import-statement",
+          "original": "./agent-profile-config.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 4617,
+      "bytes": 7129,
       "imports": [
         {
           "path": "node:fs",
@@ -30267,9 +30319,19 @@
           "original": "@iarna/toml"
         },
         {
+          "path": "packages/plugin-core/src/plugins/loader/capability-discovery.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/plugins/loader/capability-discovery"
+        },
+        {
           "path": "packages/host/src/agent-profile-config.ts",
           "kind": "import-statement",
           "original": "./agent-profile-config.js"
+        },
+        {
+          "path": "packages/host/src/plugin-install-paths.ts",
+          "kind": "import-statement",
+          "original": "./plugin-install-paths.js"
         }
       ],
       "format": "esm"
@@ -37968,6 +38030,31 @@
           "external": true
         },
         {
+          "path": "fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:fs",
           "kind": "require-call",
           "external": true
@@ -38380,7 +38467,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -38482,7 +38569,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -40243,7 +40330,7 @@
           "bytesInOutput": 1744
         },
         "../../../node_modules/yaml/dist/index.js": {
-          "bytesInOutput": 883
+          "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
           "bytesInOutput": 413
@@ -40429,7 +40516,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -41395,7 +41482,7 @@
           "bytesInOutput": 80
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1525
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41404,10 +41491,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50728
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1883
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41422,10 +41509,10 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1694
+          "bytesInOutput": 1695
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3078
+          "bytesInOutput": 3079
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/errors.js": {
           "bytesInOutput": 81
@@ -41440,10 +41527,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50729
+          "bytesInOutput": 50730
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1884
+          "bytesInOutput": 1885
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -42148,7 +42235,7 @@
           "bytesInOutput": 1122
         },
         "packages/host/src/worker-prompts/hbs/assetLoader.ts": {
-          "bytesInOutput": 506
+          "bytesInOutput": 505
         },
         "packages/host/src/worker-prompts/PromptsRegistry.ts": {
           "bytesInOutput": 733
@@ -42499,7 +42586,7 @@
           "bytesInOutput": 820
         },
         "packages/host/src/worker-workflows/dwf/frontmatter.ts": {
-          "bytesInOutput": 1008
+          "bytesInOutput": 1007
         },
         "packages/host/src/worker-workflows/dwf/runtime.ts": {
           "bytesInOutput": 9209
@@ -42874,7 +42961,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43072,7 +43159,13 @@
           "bytesInOutput": 25
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 706
+          "bytesInOutput": 1028
+        },
+        "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
+          "bytesInOutput": 3170
+        },
+        "packages/host/src/plugin-install-paths.ts": {
+          "bytesInOutput": 1469
         },
         "packages/host/src/config-agents/config-agents-api.ts": {
           "bytesInOutput": 5
@@ -43726,7 +43819,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4679071
+      "bytes": 4684048
     }
   }
 }
