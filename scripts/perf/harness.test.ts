@@ -23,7 +23,8 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -50,6 +51,7 @@ import {
   releaseInternalLock,
   resolveLockDir,
 } from '../../e2e/perf/lib/lock.mjs';
+import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -254,9 +256,132 @@ describe('the measurement lock', () => {
     releaseInternalLock(dir);
   });
 
+  it('can be taken over when the holder process is gone', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    // A holder that crashed leaves a lock that nobody holds. Waiting the
+    // whole stale timeout for it would stall the sprint for 30 minutes of
+    // a machine that is not being measured at all.
+    writeFileSync(
+      path.join(dir, 'owner.json'),
+      JSON.stringify({ agent: 'agent-a', pid: 0x7ffffff0, acquiredAt: Date.now() }),
+      'utf8',
+    );
+    const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b' });
+    expect(takeover.acquired).toBe(true);
+    expect(readLockOwner(dir)?.agent).toBe('agent-b');
+    releaseInternalLock(dir);
+  });
+
   it('resolves a lock directory inside the repository by default', () => {
     const dir = resolveLockDir();
     expect(path.isAbsolute(dir)).toBe(true);
     expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+});
+
+describe('the app shutdown', () => {
+  const isProcessAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+    }
+  };
+
+  it('never kills a pid that was recycled by another process', async () => {
+    // When the app is already gone its pid can be handed to ANOTHER
+    // process. Killing that one takes the harness down with it, so the
+    // process name is checked before the tree is killed.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      await closePerfElectron({
+        process: () => ({ pid: child.pid }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      });
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('survives a pid that is already gone', async () => {
+    await expect(
+      closePerfElectron({
+        process: () => ({ pid: 0x7ffffff0 }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      }),
+    ).resolves.toEqual({ killed: [] });
+  });
+
+  // The leak this guards: `app.close()` resolves when Playwright is done
+  // with the WINDOW, and this app keeps its main process alive (it owns a
+  // gateway and an agent server). A sample that left the app running kept
+  // its profile locked and ~700 MB allocated, and the next sample measured
+  // a machine that was already busy.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the app when it survives the graceful close',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      // The name is what the guard looks at, so the stand-in is named
+      // like the app it stands in for.
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const child = spawn(binary, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+      try {
+        await closePerfElectron({
+          process: () => ({ pid: child.pid }),
+          close: async () => {
+            /* the close resolves, and the app stays alive */
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The pid Playwright hands out belongs to its own launcher (`cmd.exe` on
+  // Windows), not to the app, so the close finds the app by the namespace
+  // that is in the app's own command line.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the processes of one launch by its namespace',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const namespace = `perf-test-${Date.now()}`;
+      // `--` ends the option list, so the namespace reaches the command line
+      // instead of being read as an option the runtime does not know.
+      const child = spawn(
+        binary,
+        ['-e', 'setTimeout(() => {}, 30000)', '--', `--duya-namespace=${namespace}`],
+        { stdio: 'ignore' },
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const killed = killLaunchProcesses(namespace);
+        expect(killed.length).toBeGreaterThan(0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('leaves the processes of another launch alone', () => {
+    const killed = killLaunchProcesses('perf-test-namespace-that-does-not-exist');
+    expect(killed).toEqual([]);
   });
 });

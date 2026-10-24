@@ -21,6 +21,11 @@
  *
  * Usage:
  *   node e2e/perf/agents/agent-e/first-screen-payload.mjs [--dist dist] [--json]
+ *   node e2e/perf/agents/agent-e/first-screen-payload.mjs --chunk-dump chunks.json
+ *
+ * `--chunk-dump` points at a Rollup chunk-graph dump (see the note on the
+ * dump below). It is optional: without it the graph is derived from the
+ * emitted chunks, and the two agree on the first-screen closure.
  *
  * No packages/ import: this file lives under e2e/ and must stay free of
  * product dependencies.
@@ -56,13 +61,20 @@ const entrySrc = entryMatch[1];
 const entryFile = path.basename(entrySrc.split('?')[0]);
 
 /**
- * Exact chunk graph, when the build was run with the chunk-dump plugin:
- * `dist/.perf-chunks.json` holds Rollup's own `imports` / `dynamicImports`
- * per chunk, plus the module ids behind it. Prefer it over the regex scan —
- * the regex has to guess at minified import syntax, Rollup does not guess.
+ * Exact chunk graph, when one is available.
+ *
+ * Rollup's own `imports` / `dynamicImports` per chunk are the ground truth,
+ * so the script prefers them over the regex scan — the regex has to guess at
+ * minified import syntax, Rollup does not guess.
+ *
+ * The dump is NOT produced by the repository build: it is written by a
+ * throwaway Rollup plugin into a file outside `dist/`, so the measurement
+ * never adds a byte to the shipped bundle. Pass its path with
+ * `--chunk-dump <path>`; without it the script derives the graph from the
+ * emitted chunks alone.
  */
-const chunkDumpPath = path.join(distDir, '.perf-chunks.json');
-const chunkDump = fs.existsSync(chunkDumpPath)
+const chunkDumpPath = option('--chunk-dump', null);
+const chunkDump = chunkDumpPath && fs.existsSync(chunkDumpPath)
   ? JSON.parse(fs.readFileSync(chunkDumpPath, 'utf8'))
   : null;
 

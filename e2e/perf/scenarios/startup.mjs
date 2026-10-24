@@ -126,10 +126,11 @@ export default {
       const processStart = readProcessStartMs(measured.app) ?? ctx.launchMark;
       const probe = await startResourceProbe(measured.page);
       await waitForAppReady(measured.page);
-      // The conversation store does not hydrate on its own in this build (see
-      // the productDefect note), so the harness lets the app sync itself
-      // through the product's own sync event. `startup.typeable_ms` includes
-      // this nudge; `startup.warm.typeableAfterSync_ms` is the app's own cost
+      // The harness lets the app sync itself through the product's own sync
+      // event, which is how the measured profile is prepared. The store
+      // hydrates on its own now (PR #400); the nudge is what fills the
+      // session list for this profile. `startup.typeable_ms` includes the
+      // nudge; `startup.warm.typeableAfterSync_ms` is the app's own cost
       // after it.
       const syncedAt = Date.now();
       await wakeConversationStore(measured.app, measured.page, { settleMs: 0 });
@@ -258,11 +259,13 @@ export default {
           'the *.reload.* metrics come from an instrumented reload of the same boot path, '
           + 'because an init script cannot reach the first document',
         productDefect:
-          'on a profile whose persisted store state is absent, the conversation store never '
-          + 'reports itself hydrated (onRehydrateStorage mutates the state instead of setting '
-          + 'it), so the session list stays empty and the welcome composer stays disabled. '
-          + 'The prepare phase works around it by letting the app sync itself; the defect '
-          + 'itself is in packages/ui/src/stores/conversation-store.ts and is NOT fixed here',
+          'FIXED (PR #400): the conversation store used to report itself hydrated by mutating '
+          + 'the state in onRehydrateStorage, which zustand v5 does not publish to the '
+          + 'subscribers - so on a profile without persisted store state the session list '
+          + 'stayed empty and the welcome composer stayed disabled. The normalization now '
+          + 'runs inside the merge that the persist middleware performs, so isHydrated is '
+          + 'published with that single write. The prepare phase still nudges the app to sync '
+          + 'itself, because that is how the measured profile is built',
       },
     };
   },

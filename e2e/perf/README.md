@@ -98,18 +98,25 @@ so `startup.cold.typeable_ms` is null and the evidence is in the sample.
 
 ### The hydration defect this harness works around
 
-`packages/ui/src/stores/conversation-store.ts` marks itself hydrated in
-`onRehydrateStorage` by MUTATING the state (`s.isHydrated = true`). Zustand
-v5 does not notify subscribers after that callback, so on a profile whose
-persisted store state is absent the mutation is never observed: `isHydrated`
-stays false in React, `app-sidebar.tsx` never calls `loadFromDatabase()`,
-the session list stays empty and the welcome composer stays disabled
-(`WelcomeView.tsx`: `disabled={!isHydrated || !selectedProject}`).
+**This defect is fixed** (PR #400): the normalization now runs inside the
+`merge` that zustand's persist middleware performs, so `isHydrated` is
+published with that single write and the subscribers are notified. The
+workaround below is therefore no longer required for the measured boot — but
+the harness still performs it, because the prepare phase needs a profile the
+app can hydrate, and the sync nudge is how that profile is built.
+
+For the record, the defect was this: `packages/ui/src/stores/conversation-store.ts`
+marked itself hydrated in `onRehydrateStorage` by MUTATING the state
+(`s.isHydrated = true`). Zustand v5 does not notify subscribers after that
+callback, so on a profile whose persisted store state was absent the mutation
+was never observed: `isHydrated` stayed false in React, `app-sidebar.tsx`
+never called `loadFromDatabase()`, the session list stayed empty and the
+welcome composer stayed disabled (`WelcomeView.tsx`:
+`disabled={!isHydrated || !selectedProject}`).
 
 The harness works around it by letting the app sync itself in the prepare
 phase (`sync:threads-changed` → `forceSync()` → `loadFromDatabase()`, which
-IS a `set()`). **The defect itself is not fixed here** — it belongs to the
-owner of the conversation store.
+IS a `set()`).
 
 ## Metric names
 
