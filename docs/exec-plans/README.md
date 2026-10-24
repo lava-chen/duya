@@ -6,7 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | 持久化 retune 已完成；更新主干基线后提交并开 draft PR |
+| Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | draft PR #453 已开；等待 checks 与 review |
 | 插件 UI MCP 资源 | [2026-10-24 插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | 完成 S1 契约后先报告 schema diff 与受影响调用方，再推进 S2 |
 | 输出速度 tok/s | [2026-10-23 输出速度](active/2026-10-23-output-token-rate.md) | provider 校准路径：ai 测时长 → 协议契约 → 帧携带 → TUI 展示 |
 | 面板列树布局 | [2026-10-22 面板列树](active/2026-10-22-panel-column-layout.md) | 切片 A（列树渲染）与 B（脱窗 Electron 侧）并行开工；C/D 待 A 落地 |
