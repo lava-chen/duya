@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · 初始 base：`21351df668adefc0357741a5f79a1513e297df61` · 最新 rebase base：`40787b394d08207ed78c863d9c78dc413a9d1038` · S1：`c79f9122` · S2：`2865357c` · S3：`a1b46a5e` · S4：`af8cc9aa` · S5：`ca3fa154` · S6：`b76776c5` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · 初始 base：`21351df668adefc0357741a5f79a1513e297df61` · 最新 rebase base：`c426d029668ed0a0d6dae5ca9429b4a878925abd` · S1：`b60eeed8` · S2：`b45e51a9` · S3：`d5e7d0b4` · S4：`b9c20b9a` · S5：`d6b1c4dd` · S6：`9b43f12e` · owner：`/root`
 
 ## 目标与边界
 
@@ -46,7 +46,7 @@
 - 首次 Electron 启动受环境限制：共享 `node_modules/electron` 没有二进制且网络 fetch 失败，环境起初也没有 `Xvfb`。后续在 `/tmp` 下载并解压 Electron 44.9.1 与 Xvfb，以临时 Playwright loader 提供可执行文件路径和 `--no-sandbox`，没有改写共享依赖；真实产品 smoke 随后通过。
 - 产品 smoke 首次运行发现安装后的 Report Viewer 把相对 MCP server 路径按宿主工作目录解析，导致资源读取失败。改用 `${DUYA_PLUGIN_ROOT}/mcp/reports-server.mjs`，并加入真实 Electron E2E 回归用例；该用例通过真实 preload/Main IPC 安装插件，Main MCP SDK 启动 stdio server 并执行 `resources/read`，随后在 Apps 与侧栏 tab 确认内容和重复激活去重。
 - 实际 Electron E2E 已覆盖安装至资源渲染和重复点击去重；agent worker 工具调用到当前 iframe 的完整联动仍由 MCP stdio 示例测试及 UI 事件桥测试分别覆盖，尚未在同一个桌面 worker turn 中端到端运行。因此 PR 继续保持 draft，待补齐这一组合路径验收后再标 ready。
-- PR #440 的 base 原为 `40787b394d08207ed78c863d9c78dc413a9d1038`；2026-10-24 GitHub 比较显示最新 `master` 已到 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，领先旧 base 22 个提交。当前网络代理拒绝 shell `git fetch`，需要先恢复 remote fetch、将分支 rebase 到新 master，再重跑门禁和同步 PR。
+- PR #440 的 base 原为 `40787b394d08207ed78c863d9c78dc413a9d1038`；2026-10-24 GitHub 比较显示 master 前进 22 个提交至 `c426d029668ed0a0d6dae5ca9429b4a878925abd`。首次普通 fetch 被代理拒绝；以提升权限重试后 fetch 成功，任务分支 19 个提交无冲突 rebase，并重跑全仓类型、架构、9 个相关测试文件、Electron 构建与真实 Electron surface smoke，均通过。
 
 ## 验证记录
 
@@ -116,9 +116,15 @@
 | `1505c1e0` + server path / E2E dirty | Linux x86_64，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；包含真实 stdio MCP `resources/read` / `tools/call`、资源页事件行为和静态 entry manifest 回归 |
 | `475f59f0` | Linux x86_64 | `git diff --check`；`git diff --cached --check` | 0 | 插件 server 安装路径修正及 Electron E2E 提交无空白错误 |
 | `475f59f0` + plan dirty | Linux x86_64；shell network proxy | `git fetch origin` | 1 | 代理 `8080` 无法连接；GitHub compare API 只读核实 `master` 为 `c426d029668ed0a0d6dae5ca9429b4a878925abd`、相对旧 base ahead 22 |
+| `c426d029668ed0a0d6dae5ca9429b4a878925abd` | Linux x86_64，GitHub remote；提升权限用于网络 fetch | `git fetch origin master`；`git rebase origin/master` | 0 | master 为 `c426d029668ed0a0d6dae5ca9429b4a878925abd`；19 个任务提交无冲突重放 |
+| `ad511786`（新 master rebase 后） | Linux x86_64，Node v24.19.0，npm 11.9.0；提升权限允许脚本启动子进程 | `npm run typecheck:all` | 0 | 20 个 workspace 包、web bundle 与全部 TypeScript 门禁通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 收敛；recorder 4/4 |
+| `ad511786`（新 master rebase 后） | Linux x86_64，Node v24.19.0；提升权限允许架构检查启动子进程 | `npm run architecture:check` | 0 | 无新增边界违规；1 个既有 fingerprint 不再触发 |
+| `ad511786`（新 master rebase 后） | Linux x86_64，Node v24.19.0，Vitest 3.2.4；提升权限用于 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；日志含既有 jsdom canvas 未实现提示 |
+| `ad511786`（新 master rebase 后） | Linux x86_64，Node v24.19.0；提升权限允许脚本启动子进程 | `npm run build:electron` | 0 | main / preload bundle 重建完成；有既有 esbuild external 警告 |
+| `ad511786`（新 master rebase 后） | Linux x86_64，Node v24.19.0；Electron 44.9.1、Xvfb 和 Playwright loader 均为 `/tmp` 临时文件 | `PATH=/tmp/duya-xvfb/root/usr/bin:$PATH NODE_OPTIONS='--require=/tmp/duya-electron-runtime/patch-playwright-electron.cjs' xvfb-run -a npx playwright test --config=e2e/playwright.config.ts --project=smoke e2e/smoke/plugin-ui-surface-smoke.spec.ts` | 0 | 真实 Electron 产品 smoke 通过；1 test、35.2 秒，覆盖安装 IPC、MCP `resources/read`、loopback iframe 和重复激活去重 |
 
 ## 接续 / 结果
 
-S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；另有安装后 MCP server 路径修正与真实 Electron E2E 提交 `475f59f0`，每个切片的进度文档也各自独立提交。以上验证是在任务分支基于 `40787b394d08207ed78c863d9c78dc413a9d1038` 时完成；GitHub 随后报告 master 已前进至 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，22 个提交，因此尚需 fetch、rebase 和重跑门禁。Draft PR #440 仍为 open/draft/mergeable 且未合并，当前远端 head 为 `1505c1e0c2ac247ad06319d91ceeb49a3aaf7b58`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片在最新 rebase 后依次为 `b60eeed8`、`b45e51a9`、`d5e7d0b4`、`b9c20b9a`、`d6b1c4dd`、`9b43f12e`；安装后 MCP server 路径修正和真实 Electron E2E 为 `302d8d33`。GitHub 最新 master `c426d029668ed0a0d6dae5ca9429b4a878925abd` 已 fetch 并 rebase，19 个提交无冲突；rebase 后全仓类型、架构、9 个相关测试文件、Electron main/preload 构建和真实 Electron 安装至资源渲染 smoke 均通过。尚需用 lease 更新 PR 分支，draft PR #440 保持 open 且未合并。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：先 fetch 并 rebase 到 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，再重跑门禁；随后补一个真实桌面 Agent Server/worker turn，以 Report Viewer MCP 工具调用驱动已打开 iframe 的 `select` / `highlight` 状态更新。PR 继续保持 draft，不合并。
+下一步：lease 更新 PR #440 分支；随后补一个真实桌面 Agent Server/worker turn，以 Report Viewer MCP 工具调用驱动已打开 iframe 的 `select` / `highlight` 状态更新。PR 继续保持 draft，不合并。
