@@ -23,7 +23,6 @@ import { createHostLocalModelCapabilityApi } from './local-model-capability-api.
 import type { MainDatabase } from '@duya/data/main-database';
 import type { MainSettingsStore } from '@duya/data/main-settings-store';
 import type { SessionStore } from '@duya/data/session-store';
-import type { CoreSession } from '@duya/data/session-store';
 import type {
   HostGoalApiV1,
   HostLocalImageAttachment,
@@ -43,14 +42,55 @@ import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
 import type { HostPluginAppInvocationInternalApi } from './local-plugin-app-invocation-api.js';
+import type { HostLocalMailboxApiV1 } from '@duya/agent-protocol/mailbox';
+import type {
+  HostMailboxApplyMode,
+  HostMailboxCheckpoint,
+  HostMailboxKind,
+  HostMailboxStatus,
+} from '@duya/agent-protocol/mailbox';
+import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type {
+  HostLocalSendMessageStateApiV1,
+  CreateWidgetPendingInput,
+  CreateSecretPendingInput,
+  CursorAgentRunInput,
+} from '@duya/agent-protocol/send-message-state';
+import type {
+  HostLocalTurnReviewApiV1,
+  TurnReviewFile,
+  TurnReviewWriteInput,
+} from '@duya/agent-protocol/turn-review';
+import type {
+  HostLocalAttachmentApiV1,
+  HostLocalParsedDocumentInput,
+  HostWorkspaceRegistrationApiV1,
+  SessionPermissionProfile,
+} from '@duya/agent-protocol/session-api';
+import type { HostLocalSessionApiV1 } from './local-session-api.js';
+import type {
+  WorkflowRunApiV1,
+  WorkflowArtifactRef,
+  WorkflowRunOrigin,
+  WorkflowRunScope,
+  WorkflowRunStatus,
+  WorkflowRunSnapshot,
+  WorkflowTriggerKind,
+} from '@duya/agent-protocol/workflow-runs';
+import {
+  createHostLocalPluginRegistryApi,
+  type HostLocalPluginRegistryApiV1,
+} from './local-plugin-registry-api.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
 } from './ipc-message-adapters.js';
 import {
   coreGoalToIpcRow,
+  coreMailboxToIpcRow,
   coreSessionToIpcRow,
   hostTaskToIpcRow,
+  ipcSessionToCoreCreate,
   ipcTaskToHostCreate,
   ipcTaskToHostUpdate,
 } from './ipc-row-adapters.js';
@@ -68,16 +108,28 @@ export class WorkerDbBridgeError extends Error {
 /** Timeline-facing subset of the Host session API the bridge serves. */
 export type WorkerBridgeSessionApi = Pick<
   HostSessionApiV1,
-  'get' | 'create' | 'update' | 'countTimeline' | 'readMessages' | 'appendTimeline' | 'deleteTimeline'
+  | 'get'
+  | 'create'
+  | 'update'
+  | 'countTimeline'
+  | 'readMessages'
+  | 'appendTimeline'
+  | 'deleteTimeline'
+  | 'searchSessions'
+  | 'resolveSessionPermissionProfile'
 >;
 
-/** Local-session subset used to emit legacy row shapes for `session:get`. */
-export interface WorkerBridgeLocalSessions {
-  readLocalSession(
-    sessionId: string,
-    options?: { includeAllSessions?: boolean },
-  ): Promise<CoreSession | null>;
-}
+/**
+ * Local-session subset used to emit legacy row shapes for the session domain.
+ *
+ * `listLocalSessions` is what makes `session:list` answer in the legacy row
+ * shape: the worker's session-search tool reads `parent_id` and
+ * `working_directory` from these rows, which the raw core rows do not have.
+ */
+export type WorkerBridgeLocalSessions = Pick<
+  HostLocalSessionApiV1,
+  'readLocalSession' | 'listLocalSessions'
+>;
 
 export interface HostWorkerDbBridgeOptions {
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
@@ -91,13 +143,80 @@ export interface HostWorkerDbBridgeOptions {
   readonly mainDatabase: MainDatabase;
   /** Host timeline APIs — serve the message domain. */
   readonly timeline?: WorkerBridgeSessionApi;
-  /** Host local-session reads — legacy row shapes for `session:get`. */
+  /**
+   * Host local-session reads — legacy row shapes for the session domain.
+   *
+   * `session:list` used to answer with the raw core rows, which have no
+   * `parent_id` / `working_directory`; the worker's session-search tool read
+   * those legacy names and found nothing.
+   */
   readonly localSessions?: WorkerBridgeLocalSessions;
+  /**
+   * Loopback-only workspace registration — serves the working directory of a
+   * session the worker creates.
+   */
+  readonly workspaceRegistration?: HostWorkspaceRegistrationApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly lockApi?: HostLockApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi?: HostTaskApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationInternalApi;
+  /**
+   * Host mailbox API — serves the `mailbox:*` domain.
+   *
+   * The worker claims and applies mailbox rows on every model turn, and
+   * writes background notifications through the same domain. Without this the
+   * standalone Host answered `unimplemented_domain`, so every claim failed
+   * and every notification was lost.
+   */
+  readonly mailboxApi?: HostLocalMailboxApiV1;
+  /**
+   * Host plugin setup API — serves `plugin:setup:list-all`.
+   *
+   * The MCP loader expands `${setup.X}` references in plugin manifests from
+   * these values; without them every reference expanded to nothing.
+   */
+  readonly pluginSetupApi?: HostLocalPluginSetupApiV1;
+  /**
+   * Host plugin registry — serves `plugin:registry:list`.
+   *
+   * The worker asks for the installed-plugin list to decide which plugin
+   * tools are enabled and which plugin skill directories to load. The
+   * standalone Host answers from `config.toml`'s `[plugins]` block; the
+   * install paths and manifests belong to the Desktop's install
+   * directory, so they are not part of this answer.
+   */
+  readonly pluginRegistryApi?: HostLocalPluginRegistryApiV1;
+  /**
+   * Durable workflow runs — serves the `workflowRun:*` domain.
+   *
+   * The workflow runner creates a run, drives it, and journals it from the
+   * worker. Without this the whole workflow feature failed at its first
+   * write in the standalone Host.
+   */
+  readonly workflowRunApi?: WorkflowRunApiV1;
+  /**
+   * Host turn review store — serves `turn-review:save`.
+   *
+   * The worker snapshots the turn's file changes after every turn. The
+   * Desktop renders them in the code-review panel; the standalone Host
+   * keeps them for its own review surface.
+   */
+  readonly turnReviewApi?: HostLocalTurnReviewApiV1;
+  /**
+   * Host attachment store — serves `attachment:store`.
+   *
+   * The worker persists the parsed-document context it attaches to a
+   * message. Without this the parsed document was dropped on the floor.
+   */
+  readonly attachmentApi?: HostLocalAttachmentApiV1;
+  /**
+   * Host message-card state store — serves the `sendMessageState:*` domain.
+   *
+   * The interactive card shapes (widget / cursor-agent / secret request)
+   * persist their pending state here so a later turn can resolve it.
+   */
+  readonly sendMessageStateApi?: HostLocalSendMessageStateApiV1;
   /**
    * Parsed-document attachments for `session:loadMessages`. Desktop serves
    * this from its attachment store; a standalone Host returns an empty list
@@ -134,6 +253,36 @@ function requireString(payload: Record<string, unknown>, key: string, action: st
   }
   return value;
 }
+
+/** An optional payload string: absent stays absent, a present value is text. */
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Parse a JSON object carried as a string (the mailbox constraint blob). */
+function parseJsonObject(value: unknown, action: string): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    throw new WorkerDbBridgeError('invalid_payload', `${action} requires a JSON object string`);
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not an object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new WorkerDbBridgeError('invalid_payload', `${action} requires a JSON object string`);
+  }
+}
+
+/**
+ * The plugin registry the bridge serves when the Host composes no override.
+ *
+ * It reads `config.toml`'s `[plugins]` block on every call, so a plugin
+ * the user enables between two runs is visible to the next one without a
+ * restart.
+ */
+const defaultPluginRegistryApi = createHostLocalPluginRegistryApi();
 
 /**
  * The Host worker bridge: run ledger, sessions, settings, tool approvals, and
@@ -183,12 +332,97 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
     }
     return options.taskApi;
   };
+  const requireMailbox = (): HostLocalMailboxApiV1 => {
+    if (options.mailboxApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'mailbox domain requires options.mailboxApi');
+    }
+    return options.mailboxApi;
+  };
+  const requirePluginSetup = (): HostLocalPluginSetupApiV1 => {
+    if (options.pluginSetupApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'plugin setup domain requires options.pluginSetupApi');
+    }
+    return options.pluginSetupApi;
+  };
+  const requireWorkflowRun = (): WorkflowRunApiV1 => {
+    if (options.workflowRunApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'workflow run domain requires options.workflowRunApi');
+    }
+    return options.workflowRunApi;
+  };
+  const requireTurnReview = (): HostLocalTurnReviewApiV1 => {
+    if (options.turnReviewApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'turn review domain requires options.turnReviewApi');
+    }
+    return options.turnReviewApi;
+  };
+  const requireAttachment = (): HostLocalAttachmentApiV1 => {
+    if (options.attachmentApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'attachment domain requires options.attachmentApi');
+    }
+    return options.attachmentApi;
+  };
+  const requireSendMessageState = (): HostLocalSendMessageStateApiV1 => {
+    if (options.sendMessageStateApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'send message state domain requires options.sendMessageStateApi');
+    }
+    return options.sendMessageStateApi;
+  };
+  const requireSessionApi = (): NonNullable<HostWorkerDbBridgeOptions['timeline']> => {
+    if (timeline === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session domain requires the Host session API (options.timeline)',
+      );
+    }
+    return timeline;
+  };
+  const requireLocalSessions = (): NonNullable<HostWorkerDbBridgeOptions['localSessions']> => {
+    if (options.localSessions === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session domain requires the Host local-session API (options.localSessions)',
+      );
+    }
+    return options.localSessions;
+  };
+  const requireWorkspaceRegistration = (): HostWorkspaceRegistrationApiV1 => {
+    if (options.workspaceRegistration === undefined) {
+      throw new WorkerDbBridgeError(
+        'unimplemented_domain',
+        'session creation requires the Host workspace registration (options.workspaceRegistration)',
+      );
+    }
+    return options.workspaceRegistration;
+  };
   const legacySessionRow = async (sessionId: string): Promise<Record<string, unknown> | undefined> => {
     if (options.localSessions === undefined) return undefined;
     const session = await options.localSessions.readLocalSession(sessionId, {
       includeAllSessions: true,
     });
     return session ? coreSessionToIpcRow(session) : undefined;
+  };
+  /**
+   * Every visible session as a legacy row, one page at a time.
+   *
+   * The legacy shape is the contract at the worker boundary: the worker's
+   * session-search tool reads `parent_id`, `working_directory` and
+   * `project_name` from these rows, and the core rows carry none of them.
+   */
+  const legacySessionRows = async (): Promise<Array<Record<string, unknown>>> => {
+    const localSessions = requireLocalSessions();
+    const rows: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await localSessions.listLocalSessions({
+        includeAllSessions: true,
+        limit: 200,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      for (const session of page.sessions) rows.push(coreSessionToIpcRow(session));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return rows;
   };
 
   return {
@@ -232,6 +466,97 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const id = requireString(payload, 'id', 'session:get');
           return legacySessionRow(id);
         }
+        case 'session:create': {
+          // The worker creates the child session row when it spawns a
+          // sub-agent, so this write is the only thing that makes the child
+          // visible in the session list afterwards.
+          const api = requireSessionApi();
+          const localSessions = requireLocalSessions();
+          const parentSessionId =
+            (payload.parent_session_id as string | undefined) ?? (payload.parent_id as string | undefined) ?? null;
+          const permissionProfile = await api.resolveSessionPermissionProfile({
+            explicit: typeof payload.permission_profile === 'string' ? payload.permission_profile : null,
+            parentSessionId,
+            trustedOverride: payload.is_trusted_permission_override === true,
+          });
+          const input = ipcSessionToCoreCreate(payload, permissionProfile);
+          const requestedCwd = typeof input.workingDirectory === 'string' ? input.workingDirectory.trim() : '';
+          const workspace = requestedCwd === ''
+            ? undefined
+            : await requireWorkspaceRegistration().registerLocalDirectory(requestedCwd);
+          const created = await api.create({
+            id: input.id,
+            ...(workspace === undefined
+              ? {}
+              : {
+                  workspaceId: workspace.workspaceId,
+                  workspaceRootId: workspace.rootId,
+                  workspaceRelativePath: workspace.relativePath,
+                }),
+            ...(input.title !== undefined ? { title: input.title } : {}),
+            ...(input.projectName !== undefined ? { projectName: input.projectName } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            ...(input.providerId !== undefined ? { providerId: input.providerId } : {}),
+            ...(input.mode !== undefined ? { mode: input.mode } : {}),
+            ...(input.permissionMode !== undefined
+              ? { permissionMode: input.permissionMode as SessionPermissionProfile }
+              : {}),
+            ...(input.agentProfileId !== undefined ? { agentProfileId: input.agentProfileId } : {}),
+            ...(input.parentSessionId !== undefined ? { parentSessionId: input.parentSessionId } : {}),
+            ...(input.parentSessionId === undefined || input.parentSessionId === null
+              ? {}
+              : {
+                  spawn: {
+                    type: (payload.spawn_type as string | undefined) ?? 'subagent',
+                    ...(typeof payload.spawn_reason === 'string' ? { reason: payload.spawn_reason } : {}),
+                    ...(typeof payload.spawn_turn_id === 'string' ? { turnId: payload.spawn_turn_id } : {}),
+                  },
+                }),
+            ...(input.agentType !== undefined ? { agentType: input.agentType } : {}),
+            ...(input.agentName !== undefined ? { agentName: input.agentName } : {}),
+            ...(input.draft !== undefined ? { draft: input.draft } : {}),
+            ...(input.extensions !== undefined ? { extensions: input.extensions as JsonObject } : {}),
+            ...(input.createdAt !== undefined ? { createdAt: input.createdAt } : {}),
+          });
+          const persisted = await localSessions.readLocalSession(created.id, {
+            includeAllSessions: true,
+          });
+          if (persisted === null) {
+            throw new WorkerDbBridgeError(
+              'unimplemented_domain',
+              `session:create could not read the session back: ${created.id}`,
+            );
+          }
+          return coreSessionToIpcRow(persisted);
+        }
+        case 'session:search': {
+          // The worker asks for sessions by title and by content; the answer
+          // carries a snippet so the tool can show what matched.
+          const api = requireSessionApi();
+          const localSessions = requireLocalSessions();
+          const query = requireString(payload, 'query', 'session:search');
+          const opts = payload.opts as { limit?: number } | undefined;
+          const limit = typeof opts?.limit === 'number' && opts.limit > 0 ? opts.limit : 10;
+          const results = await api.searchSessions(query, { limit, includeContent: true });
+          const rows: Array<Record<string, unknown> | null> = await Promise.all(results.map(async (result) => {
+            const session = await localSessions.readLocalSession(result.session.id, {
+              includeAllSessions: true,
+            });
+            return session === null
+              ? null
+              : { ...coreSessionToIpcRow(session), snippet: result.snippet };
+          }));
+          return rows.filter((row): row is Record<string, unknown> => row !== null);
+        }
+        case 'session:list': {
+          return legacySessionRows();
+        }
+        case 'session:listByWorkingDirectory': {
+          const workingDirectory = typeof payload.workingDirectory === 'string' ? payload.workingDirectory : '';
+          const rows = await legacySessionRows();
+          return rows.filter((row) => row.working_directory === workingDirectory);
+        }
         case 'session:setExtension': {
           // Plan 621 D: key-level extension write, served by the same
           // SessionStore the HTTP surface reads — `setExtension` preserves
@@ -241,9 +566,6 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           const key = requireString(payload, 'key', 'session:setExtension');
           options.sessions.setExtension(id, key, payload.value);
           return { ok: true };
-        }
-        case 'session:list': {
-          return options.sessions.list();
         }
         case 'session:update': {
           const api = requireTimeline();
@@ -630,6 +952,280 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           });
           return { ok: true };
         }
+        // ==================== Mailbox ====================
+        // The same actions the Desktop bridge serves, from the same
+        // Host-owned API and the same row converter. The Desktop's renderer
+        // broadcasts and wake scheduling are deliberately NOT repeated here:
+        // a standalone Host has no renderer, and the worker picks the row up
+        // at its next checkpoint either way.
+        case 'mailbox:send': {
+          const item = await requireMailbox().enqueue({
+            id: requireString(payload, 'id', action),
+            sessionId: requireString(payload, 'sessionId', action),
+            submittedRunId: optionalString(payload.submittedDuringRunId) ?? '',
+            content: requireString(payload, 'content', action),
+            kind: requireString(payload, 'kind', action) as HostMailboxKind,
+            ...(Array.isArray(payload.attachments) ? { attachments: payload.attachments } : {}),
+            ...(payload.clientMsgId === null
+              ? { clientMsgId: null }
+              : (optionalString(payload.clientMsgId) === undefined ? {} : { clientMsgId: optionalString(payload.clientMsgId)! })),
+            ...(optionalString(payload.source) === undefined ? {} : { source: optionalString(payload.source)! }),
+            ...(payload.constraintsJson === undefined
+              ? {}
+              : { meta: { constraints: parseJsonObject(payload.constraintsJson, action) } }),
+          });
+          return coreMailboxToIpcRow(item);
+        }
+        case 'mailbox:edit': {
+          const api = requireMailbox();
+          const id = requireString(payload, 'id', action);
+          const existing = await api.getItem(id);
+          if (!existing) return null;
+          // Retry-safe: a row already promoted for the next agent turn comes
+          // back unchanged, so the caller's retry is idempotent.
+          if (existing.status === 'applied' && existing.appliedSummary === 'queued_for_next_agent_turn') {
+            return coreMailboxToIpcRow(existing);
+          }
+          const edited = await api.edit(id, {
+            ...(optionalString(payload.content) === undefined ? {} : { content: optionalString(payload.content)! }),
+            ...(optionalString(payload.kind) === undefined ? {} : { kind: optionalString(payload.kind)! as HostMailboxKind }),
+          });
+          return edited === null ? null : coreMailboxToIpcRow(edited);
+        }
+        case 'mailbox:guide': {
+          const guided = await requireMailbox().guide(requireString(payload, 'id', action));
+          return guided === null ? null : coreMailboxToIpcRow(guided);
+        }
+        case 'mailbox:promoteQueued': {
+          const promoted = await requireMailbox().promoteQueued(requireString(payload, 'id', action));
+          return promoted === null ? null : coreMailboxToIpcRow(promoted);
+        }
+        case 'mailbox:cancel': {
+          const cancelled = await requireMailbox().cancel(
+            requireString(payload, 'id', action),
+            optionalString(payload.reason),
+          );
+          return cancelled === null ? null : coreMailboxToIpcRow(cancelled);
+        }
+        case 'mailbox:list': {
+          const items = await requireMailbox().listMailboxItems(
+            requireString(payload, 'sessionId', action),
+            {
+              ...(Array.isArray(payload.status)
+                ? { status: payload.status.map((status) => String(status) as HostMailboxStatus) }
+                : {}),
+              limit: typeof payload.limit === 'number' ? payload.limit : 50,
+            },
+          );
+          return items.map(coreMailboxToIpcRow);
+        }
+        case 'mailbox:listForSession': {
+          const items = await requireMailbox().listMailboxItemsForSession(
+            requireString(payload, 'sessionId', action),
+          );
+          return items.map(coreMailboxToIpcRow);
+        }
+        case 'mailbox:claimBatch': {
+          const result = await requireMailbox().claimBatch({
+            sessionId: requireString(payload, 'sessionId', action),
+            runId: requireString(payload, 'runId', action),
+            checkpoint: requireString(payload, 'checkpoint', action) as HostMailboxCheckpoint,
+            ...(typeof payload.limit === 'number' ? { limit: payload.limit } : {}),
+            ...(typeof payload.leaseMs === 'number' ? { leaseMs: payload.leaseMs } : {}),
+            ...(typeof payload.coalesceWindowMs === 'number' ? { coalesceWindowMs: payload.coalesceWindowMs } : {}),
+            ...(typeof payload.maxClaimAttempts === 'number' ? { maxClaimAttempts: payload.maxClaimAttempts } : {}),
+          });
+          return { rows: result.rows.map(coreMailboxToIpcRow), claimTokens: [...result.claimTokens] };
+        }
+        case 'mailbox:apply': {
+          const item = await requireMailbox().apply({
+            id: requireString(payload, 'id', action),
+            claimToken: requireString(payload, 'claimToken', action),
+            mode: requireString(payload, 'mode', action) as HostMailboxApplyMode,
+            checkpoint: requireString(payload, 'checkpoint', action) as HostMailboxCheckpoint,
+            ...(optionalString(payload.summary) === undefined ? {} : { summary: optionalString(payload.summary)! }),
+            ...(payload.resultingUserMsgId === undefined
+              ? {}
+              : { resultingEventId: payload.resultingUserMsgId === null ? null : String(payload.resultingUserMsgId) }),
+          });
+          return coreMailboxToIpcRow(item);
+        }
+        case 'mailbox:cancelByAgent': {
+          const cancelled = await requireMailbox().cancelByAgent({
+            id: requireString(payload, 'id', action),
+            claimToken: requireString(payload, 'claimToken', action),
+            reason: optionalString(payload.reason) ?? 'cancelled_by_agent',
+          });
+          return cancelled === null ? null : coreMailboxToIpcRow(cancelled);
+        }
+
+        // ==================== Plugin setup ====================
+        case 'plugin:setup:list-all':
+          // The MCP loader expands `${setup.X}` references in plugin
+          // manifests from these values.
+          return requirePluginSetup().listPluginSetupValues();
+
+        // ==================== Plugin registry ====================
+        case 'plugin:registry:list':
+          // The installed-plugin list the worker gates on. The standalone
+          // Host reports the config-backed entries; an entry carries no
+          // install path because the package files live under the
+          // Desktop's Electron userData, not under the shared data root.
+          return (options.pluginRegistryApi ?? defaultPluginRegistryApi).listPlugins();
+
+        // ==================== Workflow runs ====================
+        // The same actions the Desktop bridge serves, from the same Host-owned
+        // workflow run API. The workflow runner creates a run, drives it, and
+        // journals it from the worker; without these the whole feature
+        // failed at its first write in the standalone Host.
+        case 'workflowRun:create':
+          return requireWorkflowRun().createRun({
+            ...(optionalString(payload.id) === undefined ? {} : { id: optionalString(payload.id)! }),
+            workflowName: requireString(payload, 'workflowName', action),
+            workflowVersionId: optionalString(payload.workflowVersionId) ?? null,
+            ...(optionalString(payload.status) === undefined
+              ? {}
+              : { status: optionalString(payload.status)! as WorkflowRunStatus }),
+            ...(payload.triggerKind === undefined || payload.triggerKind === null
+              ? {}
+              : { triggerKind: payload.triggerKind as WorkflowTriggerKind }),
+            dedupKey: optionalString(payload.dedupKey) ?? null,
+            params: (payload.params as Record<string, unknown> | undefined) ?? {},
+            retryOf: optionalString(payload.retryOf) ?? null,
+            // Plan 560: run anchoring always crosses the bridge explicitly.
+            // The session-anchored runner sends 'session' — relying on the
+            // column default would label it 'library' and corrupt the
+            // origin filter.
+            ...(payload.origin === undefined
+              ? {}
+              : { origin: payload.origin as WorkflowRunOrigin }),
+            scope: (payload.scope as WorkflowRunScope | null | undefined) ?? null,
+            projectDir: optionalString(payload.projectDir) ?? null,
+            parentSessionId: optionalString(payload.parentSessionId) ?? null,
+            agentModel: optionalString(payload.agentModel) ?? null,
+          });
+        case 'workflowRun:updateStatus':
+          return requireWorkflowRun().updateStatus(
+            requireString(payload, 'id', action),
+            requireString(payload, 'status', action) as WorkflowRunStatus,
+            (payload.pauseMessage as string | null | undefined) ?? undefined,
+          );
+        case 'workflowRun:finish':
+          // Plan 560 terminal write. The optional keys are forwarded only
+          // when the caller sent them, so a partial outcome never clobbers
+          // an earlier summary / artifact list.
+          return requireWorkflowRun().finishRun(requireString(payload, 'id', action), {
+            status: requireString(payload, 'status', action) as WorkflowRunStatus,
+            ...(payload.summary === undefined ? {} : { summary: payload.summary as string | null }),
+            ...(payload.artifacts === undefined
+              ? {}
+              : { artifacts: payload.artifacts as WorkflowArtifactRef[] }),
+            ...(payload.spentTokens === undefined
+              ? {}
+              : { spentTokens: payload.spentTokens as number | null }),
+          });
+        case 'workflowRun:saveSnapshot':
+          return requireWorkflowRun().saveSnapshot({
+            runId: requireString(payload, 'runId', action),
+            definition: payload.definition,
+            nodeStack: (payload.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
+            journal: (payload.journal as WorkflowRunSnapshot['journal']) ?? [],
+          });
+        case 'workflowRun:loadSnapshot':
+          return requireWorkflowRun().loadSnapshot(requireString(payload, 'runId', action));
+        case 'workflowRun:appendJournal':
+          return requireWorkflowRun().appendJournalRecord(
+            requireString(payload, 'runId', action),
+            payload.record as WorkflowRunSnapshot['journal'][number],
+          );
+        case 'workflowRun:loadJournal':
+          return requireWorkflowRun().loadJournal(requireString(payload, 'runId', action));
+
+        // ==================== Turn review ====================
+        case 'turn-review:save': {
+          const sessionId = optionalString(payload.sessionId) ?? '';
+          const turnId = optionalString(payload.turnId) ?? '';
+          const workingDirectory = optionalString(payload.workingDirectory) ?? '';
+          if (!sessionId || !turnId || !workingDirectory) {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} requires sessionId, turnId and workingDirectory`);
+          }
+          const input: TurnReviewWriteInput = {
+            id: optionalString(payload.id) ?? randomUUID(),
+            sessionId,
+            turnId,
+            workingDirectory,
+            files: (Array.isArray(payload.files) ? payload.files : []) as TurnReviewFile[],
+            patch: optionalString(payload.patch) ?? '',
+            additions: typeof payload.additions === 'number' ? payload.additions : 0,
+            removals: typeof payload.removals === 'number' ? payload.removals : 0,
+            truncated: payload.truncated === true,
+            binary: payload.binary === true,
+            capturedAt: typeof payload.capturedAt === 'number' ? payload.capturedAt : Date.now(),
+          };
+          await requireTurnReview().saveTurnReview(input);
+          return true;
+        }
+
+        // ==================== Attachments ====================
+        case 'attachment:store': {
+          const messageId = optionalString(payload.messageId) ?? '';
+          if (!messageId) {
+            // The Desktop bridge answers with a soft failure here rather than
+            // throwing: the worker has no message to attach the document to.
+            return { success: false, error: 'messageId is required' };
+          }
+          const input: HostLocalParsedDocumentInput = {
+            messageId,
+            sessionId: optionalString(payload.sessionId) ?? '',
+            filename: optionalString(payload.filename) ?? '',
+            filePath: optionalString(payload.filePath) ?? '',
+            charCount: typeof payload.charCount === 'number' ? payload.charCount : 0,
+            text: optionalString(payload.text) ?? '',
+            ...(payload.extractMethod === undefined
+              ? {}
+              : { extractMethod: optionalString(payload.extractMethod)! }),
+            ...(payload.imageChunks === undefined
+              ? {}
+              : { imageChunks: payload.imageChunks as NonNullable<HostLocalParsedDocumentInput['imageChunks']> }),
+          };
+          return requireAttachment().storeParsedDocument(input);
+        }
+
+        // ==================== SendMessage side state ====================
+        // The Desktop bridge swallows the store error and answers with a
+        // soft failure, so the worker never sees an unhandled rejection
+        // from a best-effort side-state write. The same holds here — but
+        // the "the Host has not composed this API" failure stays OUTSIDE
+        // the catch: a misconfigured Host must fail fast and name the
+        // missing domain, not look like a store hiccup.
+        case 'sendMessageState:createWidgetPending': {
+          const api = requireSendMessageState();
+          try {
+            await api.createWidgetPending(payload as unknown as CreateWidgetPendingInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
+        case 'sendMessageState:createSecretPending': {
+          const api = requireSendMessageState();
+          try {
+            await api.createSecretPending(payload as unknown as CreateSecretPendingInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
+        case 'sendMessageState:upsertCursorAgentRun': {
+          const api = requireSendMessageState();
+          try {
+            await api.upsertCursorAgentRun(payload as unknown as CursorAgentRunInput);
+            return { success: true, messageId: optionalString(payload.messageId) ?? '' };
+          } catch {
+            return { success: false, reason: 'transaction_failed' };
+          }
+        }
+
         default:
           throw new WorkerDbBridgeError(
             'unimplemented_domain',

@@ -60,6 +60,7 @@
 | [621 工作区生命周期](active/621-coding-workspace-lifecycle-harness.md) | P0 | 已合并：A/B/C · 接缝 #370 · D #372 · E #371 · 组装接线 #373 · F（三端 UI + 真实链路验证）#378 → `39f2314f`；三端同一 Host API 回答，场景 1–7 全绿 |
 | [CI 提速与测试瘦身](active/2026-10-21-ci-speed-and-test-diet.md) | — | #339（CI 提速）已合并 `052f85cb`；#342（退役 `packages/agent` 291 个测试）仍 open，待授权合并 |
 | [CI 提速的后续四项](active/2026-10-21-ci-followups.md) | — | 上面那份之后的四项（typecheck 按依赖图拆分、最慢 7 个测试文件重构、全局状态测试分组串行、12 个契约补测试）；实测数据与验收都在正文 |
+| [Agent Runtime 真实基准](active/2026-10-23-agent-runtime-e2e-benchmark.md) | — | `npm run eval:agent:runtime`：真实 Host + 生产 worker + 真实 SSE + TUI 消费路径，分段测首 Token / 工具往返 / 事件传输；已定位瓶颈 |
 
 ## 关联切片与待确认提案
 

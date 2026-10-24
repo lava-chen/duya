@@ -7,6 +7,21 @@ import { pathToFileURL } from 'node:url';
 const DOCS_ONLY = /^(?:docs|docs-local)\/|\.(?:md|mdx|rst|txt)$/i;
 
 /**
+ * A stylesheet.
+ *
+ * A stylesheet carries no unit test of its own, but it decides what the tests
+ * of its package SEE: the layout of the transcript, the theme variables, the
+ * container queries. So a stylesheet change has to run the tests of the
+ * package that owns it — otherwise a PR that only moves CSS runs NO test at
+ * all, and the `test` job fails with "Changed unit scope has no test or
+ * source targets".
+ */
+const STYLESHEET = /\.(?:css|scss|sass|less|styl)$/i;
+
+/** A tracked unit test file, as the runner collects them. */
+const TEST_FILE = /^(?:apps|packages|scripts|evals|tests)\/.+\.(?:test|spec)\.[cm]?[jt]sx?$/;
+
+/**
  * Manifest fields that can change what a build, a test run or a package
  * resolution does. A manifest edit that touches NONE of these is metadata
  * (description, keywords, author, license, homepage, repository, ...): it
@@ -68,7 +83,7 @@ export function classifyChangedFiles(changedPaths, options = {}) {
   return classifyChangedFilesWithOptions(changedPaths, options);
 }
 
-function classifyChangedFilesWithOptions(changedPaths, { ciRoutingManifestOnly = false, metadataOnlyManifests = [] } = {}) {
+function classifyChangedFilesWithOptions(changedPaths, { ciRoutingManifestOnly = false, metadataOnlyManifests = [], trackedTestFiles = [] } = {}) {
   const allFiles = [...new Set(changedPaths.map(normalizePath).filter(Boolean))].sort();
   // A metadata-only manifest edit cannot change a build, a dependency graph or
   // a resolved export, so it is removed from the change set entirely. What is
@@ -116,7 +131,7 @@ function classifyChangedFilesWithOptions(changedPaths, { ciRoutingManifestOnly =
     || file.startsWith('.github/workflows/')
     || file.startsWith('scripts/ci/'));
   const unitFiles = unitScope === 'changed'
-    ? [...new Set(unitFilesFor(files, ciOnlyChanges))].sort()
+    ? [...new Set(unitFilesFor(files, ciOnlyChanges, trackedTestFiles))].sort()
     : [];
 
   return {
@@ -128,13 +143,58 @@ function classifyChangedFilesWithOptions(changedPaths, { ciRoutingManifestOnly =
   };
 }
 
-function unitFilesFor(files, ciOnlyChanges) {
+function unitFilesFor(files, ciOnlyChanges, trackedTestFiles = []) {
   const sourceOrTest = files.filter((file) => /^(?:apps|packages|scripts|evals|tests)\/.+\.[cm]?[jt]sx?$/.test(file));
   if (ciOnlyChanges) {
     const changedTests = sourceOrTest.filter((file) => /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file));
     return changedTests.length > 0 ? changedTests : ['scripts/ci/test-scope.test.ts'];
   }
-  return sourceOrTest;
+  const stylesheets = files.filter((file) => STYLESHEET.test(file));
+  if (stylesheets.length === 0) return sourceOrTest;
+  return [...new Set([...sourceOrTest, ...stylesheetTargets(stylesheets, trackedTestFiles)])].sort();
+}
+
+/**
+ * The tests a stylesheet change has to run.
+ *
+ * A stylesheet belongs to a package (`packages/ui`, `apps/desktop`, ...), and
+ * the tests of that package are the ones that can see what the stylesheet
+ * does. A stylesheet outside every package falls back to the whole tracked
+ * test set, because there is no narrower honest answer.
+ */
+export function stylesheetTargets(stylesheets, trackedTestFiles) {
+  const tests = trackedTestFiles.filter((file) => TEST_FILE.test(file));
+  if (tests.length === 0) return [];
+  const targets = new Set();
+  for (const sheet of stylesheets) {
+    const root = packageRootOf(sheet);
+    const owned = root ? tests.filter((test) => test.startsWith(`${root}/`)) : [];
+    const chosen = owned.length > 0 ? owned : tests;
+    for (const test of chosen) targets.add(test);
+  }
+  return [...targets];
+}
+
+/** `packages/ui/src/styles/workspace.css` -> `packages/ui`. */
+function packageRootOf(file) {
+  const parts = file.split('/');
+  return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : '';
+}
+
+/** Every tracked unit test file of this checkout. */
+function trackedTestFilesOf() {
+  try {
+    const output = execFileSync('git', ['ls-files'], {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    return output.split(/\r?\n/).filter((file) => TEST_FILE.test(file));
+  } catch {
+    // Without the file list the stylesheet mapping has nothing to map onto,
+    // and the guard in the workflow reports the empty scope instead of
+    // pretending the change was tested.
+    return [];
+  }
 }
 
 function isCiRoutingManifestOnly(baseSha, headSha) {
@@ -226,6 +286,7 @@ export function getScopesForEvent(eventName, env = process.env) {
     return classifyChangedFilesWithOptions(paths, {
       ciRoutingManifestOnly: paths.includes('package.json') && isCiRoutingManifestOnly(baseSha, headSha),
       metadataOnlyManifests: findMetadataOnlyManifests(baseSha, headSha, paths),
+      trackedTestFiles: trackedTestFilesOf(),
     });
   } catch (error) {
     process.stderr.write(`Could not resolve PR changes; selecting full suites: ${String(error)}\n`);

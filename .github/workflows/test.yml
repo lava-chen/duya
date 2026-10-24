@@ -151,6 +151,9 @@ jobs:
           }
           EOF
 
+      - name: Slice graph and audit-imports parity
+        run: npm run architecture:slice-graph
+
       # Plan 610 S4c-d3. `architecture:boundaries` (scripts/architecture/
       # boundary-gates.mjs) is a SEPARATE gate with a SEPARATE baseline
       # (`boundary-gates-baseline.json`) and it had a `package.json` script that
@@ -658,6 +661,26 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
+
+      - name: First-screen JS budget
+        # The bytes of JavaScript the renderer must download and evaluate
+        # before the first screen can paint.
+        #
+        # This is the sprint's first machine-INDEPENDENT performance gate.
+        # Wall-clock thresholds cannot gate a shared runner, so they stay out
+        # of CI and live in the plan document as trends; bytes are the same on
+        # every machine, so a budget is a real gate.
+        #
+        # It catches the regressions that matter for the first screen: a
+        # barrel file that drags a provider SDK back into the entry chunk, an
+        # import that used to be lazy becoming static, a dependency that
+        # grew. The budget is one-sided — an improvement never fails it — and
+        # it is tightened by hand after a measured win, the way the
+        # architecture baselines are ratcheted.
+        #
+        # The step reads the build output of the step above; it launches
+        # nothing, so it costs a fraction of a second.
+        run: npm run perf:first-screen-budget
 
       - name: Run affected Electron E2E tests
         # The Electron E2E suite is OFF the pull-request path.

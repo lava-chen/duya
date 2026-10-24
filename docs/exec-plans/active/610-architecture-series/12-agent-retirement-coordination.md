@@ -285,3 +285,152 @@ Every wave updates this file with completed facts and outstanding consumers.
   textual references; then remove `packages/agent` and verify clean builds and
   packaged execution with the directory absent. Do not mark Host/Desktop
   runtime convergence complete from the CLI and worker proofs alone.
+
+### Coordinator handoff: standalone Host db domains (PR #420)
+
+- Branch `codex/fix-host-db-actions`, base `origin/master` (`aed0d13c`), head
+  `984a4d5a`. PR #420 is OPEN and **not merged** — integration needs the user's
+  authorization. Worktree:
+  `E:\Projects\duya\.claude\worktrees\host-db-actions`. The shared checkout stays
+  read-only.
+- The standalone Host's worker db bridge answered 66 actions. Three domains the
+  worker asks for fell through to the default branch and threw
+  `WorkerDbBridgeError('unimplemented_domain')`; the worker answers a failed
+  lookup with a warning and an empty result, so the gap was silent. This cut
+  serves them:
+  - **mailbox** (10 actions): the worker claims rows at every model checkpoint
+    and applies them afterwards. Every claim failed, so every notification was
+    lost. Reuses the Host's existing `localMailboxApi` over
+    `core.stores.mailbox`. The Desktop's renderer broadcast and wake
+    scheduling are deliberately not repeated — a standalone Host has no
+    renderer, and the worker picks the row up at its next checkpoint anyway.
+  - **`plugin:setup:list-all`**: the MCP loader expands `${setup.X}` in plugin
+    manifests from these values; without them every reference expanded to
+    nothing. Reuses the Host's existing `localPluginSetupApi` over
+    `PluginSetupStore`.
+  - **`plugin:registry:list`**: answered from `config.toml`'s `[plugins]`
+    block — the only persisted source of the installed-plugin list. The
+    composite `<pluginId>@<marketplace>` key is split into id and marketplace;
+    `enabled` is reported, and an entry that omits it counts as enabled (the
+    Desktop registry store's default). The entry carries **no install path**:
+    the package files live under the Desktop's Electron `userData`, not under
+    the shared data root a standalone Host reads. Plugin skills and
+    plugin-declared MCP servers therefore stay unavailable here — exactly as
+    before — but the action no longer fails and the enabled-plugin set the
+    worker gates on is now served.
+- `coreMailboxToIpcRow` moved to `@duya/host/ipc-row-adapters` so both bridges
+  emit one legacy row shape; the Desktop re-exports it the way it already
+  re-exports `coreSessionToIpcRow`. The mailbox and plugin setup APIs are each
+  built once and shared by the HTTP surface and the bridge.
+- Verification, all from the worktree root:
+  `npx vitest run packages/host/tests/worker-db-bridge-{mailbox,plugin-setup,plugin-registry}.test.ts`
+  → 17/17; `npm run typecheck:all` → exit 0; `npm run architecture:check` →
+  exit 0 (2622 tolerated, no new violations); `npm run bundle:verify` → FRESH
+  0/919; the desktop adapter suites → 126/126. The full
+  `packages/host/tests` run had one failure,
+  `worker-hooks/events.test.ts`'s `toBeLessThan(500)` wall-clock assertion
+  (measured 521 ms) — a load-dependent flake in a file this cut does not
+  touch; isolated re-run of that file together with `executor.test.ts` was
+  57/57.
+- Known gaps left open, each its own migration surface. The real count is
+  **20** worker-used actions still missing from the bridge, not the 9 the PR
+  body first claimed (that list came from a regex that missed multi-line
+  client definitions; a line-by-line rescan of the worker call sites is the
+  reliable count). This branch now covers 11 of them — the workflow run
+  domain (create / updateStatus / finish / saveSnapshot / loadSnapshot /
+  appendJournal / loadJournal), `turn-review:save`, `attachment:store` and
+  the three `sendMessageState:*` writes. The session domain (see the third
+  cut below) took `session:create` and `session:search`; **7 are left**:
+  - `config:agents:create` / `config:agents:update` — the write side of
+    `config.toml`'s `[agents.*]` still lives in
+    `apps/desktop/src/main/config/agents.ts`; it has to move into packages.
+  - `automation:cron:create` / `delete` / `list` / `update` — the Host has
+    no automation API yet.
+  - `channel:deliver` — outbound platform delivery, a gateway concern
+    rather than a bridge one.
+- The `sendMessageState:*` writes are best-effort by contract: the Desktop
+  bridge swallows the store error and answers with a soft failure. The
+  standalone Host keeps that contract, but the "the Host has not composed
+  this API" failure stays OUTSIDE that catch — a misconfigured Host must
+  fail fast and name the missing domain instead of looking like a store
+  hiccup. The first draft of that case had the `require` inside the try,
+  and the test caught it.
+- CI run 40066793619 (head `3941cbad`): `architecture`, `typecheck` and `build`
+  green; the `test` job red with **every affected test green** (82 files, 668
+  passed, 6 skipped) plus one `Uncaught Exception: ENOENT ... /tmp/duya-cron-test-*/logs/app.log`
+  originating in `apps/desktop/src/main/cli/handlers/crons.test.ts`. That is the
+  known desktop logger defect fixed by PR #397 (`e269c53e`), which was still
+  OPEN and CONFLICTING against master on 2026-10-24 — so every PR touching
+  `packages/host/src` or `packages/data/src` hits it. This branch cherry-picks
+  `e269c53e`; once #397 lands, one of the two copies can be dropped, since the
+  content is identical and will not conflict.
+- CI run 40067527772 (head `1bbd8844`): **all five jobs green** — `architecture`,
+  `test scope`, `typecheck`, `test`, `build`. The cherry-pick removed the
+  unhandled exception; the local CI-equivalent scope
+  (`npx vitest run --changed=origin/master --maxWorkers=2`) was 210 files /
+  2128 cases with 2119 passed and 9 skipped, exit 0.
+- CI run 40068101938 (head `ca0eaee7`) and run 40069474501 (head `0bc45679`):
+  **all five jobs green** — the workflow-run cut and its bundle reached
+  master-base CI without a red job.
+
+## Third cut — the session domain (`7a3ae41b`, `571540a8`)
+
+The session domain was the next worker-facing surface that the standalone
+Host did not serve, and the first one where the Host answered with the
+WRONG SHAPE rather than with nothing:
+
+- `session:create` — not served. The worker writes it when it spawns a
+  sub-agent (`worker-subagents/service.ts`), so on the standalone Host the
+  child session row never existed. The write is wrapped in a `catch` that
+  only warns, so the run continued as if the row had been created.
+- `session:search` — not served. The session-search tool
+  (`worker-tool-services/session-search.ts`) then answered "no session
+  matched" for every query.
+- `session:list` — served, but with the raw core rows (`parentSessionId`,
+  `workingDirectory`). The worker reads the legacy `parent_id` /
+  `working_directory`, so its parent map was empty and the recent-session
+  list was blank. The Desktop bridge answers the same action with
+  `coreSessionToIpcRow` rows.
+- `session:listByWorkingDirectory` — not served, although the worker client
+  exposes it.
+
+What the cut does:
+
+- The bridge serves `session:create` (permission profile resolved through
+  the Host session API, the working directory registered as a workspace, the
+  spawn edge recorded), `session:search` (rows plus the matched snippet)
+  and `session:listByWorkingDirectory`, and answers `session:list` in the
+  legacy row shape by paging the local-session API.
+- `ipcSessionToCoreCreate` moved to `@duya/host/ipc-row-adapters`; the
+  Desktop re-exports it, the same way it re-exports `coreSessionToIpcRow`.
+  Both bridges now map the same flat payload with one implementation.
+- `local-host.ts` builds the local-session API once and shares it between
+  the HTTP surface and the bridge, and passes the workspace registration
+  API that the create path needs.
+- A missing Host API fails fast and names the domain
+  (`unimplemented_domain`), the same contract as the other cuts.
+
+Verification, all from the worktree root:
+`npx vitest run packages/host/tests/worker-db-bridge-session.test.ts` → 9/9;
+the whole `packages/host/tests` run → 183 files / 1675 passed / 1 skipped,
+exit 0; the nine `worker-db-bridge-*` files → 48/48; the Desktop adapter
+suites (`core-db-adapters`, `db-handlers`) → 75/75;
+`npm run typecheck:all` → exit 0; `npm run architecture:check` → exit 0
+(2648 tolerated, no new violations); `npm run bundle:verify` → FRESH 0/919.
+The local CI-equivalent scope (`npx vitest run --changed=origin/master --maxWorkers=2`)
+is 213 files / 2146 passed / 9 skipped, exit 0.
+
+- CI run 40070759848 (head `f7571596`): **all five jobs green** — `architecture`,
+  `test scope`, `typecheck`, `test`, `build`.
+
+- Next action: review PR #420 and, once authorized, integrate it. PR #381
+  (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
+  same authorization to sync master and rebuild its bundle before it can be
+  integrated. Note that PR #381's head commit `08f8de89` has no check run at
+  all (the last green run, 40063606946, covers `404103eb`); syncing master will
+  re-trigger CI for it.
+- The next worker surface after this one is the `[agents.*]` write side of
+  `config.toml`, which still lives in
+  `apps/desktop/src/main/config/agents.ts` and has to move into packages
+  before `config:agents:create` / `config:agents:update` can be served.
+  The automation (cron) API does not exist in the Host at all yet.

@@ -6,6 +6,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { resolveWorkerCompileCacheDir } from '@duya/host/worker-limits';
 import { getConfigStore } from '../../config/store-instance';
 
 export interface RunningProcess {
@@ -100,6 +101,14 @@ export function getAgentRuntimeCommand(
     DUYA_AGENT_MODE: 'true',
     SESSION_ID: sessionId,
     DUYA_SECURITY_BYPASS_SKILLS: securityBypassSkills?.join(',') || '',
+    // The agent bundle is 4.6 MB and is this process's ENTRY POINT, so it
+    // is compiled from source on every spawn. `NODE_COMPILE_CACHE` is the
+    // only channel that reaches a fresh process with the cache enabled --
+    // and it covers the entry point, unlike `enableCompileCache()`. The
+    // worker flushes the cache while it is alive, so the next spawn finds
+    // it. An explicit setting wins, so an operator's own choice is
+    // respected.
+    NODE_COMPILE_CACHE: process.env.NODE_COMPILE_CACHE ?? resolveWorkerCompileCacheDir(),
   };
 
   if (isPackagedHost()) {

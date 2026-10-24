@@ -107,7 +107,7 @@ describe('TranscriptPane document cache', () => {
   it('assembles the document once until the revision or the options change', () => {
     const renderer = new TranscriptRenderer();
     const model = makeModel(20);
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 0, revision: 0 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: true, revision: 0 });
 
     const first = pane.lines(80);
     // Same revision, same width: the SAME array comes back, so a streaming frame
@@ -128,7 +128,7 @@ describe('TranscriptPane document cache', () => {
 
   it('re-assembles when the width changes, because wrapping changes lines', () => {
     const renderer = new TranscriptRenderer();
-    const pane = new TranscriptPane({ renderer, model: makeModel(4), options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer, model: makeModel(4), options: OPTIONS, scrollTop: 0, following: true });
     pane.lines(80);
     const wide = renderer.stats.misses;
     pane.lines(40);
@@ -138,13 +138,13 @@ describe('TranscriptPane document cache', () => {
   it('windows the same lines it assembled, newest-first when following', () => {
     const renderer = new TranscriptRenderer();
     const model = makeModel(30);
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: true });
     const lines = pane.lines(80);
     const visible = pane.visibleLines(80, 10);
     expect(visible).toHaveLength(Math.min(10, lines.length));
     expect(visible[visible.length - 1]).toBe(lines[lines.length - 1]);
 
-    pane.props = { ...pane.props, scrollLines: 5 };
+    pane.props = { ...pane.props, scrollTop: 0, following: false };
     const scrolled = pane.visibleLines(80, 10);
     const window = pane.window(80, 10);
     expect(scrolled[0]).toBe(lines[window.lineStart]);

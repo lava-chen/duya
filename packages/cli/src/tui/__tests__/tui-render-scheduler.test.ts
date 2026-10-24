@@ -137,3 +137,125 @@ describe('RenderScheduler', () => {
     expect(scheduler.renderCount).toBe(0);
   });
 });
+
+describe('RenderScheduler content requests', () => {
+  it('paints the first content of a burst immediately', () => {
+    const clock = new FakeClock();
+    const renders: number[] = [];
+    const scheduler = makeScheduler(clock, () => renders.push(clock.now));
+
+    // The first content of a burst is what the user is waiting for: it must
+    // not sit in a throttle window opened by a frame that did not contain it.
+    expect(scheduler.requestContent(() => {})).toBe(true);
+    expect(renders).toHaveLength(1);
+    expect(renders[0]).toBe(0);
+    expect(scheduler.hasPendingRender).toBe(false);
+  });
+
+  it('throttles the rest of the burst', () => {
+    const clock = new FakeClock();
+    const renders: number[] = [];
+    const scheduler = makeScheduler(clock, () => renders.push(clock.now));
+
+    scheduler.requestContent(() => {});
+    clock.advance(10);
+
+    // Same burst: the trailing throttle owns this one.
+    expect(scheduler.requestContent(() => {})).toBe(false);
+    expect(renders).toHaveLength(1);
+    expect(scheduler.hasPendingRender).toBe(true);
+
+    clock.advance(MIN_RENDER_INTERVAL_MS);
+    expect(renders).toHaveLength(2);
+  });
+
+  it('keeps the LAST content of a burst on screen', () => {
+    const clock = new FakeClock();
+    let state = '';
+    const painted: string[] = [];
+    const scheduler = makeScheduler(clock, () => painted.push(state));
+
+    state = 'first';
+    scheduler.requestContent(() => {});
+    state = 'last';
+    scheduler.requestContent(() => {});
+
+    clock.advance(MIN_RENDER_INTERVAL_MS * 2);
+
+    // The tail is the whole point of the trailing edge: whatever state the
+    // stream ended in has to reach the screen.
+    expect(painted.at(-1)).toBe('last');
+  });
+
+  it('bounds the frames a burst costs', () => {
+    const clock = new FakeClock();
+    let renders = 0;
+    const scheduler = makeScheduler(clock, () => {
+      renders += 1;
+    });
+
+    // A firehose: one leading frame for the burst, plus the trailing frames
+    // the throttle would have painted anyway. NOT one frame per token.
+    for (let i = 0; i < 1000; i += 1) scheduler.requestContent(() => {});
+    clock.advance(MIN_RENDER_INTERVAL_MS);
+    expect(renders).toBe(2);
+  });
+
+  it('runs prepare before the frame is painted', () => {
+    const clock = new FakeClock();
+    const order: string[] = [];
+    const scheduler = makeScheduler(clock, () => order.push('render'));
+
+    scheduler.requestContent(() => order.push('prepare'));
+
+    // A frame painted before the content is committed shows nothing, which
+    // defeats the purpose of painting it early.
+    expect(order).toEqual(['prepare', 'render']);
+  });
+
+  it('does not swallow the rest of the stream after a leading frame', () => {
+    const clock = new FakeClock();
+    const renders: number[] = [];
+    const scheduler = makeScheduler(clock, () => renders.push(clock.now));
+
+    scheduler.requestContent(() => {});
+    clock.advance(5);
+    scheduler.request();
+    clock.advance(MIN_RENDER_INTERVAL_MS);
+
+    // The leading frame took over the queued one; the frame after it still
+    // has to happen, or the tail of the stream is never painted.
+    expect(renders).toHaveLength(2);
+  });
+
+  it('keeps keyboard input immediate while content is flowing', () => {
+    const clock = new FakeClock();
+    const renders: number[] = [];
+    const scheduler = makeScheduler(clock, () => renders.push(clock.now));
+
+    scheduler.requestContent(() => {});
+    clock.advance(5);
+    scheduler.requestContent(() => {});
+    expect(scheduler.hasPendingRender).toBe(true);
+
+    scheduler.requestImmediate();
+
+    // A keystroke is painted on the spot, and it does not leave a second
+    // frame queued behind it.
+    expect(renders).toHaveLength(2);
+    expect(scheduler.hasPendingRender).toBe(false);
+  });
+
+  it('requestContent after stop() is a no-op', () => {
+    const clock = new FakeClock();
+    const scheduler = makeScheduler(clock, () => {});
+    let prepared = false;
+    scheduler.stop();
+
+    expect(scheduler.requestContent(() => {
+      prepared = true;
+    })).toBe(false);
+    expect(prepared).toBe(false);
+    expect(scheduler.renderCount).toBe(0);
+  });
+});

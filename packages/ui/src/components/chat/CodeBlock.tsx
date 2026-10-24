@@ -14,7 +14,7 @@ interface CodeBlockProps {
   copiedLabel?: string;
 }
 
-export function CodeBlock({ children, className, copyLabel = 'Copy', copiedLabel = 'Copied' }: CodeBlockProps) {
+function CodeBlockInner({ children, className, copyLabel = 'Copy', copiedLabel = 'Copied' }: CodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -79,3 +79,30 @@ export function CodeBlock({ children, className, copyLabel = 'Copy', copiedLabel
     </div>
   );
 }
+
+/**
+ * Compare a code block by what it actually renders.
+ *
+ * `children` is the fence's text, so a completed fence compares equal across
+ * the frames in which the surrounding reply keeps growing. That equality is
+ * the point: a streaming message re-parses its markdown on every frame, and
+ * without this comparator every fence inside it — including the ones that
+ * were finished long ago — is re-tokenized and re-highlighted on every
+ * frame. The highlight is the single most expensive step of that frame
+ * (measured: 78% of the main-thread time of a long streamed reply), and
+ * re-doing it for an unchanged fence is pure waste.
+ *
+ * The copy button's own state (`copied`) and the theme live inside the
+ * component, so a state change or a theme switch still re-renders it —
+ * `React.memo` only short-circuits a re-render caused by unchanged props.
+ */
+function codeBlockPropsEqual(prev: CodeBlockProps, next: CodeBlockProps): boolean {
+  return (
+    prev.className === next.className &&
+    prev.copyLabel === next.copyLabel &&
+    prev.copiedLabel === next.copiedLabel &&
+    prev.children === next.children
+  );
+}
+
+export const CodeBlock = React.memo(CodeBlockInner, codeBlockPropsEqual);
