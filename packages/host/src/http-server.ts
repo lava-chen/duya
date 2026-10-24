@@ -4777,7 +4777,7 @@ export class HostSessionHttpServer {
   async #listMcpServers(res: ServerResponse): Promise<void> {
     const api = this.#options.mcpInventoryApi;
     if (!api) {
-      this.#sendJson(res, 404, { error: { code: 'mcp_inventory_unavailable' } });
+      this.#sendJson(res, 404, { error: { code: 'mcp_inventory_api_unavailable' } });
       return;
     }
     try {
@@ -4798,7 +4798,7 @@ export class HostSessionHttpServer {
   async #listSkills(url: URL, res: ServerResponse): Promise<void> {
     const api = this.#options.skillInventoryApi;
     if (!api) {
-      this.#sendJson(res, 404, { error: { code: 'skill_inventory_unavailable' } });
+      this.#sendJson(res, 404, { error: { code: 'skill_inventory_api_unavailable' } });
       return;
     }
     const sessionId = url.searchParams.get('sessionId');

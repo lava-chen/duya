@@ -68,7 +68,7 @@ async function startServer(
 }
 
 describe('GET /v1/mcps', () => {
-  it('answers 404 mcp_inventory_unavailable when the capability is not wired', async () => {
+  it('answers 404 mcp_inventory_api_unavailable when the capability is not wired', async () => {
     const { origin } = await startServer({});
 
     const response = await fetch(`${origin}/v1/mcps`, {
@@ -77,7 +77,7 @@ describe('GET /v1/mcps', () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'mcp_inventory_unavailable' },
+      error: { code: 'mcp_inventory_api_unavailable' },
     });
   });
 
@@ -162,7 +162,7 @@ describe('the Host client method', () => {
 
     await expect(client.listMcpServers()).rejects.toMatchObject({
       status: 404,
-      code: 'mcp_inventory_unavailable',
+      code: 'mcp_inventory_api_unavailable',
     });
   });
 });

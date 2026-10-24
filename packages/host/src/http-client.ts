@@ -2277,7 +2277,7 @@ export class HostSessionHttpClient implements
    * project the list is about.
    *
    * A Host that was given no inventory capability refuses with a named code
-   * (`skill_inventory_unavailable`), which is a different answer from "this
+   * (`skill_inventory_api_unavailable`), which is a different answer from "this
    * user has no skills".
    */
   async listSkills(

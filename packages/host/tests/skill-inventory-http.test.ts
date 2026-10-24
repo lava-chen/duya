@@ -86,7 +86,7 @@ function inventory(workingDirectory: string | null) {
 }
 
 describe('GET /v1/skills', () => {
-  it('answers 404 skill_inventory_unavailable when the capability is not wired', async () => {
+  it('answers 404 skill_inventory_api_unavailable when the capability is not wired', async () => {
     const { origin } = await startServer({});
 
     const response = await fetch(`${origin}/v1/skills?sessionId=session-1`, {
@@ -95,7 +95,7 @@ describe('GET /v1/skills', () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'skill_inventory_unavailable' },
+      error: { code: 'skill_inventory_api_unavailable' },
     });
   });
 
@@ -252,7 +252,7 @@ describe('the Host client method', () => {
 
     await expect(client.listSkills('session-1')).rejects.toMatchObject({
       status: 404,
-      code: 'skill_inventory_unavailable',
+      code: 'skill_inventory_api_unavailable',
     });
   });
 });
