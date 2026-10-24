@@ -183,4 +183,23 @@ emergency / preflight 仍按原样把 `ctx.deferred.current` 并入基线。
 
 ## 6. 验证记录
 
-见本文件末尾的「验证记录」表（随提交更新）。
+落地分支 `codex/harness-correctness-to-master`（PR #424，base `master`）· 环境 Windows / PowerShell 5.1 / Node 24。
+
+| 门禁 | 命令 | 结果 |
+| --- | --- | --- |
+| 类型 | `npm run typecheck:all` | 退出码 0 |
+| 架构 | `npm run architecture:check` | 退出码 0，`OK — no new boundary violations`（tolerated 2617 / baseline 2785，未新增指纹） |
+| bundle | `npm run bundle:verify` | 退出码 0，`FRESH 0/922` |
+| 核心套件 | `npx vitest run packages/ai packages/agent-runtime packages/host/tests/worker-product-runtime` | 685 套件 / 1874 用例，1874 通过，0 失败 |
+| host 全量 | `npx vitest run packages/host/tests` | 630 套件 / 1663 用例，1662 通过，0 失败，1 跳过 |
+
+反例臂（证明的是「改回去会坏」，不是「改对了」）：
+
+| 发现 | 回退方式 | 结果 |
+| --- | --- | --- |
+| H-2 / H-5 | 移除 `origin` 标记 / 移除重挂载 | 3 例失败 / 5 例失败 |
+| H-1 | 把 inbound 退回 prompt 之后 | 5 失败 / 11 通过 |
+| H-6 | 回退探针修复 | 新增 6 例中 5 失败 1 通过（通过的是「压缩前仍测 assembled」的对照臂） |
+
+临时目录指到仓库外的 `E:\duya-tmp`：C 盘余量不足时，git 相关用例会因 `No space left on device` 假失败。
+
