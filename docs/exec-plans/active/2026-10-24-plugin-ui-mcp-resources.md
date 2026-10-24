@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · S3：`27a60f22809737dd26bffac748aeb7b3534f17d5` · owner：`/root`
 
 ## 目标与边界
 
@@ -24,7 +24,7 @@
 
 - [x] S1 契约：定义 surface schema，校验所属 MCP server、`ui://` URI、插件内唯一 ID；保持静态 `entry` 双向兼容。
 - [x] S2 发现与目录：投影到已安装插件目录，拒绝跨插件同名 surface，安装态变化刷新目录。
-- [ ] S3 宿主资源解析：调用 MCP `resources/read`，校验 MIME、大小、来源 server，再通过现有文档通道签发 token 与 nonce。
+- [x] S3 宿主资源解析：调用 MCP `resources/read`，校验 MIME、大小、来源 server，再通过现有文档通道签发 token 与 nonce。
 - [ ] S4 UI 入口：插件应用区与侧栏 tab 渲染 surface，复用安装/启用进度及失败提示；按会话可用性隐藏入口。
 - [ ] S5 双向通道：保留 guest→host invoke，新增 host→guest `select` / `highlight` / `refresh`，仅寻址当前 launch 的 surface。
 - [ ] S6 示例与兼容：迁移一个纯查看型示例插件，并用静态 entry 插件回归。
@@ -40,6 +40,7 @@
 - 当前上下文未提供 Playwright MCP 工具，完整 Electron 二进制也未下载；surface 的真实应用 UI 验收记录在 S4/S6，不在 S1 声称完成。
 - 参考官方 `zai-org/ZCode` 开源仓库（浅克隆 SHA `3c5b227649371507ddc4eb46ac5133afe6db1cab`）：`plugins/listUiSurfaces` 是与 tab 状态分离的只读目录投影，仅返回启用插件的 surface；本任务采用目录投影与资源归属检查的经验，不引入其 MCP Apps 页面 API、工具注册、订阅或 widgetState 协议。
 - S2 从已安装 Plugin App 声明生成独立只读 surface 目录；跨已安装插件重复 ID 全部隔离并返回 owner 冲突，目录仅提供启用插件的唯一 surface。安装、启用、停用、卸载和设置变化复用既有 `plugin-app:changed` 事件供目录消费者刷新。
+- S3 经现有 MCP SDK `Client.readResource` 加载 surface：活动会话 worker 存活时复用其 MCPManager，并以 worker 身份与 generation 复核响应；无 worker 或 standalone/always 入口通过同一 MCPManager 实现短连接读取，仅连接 manifest 声明的 server。worker 和 Main 都要求 server `source=plugin`、插件归属匹配、资源 URI 完全匹配、唯一文本 `text/html` 内容且不超过 8 MiB。Main 将已校验 HTML 挂到随机 token 的 loopback `/index.html` 单文档路由；该 mount 不提供包内静态资源，文档 CSP 禁止网络连接，沿用既有 launch nonce 与 opaque-origin iframe。静态 `entry` 路径保持原样。
 
 ## 验证记录
 
@@ -61,9 +62,19 @@
 | `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0；授权执行以允许检查脚本启动 git 子进程 | `npm run typecheck:all` | 0 | 全仓类型检查通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 可收紧 |
 | `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0；授权执行以允许架构脚本启动 node 子进程 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
 | `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0，npm 11.9.0 | `npm run build:plugin-core`；`npm run build -w @duya/agent-protocol`；`npm run build -w @duya/capabilities`；修复可空 worker manager 后 `npm run build -w @duya/host` | 0 | Plugin UI 8 MiB 上限、RPC 类型、MCP `readResource` client 与 worker API 编译通过 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run typecheck:preload -w @duya/desktop` | 0 | 新增 surface launch 参数编译通过 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run typecheck:main -w @duya/desktop` | 2 | 独立 main 检查被仓库已有项目级错误挡住；完整 electron ratchet 后续确认无新增错误，改动文件没有匹配诊断 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty（首次） | Linux，Node v24.19.0 | `npm run typecheck:all` | 1 | Host 检查发现 `manager` 可空；修复后完整重跑通过 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0，npm 11.9.0 | `npm run typecheck:all` | 0 | 20 个包构建与全仓检查通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 可收紧；4 个 agent core recorder 检查通过 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty（首次） | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/plugin-app-assets.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge.test.ts` | 1 | MCP test server fixture 未实现连接阶段必需的 `tools/list`；补齐后同命令通过 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0，Vitest 3.2.4；允许 loopback | 同上 6 个测试文件 | 0 | 6 个文件、83 个测试通过；覆盖真实 in-process MCP `resources/read`、manifest、worker bridge、host MIME/来源/大小拒绝与 loopback 单文档路由 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
+| `6accc976ca6bf9a4e5000ed574f5a269d4223c40` + S3 dirty | Linux | `git diff --cached --check` | 0 | S3 暂存 diff 无空白错误 |
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。S3 MCP resource loader、worker bridge、tokenized loopback document mount 与架构说明已提交于 `27a60f22809737dd26bffac748aeb7b3534f17d5`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：推进 S3 MCP resources/read 宿主解析，并沿用 S2 的安装态 surface 目录。
+下一步：推进 S4 插件应用区入口、侧栏 tab 呈现、同 surface 单 tab 复用、session availability 隐藏和用户可见错误提示。
