@@ -16,6 +16,7 @@ import type {
   HostMessageSearchQuery,
   HostSessionChangeStats,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostSessionPage,
   HostSessionPatch,
@@ -697,6 +698,36 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
     return count;
   }
 
+  /**
+   * The message/compaction projection of a session's rows.
+   *
+   * The paged read and the whole-transcript read project the SAME rows the
+   * same way; only the slicing differs. One projection function is what keeps
+   * the two reads comparable — and it is called ONCE per read, not once per
+   * page.
+   */
+  function projectMessageItems(
+    rows: ReturnType<typeof messageLog.listBySession>,
+  ): HostMessagePage['messages'][number][] {
+    const items: HostMessagePage['messages'][number][] = [];
+    for (const row of rows) {
+      try {
+        const entry = JSON.parse(row.payload) as DurableTimelineEntry;
+        if (entry.type !== 'message' && entry.type !== 'compaction') continue;
+        items.push({
+          id: row.id,
+          sequence: row.seq,
+          createdAt: row.createdAt,
+          turnId: row.turnId,
+          entry,
+        });
+      } catch {
+        // Match the legacy IPC adapter: malformed rollout rows do not become messages.
+      }
+    }
+    return items;
+  }
+
   async function readMessages(
     sessionId: string,
     query: HostMessageReadQuery = {},
@@ -717,22 +748,7 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
       includeSuperseded,
       ...(sources === undefined ? {} : { source: sources }),
     });
-    const items: HostMessagePage['messages'][number][] = [];
-    for (const row of rows) {
-      try {
-        const entry = JSON.parse(row.payload) as DurableTimelineEntry;
-        if (entry.type !== 'message' && entry.type !== 'compaction') continue;
-        items.push({
-          id: row.id,
-          sequence: row.seq,
-          createdAt: row.createdAt,
-          turnId: row.turnId,
-          entry,
-        });
-      } catch {
-        // Match the legacy IPC adapter: malformed rollout rows do not become messages.
-      }
-    }
+    const items = projectMessageItems(rows);
     const page = items.slice(offset, offset + limit);
     const nextOffset = offset + page.length;
     return {
@@ -741,6 +757,33 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
       nextCursor: nextOffset < items.length
         ? encodeCursor({ version: 1, resource: 'messages', owner, offset: nextOffset })
         : null,
+    };
+  }
+
+  /**
+   * The whole transcript, projected once.
+   *
+   * The paged read projects the ENTIRE transcript on every page, so a caller
+   * that reads a transcript end to end pays for it once per page. This read
+   * projects it once and hands back every row.
+   */
+  async function readAllMessages(
+    sessionId: string,
+    query: HostMessageReadAllQuery = {},
+  ): Promise<HostMessagePage> {
+    await requireSession(sessionId);
+    const includeSuperseded = query.includeSuperseded ?? true;
+    const sources = query.sources === undefined
+      ? undefined
+      : [...new Set(query.sources)].sort();
+    const rows = messageLog.listBySession(sessionId, {
+      includeSuperseded,
+      ...(sources === undefined ? {} : { source: sources }),
+    });
+    return {
+      sessionId,
+      messages: projectMessageItems(rows),
+      nextCursor: null,
     };
   }
 
@@ -845,6 +888,7 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
     countTimeline,
     deleteTimeline,
     readMessages,
+    readAllMessages,
     readProjectedTimeline,
     readTimeline,
     appendTimeline,

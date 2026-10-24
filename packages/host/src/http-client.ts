@@ -15,6 +15,7 @@ import type {
   HostRolloutImportResult,
   HostRolloutReconcileResult,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostSessionListQuery,
   HostSessionPage,
@@ -1914,6 +1915,29 @@ export class HostSessionHttpClient implements
     const queryString = params.toString();
     const suffix = queryString ? `?${queryString}` : '';
     return this.request('GET', `/v1/sessions/${encodeURIComponent(sessionId)}/messages${suffix}`);
+  }
+
+  /**
+   * The whole transcript in one request.
+   *
+   * The Host projects the transcript once per page, so a caller that pages to
+   * the end pays for the transcript once per page. `all=1` asks for the whole
+   * projection instead.
+   */
+  async readAllMessages(
+    sessionId: string,
+    query: HostMessageReadAllQuery = {},
+  ): Promise<HostMessagePage> {
+    const params = new URLSearchParams();
+    params.set('all', '1');
+    if (query.includeSuperseded !== undefined) {
+      params.set('includeSuperseded', String(query.includeSuperseded));
+    }
+    for (const source of query.sources ?? []) params.append('source', source);
+    return this.request(
+      'GET',
+      `/v1/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`,
+    );
   }
 
   async readTimeline(sessionId: string, query: HostTimelineReadQuery = {}): Promise<HostTimelinePage> {
