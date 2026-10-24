@@ -97,7 +97,8 @@
 | `21af3db4` | 同上 | `npx tsc -p packages/cli/tsconfig.json --noEmit`；`npx vitest run packages/cli`；transcript 两文件 | 均 0 · CLI 106 文件 / 1297 用例；transcript 30 用例 | 二次同步后重验；PR #464 由 CONFLICTING 转 MERGEABLE，Test workflow 在 head `21af3db4` 上运行 |
 | `9b4bfc35` | 同上 | CI：Test workflow（architecture / test scope / typecheck / test） | architecture **FAIL** · `bundle:verify`：`STALE worker-entry.js`，6 个 bundle 输入在 bundle 提交 `41f5749b` 之后改动；其余 3 项 pass | 失败签名与发现 11；修复动作 = `npm run bundle:worker` 后提交 bundle（`26cef6db`） |
 | `26cef6db` | 同上 | `npm run bundle:verify`；`npm run architecture:check`；`npx vitest run packages/cli packages/host/tests/{background-task-index,background-task-routes,run-execution}.test.ts` | 0 · `FRESH 0/953 bundle inputs`；2738 tolerated 无新增违规；首轮 1 失败 / 1325，重跑两次均 109 文件 / 1325 全绿 | 首轮那条失败在随后两次同命令运行中不可复现（记录为 flake，未定位到用例） |
-| `26cef6db` | GitHub Actions | `gh pr view 464 --json statusCheckRollup` | 全 pass · architecture / test scope / typecheck / test / build | PR head 即本提交，五项检查均 COMPLETED SUCCESS |
+| `26cef6db` | GitHub Actions | `gh pr view 464 --json statusCheckRollup` | 全 pass · architecture / test scope / typecheck / test / build | 修好 bundle 后 architecture 由 FAIL 转 pass |
+| `8887d295`（文档提交） | GitHub Actions | `gh pr checks 464 --watch` | 全 pass · architecture 2m30s / test scope 8s / typecheck 4m50s / test 5m52s / build 3m23s | PR 状态 MERGEABLE、非 draft、无 required review 阻塞记录 |
 
 ## 接续 / 结果
 
