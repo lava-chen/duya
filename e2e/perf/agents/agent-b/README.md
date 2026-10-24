@@ -63,12 +63,36 @@ that the numbers are 未持锁测量 (taken without the lock) and the report rec
 
 Both fixtures are deterministic — same bytes on every run.
 
-| Fixture id | Shape |
+| Scenario id | Shape |
 | --- | --- |
-| `perf/stream-long-reply` | One long reply (~5k chars: prose, a table, three fenced code blocks in ts/python/bash), streamed in 20-char chunks per animation frame. |
-| `perf/stream-tool-storm` | A short reply plus 40 `tool_use` / `tool_result` pairs, one tool every two frames. |
+| `ui-harness/stream-long-reply` | One long reply (~5k chars: prose, a table, three fenced code blocks in ts/python/bash), streamed in 20-char chunks per animation frame. |
+| `ui-harness/stream-tool-storm` | A short reply plus 40 `tool_use` / `tool_result` pairs, one tool every two frames. |
 
 The fixture content lives in `packages/ui/src/components/chat/__tests__/harness/fixture.ts`.
+
+### Why these ids are not `perf/*`
+
+The `perf/*` ids are the fixture **contract** of the shared harness
+(`e2e/perf/lib/fixtures.mjs`), and every number in a report names the fixture
+it measured. `perf/stream-long-reply` in that contract is a **plain text**
+reply of 2 000 chunks; the reply this driver renders carries three fenced
+code blocks. The same id with two different contents would make every
+cross-harness comparison meaningless, so the local evidence harness keeps its
+own `ui-harness/` namespace.
+
+Mapping from the labels the first round's archived evidence used (PR #385,
+whose report files are named after the old label):
+
+| Archived label | Current label | Content |
+| --- | --- | --- |
+| `perf/stream-long-reply` | `ui-harness/stream-long-reply` | unchanged (fenced reply, 20-char chunks) |
+| `perf/stream-tool-storm` | `ui-harness/stream-tool-storm` | unchanged (40 tool pairs) |
+
+The shared harness's `perf/stream-long-reply` (plain text, 2 000 chunks) and
+`perf/stream-tool-storm` (200 calls / 400 rows) were **not** renamed: they
+are the contract the authoritative baseline was measured with, and changing
+an id's content would change its digest.
+
 
 ## Metrics
 
