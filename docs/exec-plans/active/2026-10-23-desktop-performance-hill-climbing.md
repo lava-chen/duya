@@ -480,14 +480,15 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | PR #444 更大范围测试 | `c502ec67` | `vitest run packages/host packages/agent-protocol apps/desktop/src/main/ipc` | 0 | **261 个测试文件 / 2801 用例全绿**，1 skipped |
 | PR #444 本地门禁 | `00881770` | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | `OK — no new boundary violations`；`FRESH 0/922 bundle inputs changed after the bundle commit` |
 | PR #444 合并 master 后的产物 | `1461fdec` → `b1041f09` → `94d26831` → `7a6be1d4` → `b4468c68`（master 连续前进：#442 模型目录自动化、#443/#449 插件安装路径、#396 tok-speed） | `git merge origin/master` → 冲突只在 `packages/host/bundle/**` → `checkout --theirs` → `npm run bundle:worker` → 提交 | 0 | 每次都是 `FRESH`（929 → 932 个输入）。**上游自己也是这么合的**（master 上的提交就叫 "build(host): rebuild the worker bundle after the master merge"）。**源码 commit 必须早于 bundle commit**，`bundle:verify` 按 git 历史判定。**注意**：即使 merge 本身「干净」，产物也可能是两个 minified bundle 的手工合并结果 —— 仍要按合并后的源码重建一次 |
-| PR #444 CI | `b4468c68` | `gh pr checks 444` | 0 | architecture / build / test / test scope / typecheck **五项全绿**。第一次红的是 `test`：`packages/cli` 的 `/context` 用例硬编码了已被模型目录刷新改名的模型 id（见「发现与决策」），单独一个 commit 修掉；**同一修法已在 master 上**，所以本 PR 的净改动里已经没有它 |
+| PR #444 CI | `b4468c68` → `65fe8514`（owner 在本分支上合了一次 master） | `gh pr checks 444` | 0 | architecture / build / test / test scope / typecheck **五项全绿**（run `40088408963`）。第一次红的是 `test`：`packages/cli` 的 `/context` 用例硬编码了已被模型目录刷新改名的模型 id（见「发现与决策」），单独一个 commit 修掉；**同一修法已在 master 上**，所以本 PR 的净改动里已经没有它 |
+| PR #444 合并 | `d26bec34`（owner 合并，2026-10-24 19:12） | 核对 master | 0 | master 的 `packages/host/src/session-api.ts` 已有 `readAllMessages`；两个门禁测试文件都在；master 的 `packages/host/bundle/worker-entry.js` 已含新逻辑（合并后重建过一次） |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
-已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）。
-未合并：**#444**（PR：Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s；含投影次数门禁）。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
+已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）、**#444 `d26bec34`（Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s，含投影次数门禁）**。
+未合并：无。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
 
 回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
