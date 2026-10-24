@@ -24,6 +24,7 @@ import { describeGitFailure, git, gitOrNull, gitPathAbsolute } from './git.js';
 import { canonicalPath, isDirectory, removeEmptyDirectory, samePath } from './fs-utils.js';
 import { allocateCheckoutName, managedRootFor, slugifyWorktreeName } from './paths.js';
 import { bindOwner, clearOwner, readOwner } from './checkout-metadata.js';
+import { readCheckoutBase, writeCheckoutOrigin } from './checkout-origin.js';
 import { inspectRegistration, worktreeEntries } from './registration.js';
 import { evaluateReclaim, reclaimCheckout, type ReclaimInputs } from './worktree-removal.js';
 
@@ -136,6 +137,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
           `base ${baseSha} does not contain a working directory for ${relativeCwd}`,
         );
       }
+      await writeCheckoutOrigin(root, baseSha);
       const owner = input.ownerSessionId.trim();
       if (owner) await bindOwner(root, owner);
       return { root, cwd, sourceRoot, sourceCwd, baseSha };
@@ -260,10 +262,8 @@ export class GitCheckoutProvider implements CheckoutProvider {
         cwd: entryCwd,
         sourceRoot,
         sourceCwd: cwd,
-        // Detached checkouts do not record their creation base anywhere in
-        // git; the registered HEAD is the closest reconstructable value.
-        // Callers that need the exact base must have kept `create`'s result.
-        baseSha: registration.head ?? '',
+        // Legacy checkouts without creation metadata have an unknown base.
+        baseSha: await readCheckoutBase(root) ?? '',
       });
     }
 
