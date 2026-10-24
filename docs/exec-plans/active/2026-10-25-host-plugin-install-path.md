@@ -65,6 +65,10 @@ reader 下沉、`dataPath` / `plugins-data` 的读写。
 - **test 模式只探测 data root**（`DUYA_TEST=1`），否则 CI 会读到跑测机器上的真实插件。
 - **禁用的插件不查盘**：worker 本来就不加载它，没必要为它走一次目录扫描。
 - **builtin 版本目录按字符串排序取最新**，与 Desktop 的 `listCachedVersions` 同规则，两边选同一版本。
+- **只要 MCP 声明就别走全量能力发现**：`discoverAllCapabilities` 还会扫 commands / agents /
+  skills / hooks / workflows，而 `plugin:registry:list` 在每次会话启动都会调。
+  因此在 plugin-core 抽出 `discoverPluginMcpServers`（native `mcp/servers.json` 优先，
+  Agent Plugins `mcp.json` 兜底），`discoverAllCapabilities` 改为调用它 —— fallback 逻辑仍只有一份。
 
 ## 验证记录
 
@@ -82,6 +86,10 @@ reader 下沉、`dataPath` / `plugins-data` 的读写。
 | b8d0a3ba（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
 | b8d0a3ba（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = b8d0a3ba |
 | b8d0a3ba（clean） | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 108 文件 / 905 passed / 6 skipped |
+| 112ff9c7（clean） | Windows / Node 24.16 | `npx vitest run packages/host/tests/plugin-install-paths.test.ts packages/host/tests/worker-db-bridge-plugin-registry.test.ts packages/plugin-core` | 0 | 23 文件 / 384 断言全过 |
+| cf962d85（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
+| cf962d85（clean） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
+| cf962d85（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = cf962d85 |
 
 ## 接续 / 结果
 
@@ -93,7 +101,8 @@ PR：未开。
 
 分支：`codex/host-plugin-install-path`（worktree `E:\Projects\duya\.claude\worktrees\plugin-install-path`，
 base `3a687e41`）。提交序列：`567cbc45` 源码 + 测试 → `e8932dbb` 重建 bundle →
-`31198be5` 计划记录 → `541c4b86` 合 master `c426d029` → `b8d0a3ba` 合并后重建 bundle。
+`31198be5` 计划记录 → `541c4b86` 合 master `c426d029` → `b8d0a3ba` 合并后重建 bundle →
+`112ff9c7` 窄 MCP 发现入口 → `cf962d85` 重建 bundle。
 
 合并时冲突只在受版本控制的 bundle 产物上（`worker-entry.js` / `worker-metafile.json`）——
 bundle 不能手工解，取一边让 merge 落地，再按合并后的源码重建。
