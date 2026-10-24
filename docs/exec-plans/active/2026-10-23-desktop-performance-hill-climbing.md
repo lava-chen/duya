@@ -372,6 +372,9 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **「墙钟慢」不等于「渲染慢」——先用 `session.open.longtask.total_ms` 判一下是渲染还是等待**。基线里 open 的主线程长任务只有 670 / 748 / 857 ms，而 `session.open_ms` 是 32154 / 36881 / 37054 ms：**渲染只占 0.7 秒**，剩下 30 多秒在等数据。How to apply：任何「打开/切换要几十秒」的抱怨，先把 `session.*.longtask.total_ms` 和墙钟并排看——两者差一个数量级就说明瓶颈不在渲染，去查数据路径（主进程 / DB / IPC）；只有两者同量级才值得优化渲染。**这条如果搞反，会把整个优化方向带偏**：第一轮就把它记成了「渲染太重」。
 - **`tsc -b` 用「输入 mtime vs 输出 mtime」判项目是否最新**。所以**还原一个源文件**（测量 before 时最常见的动作）会让它拿到比产物更旧的 mtime，整个包被**静默跳过**、`dist` 保持旧版——**构建「成功」了，但量的是上一版**。F 的第一轮 after 就这样把基线又量了一遍。How to apply：任何「还原→重建→测量」的循环，必须 (a) 删 `tsconfig.tsbuildinfo`、把源文件 mtime 顶到现在，(b) **在测量前断言产物**（新文件存在 / 旧静态边消失）。没有这一步，before/after 对照会静默地退化成 before vs before。
 - **拆桶文件 vs `sideEffects: false`**：后者实测也能让 SDK 归零（entry chunk 还小 583 B），但它是「本包没有导入期副作用」的**全包承诺**，会连带改变 Electron main / worker / CLI 三个 bundle 的 tree-shaking 语义，每加一个模块都要重新论证。**结构性拆分**（把 SDK 客户端搬进独立子路径）拿到同样的结果，且不依赖打包器启发式、不可能被一次 re-export 悄悄 undo。
+- **第五轮：数据路径的根因是「投影次数」，不是「读了多少行」**。`packages/host/src/session-api.ts` 的分页读每次都取**整条**历史再切页；Desktop 用 `limit: 200` 翻到末尾 → 1 万条 = 50 次全量投影。**How to apply**：拿到「慢」的抱怨先问「同一个东西被算了多少遍」，而不是「算了多少行」——本例里数据量只占一半，另一半是重复的**次数**。这个量可以做成门禁：数投影次数，纯计数、机器无关，比任何耗时阈值都稳。
+- **第五轮：master 绿 ≠ 那条断言还成立**。`packages/cli` 的 `/context` 用例硬编码 `claude-sonnet-4` 当作「内置目录里 1M 上下文的模型」，而模型目录是从上游元数据**刷新**的（#442 加了自动化），那个 id 已经改名 → 断言失效。**master 照样绿**，因为 master 的 affected 范围从没覆盖 `packages/cli`；而任何动了 `packages/host/bundle/**` 的 PR 都会把 CLI 测试拉进范围（bundle 的 entry 就是 `packages/cli/src/agent-worker-entry.ts`）→ 在那里变红。**How to apply**：断言里凡是引用「会被刷新的产物」的值，都改成**从源头推导**（`allProviderModels.find(...)`），别硬编码；另有一个坑是**本地绿、CI 红**的第一嫌疑不是 flake 而是**本地构建产物陈旧**——本地 `packages/ai/dist` 还是旧版，要先 `npm -w @duya/ai run build` 才能复现。
+- **第五轮：同树 A/B 测量要用补丁，不要整文件拷贝**。测量树是 detached HEAD 的旧提交（`8becf37c`），比 master 旧。`Copy-Item` 整文件会把新 master 才有的 import（`packages/host/src/client-lease.js`）带进旧树 → `tsc -b` 报「找不到模块」，而且错误信息与本次改动毫无关系。正确做法：`git diff --output=<file>` 生成补丁（**不要**用 PS 的 `Out-File -Encoding utf8`／`>`，前者带 BOM、后者写 UTF-16，`git apply` 都会拒绝）→ `git apply --check` → apply → 重建 → 测量。这样 before/after 只差这一个改动，证据链才干净。
 
 
 ## 权威基线（第四轮：master + #422 + #421）
@@ -476,7 +479,8 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | PR #444 门禁 | `c502ec67` | `vitest run packages/host/tests/session-message-projection-count.test.ts packages/host/tests/session-messages-read.test.ts apps/desktop/src/main/ipc/__tests__/db-handlers.test.ts` | 0 | 55/55 绿（整读 = 1 次投影、分页 = 每页 1 次；`all=1` 携带 `limit`/`cursor` 报 400） |
 | PR #444 更大范围测试 | `c502ec67` | `vitest run packages/host packages/agent-protocol apps/desktop/src/main/ipc` | 0 | **261 个测试文件 / 2801 用例全绿**，1 skipped |
 | PR #444 本地门禁 | `00881770` | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | `OK — no new boundary violations`；`FRESH 0/922 bundle inputs changed after the bundle commit` |
-| PR #444 合并 master 后的产物 | `1461fdec` | `git merge origin/master` → 冲突只在 `packages/host/bundle/**` → `checkout --theirs` → `npm run bundle:worker` → 提交 | 0 | `FRESH 0/929`；输入集 922 → 929（master 新增的 host 源文件进了 bundle）。**源码 commit 必须早于 bundle commit** |
+| PR #444 合并 master 后的产物 | `1461fdec` → `b1041f09` → `94d26831`（master 连续前进三次：#442 模型目录自动化、#443 插件安装路径） | `git merge origin/master` → 冲突只在 `packages/host/bundle/**` → `checkout --theirs` → `npm run bundle:worker` → 提交 | 0 | 每次都是 `FRESH`（929 → 931 个输入）。**上游自己也是这么合的**（master 上的提交就叫 "build(host): rebuild the worker bundle after the master merge"）。**源码 commit 必须早于 bundle commit**，`bundle:verify` 按 git 历史判定 |
+| PR #444 CI | `94d26831` | `gh pr checks 444` | 0 | architecture / build / test / test scope / typecheck **五项全绿**。第一次红的是 `test`：`packages/cli` 的 `/context` 用例硬编码了已被模型目录刷新改名的模型 id（见「发现与决策」），单独一个 commit 修掉 |
 
 ## 接续 / 结果
 
