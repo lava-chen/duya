@@ -36,10 +36,12 @@
 | 平台消息进不来 | `packages/gateway/src/gateway-manager.ts:188` | 适配器连接与生命周期都在这 |
 | 消息路由到了错误的 agent | `packages/gateway/src/profile-routing.ts:70` | 匹配规则与排序都在这（`sortRoutes` `:62`） |
 | 平台命令没反应 | `packages/gateway/src/commands/registry.ts` | 只负责检测；执行在主进程，先确认是否被拦截 |
+| Telegram 菜单里的命令点了说「未启用」 | `packages/gateway/src/commands/registry.ts` | 菜单直接来自 `COMMAND_REGISTRY`；注册了但主进程没实现，就会这样 |
 | 网关子进程起不来 | `packages/gateway/src/index.ts` | 子进程入口在此 |
 
 ## 4. 边界约束
 
 - 架构层 `host`（`architecture-policy.yaml:119`），模块 `legacy-gateway` `managed: false`。
 - **命令执行不在本包**：本包只做检测与注册，执行在主进程（plan 520 的拆分）。
+- **注册表只放主进程真能执行的命令**：`COMMAND_REGISTRY` 同时是 Telegram 的 `/commands` 菜单来源。写了注册项却没写主进程的 `handleGatewayCommand` 分支，用户就会点到一个必然失败的菜单项。
 - `managed: false` 意味着本包的架构违规不阻断门禁，只能随迁移收敛。
