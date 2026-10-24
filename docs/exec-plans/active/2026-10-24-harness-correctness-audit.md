@@ -157,4 +157,25 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 
 ## 6. 验证记录
 
-见本文件末尾的「验证记录」表（随提交更新）。
+环境：Windows / Node v24.16.0。检出：`.claude/worktrees/harness-audit`（分支 `codex/harness-correctness-audit`）。
+
+| SHA | 命令 | 退出码 / 结果 |
+| --- | --- | --- |
+| `10db8786` + 本任务改动 | `npx vitest run packages/ai/test/model-request-invariants.test.ts` | 0 — 21 passed（5 adapter × 3 + 检查器 6） |
+| `10db8786` + 本任务改动 | `npx vitest run packages/host/tests/worker-product-runtime/engine-payload-invariants.test.ts` | 0 — 2 passed（含回归反例臂） |
+| `10db8786` + 本任务改动 | `npx vitest run packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | 0 — 3 passed（H-2 探针） |
+| `10db8786` + 本任务改动 | `npx vitest run packages/ai packages/agent-runtime` | 0 — 157 files / 1690 passed |
+| `10db8786` + 本任务改动 | `npx vitest run packages/host/tests` | 0 — 178 files / 1637 passed, 1 skipped |
+| `e797a7ee`（合并 base 后） | `npm run typecheck:all` | 0 |
+| `e797a7ee` | `npm run architecture:check` | 0 — OK，no new boundary violations |
+| `e797a7ee` | `npm run bundle:verify` | 0 — FRESH，0/923 bundle inputs changed |
+| `e797a7ee` | `npx vitest run packages/ai packages/agent-runtime packages/host/tests/worker-product-runtime` | 0 — 181 files / 1822 passed |
+
+**未覆盖 / 未验证**：
+
+- 本 PR 的 base 是 `codex/fix-prompt-last`（特性分支），**CI 矩阵不跑**（`.github/workflows/test.yml`
+  的 `pull_request: branches: [master]`）。上表是全部证据。
+- H-2 的**修复**未做——本 PR 只把它钉住并写清修复要决定什么。
+- H-1 的语义**未裁定**——审计不替契约 owner 做这个决定。
+- `codex/alt-prompt-absolute-last` 的对照结论基于代码阅读，未在它上面跑测试。
+
