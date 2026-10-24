@@ -18,21 +18,18 @@
  *
  * **A committed row can never be un-committed.** That is what the terminal's
  * scrollback means, and it has an exact consequence: commits may only ever
- * ADVANCE. Two rules follow, and both are enforced here rather than trusted to
- * the caller:
+ * ADVANCE, and the live area starts exactly at the committed boundary — it will
+ * not repaint a row that is already in the scrollback, because that row would
+ * then exist twice.
  *
- * 1. Rows are committed ONLY while the view is following the tail. A row the
- *    user has scrolled away from may be wanted again, and the terminal cannot
- *    be told to take it back.
- * 2. The live area starts at or after the committed boundary. It will not
- *    repaint a row that is already in the scrollback, because that row would
- *    then exist twice.
- *
- * Rule 2 has a visible consequence, and it is the honest one: scrolling back
- * further than the uncommitted tail cannot show older text here, because that
- * text is no longer on this screen. `render` reports `atBoundary` so the caller
- * can say so in the status bar and point the user at the terminal's own
- * scrollback.
+ * There is no hold buffer above the live area, and that is deliberate. A commit
+ * writes a row at the bottom of the scroll region and lets the region scroll;
+ * the row that enters the scrollback is the one at the TOP of the region, not
+ * the one just written. Keeping extra rows uncommitted would therefore make the
+ * region scroll the rows the reader is looking at into the scrollback while the
+ * rows actually being committed are overwritten before they are ever printed —
+ * losing them and reordering the history. Inline scrolling is the terminal's
+ * job; the app-owned viewport belongs to the full-screen mode.
  *
  * Encoding this as arithmetic rather than as an assertion is deliberate. The
  * failure being prevented — a negative overflow, or a live area starting behind
@@ -65,38 +62,13 @@ export interface InlineSurfaceOptions {
   readonly size: () => TerminalSize;
   /** Defaults to detection from `process.env`. */
   readonly strategy?: ScrollbackStrategy;
-  /**
-   * How many live areas' worth of conversation to keep uncommitted.
-   *
-   * This is a straight trade, and the default takes the side that cannot lose
-   * text. Commits print rows into the terminal's scrollback, permanently. If a
-   * row is held rather than committed, it is on no screen at all until the user
-   * scrolls back to it — so raising this creates scroll-back range by creating a
-   * stretch of transcript that is printed nowhere, and that a user who never
-   * scrolls will simply never see.
-   *
-   * `1` — commit the moment a row leaves the live area — leaves no gap and
-   * nothing unwritten. `2` or more buys app-scrolled history at the cost of that
-   * gap. Default `1`, because silently missing text is worse than scrolling with
-   * the terminal, which is where the history is anyway.
-   */
-  readonly reserve?: number;
 }
-
-/** Default held rows, in screens' worth of the live area. */
-const COMMIT_RESERVE_SCREENS = 1;
 
 export interface InlineFrameResult {
   /** Rows committed to scrollback by this frame. */
   readonly committed: number;
   /** Rows rewritten in the live area. */
   readonly rewritten: number;
-  /**
-   * The view asked for rows that are already in the scrollback, so the live
-   * area is pinned to its oldest uncommitted row. Older text than that is only
-   * reachable through the terminal's own scrollback.
-   */
-  readonly atBoundary: boolean;
 }
 
 export interface InlineFrame {
@@ -113,25 +85,21 @@ export interface InlineFrame {
    * rows ABOVE it, not below.
    */
   readonly chrome: readonly SceneLine[];
-  /** Caret: a row index in scroll or chrome and a 1-based column, or null. */
+  /**
+   * Caret: a row index in scroll or chrome and a 1-based column, or null.
+   */
   readonly caret: {
     readonly row: number;
     readonly column: number;
     /** Chrome coordinates include padding above the bottom-anchored composer. */
     readonly region?: 'chrome';
   } | null;
-  /**
-   * One past the last `scroll` row the user wants visible. Omit to follow the
-   * tail, which is the only mode that commits.
-   */
-  readonly viewEnd?: number;
 }
 
 export class InlineSurface {
   readonly #output: NodeJS.WritableStream;
   readonly #size: () => TerminalSize;
   readonly #strategy: ScrollbackStrategy;
-  readonly #reserve: number;
 
   /** Document index that owns live-area row 1. Only ever advances. */
   #liveStart = 0;
@@ -143,7 +111,6 @@ export class InlineSurface {
     this.#output = options.output;
     this.#size = options.size;
     this.#strategy = options.strategy ?? detectScrollbackStrategy();
-    this.#reserve = Math.max(1, options.reserve ?? COMMIT_RESERVE_SCREENS);
   }
 
   /** Document rows already printed into the terminal's scrollback. */
@@ -191,26 +158,12 @@ export class InlineSurface {
       this.#previousLive = [];
     }
 
-    const following = frame.viewEnd === undefined;
-    // Clamped into the document rather than trusted: an out-of-range view end
-    // would otherwise slice past the end and silently shorten the frame.
-    const desiredEnd = following
-      ? scroll.length
-      : Math.max(0, Math.min(scroll.length, Math.trunc(frame.viewEnd as number)));
-    const desiredStart = Math.max(0, desiredEnd - liveRows);
-    // Not clamped to the committed boundary yet: committing below moves that
-    // boundary, and a start computed before the commit would window the live
-    // area against rows this very frame printed.
-    const atBoundaryRequested = !following && desiredStart < this.#liveStart;
-
     let committed = 0;
-    if (following && liveRows > 0) {
-      // The reserve, not the live area, is what bounds the uncommitted tail.
-      // Windowing against `liveRows * reserve` means the live area is still the
-      // last `liveRows` rows — it is `liveWindow` that decides how far back the
-      // held buffer reaches, which is the only thing that decides what PgUp can
-      // still show.
-      const plan = liveWindow(scroll.length, this.#liveStart, liveRows * this.#reserve);
+    if (liveRows > 0) {
+      // The live area is exactly the last `liveRows` rows. Anything above it is
+      // already in the terminal's scrollback, which is the only place this mode
+      // scrolls — see the module note on why there is no hold buffer.
+      const plan = liveWindow(scroll.length, this.#liveStart, liveRows);
       if (plan.overflow > 0) {
         // Converted here, not left to the caller. A committed row is written into
         // the user's scrollback PERMANENTLY, so a tag that survives the trip is
@@ -229,10 +182,9 @@ export class InlineSurface {
       }
     }
 
-    // The live area may never start behind the committed boundary: those rows are
-    // already printed, and redrawing them duplicates the conversation.
-    const start = Math.max(this.#liveStart, desiredStart);
-    const atBoundary = atBoundaryRequested || (!following && desiredStart < start);
+    // The live area starts exactly at the committed boundary. Anything above it
+    // is already printed, and redrawing it would duplicate the conversation.
+    const start = this.#liveStart;
 
     const window = liveRows > 0 ? scroll.slice(start, start + liveRows) : [];
     // The slack goes ABOVE the chrome. Padding the composed document to capacity
@@ -280,7 +232,7 @@ export class InlineSurface {
       }
     }
 
-    return { committed, rewritten: painted.rewritten, atBoundary };
+    return { committed, rewritten: painted.rewritten };
   }
 
   /** Release the terminal. Nothing is erased — the conversation stays. */
