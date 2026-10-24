@@ -196,6 +196,11 @@
       ],
       "format": "esm"
     },
+    "packages/agent-protocol/src/session-compaction.ts": {
+      "bytes": 4225,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/rollout-events.ts": {
       "bytes": 14044,
       "imports": [],
@@ -575,7 +580,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 4676,
+      "bytes": 4800,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -616,6 +621,11 @@
           "path": "packages/agent-protocol/src/session-fork.ts",
           "kind": "import-statement",
           "original": "./session-fork.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/agent-protocol/src/rollout-events.ts",
@@ -22184,7 +22194,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -29676,7 +29686,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 86401,
+      "bytes": 91739,
       "imports": [],
       "format": "esm"
     },
@@ -29950,6 +29960,17 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/session-compaction.ts": {
+      "bytes": 14583,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
       "bytes": 3481,
       "imports": [
@@ -29962,7 +29983,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 240137,
+      "bytes": 246453,
       "imports": [
         {
           "path": "node:crypto",
@@ -30038,6 +30059,11 @@
           "path": "packages/host/src/run-api.ts",
           "kind": "import-statement",
           "original": "./run-api.js"
+        },
+        {
+          "path": "packages/host/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/host/src/project-api.ts",
@@ -30476,7 +30502,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 36528,
+      "bytes": 38570,
       "imports": [
         {
           "path": "child_process",
@@ -30899,7 +30925,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 35771,
+      "bytes": 37916,
       "imports": [
         {
           "path": "node:crypto",
@@ -31150,6 +31176,11 @@
           "path": "packages/host/src/run-api.ts",
           "kind": "import-statement",
           "original": "./run-api.js"
+        },
+        {
+          "path": "packages/host/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/host/src/research-api.ts",
@@ -38821,13 +38852,16 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
+        },
+        "packages/agent-protocol/src/session-compaction.ts": {
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -38908,10 +38942,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -38998,7 +39032,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 403
+          "bytesInOutput": 409
         },
         "packages/data/src/run-store.ts": {
           "bytesInOutput": 7340
@@ -39028,10 +39062,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -39112,7 +39146,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -41185,7 +41219,7 @@
           "bytesInOutput": 1002
         },
         "packages/plugin-core/src/mcp/core/alias.ts": {
-          "bytesInOutput": 69
+          "bytesInOutput": 82
         },
         "packages/capabilities/src/MCP/result-blocks.ts": {
           "bytesInOutput": 1119
@@ -42274,7 +42308,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43345,7 +43379,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43459,7 +43493,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 33700
+          "bytesInOutput": 35003
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -43496,6 +43530,9 @@
         },
         "packages/host/src/run-api.ts": {
           "bytesInOutput": 10
+        },
+        "packages/host/src/session-compaction.ts": {
+          "bytesInOutput": 39
         },
         "packages/host/src/project-api.ts": {
           "bytesInOutput": 5
@@ -43534,7 +43571,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 10687
+          "bytesInOutput": 11124
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -44203,7 +44240,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4690552
+      "bytes": 4692285
     }
   }
 }
