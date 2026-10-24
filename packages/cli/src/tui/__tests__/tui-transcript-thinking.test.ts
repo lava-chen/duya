@@ -6,11 +6,11 @@
  *
  *  - the head reports what the block DID (`Thinking…` / `Thought for 1.2s`)
  *    rather than how many characters it holds;
- *  - a collapsed block is a three-line preview whose edge follows the state —
+ *  - a collapsed block is a ONE-line preview whose edge follows the state —
  *    tail while streaming (the newest thought is on screen), head once closed
  *    (the premise is);
- *  - the row that replaces the clipped lines is the disclosure, and `[+]`/`[-]`
- *    still mark the toggle.
+ *  - the head's `[+]`/`[-]` IS the disclosure; the folded rows carry no
+ *    overflow row of their own.
  *
  * `strip` removes blessed tags so an assertion can quote the text the reader
  * sees instead of the tagged form the renderer emits.
@@ -73,24 +73,14 @@ describe('thinking head', () => {
 describe('thinking preview window', () => {
   it('follows the tail while the block streams', () => {
     const rendered = strip(renderTranscript(thinkingModel(FIVE_LINES))).split('\n');
-    // The newest lines are the ones on screen, and the omission row sits ABOVE
-    // them because the hidden lines are the earlier ones.
-    expect(rendered[1]).toContain('… 2 earlier lines');
-    expect(rendered.slice(2)).toEqual([
-      '    third thought',
-      '    fourth thought',
-      '    fifth thought',
-    ]);
+    // The newest line is the one on screen. A folded thought is ONE row, and
+    // the head's `[+]` is what says there is more — there is no overflow row.
+    expect(rendered).toEqual(['└ • Thinking… [+]', '    fifth thought']);
   });
 
   it('snaps to the head once the block closes', () => {
     const rendered = strip(renderTranscript(thinkingModel(FIVE_LINES, 800))).split('\n');
-    expect(rendered.slice(1, 4)).toEqual([
-      '    first thought',
-      '    second thought',
-      '    third thought',
-    ]);
-    expect(rendered[4]).toContain('… 2 more lines');
+    expect(rendered).toEqual(['└ • Thought for 0.8s [+]', '    first thought']);
   });
 
   it('shows a short block without an omission row', () => {
@@ -127,15 +117,14 @@ describe('thinking expansion', () => {
 });
 
 describe('thinking character bound', () => {
-  it('reports an overflow without a line count when the cut hides more than lines', () => {
+  it('keeps the character-bound preview to one row', () => {
     const model = thinkingModel('x'.repeat(2_500), 800);
     const rendered = strip(renderTranscript(model)).split('\n');
-    // The character bound cut the block, so the omission row names the kind of
-    // overflow instead of counting lines it never split.
+    // The character bound cut the block, and the preview is ONE row: the
+    // head's `[+]` is the disclosure, so there is no overflow row that could
+    // miscount what the cut hid.
     expect(rendered[0]).toContain('• Thought for 0.8s');
-    // Head edge keeps the single (very long) line, so the omission row is the
-    // one BELOW it.
-    expect(rendered[2]).toContain('… more content');
+    expect(rendered.length).toBe(2);
     expect(rendered.join('\n').length).toBeLessThan(2_500);
   });
 });
@@ -154,13 +143,13 @@ describe('thinking markdown (plan 614 phase 5)', () => {
 
   it('does not change the preview line count (D10 invariant)', () => {
     const text = FIVE_LINES.replace('second thought', 'has **bold** and `code`');
-    // Sealed, so the preview reads from the HEAD and rows 1-3 are on screen.
+    // Sealed, so the preview reads from the HEAD and row 1 is on screen.
     const rendered = renderTranscript(thinkingModel(text, 1_000));
     const bodyRows = strip(rendered).split('\n').filter((line) =>
       ['first thought', 'has bold and code'].some((prefix) => line.includes(prefix)),
     ).length;
-    // Three preview rows plus the disclosure row; the tagged spans inside a
-    // row may never turn into extra rows.
-    expect(bodyRows).toBe(2);
+    // ONE preview row; the tagged spans inside a row may never turn into
+    // extra rows.
+    expect(bodyRows).toBe(1);
   });
 });

@@ -41,6 +41,7 @@
  * block it needs, and the tests can assert identity rather than equality.
  */
 
+import { isTodoTool, parseTodoItems, type TuiTodoItem } from './todo.js';
 import { shellCommandOf } from './tool-render.js';
 
 /** A frame as the CLI receives it. Structurally `LegacySseFrame`. */
@@ -152,6 +153,14 @@ export interface ToolBlock {
    * apart. Set by the T11 view adapter, which is the only producer.
    */
   timedOut?: boolean;
+  /**
+   * The todo list this call wrote, when the call WAS a todo write.
+   *
+   * Present only for the `todo` tool and only once its result arrived, which
+   * is why it is separate from `result`: the result is the raw JSON the tool
+   * returned, this is the list the transcript draws.
+   */
+  todos?: readonly TuiTodoItem[];
 }
 
 export interface ErrorBlock {
@@ -609,6 +618,13 @@ export class TranscriptModel {
     if (block === undefined) return null;
     block.result = result;
     block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
+    // A todo write returns the WHOLE list (the tool is merge-semantic), so the
+    // result the transcript was about to print as JSON becomes the list it
+    // draws instead. A failed write keeps its error and shows no list.
+    if (!failed && isTodoTool(block.name)) {
+      const items = parseTodoItems(result);
+      if (items !== null) block.todos = items;
+    }
     return block;
   }
 
