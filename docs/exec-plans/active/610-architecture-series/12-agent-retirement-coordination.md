@@ -349,6 +349,11 @@ Every wave updates this file with completed facts and outstanding consumers.
   `packages/host/src` or `packages/data/src` hits it. This branch cherry-picks
   `e269c53e`; once #397 lands, one of the two copies can be dropped, since the
   content is identical and will not conflict.
+- CI run 40067527772 (head `1bbd8844`): **all five jobs green** — `architecture`,
+  `test scope`, `typecheck`, `test`, `build`. The cherry-pick removed the
+  unhandled exception; the local CI-equivalent scope
+  (`npx vitest run --changed=origin/master --maxWorkers=2`) was 210 files /
+  2128 cases with 2119 passed and 9 skipped, exit 0.
 - Next action: review PR #420 and, once authorized, integrate it. PR #381
   (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
   same authorization to sync master and rebuild its bundle before it can be
