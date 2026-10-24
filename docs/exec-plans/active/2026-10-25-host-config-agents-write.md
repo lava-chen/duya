@@ -37,10 +37,12 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
 - [x] `packages/host/src/config-agents/` 模块（bot-id / bot-paths / bot-profile / schema / core / config-file / api）
 - [x] `packages/host/src/agent-profile-config.ts` 的 `CustomAgentConfig` 改用共享定义
 - [x] `worker-db-bridge.ts` 接上两个 action
-- [x] Desktop 侧 `agent-id` / `bot-profile` / `agent-paths` / `agents` 收敛
+- [x] Desktop 侧 `agent-id` / `bot-profile` / `agent-paths` / `agents` / `schema` 收敛
 - [x] 测试（packages/host 新增 2 个文件 15 条断言；Desktop config 16 文件 147 条全绿）
-- [ ] 门禁：typecheck:all / architecture:check / bundle 重建 + bundle:verify
-- [ ] PR
+- [x] 门禁：typecheck:all exit 0、architecture:check exit 0、bundle 重建 + `bundle:verify` FRESH 0/927
+- [x] PR #433（未合并，等授权）
+- [ ] CI 五个 job 全绿
+- [ ] 授权后合并
 
 ## 发现与决策
 
@@ -103,16 +105,26 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
 | --- | --- | --- | --- | --- |
 | 59c15bda（clean） | Windows / Node 24.16 | `node` 探测 `@iarna/toml` parse/stringify | 0 | 往返语义无损、注释丢失、整数下划线化 |
 | dirty（packages/host + apps/desktop） | Windows / Node 24.16 | `npm run build:packages -- --target @duya/host` | 0 | 12 个包构建通过 |
+| dirty | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 含 check:encoding / manifest-keys / electron gate / cli / web / voice / evals |
+| dirty | Windows / Node 24.16 | `npm run architecture:check` | 0 | tolerated 2567（master 上 2553，新增 3 条 permitted），无新增违规 |
 | dirty | Windows / Node 24.16 | `npx vitest run packages/host/tests/config-agents-write.test.ts packages/host/tests/worker-db-bridge-config-agents.test.ts` | 0 | 2 文件 15 断言全过 |
 | dirty | Windows / Node 24.16 | `npx vitest run apps/desktop/src/main/config/__tests__` | 0 | 16 文件 147 断言全过 |
+| 3ddbbfaf + dirty | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 216 文件 / 2095 passed / 6 skipped |
+| 9df284bd（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/927，bundle commit = 9df284bd |
 
 ## 接续 / 结果
 
 已实现：`packages/host/src/config-agents/`（8 个文件）、Host bridge 两个 action、
 Desktop 侧 `agent-id` / `bot-profile` / `agent-paths` / `agents` / `schema` 收敛到共享实现。
-已验证：packages/host 构建通过、新增测试全绿、Desktop config 测试全绿。PR：待开。
-未提交路径：全部改动仍在 worktree，未 commit。
+已验证：门禁全绿（typecheck / architecture / bundle:verify），受影响测试集 216 文件 2095 断言全绿。
+PR：#433（https://github.com/lava-chen/duya/pull/433），base `master`，**未合并**。
+
+分支：`codex/host-config-write`（worktree `E:\Projects\duya\.claude\worktrees\host-db-actions`，
+base `3ddbbfaf`）。三个 commit：`0149eebb` 源码、`9df284bd` bundle 重建、最后一个是本计划更新。
+
+未提交路径：无（worktree 干净，提交信息与 PR 正文在 gitignored 的 `docs-local/`）。
 副作用：无外部副作用。
-阻塞：无。
-下一步：跑完 typecheck:all / architecture:check，重建 worker bundle 并 `bundle:verify`，然后开 PR。
+阻塞：无。等 CI 五个 job 全绿 + 用户授权后合并。
+下一步：`gh pr checks 433` 看 CI；全绿后向用户申请合并授权，授权则 `gh pr merge 433 --merge`。
+
 
