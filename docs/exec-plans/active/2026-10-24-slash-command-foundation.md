@@ -143,10 +143,11 @@
 | base（stash 本轮改动后） | Windows / Node 24 | `npm run architecture:check` | 0 | base 同样报「256 fingerprint 不再触发」——该缩水是仓库既有状态 |
 | `b5f5b827` clean | Windows / Node 24 | `npm run typecheck:all` | 0 | 最终门禁（与改动后同结果） |
 | `b5f5b827` clean | Windows / Node 24 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；baseline size 2785，tolerated 2665 |
+| `21d67ac7` (PR head) | GitHub Actions / ubuntu-latest 22.x | PR #439 CI | 全绿 | `architecture` / `test scope` / `typecheck` / `test` / `build` 五项均 SUCCESS；`mergeStateStatus: CLEAN` |
 
 ## 接续 / 结果
 
-**已实现、已验证、已提交并开出 PR。未获集成授权，PR 保持未合并。**
+**已实现、已验证、已提交并开出 PR。CI 全绿。未获集成授权，PR 保持未合并。**
 
 - 分支：`codex/slash-foundation`（base `master` @ `2ca7886f`）
 - PR：<https://github.com/lava-chen/duya/pull/439>
