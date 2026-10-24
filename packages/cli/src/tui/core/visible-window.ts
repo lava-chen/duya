@@ -13,12 +13,26 @@
  * offset, which lines are on screen? So it is asked once, here, and both modes
  * read the answer.
  *
- * ## Follow is an offset, not a flag
+ * ## Follow is a flag, and the offset is absolute
  *
- * `scrollLines === 0` means "the newest line is visible", because the window
- * ends at the last line and only ever drops lines from the top. Deriving follow
- * from the offset is what makes "I scrolled to the bottom but it still says
- * paused" unreachable — there is no second piece of state to get out of sync.
+ * Two separate facts decide what is on screen:
+ *
+ *  - `following` says whether the window is pinned to the newest line.
+ *  - `scrollTop` says where the top of the viewport sits, counted from the
+ *    TOP of the document.
+ *
+ * The offset is absolute on purpose. A tail-relative offset ("how many lines
+ * back from the newest line") cannot express "keep showing me what I am
+ * reading": the newest line moves as the model writes, so a tail-relative
+ * offset moves the window with it and pushes the text the reader is looking
+ * at off the top of the screen. An absolute offset anchors the viewport to
+ * the CONTENT, so a message that arrives while the reader is scrolled up
+ * simply appears below what they are reading.
+ *
+ * pi's `ScrollView` models the same thing the same way
+ * (`packages/tui/src/components/scroll-view.ts`): an absolute `scrollTop`
+ * plus a separate `followingEnd` flag, with the rule "following pins to the
+ * bottom, not following clamps but does not move".
  */
 
 /** Where a scroll offset puts the viewport, in both line and block terms. */
@@ -42,23 +56,26 @@ export interface VisibleWindow {
 /**
  * Resolve the window.
  *
- * `scrollLines` is how far BACK from the newest line the reader has scrolled,
- * clamped to the document: a scroll past the top shows the top, and no scroll
- * means follow. An empty document yields an empty window rather than a
+ * `scrollTop` is where the viewport starts, in lines from the top of the
+ * document, and it is clamped to the document: a scroll past the top shows the
+ * top. `following` pins the window to the newest line and makes `scrollTop`
+ * irrelevant. An empty document yields an empty window rather than a
  * one-line one, so a caller cannot paint a line that does not exist.
  */
 export function visibleWindow(
   heights: readonly number[],
   viewportRows: number,
-  scrollLines: number,
+  scrollTop: number,
+  following: boolean,
 ): VisibleWindow {
   const rows = Math.max(1, Math.floor(viewportRows));
   let totalLines = 0;
   for (const height of heights) totalLines += Math.max(0, height);
 
   const maxStart = Math.max(0, totalLines - rows);
-  const offset = Math.min(maxStart, Math.max(0, Math.floor(scrollLines)));
-  const lineStart = maxStart - offset;
+  const lineStart = following
+    ? maxStart
+    : Math.max(0, Math.min(maxStart, Math.floor(scrollTop)));
   const lineEnd = Math.min(totalLines, lineStart + rows);
 
   return {
@@ -68,7 +85,7 @@ export function visibleWindow(
     lineEnd,
     firstBlock: blockAt(heights, lineStart),
     lastBlock: blockAfter(heights, lineEnd),
-    following: offset === 0,
+    following,
   };
 }
 
