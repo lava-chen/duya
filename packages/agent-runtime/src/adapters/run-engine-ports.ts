@@ -1181,15 +1181,21 @@ function readToolResultPayload(message: Message): {
   const content = message.content;
   if (message.role === 'tool') {
     const text = typeof content === 'string' ? content : JSON.stringify(content);
+    // A STATED status outranks the text markers. The executor stamps `success`
+    // on every result it saw complete and `error` on the ones it wrapped, so a
+    // result that carries a bit is answering the question directly. Without
+    // this arm the success bit did not exist and every successful call reached
+    // the protocol's `indeterminate` arm -- which the transcript paints as `?`.
+    const stated = statedToolOutcome(message.status);
     // The marker arm is an INFERENCE, so only its POSITIVE result is evidence.
-    // No `<tool_error>` in the text is not a statement that the call succeeded --
+    // No failure marker in the text is not a statement that the call succeeded --
     // it is the absence of a marker in a format that carries no status field --
     // so it resolves to `undefined` and reaches the protocol's `indeterminate`
     // arm. `text.includes(...)` used to hand back a bare `false` here, which
     // read downstream as a producer that said "did not fail".
     return {
       content: text,
-      isError: text.includes('<tool_error>') ? true : undefined,
+      isError: stated ?? (FAILURE_MARKER.test(text) ? true : undefined),
       callId: message.tool_call_id ?? '',
     };
   }
@@ -1206,4 +1212,20 @@ function readToolResultPayload(message: Message): {
     isError: block.is_error,
     callId: block.tool_use_id,
   };
+}
+
+/** Both failure envelopes the runtime emits, wrapped or bare. */
+const FAILURE_MARKER = /<(?:tool_error|tool_use_error)>/u;
+
+/**
+ * A status bit the producer STATED, as the two values this adapter can carry.
+ *
+ * `undefined` means the producer did not answer -- the neutral messages
+ * ("waiting for approval") and older producers carry no bit -- and must stay
+ * `undefined` rather than becoming a success nobody claimed.
+ */
+function statedToolOutcome(status: unknown): boolean | undefined {
+  if (status === 'success' || status === 'done') return false;
+  if (status === 'error' || status === 'failed') return true;
+  return undefined;
 }
