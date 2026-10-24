@@ -1,0 +1,267 @@
+name: Model catalog refresh
+
+# The built-in model directory (packages/ai/src/providers/*.models.ts) drifts
+# out of date within weeks: vendors rotate model names, retire ids and reprice
+# the same model. This workflow refreshes it from the two public catalogues
+# the sync script reads (models.dev for vendor-direct ids, OpenRouter for the
+# proxy-side ones) and hands the result to a human as a pull request.
+#
+# It never merges. AGENTS.md forbids integrating without authorization, and an
+# unattended merge would put whatever the upstream catalogue said that night
+# into the product without anyone deciding whether those models belong.
+#
+# Knobs:
+#   * when   — `schedule.cron` below (21:30 Beijing time). GitHub delays
+#               scheduled runs under load, so read it as "some time that
+#               night", not as a deadline.
+#   * how    — the per-shard allow lists in packages/ai/scripts/sync-models.mjs
+#               decide which upstream models are eligible. A model that is not
+#               on a list is never added; edit the lists and the next night
+#               follows them.
+#   * merge  — never. The pull request is the deliverable.
+#
+# Opening the pull request needs a token that may create pull requests. The
+# built-in GITHUB_TOKEN is refused by default (Settings → Actions → General →
+# "Allow GitHub Actions to create and approve pull requests"), so the workflow
+# uses the NIGHTLY_PR_TOKEN secret when the repository has one and falls back
+# to GITHUB_TOKEN otherwise.
+on:
+  schedule:
+    # 21:30 Beijing time (UTC+8). Late enough that the vendors' own catalogue
+    # updates have landed, early enough to be reviewed the next morning.
+    - cron: '30 13 * * *'
+  # Manual trigger: the same path, for the morning after a vendor announcement
+  # and for re-running a night that failed.
+  workflow_dispatch:
+
+# Least privilege: push one branch, open one pull request, touch nothing else.
+permissions:
+  contents: write
+  pull-requests: write
+
+# One refresh at a time. A nightly run that overlaps the next one would race
+# on the same branch; cancelling the older run instead would leave the branch
+# pointing at a half-finished refresh.
+concurrency:
+  group: model-catalog-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: refresh model catalog
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # The branch is force-pushed, so the history must be writable, and
+          # the diff quoted in the pull request is measured against the merge
+          # base with the current master rather than against this checkout.
+          ref: master
+          fetch-depth: 0
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      # No `npm ci` yet: the sync script is plain node and only fetches two
+      # public JSON documents. Installing the workspace before knowing whether
+      # anything changed would spend most of this job's minutes on a night
+      # that has nothing to report.
+      #
+      # A failing fetch exits non-zero, so an upstream outage ends the run with
+      # a red job and no pull request — the directory is never rewritten from a
+      # half-read catalogue.
+      #
+      # The output is kept: it is the record of which ids appeared and which
+      # disappeared, and the pull request body quotes it.
+      - name: Refresh the model directory from upstream
+        run: |
+          set -euo pipefail
+          node packages/ai/scripts/sync-models.mjs --write | tee "$RUNNER_TEMP/sync-output.txt"
+
+      - name: Detect whether the directory changed
+        id: detect
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- packages/ai/src/providers; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "model directory unchanged — nothing to propose"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- packages/ai/src/providers
+          fi
+
+      - name: Install dependencies
+        if: steps.detect.outputs.changed == 'true'
+        run: npm ci
+
+      # The worker bundle is assembled from the built dist/ tree, so the
+      # packages have to be built before anything reads them. This also type
+      # checks the refreshed shards: the build runs tsc over packages/ai, so a
+      # catalogue entry that does not fit the Model type fails here instead of
+      # shipping.
+      - name: Build the Host dependency closure
+        if: steps.detect.outputs.changed == 'true'
+        run: node scripts/build-packages.mjs --target @duya/host
+
+      # The governance suite is what makes this safe to do unattended: it
+      # rejects a directory whose entries lost their thinking ladder, whose
+      # prices are off by a factor of a million, or whose model ids are
+      # duplicated inside one list.
+      - name: Model directory self-check
+        if: steps.detect.outputs.changed == 'true'
+        run: npx vitest run --root . packages/ai/test
+
+      # The worker bundle is tracked in git and the freshness gate compares it
+      # against the first-party inputs that changed since the bundle commit.
+      # A refresh that changes packages/ai/src/providers without rebuilding
+      # the bundle therefore turns the gate red on the pull request.
+      - name: Rebuild the worker bundle
+        if: steps.detect.outputs.changed == 'true'
+        run: npm run bundle:worker
+
+      # The build regenerates a tracked artefact (packages/capabilities/src/
+      # ModuleTool/inline-content.ts). It is not part of this refresh, and
+      # leaving it modified would make the bundle gate below report the bundle
+      # as stale for a change nobody made. Restore every tracked file the
+      # build touched except the two paths this refresh owns.
+      - name: Restore files the build regenerated
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          stray="$(git diff --name-only -- . \
+            ':(exclude)packages/ai/src/providers' \
+            ':(exclude)packages/host/bundle')"
+          if [ -n "$stray" ]; then
+            echo "restoring build-regenerated files:"
+            echo "$stray"
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              git checkout -- "$file"
+            done <<< "$stray"
+          fi
+
+      - name: Commit and push the refreshed directory
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B chore/ai-model-catalog-nightly
+          git add packages/ai/src/providers packages/host/bundle
+          git commit -m "chore(ai): refresh model catalog from upstream"
+          git push --force origin chore/ai-model-catalog-nightly
+
+      # The freshness gate is a git judgement: it compares the committed bundle
+      # against the first-party inputs that changed after the bundle commit.
+      # Run it AFTER the commit — that is the state the pull request will be
+      # reviewed in — and before the push, so a stale bundle never reaches the
+      # branch.
+      - name: Worker bundle freshness (bundle:verify)
+        if: steps.detect.outputs.changed == 'true'
+        run: npm run bundle:verify
+
+      # The pull request body names the models that appeared and disappeared,
+      # because that is the part of a refresh a human has to judge: a new id
+      # means a new model is now offered in the settings, and a removed id
+      # means it is not.
+      - name: Open or update the pull request
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          # A PAT wins when the repository has one: creating a pull request is
+          # the one operation the built-in GITHUB_TOKEN is refused by default
+          # (Settings → Actions → General → "Allow GitHub Actions to create
+          # and approve pull requests"). Updating an existing pull request is
+          # allowed either way, so a repository that has one only needs the
+          # token for the very first night.
+          GH_TOKEN: ${{ secrets.NIGHTLY_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: chore/ai-model-catalog-nightly
+        run: |
+          set -euo pipefail
+          node <<'EOF' > "$RUNNER_TEMP/pr-body.md"
+          const { execFileSync } = require('node:child_process');
+          const { readFileSync } = require('node:fs');
+
+          // The sync script prints, per shard, the ids upstream added and the
+          // ids it dropped. That list is the decision-relevant part of the
+          // refresh; the rest of the diff is context windows and prices.
+          const sync = readFileSync(`${process.env.RUNNER_TEMP}/sync-output.txt`, 'utf8');
+          const added = [];
+          const removed = [];
+          let shard = '';
+          for (const line of sync.split('\n')) {
+            const header = line.match(/^== (\S+)/);
+            if (header) {
+              shard = header[1];
+              continue;
+            }
+            const plus = line.match(/^\s+\+\d+: (.+)$/);
+            if (plus) {
+              for (const id of plus[1].split(', ')) added.push(`\`${id}\` — ${shard}`);
+              continue;
+            }
+            const minus = line.match(/^\s+-\d+: (.+)$/);
+            if (minus) {
+              for (const id of minus[1].split(', ')) removed.push(`\`${id}\` — ${shard}`);
+            }
+          }
+
+          const stat = execFileSync(
+            'git',
+            ['diff', '--stat', 'origin/master...HEAD', '--', 'packages/ai/src/providers', 'packages/host/bundle'],
+            { encoding: 'utf8' },
+          ).trim();
+
+          const date = new Date().toISOString().slice(0, 10);
+          const lines = [
+            `模型目录自动刷新（${date}）`,
+            '',
+            '由 `.github/workflows/model-catalog.yml` 定时刷新，来源是 models.dev 与 OpenRouter 两个公开目录。',
+            '**本 PR 需要人工评审后合并**，自动刷新只负责把差异摆出来。',
+            '',
+            '### 新增模型（会出现在设置里）',
+            '',
+            ...(added.length ? added : ['无']),
+            '',
+            '### 移除模型（不再出现在设置里）',
+            '',
+            ...(removed.length ? removed : ['无']),
+            '',
+            '### 其余差异',
+            '',
+            '上下文窗口、输出上限与价格的变化，以及随源码重建的 worker bundle。',
+            '',
+            '```',
+            stat,
+            '```',
+            '',
+          ];
+          process.stdout.write(lines.join('\n'));
+          EOF
+
+          # `gh pr edit` takes a pull request number, not a branch name, so the
+          # existing pull request is looked up first. A closed pull request is
+          # not found here, and the next night opens a new one.
+          PR_NUMBER="$(gh pr view --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
+            --json number --jq '.number' 2>/dev/null || true)"
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/pr-body.md"
+            echo "updated pull request #$PR_NUMBER"
+          else
+            # The branch is already pushed, so a pull request that cannot be
+            # created by the token is still one click away. The job fails
+            # instead of passing quietly: a refresh that nobody is told about
+            # is a refresh nobody reviews.
+            COMPARE_URL="https://github.com/$GITHUB_REPOSITORY/compare/master...$BRANCH?expand=1"
+            if ! gh pr create --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" \
+              --title "chore(ai): refresh model catalog from upstream" \
+              --body-file "$RUNNER_TEMP/pr-body.md"; then
+              echo "::error::This token may not create pull requests. Enable Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests', or add a PAT as the NIGHTLY_PR_TOKEN secret."
+              echo "Open the pull request manually: $COMPARE_URL"
+              exit 1
+            fi
+          fi

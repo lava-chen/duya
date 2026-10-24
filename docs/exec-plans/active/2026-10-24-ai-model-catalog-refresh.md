@@ -1,7 +1,7 @@
 # 刷新 @duya/ai 各 provider 模型目录
 
 状态：active · 负责人：mavis（会话 mvs_35672764d34e4ec2800223e322efa928） · 更新：2026-10-24
-分支：codex/ai-model-catalog · worktree：E:\Projects\duya\.claude\worktrees\ai-model-catalog · base：3ddbbfaf · owner：mavis
+分支：codex/ai-model-catalog-automation（#441 已合并，后续改动在此分支） · worktree：E:\Projects\duya\.claude\worktrees\ai-model-catalog · base：c426d029 · owner：mavis
 
 ## 目标与边界
 
@@ -29,6 +29,31 @@
 - [x] 同步 `catalog-data.ts` 默认模型。
 - [x] 补治理用例：预设 id 必须命中能力目录、同 shard 不得重复 id、cost 量级一致。
 - [x] 跑门禁、提交、提 PR。
+- [x] #441 合并进 master（c426d029）。
+- [x] 模型 id 排序改成码位序，去掉对 ICU 本地化的依赖。
+- [x] 重跑同步脚本，吸收 openrouter 价格漂移并重建 worker bundle。
+- [x] 新增夜间刷新 workflow：只开 PR，不自动合并。
+- [ ] 提交后续改动、提 PR、等 CI 与 review。
+
+## 夜间自动刷新
+
+`.github/workflows/model-catalog.yml`：每天 21:30（北京时间）跑同步脚本，无变化就早退，有变化则重建
+worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-catalog-nightly` 并开/更新一个 PR。
+
+| 旋钮 | 位置 | 默认 |
+| --- | --- | --- |
+| 时间 | workflow `schedule.cron` | `30 13 * * *`（UTC） |
+| 纳入哪些上游模型 | 同步脚本各 shard 的白名单 / 排除规则 | 见 `packages/ai/scripts/sync-models.mjs` |
+| 是否合并 | — | 永不合并，等人评审 |
+
+- **只开 PR 不自动合并**：仓库规则要求未经授权不集成；无人值守合并等于把上游目录原样塞进产品。
+- **滚动分支**：每天新开一个 PR 会攒出一堆过期评审对象，所以固定一个分支 force-push。
+- **排序不能依赖 locale**：`localeCompare` 走 ICU 排序，结果随机器 locale 变。夜间任务跑在 Linux runner、
+  目录却是在开发机上写的，本地化排序会让「上游没变」每晚都被判成「有变化」。改成码位序后两边一致。
+- **开 PR 需要有权限的 token**：仓库当前未开启 "Allow GitHub Actions to create and approve pull requests"，
+  `GITHUB_TOKEN` 默认建不了 PR。workflow 优先用 `NIGHTLY_PR_TOKEN` secret，没有则回退 `GITHUB_TOKEN`，
+  失败时打印可直接点开的 compare 链接并把任务标红。
+
 
 ## 发现与决策
 
@@ -59,19 +84,24 @@
 | 3ddbbfaf + 本次改动 | Windows / Node 24 | `npx vitest run packages/ai/test` | 0，550 通过 | 含新增目录一致性用例 |
 | 3ddbbfaf + 本次改动 | Windows / Node 24 | `npx vitest run packages/ui/src/lib/providers packages/ui/src/components/providers apps/desktop/src/main/services/providers packages/host/tests` | 0，220 文件 / 2086 通过 | 消费侧 provider 链路 |
 | 3ddbbfaf + 本次改动 | Windows / Node 24 | `npm run bundle:worker` + `npm run bundle:verify` | 0 | worker bundle 随本 PR 重建 |
+| c426d029 + 本次改动 | Windows / Node 24 | `npm run typecheck:all` | 0 | 全仓类型检查通过 |
+| c426d029 + 本次改动 | Windows / Node 24 | `npm run architecture:check` | 0 | 无新增边界违规 |
+| c426d029 + 本次改动 | Windows / Node 24 | `npm run plan:sync` | 0 | 计划表与仓库一致 |
+| c426d029 + 本次改动 | Windows / Node 24 | `npx vitest run --root . packages/ai/test` | 0，550 通过 | 含目录一致性与治理用例 |
+| c426d029 + 本次改动 | Windows / Node 24 | `node scripts/build-packages.mjs --target @duya/host` + `npm run bundle:worker` | 0 | worker bundle 随 openrouter 价格重建 |
 
 ## 接续 / 结果
 
-- 已实现：19 个 provider shard 刷新 + 1 个新增（小米 MiMo）、预设默认模型对齐、同步脚本重写、
+- 已实现（#441，已合并）：19 个 provider shard 刷新 + 1 个新增（小米 MiMo）、预设默认模型对齐、同步脚本重写、
   目录一致性用例、worker bundle 重建。
-- 已验证：见上表（本地全绿，合并 master 后复跑仍全绿）。
-- PR：#441 https://github.com/lava-chen/duya/pull/441 （base=master，未合并）。
-- 合并记录：master 前进导致 PR 冲突，冲突只在 `packages/host/bundle/**`；已合并
-  origin/master 并基于合并后的源码重建 bundle，门禁回到 FRESH。
-- 未提交路径：无。
+- 已实现（后续 PR）：模型 id 排序去本地化、openrouter 价格随上游漂移刷新 + bundle 重建、夜间刷新 workflow。
+- 已验证：见上表（本地全绿）。
+- PR：#441 https://github.com/lava-chen/duya/pull/441 （已合并，merge commit c426d029）；
+  夜间刷新的 PR 待提。
+- 未提交路径：无（提交后见 Git）。
 - 副作用：worker bundle 产物变化（`packages/host/bundle/**`），属本次改动的应有产物。
-- 阻塞：无。
-- 回收：未回收原因——PR 尚未集成，需保留分支与检出。
+- 阻塞：无技术阻塞；开 PR 一步需要仓库开启 GitHub Actions 建 PR 权限或配置 `NIGHTLY_PR_TOKEN`。
+- 回收：未回收——后续 PR 尚未集成，需保留分支与检出。
 
-下一步：等 CI 与 review 通过后由获授权的集成者合并；本 agent 不自行合并。
+下一步：由获授权的集成者合并夜间刷新 PR；本 agent 不自行合并。
 
