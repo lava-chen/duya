@@ -76,10 +76,12 @@ interface McpInventoryResponse {
 /**
  * The slice of the Host client this command depends on.
  *
- * `listMcpServers()` arrives on `HostSessionHttpClient` together with the
- * Host's inventory route. It is declared here as a structural interface so
- * this file compiles against a client that does not carry the method yet;
- * the cast goes away when the Host work lands.
+ * `listMcpServers()` ships on `HostSessionHttpClient` together with the
+ * Host's inventory route, so the client already carries it. It is declared
+ * here as a structural interface and the client is assigned to it, not
+ * cast to it: a CLI running against a Host that predates the route has no
+ * method to call, and that is a fact the command can report instead of a
+ * crash it cannot.
  */
 interface McpInventoryCapableClient {
   listMcpServers(): Promise<McpInventoryResponse>;
@@ -191,9 +193,10 @@ const MCP_COMMAND: TuiSlashCommandDef = {
   description: 'List the configured MCP servers',
   group: 'Session info',
   async run(ctx: TuiSlashContext) {
-    // The method lands on the client with the Host's inventory route; until
-    // it does, the client this CLI runs against has no way to answer.
-    const client = ctx.client as unknown as Partial<McpInventoryCapableClient>;
+    // The Host's inventory route lands the method on the client. A client
+    // without it cannot answer, and the command says so rather than
+    // calling into nothing.
+    const client: Partial<McpInventoryCapableClient> = ctx.client;
     if (typeof client.listMcpServers !== 'function') {
       ctx.tui.printError(
         'This CLI cannot read the MCP inventory: its Host client does not offer the inventory route.',
