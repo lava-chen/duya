@@ -14,14 +14,16 @@
 
 审计另外发现一个契约覆盖不到的真缺陷:**compaction 之后 volatile context 整个消失**。
 
+**修复状态:H-1 / H-2 / H-3 / H-4 / H-5 已全部修复**(见 §3.5),剩余 H-6 一个新发现待决。
+
 | # | 结论 | 证据 |
 | --- | --- | --- |
 | A | 缺陷曾连续被修坏 3 次,同一处 | `01344cd3` / `b8dda429` / `10db8786`,全在同一个数组表达式上 |
 | B | 契约已存在但**未进 master** | `master` 无 `packages/agent-runtime/src/engine/request-assembly.ts` |
 | C | 两套并行实现,只有一套有 provider 边界测试 | `codex/fix-prompt-last` 有 `packages/ai/test/prompt-last-provider-payload.test.ts`;`codex/alt-prompt-absolute-last` 无 |
-| D | **compaction 后 volatile context 消失**（P0,本次新发现） | 见 H-2 |
-| E | 规则 5 有一个**未命名的例外**:inbound（P1） | 见 H-1 |
-| F | provider 边界只覆盖 2/5 | 见 H-3 |
+| D | **compaction 后 volatile context 消失**（P0,本次新发现） | 见 H-2 → **已修**（PR #416） |
+| E | 规则 5 有一个**未命名的例外**:inbound（P1） | 见 H-1 → **已修**（PR #414） |
+| F | provider 边界只覆盖 2/5 | 见 H-3 → **已修**（PR #413） |
 
 ---
 
@@ -44,11 +46,11 @@
 
 | 不变量 | 契约里 | 有测试 | 测在哪层 | 判定 |
 | --- | --- | --- | --- | --- |
-| 用户请求不被自动上下文掩盖 | ✅ rule 5 | ✅ | 引擎层 + 本次补的 provider 边界层 | ⚠️ **成立但有例外**（H-1） |
-| Prompt 不重复、不遗漏 | ✅ rule 1/3 | ✅ | 引擎层 | ✅ |
-| 工具调用/结果因果顺序 | 明确不管（rule 4） | ✅ | adapter 层 | ⚠️ 未与契约联测 |
-| Compaction 不丢关键指令、不重注过期 | ❌ 无 | ❌ 无 | — | ❌ **违反**（H-2） |
-| 多 Provider 转换不提升权限、不丢内容 | ❌ 无 | 仅 2/5 | adapter 层 | ⚠️ **缺口**（H-3） |
+| 用户请求不被自动上下文掩盖 | ✅ rule 5 | ✅ | 引擎层 + provider 边界层 + 五个场景 | ✅ **已成立**（H-1 已修，规则 5 现在无条件） |
+| Prompt 不重复、不遗漏 | ✅ rule 1/3 | ✅ | 引擎层 + provider 边界层 | ✅ |
+| 工具调用/结果因果顺序 | 明确不管（rule 4） | ✅ | adapter 层 + 工具续轮场景 | ✅ |
+| Compaction 不丢关键指令、不重注过期 | ✅ 补齐（H-2/H-5） | ✅ | 引擎层 | ✅ **已成立** |
+| 多 Provider 转换不提升权限、不丢内容 | ✅ 补齐（H-3） | ✅ | provider 边界层，5/5 | ✅ **已成立** |
 
 ---
 
@@ -119,12 +121,37 @@ rail 是**工作数组状态**，不进 timeline（plan 619 Phase 3）。compact
 compaction 的替换转写全走这条路 → 替换里的行**没有**「这是系统注入行」的标记，
 rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题。
 
+### H-6（P2，本次修复过程中新发现）compaction 探针少算 context 行
+
+`#transcriptFor`（compaction 的探针输入）在 compaction 之后只量 **replacement**，不含 context 行。
+H-2 修复后 context 行会重新挂回请求，于是探针**少算**了 rail 的体积 → compaction 的触发点**偏晚**。
+
+这是修复带来的口径不一致，不是原缺陷。归属：compaction owner。**未修**，因为改它要动探针的计量口径，
+而那属于另一个决策（探针该不该计入 per-request 的 context）。
+
 ### 观察项（P3）两套并行的提醒分类法
 
 `STARTS_PROMPT_TURN`（`agent-core/src/message/message-framework.ts:64`）按 `RuntimeContextSource` 穷尽，
 而 rail 块用的是 `ReminderSourceId`（`agent-core/src/context/reminder-sources.ts:43`）。
 两套不相交，`runtimeContextStartsPromptTurn` 目前**只有测试在调用**，生产无调用点，
 所以今天不是 bug——但它是下一个「加一种 source 忘了加另一张表」的坑。
+
+---
+
+## 3.5 修复状态
+
+| # | 修法（一句话） | PR |
+| --- | --- | --- |
+| H-1 | `inbound` 是系统注入行（全部经 `projectRuntimeContextToProviderMessage`，无一条是人打的），**移到 prompt 前**；后续轮不动（rule 4 不管后续轮） | [#414](https://github.com/lava-chen/duya/pull/414) |
+| H-2 | compaction 替换只贡献**非 context 行**，宿主当前投影贡献 **context 行**——**划分，不是合并**，两边用同一个 `origin` 标记分类，所以不可能数两次 | [#416](https://github.com/lava-chen/duya/pull/416) |
+| H-5 | `toRuntimeMessage` 带上 `origin: 'context'`——这是 H-2 的**前提**：没有标记，replacement 的 context 行与「人说话」无法区分 | [#416](https://github.com/lava-chen/duya/pull/416) |
+| H-3 | 导出 `toGeminiContents` / `toBedrockMessages`，provider 边界覆盖 2/5 → **5/5** | [#413](https://github.com/lava-chen/duya/pull/413) |
+| H-4 | 补上跑完 Host → Runtime → **真实 adapter** 的端到端测试，含反例臂 | [#413](https://github.com/lava-chen/duya/pull/413) |
+| 边界自身 | 重复检查改数**出现次数**（扛得住 Anthropic 的同角色合并）；新增 `mode: 'continuation'`——续轮本就不以问题收尾，rule 4 | 本 PR 末次提交 |
+| 场景套件 | 五个真实场景（长对话 / 工具续轮 / 运行中 steering / 中断与续话 / 多 provider），每个都有反例臂 | [#417](https://github.com/lava-chen/duya/pull/417) |
+
+**反例确实会红**：A 与 B 都用 mutation 验证过（移除标记 → 3 例失败；移除 context 重挂载 → 5 例失败；
+把 `inbound` 放回 prompt 后 → 5 failed / 11 passed）。C 在续轮场景上跑了一次证伪探针，文件变红后还原。
 
 ---
 
@@ -135,7 +162,10 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 | `packages/ai/src/model-request-invariants.ts` | **Model Request 权威边界**：不变量定义 + 检查器 + 5 个 adapter 的归约器 |
 | `packages/ai/test/model-request-invariants.test.ts` | provider 矩阵：5 个 adapter × (正常 / 回归反例) |
 | `packages/host/tests/worker-product-runtime/engine-payload-invariants.test.ts` | **端到端**：真实 Host → Runtime → 真实 Anthropic adapter → 检查器，含反例臂 |
-| `packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | H-2 缺陷探针（characterization，修复后断言翻转） |
+| `packages/host/tests/worker-product-runtime/harness-scenario-*.test.ts` | 五个真实场景回归（长对话 / 工具续轮 / steering / 中断续话 / 多 provider） |
+| `packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | H-2 探针，**已反转**为「修复后必须存在且恰好一次」 |
+| `packages/agent-runtime/test/compaction-context-reattachment.test.ts` | H-2 的重挂载与不重复的证明 |
+| `packages/agent-runtime/test/to-runtime-message-origin.test.ts` | H-5 的标记传播证明 |
 | `packages/ai/src/api/{google-generative-ai,bedrock-converse}.ts` | 导出 `toGeminiContents` / `toBedrockMessages`，让边界可断言 |
 | `packages/ai/src/index.ts` | 导出边界模块与 5 个 payload 构造器 |
 
@@ -148,12 +178,12 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 
 | # | 动作 | 归属 | 备注 |
 | --- | --- | --- | --- |
-| 1 | 决定 **inbound 的语义**（H-1） | 契约 owner | 两个读法：inbound 也是系统注入 → 移到 prompt 前；或它是"人话" → 契约明写例外。**需要人裁定**，审计不替它决定 |
-| 2 | 修 **H-2**：compaction 替换要重新投影 rail | compaction owner | rail 是每请求状态，不能"保留"，只能"重投影" |
-| 3 | `toRuntimeMessage` 带上 `origin`（H-5） | runtime owner | 与 2 同批做，否则 2 的修复没有分类依据 |
-| 4 | 让 `fix-prompt-last` 进 master | PR owner | base 指向 `codex/tui-perf-benchmark`（PR #381,open），CI 不跑；需评估是否拆出独立 PR |
-| 5 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | 已被 `fix-prompt-last` 取代 |
-| 6 | 把 provider 矩阵挂进 CI | 审计 owner | 本 PR 已就位，需确认 CI 实际跑到 |
+| 1 | 让 `codex/fix-prompt-last` 进 master | PR owner | base 指向 `codex/tui-perf-benchmark`（PR #381,open），CI 不跑；需评估是否拆出独立 PR。**这是所有后续的前提** |
+| 2 | 把本 PR 链（#413 → #414 / #416 / #417）按顺序集成到 master | 集成者 | 每个 PR 单独合，bundle 由集成者从合并后源码重建 |
+| 3 | 决定 **H-6**：compaction 探针要不要计入 per-request 的 context | compaction owner | 现状是少算 → 触发点偏晚 |
+| 4 | 停用 `codex/alt-prompt-absolute-last` | 分支 owner | 已被 `fix-prompt-last` 取代，且从未推远端 |
+| 5 | 把 provider 矩阵与场景套件挂进 CI | 集成者 | 本 PR 已就位，需确认 CI 实际跑到 |
+| 6 | 观察项：把 `ReminderSourceId` 与 `RuntimeContextSource` 合并或明确桥接 | 架构 owner | 今天不是 bug，是下一个「加一种 source 忘了加另一张表」的坑 |
 
 ## 6. 验证记录
 
@@ -163,19 +193,27 @@ rule 5 的分类依据在 compaction 之后失效。这是 H-2 的同源问题�
 | --- | --- | --- |
 | `10db8786` + 本任务改动 | `npx vitest run packages/ai/test/model-request-invariants.test.ts` | 0 — 21 passed（5 adapter × 3 + 检查器 6） |
 | `10db8786` + 本任务改动 | `npx vitest run packages/host/tests/worker-product-runtime/engine-payload-invariants.test.ts` | 0 — 2 passed（含回归反例臂） |
-| `10db8786` + 本任务改动 | `npx vitest run packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | 0 — 3 passed（H-2 探针） |
+| `10db8786` + 本任务改动 | `npx vitest run packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | 0 — 3 passed（H-2 探针，**当时钉的是缺陷**） |
 | `10db8786` + 本任务改动 | `npx vitest run packages/ai packages/agent-runtime` | 0 — 157 files / 1690 passed |
 | `10db8786` + 本任务改动 | `npx vitest run packages/host/tests` | 0 — 178 files / 1637 passed, 1 skipped |
 | `e797a7ee`（合并 base 后） | `npm run typecheck:all` | 0 |
 | `e797a7ee` | `npm run architecture:check` | 0 — OK，no new boundary violations |
-| `e797a7ee` | `npm run bundle:verify` | 0 — FRESH，0/923 bundle inputs changed |
+| `e797a7ee` | `npm run bundle:verify` | 0 — FRESH，0/923 |
 | `e797a7ee` | `npx vitest run packages/ai packages/agent-runtime packages/host/tests/worker-product-runtime` | 0 — 181 files / 1822 passed |
+| `08a5976e`（合入 H-1 + H-2/H-5 后） | `npm run typecheck:all` | 0 |
+| `08a5976e` | `npm run architecture:check` | 0 — OK，no new boundary violations |
+| `08a5976e` | `npm run bundle:verify` | 0 — FRESH，0/923 |
+| `08a5976e` | `npx vitest run packages/agent-runtime packages/ai packages/host/tests/worker-product-runtime` | 0 — **183 files / 1837 passed** |
+| `9bb97e21`（合入场景套件后） | `npx vitest run packages/host/tests/worker-product-runtime packages/ai packages/agent-runtime` | 0 — **188 files / 1863 passed** |
+| `f999e072`（边界自身修复后） | `npx vitest run packages/ai/test/model-request-invariants.test.ts` | 0 — 26 passed |
 
 **未覆盖 / 未验证**：
 
-- 本 PR 的 base 是 `codex/fix-prompt-last`（特性分支），**CI 矩阵不跑**（`.github/workflows/test.yml`
+- 本 PR 链的 base 是 `codex/fix-prompt-last`（特性分支），**CI 矩阵不跑**（`.github/workflows/test.yml`
   的 `pull_request: branches: [master]`）。上表是全部证据。
-- H-2 的**修复**未做——本 PR 只把它钉住并写清修复要决定什么。
-- H-1 的语义**未裁定**——审计不替契约 owner 做这个决定。
+- **H-6 未修**（compaction 探针少算 context 行）——归属 compaction owner。
 - `codex/alt-prompt-absolute-last` 的对照结论基于代码阅读，未在它上面跑测试。
+- 并行跑 `packages/host/tests` 时出现过跨用例干扰（单跑全绿、基线也绿），已由 A、B 各自核对为
+  既有 flake，与本次改动无关。
+
 
