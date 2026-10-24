@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { ChevronDownIcon } from '@/components/icons';
 import { WorkflowRunStream } from '@/components/workflow/WorkflowRunCard';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
-import { MessageVirtualizer, planRowItems, type VirtualWindow } from './messageVirtualizer';
+import { MessageVirtualizer, planRowItems, readListViewport, type VirtualWindow } from './messageVirtualizer';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -840,7 +840,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   if (virtualizerRef.current === null) virtualizerRef.current = new MessageVirtualizer();
   const virtualizer = virtualizerRef.current;
   // The rows that are mounted around the current scroll position.
-  const [mountedWindow, setMountedWindow] = useState<VirtualWindow>({ start: 0, end: -1 });
+  const [mountedWindows, setMountedWindows] = useState<VirtualWindow[]>([]);
   // Bumped whenever a measured height changed the layout, so the spacers
   // (and therefore the scroll height) are recomputed.
   const [layoutVersion, setLayoutVersion] = useState(0);
@@ -854,6 +854,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   // viewport.
   const layoutGenerationRef = useRef(0);
   const correctedGenerationRef = useRef(0);
+  // The row a jump asked for. It stays mounted until the viewport really
+  // lands on it, so the target of a jump does not disappear again when the
+  // list cannot scroll far enough to reach it.
+  const pendingJumpRef = useRef<{ index: number } | null>(null);
 
   // Single scroll state: true = user is at bottom and wants auto-scroll
   const autoScrollRef = useRef(true);
@@ -869,13 +873,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     if (pendingAnchorRef.current) return;
     const container = containerRef.current;
     if (!container) return;
-    const index = virtualizer.indexAt(container.scrollTop);
+    const viewport = readListViewport(container);
+    const index = virtualizer.indexAt(viewport.offset);
     if (index < 0) return;
     const id = virtualizer.idAt(index);
     if (!id) return;
     pendingAnchorRef.current = {
       id,
-      offsetInViewport: container.scrollTop - virtualizer.offsetOf(index),
+      offsetInViewport: viewport.offset - virtualizer.offsetOf(index),
     };
   }, [virtualizer]);
 
@@ -903,13 +908,36 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const syncMountedWindow = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
-    const window = virtualizer.windowFor(
-      container.scrollTop,
-      container.clientHeight,
+    const viewport = readListViewport(container);
+    const visible = virtualizer.windowFor(
+      viewport.offset,
+      viewport.height,
       MESSAGE_ROW_OVERSCAN_PX,
     );
-    setMountedWindow((previous) => (
-      previous.start === window.start && previous.end === window.end ? previous : window
+
+    const windows: VirtualWindow[] = [visible];
+
+    // A row the user jumped to stays mounted until the viewport reaches it.
+    const jump = pendingJumpRef.current;
+    if (jump) {
+      if (jump.index >= visible.start && jump.index <= visible.end) {
+        // The viewport landed on the target — the jump is done.
+        pendingJumpRef.current = null;
+      } else {
+        windows.push({
+          start: Math.max(0, jump.index - MOUNT_OVERSCAN_ROWS),
+          end: jump.index + MOUNT_OVERSCAN_ROWS,
+        });
+      }
+    }
+
+    setMountedWindows((previous) => (
+      previous.length === windows.length
+      && previous.every((window, index) => (
+        window.start === windows[index].start && window.end === windows[index].end
+      ))
+        ? previous
+        : windows
     ));
   }, [virtualizer]);
 
@@ -928,12 +956,16 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
+    // The visible slice of the list changes when the window changes, even
+    // when the list itself does not scroll.
+    window.addEventListener('resize', handleScroll);
     updateScrollState();
     syncMountedWindow();
 
     return () => {
       if (frameId) cancelAnimationFrame(frameId);
       container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
     };
   }, [updateScrollState, syncMountedWindow]);
 
@@ -950,11 +982,13 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           container.scrollTop = container.scrollHeight;
         });
       }
+      // The height of the list changed — the mounted window has to follow.
+      syncMountedWindow();
     });
 
     ro.observe(inner);
     return () => ro.disconnect();
-  }, []);
+  }, [syncMountedWindow]);
 
   // Sort once so the grouping increment can compare append-only prefixes and
   // reuse frozen rows instead of re-sorting the whole transcript per update.
@@ -1036,9 +1070,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   // that stand in for the rows that are not mounted.
   const rowItems = useMemo(() => planRowItems(
     virtualizer,
-    [mountedWindow, tailWindow],
+    [...mountedWindows, tailWindow],
     groupedMessages.length,
-  ), [virtualizer, groupedMessages.length, mountedWindow, tailWindow, layoutVersion]);
+  ), [virtualizer, groupedMessages.length, mountedWindows, tailWindow, layoutVersion]);
 
   // Only the last user message in the conversation is editable.
   const lastUserMessageId = useMemo(() => {
@@ -1122,7 +1156,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       autoScrollRef.current = true;
       // The anchor and the mounted window belong to the old transcript.
       pendingAnchorRef.current = null;
-      setMountedWindow({ start: 0, end: -1 });
+      pendingJumpRef.current = null;
+      setMountedWindows([]);
       navigatorCacheRef.current.clear();
       lastActiveNavUpdateRef.current = 0;
       lastSeenUserCountRef.current = 0;
@@ -1204,15 +1239,15 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     const offset = virtualizer.offsetOf(index);
     setActiveMessageId(messageId);
     autoScrollRef.current = false;
-    setMountedWindow({
-      start: Math.max(0, index - MOUNT_OVERSCAN_ROWS),
-      end: index + MOUNT_OVERSCAN_ROWS,
-    });
+    // The jump target stays mounted until the viewport reaches it, so the
+    // row cannot disappear again while the list scrolls towards it.
+    pendingJumpRef.current = { index };
     container.scrollTop = offset;
     // A pending correction belongs to the old position — it must not undo
     // the jump.
     pendingAnchorRef.current = null;
-  }, [sessionId, virtualizer]);
+    syncMountedWindow();
+  }, [sessionId, virtualizer, syncMountedWindow]);
 
   // Scroll to bottom (exposed to parent)
   const scrollToBottom = useCallback(() => {

@@ -239,6 +239,41 @@ export class MessageVirtualizer {
 }
 
 /**
+ * The slice of the transcript the user can actually see.
+ *
+ * `clientHeight` is the wrong number to size the mounted window with: it only
+ * describes the visible area when the list is a real scroll container, and
+ * the current app shell does not give it a bounded height (the chat column is
+ * content-sized), so `clientHeight` is the height of the WHOLE transcript.
+ * Measuring the visible slice of the list against the window gives the right
+ * answer in both cases.
+ */
+export interface ListViewport {
+  /** Top of the visible slice, in the coordinates of the list. */
+  offset: number;
+  /** Height of the visible slice, in pixels. */
+  height: number;
+}
+
+/**
+ * Read the visible slice of a list.
+ *
+ * `offset` is the position of the top of the window inside the list: for a
+ * scroll container that is the scroll offset, for a content-sized list (which
+ * a scrolling ancestor can push around) it is the distance between the top of
+ * the list and the top of the window.
+ */
+export function readListViewport(container: HTMLElement): ListViewport {
+  const rect = container.getBoundingClientRect();
+  const windowHeight = window.innerHeight || rect.height;
+  const visibleTop = Math.max(0, rect.top);
+  const visibleBottom = Math.min(windowHeight, rect.bottom);
+  const height = Math.max(0, visibleBottom - visibleTop);
+  const offset = container.scrollTop + (visibleTop - rect.top);
+  return { offset, height };
+}
+
+/**
  * Turn the mounted ranges into the items the list renders: the rows
  * themselves, separated by spacers that stand in for the rows that are not
  * mounted. The spacer heights come from the same offsets the rows use, so

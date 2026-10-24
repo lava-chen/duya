@@ -13,7 +13,7 @@
  *     row that is not measured still occupies its estimated space.
  */
 import { describe, expect, it } from 'vitest';
-import { MessageVirtualizer, planRowItems } from '../messageVirtualizer';
+import { MessageVirtualizer, planRowItems, readListViewport } from '../messageVirtualizer';
 
 function rows(count: number, height = 100): { id: string; estimatedHeight: number }[] {
   return Array.from({ length: count }, (_, index) => ({
@@ -183,5 +183,70 @@ describe('planRowItems', () => {
     layout.setRows([]);
 
     expect(planRowItems(layout, [{ start: 0, end: 0 }], 0)).toEqual([]);
+  });
+});
+
+/**
+ * The list is only a scroll container when its ancestors give it a bounded
+ * height. When they do not, `clientHeight` is the height of the whole
+ * transcript, and a mounted window sized by it would mount every row. The
+ * visible slice of the list is the number the window has to be sized with.
+ */
+describe('readListViewport', () => {
+  function container(rect: {
+    top: number;
+    bottom: number;
+  }, scrollTop = 0): HTMLElement {
+    return {
+      scrollTop,
+      getBoundingClientRect: () => ({
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.bottom - rect.top,
+      }),
+    } as unknown as HTMLElement;
+  }
+
+  it('measures the visible slice, not the height of the whole list', () => {
+    // A content-sized list: 115 000px tall, of which the window shows 768px.
+    const viewport = readListViewport(container({ top: 0, bottom: 115_000 }));
+
+    expect(viewport.height).toBe(768);
+    expect(viewport.offset).toBe(0);
+  });
+
+  it('uses the scroll offset of a real scroll container', () => {
+    const viewport = readListViewport(container({ top: 100, bottom: 900 }, 4_000));
+
+    // The list starts 100px below the top of the window, so the visible
+    // slice starts at the scroll offset.
+    expect(viewport.offset).toBe(4_000);
+    expect(viewport.height).toBe(668);
+  });
+
+  it('follows a content-sized list that a scrolling ancestor pushed down', () => {
+    // The top of the list is 300px above the top of the window.
+    const viewport = readListViewport(container({ top: -300, bottom: 114_700 }));
+
+    expect(viewport.offset).toBe(300);
+    expect(viewport.height).toBe(768);
+  });
+
+  it('reports no visible slice when the list is outside the window', () => {
+    const viewport = readListViewport(container({ top: 900, bottom: 115_900 }));
+
+    expect(viewport.height).toBe(0);
+  });
+
+  it('sizes the mounted window by the visible slice, not by the list', () => {
+    const layout = new MessageVirtualizer();
+    layout.setRows(rows(1_000, 100));
+
+    const viewport = readListViewport(container({ top: 0, bottom: 115_000 }));
+    const window = layout.windowFor(viewport.offset, viewport.height, 600);
+
+    // 768px of viewport plus 600px of overscan on both sides — a handful of
+    // rows, not the whole transcript.
+    expect(window.end - window.start + 1).toBeLessThan(30);
   });
 });
