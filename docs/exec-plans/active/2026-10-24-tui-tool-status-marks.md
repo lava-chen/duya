@@ -52,6 +52,6 @@
 
 ## 接续 / 结果
 
-已实现并本地验证：提交 `0be1af2c`（源码）、`6e99489d`（单测）、`4017ec9e`（bundle + 真实 worker 断言）。待 PR、CI 与授权集成；未合并。
+已实现并本地验证：提交 `0be1af2c`（源码）、`6e99489d`（单测）、`4017ec9e`（bundle + 真实 worker 断言）、`55e6c912`（计划）。PR [#457](https://github.com/lava-chen/duya/pull/457)，待 CI 与授权集成；未合并。
 回收：worktree 保留到 PR 集成后。
-下一步：推送 `codex/tui-tool-status` 并创建 PR；集成后重跑 `shared-client-vertical` 并核对 bundle 未漂移。
+下一步：等 #457 必需检查全绿；获授权后用 merge commit 集成，再重跑 `shared-client-vertical` 并核对 bundle 未漂移。
