@@ -79,8 +79,8 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 - [x] 三路并行摸底（CLI 接入面 / 后端能力 / 桌面 UI 资产与 app 语义）+ 一路补查（mcp/skills 取数路径）
 - [x] 建 worktree + junction + 依赖构建
 - [x] 写本计划
-- [ ] PR-1 会话类（compact / btw / diff）— 实现完成，门禁与 PR 待办
-- [ ] PR-2 能力类：mcp / skills
+- [x] PR-1 会话类（compact / btw / diff）— 已合并（PR #461 → `379d990b`）
+- [x] PR-2 能力类：mcp / skills — 实现完成，门禁与 PR 待办
 - [ ] PR-3 扩展类：app / apps / plugin / workflow
 - [ ] PR-4 新功能类：doctor / init
 
@@ -99,6 +99,66 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 3. `/btw` **不做 busy 拒绝**——它的语义就是「不打断当前对话」，加 busy 拒绝会让功能自相矛盾；桌面端 `handlePostSideQuestion` 也不拒。
 4. SSE 解析器 `readServerSentFrames` 抽为模块级唯一实现，`watchAgentRunEvents` 一并复用。
 
+### PR-2 已实现：能力类（mcp / skills）
+
+| WP | 内容 | 提交 |
+| --- | --- | --- |
+| WP-E | Host 只读出口：`GET /v1/mcps` + `HostMcpServerConfig` 契约 + `HostSessionHttpClient.listMcpServers()` | `87385c23` |
+| WP-F | CLI `/skills`：进程内复用 `@duya/host/skills/skillService` | `bfeee159` |
+| WP-G | CLI `/mcp`：读 Host inventory | `b9105f27` |
+| 主 agent | catalog surfaces 扩到 cli、CLI 注册表接线、完整性测试名单、拆除临时 client cast、更新 `chat.ts` 过时文案 | `d083eef6` + `0ec8302d` + `20e2683a` + `55447570`（bundle） |
+
+**关键决策**：
+
+1. **`/mcp` 的数据源是 Host，不是桌面 CLI API**。`packages/cli/src/api/client.ts` 的 `CliApiClient` 连的是**桌面 Electron 的 loopback**（`<userData>/runtime/cli-api.json`），桌面不跑就没有 `/v1/mcps`；Host 的 `http-server.ts` 才是两端都在的那个。所以新 route 一律落在 `packages/host/src/http-server.ts`。
+2. **inventory 是投影，凭据不过界**：`HostMcpServerConfig` 故意**不含** `env` / `headers`（那俩是凭据）。丢弃点唯一，在 `mcp-inventory-api.ts` 的 `toHostMcpServerConfig()`。
+3. **排序用码位序**（`left < right`），不用 `localeCompare`——后者随进程 locale 变，同一份配置在两台机器上顺序不同。
+4. **「没有 server」和「这个 Host 答不了」是两件事**：未装配该能力时回 `404 mcp_inventory_unavailable`，CLI 单独渲染，绝不退化成空列表。
+5. **`/skills` 走进程内 skill service，不走 HTTP**。`@duya/host` 是 CLI 的运行时依赖、`./skills/*` 已 export，`legacy-cli.requires` 也含 `duya-host` → **零架构策略改动**。CLI **不能**运行时 import `@duya/plugin-core`（它只是 devDependency；现存两条 `cli → plugin-core` 边是已入 baseline 的冻结债务，新增一条会被 `architecture-check` 判阻断）。
+6. **插件带来的技能在 CLI 看不到，输出里逐字说明**。Host 侧插件注册表条目**不带 installPath**，插件包在 Electron `userData` 下，不在共享数据目录 → `pluginInstallPaths` 只能传空。CLI 每条输出（含空列表）都带这句限制说明，否则比桌面短的列表会被读成「列错了」。
+7. **工作目录取会话的，不是 `process.cwd()`**：`ctx.client.readLocalSession(...).workingDirectory`。会话从别的目录 resume 时，列的必须是会话真正工作的项目；取不到就**拒绝**，不拿别的目录凑。
+
+## PR-3 / PR-4 的落点（2026-10-24 实测后修正）
+
+原计划里几处基于调研文档的假设是错的，实测修正如下：
+
+| 事项 | 原以为 | 实测 |
+| --- | --- | --- |
+| AGENTS.md writer | 不存在 | **存在两个**（`apps/desktop/src/main/db/core/projectService.ts:181` 的 `DEFAULT_PROJECT_AGENTS_MD_TEMPLATE` + `apps/desktop/src/main/import/writer/instruction-writer.ts:69`），但都写 duya 内部目录（`~/.duya/projects/<id>/`、`~/.duya/`），**从不写用户项目根**。`projectService.ts` 的 `<!-- duya-agents-md:version N -->` 版本标记机制可照抄 |
+| 插件清单字段 | Host 侧没有 installPath/version | Desktop 的 `PluginRegistryEntry`（`apps/desktop/src/main/plugins/types.ts:310-337`）**四项全有**（installPath/version/marketplace/enabled）还多 health/permissions/trustLevel；**反而是 Host 的 `HostPluginRegistryEntry`（`packages/host/src/local-plugin-registry-api.ts:69-80`）缺 version** |
+| Host 能否启动 workflow | `packages/host/src/worker-workflows/` 能启动 | **不能**。`WorkflowManager`（`manager.ts:144`）只在测试里被 new，`local-host.ts` / `http-server.ts` 都不装配它。真正的 trigger 在桌面端 agent server（`apps/desktop/src/main/agents/server/router.ts:3697`）。→ `/workflow` 只做 list，启动在计划里明确标为「Host 不支持」 |
+| `/doctor` 结果 | 只有文本 | **是结构化的**：`DoctorResult` / `CheckResult` / `DoctorIssue` 都是导出接口（`packages/cli/src/commands/doctor.ts:36-80`），桌面端可直接渲染 |
+| 项目类型检测 | 不存在 | 确认不存在（全仓 grep `pyproject.toml|Cargo.toml|go.mod` 零命中）。最便宜诚实的做法：读 cwd 上一层的标记文件，找不到就标 unknown，不猜 |
+| `/apps` = `listAppConnections` | 等价 | 只对一半：那是「已连接记录」，不是「app 目录」。app 目录（provider registry）只活在桌面端进程（`apps/desktop/src/main/services/app-connections/providers/registry.ts:252-279`），Host 无对应 route → v1 的 `/apps` 只能列已连接的连接器，并说明目录不可见 |
+
+### `/app` 的机制选择（偏离 codex，有硬证据）
+
+codex 的 `/app` 是 `codex://threads/<id>` 深链（`codex-rs/tui/src/app/history_ui.rs:287-299`），靠 OS 协议处理器打开桌面端。**duya 不走这条路**：
+
+1. 深链在开发模式下**根本不通**——协议注册发生在安装器里，仓库内 `app.setAsDefaultProtocolClient` 零调用、`open-url` 零存在，`registerSchemesAsPrivileged`（`apps/desktop/src/main/index.ts:134`）只注册了 `duya-file`。
+2. 更根本的：**duya 一个数据目录只有一个 Host owner**（`packages/data/src/database-owner-lock.ts`）。TUI 持有 Host 时启动桌面端会撞 `DatabaseOwnerLockError`——codex 没有这个约束（它靠 SQLite WAL 并发 + per-thread 写锁）。
+
+**duya 的落法**：桌面端的 Electron main **本身就跑着 `HostSessionHttpServer`**（`apps/desktop/src/main/cli/desktop-host-api.ts:63`）并写 `<dataRoot>/runtime/host-api.json`。所以 TUI 附着的 `ctx.client` 连的就是桌面端那个 Host。于是：
+
+- 新增可选能力 `HostSessionHandoffApiV1 { openInDesktopApp({sessionId}) }`，走**已有的 `ctx.client` 通道**，不新增第二个服务器。
+- 桌面端注入该能力 → `webContents.send` → renderer 切到该会话。
+- TUI 拥有 Host（桌面端没跑）时 → `404 session_handoff_unavailable` → 提示「桌面端没有附在这个 Host 上」。
+
+用户可见结果与 codex 一致（会话在桌面端打开），机制不同且在开发模式下真的能用。
+
+### `/doctor` 的落法
+
+- **纯读部分下沉到 `packages/host/src/diagnostics/`**：`doctor-config.ts` + `doctor-timing.ts` + 类型（`doctor.ts` 的类型定义）。依据：这两个模块只依赖 `node:fs/os/path` + `@iarna/toml`，**零 Electron、零 Host 依赖**；`packages/host/src/config-agents/` 是同类先例（已 export 子路径）。
+- **live 部分各自探测**：桌面端探自己的 API，CLI 探 `CliApiClient`。
+- 顺带修一个真 bug：`CheckResult.category` 声明含 `'database'`（`doctor.ts:49`），但 `renderText` 的分组表（`doctor.ts:400`）没有它 → 写成 `database` 的检查在文本报告里**整条消失**。
+
+### `/init` 的落法
+
+- 落点：cwd 向上第一个 git root（`packages/host/src/workspace/git.ts:38` 的 `gitOrNull()` → `git rev-parse --show-toplevel`）；已存在则**不覆盖**，只提示。
+- 内容：项目名、根路径、检测出的技术栈、构建/测试命令（从 `package.json.scripts` 读，**不编造**）、以及「本文件由 duya 生成」的版本标记。
+- duya 自己的根 `AGENTS.md` / `docs/AGENTS.md` 是**内部文档**（worktree 纪律、架构门禁、交付流程），**不可复用为用户项目模板**。
+- 写入路径：桌面端 renderer 没有 FS 写权限 → 走 Electron IPC；CLI 直接写。模板与检测逻辑共享。
+
 ## 验证记录（PR-1）
 
 | SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 |
@@ -110,6 +170,17 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 | `79cad6bf` clean | Windows / Node 24 | `npx vitest run packages/command-catalog packages/ui packages/cli packages/gateway packages/host packages/agent-protocol` | 0 · 568 文件 / 5905 通过 / 3 跳过 |
 
 **未验证（真机）**：冷启动 worker 的 provider-config 解析（613 R1）、5 分钟无字节 SSE 存活探测、压缩后 transcript rebase 经 `includeSuperseded=false` 可见、端到端 `/btw` 对接真实 provider。以上均只有 fake worker / stub server 的单测级覆盖。
+
+## 验证记录（PR-2）
+
+| SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 |
+| --- | --- | --- | --- |
+| `55447570` clean | Windows / Node 24 | `npm run typecheck:all` | 0 |
+| `55447570` clean | Windows / Node 24 | `npm run architecture:check` | 0 · `OK — no new boundary violations`；total 2739 / tolerated 2739，baseline size 2530，2 个 fingerprint 不再触发（缩债，非失败）。新边 `cli → duya-host` 与 `duya-host → legacy-plugin-core` 均落在 **permitted** 桶（2628），未进 baseline |
+| `55447570` clean | Windows / Node 24 | `node scripts/architecture/bundle-verify.mjs` | 0 · `FRESH 0/952 bundle inputs changed after the bundle commit` |
+| `55447570` clean | Windows / Node 24 | `npx vitest run packages/command-catalog packages/ui packages/cli packages/gateway packages/host packages/agent-protocol` | 1 · 571 文件通过 / 1 失败（5941 通过 / 3 跳过）。**唯一失败是计时 flake**：`packages/host/tests/worker-hooks/executor.test.ts` 的 `executeHookBackground > launches async command hooks without blocking` 断言 `< 500ms`、实测 501ms（并发满载）。单独复跑该文件 **43/43 通过、退出码 0** → 非本次改动引入，未放宽断言 |
+
+**未验证（真机）**：`/skills` 在真实 `~/.duya/skills` 下的发现结果与桌面端一致性；`/mcp` 对真实 `config.toml` 的 `[mcp_servers.*]` 读取；独立 TUI（桌面端未运行）下的两个命令。均只有临时目录 + stub client 的单测级覆盖。
 
 ## 关键事实速查
 
