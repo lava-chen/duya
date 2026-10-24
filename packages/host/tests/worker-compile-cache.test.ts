@@ -110,7 +110,10 @@ describe('the worker compile cache environment', () => {
     // cleared by the OS -- which would cost the user this saving again
     // every morning. The data root is where the worker already writes
     // its logs.
-    expect(dir).toContain(`${'cache'}\\${'node-compile'}`);
+    //
+    // The separator is the platform's own: the path is built with
+    // path.join, so the assertion must not spell one out.
+    expect(dir.endsWith(join('cache', 'node-compile'))).toBe(true);
     expect(dir).not.toContain('node_modules');
   });
 
