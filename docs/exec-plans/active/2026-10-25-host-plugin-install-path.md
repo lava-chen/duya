@@ -78,6 +78,10 @@ reader 下沉、`dataPath` / `plugins-data` 的读写。
 | dirty（packages/host） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
 | dirty（packages/host） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
 | e8932dbb（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/930，bundle commit = e8932dbb |
+| b8d0a3ba（clean，merged master `c426d029`） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
+| b8d0a3ba（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
+| b8d0a3ba（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = b8d0a3ba |
+| b8d0a3ba（clean） | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 108 文件 / 905 passed / 6 skipped |
 
 ## 接续 / 结果
 
@@ -88,7 +92,11 @@ architecture / bundle:verify FRESH 0/930）全绿。
 PR：未开。
 
 分支：`codex/host-plugin-install-path`（worktree `E:\Projects\duya\.claude\worktrees\plugin-install-path`，
-base `3a687e41`）。提交序列：`567cbc45` 源码 + 测试 → `e8932dbb` 重建 bundle → 本次计划更新。
+base `3a687e41`）。提交序列：`567cbc45` 源码 + 测试 → `e8932dbb` 重建 bundle →
+`31198be5` 计划记录 → `541c4b86` 合 master `c426d029` → `b8d0a3ba` 合并后重建 bundle。
+
+合并时冲突只在受版本控制的 bundle 产物上（`worker-entry.js` / `worker-metafile.json`）——
+bundle 不能手工解，取一边让 merge 落地，再按合并后的源码重建。
 
 未提交路径：无。
 副作用：无外部副作用。
