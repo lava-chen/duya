@@ -14,6 +14,8 @@
 
 前置已合入：PR #439（slash 基础层：清死命令 + 可用性模型 + Gateway 收敛）→ `3a687e41`，master CI 绿。
 
+关联：原始调研报告 `docs/references/tui-slash-command-survey.md`（2026-10-15 四方调研，**本地未入版本库**；它的「duya 现状」一节已被本计划下表修正）。
+
 ## 调研基线的修正（实测，master @ 3a687e41）
 
 调研文档写于 9 天前，**「duya 现状」一节已过时**：
@@ -34,10 +36,13 @@
 | 家族 | 用途 | 现状 |
 | --- | --- | --- |
 | Electron IPC（`window.electronAPI.*`） | 桌面原生 | 齐全 |
-| Host HTTP `/v1/*`（`packages/host/src/http-server.ts`） | CLI 唯一后端 | 有 `/v1/skills` `/v1/plugins` `/v1/mcps` `/v1/workflow-runs` `/v1/local/app-connections`；**无 compact / btw / git / workflows** |
+| **桌面 CLI API**（`apps/desktop/src/main/cli/cli-api-server.ts`） | 只给 `duya mcp/skill/plugin` 这类**顶层命令**用 | 有 `/v1/skills` `/v1/mcps` `/v1/plugins`；**但它在 Electron main 里，桌面不跑就没有** → 独立 TUI 用不了 |
+| **Host HTTP**（`packages/host/src/http-server.ts`） | CLI TUI 的**唯一**后端通道 | 只有 session / run / workflow / 设置 / app-connection / plugin-setup 之类；**没有 skills、没有 mcps、没有 compact、没有 btw、没有 git** |
 | agent-server HTTP（`apps/desktop/src/main/agents/server/router.ts`） | 会话内实时调用 | 桌面走它；**CLI 够不到** |
 
-CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法）；CLI 本身是 Node 进程，**可本地读盘 / 跑 git**（先例 `packages/cli/src/tui/slash/session-ops.ts:22` 的 `execFileSync`；CLI 已依赖 `@duya/plugin-core`）。
+⚠️ 仓库里有**两套** CLI HTTP 服务，别混：`apps/desktop/src/main/cli/`（桌面 Electron 提供，桌面不跑就 404）与 `packages/host/src/http-server.ts`（Host 提供，独立 TUI 挂的就是它）。`packages/host/src/skills/skillService.ts` 的头注释说自己是「CLI API server (`GET /v1/skills`)」指的是**前者**。
+
+CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法）；CLI 本身是 Node 进程，**可本地读盘 / 跑 git**（先例 `packages/cli/src/tui/slash/session-ops.ts:22` 的 `execFileSync`）。但 **CLI 不能运行时 import `@duya/plugin-core`**——它只是 devDependency，且现存的两条 `cli → plugin-core` 边（`packages/cli/src/commands/mcp.ts:27` 等）是**已入 baseline 的冻结债务**；新增一条新边会被 `architecture-check` 判为阻断。
 
 ## 4 个 PR
 
@@ -88,3 +93,4 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 - 通用列表原语：`OptionPanel`（`packages/ui/src/components/ui/OptionPanel.tsx:88`）可搜索可选列表；`CommandResultDialog`（`components/chat/CommandResultDialog.tsx:22`）纯文本结果。
 - 桌面已有可复用页面：扩展市场 `components/extensions/MarketplacePage.tsx`、工作流 `components/workflow/WorkflowPage.tsx`、技能 `components/skills/SkillsView.tsx`、连接器段 `components/extensions/InstalledPage.tsx:381-443`。
 - 桌面弹窗条目来源 = catalog 投影 + 硬编码（`packages/ui/src/hooks/useSlashCommands.ts:205-299` 的 `__thinking/__style/__compact/__btw/__focus` 与 mode 三项）。
+- **`packages/cli/package.json` 里 `@duya/plugin-core` 只是 devDependency**（`@duya/host` / `@duya/command-catalog` 才是运行时依赖）→ CLI 侧 `/mcp` 不能直接 import plugin-core，要么升为运行时依赖，要么走 Host 出口。
