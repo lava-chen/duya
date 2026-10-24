@@ -92,6 +92,8 @@
 | `42066088` + 未提交改动 | 同上 | `npm run build:packages` 后 `npm run typecheck:all`、`npm run architecture:check` | 均 0 · 2738 tolerated / baseline 2530，无新增违规 | 合并后重验：门禁仍只提示同样 2 条指纹消失 |
 | `42066088` + 未提交改动 | 同上 | `npx vitest run packages/cli`；host 4 文件 + catalog | 0 · CLI 106 文件 / 1298 用例；host+catalog 5 文件 / 63 用例 | 合并引入的 slash 用例与本任务用例同树通过 |
 | `42066088` + 未提交改动 | 同上 | `npm run build:cli-dev` 后 `node tmp/tui-bg-realrun.cjs` | 0 · 7 步全过 | 真机链路在合并后的树上复现，摘要行与详情文案与合并前一致 |
+| `d9d365e1` | 同上 | `git merge origin/master`（`f6120e04`，PR #462 改了 `TUIApp.ts` 的 inline 滚动） | 1 处冲突：HEAD 的 `openSelectedTask()` 与 master 更新过的 `revealSelectedBlock()` 重叠；本步已删除 transcript 块选择，保留 HEAD 方法、丢弃后者（`grep revealSelectedBlock` 在 `src` 中已无调用点）。合并提交 `21af3db4` | 4 处注释仍点名已删除的方法，随 `docs(tui)` 提交改为 `visibleWindow()` / 滚动数学 |
+| `21af3db4` | 同上 | `npx tsc -p packages/cli/tsconfig.json --noEmit`；`npx vitest run packages/cli`；transcript 两文件 | 均 0 · CLI 106 文件 / 1297 用例；transcript 30 用例 | 二次同步后重验；PR #464 由 CONFLICTING 转 MERGEABLE，Test workflow 在 head `21af3db4` 上运行 |
 
 ## 接续 / 结果
 
@@ -99,5 +101,6 @@
 已验证：上表单元/集成/门禁项；`packages/cli` 全量 1260 用例；跨包 typecheck 与架构门禁；真机 PTY 7 步（`tmp/tui-bg-realrun.log`）。
 未验证：真模型驱动的 `sleep 60` 前台超时自动转后台触发链（发现 9）；Desktop 侧未改动。
 本任务未提交的本地改动：`packages/host/bundle/*` 与 `packages/capabilities/src/ModuleTool/inline-content.ts`。两者由本地 `build:packages` / `build:cli-dev` 再生，`inline-content.ts` 与 `bundle/package.json` 只有行尾差异，其余差异是 esbuild 压缩标识符改名（已用 `git diff --ignore-all-space` 逐文件确认）。本功能的运行代码不依赖 worker bundle 变更：读路由在 Host 进程，`cli.cjs` 未被跟踪，所以 PR 不带这些产物；合并后 `packages/host/bundle/*` 以 `79cad6bf` 的版本为准。
-PR：待创建（`codex/tui-background-tasks`，base `master`；不在本地合并 master）。
+PR：[#464](https://github.com/lava-chen/duya/pull/464)（base `master`，head `codex/tui-background-tasks`，非 draft）；未合并，等待 review 与 Test workflow。
 回收：未开始；分支与 worktree 在 PR 集成前保留。
+下一步：等 PR #464 的最新 head 上必需检查通过后按授权集成；随后同步 master、重验并回收 worktree。第二步（kill / 子会话实时 transcript / 输出流式 / 自动展开收起）另立计划。
