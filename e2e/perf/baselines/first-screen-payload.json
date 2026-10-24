@@ -1,0 +1,16 @@
+{
+  "recordedAt": "2026-10-24",
+  "commit": "18a144e8",
+  "note": "The renderer bundle the integrator measured with a production build on the reference machine (Intel Core i5-14600KF / 31.8 GB / Node v24.16.0 / Windows, vite production build). The budget is one-sided: growth fails the gate, an improvement passes. Tighten it after a measured win, the way the architecture baselines are ratcheted.",
+  "calibration": "Two independent production builds of the same tree measured 3538.1 KB (PR #401's claim) and 3541.1 KB (the integrator's serial re-profile) - 0.08 % apart; the entry chunk 2659.2 KB and 2662.2 KB - 0.11 % apart. The 5 % tolerance is about fifty times that spread, while the smallest regression worth catching (the provider SDKs coming back into the entry chunk) is roughly 15 %.",
+  "tolerancePct": 5,
+  "firstScreen": {
+    "chunkCount": 7,
+    "bytes": 3626123
+  },
+  "entryChunkBytes": 2726133,
+  "totalJs": {
+    "chunkCount": 339,
+    "bytes": 17937649
+  }
+}
