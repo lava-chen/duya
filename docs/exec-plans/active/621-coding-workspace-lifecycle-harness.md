@@ -1,6 +1,6 @@
 # 621 — Coding Workspace Lifecycle Harness（Session → Checkout → ChangeSet → Integration）
 
-状态：active（既有 A–F 已合并；P0 PR #460 待 review/CI；P1a 执行屏障已实现与验证，待交付 draft PR）· 负责人：Codex `/root` · 更新：2026-10-24
+状态：active（既有 A–F 已合并；P0 PR #460 与 P1a draft PR #465 待 review/CI；执行屏障已实现与验证）· 负责人：Codex `/root` · 更新：2026-10-24
 分支：`codex/worktree-p1` · worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（P0）；接续见文末。
 
 关联：[496 Worktree 框架](./496-worktree-framework-implementation.md)（提供隔离实现，本计划接续其「统一生命周期 / 回收 / journal」三项未完成范围）·
@@ -539,7 +539,7 @@ worktree：`/workspace/work/duya-worktree-p1` · base：`c4eeef11`（依赖 #460
 - [x] 同步取得执行占用，在最后一个异步检查之后拒绝过期上下文；执行中拒绝目录切换，异常释放占用。
 - [x] 普通 registry、真 BashWorker 与 deferred 调用覆盖；等待审批或排队的旧调用没有磁盘副作用。
 - [x] 新一轮上下文可继续执行；既有未附带屏障的外部调用保持兼容。
-- [ ] `typecheck:all`、`architecture:check`、`agent-retirement-gate`、必要构建与相关测试；提交依赖 P0 的 draft PR。
+- [x] `typecheck:all`、`architecture:check`、`agent-retirement-gate`、必要构建与相关测试；提交依赖 P0 的 [draft PR #465](https://github.com/lava-chen/duya/pull/465)。
 
 ### 验证与接续
 
@@ -560,4 +560,6 @@ Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/work
 | 显式 `check-packaged-artifacts.mjs --bundle` | 1；仅既有 `ajv-formats/dist/formats` finding；与 P0 `ac73b758` 报告逐项一致，未改扫描器或 baseline |
 
 日志为 `/workspace/work/duya-worktree-p1-final-*.log`；失败对比 `duya-worktree-p1-final-failure-comparison.json`。最后接入 P0 `ac73b758` 时，已用 `git diff --exit-code 501299bf -- . ':!docs' ':!packages/host/bundle'` 证明源码与依赖完全一致，复用本检出已验收的 P1 bundle，保留 P0 最新接续记录。没有用 P0 产物覆盖 P1 实现。
-下一步：创建依赖 #460 的 draft PR，核对远端 CI / review 并记录 URL。P1a 已验证；P1 主会话 enter/exit、journal 与背景任务占用尚未完成。未合并、未回收；未提交源码路径待交付提交后清零，第三方依赖 overlay 为本地 untracked 配置。
+已交付：[draft PR #465](https://github.com/lava-chen/duya/pull/465)，依赖 [#460](https://github.com/lava-chen/duya/pull/460)，源码与产物 head 为 `f4854159`，本记录随交付文档提交；本轮源码无未提交改动。第三方依赖 overlay 为本地 untracked 配置，未进入 PR。
+远端：#460 的 `ac73b758` 已通过 architecture（包含修复后的退役引用门禁）与 test scope，类型、测试、构建继续运行；#465 刚创建，CI / review 待完成。两个 PR 均保留 draft，未合并、未发布、未回收。
+下一步：核对 #465 最新 head 的 CI / review，修复本 PR 引入的问题；P1b 接入 Host 持久化切换 journal、后台任务占用、主会话 enter/exit 工具，以及下一模型轮的 prompt / permission / skills / catalog 原子刷新。之后再接子会话隔离参数与三端共用入口。P1a 完成不代表 P1 主会话工具已完成。
