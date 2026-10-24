@@ -285,3 +285,62 @@ Every wave updates this file with completed facts and outstanding consumers.
   textual references; then remove `packages/agent` and verify clean builds and
   packaged execution with the directory absent. Do not mark Host/Desktop
   runtime convergence complete from the CLI and worker proofs alone.
+
+### Coordinator handoff: standalone Host db domains (PR #420)
+
+- Branch `codex/fix-host-db-actions`, base `origin/master` (`aed0d13c`), head
+  `984a4d5a`. PR #420 is OPEN and **not merged** — integration needs the user's
+  authorization. Worktree:
+  `E:\Projects\duya\.claude\worktrees\host-db-actions`. The shared checkout stays
+  read-only.
+- The standalone Host's worker db bridge answered 66 actions. Three domains the
+  worker asks for fell through to the default branch and threw
+  `WorkerDbBridgeError('unimplemented_domain')`; the worker answers a failed
+  lookup with a warning and an empty result, so the gap was silent. This cut
+  serves them:
+  - **mailbox** (10 actions): the worker claims rows at every model checkpoint
+    and applies them afterwards. Every claim failed, so every notification was
+    lost. Reuses the Host's existing `localMailboxApi` over
+    `core.stores.mailbox`. The Desktop's renderer broadcast and wake
+    scheduling are deliberately not repeated — a standalone Host has no
+    renderer, and the worker picks the row up at its next checkpoint anyway.
+  - **`plugin:setup:list-all`**: the MCP loader expands `${setup.X}` in plugin
+    manifests from these values; without them every reference expanded to
+    nothing. Reuses the Host's existing `localPluginSetupApi` over
+    `PluginSetupStore`.
+  - **`plugin:registry:list`**: answered from `config.toml`'s `[plugins]`
+    block — the only persisted source of the installed-plugin list. The
+    composite `<pluginId>@<marketplace>` key is split into id and marketplace;
+    `enabled` is reported, and an entry that omits it counts as enabled (the
+    Desktop registry store's default). The entry carries **no install path**:
+    the package files live under the Desktop's Electron `userData`, not under
+    the shared data root a standalone Host reads. Plugin skills and
+    plugin-declared MCP servers therefore stay unavailable here — exactly as
+    before — but the action no longer fails and the enabled-plugin set the
+    worker gates on is now served.
+- `coreMailboxToIpcRow` moved to `@duya/host/ipc-row-adapters` so both bridges
+  emit one legacy row shape; the Desktop re-exports it the way it already
+  re-exports `coreSessionToIpcRow`. The mailbox and plugin setup APIs are each
+  built once and shared by the HTTP surface and the bridge.
+- Verification, all from the worktree root:
+  `npx vitest run packages/host/tests/worker-db-bridge-{mailbox,plugin-setup,plugin-registry}.test.ts`
+  → 17/17; `npm run typecheck:all` → exit 0; `npm run architecture:check` →
+  exit 0 (2622 tolerated, no new violations); `npm run bundle:verify` → FRESH
+  0/919; the desktop adapter suites → 126/126. The full
+  `packages/host/tests` run had one failure,
+  `worker-hooks/events.test.ts`'s `toBeLessThan(500)` wall-clock assertion
+  (measured 521 ms) — a load-dependent flake in a file this cut does not
+  touch; isolated re-run of that file together with `executor.test.ts` was
+  57/57.
+- Known gaps left open, each its own migration surface:
+  `turn-review:save`, `attachment:store`, `session:create`, `session:search`,
+  `config:agents:create`, `automation:cron:list`,
+  `sendMessageState:createWidgetPending`, `sendMessageState:createSecretPending`,
+  `sendMessageState:upsertCursorAgentRun`. Making `plugin:registry:list`
+  equivalent to the Desktop's answer (with `installPath` and `manifest`)
+  needs the plugin manifest reader and the install-directory layout moved down
+  into `plugin-core` — a separate slice.
+- Next action: review PR #420 and, once authorized, integrate it. PR #381
+  (`codex/tui-perf-benchmark`) is still CONFLICTING with master — it needs the
+  same authorization to sync master and rebuild its bundle before it can be
+  integrated.
