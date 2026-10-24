@@ -364,7 +364,61 @@ describe('TUIApp integration', () => {
     app.stop();
     expect(() => app.stop()).not.toThrow();
   });
+
+  it('keeps the viewport on the content when output arrives while the reader is scrolled back', async () => {
+    // The defect this pins: the scroll offset used to be counted from the
+    // TAIL, so every new line moved the window down and pushed what the reader
+    // was reading off the top of the screen. The offset is absolute now, so the
+    // viewport stays where the reader put it.
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({ output: out.stream, input: stdin, onSubmit: () => {} });
+    app.start();
+    await settle();
+
+    const write = (from: number, to: number): void => {
+      for (let index = from; index < to; index += 1) {
+        const data = { content: `line-${index}`, messageId: `m${index}`, index: 0 };
+        app.push({ type: 'text_delta', data });
+        app.push({ type: 'text', data });
+      }
+    };
+
+    // More lines than the viewport can hold, so there is something to scroll.
+    write(0, 120);
+    await settleRendered();
+
+    stdin.write('\x1b[5~'); // PgUp
+    await settleRendered();
+
+    const scrolled = scrollStateOf(app);
+    expect(scrolled.follow).toBe(false);
+    expect(scrolled.scrollTop).toBeGreaterThan(0);
+
+    // The model keeps writing while the reader is looking at something else.
+    write(120, 240);
+    await settleRendered();
+
+    const after = scrollStateOf(app);
+    expect(after.follow).toBe(false);
+    // The offset is absolute, so the viewport did not move with the tail.
+    expect(after.scrollTop).toBe(scrolled.scrollTop);
+
+    app.stop();
+  });
 });
+
+/**
+ * The scroll state the app keeps, read for the assertion.
+ *
+ * There is no public accessor for it: the offset is an internal detail of the
+ * viewport, and the user-visible consequence (which lines are on screen) is
+ * what `visibleWindow` computes from it — and that is unit-tested on its own.
+ */
+function scrollStateOf(app: TUIApp): { scrollTop: number; follow: boolean } {
+  const state = app as unknown as { scrollTop: number; follow: boolean };
+  return { scrollTop: state.scrollTop, follow: state.follow };
+}
 
 /**
  * Read the TUIApp source, for the two structural assertions above.
@@ -455,12 +509,13 @@ describe('renderTranscript', () => {
       showToolResults: false,
       toolResultLines: 5,
     });
-    // Collapsed is a three-line PREVIEW, not an absence: the head names the
-    // phase and the clipped tail is disclosed rather than dropped silently.
+    // Collapsed is a ONE-line PREVIEW, not an absence: the head names the
+    // phase and the newest line is on screen. The head's `[+]` is the
+    // disclosure, so there is no separate overflow row.
     expect(collapsed).toContain('Thinking…');
     expect(collapsed).toContain('line five');
     expect(collapsed).not.toContain('line one');
-    expect(collapsed).toContain('earlier lines');
+    expect(collapsed).not.toContain('earlier lines');
 
     const expanded = renderTranscript(model, {
       expanded: true,
