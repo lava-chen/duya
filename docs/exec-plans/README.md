@@ -15,6 +15,10 @@
 | 平台收口 | [622 依赖测量先行](active/622-agent-platform-convergence/README.md) | 先修切片图的裸 `@duya/*` 解析（= T19 的执行版），再定层表与 `@duya/host` 归属；不先拆包 |
 | 工作区生命周期 | [621 生命周期 Harness](active/621-coding-workspace-lifecycle-harness.md) | 已合并（含 F 三端 UI，#378 → `39f2314f`）；场景 1–7 全绿 |
 | 多 Agent 编排 | [2026-10-23 多 Agent Orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | 评估已出：codex 无队列/DAG/重试可抄；duya 依赖与重试已具备。Phase 1 补测（子 agent 状态机零覆盖）→ Phase 2 DAG 并行 + 失败级联 |
+| computer-use 插件 | [2026-10-24 computer-use 插件审计](active/2026-10-24-computer-use-plugin-audit.md) | 在插件仓库建独立检出并完成 S0 基线：读实现、跑测试、记录 Windows skip 与退出码 |
+| 内置插件随本体分发 | [2026-10-24 内置插件随本体分发](active/2026-10-24-builtin-plugin-distribution.md) | 已实现并推 draft PR（主仓 #445、marketplace #4）：清单在插件仓、seed 改为 copy-then-swap、清单决定默认启停 |
+| 插件 UI 资源面 | [2026-10-24 插件 UI 改为 MCP 资源面](active/2026-10-24-plugin-ui-mcp-resources.md) | 先做 S1 surface 契约与校验用例，确认静态 entry 兼容路径 |
+| 动态工作流抽包 | [2026-10-24 动态工作流核心抽包](active/2026-10-24-dynamic-workflow-package.md) | 完成 S0 对账：比对 host 与 legacy agent 两份实现，确认迁移与删除条件 |
 | Desktop 性能爬坡 | [2026-10-23 Desktop 性能爬坡](active/2026-10-23-desktop-performance-hill-climbing.md) | 5 个 Agent 各占一条独占路径：先由 A 交 Harness v1，再由 B/C/D/E 建基线、各出一个可证明收益的 PR |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
 
