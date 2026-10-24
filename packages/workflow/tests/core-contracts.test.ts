@@ -4,13 +4,16 @@ import { Journal } from '../src/journal.js';
 import { ConcurrencyGate, readyNodes } from '../src/scheduler.js';
 import { isResumeTokenPayload } from '../src/resume-token.js';
 
-const digest: WorkflowHashPort = { sha256: (value) => `digest:${value}` };
+let lastHashedInput = '';
+const digest: WorkflowHashPort = { sha256: (value) => { lastHashedInput = value; return 'a'.repeat(64); } };
 
 describe('@duya/workflow pure contracts', () => {
   it('canonicalizes nested keys and hashes the full definition and requests', () => {
     expect(canonicalJson({ z: 1, a: { y: true, x: 2 } })).toBe('{"a":{"x":2,"y":true},"z":1}');
-    expect(computeDefinitionHash({ z: 1, a: 2 }, digest)).toBe('digest:{"a":2,"z":1}');
-    expect(computeReqHash('tool', { z: 1, a: 2 }, digest)).toBe('digest:tool\u0000{"a":2,"z":1}');
+    expect(computeDefinitionHash({ z: 1, a: 2 }, digest)).toBe('a'.repeat(64));
+    expect(lastHashedInput).toBe('{"a":2,"z":1}');
+    expect(computeReqHash('tool', { z: 1, a: 2 }, digest)).toBe('a'.repeat(16));
+    expect(lastHashedInput).toBe('tool\u0000{"a":2,"z":1}');
   });
 
   it('replays successful journal entries and trims a replayable failure tail', () => {

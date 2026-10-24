@@ -107,6 +107,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@duya/workflow": "0.1.0",
     "@duya/capabilities": "0.1.0",
     "@duya/client-core": "0.1.0",
     "@duya/plugin-core": "0.1.0",

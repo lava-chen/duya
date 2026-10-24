@@ -25,7 +25,7 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 
 - [x] S0：逐文件对账 Host 与 legacy Agent workflow，记录引用方与删除条件。
 - [x] S1：抽取 schema、validate、expr、journal 类型、resume-token、scheduler 与并发控制；公开入口零 IO。
-- [ ] S2：接线 workspace build order、tsconfig 与 architecture policy；登记 `managed: true`、声明窄 `requires`；Host 改从新包导入并移除已迁移重复实现。
+- [x] S2：接线 workspace build order、tsconfig 与 architecture policy；登记 `managed: true`、声明窄 `requires`；Host 改从新包导入并移除已迁移重复实现。
 - [ ] S3：就绪集并行调度、run 限流与 provider AIMD governor 分离、live retune 与观测事件。
 - [ ] S4：依赖子树失败隔离、指数退避加抖动、预算耗尽/取消的 run 级停止。
 - [ ] S5：整份定义 hash 与 journal 恢复纪律、trailing failure 剪枝、orphan running 收敛。
@@ -97,9 +97,18 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 | `c03348b5a8e5f8d59a5e499b63b6cad945296d80` / `packages/workflow/**` + 本计划未提交；`node_modules/`、`dist/` ignored | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npx tsc -p packages/workflow/tsconfig.json --pretty false` | 0 | 新包源码独立严格编译；公共入口暴露 schema/expr/validate、hash/token ports、journal 与 scheduler |
 | 同上 / 同上 | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/workflow/tests/core-contracts.test.ts` | 0 | 1 file / 5 tests：稳定 hash、journal cache/prune/clock 注入、DAG ready set、live limiter、resume payload shape |
 | 同上 / 同上 | 同上 | `rg -n "require\\('node:|from ['\"]node:|import\\(['\"]node:|process\\.|Date\\.now|setTimeout|fetch\\(" packages/workflow/src` | 1（无匹配） | 纯源码未发现 Node builtin、host clock/timer、process 或网络调用 |
+| `6a6a0ebc` / S2 改动；package/lock、build/policy/tsconfig/Vitest、Host adapters 与 `packages/workflow/src/**` | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm install --package-lock-only --ignore-scripts --offline --cache /tmp/duya-workflow-npm-cache` | 0 | 仅登记本地 `@duya/workflow` workspace 与 Host/Runtime 依赖，无 registry 更新 |
+| 同上 / 同上 | 同上 | `npm install --ignore-scripts --offline --cache /tmp/duya-workflow-npm-cache` | 0 | 添加当前 worktree 的 `node_modules/@duya/workflow` workspace link |
+| 同上 / 同上 | 同上 | `npm run build:packages -- --target @duya/workflow --target @duya/host`（首次） | 1 | 错误签名 `dwf/runtime.ts: Semaphore is not exported from ../host.js`；Host adapter 未转出旧兼容符号，补齐 export 后重跑 |
+| 同上 / 同上 | 同上 | `npm run build:packages -- --target @duya/workflow --target @duya/host` | 0 | 13 包依赖闭包构建通过，新包位于 agent-core 后、agent-runtime 前 |
+| 同上 / 同上 | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 0 | 14 files / 205 tests passed；覆盖既有 Host 工作流与新包，workflow layer purity 通过 |
+| 同上 / 同上 | 同上 | `npm run typecheck:workflow` | 0 | `@duya/workflow` 声明与源码 typecheck 通过 |
+| 同上 / 同上 | 同上 | `npm run check:test-coverage` | 0 | 所有 tracked test 被收集；仅有 baseline 中的 1 条 known orphan |
+| 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2641 findings 全部已容忍；无新增违规；256 条旧指纹未触发，baseline 未改写 |
+| `6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b` / S2 改动文件；`node_modules/`、`dist/` ignored | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm run typecheck:all`（受限授权） | 0 | 21 包构建及 protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 类型门禁通过；Electron ratchet 无新增错误；eval 4/4 |
 
 ## 接续 / 结果
 
-已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）。改动前 workflow 基线在正确 build prerequisites 后为 12 files / 185 tests 全绿；首次未构建时的 10 个 import failure 独立记录，不能作为行为红测。S1 新包独立严格编译及 5 个纯契约用例通过；纯源码 grep 未发现 IO primitive。`node_modules/`、`dist/` 均 ignored。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
+已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）与 S1（`6a6a0ebc`）。改动前 Host workflow 基线在正确 build prerequisites 后为 12 files / 185 tests 全绿；首次未构建时的 10 个 import failure 独立记录，不能作为行为红测。S1 新包独立严格编译及 5 个纯契约用例通过；S2 workflow/Host 回归及 layer purity 为 14 files / 205 tests 全绿，workspace 目标构建与 architecture gate 通过。request hash 保持旧 16 hex 格式，definition hash 独立覆盖整份规范化定义。`node_modules/`、`dist/` 均 ignored。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
 
-下一步：提交 S1；S2 将新包接入 workspace build order、tsconfig、Vitest source alias 与 architecture policy，迁入执行核心，并在 Host 保留存储、进度、worker 装配、crypto/hash/time 适配器。
+下一步：提交 S2；S3 以就绪集替换串行拓扑执行，分离 run `maxConcurrency` 与共享 provider AIMD governor，并补 live retune 及 `concurrency-changed` / `run-stalled` 观察事件。

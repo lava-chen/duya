@@ -5,7 +5,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 
 // Follow this checkout's declared exports, including relocated source subpaths.
 // Shared dependency junctions otherwise let Vite read the primary manifest.
-const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'agent-core', 'agent-protocol', 'client-core', 'command-catalog'].flatMap((name) => {
+const WORKSPACE_SOURCE_ALIASES = ['host', 'data', 'capabilities', 'agent-runtime', 'workflow', 'agent-core', 'agent-protocol', 'client-core', 'command-catalog'].flatMap((name) => {
   const directory = new URL(`./packages/${name}/`, import.meta.url)
   const manifest = JSON.parse(readFileSync(new URL('package.json', directory), 'utf8')) as {
     name: string;

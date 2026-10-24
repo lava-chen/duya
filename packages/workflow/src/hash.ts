@@ -15,7 +15,9 @@ export function canonicalJson(value: unknown): string {
 }
 
 export function computeReqHash(kind: string, payload: unknown, hash: WorkflowHashPort): string {
-  return hash.sha256(`${kind}\u0000${canonicalJson(payload)}`).slice(0, 32);
+  // Preserve the pre-extraction 16-hex-character key so existing journal
+  // entries remain replayable across the package move.
+  return hash.sha256(`${kind}\u0000${canonicalJson(payload)}`).slice(0, 16);
 }
 
 /** Hash the entire normalized DAG definition, including metadata and phases. */
