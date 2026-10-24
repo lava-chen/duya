@@ -30249,7 +30249,7 @@
       "format": "esm"
     },
     "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
-      "bytes": 15587,
+      "bytes": 16092,
       "imports": [
         {
           "path": "fs",
@@ -30301,7 +30301,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 6967,
+      "bytes": 6929,
       "imports": [
         {
           "path": "node:fs",
@@ -38461,13 +38461,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -38545,7 +38545,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 687
@@ -38569,7 +38569,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -38710,7 +38710,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -40492,7 +40492,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41479,10 +41479,10 @@
           "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 81
+          "bytesInOutput": 80
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1526
+          "bytesInOutput": 1525
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41491,10 +41491,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50729
+          "bytesInOutput": 50728
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1884
+          "bytesInOutput": 1883
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -42337,7 +42337,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -42955,7 +42955,7 @@
           "bytesInOutput": 916
         },
         "packages/plugin-core/src/workflows/schema.ts": {
-          "bytesInOutput": 392
+          "bytesInOutput": 393
         },
         "packages/plugin-core/src/workflows/index.ts": {
           "bytesInOutput": 0
@@ -43159,10 +43159,10 @@
           "bytesInOutput": 25
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 1050
+          "bytesInOutput": 1028
         },
         "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
-          "bytesInOutput": 4658
+          "bytesInOutput": 3170
         },
         "packages/host/src/plugin-install-paths.ts": {
           "bytesInOutput": 1469
@@ -43819,7 +43819,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4685256
+      "bytes": 4683774
     }
   }
 }
