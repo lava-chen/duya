@@ -2,7 +2,7 @@
 
 状态：draft PR #436 · CI 修复中（用户已授权合并，待门禁通过）· 负责人：Codex · 更新：2026-10-24
 分支：`codex/workflow-core-package` · worktree：`.claude/worktrees/workflow-core-package`
-base：`2ca7886fbae7197d30db4b4c553f59ca4b03fedf`（当前 `origin/master`）· owner：本会话
+base：`c426d029668ed0a0d6dae5ca9429b4a878925abd`（当前 `origin/master`）· owner：本会话
 
 ## 目标与边界
 
@@ -156,6 +156,12 @@ base：`2ca7886fbae7197d30db4b4c553f59ca4b03fedf`（当前 `origin/master`）· 
 | 同上 / 分类表与 bundle dirty；全量 Vitest 未完成 | Node v24.19.0 · 本地网络受限 | `npx vitest run` | 130（人工中断） | 未筛选全量启动；多个 Electron 集成文件在 collection 时下载 binary 失败并显示 `0 test`，输出 `TypeError: fetch failed`，不能作为完整测试结果 |
 | 同上 / 分类表与 bundle dirty；网络权限开启后全量 Vitest 未完成 | Node v24.19.0 · 本地网络权限已批准 | `npx vitest run` | 130（人工中断） | 外连仍无法获取 Electron binary；还出现的 Host/IPC 本地失败在上行两文件单独重跑全部通过。全量无跳过地由 PR CI 复验 |
 | `e0b867519f115244061d0a80bd43783c3ff3e96c` / classification, bundle and plan dirty | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `git fetch origin` | 0 | `origin/master` 前进自 `2ca7886fbae7197d30db4b4c553f59ca4b03fedf` 至 `c426d029`；先提交 CI 修复，再 rebase 并重跑完整门禁 |
+| `60af2c95` / CI 修复提交 | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `git rebase origin/master` | 首次 1；冲突解决后继续 0 | 8 个提交重放；仅 `worker-entry.js` 与 worker metafile 冲突，按 rebase 后源码重新生成，不手工拼接生成文件 |
+| `4b22e70bf14a64693a4751232c0bada08cf35e98` / rebase 正在重放 CI 修复，两个 bundle 路径已从冲突状态恢复 | 同上 | `npm run build:packages -- --target @duya/host && npm run bundle:worker` | 0 | 13 包依赖闭包通过；根据已重放源码生成 `worker-entry.js`（4.47 MB）与 `BashWorker.js`（33.09 KB），随后 `git rebase --continue` 完成 |
+| `82665fab2e2fab581513f72b7749d0872e038b72` / 仅计划文档未提交；`origin/master=c426d029668ed0a0d6dae5ca9429b4a878925abd` | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm run architecture:check`（rebase 后，受限授权） | 0 | 2703 findings 均为已容忍项；无新违规；2 条旧指纹消退；未写 baseline |
+| 同上 / 同范围 | 同上，受限授权 | `npm run typecheck:all`（rebase 后） | 0 | 21 包构建、protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 通过；Electron ratchet 无新增错误；eval 4/4 |
+| 同上 / 同范围 | 同上，受限授权 | `npx vitest run packages/workflow/tests scripts/architecture/slice-classification.test.ts` | 0 | 5 files / 47 tests passed：workflow graph/并发/失败/恢复全套及新包分类完整性 |
+| 同上 / 同范围 | 同上，受限授权 | `npm run bundle:verify`（rebase 后） | 0 | worker bundle commit 为 `82665fab`；两个产物 `ok`，0/945 输入在生成提交后变化 |
 
 ## 接续 / 结果
 
@@ -165,4 +171,4 @@ S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的�
 
 S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
 
-已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；已修复方案并在本地通过 workflow 全套测试、`typecheck:all` 与 architecture gate。当前分类表与 worker bundle 修复待提交、推送并触发完整 PR CI；若 CI 全绿则按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。
+已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；修复提交 `82665fab2e2fab581513f72b7749d0872e038b72` 已 rebase 到最新 `origin/master=c426d029668ed0a0d6dae5ca9429b4a878925abd`，冲突仅涉及生成 bundle，已按源码重建。最新 base 上 architecture、typecheck、workflow/classification 测试与 bundle freshness 均通过；计划文档的 rebase 后验证记录待提交，随后 force-with-lease 更新 PR 并等待 GitHub 全量 CI。若 CI 全绿则按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。
