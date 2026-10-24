@@ -1,7 +1,7 @@
 # 消息写路径：appendBatch 的去重检查按批点查，不再全量扫会话索引
 
 状态：active · 负责人：mavis 会话 `mvs_ae3b38275b13437883faa5ef6f4d518c` · 更新：2026-10-25
-分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1`（已合入 `origin/master` `379d990b`）· owner：mavis
+分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1`（已合入 `origin/master` `dc6d4ee7`）· owner：mavis
 
 ## 目标与边界
 
