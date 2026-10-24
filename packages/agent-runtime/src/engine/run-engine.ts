@@ -2194,7 +2194,10 @@ export class RunEngineImpl implements RunEngine {
    * provider sending the original history forever, so the two assignments below
    * are the load-bearing lines rather than bookkeeping:
    *
-   *  - `compacted.current` is what `#modelRequest` builds the next request from.
+   *  - `compacted.current` is what `#modelRequest` builds the next request from,
+   *    and what the compaction PROBE measures from once it is in place
+   *    (`#transcriptFor` partitions it against the host's current context, so
+   *    the probe measures the request's rows and not the replacement's alone).
    *  - `contextEpoch += 1` retires the generation the just-finished request
    *    belonged to, so a later `noteUsage` cannot anchor the new one to a size it
    *    never had. The legacy bumps on the same event (`CompactionManager.ts:918`).
@@ -2249,16 +2252,42 @@ export class RunEngineImpl implements RunEngine {
   /**
    * The transcript to hand the port at a decision point.
    *
-   * Three inputs, in precedence order, and the order is the whole argument:
+   * ## The probe measures what the REQUEST carries
    *
-   * 1. a compaction's replacement, when one exists. It is not optional: the
-   *    legacy re-projects after every compaction precisely so the next
-   *    iteration "sees the compacted projection" (`DuyaAgent.ts:3034-3036`).
-   * 2. the fragments drained this turn whose text already exists. They are the
-   *    payload a preflight probe exists to catch, and they are not yet in the
-   *    assembly.
-   * 3. the assembled messages, which is the last point the engine holds a real
-   *    transcript rather than a `ResolvedPart` the host still has to resolve.
+   * The port is handed a transcript and MEASURES it -- "the messages travel,
+   * and the port measures them" (`ports.ts`) -- so a probe handed LESS than
+   * the request carries under-counts it, and a compaction decided against a
+   * smaller number is decided against the WRONG number (audit finding H-6).
+   *
+   * The gap is not a rounding error and it does not stay still: the volatile
+   * context -- the environment, the memory projection, the skill catalog,
+   * every hook block -- is per-request state that never enters the
+   * timeline, so a compaction's replacement CANNOT carry it. Measured
+   * against the replacement alone, the probe misses the rail, and the rail
+   * is exactly the part that changes every turn. The trigger therefore
+   * fires later than it should, by the rail's size.
+   *
+   * So the base here is the SAME partition the request is built from, and
+   * that partition has ONE derivation: `#compactedHistory`, which this method
+   * and `#requestHistory` both call. There is no second copy of the rule for
+   * the probe and the request to drift apart over.
+   *
+   * ## Two inputs, in precedence order, and the order is the whole argument:
+   *
+   * 1. the fragments drained this turn whose text already exists. They are
+   *    the payload a preflight probe exists to catch, and they are not yet
+   *    in the assembly.
+   * 2. the history: the host's assembled messages, or -- once a compaction
+   *    has replaced the transcript -- the partition of the replacement and
+   *    the host's current context.
+   *
+   * ## Why the base is the ASSEMBLED messages before any compaction
+   *
+   * With no replacement the base is the host's assembled messages: the last
+   * point the engine holds a real transcript rather than a `ResolvedPart` the
+   * host still has to resolve. An inline history is frozen at run start and a
+   * `by_ref` one is the HOST's to resolve, so neither can be what the probe
+   * measures.
    *
    * ## Why this is NOT `#fragmentMessages`, and why it is not async
    *
@@ -2296,7 +2325,15 @@ export class RunEngineImpl implements RunEngine {
     assembled: AssembledTurn,
     drained?: readonly TransientContextFragment[],
   ): readonly ModelMessage[] {
-    const base = ctx.compacted.current ?? assembled.messages;
+    const replacement = ctx.compacted.current;
+    // The partition, not the replacement alone: the probe has to measure the
+    // rows the request carries, and the request carries the replacement's
+    // conversation PLUS the host's current context (audit finding H-6). The
+    // derivation is `#compactedHistory`, shared with `#requestHistory`.
+    const base =
+      replacement === null
+        ? assembled.messages
+        : this.#compactedHistory(replacement, assembled);
     if (drained === undefined) return base;
     // Narrowed on the presence of `pending`, which is what makes "the text is
     // `string | undefined`" unrepresentable (`ports.ts`, the fragment union).
@@ -2716,12 +2753,61 @@ export class RunEngineImpl implements RunEngine {
    * The inline history is still the source of the CONVERSATION when there is no
    * replacement: an inline history is what the host handed the run at its
    * start, and nothing replaces it until a compaction says so.
+   *
+   * ## Where the partition is computed
+   *
+   * In `#compactedHistory`, which the compaction PROBE calls as well
+   * (`#transcriptFor`, audit finding H-6). The probe measures the request's
+   * rows, so the two must not be able to disagree about which rows those are,
+   * and the rule that decides them has exactly one derivation.
    */
   #requestHistory(ctx: RunContext, assembled: AssembledTurn): readonly ModelMessage[] {
     const replacement = ctx.compacted.current;
     if (replacement === null) {
       return ctx.input.history.kind === 'inline' ? ctx.input.history.value : assembled.messages;
     }
+    return this.#compactedHistory(replacement, assembled);
+  }
+
+  /**
+   * The history of a run whose transcript a compaction has replaced.
+   *
+   * ## This is the ONE derivation of the partition
+   *
+   * The partition the request is built from is stated in `#requestHistory`
+   * above: the replacement contributes the CONVERSATION (rows with
+   * `origin !== 'context'`) and the host's current projection contributes the
+   * CONTEXT (rows with `origin === 'context'`).
+   *
+   * It lives in ONE method because it is needed in TWO places, and the two
+   * places must not be able to disagree:
+   *
+   *  - `#requestHistory`, which builds the request's history from it.
+   *  - `#transcriptFor`, which builds the transcript the COMPACTION PROBE
+   *    measures from it (audit finding H-6).
+   *
+   * A probe that recomputed the partition with its own logic would be a
+   * second derivation of one rule, and the drift between them would be
+   * invisible until the trigger fired at the wrong moment -- which is the
+   * failure this method exists to make impossible.
+   *
+   * ## Why the two halves are DISJOINT
+   *
+   * The same reasoning as in `#requestHistory`, and it is worth restating
+   * here because the probe now depends on it too: a timeline row that is
+   * runtime context is `origin: 'context'` in BOTH projections, so it lands
+   * in the host's half and is excluded from the replacement's; a row that is
+   * not is `origin !== 'context'` in both, so the mirror image applies. The
+   * rail, the hook blocks and the attachment text exist only in the host's
+   * projection, so they land in the host's half and nowhere else.
+   *
+   * Every row is therefore in exactly one half: the request carries the
+   * context rows EXACTLY ONCE, and the probe measures exactly those rows.
+   */
+  #compactedHistory(
+    replacement: readonly ModelMessage[],
+    assembled: AssembledTurn,
+  ): readonly ModelMessage[] {
     return [
       ...replacement.filter((message) => message.origin !== 'context'),
       ...assembled.messages.filter((message) => message.origin === 'context'),
