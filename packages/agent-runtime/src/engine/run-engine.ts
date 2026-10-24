@@ -171,6 +171,7 @@ import type {
   TurnAssemblyInput,
 } from './ports.js';
 import { openRequestScope } from './request-scope.js';
+import { assembleRequestMessages } from './request-assembly.js';
 import { runCompactionPass, type CompactionPassResult } from './compaction.js';
 
 // ============================================================================
@@ -2678,42 +2679,25 @@ export class RunEngineImpl implements RunEngine {
     // behind a history the model has already read.
     const inbound = ctx.injected.current;
 
-    // The prompt goes in on the FIRST turn only. Later turns are continuations
-    // after tool results, and re-appending the prompt every turn is how a
-    // conversation teaches a model to repeat itself.
+    // The prompt goes in on the FIRST turn only, and it goes in ONCE. Both of
+    // those are the REQUEST CONTRACT, not a fact about this method: the
+    // contract, the reasons behind it, and the request shapes it produces are
+    // in `request-assembly.ts`, and this method only collects the parts.
     //
-    // It goes in ONCE. A host that assembles the turn from its own timeline
-    // projects this turn's user row into `assembled.messages`, and that row IS
-    // the prompt -- the host committed the prompt row under the id the run
-    // input names, so the two are one message reached twice. Measured on the
-    // agent-runtime benchmark: the model received the user's prompt TWICE in
-    // one request, which doubled the input tokens of the first turn.
-    //
-    // Which copy survives is decided by POSITION, not by preference. The row
-    // the host committed sits where the conversation puts it -- after the
-    // turns it answers -- and that is the copy the legacy sent, because the
-    // legacy's transcript WAS the timeline. The engine's own copy would sit
-    // at the FRONT of the request, ahead of the turns it is answering, and
-    // the provider boundary merges consecutive user messages, so the prompt
-    // would reach the model twice: once ahead of the conversation, and once
-    // where it belongs.
-    //
-    // So the engine's copy is the one that goes when the host's copy is
-    // there. Identity is the message ID, and that is the only thing it can be:
-    // the engine cannot compare prose (a host may have rendered the prompt
-    // into the row's content differently) and must not drop a message on a
-    // heuristic. A host whose assembled messages do NOT carry the prompt row
-    // keeps the engine's copy here, unchanged -- that is the case where the
-    // request would otherwise have no question in it at all.
-    const promptId = input.prompt.id;
-    const historyCarriesPrompt = promptId !== undefined &&
-      history.some((message) => message.id === promptId);
-    const messages: readonly ModelMessage[] =
-      ctx.turn === 1
-        ? (historyCarriesPrompt
-            ? [...steering, ...carried, ...history, ...inbound]
-            : [input.prompt, ...steering, ...carried, ...history, ...inbound])
-        : [...history, ...carried, ...steering, ...inbound];
+    // The short version, because it is the part that is easy to get wrong: a
+    // model reads a conversation from the end, and the host's context rail
+    // rides at the end of the request -- every rail row is a `user` turn
+    // wrapped in "This context was attached automatically by the system. It
+    // is not part of the user's message." So the question has to be at the
+    // end of the CONVERSATION, and only one copy of it.
+    const messages = assembleRequestMessages({
+      hostMessages: history,
+      prompt: input.prompt,
+      carried,
+      steering,
+      inbound,
+      isFirstTurn: ctx.turn === 1,
+    });
 
     // Model selection is forwarded from the manifest when it names one, and
     // omitted when it does not: `RunManifest.agent` is optional, and a request
