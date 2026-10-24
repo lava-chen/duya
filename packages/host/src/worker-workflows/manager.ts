@@ -20,12 +20,19 @@
  * store over IPC (`workflowRunDb`).
  */
 
-import type { WorkflowDef } from './schema.js';
-import { validateWorkflow } from './validate.js';
-import { WorkflowEngine, type EngineOutcome, type EngineOptions } from './engine.js';
+import {
+  WorkflowEngine,
+  validateWorkflow,
+  type EngineOutcome,
+  type WorkflowDef,
+} from '@duya/workflow';
 import { Journal, type JournalRecord, type JournalSink } from './journal.js';
 import { verifyResumeToken, createResumeToken } from './resume-token.js';
-import type { WorkflowHost } from './host.js';
+import type { WorkflowHost } from '@duya/workflow';
+import { WorkflowDecisionAdapter } from './decision-adapter.js';
+import { createWorkflowRuntimePorts } from './runtime-ports.js';
+import { defaultConcurrency } from './host.js';
+import type { DecisionService } from '../decisions/index.js';
 import { runVerifyStage, type VerifyVerdict } from './verify.js';
 import type { PlannerResult } from './planner.js';
 
@@ -106,7 +113,7 @@ export type LaunchResult =
 export interface WorkflowManagerOptions {
   host: WorkflowHost;
   store: WorkflowRunStoreLike;
-  decisionService?: EngineOptions['decisionService'];
+  decisionService?: DecisionService;
   /** Resume-token HMAC secret (production: host-provided, persistent). */
   secret?: string;
   approvalMode?: 'await' | 'suspend';
@@ -359,11 +366,13 @@ export class WorkflowManager {
 
     const engine = new WorkflowEngine({
       host: this.options.host,
-      decisionService: this.options.decisionService,
-      secret: this.options.secret,
+      ...(this.options.decisionService
+        ? { decisions: new WorkflowDecisionAdapter(this.options.decisionService) }
+        : {}),
+      ports: createWorkflowRuntimePorts(this.options.secret),
       approvalMode: this.options.approvalMode ?? 'await',
       agentBudget: this.options.agentBudget,
-      concurrency: this.options.concurrency,
+      concurrency: this.options.concurrency ?? defaultConcurrency(),
       signal: opts.signal,
     });
 

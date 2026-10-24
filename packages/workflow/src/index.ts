@@ -5,3 +5,12 @@ export { canonicalJson, computeDefinitionHash, type WorkflowHashPort } from './h
 export * from './resume-token.js';
 export * from './scheduler.js';
 export * from './journal.js';
+export * from './host.js';
+export * from './ports.js';
+export * from './decision-port.js';
+export * from './error-class.js';
+export * from './output-schema.js';
+export * from './human-runner.js';
+export * from './node-runner.js';
+export * from './map-runner.js';
+export * from './engine.js';

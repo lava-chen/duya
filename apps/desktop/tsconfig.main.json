@@ -33,6 +33,12 @@
       "@duya/host": [
         "../../packages/host/dist/index.d.ts"
       ],
+      "@duya/workflow": [
+        "../../packages/workflow/dist/index.d.ts"
+      ],
+      "@duya/workflow/*": [
+        "../../packages/workflow/dist/*"
+      ],
       "@duya/host/control-plane-service": [
         "../../packages/host/dist/control-plane-service.d.ts"
       ],

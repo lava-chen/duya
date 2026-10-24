@@ -139,6 +139,7 @@ const BUILD_ORDER = [
   // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
   '@duya/client-core', // -> @duya/agent-protocol
+  '@duya/workflow', //     -> @duya/agent-core, @duya/agent-protocol
 
   // Source-only shared React renderer. Its build step typechecks the public
   // source tree (it intentionally emits no JS because both Vite surfaces
@@ -149,8 +150,8 @@ const BUILD_ORDER = [
   // and plugin contracts, while Runtime consumes their public tool contracts.
   '@duya/capabilities',
 
-  // Level 4 — depend on agent-core, agent-protocol, and client-core.
-  '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol, @duya/client-core
+  // Level 4 — depend on agent-core, agent-protocol, client-core, and workflow.
+  '@duya/agent-runtime', // -> @duya/agent-core, @duya/agent-protocol, @duya/client-core, @duya/workflow
 
   // Memory is a Host prompt/context prerequisite.
   '@duya/memory', // -> @duya/ai
