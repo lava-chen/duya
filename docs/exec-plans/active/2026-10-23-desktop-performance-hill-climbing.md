@@ -103,6 +103,9 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [x] 第四轮：harness 三个 P0（锁自杀 #429 / CI 路由 #430 / 信号预算 #431）
 - [x] 第四轮：同轮 before/after 权威重跑（before `73c22414` → after `8becf37c`，10k 三个有效样本）
 - [x] 第四轮：刷新快场景权威基线（startup / stream / typing / panels / gpu）
+- [x] 第五轮：数据路径 O(n²) 根因定位 + 修法（PR #444，Host 新增整读）
+- [x] 第五轮：同轮 before/after 权威对照（10k 打开 35.2 s → **1.4 s**，切换 47.7 s → **1.7 s**）
+- [x] 第五轮：投影次数门禁（机器无关，确定性）
 
 派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径并交付第一轮。第二轮的 F（首屏依赖闭包）与 G（虚拟化）由集成者直接派工；第四轮由集成者收口（harness 与 CSS 属共享范围）。
 
@@ -269,6 +272,60 @@ after 侧的切换多花了约 12–15 秒，而这 12–15 秒里主线程几�
 
 **下一步要回答的问题**：切换时主进程做了多少次 `db:message:getBySession`、每次投影多少条记录。已知根因是「每页全量重投影」O(n²)；如果虚拟化让 store 发布了更多次更新、每次都触发一次全量重投影，那墙钟就会随**发布次数**而不是**数据量**增长。**这是下一轮第一号机会。**
 
+## 第五轮：数据路径（PR #444）
+
+上面那个问题有答案了。第四轮留下的「万条会话分钟级」和「切换墙钟 +15 %」是**同一个根因**：Host 每翻一页，就把整条历史重新投影一遍。
+
+### 根因（实测，不是推断）
+
+`packages/host/src/session-api.ts` 的分页读，每次调用都执行 `messageLog.listBySession()` 取**整条**历史，逐行 `JSON.parse`、逐行投影，最后才切出当前页。Desktop 侧 `apps/desktop/src/main/ipc/db-handlers.ts` 用 `limit: 200` 一直翻到末尾 → 1 万条消息 = **50 次全量投影**。
+
+真实 `createHostSessionApi` + 真实 `MessageLog` 的基准（1 万条消息、3.6 MB rollout）：
+
+| | |
+| --- | --- |
+| 分页读 50 页（Desktop 现状） | **16672 ms** |
+| 同一条历史的一次投影 | **314 ms** |
+| 倍数 | **53×** |
+
+### 修法：Host 新增「整读」
+
+- `packages/agent-protocol/src/session-api.ts`：`HostSessionApiV1.readAllMessages` + `HostMessageReadAllQuery`
+- `packages/host/src/session-api.ts`：投影抽成共享的 `projectMessageItems()`，两种读共用；`readAllMessages` 只投影一次
+- `packages/host/src/http-client.ts` / `http-server.ts`：既有 `/messages` 路由加 `?all=1`；分页语义不变；`all` 带上 `limit`/`cursor`（或值不是 `1`）一律 400
+- `apps/desktop/src/main/ipc/db-handlers.ts`：桥接一次整读，不再翻页
+
+### 同轮 before/after 权威对照
+
+同一棵测量树、同一台机器、同一天，两个跑次都持锁，9 样本零失败。`perf/session-10000`：
+
+| 指标 | before | after | 变化 |
+| --- | --- | --- | --- |
+| `session.open_ms` | 35249 / 37160 / 29503 | **1153 / 1364 / 1560** | **−96.1 %**（26×） |
+| `session.switch_ms` | 50755 / 47698 / 46900 | **1543 / 2148 / 1672** | **−96.5 %**（28×） |
+| `scrollHeight` | 1327480 px | 1327480 px | 0（同一份历史） |
+| `dom.nodes` | 569 | 569 | 0（同一套虚拟化） |
+| `commit.count` | 42 | 42 | 0 |
+| `longtask.total_ms` | 302 / 281 / 298 | 419 / 527 / 615 | +77 %（见下） |
+| `cpu.renderer_pct` | 4.65 / 4.54 / 4.18 | 35.97 / 33.39 / 37.22 | +692 %（见下） |
+| `mem.peakMB` | 83.77 / 90.26 / 81.49 | 117.32 / 108.84 / 129.54 | +40 %（见下） |
+
+`perf/session-1000`：open 626 → 336 ms（−46 %）、switch 684 → 359 ms（−48 %）。
+`perf/session-100`（对照，本来就只有一页）：open 203 → 237 ms——一页之内没有可优化的地方，这个差异落在 0.2 s 量级的运行间噪声内。
+
+**三处上升是同一件事**：渲染量没变（`scrollHeight`、`dom.nodes`、`commit.count` 三个都一模一样），变的是**投递方式**。before 把 10 000 条拆成 50 批、摊在 35 秒里；after 一次送到，渲染挤在 1.4 秒里完成——于是主线程长任务从 0.3 s 涨到 0.5 s，渲染器 CPU 从 4.5 % 涨到 36 %（分母从 35 秒变成 1.4 秒）。内存峰值 +33 MB 是整条历史一次性到达的代价。**这三个数字是本轮换来的代价，不是回归**，但它们指向下一轮的靶子。
+
+「切换墙钟 +15 %」这个悬案到此**消解**：它和打开的分钟级是同一段等待，切换读得更多，所以等得更久。
+
+### 门禁：投影次数（机器无关）
+
+`packages/host/tests/session-message-projection-count.test.ts` 数的是**投影次数**，不是毫秒：
+
+- 整读 → 投影**恰好 1 次**
+- 分页读 → 投影**每页 1 次**（3 页就是 3 次）
+
+这是 Claude 式棘轮在本仓的第一次落地：重新引入「每页全量投影」的那个提交会**直接红**，而不是等到某台机器上有人觉得慢才发现。它和 `apps/desktop/src/main/ipc/__tests__/db-handlers.test.ts` 里「桥接只调 Host 一次、绝不翻页」一起，把这条路径钉死。
+
 ## 集成记录
 
 | PR | Agent | 内容 | 状态 |
@@ -332,9 +389,11 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | typing | `interact.p50_ms` **25.75**（CV 0.33%）、`interact.p95_ms` **32.30**（CV 0.25%）、`frame.p95_ms` 16.8（0%）、`dom.nodes` **557**（第一轮 1378）、`commit.count` 1、`longtask.total_ms` 0 | 输入延迟最稳的一组，是最可靠的 CI 候选来源 |
 | panels | `panels.open_ms` 449（3 个面板）、`dom.nodes` **697**（第一轮 1533）、`frame.p95_ms` 16.8（0%）、`longtask.total_ms` 112（CV 33.5%） | |
 | gpu | `cpu.renderer_pct` **5.04**（第一轮 99.4）、`longtask.count` 2（第一轮 305）、`longtask.total_ms` **111**（第一轮 **37230**）、`frame.p95_ms` 16.8（CV 0.28%）、`dom.nodes` 580 | 三种 GPU 状态（normal / unavailable / context-lost）合并；`webgl-context-lost` 三个样本都观测到 `lost=1`，**注入真实生效**；`gpu.terminal.degraded` 0 |
-| session-switch（100 条） | `session.open_ms` **218**、`session.switch_ms` **174**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 24–31 | |
-| session-switch（1000 条） | `session.open_ms` **601**、`session.switch_ms` **706**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 31–45 | |
-| session-switch（**10000 条**） | `session.open_ms` **75292**、`session.switch_ms` **114611**、`dom.nodes` **569**、`longtask.total_ms` **283–569**、`mem.peakMB` **68–80**、`cpu.renderer_pct` **3.09–5.81** | 墙钟由数据路径主导（见「第四轮」） |
+| session-switch（100 条） | `session.open_ms` **237**、`session.switch_ms` **203**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 23–33 | 第五轮；对照用，一页之内没有可优化的地方 |
+| session-switch（1000 条） | `session.open_ms` **336**、`session.switch_ms` **359**、`dom.nodes` 569、`longtask.total_ms` 0、`mem.peakMB` 34–49 | 第五轮 |
+| session-switch（**10000 条**） | `session.open_ms` **1364**、`session.switch_ms` **1672**、`dom.nodes` **569**、`longtask.total_ms` **419–615**、`mem.peakMB` **109–130**、`cpu.renderer_pct` **33–37** | 第五轮（#444 之后）；第四轮同口径是 75292 / 114611 ms |
+
+**session-switch 三行已被第五轮改写**：#444 把整条历史的读取从「每页一次全量投影」换成「一次投影」。10 000 条的打开从 **35.2 s → 1.4 s**、切换从 **47.7 s → 1.7 s**。这三行与其余场景的基线**不同源**——#444 只动 Host 与 Desktop 桥接，不碰渲染器，所以 startup / stream / typing / panels / gpu 五行仍以第四轮为准。第五轮没有重跑那五个场景。
 
 **GPU 那一行的巨大落差**：旧基线（坏布局）测到 37.2 秒长任务与 99.4 % 渲染器 CPU，布局修好后是 **111 ms / 5.04 %**。**没有做受控对照**，所以不能断定是 #422 还是 #421 的功劳；但幅度排除了虚拟化（该场景的 fixture 只有 100 条消息，DOM 少挂载 800 个节点不可能省下 37 秒），最可能是终端的 WebGL 画布落在坏掉的 flex 容器里、尺寸反复重算。
 
@@ -353,19 +412,19 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 | # | 机会 | 已测收益 / 证据 | 状态 | 归属 |
 | --- | --- | --- | --- | --- |
-| **0** | **数据路径：`db:message:getBySession` 每页全量重投影 O(n²)** | 第四轮把墙钟拆成两段：open 的 `t_click → t_data = 73048 ms`、`data → dom = **0 ms**`；switch 的 `getThreadIPC` 一段就是 **103691 ms**，CPU profile **97.4 % idle**。**渲染只占 0 毫秒，其余全在等主进程** | **第一号**。具体动作：数清一次切换里主进程做了多少次重投影、每次投影多少条记录 | 主进程 / host / DB / IPC |
-| **1** | **虚拟化之后切换墙钟 +15 %（未解释）** | 同轮对照：switch 墙钟 99835 → **114611 ms**（p50），而 switch 的主线程成本从 21163–26676 ms 掉到 283–569 ms——多出来的 12–15 秒**全是等待**。G 的 A/B/A 轮独立观测到同一量级（+10 ~ 14 s），所以不是偶发 | **待查**。候选：store 发布次数变多 → 每次都触发一次全量重投影（与 #0 同一个根因） | 与 #0 一起查 |
+| **0** | **Web 侧还有同一条 O(n²) 路径** | `packages/ui/src/lib/ipc-client.ts` 的 `readAllHostMessages` 用 `limit: 100` 分页读**同一个** Host 接口：1 万条 = 100 页 × 全量投影。Desktop 侧已在 #444 修掉（一次整读），Web 侧还没跟上（Desktop 不配置 UI services，走 IPC；Web 走这条） | **新的第一号**。`UiServices.sessions` 是窄接口，需要另一个 PR 把整读加进去 | UI / host |
+| **1** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
 | 2 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
 | 3 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
 | 4 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
 | 5 | 首屏 entry chunk 里剩下的一方模块 | 首屏 entry chunk 现为 **2478263 B**（#418 之后）；E 已切走 8 个界面树 | **待做**：用 E 的 `module-closure.mjs` 看还剩哪些是「点击才到」的 | E |
 | 6 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
 | 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
-| 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253） | 集成者 + A |
+| 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253）。**#444 再加一条**：投影次数门禁（整读 = 1 次投影），纯计数、机器无关 | 集成者 + A |
 | 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
 | 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
 
-**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由 #0 决定。
+**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 | 证据 |
@@ -411,13 +470,20 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | 第四轮快场景基线 | `8becf37c` | `node scripts/perf/run.mjs --scenarios startup,stream,typing,panels --samples 3 …` + `--scenarios gpu --samples 3` | 0 | 5 场景 18 样本零失败；startup typeable 1741 / dom 183；typing interact p50 25.75 / p95 32.30 / dom 557；panels dom 697；gpu 长任务 111 ms / CPU 5.04 % / `lost=1` 注入生效 |
 | 第四轮数据路径探针 | `8becf37c` | `node docs-local/research/perf-harness/probe-rows.mjs --fixture perf/session-10000`（240 秒预算） | 0 | openMs 73077；`t_click → t_data` **73048 ms**、`data → dom` **0 ms**；switch 的 `getThreadIPC` 一段 **103691 ms**、总 109986 ms；CPU profile **97.4 % idle**；DOM `domNodes 569 / navDots 20 / rowCount 18 / scrollHeight 1334213 / clientHeight 694 / scrollTop 1333518` |
 | 第四轮锁负对照（真实脚本） | `8becf37c` | `docs-local/research/perf-workspace-row/kill-probe.mjs` | 1（**预期**） | owner pid == probe 自己的 pid；release 之后 `SURVIVED` 永不打印 |
+| PR #444 根因基准 | `c502ec67` 之前 | 真实 `createHostSessionApi` + 真实 `MessageLog`，1 万条消息 / 3.6 MB rollout | 0 | 分页读 50 页 **16672 ms** vs 一次投影 **314 ms**（**53×**） |
+| PR #444 before 权威重跑 | 测量树 `8becf37c`（无 #444） | `node scripts/perf/run.mjs --scenarios session-switch --samples 3 --lock-mode strict --lock-wait-min 25 --agent mavis-r5-before` | 0 | **9 样本零失败**；10k open 29503–37160 ms / switch 46900–50755 ms；`dom.nodes` 569、`scrollHeight` 1327480、`commit.count` 42 |
+| PR #444 after 权威重跑 | 同树 + #444 的 5 个产品文件 | 同上（`--agent mavis-r5-after`，随后 `--agent mavis-r5-after2` 用最终代码复核） | 0 | 两轮独立复核一致：10k open **1153/1364/1560** 与 1206/1382/1345；switch **1543/2148/1672** 与 1843/1686/1483 |
+| PR #444 门禁 | `c502ec67` | `vitest run packages/host/tests/session-message-projection-count.test.ts packages/host/tests/session-messages-read.test.ts apps/desktop/src/main/ipc/__tests__/db-handlers.test.ts` | 0 | 55/55 绿（整读 = 1 次投影、分页 = 每页 1 次；`all=1` 携带 `limit`/`cursor` 报 400） |
+| PR #444 更大范围测试 | `c502ec67` | `vitest run packages/host packages/agent-protocol apps/desktop/src/main/ipc` | 0 | **261 个测试文件 / 2801 用例全绿**，1 skipped |
+| PR #444 本地门禁 | `00881770` | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | `OK — no new boundary violations`；`FRESH 0/922 bundle inputs changed after the bundle commit` |
+| PR #444 合并 master 后的产物 | `1461fdec` | `git merge origin/master` → 冲突只在 `packages/host/bundle/**` → `checkout --theirs` → `npm run bundle:worker` → 提交 | 0 | `FRESH 0/929`；输入集 922 → 929（master 新增的 host 源文件进了 bundle）。**源码 commit 必须早于 bundle commit** |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
 已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）。
-未合并：无。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
+未合并：**#444**（PR：Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s；含投影次数门禁）。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
 
 回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
@@ -425,8 +491,10 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 第二轮集成者侧已合并：**#406** 锁（两种实现互相拆台）、**#407** fixture 命名空间、**#408** 首屏字节预算进 CI、**#409** 带围栏契约 fixture、**#410** 第二轮章程、**#412** #391 留下的 IPC 注册回归、**#415** 第二轮集成记录、**#418** 首屏依赖闭包（模块数归零 + 预算棘轮，master `aed0d13c`）、**#421** 万条消息虚拟化、**#422** 布局缺陷修复、**#429 / #430 / #431** harness 的三个 P0。
 
-下一步：**数据路径**（机会清单 #0）——数清一次切换里主进程做了多少次全量重投影，并解释虚拟化之后切换墙钟 +15 % 的来源（#1）。
+下一步（第五轮之后，按新的机会清单）：**#0 Web 侧同一条 O(n²) 路径**——`packages/ui/src/lib/ipc-client.ts` 的 `readAllHostMessages` 还在用 `limit: 100` 分页读同一个 Host 接口，Desktop 侧已经在 #444 换成一次整读，Web 侧还没跟上；**#1 整条历史一次性投递的代价**——长任务 0.3 → 0.5 s、内存峰值 +33 MB，需要分块投递 / 增量渲染，别让主线程被一次性占用。
 
 **这一轮最重要的产出不是某个 PR，而是把「万条会话 30–45 秒」的靶子从渲染换到了数据路径**：基线的 `session.open.longtask.total_ms` 只有 0.7 秒，而 open 要 32–37 秒；G 的虚拟化把 switch 的主线程成本压掉 92 %，墙钟一动不动。**下一轮该测的是数据路径（主进程 / DB / IPC），不是继续抠渲染。**
+
+第五轮把这条线索走完了：**根因是 Host 每翻一页就重投影整条历史，50 页 = 50 次全量投影**；修法是 Host 提供一次整读，Desktop 桥接只调一次。10 000 条消息的打开从 **35.2 秒降到 1.4 秒**、切换从 **47.7 秒降到 1.7 秒**，同一份历史、同样的 `dom.nodes`、同样的 `commit.count`——变的只是数据怎么到渲染器。**并且这次不只修了它，还给它装了一道门禁**（数投影次数，纯计数、机器无关），下次谁把每页全量投影改回来，CI 直接红。
 
 
