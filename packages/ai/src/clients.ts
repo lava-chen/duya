@@ -22,6 +22,13 @@
  * Consumers that only read model metadata, context estimates or runtime
  * configuration import `@duya/ai` (or the narrower `@duya/ai/context`).
  *
+ * The PAYLOAD BUILDERS live here for the same reason the clients do: a
+ * request that cannot be inspected cannot be proved correct, so the builders
+ * have to be reachable -- but three of them live in modules that statically
+ * import the vendor SDKs, and re-exporting those from the root entry would
+ * put the SDKs back into the renderer's first screen. The root entry keeps
+ * the Model Request boundary instead, which imports nothing at all.
+ *
  * The names here are byte-identical to the ones the root entry used to
  * export; only the import path changed.
  */
@@ -36,3 +43,17 @@ export {
   bedrockConverseStreams,
   googleGenerativeAiStreams,
 } from './providers/adapters.js';
+
+// ─── The payload builders ───
+//
+// The wire shape each adapter produces, so a test can assert on what the
+// MODEL reads rather than on the engine's intermediate array.
+export { toAnthropicMessages } from './api/anthropic-messages.js';
+export { toResponsesInput } from './api/openai-responses.js';
+export { toOpenAIMessages } from './api/openai-completions.js';
+export { toGeminiContents, type GeminiContent } from './api/google-generative-ai.js';
+export {
+  toBedrockMessages,
+  type BedrockConverseMessage,
+  type BedrockConverseRequest,
+} from './api/bedrock-converse.js';

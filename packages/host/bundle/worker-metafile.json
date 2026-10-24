@@ -4008,6 +4008,11 @@
       ],
       "format": "esm"
     },
+    "packages/ai/src/model-request-invariants.ts": {
+      "bytes": 14013,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/ai/src/utils/context-estimate.ts": {
       "bytes": 36862,
       "imports": [],
@@ -9931,8 +9936,13 @@
       "format": "esm"
     },
     "packages/ai/src/index.ts": {
-      "bytes": 9676,
+      "bytes": 10750,
       "imports": [
+        {
+          "path": "packages/ai/src/model-request-invariants.ts",
+          "kind": "import-statement",
+          "original": "./model-request-invariants.js"
+        },
         {
           "path": "packages/ai/src/utils/context-estimate.ts",
           "kind": "import-statement",
@@ -15335,13 +15345,18 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-runtime/src/engine/request-assembly.ts": {
+      "bytes": 12875,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-runtime/src/engine/compaction.ts": {
       "bytes": 14404,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 189657,
+      "bytes": 198900,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -15352,6 +15367,11 @@
           "path": "packages/agent-runtime/src/engine/request-scope.ts",
           "kind": "import-statement",
           "original": "./request-scope.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/request-assembly.ts",
+          "kind": "import-statement",
+          "original": "./request-assembly.js"
         },
         {
           "path": "packages/agent-runtime/src/engine/compaction.ts",
@@ -16525,12 +16545,12 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 59913,
+      "bytes": 61544,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
-      "bytes": 22671,
+      "bytes": 23218,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -21789,7 +21809,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -38128,7 +38148,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -38215,10 +38235,10 @@
           "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -38443,7 +38463,7 @@
           "bytesInOutput": 316
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -38771,6 +38791,9 @@
         },
         "../../../node_modules/zod/index.js": {
           "bytesInOutput": 26
+        },
+        "packages/ai/src/model-request-invariants.ts": {
+          "bytesInOutput": 2504
         },
         "packages/ai/src/utils/context-estimate.ts": {
           "bytesInOutput": 6664
@@ -39625,7 +39648,7 @@
           "bytesInOutput": 8462
         },
         "packages/ai/src/index.ts": {
-          "bytesInOutput": 4429
+          "bytesInOutput": 4719
         },
         "packages/agent-core/src/context/reminder-sanitizer.ts": {
           "bytesInOutput": 111
@@ -40140,11 +40163,14 @@
         "packages/agent-runtime/src/engine/request-scope.ts": {
           "bytesInOutput": 462
         },
+        "packages/agent-runtime/src/engine/request-assembly.ts": {
+          "bytesInOutput": 801
+        },
         "packages/agent-runtime/src/engine/compaction.ts": {
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 18704
+          "bytesInOutput": 18925
         },
         "packages/agent-runtime/src/index.ts": {
           "bytesInOutput": 221
@@ -40174,7 +40200,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -41185,10 +41211,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50721
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1880
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41569,7 +41595,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -41578,10 +41604,10 @@
           "bytesInOutput": 2872
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -42061,7 +42087,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42193,7 +42219,7 @@
           "bytesInOutput": 4067
         },
         "packages/host/src/worker-run-composition.ts": {
-          "bytesInOutput": 5714
+          "bytesInOutput": 5771
         },
         "packages/host/src/run-engine-model.ts": {
           "bytesInOutput": 3247
@@ -42217,7 +42243,7 @@
           "bytesInOutput": 2261
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-          "bytesInOutput": 3825
+          "bytesInOutput": 3882
         },
         "packages/host/src/run-event-spine.ts": {
           "bytesInOutput": 440
@@ -43459,7 +43485,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4592904
+      "bytes": 4596904
     }
   }
 }
