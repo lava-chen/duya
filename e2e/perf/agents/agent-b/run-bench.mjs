@@ -27,8 +27,14 @@
  *
  * USAGE
  *
- *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario perf/stream-long-reply --runs 5
- *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario perf/stream-tool-storm --runs 5 --profile
+ *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario ui-harness/stream-long-reply --runs 5
+ *   node e2e/perf/agents/agent-b/run-bench.mjs --scenario ui-harness/stream-tool-storm --runs 5 --profile
+ *
+ * The scenario labels live in the `ui-harness/` namespace, NOT in the `perf/`
+ * fixture contract of the shared harness: `perf/stream-long-reply` there is a
+ * plain text reply, while the reply this driver renders carries three fenced
+ * code blocks. The same id with two different contents would make any
+ * cross-harness comparison meaningless.
  *
  * The run holds the shared measurement lock for the whole build+measure
  * window, so the numbers are not a measurement of another agent's build. The
@@ -75,7 +81,7 @@ const MIME = {
 };
 
 function parseArgs(argv) {
-  const args = { scenario: 'perf/stream-long-reply', runs: 5, profile: false, lock: true, build: true, out: null, screenshot: null, htmlOut: null, dist: null, lockScript: null };
+  const args = { scenario: 'ui-harness/stream-long-reply', runs: 5, profile: false, lock: true, build: true, out: null, screenshot: null, htmlOut: null, dist: null, lockScript: null };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--scenario') args.scenario = argv[++i];
