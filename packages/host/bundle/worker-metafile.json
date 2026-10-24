@@ -1231,7 +1231,7 @@
       "format": "esm"
     },
     "packages/data/src/database-owner-lock.ts": {
-      "bytes": 6105,
+      "bytes": 6344,
       "imports": [
         {
           "path": "node:crypto",
@@ -1518,7 +1518,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2273,
+      "bytes": 2316,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1544,6 +1544,11 @@
           "path": "packages/data/src/database-host.ts",
           "kind": "import-statement",
           "original": "./database-host.js"
+        },
+        {
+          "path": "packages/data/src/database-owner-lock.ts",
+          "kind": "import-statement",
+          "original": "./database-owner-lock.js"
         },
         {
           "path": "packages/data/src/sqlite-connection.ts",
@@ -29005,7 +29010,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-limits.ts": {
-      "bytes": 9074,
+      "bytes": 9292,
       "imports": [
         {
           "path": "node:module",
@@ -29301,7 +29306,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 83647,
+      "bytes": 85380,
       "imports": [],
       "format": "esm"
     },
@@ -29412,6 +29417,11 @@
     },
     "packages/host/src/checkout-api.ts": {
       "bytes": 6704,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/client-lease.ts": {
+      "bytes": 3342,
       "imports": [],
       "format": "esm"
     },
@@ -29582,7 +29592,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 234386,
+      "bytes": 238348,
       "imports": [
         {
           "path": "node:crypto",
@@ -29608,6 +29618,11 @@
           "path": "packages/host/src/checkout-api.ts",
           "kind": "import-statement",
           "original": "./checkout-api.js"
+        },
+        {
+          "path": "packages/host/src/client-lease.ts",
+          "kind": "import-statement",
+          "original": "./client-lease.js"
         },
         {
           "path": "packages/host/src/local-rollout-api.ts",
@@ -30322,7 +30337,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 34208,
+      "bytes": 35771,
       "imports": [
         {
           "path": "node:crypto",
@@ -36158,7 +36173,7 @@
       "format": "esm"
     },
     "packages/cli/src/agent-worker-entry.ts": {
-      "bytes": 593,
+      "bytes": 605,
       "imports": [
         {
           "path": "packages/host/src/worker-process-entry.ts",
@@ -38214,7 +38229,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -38298,7 +38313,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 687
@@ -38526,7 +38541,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 316
+          "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4332
@@ -41661,7 +41676,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -41670,10 +41685,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -42825,7 +42840,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 32879
+          "bytesInOutput": 33284
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -43554,7 +43569,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4600638
+      "bytes": 4601117
     }
   }
 }

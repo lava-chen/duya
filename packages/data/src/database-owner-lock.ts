@@ -128,11 +128,18 @@ export class DatabaseOwnerLock {
 }
 
 export class DatabaseOwnerLockError extends Error {
+  /** The process that already owns the database. */
+  readonly ownerPid: number;
+  /** The machine that process runs on. */
+  readonly ownerHostname: string;
+
   constructor(databasePath: string, owner: OwnerRecord) {
     super(
       `Database is already owned by Duya process ${owner.pid} on ${owner.hostname}: ${databasePath}`,
     );
     this.name = 'DatabaseOwnerLockError';
+    this.ownerPid = owner.pid;
+    this.ownerHostname = owner.hostname;
   }
 }
 

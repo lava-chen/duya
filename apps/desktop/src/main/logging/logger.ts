@@ -247,6 +247,7 @@ class Logger extends EventEmitter {
         // re-queue the same batch on every flush and never drain.
         if (this.writeStream === stream) {
           this.writeStream = null
+          this.logQueue.length = 0
         }
       })
     } catch (error) {
@@ -402,8 +403,13 @@ class Logger extends EventEmitter {
     this.writeStream.write(batch, (err) => {
       this.isWriting = false
       if (err) {
-        // Put failed logs back to queue for retry
-        this.logQueue.unshift(batch)
+        // Put failed logs back to queue for retry -- but only while the
+        // stream is still usable. After a stream-level error the stream is
+        // dropped (see initWriteStream), and re-queueing the batch would
+        // grow the queue without any writer to drain it.
+        if (this.writeStream) {
+          this.logQueue.unshift(batch)
+        }
       }
     })
   }

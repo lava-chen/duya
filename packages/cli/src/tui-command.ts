@@ -28,11 +28,13 @@
  */
 
 import type { SessionId } from '@duya/agent-protocol';
-import type { HostHandshakeV1 } from '@duya/host/http-client';
+import type { HostClientLease, HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
+import { DatabaseOwnerLockError } from '@duya/data';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
+import { startBackgroundHost } from './tui/background-host.js';
 import { chatInteractive, createChatSession, write, DIM, RED, RESET } from './chat.js';
 import {
   CLI_HOST_DECLARATION,
@@ -182,11 +184,15 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       return 1;
     }
   }
-  const host = explicit ?? discovered ?? await startLocalHost({
-    port: options.port,
-    ephemeral: true,
-    workerPath: resolveHostWorkerPath(),
-  });
+
+  let host: AttachedHost;
+  try {
+    host = explicit ?? discovered ?? await acquireHost(options);
+  } catch (error) {
+    write(`${RED}${hostUnavailableMessage(error)}${RESET}`);
+    return 1;
+  }
+
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
   try {
     const health = await client.getHealth();
@@ -196,6 +202,11 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     return 1;
   }
 
+  // Keep the Host alive for as long as this terminal is open. A Host whose
+  // clients all left releases the data directory and goes away; without this
+  // lease it would take the next terminal down with it.
+  const lease = await openClientLease(client);
+
   let sessionId: SessionId;
   const owned = new OwnedSessions();
   if (options.session !== undefined && options.session.trim().length > 0) {
@@ -203,6 +214,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
     if (existing === null) {
       write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
+      lease?.close();
       return 1;
     }
   } else {
@@ -225,10 +237,79 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath }, owned);
   } finally {
     try {
+      lease?.close();
       await host.close();
     } finally {
       consoleCapture?.restore();
     }
   }
   return exitCode;
+}
+
+/**
+ * Get a Host for this terminal.
+ *
+ * The preferred answer is a Host that already runs: the Desktop's, or a
+ * `duya serve` somebody started. When there is none, this terminal starts one
+ * **as its own process** — not inside this process — so a second terminal can
+ * attach to it instead of colliding with it.
+ *
+ * The in-process Host is the last resort. It works, but it owns the data
+ * directory alone, so no other terminal can attach to it. That is the shape
+ * that made a second `duya tui` fail with a database lock error, and it is
+ * only reached when the background Host could not be started at all.
+ */
+async function acquireHost(options: TuiCommandOptions): Promise<AttachedHost> {
+  try {
+    return await startBackgroundHost({
+      ...(options.port === undefined ? {} : { port: options.port }),
+    });
+  } catch (error) {
+    write(`${DIM}Could not start a Duya Host in the background: ${errorMessage(error)}${RESET}`);
+  }
+  write(`${DIM}Starting a Host inside this terminal; other terminals cannot attach to it.${RESET}`);
+  const handle = await startLocalHost({
+    port: options.port,
+    ephemeral: true,
+    workerPath: resolveHostWorkerPath(),
+  });
+  return {
+    origin: handle.origin,
+    token: handle.token ?? '',
+    close: () => handle.close(),
+    ...(handle.diagnosticsLogPath === undefined ? {} : { diagnosticsLogPath: handle.diagnosticsLogPath }),
+    started: true,
+  };
+}
+
+/**
+ * Hold a client lease so the Host knows this terminal is still here.
+ *
+ * A Host that does not offer leases is somebody else's to stop, so there is
+ * nothing to hold and nothing to report.
+ */
+async function openClientLease(client: HostSessionHttpClient): Promise<HostClientLease | null> {
+  try {
+    return await client.openClientLease();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The message a user gets when no Host could be started.
+ *
+ * The raw `DatabaseOwnerLockError` names the owner and says nothing about
+ * what to do about it. What to do is either stop that program or run this
+ * terminal on a data directory of its own.
+ */
+function hostUnavailableMessage(error: unknown): string {
+  if (error instanceof DatabaseOwnerLockError) {
+    return [
+      `The Duya data directory is already owned by another Duya process (pid ${error.ownerPid} on ${error.ownerHostname}).`,
+      'Stop that process, or give this terminal its own data directory:',
+      '  DUYA_DATA_ROOT=<somewhere-else> duya tui',
+    ].join('\n');
+  }
+  return `Could not start a Duya Host: ${errorMessage(error)}`;
 }
