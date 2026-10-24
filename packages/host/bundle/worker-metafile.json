@@ -4024,92 +4024,97 @@
       "format": "esm"
     },
     "packages/ai/src/providers/minimax.models.ts": {
-      "bytes": 4985,
+      "bytes": 5605,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/minimax-cn.models.ts": {
-      "bytes": 3989,
+      "bytes": 5540,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/deepseek.models.ts": {
-      "bytes": 2588,
+      "bytes": 1642,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/qwen.models.ts": {
-      "bytes": 21520,
+      "bytes": 19433,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/glm.models.ts": {
-      "bytes": 4099,
+      "bytes": 18510,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/kimi.models.ts": {
-      "bytes": 3173,
+      "bytes": 2644,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/openai.models.ts": {
-      "bytes": 963,
+      "bytes": 18182,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/openai-responses.models.ts": {
-      "bytes": 1553,
+      "bytes": 19322,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/anthropic.models.ts": {
-      "bytes": 6721,
+      "bytes": 7132,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/openrouter.models.ts": {
-      "bytes": 21142,
+      "bytes": 45689,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/ollama.models.ts": {
-      "bytes": 431,
+      "bytes": 2637,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/xai.models.ts": {
-      "bytes": 3265,
+      "bytes": 4188,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/stepfun.models.ts": {
-      "bytes": 1440,
+      "bytes": 2216,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/volcengine.models.ts": {
-      "bytes": 777,
+      "bytes": 4143,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/bailian.models.ts": {
-      "bytes": 2399,
+      "bytes": 6451,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/bedrock.models.ts": {
-      "bytes": 2194,
+      "bytes": 18413,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/google.models.ts": {
-      "bytes": 1714,
+      "bytes": 6891,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/xiaomi.models.ts": {
+      "bytes": 3200,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/providers/index.ts": {
-      "bytes": 2594,
+      "bytes": 2718,
       "imports": [
         {
           "path": "packages/ai/src/providers/minimax.models.ts",
@@ -4197,6 +4202,11 @@
           "original": "./google.models.js"
         },
         {
+          "path": "packages/ai/src/providers/xiaomi.models.ts",
+          "kind": "import-statement",
+          "original": "./xiaomi.models.js"
+        },
+        {
           "path": "packages/ai/src/providers/minimax.models.ts",
           "kind": "import-statement",
           "original": "./minimax.models.js"
@@ -4280,6 +4290,11 @@
           "path": "packages/ai/src/providers/google.models.ts",
           "kind": "import-statement",
           "original": "./google.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/xiaomi.models.ts",
+          "kind": "import-statement",
+          "original": "./xiaomi.models.js"
         }
       ],
       "format": "esm"
@@ -4499,7 +4514,7 @@
       "format": "esm"
     },
     "packages/ai/src/providers/catalog-data.ts": {
-      "bytes": 37284,
+      "bytes": 37603,
       "imports": [],
       "format": "esm"
     },
@@ -38416,7 +38431,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -38446,7 +38461,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -38554,7 +38569,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -38626,7 +38641,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -38635,10 +38650,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -38650,13 +38665,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -38665,7 +38680,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -38707,7 +38722,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -38737,7 +38752,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -39097,58 +39112,61 @@
           "bytesInOutput": 6664
         },
         "packages/ai/src/providers/minimax.models.ts": {
-          "bytesInOutput": 2544
+          "bytesInOutput": 3725
         },
         "packages/ai/src/providers/minimax-cn.models.ts": {
-          "bytesInOutput": 2604
+          "bytesInOutput": 3851
         },
         "packages/ai/src/providers/deepseek.models.ts": {
-          "bytesInOutput": 763
+          "bytesInOutput": 736
         },
         "packages/ai/src/providers/qwen.models.ts": {
-          "bytesInOutput": 14266
+          "bytesInOutput": 13024
         },
         "packages/ai/src/providers/glm.models.ts": {
-          "bytesInOutput": 2513
+          "bytesInOutput": 12739
         },
         "packages/ai/src/providers/kimi.models.ts": {
-          "bytesInOutput": 1776
+          "bytesInOutput": 1664
         },
         "packages/ai/src/providers/openai.models.ts": {
-          "bytesInOutput": 599
+          "bytesInOutput": 12283
         },
         "packages/ai/src/providers/openai-responses.models.ts": {
-          "bytesInOutput": 1005
+          "bytesInOutput": 13255
         },
         "packages/ai/src/providers/anthropic.models.ts": {
-          "bytesInOutput": 4206
+          "bytesInOutput": 4507
         },
         "packages/ai/src/providers/openrouter.models.ts": {
-          "bytesInOutput": 13410
+          "bytesInOutput": 30306
         },
         "packages/ai/src/providers/ollama.models.ts": {
-          "bytesInOutput": 208
+          "bytesInOutput": 1405
         },
         "packages/ai/src/providers/xai.models.ts": {
-          "bytesInOutput": 1857
+          "bytesInOutput": 2613
         },
         "packages/ai/src/providers/stepfun.models.ts": {
-          "bytesInOutput": 682
+          "bytesInOutput": 1349
         },
         "packages/ai/src/providers/volcengine.models.ts": {
-          "bytesInOutput": 474
+          "bytesInOutput": 2835
         },
         "packages/ai/src/providers/bailian.models.ts": {
-          "bytesInOutput": 1377
+          "bytesInOutput": 4319
         },
         "packages/ai/src/providers/bedrock.models.ts": {
-          "bytesInOutput": 1355
+          "bytesInOutput": 12520
         },
         "packages/ai/src/providers/google.models.ts": {
-          "bytesInOutput": 973
+          "bytesInOutput": 4657
+        },
+        "packages/ai/src/providers/xiaomi.models.ts": {
+          "bytesInOutput": 2067
         },
         "packages/ai/src/providers/index.ts": {
-          "bytesInOutput": 351
+          "bytesInOutput": 370
         },
         "packages/ai/src/models.ts": {
           "bytesInOutput": 1554
@@ -39235,7 +39253,7 @@
           "bytesInOutput": 1411
         },
         "packages/ai/src/providers/catalog-data.ts": {
-          "bytesInOutput": 27073
+          "bytesInOutput": 27312
         },
         "packages/ai/src/providers/catalog.ts": {
           "bytesInOutput": 179
@@ -40504,7 +40522,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
@@ -41893,7 +41911,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -41902,10 +41920,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -43801,7 +43819,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4607573
+      "bytes": 4685256
     }
   }
 }
