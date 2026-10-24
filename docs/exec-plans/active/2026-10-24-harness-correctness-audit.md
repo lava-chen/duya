@@ -136,7 +136,7 @@ emergency / preflight 仍按原样把 `ctx.deferred.current` 并入基线。
 
 **遗留**：`inline history` 形态下探针与请求的行集仍不一致，且方向相反（探针**多**算）。
 该行为早于 H-2，被既有断言 `run-engine-compaction.test.ts` 钉住；生产 host 走 `by_ref`
-（`packages/host/src/worker-run-composition.ts:402`），该形态下两者一致，故未改。
+（`packages/host/src/worker-run-composition.ts:403`），该形态下两者一致，故未改。
 
 ### 观察项（P3）两套并行的提醒分类法
 
