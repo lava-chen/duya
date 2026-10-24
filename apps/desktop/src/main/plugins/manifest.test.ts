@@ -124,6 +124,54 @@ describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
     expect(() => readPluginManifest(dir)).toThrow(/stateSchemaVersion/i);
   });
 
+  it('accepts resource-only surfaces and rejects references to undeclared MCP servers', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    mkdirSync(join(dir, 'mcp'), { recursive: true });
+    writeFileSync(
+      join(dir, 'mcp', 'servers.json'),
+      JSON.stringify({ servers: [{ name: 'dashboard', transport: 'stdio', command: 'node' }] }),
+    );
+    const manifestPath = join(dir, '.duya-plugin', 'plugin.json');
+    const app = {
+      appId: 'dashboard',
+      ui: {
+        surfaces: [
+          {
+            id: 'overview',
+            title: { en: 'Overview', zh: '概览' },
+            icon: 'chart-bar',
+            server: 'dashboard',
+            resourceUri: 'ui://dashboard/overview',
+            availability: 'session',
+          },
+        ],
+      },
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    };
+    const writeManifest = (apps: unknown[]) =>
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: 'resource-ui-plugin',
+          extensions: { 'com.duya.client': { apps } },
+        }),
+      );
+
+    writeManifest([app]);
+    const manifest = readPluginManifest(dir);
+    expect(manifest.apps?.[0]?.entry).toBeUndefined();
+    expect(manifest.apps?.[0]?.ui?.surfaces[0]?.server).toBe('dashboard');
+
+    writeManifest([
+      {
+        ...app,
+        ui: { surfaces: [{ ...app.ui.surfaces[0], server: 'other-plugin-server' }] },
+      },
+    ]);
+    expect(() => readPluginManifest(dir)).toThrow(/server other-plugin-server is not declared.*mcpServers/i);
+  });
+
   it('rejects App entry traversal and symlinks escaping the plugin package', () => {
     mkdirSync(join(dir, '.duya-plugin'));
     mkdirSync(join(dir, 'apps', 'external'), { recursive: true });
@@ -367,6 +415,28 @@ describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
   });
 });
 
+describe('example Plugin UI packages', () => {
+  it('loads the resource-only report viewer and binds its surface to its MCP server', () => {
+    const manifest = readPluginManifest(join(process.cwd(), 'plugins', 'examples', 'report-viewer'));
+    const app = manifest.apps?.find((candidate) => candidate.appId === 'reports');
+
+    expect(app?.entry).toBeUndefined();
+    expect(app?.ui?.surfaces).toEqual([expect.objectContaining({
+      id: 'report-overview',
+      server: 'reports',
+      resourceUri: 'ui://reports/overview',
+      availability: 'session',
+    })]);
+    expect(manifest.capabilities.mcpServers?.map((server) => server.name)).toContain('reports');
+  });
+
+  it('keeps the hello example on its legacy static entry', () => {
+    const manifest = readPluginManifest(join(process.cwd(), 'plugins', 'examples', 'hello-app'));
+    expect(manifest.apps?.find((candidate) => candidate.appId === 'hello')?.entry)
+      .toBe('apps/hello/index.html');
+  });
+});
+
 // ----------------------------------------------------------------------------
 // v1 compatibility — existing v1 manifests must parse with zero changes
 // ----------------------------------------------------------------------------
@@ -479,6 +549,55 @@ describe('readPluginManifest — v2 parsing', () => {
       url: 'https://duya.dev',
       verified: true,
     });
+  });
+
+  it('binds App surfaces to legacy capabilities.mcpServers', () => {
+    const app = {
+      appId: 'viewer',
+      ui: {
+        surfaces: [
+          {
+            id: 'overview',
+            title: { en: 'Overview', zh: '概览' },
+            icon: 'chart-bar',
+            server: 'dashboard',
+            resourceUri: 'ui://dashboard/overview',
+            availability: 'always',
+          },
+        ],
+      },
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    };
+    const writeManifest = (surfaceServer: string) =>
+      writeFileSync(
+        join(dir, 'plugin.json'),
+        JSON.stringify({
+          schemaVersion: 'duya.plugin.v2',
+          id: 'com.duya.v2-resource-ui',
+          name: 'V2 Resource UI',
+          version: '2.0.0',
+          description: 'A v2 resource-backed UI.',
+          author: { name: 'DUYA Team' },
+          capabilities: { mcpServers: [{ name: 'dashboard', command: 'node' }] },
+          extensions: {
+            'com.duya.client': {
+              apps: [{
+                ...app,
+                ui: { surfaces: [{ ...app.ui.surfaces[0], server: surfaceServer }] },
+              }],
+            },
+          },
+          permissions: [],
+          engines: { duya: '>=0.1.0' },
+        }),
+      );
+
+    writeManifest('dashboard');
+    expect(readPluginManifest(dir).apps?.[0]?.ui?.surfaces[0]?.server).toBe('dashboard');
+
+    writeManifest('missing');
+    expect(() => readPluginManifest(dir)).toThrow(/server missing is not declared.*mcpServers/i);
   });
 
   it('parses a v2 manifest that omits capabilities in favour of components', () => {
@@ -747,6 +866,60 @@ describe('readPluginManifest — standard Agent Plugins package detection (Plan 
       { id: 'api-key', label: 'API Key', type: 'secret', required: true },
     ]);
     expect(manifest.permissionPolicy).toEqual({ defaultMode: 'write' });
+  });
+
+  it('binds App surfaces to servers discovered from standard mcp.json', () => {
+    const app = {
+      appId: 'viewer',
+      ui: {
+        surfaces: [
+          {
+            id: 'overview',
+            title: { en: 'Overview', zh: '概览' },
+            icon: 'chart-bar',
+            server: 'remote',
+            resourceUri: 'ui://remote/overview',
+            availability: 'session',
+          },
+        ],
+      },
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    };
+    const writeManifest = (surfaceServer: string) => {
+      writeFileSync(
+        join(dir, 'plugin.json'),
+        JSON.stringify({
+          $schema: AGENT_PLUGINS_PLUGIN_SCHEMA,
+          name: 'standard-resource-ui',
+          version: '1.0.0',
+          description: 'A standard resource-backed UI.',
+          extensions: {
+            'com.duya.client': {
+              apps: [{
+                ...app,
+                ui: { surfaces: [{ ...app.ui.surfaces[0], server: surfaceServer }] },
+              }],
+            },
+          },
+        }),
+      );
+      writeFileSync(
+        join(dir, 'mcp.json'),
+        JSON.stringify({
+          $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+          mcpServers: {
+            remote: { type: 'streamable-http', url: 'https://mcp.example.com' },
+          },
+        }),
+      );
+    };
+
+    writeManifest('remote');
+    expect(readPluginManifest(dir).apps?.[0]?.ui?.surfaces[0]?.server).toBe('remote');
+
+    writeManifest('missing');
+    expect(() => readPluginManifest(dir)).toThrow(/server missing is not declared.*mcpServers/i);
   });
 
   it('defaults duya-specific fields when the com.duya.client extension is absent', () => {

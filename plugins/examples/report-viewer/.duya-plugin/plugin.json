@@ -1,0 +1,40 @@
+{
+  "name": "Report Viewer",
+  "id": "com.duya.examples.report-viewer",
+  "version": "0.1.0",
+  "description": "A read-only report surface served by this plugin's MCP server.",
+  "author": {
+    "name": "Duya"
+  },
+  "interface": {
+    "displayName": "Report Viewer",
+    "shortDescription": "Read-only reports with agent selection and highlighting",
+    "category": "productivity"
+  },
+  "extensions": {
+    "com.duya.client": {
+      "apps": [
+        {
+          "appId": "reports",
+          "ui": {
+            "surfaces": [
+              {
+                "id": "report-overview",
+                "title": {
+                  "en": "Report overview",
+                  "zh": "报告概览"
+                },
+                "icon": "chart-bar",
+                "server": "reports",
+                "resourceUri": "ui://reports/overview",
+                "availability": "session"
+              }
+            ]
+          },
+          "requiredCapabilities": [],
+          "stateSchemaVersion": 1
+        }
+      ]
+    }
+  }
+}

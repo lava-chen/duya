@@ -10,6 +10,7 @@ import {
   TerminalIcon,
   GearSixIcon,
   ChatCircleIcon,
+  PlugIcon,
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
@@ -21,6 +22,7 @@ import { FilePreviewPanel } from "./FilePreviewPanel";
 import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
+import { PluginUiSurfacePanel } from "./PluginUiSurfacePanel";
 
 // Heavy, low-frequency panels stay out of the entry chunk (plan 426 Phase 5.2).
 // Rendered inside <Suspense> in PanelZone; chunks load from local disk in Electron.
@@ -179,6 +181,19 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 360,
     defaultExpanded: false,
     component: RoomSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  "plugin-app": {
+    id: "plugin-app",
+    labelKey: "apps.title",
+    icon: PlugIcon,
+    // One tab per installed surface. `openOrActivatePage` folds repeated
+    // launches by pluginId + surfaceId into the existing panel tab.
+    multiInstance: true,
+    available: true,
+    minWidth: 360,
+    preferredWidth: 520,
+    defaultExpanded: false,
+    component: PluginUiSurfacePanel,
   },
 };
 
