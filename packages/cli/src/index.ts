@@ -42,6 +42,14 @@ export * from './contract/index.js';
  * Build the `duya` Commander program. Pure function — no I/O,
  * no argv mutation. The caller (`bin/duya`) wires argv to
  * `program.parse(argv)`.
+ *
+ * ## Reading an option
+ *
+ * Commander stores an option under its camelCase attribute name, so
+ * `--client-scoped` is read as `clientScoped` and `--runtime-file` as
+ * `runtimeFile`. Reading the hyphenated name returns `undefined` — the option
+ * is then silently ignored, which is how `--api-format` and `--runtime-file`
+ * stopped working. Only a single-word flag has the same name either way.
  */
 export function buildProgram(): Command {
   const program = new Command();
@@ -55,6 +63,10 @@ export function buildProgram(): Command {
   // out of the descriptor registry consumed by the in-process duya_cli tool.
   const serve = program.command('serve').description('Start the local Duya Host service');
   serve.option('--port <port>', 'Loopback HTTP port (0 selects an available port)', '0');
+  serve.option(
+    '--client-scoped',
+    'Stop the Host once its last client disconnects (used by `duya tui`)',
+  );
   serve.action(async () => {
     const rawPort: unknown = serve.getOptionValue('port');
     const port = typeof rawPort === 'string' ? Number(rawPort) : Number.NaN;
@@ -63,10 +75,15 @@ export function buildProgram(): Command {
       process.exitCode = 64;
       return;
     }
+    const clientScoped = serve.getOptionValue('clientScoped') === true;
 
     try {
       const workerPath = resolveHostWorkerPath();
-      const host = await startLocalHost({ port, ...(workerPath === undefined ? {} : { workerPath }) });
+      const host = await startLocalHost({
+        port,
+        clientScoped,
+        ...(workerPath === undefined ? {} : { workerPath }),
+      });
       process.stdout.write(`Duya Host listening at ${host.origin}\n`);
       process.stdout.write(`Runtime descriptor: ${host.runtimeFilePath}\n`);
       process.stdout.write(
@@ -74,6 +91,9 @@ export function buildProgram(): Command {
           ? 'Execution: LEDGER-ONLY (no worker entry found; set DUYA_HOST_WORKER_PATH)\n'
           : `Execution: enabled (worker: ${workerPath})\n`,
       );
+      if (clientScoped) {
+        process.stdout.write('Lifetime: client-scoped (stops when the last client disconnects)\n');
+      }
       let stopping = false;
       const stop = (): void => {
         if (stopping) return;
@@ -111,20 +131,21 @@ export function buildProgram(): Command {
     const options: ChatCommandOptions = {
       origin: asString(chat.getOptionValue('origin')),
       token: asString(chat.getOptionValue('token')),
-      runtimeFile: asString(chat.getOptionValue('runtime-file')),
+      runtimeFile: asString(chat.getOptionValue('runtimeFile')),
       session: asString(chat.getOptionValue('session')),
       model: asString(chat.getOptionValue('model')),
       providerId: asString(chat.getOptionValue('provider')),
-      apiFormat: asString(chat.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+      apiFormat: asString(chat.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
       print: asString(chat.getOptionValue('print')),
     };
     process.exitCode = await runChatCommand(options);
   });
 
-  // `duya tui` — ephemeral Host + TUI in one process.
+  // `duya tui` — the TUI client. It attaches to the Host that owns this data
+  // directory and starts one only when none is running.
   const tui = program
     .command('tui')
-    .description('Start an ephemeral Duya Host and open the TUI (DUYA_TUI_INLINE=1 for the inline screen model)');
+    .description('Open the TUI against the Duya Host that owns this data directory (DUYA_TUI_INLINE=1 for the inline screen model)');
   tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
   tui.option('--session <id>', 'Continue an existing session instead of creating one');
   tui.option('--model <model>', 'Default model override');
@@ -145,7 +166,7 @@ export function buildProgram(): Command {
       session: asString(tui.getOptionValue('session')),
       model: asString(tui.getOptionValue('model')),
       providerId: asString(tui.getOptionValue('provider')),
-      apiFormat: asString(tui.getOptionValue('api-format')) as 'anthropic' | 'openai' | undefined,
+      apiFormat: asString(tui.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
     };
     process.exitCode = await runTuiCommand(options);
   });
