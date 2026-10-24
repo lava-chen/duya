@@ -1069,13 +1069,12 @@ describe('the engine is an implementation, not a delegating port', () => {
  * ## What the cases pin
  *
  *  - the host's assembled messages ALREADY carrying the prompt (by id) means
- *    the engine must not add its own copy -- and the host's row keeps its
- *    place in the request;
+ *    the engine must not add its own copy -- and the request ENDS with the
+ *    question, because the system-attached rows are moved in front of it;
  *  - a history that does NOT carry it still gets the prompt, and it goes at
- *    the END of the conversation, because a question at the front of a
- *    request is a question the model has to dig out from under the whole
- *    conversation. (`request-assembly.ts` states the rule; its matrix states
- *    the shapes.)
+ *    the END of the request, because a question at the front of a request is
+ *    a question the model has to dig out from under the whole conversation.
+ *    (`request-assembly.ts` states the rule; its matrix states the shapes.)
  */
 describe('the prompt reaches the model exactly once', () => {
   it('does not add the prompt again when the host already assembled it', async () => {
@@ -1083,7 +1082,7 @@ describe('the prompt reaches the model exactly once', () => {
       turns: [{ frames: [{ type: 'text', text: 'done' }] }],
       assembledMessages: [
         { role: 'user', id: 'p1', content: 'write a file' },
-        { role: 'user', id: 'rail-1', content: 'a context rail block' },
+        { role: 'user', id: 'rail-1', content: 'a context rail block', origin: 'context' },
       ],
     });
     const clock = fakeClock();
@@ -1096,10 +1095,11 @@ describe('the prompt reaches the model exactly once', () => {
 
     const sent = h.sentMessages[0]!;
     expect(sent.filter((m) => m.id === 'p1')).toHaveLength(1);
-    // And the ORDER is the host's: the row the host committed keeps the place
-    // the conversation puts it, instead of being pushed to the front of the
-    // request.
-    expect(sent.map((m) => m.id)).toEqual(['p1', 'rail-1']);
+    // And the request ENDS with the question: the system-attached rows are
+    // moved in front of it, because a request whose last row is a rail block
+    // reads to the model as a turn with no question in it.
+    expect(sent.map((m) => m.id)).toEqual(['rail-1', 'p1']);
+    expect(sent.at(-1)?.id).toBe('p1');
   });
 
   it('sends the prompt when the history does not carry it', async () => {
