@@ -13,7 +13,7 @@
  *
  *  2. "No servers" and "this Host cannot answer" are different facts and
  *     are rendered differently. A Host that answers 404
- *     `mcp_inventory_unavailable` must NOT be shown an empty inventory:
+ *     `mcp_inventory_api_unavailable` must NOT be shown an empty inventory:
  *     the question was never asked of an authority that could answer it.
  *
  *  3. A transport failure is an error, and it says what failed.
@@ -71,8 +71,6 @@ async function run(options: {
   readonly inventory?: unknown;
   readonly error?: Error;
   readonly busy?: boolean;
-  /** A client that has no inventory method at all. */
-  readonly withoutMethod?: boolean;
   /** A host without a panel surface: the command must fall back to notices. */
   readonly withoutPanel?: boolean;
 }): Promise<Harness> {
@@ -80,14 +78,12 @@ async function run(options: {
   const errors: string[] = [];
   const panels: Array<{ title: string; lines: readonly string[] }> = [];
 
-  const client = options.withoutMethod === true
-    ? {}
-    : {
-      listMcpServers: vi.fn(async () => {
-        if (options.error !== undefined) throw options.error;
-        return options.inventory ?? { servers: [] };
-      }),
-    };
+  const client = {
+    listMcpServers: vi.fn(async () => {
+      if (options.error !== undefined) throw options.error;
+      return options.inventory ?? { servers: [] };
+    }),
+  };
   const tui: TuiSlashHost = {
     printNotice: (text) => { notices.push(text); },
     printError: (text) => { errors.push(text); },
@@ -175,14 +171,14 @@ describe('/mcp', () => {
 
   it('says the Host cannot answer when the inventory is unavailable', async () => {
     const { output, errors } = await run({
-      error: hostError(404, 'mcp_inventory_unavailable'),
+      error: hostError(404, 'mcp_inventory_api_unavailable'),
     });
 
     // Not an empty inventory: the question was never asked of an
     // authority that could answer it.
     expect(output).not.toContain('No MCP servers are configured');
     expect(output).toContain('does not serve the MCP inventory');
-    expect(output).toContain('mcp_inventory_unavailable');
+    expect(output).toContain('mcp_inventory_api_unavailable');
     expect(errors).toEqual([]);
   });
 
@@ -265,11 +261,5 @@ describe('/mcp', () => {
 
     expect(panels).toEqual([]);
     expect(notices.join('\n')).toMatch(/filesystem\s+on\s+stdio/);
-  });
-
-  it('says so when its own Host client has no inventory method', async () => {
-    const { errors } = await run({ withoutMethod: true });
-
-    expect(errors.join('\n')).toContain('cannot read the MCP inventory');
   });
 });

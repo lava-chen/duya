@@ -27,7 +27,7 @@
  *  3. An empty inventory is said plainly, and no table is printed.
  *  4. "No skills" and "this Host cannot answer" are different facts and
  *     are rendered differently. A Host that answers 404
- *     `skill_inventory_unavailable` must NOT be shown an empty list: the
+ *     `skill_inventory_api_unavailable` must NOT be shown an empty list: the
  *     question was never asked of an authority that could answer it.
  *  5. A session the Host does not have, and a transport failure, each
  *     report their own problem.
@@ -93,8 +93,6 @@ async function run(options: {
   readonly inventory?: unknown;
   readonly error?: Error;
   readonly busy?: boolean;
-  /** A client that has no inventory method at all. */
-  readonly withoutMethod?: boolean;
   /** A host without a panel surface: the command must fall back to notices. */
   readonly withoutPanel?: boolean;
 }): Promise<Harness> {
@@ -102,13 +100,11 @@ async function run(options: {
   const errors: string[] = [];
   const panels: Array<{ title: string; lines: readonly string[] }> = [];
 
-  const listSkills = options.withoutMethod === true
-    ? undefined
-    : vi.fn(async (_sessionId: string) => {
-      if (options.error !== undefined) throw options.error;
-      return options.inventory ?? { skills: [], workingDirectory: WORKING_DIRECTORY };
-    });
-  const client = listSkills === undefined ? {} : { listSkills };
+  const listSkills = vi.fn(async (_sessionId: string) => {
+    if (options.error !== undefined) throw options.error;
+    return options.inventory ?? { skills: [], workingDirectory: WORKING_DIRECTORY };
+  });
+  const client = { listSkills };
   const tui: TuiSlashHost = {
     printNotice: (text) => { notices.push(text); },
     printError: (text) => { errors.push(text); },
@@ -230,21 +226,21 @@ describe('/skills', () => {
 
   it('says the Host cannot answer when the inventory is unavailable', async () => {
     const { output, errors, panels } = await run({
-      error: hostError(404, 'skill_inventory_unavailable'),
+      error: hostError(404, 'skill_inventory_api_unavailable'),
     });
 
     // Not an empty list: the question was never asked of an authority
     // that could answer it.
     expect(output).not.toContain('no skills found');
     expect(output).toContain('does not serve the skills inventory');
-    expect(output).toContain('skill_inventory_unavailable');
+    expect(output).toContain('skill_inventory_api_unavailable');
     expect(errors).toEqual([]);
     expect(panels).toHaveLength(1);
     expect(panels[0]?.title).toBe('Skills');
   });
 
   it('states the plugin limitation on the panel that says the Host cannot answer', async () => {
-    const { output } = await run({ error: hostError(404, 'skill_inventory_unavailable') });
+    const { output } = await run({ error: hostError(404, 'skill_inventory_api_unavailable') });
 
     expect(output).toContain('Plugin skills are not listed');
   });
@@ -303,11 +299,5 @@ describe('/skills', () => {
 
     expect(panels).toEqual([]);
     expect(notices.join('\n')).toMatch(/demo-skill\s+user\s+yes\s+yes\s+A demo skill/);
-  });
-
-  it('says so when its own Host client has no inventory method', async () => {
-    const { errors } = await run({ withoutMethod: true });
-
-    expect(errors.join('\n')).toContain('cannot read the skills inventory');
   });
 });

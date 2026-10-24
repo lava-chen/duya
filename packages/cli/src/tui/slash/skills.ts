@@ -19,16 +19,6 @@
  * the Host's — one implementation, so the Desktop's list and the CLI's list
  * cannot disagree about which skill wins a name.
  *
- * ## The Host's method lands in the same batch as this file
- *
- * `HostSessionHttpClient.listSkills(sessionId)` ships together with the
- * Host's route, so the client carries the method once that route lands.
- * Until then this file declares the structural interface it depends on
- * (`SkillsCapableClient`) and connects the client to it with a SINGLE
- * assertion — never `as unknown as`, so the shapes are still checked
- * against each other. Integration deletes the assertion and the
- * structural interface, leaving `ctx.client.listSkills(...)`.
- *
  * ## The session's working directory comes with the answer
  *
  * Project skills live next to the project the session works in, and
@@ -40,7 +30,7 @@
  * ## "No skills" and "this Host cannot answer" are different answers
  *
  * A Host without the inventory capability answers 404
- * `skill_inventory_unavailable`. That is not "there are no skills" — it is
+ * `skill_inventory_api_unavailable`. That is not "there are no skills" — it is
  * "this Host cannot answer the question", and the two are rendered
  * differently. An empty list is a fact that was observed; a refusal is not,
  * and a panel that said "no skills" for a Host that never answered would
@@ -84,20 +74,6 @@ interface HostSkillEntry {
 interface SkillsInventoryResponse {
   readonly skills: readonly HostSkillEntry[];
   readonly workingDirectory: string;
-}
-
-/**
- * The slice of the Host client this command depends on.
- *
- * `listSkills()` ships on `HostSessionHttpClient` together with the Host's
- * inventory route, so the client already carries it once that route lands.
- * It is declared here as a structural interface so this branch stands on
- * its own: a CLI running against a Host that predates the route has no
- * method to call, and that is a fact the command can report instead of a
- * crash it cannot.
- */
-interface SkillsCapableClient {
-  listSkills(sessionId: string): Promise<SkillsInventoryResponse>;
 }
 
 /**
@@ -183,36 +159,21 @@ const SKILLS_COMMAND: TuiSlashCommandDef = {
   description: 'List available skills',
   group: 'Session info',
   async run(ctx: TuiSlashContext) {
-    // The Host's inventory route lands `listSkills` on the client. Until it
-    // does, the client cannot be ASSIGNED to the structural interface: the
-    // weak-type check rejects a target whose every property is optional
-    // when the source shares none of them (TS2559). One assertion is the
-    // honest form of that — it keeps the shapes checked against each
-    // other — and it becomes a plain assignment the moment the method
-    // lands.
-    const client: Partial<SkillsCapableClient> = ctx.client as Partial<SkillsCapableClient>;
-    if (typeof client.listSkills !== 'function') {
-      ctx.tui.printError(
-        'This CLI cannot read the skills inventory: its Host client does not offer the inventory route.',
-      );
-      return { kind: 'handled' };
-    }
-
     let payload: unknown;
     try {
-      payload = await client.listSkills(ctx.session.id);
+      payload = await ctx.client.listSkills(ctx.session.id);
     } catch (error) {
       const code = hostErrorCode(error);
       // A Host without the inventory capability cannot answer. That is not
       // the same as an empty inventory, and it is rendered differently.
-      if (code === 'skill_inventory_unavailable') {
+      if (code === 'skill_inventory_api_unavailable') {
         showPanel(ctx, 'Skills', [
           'This Host does not serve the skills inventory, so it cannot answer.',
           '',
           '  That is different from an empty list — here the question was never',
           '  asked of an authority that could answer it.',
           '',
-          '  Source: Host skills inventory (GET /v1/skills), 404 skill_inventory_unavailable.',
+          '  Source: Host skills inventory (GET /v1/skills), 404 skill_inventory_api_unavailable.',
           '',
           PLUGIN_LIMITATION,
         ], { footer: FOOTER, scrollable: true });
