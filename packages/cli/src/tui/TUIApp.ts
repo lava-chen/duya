@@ -76,7 +76,7 @@ import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } 
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
 import { compactActivity } from './text.js';
-import { buildFooterLines, readGitBranch } from './footer.js';
+import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer.js';
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
@@ -89,6 +89,7 @@ import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import type { CommandLocale } from '@duya/command-catalog';
+import { calculateOutputTokensPerSecond } from '@duya/ai';
 
 /** DECSET 2026: begin synchronized update. */
 const SYNC_BEGIN = '\x1b[?2026h';
@@ -552,9 +553,22 @@ export class TUIApp {
    */
   private readonly keymapIssues: readonly KeymapIssue[];
   /** Usage of the most recent billed call, from `token_usage` frames. */
-  private lastUsage: { input: number; output: number; total: number } | null = null;
+  private lastUsage: {
+    input: number;
+    output: number;
+    total: number;
+    /** Output tokens per second of that call; null when the provider measured no duration. */
+    tokensPerSecond: number | null;
+  } | null = null;
   /** Sum of every `token_usage` total seen this session. */
   private sessionTokens = 0;
+  /**
+   * Transcript characters at the moment of the last billed call.
+   *
+   * The context estimate is "what the last request cost" plus "what has been
+   * added since", and this is the point the "since" is measured from.
+   */
+  private usageCharBaseline = 0;
   /**
    * Last git branch read for the footer, and when.
    *
@@ -1653,11 +1667,14 @@ export class TUIApp {
         inputTokens: this.lastUsage?.input ?? 0,
         outputTokens: this.lastUsage?.output ?? 0,
         totalTokens: this.sessionTokens,
+        // The rate of that same most recent call, and null when the provider
+        // reported no duration for it.
+        outputTokensPerSecond: this.lastUsage?.tokensPerSecond ?? null,
         // Before the first billed call the footer says `?/window` rather than
         // `0%`: the window is a property of the model, the usage is not yet a
         // reading. Getting this wrong is how an idle prompt claims to have used
         // nothing and implies the model is free.
-        contextPercent: budget !== null && budget > 0 && this.sessionTokens > 0
+        contextPercent: budget !== null && budget > 0 && this.contextTokens() !== null
           ? this.contextPercent()
           : null,
         contextBudget: budget,
@@ -1684,12 +1701,21 @@ export class TUIApp {
    * Status-bar token segment: the context bar when a budget is resolvable,
    * otherwise the bare session total. Empty until the first `token_usage`
    * frame, so an idle prompt shows nothing.
+   *
+   * The output rate of the MOST RECENT billed call rides the same segment,
+   * because it is the other half of the same question ("what did that call
+   * cost?"). It is omitted when the provider measured no duration: a rate
+   * that nobody measured is not a number, and a zero would be a measurement
+   * nobody made.
    */
   private usageSegment(): string {
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget !== null && budget > 0) return ` · ${this.contextBar()} ${this.contextPercent()}%`;
-    if (this.sessionTokens > 0) return ` · Σ ${formatTokens(this.sessionTokens)}`;
-    return '';
+    const rate = this.lastUsage?.tokensPerSecond ?? null;
+    const rateSegment = rate === null ? '' : ` · ${formatTokensPerSecond(rate)}`;
+    const tokens = this.contextTokens();
+    if (budget !== null && budget > 0 && tokens !== null) return ` · ${this.contextBar()} ${this.contextPercent()}%${rateSegment}`;
+    if (this.sessionTokens > 0) return ` · Σ ${formatTokens(this.sessionTokens)}${rateSegment}`;
+    return rateSegment;
   }
 
   /** Show the most useful live activity without adding one transcript row per tick. */
@@ -1826,12 +1852,26 @@ export class TUIApp {
         const data = frameRecord(frame.data);
         const total = typeof data['total_tokens'] === 'number' ? data['total_tokens'] : 0;
         if (total <= 0) return;
+        const output = typeof data['output_tokens'] === 'number' ? data['output_tokens'] : 0;
+        // The provider's own request duration, when it reported one. The
+        // rate comes from the shared pure function in `@duya/ai` so the TUI
+        // and the Desktop cannot disagree about one number; a frame without
+        // a duration produces no rate at all rather than a zero.
+        const durationMs = typeof data['request_duration_ms'] === 'number'
+          ? data['request_duration_ms']
+          : undefined;
         this.lastUsage = {
           input: typeof data['input_tokens'] === 'number' ? data['input_tokens'] : 0,
-          output: typeof data['output_tokens'] === 'number' ? data['output_tokens'] : 0,
+          output,
           total,
+          tokensPerSecond: durationMs === undefined
+            ? null
+            : calculateOutputTokensPerSecond(output, durationMs),
         };
         this.sessionTokens += total;
+        // The context estimate is anchored here: everything the transcript
+        // holds from now on is what the NEXT request would have to carry.
+        this.usageCharBaseline = this.model.contextChars;
         this.scheduleRender();
         return;
       }
@@ -2446,13 +2486,23 @@ export class TUIApp {
         + ` · out ${usage.output.toLocaleString('en-US')}`
         + ` · total ${usage.total.toLocaleString('en-US')}`,
       );
+      // The rate, when the provider measured the request. A separate line
+      // rather than another field on the line above: it is a different unit,
+      // and it is absent for a call whose duration nobody measured.
+      if (usage.tokensPerSecond !== null) {
+        lines.push(`speed        ${formatTokensPerSecond(usage.tokensPerSecond)}`);
+      }
     }
     lines.push(`session      ${this.sessionTokens.toLocaleString('en-US')} tokens (sum of billed calls)`);
 
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget !== null && budget > 0) {
+    const contextTokens = this.contextTokens();
+    if (budget !== null && budget > 0 && contextTokens !== null) {
       const pct = this.contextPercent();
-      lines.push(`context      ${this.contextBar()} ${pct}% of ${formatTokens(budget)}`);
+      lines.push(
+        `context      ${this.contextBar()} ${pct}% of ${formatTokens(budget)}`
+        + ` (${contextTokens.toLocaleString('en-US')} tokens in the window)`,
+      );
     } else {
       lines.push(styles.muted('context      budget unknown for this model'));
     }
@@ -2460,11 +2510,31 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
-  /** Session tokens against the budget, clamped to 0–100. */
+  /**
+   * Tokens the NEXT request would carry, or null when that is not known yet.
+   *
+   * This is the CONTEXT, and it is not the spend. The provider's usage says
+   * how many tokens the last request cost; the transcript says how much has
+   * been added since. The session total is a different number — every billed
+   * call summed — and it grows with every turn without saying anything about
+   * how full the window is. Reading it as occupancy is how a long session
+   * ends up claiming a full window while the model still has room to work.
+   */
+  private contextTokens(): number | null {
+    const usage = this.lastUsage;
+    if (usage === null) return null;
+    // Four characters per token is the same rough rate pi uses for the tail
+    // of a conversation (`packages/ai/src/utils/estimate.ts:14`).
+    const added = Math.max(0, this.model.contextChars - this.usageCharBaseline);
+    return usage.total + Math.ceil(added / 4);
+  }
+
+  /** Context occupancy against the window, clamped to 0–100. */
   private contextPercent(): number {
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget === null || budget <= 0) return 0;
-    return Math.min(100, Math.max(0, Math.round((this.sessionTokens / budget) * 100)));
+    const tokens = this.contextTokens();
+    if (budget === null || budget <= 0 || tokens === null) return 0;
+    return Math.min(100, Math.max(0, Math.round((tokens / budget) * 100)));
   }
 
   /**

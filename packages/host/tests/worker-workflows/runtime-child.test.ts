@@ -25,6 +25,7 @@ const { workflowRunDbMocks, registryExecute } = vi.hoisted(() => ({
     create: vi.fn(),
     saveSnapshot: vi.fn(),
     appendJournal: vi.fn(),
+    loadSnapshot: vi.fn(),
     updateStatus: vi.fn(),
     finish: vi.fn(),
     loadJournal: vi.fn(),
@@ -162,6 +163,7 @@ beforeEach(() => {
   workflowRunDbMocks.updateStatus.mockReset();
   workflowRunDbMocks.finish.mockReset();
   workflowRunDbMocks.loadJournal.mockReset().mockResolvedValue([]);
+  workflowRunDbMocks.loadSnapshot.mockReset().mockResolvedValue(null);
   registryExecute.mockReset().mockResolvedValue({ result: 'v0.9.0\n', metadata: { exitCode: 0 } });
 });
 
@@ -353,6 +355,15 @@ export default async function (wf) {
     // Run 2 — init declares run-1 as the cache seed: the identical call
     // replays and the host is never invoked.
     workflowRunDbMocks.loadJournal.mockResolvedValue([toolRecord!.record]);
+    const readyFrame = first.frames.find((frame) => frame.type === 'workflow:ready')!;
+    workflowRunDbMocks.loadSnapshot.mockResolvedValue({
+      definition: readyFrame.definition,
+      definitionHash: readyFrame.definitionHash,
+      definitionHashSource: readyFrame.definitionHashSource,
+      nodeStack: [],
+      journal: [],
+      updatedAt: Date.now(),
+    });
     registryExecute.mockClear();
     const h = startChild(SCRIPT, 'run-2', { resumeFromRunId: 'run-1' });
     await waitFor(

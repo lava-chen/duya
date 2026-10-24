@@ -298,6 +298,11 @@ export const CORE_MODULES: readonly CoreModule[] = [
     carveOut: [],
   },
   {
+    id: 'workflow',
+    roots: ['packages/workflow'],
+    carveOut: [],
+  },
+  {
     // `packages/ai` is `core`-shaped and declared `core`. Three files are not
     // pure. See the file header for the full argument.
     id: 'legacy-ai',

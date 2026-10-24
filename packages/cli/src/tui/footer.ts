@@ -47,6 +47,15 @@ export interface FooterStats {
   /** 0–100, or null when no context budget is known for the model. */
   readonly contextPercent: number | null;
   readonly contextBudget: number | null;
+  /**
+   * Output tokens per second of the most recent billed call, or null when
+   * the provider reported no duration for it.
+   *
+   * Null and zero are different answers: null means "nobody measured this
+   * call", zero would mean "the model emitted nothing in no time", which is
+   * not a rate anybody observed.
+   */
+  readonly outputTokensPerSecond: number | null;
 }
 
 /** The right-hand identity of the second row. */
@@ -78,6 +87,18 @@ export function formatTokenCount(count: number): string {
   if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
   if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   return `${Math.round(value / 1_000_000)}M`;
+}
+
+/**
+ * Measured output throughput: `⚡ 63.0 tok/s`.
+ *
+ * One decimal, because the difference between 12 and 13 tok/s is noise and
+ * the difference between 12 and 120 is not. No `~` prefix: this number is
+ * measured against the provider's own request duration, not estimated from
+ * streamed text.
+ */
+export function formatTokensPerSecond(rate: number): string {
+  return `⚡ ${rate.toFixed(1)} tok/s`;
 }
 
 /**
@@ -204,6 +225,13 @@ export function buildFooterLines(input: FooterInput): string[] {
     ? `${percent === null ? '?' : `${Math.round(percent)}%`}/${formatTokenCount(budget)}`
     : '';
   if (contextLabel !== '') parts.push(contextLabel);
+  // The output rate of the MOST RECENT billed call, measured against the
+  // provider's own request duration. It sits on the same row as the counters
+  // because it answers the same question they do -- what did that call
+  // cost -- and it is omitted entirely when the provider reported no
+  // duration, rather than shown as a zero.
+  const rate = stats.outputTokensPerSecond;
+  if (rate !== null && Number.isFinite(rate)) parts.push(formatTokensPerSecond(rate));
   const statsPlain = parts.join(' ');
 
   const model = input.model ?? null;
