@@ -103,14 +103,6 @@ export async function writeConfigAgentsTable(
   await writeConfigTomlDocument(configPath, { ...doc, agents });
 }
 
-/** Replace the `[agents]` table of a document. */
-export function withAgentsTable(
-  doc: ConfigTomlDocument,
-  agents: Record<string, CustomAgentConfig>,
-): ConfigTomlDocument {
-  return { ...doc, agents };
-}
-
 // ==== the surgical namespace edit ====
 
 /**
@@ -147,10 +139,10 @@ function replaceAgentsNamespace(raw: string, block: string[]): string | null {
   let cursor = 0;
   regions.forEach((region, index) => {
     out.push(...lines.slice(cursor, region.start));
-    if (index === 0) {
+    if (index === 0 && block.length > 0) {
       if (out.length > 0 && out[out.length - 1] !== '') out.push('');
       out.push(...block);
-      if (block.length > 0) out.push('');
+      out.push('');
     }
     cursor = region.end;
   });

@@ -57,7 +57,6 @@ export {
 export {
   readAgentsTable,
   readConfigTomlDocument,
-  withAgentsTable,
   writeConfigAgentsTable,
   writeConfigTomlDocument,
 } from './config-file.js';
