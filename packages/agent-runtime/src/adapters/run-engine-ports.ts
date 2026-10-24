@@ -518,6 +518,26 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
  * adapter must not produce, because the caller could not tell an absent row
  * from a dropped block. That marker remains a guard rather than a live code
  * path, and is stated so nobody reads it as a claim that images survive.
+ *
+ * ## Why `origin` crosses, and why it is the CLASSIFIER the engine needs
+ *
+ * `metadata.runtimeContext === true` is the marker every producer of a
+ * system-attached row already sets -- the volatile-context rail
+ * (`worker-context/context-rail.ts:87`), a hook's block
+ * (`worker-hooks/injection.ts:277`), an attachment's extracted text
+ * (`message-projectors.ts:159`). The HOST's projection turns it into
+ * `origin: 'context'` on its way in (`worker-run-composition.ts:314`), and the
+ * request contract uses that marker to tell "the system attached this row" from
+ * "the person said this" (`request-assembly.ts:153`).
+ *
+ * Without it, the compaction replacement was UNCLASSIFIABLE: a runtime-context
+ * row came back from `toRuntimeMessage` looking exactly like a person speaking,
+ * so the request could not tell which rows were the system's own -- and the
+ * engine's rule for keeping the context rows across a compaction
+ * (`run-engine.ts`, `#requestHistory`) had no way to exclude the replacement's own
+ * copy of them. Carrying the marker is what makes that exclusion exact rather
+ * than a guess, and the two changes are one change: without the marker the
+ * exclusion cannot be expressed, and with it the exclusion is a partition.
  */
 export function toRuntimeMessage(message: Message): ModelMessage {
   return {
@@ -536,6 +556,11 @@ export function toRuntimeMessage(message: Message): ModelMessage {
     // unidentified rows of the same role. Stated rather than hidden.
     id: message.id ?? `unidentified:${message.role}`,
     content: toRuntimeContent(message.content),
+    // The SYSTEM's own rows keep their identity across this boundary. Spread
+    // rather than a named `origin: undefined`, because the field is optional
+    // under `exactOptionalPropertyTypes` and naming it with no value is not
+    // the same as omitting it.
+    ...(message.metadata?.runtimeContext === true ? { origin: 'context' as const } : {}),
   };
 }
 
