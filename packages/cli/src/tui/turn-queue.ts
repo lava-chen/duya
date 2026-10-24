@@ -1,20 +1,29 @@
 /** Serial admission of local drafts into Host turns. This does not execute runs. */
+import type { FileAttachment } from '@duya/agent-protocol';
+
 export type TurnOutcome = 'completed' | 'cancelled' | 'failed';
+
+/** One queued draft: the prompt text plus the attachments submitted with it. */
+interface QueuedDraft {
+  readonly text: string;
+  readonly attachments: readonly FileAttachment[];
+}
 
 export interface TurnQueueSnapshot {
   readonly busy: boolean;
   readonly paused: boolean;
+  /** The queued prompt TEXTS. Attachments are not surfaced here. */
   readonly pending: readonly string[];
 }
 
 export interface TurnQueueOptions {
-  readonly execute: (text: string) => Promise<TurnOutcome>;
+  readonly runTurn: (text: string, attachments: readonly FileAttachment[]) => Promise<TurnOutcome>;
   readonly onChange: (snapshot: TurnQueueSnapshot) => void;
   readonly onError: (error: unknown) => void;
 }
 
 export class TurnQueue {
-  private readonly pending: string[] = [];
+  private readonly pending: QueuedDraft[] = [];
   private busy = false;
   private paused = false;
   private closed = false;
@@ -24,10 +33,10 @@ export class TurnQueue {
   constructor(private readonly options: TurnQueueOptions) {}
 
   get snapshot(): TurnQueueSnapshot {
-    return { busy: this.busy, paused: this.paused, pending: [...this.pending] };
+    return { busy: this.busy, paused: this.paused, pending: this.pending.map((draft) => draft.text) };
   }
 
-  submit(text: string): void {
+  submit(text: string, attachments: readonly FileAttachment[] = []): void {
     if (this.closed || text.trim() === '') return;
     // A fresh input after interruption is an explicit new intent. Older queued
     // drafts still require the user's resume decision before automatic drain.
@@ -35,7 +44,7 @@ export class TurnQueue {
       if (this.busy) this.resumeAfterActive = true;
       else this.paused = false;
     }
-    this.pending.push(text);
+    this.pending.push({ text, attachments });
     this.changed();
     this.drain();
   }
@@ -55,10 +64,18 @@ export class TurnQueue {
     this.drain();
   }
 
+  /**
+   * Recall the newest queued draft's TEXT for editing.
+   *
+   * The attachments are dropped, not re-queued: the recalled text still
+   * carries the chip labels, and resubmitting filters against an empty draft
+   * list — the user re-attaches by pasting again rather than the queue
+   * silently re-attaching files the editor no longer shows as queued chips.
+   */
   takeLast(): string | null {
-    const text = this.pending.pop() ?? null;
+    const draft = this.pending.pop() ?? null;
     this.changed();
-    return text;
+    return draft?.text ?? null;
   }
 
   clear(): void {
@@ -91,10 +108,10 @@ export class TurnQueue {
   private async run(): Promise<void> {
     try {
       while (!this.closed && !this.paused) {
-        const text = this.pending.shift();
-        if (text === undefined) break;
+        const draft = this.pending.shift();
+        if (draft === undefined) break;
         this.changed();
-        const outcome = await this.options.execute(text);
+        const outcome = await this.options.runTurn(draft.text, draft.attachments);
         if (outcome !== 'completed') this.paused = outcome !== 'cancelled' || !this.resumeAfterActive;
         this.resumeAfterActive = false;
       }

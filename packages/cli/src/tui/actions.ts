@@ -50,6 +50,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'undo', keys: ['Ctrl+Z'], label: 'Undo the last edit', context: 'editor' },
   { id: 'yank', keys: ['Ctrl+Y'], label: 'Yank back the last kill', context: 'editor' },
   { id: 'yank-pop', keys: ['Alt+Y'], label: 'Cycle the yank through older kills', context: 'editor' },
+  { id: 'paste-attachment', keys: ['Ctrl+V', 'Alt+V'], label: 'Attach a clipboard image or copied files', context: 'editor' },
   { id: 'indent', keys: ['Tab'], label: 'Indent · history recall when the line is empty', context: 'editor' },
   { id: 'complete', keys: ['/', '@'], label: 'Trigger command / file completion', context: 'editor' },
   // Ctrl+D is deliberately NOT a delete-forward. Every line editor makes it

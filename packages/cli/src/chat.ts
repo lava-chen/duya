@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import readline from 'node:readline';
 import type {
   DurableTimelineEntry,
+  FileAttachment,
   HostSessionListItem,
   HostSessionRecord,
   RunEvent,
@@ -720,7 +721,7 @@ export async function chatTui(
   };
 
   const queue = new TurnQueue({
-    execute: runTurn,
+    runTurn,
     onChange: (snapshot) => {
       const busyChanged = busy !== snapshot.busy;
       busy = snapshot.busy;
@@ -828,7 +829,7 @@ export async function chatTui(
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
     canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
-    onSubmit: (text) => { void handleLine(text); },
+    onSubmit: (text, attachments) => { void handleLine(text, attachments); },
     onInterrupt: interrupt,
     onExit: () => close(),
   });
@@ -1009,7 +1010,7 @@ export async function chatTui(
     tui.replaceTranscript(await loadSessionMessages(client, sessionId));
   }
 
-  async function runTurn(prompt: string): Promise<TurnOutcome> {
+  async function runTurn(prompt: string, attachments: readonly FileAttachment[] = []): Promise<TurnOutcome> {
     if (unsettledRunId !== null) {
       await requestRemoteCancellation(unsettledRunId, 'chat cancellation retry');
       if (unsettledRunId !== null) {
@@ -1031,6 +1032,7 @@ export async function chatTui(
       const start = await client.startAgentRun({
         sessionId: runSessionId,
         prompt,
+        ...(attachments.length > 0 ? { attachments } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
@@ -1165,11 +1167,14 @@ export async function chatTui(
     }
   }
 
-  async function handleLine(line: string): Promise<void> {
+  async function handleLine(line: string, attachments: readonly FileAttachment[] = []): Promise<void> {
     const text = line.trim();
     if (text === '') return;
     const command = /^\/([^\s]+)(?:\s+(.*))?$/u.exec(text);
     if (command !== null) {
+      // Slash commands are local surface actions; nothing downstream can
+      // consume attachments, so say so instead of silently losing them.
+      if (attachments.length > 0) tui.printNotice('Attachments are ignored with slash commands.');
       const name = command[1]?.toLowerCase() ?? '';
       const args = command[2]?.trim() ?? '';
       try {
@@ -1273,6 +1278,7 @@ export async function chatTui(
     // and the same contract the Desktop composer implements). Checked after
     // the slash branch because `!/usr/bin/...` is a path, not a command.
     if (text.startsWith('!')) {
+      if (attachments.length > 0) tui.printNotice('Attachments are ignored with shell commands.');
       const shellLine = text.slice(1).trim();
       if (shellLine === '') {
         tui.printError('Usage: !<shell command>');
@@ -1296,7 +1302,7 @@ export async function chatTui(
       return;
     }
 
-    queue.submit(line);
+    queue.submit(line, attachments);
 
   }
 

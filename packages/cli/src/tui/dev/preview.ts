@@ -20,7 +20,7 @@ let showThinking = true;
 let completionRows = 8;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const queue = new TurnQueue({
-  execute: async (prompt) => {
+  runTurn: async (prompt) => {
     interrupted = false;
     tui.printUser(prompt);
     if (prompt === 'bugs') {
