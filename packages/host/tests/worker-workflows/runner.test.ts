@@ -24,6 +24,7 @@ const { workflowRunDbMocks, registryExecute } = vi.hoisted(() => ({
     create: vi.fn(),
     saveSnapshot: vi.fn(),
     appendJournal: vi.fn(),
+    loadSnapshot: vi.fn(),
     updateStatus: vi.fn(),
     finish: vi.fn(),
     loadJournal: vi.fn(),
@@ -162,6 +163,7 @@ beforeEach(() => {
   workflowRunDbMocks.updateStatus.mockReset().mockResolvedValue(true);
   workflowRunDbMocks.finish.mockReset().mockResolvedValue(true);
   workflowRunDbMocks.loadJournal.mockReset().mockResolvedValue([]);
+  workflowRunDbMocks.loadSnapshot.mockReset().mockResolvedValue(null);
   registryExecute.mockReset().mockResolvedValue({ result: 'ok', metadata: {} });
 });
 
@@ -347,10 +349,20 @@ export default async function (wf) {
       });
       expect(registryExecute).toHaveBeenCalledTimes(1);
       expect(persisted1.length).toBeGreaterThan(0);
+      const priorSnapshot = workflowRunDbMocks.saveSnapshot.mock.calls.at(-1)![0] as {
+        definition: unknown;
+        definitionHash: string;
+        definitionHashSource: string;
+      };
+      expect(priorSnapshot.definitionHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(priorSnapshot.definitionHashSource).toBe('dwf-script');
 
       // Run 2 — resume with identical script + args: the call replays from
       // the seeded cache and the host is never invoked.
       workflowRunDbMocks.loadJournal.mockResolvedValue(persisted1);
+      workflowRunDbMocks.loadSnapshot.mockResolvedValue({
+        runId: 'rA', ...priorSnapshot, nodeStack: [], journal: [], updatedAt: Date.now(),
+      });
       registryExecute.mockClear();
       const run2 = makeDeps();
       await launchSavedWorkflow(run2.deps, {
@@ -381,6 +393,48 @@ export default async function (wf) {
       });
       expect(registryExecute).toHaveBeenCalledTimes(1);
       expect(run3.frames[run3.frames.length - 1]!.run.status).toBe('complete');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses DWF journal seeding when the saved script hash differs', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wf-runner-hash-'));
+    try {
+      writeSavedWorkflow(dir, 'hash-bound', { description: 'hash-bound' }, `
+export default async function (wf) {
+  await wf.tool("Bash", { cmd: "echo one" });
+}
+`);
+      const first = makeDeps();
+      await launchSavedWorkflow(first.deps, {
+        runId: 'prior', workflowName: 'hash-bound', projectDir: dir,
+      });
+      const priorSnapshot = workflowRunDbMocks.saveSnapshot.mock.calls.at(-1)![0] as {
+        definition: unknown;
+        definitionHash: string;
+        definitionHashSource: 'dwf-script';
+      };
+      workflowRunDbMocks.loadSnapshot.mockResolvedValue({
+        runId: 'prior', ...priorSnapshot, nodeStack: [], journal: [], updatedAt: Date.now(),
+      });
+      workflowRunDbMocks.create.mockClear();
+      workflowRunDbMocks.loadJournal.mockClear();
+
+      writeSavedWorkflow(dir, 'hash-bound', { description: 'hash-bound' }, `
+export default async function (wf) {
+  await wf.tool("Bash", { cmd: "echo two" });
+}
+`);
+      const resumed = makeDeps();
+      await launchSavedWorkflow(resumed.deps, {
+        runId: 'new', workflowName: 'hash-bound', projectDir: dir, resumeFromRunId: 'prior',
+      });
+
+      expect(resumed.frames.at(-1)?.event).toBe('error');
+      expect(resumed.frames.at(-1)?.run.error).toContain('definition hash');
+      expect(workflowRunDbMocks.create).not.toHaveBeenCalled();
+      expect(workflowRunDbMocks.loadJournal).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

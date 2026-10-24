@@ -59,6 +59,10 @@ export function createHostWorkflowRunApi(
       runs.appendJournalRecord(runId, record);
       return true;
     },
+    async replaceJournal(runId, records) {
+      runs.replaceJournal(runId, records);
+      return true;
+    },
     async listEvents(runId, afterSeq = -1) {
       return runs.listEvents(runId, afterSeq);
     },
