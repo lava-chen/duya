@@ -172,7 +172,7 @@ const scriptGlyphStyle = (accent: string): CSSProperties => ({
   fontSize: '11px',
   fontWeight: 700,
   color: accent,
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
 });
 
 const nodeCountStyle: CSSProperties = {
@@ -222,7 +222,7 @@ const nodePreviewBodyStyle: CSSProperties = {
   fontSize: '12px',
   lineHeight: 1.5,
   color: 'var(--text-faint)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   background: 'var(--bg-surface-1, transparent)',
   border: '1px solid var(--border-weak)',
   whiteSpace: 'pre-wrap',
@@ -283,7 +283,7 @@ const artifactNameStyle: CSSProperties = {
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   fontSize: '12px',
 };
 
@@ -331,7 +331,7 @@ const stepTextBlockStyle: CSSProperties = {
 
 const stepActionStyle: CSSProperties = {
   fontSize: '12px',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   color: 'var(--text)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
@@ -362,7 +362,7 @@ const metricChipStyle: CSSProperties = {
   fontSize: '11px',
   color: 'var(--text-faint)',
   background: 'var(--bg-surface-2, rgba(255,255,255,0.05))',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   fontVariantNumeric: 'tabular-nums',
 };
 
