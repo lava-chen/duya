@@ -473,21 +473,36 @@ export async function startBenchHost(options: BenchHostOptions): Promise<BenchHo
 
   const productionWorkerPath = path.resolve(options.repoRoot, 'packages/host/bundle/worker-entry.js');
   const workerPath = path.join(dataRoot, 'worker-entry-bench-wrapper.cjs');
-  // The wrapper exists for two reasons, and both are measurements:
+  // The wrapper exists for ONE reason: the worker must not inherit VITEST.
   //
-  //  1. `delete process.env.VITEST` -- the worker loads the PRODUCTION
-  //     bundle, and vitest's marker would make the production DB client
-  //     refuse the pool's `process.send` channel.
-  //  2. `enableCompileCache()` -- Node's compile cache covers modules that
-  //     are REQUIRED, and the worker bundle is required here rather than
-  //     being the process entry point. That is what lets the benchmark
-  //     measure the bundle's compile cost with a warm cache; the production
-  //     path cannot get this for free (there the bundle IS the entry point),
-  //     so the difference between the two is the size of the prize for
-  //     making the bundle a required module.
+  // The worker loads the PRODUCTION bundle, and vitest's marker would make
+  // the production DB client refuse the pool's `process.send` channel
+  // (`packages/host/src/worker-db-client.ts:113-121`). The bundle cannot be
+  // the entry point here, because the entry point is the file Node runs,
+  // and this file is what runs.
+  //
+  // It deliberately does NOT call `enableCompileCache()`. That call used to
+  // grant this fixture a benefit PRODUCTION did not have -- the compile
+  // cache covers modules that are REQUIRED, and the wrapper makes the bundle
+  // a required module, while in production the bundle IS the entry point.
+  // The benchmark therefore measured an idealised state that no user ever
+  // experienced.
+  //
+  // The production path now reaches that state for real: `NODE_COMPILE_CACHE`
+  // in the worker environment covers the entry point too (measured on the
+  // 4.6 MB bundle: 122 ms cold -> 65 ms warm under Electron-as-Node). With
+  // the call removed, the cache state comes from the ENVIRONMENT -- the same
+  // thing production does -- so the benchmark measures what production pays,
+  // and `NODE_DISABLE_COMPILE_CACHE=1` turns the optimization off for a
+  // controlled comparison.
+  //
+  // The worker also flushes the cache while it is ALIVE, because Node writes
+  // it only on a clean exit and the Host kills its workers. Without that
+  // flush the cache directory stays EMPTY: every spawn pays the compile and
+  // then throws the entry away, which is SLOWER than having no cache at all.
   await writeFile(
     workerPath,
-    `delete process.env.VITEST;\nrequire('node:module').enableCompileCache();\nrequire(${JSON.stringify(productionWorkerPath)});\n`,
+    `delete process.env.VITEST;\nrequire(${JSON.stringify(productionWorkerPath)});\n`,
     'utf8',
   );
 

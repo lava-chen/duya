@@ -446,6 +446,10 @@ afterAll(async () => {
       samples: samples.length,
       coldSamples: samples.filter((sample) => sample.cold).length,
       spans: spanTable(samples),
+      // The raw per-sample spans, in sample order. The summary above hides
+      // the one thing a warm/cold comparison needs: which sample paid a
+      // first-run cost and which ones did not.
+      sampleSpans: samples.map((sample) => ({ cold: sample.cold, spans: sample.spans })),
       counters: counterTable(samples),
       providerRequests: samples.flatMap((sample) => sample.providerRequests.map((request) => ({
         index: request.index,
