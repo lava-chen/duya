@@ -343,9 +343,9 @@ export const openrouterModels: Model<'openai-chat'>[] = [
     contextWindow: 1048576,
     maxTokens: 384000,
     cost: {
-      input: 0.439176,
-      output: 0.878352,
-      cacheRead: 0.036598,
+      input: 0.388368,
+      output: 0.776736,
+      cacheRead: 0.032364,
       cacheWrite: 0,
     },
   },
