@@ -3,49 +3,43 @@
  *
  * `/skills` — the skills of the current project, listed in the terminal.
  *
- * ## Why a REAL skills directory and not a mocked service
+ * ## Where the discovery lives now
  *
- * The command's whole job is to find skills on disk: read the frontmatter,
- * decide which skill wins a name, report where each one came from. A mock of
- * `listSkillDTOs` would encode this file's own beliefs about those rules, so
- * a wrong belief would pass. Every case here therefore builds real skill
- * directories (`<dir>/<name>/SKILL.md`) in a temporary directory and lets the
- * Host's own service read them.
+ * The command used to scan the skill directories itself, inside the CLI
+ * process. That discovery belongs to the Host now: the CLI asks
+ * `GET /v1/skills` and prints the answer. The two suites therefore pin
+ * DIFFERENT things:
  *
- * Two things are pinned down so the cases stay hermetic:
+ *  - the Host's suite pins the DISCOVERY — which skill wins a name, where
+ *    it came from, whether it is enabled;
+ *  - this suite pins the PRESENTATION — that whatever the Host answered is
+ *    shown as it was answered, that a refusal is not shown as an empty
+ *    list, and that the one sentence about plugin skills is always there.
  *
- *  1. The home directory, because the user skills live under `~/.duya/skills`.
- *     Without this the suite would read the developer's real skills and the
- *     "no skills" case would depend on the machine it runs on.
- *  2. The Duya data root, because the configured custom skills directory is
- *     read from `config.toml` there.
- *
- * The session's working directory comes from the Host's local session
- * projection, so the client is the only thing that is faked — the same shape
- * `/diff` uses.
+ * A real skills directory here would test the Host's service from the
+ * wrong side, so the cases below drive a stub client instead. What the
+ * stub says IS what the Host would have said.
  *
  * ## What these cases pin
  *
- *  1. A skill is listed with its source, its description and whether the user
- *     can invoke it — including a skill that says it cannot be.
- *  2. A project skill, a user skill, a system skill and a configured custom
- *     skill are all found, and each says where it came from.
- *  3. No skills is said plainly. An empty table would read as a broken one.
- *  4. A session without a working directory is refused, not answered from
- *     some other directory.
- *  5. The plugin limitation is stated, so a shorter list than the Desktop's
- *     is not read as a wrong list.
- *  6. The command works while a turn is streaming: it is a read.
+ *  1. The command's identity: name, group, no aliases.
+ *  2. The table: its columns, their order and their values.
+ *  3. An empty inventory is said plainly, and no table is printed.
+ *  4. "No skills" and "this Host cannot answer" are different facts and
+ *     are rendered differently. A Host that answers 404
+ *     `skill_inventory_unavailable` must NOT be shown an empty list: the
+ *     question was never asked of an authority that could answer it.
+ *  5. A session the Host does not have, and a transport failure, each
+ *     report their own problem.
+ *  6. The plugin limitation is on every panel.
+ *  7. A read works while a turn is streaming.
  *
  * The handler is called directly rather than through the registry: the
  * registry entry is another writer's file, and a test that depended on it
  * would fail here for a reason that has nothing to do with this command.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 
@@ -53,104 +47,78 @@ import { SKILLS_COMMANDS } from '../skills.js';
 import type { TuiSlashContext, TuiSlashHost } from '../types.js';
 
 const SESSION_ID = 's-skills-1';
+const WORKING_DIRECTORY = '/work/project';
 
 const COMMAND = SKILLS_COMMANDS[0];
 if (COMMAND === undefined) throw new Error('the skills command is not exported');
 
-/**
- * The home directory the command reads. A mutable box, because the mock
- * factory below is hoisted above every module-level binding.
- */
-const osState = vi.hoisted(() => ({ home: '' }));
-
-vi.mock('node:os', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:os')>();
-  return { ...actual, homedir: () => osState.home };
-});
-
 // ───────────────────────────── fixtures ─────────────────────────────
 
-const temporaryDirectories: string[] = [];
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-  osState.home = '';
-  while (temporaryDirectories.length > 0) {
-    const directory = temporaryDirectories.pop();
-    if (directory === undefined) continue;
-    try {
-      rmSync(directory, { recursive: true, force: true });
-    } catch {
-      // Best-effort: a file handle may still be open on Windows.
-    }
-  }
-});
-
-function temporaryDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'duya-cli-skills-'));
-  temporaryDirectories.push(directory);
-  return directory;
-}
-
-/** A skill directory with a SKILL.md, the shape the loader reads. */
-function writeSkill(skillsDir: string, name: string, frontmatter: readonly string[]): void {
-  const directory = join(skillsDir, name);
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(
-    join(directory, 'SKILL.md'),
-    `---\n${frontmatter.join('\n')}\n---\n\nThe body of the skill.\n`,
-    'utf8',
+/** A Host HTTP error, shaped like the one the client throws. */
+function hostError(status: number, code: string): Error {
+  return Object.assign(
+    new Error(`Duya Host request failed (${status}: ${code})`),
+    { status, code },
   );
 }
 
-/** The user's Duya root for this case. */
-function homeRoot(): string {
-  const home = temporaryDirectory();
-  osState.home = home;
-  return home;
-}
-
-/** The Duya data root, which holds `config.toml`. */
-function dataRoot(): string {
-  const root = temporaryDirectory();
-  vi.stubEnv('DUYA_DATA_ROOT', root);
-  vi.stubEnv('DUYA_TEST', '');
-  return root;
+/** One skill, as the Host's inventory route reports it. */
+function skill(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'demo-skill',
+    name: 'demo-skill',
+    description: 'A demo skill',
+    source: 'user',
+    enabled: true,
+    userInvocable: true,
+    ...overrides,
+  };
 }
 
 interface Harness {
   readonly notices: string[];
   readonly errors: string[];
+  readonly panels: Array<{ title: string; lines: readonly string[] }>;
+  /** Everything the command put on the screen, in one string. */
   readonly output: string;
+  /** The stub's inventory read, for asserting how it was called. */
+  readonly listSkills: ReturnType<typeof vi.fn> | undefined;
 }
 
 /**
- * Run `/skills` against a client whose local session projection answers with
- * `workingDirectory` (or fails with `readError`).
+ * Run `/skills` against a client whose inventory read answers with
+ * `inventory` (or fails with `error`).
  */
 async function run(options: {
-  readonly workingDirectory?: string | null;
-  readonly readError?: Error;
-  readonly overrides?: string | null;
+  readonly inventory?: unknown;
+  readonly error?: Error;
   readonly busy?: boolean;
+  /** A client that has no inventory method at all. */
+  readonly withoutMethod?: boolean;
+  /** A host without a panel surface: the command must fall back to notices. */
+  readonly withoutPanel?: boolean;
 }): Promise<Harness> {
   const notices: string[] = [];
   const errors: string[] = [];
-  const client = {
-    readLocalSession: vi.fn(async () => {
-      if (options.readError !== undefined) throw options.readError;
-      if (options.workingDirectory === undefined || options.workingDirectory === null) return null;
-      return { id: SESSION_ID, workingDirectory: options.workingDirectory };
-    }),
-    getSetting: vi.fn(async () => options.overrides ?? null),
-  } as unknown as HostSessionHttpClient;
+  const panels: Array<{ title: string; lines: readonly string[] }> = [];
+
+  const listSkills = options.withoutMethod === true
+    ? undefined
+    : vi.fn(async (_sessionId: string) => {
+      if (options.error !== undefined) throw options.error;
+      return options.inventory ?? { skills: [], workingDirectory: WORKING_DIRECTORY };
+    });
+  const client = listSkills === undefined ? {} : { listSkills };
   const tui: TuiSlashHost = {
     printNotice: (text) => { notices.push(text); },
     printError: (text) => { errors.push(text); },
     choose: async () => null,
+    ...(options.withoutPanel === true
+      ? {}
+      : { showPanel: (title: string, lines: readonly string[]) => { panels.push({ title, lines }); } }),
   };
   const ctx = {
-    client,
+    client: client as unknown as HostSessionHttpClient,
     session: { id: SESSION_ID },
     tui,
     busy: options.busy ?? false,
@@ -158,103 +126,87 @@ async function run(options: {
 
   await COMMAND.run(ctx, '');
 
-  return { notices, errors, output: notices.join('\n') };
+  return {
+    notices,
+    errors,
+    panels,
+    listSkills,
+    output: [
+      ...notices,
+      ...panels.flatMap((panel) => [panel.title, ...panel.lines]),
+      ...errors,
+    ].join('\n'),
+  };
+}
+
+/** The inventory payload the stub answers with. */
+function inventory(skills: readonly unknown[]): Record<string, unknown> {
+  return { skills, workingDirectory: WORKING_DIRECTORY };
 }
 
 // ───────────────────────────── cases ─────────────────────────────
 
 describe('/skills', () => {
-  it('lists a skill with its source, its description and whether it is invocable', async () => {
-    const home = homeRoot();
-    dataRoot();
-    writeSkill(join(home, '.duya', 'skills'), 'demo-skill', [
-      'name: demo-skill',
-      'description: A demo skill',
-    ]);
-    const project = temporaryDirectory();
-
-    const { output, errors } = await run({ workingDirectory: project });
-
-    expect(errors).toEqual([]);
-    expect(output).toMatch(/demo-skill\s+user\s+yes\s+yes\s+A demo skill/);
+  it('is a session-info command named skills, with no aliases', () => {
+    expect(COMMAND.name).toBe('skills');
+    expect(COMMAND.aliases).toBeUndefined();
+    expect(COMMAND.group).toBe('Session info');
+    expect(COMMAND.description).toBe('List available skills');
   });
 
-  it('says a skill that declares itself non-invocable is not invocable', async () => {
-    const home = homeRoot();
-    dataRoot();
-    writeSkill(join(home, '.duya', 'skills'), 'internal-skill', [
-      'name: internal-skill',
-      'description: Internal helper',
-      'user-invocable: false',
-    ]);
-    const project = temporaryDirectory();
-
-    const { output, errors } = await run({ workingDirectory: project });
-
-    expect(errors).toEqual([]);
-    expect(output).toMatch(/internal-skill\s+user\s+no\s+yes\s+Internal helper/);
-  });
-
-  it('finds the project, user, system and configured custom skills, each with its source', async () => {
-    const home = homeRoot();
-    const root = dataRoot();
-
-    const project = temporaryDirectory();
-    writeSkill(join(project, '.agent', 'skills'), 'project-skill', [
-      'name: project-skill',
-      'description: A project skill',
-    ]);
-    writeSkill(join(home, '.duya', 'skills'), 'user-skill', [
-      'name: user-skill',
-      'description: A user skill',
-    ]);
-    writeSkill(join(home, '.duya', 'skills', '.system'), 'system-skill', [
-      'name: system-skill',
-      'description: A system skill',
-    ]);
-
-    const custom = temporaryDirectory();
-    writeSkill(custom, 'custom-skill', [
-      'name: custom-skill',
-      'description: A custom skill',
-    ]);
-    // A TOML LITERAL string: a basic string would read the Windows
-    // backslashes as escapes.
-    writeFileSync(join(root, 'config.toml'), `[agent]\nskill_path = '${custom}'\n`, 'utf8');
-
-    const { output, errors } = await run({ workingDirectory: project });
-
-    expect(errors).toEqual([]);
-    expect(output).toMatch(/project-skill\s+project\s+yes\s+yes\s+A project skill/);
-    expect(output).toMatch(/user-skill\s+user\s+yes\s+yes\s+A user skill/);
-    expect(output).toMatch(/system-skill\s+system\s+yes\s+yes\s+A system skill/);
-    expect(output).toMatch(/custom-skill\s+custom\s+yes\s+yes\s+A custom skill/);
-  });
-
-  it('marks a skill the user turned off as not enabled', async () => {
-    const home = homeRoot();
-    dataRoot();
-    writeSkill(join(home, '.duya', 'skills'), 'demo-skill', [
-      'name: demo-skill',
-      'description: A demo skill',
-    ]);
-    const project = temporaryDirectory();
-
+  it('lists every skill with its source, its description and whether it is invocable', async () => {
     const { output, errors } = await run({
-      workingDirectory: project,
-      overrides: JSON.stringify({ 'demo-skill': false }),
+      inventory: inventory([
+        skill(),
+        skill({
+          id: 'project-skill',
+          name: 'project-skill',
+          description: 'A project skill',
+          source: 'project',
+        }),
+      ]),
+    });
+
+    expect(errors).toEqual([]);
+    // The columns, in order — a column that moved fails here.
+    expect(output).toMatch(/name\s+source\s+invocable\s+enabled\s+description/);
+    expect(output).toMatch(/demo-skill\s+user\s+yes\s+yes\s+A demo skill/);
+    expect(output).toMatch(/project-skill\s+project\s+yes\s+yes\s+A project skill/);
+  });
+
+  it('asks the Host about the current session', async () => {
+    const { listSkills } = await run({ inventory: inventory([skill()]) });
+
+    expect(listSkills).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('says a skill the user cannot invoke is not invocable', async () => {
+    const { output, errors } = await run({
+      inventory: inventory([skill({ userInvocable: false })]),
+    });
+
+    expect(errors).toEqual([]);
+    expect(output).toMatch(/demo-skill\s+user\s+no\s+yes\s+A demo skill/);
+  });
+
+  it('says a skill the user turned off is not enabled', async () => {
+    const { output, errors } = await run({
+      inventory: inventory([skill({ enabled: false })]),
     });
 
     expect(errors).toEqual([]);
     expect(output).toMatch(/demo-skill\s+user\s+yes\s+no\s+A demo skill/);
   });
 
-  it('says plainly that there are no skills, and prints no table', async () => {
-    homeRoot();
-    dataRoot();
-    const project = temporaryDirectory();
+  it('prints the project the skills belong to', async () => {
+    const { output, errors } = await run({ inventory: inventory([skill()]) });
 
-    const { output, errors } = await run({ workingDirectory: project });
+    expect(errors).toEqual([]);
+    expect(output).toMatch(/project\s+\/work\/project/);
+  });
+
+  it('says plainly that there are no skills, and prints no table', async () => {
+    const { output, errors } = await run({ inventory: inventory([]) });
 
     expect(errors).toEqual([]);
     expect(output).toContain('no skills found');
@@ -263,63 +215,99 @@ describe('/skills', () => {
   });
 
   it('states that plugin skills are not available to a standalone CLI', async () => {
-    homeRoot();
-    dataRoot();
-    const project = temporaryDirectory();
-
-    const { output, errors } = await run({ workingDirectory: project });
+    const { output, errors } = await run({ inventory: inventory([skill()]) });
 
     expect(errors).toEqual([]);
     expect(output).toContain('Plugin skills are not listed');
   });
 
-  it('refuses when the session has no working directory', async () => {
-    homeRoot();
-    dataRoot();
+  it('states the plugin limitation even when there are no skills', async () => {
+    const { output, errors } = await run({ inventory: inventory([]) });
 
-    const { output, errors } = await run({ workingDirectory: '' });
-
-    expect(output).toEqual('');
-    expect(errors.join('\n')).toContain('no working directory');
+    expect(errors).toEqual([]);
+    expect(output).toContain('Plugin skills are not listed');
   });
 
-  it('refuses when the Host cannot tell which project this is', async () => {
-    homeRoot();
-    dataRoot();
-    const error = Object.assign(new Error('Duya Host request failed (404: local_session_projection_unavailable)'), {
-      status: 404,
-      code: 'local_session_projection_unavailable',
+  it('says the Host cannot answer when the inventory is unavailable', async () => {
+    const { output, errors, panels } = await run({
+      error: hostError(404, 'skill_inventory_unavailable'),
     });
 
-    const { output, errors } = await run({ readError: error });
-
-    expect(output).toEqual('');
-    expect(errors.join('\n')).toContain('does not expose the session');
+    // Not an empty list: the question was never asked of an authority
+    // that could answer it.
+    expect(output).not.toContain('no skills found');
+    expect(output).toContain('does not serve the skills inventory');
+    expect(output).toContain('skill_inventory_unavailable');
+    expect(errors).toEqual([]);
+    expect(panels).toHaveLength(1);
+    expect(panels[0]?.title).toBe('Skills');
   });
 
-  it('refuses when the home directory is unknown, because the data root is not', async () => {
-    osState.home = '';
-    dataRoot();
-    const project = temporaryDirectory();
+  it('states the plugin limitation on the panel that says the Host cannot answer', async () => {
+    const { output } = await run({ error: hostError(404, 'skill_inventory_unavailable') });
 
-    const { output, errors } = await run({ workingDirectory: project });
+    expect(output).toContain('Plugin skills are not listed');
+  });
 
-    expect(output).toEqual('');
-    expect(errors.join('\n')).toContain('home directory');
+  it('reports a session the Host does not have as a session problem', async () => {
+    const { output, errors } = await run({ error: hostError(404, 'session_not_found') });
+
+    expect(output).not.toContain('no skills found');
+    expect(errors.join('\n')).toContain('not on this Host');
+    expect(errors.join('\n')).toContain(SESSION_ID);
+  });
+
+  it('reports a transport failure as an error', async () => {
+    const { output, errors, panels } = await run({
+      error: new Error('connect ECONNREFUSED 127.0.0.1:4321'),
+    });
+
+    expect(errors.join('\n')).toContain('Could not read the skills inventory');
+    expect(errors.join('\n')).toContain('ECONNREFUSED');
+    // No listing is shown for a read that failed.
+    expect(panels).toEqual([]);
+    expect(output).not.toContain('no skills found');
+  });
+
+  it('reports a payload that is not an inventory', async () => {
+    const { errors, panels } = await run({ inventory: { unexpected: true } });
+
+    expect(errors.join('\n')).toContain('not an inventory');
+    expect(panels).toEqual([]);
+  });
+
+  it('skips a malformed entry instead of failing the whole listing', async () => {
+    const { output, errors } = await run({
+      inventory: inventory(['not-an-object', skill({ id: 'good', name: 'good' })]),
+    });
+
+    expect(errors).toEqual([]);
+    expect(output).toMatch(/good\s+user\s+yes\s+yes\s+A demo skill/);
   });
 
   it('works while a turn is streaming, because a skill list is a read', async () => {
-    const home = homeRoot();
-    dataRoot();
-    writeSkill(join(home, '.duya', 'skills'), 'demo-skill', [
-      'name: demo-skill',
-      'description: A demo skill',
-    ]);
-    const project = temporaryDirectory();
-
-    const { output, errors } = await run({ workingDirectory: project, busy: true });
+    const { output, errors } = await run({
+      inventory: inventory([skill()]),
+      busy: true,
+    });
 
     expect(errors).toEqual([]);
     expect(output).toMatch(/demo-skill\s+user\s+yes\s+yes\s+A demo skill/);
+  });
+
+  it('falls back to plain notices when the host has no panel surface', async () => {
+    const { notices, panels } = await run({
+      inventory: inventory([skill()]),
+      withoutPanel: true,
+    });
+
+    expect(panels).toEqual([]);
+    expect(notices.join('\n')).toMatch(/demo-skill\s+user\s+yes\s+yes\s+A demo skill/);
+  });
+
+  it('says so when its own Host client has no inventory method', async () => {
+    const { errors } = await run({ withoutMethod: true });
+
+    expect(errors.join('\n')).toContain('cannot read the skills inventory');
   });
 });

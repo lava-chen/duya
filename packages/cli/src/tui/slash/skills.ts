@@ -3,76 +3,66 @@
  *
  * `/skills` — the skills this project can use, listed in the terminal.
  *
- * ## The Host's skill service, in process
+ * ## Why the CLI asks the Host
  *
  * The Desktop's `/skills` goes through the main process, which asks
- * `@duya/host/skills/skillService` for the winner set. The CLI has no main
- * process, but it does have `@duya/host` on its runtime dependencies and the
- * service is a pure filesystem read — so this command calls the SAME service
- * the Desktop calls. One service, two surfaces: the two lists cannot
- * disagree about which skill owns a name.
+ * `@duya/host/skills/skillService` for the winner set. This command used to
+ * call that SAME service in process — the CLI has `@duya/host` on its runtime
+ * dependencies — and that is precisely what the client-closure gate (G11-1)
+ * forbids: the value-import closure of a client entry must not reach
+ * `@duya/agent-core`, and the skill service reaches it through
+ * `@duya/agent-core/skills/resolver`.
  *
- * ## The arguments, assembled the way the Desktop assembles them
+ * So the CLI asks the Host over HTTP instead, the same way `/mcp` asks for
+ * the MCP inventory: `GET /v1/skills?sessionId=<id>` answers with the
+ * skills AND the session's working directory. The discovery itself stays
+ * the Host's — one implementation, so the Desktop's list and the CLI's list
+ * cannot disagree about which skill wins a name.
  *
- * `apps/desktop/src/main/cli/handlers/skills.ts` builds the same
- * `SkillServiceListArgs` for its `/v1/skills` route. This file mirrors that
- * assembly and replaces the two Electron-only pieces with their standalone
- * equivalents:
+ * ## The Host's method lands in the same batch as this file
  *
- * | argument | value | where it comes from |
- * | --- | --- | --- |
- * | `userSkillsDir` | `~/.duya/skills` | the home directory — the same path the agent's own loader reads (`getSkillDirectories` in `@duya/host/skills/loader`) |
- * | `projectSkillsDirs` | `<project>/.agent/skills`, `<project>/.duya/skills` | the SESSION's working directory |
- * | `systemSkillsDir` | `<userSkillsDir>/.system` | the synced copy of the bundled system skills, the same directory the Desktop reads |
- * | `customSkillDir` | `[agent] skill_path` | `config.toml` in the Duya data root — the Desktop reads the same key from its Electron config store |
- * | `pluginInstallPaths` | empty | see the limitation below |
- * | `overrides` | the `skillEnabledOverrides` setting | the Host's local settings, read through the client |
+ * `HostSessionHttpClient.listSkills(sessionId)` ships together with the
+ * Host's route, so the client carries the method once that route lands.
+ * Until then this file declares the structural interface it depends on
+ * (`SkillsCapableClient`) and connects the client to it with a SINGLE
+ * assertion — never `as unknown as`, so the shapes are still checked
+ * against each other. Integration deletes the assertion and the
+ * structural interface, leaving `ctx.client.listSkills(...)`.
  *
- * ## The session's working directory, not `process.cwd()`
+ * ## The session's working directory comes with the answer
  *
- * Project skills live next to the project the session works in. `process.cwd()`
- * is wherever the user happened to start the CLI, which is a different fact
- * as soon as the session was resumed from another directory. So the path is
- * read from the local session projection — the same way `/diff` reads it. When
- * that projection cannot answer, this command refuses rather than listing
- * some other directory's skills.
+ * Project skills live next to the project the session works in, and
+ * `process.cwd()` is wherever the user happened to start the CLI — a
+ * different fact as soon as the session was resumed from another directory.
+ * The Host knows the session's working directory, so it answers with it
+ * next to the list; the CLI resolves no path on its own.
+ *
+ * ## "No skills" and "this Host cannot answer" are different answers
+ *
+ * A Host without the inventory capability answers 404
+ * `skill_inventory_unavailable`. That is not "there are no skills" — it is
+ * "this Host cannot answer the question", and the two are rendered
+ * differently. An empty list is a fact that was observed; a refusal is not,
+ * and a panel that said "no skills" for a Host that never answered would
+ * report a fact it never observed.
  *
  * ## What a standalone CLI cannot see
  *
- * Plugin-declared skills are NOT in this list, and the list says so. The
- * plugin registry a Host knows about carries no `installPath`, and the plugin
- * packages themselves live under the Electron app's `userData` directory, so
- * a CLI that runs on its own has no directory to scan. `pluginInstallPaths`
- * therefore stays empty — the one argument this surface cannot fill.
+ * Plugin-declared skills are NOT in this list, and the list says so — on
+ * every panel, including the empty one. A list that is shorter than the
+ * Desktop's without this sentence reads as a WRONG list rather than as a
+ * smaller surface, which is the one mistake this line exists to prevent.
  */
-
-import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
-
-import { parse as parseToml } from '@iarna/toml';
-import { resolveDataRoot } from '@duya/data/data-paths';
-import {
-  getSkillInfoDTO,
-  listSkillDTOs,
-  type SkillServiceListArgs,
-} from '@duya/host/skills/skillService';
-import type { HostSessionHttpClient } from '@duya/host/http-client';
 
 import { describeError, hostErrorCode, showPanel } from './shared.js';
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 
-/**
- * The settings key the Desktop's skill toggles write. The Desktop keeps it in
- * its Electron config store; the Host serves the same setting on its local
- * settings surface, which is where a CLI reads it from.
- */
-const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
+const FOOTER = 'Esc close';
 
 /**
  * The one line that says what this surface cannot see.
  *
- * It is printed with EVERY answer, including the empty one: a list that is
+ * It is printed with EVERY panel, including the empty one: a list that is
  * shorter than the Desktop's without this sentence reads as a wrong list
  * rather than as a smaller surface.
  */
@@ -80,147 +70,90 @@ const PLUGIN_LIMITATION =
   'Plugin skills are not listed: the plugin registry carries no install path and the plugin packages '
   + 'live under the Electron app\'s data directory, so a standalone CLI cannot see them.';
 
-/**
- * The session's working directory, as the Host recorded it.
- *
- * `ctx.session` is the public session record and carries no path, so the
- * local session projection is the only place the path still exists. A Host
- * without that projection cannot answer, and that is a different answer from
- * "this session has no working directory".
- */
-async function sessionWorkingDirectory(
-  ctx: TuiSlashContext,
-): Promise<
-  { readonly ok: true; readonly workingDirectory: string }
-  | { readonly ok: false; readonly message: string }
-> {
-  let session: Awaited<ReturnType<HostSessionHttpClient['readLocalSession']>>;
-  try {
-    session = await ctx.client.readLocalSession(ctx.session.id, { includeAllSessions: true });
-  } catch (error) {
-    if (hostErrorCode(error) === 'local_session_projection_unavailable') {
-      return {
-        ok: false,
-        message: 'This Host does not expose the session\'s working directory, so /skills cannot tell which project to list.',
-      };
-    }
-    return {
-      ok: false,
-      message: `Could not read the session's working directory: ${describeError(error)}`,
-    };
-  }
-  if (session === null) {
-    return {
-      ok: false,
-      message: `Session ${ctx.session.id} is not on this Host, so there is no project to list skills for.`,
-    };
-  }
-  const workingDirectory = typeof session.workingDirectory === 'string' ? session.workingDirectory : '';
-  if (workingDirectory.trim() === '') {
-    return {
-      ok: false,
-      message: 'This session has no working directory, so there is no project to list skills for.',
-    };
-  }
-  return { ok: true, workingDirectory };
-}
-
-/**
- * The user's Duya root, or `undefined` when the home directory is unknown.
- *
- * The skills live under `~/.duya/skills` — the path the agent's own loader
- * reads — so an unknown home directory means an unknown skills directory. It
- * is NOT a reason to scan the current directory instead.
- */
-function homeDirectory(): string | undefined {
-  let home: string;
-  try {
-    home = homedir();
-  } catch {
-    return undefined;
-  }
-  return typeof home === 'string' && home.trim() !== '' ? home : undefined;
-}
-
-/**
- * The configured custom skills directory (`[agent] skill_path`).
- *
- * The Desktop reads this key from its Electron config store, which the CLI
- * cannot reach; the same value lives in `config.toml` in the Duya data root,
- * so the CLI reads it from there. A missing or malformed file means "no
- * custom directory", exactly like a store that has never been written.
- */
-function customSkillDir(dataRoot: string): string | undefined {
-  try {
-    const configPath = join(dataRoot, 'config.toml');
-    if (!existsSync(configPath)) return undefined;
-    const parsed: unknown = parseToml(readFileSync(configPath, 'utf-8'));
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    const agent = (parsed as { readonly agent?: unknown }).agent;
-    if (typeof agent !== 'object' || agent === null) return undefined;
-    const value = (agent as { readonly skill_path?: unknown }).skill_path;
-    return typeof value === 'string' && value.trim() !== '' ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * The user's per-skill enable/disable overrides.
- *
- * A Host that cannot answer the settings read still has skills; the
- * overrides are then simply unknown, and every skill reads as enabled. That
- * is the same fallback the Desktop's handler uses.
- */
-async function readOverrides(ctx: TuiSlashContext): Promise<Record<string, boolean>> {
-  try {
-    const raw = await ctx.client.getSetting(SKILL_ENABLED_OVERRIDES_KEY);
-    if (raw === null || raw === undefined) return {};
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
-    return Object.fromEntries(
-      Object.entries(parsed as Record<string, unknown>).filter(
-        (entry): entry is [string, boolean] => typeof entry[1] === 'boolean',
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
-/** One row of the printed list. */
-interface SkillRow {
+/** One skill, as the Host's inventory route reports it. */
+interface HostSkillEntry {
+  readonly id: string;
   readonly name: string;
-  readonly source: string;
   readonly description: string;
-  readonly userInvocable: boolean;
+  readonly source: string;
   readonly enabled: boolean;
+  readonly userInvocable: boolean;
+}
+
+/** The inventory payload: the skills plus the project's working directory. */
+interface SkillsInventoryResponse {
+  readonly skills: readonly HostSkillEntry[];
+  readonly workingDirectory: string;
 }
 
 /**
- * The list, as rows.
+ * The slice of the Host client this command depends on.
  *
- * `listSkillDTOs` decides which skill wins a name and what its id is; the
- * info DTO adds the user-invocable flag, which the list DTO does not carry.
- * The flag is read per skill, and each read re-walks the skill directories —
- * a handful of skills on a local disk, which is cheaper than a second
- * discovery implementation to keep in step.
+ * `listSkills()` ships on `HostSessionHttpClient` together with the Host's
+ * inventory route, so the client already carries it once that route lands.
+ * It is declared here as a structural interface so this branch stands on
+ * its own: a CLI running against a Host that predates the route has no
+ * method to call, and that is a fact the command can report instead of a
+ * crash it cannot.
  */
-function skillRows(args: SkillServiceListArgs): SkillRow[] {
-  return listSkillDTOs(args).map((item) => {
-    const info = getSkillInfoDTO({ ...args, id: item.id });
-    return {
-      name: item.name,
-      source: item.source,
-      description: item.description,
-      userInvocable: info?.userInvocable ?? true,
-      enabled: item.enabled,
-    };
-  });
+interface SkillsCapableClient {
+  listSkills(sessionId: string): Promise<SkillsInventoryResponse>;
+}
+
+/**
+ * Narrow one unknown record into the fields this command shows.
+ *
+ * The payload arrives over HTTP as JSON, so the declared type describes the
+ * happy path and not a guarantee: one malformed entry must not take the
+ * whole listing down.
+ */
+function narrowEntry(value: unknown): HostSkillEntry | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const name = record['name'];
+  if (typeof name !== 'string' || name === '') return undefined;
+  const id = record['id'];
+  const description = record['description'];
+  const source = record['source'];
+  return {
+    id: typeof id === 'string' && id !== '' ? id : name,
+    name,
+    description: typeof description === 'string' ? description : '',
+    source: typeof source === 'string' ? source : '',
+    // An entry that does not say whether it is enabled counts as enabled,
+    // and one that does not say whether the user may invoke it counts as
+    // invocable: a skill only leaves the list when the Host says so.
+    enabled: record['enabled'] !== false,
+    userInvocable: record['userInvocable'] !== false,
+  };
+}
+
+/**
+ * The skills in an inventory payload.
+ *
+ * `undefined` means the payload is not an inventory at all — a different
+ * fact from "the inventory is empty", and one the caller has to report
+ * differently.
+ */
+function readInventory(payload: unknown): SkillsInventoryResponse | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const record = payload as Record<string, unknown>;
+  const raw = record['skills'];
+  if (!Array.isArray(raw)) return undefined;
+  const skills: HostSkillEntry[] = [];
+  for (const item of raw) {
+    const entry = narrowEntry(item);
+    if (entry !== undefined) skills.push(entry);
+  }
+  const workingDirectory = record['workingDirectory'];
+  return {
+    skills,
+    workingDirectory: typeof workingDirectory === 'string' ? workingDirectory : '',
+  };
 }
 
 /** The table, aligned on the widest cell of each column. */
-function renderTable(rows: readonly SkillRow[]): string[] {
+function renderTable(rows: readonly HostSkillEntry[]): string[] {
   const nameWidth = Math.max(...rows.map((row) => row.name.length));
   const sourceWidth = Math.max(...rows.map((row) => row.source.length));
   const header = `  ${'name'.padEnd(nameWidth)}  ${'source'.padEnd(sourceWidth)}  invocable  enabled  description`;
@@ -232,64 +165,78 @@ function renderTable(rows: readonly SkillRow[]): string[] {
   return [header, ...body];
 }
 
+/** The listing, as panel lines. */
+function skillLines(inventory: SkillsInventoryResponse): string[] {
+  const lines: string[] = [`project  ${inventory.workingDirectory}`, ''];
+  if (inventory.skills.length === 0) {
+    // No table: an empty table reads as a broken table.
+    lines.push('  no skills found');
+  } else {
+    lines.push(...renderTable(inventory.skills));
+  }
+  lines.push('', PLUGIN_LIMITATION);
+  return lines;
+}
+
 const SKILLS_COMMAND: TuiSlashCommandDef = {
   name: 'skills',
   description: 'List available skills',
   group: 'Session info',
   async run(ctx: TuiSlashContext) {
-    const project = await sessionWorkingDirectory(ctx);
-    if (!project.ok) {
-      ctx.tui.printError(project.message);
-      return { kind: 'handled' };
-    }
-
-    const home = homeDirectory();
-    if (home === undefined) {
+    // The Host's inventory route lands `listSkills` on the client. Until it
+    // does, the client cannot be ASSIGNED to the structural interface: the
+    // weak-type check rejects a target whose every property is optional
+    // when the source shares none of them (TS2559). One assertion is the
+    // honest form of that — it keeps the shapes checked against each
+    // other — and it becomes a plain assignment the moment the method
+    // lands.
+    const client: Partial<SkillsCapableClient> = ctx.client as Partial<SkillsCapableClient>;
+    if (typeof client.listSkills !== 'function') {
       ctx.tui.printError(
-        'The home directory is unknown, so the Duya data root cannot be found and no skills can be listed.',
+        'This CLI cannot read the skills inventory: its Host client does not offer the inventory route.',
       );
       return { kind: 'handled' };
     }
 
-    const userSkillsDir = join(home, '.duya', 'skills');
-    const projectSkillsDirs = [
-      join(project.workingDirectory, '.agent', 'skills'),
-      join(project.workingDirectory, '.duya', 'skills'),
-    ];
-    const custom = customSkillDir(resolveDataRoot());
-
-    const args: SkillServiceListArgs = {
-      userSkillsDir,
-      projectSkillsDirs,
-      systemSkillsDir: join(userSkillsDir, '.system'),
-      ...(custom === undefined ? {} : { customSkillDir: custom }),
-      // A standalone CLI has no plugin registry to read install paths from;
-      // see the limitation line printed below.
-      pluginInstallPaths: {},
-      overrides: await readOverrides(ctx),
-    };
-
-    let rows: SkillRow[];
+    let payload: unknown;
     try {
-      rows = skillRows(args);
+      payload = await client.listSkills(ctx.session.id);
     } catch (error) {
-      ctx.tui.printError(`Could not read the skills: ${describeError(error)}`);
+      const code = hostErrorCode(error);
+      // A Host without the inventory capability cannot answer. That is not
+      // the same as an empty inventory, and it is rendered differently.
+      if (code === 'skill_inventory_unavailable') {
+        showPanel(ctx, 'Skills', [
+          'This Host does not serve the skills inventory, so it cannot answer.',
+          '',
+          '  That is different from an empty list — here the question was never',
+          '  asked of an authority that could answer it.',
+          '',
+          '  Source: Host skills inventory (GET /v1/skills), 404 skill_inventory_unavailable.',
+          '',
+          PLUGIN_LIMITATION,
+        ], { footer: FOOTER, scrollable: true });
+        return { kind: 'handled' };
+      }
+      if (code === 'session_not_found') {
+        ctx.tui.printError(
+          `Session ${ctx.session.id} is not on this Host, so there are no skills to list for it.`,
+        );
+        return { kind: 'handled' };
+      }
+      ctx.tui.printError(`Could not read the skills inventory: ${describeError(error)}`);
       return { kind: 'handled' };
     }
 
-    const lines: string[] = [`project  ${project.workingDirectory}`, ''];
-    if (rows.length === 0) {
-      // No table: an empty table reads as a broken table.
-      lines.push('  no skills found', '', '  searched');
-      for (const directory of [userSkillsDir, ...projectSkillsDirs, ...(custom === undefined ? [] : [custom])]) {
-        lines.push(`    ${directory}`);
-      }
-    } else {
-      lines.push(...renderTable(rows));
+    const inventory = readInventory(payload);
+    if (inventory === undefined) {
+      ctx.tui.printError(
+        'Could not read the skills inventory: the Host answered with something that is not an inventory.',
+      );
+      return { kind: 'handled' };
     }
-    lines.push('', PLUGIN_LIMITATION);
 
-    showPanel(ctx, 'Skills', lines, { footer: 'Esc close', scrollable: true });
+    showPanel(ctx, 'Skills', skillLines(inventory), { footer: FOOTER, scrollable: true });
     return { kind: 'handled' };
   },
 };
