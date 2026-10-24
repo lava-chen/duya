@@ -21789,7 +21789,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -30188,6 +30188,32 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/local-plugin-registry-api.ts": {
+      "bytes": 4489,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "kind": "import-statement",
+          "original": "@iarna/toml"
+        },
+        {
+          "path": "packages/host/src/agent-profile-config.ts",
+          "kind": "import-statement",
+          "original": "./agent-profile-config.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/ipc-message-adapters.ts": {
       "bytes": 27865,
       "imports": [
@@ -30210,12 +30236,12 @@
       "format": "esm"
     },
     "packages/host/src/ipc-row-adapters.ts": {
-      "bytes": 7951,
+      "bytes": 10174,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 30005,
+      "bytes": 40161,
       "imports": [
         {
           "path": "node:crypto",
@@ -30248,6 +30274,11 @@
           "original": "./tool-approval-api.js"
         },
         {
+          "path": "packages/host/src/local-plugin-registry-api.ts",
+          "kind": "import-statement",
+          "original": "./local-plugin-registry-api.js"
+        },
+        {
           "path": "packages/host/src/ipc-message-adapters.ts",
           "kind": "import-statement",
           "original": "./ipc-message-adapters.js"
@@ -30261,7 +30292,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 33243,
+      "bytes": 33636,
       "imports": [
         {
           "path": "node:crypto",
@@ -37732,6 +37763,16 @@
           "external": true
         },
         {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:crypto",
           "kind": "require-call",
           "external": true
@@ -38074,7 +38115,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14360
+          "bytesInOutput": 14347
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -38098,7 +38139,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -38131,10 +38172,10 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -38212,13 +38253,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -38236,7 +38277,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -38308,7 +38349,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -38317,10 +38358,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -38332,13 +38373,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -38347,7 +38388,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -38377,7 +38418,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -38389,7 +38430,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -38419,7 +38460,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -40150,7 +40191,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -40174,7 +40215,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -40186,7 +40227,7 @@
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -41569,7 +41610,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -41578,10 +41619,10 @@
           "bytesInOutput": 2872
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -42619,7 +42660,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -42814,7 +42855,10 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-db-bridge.ts": {
-          "bytesInOutput": 11
+          "bytesInOutput": 25
+        },
+        "packages/host/src/local-plugin-registry-api.ts": {
+          "bytesInOutput": 706
         },
         "packages/host/src/ipc-message-adapters.ts": {
           "bytesInOutput": 10
@@ -43459,7 +43503,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4592904
+      "bytes": 4593812
     }
   }
 }
