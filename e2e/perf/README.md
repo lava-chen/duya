@@ -55,6 +55,14 @@ like the flat IPC message DTO, so they can be injected through the real
 bridge (`electronAPI.message.replace`). `fixtureDigest(id)` is the SHA-256 of
 the canonical payload and is printed in every report.
 
+**An id names one content.** A report is only comparable to another report
+when both name the same fixture id AND that id resolves to the same bytes.
+A harness that renders different content under a `perf/*` id must use its own
+namespace instead — the local evidence harness under `e2e/perf/agents/agent-b/`
+uses `ui-harness/*` for exactly that reason (see its README). Changing the
+content of an existing id is not allowed: it changes the digest and silently
+invalidates every archived number that used it.
+
 **Seed the same fixture into two sessions? Give the rows different ids.**
 The transcript store appends with `INSERT OR IGNORE` on the message id, so
 two sessions carrying the same ids leave the second one empty:
