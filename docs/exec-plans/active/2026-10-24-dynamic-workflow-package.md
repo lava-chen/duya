@@ -1,8 +1,8 @@
 # 动态工作流核心包与并发、恢复纪律
 
-状态：draft PR #436 · 负责人：Codex · 更新：2026-10-24
+状态：draft PR #436 · CI 修复中（用户已授权合并，待门禁通过）· 负责人：Codex · 更新：2026-10-24
 分支：`codex/workflow-core-package` · worktree：`.claude/worktrees/workflow-core-package`
-base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
+base：`2ca7886fbae7197d30db4b4c553f59ca4b03fedf`（当前 `origin/master`）· owner：本会话
 
 ## 目标与边界
 
@@ -140,6 +140,22 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 | 同上 / clean；测试数据根 `/tmp/duya-workflow-data` | 同上 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests apps/desktop/src/main/db/core/__tests__/workflow-store.test.ts apps/desktop/src/main/agents/server/__tests__/workflow-runtime-manager.test.ts packages/ui/src/components/workflow/run-display/run-status.test.ts scripts/architecture/layer-purity.test.ts` | 0 | 20 files / 260 tests passed |
 | 同上 / clean | 同上 | `npx tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --esModuleInterop --skipLibCheck packages/workflow/tests/*.test.ts packages/workflow/tests/fixtures/*.ts` | 0 | Workflow graph fixture 与纯包测试严格 TypeScript 检查通过 |
 | 同上 / clean | 同上 | `npm run architecture:check`（受限授权，rebase 后） | 0 | 2685 findings 均为基线容忍项；无新增违规；257 条旧指纹未触发，baseline 未写入 |
+| `e0b867519f115244061d0a80bd43783c3ff3e96c` / clean；PR #436 初次 CI | GitHub Actions · Ubuntu 26.04 · Node 22.x | PR 全量 test job（run `40078155559`） | 1 | 1,176 个文件中 1 个失败：`scripts/architecture/slice-classification.test.ts` 将新 `packages/workflow/**` 列为 unexplained；13,099 passed、2 expected-fail、23 skipped。CI 失败签名与架构映射漏登一致 |
+| 同上 / clean；PR #436 初次 CI | GitHub Actions · Ubuntu 26.04 | architecture job（run `40078155559`） | 1 | `npm run bundle:verify` 报 `worker-entry.js` 与 `BashTool/BashWorker.js` stale，14 个源输入在 bundle commit 后变更；其余 architecture 步骤通过 |
+| 同上 / 本地分类表两文件未提交 | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npx vitest run scripts/architecture/slice-classification.test.ts`（加分类规则、尚未更新规则表 hash） | 1 | 30 tests 中 1 项为 reviewed rule table hash 不匹配：`cf513c5ff92b47e5` → `ab8016b8343270e6`；更新该 map tripwire，不改 architecture baseline |
+| 同上 / `scripts/architecture/slice-classification.{ts,test.ts}` 未提交 | 同上 | `npx vitest run scripts/architecture/slice-classification.test.ts` | 0 | 1 file / 30 tests passed；新 `packages/workflow/src` 归入 runtime-coordination，workflow 测试目录按既有约定作为明确 unclassified prefix |
+| 同上 / 切片分类与 worker bundle 输出未提交 | 同上 | `npm run build:packages -- --target @duya/host` | 0 | 构建 13 包 host 依赖闭包；包含 `@duya/workflow` |
+| 同上 / worker bundle 输出未提交 | 同上 | `npm run bundle:worker` | 0 | 重建 `packages/host/bundle/worker-entry.js`、`BashTool/BashWorker.js` 和 metafile；有既有 `import.meta`/CJS 构建 warning |
+| 同上 / bundle 输出未提交 | 同上 | `npm run bundle:verify` | 1 | verifier 以最后提交 bundle 的 git 历史为准；生成物仍是工作区未提交状态，提交同次变更后复验 |
+| 同上 / bundle 与分类表未提交；architecture 默认 sandbox | 同上 | `npm run architecture:check` | 2 | `audit-imports.mjs` 的 `spawnSync(node)` 返回 `EPERM`，未进入门禁扫描 |
+| 同上 / 同范围 | 同上，受限授权运行 | `npm run architecture:check` | 0 | 无新 boundary violations；257 个旧 baseline 指纹不再触发；未写入或新增 architecture baseline 指纹 |
+| 同上 / 同范围；typecheck 默认 sandbox | 同上 | `npm run typecheck:all` | 1 | `check:no-ts-suppress` 的 `spawnSync git ls-files` 返回 `EPERM`，未完成门禁 |
+| 同上 / 同范围 | 同上，受限授权运行 | `npm run typecheck:all` | 0 | 21 包构建与 protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 全部通过；Electron ratchet 无新增错误；eval 4/4 |
+| 同上 / 分类表与 bundle dirty；工作流 package 源/测试 clean | 同上 | `npx vitest run packages/workflow/tests` | 0 | 4 files / 17 tests passed，独立于 DB、worker 与 Electron |
+| 同上 / 分类表与 bundle dirty | 同上 | `npx vitest run packages/host/tests/worker-product-runtime/engine-chat-start-assembly-proof.test.ts apps/desktop/src/main/ipc/__tests__/project-entity-handlers.test.ts --reporter=verbose` | 0 | 2 files / 26 tests passed；全量本地运行中的瞬时失败在单独复核中未复现 |
+| 同上 / 分类表与 bundle dirty；全量 Vitest 未完成 | Node v24.19.0 · 本地网络受限 | `npx vitest run` | 130（人工中断） | 未筛选全量启动；多个 Electron 集成文件在 collection 时下载 binary 失败并显示 `0 test`，输出 `TypeError: fetch failed`，不能作为完整测试结果 |
+| 同上 / 分类表与 bundle dirty；网络权限开启后全量 Vitest 未完成 | Node v24.19.0 · 本地网络权限已批准 | `npx vitest run` | 130（人工中断） | 外连仍无法获取 Electron binary；还出现的 Host/IPC 本地失败在上行两文件单独重跑全部通过。全量无跳过地由 PR CI 复验 |
+| `e0b867519f115244061d0a80bd43783c3ff3e96c` / classification, bundle and plan dirty | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `git fetch origin` | 0 | `origin/master` 前进自 `2ca7886fbae7197d30db4b4c553f59ca4b03fedf` 至 `c426d029`；先提交 CI 修复，再 rebase 并重跑完整门禁 |
 
 ## 接续 / 结果
 
@@ -149,4 +165,4 @@ S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的�
 
 S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
 
-已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。PR 当前 mergeable、未合并；实现、验证和 rebase 已完成，等待 review。
+已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；已修复方案并在本地通过 workflow 全套测试、`typecheck:all` 与 architecture gate。当前分类表与 worker bundle 修复待提交、推送并触发完整 PR CI；若 CI 全绿则按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。

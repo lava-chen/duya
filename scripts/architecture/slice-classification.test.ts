@@ -1962,7 +1962,7 @@ function ruleTableFingerprint(): string {
   return createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 }
 
-const RULE_TABLE_FINGERPRINT = 'cf513c5ff92b47e5';
+const RULE_TABLE_FINGERPRINT = 'ab8016b8343270e6';
 
 describe('the classification is a partition of the source tree', () => {
   it('classifies every source file except the deliberately unclassified ones', () => {
