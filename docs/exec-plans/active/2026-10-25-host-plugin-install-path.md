@@ -101,8 +101,9 @@ PR：未开。
 
 分支：`codex/host-plugin-install-path`（worktree `E:\Projects\duya\.claude\worktrees\plugin-install-path`，
 base `3a687e41`）。提交序列：`567cbc45` 源码 + 测试 → `e8932dbb` 重建 bundle →
-`31198be5` 计划记录 → `541c4b86` 合 master `c426d029` → `b8d0a3ba` 合并后重建 bundle →
-`112ff9c7` 窄 MCP 发现入口 → `cf962d85` 重建 bundle。
+`31198be5` 计划记录 → `541c4b86` 合 master → `b8d0a3ba` 重建 bundle →
+`112ff9c7` 窄 MCP 发现入口 → `cf962d85` 重建 bundle → `1c6ca164` 计划记录 →
+`4e619f96` 合 master `51014d67` → `2b1e26fd` 重建 bundle。
 
 合并时冲突只在受版本控制的 bundle 产物上（`worker-entry.js` / `worker-metafile.json`）——
 bundle 不能手工解，取一边让 merge 落地，再按合并后的源码重建。
