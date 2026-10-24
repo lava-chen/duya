@@ -10,6 +10,7 @@ import type { ToolExecutor as RuntimeToolExecutor } from '@duya/agent-runtime/to
 import type { RiskTier } from '@duya/agent-runtime/authorization/permissions/policy';
 import { activateConditionalSkills, getPendingConditionalSkillCount } from './skills/conditionalSkills.js';
 import type { Tool, ToolResult, ToolUseContext } from './worker-run-contracts.js';
+import { checkCheckoutToolWrite } from './workspace/tool-write-gate.js';
 
 export type { ToolExposure } from '@duya/agent-runtime/tools/catalog/catalog-types';
 export type {
@@ -33,6 +34,22 @@ const conditionalSkillEffects = {
 export class ToolRegistry extends RuntimeToolRegistry<Tool, ToolResult, ToolUseContext, ToolExecutor> {
   constructor() {
     super({ conditionalSkillEffects });
+  }
+
+  override async execute(
+    name: string,
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+    context?: ToolUseContext,
+  ): Promise<ToolResult | null> {
+    const denial = await checkCheckoutToolWrite({ toolName: name, input, workingDirectory, sessionId: context?.options.sessionId });
+    if (denial) {
+      return {
+        id: crypto.randomUUID(), name, error: true, result: denial.message,
+        metadata: { errorCode: denial.code, reason: denial.reason },
+      };
+    }
+    return super.execute(name, input, workingDirectory, context);
   }
 }
 

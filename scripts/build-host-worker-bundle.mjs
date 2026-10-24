@@ -115,6 +115,10 @@ await build({
   sourcemap: false,
   minify: true,
   external: [],
+  // The logger's data-root dependency also uses createRequire(import.meta.url).
+  // This separate CJS executable needs its own URL binding, just like the main entry.
+  banner: { js: importMetaUrlPolyfill },
+  define: { 'import.meta.url': 'import_meta_url' },
 });
 
 // Create a package.json to force CommonJS mode for the bundle

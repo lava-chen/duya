@@ -59,6 +59,7 @@ import {
   type CheckoutRunRecord,
 } from './worktree.js';
 import { samePath } from '../workspace/fs-utils.js';
+import { isManagedCheckoutPath } from '../workspace/paths.js';
 
 const agentTypeAliases: Record<string, string> = {
   explore: 'Explore',
@@ -404,6 +405,18 @@ export class WorkerSubagentService<
         };
       }
 
+      // Reject before re-binding anything: incompatible arguments must have no
+      // checkout ownership side effect.
+      if (agentInput.isolation === 'worktree' && resumeTarget?.ok) {
+        return {
+          id: crypto.randomUUID(),
+          name: SUBAGENT_TOOL_NAME,
+          result: JSON.stringify({ error: 'isolation: "worktree" cannot be combined with resume_from. Resume the existing sub-agent in its original checkout, or start a new isolated sub-agent.' }),
+          error: true,
+        };
+      }
+
+      let childWorkingDirectory = context.options.workingDirectory;
       if (resumeTarget?.ok) {
         if (!agentInput.subagent_type) {
           warnings.push(
@@ -412,40 +425,25 @@ export class WorkerSubagentService<
         }
         const resumeDir = resumeTarget.workingDirectory;
         const runDir = context.options.workingDirectory;
-        if (resumeDir && runDir) {
-          // Plan 621 D: a checkout-owned session must not silently move to the
-          // parent's cwd. When the original directory is a registered linked
-          // worktree, the accumulated history refers to files that only exist
-          // there — refuse instead of the legacy silent switch. An ordinary
-          // directory the user merely relocated keeps the legacy warning.
+        const attachment = resumeTarget.checkout;
+        if (attachment && (!resumeDir || !samePath(attachment.cwd, resumeDir))) {
+          return {
+            id: crypto.randomUUID(), name: SUBAGENT_TOOL_NAME, error: true,
+            result: JSON.stringify({ error: `Session ${resumeTarget.sessionId} has a checkout cwd mismatch; refusing to resume outside its recorded checkout.` }),
+          };
+        }
+        if (resumeDir) {
           const original = await registeredCheckoutRoot(resumeDir);
-          if (original !== null && !samePath(resumeDir, runDir)) {
-            logger.warn('[SubAgent] resume_from rejected: checkout cwd mismatch', {
-              resumeFrom: resumeTarget.sessionId,
-              originalWorkingDirectory: resumeDir,
-              requestedWorkingDirectory: runDir,
-              checkoutRoot: original.root,
-              parentSessionId,
-            }, 'SubAgent')
+          if ((!original && (attachment || isManagedCheckoutPath(resumeDir)))
+            || (original && attachment && !samePath(original.root, attachment.root))) {
             return {
-              id: crypto.randomUUID(),
-              name: SUBAGENT_TOOL_NAME,
-              result: JSON.stringify({
-                error:
-                  `resume_from "${resumeTarget.sessionId}" originally ran in ${resumeDir}, ` +
-                  `which is inside the managed checkout at ${original.root}, but this run would use ` +
-                  `${runDir}. Resuming a checkout-owned sub-agent outside its checkout ` +
-                  `would point its history at files that do not exist here. Resume it with the original working ` +
-                  `directory, or start a new sub-agent in the current directory instead.`,
-              }),
-              error: true,
+              id: crypto.randomUUID(), name: SUBAGENT_TOOL_NAME, error: true,
+              result: JSON.stringify({ error: `The original checkout at ${resumeDir} is missing or its identity cannot be verified. Restore that checkout or start a new isolated sub-agent; the parent directory will not be substituted.` }),
             };
           }
           if (original !== null) {
-            // Same directory: the session re-enters its own checkout. The
-            // previous run released it at its terminal, so re-bind ownership
-            // for this run; a typed owner error here means another session
-            // bound the checkout meanwhile — refuse rather than run read-only.
+            // Resume the child's execution location, independently of where
+            // its parent is running. Never allocate a replacement checkout.
             try {
               await bindIsolatedWorktree(original.root, resumeTarget.sessionId);
             } catch (err) {
@@ -470,9 +468,12 @@ export class WorkerSubagentService<
             checkoutEntry = {
               root: original.root,
               cwd: resumeDir,
-              baseSha: original.head ?? '',
+              baseSha: original.baseSha || attachment?.baseSha || '',
               enteredAt: Date.now(),
             };
+            subAgentSessionId = resumeTarget.sessionId;
+            childWorkingDirectory = resumeDir;
+            worktreeBase = checkoutEntry.baseSha.slice(0, 12) || undefined;
             try {
               await sessionDb.setExtension(resumeTarget.sessionId, 'checkout', checkoutEntry);
             } catch (err) {
@@ -482,7 +483,7 @@ export class WorkerSubagentService<
                 err,
               }, 'SubAgent')
             }
-          } else if (!samePath(resumeDir, runDir)) {
+          } else if (runDir && !samePath(resumeDir, runDir)) {
             warnings.push(
               `The resumed sub-agent originally ran in ${resumeDir}; this run uses the session's current working directory ${runDir}.`,
             );
@@ -496,21 +497,6 @@ export class WorkerSubagentService<
         }, 'SubAgent')
       }
 
-      // ---- Plan 571 3.3: `isolation: 'worktree'` -------------------------
-      // A worktree can only be created for a NEW child. Resuming an existing
-      // session into a different working copy would silently change which
-      // files the accumulated history refers to, so refuse the combination.
-      if (agentInput.isolation === 'worktree' && resumeTarget?.ok) {
-        return {
-          id: crypto.randomUUID(),
-          name: SUBAGENT_TOOL_NAME,
-          result: JSON.stringify({
-            error: 'isolation: "worktree" cannot be combined with resume_from. Start a new sub-agent with isolation, or resume the existing one in the current working directory.',
-          }),
-          error: true,
-        };
-      }
-
       // Resume keeps the original session (and its transcript); a new spawn
       // mints a fresh id and a fresh `chat_sessions` row. Plan 621 D: the id
       // is minted BEFORE the checkout is created so the checkout can be born
@@ -518,7 +504,6 @@ export class WorkerSubagentService<
       const isResume = resumeTarget?.ok === true;
       subAgentSessionId = isResume ? resumeTarget.sessionId : crypto.randomUUID();
 
-      let childWorkingDirectory = context.options.workingDirectory;
       // Present only on the isolation path (mutually exclusive with resume):
       // the checkout identity the terminal paths need for checkpoint/release.
       let checkoutRoot: string | undefined;
@@ -557,8 +542,9 @@ export class WorkerSubagentService<
       // VERDICT completion contract so the parent gets a mechanical verdict
       // line instead of having to interpret prose.
       const verdictRequired = wantsVerdictContract(agentDefinition.agentType);
+      const usesWorktree = agentInput.isolation === 'worktree' || checkoutEntry !== undefined;
       const worktreeNotice =
-        agentInput.isolation === 'worktree' && childWorkingDirectory
+        usesWorktree && childWorkingDirectory
           ? `\n\n${buildWorktreeSpawnNotice(
               context.options.workingDirectory ?? process.cwd(),
               childWorkingDirectory,
@@ -814,7 +800,7 @@ export class WorkerSubagentService<
           outputFilePath: record.outputFilePath,
           background: true,
           ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
-          ...(agentInput.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+          ...(usesWorktree ? { isolation: 'worktree' as const } : {}),
           ...(warnings.length ? { warnings } : {}),
         });
         if (parentSessionId) {
@@ -1049,7 +1035,7 @@ export class WorkerSubagentService<
             : 0,
           ...(usage ? { usage } : {}),
           ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
-          ...(agentInput.isolation === 'worktree' ? { isolation: 'worktree' as const } : {}),
+          ...(usesWorktree ? { isolation: 'worktree' as const } : {}),
           ...(warnings.length ? { warnings } : {}),
           ...(runFailed ? { error: String(resultMetadata.agentError) } : {}),
         }),

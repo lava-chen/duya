@@ -45,6 +45,7 @@ import {
   slugifyWorktreeName,
 } from '../workspace/index.js';
 import { canonicalPath } from '../workspace/fs-utils.js';
+import { readCheckoutBase } from '../workspace/checkout-origin.js';
 import { sessionDb } from '../worker-db-client.js';
 import { logger } from '../worker-logger.js';
 
@@ -213,25 +214,22 @@ export async function checkpointIsolatedWorktree(
  * check in `inspectRegistration`, surfaced through `provider.observe`).
  * Slice D uses this to decide whether a resumed sub-agent's original
  * working directory was checkout-owned (refuse the cwd change) or an
- * ordinary directory the user moved (keep the legacy warning). `head` is the
- * registered HEAD, the closest reconstructable base for a resumed session's
- * checkout record.
+ * ordinary directory the user moved (keep the legacy warning). `head` is an
+ * observation; `baseSha` is the persisted creation base, or empty for legacy
+ * checkouts whose base is unknown. They must never be substituted.
  */
 export async function registeredCheckoutRoot(
   directory: string,
-): Promise<{ root: string; head: string | null } | null> {
+): Promise<{ root: string; head: string | null; baseSha: string } | null> {
   const toplevel = await gitOrNull(directory, ['rev-parse', '--show-toplevel']);
   const trimmed = toplevel?.trim();
   if (!trimmed) return null;
 
   const root = canonicalPath(trimmed);
   try {
-    const observed = await provider.observe(root);
-    if (!observed.registered) return null;
-    // `observe` is the registration judge; this second read only recovers the
-    // registered HEAD, which observation deliberately does not surface.
     const registration = await inspectRegistration(root);
-    return { root, head: registration.head };
+    if (!registration.registered) return null;
+    return { root, head: registration.head, baseSha: await readCheckoutBase(root) ?? '' };
   } catch (err) {
     // Observation failure is not evidence of registration; the caller falls
     // back to the non-checkout path instead of blocking a valid resume.

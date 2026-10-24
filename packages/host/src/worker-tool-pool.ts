@@ -46,8 +46,7 @@ function resolveDirname(): string {
  * In dev mode: __dirname/tool/BashTool/BashWorker.js
  * In packaged app: need to find agent directory instead of agent-bundle
  */
-function resolveBashWorkerPath(): string {
-  const dirname = resolveDirname();
+export function resolveBashWorkerPath(dirname = resolveDirname()): string {
   // First try the default path (works in dev mode)
   const defaultPath = path.join(dirname, 'BashTool', 'BashWorker.js');
   if (fs.existsSync(defaultPath)) {

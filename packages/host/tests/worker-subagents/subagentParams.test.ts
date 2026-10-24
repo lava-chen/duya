@@ -9,8 +9,13 @@
  * layer that is supposed to consume it.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import * as os from 'node:os';
+import * as path from 'node:path';
+import { git, makeRepo, useIsolatedDataRoot } from '../workspace/fixtures.js';
+import { createCheckoutProvider } from '../../src/workspace/checkout-provider.js';
+import { coreSessionToIpcRow } from '../../src/ipc-row-adapters.js';
+import type { CoreSession } from '@duya/data/session-store';
 import type { ToolUseContext, Message } from '../../src/worker-run-contracts.js';
 import type { RunAgentParams } from '../../src/worker-subagents/run-agent.js';
 
@@ -27,6 +32,7 @@ vi.mock('@duya/host/worker-db-client', () => ({
     create: vi.fn(async () => undefined),
     update: vi.fn(async () => undefined),
     get: vi.fn(async (id: string) => mocks.sessionRows.get(id) ?? null),
+    setExtension: vi.fn(async () => undefined),
   },
   messageDb: {
     getBySession: vi.fn(async () => []),
@@ -92,6 +98,23 @@ const subagentTool = new SubagentTool({
   createSubAgent,
   createToolRegistry,
 });
+
+let restoreDataRoot: () => void;
+beforeAll(() => { restoreDataRoot = useIsolatedDataRoot(); });
+afterAll(() => { restoreDataRoot(); });
+
+async function isolatedChild() {
+  const repo = makeRepo({ subdirectory: 'src' });
+  const provider = createCheckoutProvider();
+  const checkout = await provider.create({ sourceCwd: path.join(repo, 'src'), ownerSessionId: 'child-isolated', label: 'resume child' });
+  await provider.release(checkout.root, 'child-isolated');
+  mocks.sessionRows.set('child-isolated', coreSessionToIpcRow({
+    id: 'child-isolated', agentType: 'sub-agent', parentSessionId: 'parent-1',
+    workingDirectory: checkout.cwd, extensions: { checkout },
+  } as CoreSession));
+  mocks.historyRows = [{ id: 'old-1', role: 'user', content: 'previous isolated task', timestamp: 1 }];
+  return { repo, provider, checkout };
+}
 
 function makeContext(overrides: Record<string, unknown> = {}): ToolUseContext {
   return {
@@ -232,6 +255,71 @@ describe('SubagentTool parameter surface (plan 571)', () => {
   });
 
   describe('resume_from', () => {
+    for (const background of [false, true]) {
+      it(`resumes an isolated child in its own cwd from the parent's directory (background=${background})`, async () => {
+        const { repo, provider, checkout } = await isolatedChild();
+        git(checkout.root, 'commit', '--allow-empty', '-qm', 'child work');
+        const result = await subagentTool.execute(
+          { prompt: 'continue isolated work', resume_from: 'child-isolated', run_in_background: background },
+          undefined, makeContext({ workingDirectory: repo }),
+        );
+        expect(result.error).not.toBe(true);
+        const params = (background ? mocks.runAgentParams[0] : lastSyncParams()) as RunAgentParams;
+        expect(params.sessionId).toBe('child-isolated');
+        expect(params.workingDirectory).toBe(checkout.cwd);
+        const receipt = JSON.parse(result.result);
+        expect(receipt.workingDirectory).toBe(checkout.cwd);
+        expect(receipt.isolation).toBe('worktree');
+        expect(params.promptMessages[0]?.content).toBe('previous isolated task');
+        if (background) {
+          expect(mocks.registerCalls[0]?.checkout).toMatchObject({ baseSha: checkout.baseSha, cwd: checkout.cwd });
+          await provider.release(checkout.root, 'child-isolated');
+        }
+      });
+    }
+
+    it('refuses a missing recorded checkout instead of substituting the parent cwd', async () => {
+      const { repo, checkout } = await isolatedChild();
+      git(repo, 'worktree', 'remove', checkout.root);
+      const result = await subagentTool.execute(
+        { prompt: 'continue', resume_from: 'child-isolated', run_in_background: false }, undefined,
+        makeContext({ workingDirectory: repo }),
+      );
+      expect(result.error).toBe(true);
+      expect(result.result).toContain('original checkout');
+      expect(mocks.runAgentSyncParams).toHaveLength(0);
+    });
+
+    it('refuses a checkout acquired by another owner', async () => {
+      const { repo, provider, checkout } = await isolatedChild();
+      await provider.bind(checkout.root, 'other-session', 'explicit-release');
+      const result = await subagentTool.execute(
+        { prompt: 'continue', resume_from: 'child-isolated', run_in_background: false }, undefined,
+        makeContext({ workingDirectory: repo }),
+      );
+      expect(result.error).toBe(true);
+      expect(mocks.runAgentSyncParams).toHaveLength(0);
+      expect((await provider.observe(checkout.root)).owner).toMatchObject({ sessionId: 'other-session' });
+    });
+
+    it('enforces the real bridge parent_id field', async () => {
+      mocks.sessionRows.set('foreign', { id: 'foreign', agent_type: 'sub-agent', parent_id: 'another-parent' });
+      const result = await subagentTool.execute({ prompt: 'continue', resume_from: 'foreign' }, undefined, makeContext());
+      expect(result.error).toBe(true);
+      expect(result.result).toContain('different parent');
+      expect(mocks.runAgentParams).toHaveLength(0);
+    });
+
+    it('rejects isolation plus resume before acquiring the original checkout', async () => {
+      const { repo, provider, checkout } = await isolatedChild();
+      const result = await subagentTool.execute(
+        { prompt: 'continue', resume_from: 'child-isolated', isolation: 'worktree' }, undefined,
+        makeContext({ workingDirectory: repo }),
+      );
+      expect(result.error).toBe(true);
+      expect((await provider.observe(checkout.root)).owner).toBeNull();
+    });
+
     it('rejects an unknown session id with a structured error and spawns nothing', async () => {
       const result = await subagentTool.execute(
         { prompt: 'continue', resume_from: 'nope' },
