@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Report overview</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+      body { margin: 0; padding: 18px; color: CanvasText; background: Canvas; }
+      h1 { margin: 0 0 4px; font-size: 18px; }
+      p { margin: 0 0 14px; color: color-mix(in srgb, CanvasText 68%, transparent); }
+      #status { min-height: 1.5em; margin-bottom: 10px; }
+      table { width: 100%; border-collapse: collapse; text-align: left; }
+      th, td { padding: 9px 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 16%, transparent); }
+      tr.is-selected { background: color-mix(in srgb, Highlight 24%, Canvas); }
+      tr.is-highlighted { outline: 2px solid Highlight; outline-offset: -2px; }
+      th { font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>Report overview</h1>
+    <p>This read-only page is loaded from the plugin's MCP resource.</p>
+    <div id="status" role="status">Waiting for the host.</div>
+    <table aria-label="Report rows">
+      <thead><tr><th>Record</th><th>Owner</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr data-record-id="report-17"><td>report-17</td><td>A. Chen</td><td>Ready</td></tr>
+        <tr data-record-id="report-23"><td>report-23</td><td>M. Rivera</td><td>Needs review</td></tr>
+        <tr data-record-id="report-31"><td>report-31</td><td>J. Patel</td><td>In progress</td></tr>
+      </tbody>
+    </table>
+    <script>
+      (function () {
+        var CHANNEL = "duya.plugin-app";
+        var SURFACE_ID = "report-overview";
+        var documentToken = location.pathname.split("/")[1];
+        var status = document.getElementById("status");
+
+        function rowFor(recordId) {
+          if (typeof recordId !== "string" || recordId.length > 64) return null;
+          return Array.from(document.querySelectorAll("tr[data-record-id]"))
+            .find(function (row) { return row.dataset.recordId === recordId; }) || null;
+        }
+
+        function receiveHostEvent(event) {
+          var message = event.data;
+          if (event.source !== window.parent || !message || typeof message !== "object") return;
+          if (message.channel !== CHANNEL || message.type !== "event") return;
+          if (message.documentToken !== documentToken || message.surfaceId !== SURFACE_ID) return;
+
+          if (message.eventName === "select") {
+            var selected = rowFor(message.payload && message.payload.recordId);
+            if (!selected) return;
+            document.querySelectorAll("tr.is-selected").forEach(function (row) { row.classList.remove("is-selected"); });
+            selected.classList.add("is-selected");
+            status.textContent = "Selected " + selected.dataset.recordId;
+          } else if (message.eventName === "highlight") {
+            var highlighted = rowFor(message.payload && message.payload.recordId);
+            if (!highlighted) return;
+            document.querySelectorAll("tr.is-highlighted").forEach(function (row) { row.classList.remove("is-highlighted"); });
+            highlighted.classList.add("is-highlighted");
+            status.textContent = "Highlighted " + highlighted.dataset.recordId;
+          } else if (message.eventName === "refresh") {
+            status.textContent = "Refreshed at " + new Date().toLocaleTimeString();
+          }
+        }
+
+        window.addEventListener("message", receiveHostEvent);
+        window.addEventListener("load", function () {
+          window.parent.postMessage({
+            channel: CHANNEL,
+            method: "ready",
+            documentToken: documentToken,
+          }, "*");
+        }, { once: true });
+      }());
+    </script>
+  </body>
+</html>
