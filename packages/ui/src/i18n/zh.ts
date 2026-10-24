@@ -1805,16 +1805,6 @@ const zh: Record<TranslationKey, string> = {
   'sidebar.dialog.newSection.placeholder': '例如：工作 / 学习 / 副业',
   'sidebar.dialog.newSection.confirm': '创建并加入',
 
-  'slashCommands.title': '命令',
-  'slashCommands.help': '帮助',
-  'slashCommands.clear': '清除',
-  'slashCommands.cost': '费用',
-  'slashCommands.compact': '压缩',
-  'slashCommands.doctor': '诊断',
-  'slashCommands.init': '初始化',
-  'slashCommands.review': '审查',
-  'slashCommands.terminal': '终端',
-
   // Onboarding - 3 Step Design
   'onboarding.stepWelcome': '欢迎',
   'onboarding.stepConfig': '配置',

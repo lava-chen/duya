@@ -1612,6 +1612,10 @@ export function MessageInput({
         permissionMode,
         workingDirectory,
         messageCount: messages?.length,
+        // The catalog asks this before running a command that mutates the
+        // conversation, so the Desktop refuses mid-turn the same way the CLI
+        // TUI does.
+        isStreaming,
       }),
       clearMessages: () => {
         onClearMessages?.();
@@ -1675,7 +1679,7 @@ export function MessageInput({
     return () => {
       setCommandAppBridge(null);
     };
-  }, [onSend, onClearMessages, sessionId, onStop, onCompact, onModelChange, onEffortChange, onPermissionModeChange, handleToggleMode, requestRecap, workingDirectory, modelName, selectedEffort, permissionMode, messages]);
+  }, [onSend, onClearMessages, sessionId, onStop, onCompact, onModelChange, onEffortChange, onPermissionModeChange, handleToggleMode, requestRecap, workingDirectory, modelName, selectedEffort, permissionMode, messages, isStreaming]);
 
   const handlePasteEvent = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
