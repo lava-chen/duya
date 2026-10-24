@@ -20,6 +20,13 @@ name: Model catalog refresh
 #               follows them.
 #   * merge  — never. The pull request is the deliverable.
 #
+# A pull request with no added and no removed model id is normal. OpenRouter
+# quotes some models with a converted price that drifts continuously (observed:
+# deepseek/deepseek-v4-pro moved ~2.6% within twenty minutes), so the openrouter
+# shard alone can be enough to open a pull request on a night when no vendor
+# shipped anything. The price is what upstream says, so it is written down
+# rather than rounded away.
+#
 # Opening the pull request needs a token that may create pull requests. The
 # built-in GITHUB_TOKEN is refused by default (Settings → Actions → General →
 # "Allow GitHub Actions to create and approve pull requests"), so the workflow

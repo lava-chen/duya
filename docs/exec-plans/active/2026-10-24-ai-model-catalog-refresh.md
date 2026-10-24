@@ -54,6 +54,9 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - **开 PR 需要有权限的 token**：仓库当前未开启 "Allow GitHub Actions to create and approve pull requests"，
   `GITHUB_TOKEN` 默认建不了 PR。workflow 优先用 `NIGHTLY_PR_TOKEN` secret，没有则回退 `GITHUB_TOKEN`，
   失败时打印可直接点开的 compare 链接并把任务标红。
+- **「只有价格变了」的 PR 是常态**：OpenRouter 部分模型给的是换算价，会持续微漂
+  （实测 `deepseek/deepseek-v4-pro` 二十分钟内漂 ~2.6%）。夜间任务因此几乎每晚都有差异可报，
+  但模型增删列表会是空的。价格按上游原样写入，不做四舍五入掩盖。
 
 
 ## 发现与决策
