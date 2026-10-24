@@ -27,7 +27,8 @@
 - [x] 真实 worker 集成断言 + 反向（旧 bundle）验证
 - [x] 重建 `packages/host/bundle`
 - [x] 门禁（`typecheck:all`、`architecture:check`）与聚焦用例复跑
-- [ ] PR、CI 与授权集成
+- [x] PR #457 与 CI（架构 / build / test / typecheck / test scope 全绿）
+- [ ] 授权集成后同步、重验与回收
 
 ## 发现与决策
 
@@ -49,9 +50,10 @@
 | 4017ec9e（源码 + 测试 + bundle 已提交） | 同上 | `npx vitest run` 上述 3 个聚焦文件 | 0 · 3 文件 / 24 用例通过 | 本地 |
 | 4017ec9e | 同上 | `npm run architecture:check` | 0 · no new boundary violations（baseline 未新增指纹） | 本地 |
 | 4017ec9e | 同上 | `npm run typecheck:all` | 0 · 全链通过（`build:packages` 21/21、typecheck-electron-gate OK、eval check 4/4） | `tmp/typecheck-all.log` 第 677 行 `EXIT:0` |
+| 8b65a337（PR #457 head） | GitHub Actions ubuntu-latest / Node 22.x | `gh pr checks 457` | 全部通过 · architecture 2m29s、build 2m30s、test 2m10s、typecheck 6m48s、test scope 13s | actions/runs/40096512421 |
 
 ## 接续 / 结果
 
-已实现并本地验证：提交 `0be1af2c`（源码）、`6e99489d`（单测）、`4017ec9e`（bundle + 真实 worker 断言）、`55e6c912`（计划）。PR [#457](https://github.com/lava-chen/duya/pull/457)，待 CI 与授权集成；未合并。
+已实现并本地验证：提交 `0be1af2c`（源码）、`6e99489d`（单测）、`4017ec9e`（bundle + 真实 worker 断言）、`55e6c912`（计划）。PR [#457](https://github.com/lava-chen/duya/pull/457)，CI 全绿（run 40096512421）；等授权集成；未合并。
 回收：worktree 保留到 PR 集成后。
-下一步：等 #457 必需检查全绿；获授权后用 merge commit 集成，再重跑 `shared-client-vertical` 并核对 bundle 未漂移。
+下一步：获授权后用 merge commit 集成 #457，再重跑 `shared-client-vertical` 并核对 bundle 未漂移，最后回收 worktree。
