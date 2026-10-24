@@ -246,25 +246,25 @@ async function listHostSessionRows(
   return rows;
 }
 
+/**
+ * A session's whole message projection, read ONCE.
+ *
+ * The Host's paged read projects the ENTIRE transcript on every page, so a
+ * caller that pages to the end pays for the transcript once per page — on a
+ * 10k-message session that is 50 projections of 10k rows. The Host's whole
+ * read projects it once and hands back every row.
+ */
 async function listHostMessageItems(
   sessionId: string,
   includeSuperseded: boolean,
   sources?: readonly string[],
 ): Promise<HostMessageItem[]> {
   const api = getDesktopHostSessionApi();
-  const items: HostMessageItem[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await api.readMessages(sessionId, {
-      includeSuperseded,
-      limit: 200,
-      ...(cursor === undefined ? {} : { cursor }),
-      ...(sources === undefined ? {} : { sources }),
-    });
-    items.push(...page.messages);
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor !== undefined);
-  return items;
+  const page = await api.readAllMessages(sessionId, {
+    includeSuperseded,
+    ...(sources === undefined ? {} : { sources }),
+  });
+  return [...page.messages];
 }
 
 async function listHostProjectedTimelineItems(sessionId: string): Promise<HostTimelineItem[]> {
