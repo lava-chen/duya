@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./strip-comments.mjs";
 import { workspaceExportTargets } from "./workspace-exports.mjs";
+import { loadWorkspacePackages } from "./workspace-packages.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const ROOTS = ["apps", "packages", "tests", "e2e"];
@@ -70,26 +71,8 @@ function ownerOf(relPath) {
   return "other";
 }
 
-// ── workspace package registry, with REAL exports maps ────────────────
-const workspacePkgs = new Map(); // name -> { dir, exports: Set<string> | null }
-for (const dirName of fs.readdirSync(path.join(ROOT, "packages"), { withFileTypes: true })) {
-  if (!dirName.isDirectory()) continue;
-  const dir = `packages/${dirName.name}`;
-  const manifestPath = path.join(ROOT, dir, "package.json");
-  if (!fs.existsSync(manifestPath)) continue;
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (!manifest.name) continue;
-
-  let exportsMap = null;
-  if (manifest.exports) {
-    exportsMap = new Set();
-    for (const key of Object.keys(manifest.exports)) exportsMap.add(key);
-  } else if (manifest.main) {
-    // No exports map: only the package root is public, via `main`.
-    exportsMap = new Set(["."]);
-  }
-  workspacePkgs.set(manifest.name, { dir, exports: exportsMap, manifest });
-}
+// Both import audits resolve workspace names through the same manifest registry.
+const workspacePkgs = loadWorkspacePackages(ROOT);
 
 const isTestFile = (p) =>
   /(^|\/)(__tests__|tests?)(\/|$)/.test(p) || /\.(test|spec)\.[jt]sx?$/.test(p);
