@@ -34,6 +34,8 @@ export * from './session-fork.js';
 export * from './session-compaction.js';
 // Read-only inventory of the user's configured MCP servers.
 export * from './mcp-inventory.js';
+// Read-only inventory of the skills a session can use.
+export * from './skill-inventory.js';
 export * from './rollout-events.js';
 export type { JournalRecord } from './workflow-journal.js';
 export * from './workflow-runs.js';

@@ -74,6 +74,7 @@ import type {
   HostCapability,
   HostDeclaration,
   HostMcpServerConfig,
+  HostSkillEntry,
   ProtocolCapability,
   ProtocolVersion,
 } from '@duya/agent-protocol';
@@ -2265,6 +2266,24 @@ export class HostSessionHttpClient implements
    */
   async listMcpServers(): Promise<{ readonly servers: readonly HostMcpServerConfig[] }> {
     return this.request('GET', '/v1/mcps');
+  }
+
+  /**
+   * The skills this session's project can use, as the Host knows them.
+   *
+   * A READ: the Host reads the skill directories and answers. It needs the
+   * session because the project's skills live next to the session's working
+   * directory, and it answers with that directory so a client can say which
+   * project the list is about.
+   *
+   * A Host that was given no inventory capability refuses with a named code
+   * (`skill_inventory_unavailable`), which is a different answer from "this
+   * user has no skills".
+   */
+  async listSkills(
+    sessionId: string,
+  ): Promise<{ readonly skills: readonly HostSkillEntry[]; readonly workingDirectory: string }> {
+    return this.request('GET', `/v1/skills?sessionId=${encodeURIComponent(sessionId)}`);
   }
 
   private async request<T>(
