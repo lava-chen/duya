@@ -50,20 +50,6 @@ import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 import { describeError, formatTokens, hostErrorCode } from './shared.js';
 
 /**
- * The Host client surface this command calls.
- *
- * `compactSession` answers with SSE frames; the terminal one carries the
- * result. `data` stays `unknown` here on purpose — it crosses the
- * network — and is narrowed by the readers below.
- */
-interface CompactCapableClient {
-  compactSession(
-    sessionId: string,
-    options?: { instructions?: string; signal?: AbortSignal },
-  ): AsyncIterable<{ event: string; data: unknown }>;
-}
-
-/**
  * The refusal sentences, keyed by the Host's error code.
  *
  * Each one names what is missing and what to do about it, because each
@@ -140,7 +126,6 @@ const COMPACT_COMMAND: TuiSlashCommandDef = {
     if (refuseWhileBusy(ctx)) return { kind: 'handled' };
 
     const instructions = args.trim();
-    const client = ctx.client as unknown as CompactCapableClient;
 
     // Say once that something is happening: a compaction is a multi-minute
     // model call, and a command that prints nothing until it ends reads as
@@ -149,7 +134,7 @@ const COMPACT_COMMAND: TuiSlashCommandDef = {
 
     let terminal: 'completed' | 'failed' | null = null;
     try {
-      for await (const frame of client.compactSession(
+      for await (const frame of ctx.client.compactSession(
         ctx.session.id,
         instructions === '' ? undefined : { instructions },
       )) {

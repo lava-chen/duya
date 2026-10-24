@@ -28,23 +28,6 @@
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 import { describeError } from './shared.js';
 
-/**
- * The Host client surface this command calls.
- *
- * `askSideQuestion` is added to `HostSessionHttpClient` by the Host work
- * that backs this command; the narrow structural type is declared here so
- * this file states the contract it depends on. The shapes are the ones
- * the Host publishes, so the cast disappears on its own once they are
- * there.
- */
-interface SideQuestionCapableClient {
-  askSideQuestion(
-    sessionId: string,
-    question: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<{ answer: string }>;
-}
-
 const BTW_COMMAND: TuiSlashCommandDef = {
   name: 'btw',
   argsHint: '[question]',
@@ -77,9 +60,8 @@ const BTW_COMMAND: TuiSlashCommandDef = {
       }
     }
 
-    const client = ctx.client as unknown as SideQuestionCapableClient;
     try {
-      const result = await client.askSideQuestion(sessionId, question);
+      const result = await ctx.client.askSideQuestion(sessionId, question);
       const answer = typeof result?.answer === 'string' ? result.answer : '';
       if (answer.trim() === '') {
         ctx.tui.printNotice('The side question came back empty.');
