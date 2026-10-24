@@ -34,6 +34,11 @@ import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalo
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import {
+  appendShellContext,
+  shellContextAttachment,
+  shellContextEntry,
+} from './tui/shell-context.js';
 import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
@@ -680,6 +685,9 @@ export async function chatTui(
   let finished = false;
   let finish: () => void = () => {};
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
+  // Accumulated output of `!` shell runs since the last message, awaiting the
+  // next normal submission (see `tui/shell-context.ts`).
+  let pendingShellContext: { command: string; context: string } | null = null;
 
   let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
   const sessionSlashRows = (): PopoverItem[] => {
@@ -1273,36 +1281,54 @@ export async function chatTui(
       }
       return;
     }
-    // Bang prefix: `!cmd` runs a shell command in this terminal and prints
-    // the result instead of sending it to the agent (minimax/codex parity,
-    // and the same contract the Desktop composer implements). Checked after
-    // the slash branch because `!/usr/bin/...` is a path, not a command.
+    // Bang prefix: `!cmd` runs a shell command in this terminal and shows the
+    // result in a transcript card instead of sending it to the agent
+    // (minimax/codex parity, and the same contract the Desktop composer
+    // implements). `!!cmd` opts the run OUT of the context the next message
+    // carries. Checked after the slash branch because `!/usr/bin/...` is a
+    // path, not a command.
     if (text.startsWith('!')) {
       if (attachments.length > 0) tui.printNotice('Attachments are ignored with shell commands.');
-      const shellLine = text.slice(1).trim();
+      const excludeFromContext = text.startsWith('!!');
+      const shellLine = text.slice(excludeFromContext ? 2 : 1).trim();
       if (shellLine === '') {
         tui.printError('Usage: !<shell command>');
         return;
       }
-      tui.printNotice(`$ ${shellLine}`);
+      const callId = tui.beginLocalShell(shellLine);
       try {
         const result = await runShellLine(shellLine);
-        for (const line of result.output.split('\n')) tui.printNotice(line);
-        if (result.timedOut) {
-          tui.printError(`Command timed out after ${BANG_TIMEOUT_MS / 1000}s`);
-        } else if (result.code !== null && result.code !== 0) {
-          tui.printError(
-            `Exited with code ${result.code}`
-            + (result.signal === null ? '' : ` (signal ${result.signal})`),
-          );
+        const footer = result.timedOut
+          ? `[Timed out after ${BANG_TIMEOUT_MS / 1000}s]`
+          : result.code === null
+            ? '[Exit code: unknown]'
+            : result.code === 0
+              ? '[Exit code: 0]'
+              : `[Exit code: ${result.code}${result.signal === null ? '' : ` (signal ${result.signal})`}]`;
+        const body = result.output.trimEnd() === '' ? '' : `${result.output.trimEnd()}\n`;
+        tui.finishLocalShell(callId, `${body}${footer}`, result.timedOut || result.code !== 0);
+        if (!excludeFromContext) {
+          const entry = shellContextEntry(shellLine, process.cwd(), `${body}${footer}`);
+          pendingShellContext = {
+            command: shellLine,
+            context: appendShellContext(pendingShellContext?.context ?? null, entry),
+          };
         }
       } catch (error) {
-        tui.printError(error instanceof Error ? error.message : String(error));
+        tui.finishLocalShell(callId, error instanceof Error ? error.message : String(error), true);
       }
       return;
     }
 
-    queue.submit(line, attachments);
+    // The pending `!` output rides along only with a normal message: it is
+    // context the user is about to ask about, and nothing else consumes it.
+    const pendingShell: { command: string; context: string } | null = pendingShellContext;
+    pendingShellContext = null;
+    const pendingAttachments = pendingShell === null
+      ? attachments
+      : [...attachments, shellContextAttachment(pendingShell.context, pendingShell.command, Date.now())];
+
+    queue.submit(line, pendingAttachments);
 
   }
 

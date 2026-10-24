@@ -461,6 +461,8 @@ export class TUIApp {
   private draftAttachments: TuiDraftAttachment[] = [];
   /** Counter for chip labels; grows for the session, never resets on submit. */
   private chipSeq = 0;
+  /** Counter for local `!` shell cards. */
+  private localShellSeq = 0;
 
   /** Transcript-wide expansion; the same flag `/settings` calls expand blocks. */
   private expanded: boolean;
@@ -3175,6 +3177,30 @@ exportHistory(): string[] {
     if (this.focus === 'transcript') this.focus = 'input';
     this.editor.insert(labelled.label + ' ');
     this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Open a local `!` shell card and return the callId to complete it with.
+   *
+   * Rendered through the ordinary bash tool card (`upsertTool` with a
+   * `{ command }` input): the running spinner, the output disclosure and the
+   * failure styling already exist there, and a locally-run command is visually
+   * the same animal as an agent-run one.
+   */
+  beginLocalShell(command: string): string {
+    this.localShellSeq += 1;
+    const callId = `local-shell:${this.localShellSeq}`;
+    this.model.upsertTool(callId, 'bash', { command });
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+    return callId;
+  }
+
+  /** Complete a local `!` shell card with its combined output. */
+  finishLocalShell(callId: string, output: string, failed: boolean): void {
+    this.model.completeTool(callId, output, failed);
+    this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
   }
 

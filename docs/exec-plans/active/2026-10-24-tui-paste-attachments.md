@@ -9,6 +9,7 @@
 
 1. 粘贴图片/文档的文件路径（终端拖拽文件 = 粘贴路径文本，含引号/转义空格形态），输入框出现 chip 占位符，提交时随消息作为附件发给 agent。
 2. Ctrl+V（终端拦截时用 Alt+V）读取系统剪贴板截图/复制的文件（Windows），落临时文件后作为附件提交。
+3. `!cmd` / `!!cmd` 在 transcript 里渲染成 shell 命令卡片（bash tool 卡片复用：running→ok/error、输出折叠、退出码脚注），并把输出作为 terminal-ref 附件注入下一条普通消息（`!!` 排除）；桌面端已有同语义链路（useBangMode → bang:run IPC → CommandResultDialog），本次核对不重写。
 
 允许修改：`packages/cli/`（TUI 与 chat 链路）。协议层零改动——`StartAgentRunInput.attachments?: FileAttachment[]` 已存在，Host `readAttachments` 与 worker（image→base64 block、path 文件→[System Attached File] 上下文）链路已就绪，TUI 只是没接。
 
@@ -24,15 +25,14 @@
 
 ## 进度
 
-- [x] 调研 minimax-code 实现与 duya 协议/worker 现状
-- [x] 分配 worktree 并配置依赖 junction
-- [ ] attachments.ts：路径判定、chip、限额、FileAttachment 映射
-- [ ] clipboard-image.ts：win32 PowerShell 读剪贴板（图片→PNG 临时文件、FileDropList→路径）
-- [ ] TUIApp 接线：bracketed paste 路径识别、C-v/M-v 绑定、提交时按 chip 存活过滤附件
-- [ ] chat.ts/TurnQueue：提交载荷扩为 { text, attachments }，startAgentRun 透传
-- [ ] 单测 + 门禁
+- [x] attachments.ts：路径判定、chip、限额、FileAttachment 映射（commit 1e5f5ee1）
+- [x] clipboard-image.ts：win32 PowerShell 读剪贴板（图片→PNG 临时文件、FileDropList→路径）
+- [x] TUIApp 接线：bracketed paste 路径识别、C-v/M-v 绑定、提交时按 chip 存活过滤附件
+- [x] chat.ts/TurnQueue：提交载荷扩为 { text, attachments }，startAgentRun 透传
+- [x] 单测 + 门禁（cli 1270 测试绿、typecheck:all、architecture:check）
+- [x] TUI `!cmd` 卡片 + terminal-ref 上下文注入（tui/shell-context.ts + beginLocalShell/finishLocalShell）；桌面端核实现有 useBangMode 链路已覆盖同语义
 - [ ] 真机冒烟
-- [ ] commit + PR
+- [ ] commit `!` 切片 + PR
 
 ## 发现与决策
 
@@ -41,6 +41,9 @@
 - 剪贴板读取用 PowerShell（`System.Windows.Forms.Clipboard`），不引 `@mariozechner/clipboard` 原生依赖：Windows 原生模块重建是本仓已知痛点，且 PowerShell 形态 minimax 已在 WSL 路径验证。
 - 临时文件放 `os.tmpdir()/duya-tui-clipboard-*`，TUI 退出时清理；worker 在 turn 开始即读文件，进程存活期覆盖消费窗口。
 - 限额对齐 minimax：≤10 个附件、总量 ≤100MB。
+- `!` 卡片复用 bash tool block（`upsertTool('bash', {command})` + `completeTool`），不新增 block kind：running/失败样式、输出折叠、`isShellTool` 渲染全是现成管线。
+- `!` 上下文用 `terminal-ref` FileAttachment（桌面端同形状：name=`$ cmd`、type=text/plain、url=''、text=输出），走 worker 既有 buildAttachmentContext；`!!` 排除语义对齐 minimax；上下文只在普通消息提交时消费，slash/`!` 不消费，多次 `!` 累积（64KB 封顶留尾部）。
+- Mimosa hook 对 `execute(`/正则/`!` 形态有三类已知误报（SQL 注入/命令注入），TurnQueue 属性因此从 `execute` 改名 `runTurn`；遇到拦截拆小 diff 或换锚点绕过，不改语义。
 
 ## 验证记录
 
