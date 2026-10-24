@@ -1,6 +1,11 @@
 # 622 — 平台收口系列（依赖测量先行）
 
 > **一句话**：先把「依赖图测不准」这件事修好，再谈拆包、提层、退役。
+>
+> **交接（2026-10-23）**：第一波卡 01 / 07 / 08 / 09 的执行 agent 会话丢失，
+> 其工作区改动已由父 agent 提交为 **WIP 快照并推送到远端**（**未验证、未开 PR**）。
+> 远端分支状态、重建检出命令与环境坑见 [HANDOFF.md](./HANDOFF.md)。
+> 后续进展：卡 01 已由 PR #399 正式完成；卡 07 / 08 / 09 的 WIP 快照仍待接手方补验收并开 PR。
 > 本系列是 622 号工作项的**唯一状态源**；卡片状态只认**具名测试 + commit**。
 
 - 编号：622（610–621 已占用）
@@ -337,7 +342,6 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | [610 A8.2 / A8.3](../610-architecture-series/15-slice-a8-client-core.md) | **排序在…之前 / 被…覆盖**。A8.2（client-core 层定义）被 [04](04-remaining-unlayered-packages.md) 吸收；A8.3（客户端轴反向门禁）是 [05](05-client-axis-reverse-gate.md) 的**主体** |
 | [610 §12 / §13 退役](../610-architecture-series/12-agent-retirement-coordination.md) | **引用**。退役的消费者清单与顺序由既有计划拥有；[10](10-retirement-and-doc-truth.md) 只做**收尾 + CI 守卫 + 文档事实源**，不重写退役序列 |
 | [多 Agent 编排 Phase 1–4](../2026-10-23-multi-agent-orchestrator.md) | **引用 + 排序在…之前**。Phase 1（A1 补测 / A4 `FakeWorkflowHost`）**阻塞** [07](07-workflow-dag-parallel.md) 与 [08](08-background-subagent-lifecycle.md)；Phase 4（F1 落盘 / F3 状态映射）是 [08](08-background-subagent-lifecycle.md) 的**主体**，本系列不复制 |
-| [Desktop 性能爬坡](../2026-10-23-desktop-performance-hill-climbing.md) | **无交集**。该计划的 A–E 独占路径与本系列不重叠 |
 
 ---
 
@@ -355,9 +359,9 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | [04](04-remaining-unlayered-packages.md) | todo | 同上，"无层包"清单仍含 10 个 | `npx vitest run scripts/architecture/boundary-gates.test.ts` | 03 |
 | [05](05-client-axis-reverse-gate.md) | todo | G11 只覆盖浏览器入口；`packages/client-core` / `packages/ui` / `packages/cli` 的反向边无人守 | `npx vitest run scripts/architecture/client-closure-gate.test.ts` | 03 04 |
 | [06](06-runtime-purity.md) | todo | `authorization/permissions/types.ts:1` / `policy.ts:1` 的 `export * from '@duya/capabilities/permissions'` 让 runtime 运行时依赖 capabilities | `npx vitest run packages/agent-runtime/test/**` | 04 |
-| [07](07-workflow-dag-parallel.md) | todo | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
-| [08](08-background-subagent-lifecycle.md) | todo | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
-| [09](09-security-and-governance.md) | todo | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
+| [07](07-workflow-dag-parallel.md) | `2b3db6b1`（WIP 快照，无绿测试 → **未完成**） | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
+| [08](08-background-subagent-lifecycle.md) | `8acbe4ce`（WIP 快照，仅 Phase 1 测试层 → **未完成**） | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
+| [09](09-security-and-governance.md) | `89569a63`（WIP 快照，无绿测试 → **未完成**） | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
 | [10](10-retirement-and-doc-truth.md) | todo | 退役门禁 `OPEN`（770 处引用）；`ARCHITECTURE_MAP.md:16` 写「23 packages」；`test-inventory.json` 162 处指向已删文件 | `node scripts/architecture/agent-retirement-gate.mjs` + `npm run test:inventory` | — |
 | [11](11-resident-reconciler.md) | todo | `packages/host` / `packages/cli` 无任何对账启动路径；`reconcileRollouts` 无开机调用 | `npx vitest run packages/host/tests/**reconcil**` | 08 |
 
@@ -374,6 +378,8 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
   集成后启动 [03](03-host-layer-verdict.md)，按 §5.1 的依赖顺序推进。
 - **未做**：未合并任何 PR；未运行 `npm test` 全量；未运行 `electron:build`
   （本卡未改运行时或打包路径）。
+- **2026-10-23 交接**：卡 07 / 08 / 09 已产出 WIP 提交并推送远端但未验证、未开 PR，
+  远端分支状态与重建检出命令见 [HANDOFF.md](./HANDOFF.md)；接手方先 rebase 再补验收与 PR。
 
 ---
 
