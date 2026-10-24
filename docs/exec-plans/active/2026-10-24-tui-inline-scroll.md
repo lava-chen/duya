@@ -31,7 +31,7 @@
 - [x] inline 下 PgUp/PgDn 与 `revealSelectedBlock` 不再改 `follow`（弹窗分页仍保留）
 - [x] 单测 + inline 集成用例
 - [x] `typecheck:cli`、`architecture:check`
-- [ ] commit、push、PR
+- [x] commit（`816b110a`）、push、PR #455
 
 ## 发现与决策
 
@@ -67,11 +67,6 @@
 
 ## 接续 / 结果
 
-已实现、已验证，未提交。未提交路径：`packages/cli/src/tui/terminal/surface.ts`、
-`packages/cli/src/tui/TUIApp.ts`、`packages/cli/src/tui/terminal/__tests__/surface.test.ts`、
-`packages/cli/src/tui/__tests__/tui-inline-mode.test.ts`、
-`packages/cli/src/tui/components/transcript-pane.ts`、`packages/cli/src/tui/core/visible-window.ts`、
-`packages/cli/src/tui/__tests__/virtual-doc.test.ts`、本计划与 `README.md`。
+已实现、已验证，提交 `816b110a`，PR [#455](https://github.com/lava-chen/duya/pull/455)；未合并（等待用户授权）。
 `tmp/vitest-ai-source.config.mts` 是 ignored 的本地验证辅助，不提交。
 回收：PR 合并后按 worktree 指南核对 owner、成果可达与 ignored 文件。
-下一步：按 Conventional Commits 提交并开 PR；合并需用户授权。
