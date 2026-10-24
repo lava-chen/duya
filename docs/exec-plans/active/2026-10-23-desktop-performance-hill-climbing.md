@@ -326,6 +326,49 @@ after 侧的切换多花了约 12–15 秒，而这 12–15 秒里主线程几�
 
 这是 Claude 式棘轮在本仓的第一次落地：重新引入「每页全量投影」的那个提交会**直接红**，而不是等到某台机器上有人觉得慢才发现。它和 `apps/desktop/src/main/ipc/__tests__/db-handlers.test.ts` 里「桥接只调 Host 一次、绝不翻页」一起，把这条路径钉死。
 
+## 第六轮：Web 侧同一条 O(n²) 路径（PR #458）
+
+第五轮修的是 Desktop 桥接。**Web 走的是另一条路**：Desktop 不配置 UI services（走 `window.electronAPI`），Web 配了，于是同一个 Host 接口在 Web 侧还有一条分页读。
+
+### 根因：同一个根因的第二条路径
+
+| 调用点 | 改前 | 页大小 |
+| --- | --- | --- |
+| `packages/ui/src/lib/ipc-client.ts` 的 `readAllHostMessages` | 游标循环读 Host `/messages` | `limit: 100` |
+| `apps/web/src/client/workspace.ts` 的 `#readFullHistory` | 游标循环读 BFF `/messages` | BFF 上限 100（`parseLimit(..., 50, 100)`） |
+
+BFF 每页上限 100，比 Desktop 的 200 更狠 → 同样 1 万条消息，**Web 要翻 100 页，Desktop 翻 50 页**，每次都让 Host 重投影整条历史。
+
+### 实测（真实 Host + 真实 BFF，1 万条消息，同一台机器同一个 rig，持共享锁）
+
+| 路径 | 请求数 | 耗时 | 返回行数 |
+| --- | --- | --- | --- |
+| 分页循环 `?limit=100` | 100 | **83 507 ms** | 10 000 |
+| 一次整读 `?all=1` | 1 | **1 006 ms** | 10 000 |
+
+**83×**。两边的行数一致，结果没变。
+
+### 修法：把整读接到 Web 这条链路上
+
+- `packages/client-core/src/transport/host-api.ts`：`HostApiBridge` 增加 `readAllMessages` → `GET /v1/sessions/:id/messages?all=1`
+- `packages/ui/src/services/ui-services.ts` + `ui-services-factory.ts`：`UiServices.sessions` 透出该操作（窄接口，Desktop 侧不需要）
+- `packages/ui/src/lib/ipc-client.ts`：`readAllHostMessages` 从游标循环改成一次整读
+- `apps/web/src/server/web-bff.ts`：`GET /api/sessions/:id/messages?all=1` → Host 整读。`all=1` 与 `cursor`/`limit` 同现一律 400 `invalid_message_query`，`all` 值不等于 `1` 也 400
+- `apps/web/src/client/api.ts` + `ui-services-adapter.ts` + `workspace.ts`：Web 两条读路径都改整读
+
+### 门禁：请求次数（机器无关）
+
+四条门禁数的都是**请求次数**，不是毫秒：
+
+- `packages/ui/src/lib/ipc-client.test.ts`：整读恰好 1 次、分页 0 次
+- `apps/web/tests/client/api.test.ts`：整读恰好 1 个请求
+- `apps/web/tests/client/workspace.test.ts`：整条历史 1 次请求、带 `all=1`、不带 cursor
+- `apps/web/tests/server/web-bff.test.ts`：整读返回全部行且无 cursor、分页契约不变、`all=1&limit=2` / `all=1&cursor=abc` / `all=maybe` 均 400
+
+### 产物：本轮没动 `packages/host/src/**`，产物照样要重建
+
+`packages/host/bundle/worker-entry.js` 内联了 `@duya/client-core`（`worker-metafile.json` 里 client-core 占 8 个输入），所以改了 `packages/client-core/src/transport/host-api.ts` 就改了产物输入集 → 同一个 PR 里必须重建并提交 `packages/host/bundle/**`，否则 `bundle:verify` 判 STALE。**判定依据是 `bundle:verify` 的输入集，不是「我改没改 host/src」。**
+
 ## 集成记录
 
 | PR | Agent | 内容 | 状态 |
@@ -375,6 +418,11 @@ PR #389（另一个会话，`codex/plan-perf-handoff`）提出把本计划归档
 - **第五轮：数据路径的根因是「投影次数」，不是「读了多少行」**。`packages/host/src/session-api.ts` 的分页读每次都取**整条**历史再切页；Desktop 用 `limit: 200` 翻到末尾 → 1 万条 = 50 次全量投影。**How to apply**：拿到「慢」的抱怨先问「同一个东西被算了多少遍」，而不是「算了多少行」——本例里数据量只占一半，另一半是重复的**次数**。这个量可以做成门禁：数投影次数，纯计数、机器无关，比任何耗时阈值都稳。
 - **第五轮：master 绿 ≠ 那条断言还成立**。`packages/cli` 的 `/context` 用例硬编码 `claude-sonnet-4` 当作「内置目录里 1M 上下文的模型」，而模型目录是从上游元数据**刷新**的（#442 加了自动化），那个 id 已经改名 → 断言失效。**master 照样绿**，因为 master 的 affected 范围从没覆盖 `packages/cli`；而任何动了 `packages/host/bundle/**` 的 PR 都会把 CLI 测试拉进范围（bundle 的 entry 就是 `packages/cli/src/agent-worker-entry.ts`）→ 在那里变红。**How to apply**：断言里凡是引用「会被刷新的产物」的值，都改成**从源头推导**（`allProviderModels.find(...)`），别硬编码；另有一个坑是**本地绿、CI 红**的第一嫌疑不是 flake 而是**本地构建产物陈旧**——本地 `packages/ai/dist` 还是旧版，要先 `npm -w @duya/ai run build` 才能复现。**这条修法已在 master 上**（与本线并行合入，内容一致），#444 的净改动里因此已经看不到它。
 - **第五轮：同树 A/B 测量要用补丁，不要整文件拷贝**。测量树是 detached HEAD 的旧提交（`8becf37c`），比 master 旧。`Copy-Item` 整文件会把新 master 才有的 import（`packages/host/src/client-lease.js`）带进旧树 → `tsc -b` 报「找不到模块」，而且错误信息与本次改动毫无关系。正确做法：`git diff --output=<file>` 生成补丁（**不要**用 PS 的 `Out-File -Encoding utf8`／`>`，前者带 BOM、后者写 UTF-16，`git apply` 都会拒绝）→ `git apply --check` → apply → 重建 → 测量。这样 before/after 只差这一个改动，证据链才干净。
+- **第六轮：同一个根因会有第二条路径，修的时候要把调用点一次列全**。第五轮只修了 Desktop 桥接（`apps/desktop/src/main/ipc/db-handlers.ts`），Web 走的是 `UiServices` → BFF → Host，另一条分页读还在原地。**How to apply**：找到 O(n²) 的读路径后，先把「谁在调这个接口」全部列出来（Desktop / Web / CLI / TUI），再决定改哪一层；只修最慢的那条，等于把同一个坑留给下一个人。另外 BFF 每页上限 100 比 Desktop 的 200 更狠 → 同样 1 万条消息，**Web 要翻 100 页，Desktop 翻 50 页**。
+- **第六轮：`bundle:verify` 判的是「产物输入集」，不是「我改没改 `host/src`」**。`packages/host/bundle/worker-entry.js` 内联了 `@duya/client-core`（`worker-metafile.json` 里 client-core 占 8 个输入），所以只改 `packages/client-core/src/transport/host-api.ts` 也会让产物变旧 → 同一个 PR 里必须重建并提交 `packages/host/bundle/**`。**How to apply**：改完先跑 `node scripts/architecture/bundle-verify.mjs`，它会直接点名是哪个输入变了；别靠猜。
+- **第六轮：门禁要数「次数」，不要数「毫秒」**。本轮四条门禁数的是请求次数（整读 1 次 / 分页 0 次），跨机器精确；耗时阈值在共享 CI 上必然抖动。**How to apply**：写门禁前先问一句「这个回归能不能被一个整数计数抓住」——能，就别写阈值。
+- **第六轮：Web 侧的数字不能从 Desktop 的 harness 里读**。共享 harness 跑的是 Electron Desktop 路径；Web 是另一条链路（BFF 每页上限不同、进程边界不同）。本轮的权威数字来自「真实 Host + 真实 BFF」的进程内基准，**不是** `scripts/perf/run.mjs` 的场景。**How to apply**：报告里写清数字来自哪条链路，别把 Desktop 的基线套到 Web 上。
+- **第六轮：整读与分页必须互斥，且要「拒绝」而不是「忽略」**。`all=1` 与 `cursor`/`limit` 同现一律 400 `invalid_message_query`，`all` 值不等于 `1` 也 400。忽略其中一个参数会让调用方以为自己拿到了完整的一段——那比报错难查得多。Host 侧 `?all=1` 已经是这个语义，BFF 沿用。
 
 
 ## 权威基线（第四轮：master + #422 + #421）
@@ -398,6 +446,8 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 **session-switch 三行已被第五轮改写**：#444 把整条历史的读取从「每页一次全量投影」换成「一次投影」。10 000 条的打开从 **35.2 s → 1.4 s**、切换从 **47.7 s → 1.7 s**。这三行与其余场景的基线**不同源**——#444 只动 Host 与 Desktop 桥接，不碰渲染器，所以 startup / stream / typing / panels / gpu 五行仍以第四轮为准。第五轮没有重跑那五个场景。
 
+**共享 harness 只覆盖 Desktop 路径**。Web（`apps/web`）是另一条链路（BFF → Host，每页上限与进程边界都不同），它的数字不在本表里；Web 侧的权威数字见「第六轮」章节。
+
 **GPU 那一行的巨大落差**：旧基线（坏布局）测到 37.2 秒长任务与 99.4 % 渲染器 CPU，布局修好后是 **111 ms / 5.04 %**。**没有做受控对照**，所以不能断定是 #422 还是 #421 的功劳；但幅度排除了虚拟化（该场景的 fixture 只有 100 条消息，DOM 少挂载 800 个节点不可能省下 37 秒），最可能是终端的 WebGL 画布落在坏掉的 flex 容器里、尺寸反复重算。
 
 **第一/二轮基线里与 DOM、滚动有关的数字作废**：那时布局是坏的（`.message-list-scroll` 的可滚动距离为 0），`scrollTranscript()` 是空操作。`dom.nodes` 的变化（typing 1378 → 557、panels 1533 → 697）来自虚拟化器只挂载可见行。
@@ -415,19 +465,18 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 | # | 机会 | 已测收益 / 证据 | 状态 | 归属 |
 | --- | --- | --- | --- | --- |
-| **0** | **Web 侧还有同一条 O(n²) 路径** | `packages/ui/src/lib/ipc-client.ts` 的 `readAllHostMessages` 用 `limit: 100` 分页读**同一个** Host 接口：1 万条 = 100 页 × 全量投影。Desktop 侧已在 #444 修掉（一次整读），Web 侧还没跟上（Desktop 不配置 UI services，走 IPC；Web 走这条） | **新的第一号**。`UiServices.sessions` 是窄接口，需要另一个 PR 把整读加进去 | UI / host |
-| **1** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
-| 2 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
-| 3 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
-| 4 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
-| 5 | 首屏 entry chunk 里剩下的一方模块 | 首屏 entry chunk 现为 **2478263 B**（#418 之后）；E 已切走 8 个界面树 | **待做**：用 E 的 `module-closure.mjs` 看还剩哪些是「点击才到」的 | E |
-| 6 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
-| 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
-| 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253）。**#444 再加一条**：投影次数门禁（整读 = 1 次投影），纯计数、机器无关 | 集成者 + A |
-| 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
-| 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
+| **0** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
+| 1 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
+| 2 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
+| 3 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
+| 4 | 首屏 entry chunk 里剩下的一方模块 | 首屏 entry chunk 现为 **2478263 B**（#418 之后）；E 已切走 8 个界面树 | **待做**：用 E 的 `module-closure.mjs` 看还剩哪些是「点击才到」的 | E |
+| 5 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
+| 6 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
+| 7 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253）。**#444 再加一条**：投影次数门禁（整读 = 1 次投影），纯计数、机器无关。**#458 再加四条**：Web 侧的整读请求次数门禁（1 次请求 / 0 次分页） | 集成者 + A |
+| 8 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
+| 9 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
 
-**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。
+**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。**#458** 把 Web 侧同一条路径也修掉了（真实 Host + 真实 BFF：100 次分页 83 507 ms → 1 次整读 1 006 ms，**83×**），并带上四条请求次数门禁——**同一个根因的第二条路径**。
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 | 证据 |
@@ -482,13 +531,18 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | PR #444 合并 master 后的产物 | `1461fdec` → `b1041f09` → `94d26831` → `7a6be1d4` → `b4468c68`（master 连续前进：#442 模型目录自动化、#443/#449 插件安装路径、#396 tok-speed） | `git merge origin/master` → 冲突只在 `packages/host/bundle/**` → `checkout --theirs` → `npm run bundle:worker` → 提交 | 0 | 每次都是 `FRESH`（929 → 932 个输入）。**上游自己也是这么合的**（master 上的提交就叫 "build(host): rebuild the worker bundle after the master merge"）。**源码 commit 必须早于 bundle commit**，`bundle:verify` 按 git 历史判定。**注意**：即使 merge 本身「干净」，产物也可能是两个 minified bundle 的手工合并结果 —— 仍要按合并后的源码重建一次 |
 | PR #444 CI | `b4468c68` → `65fe8514`（owner 在本分支上合了一次 master） | `gh pr checks 444` | 0 | architecture / build / test / test scope / typecheck **五项全绿**（run `40088408963`）。第一次红的是 `test`：`packages/cli` 的 `/context` 用例硬编码了已被模型目录刷新改名的模型 id（见「发现与决策」），单独一个 commit 修掉；**同一修法已在 master 上**，所以本 PR 的净改动里已经没有它 |
 | PR #444 合并 | `d26bec34`（owner 合并，2026-10-24 19:12） | 核对 master | 0 | master 的 `packages/host/src/session-api.ts` 已有 `readAllMessages`；两个门禁测试文件都在；master 的 `packages/host/bundle/worker-entry.js` 已含新逻辑（合并后重建过一次） |
+| PR #458 实测 | `95fc82af`（`codex/perf-webpath`，基于 master `686f3c81`） | 真实 Host + 真实 BFF，1 万条消息，同一台机器同一个 rig，持共享锁 | 0 | 分页循环 **100 次请求 / 83 507 ms** vs 一次整读 **1 次请求 / 1 006 ms**（**83×**）；两边返回行数都是 10 000 |
+| PR #458 门禁 | `95fc82af` | `vitest run packages/ui/src/lib/ipc-client.test.ts apps/web/tests/client/api.test.ts apps/web/tests/client/workspace.test.ts apps/web/tests/server/web-bff.test.ts` | 0 | **4 个文件 / 51 个用例全绿**；其中四条是「整读 = 1 次请求、分页 = 0 次」和 BFF 契约（`all=1` 携带 `limit`/`cursor`，或 `all` 值≠`1`，均 400） |
+| PR #458 本地门禁 | `2d285d45` | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | typecheck 全过（`typecheck-electron-gate: OK — no new type errors`）；架构 `OK — no new boundary violations`；产物 `FRESH 0/948 bundle inputs changed after the bundle commit` |
+| PR #458 产物 | `95fc82af` → `2d285d45` | `npm run bundle:worker` → `git add packages/host/bundle` | 0 | 源码 commit 必须**早于**产物 commit（`bundle:verify` 按 git 历史判定）；产物只有 `worker-entry.js` 与 `worker-metafile.json` 变化（`packages/host/bundle/package.json` 与 `BashWorker.js` 只是行尾差异，git 归一化后不变） |
+| PR #458 CI | `2d285d45` | `gh pr checks 458` | 0 | architecture / build / test / test scope / typecheck **五项全绿**（run `40096489541`） |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
 已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）、**#444 `d26bec34`（Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s，含投影次数门禁）**。
-未合并：无。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
+未合并：**#458**（第六轮：Web 侧整读，83×）与本文档 PR，均待集成者 review。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
 
 回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
@@ -496,10 +550,12 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 第二轮集成者侧已合并：**#406** 锁（两种实现互相拆台）、**#407** fixture 命名空间、**#408** 首屏字节预算进 CI、**#409** 带围栏契约 fixture、**#410** 第二轮章程、**#412** #391 留下的 IPC 注册回归、**#415** 第二轮集成记录、**#418** 首屏依赖闭包（模块数归零 + 预算棘轮，master `aed0d13c`）、**#421** 万条消息虚拟化、**#422** 布局缺陷修复、**#429 / #430 / #431** harness 的三个 P0。
 
-下一步（第五轮之后，按新的机会清单）：**#0 Web 侧同一条 O(n²) 路径**——`packages/ui/src/lib/ipc-client.ts` 的 `readAllHostMessages` 还在用 `limit: 100` 分页读同一个 Host 接口，Desktop 侧已经在 #444 换成一次整读，Web 侧还没跟上；**#1 整条历史一次性投递的代价**——长任务 0.3 → 0.5 s、内存峰值 +33 MB，需要分块投递 / 增量渲染，别让主线程被一次性占用。
+下一步（第六轮之后，按新的机会清单）：**#0 整条历史一次性投递的代价**——长任务 0.3 → 0.5 s、内存峰值 +33 MB，需要分块投递 / 增量渲染，别让主线程被一次性占用；**#1 围栏代码块在流式时的主线程开销**——把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分。
 
 **这一轮最重要的产出不是某个 PR，而是把「万条会话 30–45 秒」的靶子从渲染换到了数据路径**：基线的 `session.open.longtask.total_ms` 只有 0.7 秒，而 open 要 32–37 秒；G 的虚拟化把 switch 的主线程成本压掉 92 %，墙钟一动不动。**下一轮该测的是数据路径（主进程 / DB / IPC），不是继续抠渲染。**
 
 第五轮把这条线索走完了：**根因是 Host 每翻一页就重投影整条历史，50 页 = 50 次全量投影**；修法是 Host 提供一次整读，Desktop 桥接只调一次。10 000 条消息的打开从 **35.2 秒降到 1.4 秒**、切换从 **47.7 秒降到 1.7 秒**，同一份历史、同样的 `dom.nodes`、同样的 `commit.count`——变的只是数据怎么到渲染器。**并且这次不只修了它，还给它装了一道门禁**（数投影次数，纯计数、机器无关），下次谁把每页全量投影改回来，CI 直接红。
+
+第六轮把同一条根因的**第二条路径**也走完了：Web 侧（`UiServices` → BFF → Host）同样在分页读同一个 Host 接口，而 BFF 每页上限 100，所以 1 万条要翻 **100 页**。真实 Host + 真实 BFF 实测：**100 次请求 83 507 ms → 1 次请求 1 006 ms（83×）**。修法和第五轮一样是「一次整读」，同样配了机器无关的门禁——这次数的是**请求次数**（整读 1 次、分页 0 次）。**教训**：找到 O(n²) 的读路径后，先把 Desktop / Web / CLI / TUI 的调用点一次列全；只修最慢的那条，是把同一个坑留给下一个人。
 
 
