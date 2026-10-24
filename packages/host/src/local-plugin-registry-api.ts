@@ -35,7 +35,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseToml } from '@iarna/toml';
-import { discoverAllCapabilities } from '@duya/plugin-core/plugins/loader/capability-discovery';
+import { discoverPluginMcpServers } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import type { McpServerCapability } from '@duya/plugin-core/plugins/loader/capability-discovery';
 import { resolveConfigRoot } from './agent-profile-config.js';
 import {
@@ -180,9 +180,9 @@ function withInstalledFiles(
  */
 function readPluginManifestShape(installPath: string): HostPluginManifest | undefined {
   try {
-    const capabilities = discoverAllCapabilities(installPath);
-    if (capabilities.mcpServers.length === 0) return undefined;
-    return { capabilities: { mcpServers: capabilities.mcpServers } };
+    const mcpServers = discoverPluginMcpServers(installPath);
+    if (mcpServers.length === 0) return undefined;
+    return { capabilities: { mcpServers } };
   } catch {
     return undefined;
   }
