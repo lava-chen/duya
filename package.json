@@ -67,7 +67,7 @@
     "architecture:check": "node scripts/architecture/architecture-check.mjs",
     "ci:test-scope": "node scripts/ci/test-scope.mjs",
     "architecture:self-test": "node scripts/architecture/architecture-check.mjs --self-test",
-    "architecture:slice-graph": "node scripts/architecture/import-graph.mjs",
+    "architecture:slice-graph": "node scripts/architecture/import-graph.mjs && node scripts/architecture/compare-import-graphs.mjs",
     "architecture:baseline": "node scripts/architecture/architecture-check.mjs --write",
     "architecture:boundaries": "node scripts/architecture/boundary-gates.mjs",
     "architecture:headless": "node scripts/architecture/headless-load-gate.mjs",

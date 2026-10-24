@@ -151,6 +151,9 @@ jobs:
           }
           EOF
 
+      - name: Slice graph and audit-imports parity
+        run: npm run architecture:slice-graph
+
       # Plan 610 S4c-d3. `architecture:boundaries` (scripts/architecture/
       # boundary-gates.mjs) is a SEPARATE gate with a SEPARATE baseline
       # (`boundary-gates-baseline.json`) and it had a `package.json` script that
