@@ -1,7 +1,7 @@
 # 消息读路径：一次打开文件读完整个会话，不再逐行 open/close
 
 状态：active · 负责人：mavis 会话 `mvs_ae3b38275b13437883faa5ef6f4d518c` · 更新：2026-10-25
-分支：`codex/read-range` · worktree：`E:\Projects\duya\.claude\worktrees\read-range` · base：`379d990b` · owner：mavis
+分支：`codex/read-range` · worktree：`E:\Projects\duya\.claude\worktrees\read-range` · base：`379d990b`（已合入 `origin/master` `dc6d4ee7`）· owner：mavis
 
 ## 目标与边界
 
@@ -72,7 +72,7 @@ finally { fs.closeSync(fd); }
 - [x] 实现 fd 复用
 - [x] 新增测试（4 条）+ 变异验证（回退后 1 条转红）
 - [x] 受影响集 8 文件 / 116 断言全过
-- [x] 三门禁 + 重建 bundle + 开 PR（待授权）
+- [x] 三门禁 + 重建 bundle + 开 PR（#466，未合并，待用户授权）
 
 ## 验证记录
 
