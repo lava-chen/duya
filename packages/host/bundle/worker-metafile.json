@@ -488,7 +488,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/provider-catalog.ts": {
-      "bytes": 3528,
+      "bytes": 4347,
       "imports": [],
       "format": "esm"
     },
@@ -30149,7 +30149,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-config/provider-catalog.ts": {
-      "bytes": 9967,
+      "bytes": 12603,
       "imports": [
         {
           "path": "fs",
@@ -38942,10 +38942,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -39146,7 +39146,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -41219,7 +41219,7 @@
           "bytesInOutput": 1002
         },
         "packages/plugin-core/src/mcp/core/alias.ts": {
-          "bytesInOutput": 82
+          "bytesInOutput": 69
         },
         "packages/capabilities/src/MCP/result-blocks.ts": {
           "bytesInOutput": 1119
@@ -42308,7 +42308,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43379,7 +43379,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44240,7 +44240,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692285
+      "bytes": 4692329
     }
   }
 }
