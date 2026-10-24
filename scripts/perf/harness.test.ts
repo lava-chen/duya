@@ -47,6 +47,7 @@ import {
   historyRowKind,
 } from '../../e2e/perf/lib/fixtures.mjs';
 import { buildReport, renderMarkdown } from '../../e2e/perf/lib/report.mjs';
+import { evaluateBudget } from '../../e2e/perf/lib/first-screen-budget.mjs';
 import {
   acquireInternalLock,
   acquireLock,
@@ -224,6 +225,56 @@ describe('the fixture generator', () => {
     const defaultScenario = driverSource.match(/scenario:\s*'([^']+)'/)?.[1];
     expect(defaultScenario).toBeDefined();
     expect(FIXTURE_IDS).not.toContain(defaultScenario);
+  });
+});
+
+describe('the first-screen budget', () => {
+  const budget = { tolerancePct: 5, firstScreen: { chunkCount: 7, bytes: 3_626_123 }, entryChunkBytes: 2_726_133 };
+  const payload = (bytes: number, chunkCount = 7) => ({
+    firstScreen: { chunkCount, bytes },
+    entryChunkBytes: 2_726_133,
+  });
+
+  it('lets a payload inside the tolerance through', () => {
+    // The measured build-to-build spread is ~0.1 %, so a 5 % tolerance is
+    // generous; a payload a few percent over the baseline is still the same
+    // build, not a regression.
+    const result = evaluateBudget(payload(3_626_123), budget);
+    expect(result.violations).toEqual([]);
+  });
+
+  it('fails a payload that grew past the tolerance', () => {
+    const result = evaluateBudget(payload(4_000_000), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('the first screen grew to 4000000 bytes');
+    expect(result.violations[0]).toContain('over the budget');
+  });
+
+  it('passes a payload that got smaller', () => {
+    // The budget is one-sided: an improvement must never fail the gate.
+    expect(evaluateBudget(payload(2_000_000), budget).violations).toEqual([]);
+  });
+
+  it('fails when nothing was measured', () => {
+    // A gate over a measurement that measured nothing proves nothing.
+    const result = evaluateBudget(payload(0, 0), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('was not measured');
+  });
+
+  it('fails when the budget has no baseline to compare against', () => {
+    const result = evaluateBudget(payload(3_626_123), { tolerancePct: 5 });
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('no firstScreen.bytes');
+  });
+
+  it('reports the chunk count and the entry chunk without gating them', () => {
+    // There is no calibrated threshold for these, so they are reported.
+    const result = evaluateBudget(payload(3_626_123, 9), budget);
+    expect(result.violations).toEqual([]);
+    const metrics = result.checks.map((check: { metric: string }) => check.metric);
+    expect(metrics).toContain('firstScreen.chunkCount');
+    expect(metrics).toContain('entryChunkBytes');
   });
 });
 
