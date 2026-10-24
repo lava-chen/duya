@@ -25,7 +25,7 @@
 - [x] S1 契约：定义 surface schema，校验所属 MCP server、`ui://` URI、插件内唯一 ID；保持静态 `entry` 双向兼容。
 - [x] S2 发现与目录：投影到已安装插件目录，拒绝跨插件同名 surface，安装态变化刷新目录。
 - [x] S3 宿主资源解析：调用 MCP `resources/read`，校验 MIME、大小、来源 server，再通过现有文档通道签发 token 与 nonce。
-- [~] S4 UI 入口已提交：插件应用区与侧栏 tab 渲染 surface，按会话可用性隐藏入口；UI 类型检查和目录/面板测试通过。真实 Electron UI 链路验证待有 Electron 二进制与显示服务的环境补跑。
+- [x] S4 UI 入口：插件应用区与侧栏 tab 渲染 surface，按会话可用性隐藏入口；真实 Electron smoke 已通过安装插件、打开 Apps surface、读取 MCP 资源并在 token 化 loopback iframe 渲染的产品路径。
 - [x] S5 双向通道：保留 guest→host invoke；资源页用当前 document token 完成 ready 握手；只将当前插件 server 的成功 `duya_ui_select` / `duya_ui_highlight` / `duya_ui_refresh` 工具结果按当前 surface 发给本次 iframe，payload 限 8 KiB。
 - [x] S6 示例与兼容：新增 MCP 资源型只读 Report Viewer；真实 stdio MCP 测试读取 HTML、调用事件工具，并验证页面 select/highlight/refresh 更新；manifest 回归确认静态 `hello-app` 仍保留 `entry`。
 
@@ -43,7 +43,10 @@
 - S2 从已安装 Plugin App 声明生成独立只读 surface 目录；跨已安装插件重复 ID 全部隔离并返回 owner 冲突，目录仅提供启用插件的唯一 surface。安装、启用、停用、卸载和设置变化复用既有 `plugin-app:changed` 事件供目录消费者刷新。
 - S3 经现有 MCP SDK `Client.readResource` 加载 surface：活动会话 worker 存活时复用其 MCPManager，并以 worker 身份与 generation 复核响应；无 worker 或 standalone/always 入口通过同一 MCPManager 实现短连接读取，仅连接 manifest 声明的 server。worker 和 Main 都要求 server `source=plugin`、插件归属匹配、资源 URI 完全匹配、唯一文本 `text/html` 内容且不超过 8 MiB。Main 将已校验 HTML 挂到随机 token 的 loopback `/index.html` 单文档路由；该 mount 不提供包内静态资源，文档 CSP 禁止网络连接，沿用既有 launch nonce 与 opaque-origin iframe。静态 `entry` 路径保持原样。
 - S4 的 Apps 目录将 surface 按插件归组并调用既有 `PanelProvider.openOrActivatePage`；tab 去重键为 `pluginId + surfaceId`。session surface 无活动会话时不出现在目录，PanelZone 同时关闭 session tab；插件 iframe 只在面板打开且卡片可见时挂载。旧 preload 没有 surface 目录能力或目录读取失败时，静态 `entry` launcher 仍从插件 registry 渲染。
-- S4 真实桌面 UI 验证受环境限制：`node_modules/electron/dist/electron` 不存在，`require('electron')` 尝试下载二进制但网络 fetch 失败，且没有 `Xvfb` / `xvfb-run`；未用 mock 替代 IPC/worker 链路验收。继续切片，最终仍需在具备 Electron 和显示服务的环境完成真实产品路径验证。
+- 首次 Electron 启动受环境限制：共享 `node_modules/electron` 没有二进制且网络 fetch 失败，环境起初也没有 `Xvfb`。后续在 `/tmp` 下载并解压 Electron 44.9.1 与 Xvfb，以临时 Playwright loader 提供可执行文件路径和 `--no-sandbox`，没有改写共享依赖；真实产品 smoke 随后通过。
+- 产品 smoke 首次运行发现安装后的 Report Viewer 把相对 MCP server 路径按宿主工作目录解析，导致资源读取失败。改用 `${DUYA_PLUGIN_ROOT}/mcp/reports-server.mjs`，并加入真实 Electron E2E 回归用例；该用例通过真实 preload/Main IPC 安装插件，Main MCP SDK 启动 stdio server 并执行 `resources/read`，随后在 Apps 与侧栏 tab 确认内容和重复激活去重。
+- 实际 Electron E2E 已覆盖安装至资源渲染和重复点击去重；agent worker 工具调用到当前 iframe 的完整联动仍由 MCP stdio 示例测试及 UI 事件桥测试分别覆盖，尚未在同一个桌面 worker turn 中端到端运行。因此 PR 继续保持 draft，待补齐这一组合路径验收后再标 ready。
+- PR #440 的 base 原为 `40787b394d08207ed78c863d9c78dc413a9d1038`；2026-10-24 GitHub 比较显示最新 `master` 已到 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，领先旧 base 22 个提交。当前网络代理拒绝 shell `git fetch`，需要先恢复 remote fetch、将分支 rebase 到新 master，再重跑门禁和同步 PR。
 
 ## 验证记录
 
@@ -107,9 +110,15 @@
 | `e0dd4f51` | Linux x86_64；系统 Chromium 与 Playwright 存在，无 Electron binary、无显示服务 | `command -v electron chromium chromium-browser google-chrome Xvfb xvfb-run weston` 与 Electron package binary 检查 | Electron / display 不可用 | 只有系统 Chromium，不能覆盖 Electron main/preload IPC 与 worker 链路；真实产品路径仍待具备 Electron 和显示服务的环境验证 |
 | `37a22819` | Linux x86_64，GitHub remote | `git push origin HEAD:refs/heads/codex/plugin-ui-mcp-resources` | 0 | PR 进度记录已同步到任务分支；master 未变 |
 | `37a22819` | Linux，GitHub remote | `github_get_pr_info(440)` | open / draft / mergeable | PR #440 base 为 `master` / `40787b394d08207ed78c863d9c78dc413a9d1038`；head 与刚推送分支一致；未合并 |
+| `1505c1e0` + server path / E2E dirty | Linux x86_64，Node v24.19.0；Electron 44.9.1 与 Xvfb 从临时下载目录运行；Playwright Electron loader 补入 binary 路径和 `--no-sandbox` | `PATH=/tmp/duya-xvfb/root/usr/bin:$PATH NODE_OPTIONS='--require=/tmp/duya-electron-runtime/patch-playwright-electron.cjs' xvfb-run -a npx playwright test --config=e2e/playwright.config.ts --project=smoke e2e/smoke/plugin-ui-surface-smoke.spec.ts` | 0 | 1 个真实 Electron 产品 smoke 通过：真实安装 IPC、surface 目录、MCP stdio `resources/read`、loopback opaque iframe 内容与同 surface tab 去重；约 44 秒 |
+| `1505c1e0` + server path / E2E dirty | Linux x86_64，Node v24.19.0，npm 11.9.0；额外子进程执行权限 | `npm run typecheck:all` | 0 | 20 个 workspace 包、web bundle 和全部 TypeScript 门禁通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 收敛；recorder 4/4 |
+| `1505c1e0` + server path / E2E dirty | Linux x86_64，Node v24.19.0；额外子进程执行权限 | `npm run architecture:check` | 0 | 无新增边界违规；1 个既有 fingerprint 不再触发 |
+| `1505c1e0` + server path / E2E dirty | Linux x86_64，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；包含真实 stdio MCP `resources/read` / `tools/call`、资源页事件行为和静态 entry manifest 回归 |
+| `475f59f0` | Linux x86_64 | `git diff --check`；`git diff --cached --check` | 0 | 插件 server 安装路径修正及 Electron E2E 提交无空白错误 |
+| `475f59f0` + plan dirty | Linux x86_64；shell network proxy | `git fetch origin` | 1 | 代理 `8080` 无法连接；GitHub compare API 只读核实 `master` 为 `c426d029668ed0a0d6dae5ca9429b4a878925abd`、相对旧 base ahead 22 |
 
 ## 接续 / 结果
 
-S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；每个切片的进度文档也各自独立提交。分支已 rebase 到最新 `origin/master` `40787b394d08207ed78c863d9c78dc413a9d1038`，第二次 rebase 后全仓类型检查、架构检查、9 个相关测试文件与 Electron main/preload 构建均通过。Draft PR #440 已同步任务分支，base 与最新 master 一致，仍为 open/draft/mergeable 且未合并。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片依次重放为 `c79f9122`、`2865357c`、`a1b46a5e`、`af8cc9aa`、`ca3fa154`、`b76776c5`；另有安装后 MCP server 路径修正与真实 Electron E2E 提交 `475f59f0`，每个切片的进度文档也各自独立提交。以上验证是在任务分支基于 `40787b394d08207ed78c863d9c78dc413a9d1038` 时完成；GitHub 随后报告 master 已前进至 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，22 个提交，因此尚需 fetch、rebase 和重跑门禁。Draft PR #440 仍为 open/draft/mergeable 且未合并，当前远端 head 为 `1505c1e0c2ac247ad06319d91ceeb49a3aaf7b58`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：在具备 Electron 二进制与显示服务的环境运行真实产品 UI/IPC/worker smoke；当前 PR 保持 draft 并记录该验收阻塞，不合并。
+下一步：先 fetch 并 rebase 到 `c426d029668ed0a0d6dae5ca9429b4a878925abd`，再重跑门禁；随后补一个真实桌面 Agent Server/worker turn，以 Report Viewer MCP 工具调用驱动已打开 iframe 的 `select` / `highlight` 状态更新。PR 继续保持 draft，不合并。
