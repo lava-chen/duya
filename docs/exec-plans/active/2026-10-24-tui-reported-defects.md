@@ -79,10 +79,25 @@ npm run bundle:verify
 
 驱动脚本 `docs-local/tui-pty-repro.mjs` 是一次性工具，不入库；两个坑记录在此：Git Bash 会把 `/model` 参数转换成 `C:/Program Files/Git/model`（需 `MSYS_NO_PATHCONV=1`），以及同一 burst 里的 `\r` 会被 ConPTY 吞掉，按键必须分帧发送。
 
+### 合入 master 之后（`4bf210cc`）
+
+master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `packages/cli/src/tui/terminal/surface.ts`
+与 `TUIApp.ts` 的行内绘制，正是本任务三处改动的输出通道，所以整体重验：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `4bf210cc`（merge `origin/master`）+ 无本地未提交 | Win10 26200 x64 / Node 24.16.0 | `npx vitest run --pool=forks packages/cli packages/host/tests/worker-config/provider-catalog.test.ts` | 0 · 104 files / 1266 tests passed | 冲突只有 `packages/host/bundle/**`，用 `npm run bundle:worker` 从合并后源码重建解决，不手改产物 |
+| 同上 | 同上 | 真 PTY 一轮真实 turn（真 provider + 真 worker） | 0 | 转写区 `└ ? Todo list 0/3` 加三条 `○ 读 schema / 写解析 / 跑测试`；底部 `↓6 Σ6 · ⚡ 5.2 tok/s` |
+| 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | 合并后全部重跑；架构仍是 2730 条全在既有 baseline，未用 `--write`；bundle FRESH 0/950 |
+
+真机那行的 `?` 是工具状态 indeterminate，属 PR #457 的在途范围，本次不重复实现；它与本任务无关，因为清单主体与计数本来就渲染对了——这正是第 1 项要的效果。
+
+`npm run bundle:worker` 会顺手把 `packages/capabilities/src/ModuleTool/inline-content.ts` 的行尾重写成 LF，内容不变（`md5` 去 CR 后与 HEAD 相同），但 `bundle:verify` 用 `git status --porcelain` 判定，于是报「1 uncommitted input / STALE」。处理是核对内容一致后 `git checkout --` 该文件，不是把它混进本任务提交。
+
 ## 接续 / 结果
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
-- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建。
+- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；合入 `origin/master`（`4bf210cc`，12 个 commit，含重写行内绘制的 PR #455）后全部重跑一遍。
 - 未合并：PR 见下（保持可 review 状态，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
