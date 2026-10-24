@@ -49,9 +49,16 @@
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| （待填） | | | | |
+| 1e5f5ee1（附件切片） | Win11 / Node v24.16.0 / worktree | npx vitest run packages/cli | 105 文件 1270 用例全绿 | 退出码 0 |
+| 1e5f5ee1 | 同上 | npm run typecheck:all | 通过（connectors 首跑 tsc 134 崩溃为瞬时 OOM，复跑通过） | 退出码 0 |
+| 1e5f5ee1 | 同上 | npm run architecture:check | 无新增违规（2 条 baseline 指纹因 host dist 重建不再触发，未改基线） | 退出码 0 |
+| fc9589d8（! 切片） | 同上 | npx vitest run packages/cli && typecheck:all && architecture:check | 全部通过 | 退出码 0 |
 
 ## 接续 / 结果
 
-（进行中）
-下一步：实现 attachments.ts 与 clipboard-image.ts，跑单测与门禁。
+已实现并验证：附件切片（1e5f5ee1）与 `!` 卡片切片（fc9589d8）均已提交并推送。
+PR：https://github.com/lava-chen/duya/pull/467（base master，draft=false；集成需必需 review / CI 通过后由获授权者合并）。
+未验证：真机冒烟（拖拽路径出 chip、Ctrl+V 截图出 chip、`!git status` 卡片 + 下条消息带 terminal-ref 附件）——需 Windows Terminal + `npm run build:cli-dev` + `npm run dev:tui`。
+副作用：主检出 `packages/host/dist` 曾被一次误操作触发 `tsc -b`（失败，dist 为 gitignored 构建产物）；worktree 内已正确重建 @duya/host dist 供类型解析。
+回收：worktree 保留至 PR 集成；ignored 文件无需备份（临时剪贴板目录随 TUI 退出自清理）。
+下一步：CI 与 review 通过后请求集成授权；真机冒烟结果回填本表。
