@@ -13,6 +13,11 @@ build/
 # time, never committed.
 resources/ripgrep/
 
+# Marketplace-sourced builtin plugins (scripts/stage-builtin-plugins.mjs).
+# The plugin marketplace repo is their source of truth; these are staged
+# copies and must never be committed here.
+resources/builtin-plugins/
+
 # Generated assembled prompt docs (read-only local reference, not source)
 /doya-general-prompt-assembled.md
 

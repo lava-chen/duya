@@ -26,6 +26,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout the plugin marketplace
+        # The marketplace repo is the source of truth for the plugins that
+        # ship inside the installer (builtin-plugins.json). Without it the
+        # release would ship without them, so this checkout is required.
+        uses: actions/checkout@v4
+        with:
+          repository: lava-chen/duya-marketplace
+          ref: main
+          path: .duya-marketplace
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -70,6 +80,10 @@ jobs:
           # while transforming 25k+ modules. Raise the limit for all
           # platforms so the same value works across the matrix.
           NODE_OPTIONS: --max-old-space-size=6144
+          # Stage the marketplace's builtin plugins into the installer.
+          # Strict: a release that ships without them is a broken release.
+          DUYA_MARKETPLACE_REPO: ${{ github.workspace }}/.duya-marketplace
+          DUYA_STRICT_BUILTIN_PLUGINS: '1'
         run: npm run electron:build
 
       - name: Verify worker bundle

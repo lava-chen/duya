@@ -114,6 +114,13 @@ extraResources:
   - from: packages/plugin-core/src/plugins/builtin/
     to: builtin-plugins/
     filter: ["**/*"]
+  # Marketplace-sourced builtin plugins, staged by
+  # scripts/stage-builtin-plugins.mjs from the plugin marketplace repo.
+  # The manifest (builtin-plugins.json) ships inside this directory and
+  # decides which of them start enabled.
+  - from: resources/builtin-plugins/
+    to: builtin-marketplace-plugins/
+    filter: ["**/*"]
   - from: public/
     to: public/
     filter: ["**/*"]
