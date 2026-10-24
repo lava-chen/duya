@@ -159,6 +159,18 @@ the user's message.」。于是请求的尾巴在明说「这些不是用户说�
 - `packages/host/tests/worker-product-runtime/engine-prompt-order-proof.test.ts`：
   真实链路（真 agent + 真 driver + 真 engine）到 provider 边界，断言提问在最后一条。
 
+**契约化（同一个 PR 的第二个 commit）**：顺序规则原先是 `#modelRequest` 里的一个
+数组表达式加一大段注释——注释能解释规则，却挡不住下一个人改它。现已抽成
+`packages/agent-runtime/src/engine/request-assembly.ts`：一份写明「五个来源 +
+顺序 + 三条受保护的规则」的契约、一个纯函数 `assembleRequestMessages`，以及
+`packages/agent-runtime/test/request-assembly.test.ts` 的**契约矩阵**（每个来源组合
+一行，输出形状逐条钉死）。`#modelRequest` 现在只负责取件。
+
+契约同时写明了它**不**管的事：host 的系统附带行（volatile context rail、hook 块、
+附件正文）留在 host 自己的投影位置，engine 不重排它们，只保证提问在其之后。
+「附件在引擎侧不可识别」这件事要根治，需要让附件身份跨 host→engine 边界可见
+（`toModelMessages` 目前把 `metadata` 整个丢掉），那是另一个改动，未在本 PR 做。
+
 ### 剩余瓶颈（实测、均未修）
 
 | 瓶颈 | 代价 | 为什么没修 |
@@ -231,6 +243,11 @@ the user's message.」。于是请求的尾巴在明说「这些不是用户说�
 | 85b877f6 | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
 | 85b877f6 | Windows | `npm run bundle:verify` | 0 | FRESH，0/921 输入变更 |
 | 85b877f6 与 7e49612a（**改动前后对比**） | Windows | `npx vitest run packages/cli/tests/integration/{shared-client-vertical,host-child-sessions}.test.ts` | 1 | 前后**同样失败**（需真实 provider）：`expected false to be true` / `condition did not become true within 15000 ms` —— 既有环境失败，非本次引入 |
+| f1916edd | Windows | `npx vitest run packages/agent-runtime` | 0 | 103 files / 1145 passed（含新增 `request-assembly.test.ts` 契约矩阵 9 例） |
+| f1916edd | Windows | `npx vitest run packages/host/tests/worker-product-runtime --maxWorkers=2` | 0 | 23 files / 128 passed |
+| f1916edd | Windows | `npm run typecheck:all` | 0 | OK |
+| f1916edd | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| f1916edd | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更 |
 
 ## 接续 / 结果
 
@@ -239,9 +256,16 @@ the user's message.」。于是请求的尾巴在明说「这些不是用户说�
 + 重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
 
 **缺陷 4（提示词被放到第一条）**在独立分支 `codex/fix-run-prompt-order`
-（worktree `.claude/worktrees/fix-run-prompt-order`，base `7e49612a`，commit `85b877f6`），
+（worktree `.claude/worktrees/fix-run-prompt-order`，base `7e49612a`），
 PR 目标分支是 `codex/tui-perf-benchmark` 而非 master：它修的是 `01344cd3` 引入的**回归**，
-而 `01344cd3` 本身也只存在于该分支。回滚方式：`git revert 85b877f6`。
+而 `01344cd3` 本身也只存在于该分支。两个 commit：
+`85b877f6`（修位置）+ `f1916edd`（把装配顺序抽成契约并配矩阵测试）。
+回滚方式：`git revert 85b877f6 f1916edd`。
+
+**下一步（未做）**：让「附件是附件」跨 host→engine 边界可见——
+`worker-run-composition.ts` 的 `toModelMessages` 目前把 host 行的 `metadata` 整个丢掉，
+而 `runtimeContext: true` 正是 rail / hook 块 / 附件正文这三类「系统附带行」的共同标记。
+带上它，引擎就能自己保证请求形状是「对话…, 附件…, 提问…」而不依赖 host 恰好把附件放在尾部。
 
 未做（带实测数字见「剩余瓶颈」）：工具目录惰性化、bundle 编译缓存 launcher、
 Handlebars 模板预编译、三个 db action、标题生成去重。
