@@ -47,6 +47,8 @@ export interface ToolInvokeDispatcherDeps {
    * per-turn context is constructed.
    */
   contextProvider?: () => ToolUseContext | undefined;
+  /** Host execution invariants, checked after approval and immediately before dispatch. */
+  beforeExecute?: (toolName: string, args: Record<string, unknown>, context?: ToolUseContext) => Promise<ToolInvokeOutcome | undefined>;
   logger?: ToolExecutionLogger;
 }
 
@@ -228,6 +230,8 @@ export function createToolInvokeDispatcherFromRegistry(
       }
 
       try {
+        const refusal = await deps.beforeExecute?.(current.definition.name, args, context);
+        if (refusal) return refusal;
         const executor = current.executor;
         const result = await executor.execute(
           args,
