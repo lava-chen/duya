@@ -16,7 +16,7 @@
  * See plan 328 decision 2 for the field-by-field mapping contract.
  */
 
-import type { HostPermissionRequest, HostMailboxItem } from '@duya/agent-protocol';
+import type { HostPermissionRequest } from '@duya/agent-protocol';
 import type {
   SessionCreateInput,
   SessionPatch,
@@ -25,7 +25,6 @@ import type {
   TaskUpdateInput,
   PermissionCreateInput,
   PermissionResolveInput,
-  MailboxItem,
 } from '../db/core';
 
 // ─── Session adapters ───
@@ -266,53 +265,8 @@ export function ipcPermissionToResolve(extra?: {
 // ─── Mailbox adapters ───
 
 /**
- * Map a MailboxItem (core store, camelCase) back to the old `agent_mailbox`
- * row shape (snake_case). JSON fields are re-serialized to match the old
- * `SELECT * FROM agent_mailbox` shape.
- *
- * Column mapping notes:
- *  - `submittedRunId` → `submitted_during_run_id`
- *  - `resultingEventId` → `resulting_user_msg_id`
- *  - `attachments` (array|null) → `attachments_json` (JSON string)
- *  - `meta.constraints` → `constraints_json`
- *  - `meta.editHistory` → `edit_history_json`
- *  - `cancelReason` also feeds `failure_reason` (collapsed in core store)
+ * `coreMailboxToIpcRow` moved to `@duya/host/ipc-row-adapters` (plan 12
+ * gate 1: the Host worker db bridge serves the mailbox domain and must emit
+ * the same legacy row shape).
  */
-export function coreMailboxToIpcRow(item: MailboxItem | HostMailboxItem): Record<string, unknown> {
-  const meta = item.meta ?? {};
-  const constraints = meta.constraints;
-  const editHistory = meta.editHistory;
-  return {
-    id: item.id,
-    session_id: item.sessionId,
-    submitted_during_run_id: item.submittedRunId,
-    content: item.content,
-    kind: item.kind,
-    status: item.status,
-    priority: item.priority,
-    constraints_json: constraints !== undefined ? JSON.stringify(constraints) : null,
-    attachments_json: item.attachments ? JSON.stringify(item.attachments) : null,
-    source: item.source,
-    client_msg_id: item.clientMsgId,
-    created_at: item.createdAt,
-    claim_token: item.claimToken,
-    claim_expires_at: item.claimExpiresAt,
-    observed_at: item.observedAt,
-    observed_at_checkpoint: item.observedAtCheckpoint,
-    observed_by_run_id: item.observedByRunId,
-    injected_run_id: item.injectedRunId,
-    claim_attempts: item.claimAttempts,
-    last_claim_error: item.lastClaimError,
-    edit_locked_at: item.editLockedAt,
-    apply_mode: item.applyMode,
-    applied_at: item.appliedAt,
-    applied_at_checkpoint: item.appliedAtCheckpoint,
-    applied_summary: item.appliedSummary,
-    resulting_user_msg_id: item.resultingEventId,
-    failure_reason: item.cancelReason,
-    edit_history_json: editHistory !== undefined ? JSON.stringify(editHistory) : null,
-    cancelled_at: item.cancelledAt,
-    cancelled_by: item.cancelledBy,
-    cancel_reason: item.cancelReason,
-  };
-}
+export { coreMailboxToIpcRow } from '@duya/host/ipc-row-adapters';

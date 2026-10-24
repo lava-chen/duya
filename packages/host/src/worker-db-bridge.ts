@@ -43,12 +43,25 @@ import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
 import type { HostPluginAppInvocationInternalApi } from './local-plugin-app-invocation-api.js';
+import type { HostLocalMailboxApiV1 } from '@duya/agent-protocol/mailbox';
+import type {
+  HostMailboxApplyMode,
+  HostMailboxCheckpoint,
+  HostMailboxKind,
+  HostMailboxStatus,
+} from '@duya/agent-protocol/mailbox';
+import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import {
+  createHostLocalPluginRegistryApi,
+  type HostLocalPluginRegistryApiV1,
+} from './local-plugin-registry-api.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
 } from './ipc-message-adapters.js';
 import {
   coreGoalToIpcRow,
+  coreMailboxToIpcRow,
   coreSessionToIpcRow,
   hostTaskToIpcRow,
   ipcTaskToHostCreate,
@@ -99,6 +112,32 @@ export interface HostWorkerDbBridgeOptions {
   readonly taskApi?: HostTaskApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationInternalApi;
   /**
+   * Host mailbox API — serves the `mailbox:*` domain.
+   *
+   * The worker claims and applies mailbox rows on every model turn, and
+   * writes background notifications through the same domain. Without this the
+   * standalone Host answered `unimplemented_domain`, so every claim failed
+   * and every notification was lost.
+   */
+  readonly mailboxApi?: HostLocalMailboxApiV1;
+  /**
+   * Host plugin setup API — serves `plugin:setup:list-all`.
+   *
+   * The MCP loader expands `${setup.X}` references in plugin manifests from
+   * these values; without them every reference expanded to nothing.
+   */
+  readonly pluginSetupApi?: HostLocalPluginSetupApiV1;
+  /**
+   * Host plugin registry — serves `plugin:registry:list`.
+   *
+   * The worker asks for the installed-plugin list to decide which plugin
+   * tools are enabled and which plugin skill directories to load. The
+   * standalone Host answers from `config.toml`'s `[plugins]` block; the
+   * install paths and manifests belong to the Desktop's install
+   * directory, so they are not part of this answer.
+   */
+  readonly pluginRegistryApi?: HostLocalPluginRegistryApiV1;
+  /**
    * Parsed-document attachments for `session:loadMessages`. Desktop serves
    * this from its attachment store; a standalone Host returns an empty list
    * unless it composes the attachment API.
@@ -134,6 +173,36 @@ function requireString(payload: Record<string, unknown>, key: string, action: st
   }
   return value;
 }
+
+/** An optional payload string: absent stays absent, a present value is text. */
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Parse a JSON object carried as a string (the mailbox constraint blob). */
+function parseJsonObject(value: unknown, action: string): Record<string, unknown> {
+  if (typeof value !== 'string') {
+    throw new WorkerDbBridgeError('invalid_payload', `${action} requires a JSON object string`);
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not an object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new WorkerDbBridgeError('invalid_payload', `${action} requires a JSON object string`);
+  }
+}
+
+/**
+ * The plugin registry the bridge serves when the Host composes no override.
+ *
+ * It reads `config.toml`'s `[plugins]` block on every call, so a plugin
+ * the user enables between two runs is visible to the next one without a
+ * restart.
+ */
+const defaultPluginRegistryApi = createHostLocalPluginRegistryApi();
 
 /**
  * The Host worker bridge: run ledger, sessions, settings, tool approvals, and
@@ -182,6 +251,18 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       throw new WorkerDbBridgeError('unimplemented_domain', 'task domain requires options.taskApi');
     }
     return options.taskApi;
+  };
+  const requireMailbox = (): HostLocalMailboxApiV1 => {
+    if (options.mailboxApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'mailbox domain requires options.mailboxApi');
+    }
+    return options.mailboxApi;
+  };
+  const requirePluginSetup = (): HostLocalPluginSetupApiV1 => {
+    if (options.pluginSetupApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'plugin setup domain requires options.pluginSetupApi');
+    }
+    return options.pluginSetupApi;
   };
   const legacySessionRow = async (sessionId: string): Promise<Record<string, unknown> | undefined> => {
     if (options.localSessions === undefined) return undefined;
@@ -630,6 +711,127 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           });
           return { ok: true };
         }
+        // ==================== Mailbox ====================
+        // The same actions the Desktop bridge serves, from the same
+        // Host-owned API and the same row converter. The Desktop's renderer
+        // broadcasts and wake scheduling are deliberately NOT repeated here:
+        // a standalone Host has no renderer, and the worker picks the row up
+        // at its next checkpoint either way.
+        case 'mailbox:send': {
+          const item = await requireMailbox().enqueue({
+            id: requireString(payload, 'id', action),
+            sessionId: requireString(payload, 'sessionId', action),
+            submittedRunId: optionalString(payload.submittedDuringRunId) ?? '',
+            content: requireString(payload, 'content', action),
+            kind: requireString(payload, 'kind', action) as HostMailboxKind,
+            ...(Array.isArray(payload.attachments) ? { attachments: payload.attachments } : {}),
+            ...(payload.clientMsgId === null
+              ? { clientMsgId: null }
+              : (optionalString(payload.clientMsgId) === undefined ? {} : { clientMsgId: optionalString(payload.clientMsgId)! })),
+            ...(optionalString(payload.source) === undefined ? {} : { source: optionalString(payload.source)! }),
+            ...(payload.constraintsJson === undefined
+              ? {}
+              : { meta: { constraints: parseJsonObject(payload.constraintsJson, action) } }),
+          });
+          return coreMailboxToIpcRow(item);
+        }
+        case 'mailbox:edit': {
+          const api = requireMailbox();
+          const id = requireString(payload, 'id', action);
+          const existing = await api.getItem(id);
+          if (!existing) return null;
+          // Retry-safe: a row already promoted for the next agent turn comes
+          // back unchanged, so the caller's retry is idempotent.
+          if (existing.status === 'applied' && existing.appliedSummary === 'queued_for_next_agent_turn') {
+            return coreMailboxToIpcRow(existing);
+          }
+          const edited = await api.edit(id, {
+            ...(optionalString(payload.content) === undefined ? {} : { content: optionalString(payload.content)! }),
+            ...(optionalString(payload.kind) === undefined ? {} : { kind: optionalString(payload.kind)! as HostMailboxKind }),
+          });
+          return edited === null ? null : coreMailboxToIpcRow(edited);
+        }
+        case 'mailbox:guide': {
+          const guided = await requireMailbox().guide(requireString(payload, 'id', action));
+          return guided === null ? null : coreMailboxToIpcRow(guided);
+        }
+        case 'mailbox:promoteQueued': {
+          const promoted = await requireMailbox().promoteQueued(requireString(payload, 'id', action));
+          return promoted === null ? null : coreMailboxToIpcRow(promoted);
+        }
+        case 'mailbox:cancel': {
+          const cancelled = await requireMailbox().cancel(
+            requireString(payload, 'id', action),
+            optionalString(payload.reason),
+          );
+          return cancelled === null ? null : coreMailboxToIpcRow(cancelled);
+        }
+        case 'mailbox:list': {
+          const items = await requireMailbox().listMailboxItems(
+            requireString(payload, 'sessionId', action),
+            {
+              ...(Array.isArray(payload.status)
+                ? { status: payload.status.map((status) => String(status) as HostMailboxStatus) }
+                : {}),
+              limit: typeof payload.limit === 'number' ? payload.limit : 50,
+            },
+          );
+          return items.map(coreMailboxToIpcRow);
+        }
+        case 'mailbox:listForSession': {
+          const items = await requireMailbox().listMailboxItemsForSession(
+            requireString(payload, 'sessionId', action),
+          );
+          return items.map(coreMailboxToIpcRow);
+        }
+        case 'mailbox:claimBatch': {
+          const result = await requireMailbox().claimBatch({
+            sessionId: requireString(payload, 'sessionId', action),
+            runId: requireString(payload, 'runId', action),
+            checkpoint: requireString(payload, 'checkpoint', action) as HostMailboxCheckpoint,
+            ...(typeof payload.limit === 'number' ? { limit: payload.limit } : {}),
+            ...(typeof payload.leaseMs === 'number' ? { leaseMs: payload.leaseMs } : {}),
+            ...(typeof payload.coalesceWindowMs === 'number' ? { coalesceWindowMs: payload.coalesceWindowMs } : {}),
+            ...(typeof payload.maxClaimAttempts === 'number' ? { maxClaimAttempts: payload.maxClaimAttempts } : {}),
+          });
+          return { rows: result.rows.map(coreMailboxToIpcRow), claimTokens: [...result.claimTokens] };
+        }
+        case 'mailbox:apply': {
+          const item = await requireMailbox().apply({
+            id: requireString(payload, 'id', action),
+            claimToken: requireString(payload, 'claimToken', action),
+            mode: requireString(payload, 'mode', action) as HostMailboxApplyMode,
+            checkpoint: requireString(payload, 'checkpoint', action) as HostMailboxCheckpoint,
+            ...(optionalString(payload.summary) === undefined ? {} : { summary: optionalString(payload.summary)! }),
+            ...(payload.resultingUserMsgId === undefined
+              ? {}
+              : { resultingEventId: payload.resultingUserMsgId === null ? null : String(payload.resultingUserMsgId) }),
+          });
+          return coreMailboxToIpcRow(item);
+        }
+        case 'mailbox:cancelByAgent': {
+          const cancelled = await requireMailbox().cancelByAgent({
+            id: requireString(payload, 'id', action),
+            claimToken: requireString(payload, 'claimToken', action),
+            reason: optionalString(payload.reason) ?? 'cancelled_by_agent',
+          });
+          return cancelled === null ? null : coreMailboxToIpcRow(cancelled);
+        }
+
+        // ==================== Plugin setup ====================
+        case 'plugin:setup:list-all':
+          // The MCP loader expands `${setup.X}` references in plugin
+          // manifests from these values.
+          return requirePluginSetup().listPluginSetupValues();
+
+        // ==================== Plugin registry ====================
+        case 'plugin:registry:list':
+          // The installed-plugin list the worker gates on. The standalone
+          // Host reports the config-backed entries; an entry carries no
+          // install path because the package files live under the
+          // Desktop's Electron userData, not under the shared data root.
+          return (options.pluginRegistryApi ?? defaultPluginRegistryApi).listPlugins();
+
         default:
           throw new WorkerDbBridgeError(
             'unimplemented_domain',

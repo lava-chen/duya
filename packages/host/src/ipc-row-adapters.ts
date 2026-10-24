@@ -13,8 +13,10 @@ import type {
   TaskStatus,
   TaskUpdateInput as HostTaskUpdateInput,
 } from '@duya/agent-protocol';
+import type { HostMailboxItem } from '@duya/agent-protocol/mailbox';
 import type { SessionGoal } from '@duya/agent-protocol/goals';
 import type { CoreSession } from '@duya/data/session-store';
+import type { MailboxItem } from '@duya/data/mailbox';
 
 /**
  * Extension keys stored in `sessions.extensions` that map to top-level
@@ -189,6 +191,57 @@ export function hostTaskToIpcRow(task: HostTask): Record<string, unknown> {
     metadata: JSON.stringify(task.metadata ?? {}),
     created_at: task.createdAt,
     updated_at: task.updatedAt,
+  };
+}
+
+/**
+ * Map a mailbox item back to the legacy `agent_mailbox` row shape
+ * (snake_case) — the shape the worker reads at the `db:request` boundary.
+ *
+ * Column mapping notes:
+ *  - `submittedRunId` → `submitted_during_run_id`
+ *  - `resultingEventId` → `resulting_user_msg_id`
+ *  - `attachments` (array|null) → `attachments_json` (JSON string)
+ *  - `meta.constraints` → `constraints_json`
+ *  - `meta.editHistory` → `edit_history_json`
+ *  - `cancelReason` also feeds `failure_reason` (collapsed in the core store)
+ */
+export function coreMailboxToIpcRow(item: MailboxItem | HostMailboxItem): Record<string, unknown> {
+  const meta = item.meta ?? {};
+  const constraints = meta.constraints;
+  const editHistory = meta.editHistory;
+  return {
+    id: item.id,
+    session_id: item.sessionId,
+    submitted_during_run_id: item.submittedRunId,
+    content: item.content,
+    kind: item.kind,
+    status: item.status,
+    priority: item.priority,
+    constraints_json: constraints !== undefined ? JSON.stringify(constraints) : null,
+    attachments_json: item.attachments ? JSON.stringify(item.attachments) : null,
+    source: item.source,
+    client_msg_id: item.clientMsgId,
+    created_at: item.createdAt,
+    claim_token: item.claimToken,
+    claim_expires_at: item.claimExpiresAt,
+    observed_at: item.observedAt,
+    observed_at_checkpoint: item.observedAtCheckpoint,
+    observed_by_run_id: item.observedByRunId,
+    injected_run_id: item.injectedRunId,
+    claim_attempts: item.claimAttempts,
+    last_claim_error: item.lastClaimError,
+    edit_locked_at: item.editLockedAt,
+    apply_mode: item.applyMode,
+    applied_at: item.appliedAt,
+    applied_at_checkpoint: item.appliedAtCheckpoint,
+    applied_summary: item.appliedSummary,
+    resulting_user_msg_id: item.resultingEventId,
+    failure_reason: item.cancelReason,
+    edit_history_json: editHistory !== undefined ? JSON.stringify(editHistory) : null,
+    cancelled_at: item.cancelledAt,
+    cancelled_by: item.cancelledBy,
+    cancel_reason: item.cancelReason,
   };
 }
 

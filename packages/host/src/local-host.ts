@@ -437,6 +437,12 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores);
     const lockApi = createHostLockApi(core.stores);
+    // ONE instance per API, shared by the HTTP surface and the worker db
+    // bridge: the bridge must answer the same rows the HTTP surface does,
+    // and two instances over one store would be two answers to the same
+    // question.
+    const localMailboxApi = createHostLocalMailboxApi(core.stores.mailbox);
+    const localPluginSetupApi = createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db));
     const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
     // One authorization source for both Plugin App APIs. An injected
     // authority wins; otherwise the Host composes one from its own durable
@@ -550,6 +556,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           modeStateApi,
           taskApi,
           pluginAppInvocationApi,
+          mailboxApi: localMailboxApi,
+          pluginSetupApi: localPluginSetupApi,
           logger: executionLogger,
         }),
         logger: executionLogger,
@@ -595,7 +603,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localAppConnectionApi: createHostLocalAppConnectionApi(
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
-      localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db)),
+      localPluginSetupApi,
       pluginAppInstanceApi,
       pluginAppInvocationApi,
       pluginAppGrantApi,
@@ -606,7 +614,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       }),
       localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase.db)),
       localTurnReviewApi: createHostLocalTurnReviewApi(turnReviews),
-      localMailboxApi: createHostLocalMailboxApi(core.stores.mailbox),
+      localMailboxApi,
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
       workflowRunApi: createHostWorkflowRunApi(core.stores),
       runApi: createHostRunApi(core.stores),
