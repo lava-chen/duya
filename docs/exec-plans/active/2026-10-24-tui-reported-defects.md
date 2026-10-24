@@ -94,11 +94,32 @@ master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `pac
 
 `npm run bundle:worker` 会顺手把 `packages/capabilities/src/ModuleTool/inline-content.ts` 的行尾重写成 LF，内容不变（`md5` 去 CR 后与 HEAD 相同），但 `bundle:verify` 用 `git status --porcelain` 判定，于是报「1 uncommitted input / STALE」。处理是核对内容一致后 `git checkout --` 该文件，不是把它混进本任务提交。
 
+### 二次同步 master（`40d3de56`）
+
+创建 PR 后 #457 合入 master（`dc6d4ee7`），PR #469 转为 CONFLICTING。#457 只给工具结果补 `status: 'success'`，
+没有改 `buildToolResultEnvelope` 的文本，所以第 1 项的解包前提仍然成立；合并后按新树整体重验：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `40d3de56`（merge `origin/master`）+ 无本地未提交 | Win10 26200 x64 / Node 24.16.0 | `npx vitest run --pool=forks packages/cli packages/agent-runtime/test/tools/execution/streaming-tool-executor.test.ts packages/agent-runtime/test/run-engine-ports-drain.test.ts packages/host/tests/worker-config/provider-catalog.test.ts` | 0 · 106 files / 1289 tests passed | 冲突仍只有 `packages/host/bundle/**`，重建解决；含 #457 的工具状态用例与 `run-engine-ports-drain` |
+| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn（`todo` 工具） | 0 | 转写区 `└ ✔ Todo list 0/1` 加 `○ 写解析`，底部 `↓6 Σ6 · ⚡ 4.3 tok/s`——`?` 已被 #457 换成 `✔`，证明两侧改动可叠加 |
+| 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | 架构仍 2730 条全在既有 baseline（「2 fingerprints no longer triggered」未重录，不用 `--write`）；bundle FRESH 0/950 |
+
+### 在途 PR 冲突面（2026-10-24 对 16 个 open PR 逐个 `gh pr view --json files` 比对）
+
+- 源码零重叠：`todo.ts`、`footer.ts`、`slash/model.ts`、`slash/effort.ts`、协议目录、Host 目录读取器都只本任务在改。
+- 会撞的只有两处，且都是追加：`docs/exec-plans/README.md` 的表行（#454 #464 #466 #467 #468 都改），
+  `packages/cli/src/tui/slash/__tests__/slash-commands.test.ts`（#463 #464 也在加命令用例）。
+- 本轮两次 `git merge origin/master` 的冲突都只是 `packages/host/bundle/**`，一律用 `npm run bundle:worker`
+  从合并后源码重建解决，不手改产物。
+- PR #457（工具状态 indeterminate）在本任务开工时是在途 CONFLICTING，故第 1 项只修解析、不碰状态位；
+  它已合入 `dc6d4ee7`，合并后真机重跑显示 `└ ✔ Todo list 0/1`，两边改动可叠加。
+
 ## 接续 / 结果
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
-- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；合入 `origin/master`（`4bf210cc`，12 个 commit，含重写行内绘制的 PR #455）后全部重跑一遍。
-- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（保持可 review 状态，未获授权不合并）。
+- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；两次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457）后各重跑一遍，最新全量为 106 files / 1289 tests。
+- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（head `40d3de56`，状态 MERGEABLE，保持可 review，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
-- 下一步：PR head 的必需 review 与必需 CI 全绿后同步 master 重验，再请用户授权集成。
+- 下一步：等 PR #469 head 的必需 review 与必需 CI 全绿，再请用户授权集成；集成后同步 master 重验并回收检出。
