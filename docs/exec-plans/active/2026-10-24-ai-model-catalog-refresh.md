@@ -64,11 +64,14 @@
 
 - 已实现：19 个 provider shard 刷新 + 1 个新增（小米 MiMo）、预设默认模型对齐、同步脚本重写、
   目录一致性用例、worker bundle 重建。
-- 已验证：见上表（本地全绿）。
-- 未提交路径：无（全部改动已入暂存区，提交后随 PR 交付）。
+- 已验证：见上表（本地全绿，合并 master 后复跑仍全绿）。
+- PR：#441 https://github.com/lava-chen/duya/pull/441 （base=master，未合并）。
+- 合并记录：master 前进导致 PR 冲突，冲突只在 `packages/host/bundle/**`；已合并
+  origin/master 并基于合并后的源码重建 bundle，门禁回到 FRESH。
+- 未提交路径：无。
 - 副作用：worker bundle 产物变化（`packages/host/bundle/**`），属本次改动的应有产物。
 - 阻塞：无。
 - 回收：未回收原因——PR 尚未集成，需保留分支与检出。
 
-下一步：开 PR（base=master），等 CI 与 review；不自行合并。
+下一步：等 CI 与 review 通过后由获授权的集成者合并；本 agent 不自行合并。
 
