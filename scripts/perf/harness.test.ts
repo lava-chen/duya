@@ -47,6 +47,7 @@ import {
 import { buildReport, renderMarkdown } from '../../e2e/perf/lib/report.mjs';
 import {
   acquireInternalLock,
+  acquireLock,
   readLockOwner,
   releaseInternalLock,
   resolveLockDir,
@@ -277,6 +278,45 @@ describe('the measurement lock', () => {
     const dir = resolveLockDir();
     expect(path.isAbsolute(dir)).toBe(true);
     expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+
+  it('stays exclusive when the holder took it through the external script', () => {
+    // The external script records its own pid and exits immediately, so the
+    // pid in the owner file is already dead by the time the caller continues.
+    // The in-repo implementation treats a dead owner as a crashed holder and
+    // takes the lock over — which would let a script-driven agent and an
+    // in-repo agent measure on the same machine at the same time.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-lock-script.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        'try { fs.mkdirSync(LOCK_DIR); } catch (error) {',
+        "  if (error.code !== 'EEXIST') throw error;",
+        '  process.exit(2);',
+        '}',
+        'fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '  agent: process.argv[3] ?? "script-agent", pid: process.pid, acquiredAt: Date.now(),',
+        '}, null, 2), "utf8");',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+
+    // The live holder owns the lock, so the in-repo implementation must not
+    // take it over.
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+    expect(readLockOwner(dir)?.pid).toBe(process.pid);
+    const second = acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    expect(second.acquired).toBe(false);
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+
+    releaseInternalLock(dir);
   });
 });
 
