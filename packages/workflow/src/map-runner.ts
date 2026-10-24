@@ -8,7 +8,7 @@
  * only affects some items re-pays just those.
  */
 
-import type { Semaphore } from './host.js';
+import { BudgetExceededError, type Semaphore } from './host.js';
 import { interpolateDeep, interpolateString, evaluateExpr, NOT_FOUND, type ExprScope } from './expr.js';
 import { computeReqHash } from './journal.js';
 import { classifyError } from './error-class.js';
@@ -70,7 +70,10 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
   }
 
   const parallel = map.parallel ?? true;
+  let budgetStop: BudgetExceededError | undefined;
   const itemRunner = async (index: number): Promise<unknown> => {
+    if (budgetStop) throw budgetStop;
+    if (ctx.signal?.aborted) throw new Error('workflow cancelled');
     const value = items[index];
     const itemNodeId = `${node.id}#${index}`;
     const itemCtx: NodeRunContext = {
@@ -82,6 +85,8 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
 
     const release = await semaphore.acquire();
     try {
+      if (budgetStop) throw budgetStop;
+      if (ctx.signal?.aborted) throw new Error('workflow cancelled');
       // Tool fan-out: input from map.input (falling back to node.input).
       if (node.tool) {
         const rawInput = map.input ?? node.input ?? {};
@@ -166,7 +171,9 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
         ctx.budget.release(ticket);
         throw err;
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof BudgetExceededError) budgetStop ??= err;
+      if (budgetStop || ctx.signal?.aborted) throw err;
       return null; // soft-fail (grok E:643-647)
     } finally {
       release();
@@ -174,7 +181,12 @@ export async function runMapNode(ctx: NodeRunContext, semaphore: Semaphore): Pro
   };
 
   const results: unknown[] = parallel
-    ? await Promise.all(items.map((_, i) => itemRunner(i)))
+    ? await (async () => {
+        const settled = await Promise.allSettled(items.map((_, i) => itemRunner(i)));
+        const rejection = settled.find((entry): entry is PromiseRejectedResult => entry.status === 'rejected');
+        if (rejection) throw rejection.reason;
+        return settled.map((entry) => (entry as PromiseFulfilledResult<unknown>).value);
+      })()
     : await (async () => {
         const out: unknown[] = [];
         for (let i = 0; i < items.length; i++) out.push(await itemRunner(i));

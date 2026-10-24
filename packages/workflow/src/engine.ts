@@ -74,7 +74,7 @@ export interface ExecuteOptions {
 }
 
 interface NodeState {
-  status: 'succeeded' | 'skipped' | 'failed' | 'waiting';
+  status: 'succeeded' | 'skipped' | 'failed' | 'blocked' | 'waiting';
   output?: unknown;
   errorClass?: string | undefined;
 }
@@ -127,6 +127,17 @@ function phaseDependencies(nodes: WorkflowNode[]): Map<string, ReadonlySet<strin
   return dependencies;
 }
 
+function workflowDependencies(def: WorkflowDef): Map<string, ReadonlySet<string>> {
+  const dependencies = new Map<string, ReadonlySet<string>>();
+  for (const phase of def.phases) {
+    for (const node of phase.nodes) {
+      const { deps } = nodeDependencies(node);
+      dependencies.set(node.id, new Set([...deps].filter((dependency) => dependency !== 'params')));
+    }
+  }
+  return dependencies;
+}
+
 function findNode(def: WorkflowDef, nodeId: string): WorkflowNode | undefined {
   for (const phase of def.phases) {
     for (const node of phase.nodes) {
@@ -174,6 +185,8 @@ export class WorkflowEngine {
       this.options.agentBudget ?? WORKFLOW_BUDGET_DEFAULTS.agentBudget,
       this.options.hostCallCap ?? WORKFLOW_BUDGET_DEFAULTS.hostCallCap,
     );
+    const allDependencies = workflowDependencies(def);
+    let firstFailure: Extract<EngineOutcome, { status: 'failed' }> | undefined;
 
     const baseCtx: Omit<NodeRunContext, 'node'> = {
       runId,
@@ -182,6 +195,7 @@ export class WorkflowEngine {
       budget,
       decisions: this.options.decisions,
       ports: this.options.ports,
+      signal: this.options.signal,
       approvalMode,
       dryRun,
       scope,
@@ -201,8 +215,10 @@ export class WorkflowEngine {
       const pending = new Map(phase.nodes.map((node) => [node.id, node]));
       const settled = new Set(outputs.keys());
       const running = new Map<string, Promise<void>>();
+      const phaseFailedNodeIds = new Set<string>();
+      const phaseBlockedNodeIds = new Set<string>();
       let waiting: { nodeId: string; waitTill: number } | undefined;
-      let terminalFailure: Extract<EngineOutcome, { status: 'failed' }> | undefined;
+      let runStopFailure: Extract<EngineOutcome, { status: 'failed' }> | undefined;
 
       while (pending.size > 0 || running.size > 0) {
         if (this.options.signal?.aborted) {
@@ -213,9 +229,24 @@ export class WorkflowEngine {
         const ready = readyNodes([...pending.values()], dependencies, settled);
         let progressed = false;
         for (const node of ready) {
-          if (terminalFailure || this.options.signal?.aborted) break;
+          if (runStopFailure || this.options.signal?.aborted) break;
           pending.delete(node.id);
           progressed = true;
+
+          const failedDependencies = [...(allDependencies.get(node.id) ?? [])].filter((dependency) => {
+            const state = outputs.get(dependency);
+            return state?.status === 'failed' || state?.status === 'blocked';
+          });
+          if (failedDependencies.length > 0) {
+            outputs.set(node.id, { status: 'blocked', errorClass: 'dependency_failed' });
+            settled.add(node.id);
+            phaseBlockedNodeIds.add(node.id);
+            journal.append({
+              kind: 'node_result', nodeId: node.id, attempt: 1, status: 'skipped', result: null,
+              errorClass: 'dependency_failed',
+            });
+            continue;
+          }
 
           if (node.when) {
             try {
@@ -226,11 +257,19 @@ export class WorkflowEngine {
                 continue;
               }
             } catch (err) {
-              terminalFailure = {
+              const error = err instanceof Error ? err.message : String(err);
+              outputs.set(node.id, { status: 'failed', errorClass: 'expr_error' });
+              settled.add(node.id);
+              phaseFailedNodeIds.add(node.id);
+              firstFailure ??= {
                 status: 'failed', runId, nodeId: node.id, errorClass: 'expr_error',
-                error: err instanceof Error ? err.message : String(err),
+                error,
               };
-              break;
+              journal.append({
+                kind: 'node_result', nodeId: node.id, attempt: 1, status: 'failed', result: null,
+                errorClass: 'expr_error',
+              });
+              continue;
             }
           }
 
@@ -242,8 +281,9 @@ export class WorkflowEngine {
                 : await this.semaphore.run(() => runNode(ctx));
               outputs.set(node.id, { status: result.status, output: result.output, errorClass: result.errorClass });
               settled.add(node.id);
-              if (result.status === 'failed' && !terminalFailure) {
-                terminalFailure = {
+              if (result.status === 'failed') {
+                phaseFailedNodeIds.add(node.id);
+                firstFailure ??= {
                   status: 'failed', runId, nodeId: node.id,
                   errorClass: result.errorClass ?? 'unknown', error: result.error ?? 'node failed',
                 };
@@ -253,12 +293,14 @@ export class WorkflowEngine {
                 outputs.set(node.id, { status: 'waiting' });
                 waiting ??= { nodeId: node.id, waitTill: err.waitTill };
               } else if (err instanceof BudgetExceededError) {
-                terminalFailure ??= {
+                runStopFailure ??= {
                   status: 'failed', runId, nodeId: node.id,
                   errorClass: 'budget_exceeded', error: err.message,
                 };
+              } else if (this.options.signal?.aborted) {
+                // Cancellation is a run-level stop and has no failure record.
               } else {
-                terminalFailure ??= {
+                runStopFailure ??= {
                   status: 'failed', runId, nodeId: node.id,
                   errorClass: 'unknown', error: err instanceof Error ? err.message : String(err),
                 };
@@ -270,9 +312,9 @@ export class WorkflowEngine {
           running.set(node.id, task);
         }
 
-        if (terminalFailure) {
+        if (runStopFailure) {
           await Promise.allSettled([...running.values()]);
-          return terminalFailure;
+          return runStopFailure;
         }
         if (running.size > 0) {
           await Promise.race([...running.values()]);
@@ -298,7 +340,7 @@ export class WorkflowEngine {
           };
         }
       }
-      if (terminalFailure) return terminalFailure;
+      if (runStopFailure) return runStopFailure;
       if (waiting) {
         const token = this.options.ports.resumeTokens.create({
           runId, nodeId: waiting.nodeId, issuedAt: this.options.ports.clock.nowMs(),
@@ -309,13 +351,18 @@ export class WorkflowEngine {
         kind: 'phase',
         nodeId: phase.phase,
         attempt: 1,
-        status: 'succeeded',
-        result: { index: phaseIndex },
+        status: phaseFailedNodeIds.size > 0 || phaseBlockedNodeIds.size > 0 ? 'failed' : 'succeeded',
+        result: {
+          index: phaseIndex,
+          ...(phaseFailedNodeIds.size > 0 ? { failedNodeIds: [...phaseFailedNodeIds] } : {}),
+          ...(phaseBlockedNodeIds.size > 0 ? { blockedNodeIds: [...phaseBlockedNodeIds] } : {}),
+        },
       });
     }
 
     const outputsOut: Record<string, unknown> = {};
     for (const [id, state] of outputs) outputsOut[id] = state.output;
+    if (firstFailure) return firstFailure;
     return { status: 'complete', runId, outputs: outputsOut };
   }
 

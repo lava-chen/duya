@@ -422,7 +422,7 @@ describe('on_error dynamic policy', () => {
     expect(attempts).toBe(3);
   });
 
-  it('on_error=skip records and continues; fail stops the run', async () => {
+  it('on_error=skip continues; fail returns a failed run outcome', async () => {
     const def = parseWorkflowDef({
       name: 'err',
       description: 'error dispositions',

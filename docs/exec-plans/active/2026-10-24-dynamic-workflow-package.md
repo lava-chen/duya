@@ -27,7 +27,7 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 - [x] S1：抽取 schema、validate、expr、journal 类型、resume-token、scheduler 与并发控制；公开入口零 IO。
 - [x] S2：接线 workspace build order、tsconfig 与 architecture policy；登记 `managed: true`、声明窄 `requires`；Host 改从新包导入并移除已迁移重复实现。
 - [x] S3：就绪集并行调度、run 限流与 provider AIMD governor 分离、live retune 与观测事件。
-- [ ] S4：依赖子树失败隔离、指数退避加抖动、预算耗尽/取消的 run 级停止。
+- [x] S4：依赖子树失败隔离、指数退避加抖动、预算耗尽/取消的 run 级停止。
 - [ ] S5：整份定义 hash 与 journal 恢复纪律、trailing failure 剪枝、orphan running 收敛。
 - [ ] S6：补齐纯包 graph fixture 与数值轨迹，跑完整验收。
 
@@ -112,9 +112,16 @@ base：`21351df668adefc0357741a5f79a1513e297df61` · owner：本会话
 | 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2642 findings 全部已容忍；无新增违规；256 条旧指纹未触发，baseline 未改写 |
 | 同上 / S3 早期工作文件 | 同上 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 1 | 6 个 Host 用例错误签名均为预期 `waiting` / `failed` 实际得到 `complete`；异步任务收尾后调度循环未折叠 terminal failure / suspension。引擎在 phase 成功记录前处理终态并等待在途任务后重跑，最终 15 files / 211 tests 通过 |
 | 同上 / S3 早期工作文件 | 同上 | `npm run build:packages -- --target @duya/workflow --target @duya/host`（首次） | 1 | `TS2304: Cannot find name 'HostAgentSpec'`；补全 node-runner 类型导入后依赖闭包构建通过 |
+| `fde7f7aac3916030b3915c3790a2820d8b3e9008` / S4 开工前 worktree clean | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 0 | S4 基线：15 files / 211 tests passed |
+| `fde7f7aac3916030b3915c3790a2820d8b3e9008` / S4 修改 `packages/workflow/src/{engine,node-runner,map-runner}.ts`、Host engine test 与新纯包用例；`node_modules/`、`dist/` ignored | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm run build:packages -- --target @duya/workflow --target @duya/host` | 0 | workflow/Host 13 包依赖闭包通过；新 signal、分支隔离及 retry port 类型通过编译 |
+| 同上 / 同上 | 同上；测试数据根 `/tmp/duya-workflow-data` | `npx vitest run packages/workflow/tests/failure-semantics.test.ts packages/workflow/tests/scheduler.test.ts`（首次） | 1 | 新 fixture 把 `map.over` 写成模板 `${params.items}`，运行语法要求表达式 `params.items`，错误签名 `expr_error`；修 fixture 后重跑通过，无产品代码变更 |
+| 同上 / 同上 | 同上 | `npx vitest run packages/workflow/tests/failure-semantics.test.ts packages/workflow/tests/scheduler.test.ts` | 0 | 2 files / 9 tests passed；依赖子树、跨 phase 结果保留、`[125, 500]` ms 抖动轨迹、map budget 与预先取消覆盖 |
+| 同上 / S4 改动文件及新测试；`node_modules/`、`dist/` ignored | 同上；测试数据根 `/tmp/duya-workflow-data` | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/host/tests/worker-workflows/ packages/workflow/tests scripts/architecture/layer-purity.test.ts` | 0 | 16 files / 215 tests passed；旧 Host error policy、workflow pure tests、layer purity 均通过 |
+| 同上 / 同上 | 同上 | `npm run typecheck:workflow` | 0 | 新包源码严格类型检查通过 |
+| 同上 / 同上 | 同上 | `npm run architecture:check`（受限授权） | 0 | 2642 findings 全部已容忍；无新增违规；256 条旧指纹未触发，baseline 未改写 |
 
 ## 接续 / 结果
 
-已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）、S1（`6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b`）与 S2（`dda132b2b1ed382a89ff84ac08411553bb418d91`）。S3 在同阶段就绪集并发派发；每个 run 使用可动态调整的独立并发门，Host 可按 provider 注入共享 AIMD governor；观测 `concurrency-changed` 和 `run-stalled`。live retune 测试确认不创建新 run 且不打断在途调用。早期红测发现异步任务收尾丢失失败/挂起终态，已修复并重跑全目标集。S3 Host/workflow/架构纯度为 15 files / 211 tests 全绿；workflow+Host 目标构建、独立类型检查和 architecture gate 通过。全仓 typecheck 在 S2 已通过。`node_modules/`、`dist/` 均 ignored。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
+已完成并提交 S0（`c03348b5a8e5f8d59a5e499b63b6cad945296d80`）、S1（`6a6a0ebc0b4e72d98352be5afcf3743dd401bc1b`）、S2（`dda132b2b1ed382a89ff84ac08411553bb418d91`）和 S3（`fde7f7aac3916030b3915c3790a2820d8b3e9008`）。S3 在同阶段就绪集并发派发；run gate 与共享 provider AIMD governor 分离，提供 live retune、`concurrency-changed` 和 `run-stalled` 观察。S4 的 `on_error: fail` 失败节点仅阻断其依赖子树（含后续 phase），独立分支继续并把成功结果留在 journal；已有默认 `skip` 仍保持软跳过语义。重试通过注入时钟和随机源按 250ms 基数、指数增长、0.5–1.5 全抖动、30s 上限等待。budget 与 abort 作为 run 级停止；map fan-out 不再吞 budget/cancel，也不为停止写失败 node record。S4 Host/workflow/架构纯度为 16 files / 215 tests 全绿；workflow+Host 目标构建、workflow 类型检查和 architecture gate 通过。S4 第一轮新测试只因 fixture 使用了错误的 map 表达式语法而红，修正 fixture 后通过。全仓 typecheck 在 S2 已通过；最终验收会重跑。`node_modules/`、`dist/` 均 ignored。全仓 gate 需在此执行环境用受限授权运行，默认 sandbox 会拦其子进程。
 
-下一步：提交 S3；随后 S4 实现依赖子树失败隔离、指数退避与抖动，以及预算耗尽和取消的 run 级停止语义。
+下一步：提交 S4；随后 S5 将整份定义 hash 绑定 journal/resume，拒绝不匹配定义，并修复 trailing failure 剪枝和 orphan `running` 收敛。
