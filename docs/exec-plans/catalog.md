@@ -7,6 +7,7 @@
 
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
+| [插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | — | S1 契约先提交并报告，再按 S2–S6 迁移资源面与兼容入口 |
 | [2026-10-22-panel-column-layout](active/2026-10-22-panel-column-layout.md) | — | 侧面板从单列 tab 改为多列 + 列内堆叠 + 可脱窗；切片 A/B 并行，C/D 第二波 |
 | [2026-10-21-public-tree-cleanup](active/2026-10-21-public-tree-cleanup.md) | — | 清理公开根目录，迁移文档入口和打包配置，核对链接与产物 |
 | [2026-10-23-multi-agent-orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | — | 多 agent 编排的测试体系与优化方案；Phase 1 补子 agent 状态机测试（当前零覆盖），Phase 2 做 DAG 并行与失败级联 |

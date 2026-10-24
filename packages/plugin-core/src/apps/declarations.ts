@@ -3,6 +3,16 @@ import { z } from 'zod';
 const APP_ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const CAPABILITY_ID_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
 
+function isPluginUiResourceUri(value: string): boolean {
+  if (!value.startsWith('ui://') || /[\s\u0000-\u001f]/.test(value)) return false;
+  try {
+    const uri = new URL(value);
+    return uri.protocol === 'ui:' && uri.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 function isPackageRelativePosixPath(value: string): boolean {
   if (value.length > 512 || value.includes('\0') || value.includes('\\')) return false;
   if (value.startsWith('/') || /^[a-zA-Z]:/.test(value) || /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(value)) {
@@ -43,11 +53,39 @@ export const PluginAppCapabilityMappingSchema = z
   })
   .strict();
 
+/** An MCP resource-backed view that belongs to one Plugin App. */
+export const PluginUiSurfaceSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(APP_ID_PATTERN),
+    /** The desktop currently supports English and Chinese UI locales. */
+    title: z
+      .object({
+        en: z.string().min(1).max(128),
+        zh: z.string().min(1).max(128),
+      })
+      .strict(),
+    /** An icon identifier resolved by the host's allowlisted icon map. */
+    icon: z.string().min(1).max(64),
+    server: z.string().min(1).max(128),
+    resourceUri: z.string().min(1).max(2048).refine(isPluginUiResourceUri),
+    availability: z.enum(['always', 'session']),
+  })
+  .strict();
+
+export type PluginUiSurface = z.infer<typeof PluginUiSurfaceSchema>;
+
 /** A package-local App declaration; it describes metadata, not a grant. */
 export const PluginAppDefinitionSchema = z
   .object({
     appId: z.string().min(1).max(64).regex(APP_ID_PATTERN),
-    entry: z.string().min(1).refine(isPackageRelativePosixPath),
+    /** Legacy package-local static entry. Resource-only Apps may omit it. */
+    entry: z.string().min(1).refine(isPackageRelativePosixPath).optional(),
+    ui: z
+      .object({
+        surfaces: z.array(PluginUiSurfaceSchema).min(1).max(64),
+      })
+      .strict()
+      .optional(),
     /** Standalone Apps keep their own MCP session when no agent run is active. */
     runtime: z.enum(['agent-run', 'standalone']).optional(),
     requiredCapabilities: z
@@ -61,7 +99,16 @@ export const PluginAppDefinitionSchema = z
      */
     capabilityTools: z.array(PluginAppCapabilityMappingSchema).max(64).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((app, ctx) => {
+    if (app.entry === undefined && (app.ui?.surfaces.length ?? 0) === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'App requires a static entry or at least one UI surface',
+        path: ['entry'],
+      });
+    }
+  });
 
 export type PluginAppDefinition = z.infer<typeof PluginAppDefinitionSchema>;
 export type PluginAppCapabilityTool = z.infer<typeof PluginAppCapabilityToolSchema>;
@@ -116,7 +163,43 @@ export const PluginAppDefinitionsSchema = z
         });
       });
     });
+
+    const surfaceOwners = new Map<string, { appIndex: number; surfaceIndex: number }>();
+    apps.forEach((app, appIndex) => {
+      app.ui?.surfaces.forEach((surface, surfaceIndex) => {
+        const owner = surfaceOwners.get(surface.id);
+        if (owner !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `Duplicate UI surface id: ${surface.id}`,
+            path: [appIndex, 'ui', 'surfaces', surfaceIndex, 'id'],
+          });
+        } else {
+          surfaceOwners.set(surface.id, { appIndex, surfaceIndex });
+        }
+      });
+    });
   });
+
+/** Bind the shared App schema to the MCP server names declared by one plugin. */
+export function pluginAppDefinitionsSchemaForMcpServers(
+  mcpServerNames: readonly string[],
+) {
+  const declaredServers = new Set(mcpServerNames);
+  return PluginAppDefinitionsSchema.superRefine((apps, ctx) => {
+    apps.forEach((app, appIndex) => {
+      app.ui?.surfaces.forEach((surface, surfaceIndex) => {
+        if (!declaredServers.has(surface.server)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `UI surface server ${surface.server} is not declared in this plugin's mcpServers`,
+            path: [appIndex, 'ui', 'surfaces', surfaceIndex, 'server'],
+          });
+        }
+      });
+    });
+  });
+}
 
 /** Stable identity of one mapped tool, independent of declaration order. */
 export function pluginAppCapabilityToolKey(tool: PluginAppCapabilityTool): string {

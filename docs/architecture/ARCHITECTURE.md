@@ -184,12 +184,18 @@ Plugin UI Apps are declared under `extensions["com.duya.client"].apps` and
 normalized to optional `PluginManifest.apps`. The shared, browser-safe schema
 is exported from `@duya/plugin-core/apps/declarations`; Desktop's existing
 manifest reader validates canonical package containment and regular entry
-files. App IDs, requested capabilities and state schema versions remain
-metadata, not grants or live instance state. The installed-plugin view projects
-only these App declarations, without exposing the rest of a manifest's MCP
-configuration. Codex's root `apps` connector-file reference is unchanged.
-Launch must recheck entry containment; instance persistence and iframe launch
-are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
+files when the legacy `entry` is present. An App may keep that static entry,
+declare resource-backed `ui.surfaces`, or carry both. Each surface declares
+English and Chinese titles, an icon identifier, an `ui://` resource URI, and
+the name of an MCP server discovered from that same plugin; surface IDs are
+unique within the plugin. This schema change only defines and validates
+metadata: resource reads and surface rendering remain subsequent slices. App
+IDs, requested capabilities and state schema versions remain metadata, not
+grants or live instance state. The installed-plugin view projects only these
+App declarations, without exposing the rest of a manifest's MCP configuration.
+Codex's root `apps` connector-file reference is unchanged. Launch must recheck
+entry containment; instance persistence and iframe launch are subsequent
+slices. See `610-architecture-series/22-wave3-dispatch.md`.
 
 `@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
 Host-created source/origin/nonce and session/run binding. It accepts only
