@@ -38,7 +38,9 @@ import {
 } from '../../e2e/perf/lib/metrics.mjs';
 import {
   FIXTURE_IDS,
+  buildFencedStreamChunks,
   buildSessionMessages,
+  buildStreamChunks,
   buildToolStormRows,
   buildTypingFixture,
   fixtureDigest,
@@ -114,9 +116,46 @@ describe('the fixture generator', () => {
       'perf/session-1000',
       'perf/session-10000',
       'perf/stream-long-reply',
+      'perf/stream-long-reply-fenced',
       'perf/stream-tool-storm',
       'perf/typing-30s',
     ]);
+  });
+
+  it('puts code blocks in the fenced fixture and only there', () => {
+    // The plain long-reply fixture is prose, so the shared harness cannot see
+    // what a syntax-highlighted code block costs while a reply is growing.
+    // The fenced fixture is the same prose with code blocks mixed in, so the
+    // difference between the two IS the highlighting cost.
+    const plain = buildStreamChunks('perf/stream-long-reply');
+    const plainText = plain.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(plainText).not.toContain('```');
+
+    const fenced = buildFencedStreamChunks('perf/stream-long-reply-fenced');
+    const fencedText = fenced.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(fencedText).toContain('```ts');
+    expect(fencedText).toContain('```python');
+    expect(fencedText).toContain('```bash');
+    // The fence markers are split across chunks on purpose: that is what a
+    // growing reply looks like.
+    expect(fenced.chunks.length).toBeGreaterThan(1000);
+    expect(fenced.chunks.some((chunk: { text: string }) => chunk.text.includes('```'))).toBe(true);
+    // Same size and cadence as the plain fixture, so the two are comparable:
+    // the difference between their numbers is the highlighting, not the
+    // amount of text.
+    expect(fenced.chunkChars).toBe(plain.chunkChars);
+    expect(fenced.chunkCount).toBe(plain.chunkCount);
+    expect(fenced.chunks.length).toBe(plain.chunks.length);
+    expect(Math.abs(fenced.totalChars - plain.totalChars)).toBeLessThan(200);
+  });
+
+  it('keeps the fenced fixture deterministic', () => {
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).toBe(
+      fixtureDigest('perf/stream-long-reply-fenced'),
+    );
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).not.toBe(
+      fixtureDigest('perf/stream-long-reply'),
+    );
   });
 
   it('builds the requested number of rows', () => {
