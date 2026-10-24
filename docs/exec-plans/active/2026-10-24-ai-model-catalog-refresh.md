@@ -33,7 +33,8 @@
 - [x] 模型 id 排序改成码位序，去掉对 ICU 本地化的依赖。
 - [x] 重跑同步脚本，吸收 openrouter 价格漂移并重建 worker bundle。
 - [x] 新增夜间刷新 workflow：只开 PR，不自动合并。
-- [ ] 提交后续改动、提 PR、等 CI 与 review。
+- [x] 提交后续改动、提 PR（#442）。
+- [ ] 等 CI 与 review。
 
 ## 夜间自动刷新
 
@@ -97,7 +98,7 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - 已实现（后续 PR）：模型 id 排序去本地化、openrouter 价格随上游漂移刷新 + bundle 重建、夜间刷新 workflow。
 - 已验证：见上表（本地全绿）。
 - PR：#441 https://github.com/lava-chen/duya/pull/441 （已合并，merge commit c426d029）；
-  夜间刷新的 PR 待提。
+  夜间刷新：#442 https://github.com/lava-chen/duya/pull/442 （base=master，未合并）。
 - 未提交路径：无（提交后见 Git）。
 - 副作用：worker bundle 产物变化（`packages/host/bundle/**`），属本次改动的应有产物。
 - 阻塞：无技术阻塞；开 PR 一步需要仓库开启 GitHub Actions 建 PR 权限或配置 `NIGHTLY_PR_TOKEN`。
