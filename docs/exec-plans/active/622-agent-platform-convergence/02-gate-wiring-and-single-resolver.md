@@ -3,7 +3,7 @@
 状态：verified · 负责人：Codex · 更新：2026-10-24
 分支：`codex/622-02-gate-wiring` · worktree：`.claude/worktrees/622-02-gate-wiring`
 base：`18a144e8ee25952cf19da3b45191cdc8a91e84bc` · owner：Codex
-实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open，latest-head CI/review pending）
+实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open；architecture/typecheck/build 通过；full test 有已在 base 复现的 2 个失败）
 独占路径：`scripts/architecture/**`、`.github/workflows/test.yml`、`package.json` 的 script 行、`.architecture-baseline.json`、`docs/architecture/ARCHITECTURE_MAP.md`、本卡与 622 README 的状态记录
 
 关联：[622 README](./README.md) · 前置：[01](01-import-graph-resolver.md)
@@ -197,6 +197,12 @@ npm run plan:sync
 5. **`plan:sync` 已在 CI**，追踪表的 `done` 行需要具名测试和 commit 证据。
    PR #399 已合并，01 行和 02 行的状态更新均指向可复跑测试及提交；未完成卡继续保持 todo。
 
+6. **PR #405 的全量测试 job 有两个已存在于 base 的 IPC 契约失败。**
+   `ipc-channel-contract.test.ts` 与 `ipc-contract.test.ts` 都报告
+   `gpu:get-status`、`gpu:report-webgl-context-lost` 没有 handler。
+   在干净 base `18a144e8` 的独立 worktree 安装 lockfile 依赖后重跑，同样 2 个测试失败、
+   同样错误签名；本卡未改这些 IPC 或生产文件。此问题不扩入 02，PR 保持未合并。
+
 ---
 
 ## 验证记录
@@ -218,6 +224,8 @@ npm run plan:sync
 | `18a144e8` + 02 | 同上 | `npm run architecture:baseline-ratchet -- HEAD` | 0 | architecture **2785 → 2530** / 255 removed / 0 added；retirement baseline initialized at **772** |
 | `18a144e8` + 02 | 同上 | `npm run agent-retirement-gate` | 0 | `OPEN` remains visible; **772 current / 772 baseline / 0 new** |
 | `18a144e8` + 02 | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 · isolated `npm ci` | `npm run typecheck:all` | 0 | 20 workspace packages built; all configured protocol, client-core, core, runtime, web, Electron, CLI, voice, eval typechecks passed; eval recorder **4/4** |
+| PR head `4f341c2f` / CI run **796** | GitHub Actions · Node v22.23.3 · npm 10.9.9 | full `npm test` | 1 | **1140 files passed / 2 failed / 2 skipped**; failures: `ipc-channel-contract.test.ts` and `ipc-contract.test.ts`, both missing GPU handlers |
+| base `18a144e8` / isolated worktree | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 · isolated `npm ci` | same two IPC contract tests | 1 | exact same two tests fail with `gpu:get-status` and `gpu:report-webgl-context-lost`; confirms CI failure predates 02 |
 | `18a144e8` + 02 | 同上 | 变异 ①：`agent-protocol` 引用 `agent-runtime` | 1 | architecture check reported `forbidden-dependency` and `module-dependency`；源文件 SHA 恢复 |
 | `18a144e8` + 02 | 同上 | 变异 ②：删掉活跃 slice-graph workflow step | 1 | `architecture-ci-wiring.test.ts` 失败；workflow 已恢复 |
 | `18a144e8` + 02 | 同上 | 变异 ③：baseline 加不存在指纹 | 1 | baseline ratchet 报 `architecture additions=1`；baseline SHA 恢复 |
@@ -226,13 +234,13 @@ npm run plan:sync
 
 ## 接续 / 结果
 
-- **已实现 / 已验证**：共享 manifest registry、退役引用 ratchet、CI 接线和 baseline 收缩均完成；本地验收通过，等待 PR #405 最新 head 的 CI/review。
+- **已实现 / 已验证**：共享 manifest registry、退役引用 ratchet、CI 接线和 baseline 收缩均完成；本地验收通过。PR #405 的 architecture、typecheck、build jobs 通过；全量 test job 中两项 IPC 失败已在 base 复现。
 - **本地工作区**：`.claude/worktrees/622-02-gate-wiring`，分支 `codex/622-02-gate-wiring`。
 - **基线变更**：`.architecture-baseline.json` 只删除 255 条旧指纹；baseline ratchet 证明新增为 0。
-- **阻塞**：无代码阻塞；PR 最新 head 的 CI/review 尚未完成。
+- **阻塞**：集成门槛仍被两个 base 已有的 IPC contract 测试失败挡住；另无已提交 review。
 
-**下一步**：根据 PR CI/review 结果修正具体问题；不得在未授权时合并。
-**完成判据**：上述具名测试、architecture checks 与三组变异在 PR head 均通过；集成后重跑受影响门禁。
+**下一步**：保留 PR #405，跟踪 base 上两个 IPC 测试的修复，并等待 review；不得在未授权或必需检查未全绿时合并。
+**完成判据**：02 的具名测试、architecture checks 与三组变异通过；集成仍须满足仓库全部必需 CI/review。
 
 **回退**：只动 `scripts/architecture/**`、`.github/workflows/test.yml`、`package.json`
 一行 script ⇒ 单提交 revert 即回原状。

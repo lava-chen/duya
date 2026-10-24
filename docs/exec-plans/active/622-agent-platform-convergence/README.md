@@ -8,7 +8,7 @@
 - 基线：`d9eb7dba`（= `origin/master`，2026-10-23）
 - 状态：active · 负责人：Codex（`codex/622-02-gate-wiring`）· 更新：2026-10-24
 - 当前执行基线：`18a144e8ee25952cf19da3b45191cdc8a91e84bc`；初始测量基线仍记录于下文 §4.1。
-- 02 实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open，latest-head CI/review pending）。
+- 02 实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open；architecture/typecheck/build 通过；全量测试的 2 个失败在 base 复现）。
 
 ---
 
@@ -413,5 +413,5 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | 卡 | 提交 / PR | 验收证据 |
 | --- | --- | --- |
 | [01](01-import-graph-resolver.md) | `bb87d484` · [PR #399 merged](https://github.com/lava-chen/duya/pull/399) | `import-graph.test.ts` 与 `architecture:slice-graph`，详见 01 卡 |
-| [02](02-gate-wiring-and-single-resolver.md) | `73c067c4396d9cee4097cbee372136a32a96e342` · [PR #405 open](https://github.com/lava-chen/duya/pull/405) | 6 files / 49 tests、全量 `typecheck:all`、架构门禁与变异证明，详见 02 卡；最新 PR head CI/review pending |
+| [02](02-gate-wiring-and-single-resolver.md) | `73c067c4396d9cee4097cbee372136a32a96e342` · [PR #405 open](https://github.com/lava-chen/duya/pull/405) | 6 files / 49 tests、全量 `typecheck:all`、架构 CI 与变异证明通过；full test 的 2 个 IPC 失败已在 base 复现，详见 02 卡 |
 
