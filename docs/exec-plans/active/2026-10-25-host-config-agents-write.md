@@ -41,7 +41,7 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
 - [x] 测试（packages/host 新增 2 个文件 15 条断言；Desktop config 16 文件 147 条全绿）
 - [x] 门禁：typecheck:all exit 0、architecture:check exit 0、bundle 重建 + `bundle:verify` FRESH 0/927
 - [x] PR #433（未合并，等授权）
-- [ ] CI 五个 job 全绿
+- [x] CI 五个 job 全绿（run `40077859709`，head `194ff067`）
 - [ ] 授权后合并
 
 ## 发现与决策
@@ -90,6 +90,19 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
   独立 Host 拓扑下才走 Host bridge，两边不会同时写同一个 `config.toml`；
   Desktop 与独立 Host 同时开则由数据目录 owner 锁挡住。仍按「Host 每次重新从盘读」缩小窗口。
 
+### 2026-10-25 合并 master 后的复核
+
+- **master 侧重写了架构门禁脚本**（#405 `622-02-gate-wiring`）：新增 `baseline-ratchet.mjs`、
+  `workspace-packages.mjs`，改写 `import-graph.mjs` 与 `audit-imports.mjs`，
+  `.architecture-baseline.json` 收缩到 2530 条。合并后必须重跑 `architecture:check`，
+  不能拿合并前的门禁结果交差。
+- **`1 baseline fingerprint(s) no longer triggered` 不是本线引入的**：在 `origin/master`（`55a8cfe9`）
+  上单跑 `architecture:check` 得到同样的提示、同样的 baseline size 2530，属 master 既有状态。
+- **本线新增的 14 条 import 边全部落在既有 permitted 内**：合并后 total 2678 = tolerated 2678
+  （master 上 2664 = 2664），baseline size 未增加，无新增违规。
+- **合并冲突只有 `docs/exec-plans/README.md`**（两边各加一行），Git 自动合并保留了两行；
+  本线索引行与 catalog 行、计划文件均核对存在。
+
 ### 留给后续（不在本次范围）
 
 - `packages/host/src/worker-hooks/config.ts:85` 自带一份 `resolveConfigRoot()`，只认 `DUYA_TEST`
@@ -111,20 +124,28 @@ vision 等其它 `config:*` 写 action、`automation:cron:*`、`channel:deliver`
 | dirty | Windows / Node 24.16 | `npx vitest run apps/desktop/src/main/config/__tests__` | 0 | 16 文件 147 断言全过 |
 | 3ddbbfaf + dirty | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 216 文件 / 2095 passed / 6 skipped |
 | 9df284bd（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/927，bundle commit = 9df284bd |
+| 194ff067（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/927，bundle commit = 194ff067 |
+| 194ff067（clean） | GitHub Actions | CI run `40077859709`（architecture / build / test / test scope / typecheck） | 0 | 五个 job 全绿 |
+| 2499b358（clean，merged master `55a8cfe9`） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 含 electron gate「9 baselined key(s) shrank」，无新增类型错误 |
+| 2499b358（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2678 = tolerated 2678（master 上 2664 = 2664），新增 14 条 import 边全部落在既有 permitted 内；baseline size 两边同为 2530 |
+| 2499b358（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/927，bundle commit = 194ff067 |
 
 ## 接续 / 结果
 
 已实现：`packages/host/src/config-agents/`（8 个文件）、Host bridge 两个 action、
 Desktop 侧 `agent-id` / `bot-profile` / `agent-paths` / `agents` / `schema` 收敛到共享实现。
 已验证：门禁全绿（typecheck / architecture / bundle:verify），受影响测试集 216 文件 2095 断言全绿。
+CI：run `40077859709` 五个 job 全绿（architecture / build / test / test scope / typecheck）。
 PR：#433（https://github.com/lava-chen/duya/pull/433），base `master`，**未合并**。
 
-分支：`codex/host-config-write`（worktree `E:\Projects\duya\.claude\worktrees\host-db-actions`，
-base `3ddbbfaf`）。三个 commit：`0149eebb` 源码、`9df284bd` bundle 重建、最后一个是本计划更新。
+分支：`codex/host-config-write`（worktree `E:\Projects\duya\.claude\worktrees\host-db-actions`）。
+提交序列：`0149eebb` 源码 → `9df284bd` bundle 重建 → `c7b40afa` 计划更新 →
+`d049fbc4` 合 master → `194ff067` 删死代码 + 重建 bundle → `ab6c8930` catalog 登记 →
+`2499b358` 合最新 master `55a8cfe9`。
 
-未提交路径：无（worktree 干净，提交信息与 PR 正文在 gitignored 的 `docs-local/`）。
+未提交路径：无（提交信息与 PR 正文在 gitignored 的 `docs-local/`）。
 副作用：无外部副作用。
-阻塞：无。等 CI 五个 job 全绿 + 用户授权后合并。
-下一步：`gh pr checks 433` 看 CI；全绿后向用户申请合并授权，授权则 `gh pr merge 433 --merge`。
+阻塞：合并需用户授权。
+下一步：用户授权后 `gh pr merge 433 --merge`，再把主检出同步到新 master。
 
 
