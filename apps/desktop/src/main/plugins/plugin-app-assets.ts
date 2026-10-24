@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { createServer, type Server, type ServerResponse } from 'node:http';
 import path from 'node:path';
+import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declarations';
 
 const MAX_ASSET_BYTES = 64 * 1024 * 1024;
 const MIME_TYPES: Readonly<Record<string, string>> = {
@@ -15,7 +16,9 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
   '.wasm': 'application/wasm', '.pdf': 'application/pdf', '.txt': 'text/plain; charset=utf-8',
 };
 
-interface PackageMount { sessionId: string; root: string }
+type PackageMount = { sessionId: string; kind: 'package'; root: string };
+type DocumentMount = { sessionId: string; kind: 'document'; html: string; sizeBytes: number };
+type Mount = PackageMount | DocumentMount;
 
 function isInside(root: string, target: string): boolean {
   const relative = path.relative(root, target);
@@ -29,7 +32,7 @@ function reject(response: ServerResponse, status: number): void {
 
 /** Serve installed App assets to opaque-origin iframes in dev and packaged renderers. */
 export class PluginAppAssetServer {
-  readonly #mounts = new Map<string, PackageMount>();
+  readonly #mounts = new Map<string, Mount>();
   #server: Server | null = null;
   #starting: Promise<string> | null = null;
   #origin = '';
@@ -41,9 +44,19 @@ export class PluginAppAssetServer {
     const origin = await this.#start();
     this.revoke(sessionId);
     const token = randomBytes(32).toString('base64url');
-    this.#mounts.set(token, { sessionId, root });
+    this.#mounts.set(token, { sessionId, kind: 'package', root });
     const resource = path.relative(root, entry).split(path.sep).map(encodeURIComponent).join('/');
     return `${origin}/${token}/${resource}`;
+  }
+
+  async openDocument(sessionId: string, html: string): Promise<string> {
+    const sizeBytes = Buffer.byteLength(html, 'utf8');
+    if (sizeBytes === 0 || sizeBytes > PLUGIN_UI_RESOURCE_MAX_BYTES) throw new Error('plugin_app_resource_size_invalid');
+    const origin = await this.#start();
+    this.revoke(sessionId);
+    const token = randomBytes(32).toString('base64url');
+    this.#mounts.set(token, { sessionId, kind: 'document', html, sizeBytes });
+    return `${origin}/${token}/index.html`;
   }
 
   revoke(sessionId: string): void {
@@ -93,6 +106,21 @@ export class PluginAppAssetServer {
     const match = /^\/([A-Za-z0-9_-]+)\/(.+)$/.exec(resource);
     const mount = match ? this.#mounts.get(match[1]!) : undefined;
     if (!match || !mount || resource.includes('\0')) { reject(response, 404); return; }
+    if (mount.kind === 'document') {
+      if (match[2] !== 'index.html') { reject(response, 404); return; }
+      if (this.#mounts.get(match[1]!) !== mount) { reject(response, 404); return; }
+      response.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': mount.sizeBytes,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+        'Access-Control-Allow-Origin': '*',
+        'Content-Security-Policy': "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+      });
+      response.end(head ? undefined : mount.html);
+      return;
+    }
     const file = await realpath(path.resolve(mount.root, match[2]!));
     if (!isInside(mount.root, file)) { reject(response, 404); return; }
     const info = await stat(file);

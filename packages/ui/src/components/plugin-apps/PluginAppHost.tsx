@@ -16,6 +16,7 @@ import "./plugin-app.css";
 interface PluginAppHostProps {
   pluginId: string;
   appId: string;
+  surfaceId?: string;
   /** The chat session the App acts in. Chosen by trusted code, not the App. */
   chatSessionId?: string;
   onError?: (message: string) => void;
@@ -36,7 +37,7 @@ interface PluginAppHostProps {
  * the App never learns the plugin, the App id, the instance or the chat
  * session it is acting for.
  */
-export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: PluginAppHostProps) {
+export function PluginAppHost({ pluginId, appId, surfaceId, chatSessionId, onError }: PluginAppHostProps) {
   const [guestFrame, setGuestFrame] = useState<HTMLIFrameElement | null>(null);
   const [launch, setLaunch] = useState<PluginAppLaunch | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
     let cancelled = false;
     let opened: PluginAppLaunch | null = null;
     void api
-      .open({ pluginId, appId, chatSessionId })
+      .open({ pluginId, appId, chatSessionId, surfaceId })
       .then((result) => {
         if (cancelled) {
           if (result.sessionId) void api.close({ sessionId: result.sessionId }).catch(() => {});
@@ -114,7 +115,7 @@ export function PluginAppHost({ pluginId, appId, chatSessionId, onError }: Plugi
         void api.close({ sessionId: opened.sessionId }).catch(() => {});
       }
     };
-  }, [pluginId, appId, chatSessionId, reportError, generation]);
+  }, [pluginId, appId, surfaceId, chatSessionId, reportError, generation]);
 
   useEffect(() => {
     const api = getPluginAppAPI();
