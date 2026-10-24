@@ -148,11 +148,11 @@ export interface ModelMessage {
    * and each of those says in so many words that it is not part of the user's
    * message.
    *
-   * The engine needs the difference to place the run's prompt at the end of
-   * the CONVERSATION rather than at the end of the request: the conversation
-   * is where the person's words are, and the rows after them are the system's.
-   * A host that does not mark its context rows simply has every row read as
-   * conversation, which is the conservative reading.
+   * The engine needs the difference to END THE REQUEST with the question: the
+   * system-attached rows are moved in front of it, because they are `user`
+   * rows too and a model reads a conversation from the end. A host that does
+   * not mark its context rows simply has every row read as conversation, which
+   * is the conservative reading.
    */
   readonly origin?: 'conversation' | 'context';
 }

@@ -4008,6 +4008,560 @@
       ],
       "format": "esm"
     },
+    "packages/ai/src/model-request-invariants.ts": {
+      "bytes": 14013,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/context-estimate.ts": {
+      "bytes": 36862,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/minimax.models.ts": {
+      "bytes": 4985,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/minimax-cn.models.ts": {
+      "bytes": 3989,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/deepseek.models.ts": {
+      "bytes": 2588,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/qwen.models.ts": {
+      "bytes": 21520,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/glm.models.ts": {
+      "bytes": 4099,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/kimi.models.ts": {
+      "bytes": 3173,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/openai.models.ts": {
+      "bytes": 963,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/openai-responses.models.ts": {
+      "bytes": 1553,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/anthropic.models.ts": {
+      "bytes": 6721,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/openrouter.models.ts": {
+      "bytes": 21142,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/ollama.models.ts": {
+      "bytes": 431,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/xai.models.ts": {
+      "bytes": 3265,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/stepfun.models.ts": {
+      "bytes": 1440,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/volcengine.models.ts": {
+      "bytes": 777,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/bailian.models.ts": {
+      "bytes": 2399,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/bedrock.models.ts": {
+      "bytes": 2194,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/google.models.ts": {
+      "bytes": 1714,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/index.ts": {
+      "bytes": 2594,
+      "imports": [
+        {
+          "path": "packages/ai/src/providers/minimax.models.ts",
+          "kind": "import-statement",
+          "original": "./minimax.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/minimax-cn.models.ts",
+          "kind": "import-statement",
+          "original": "./minimax-cn.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/deepseek.models.ts",
+          "kind": "import-statement",
+          "original": "./deepseek.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/qwen.models.ts",
+          "kind": "import-statement",
+          "original": "./qwen.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/glm.models.ts",
+          "kind": "import-statement",
+          "original": "./glm.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/kimi.models.ts",
+          "kind": "import-statement",
+          "original": "./kimi.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openai.models.ts",
+          "kind": "import-statement",
+          "original": "./openai.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openai-responses.models.ts",
+          "kind": "import-statement",
+          "original": "./openai-responses.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/anthropic.models.ts",
+          "kind": "import-statement",
+          "original": "./anthropic.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openrouter.models.ts",
+          "kind": "import-statement",
+          "original": "./openrouter.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/ollama.models.ts",
+          "kind": "import-statement",
+          "original": "./ollama.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/xai.models.ts",
+          "kind": "import-statement",
+          "original": "./xai.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/stepfun.models.ts",
+          "kind": "import-statement",
+          "original": "./stepfun.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/volcengine.models.ts",
+          "kind": "import-statement",
+          "original": "./volcengine.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/bailian.models.ts",
+          "kind": "import-statement",
+          "original": "./bailian.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/bedrock.models.ts",
+          "kind": "import-statement",
+          "original": "./bedrock.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/google.models.ts",
+          "kind": "import-statement",
+          "original": "./google.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/minimax.models.ts",
+          "kind": "import-statement",
+          "original": "./minimax.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/minimax-cn.models.ts",
+          "kind": "import-statement",
+          "original": "./minimax-cn.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/deepseek.models.ts",
+          "kind": "import-statement",
+          "original": "./deepseek.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/qwen.models.ts",
+          "kind": "import-statement",
+          "original": "./qwen.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/glm.models.ts",
+          "kind": "import-statement",
+          "original": "./glm.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/kimi.models.ts",
+          "kind": "import-statement",
+          "original": "./kimi.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openai.models.ts",
+          "kind": "import-statement",
+          "original": "./openai.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openai-responses.models.ts",
+          "kind": "import-statement",
+          "original": "./openai-responses.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/anthropic.models.ts",
+          "kind": "import-statement",
+          "original": "./anthropic.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/openrouter.models.ts",
+          "kind": "import-statement",
+          "original": "./openrouter.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/ollama.models.ts",
+          "kind": "import-statement",
+          "original": "./ollama.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/xai.models.ts",
+          "kind": "import-statement",
+          "original": "./xai.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/stepfun.models.ts",
+          "kind": "import-statement",
+          "original": "./stepfun.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/volcengine.models.ts",
+          "kind": "import-statement",
+          "original": "./volcengine.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/bailian.models.ts",
+          "kind": "import-statement",
+          "original": "./bailian.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/bedrock.models.ts",
+          "kind": "import-statement",
+          "original": "./bedrock.models.js"
+        },
+        {
+          "path": "packages/ai/src/providers/google.models.ts",
+          "kind": "import-statement",
+          "original": "./google.models.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/models.ts": {
+      "bytes": 9666,
+      "imports": [
+        {
+          "path": "packages/ai/src/providers/index.ts",
+          "kind": "import-statement",
+          "original": "./providers/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/context-window.ts": {
+      "bytes": 2523,
+      "imports": [
+        {
+          "path": "packages/ai/src/models.ts",
+          "kind": "import-statement",
+          "original": "../models.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/context-accounting.ts": {
+      "bytes": 9299,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/context-snapshot.ts": {
+      "bytes": 6114,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/api/transform-messages.ts": {
+      "bytes": 7212,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/think-tag-parser.ts": {
+      "bytes": 7246,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/backoff.ts": {
+      "bytes": 5976,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/errors.ts": {
+      "bytes": 23331,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/usage.ts": {
+      "bytes": 8222,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/retry.ts": {
+      "bytes": 13298,
+      "imports": [
+        {
+          "path": "packages/ai/src/utils/backoff.ts",
+          "kind": "import-statement",
+          "original": "./backoff.js"
+        },
+        {
+          "path": "packages/ai/src/utils/errors.ts",
+          "kind": "import-statement",
+          "original": "./errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/infer-provider.ts": {
+      "bytes": 3458,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/default-base-url.ts": {
+      "bytes": 758,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/retry-client.ts": {
+      "bytes": 2228,
+      "imports": [
+        {
+          "path": "packages/ai/src/utils/retry.ts",
+          "kind": "import-statement",
+          "original": "./utils/retry.js"
+        },
+        {
+          "path": "packages/ai/src/index.ts",
+          "kind": "dynamic-import",
+          "original": "./index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/runtime-adapter.ts": {
+      "bytes": 13870,
+      "imports": [
+        {
+          "path": "packages/ai/src/models.ts",
+          "kind": "import-statement",
+          "original": "./models.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/utils/simple-options.ts": {
+      "bytes": 6471,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/wrappers/compose.ts": {
+      "bytes": 2168,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts": {
+      "bytes": 4146,
+      "imports": [
+        {
+          "path": "packages/ai/src/api/transform-messages.ts",
+          "kind": "import-statement",
+          "original": "../../api/transform-messages.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts": {
+      "bytes": 2717,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/wrappers/compat-injection.ts": {
+      "bytes": 2579,
+      "imports": [
+        {
+          "path": "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts",
+          "kind": "import-statement",
+          "original": "./anthropic-family-tool-payload-compat.js"
+        },
+        {
+          "path": "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts",
+          "kind": "import-statement",
+          "original": "./anthropic-family-thinking-replay.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/create-provider.ts": {
+      "bytes": 3252,
+      "imports": [
+        {
+          "path": "packages/ai/src/providers/wrappers/compose.ts",
+          "kind": "import-statement",
+          "original": "./wrappers/compose.js"
+        },
+        {
+          "path": "packages/ai/src/providers/wrappers/compat-injection.ts",
+          "kind": "import-statement",
+          "original": "./wrappers/compat-injection.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/error.ts": {
+      "bytes": 337,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/models.ts": {
+      "bytes": 2418,
+      "imports": [
+        {
+          "path": "packages/ai/src/auth/error.ts",
+          "kind": "import-statement",
+          "original": "../auth/error.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/lazy.ts": {
+      "bytes": 1429,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/credential-store.ts": {
+      "bytes": 662,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/helpers.ts": {
+      "bytes": 1214,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/resolve.ts": {
+      "bytes": 1792,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/oauth/pkce.ts": {
+      "bytes": 2219,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/auth/oauth/device-code.ts": {
+      "bytes": 3518,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/catalog-data.ts": {
+      "bytes": 37284,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/providers/catalog.ts": {
+      "bytes": 3039,
+      "imports": [
+        {
+          "path": "packages/ai/src/providers/catalog-data.ts",
+          "kind": "import-statement",
+          "original": "./catalog-data.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/system-one/types.ts": {
+      "bytes": 5255,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/ai/src/system-one/client.ts": {
+      "bytes": 8407,
+      "imports": [
+        {
+          "path": "packages/ai/src/system-one/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        },
+        {
+          "path": "packages/ai/src/utils/retry.ts",
+          "kind": "import-statement",
+          "original": "../utils/retry.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/system-one/config.ts": {
+      "bytes": 2461,
+      "imports": [
+        {
+          "path": "packages/ai/src/system-one/client.ts",
+          "kind": "import-statement",
+          "original": "./client.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/ai/src/system-one/index.ts": {
+      "bytes": 1055,
+      "imports": [
+        {
+          "path": "packages/ai/src/system-one/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        },
+        {
+          "path": "packages/ai/src/system-one/client.ts",
+          "kind": "import-statement",
+          "original": "./client.js"
+        },
+        {
+          "path": "packages/ai/src/system-one/config.ts",
+          "kind": "import-statement",
+          "original": "./config.js"
+        }
+      ],
+      "format": "esm"
+    },
     "../../../node_modules/@anthropic-ai/sdk/internal/tslib.mjs": {
       "bytes": 1080,
       "imports": [],
@@ -5245,11 +5799,6 @@
       ],
       "format": "cjs"
     },
-    "packages/ai/src/api/transform-messages.ts": {
-      "bytes": 7212,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/ai/src/api/degrade.ts": {
       "bytes": 1820,
       "imports": [],
@@ -5270,11 +5819,6 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/ai/src/utils/simple-options.ts": {
-      "bytes": 6471,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/ai/src/utils/prompt-caching.ts": {
       "bytes": 16871,
       "imports": [],
@@ -5282,11 +5826,6 @@
     },
     "packages/ai/src/utils/tool-order.ts": {
       "bytes": 833,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/errors.ts": {
-      "bytes": 23331,
       "imports": [],
       "format": "esm"
     },
@@ -5313,11 +5852,6 @@
     },
     "packages/ai/src/utils/idle-timeout.ts": {
       "bytes": 3511,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/think-tag-parser.ts": {
-      "bytes": 7246,
       "imports": [],
       "format": "esm"
     },
@@ -5400,304 +5934,6 @@
           "original": "../utils/think-tag-parser.js"
         }
       ],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/context-estimate.ts": {
-      "bytes": 36862,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/minimax.models.ts": {
-      "bytes": 4985,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/minimax-cn.models.ts": {
-      "bytes": 3989,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/deepseek.models.ts": {
-      "bytes": 2588,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/qwen.models.ts": {
-      "bytes": 21520,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/glm.models.ts": {
-      "bytes": 4099,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/kimi.models.ts": {
-      "bytes": 3173,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/openai.models.ts": {
-      "bytes": 963,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/openai-responses.models.ts": {
-      "bytes": 1553,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/anthropic.models.ts": {
-      "bytes": 6721,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/openrouter.models.ts": {
-      "bytes": 21142,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/ollama.models.ts": {
-      "bytes": 431,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/xai.models.ts": {
-      "bytes": 3265,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/stepfun.models.ts": {
-      "bytes": 1440,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/volcengine.models.ts": {
-      "bytes": 777,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/bailian.models.ts": {
-      "bytes": 2399,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/bedrock.models.ts": {
-      "bytes": 2194,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/google.models.ts": {
-      "bytes": 1714,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/index.ts": {
-      "bytes": 2594,
-      "imports": [
-        {
-          "path": "packages/ai/src/providers/minimax.models.ts",
-          "kind": "import-statement",
-          "original": "./minimax.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/minimax-cn.models.ts",
-          "kind": "import-statement",
-          "original": "./minimax-cn.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/deepseek.models.ts",
-          "kind": "import-statement",
-          "original": "./deepseek.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/qwen.models.ts",
-          "kind": "import-statement",
-          "original": "./qwen.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/glm.models.ts",
-          "kind": "import-statement",
-          "original": "./glm.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/kimi.models.ts",
-          "kind": "import-statement",
-          "original": "./kimi.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openai.models.ts",
-          "kind": "import-statement",
-          "original": "./openai.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openai-responses.models.ts",
-          "kind": "import-statement",
-          "original": "./openai-responses.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/anthropic.models.ts",
-          "kind": "import-statement",
-          "original": "./anthropic.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openrouter.models.ts",
-          "kind": "import-statement",
-          "original": "./openrouter.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/ollama.models.ts",
-          "kind": "import-statement",
-          "original": "./ollama.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/xai.models.ts",
-          "kind": "import-statement",
-          "original": "./xai.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/stepfun.models.ts",
-          "kind": "import-statement",
-          "original": "./stepfun.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/volcengine.models.ts",
-          "kind": "import-statement",
-          "original": "./volcengine.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/bailian.models.ts",
-          "kind": "import-statement",
-          "original": "./bailian.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/bedrock.models.ts",
-          "kind": "import-statement",
-          "original": "./bedrock.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/google.models.ts",
-          "kind": "import-statement",
-          "original": "./google.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/minimax.models.ts",
-          "kind": "import-statement",
-          "original": "./minimax.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/minimax-cn.models.ts",
-          "kind": "import-statement",
-          "original": "./minimax-cn.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/deepseek.models.ts",
-          "kind": "import-statement",
-          "original": "./deepseek.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/qwen.models.ts",
-          "kind": "import-statement",
-          "original": "./qwen.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/glm.models.ts",
-          "kind": "import-statement",
-          "original": "./glm.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/kimi.models.ts",
-          "kind": "import-statement",
-          "original": "./kimi.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openai.models.ts",
-          "kind": "import-statement",
-          "original": "./openai.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openai-responses.models.ts",
-          "kind": "import-statement",
-          "original": "./openai-responses.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/anthropic.models.ts",
-          "kind": "import-statement",
-          "original": "./anthropic.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/openrouter.models.ts",
-          "kind": "import-statement",
-          "original": "./openrouter.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/ollama.models.ts",
-          "kind": "import-statement",
-          "original": "./ollama.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/xai.models.ts",
-          "kind": "import-statement",
-          "original": "./xai.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/stepfun.models.ts",
-          "kind": "import-statement",
-          "original": "./stepfun.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/volcengine.models.ts",
-          "kind": "import-statement",
-          "original": "./volcengine.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/bailian.models.ts",
-          "kind": "import-statement",
-          "original": "./bailian.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/bedrock.models.ts",
-          "kind": "import-statement",
-          "original": "./bedrock.models.js"
-        },
-        {
-          "path": "packages/ai/src/providers/google.models.ts",
-          "kind": "import-statement",
-          "original": "./google.models.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/models.ts": {
-      "bytes": 9666,
-      "imports": [
-        {
-          "path": "packages/ai/src/providers/index.ts",
-          "kind": "import-statement",
-          "original": "./providers/index.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/context-window.ts": {
-      "bytes": 2523,
-      "imports": [
-        {
-          "path": "packages/ai/src/models.ts",
-          "kind": "import-statement",
-          "original": "../models.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/context-accounting.ts": {
-      "bytes": 9299,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/context-snapshot.ts": {
-      "bytes": 6114,
-      "imports": [],
       "format": "esm"
     },
     "../../../node_modules/openai/internal/tslib.mjs": {
@@ -9592,11 +9828,6 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/ai/src/utils/usage.ts": {
-      "bytes": 8222,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/ai/src/api/openai-completions.ts": {
       "bytes": 46126,
       "imports": [
@@ -9653,138 +9884,6 @@
       ],
       "format": "esm"
     },
-    "packages/ai/src/utils/backoff.ts": {
-      "bytes": 5976,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/retry.ts": {
-      "bytes": 13298,
-      "imports": [
-        {
-          "path": "packages/ai/src/utils/backoff.ts",
-          "kind": "import-statement",
-          "original": "./backoff.js"
-        },
-        {
-          "path": "packages/ai/src/utils/errors.ts",
-          "kind": "import-statement",
-          "original": "./errors.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/infer-provider.ts": {
-      "bytes": 3458,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/utils/default-base-url.ts": {
-      "bytes": 758,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/retry-client.ts": {
-      "bytes": 2228,
-      "imports": [
-        {
-          "path": "packages/ai/src/utils/retry.ts",
-          "kind": "import-statement",
-          "original": "./utils/retry.js"
-        },
-        {
-          "path": "packages/ai/src/index.ts",
-          "kind": "dynamic-import",
-          "original": "./index.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/runtime-adapter.ts": {
-      "bytes": 13870,
-      "imports": [
-        {
-          "path": "packages/ai/src/models.ts",
-          "kind": "import-statement",
-          "original": "./models.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/wrappers/compose.ts": {
-      "bytes": 2168,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts": {
-      "bytes": 4146,
-      "imports": [
-        {
-          "path": "packages/ai/src/api/transform-messages.ts",
-          "kind": "import-statement",
-          "original": "../../api/transform-messages.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts": {
-      "bytes": 2717,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/wrappers/compat-injection.ts": {
-      "bytes": 2579,
-      "imports": [
-        {
-          "path": "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts",
-          "kind": "import-statement",
-          "original": "./anthropic-family-tool-payload-compat.js"
-        },
-        {
-          "path": "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts",
-          "kind": "import-statement",
-          "original": "./anthropic-family-thinking-replay.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/create-provider.ts": {
-      "bytes": 3252,
-      "imports": [
-        {
-          "path": "packages/ai/src/providers/wrappers/compose.ts",
-          "kind": "import-statement",
-          "original": "./wrappers/compose.js"
-        },
-        {
-          "path": "packages/ai/src/providers/wrappers/compat-injection.ts",
-          "kind": "import-statement",
-          "original": "./wrappers/compat-injection.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/error.ts": {
-      "bytes": 337,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/models.ts": {
-      "bytes": 2418,
-      "imports": [
-        {
-          "path": "packages/ai/src/auth/error.ts",
-          "kind": "import-statement",
-          "original": "../auth/error.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/lazy.ts": {
-      "bytes": 1429,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/ai/src/api/openai-responses.ts": {
       "bytes": 35064,
       "imports": [
@@ -9831,170 +9930,18 @@
       ],
       "format": "esm"
     },
-    "packages/ai/src/api/bedrock-converse.ts": {
-      "bytes": 31730,
-      "imports": [
-        {
-          "path": "./transform-messages.js",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/ai/src/api/emit-sse.ts",
-          "kind": "import-statement",
-          "original": "./emit-sse.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/api/google-generative-ai.ts": {
-      "bytes": 18607,
-      "imports": [
-        {
-          "path": "packages/ai/src/api/emit-sse.ts",
-          "kind": "import-statement",
-          "original": "./emit-sse.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/adapters.ts": {
-      "bytes": 4660,
-      "imports": [
-        {
-          "path": "packages/ai/src/api/anthropic-messages.ts",
-          "kind": "import-statement",
-          "original": "../api/anthropic-messages.js"
-        },
-        {
-          "path": "packages/ai/src/api/openai-completions.ts",
-          "kind": "import-statement",
-          "original": "../api/openai-completions.js"
-        },
-        {
-          "path": "packages/ai/src/api/openai-responses.ts",
-          "kind": "import-statement",
-          "original": "../api/openai-responses.js"
-        },
-        {
-          "path": "packages/ai/src/api/bedrock-converse.ts",
-          "kind": "import-statement",
-          "original": "../api/bedrock-converse.js"
-        },
-        {
-          "path": "packages/ai/src/api/google-generative-ai.ts",
-          "kind": "import-statement",
-          "original": "../api/google-generative-ai.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/credential-store.ts": {
-      "bytes": 662,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/helpers.ts": {
-      "bytes": 1214,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/resolve.ts": {
-      "bytes": 1792,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/oauth/pkce.ts": {
-      "bytes": 2219,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/auth/oauth/device-code.ts": {
-      "bytes": 3518,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/catalog-data.ts": {
-      "bytes": 37284,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/providers/catalog.ts": {
-      "bytes": 3039,
-      "imports": [
-        {
-          "path": "packages/ai/src/providers/catalog-data.ts",
-          "kind": "import-statement",
-          "original": "./catalog-data.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/system-one/types.ts": {
-      "bytes": 5255,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/ai/src/system-one/client.ts": {
-      "bytes": 8407,
-      "imports": [
-        {
-          "path": "packages/ai/src/system-one/types.ts",
-          "kind": "import-statement",
-          "original": "./types.js"
-        },
-        {
-          "path": "packages/ai/src/utils/retry.ts",
-          "kind": "import-statement",
-          "original": "../utils/retry.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/system-one/config.ts": {
-      "bytes": 2461,
-      "imports": [
-        {
-          "path": "packages/ai/src/system-one/client.ts",
-          "kind": "import-statement",
-          "original": "./client.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/ai/src/system-one/index.ts": {
-      "bytes": 1055,
-      "imports": [
-        {
-          "path": "packages/ai/src/system-one/types.ts",
-          "kind": "import-statement",
-          "original": "./types.js"
-        },
-        {
-          "path": "packages/ai/src/system-one/client.ts",
-          "kind": "import-statement",
-          "original": "./client.js"
-        },
-        {
-          "path": "packages/ai/src/system-one/config.ts",
-          "kind": "import-statement",
-          "original": "./config.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/ai/src/api/ollama-chat.ts": {
       "bytes": 22914,
       "imports": [],
       "format": "esm"
     },
     "packages/ai/src/index.ts": {
-      "bytes": 9694,
+      "bytes": 10750,
       "imports": [
         {
-          "path": "packages/ai/src/api/anthropic-messages.ts",
+          "path": "packages/ai/src/model-request-invariants.ts",
           "kind": "import-statement",
-          "original": "./api/anthropic-messages.js"
+          "original": "./model-request-invariants.js"
         },
         {
           "path": "packages/ai/src/utils/context-estimate.ts",
@@ -10015,11 +9962,6 @@
           "path": "packages/ai/src/utils/context-snapshot.ts",
           "kind": "import-statement",
           "original": "./utils/context-snapshot.js"
-        },
-        {
-          "path": "packages/ai/src/api/openai-completions.ts",
-          "kind": "import-statement",
-          "original": "./api/openai-completions.js"
         },
         {
           "path": "packages/ai/src/api/transform-messages.ts",
@@ -10105,11 +10047,6 @@
           "path": "packages/ai/src/providers/lazy.ts",
           "kind": "import-statement",
           "original": "./providers/lazy.js"
-        },
-        {
-          "path": "packages/ai/src/providers/adapters.ts",
-          "kind": "import-statement",
-          "original": "./providers/adapters.js"
         },
         {
           "path": "packages/ai/src/auth/error.ts",
@@ -15409,7 +15346,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/request-assembly.ts": {
-      "bytes": 7444,
+      "bytes": 12875,
       "imports": [],
       "format": "esm"
     },
@@ -15419,7 +15356,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 190267,
+      "bytes": 198900,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -16608,7 +16545,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 59913,
+      "bytes": 61544,
       "imports": [],
       "format": "esm"
     },
@@ -38182,7 +38119,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14360
+          "bytesInOutput": 14347
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -38206,7 +38143,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -38323,10 +38260,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -38344,7 +38281,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -38416,7 +38353,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -38425,10 +38362,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -38440,13 +38377,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -38455,7 +38392,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -38485,7 +38422,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -38497,7 +38434,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -38527,7 +38464,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -38551,7 +38488,7 @@
           "bytesInOutput": 316
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -38880,6 +38817,168 @@
         "../../../node_modules/zod/index.js": {
           "bytesInOutput": 26
         },
+        "packages/ai/src/model-request-invariants.ts": {
+          "bytesInOutput": 2504
+        },
+        "packages/ai/src/utils/context-estimate.ts": {
+          "bytesInOutput": 6664
+        },
+        "packages/ai/src/providers/minimax.models.ts": {
+          "bytesInOutput": 2544
+        },
+        "packages/ai/src/providers/minimax-cn.models.ts": {
+          "bytesInOutput": 2604
+        },
+        "packages/ai/src/providers/deepseek.models.ts": {
+          "bytesInOutput": 763
+        },
+        "packages/ai/src/providers/qwen.models.ts": {
+          "bytesInOutput": 14266
+        },
+        "packages/ai/src/providers/glm.models.ts": {
+          "bytesInOutput": 2513
+        },
+        "packages/ai/src/providers/kimi.models.ts": {
+          "bytesInOutput": 1776
+        },
+        "packages/ai/src/providers/openai.models.ts": {
+          "bytesInOutput": 599
+        },
+        "packages/ai/src/providers/openai-responses.models.ts": {
+          "bytesInOutput": 1005
+        },
+        "packages/ai/src/providers/anthropic.models.ts": {
+          "bytesInOutput": 4206
+        },
+        "packages/ai/src/providers/openrouter.models.ts": {
+          "bytesInOutput": 13410
+        },
+        "packages/ai/src/providers/ollama.models.ts": {
+          "bytesInOutput": 208
+        },
+        "packages/ai/src/providers/xai.models.ts": {
+          "bytesInOutput": 1857
+        },
+        "packages/ai/src/providers/stepfun.models.ts": {
+          "bytesInOutput": 682
+        },
+        "packages/ai/src/providers/volcengine.models.ts": {
+          "bytesInOutput": 474
+        },
+        "packages/ai/src/providers/bailian.models.ts": {
+          "bytesInOutput": 1377
+        },
+        "packages/ai/src/providers/bedrock.models.ts": {
+          "bytesInOutput": 1355
+        },
+        "packages/ai/src/providers/google.models.ts": {
+          "bytesInOutput": 973
+        },
+        "packages/ai/src/providers/index.ts": {
+          "bytesInOutput": 351
+        },
+        "packages/ai/src/models.ts": {
+          "bytesInOutput": 1554
+        },
+        "packages/ai/src/utils/context-window.ts": {
+          "bytesInOutput": 315
+        },
+        "packages/ai/src/utils/context-accounting.ts": {
+          "bytesInOutput": 1063
+        },
+        "packages/ai/src/utils/context-snapshot.ts": {
+          "bytesInOutput": 966
+        },
+        "packages/ai/src/api/transform-messages.ts": {
+          "bytesInOutput": 1629
+        },
+        "packages/ai/src/utils/think-tag-parser.ts": {
+          "bytesInOutput": 1946
+        },
+        "packages/ai/src/utils/backoff.ts": {
+          "bytesInOutput": 1241
+        },
+        "packages/ai/src/utils/errors.ts": {
+          "bytesInOutput": 8317
+        },
+        "packages/ai/src/utils/usage.ts": {
+          "bytesInOutput": 1969
+        },
+        "packages/ai/src/utils/retry.ts": {
+          "bytesInOutput": 3232
+        },
+        "packages/ai/src/utils/infer-provider.ts": {
+          "bytesInOutput": 801
+        },
+        "packages/ai/src/utils/default-base-url.ts": {
+          "bytesInOutput": 239
+        },
+        "packages/ai/src/retry-client.ts": {
+          "bytesInOutput": 664
+        },
+        "packages/ai/src/runtime-adapter.ts": {
+          "bytesInOutput": 3415
+        },
+        "packages/ai/src/utils/simple-options.ts": {
+          "bytesInOutput": 2046
+        },
+        "packages/ai/src/providers/wrappers/compose.ts": {
+          "bytesInOutput": 97
+        },
+        "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts": {
+          "bytesInOutput": 576
+        },
+        "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts": {
+          "bytesInOutput": 381
+        },
+        "packages/ai/src/providers/wrappers/compat-injection.ts": {
+          "bytesInOutput": 227
+        },
+        "packages/ai/src/providers/create-provider.ts": {
+          "bytesInOutput": 434
+        },
+        "packages/ai/src/auth/error.ts": {
+          "bytesInOutput": 128
+        },
+        "packages/ai/src/providers/models.ts": {
+          "bytesInOutput": 704
+        },
+        "packages/ai/src/providers/lazy.ts": {
+          "bytesInOutput": 248
+        },
+        "packages/ai/src/auth/credential-store.ts": {
+          "bytesInOutput": 219
+        },
+        "packages/ai/src/auth/helpers.ts": {
+          "bytesInOutput": 241
+        },
+        "packages/ai/src/auth/resolve.ts": {
+          "bytesInOutput": 445
+        },
+        "packages/ai/src/auth/oauth/pkce.ts": {
+          "bytesInOutput": 941
+        },
+        "packages/ai/src/auth/oauth/device-code.ts": {
+          "bytesInOutput": 1411
+        },
+        "packages/ai/src/providers/catalog-data.ts": {
+          "bytesInOutput": 27073
+        },
+        "packages/ai/src/providers/catalog.ts": {
+          "bytesInOutput": 179
+        },
+        "packages/ai/src/system-one/types.ts": {
+          "bytesInOutput": 972
+        },
+        "packages/ai/src/system-one/client.ts": {
+          "bytesInOutput": 2945
+        },
+        "packages/ai/src/system-one/config.ts": {
+          "bytesInOutput": 557
+        },
+        "packages/ai/src/system-one/index.ts": {
+          "bytesInOutput": 48
+        },
         "../../../node_modules/@anthropic-ai/sdk/internal/tslib.mjs": {
           "bytesInOutput": 679
         },
@@ -39066,9 +39165,6 @@
         "../../../node_modules/@anthropic-ai/sdk/core/streaming.js": {
           "bytesInOutput": 4012
         },
-        "packages/ai/src/api/transform-messages.ts": {
-          "bytesInOutput": 1629
-        },
         "packages/ai/src/api/degrade.ts": {
           "bytesInOutput": 266
         },
@@ -39081,17 +39177,11 @@
         "packages/ai/src/utils/sanitize-unicode.ts": {
           "bytesInOutput": 140
         },
-        "packages/ai/src/utils/simple-options.ts": {
-          "bytesInOutput": 2046
-        },
         "packages/ai/src/utils/prompt-caching.ts": {
           "bytesInOutput": 3031
         },
         "packages/ai/src/utils/tool-order.ts": {
           "bytesInOutput": 105
-        },
-        "packages/ai/src/utils/errors.ts": {
-          "bytesInOutput": 8317
         },
         "packages/ai/src/utils/json-repair.ts": {
           "bytesInOutput": 868
@@ -39105,80 +39195,8 @@
         "packages/ai/src/utils/idle-timeout.ts": {
           "bytesInOutput": 825
         },
-        "packages/ai/src/utils/think-tag-parser.ts": {
-          "bytesInOutput": 1946
-        },
         "packages/ai/src/api/anthropic-messages.ts": {
-          "bytesInOutput": 25832
-        },
-        "packages/ai/src/utils/context-estimate.ts": {
-          "bytesInOutput": 6664
-        },
-        "packages/ai/src/providers/minimax.models.ts": {
-          "bytesInOutput": 2544
-        },
-        "packages/ai/src/providers/minimax-cn.models.ts": {
-          "bytesInOutput": 2604
-        },
-        "packages/ai/src/providers/deepseek.models.ts": {
-          "bytesInOutput": 763
-        },
-        "packages/ai/src/providers/qwen.models.ts": {
-          "bytesInOutput": 14266
-        },
-        "packages/ai/src/providers/glm.models.ts": {
-          "bytesInOutput": 2513
-        },
-        "packages/ai/src/providers/kimi.models.ts": {
-          "bytesInOutput": 1776
-        },
-        "packages/ai/src/providers/openai.models.ts": {
-          "bytesInOutput": 599
-        },
-        "packages/ai/src/providers/openai-responses.models.ts": {
-          "bytesInOutput": 1005
-        },
-        "packages/ai/src/providers/anthropic.models.ts": {
-          "bytesInOutput": 4206
-        },
-        "packages/ai/src/providers/openrouter.models.ts": {
-          "bytesInOutput": 13410
-        },
-        "packages/ai/src/providers/ollama.models.ts": {
-          "bytesInOutput": 208
-        },
-        "packages/ai/src/providers/xai.models.ts": {
-          "bytesInOutput": 1857
-        },
-        "packages/ai/src/providers/stepfun.models.ts": {
-          "bytesInOutput": 682
-        },
-        "packages/ai/src/providers/volcengine.models.ts": {
-          "bytesInOutput": 474
-        },
-        "packages/ai/src/providers/bailian.models.ts": {
-          "bytesInOutput": 1377
-        },
-        "packages/ai/src/providers/bedrock.models.ts": {
-          "bytesInOutput": 1355
-        },
-        "packages/ai/src/providers/google.models.ts": {
-          "bytesInOutput": 973
-        },
-        "packages/ai/src/providers/index.ts": {
-          "bytesInOutput": 351
-        },
-        "packages/ai/src/models.ts": {
-          "bytesInOutput": 1554
-        },
-        "packages/ai/src/utils/context-window.ts": {
-          "bytesInOutput": 315
-        },
-        "packages/ai/src/utils/context-accounting.ts": {
-          "bytesInOutput": 1063
-        },
-        "packages/ai/src/utils/context-snapshot.ts": {
-          "bytesInOutput": 966
+          "bytesInOutput": 25835
         },
         "../../../node_modules/openai/internal/tslib.mjs": {
           "bytesInOutput": 679
@@ -39645,104 +39663,17 @@
         "packages/ai/src/api/local-runtime.ts": {
           "bytesInOutput": 142
         },
-        "packages/ai/src/utils/usage.ts": {
-          "bytesInOutput": 1969
-        },
         "packages/ai/src/api/openai-completions.ts": {
-          "bytesInOutput": 10925
-        },
-        "packages/ai/src/utils/backoff.ts": {
-          "bytesInOutput": 1241
-        },
-        "packages/ai/src/utils/retry.ts": {
-          "bytesInOutput": 3232
-        },
-        "packages/ai/src/utils/infer-provider.ts": {
-          "bytesInOutput": 801
-        },
-        "packages/ai/src/utils/default-base-url.ts": {
-          "bytesInOutput": 239
-        },
-        "packages/ai/src/retry-client.ts": {
-          "bytesInOutput": 664
-        },
-        "packages/ai/src/runtime-adapter.ts": {
-          "bytesInOutput": 3415
-        },
-        "packages/ai/src/providers/wrappers/compose.ts": {
-          "bytesInOutput": 97
-        },
-        "packages/ai/src/providers/wrappers/anthropic-family-tool-payload-compat.ts": {
-          "bytesInOutput": 576
-        },
-        "packages/ai/src/providers/wrappers/anthropic-family-thinking-replay.ts": {
-          "bytesInOutput": 381
-        },
-        "packages/ai/src/providers/wrappers/compat-injection.ts": {
-          "bytesInOutput": 227
-        },
-        "packages/ai/src/providers/create-provider.ts": {
-          "bytesInOutput": 434
-        },
-        "packages/ai/src/auth/error.ts": {
-          "bytesInOutput": 128
-        },
-        "packages/ai/src/providers/models.ts": {
-          "bytesInOutput": 704
-        },
-        "packages/ai/src/providers/lazy.ts": {
-          "bytesInOutput": 248
+          "bytesInOutput": 10928
         },
         "packages/ai/src/api/openai-responses.ts": {
           "bytesInOutput": 9302
-        },
-        "packages/ai/src/api/bedrock-converse.ts": {
-          "bytesInOutput": 59
-        },
-        "packages/ai/src/api/google-generative-ai.ts": {
-          "bytesInOutput": 35
-        },
-        "packages/ai/src/providers/adapters.ts": {
-          "bytesInOutput": 286
-        },
-        "packages/ai/src/auth/credential-store.ts": {
-          "bytesInOutput": 219
-        },
-        "packages/ai/src/auth/helpers.ts": {
-          "bytesInOutput": 241
-        },
-        "packages/ai/src/auth/resolve.ts": {
-          "bytesInOutput": 445
-        },
-        "packages/ai/src/auth/oauth/pkce.ts": {
-          "bytesInOutput": 941
-        },
-        "packages/ai/src/auth/oauth/device-code.ts": {
-          "bytesInOutput": 1411
-        },
-        "packages/ai/src/providers/catalog-data.ts": {
-          "bytesInOutput": 27073
-        },
-        "packages/ai/src/providers/catalog.ts": {
-          "bytesInOutput": 179
-        },
-        "packages/ai/src/system-one/types.ts": {
-          "bytesInOutput": 972
-        },
-        "packages/ai/src/system-one/client.ts": {
-          "bytesInOutput": 2945
-        },
-        "packages/ai/src/system-one/config.ts": {
-          "bytesInOutput": 557
-        },
-        "packages/ai/src/system-one/index.ts": {
-          "bytesInOutput": 48
         },
         "packages/ai/src/api/ollama-chat.ts": {
           "bytesInOutput": 8462
         },
         "packages/ai/src/index.ts": {
-          "bytesInOutput": 4598
+          "bytesInOutput": 4719
         },
         "packages/agent-core/src/context/reminder-sanitizer.ts": {
           "bytesInOutput": 111
@@ -40258,19 +40189,19 @@
           "bytesInOutput": 462
         },
         "packages/agent-runtime/src/engine/request-assembly.ts": {
-          "bytesInOutput": 595
+          "bytesInOutput": 801
         },
         "packages/agent-runtime/src/engine/compaction.ts": {
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 18738
+          "bytesInOutput": 18925
         },
         "packages/agent-runtime/src/index.ts": {
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41269,10 +41200,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50718
+          "bytesInOutput": 50715
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1879
+          "bytesInOutput": 1878
         },
         "../../../node_modules/@jimp/plugin-displace/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41287,10 +41218,10 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1695
+          "bytesInOutput": 1694
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3079
+          "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/errors.js": {
           "bytesInOutput": 81
@@ -41305,10 +41236,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50730
+          "bytesInOutput": 50729
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1885
+          "bytesInOutput": 1884
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41689,7 +41620,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -42115,7 +42046,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -42181,7 +42112,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42337,7 +42268,7 @@
           "bytesInOutput": 2261
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-          "bytesInOutput": 3825
+          "bytesInOutput": 3882
         },
         "packages/host/src/run-event-spine.ts": {
           "bytesInOutput": 440
@@ -43579,7 +43510,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4597305
+      "bytes": 4600061
     }
   }
 }

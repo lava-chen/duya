@@ -16,9 +16,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   SPECIFIER_CLASS,
   importsOf,
@@ -28,6 +30,18 @@ import {
   tarjan,
   ROOT,
 } from './import-graph.mjs';
+
+function assertBarePackageRoot(
+  resolver: typeof resolveTarget,
+  specifier: string,
+  expected: string,
+): void {
+  expect(resolver(specifier, 'packages/host/src/x.ts')).toBe(expected);
+}
+
+function sha256(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
 
 describe('the specifier class is shared, not retyped', () => {
   it('is the same literal the two audit scripts use', () => {
@@ -234,6 +248,123 @@ describe('owners and targets resolve the way the audits resolve them', () => {
 
   it('returns null rather than inventing a file', () => {
     expect(resolveTarget('./does-not-exist.js', 'packages/agent/src/index.ts')).toBeNull();
+  });
+});
+
+describe('a bare @duya specifier resolves to the file that declares it', () => {
+  // Plan 622 card 01 / 610 T19.
+  //
+  // The resolver used to map `@duya/<rest>` to `packages/<first segment of
+  // rest>` — the subpath DROPPED rather than joined — and then try `<pkg>.ts`
+  // and `<pkg>/index.ts`. No package in this repo keeps an entry at its root
+  // (every entry is `src/index.ts`), so EVERY bare specifier resolved to
+  // `null`: 755 of 755 distinct specifiers on this tree, which is why the
+  // slice graph had no cross-package edge at all.
+
+  it('resolves a bare @duya specifier to the file that declares it', () => {
+    assertBarePackageRoot(
+      resolveTarget,
+      '@duya/agent-protocol',
+      'packages/agent-protocol/src/index.ts',
+    );
+  });
+
+  it('keeps the subpath instead of dropping it', () => {
+    // The defect was not "one candidate missing" but "the subpath is thrown
+    // away", so this is the case that pins the join: the subpath lands under
+    // the package's `src/` root, not at the package root.
+    expect(resolveTarget('@duya/agent-protocol/testing', 'packages/host/src/x.ts')).toBe(
+      'packages/agent-protocol/src/testing/index.ts',
+    );
+  });
+
+  it('resolves a subpath that only the package exports map names', () => {
+    // `@duya/agent-runtime/contextual-user-fragment` lives at
+    // `src/context/contextual-user-fragment.ts`, not at
+    // `src/contextual-user-fragment.ts`, so joining the subpath under `src/`
+    // does not find it — the package's own `exports` map does.
+    expect(
+      resolveTarget('@duya/agent-runtime/contextual-user-fragment', 'packages/host/src/x.ts'),
+    ).toBe('packages/agent-runtime/src/context/contextual-user-fragment.ts');
+  });
+
+  it('resolves the root of every workspace package', () => {
+    // A package that keeps its entry somewhere other than `src/index.ts` must
+    // fail LOUDLY here rather than going silently unresolved, which would hide
+    // its edges from the graph the same way the old resolver hid all of them.
+    const packagesDir = path.join(ROOT, 'packages');
+    const names = readdirSync(packagesDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(packagesDir, e.name, 'package.json'))
+      .filter((p) => existsSync(p))
+      .map((p) => JSON.parse(readFileSync(p, 'utf8')).name)
+      .filter((n): n is string => typeof n === 'string');
+    expect(names.length).toBeGreaterThan(0);
+    const unresolved = names.filter((n) => resolveTarget(n, 'packages/host/src/x.ts') === null);
+    expect(unresolved).toEqual([]);
+  });
+
+
+
+  it('fails the bare-root assertion when the src/index.ts candidate is removed (mutation ①)', async () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'm51-mutation-1-'));
+    const architectureDir = path.join(fixtureRoot, 'scripts/architecture');
+    const sourceModule = path.join(ROOT, 'scripts/architecture/import-graph.mjs');
+    const sourceHashBefore = sha256(sourceModule);
+    const specifier = '@duya/mutation-fixture';
+    const expected = 'packages/mutation-fixture/src/index.ts';
+
+    try {
+      mkdirSync(architectureDir, { recursive: true });
+      for (const name of ['import-graph.mjs', 'strip-comments.mjs', 'workspace-exports.mjs']) {
+        copyFileSync(path.join(ROOT, 'scripts/architecture', name), path.join(architectureDir, name));
+      }
+
+      const packageRoot = path.join(fixtureRoot, 'packages/mutation-fixture');
+      mkdirSync(path.join(packageRoot, 'src'), { recursive: true });
+      writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ name: specifier }), 'utf8');
+      writeFileSync(path.join(packageRoot, 'src/index.ts'), 'export {};\n', 'utf8');
+
+      const mutantModule = path.join(architectureDir, 'import-graph.mjs');
+      const baseline = await import(`${pathToFileURL(mutantModule).href}?baseline`);
+      assertBarePackageRoot(baseline.resolveTarget, specifier, expected);
+
+      const source = readFileSync(mutantModule, 'utf8');
+      const indexCandidate = '`${srcRoot}/index.ts`, ';
+      expect(source.includes(indexCandidate)).toBe(true);
+      writeFileSync(mutantModule, source.replace(indexCandidate, ''), 'utf8');
+
+      const mutant = await import(`${pathToFileURL(mutantModule).href}?mutation`);
+      expect(() => assertBarePackageRoot(mutant.resolveTarget, specifier, expected)).toThrow();
+      expect(sha256(sourceModule)).toBe(sourceHashBefore);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('returns null for a package that does not exist', () => {
+    expect(resolveTarget('@duya/no-such-package', 'packages/host/src/x.ts')).toBeNull();
+  });
+
+  it('still separates a type-only bare import from a value bare import', () => {
+    // The resolver change must not touch the one distinction this module
+    // exists for. A bare specifier that binds a type is erased by the
+    // compiler; one that binds a value survives into the bundle.
+    const dir = mkdtempSync(path.join(tmpdir(), 'm51-bare-'));
+    const file = path.join(dir, 'probe.ts');
+    writeFileSync(
+      file,
+      "import type { X } from '@duya/agent-protocol';\nimport { y } from '@duya/agent-protocol';\n",
+      'utf8',
+    );
+    try {
+      expect(importsOf(file)).toEqual([
+        { spec: '@duya/agent-protocol', typeOnly: true },
+        { spec: '@duya/agent-protocol', typeOnly: false },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

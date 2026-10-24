@@ -52,6 +52,31 @@ const STATES = [
   { id: 'webgl-context-lost', extraArgs: [] },
 ];
 
+/** How long one state of one sample may take before it is abandoned. */
+const SAMPLE_TIMEOUT_MS = 240_000;
+
+/**
+ * A budget for one sample.
+ *
+ * The timeout does NOT cancel the work: the sample is abandoned and its app
+ * is closed by the caller. The point is that one unresponsive app cannot take
+ * the scenario, the report and the whole run with it.
+ */
+function withSampleTimeout(work, timeoutMs, label) {
+  let timer = null;
+  const budget = new Promise((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} did not finish within ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    // The budget must not keep the process alive after the work is done.
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+  return Promise.race([work, budget]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /** Can the renderer create a WebGL context right now? */
 async function probeWebgl(page) {
   return page.evaluate(() => {
@@ -172,110 +197,139 @@ export default {
         fs.mkdirSync(workspace, { recursive: true });
         const transcript = buildSessionMessages(FIXTURE_ID, { idPrefix: sessionId });
 
-        const measured = await launchPerfElectron({
-          namespace,
-          extraArgs: state.extraArgs,
-        });
-        await waitForAppReady(measured.page);
-        await seedSession(measured.page, {
-          sessionId,
-          title,
-          workingDirectory: workspace,
-          messages: transcript,
-        });
-        // The app syncs itself, so the sidebar lists the session and the
-        // store persists the state the instrumented reload will hydrate from.
-        await wakeConversationStore(measured.app, measured.page);
-        await installCollector(measured.page);
-        await measured.page.reload({ waitUntil: 'domcontentloaded' });
-        await waitForAppReady(measured.page);
-        // The reloaded document does not hydrate on its own either (the same
-        // store defect), so the app is told to sync itself before the
-        // measurement starts.
-        await wakeConversationStore(measured.app, measured.page);
-        await measured.page.waitForTimeout(1000);
-        await openSeededSession(measured.page, {
-          title,
-          lastMessageId: transcript[transcript.length - 1].id,
-        });
+        // A sample that hangs must not take the scenario, the report and the
+        // whole run down with it. The app is a real process on a busy machine:
+        // one unresponsive call is enough to stall everything after it. The
+        // sample is abandoned, recorded as failed, and the next one runs.
+        let measured = null;
+        let abandoned = false;
+        const runSample = async () => {
+          measured = await launchPerfElectron({
+            namespace,
+            extraArgs: state.extraArgs,
+          });
+          await waitForAppReady(measured.page);
+          await seedSession(measured.page, {
+            sessionId,
+            title,
+            workingDirectory: workspace,
+            messages: transcript,
+          });
+          // The app syncs itself, so the sidebar lists the session and the
+          // store persists the state the instrumented reload will hydrate from.
+          await wakeConversationStore(measured.app, measured.page);
+          await installCollector(measured.page);
+          await measured.page.reload({ waitUntil: 'domcontentloaded' });
+          await waitForAppReady(measured.page);
+          // The reloaded document does not hydrate on its own either (the same
+          // store defect), so the app is told to sync itself before the
+          // measurement starts.
+          await wakeConversationStore(measured.app, measured.page);
+          await measured.page.waitForTimeout(1000);
+          await openSeededSession(measured.page, {
+            title,
+            lastMessageId: transcript[transcript.length - 1].id,
+          });
 
-        const featureStatus = await gpuFeatureStatus(measured.app);
-        const probe = await startResourceProbe(measured.page);
-        const terminal = await openTerminalPanel(measured.page);
-        const probeBefore = await probeWebgl(measured.page);
-        const rendererBefore = await readTerminalRenderer(measured.page);
-        let contextsBefore = await readTrackedContexts(measured.page);
+          const featureStatus = await gpuFeatureStatus(measured.app);
+          const probe = await startResourceProbe(measured.page);
+          const terminal = await openTerminalPanel(measured.page);
+          const probeBefore = await probeWebgl(measured.page);
+          const rendererBefore = await readTerminalRenderer(measured.page);
+          let contextsBefore = await readTrackedContexts(measured.page);
 
-        // The app had no WebGL context of its own: create one in its page so
-        // the loss is still a real GPU event, and say so in the report.
-        let contextSource = 'app';
-        if (state.id === 'webgl-context-lost' && (contextsBefore ?? []).length === 0) {
-          const created = await createHarnessContext(measured.page);
-          await measured.page.waitForTimeout(300);
-          contextsBefore = await readTrackedContexts(measured.page);
-          contextSource = created === 'created' ? 'harness' : `harness-${created}`;
-        }
+          // The app had no WebGL context of its own: create one in its page so
+          // the loss is still a real GPU event, and say so in the report.
+          let contextSource = 'app';
+          if (state.id === 'webgl-context-lost' && (contextsBefore ?? []).length === 0) {
+            const created = await createHarnessContext(measured.page);
+            await measured.page.waitForTimeout(300);
+            contextsBefore = await readTrackedContexts(measured.page);
+            contextSource = created === 'created' ? 'harness' : `harness-${created}`;
+          }
 
-        let lostContexts = 0;
-        if (state.id === 'webgl-context-lost') {
-          lostContexts = await measured.page
-            .evaluate(() =>
-              window.__duyaPerf && typeof window.__duyaPerf.loseWebglContexts === 'function'
-                ? window.__duyaPerf.loseWebglContexts()
-                : 0,
-            )
-            .catch(() => 0);
-          await measured.page.waitForTimeout(2000);
-        }
+          let lostContexts = 0;
+          if (state.id === 'webgl-context-lost') {
+            lostContexts = await measured.page
+              .evaluate(() =>
+                window.__duyaPerf && typeof window.__duyaPerf.loseWebglContexts === 'function'
+                  ? window.__duyaPerf.loseWebglContexts()
+                  : 0,
+              )
+              .catch(() => 0);
+            await measured.page.waitForTimeout(2000);
+          }
 
-        const probeAfter = await probeWebgl(measured.page);
-        const rendererAfter = await readTerminalRenderer(measured.page);
-        const snapshot = await readCollector(measured.page);
-        const resource = await probe.stop();
-        const trackedContexts = snapshot?.webglContextsLost ?? [];
+          const probeAfter = await probeWebgl(measured.page);
+          const rendererAfter = await readTerminalRenderer(measured.page);
+          const snapshot = await readCollector(measured.page);
+          const resource = await probe.stop();
+          const trackedContexts = snapshot?.webglContextsLost ?? [];
 
-        const metrics = {
-          ...gpuMetrics(featureStatus),
-          ...snapshotToMetrics(snapshot),
-          ...resource,
-          'gpu.probe.available': probeAfter.available ? 1 : 0,
-          'gpu.contexts.lost': trackedContexts.filter(Boolean).length,
-          'gpu.contexts.total': trackedContexts.length,
-          // 1 when the terminal answered a lost context with the DOM renderer.
-          'gpu.terminal.degraded': rendererBefore === 'webgl' && rendererAfter === 'dom' ? 1 : 0,
+          const metrics = {
+            ...gpuMetrics(featureStatus),
+            ...snapshotToMetrics(snapshot),
+            ...resource,
+            'gpu.probe.available': probeAfter.available ? 1 : 0,
+            'gpu.contexts.lost': trackedContexts.filter(Boolean).length,
+            'gpu.contexts.total': trackedContexts.length,
+            // 1 when the terminal answered a lost context with the DOM renderer.
+            'gpu.terminal.degraded': rendererBefore === 'webgl' && rendererAfter === 'dom' ? 1 : 0,
+          };
+
+          if (abandoned) return;
+          samples.push({
+            index: samples.length,
+            metrics,
+            observed: {
+              fixture: FIXTURE_ID,
+              fixtureDigest: digest,
+              state: state.id,
+              launchArgs: state.extraArgs,
+              namespace,
+              featureStatus,
+              terminal,
+              probeBefore,
+              probeAfter,
+              rendererBefore,
+              rendererAfter,
+              contextSource,
+              contextsBefore,
+              lostContexts,
+              trackedContextsLost: trackedContexts,
+              consoleErrors: measured.consoleErrors.slice(0, 10),
+              pageErrors: measured.pageErrors.slice(0, 10),
+            },
+            error: null,
+          });
+
+          await closePerfElectron(measured.app);
+          ctx.log(
+            `gpu ${state.id} sample ${index}: webgl=${featureStatus?.webgl ?? '?'} `
+              + `terminal=${rendererBefore ?? '?'}->${rendererAfter ?? '?'} `
+              + `lost=${trackedContexts.filter(Boolean).length}`,
+          );
         };
 
-        samples.push({
-          index: samples.length,
-          metrics,
-          observed: {
-            fixture: FIXTURE_ID,
-            fixtureDigest: digest,
-            state: state.id,
-            launchArgs: state.extraArgs,
-            namespace,
-            featureStatus,
-            terminal,
-            probeBefore,
-            probeAfter,
-            rendererBefore,
-            rendererAfter,
-            contextSource,
-            contextsBefore,
-            lostContexts,
-            trackedContextsLost: trackedContexts,
-            consoleErrors: measured.consoleErrors.slice(0, 10),
-            pageErrors: measured.pageErrors.slice(0, 10),
-          },
-          error: null,
-        });
-
-        await closePerfElectron(measured.app);
-        ctx.log(
-          `gpu ${state.id} sample ${index}: webgl=${featureStatus?.webgl ?? '?'} `
-            + `terminal=${rendererBefore ?? '?'}->${rendererAfter ?? '?'} `
-            + `lost=${trackedContexts.filter(Boolean).length}`,
-        );
+        try {
+          await withSampleTimeout(runSample(), SAMPLE_TIMEOUT_MS, `${state.id} sample ${index}`);
+        } catch (error) {
+          abandoned = true;
+          samples.push({
+            index: samples.length,
+            metrics: {},
+            observed: {
+              fixture: FIXTURE_ID,
+              fixtureDigest: digest,
+              state: state.id,
+              namespace,
+              abandoned: true,
+            },
+            error: String(error?.message ?? error),
+          });
+          ctx.log(`gpu ${state.id} sample ${index} failed: ${error?.message}`);
+          if (measured) await closePerfElectron(measured.app).catch(() => undefined);
+        }
       }
     }
 

@@ -145,6 +145,71 @@ async function main() {
     chromiumVersion: null,
   };
 
+  const lockDir = resolveLockDir({ lockDir: options.lockDir });
+  const lockScript = resolveLockScript(options.lockScript);
+  const basename = `perf-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+
+  /** The lock summary of the run so far. */
+  const lockSummary = () => {
+    const skipped = results.filter((result) => result.status === 'skipped');
+    if (!options.useLock) {
+      return {
+        enabled: false,
+        held: false,
+        mode: 'off',
+        implementation: lockScript ? 'external-script' : 'in-repo',
+        dir: lockDir,
+        reason: '--no-lock was passed',
+      };
+    }
+    return {
+      enabled: true,
+      held: skipped.length === 0,
+      mode: 'per-scenario',
+      agent: options.agent,
+      implementation: lockScript ? 'external-script' : 'in-repo',
+      dir: lockDir,
+      script: lockScript,
+      skippedScenarios: skipped.map((result) => result.scenario),
+    };
+  };
+
+  /**
+   * Write the report NOW.
+   *
+   * The report is written after every scenario, not only at the end: a
+   * scenario can take the whole runner down (a GPU launch that crashes the
+   * app takes the harness with it), and a run that dies half way must still
+   * leave the numbers it did take on disk.
+   */
+  const writeCurrentReport = async () => {
+    const report = buildReport({
+      results,
+      environment,
+      startedAt,
+      durationMs: Date.now() - Date.parse(startedAt),
+      samplesPerScenario: options.samples,
+      lock: lockSummary(),
+      harnessVersion: '1.0.0',
+      notes: {
+        command: `node e2e/perf/run.mjs ${process.argv.slice(2).join(' ')}`.trim(),
+        thresholdPolicy:
+          'no hard thresholds: the report presents numbers, their spread across samples, '
+          + 'and the noise level of each metric',
+        fixtureIds: [
+          'perf/session-100',
+          'perf/session-1000',
+          'perf/session-10000',
+          'perf/stream-long-reply',
+          'perf/stream-long-reply-fenced',
+          'perf/stream-tool-storm',
+          'perf/typing-30s',
+        ],
+      },
+    });
+    return writeReport({ dir: options.out, basename, report });
+  };
+
   /**
    * One scenario at a time under the lock.
    *
@@ -245,36 +310,17 @@ async function main() {
         },
         durationMs: Date.now() - scenarioStartedAt,
       });
+      // The report is on disk after every scenario, so a runner that dies
+      // half way still leaves the numbers it took.
+      await writeCurrentReport();
     }
     return results;
   };
-  let lock;
-  const lockDir = resolveLockDir({ lockDir: options.lockDir });
-  const lockScript = resolveLockScript(options.lockScript);
   if (options.useLock) {
     // The lock is taken per scenario inside `runMeasurements`; this block
     // only records the mode for the report.
     await runMeasurements();
-    const skipped = results.filter((result) => result.status === 'skipped');
-    lock = {
-      enabled: true,
-      held: skipped.length === 0,
-      mode: 'per-scenario',
-      agent: options.agent,
-      implementation: lockScript ? 'external-script' : 'in-repo',
-      dir: lockDir,
-      script: lockScript,
-      skippedScenarios: skipped.map((result) => result.scenario),
-    };
   } else {
-    lock = {
-      enabled: false,
-      held: false,
-      mode: 'off',
-      implementation: lockScript ? 'external-script' : 'in-repo',
-      dir: lockDir,
-      reason: '--no-lock was passed',
-    };
     await runMeasurements();
   }
 
@@ -286,7 +332,7 @@ async function main() {
     startedAt,
     durationMs: Date.now() - Date.parse(startedAt),
     samplesPerScenario: options.samples,
-    lock,
+    lock: lockSummary(),
     harnessVersion: '1.0.0',
     notes: {
       command: `node e2e/perf/run.mjs ${process.argv.slice(2).join(' ')}`.trim(),
@@ -298,13 +344,13 @@ async function main() {
         'perf/session-1000',
         'perf/session-10000',
         'perf/stream-long-reply',
+        'perf/stream-long-reply-fenced',
         'perf/stream-tool-storm',
         'perf/typing-30s',
       ],
     },
   });
 
-  const basename = `perf-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   const { jsonPath, mdPath } = await writeReport({
     dir: options.out,
     basename,

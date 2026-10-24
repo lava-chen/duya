@@ -108,6 +108,28 @@ function lockAgeMs(owner) {
   return Date.now() - owner.acquiredAt;
 }
 
+/**
+ * Whether the process that took the lock is still running.
+ *
+ * A crashed holder leaves its lock behind, and the lock is then held by
+ * nobody: the sprint stalls until the stale timeout expires, which is 30
+ * minutes of a machine that is not being measured at all. A holder whose
+ * process is gone therefore never held the lock against anybody.
+ *
+ * A pid that cannot be checked (no pid in the owner file) counts as alive:
+ * an unreadable owner is not evidence that the holder is gone.
+ */
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but belongs to another user.
+    return error?.code === 'EPERM';
+  }
+}
+
 /** A human-readable description of the current holder. */
 export function describeLockHolder(lockDir) {
   const owner = readLockOwner(lockDir);
@@ -133,6 +155,10 @@ export function describeLockHolder(lockDir) {
  * `mkdir` is atomic, so exactly one caller creates the directory. The owner
  * file is written immediately afterwards; a lock whose owner file is missing
  * but whose directory is fresh is treated as held, not as stale.
+ *
+ * A lock is stale when it is older than the timeout OR when the process that
+ * took it is gone: a crashed holder leaves a lock that nobody holds, and
+ * waiting the whole timeout for it is a stall of the whole sprint.
  */
 export function acquireInternalLock(options = {}) {
   const lockDir = options.lockDir ?? resolveLockDir(options);
@@ -146,7 +172,7 @@ export function acquireInternalLock(options = {}) {
     if (error.code !== 'EEXIST') throw error;
     const owner = readLockOwner(lockDir);
     const stale = owner
-      ? lockAgeMs(owner) > timeoutMin * 60_000
+      ? lockAgeMs(owner) > timeoutMin * 60_000 || !isProcessAlive(owner.pid)
       : isDirectoryStale(lockDir);
     if (!stale) {
       return { acquired: false, lockDir, reason: describeLockHolder(lockDir), holder: owner };
@@ -219,6 +245,10 @@ export function acquireLock(options = {}) {
       ? acquireThroughScript(script, agent)
       : acquireInternalLock({ lockDir, agent, timeoutMin: options.timeoutMin });
     if (result.acquired) {
+      // A script-driven acquisition leaves the script's own (already dead) pid
+      // in the owner file. Claim it for this process so that the in-repo
+      // implementation does not treat the live holder as a crashed one.
+      if (script) claimOwnerPid(lockDir, agent);
       return { ...result, script: script ?? null, lockDir };
     }
     if (Date.now() >= deadline) {
@@ -241,6 +271,44 @@ function acquireThroughScript(script, agent) {
   if (result.status === 0) return { acquired: true, at: new Date().toISOString() };
   const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   return { acquired: false, reason: output || 'lock busy' };
+}
+
+/**
+ * Record THIS process as the owner of a lock that was taken through the
+ * external script.
+ *
+ * The script writes its own pid into `owner.json` and exits immediately, so
+ * the recorded pid is already dead by the time the caller continues. The
+ * in-repo implementation treats a dead owner as a crashed holder and takes the
+ * lock over — which means a script-driven agent and an in-repo agent would
+ * measure on the same machine at the same time, and both sets of numbers
+ * would be a measurement of contention instead of of the code under test.
+ * Writing the caller's live pid back into the owner file keeps the two
+ * implementations excluding each other.
+ *
+ * The takeover of a genuinely crashed holder still works: when the holder
+ * dies, its pid dies with it.
+ */
+function claimOwnerPid(lockDir, agent) {
+  try {
+    const owner = readLockOwner(lockDir);
+    fs.writeFileSync(
+      path.join(lockDir, 'owner.json'),
+      JSON.stringify(
+        {
+          agent: owner?.agent ?? agent,
+          pid: process.pid,
+          acquiredAt: owner?.acquiredAt ?? Date.now(),
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+  } catch {
+    // The owner file is a hint for the takeover rule; the directory itself is
+    // the mutex. Failing to refresh it must not fail the acquisition.
+  }
 }
 
 /** A synchronous sleep — the harness must not yield the process while it waits. */

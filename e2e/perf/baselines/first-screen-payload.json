@@ -1,0 +1,16 @@
+{
+  "recordedAt": "2026-10-24",
+  "commit": "065fa4aa",
+  "note": "The renderer bundle after the provider SDKs left the first screen: `packages/ai`'s barrel no longer statically re-exports the protocol adapters, so the root entry has no static edge to `@anthropic-ai/sdk` or `openai`. Measured with a production build on the reference machine (Intel Core i5-14600KF / 31.8 GB / Node v24.16.0 / Windows, vite production build). The budget is one-sided: growth fails the gate, an improvement passes. Tighten it after a measured win, the way the architecture baselines are ratcheted.",
+  "calibration": "The SDK removal is a structural move, not a measurement drift: the `openai` and `@anthropic-ai/sdk` module counts in the first-screen closure went from 141 and 69 to 0, and the first-screen payload dropped 247870 bytes (-6.83 %) with the chunk count unchanged. The 5 % tolerance is now 3547166 bytes, about fifty times the observed build-to-build spread (0.08 % between two independent builds of the same tree), while the smallest regression worth catching - the provider SDKs coming back into the entry chunk - is still roughly 15 % (~3885 KB). So the relative tolerance is unchanged and the absolute limit is 80 KB tighter than the previous baseline's.",
+  "tolerancePct": 5,
+  "firstScreen": {
+    "chunkCount": 7,
+    "bytes": 3378253
+  },
+  "entryChunkBytes": 2478263,
+  "totalJs": {
+    "chunkCount": 339,
+    "bytes": 17689779
+  }
+}
