@@ -97,6 +97,14 @@ export interface TuiSlashActions {
   adoptSession: (sessionId: string) => Promise<void>;
   /** Leave the current session behind (archive/delete): start a fresh one. */
   startFreshSession: () => Promise<void>;
+  /**
+   * Re-read the durable transcript and repaint it.
+   *
+   * Not `adoptSession`: the session did not change, only its contents did
+   * (`/compact` rewrote the timeline), so this says nothing about a
+   * switch. The caller names the session it wants re-read.
+   */
+  reloadTranscript: (sessionId: string) => Promise<void>;
 }
 
 export type TuiSlashOutcome =

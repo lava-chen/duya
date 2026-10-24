@@ -2239,11 +2239,14 @@ export class MessageLog {
 
   /** Create the file (and parent directories) if it does not exist. */
   private ensureFile(absolutePath: string): void {
+    // The append path calls this on every batch, and the file almost always
+    // exists already. Probing the file first skips the directory-creation
+    // syscall in that common case: an existing file implies its directory
+    // exists, and a missing one still gets both created below.
+    if (fs.existsSync(absolutePath)) return;
     const dir = path.dirname(absolutePath);
     fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(absolutePath)) {
-      fs.writeFileSync(absolutePath, '', 'utf8');
-    }
+    fs.writeFileSync(absolutePath, '', 'utf8');
   }
 
   /**
@@ -2382,19 +2385,25 @@ export class MessageLog {
 
   /** Get the cached rollout path, or resolve + write back + cache on first access. */
   private getOrCreateRolloutPath(sessionId: string, createdAt: number): string {
-    const desired = this.resolvePath(sessionId, createdAt);
     const existing = this.getRolloutPath(sessionId);
-    if (existing && existing !== desired) {
+    if (existing) {
       // Plan 506 (C1): the generation layout is sticky — the active file
       // must stay beside its archive segments, so never re-bucket it into
       // a new date directory. Only legacy single files move.
       if (path.basename(existing) === 'active.jsonl') return existing;
+      // The filename embeds a millisecond-precision stamp, so it differs on
+      // every batch. Only the DATE BUCKET decides where the file belongs;
+      // treating every stamp change as a move renamed the rollout file and
+      // rewrote sessions.rollout_path on every single append.
+      if (!this.isDifferentDateBucket(existing, createdAt)) return existing;
       // Date bucket changed (cross-midnight session) — move the file.
+      const desired = this.resolvePath(sessionId, createdAt);
+      if (desired === existing) return existing;
       this.moveRollout(sessionId, existing, desired);
       return desired;
     }
-    if (existing) return existing;
 
+    const desired = this.resolvePath(sessionId, createdAt);
     const absolutePath = this.resolvePathOnDisk(desired);
     this.ensureFile(absolutePath);
 
@@ -2440,6 +2449,27 @@ export class MessageLog {
 
     this.pathCache.set(sessionId, desired);
     return desired;
+  }
+
+  /**
+   * Whether `existing` lives in a different UTC date bucket than `createdAt`.
+   *
+   * A rollout path is `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<id>.jsonl`.
+   * The stamp is millisecond-precision, so it changes on every batch; the
+   * bucket is the part that decides where the file belongs.
+   *
+   * A path that is not in that layout — a legacy flat path, or a bot
+   * session's absolute path — cannot be compared this way, so it counts as
+   * a different bucket: the caller then moves the file exactly as before.
+   */
+  private isDifferentDateBucket(existing: string, createdAt: number): boolean {
+    const segments = existing.split(/[\\/]/);
+    if (segments.length < 5 || segments[0] !== 'sessions') return true;
+    const date = new Date(createdAt);
+    const yyyy = String(date.getUTCFullYear()).padStart(4, '0');
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(date.getUTCDate()).padStart(2, '0');
+    return segments[1] !== yyyy || segments[2] !== mm || segments[3] !== dd;
   }
 
   /**
