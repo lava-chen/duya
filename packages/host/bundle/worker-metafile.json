@@ -29069,7 +29069,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-pool.ts": {
-      "bytes": 25395,
+      "bytes": 25392,
       "imports": [
         {
           "path": "child_process",
@@ -41006,7 +41006,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -41030,13 +41030,13 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -42431,7 +42431,7 @@
           "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9009
+          "bytesInOutput": 9038
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -44354,7 +44354,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4702215
+      "bytes": 4702257
     }
   }
 }

@@ -22,7 +22,7 @@ afterAll(() => {
 describe('checkout ownership across the shell worker process', () => {
   it.skipIf(process.platform === 'win32')('executes only the owning session in the real bundled worker', async () => {
     restoreDataRoot = useIsolatedDataRoot();
-    const script = fileURLToPath(new URL('../../bundle/BashTool/BashWorker.js', import.meta.url));
+    const script = workerPool.resolveBashWorkerPath(fileURLToPath(new URL('../../bundle/', import.meta.url)));
     expect(existsSync(script), 'run npm run bundle:worker before the worker integration suite').toBe(true);
     pool = new workerPool.WorkerPool({ workerScriptPath: script, maxWorkers: 1 });
     // Select the build from THIS checkout; execution and IPC remain real.

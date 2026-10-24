@@ -512,3 +512,8 @@ worktree：`/workspace/work/duya-worktree-p0` · base：`686f3c81eace1477010b3b9
 副作用：任务分支已推送、已创建 draft PR；独立依赖/构建/测试数据及基线检出保留。未发布或合并。
 回收：未回收；待 PR 集成与合并后验证。
 下一步：核对 #460 最新 head 的 review/CI，处理本 PR 引入的问题；后续 P1 实现主会话 enter/exit 与执行屏障。原有测试和显式 bundle 扫描的基线问题已在 PR 中列明，未作通过声明。
+
+### P0 CI 修正（2026-10-24）
+
+`d8e7b845` 的 GitHub 类型检查与测试已通过；architecture job 在独立的 Agent retirement reference ratchet 失败。新增真实 shell worker 测试重复硬编码了 worker 产物路径，增加一个 selector。测试现在复用生产 `resolveBashWorkerPath`，该函数支持注入 bundle 目录；不改门禁或 baseline。
+修正后的 `typecheck:all`、`electron:build`、`architecture:check`、`agent-retirement-gate`（772/772，新增 0）与真实 shell worker 测试均 exit 0。日志留在 `/workspace/work/duya-worktree-p0-ci-fix-*.log`；验证环境与上表一致。生成的 worker bundle 随源代码更新。P0 仍待最新远端 CI 与 review，不合并。
