@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "name": "reports",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["mcp/reports-server.mjs"],
+      "startupTimeoutSec": 10
+    }
+  ]
+}

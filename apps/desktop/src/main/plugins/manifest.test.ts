@@ -415,6 +415,28 @@ describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
   });
 });
 
+describe('example Plugin UI packages', () => {
+  it('loads the resource-only report viewer and binds its surface to its MCP server', () => {
+    const manifest = readPluginManifest(join(process.cwd(), 'plugins', 'examples', 'report-viewer'));
+    const app = manifest.apps?.find((candidate) => candidate.appId === 'reports');
+
+    expect(app?.entry).toBeUndefined();
+    expect(app?.ui?.surfaces).toEqual([expect.objectContaining({
+      id: 'report-overview',
+      server: 'reports',
+      resourceUri: 'ui://reports/overview',
+      availability: 'session',
+    })]);
+    expect(manifest.capabilities.mcpServers?.map((server) => server.name)).toContain('reports');
+  });
+
+  it('keeps the hello example on its legacy static entry', () => {
+    const manifest = readPluginManifest(join(process.cwd(), 'plugins', 'examples', 'hello-app'));
+    expect(manifest.apps?.find((candidate) => candidate.appId === 'hello')?.entry)
+      .toBe('apps/hello/index.html');
+  });
+});
+
 // ----------------------------------------------------------------------------
 // v1 compatibility — existing v1 manifests must parse with zero changes
 // ----------------------------------------------------------------------------
