@@ -30241,7 +30241,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 40161,
+      "bytes": 51587,
       "imports": [
         {
           "path": "node:crypto",
@@ -30292,7 +30292,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 33636,
+      "bytes": 34060,
       "imports": [
         {
           "path": "node:crypto",
@@ -40197,7 +40197,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -40227,7 +40227,7 @@
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -41907,7 +41907,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1877
+          "bytesInOutput": 1883
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -43503,7 +43503,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4593812
+      "bytes": 4593818
     }
   }
 }
