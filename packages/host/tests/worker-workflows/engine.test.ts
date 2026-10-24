@@ -22,7 +22,9 @@ import {
   type EngineOutcome,
 } from '../../src/worker-workflows/index.js';
 import { DecisionService } from '@duya/host/decisions';
+import { computeDefinitionHash } from '@duya/workflow';
 import { DEFAULT_DECIDE_LOOP_POLICY } from '../../src/worker-workflows/decision-adapter.js';
+import { createWorkflowRuntimePorts } from '../../src/worker-workflows/runtime-ports.js';
 
 // ─── fixtures ───
 
@@ -289,6 +291,7 @@ describe('human nodes', () => {
       { amount: 100 },
       journal,
       { token: first.resumeToken, decision: 'approve' },
+      { expectedDefinitionHash: computeDefinitionHash(PAY_DEF, createWorkflowRuntimePorts(secret).hash) },
     );
     expect(second.status).toBe('complete');
     if (second.status !== 'complete') return;
@@ -320,9 +323,30 @@ describe('human nodes', () => {
     const first = await engine.execute(PAY_DEF, { amount: 1 }, { journal });
     if (first.status !== 'waiting') throw new Error('expected waiting');
     const token = createResumeToken(secret, { runId: first.runId, nodeId: 'approve-payment', issuedAt: Date.now() });
-    const outcome = await engine.resume(PAY_DEF, { amount: 1 }, journal, { token, decision: 'timeout' });
+    const outcome = await engine.resume(PAY_DEF, { amount: 1 }, journal, { token, decision: 'timeout' }, {
+      expectedDefinitionHash: computeDefinitionHash(PAY_DEF, createWorkflowRuntimePorts(secret).hash),
+    });
     expect(outcome.status).toBe('failed');
     expect((outcome as { errorClass?: string }).errorClass).toBe('approval_timeout');
+  });
+
+  it('refuses resume when the journal definition hash differs', async () => {
+    const host = fixtureHost({ tools: { 'pay.send': () => 'sent', 'pay.note': () => 'noted' } });
+    const journal = new Journal(new MemoryJournalSink());
+    const secret = 'definition-hash';
+    const ports = createWorkflowRuntimePorts(secret);
+    const engine = new WorkflowEngine({ host, ports, secret, approvalMode: 'suspend' });
+    const first = await engine.execute(PAY_DEF, { amount: 10 }, { journal });
+    if (first.status !== 'waiting') throw new Error('expected waiting');
+    const changed = { ...PAY_DEF, description: 'changed after journal creation' };
+
+    const outcome = await engine.resume(changed, { amount: 10 }, journal, {
+      token: first.resumeToken,
+      decision: 'approve',
+    }, { expectedDefinitionHash: computeDefinitionHash(PAY_DEF, ports.hash) });
+
+    expect(outcome).toMatchObject({ status: 'failed', errorClass: 'definition_hash_mismatch' });
+    expect(journal.all().some((record) => record.kind === 'approval' && record.status === 'succeeded')).toBe(false);
   });
 });
 
@@ -422,7 +446,7 @@ describe('on_error dynamic policy', () => {
     expect(attempts).toBe(3);
   });
 
-  it('on_error=skip records and continues; fail stops the run', async () => {
+  it('on_error=skip continues; fail returns a failed run outcome', async () => {
     const def = parseWorkflowDef({
       name: 'err',
       description: 'error dispositions',

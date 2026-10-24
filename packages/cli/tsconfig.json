@@ -19,6 +19,8 @@
       "@duya/host/local-host": ["../host/dist/local-host.d.ts"],
       "@duya/host/http-client": ["../host/dist/http-client.d.ts"],
       "@duya/host": ["../host/dist/index.d.ts"],
+      "@duya/workflow": ["../workflow/dist/index.d.ts"],
+      "@duya/workflow/*": ["../workflow/dist/*"],
       "@duya/client-core/testing": ["../client-core/dist/testing/index.d.ts"],
       "@duya/client-core": ["../client-core/dist/index.d.ts"],
       "@duya/agent-protocol": ["../agent-protocol/dist/index.d.ts"],
