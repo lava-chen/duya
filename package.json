@@ -213,7 +213,7 @@
     "react-syntax-highlighter": "^16.1.1",
     "readable-stream": "^4.7.0",
     "remark-gfm": "^4.0.1",
-    "sharp": "^0.33.5",
+    "sharp": "^0.35.5",
     "simple-icons": "^16.28.0",
     "socks-proxy-agent": "^8.0.5",
     "tailwind-merge": "^3.5.0",
