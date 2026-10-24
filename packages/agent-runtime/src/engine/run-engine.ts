@@ -2634,6 +2634,101 @@ export class RunEngineImpl implements RunEngine {
   }
 
   /**
+   * The history a request is built from: the conversation, and the context.
+   *
+   * ## A compaction replaces the TRANSCRIPT, not the CONTEXT
+   *
+   * The volatile context -- the environment, the memory projection, the skill
+   * catalog, a hook's block -- is PER-REQUEST state. The host projects it onto
+   * a COPY of the transcript for each request and never lets it enter the
+   * timeline (`worker-context/context-rail.ts`, "the rail lives in the working
+   * array only"). A compaction's replacement, on the other hand, is a
+   * re-projection of the TIMELINE (`worker-compaction/engine-sources.ts` binds
+   * the compaction source to the timeline), so it cannot carry the rail at all.
+   *
+   * So a replacement that is used ALONE drops the volatile context for the
+   * rest of the run: the request carries no environment, no memory projection
+   * and no skill catalog, and the model answers from the summary alone. That
+   * is the defect this method exists to prevent (audit finding H-2), and the
+   * fix is structural rather than a patch: the replacement supplies the
+   * CONVERSATION and the host's CURRENT projection supplies the CONTEXT.
+   *
+   * ## ONE rule, and it is a partition rather than a merge
+   *
+   * | source | contributes |
+   * | --- | --- |
+   * | the replacement | the conversation -- rows with `origin !== 'context'` |
+   * | the host's current projection | the context -- rows with `origin === 'context'` |
+   *
+   * The HOST's projection wins for the context rows, because the context is
+   * per-request state and the host's copy of it is the CURRENT one: the rail's
+   * text is this turn's environment, not the environment at compaction time.
+   *
+   * ## Why duplication is IMPOSSIBLE rather than merely unlikely
+   *
+   * The two halves are filtered from ONE source each and are DISJOINT by
+   * construction, because both projections classify a row the same way:
+   *
+   *  - a timeline row that is runtime context is `origin: 'context'` in BOTH --
+   *    the host stamps it in `toModelMessages`
+   *    (`worker-run-composition.ts:314`) and the replacement stamps it in
+   *    `toRuntimeMessage` (`adapters/run-engine-ports.ts`). It therefore lands
+   *    in the host's half and is excluded from the replacement's half.
+   *  - a timeline row that is NOT runtime context is `origin !== 'context'` in
+   *    both, and the mirror image applies.
+   *  - the rail, the hook blocks and the attachment text exist only in the
+   *    host's projection -- they never enter the timeline -- so they land in
+   *    the host's half and nowhere else.
+   *
+   * Every row is in exactly one half, so a request carries the context rows
+   * EXACTLY ONCE. The marker is what makes the partition exact: without it the
+   * replacement's copy of a context row would be indistinguishable from a
+   * person speaking, and the exclusion could not be expressed at all.
+   *
+   * ## The ordering, and why it is the host's own arrangement
+   *
+   * The host appends its system-attached rows at the END of its projection
+   * (`applyContextRail` pushes onto the array; `appendAttachmentContext`
+   * appends after it), so putting the host's context rows after the
+   * replacement's conversation rows reproduces the host's own arrangement:
+   * transcript first, system context last. The request contract then moves the
+   * context rows in front of the prompt on the first turn and leaves later
+   * turns alone (`request-assembly.ts`), which is a contract this file does
+   * not own and does not second-guess.
+   *
+   * ## The sources below the replacement, and why the replacement outranks them
+   *
+   * A `by_ref` history is the HOST's to resolve; the engine hands the locator
+   * back rather than re-resolving it, which is what keeps exactly one
+   * derivation of "the same input" (ports.ts contract 2).
+   *
+   * A compaction's replacement OUTRANKS both, and that precedence is the whole
+   * mechanism by which a compaction does anything. `CompactionOutcome.replacement`
+   * is documented as "the transcript the NEXT request must be built from"
+   * (`ports.ts`), and the two sources below cannot honour that on their own:
+   * an `inline` history is frozen at run start, so it would resend the
+   * pre-compaction messages on every later turn, and `assembled.messages`
+   * reflects the host's timeline rather than a transcript the port has
+   * already rewritten. This is the same limitation `RunInputSnapshot.steering`
+   * has and for the same reason -- the snapshot is fixed at run start, so
+   * nothing that changes mid-run can ride it.
+   *
+   * The inline history is still the source of the CONVERSATION when there is no
+   * replacement: an inline history is what the host handed the run at its
+   * start, and nothing replaces it until a compaction says so.
+   */
+  #requestHistory(ctx: RunContext, assembled: AssembledTurn): readonly ModelMessage[] {
+    const replacement = ctx.compacted.current;
+    if (replacement === null) {
+      return ctx.input.history.kind === 'inline' ? ctx.input.history.value : assembled.messages;
+    }
+    return [
+      ...replacement.filter((message) => message.origin !== 'context'),
+      ...assembled.messages.filter((message) => message.origin === 'context'),
+    ];
+  }
+
+  /**
    * The messages the model is given this turn.
    *
    * The prompt goes in on the FIRST turn only. Later turns are continuations
@@ -2645,23 +2740,7 @@ export class RunEngineImpl implements RunEngine {
     assembled: AssembledTurn,
   ): Promise<ModelRequest> {
     const { input, manifest } = ctx;
-    // A `by_ref` history is the HOST's to resolve; the engine hands the locator
-    // back rather than re-resolving it, which is what keeps exactly one
-    // derivation of "the same input" (ports.ts contract 2).
-    //
-    // A compaction's replacement OUTRANKS both, and that precedence is the whole
-    // mechanism by which a compaction does anything. `CompactionOutcome.replacement`
-    // is documented as "the transcript the NEXT request must be built from"
-    // (`ports.ts`), and the two sources below cannot honour that on their own:
-    // an `inline` history is frozen at run start, so it would resend the
-    // pre-compaction messages on every later turn, and `assembled.messages`
-    // reflects the host's timeline rather than a transcript the port has
-    // already rewritten. This is the same limitation `RunInputSnapshot.steering`
-    // has and for the same reason -- the snapshot is fixed at run start, so
-    // nothing that changes mid-run can ride it.
-    const history: readonly ModelMessage[] =
-      ctx.compacted.current ??
-      (input.history.kind === 'inline' ? input.history.value : assembled.messages);
+    const history = this.#requestHistory(ctx, assembled);
 
     const steering = await this.#fragmentMessages(
       'steering',

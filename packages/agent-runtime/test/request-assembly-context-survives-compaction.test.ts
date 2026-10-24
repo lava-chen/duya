@@ -1,18 +1,19 @@
 /**
- * DEFECT PROBE -- the volatile context does NOT survive a compaction.
+ * The volatile context SURVIVES a compaction.
  *
  * ## What this file is
  *
- * A CHARACTERISATION test, not a contract test: it pins the CURRENT
- * behaviour, and the current behaviour is a defect. It exists so the defect
- * is visible in the test report instead of in a bug report, and so the
- * assertion can be flipped the moment the defect is fixed.
+ * This file WAS the defect probe for audit finding H-2, and it PINNED the
+ * defect: it asserted that the rail is ABSENT from the request once a
+ * compaction has replaced the transcript. The fix inverted that assertion, and
+ * the file is now the CONTRACT the fix satisfies rather than a
+ * characterisation of the bug.
  *
  * The reference is the Agent Harness Correctness Audit (plan
  * `docs/exec-plans/active/2026-10-24-harness-correctness-audit.md`), finding
- * H-2.
+ * H-2, with H-5 (the dropped `origin` marker) as its other half.
  *
- * ## The defect
+ * ## The defect this file used to pin
  *
  * The host attaches its volatile context -- the environment, the memory
  * projection, the skill catalog, a hook's block -- through the CONTEXT RAIL.
@@ -23,29 +24,29 @@
  * A compaction replaces the transcript. The replacement the host hands back
  * is a re-projection of the TIMELINE (`worker-engine-driver.ts` binds the
  * compaction source to `agent.getMessages()`), so it cannot contain the rail.
- * The engine then builds the next request from the REPLACEMENT rather than
+ * The engine then built the next request from the REPLACEMENT rather than
  * from the host's projection (`run-engine.ts`: `history = ctx.compacted.current
- * ?? ...`), and the rail is gone.
+ * ?? ...`), and the rail was gone for the rest of the run.
  *
  * Plan 619 Phase 3 states the opposite -- "compaction 后自动重建" -- so the
- * plan's claim and the code disagree, and the code is what ships.
+ * plan's claim and the code disagreed, and the code is what shipped.
  *
- * ## What the two arms show
+ * ## What the fix does
+ *
+ * A compaction replaces the TRANSCRIPT; it does not replace the per-request
+ * CONTEXT. The request keeps the replacement for the conversation and
+ * re-attaches the context rows from the host's CURRENT projection
+ * (`run-engine.ts`, `#requestHistory`). The two halves are DISJOINT by
+ * construction, so the context rows ride EXACTLY ONCE -- the counterpart of
+ * this file's counter-examples lives in
+ * `compaction-context-reattachment.test.ts`.
+ *
+ * ## The three arms
  *
  *  - Without a compaction, the rail rides the request.
- *  - With one, it does not. Same host, same prompt, same engine.
- *
- * The second arm is the defect; the first arm is what makes the second one
- * mean something rather than "the rail is never there".
- *
- * ## What the fix has to decide
- *
- * The rail is per-request state, so a compaction cannot "preserve" it the
- * way it preserves transcript rows -- it has to be re-PROJECTED onto the
- * replacement. That is a change to where the rail is applied, not to what
- * it contains, and it belongs to whoever owns the compaction replacement.
- * This file does not propose the fix; it pins the fact that the fix is
- * needed.
+ *  - With one, it STILL rides the request, exactly once.
+ *  - And the question is still the last row, because a fix for the rail must
+ *    not be a fix for the prompt.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -260,7 +261,7 @@ function contextRows(messages: readonly ModelMessage[]): readonly ModelMessage[]
 }
 
 // ============================================================================
-// The probe
+// The contract
 // ============================================================================
 
 describe('the volatile context across a compaction', () => {
@@ -274,26 +275,33 @@ describe('the volatile context across a compaction', () => {
     expect(contextRows(p.sent[0]!).map((m) => m.id)).toEqual(['rail-1']);
   });
 
-  it('DOES NOT ride the request once a compaction has replaced the transcript', async () => {
-    // THE DEFECT (audit finding H-2).
+  it('STILL rides the request once a compaction has replaced the transcript', async () => {
+    // THE FIX (audit finding H-2).
     //
     // The replacement is a re-projection of the timeline, so it cannot carry
     // the rail -- the rail is working-array state and never enters the
-    // timeline. The engine builds the request from the replacement, so the
-    // request loses the environment, the memory projection, the skill
-    // catalog and every hook block, for the rest of the run.
+    // timeline. A request built from the replacement ALONE therefore loses
+    // the environment, the memory projection, the skill catalog and every
+    // hook block, for the rest of the run.
     //
-    // When this is fixed, this assertion INVERTS: the rail is present, and
-    // the arm above is what proves the rail is reachable at all.
+    // A compaction replaces the TRANSCRIPT; it does not replace the
+    // per-request CONTEXT. The request keeps the replacement for the
+    // conversation and re-attaches the context rows from the host's CURRENT
+    // projection -- EXACTLY ONCE, which is what the second assertion pins.
     const p = probe({ compact: true });
     await run(p);
 
     expect(p.sent.length).toBeGreaterThan(0);
-    expect(contextRows(p.sent[0]!)).toEqual([]);
+    const request = p.sent[0]!;
+    // Present ...
+    expect(contextRows(request).map((m) => m.id)).toEqual(['rail-1']);
+    // ... and present ONCE. A request that carries the rail twice is as
+    // broken as one that carries it zero times.
+    expect(request.filter((m) => m.id === 'rail-1')).toHaveLength(1);
   });
 
   it('still carries the question, so the compaction itself is not the defect', async () => {
-    // The defect is CONTEXT LOSS, not a lost question: the prompt is in the
+    // The defect was CONTEXT LOSS, not a lost question: the prompt is in the
     // replacement and the request still ends with it. This arm separates the
     // two, so a fix for the rail cannot be confused with a fix for the
     // prompt.
@@ -302,5 +310,22 @@ describe('the volatile context across a compaction', () => {
 
     const request = p.sent[0]!;
     expect(request.at(-1)?.id).toBe('p1');
+  });
+
+  it('builds the same request with and without a compaction', async () => {
+    // The strongest form of the claim: the compaction is INVISIBLE to the
+    // request's shape. The conversation is the replacement's, the context is
+    // the host's, and the question is last either way.
+    //
+    // This arm fails if the fix is reverted in EITHER direction: a request
+    // built from the replacement alone loses the rail, and a request that
+    // carries both copies of the rail has it twice.
+    const compacted = probe({ compact: true });
+    await run(compacted);
+    const plain = probe({ compact: false });
+    await run(plain);
+
+    expect(compacted.sent[0]!.map((m) => m.id)).toEqual(plain.sent[0]!.map((m) => m.id));
+    expect(compacted.sent[0]!.map((m) => m.id)).toEqual(['u-1', 'rail-1', 'p1']);
   });
 });
