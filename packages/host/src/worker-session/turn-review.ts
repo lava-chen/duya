@@ -86,6 +86,18 @@ function repositoryIndexPath(cwd: string): string | null {
  *
  * The copy is what git writes to. The repository's own index is only read,
  * never written.
+ *
+ * ## What the copy carries, and why that is the right answer
+ *
+ * The copy carries the repository's index flags with it, and that is the
+ * point: a file marked assume-unchanged is one the user told git to stop
+ * reporting, and a file marked skip-worktree is one outside a sparse
+ * checkout cone. `add -A` honours both, so the primed path reports what the
+ * repository's own index says -- the same answer `git status` and `git diff`
+ * give. The old path did not: it seeded a fresh index from HEAD, which has
+ * no flags, so it reported changes to assume-unchanged files that the
+ * repository had been told to ignore. The two snapshots are taken the same
+ * way, so the diff between them stays consistent either way.
  */
 function primeIndexFromRepository(cwd: string, indexPath: string): boolean {
   const source = repositoryIndexPath(cwd);

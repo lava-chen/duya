@@ -28670,7 +28670,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session/turn-review.ts": {
-      "bytes": 9629,
+      "bytes": 10367,
       "imports": [
         {
           "path": "node:child_process",
@@ -38191,7 +38191,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -38401,7 +38401,7 @@
           "bytesInOutput": 403
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -38410,7 +38410,7 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
           "bytesInOutput": 45
@@ -38425,7 +38425,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -38440,7 +38440,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -38482,7 +38482,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -42166,7 +42166,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42724,7 +42724,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -43564,7 +43564,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4597076
+      "bytes": 4597148
     }
   }
 }

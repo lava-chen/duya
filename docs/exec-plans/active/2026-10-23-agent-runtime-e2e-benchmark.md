@@ -287,6 +287,9 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 + 技能威胁扫描预筛 + turn review 的 git 快照复用 stat 缓存 + desktop IPC 普查解析常量
 + 每次源码变更后重新构建的 worker bundle（`bundle:verify` 要求同变更内重建并提交）。
 
+CI：head `1747d15f` 一轮 **五项全绿**（architecture / test scope / typecheck / test / build，
+run 39996699375）。之后的提交只改文档。
+
 ### 提示词去重的坑：删错了副本
 
 第一版「去重」按 id 过滤 **history** 里那条 prompt，留下 engine 前置的那份——这**删错了**。
