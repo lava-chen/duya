@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { resolveHostWorkerPath } from './worker-path.js';
+import { resolveHostWorkerPath, workerEntryCandidates } from './worker-path.js';
 
 const fsMock = vi.hoisted(() => ({
   existsSync: vi.fn<(candidate: string) => boolean>(),
@@ -21,9 +21,17 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, existsSync: fsMock.existsSync };
 });
 
+const originalArgv = process.argv;
+
+/** Pretend this process was launched from `entry`. */
+function stubCliEntry(entry: string): void {
+  process.argv = [originalArgv[0] ?? 'node', entry];
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
   fsMock.existsSync.mockReset();
+  process.argv = originalArgv;
 });
 
 describe('resolveHostWorkerPath', () => {
@@ -38,6 +46,7 @@ describe('resolveHostWorkerPath', () => {
 
   it('discovers the Host bundle under the workspace packages directory', () => {
     vi.stubEnv('DUYA_HOST_WORKER_PATH', ' ');
+    stubCliEntry(path.join(path.resolve('nowhere', 'cli'), 'index.js'));
     const expected = path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js');
     fsMock.existsSync.mockImplementation((candidate) => String(candidate) === expected);
 
@@ -49,5 +58,53 @@ describe('resolveHostWorkerPath', () => {
     fsMock.existsSync.mockReturnValue(false);
 
     expect(resolveHostWorkerPath()).toBeUndefined();
+  });
+
+  it('finds the worker next to the CLI install, not only under the working directory', () => {
+    vi.stubEnv('DUYA_HOST_WORKER_PATH', '');
+    const installDir = path.resolve('opt', 'duya', 'packages', 'cli', 'bundle');
+    stubCliEntry(path.join(installDir, 'cli.cjs'));
+    const expected = path.resolve('opt', 'duya', 'packages', 'host', 'bundle', 'worker-entry.js');
+    fsMock.existsSync.mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(resolveHostWorkerPath()).toBe(expected);
+  });
+
+  it('finds the worker in the packaged harness-bundle layout', () => {
+    vi.stubEnv('DUYA_HOST_WORKER_PATH', '');
+    const installDir = path.resolve('app', 'resources', 'cli-bundle');
+    stubCliEntry(path.join(installDir, 'cli.cjs'));
+    const expected = path.resolve('app', 'resources', 'harness-bundle', 'worker-entry.js');
+    fsMock.existsSync.mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(resolveHostWorkerPath()).toBe(expected);
+  });
+
+  it('falls back to the working directory when the install location has no worker', () => {
+    vi.stubEnv('DUYA_HOST_WORKER_PATH', '');
+    stubCliEntry(path.join(path.resolve('nowhere', 'cli'), 'index.js'));
+    const expected = path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js');
+    fsMock.existsSync.mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(resolveHostWorkerPath()).toBe(expected);
+  });
+});
+
+describe('workerEntryCandidates', () => {
+  it('lists the checkout layout before the working directory', () => {
+    stubCliEntry(path.join(path.resolve('opt', 'duya', 'packages', 'cli', 'dist'), 'index.js'));
+
+    const candidates = workerEntryCandidates();
+
+    expect(candidates[0]).toBe(path.resolve('opt', 'duya', 'packages', 'host', 'bundle', 'worker-entry.js'));
+    expect(candidates).toContain(path.join(process.cwd(), 'packages', 'host', 'bundle', 'worker-entry.js'));
+  });
+
+  it('resolves every candidate to an absolute path', () => {
+    stubCliEntry(path.join(path.resolve('opt', 'duya', 'packages', 'cli', 'dist'), 'index.js'));
+
+    for (const candidate of workerEntryCandidates()) {
+      expect(path.isAbsolute(candidate)).toBe(true);
+    }
   });
 });

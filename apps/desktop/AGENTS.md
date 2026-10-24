@@ -30,6 +30,7 @@
 | 白屏 / 窗口没内容 | `apps/desktop/src/main/core/window-manager.ts:329`（`loadURL`）→ 仓库根 `index.html:154`（挂载 `apps/desktop/src/renderer/main.tsx`） |
 | 查不到某个持久化 store | `apps/desktop/src/main/db/core/index.ts:1` 是 barrel，**真身在 `packages/data`**（`apps/desktop/src/main/db/core/session-store.ts:1` 等多为转发 shim） |
 | App Connector / bot 频道连接器不通 | `apps/desktop/src/main/services/app-connections/connector-service.ts:1`（App Connector）**或** `apps/desktop/src/main/channels/connector-runtime.ts:1`（bot 频道）—— 两套子系统 |
+| CI 的 `test` job 红了，但日志说 `Test Files N passed` + `Errors 1 error` | 有一个**未捕获异常**，不是用例失败。查 `Uncaught Exception:` 那行指向哪个文件——2026-10 修过一处：`apps/desktop/src/main/logging/logger.ts` 的写流错误处理曾把 `ENOENT` 抛成未捕获异常（`Logger extends EventEmitter` 而全仓无 `error` 监听器，Node 语义即抛）。回归测试在 `apps/desktop/src/main/__tests__/logger-write-stream-error.test.ts` |
 
 ## 边界
 

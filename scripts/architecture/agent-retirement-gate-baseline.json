@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "generatedFrom": "18a144e8ee25952cf19da3b45191cdc8a91e84bc",
+  "note": "Frozen static reference counts by scope. New references fail; reductions are allowed.",
+  "referenceCount": 772,
+  "byScope": {
+    "production-source": 19,
+    "build-tooling": 86,
+    "active-config": 13,
+    "test-target": 654
+  }
+}

@@ -3,7 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { collectAgentRetirementReport, strictFailures } from './agent-retirement-gate.mjs';
+import {
+  collectAgentRetirementReport,
+  compareRetirementBaseline,
+  strictFailures,
+} from './agent-retirement-gate.mjs';
 
 let fixtureRoot = '';
 
@@ -260,6 +264,47 @@ describe('agent-retirement-gate', () => {
     expect(actualTestFindings.every((finding) => finding.blocking)).toBe(true);
     expect(report.blockingReferenceCount).toBe(actualTestFindings.length);
     // RETIREMENT_GATE_FIXTURE_CONTEXT_END
+  });
+
+  it('blocks retirement-reference growth while allowing reductions in every scope', () => {
+    const baseline = {
+      version: 1,
+      generatedFrom: 'fixture',
+      referenceCount: 3,
+      byScope: {
+        'production-source': 1,
+        'build-tooling': 1,
+        'active-config': 0,
+        'test-target': 1,
+      },
+    };
+
+    const reduced = {
+      referenceCount: 2,
+      byScope: {
+        'production-source': 1,
+        'build-tooling': 1,
+        'active-config': 0,
+        'test-target': 0,
+      },
+    };
+    const shifted = {
+      referenceCount: 3,
+      byScope: {
+        'production-source': 2,
+        'build-tooling': 0,
+        'active-config': 0,
+        'test-target': 1,
+      },
+    };
+
+    expect(compareRetirementBaseline(reduced, baseline).newReferenceCount).toBe(0);
+    expect(compareRetirementBaseline(shifted, baseline)).toMatchObject({
+      newReferenceCount: 1,
+      increasesByScope: { 'production-source': 1 },
+    });
+    expect(() => compareRetirementBaseline(reduced, { ...baseline, referenceCount: 4 }))
+      .toThrow('counts do not add up');
   });
 
   it('ignores only references inside the gate test explicit fixture markers', () => {

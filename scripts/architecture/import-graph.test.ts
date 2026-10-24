@@ -307,7 +307,9 @@ describe('a bare @duya specifier resolves to the file that declares it', () => {
 
 
   it('fails the bare-root assertion when the src/index.ts candidate is removed (mutation ①)', async () => {
-    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'm51-mutation-1-'));
+    // Keep the temporary ESM fixture inside the checkout so Vitest's Vite
+    // resolver can load the copied module while still isolating every write.
+    const fixtureRoot = mkdtempSync(path.join(ROOT, '.m51-mutation-1-'));
     const architectureDir = path.join(fixtureRoot, 'scripts/architecture');
     const sourceModule = path.join(ROOT, 'scripts/architecture/import-graph.mjs');
     const sourceHashBefore = sha256(sourceModule);
@@ -316,7 +318,12 @@ describe('a bare @duya specifier resolves to the file that declares it', () => {
 
     try {
       mkdirSync(architectureDir, { recursive: true });
-      for (const name of ['import-graph.mjs', 'strip-comments.mjs', 'workspace-exports.mjs']) {
+      for (const name of [
+        'import-graph.mjs',
+        'strip-comments.mjs',
+        'workspace-exports.mjs',
+        'workspace-packages.mjs',
+      ]) {
         copyFileSync(path.join(ROOT, 'scripts/architecture', name), path.join(architectureDir, name));
       }
 

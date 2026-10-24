@@ -30,6 +30,7 @@
 | `packages/host/src/worker-transport.ts:92` | NDJSON over 子进程 stdout/stdin；`:104` 解析；背压队列上限 2000 帧 / 4 MB（`:14`） |
 | `packages/host/src/run-control-plane.ts:159` | 控制面动作工厂；`run:append` 的 fence 检查在 `:241`，`run:complete` 的在 `:294` |
 | `packages/host/src/worker-db-bridge.ts:1` | worker 的 `db:request` 由 Host 派发；**未实现的域必须快速失败**（`:14`），静默空结果会伪装成"没数据" |
+| `packages/host/src/client-lease.ts:1` | 客户端在场计数：长连接 `GET /v1/host/lease`；`clientScoped` 的 Host 在最后一个客户端离开后自行退出并释放数据库 |
 
 ## 3. 排障入口
 

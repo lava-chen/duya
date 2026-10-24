@@ -41,6 +41,7 @@
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
+import { todoKey } from './todo.js';
 import {
   blockExpanded,
   planKey,
@@ -70,7 +71,10 @@ function blockContent(block: Block): string {
     // to `Thought for 1.2s` the moment the block seals, and the seal mutates
     // the duration without touching the text.
     case 'thinking': return `t:${block.finalized ? 1 : 0}:${block.durationMs ?? ''}:${block.text}`;
-    case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.command ?? ''}:${block.result ?? ''}`;
+    // The todo list is part of the key: it is read out of the RESULT, so a
+    // list whose items changed status would otherwise keep rendering the
+    // version the reader first saw.
+    case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.command ?? ''}:${block.result ?? ''}:${todoKey(block.todos)}`;
     case 'error': return `e:${block.message}`;
     case 'notice': return `n:${block.text}`;
   }

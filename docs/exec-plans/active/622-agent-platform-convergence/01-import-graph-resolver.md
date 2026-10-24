@@ -1,7 +1,7 @@
 # 01 — 修 `import-graph` 的裸 `@duya/*` 解析
 
-状态：completed（PR review） · 负责人：lava-chen · 更新：2026-10-23
-分支：`codex/622-01-import-graph-resolver` · PR：#399（未合并）
+状态：completed（merged） · 负责人：lava-chen · 更新：2026-10-24
+分支：`codex/622-01-import-graph-resolver` · PR：[#399](https://github.com/lava-chen/duya/pull/399)（已合并）
 base：`d9eb7dba96f63b3e07b4fba9c068acd017616913` · owner：lava-chen（Codex 续接）
 
 关联：[622 README](./README.md) · 根因记录在 [610 T19](../610-architecture-series/19-fast-track-queue.md)（**不重述**）
@@ -155,7 +155,7 @@ resolver 一动，下列声明必须**逐条重测并更新**，不能留旧数�
 
 ## 接续 / 结果
 
-- **已实现 / 已验证**：解析器、回归测试、逐条对账与两项变异证明完成；PR #399 已开放，等待 review，未合并。
+- **已实现 / 已验证 / 已合并**：PR #399 于 2026-10-24 合并，merge commit `bb87d484ddac4dfd3e2d2413973402b0a38f1c03`；解析器、回归测试、逐条对账和两项变异证明已完成。
 - **未提交路径**：无。
 - **副作用**：无；变异只在临时 fixture 和内存中进行。
 - **阻塞**：无。
