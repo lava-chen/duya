@@ -1,0 +1,250 @@
+// @vitest-environment jsdom
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type TestStreamEvent =
+  | { type: "tool_use"; toolUse: { id: string; name: string; input: unknown } }
+  | { type: "tool_result"; toolResult: { tool_use_id: string; is_error?: boolean } };
+
+const mocks = vi.hoisted(() => ({
+  activeThreadId: null as string | null,
+  includeStaticApp: false,
+  translate: (key: string) => key,
+  openOrActivatePage: vi.fn(),
+  openApp: vi.fn(),
+  listSurfaces: vi.fn(),
+  onChanged: undefined as ((payload: { pluginId: string }) => void) | undefined,
+  streamListener: undefined as ((events: TestStreamEvent[]) => void) | undefined,
+}));
+
+vi.mock("@/hooks/useTranslation", () => ({
+  useTranslation: () => ({ locale: "en", t: mocks.translate }),
+}));
+
+vi.mock("@/hooks/usePanel", () => ({
+  useOptionalPanel: () => ({ openOrActivatePage: mocks.openOrActivatePage }),
+}));
+
+vi.mock("@/stores/conversation-store", () => ({
+  useConversationStore: (selector: (state: { activeThreadId: string | null }) => unknown) =>
+    selector({ activeThreadId: mocks.activeThreadId }),
+}));
+
+vi.mock("@/lib/plugin-ipc", () => ({
+  getPluginAPI: () => ({
+    registry: { list: async () => ({ success: true, data: [{
+      id: "com.duya.viewer", name: "Viewer", description: "Read-only view", enabled: true,
+      apps: mocks.includeStaticApp ? [{ appId: "legacy-view", entry: "index.html" }] : [],
+    }] }) },
+    uiSurfaces: { list: mocks.listSurfaces },
+  }),
+}));
+
+vi.mock("@/lib/plugin-app-ipc", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/plugin-app-ipc")>();
+  return {
+    ...actual,
+    getPluginAppAPI: () => ({
+      open: mocks.openApp,
+      close: vi.fn().mockResolvedValue({ ok: true }),
+      onChanged: (callback: (payload: { pluginId: string }) => void) => {
+        mocks.onChanged = callback;
+        return () => { mocks.onChanged = undefined; };
+      },
+    }),
+  };
+});
+
+vi.mock("@/lib/stream-session-manager", () => ({
+  subscribeToStreamingEvents: (_sessionId: string, listener: (events: TestStreamEvent[]) => void) => {
+    mocks.streamListener = listener;
+    listener([]);
+    return () => { mocks.streamListener = undefined; };
+  },
+}));
+
+import { MiniAppsView } from "./MiniAppsView";
+import { PluginAppHost } from "./PluginAppHost";
+import { pluginUiEventToolName } from "@/lib/plugin-app-ui-events";
+import { getPluginAppDocumentToken, isPluginAppEntryUrl } from "@/lib/plugin-app-ipc";
+
+const alwaysSurface = {
+  id: "overview", pluginId: "com.duya.viewer", pluginName: "Viewer", appId: "reports",
+  title: { en: "Overview", zh: "概览" }, icon: "chart-bar", server: "reports",
+  resourceUri: "ui://reports/overview", availability: "always" as const,
+};
+const sessionSurface = {
+  ...alwaysSurface, id: "activity", title: { en: "Activity", zh: "活动" }, availability: "session" as const,
+};
+
+beforeEach(() => {
+  mocks.activeThreadId = null;
+  mocks.includeStaticApp = false;
+  mocks.openOrActivatePage.mockReset();
+  mocks.openApp.mockReset();
+  mocks.listSurfaces.mockReset().mockResolvedValue({
+    success: true, data: { surfaces: [alwaysSurface, sessionSurface], conflicts: [] },
+  });
+  mocks.onChanged = undefined;
+  mocks.streamListener = undefined;
+});
+
+describe("Mini Apps Plugin UI surface directory", () => {
+  it("hides session surfaces without a chat and opens always surfaces in the existing panel tabs", async () => {
+    render(<MiniAppsView />);
+    const overview = await screen.findByRole("button", { name: "Overview" });
+    expect(screen.queryByRole("button", { name: "Activity" })).toBeNull();
+    fireEvent.click(overview);
+    expect(mocks.openOrActivatePage).toHaveBeenCalledWith("plugin-app", expect.objectContaining({
+      pluginId: "com.duya.viewer", appId: "reports", surfaceId: "overview", availability: "always",
+    }));
+  });
+
+  it("shows session surfaces with an active chat and refreshes on plugin lifecycle changes", async () => {
+    mocks.activeThreadId = "thread-1";
+    render(<MiniAppsView />);
+    expect(await screen.findByRole("button", { name: "Activity" })).toBeTruthy();
+    const refresh = mocks.onChanged;
+    expect(refresh).toBeTypeOf("function");
+    await act(async () => {
+      refresh?.({ pluginId: "com.duya.viewer" });
+    });
+    await waitFor(() => expect(mocks.listSurfaces).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows a localized failure when the resource cannot be displayed", async () => {
+    mocks.openApp.mockResolvedValue({ ok: false, error: "resource_too_large" });
+    render(<PluginAppHost pluginId="com.duya.viewer" appId="reports" surfaceId="overview" />);
+    expect((await screen.findByRole("alert")).textContent).toBe("apps.resourceTooLarge");
+  });
+
+  it("relays only the current surface event from the current opaque-origin frame", async () => {
+    const token = "A".repeat(43);
+    const entryUrl = `http://127.0.0.1:43127/${token}/index.html`;
+    expect(isPluginAppEntryUrl(entryUrl)).toBe(true);
+    expect(getPluginAppDocumentToken(entryUrl)).toBe(token);
+    mocks.openApp.mockResolvedValue({
+      ok: true,
+      sessionId: "launch-1",
+      launchNonce: "nonce-1",
+      entryUrl,
+    });
+    render(<PluginAppHost
+      pluginId="com.duya.viewer"
+      appId="reports"
+      surfaceId="overview"
+      server="reports"
+      chatSessionId="thread-1"
+      title="Overview"
+    />);
+
+    const frame = await screen.findByTitle("Overview") as HTMLIFrameElement;
+    const guest = frame.contentWindow;
+    expect(guest).toBeTruthy();
+    const postMessage = vi.spyOn(guest!, "postMessage");
+    await waitFor(() => expect(mocks.streamListener).toBeTypeOf("function"));
+
+    const sendMessage = (data: unknown, source: MessageEventSource | null, origin = "null") => {
+      window.dispatchEvent(new MessageEvent("message", { data, source, origin }));
+    };
+    const ready = { channel: "duya.plugin-app", method: "ready", documentToken: token };
+
+    sendMessage(ready, window);
+    mocks.streamListener?.([{
+      type: "tool_use",
+      toolUse: {
+        id: "event-1",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview" },
+      },
+    }]);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    sendMessage(ready, guest, "https://remote.example");
+    expect(postMessage).not.toHaveBeenCalled();
+    sendMessage(ready, guest);
+    expect(postMessage).not.toHaveBeenCalled();
+
+    mocks.streamListener?.([{
+      type: "tool_use",
+      toolUse: {
+        id: "event-1",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview", payload: { recordId: "r-17" } },
+      },
+    }]);
+    expect(postMessage).not.toHaveBeenCalled();
+    mocks.streamListener?.([{
+      type: "tool_use",
+      toolUse: {
+        id: "event-1",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview", payload: { recordId: "r-17" } },
+      },
+    }, {
+      type: "tool_result",
+      toolResult: { tool_use_id: "event-1", is_error: false },
+    }]);
+    expect(postMessage).toHaveBeenCalledTimes(1);
+
+    mocks.streamListener?.([{
+      type: "tool_use",
+      toolUse: {
+        id: "event-1",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview", payload: { recordId: "r-17" } },
+      },
+    }, {
+      type: "tool_result",
+      toolResult: { tool_use_id: "event-1", is_error: false },
+    }, {
+      type: "tool_use",
+      toolUse: {
+        id: "event-2",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "another", payload: { recordId: "r-17" } },
+      },
+    }, {
+      type: "tool_result",
+      toolResult: { tool_use_id: "event-2", is_error: false },
+    }, {
+      type: "tool_use",
+      toolUse: {
+        id: "event-3",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview", payload: { recordId: "r-23" } },
+      },
+    }, {
+      type: "tool_result",
+      toolResult: { tool_use_id: "event-3", is_error: false },
+    }, {
+      type: "tool_use",
+      toolUse: {
+        id: "event-4",
+        name: pluginUiEventToolName("com.duya.viewer", "reports", "select"),
+        input: { surfaceId: "overview", payload: { recordId: "report-31" } },
+      },
+    }, {
+      type: "tool_result",
+      toolResult: { tool_use_id: "event-4", is_error: true },
+    }]);
+
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenCalledWith({
+      channel: "duya.plugin-app",
+      type: "event",
+      documentToken: token,
+      surfaceId: "overview",
+      eventName: "select",
+      payload: { recordId: "r-17" },
+    }, "*");
+  });
+
+  it("keeps static entry launchers available if the surface directory API is unavailable", async () => {
+    mocks.includeStaticApp = true;
+    mocks.listSurfaces.mockRejectedValue(new Error("surface directory unavailable"));
+    render(<MiniAppsView />);
+    expect(await screen.findByRole("button", { name: "legacy-view" })).toBeTruthy();
+    expect(await screen.findByRole("alert")).toHaveTextContent("surface directory unavailable");
+  });
+});

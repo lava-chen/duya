@@ -35,8 +35,9 @@ reader 下沉、`dataPath` / `plugins-data` 的读写。
 - [x] `packages/host/src/plugin-install-paths.ts`
 - [x] `local-plugin-registry-api.ts` 带上 `installPath` 与 `manifest`
 - [x] 测试（新增 8 条 + 注册表 10 条）
-- [x] 门禁：typecheck exit 0、architecture exit 0、bundle 重建 + `bundle:verify` FRESH 0/930
-- [ ] 开 PR
+- [x] 门禁：typecheck exit 0、architecture exit 0、bundle 重建 + `bundle:verify` FRESH 0/931
+- [x] PR #443 已开，CI run `40086082495` 五个 job 全绿
+- [x] 已合并（merge commit `49b4771e`），合并后主检出三门禁复跑全绿
 
 ## 发现与决策
 
@@ -90,20 +91,29 @@ reader 下沉、`dataPath` / `plugins-data` 的读写。
 | cf962d85（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
 | cf962d85（clean） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
 | cf962d85（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = cf962d85 |
+| 2b1e26fd（clean，merged master `51014d67`） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，baseline size 2530 未变 |
+| 2b1e26fd（clean） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
+| 2b1e26fd（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = 2b1e26fd |
+| 2b1e26fd（clean） | Windows / Node 24.16 | `npx vitest run --changed=origin/master --maxWorkers=2` | 0 | 109 文件 / 933 passed / 6 skipped |
+| 61f7928a（clean） | GitHub Actions | CI run `40086082495`（architecture / build / test / test scope / typecheck） | 0 | 五个 job 全绿 |
+| 49b4771e（clean，主检出，合并 #443 后） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH 0/931，bundle commit = 2b1e26fd |
+| 49b4771e（clean，主检出） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2684 = tolerated 2684，无新增违规 |
+| 49b4771e（clean，主检出） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 无新增类型错误 |
 
 ## 接续 / 结果
 
 已实现：`packages/host/src/plugin-install-paths.ts`（安装路径探测）、注册表条目带上
-`installPath` / `dataPath` / 最小 `manifest`（MCP 声明）。
-已验证：18 条新增断言全过，受影响集 108 文件 905 断言全绿，三门禁（typecheck /
-architecture / bundle:verify FRESH 0/930）全绿。
-PR：未开。
+`installPath` / `dataPath` / 最小 `manifest`（MCP 声明），plugin-core 新增只取 MCP 声明的
+窄入口 `discoverPluginMcpServers`。
+已验证：18 条新增断言全过，受影响集 109 文件 933 断言全绿，三门禁（typecheck /
+architecture / bundle:verify FRESH 0/931）全绿；CI run `40086082495` 五个 job 全绿。
+已合并：PR #443 → merge commit `49b4771e`（base `master`）。合并后主检出复跑三门禁全绿。
 
 分支：`codex/host-plugin-install-path`（worktree `E:\Projects\duya\.claude\worktrees\plugin-install-path`，
 base `3a687e41`）。提交序列：`567cbc45` 源码 + 测试 → `e8932dbb` 重建 bundle →
 `31198be5` 计划记录 → `541c4b86` 合 master → `b8d0a3ba` 重建 bundle →
 `112ff9c7` 窄 MCP 发现入口 → `cf962d85` 重建 bundle → `1c6ca164` 计划记录 →
-`4e619f96` 合 master `51014d67` → `2b1e26fd` 重建 bundle。
+`4e619f96` 合 master `51014d67` → `2b1e26fd` 重建 bundle → `61f7928a` 计划记录。
 
 合并时冲突只在受版本控制的 bundle 产物上（`worker-entry.js` / `worker-metafile.json`）——
 bundle 不能手工解，取一边让 merge 落地，再按合并后的源码重建。
@@ -112,4 +122,5 @@ bundle 不能手工解，取一边让 merge 落地，再按合并后的源码重
 副作用：无外部副作用。
 阻塞：无。
 
-下一步：push 并开 PR（base `master`）；CI 五个 job 全绿后向用户申请合并授权。
+下一步：本线已交付并合并，worktree 与分支待回收（`scripts/remove-worktree.sh` +
+`git branch -d`）。后续缺口另立计划。

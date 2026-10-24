@@ -603,6 +603,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@duya/workflow": "0.1.0",
     "@duya/agent-core": "0.1.0",
     "@duya/agent-runtime": "0.1.0",
     "@duya/agent-protocol": "0.1.0",

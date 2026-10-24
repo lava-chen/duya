@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HostSessionRecord } from '@duya/agent-protocol';
+import { allProviderModels } from '@duya/ai';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 
 import {
@@ -740,16 +741,23 @@ describe('/context', () => {
   });
 
   it('falls back to the built-in catalog when the Host has no capability row', async () => {
+    // The model comes from the built-in catalog itself, not from a hardcoded
+    // id: the catalog is refreshed from upstream model metadata, and a
+    // hardcoded id breaks the next time upstream renames a model. (It did —
+    // `claude-sonnet-4` became `claude-sonnet-4-6`, and this test failed in
+    // every run whose affected scope reached packages/cli.)
+    const catalogModel = allProviderModels.find((model) => model.contextWindow === 1_000_000);
+    if (!catalogModel) throw new Error('the built-in catalog must offer a 1M model');
     const ctx = makeContext({
       readMessages: async () => page([
         message('assistant', 'x', { tokenUsage: { input_tokens: 100_000, output_tokens: 1 } }),
       ]),
       getProviderModelCapability: async () => null,
-    }, {}, { ...SESSION, model: 'claude-sonnet-4' } as HostSessionRecord);
+    }, {}, { ...SESSION, model: catalogModel.id } as HostSessionRecord);
     await command('context').run(ctx, '');
     const out = ctx.notices.join('\n');
-    // 1M for claude-sonnet-4 in the built-in catalog — the same chain the
-    // Desktop ring and auto-compaction resolve against.
+    // 1M for a catalog model — the same chain the Desktop ring and
+    // auto-compaction resolve against.
     expect(out).toContain('1.0M');
     expect(out).toContain('built-in model catalog');
   });

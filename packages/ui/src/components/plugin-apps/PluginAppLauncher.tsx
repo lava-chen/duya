@@ -8,7 +8,7 @@ import { PluginAppHost } from "./PluginAppHost";
 
 interface PluginAppLauncherProps {
   pluginId: string;
-  apps: ReadonlyArray<{ appId: string; entry: string; runtime?: 'agent-run' | 'standalone' }>;
+  apps: ReadonlyArray<{ appId: string; entry?: string; runtime?: 'agent-run' | 'standalone' }>;
   /** Shown when no chat session is selected — the App needs a running one to bind. */
   emptyHint?: string;
 }
@@ -33,14 +33,15 @@ export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLaunch
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [openAppId]);
 
-  if (apps.length === 0) return null;
+  const staticApps = apps.filter((app) => app.entry !== undefined);
+  if (staticApps.length === 0) return null;
 
-  const open = apps.find((app) => app.appId === openAppId);
+  const open = staticApps.find((app) => app.appId === openAppId);
 
   return (
     <div className="mt-2 space-y-2 pl-11">
       <div className="flex flex-wrap items-center gap-2">
-        {apps.map((app) => (
+        {staticApps.map((app) => (
           <Button
             key={app.appId}
             variant="secondary"

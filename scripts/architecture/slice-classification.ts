@@ -270,6 +270,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'The run execution engine: transports, event emission, replay cursors, backpressure, control channels. Async coordination with no host dependency.',
   },
   {
+    prefix: 'packages/workflow/src',
+    category: 'runtime-coordination',
+    why: 'The dynamic workflow scheduler and recovery engine. It coordinates DAG nodes through injected ports without owning host IO.',
+  },
+  {
     prefix: 'packages/host/src',
     category: 'runtime-coordination',
     why: 'THE Host, Electron-agnostic: manifest freeze, the run orchestrator, worker lifecycle, the tool registry, the run control plane and the HTTP surface. It hosts the runtime and relays events, which is the job `apps/desktop/src/main/agents` did before the extraction, and the `skills`, `managed-shell`, `connector-services` and `authorization` directories inside it carry their own narrower rules above.',
@@ -680,6 +685,10 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
   {
     prefix: 'packages/agent-runtime/test',
     why: 'Runtime tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/workflow/tests',
+    why: 'Workflow package tests and graph fixtures. They verify runtime behavior but are not runtime implementation code.',
   },
   {
     prefix: 'packages/ai/test',

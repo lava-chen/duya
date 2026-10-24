@@ -361,6 +361,22 @@ export interface TokenUsage {
    *  E.g., "Anthropic", "OpenAI", "Google". Undefined for direct API calls. */
   upstreamProvider?: string;
   /**
+   * Physical duration of the provider request that produced this usage, in
+   * milliseconds.
+   *
+   * Measured at the provider call, from the moment the request is opened to
+   * the moment the provider reports its usage — so it INCLUDES the time to
+   * first token. Consumers use the elapsed duration directly instead of
+   * reconstructing throughput from downstream chunk timestamps, which may be
+   * buffered and would therefore understate the time the provider actually
+   * spent.
+   *
+   * Absent when the producer did not measure it. A missing duration is not a
+   * zero duration: a zero would divide by zero downstream, and an absent
+   * value says "nobody measured this".
+   */
+  request_duration_ms?: number;
+  /**
    * Per-call usage ledger (pi-style). A tool-heavy turn emits one entry per
    * LLM API call; each entry snapshots the model / provider that produced
    * it, so a session that switches models mid-turn attributes every call to

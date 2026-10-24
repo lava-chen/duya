@@ -115,7 +115,7 @@ layers:
   #    contain. A hand-kept list stops finding the fourth; a gate does not.
   #    Each entry, and the follow-on port that retires it, is recorded in
   #    `layer-purity.ts` `CORE_MODULES`.
-  - runtime # agent-runtime
+  - runtime # agent-runtime, workflow
   - host # desktop, cli, gateway
 # harness/ lives outside the workspace and is validated separately (05 §4.4).
 
@@ -223,7 +223,7 @@ modules:
   - id: duya-host
     roots: [packages/host]
     managed: true
-    requires: [agent-protocol, agent-runtime, agent-core, legacy-ai, data, capabilities, memory, legacy-plugin-core]
+    requires: [agent-protocol, agent-runtime, agent-core, workflow, legacy-ai, data, capabilities, memory, legacy-plugin-core]
     publicEntrypoints:
       - packages/host/src/index.ts
       - packages/host/src/session-api.ts
@@ -284,11 +284,19 @@ modules:
     # `packages/plugin-core` or any `UNRESOLVED:` owner. The
     # `agent-runtime -> plugin-core / ai` edges that `allowedDependencies`
     # below claims are granted do not exist.
-    requires: [agent-protocol, client-core, agent-core, capabilities, legacy-plugin-core]
+    requires: [agent-protocol, client-core, agent-core, capabilities, legacy-plugin-core, workflow]
     publicEntrypoints:
       - packages/agent-runtime/src/index.ts
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
     owner: agent
+
+  - id: workflow
+    roots: [packages/workflow]
+    managed: true
+    requires: [agent-protocol, agent-core]
+    publicEntrypoints:
+      - packages/workflow/src/index.ts
+    owner: host
 
   # Node-only local BFF. A future browser entry needs its own narrower module.
   - id: web-server
