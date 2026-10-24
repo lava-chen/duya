@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { WorkflowEngine, Journal, MemoryJournalSink, type WorkflowDef, type WorkflowHost, type WorkflowRuntimePorts } from '../src/index.js';
+import { failureIsolationGraph } from './fixtures/graphs.js';
 
 function testPorts(options: { now?: number; randomValues?: number[] } = {}): {
   ports: WorkflowRuntimePorts;
@@ -47,31 +48,10 @@ describe('@duya/workflow failure semantics', () => {
           : { ok: true, output: tool };
       },
     });
-    const def: WorkflowDef = {
-      name: 'failure-branches',
-      description: 'Keep the successful branch and block only descendants of a hard failure',
-      phases: [
-        {
-          phase: 'main', title: 'Main', nodes: [
-            { id: 'fragile', tool: 'fragile', on_error: 'fail' },
-            { id: 'fragile-child', tool: 'must-not-run', input: { value: '${fragile.output}' } },
-            { id: 'fragile-grandchild', noop: true, when: 'fragile-child.succeeded == true' },
-            { id: 'steady', tool: 'steady' },
-            { id: 'steady-child', tool: 'steady-child', input: { value: '${steady.output}' } },
-          ],
-        },
-        {
-          phase: 'later', title: 'Later', nodes: [
-            { id: 'later-dependent', tool: 'must-not-run-later', input: { value: '${fragile.output}' } },
-            { id: 'later-steady', tool: 'later-steady', input: { value: '${steady-child.output}' } },
-          ],
-        },
-      ],
-    };
     const journal = new Journal(new MemoryJournalSink(), { nowMs: () => 1_000 });
     const engine = new WorkflowEngine({ host, ports: testPorts().ports });
 
-    const outcome = await engine.execute(def, {}, { runId: 'branch-run', journal });
+    const outcome = await engine.execute(failureIsolationGraph, {}, { runId: 'branch-run', journal });
 
     expect(outcome).toMatchObject({ status: 'failed', nodeId: 'fragile', errorClass: 'tool_error' });
     expect(calls).toEqual(['fragile', 'steady', 'steady-child', 'later-steady']);
