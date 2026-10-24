@@ -113,6 +113,45 @@ describe('inline mode', () => {
     expect(missing).toEqual([]);
   });
 
+  it('leaves the mouse wheel to the terminal, and only full-screen claims it', async () => {
+    const inlineRun = makeApp({ inline: true });
+    inlineRun.app.start();
+    await settleRendered();
+    inlineRun.app.stop();
+
+    const fullRun = makeApp();
+    fullRun.app.start();
+    await settle();
+    fullRun.app.stop();
+
+    // With mouse reporting on, the terminal ships the wheel as SGR mouse
+    // sequences instead of scrolling its own scrollback. Inline mode has no
+    // app-owned viewport, so claiming the wheel would make the conversation
+    // unscrollable; full-screen owns such a viewport and has to receive it.
+    expect(inlineRun.out.text()).not.toContain('\x1b[?1002h');
+    expect(fullRun.out.text()).toContain('\x1b[?1002h');
+  });
+
+  it('keeps following the tail on pageup, so streaming keeps committing', async () => {
+    const { app, out, input } = makeApp({ inline: true });
+    app.start();
+    flood(app, 60);
+    await settleRendered();
+    expect(app.renderState.follow).toBe(true);
+
+    press(input, 'pageup');
+    await settleRendered();
+    // Older rows are already in the terminal's scrollback; paging here would
+    // set follow=false, and in this mode that freezes the live area AND stops
+    // commits — the conversation would stop updating mid-stream.
+    expect(app.renderState.follow).toBe(true);
+
+    app.push({ type: 'text_delta', data: { content: 'after-pageup\n' } });
+    await settleRendered();
+    app.stop();
+    expect(out.text()).toContain('after-pageup');
+  });
+
   it('draws a composer prompt between horizontal rules without panel corners', async () => {
     const { app, out } = makeApp({ inline: true });
     app.start();
