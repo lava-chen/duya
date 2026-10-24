@@ -129,7 +129,7 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 | 瓶颈 | 代价 | 为什么没修 |
 | --- | --- | --- |
 | 技能加载 | 冷 **84–160 ms**（热 12–17 ms） | 威胁扫描已优化（见上）；剩下的分解见下方「再更正」，**主体是 I/O 等待**（Defender 逐文件扫描），没有语义可省 |
-| worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名 |
+| worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名。**机制已验证可行**：1.38 MB 的合成 CJS 模块，冷 require 20.5 ms → 缓存命中 10.7 ms（首次写缓存反而 30.6 ms）。卡点是打包与发布契约，不是可行性 |
 | 三个 db action 未实现 | ~1 ms/次，但**功能坏** | `plugin:registry:list` / `plugin:setup:list-all` / `mailbox:claimBatch` 在 Host 侧仍抛 `unimplemented_domain`：CLI/TUI 路径因此**加载不到插件技能**、mailbox 领取每次失败。属功能缺口，不是延迟瓶颈，建议单独 PR |
 | 标题生成多一次 provider 调用 | 不在关键路径 | 代码上它在助手回复**完成后**才发起，不阻塞首 token；改它会动「标题何时出现」的用户可见行为 |
 
