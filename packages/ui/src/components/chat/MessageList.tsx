@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button';
 import { ChevronDownIcon } from '@/components/icons';
 import { WorkflowRunStream } from '@/components/workflow/WorkflowRunCard';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
+import { MessageVirtualizer, planRowItems, readListViewport, type VirtualWindow } from './messageVirtualizer';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -44,6 +45,12 @@ const MIN_ESTIMATED_ROW_HEIGHT = 88;
 const MAX_ESTIMATED_ROW_HEIGHT = 560;
 const ALWAYS_RENDER_TRAILING_ROWS = 8;
 const ACTIVE_NAV_UPDATE_INTERVAL_MS = 160;
+/**
+ * Rows kept mounted around a jump target that is not in the mounted window.
+ * The jump mounts the target first, so the user never lands on an empty
+ * stretch of the transcript.
+ */
+const MOUNT_OVERSCAN_ROWS = 8;
 
 function estimateContentLength(content: Message['content']): number {
   if (typeof content === 'string') return content.length;
@@ -89,6 +96,22 @@ function hasRenderableAssistantContent(message: Message): boolean {
   }
   if (message.tool_call_id || message.toolName || message.vizSpec) return true;
   return estimateContentLength(message.content) > 0;
+}
+
+/**
+ * Row height estimates are cached per grouped row. The grouping reuses the
+ * frozen rows of a settled transcript, so the estimate of a settled row is
+ * computed once instead of on every streaming update — the layout needs the
+ * estimate of EVERY row, not only of the mounted ones.
+ */
+const estimatedRowHeightCache = new WeakMap<GroupedMessage, number>();
+
+function estimateRowHeight(group: GroupedMessage): number {
+  const cached = estimatedRowHeightCache.get(group);
+  if (cached !== undefined) return cached;
+  const height = estimateMessageRowHeight(group);
+  estimatedRowHeightCache.set(group, height);
+  return height;
 }
 
 /**
@@ -342,12 +365,17 @@ function lastUserIndexSorted(ordered: Message[]): number {
   return -1;
 }
 
-const LazyMessageRow = React.memo(function LazyMessageRow({
+/**
+ * One mounted row of the transcript.
+ *
+ * The list decides WHICH rows are mounted (see `MessageVirtualizer`), so a
+ * mounted row is always rendered — there is no per-row IntersectionObserver
+ * and no `content-visibility` placeholder any more. The row only reports its
+ * real height, and the list owns the layout.
+ */
+const MessageRow = React.memo(function MessageRow({
   group,
-  scrollRoot,
   rowDomId,
-  isAlwaysRendered,
-  cachedHeight,
   onHeightChange,
   isEditable,
   onEditMessage,
@@ -355,10 +383,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   isLiveRun,
 }: {
   group: GroupedMessage;
-  scrollRoot: React.RefObject<HTMLDivElement | null>;
   rowDomId: string;
-  isAlwaysRendered: boolean;
-  cachedHeight?: number;
   onHeightChange: (messageId: string, height: number) => void;
   isEditable?: boolean;
   onEditMessage?: (messageId: string) => void;
@@ -369,59 +394,22 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   isLiveRun?: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
-  const [isNearViewport, setIsNearViewport] = useState(isAlwaysRendered);
-  const [measuredHeight, setMeasuredHeight] = useState<number | undefined>(cachedHeight);
-  const shouldRender = isAlwaysRendered || isNearViewport;
-  const estimatedHeight = measuredHeight ?? cachedHeight ?? estimateMessageRowHeight(group);
-
-  useEffect(() => {
-    if (isAlwaysRendered) {
-      setIsNearViewport(true);
-      return;
-    }
-
-    const row = rowRef.current;
-    const root = scrollRoot.current;
-    if (!row || !root || typeof IntersectionObserver === 'undefined') {
-      setIsNearViewport(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      entries => {
-        setIsNearViewport(entries.some(entry => entry.isIntersecting));
-      },
-      {
-        root,
-        rootMargin: `${MESSAGE_ROW_OVERSCAN_PX}px 0px`,
-        threshold: 0,
-      },
-    );
-
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, [group.message.id, isAlwaysRendered, scrollRoot]);
 
   useLayoutEffect(() => {
-    if (!shouldRender) return;
-
     const row = rowRef.current;
     if (!row || typeof ResizeObserver === 'undefined') return;
 
     const measure = () => {
       const height = row.getBoundingClientRect().height;
       if (height <= 0) return;
-
-      const roundedHeight = Math.ceil(height);
-      setMeasuredHeight(prev => (prev == null || Math.abs(prev - roundedHeight) > 2 ? roundedHeight : prev));
-      onHeightChange(group.message.id, roundedHeight);
+      onHeightChange(group.message.id, height);
     };
 
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(row);
     return () => observer.disconnect();
-  }, [group.message.id, onHeightChange, shouldRender]);
+  }, [group.message.id, onHeightChange]);
 
   return (
     <div
@@ -429,28 +417,16 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
       id={rowDomId}
       data-message-id={group.message.id}
       className="transition-[min-height] duration-200 ease-out"
-      style={shouldRender
-        ? undefined
-        : {
-            // Off-screen rows: skip layout/paint/composite for this subtree.
-            // The browser uses `contain-intrinsic-size` as the placeholder
-            // height so the scrollbar position stays correct without us
-            // reserving a forced min-height (which would still cost layout).
-            contentVisibility: 'auto',
-            containIntrinsicSize: `auto ${estimatedHeight}px`,
-          }}
     >
-      {shouldRender ? (
-        <MessageItem
-          message={group.message}
-          toolResults={group.toolResults}
-          mergedMessages={group.mergedMessages}
-          isEditable={isEditable}
-          onEditMessage={onEditMessage}
-          focusMode={focusMode}
-          isLiveRun={isLiveRun}
-        />
-      ) : null}
+      <MessageItem
+        message={group.message}
+        toolResults={group.toolResults}
+        mergedMessages={group.mergedMessages}
+        isEditable={isEditable}
+        onEditMessage={onEditMessage}
+        focusMode={focusMode}
+        isLiveRun={isLiveRun}
+      />
     </div>
   );
 }, (prev, next) => (
@@ -458,8 +434,6 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && messagesEqual(prev.group.mergedMessages, next.group.mergedMessages)
   && toolResultsEqual(prev.group.toolResults, next.group.toolResults)
   && prev.rowDomId === next.rowDomId
-  && prev.isAlwaysRendered === next.isAlwaysRendered
-  && prev.cachedHeight === next.cachedHeight
   && prev.isEditable === next.isEditable
   && prev.onEditMessage === next.onEditMessage
   && prev.focusMode === next.focusMode
@@ -754,24 +728,32 @@ function ChatMessageNavigator({
         visibleIndices.push(total - 1);
       }
     } else {
-      // Always show items around the active one (within windowSize).
+      // Always show items around the active one (within windowSize) — but the
+      // cap still wins. The window around the active turn is 30 % of the
+      // transcript, so on a long session it holds thousands of items; letting
+      // it through rendered one dot per turn (and a 156 000px rail) instead of
+      // the twenty the rail is designed for.
+      let nearStart = Math.max(0, activeIndex - windowSize);
+      let nearEnd = Math.min(total - 1, activeIndex + windowSize);
+      if (nearEnd - nearStart + 1 > MAX_VISIBLE_DOTS) {
+        nearStart = Math.max(0, Math.min(activeIndex - Math.floor(MAX_VISIBLE_DOTS / 2), total - MAX_VISIBLE_DOTS));
+        nearEnd = Math.min(total - 1, nearStart + MAX_VISIBLE_DOTS - 1);
+      }
       const nearActive = new Set<number>();
-      for (
-        let i = Math.max(0, activeIndex - windowSize);
-        i <= Math.min(total - 1, activeIndex + windowSize);
-        i++
-      ) {
+      for (let i = nearStart; i <= nearEnd; i += 1) {
         nearActive.add(i);
       }
       // Fill remaining slots with evenly-spread indices from the non-near regions.
-      const remainingSlots = MAX_VISIBLE_DOTS - nearActive.size;
-      const nonNearIndices = items
-        .map((_, i) => i)
-        .filter((i) => !nearActive.has(i));
-      const step = Math.max(1, Math.ceil(nonNearIndices.length / remainingSlots));
+      const remainingSlots = Math.max(0, MAX_VISIBLE_DOTS - nearActive.size);
       const farIndices: number[] = [];
-      for (let i = 0; i < nonNearIndices.length; i += step) {
-        farIndices.push(nonNearIndices[i]);
+      if (remainingSlots > 0) {
+        const nonNearIndices = items
+          .map((_, i) => i)
+          .filter((i) => !nearActive.has(i));
+        const step = Math.max(1, Math.ceil(nonNearIndices.length / remainingSlots));
+        for (let i = 0; i < nonNearIndices.length; i += step) {
+          farIndices.push(nonNearIndices[i]);
+        }
       }
       // Merge and sort: nearActive + farIndices (evenly spread from edges).
       const allVisible = [...nearActive, ...farIndices].sort((a, b) => a - b);
@@ -840,8 +822,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const wasStreamingRef = useRef(false);
   const userMessageIdRef = useRef<string | null>(null);
   const prevSessionIdRef = useRef(sessionId);
-  const hasScrolledOnMountRef = useRef(false);
-  const rowHeightsRef = useRef(new Map<string, number>());
   const lastActiveNavUpdateRef = useRef(0);
   // Append-cache for the incremental grouped-message fast path. Holds the
   // last sorted input and its grouped output so an append-only transcript
@@ -857,15 +837,69 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   // Per-session Focus display mode (slash popover toggle).
   const focusMode = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
 
+  // --- row virtualization --------------------------------------------------
+  //
+  // The transcript can hold tens of thousands of rows. The list mounts only
+  // the rows around the viewport (plus the trailing rows, which carry the
+  // live tail) and replaces the rest with a spacer whose height is the sum
+  // of the rows it stands for, so the scroll height still describes the
+  // whole transcript while the DOM only holds the visible part of it.
+  const virtualizerRef = useRef<MessageVirtualizer | null>(null);
+  if (virtualizerRef.current === null) virtualizerRef.current = new MessageVirtualizer();
+  const virtualizer = virtualizerRef.current;
+  // The rows that are mounted around the current scroll position.
+  const [mountedWindows, setMountedWindows] = useState<VirtualWindow[]>([]);
+  // Bumped whenever a measured height changed the layout, so the spacers
+  // (and therefore the scroll height) are recomputed.
+  const [layoutVersion, setLayoutVersion] = useState(0);
+  // The row the viewport is anchored to, captured when the layout changes.
+  // Measuring a row above it, or prepending older messages, moves that row;
+  // correcting the scroll position against the anchor keeps the reading
+  // position where it was.
+  const pendingAnchorRef = useRef<{ id: string; offsetInViewport: number } | null>(null);
+  // Counts the layout changes. The correction only runs for a change that
+  // has not been corrected yet, so a plain re-render never moves the
+  // viewport.
+  const layoutGenerationRef = useRef(0);
+  const correctedGenerationRef = useRef(0);
+  // The row a jump asked for. It stays mounted until the viewport really
+  // lands on it, so the target of a jump does not disappear again when the
+  // list cannot scroll far enough to reach it.
+  const pendingJumpRef = useRef<{ index: number } | null>(null);
+
   // Single scroll state: true = user is at bottom and wants auto-scroll
   const autoScrollRef = useRef(true);
 
+  /**
+   * Remember the row the viewport is anchored to, in the layout that is
+   * still valid. The anchor is captured at the moment the layout changes —
+   * a measured height or a rebuilt row list — because that is the only
+   * moment at which "where the user was looking" is still expressible in
+   * the old coordinates.
+   */
+  const captureAnchor = useCallback(() => {
+    if (pendingAnchorRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const viewport = readListViewport(container);
+    const index = virtualizer.indexAt(viewport.offset);
+    if (index < 0) return;
+    const id = virtualizer.idAt(index);
+    if (!id) return;
+    pendingAnchorRef.current = {
+      id,
+      offsetInViewport: viewport.offset - virtualizer.offsetOf(index),
+    };
+  }, [virtualizer]);
+
   const handleRowHeightChange = useCallback((messageId: string, height: number) => {
-    const previousHeight = rowHeightsRef.current.get(messageId);
-    if (previousHeight == null || Math.abs(previousHeight - height) > 2) {
-      rowHeightsRef.current.set(messageId, height);
-    }
-  }, []);
+    // The anchor has to be captured before the layout moves.
+    captureAnchor();
+    const change = virtualizer.measure(messageId, height);
+    if (!change) return;
+    layoutGenerationRef.current += 1;
+    setLayoutVersion((version) => version + 1);
+  }, [captureAnchor, virtualizer]);
 
   const updateScrollState = useCallback(() => {
     const container = containerRef.current;
@@ -878,6 +912,43 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     onScrollStateChange?.(isNearBottom);
   }, [onScrollStateChange]);
 
+  /** Mount the rows the current scroll position needs. */
+  const syncMountedWindow = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const viewport = readListViewport(container);
+    const visible = virtualizer.windowFor(
+      viewport.offset,
+      viewport.height,
+      MESSAGE_ROW_OVERSCAN_PX,
+    );
+
+    const windows: VirtualWindow[] = [visible];
+
+    // A row the user jumped to stays mounted until the viewport reaches it.
+    const jump = pendingJumpRef.current;
+    if (jump) {
+      if (jump.index >= visible.start && jump.index <= visible.end) {
+        // The viewport landed on the target — the jump is done.
+        pendingJumpRef.current = null;
+      } else {
+        windows.push({
+          start: Math.max(0, jump.index - MOUNT_OVERSCAN_ROWS),
+          end: jump.index + MOUNT_OVERSCAN_ROWS,
+        });
+      }
+    }
+
+    setMountedWindows((previous) => (
+      previous.length === windows.length
+      && previous.every((window, index) => (
+        window.start === windows[index].start && window.end === windows[index].end
+      ))
+        ? previous
+        : windows
+    ));
+  }, [virtualizer]);
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -888,17 +959,23 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       frameId = requestAnimationFrame(() => {
         frameId = 0;
         updateScrollState();
+        syncMountedWindow();
       });
     };
 
     container.addEventListener('scroll', handleScroll, { passive: true });
+    // The visible slice of the list changes when the window changes, even
+    // when the list itself does not scroll.
+    window.addEventListener('resize', handleScroll);
     updateScrollState();
+    syncMountedWindow();
 
     return () => {
       if (frameId) cancelAnimationFrame(frameId);
       container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
     };
-  }, [updateScrollState]);
+  }, [updateScrollState, syncMountedWindow]);
 
   // ResizeObserver: during streaming, auto-scroll when content grows and user is at bottom
   useEffect(() => {
@@ -913,11 +990,13 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           container.scrollTop = container.scrollHeight;
         });
       }
+      // The height of the list changed — the mounted window has to follow.
+      syncMountedWindow();
     });
 
     ro.observe(inner);
     return () => ro.disconnect();
-  }, []);
+  }, [syncMountedWindow]);
 
   // Sort once so the grouping increment can compare append-only prefixes and
   // reuse frozen rows instead of re-sorting the whole transcript per update.
@@ -973,6 +1052,36 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     return groups;
   }, [sortedMessages, messages]);
 
+  // Rebuild the row layout when the transcript changes. Measured heights are
+  // keyed by message id, so a row that was already measured keeps its real
+  // height across the rebuild a streaming update causes on every tick.
+  useMemo(() => {
+    // The anchor is captured before the layout moves: prepending older
+    // messages moves every row below the anchor.
+    captureAnchor();
+    virtualizer.setRows(groupedMessages.map((group) => ({
+      id: group.message.id,
+      estimatedHeight: estimateRowHeight(group),
+    })));
+    layoutGenerationRef.current += 1;
+  }, [groupedMessages, virtualizer, captureAnchor]);
+
+  // The trailing rows carry the live tail of the transcript. They stay
+  // mounted whatever the scroll position is: the tail is where the stream
+  // lands, and the list opens at the bottom.
+  const tailWindow = useMemo<VirtualWindow>(() => {
+    const count = groupedMessages.length;
+    return { start: Math.max(0, count - ALWAYS_RENDER_TRAILING_ROWS), end: count - 1 };
+  }, [groupedMessages.length]);
+
+  // The items the list renders: the mounted rows, separated by the spacers
+  // that stand in for the rows that are not mounted.
+  const rowItems = useMemo(() => planRowItems(
+    virtualizer,
+    [...mountedWindows, tailWindow],
+    groupedMessages.length,
+  ), [virtualizer, groupedMessages.length, mountedWindows, tailWindow, layoutVersion]);
+
   // Only the last user message in the conversation is editable.
   const lastUserMessageId = useMemo(() => {
     for (let i = groupedMessages.length - 1; i >= 0; i -= 1) {
@@ -993,7 +1102,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
   // Plan 447: index of the last user group in the transcript. Assistant
   // rounds after it belong to the turn currently being generated; while
-  // `isStreaming`, they render in the live presentation (see LazyMessageRow).
+  // `isStreaming`, they render in the live presentation (see MessageRow).
   const activeRunBoundaryIndex = useMemo(() => {
     for (let i = groupedMessages.length - 1; i >= 0; i--) {
       if (groupedMessages[i].message.role === 'user') return i;
@@ -1037,17 +1146,26 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     setUnreadTurns(0);
   }, []);
 
-  // Track session changes and reset scroll state
-  useEffect(() => {
+  // Track session changes and reset scroll state.
+  //
+  // This is a layout effect on purpose: the reset has to happen BEFORE the
+  // "scroll to bottom on load" effect below, and before the browser paints
+  // the new transcript. As a passive effect it ran after the paint, which
+  // left the new transcript visible for a frame and — when the new session
+  // had the same number of messages — left the list hidden behind the
+  // `invisible` flag, because nothing reset it again.
+  useLayoutEffect(() => {
     const isSessionChanged = prevSessionIdRef.current !== sessionId;
     if (isSessionChanged) {
       prevSessionIdRef.current = sessionId;
       userMessageIdRef.current = null;
       prevMessagesLengthRef.current = 0;
       wasStreamingRef.current = false;
-      hasScrolledOnMountRef.current = false;
       autoScrollRef.current = true;
-      rowHeightsRef.current.clear();
+      // The anchor and the mounted window belong to the old transcript.
+      pendingAnchorRef.current = null;
+      pendingJumpRef.current = null;
+      setMountedWindows([]);
       navigatorCacheRef.current.clear();
       lastActiveNavUpdateRef.current = 0;
       lastSeenUserCountRef.current = 0;
@@ -1116,8 +1234,28 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       el.scrollIntoView({ block: 'start', behavior: 'smooth' });
       setActiveMessageId(messageId);
       autoScrollRef.current = false;
+      return;
     }
-  }, [sessionId]);
+
+    // The row is not mounted: it is outside the window the viewport needs.
+    // Jump to the position the layout gives it and mount it — the layout
+    // offset and the spacer above the window are the same number, so the
+    // row lands exactly where the jump points.
+    const index = virtualizer.indexOf(messageId);
+    if (index < 0) return;
+
+    const offset = virtualizer.offsetOf(index);
+    setActiveMessageId(messageId);
+    autoScrollRef.current = false;
+    // The jump target stays mounted until the viewport reaches it, so the
+    // row cannot disappear again while the list scrolls towards it.
+    pendingJumpRef.current = { index };
+    container.scrollTop = offset;
+    // A pending correction belongs to the old position — it must not undo
+    // the jump.
+    pendingAnchorRef.current = null;
+    syncMountedWindow();
+  }, [sessionId, virtualizer, syncMountedWindow]);
 
   // Scroll to bottom (exposed to parent)
   const scrollToBottom = useCallback(() => {
@@ -1136,45 +1274,85 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   //
   // Two timing hazards force us to do this in stages instead of one shot:
   //
-  //   1. LazyMessageRow (line ~320) uses IntersectionObserver + the
-  //      `contentVisibility: auto` placeholder. At mount time only the
-  //      trailing `ALWAYS_RENDER_TRAILING_ROWS` rows are in the DOM, so
-  //      `container.scrollHeight` is far smaller than the eventual height
-  //      of the full transcript.
-  //   2. The IO callback fires asynchronously (microtask + next frame) and
-  //      each newly-realised row mutates `scrollHeight`. Without a follow-up
-  //      scroll, the user lands partway up and the rest of the rows render
-  //      above the visible area — which is exactly the "scrolls to top and
-  //      you can't scroll down" complaint that motivates this plan.
+  //   1. The list mounts the trailing `ALWAYS_RENDER_TRAILING_ROWS` rows
+  //      plus a spacer for the rest, so `container.scrollHeight` already
+  //      describes the whole transcript — but only once the layout knows
+  //      the row heights (measured, or estimated for the rows that were
+  //      never rendered).
+  //   2. The rows that get measured after commit change the total height
+  //      of the list. Without a follow-up scroll, the user lands partway
+  //      up — which is exactly the "scrolls to top and you can't scroll
+  //      down" complaint that motivates this plan.
   //
   // Strategy: do the synchronous jump immediately so the user sees content
   // pinned to the bottom on the first frame, then schedule one rAF follow-up
-  // to catch the rows that IO realised after commit. The follow-up is gated
-  // by `autoScrollRef` so it never fights a user who is actively scrolling.
+  // to catch the rows that were measured after commit. The follow-up is
+  // gated by `autoScrollRef` so it never fights a user who is actively
+  // scrolling.
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    if (messages.length > 0 && !hasScrolledOnMountRef.current) {
-      hasScrolledOnMountRef.current = true;
-      // Synchronous first paint — place the visible content at the bottom.
-      container.scrollTop = container.scrollHeight;
-      autoScrollRef.current = true;
-      setIsInitialLoading(false);
+    // The list opens at the bottom of the transcript. `isInitialLoading` is
+    // the "the transcript is not positioned yet" flag: it is set when the
+    // session changes and cleared here, so a session switch positions the
+    // new transcript even when it has the same number of messages as the
+    // old one.
+    if (!isInitialLoading) return;
+    if (messages.length === 0) return;
 
-      // rAF follow-up: catch LazyMessageRow IO callbacks that landed after
-      // commit. We re-read scrollHeight on the next frame and, if the user
-      // is still pinned to the bottom, snap to the new bottom. Idempotent —
-      // ResizeObserver continues to handle streaming growth past this point.
-      const rafId = requestAnimationFrame(() => {
-        const el = containerRef.current;
-        if (!el || !autoScrollRef.current) return;
-        el.scrollTop = el.scrollHeight;
-      });
-      return () => cancelAnimationFrame(rafId);
-    }
+    // Synchronous first paint — place the visible content at the bottom.
+    container.scrollTop = container.scrollHeight;
+    autoScrollRef.current = true;
+    setIsInitialLoading(false);
+    // The list opens at the bottom, so the tail is the mounted window.
+    syncMountedWindow();
+
+    // rAF follow-up: catch the row measurements that landed after commit.
+    // We re-read scrollHeight on the next frame and, if the user is still
+    // pinned to the bottom, snap to the new bottom. Idempotent —
+    // ResizeObserver continues to handle streaming growth past this point.
+    //
+    // The frame is deliberately not cancelled: the effect re-runs as soon as
+    // `isInitialLoading` flips, and the follow-up only scrolls when the user
+    // is still pinned to the bottom.
+    requestAnimationFrame(() => {
+      const el = containerRef.current;
+      if (!el || !autoScrollRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
     return undefined;
-  }, [messages.length]);
+  }, [isInitialLoading, messages.length, syncMountedWindow]);
+
+  // After every commit: keep the reading position and the mounted window in
+  // sync with the layout. Measuring a row moves the rows below it, and
+  // prepending older messages moves all of them; correcting the scroll
+  // position against the anchor keeps the visible content where it was.
+  //
+  // The correction only runs for a layout change that has not been
+  // corrected yet — a plain re-render must never move the viewport.
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const generation = layoutGenerationRef.current;
+    if (generation !== correctedGenerationRef.current) {
+      correctedGenerationRef.current = generation;
+      const anchor = pendingAnchorRef.current;
+      if (anchor && !autoScrollRef.current) {
+        const index = virtualizer.indexOf(anchor.id);
+        if (index >= 0) {
+          const target = virtualizer.offsetOf(index) + anchor.offsetInViewport;
+          if (Math.abs(target - container.scrollTop) > 0.5) {
+            container.scrollTop = target;
+          }
+        }
+      }
+    }
+    pendingAnchorRef.current = null;
+
+    syncMountedWindow();
+  });
 
   useImperativeHandle(ref, () => ({
     scrollToBottom,
@@ -1251,24 +1429,38 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         ref={innerRef}
         className={`flex flex-col mx-auto w-full px-4 @min-[864px]:max-w-4xl @min-[1280px]:max-w-6xl ${isInitialLoading ? 'invisible' : ''}`}
       >
-        {groupedMessages.map((group, index) => (
-          <LazyMessageRow
-            key={group.message.id}
-            group={group}
-            scrollRoot={containerRef}
-            rowDomId={`message-row-${sessionId}-${group.message.id}`}
-            isAlwaysRendered={index >= groupedMessages.length - ALWAYS_RENDER_TRAILING_ROWS}
-            cachedHeight={rowHeightsRef.current.get(group.message.id)}
-            onHeightChange={handleRowHeightChange}
-            isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
-            onEditMessage={onEditMessage}
-            focusMode={focusMode}
-            // Plan 447: rounds after the last user message belong to the turn
-            // being streamed — render them in the live presentation so a
-            // mid-run refresh doesn't snap them to the collapsed final state.
-            isLiveRun={isStreaming && index > activeRunBoundaryIndex}
-          />
-        ))}
+        {rowItems.map((item) => {
+          if (item.kind === 'spacer') {
+            // Stands in for the rows that are not mounted: its height is the
+            // sum of their heights, so the scroll height still describes the
+            // whole transcript.
+            return (
+              <div
+                key={item.key}
+                aria-hidden="true"
+                style={{ height: `${item.height}px`, flexShrink: 0 }}
+              />
+            );
+          }
+
+          const group = groupedMessages[item.index];
+          if (!group) return null;
+          return (
+            <MessageRow
+              key={group.message.id}
+              group={group}
+              rowDomId={`message-row-${sessionId}-${group.message.id}`}
+              onHeightChange={handleRowHeightChange}
+              isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
+              onEditMessage={onEditMessage}
+              focusMode={focusMode}
+              // Plan 447: rounds after the last user message belong to the turn
+              // being streamed — render them in the live presentation so a
+              // mid-run refresh doesn't snap them to the collapsed final state.
+              isLiveRun={isStreaming && item.index > activeRunBoundaryIndex}
+            />
+          );
+        })}
 
         {/* Error message display */}
         {error && (
