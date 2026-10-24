@@ -7,8 +7,11 @@ interface FakeTuiOptions {
   readonly onInterrupt: () => void;
   readonly onExit: () => void;
   readonly isBusy: () => boolean;
-  readonly queuedPrompts: () => readonly string[];
+  readonly queuedDrafts: () => readonly { readonly text: string; readonly mode: 'steer' | 'queue' }[];
   readonly queuePaused: () => boolean;
+  readonly onSteer: (text: string) => void | Promise<void>;
+  readonly onQueueDraft: (text: string) => void | Promise<void>;
+  readonly onInterruptAndSend: (text: string) => void;
 }
 
 interface FakeTui {
@@ -16,8 +19,16 @@ interface FakeTui {
   readonly users: string[];
   readonly frames: unknown[];
   readonly errors: string[];
+  readonly recalled: string[];
+  chooseAnswers: ChooseAnswer[];
   stopped: boolean;
 }
+
+/** One scripted answer for `choose`: a value, a null, or a function of the rows. */
+type ChooseAnswer =
+  | string
+  | null
+  | ((choices: readonly { readonly value: string }[]) => string | null);
 
 const harness = vi.hoisted(() => ({ app: null as FakeTui | null }));
 
@@ -26,6 +37,8 @@ vi.mock('../tui/index.js', () => ({
     readonly users: string[] = [];
     readonly frames: unknown[] = [];
     readonly errors: string[] = [];
+    readonly recalled: string[] = [];
+    chooseAnswers: ChooseAnswer[] = [];
     stopped = false;
     readonly options: FakeTuiOptions;
 
@@ -44,8 +57,16 @@ vi.mock('../tui/index.js', () => ({
     printNotice(_message: string): void {}
     replaceTranscript(_messages: unknown): void {}
     clearTranscript(): void {}
+    recallIntoComposer(text: string): void { this.recalled.push(text); }
     chooseFiltered(): Promise<string | null> { return Promise.resolve(null); }
-    choose(): Promise<string | null> { return Promise.resolve(null); }
+    choose(
+      _title: string,
+      choices: readonly { readonly value: string }[],
+    ): Promise<string | null> {
+      const next = this.chooseAnswers.shift();
+      if (typeof next === 'function') return Promise.resolve(next(choices));
+      return Promise.resolve(next ?? null);
+    }
   },
   shouldUseTui: () => true,
 }));
@@ -200,7 +221,7 @@ describe('chatTui production callback wiring', () => {
 
     expect(starts).toEqual(['first']);
     expect(app.users).toEqual(['first']);
-    expect(app.options.queuedPrompts()).toEqual(['second']);
+    expect(app.options.queuedDrafts().map((draft) => draft.text)).toEqual(['second']);
 
     acceptance.resolve({ accepted: true, runId: 'run-first' as RunId });
     await waitUntil(() => app.options.isBusy());
@@ -242,8 +263,319 @@ describe('chatTui production callback wiring', () => {
     expect(starts).toEqual(['active']);
     expect(cancelled).toContain('run-active');
     expect(app.options.queuePaused()).toBe(true);
-    expect(app.options.queuedPrompts()).toEqual(['pending']);
+    expect(app.options.queuedDrafts().map((draft) => draft.text)).toEqual(['pending']);
 
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  /**
+   * A steer is written into the running turn's mailbox, not queued behind it.
+   * The trap this pins: the row may be claimed by the turn that just ended, so
+   * the local draft must recognise "already delivered" and skip instead of
+   * starting a second turn with the same text.
+   */
+  it('writes a steer into the running turn and never sends it twice', async () => {
+    const acceptance = deferred<{ accepted: true; runId: RunId }>();
+    const firstStream = deferred<void>();
+    const starts: string[] = [];
+    const enqueued: { content: string; kind: string; submittedRunId: string }[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return starts.length === 1
+          ? acceptance.promise
+          : Promise.resolve({ accepted: true as const, runId: `run-${prompt}` as RunId });
+      }),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string; kind: string; submittedRunId: string }) => {
+        enqueued.push(input);
+        return { id: 'row-1', status: 'pending', content: input.content };
+      }),
+      getItem: vi.fn(async () => ({ id: 'row-1', status: 'applied', content: 'steer me' })),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => starts.length === 1);
+    acceptance.resolve({ accepted: true, runId: 'run-first' as RunId });
+    await waitUntil(() => app.options.isBusy());
+
+    await app.options.onSteer('steer me');
+    expect(enqueued).toEqual([
+      expect.objectContaining({ content: 'steer me', kind: 'followup', submittedRunId: 'run-first' }),
+    ]);
+    expect(app.users).toEqual(['first', 'steer me']);
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'steer me', mode: 'steer' }]);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
+    expect(starts).toEqual(['first']);
+    expect(app.users).toEqual(['first', 'steer me']);
+    expect(app.options.queuedDrafts()).toEqual([]);
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('sends a queued draft as the next turn once the running turn ends', async () => {
+    const firstStream = deferred<void>();
+    const starts: string[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return Promise.resolve({ accepted: true as const, runId: `run-${prompt}` as RunId });
+      }),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    app.options.onQueueDraft('later');
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'later', mode: 'queue' }]);
+    expect(starts).toEqual(['first']);
+
+    firstStream.resolve();
+    await waitUntil(() => starts.length === 2 && !app.options.isBusy());
+    expect(starts).toEqual(['first', 'later']);
+    expect(app.users).toEqual(['first', 'later']);
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('stops the running turn and sends the interrupted draft next', async () => {
+    const acceptance = deferred<{ accepted: true; runId: RunId }>();
+    const cancelled: string[] = [];
+    const starts: string[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return starts.length === 1
+          ? acceptance.promise
+          : Promise.resolve({ accepted: true as const, runId: `run-${prompt}` as RunId });
+      }),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId, { signal }: { signal: AbortSignal }) {
+        if (runId !== 'run-first') return;
+        await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+      }),
+      cancelAgentRun: vi.fn(async (runId: RunId) => {
+        cancelled.push(runId);
+        return { requested: true, runId, terminal: { status: 'cancelled' } };
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => starts.length === 1);
+    acceptance.resolve({ accepted: true, runId: 'run-first' as RunId });
+    await waitUntil(() => app.options.isBusy());
+
+    app.options.onInterruptAndSend('correction');
+    await waitUntil(() => starts.length === 2 && !app.options.isBusy());
+    expect(cancelled).toContain('run-first');
+    expect(starts).toEqual(['first', 'correction']);
+    expect(app.users).toEqual(['first', 'correction']);
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('sends a held draft into the running turn from the /queue panel', async () => {
+    const firstStream = deferred<void>();
+    const starts: string[] = [];
+    const enqueued: { content: string; kind: string }[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return Promise.resolve({ accepted: true as const, runId: `run-${prompt}` as RunId });
+      }),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string; kind: string }) => {
+        enqueued.push(input);
+        return { id: 'row-9', status: 'pending', content: input.content };
+      }),
+      getItem: vi.fn(async () => ({ id: 'row-9', status: 'applied', content: 'held' })),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    app.options.onQueueDraft('held');
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'held', mode: 'queue' }]);
+
+    app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'send');
+    app.options.onSubmit('/queue');
+    await waitUntil(() => enqueued.length === 1);
+
+    expect(enqueued[0]).toMatchObject({ content: 'held', kind: 'followup' });
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'held', mode: 'steer' }]);
+    expect(app.users).toEqual(['first', 'held']);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
+    // The turn read the steer, so the draft leaves without a second turn.
+    expect(starts).toEqual(['first']);
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('sends a send-now draft as one user line even when the old turn missed it', async () => {
+    const firstStream = deferred<void>();
+    const starts: string[] = [];
+    const cancelled: { id: string; reason?: string }[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
+        starts.push(prompt);
+        return Promise.resolve({ accepted: true as const, runId: `run-${prompt}` as RunId });
+      }),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string }) => ({ id: 'row-9', status: 'pending', content: input.content })),
+      getItem: vi.fn(async () => ({ id: 'row-9', status: 'pending', content: 'held' })),
+      cancel: vi.fn(async (id: string, reason?: string) => {
+        cancelled.push({ id, reason });
+        return { id, status: 'cancelled', content: 'held' };
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    app.options.onQueueDraft('held');
+    app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'send');
+    app.options.onSubmit('/queue');
+    await waitUntil(() => app.options.queuedDrafts()[0]?.mode === 'steer');
+
+    // The run settles before its next model boundary, so the steer never
+    // reaches it: the drain sends the row's text as a new turn instead.
+    firstStream.resolve();
+    await waitUntil(() => starts.length === 2);
+    expect(cancelled).toEqual([{ id: 'row-9', reason: 'steer_missed_turn' }]);
+    expect(starts).toEqual(['first', 'held']);
+    // It was echoed when the user pressed send now; taking it over must not
+    // print the same line twice.
+    expect(app.users).toEqual(['first', 'held']);
+
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('withdraws a steer by its mailbox row from the /queue panel', async () => {
+    const firstStream = deferred<void>();
+    const cancelled: { id: string; reason?: string }[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(async ({ prompt }: { prompt: string }) => ({
+        accepted: true as const,
+        runId: `run-${prompt}` as RunId,
+      })),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string }) => ({ id: 'row-1', status: 'pending', content: input.content })),
+      cancel: vi.fn(async (id: string, reason?: string) => {
+        cancelled.push({ id, reason });
+        return { id, status: 'cancelled' };
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    await app.options.onSteer('steer me');
+
+    app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'withdraw');
+    app.options.onSubmit('/queue');
+    await waitUntil(() => cancelled.length === 1);
+
+    expect(cancelled[0]).toEqual({ id: 'row-1', reason: 'user_withdrew_steer' });
+    expect(app.options.queuedDrafts()).toEqual([]);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('recalls a steer to the composer and withdraws its mailbox row', async () => {
+    const firstStream = deferred<void>();
+    const cancelled: string[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(async ({ prompt }: { prompt: string }) => ({
+        accepted: true as const,
+        runId: `run-${prompt}` as RunId,
+      })),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string }) => ({ id: 'row-2', status: 'pending', content: input.content })),
+      cancel: vi.fn(async (id: string) => {
+        cancelled.push(id);
+        return { id, status: 'cancelled' };
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    await app.options.onSteer('half a thought');
+
+    app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'recall');
+    app.options.onSubmit('/queue');
+    await waitUntil(() => app.recalled.length === 1);
+
+    expect(app.recalled).toEqual(['half a thought']);
+    expect(cancelled).toEqual(['row-2']);
+    expect(app.options.queuedDrafts()).toEqual([]);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('withdraws every held steer when /queue clear drops the drafts', async () => {
+    const firstStream = deferred<void>();
+    const cancelled: string[] = [];
+    const client = makeClient({
+      startAgentRun: vi.fn(async ({ prompt }: { prompt: string }) => ({
+        accepted: true as const,
+        runId: `run-${prompt}` as RunId,
+      })),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string }) => ({ id: 'row-3', status: 'pending', content: input.content })),
+      cancel: vi.fn(async (id: string) => {
+        cancelled.push(id);
+        return { id, status: 'cancelled' };
+      }),
+    });
+    const { running, app } = await startChat(client);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => app.options.isBusy());
+    await app.options.onSteer('steer me');
+    app.options.onQueueDraft('and this later');
+
+    app.options.onSubmit('/queue clear');
+    await waitUntil(() => cancelled.length === 1);
+
+    expect(cancelled).toEqual(['row-3']);
+    expect(app.options.queuedDrafts()).toEqual([]);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
     app.options.onExit();
     await expect(running).resolves.toBe(0);
   });
