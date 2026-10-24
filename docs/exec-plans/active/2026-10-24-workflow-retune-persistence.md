@@ -51,7 +51,8 @@
 | 同一 HEAD / 同上 | Linux 6.18.55 · Node v24.19.0 · npm 11.9.0；worktree-local overlay | 首轮 `npm run typecheck:all`；再以允许脚本启动子进程的执行模式重跑 | 首轮 1；重跑 0 | 首轮在 `check-no-ts-suppress` 以 `spawnSync git EPERM` 退出；原命令重跑通过全仓构建和类型门禁；baseline gate 报告 0 新类型错误 |
 | 同一 HEAD / dirty source 与 docs 如上 | Linux · Git origin | `git fetch origin`；`git rev-list --left-right --count HEAD...origin/master` | 0 | origin/master 仍是 base SHA，无需 rebase |
 | `b733b644` / 验证过的实现与计划文档 | Linux · GitHub CLI 2.46.0 | `git push -u origin codex/workflow-retune-persistence`；`gh pr create --draft --base master --head codex/workflow-retune-persistence` | 0 / 0 | Draft PR #453 已创建；未合并 |
+| `8879ba14` / 干净提交后的 draft PR 分支 | Linux · GitHub CLI 2.46.0 | `gh pr view 453 --json number,title,url,isDraft,baseRefName,headRefName,statusCheckRollup`；`gh pr checks 453` | 0 / 1 | PR #453 指向 master 且为 draft；暂时没有 checks 报告，checks 命令退出 1 |
 
 ## 接续 / 结果
 
-实现和相关回归已完成。Live retune 在持久化成功后更新同一 engine，支持从 1→2→1 的数值轨迹；SQLite JSON 可回读 run cap，无 schema 变更。主干刷新确认无前进；worktree-local 依赖 symlink 已移除；Draft PR #453 已提交到 `master`。下一步等待 CI 与 review，不合并。
+实现和相关回归已完成。Live retune 在持久化成功后更新同一 engine，支持从 1→2→1 的数值轨迹；SQLite JSON 可回读 run cap，无 schema 变更。主干刷新确认无前进；worktree-local 依赖 symlink 已移除；Draft PR #453 已提交到 `master`，GitHub 尚未报告 CI checks。下一步等待 checks 与 review，不合并。
