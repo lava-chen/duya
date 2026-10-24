@@ -156,6 +156,16 @@ export class WorkerManager {
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
   private onWorkerExit: ((sessionId: string, child: ChildProcess) => void) | null = null;
   private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void) | null = null;
+  /**
+   * Extra subscribers to the raw worker frame stream.
+   *
+   * The primary handler above is a SINGLE slot, which is why a second
+   * consumer used to be impossible: assigning the slot would displace the
+   * first one. The session-level exits (manual compaction, side questions)
+   * need their own subscription, so the fan-out is a set and the slot became
+   * one member of it.
+   */
+  private readonly messageListeners = new Set<(sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void>();
   // H6: Track intentionally killed workers so their exit is not misjudged as a crash
   private intentionalKills = new WeakSet<ChildProcess>();
   // Plan 426 Phase 2: idle recycling. lastActivityAt refreshes on every
@@ -209,8 +219,37 @@ export class WorkerManager {
     this.onWorkerExit = handler;
   }
 
+  /**
+   * Install the PRIMARY worker-frame handler.
+   *
+   * A thin wrapper over {@link addMessageListener} that keeps its historical
+   * REPLACE semantics: the previous primary is removed, and every OTHER
+   * subscriber stays. A caller that assigned this twice used to lose the
+   * first handler; a caller that subscribes through
+   * {@link addMessageListener} is unaffected either way.
+   */
   setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void): void {
+    if (this.onWorkerMessage !== null) {
+      this.messageListeners.delete(this.onWorkerMessage);
+    }
     this.onWorkerMessage = handler;
+    this.messageListeners.add(handler);
+  }
+
+  /**
+   * Subscribe to the raw worker frame stream.
+   *
+   * Returns an unsubscribe function. Frames are delivered to EVERY
+   * subscriber, in subscription order, and one subscriber throwing does not
+   * stop the others: a broken extra consumer must not silence the run layer.
+   */
+  addMessageListener(
+    listener: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void,
+  ): () => void {
+    this.messageListeners.add(listener);
+    return () => {
+      this.messageListeners.delete(listener);
+    };
   }
 
   /**
@@ -510,6 +549,17 @@ export class WorkerManager {
       }
       if (this.onWorkerMessage) {
         this.onWorkerMessage(sessionId, msg, child);
+      }
+      for (const listener of [...this.messageListeners]) {
+        if (listener === this.onWorkerMessage) continue;
+        try {
+          listener(sessionId, msg, child);
+        } catch (err) {
+          this.logger.warn('Worker message listener failed', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     });
 
