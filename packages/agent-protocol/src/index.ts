@@ -32,6 +32,8 @@ export * from './session-api.js';
 export * from './session-fork.js';
 // Session-level exits that create no run: manual compaction and side questions.
 export * from './session-compaction.js';
+// Read-only inventory of the user's configured MCP servers.
+export * from './mcp-inventory.js';
 export * from './rollout-events.js';
 export type { JournalRecord } from './workflow-journal.js';
 export * from './workflow-runs.js';
