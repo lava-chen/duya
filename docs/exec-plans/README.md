@@ -20,7 +20,7 @@
 | Desktop 性能爬坡 | [2026-10-23 Desktop 性能爬坡](active/2026-10-23-desktop-performance-hill-climbing.md) | 5 个 Agent 各占一条独占路径：先由 A 交 Harness v1，再由 B/C/D/E 建基线、各出一个可证明收益的 PR |
 | CLI TUI 渲染 todolist | [2026-10-23 CLI todo 渲染](active/2026-10-23-cli-todo-list-render.md) | todo 清单渲染与 thinking 折叠预览已实现并过门禁，待开 PR；底部常驻面板列 Phase 2 |
 | config 写侧下沉 | [2026-10-25 config 写侧下沉](active/2026-10-25-host-config-agents-write.md) | 共享规则已下沉 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update`；PR #433 已合并（`f59767f1`） |
-| 插件安装路径下沉 | [2026-10-25 插件安装路径](active/2026-10-25-host-plugin-install-path.md) | 独立 Host 已能解析插件 `installPath` 与 MCP 声明，恢复插件技能与 MCP；PR #443 待 CI 全绿后合并 |
+| 插件安装路径下沉 | [2026-10-25 插件安装路径](active/2026-10-25-host-plugin-install-path.md) | 独立 Host 已能解析插件 `installPath` 与 MCP 声明，恢复插件技能与 MCP；PR #443 已合并（`49b4771e`） |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
 | TUI 滚动语义 | [2026-10-23 TUI 滚动锚定](active/2026-10-23-tui-scroll-anchor.md) | 视窗改为绝对偏移 + 独立 follow，已过门禁待开 PR；参考 pi 的 scroll-view |
 | TUI 上下文占用 | [2026-10-23 TUI 上下文占用](active/2026-10-23-tui-context-usage.md) | 占用率与会话花费拆开，已过用例与变异验证，待门禁与 PR |
