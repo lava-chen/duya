@@ -42,6 +42,7 @@ import {
   clickSidebarThread,
   describeSidebar,
   showWorkTab,
+  signalBudgetMs,
   snapshotToMetrics,
   startResourceProbe,
 } from '../lib/scenario-kit.mjs';
@@ -50,7 +51,7 @@ import { round } from '../lib/metrics.mjs';
 const FIXTURES = ['perf/session-100', 'perf/session-1000', 'perf/session-10000'];
 
 /** Wait until a specific message row is painted. */
-async function waitForMessageRow(page, messageId, timeoutMs = 120_000) {
+async function waitForMessageRow(page, messageId, timeoutMs) {
   await page.waitForFunction(
     (id) => Boolean(document.querySelector(`[data-message-id="${id}"]`)),
     messageId,
@@ -111,7 +112,11 @@ export default {
 
     for (const fixtureId of FIXTURES) {
       const digest = fixtureDigest(fixtureId);
-      notes[fixtureId] = { digest, messageCount: buildSessionMessages(fixtureId).length };
+      notes[fixtureId] = {
+        digest,
+        messageCount: buildSessionMessages(fixtureId).length,
+        signalBudgetMs: signalBudgetMs(buildSessionMessages(fixtureId).length),
+      };
 
       for (let index = 0; index < ctx.options.samples; index += 1) {
         const namespace = `switch-${fixtureId.replace(/[^a-z0-9]+/gi, '-')}-${ctx.runId}-${index}`;
@@ -127,6 +132,10 @@ export default {
         // into two sessions of one database would leave the second one empty.
         const messagesA = buildSessionMessages(fixtureId, { idPrefix: sessionA });
         const messagesB = buildSessionMessages(fixtureId, { idPrefix: sessionB });
+        // The budget of the "on screen" signal follows the size of the
+        // transcript: the data path of the largest fixture is slow on a busy
+        // machine, and a sample that times out is not a measurement.
+        const budget = signalBudgetMs(messagesA.length);
 
         const measured = await launchPerfElectron({ namespace });
         await waitForAppReady(measured.page);
@@ -168,7 +177,7 @@ export default {
           const probe = await startResourceProbe(measured.page);
           const openStartedAt = Date.now();
           await clickSidebarThread(measured.page, titleA);
-          await waitForMessageRow(measured.page, lastIdA);
+          await waitForMessageRow(measured.page, lastIdA, budget);
           const openMs = Date.now() - openStartedAt;
           const openSnapshot = await readCollector(measured.page);
           await resetCollector(measured.page);
@@ -176,7 +185,7 @@ export default {
           // --- switch to the second one ----------------------------------
           const switchStartedAt = Date.now();
           await clickSidebarThread(measured.page, titleB);
-          await waitForMessageRow(measured.page, lastIdB);
+          await waitForMessageRow(measured.page, lastIdB, budget);
           const switchMs = Date.now() - switchStartedAt;
           const switchSnapshot = await readCollector(measured.page);
 
@@ -213,6 +222,7 @@ export default {
               sessionB,
               sidebar,
               scroll,
+              signalBudgetMs: budget,
             },
             error: null,
           });
@@ -247,6 +257,10 @@ export default {
           'the sessions are opened and switched by clicking their rows in the sidebar '
           + '(div.thread-item), not by a store poke',
         onScreenSignal: 'the last fixture message row appearing in the DOM',
+        signalBudget:
+          'the "on screen" signal is given a budget that follows the size of the '
+          + 'transcript (60s up to 1000 messages, 240s above), so a slow data path '
+          + 'shows up as a slow number instead of a failed sample',
         sameRun:
           'the whole journey happens in one app run: this build cannot restore a session '
           + 'across a restart (the boot splash stays on "Preparing session…"), so the '
