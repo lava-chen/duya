@@ -116,6 +116,59 @@ export type PanelWindowEvent =
   | { type: 'returned'; paneId: string; reason: 'native-close' | 'requested' }
   | { type: 'always-on-top-changed'; paneId: string; alwaysOnTop: boolean }
 
+// ── GPU compositing observability ───────────────────────────────────────────
+//
+// The main process observes the GPU (`getGPUFeatureStatus`, `getGPUInfo`,
+// `child-process-gone`) and answers over these two channels. The shapes below
+// MIRROR `apps/desktop/src/main/core/gpu-diagnostics.ts` rather than importing
+// it: the preload is a separate bundle, and the two sides of a contextBridge
+// are allowed to drift only as far as the channel contract can see.
+
+/** How the window is composited. */
+export type GpuCompositingMode = 'hardware' | 'software' | 'disabled' | 'unknown'
+
+/** The subset of Chromium's GPU feature status this app reports. */
+export interface GpuFeatureStatusSnapshot {
+  gpu_compositing: string
+  gpu_rasterization: string
+  webgl: string
+  webgl2: string
+  canvas2d: string
+  video_decode: string
+  video_encode: string
+  raw: Record<string, string>
+}
+
+/** The GPU adapter identity, as far as Chromium could report it. */
+export interface GpuAdapterInfo {
+  vendor: string | null
+  renderer: string | null
+  driverVersion: string | null
+  adapter: string | null
+}
+
+/** A snapshot of everything the main process knows about the GPU. */
+export interface GpuStatusSnapshot {
+  timestamp: number
+  compositing: GpuCompositingMode
+  featureStatus: GpuFeatureStatusSnapshot
+  adapter: GpuAdapterInfo
+  gpuProcessExitCount: number
+  webglContextLossCount: number
+}
+
+export interface GPUAPI {
+  /** Read the current GPU status from the main process. */
+  getStatus: () => Promise<GpuStatusSnapshot>
+  /**
+   * Report that a WebGL context was lost on a surface. The main process
+   * counts these and logs them, so a silent WebGL -> DOM degradation becomes
+   * visible in the log.
+   */
+  reportWebglContextLoss: (report: { surface: string; reason: string }) =>
+    Promise<{ ok: boolean; webglContextLossCount: number }>
+}
+
 /** Value of a `--name=value` renderer argument, or null. */
 function readRendererArg(prefix: string): string | null {
   const arg = process.argv.find((a) => a.startsWith(prefix));
@@ -1271,6 +1324,12 @@ export interface ElectronAPI {
     /** Listen for detached-panel events from the main process. */
     onEvent: (callback: (event: PanelWindowEvent) => void) => () => void
   }
+  /**
+   * GPU compositing observability. Read-only for the renderer except for the
+   * context-loss report, which is how the terminal tells the main process
+   * that its WebGL renderer degraded to the DOM renderer.
+   */
+  gpu: GPUAPI
   agent: AgentAPI
   projects: {
     getRecentFolders: () => Promise<string[]>
@@ -1981,6 +2040,15 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.removeListener('panel-window:event', handler)
       }
     },
+  },
+  gpu: {
+    getStatus: () =>
+      ipcRenderer.invoke('gpu:get-status') as Promise<GpuStatusSnapshot>,
+    reportWebglContextLoss: (report: { surface: string; reason: string }) =>
+      ipcRenderer.invoke('gpu:report-webgl-context-lost', report) as Promise<{
+        ok: boolean
+        webglContextLossCount: number
+      }>,
   },
   agent: {
     // Plan 583 ISS-24: `streamChat` / `interrupt` invoked `agent:stream` and

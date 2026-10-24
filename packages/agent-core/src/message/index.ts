@@ -12,6 +12,7 @@
 // Boundary projectors (runtime)
 export {
   projectModelMessages,
+  projectSystemPrompt,
   projectRuntimeContextToProviderMessage,
   extractLegacySystemSegments,
   projectPersistenceMessages,

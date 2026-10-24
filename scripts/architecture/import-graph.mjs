@@ -46,6 +46,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./strip-comments.mjs";
+import { workspaceExportTargets } from "./workspace-exports.mjs";
+import { loadWorkspacePackages } from "./workspace-packages.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SRC_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
@@ -270,52 +272,167 @@ export const HOST_BOUNDARIES = new Set([
 export const isHostBoundary = (owner) => HOST_BOUNDARIES.has(owner);
 
 /**
- * Resolve a specifier to the file it names, for graph purposes.
+ * The workspace package registry: manifest `name` -> `{ dir, manifest }`.
+ *
+ * The same registry `audit-imports.mjs:74-92` builds, from the same source
+ * (each `packages/<x>/package.json`), for the same reason: a bare `@duya/<x>`
+ * specifier names a PACKAGE, and the only place the repository says which
+ * package that is, and where its source lives, is the manifest.
+ *
+ * It is built lazily rather than at import time so that importing this module
+ * stays free of IO side effects for the consumers that only want the
+ * specifier class (`headless-load-gate.mjs`, `agent-retirement-gate.mjs`).
+ */
+let workspaceRegistry = null;
+
+function workspacePackages() {
+  if (workspaceRegistry === null) workspaceRegistry = loadWorkspacePackages(ROOT);
+  return workspaceRegistry;
+}
+
+/**
+ * Resolve a path to the file it names, or null.
  *
  * The candidate list mirrors `audit-imports.mjs:resolveFile` (`.ts` before
  * `.js`, `index.*` last) and keeps its `dist/` -> `src/` twin, so an edge
  * written against a build output lands on the source that produced it and the
  * graph does not depend on whether `dist/` happens to be present.
- *
- * Returns null when nothing resolves. An unresolved specifier is reported by
- * `audit-imports.mjs` already; here it simply is not an edge.
  */
-export function resolveTarget(spec, fromRelPath) {
-  const base = spec.startsWith("@duya/")
-    ? path.join(ROOT, "packages", spec.slice("@duya/".length).split("/")[0])
-    : path.resolve(ROOT, path.posix.dirname(fromRelPath), spec);
-  const ext = path.extname(base);
-  const stem = ext === ".js" || ext === ".mjs" ? base.slice(0, -ext.length) : base;
+function resolveFile(base) {
   const candidates = [];
-  const push = (p) => {
-    candidates.push(p);
-    const twin = distToSourceTwin(p);
-    if (twin) candidates.push(twin);
-  };
+  const ext = path.extname(base);
   if (ext === ".js" || ext === ".mjs") {
-    push(`${stem}.ts`);
-    push(`${stem}.tsx`);
-    push(base);
-    push(`${stem}.js`);
+    // NodeNext style: './x.js' actually means './x.ts' in this repo. The
+    // literal path is ALSO tried, because unlike `./x.js` a `./x.mjs`
+    // specifier is frequently the real file and not a TS stand-in.
+    const stem = base.slice(0, -ext.length);
+    candidates.push(`${stem}.ts`, `${stem}.tsx`, base, `${stem}.js`);
   } else {
-    push(`${base}.ts`);
-    push(`${base}.tsx`);
-    push(`${base}.js`);
-    push(`${base}.mjs`);
-    push(base);
+    candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`, base);
   }
-  push(`${base}/index.ts`);
-  push(`${base}/index.tsx`);
-  push(`${base}/index.js`);
-  push(`${base}/index.mjs`);
+  candidates.push(
+    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`, `${base}/index.mjs`,
+  );
+  // The literal candidate always wins; the source twin is only a fallback for
+  // the build-output case described above.
+  const withTwins = [];
   for (const c of candidates) {
+    withTwins.push(c);
+    const twin = distToSourceTwin(c);
+    if (twin) withTwins.push(twin);
+  }
+  for (const c of withTwins) {
     try {
-      if (fs.existsSync(c) && fs.statSync(c).isFile()) return rel(c);
+      if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
     } catch {
       /* ignore */
     }
   }
   return null;
+}
+
+/**
+ * The source candidates for a bare `@duya/<pkg>` / `@duya/<pkg>/<sub>`.
+ *
+ * The SUBPATH IS JOINED, not dropped. The previous implementation kept only
+ * the first segment after `@duya/`, so `@duya/agent-protocol/testing` and
+ * `@duya/agent-protocol` both produced candidates under
+ * `packages/agent-protocol/` — and because no package in this repo keeps an
+ * entry at its root (every entry is `src/index.ts`), EVERY bare specifier
+ * resolved to `null`: 755 of 755, on this tree.
+ *
+ * So the source root of a workspace package is `packages/<pkg>/src`, and the
+ * package root is `packages/<pkg>/src/index.ts` while a subpath is
+ * `packages/<pkg>/src/<sub>` — as a file with an extension, or as a directory
+ * with an `index` beside it.
+ */
+function bareSpecCandidates(pkgDir, sub) {
+  const srcRoot = path.join(ROOT, pkgDir, "src");
+  const candidates = [];
+  if (sub === "" || sub === "/") {
+    candidates.push(
+      `${srcRoot}/index.ts`, `${srcRoot}/index.tsx`, `${srcRoot}/index.js`, `${srcRoot}/index.mjs`,
+    );
+    return candidates;
+  }
+  const base = path.join(srcRoot, sub);
+  candidates.push(`${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.mjs`);
+  candidates.push(
+    `${base}/index.ts`, `${base}/index.tsx`, `${base}/index.js`, `${base}/index.mjs`,
+  );
+  return candidates;
+}
+
+/**
+ * Resolve a bare `@duya/*` specifier to the source file it names.
+ *
+ * Two mechanisms, in order:
+ *
+ *  1. the candidate table above, which joins the subpath under the package's
+ *     `src/` root;
+ *  2. the package's OWN `exports` map, for a subpath whose source path is not
+ *     derivable by joining. Measured on this tree: the candidate table
+ *     resolves 728 of the 729 distinct bare specifiers, and the one it misses
+ *     is `@duya/agent-runtime/contextual-user-fragment`, whose source lives at
+ *     `packages/agent-runtime/src/context/contextual-user-fragment.ts` — a
+ *     path only the `exports` map names.
+ *
+ * The package ROOT is deliberately NOT handed to the `exports` map. The map
+ * points at BUILD OUTPUT (`./dist/index.d.ts`), and turning that back into a
+ * source path is a `dist` -> `src` guess about this repo's build layout; it
+ * re-derives the same `packages/<pkg>/src/index.ts` the candidate table already
+ * states, and having two mechanisms for one file means two places to get it
+ * wrong. `import-graph.test.ts` asserts that every workspace package's root
+ * specifier resolves, so a package that keeps its entry somewhere else fails
+ * loudly instead of going silently unresolved.
+ *
+ * The `exports` fallback reuses `workspace-exports.mjs`, the same helper
+ * `audit-imports.mjs:166` uses, so the two resolvers read the same map the
+ * same way.
+ */
+function resolveBareSpec(spec) {
+  const pkgName = spec.split("/").slice(0, 2).join("/");
+  const pkg = workspacePackages().get(pkgName);
+  if (!pkg) return null;
+  const sub = spec.slice(pkg.manifest.name.length);
+  for (const candidate of bareSpecCandidates(pkg.dir, sub)) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (sub === "" || sub === "/") return null;
+  const exportKey = `.${sub}`;
+  for (const target of workspaceExportTargets(pkg.manifest, exportKey)) {
+    if (!target.startsWith("./")) continue;
+    const sourceTarget = target
+      .replace(/^\.\/dist\//, "./src/")
+      .replace(/\.d\.ts$/, ".ts");
+    const file = resolveFile(path.resolve(ROOT, pkg.dir, sourceTarget));
+    if (file) return file;
+  }
+  return null;
+}
+
+/**
+ * Resolve a specifier to the file it names, for graph purposes.
+ *
+ * A relative specifier resolves against the importing file; a bare `@duya/*`
+ * specifier resolves through the workspace package registry (see
+ * `resolveBareSpec`).
+ *
+ * Returns null when nothing resolves. An unresolved specifier is reported by
+ * `audit-imports.mjs` already; here it simply is not an edge.
+ */
+export function resolveTarget(spec, fromRelPath) {
+  if (spec.startsWith("@duya/")) {
+    const file = resolveBareSpec(spec);
+    return file ? rel(file) : null;
+  }
+  const base = path.resolve(ROOT, path.posix.dirname(fromRelPath), spec);
+  const file = resolveFile(base);
+  return file ? rel(file) : null;
 }
 
 /** Our own `packages/<x>/dist/...` maps back to the `src/` file that made it. */

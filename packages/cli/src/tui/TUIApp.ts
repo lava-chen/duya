@@ -458,13 +458,19 @@ export class TUIApp {
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
-   * How many lines the view is scrolled back from the tail.
+   * Where the top of the viewport sits, in lines from the top of the document.
    *
-   * Zero means "following". This is the whole scroll state: the transcript box
-   * is never handed more content than it has rows, so the offset is the only
-   * thing that decides which slice of the model is on screen.
+   * ABSOLUTE, not "how many lines back from the tail". An absolute offset
+   * anchors the viewport to the CONTENT: a message that arrives while the
+   * reader is scrolled up appears below what they are reading instead of
+   * pushing it off the top of the screen. A tail-relative offset moved the
+   * window along with the newest line, which is what made the transcript
+   * slide away under a reader who had scrolled up to look at something.
+   *
+   * Only meaningful while `follow` is false; while following, the window is
+   * pinned to the newest line.
    */
-  private scrollLines = 0;
+  private scrollTop = 0;
   /**
    * Cache-fed transcript renderer. Every paint asks it for the window slice;
    * unchanged blocks come back as cached line arrays, so a streaming frame
@@ -482,7 +488,8 @@ export class TUIApp {
     renderer: this.transcript,
     model: this.model,
     options: DEFAULT_RENDER_OPTIONS,
-    scrollLines: 0,
+    scrollTop: 0,
+    following: true,
   });
   /** Bumped on any private model change the options key cannot observe. */
   private transcriptRevision = 0;
@@ -1096,10 +1103,12 @@ export class TUIApp {
       chrome,
       caret,
       // Scrolling back must not commit: those rows may be wanted again, and the
-      // terminal cannot be told to take a committed row back.
-      ...(this.scrollLines > 0
-        ? { viewEnd: Math.max(0, this.inlineTranscriptLines.length - this.scrollLines) }
-        : {}),
+      // terminal cannot be told to take a committed row back. `viewEnd` is the
+      // line the live area ends at — everything above it is already in the
+      // terminal's scrollback.
+      ...(this.follow
+        ? {}
+        : { viewEnd: Math.max(0, this.scrollTop) }),
     });
   }
 
@@ -1222,7 +1231,8 @@ export class TUIApp {
       renderer: this.transcript,
       model: this.model,
       options: this.renderOptions(),
-      scrollLines: this.scrollLines,
+      scrollTop: this.scrollTop,
+      following: this.follow,
       revision: this.transcriptRevision,
     };
     if (this.inlineSurface !== null) {
@@ -1809,14 +1819,14 @@ export class TUIApp {
         if (!this.thinkingBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.textBuffer, key);
         this.textBuffer.append(readContent(frame), now(), key);
-        this.drainBuffers();
+        this.pushContent();
         return;
       }
       case 'thinking_delta': {
         if (!this.textBuffer.isEmpty && this.commitBuffers()) this.noteTranscriptMutation();
         this.commitIfBlockChanged(this.thinkingBuffer, key);
         this.thinkingBuffer.append(readContent(frame), now(), key);
-        this.drainBuffers();
+        this.pushContent();
         return;
       }
       case 'permission': {
@@ -1999,6 +2009,29 @@ export class TUIApp {
   }
 
   /**
+   * Handle newly arrived CONTENT — a text or thinking delta.
+   *
+   * The first content of a burst is painted NOW rather than at the end of the
+   * throttle window. The user is watching the screen hardest exactly there,
+   * and the window it would otherwise land in was opened by a frame that did
+   * not contain the content, so the frame they wait for shows nothing.
+   *
+   * Everything after the first content of a burst keeps the ordinary path:
+   * the delta buffer's line quantisation decides when a fragment becomes
+   * visible, and the scheduler's trailing throttle decides when it is
+   * painted.
+   */
+  private pushContent(): void {
+    const painted = this.scheduler.requestContent(() => {
+      // The leading frame is painted right after this returns, so the content
+      // has to be in the model NOW: a frame painted before the commit shows
+      // nothing.
+      if (this.commitBuffers()) this.noteTranscriptMutation();
+    });
+    if (!painted) this.drainBuffers();
+  }
+
+  /**
    * Commit buffered deltas into the block model.
    *
    * This is the whole point of the design: the ONLY thing a delta does is
@@ -2114,7 +2147,7 @@ export class TUIApp {
     this.thinkingBuffer.reset();
     this.editor.clear();
     this.follow = true;
-    this.scrollLines = 0;
+    this.scrollTop = 0;
     this.focus = 'input';
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
@@ -2200,7 +2233,7 @@ export class TUIApp {
       }
     }
     this.follow = true;
-    this.scrollLines = 0;
+    this.scrollTop = 0;
     this.focus = 'input';
     this.selectedBlockIndex = -1;
     this.expandedBlockIds.clear();
@@ -3100,6 +3133,7 @@ exportHistory(): string[] {
       this.noteTranscriptMutation();
     }
     this.follow = true;
+    this.scrollTop = 0;
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
     this.scheduler.requestImmediate();
@@ -3127,7 +3161,7 @@ exportHistory(): string[] {
   private followTail(): void {
     if (this.focus === 'transcript') this.focus = 'input';
     this.follow = true;
-    this.scrollLines = 0;
+    this.scrollTop = 0;
     this.scheduler.requestImmediate();
   }
 
@@ -3189,29 +3223,38 @@ exportHistory(): string[] {
     const totalRows = heights.reduce((total, lines) => total + lines, 0);
     const viewportRows = this.visibleTranscriptRows();
     const maxStart = Math.max(0, totalRows - viewportRows);
-    let start = Math.max(0, Math.min(maxStart, maxStart - this.scrollLines));
+    // Following pins the window to the newest line; otherwise the viewport
+    // stays where the reader put it and the selected block is brought into it.
+    let start = this.follow
+      ? maxStart
+      : Math.max(0, Math.min(maxStart, this.scrollTop));
     if (selectedStart < start) start = selectedStart;
     else if (selectedStart + selectedRows > start + viewportRows) {
       start = selectedStart + selectedRows - viewportRows;
     }
     start = Math.max(0, Math.min(maxStart, start));
-    this.scrollLines = maxStart - start;
-    this.follow = this.scrollLines === 0;
+    this.scrollTop = start;
+    // Reaching the bottom IS following again, and it is the only way there:
+    // the reader scrolls to the last line and the transcript starts following
+    // again. Deriving this from the offset rather than setting it separately
+    // is what stops "I scrolled to the bottom but it still says paused" from
+    // being reachable.
+    this.follow = start >= maxStart;
   }
 
   private scrollBy(pages: number): void {
     const rows = this.visibleTranscriptRows();
     const total = this.transcript.totalLines(this.model, this.renderOptions());
-    const maxBack = Math.max(0, total - rows);
-    const next = pages < 0
-      ? Math.min(maxBack, this.scrollLines - pages * rows)
-      : Math.max(0, this.scrollLines - pages * rows);
-    this.scrollLines = next;
+    const maxTop = Math.max(0, total - rows);
+    // `scrollTop` grows DOWNWARDS, so a negative page count (up) shrinks it.
+    const current = this.follow ? maxTop : Math.min(maxTop, this.scrollTop);
+    const next = Math.max(0, Math.min(maxTop, current + pages * rows));
+    this.scrollTop = next;
     // Scrolling back to the newest line IS following again; scrolling away
     // from it is not. Deriving this from the offset rather than setting it
     // separately is what stops "I scrolled to the bottom but it still says
     // paused" from being reachable.
-    this.follow = this.scrollLines === 0;
+    this.follow = next >= maxTop;
     this.scheduler.requestImmediate();
   }
 
@@ -3222,11 +3265,13 @@ exportHistory(): string[] {
    */
   private scrollByLines(lines: number): void {
     const total = this.transcript.totalLines(this.model, this.renderOptions());
-    const maxBack = Math.max(0, total - this.visibleTranscriptRows());
-    this.scrollLines = lines < 0
-      ? Math.min(maxBack, this.scrollLines - lines)
-      : Math.max(0, this.scrollLines - lines);
-    this.follow = this.scrollLines === 0;
+    const maxTop = Math.max(0, total - this.visibleTranscriptRows());
+    // Negative lines scroll UP: `scrollTop` counts from the top of the
+    // document, so going back means a smaller number.
+    const current = this.follow ? maxTop : Math.min(maxTop, this.scrollTop);
+    const next = Math.max(0, Math.min(maxTop, current + lines));
+    this.scrollTop = next;
+    this.follow = next >= maxTop;
     this.scheduler.requestImmediate();
   }
 

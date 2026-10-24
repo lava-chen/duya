@@ -83,6 +83,24 @@ export const VIEW_EXECUTORS: Record<string, CommandExecutorFn> = {
   },
 
   /**
+   * Plan mode is a session-level mode modifier — the same one the composer's
+   * "Plan Mode" chip toggles (`useSlashCommands.ts` → `modeValue: 'plan-task'`).
+   * Switching it on is what makes the agent plan before it edits.
+   *
+   * `toggleMode` is a toggle, so re-running `/plan` turns the mode back off.
+   * That matches tapping the chip twice, which is what the user sees.
+   *
+   * The mode is mutually exclusive with `research` (`MODE_EXCLUSIVE_WITH` in
+   * `@/types/mode-id`), so turning plan mode on drops research mode.
+   */
+  plan: (ctx) => {
+    const app = ctx.app;
+    if (!app) return bridgeMissing('plan');
+    app.toggleMode('plan-task');
+    return { type: 'dismiss' };
+  },
+
+  /**
    * Research mode is a session-level mode modifier (plan 423) — switching it on
    * is what makes the agent use `research_start` / `research_report`. The query
    * itself is forwarded as plain text: `/deep-research` is a desktop command

@@ -1,5 +1,5 @@
 /**
- * Trailing-edge render throttle.
+ * Trailing-edge render throttle, with a leading edge for new content.
  *
  * ## Why throttle at all
  *
@@ -19,6 +19,22 @@
  * input routes through `requestImmediate()` rather than queueing behind a
  * timer, because a queued `setTimeout` on Windows can cost a full tick of
  * perceived lag on the one interaction where lag is felt most.
+ *
+ * ## Why content gets a leading edge anyway
+ *
+ * A pure trailing throttle makes the FIRST token of an answer wait for the
+ * rest of a window that was opened by a frame which did not contain it. The
+ * user is watching the screen hardest exactly there, and the frame they are
+ * waiting for shows nothing they have not seen.
+ *
+ * So `requestContent()` paints the first content of a burst immediately, and
+ * leaves everything after it on the trailing throttle. The tail is still safe:
+ * the immediate frame paints the state as it is NOW, so the content that
+ * triggered it is on screen rather than lost, and content that arrives later
+ * schedules the ordinary trailing render, which always happens.
+ *
+ * The cost is ONE extra frame per burst, not per token: a burst of any length
+ * paints one leading frame plus one trailing frame per interval.
  *
  * ## Why the clock and timers are injected
  *
@@ -67,6 +83,14 @@ export class RenderScheduler {
   private renderRequested = false;
   /** Negative infinity, so the FIRST request renders on the next tick at delay 0. */
   private lastRenderAt = Number.NEGATIVE_INFINITY;
+  /**
+   * When the last CONTENT request arrived, or negative infinity.
+   *
+   * This is the burst window: content that arrives within `minIntervalMs` of
+   * the previous content belongs to the same burst, and only the FIRST
+   * request of a burst earns the leading edge.
+   */
+  private lastContentAt = Number.NEGATIVE_INFINITY;
   private stopped = false;
   private renders = 0;
 
@@ -113,6 +137,66 @@ export class RenderScheduler {
       this.lastRenderAt = this.now();
       if (this.renderRequested) this.request();
     }, delay);
+  }
+
+  /**
+   * Ask for a render of NEW CONTENT, and paint the first of a burst NOW.
+   *
+   * ## The rule
+   *
+   * The FIRST content request of a burst paints immediately. Every later
+   * content request in the same burst is throttled exactly like `request()`.
+   *
+   * A burst is a run of content requests closer together than
+   * `minIntervalMs`; a gap that long starts a new one.
+   *
+   * ## Why the tail is still safe
+   *
+   * The immediate frame paints the state as it is NOW, so the content that
+   * triggered it is on screen rather than lost — this is the difference
+   * between a leading edge and the leading-edge throttle this file used to
+   * argue against, which swallowed the rest of the window and dropped the
+   * tail. Content that arrives afterwards schedules the ordinary trailing
+   * render, and that render always happens.
+   *
+   * ## Why the cost is one frame per burst
+   *
+   * A burst paints one leading frame plus one trailing frame per interval:
+   * exactly ONE frame more than the pure trailing throttle, and only for the
+   * first frame of the burst. A firehose is unaffected.
+   *
+   * @param prepare Runs immediately before the leading frame is painted. The
+   *   content has to be in the model by then — a frame painted before the
+   *   content is committed shows nothing, which defeats the whole point. NOT
+   *   called when the request is throttled: throttled content keeps the
+   *   caller's own cadence (line quantisation, `delta-buffer.ts`).
+   * @returns `true` when the content was painted immediately, `false` when
+   *   the request was throttled.
+   */
+  requestContent(prepare: () => void): boolean {
+    if (this.stopped) return false;
+
+    const at = this.now();
+    const burstStart = at - this.lastContentAt >= this.minIntervalMs;
+    this.lastContentAt = at;
+
+    if (!burstStart) {
+      // Same burst: the trailing throttle owns this one.
+      this.request();
+      return false;
+    }
+
+    // Leading edge. Take over the queued frame: it was scheduled for a state
+    // that does not include this content, and painting now carries it.
+    if (this.timer !== undefined) {
+      this.clearTimer(this.timer);
+      this.timer = undefined;
+    }
+    this.renderRequested = false;
+    prepare();
+    this.render();
+    this.lastRenderAt = this.now();
+    return true;
   }
 
   /**

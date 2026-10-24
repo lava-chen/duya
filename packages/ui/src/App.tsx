@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -19,15 +19,7 @@ import {
 } from "@/components/chat/bot/send/scheduled-turns";
 import type { BotDirectSendPayload } from "@/components/chat/BotDirectChatView";
 import { composeReplyContent } from "@/components/chat/bot/reply";
-import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
-import { SkillsView } from "@/components/skills/SkillsView";
-import { AutomationView } from "@/components/automation/AutomationView";
-import { WorkflowPage } from "@/components/workflow/WorkflowPage";
-import { ProjectsView } from "@/components/projects/ProjectsView";
-import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
-import { MiniAppsView } from "@/components/plugin-apps/MiniAppsView";
-import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
@@ -53,6 +45,36 @@ import type { RunSessionSnapshot } from "@duya/client-core";
 import type { HostPermissionRequest } from "@duya/agent-protocol";
 import { mergeRunSessionRows } from "@/lib/run-session-view";
 import { RunAttachmentGate } from "@/lib/run-attachment-gate";
+
+/**
+ * Surfaces the user reaches through an explicit click are loaded on demand.
+ *
+ * They used to be static imports, so the whole settings, workflow,
+ * projects, extensions, automation, skills and new-chat trees rode along in
+ * the startup chunk: the renderer downloaded and evaluated all of them
+ * before the composer was interactive, even though the first screen is the
+ * home / chat surface. A lazy boundary stops the static module graph at the
+ * view, so the startup chunk carries only what the first screen renders.
+ *
+ * The chat surfaces (`ChatView`, `BotDirectChatView`, `GroupRoomChatView`)
+ * stay eager on purpose: `activeThreadId` and `currentView` are persisted,
+ * so a returning user lands straight in a session and the chat IS the first
+ * screen. Lazy-loading those would push the composer further away, not
+ * closer.
+ *
+ * The `Suspense` fallback is null, matching the pattern already used for
+ * the onboarding flow (`components/layout/app-shell.tsx`): the shell around
+ * the surface stays mounted, only the surface that is still loading is
+ * absent.
+ */
+const NewChatView = lazy(() => import("@/components/chat/NewChatView").then((m) => ({ default: m.NewChatView })));
+const SkillsView = lazy(() => import("@/components/skills/SkillsView").then((m) => ({ default: m.SkillsView })));
+const AutomationView = lazy(() => import("@/components/automation/AutomationView").then((m) => ({ default: m.AutomationView })));
+const WorkflowPage = lazy(() => import("@/components/workflow/WorkflowPage").then((m) => ({ default: m.WorkflowPage })));
+const ProjectsView = lazy(() => import("@/components/projects/ProjectsView").then((m) => ({ default: m.ProjectsView })));
+const ExtensionsPage = lazy(() => import("@/components/extensions/ExtensionsPage").then((m) => ({ default: m.ExtensionsPage })));
+const MiniAppsView = lazy(() => import("@/components/plugin-apps/MiniAppsView").then((m) => ({ default: m.MiniAppsView })));
+const SettingsView = lazy(() => import("@/components/settings/SettingsView").then((m) => ({ default: m.SettingsView })));
 
 /** Boot splash lifecycle. Re-exported from StartupLanding for convenience. */
 type BootSplashPhase = StartupLandingPhase;
@@ -1250,7 +1272,12 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
   return (
     <I18nProvider>
       <FontProvider>
-        <AppShell capabilities={uiServices?.capabilities}>{renderView()}</AppShell>
+        {/* The lazily loaded surfaces suspend here. Only one view is rendered
+            at a time, so the boundary never takes the eager content down
+            with it. */}
+        <AppShell capabilities={uiServices?.capabilities}>
+          <Suspense fallback={null}>{renderView()}</Suspense>
+        </AppShell>
         <SearchCommandPalette />
         {bootPhase !== "hidden" && (
           <StartupLanding phase={bootPhase} status={bootStatus} />

@@ -327,6 +327,17 @@ export interface HostHandshakeV1 extends HostHealthV1 {
  */
 export const HOST_DECLARATION_HEADER = 'x-duya-host-declaration';
 
+/**
+ * A held client lease.
+ *
+ * The lease keeps a client-scoped Host alive for as long as it is held.
+ * Closing it releases the Host's hold on this client; it does not stop the
+ * Host, which decides that on its own once every client is gone.
+ */
+export interface HostClientLease {
+  close(): void;
+}
+
 /** Typed client for the versioned Host session, timeline, and task APIs. */
 export class HostSessionHttpClient implements
   HostSessionApiV1,
@@ -375,6 +386,45 @@ export class HostSessionHttpClient implements
 
   async getHealth(): Promise<HostHealthV1> {
     return this.request('GET', '/healthz');
+  }
+
+  /**
+   * Hold a client lease on this Host.
+   *
+   * The lease keeps the Host alive: it is a long-lived request that stays open
+   * until {@link HostClientLease.close} is called, and the Host stops itself
+   * once the last lease is gone. A client that streams a long turn sends no
+   * other traffic, so request frequency cannot answer "is anybody still
+   * there?" — an open lease can.
+   *
+   * Returns `null` when the Host does not offer leases. That is the ordinary
+   * case for a Host somebody else owns: such a Host runs until it is stopped,
+   * so this client has no reason to hold one.
+   */
+  async openClientLease(): Promise<HostClientLease | null> {
+    const controller = new AbortController();
+    const response = await fetch(`${this.origin}/v1/host/lease`, {
+      headers: { authorization: `Bearer ${this.token}` },
+      signal: controller.signal,
+    });
+    if (response.status === 404) {
+      controller.abort();
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    if (!response.ok) {
+      controller.abort();
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Host refused the client lease: ${response.status}`);
+    }
+    let closed = false;
+    return {
+      close: () => {
+        if (closed) return;
+        closed = true;
+        controller.abort();
+      },
+    };
   }
 
   /** Declare what this client consumes, and read the Host capability answer. */

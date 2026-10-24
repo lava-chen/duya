@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COMMAND_SPECS,
+  availableSpecsFor,
   canonicalName,
+  commandAvailability,
   describeSpec,
   findSpec,
   formatSpecLabel,
@@ -94,8 +96,8 @@ describe('command catalog per-surface views', () => {
   it('gives each surface its own advertised set', () => {
     const desktop = specsForSurface('desktop').map((spec) => spec.name);
     const cli = specsForSurface('cli').map((spec) => spec.name);
-    expect(desktop).toContain('review');
-    expect(cli).not.toContain('review');
+    expect(desktop).toContain('diff');
+    expect(cli).not.toContain('diff');
     expect(cli).toContain('fork');
     expect(desktop).not.toContain('fork');
   });
@@ -111,8 +113,11 @@ describe('command catalog per-surface views', () => {
     const names = specsForSurface('cli', { busy: true }).map((spec) => spec.name);
     expect(names).toContain('stop');
     expect(names).toContain('status');
+    // Switching the model mid-turn is not safe — the CLI handler refuses it.
     expect(names).not.toContain('model');
-    expect(names).not.toContain('export');
+    // So is compacting the conversation: it rewrites the context the running
+    // turn is reading from.
+    expect(names).not.toContain('compact');
   });
 
   it('preserves declaration order so the popup order is stable', () => {
@@ -157,7 +162,7 @@ describe('command catalog desktop parity', () => {
   it('still resolves every command the Desktop registry listed', () => {
     const desktopOnly = [
       'clear', 'compact', 'export', 'help', 'status', 'cost', 'recap', 'model',
-      'review', 'simplify', 'doctor', 'commit', 'plan', 'goal', 'resume',
+      'plan', 'goal', 'resume',
       'rename', 'stop', 'queue', 'login', 'logout', 'permission', 'effort',
       'context', 'transcript', 'skills', 'deep-research', 'diff', 'loop',
       'memory', 'mcp', 'add-dir', 'image', 'btw', 'copy', 'stop',
@@ -165,6 +170,17 @@ describe('command catalog desktop parity', () => {
     for (const name of desktopOnly) {
       expect(findSpec(name), name).toBeDefined();
       expect(findSpec(name)?.surfaces, name).toContain('desktop');
+    }
+  });
+
+  it('no longer resolves the commands that had no implementation', () => {
+    // `review` duplicated `/diff` (both open the code-review panel), and
+    // `simplify` / `doctor` / `commit` only ever produced a prompt naming a
+    // skill that does not exist. duya ships six `.system` skills — none of
+    // them is one of these four. Leaving them resolvable would send the user
+    // to a skill that cannot be loaded.
+    for (const name of ['review', 'simplify', 'doctor', 'commit']) {
+      expect(findSpec(name), name).toBeUndefined();
     }
   });
 
@@ -183,6 +199,66 @@ describe('command catalog desktop parity', () => {
     // platforms: ['app', 'gateway'].
     const gateway = COMMAND_SPECS.filter((spec) => spec.gateway === true).map((spec) => spec.name);
     expect(gateway).toEqual(['new', 'help', 'status']);
+  });
+});
+
+describe('command availability', () => {
+  it('refuses a session-scoped command when there is no session', () => {
+    const spec = findSpec('rename')!;
+    const verdict = commandAvailability(spec, { hasSession: false, busy: false });
+
+    expect(verdict.available).toBe(false);
+    expect(verdict.available === false && verdict.reason).toContain('/rename');
+  });
+
+  it('refuses a command that is not safe to run mid-turn', () => {
+    // `rename` mutates the conversation, so it declares no
+    // `availableWhileBusy`. The reason must name the command and say what to
+    // do — a bare "unavailable" teaches the user nothing.
+    const spec = findSpec('rename')!;
+    const verdict = commandAvailability(spec, { hasSession: true, busy: true });
+
+    expect(verdict.available).toBe(false);
+    expect(verdict.available === false && verdict.reason).toContain('/rename');
+  });
+
+  it('allows a command that declares itself safe while busy', () => {
+    const spec = findSpec('status')!;
+    expect(spec.availableWhileBusy).toBe(true);
+    expect(commandAvailability(spec, { hasSession: true, busy: true }).available).toBe(true);
+  });
+
+  it('allows a command that needs neither a session nor a free turn', () => {
+    // `/help` declares itself safe while busy and needs no session.
+    const spec = findSpec('help')!;
+    expect(spec.availableWhileBusy).toBe(true);
+    expect(spec.requiresSession).not.toBe(true);
+    expect(commandAvailability(spec, { hasSession: false, busy: true }).available).toBe(true);
+  });
+
+  it('uses the spec own reason when it declares one', () => {
+    const spec = { ...findSpec('rename')!, unavailableReason: '先停止当前回合。' };
+    const verdict = commandAvailability(spec, { hasSession: true, busy: true });
+
+    expect(verdict.available === false && verdict.reason).toBe('先停止当前回合。');
+  });
+
+  it('lists only the commands a surface can actually run', () => {
+    const idle = availableSpecsFor('desktop', { hasSession: true, busy: false });
+    const busy = availableSpecsFor('desktop', { hasSession: true, busy: true });
+
+    expect(idle.length).toBeGreaterThan(busy.length);
+    // `/status` is safe mid-turn, `/rename` is not.
+    expect(busy.map((spec) => spec.name)).toContain('status');
+    expect(busy.map((spec) => spec.name)).not.toContain('rename');
+    expect(idle.map((spec) => spec.name)).toContain('rename');
+  });
+
+  it('keeps a hidden command resolvable — hiding is not the same as removing', () => {
+    // The rule the catalog exists to enforce: a command that is unavailable
+    // right now is still FOUND by name, so the surface can explain itself
+    // instead of forwarding the token to the model as prose.
+    expect(findSpec('rename')).toBeDefined();
   });
 });
 

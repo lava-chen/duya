@@ -79,10 +79,24 @@ function electronSources(dir = ELECTRON_DIR, acc: string[] = []): string[] {
 /** Every channel a `ipcMain.handle('...')` call in the main process answers. */
 function collectRegisteredChannels(): Map<string, string> {
   const registered = new Map<string, string>();
-  for (const file of electronSources()) {
-    const source = fs.readFileSync(file, 'utf8');
-    for (const m of source.matchAll(/ipcMain\.handle\(\s*['"]([^'"]+)['"]/g)) {
-      if (!registered.has(m[1])) registered.set(m[1], path.relative(ELECTRON_DIR, file));
+  const sources = electronSources().map((file) => ({ file, source: fs.readFileSync(file, 'utf8') }));
+
+  // A handler may name its channel through a constant
+  // (`ipcMain.handle(GPU_STATUS_CHANNEL, ...)`), so the channel names are
+  // collected before the registrations are read: the constant may be
+  // declared in another module.
+  const constants = new Map<string, string>();
+  const CONSTANT = /\b(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*['"`]([A-Za-z0-9:_-]+)['"`]/g;
+  for (const { source } of sources) {
+    for (const m of source.matchAll(CONSTANT)) {
+      if (!constants.has(m[1])) constants.set(m[1], m[2]);
+    }
+  }
+
+  for (const { file, source } of sources) {
+    for (const m of source.matchAll(/ipcMain\.handle\(\s*(?:['"]([^'"]+)['"]|([A-Za-z_$][\w$]*))/g)) {
+      const channel = m[1] ?? (m[2] === undefined ? '' : constants.get(m[2]) ?? m[2]);
+      if (!registered.has(channel)) registered.set(channel, path.relative(ELECTRON_DIR, file));
     }
   }
   // Lazy groups: `main.ts` lists their channels up front and loads the real

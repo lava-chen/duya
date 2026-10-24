@@ -62,6 +62,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Frozen baselines may shrink as debt is removed, but a PR must never
+      # make an existing architecture or retirement gate more permissive.
+      - name: Baseline ratchet
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          BASELINE_BASE_SHA="${PR_BASE_SHA:-$PUSH_BEFORE_SHA}"
+          if [ -z "$BASELINE_BASE_SHA" ] || \
+             [ "$BASELINE_BASE_SHA" = "0000000000000000000000000000000000000000" ] || \
+             ! git cat-file -e "${BASELINE_BASE_SHA}^{commit}" 2>/dev/null; then
+            BASELINE_BASE_SHA="$(git rev-parse HEAD^)"
+          fi
+          npm run architecture:baseline-ratchet -- "$BASELINE_BASE_SHA"
+
       # No built `dist/` is required. Measured on a clean checkout with every
       # `dist/` absent: `architecture:check` exits 0 (802 total / 802
       # tolerated / 802 baseline) and `architecture:self-test` exits 0. The
@@ -150,6 +166,15 @@ jobs:
             process.exit(1);
           }
           EOF
+
+      - name: Slice graph and audit-imports parity
+        run: npm run architecture:slice-graph
+
+      # Existing retirement references are frozen in a non-regression count
+      # baseline. This gate remains green while the package is open and turns
+      # red only when a reference is added.
+      - name: Agent retirement reference ratchet
+        run: npm run agent-retirement-gate
 
       # Plan 610 S4c-d3. `architecture:boundaries` (scripts/architecture/
       # boundary-gates.mjs) is a SEPARATE gate with a SEPARATE baseline
@@ -658,6 +683,26 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=6144
         run: npm run electron:build
+
+      - name: First-screen JS budget
+        # The bytes of JavaScript the renderer must download and evaluate
+        # before the first screen can paint.
+        #
+        # This is the sprint's first machine-INDEPENDENT performance gate.
+        # Wall-clock thresholds cannot gate a shared runner, so they stay out
+        # of CI and live in the plan document as trends; bytes are the same on
+        # every machine, so a budget is a real gate.
+        #
+        # It catches the regressions that matter for the first screen: a
+        # barrel file that drags a provider SDK back into the entry chunk, an
+        # import that used to be lazy becoming static, a dependency that
+        # grew. The budget is one-sided — an improvement never fails it — and
+        # it is tightened by hand after a measured win, the way the
+        # architecture baselines are ratcheted.
+        #
+        # The step reads the build output of the step above; it launches
+        # nothing, so it costs a fraction of a second.
+        run: npm run perf:first-screen-budget
 
       - name: Run affected Electron E2E tests
         # The Electron E2E suite is OFF the pull-request path.

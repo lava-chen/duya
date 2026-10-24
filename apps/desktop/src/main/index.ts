@@ -90,6 +90,7 @@ import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
 
 import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
 import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
+import { attachGpuDiagnostics, formatGpuStatusLine } from './core/gpu-diagnostics';
 import { checkMediaPath } from './core/media-allowlist';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
 import { createTray } from './core/tray-manager';
@@ -233,6 +234,38 @@ if (gotTheLock) {
     setupApplicationMenu();
 
     logEnvironmentDiagnostic();
+
+    // GPU compositing observability (desktop performance hill-climb, agent D).
+    //
+    // Before this the main process had NO GPU observation at all: no
+    // `getGPUFeatureStatus()`, no `getGPUInfo()`, and no listener on
+    // `child-process-gone`. A GPU-process crash was therefore silent, and the
+    // `gpu.compositing` metric had no producer. This observer only READS
+    // state - it never changes a GPU switch, never disables hardware
+    // acceleration and never enables a Chromium GPU experiment.
+    //
+    // A healthy GPU is an info line (same convention as the environment
+    // diagnostic above); a degraded one is a warning, because software
+    // compositing is exactly the kind of thing that makes a UI feel slow and
+    // leaves no other trace.
+    const gpuDiagnostics = attachGpuDiagnostics(app, ipcMain, logger, LogComponent.Main);
+    void gpuDiagnostics
+      .getStatus()
+      .then((status) => {
+        const line = `GPU status: ${formatGpuStatusLine(status)}`;
+        if (status.compositing === 'hardware') {
+          logger.info(line, undefined, LogComponent.Main);
+        } else {
+          logger.warn(line, undefined, LogComponent.Main);
+        }
+      })
+      .catch((err: unknown) => {
+        logger.warn(
+          'GPU status unavailable',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.Main,
+        );
+      });
 
     // ============================================================
     // Step 0.75: Subagent transcript root unification (~/.duya)

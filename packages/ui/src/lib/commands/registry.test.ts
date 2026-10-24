@@ -15,6 +15,10 @@ import {
   isKnownCommand,
   resolveCommand,
 } from './registry';
+import { hasCommandExecutor } from './executors/registry';
+// Side effect: registers every domain's executors, exactly as production does
+// through `executors/index.ts`.
+import './executors/index';
 
 describe('desktop registry derivation', () => {
   it('lists exactly the commands the catalog advertises to the desktop', () => {
@@ -95,5 +99,37 @@ describe('desktop registry lookup', () => {
     expect(new Set(flat).size).toBe(flat.length);
     expect(grouped.get('session')?.map((cmd) => cmd.name)).toContain('new');
     expect(grouped.get('exit')).toBeUndefined();
+  });
+});
+
+describe('desktop commands have an executor', () => {
+  // The rule the catalog documents as "not advertised-but-unrunnable is
+  // forbidden". Before this test, `review` / `simplify` / `doctor` /
+  // `commit` sat in the catalog with no executor at all — the popup offered
+  // them and the composer turned them into a prompt naming a skill duya does
+  // not ship.
+  //
+  // A literal list on purpose: a test generated from the registry would
+  // assert the registry agrees with itself.
+  const DESKTOP_EXECUTORS = [
+    'new', 'resume', 'rename', 'clear', 'compact', 'export', 'copy', 'stop',
+    'queue', 'model', 'permission', 'effort', 'login', 'logout', 'help',
+    'status', 'cost', 'context', 'transcript', 'recap', 'skills', 'plan',
+    'goal', 'deep-research', 'diff', 'loop', 'memory', 'mcp', 'add-dir',
+    'image', 'btw',
+  ];
+
+  it('registers an executor for every command the catalog advertises', () => {
+    const declared = specsForSurface('desktop').map((spec) => spec.name);
+    const missing = declared.filter((name) => !hasCommandExecutor(name));
+    expect(missing).toEqual([]);
+  });
+
+  it('registers exactly the commands this surface owns', () => {
+    // The alias entries (`usage`, `title`, `sessions`, `permissions`,
+    // `research`) are dispatch keys, not commands of their own — they resolve
+    // through the canonical name and are not in the catalog.
+    const extra = DESKTOP_EXECUTORS.filter((name) => !specsForSurface('desktop').some((spec) => spec.name === name));
+    expect(extra).toEqual([]);
   });
 });
