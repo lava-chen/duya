@@ -4023,22 +4023,37 @@ export class HostSessionHttpServer {
     const limit = this.#optionalNumber(url.searchParams.get('limit'));
     const includeSupersededRaw = url.searchParams.get('includeSuperseded');
     const sources = url.searchParams.getAll('source');
+    const allRaw = url.searchParams.get('all');
     if (
       limit === null ||
       (includeSupersededRaw !== null && includeSupersededRaw !== 'true' && includeSupersededRaw !== 'false') ||
+      (allRaw !== null && allRaw !== '1') ||
+      // A whole read and a page are contradictory, and so is a whole read
+      // with a cursor: rejecting both beats silently ignoring one of them.
+      (allRaw === '1' && (limit !== undefined || url.searchParams.has('cursor'))) ||
       sources.length > 32 ||
       sources.some((source) => source.length === 0 || source.length > 128)
     ) {
       this.#sendJson(res, 400, { error: { code: 'invalid_message_query' } });
       return;
     }
-    const query: HostMessageReadQuery = {
-      ...(limit === undefined ? {} : { limit }),
-      ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor') ?? '' } : {}),
+    const projection = {
       ...(includeSupersededRaw === null ? {} : { includeSuperseded: includeSupersededRaw === 'true' }),
       ...(sources.length === 0 ? {} : { sources }),
     };
     try {
+      if (allRaw === '1') {
+        // The whole transcript, projected ONCE. The paged read projects the
+        // whole transcript on every page, so a client that pages to the end
+        // pays for it once per page.
+        this.#sendJson(res, 200, await this.#options.api.readAllMessages(sessionId as SessionId, projection));
+        return;
+      }
+      const query: HostMessageReadQuery = {
+        ...(limit === undefined ? {} : { limit }),
+        ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor') ?? '' } : {}),
+        ...projection,
+      };
       this.#sendJson(res, 200, await this.#options.api.readMessages(sessionId as SessionId, query));
     } catch (error) {
       this.#sendApiError(res, error);
