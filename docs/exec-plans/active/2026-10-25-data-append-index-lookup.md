@@ -1,7 +1,7 @@
 # 消息写路径：appendBatch 的去重检查按批点查，不再全量扫会话索引
 
 状态：active · 负责人：mavis 会话 `mvs_ae3b38275b13437883faa5ef6f4d518c` · 更新：2026-10-25
-分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1` · owner：mavis
+分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1`（已合入 `origin/master` `686f3c81`）· owner：mavis
 
 ## 目标与边界
 
@@ -37,7 +37,7 @@
 - [x] 删除失去调用点的 `getIndexedIds`
 - [x] 新增测试（6 条）+ 变异验证（回退优化后 2 条转红）
 - [x] 受影响集 7 文件 / 112 断言全过
-- [ ] 三门禁 + 重建 bundle + 开 PR
+- [x] 三门禁 + 重建 bundle + 开 PR（#456，未合并，待用户授权）
 
 ## 发现与决策
 
@@ -74,17 +74,21 @@
 | dirty（packages/data） | Windows / Node 24.16 | 变异验证：把点查换回全量扫后重跑同一文件 | 1 | 2 条性能断言转红，4 条语义断言仍绿 |
 | dirty（packages/data） | Windows / Node 24.16 | `npx vitest run`（message-log / rotation / portability / source-filter / session-archive / session-fork / legacy-import） | 0 | 7 文件 / 112 断言全过 |
 | dirty（packages/data） | Windows / Node 24.16 | 基准：真实 `MessageLog`，单会话 8000 条 / 每批 4 条 | 0 | 5957ms → 3029ms（−49%）；2000 条 951ms → 710ms（−25%） |
+| head `cafcb4d8`（clean） | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 206 known / 102 key(s)，无新增类型错误 |
+| head `cafcb4d8`（clean） | Windows / Node 24.16 | `npm run architecture:check` | 0 | total 2721 = tolerated 2721，baseline 2530 未变 |
+| head `cafcb4d8`（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH，0/948 bundle inputs 在 bundle commit 后变更 |
+| head `cafcb4d8`（clean） | Windows / Node 24.16 | `vitest run`（message-log / rotation / portability / source-filter / session-archive / session-fork / legacy-import / append-index） | 0 | 8 文件 / 118 断言全过 |
 
 ## 接续 / 结果
 
 已实现：`getIndexedIdsIn`（按批内 id 集合走主键点查，JS 侧按 `session_id` 过滤，分块 400），
 `appendBatch` 与 `importContinueFromFile` 两处去重检查改用它，删除失去调用点的 `getIndexedIds`。
 
-已验证：新增 6 条断言全过并经变异验证；受影响集 7 文件 / 112 断言全过；基准单会话 8000 条
-耗时减半。
+已验证：新增 6 条断言全过并经变异验证；受影响集 8 文件 / 118 断言全过；基准单会话 8000 条
+耗时减半；三门禁（typecheck / architecture / bundle:verify）在 head `cafcb4d8` 上全绿。
 
 未提交路径：无。
 副作用：无。
 阻塞：无。
 
-下一步：跑三门禁 + 重建 bundle + 开 PR（不合并，待用户授权）。
+下一步：等 PR #456 的 CI 绿，然后申请合并授权（不自行合并）。
