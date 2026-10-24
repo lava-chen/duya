@@ -76,13 +76,40 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 ## 进度
 
 - [x] 合并 PR #439 入 master（`3a687e41`，CI 绿）
-- [x] 三路并行摸底（CLI 接入面 / 后端能力 / 桌面 UI 资产与 app 语义）
+- [x] 三路并行摸底（CLI 接入面 / 后端能力 / 桌面 UI 资产与 app 语义）+ 一路补查（mcp/skills 取数路径）
 - [x] 建 worktree + junction + 依赖构建
 - [x] 写本计划
-- [ ] PR-1 会话类
-- [ ] PR-2 能力类
-- [ ] PR-3 扩展类
-- [ ] PR-4 新功能类
+- [ ] PR-1 会话类（compact / btw / diff）— 实现完成，门禁与 PR 待办
+- [ ] PR-2 能力类：mcp / skills
+- [ ] PR-3 扩展类：app / apps / plugin / workflow
+- [ ] PR-4 新功能类：doctor / init
+
+### PR-1 已实现（work package 拆分）
+
+| WP | 内容 | 提交 |
+| --- | --- | --- |
+| WP-A | Host 会话级出口：`POST /v1/sessions/{id}/compact`（SSE）+ `POST /v1/sessions/{id}/btw`（JSON）、`SessionCompactor` / `SessionSideQuestioner`、`WorkerManager.addMessageListener` 多订阅 fan-out、Host client 两个新方法 | `850fc300` + `efa99845` |
+| WP-B | CLI `/compact` + `/btw` + `reloadTranscript` 动作 | `5355e26e` + `ae48b01a` |
+| WP-D | CLI `/diff`（进程内 git，含 untracked） | `4fbf5a1a` |
+| 主 agent | catalog surfaces 扩到 cli、CLI 注册表接线、完整性测试名单、拆除临时 client cast | `bc0328e0` `eafb535b` `ae48b01a` |
+
+**与 plan 613 的偏差（已定）**：
+1. `reserve(input)` **同步**返回 `{ok:true, events}` 或 `{ok:false, status, code, message}`，而不是 613 草拟的 `compact(input): Promise<SessionCompactResult>`。理由：路由必须在写任何 header **之前**决定回 JSON 错误还是 200 SSE；拿到 promise 时响应形态已定。
+2. 拒绝判定顺序 `session_busy` → `compact_in_flight` → `no_live_worker`，全部 409。`no_live_worker` 是 613 Phase 0 的 Go/No-Go 降级：**不拉起 worker、不补 provider 配置**。
+3. `/btw` **不做 busy 拒绝**——它的语义就是「不打断当前对话」，加 busy 拒绝会让功能自相矛盾；桌面端 `handlePostSideQuestion` 也不拒。
+4. SSE 解析器 `readServerSentFrames` 抽为模块级唯一实现，`watchAgentRunEvents` 一并复用。
+
+## 验证记录（PR-1）
+
+| SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 |
+| --- | --- | --- | --- |
+| `79cad6bf` clean | Windows / Node 24 | `npm run typecheck:all` | 0 |
+| `79cad6bf` clean | Windows / Node 24 | `npm run architecture:check` | 0 · `OK — no new boundary violations`；baseline 2530 / tolerated 2730，2 个 fingerprint 不再触发（缩债，非失败） |
+| `79cad6bf` clean | Windows / Node 24 | `node scripts/architecture/bundle-verify.mjs` | 0 · `FRESH 0/950 bundle inputs changed after the bundle commit` |
+| `69bd03b7` | Windows / Node 24 | `git merge origin/master` | 1 → 手工解决 `docs/exec-plans/README.md` 计划索引表冲突（取 master 版再插回本计划一行），其余自动合并 |
+| `79cad6bf` clean | Windows / Node 24 | `npx vitest run packages/command-catalog packages/ui packages/cli packages/gateway packages/host packages/agent-protocol` | 0 · 568 文件 / 5905 通过 / 3 跳过 |
+
+**未验证（真机）**：冷启动 worker 的 provider-config 解析（613 R1）、5 分钟无字节 SSE 存活探测、压缩后 transcript rebase 经 `includeSuperseded=false` 可见、端到端 `/btw` 对接真实 provider。以上均只有 fake worker / stub server 的单测级覆盖。
 
 ## 关键事实速查
 
