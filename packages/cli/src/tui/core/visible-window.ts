@@ -6,8 +6,9 @@
  * Full-screen mode slices the transcript to the pane; inline mode has to decide
  * which rows are old enough to commit to the terminal's scrollback and which
  * must stay live. Those look like different problems and were solved in
- * different places (`paintTranscript` vs `InlineSurface.render({ viewEnd })`),
- * which is how they came to disagree about what "scrolled back" means.
+ * different places (`paintTranscript` vs the inline surface's own window
+ * arithmetic), which is how they came to disagree about what "scrolled back"
+ * means.
  *
  * They are the same question: given per-block heights, a viewport and a scroll
  * offset, which lines are on screen? So it is asked once, here, and both modes
