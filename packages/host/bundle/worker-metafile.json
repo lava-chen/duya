@@ -9429,7 +9429,7 @@
       "format": "esm"
     },
     "packages/ai/src/model-request-invariants.ts": {
-      "bytes": 11020,
+      "bytes": 13658,
       "imports": [],
       "format": "esm"
     },
@@ -21907,7 +21907,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -38343,10 +38343,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -39612,7 +39612,7 @@
           "bytesInOutput": 1191
         },
         "packages/ai/src/model-request-invariants.ts": {
-          "bytesInOutput": 2280
+          "bytesInOutput": 2504
         },
         "packages/ai/src/utils/context-estimate.ts": {
           "bytesInOutput": 6664
@@ -42204,7 +42204,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -43602,7 +43602,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4602303
+      "bytes": 4602503
     }
   }
 }
