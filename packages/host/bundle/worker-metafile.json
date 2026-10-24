@@ -196,6 +196,11 @@
       ],
       "format": "esm"
     },
+    "packages/agent-protocol/src/session-compaction.ts": {
+      "bytes": 4119,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/rollout-events.ts": {
       "bytes": 13691,
       "imports": [],
@@ -575,7 +580,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 4570,
+      "bytes": 4692,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -616,6 +621,11 @@
           "path": "packages/agent-protocol/src/session-fork.ts",
           "kind": "import-statement",
           "original": "./session-fork.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/agent-protocol/src/rollout-events.ts",
@@ -1063,7 +1073,7 @@
       "format": "esm"
     },
     "packages/data/src/message-log.ts": {
-      "bytes": 124043,
+      "bytes": 125798,
       "imports": [
         {
           "path": "node:fs",
@@ -29732,7 +29742,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 84094,
+      "bytes": 89281,
       "imports": [],
       "format": "esm"
     },
@@ -30006,6 +30016,17 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/session-compaction.ts": {
+      "bytes": 14207,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
       "bytes": 3379,
       "imports": [
@@ -30018,7 +30039,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 234474,
+      "bytes": 240642,
       "imports": [
         {
           "path": "node:crypto",
@@ -30094,6 +30115,11 @@
           "path": "packages/host/src/run-api.ts",
           "kind": "import-statement",
           "original": "./run-api.js"
+        },
+        {
+          "path": "packages/host/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/host/src/project-api.ts",
@@ -30532,7 +30558,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 35660,
+      "bytes": 37652,
       "imports": [
         {
           "path": "child_process",
@@ -30955,7 +30981,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 35004,
+      "bytes": 37104,
       "imports": [
         {
           "path": "node:crypto",
@@ -31206,6 +31232,11 @@
           "path": "packages/host/src/run-api.ts",
           "kind": "import-statement",
           "original": "./run-api.js"
+        },
+        {
+          "path": "packages/host/src/session-compaction.ts",
+          "kind": "import-statement",
+          "original": "./session-compaction.js"
         },
         {
           "path": "packages/host/src/research-api.ts",
@@ -38968,6 +38999,9 @@
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
         },
+        "packages/agent-protocol/src/session-compaction.ts": {
+          "bytesInOutput": 30
+        },
         "packages/agent-protocol/src/rollout-events.ts": {
           "bytesInOutput": 279
         },
@@ -39140,7 +39174,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 403
+          "bytesInOutput": 409
         },
         "packages/data/src/run-store.ts": {
           "bytesInOutput": 7353
@@ -41006,7 +41040,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2553
@@ -41942,7 +41976,7 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1969
+          "bytesInOutput": 1971
         },
         "node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -42911,7 +42945,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -43607,7 +43641,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 33700
+          "bytesInOutput": 35003
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -43644,6 +43678,9 @@
         },
         "packages/host/src/run-api.ts": {
           "bytesInOutput": 10
+        },
+        "packages/host/src/session-compaction.ts": {
+          "bytesInOutput": 39
         },
         "packages/host/src/project-api.ts": {
           "bytesInOutput": 5
@@ -43682,7 +43719,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 10687
+          "bytesInOutput": 11124
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -44354,7 +44391,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4702257
+      "bytes": 4704063
     }
   }
 }
