@@ -57,6 +57,6 @@
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交；提交 SHA 待写。完整 `electron:build` 因官方资源下载失败未通过，但 `node scripts/build-electron.mjs` 已重编 main/preload bundle。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。完整 `electron:build` 因官方资源下载失败未通过，但 `node scripts/build-electron.mjs` 已重编 main/preload bundle。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
 下一步：向用户报告 S1 契约 diff、受影响调用方及验证记录；得到接续后从 S2 发现与目录切片开始。
