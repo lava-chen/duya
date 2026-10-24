@@ -99,6 +99,8 @@ export interface WorkflowRunSnapshot {
   definitionHash?: string;
   /** `dag` hashes normalized WorkflowDef; `dwf-script` hashes script body + frontmatter. */
   definitionHashSource?: 'dag' | 'dwf-script';
+  /** Run-level scheduler bound; separate from provider-level admission. */
+  maxConcurrency?: number;
   nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
   /**
    * @deprecated Journal records live in `workflow_run_events`. This remains
@@ -115,6 +117,7 @@ export interface WorkflowRunSnapshotSaveInput {
   definition: unknown;
   definitionHash?: string;
   definitionHashSource?: WorkflowRunSnapshot['definitionHashSource'];
+  maxConcurrency?: WorkflowRunSnapshot['maxConcurrency'];
   nodeStack?: WorkflowRunSnapshot['nodeStack'];
   /** Legacy compatibility; records are persisted in the event table. */
   journal?: JournalRecord[];

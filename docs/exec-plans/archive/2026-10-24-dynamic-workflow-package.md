@@ -1,6 +1,6 @@
 # 动态工作流核心包与并发、恢复纪律
 
-状态：draft PR #436 · CI 修复中（用户已授权合并，待门禁通过）· 负责人：Codex · 更新：2026-10-24
+状态：complete · PR #436 已合并 · 更新：2026-10-24
 分支：`codex/workflow-core-package` · worktree：`.claude/worktrees/workflow-core-package`
 base：`51014d6737ff74254fbb2ab954ddbb5b6a802563`（当前 `origin/master`）· owner：本会话
 
@@ -186,4 +186,6 @@ S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的�
 
 S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
 
-已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期，均已修复并 rebase 到最新 `51014d67`；第三次 rebase 的 bundle 冲突按源码重建，freshness 为 0/945 变化。最新 base 上的本地 architecture、typecheck、workflow/classification 测试和 bundle freshness 均通过。workflow run 909 又发现新 workspace 缺少包级 `AGENTS.md`；已添加边界指南，`npm run test:rules` 本地 6/6 通过。此修复待提交推送，随后等当前 PR head 的全量 CI 全绿后按用户授权合并。官方仓库已确认为 `zai-org/ZCode`；合并后再克隆到独立目录只读学习比较，不移植代码。
+PR #436 已由仓库维护者合并，merge commit 为 `a158dc5d57c92e25a1069427cf460d67590edaed`，PR head 为 `ce6732923fa1f321d3b25f0e23a82fbef62efe05`。GitHub Actions run `40089028336` 的 test scope、architecture、测试、typecheck、build 全部成功。已浅克隆官方 `zai-org/ZCode` 到 `/tmp/zcode-research`（只读，SHA `3c5b227649371507ddc4eb46ac5133afe6db1cab`）并完成架构比较；保留 YAML/DAG 与 Host 注入边界，不移植 TS 作者面、taint/causal 分析器或多层 run service。原工作 tree 保留本地验证生成的两个 worker bundle 改动，未推送。
+
+本计划后续状态：新一轮优化由 [workflow 并发上限持久化](../active/2026-10-24-workflow-retune-persistence.md) 跟踪。
