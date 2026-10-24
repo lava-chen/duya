@@ -332,14 +332,32 @@ Every wave updates this file with completed facts and outstanding consumers.
   (measured 521 ms) — a load-dependent flake in a file this cut does not
   touch; isolated re-run of that file together with `executor.test.ts` was
   57/57.
-- Known gaps left open, each its own migration surface:
-  `turn-review:save`, `attachment:store`, `session:create`, `session:search`,
-  `config:agents:create`, `automation:cron:list`,
-  `sendMessageState:createWidgetPending`, `sendMessageState:createSecretPending`,
-  `sendMessageState:upsertCursorAgentRun`. Making `plugin:registry:list`
-  equivalent to the Desktop's answer (with `installPath` and `manifest`)
-  needs the plugin manifest reader and the install-directory layout moved down
-  into `plugin-core` — a separate slice.
+- Known gaps left open, each its own migration surface. The real count is
+  **20** worker-used actions still missing from the bridge, not the 9 the PR
+  body first claimed (that list came from a regex that missed multi-line
+  client definitions; a line-by-line rescan of the worker call sites is the
+  reliable count). This branch now covers 11 of them — the workflow run
+  domain (create / updateStatus / finish / saveSnapshot / loadSnapshot /
+  appendJournal / loadJournal), `turn-review:save`, `attachment:store` and
+  the three `sendMessageState:*` writes. The 9 left are:
+  - `session:create` / `session:search` — not pure wiring: `session:create`
+    resolves the model from the provider config first, and
+    `session:search` goes through the Desktop's `searchHostSessionRows`
+    helper, which has no `packages/host` equivalent yet.
+  - `config:agents:create` / `config:agents:update` — the write side of
+    `config.toml`'s `[agents.*]` still lives in
+    `apps/desktop/src/main/config/agents.ts`; it has to move into packages.
+  - `automation:cron:create` / `delete` / `list` / `update` — the Host has
+    no automation API yet.
+  - `channel:deliver` — outbound platform delivery, a gateway concern
+    rather than a bridge one.
+- The `sendMessageState:*` writes are best-effort by contract: the Desktop
+  bridge swallows the store error and answers with a soft failure. The
+  standalone Host keeps that contract, but the "the Host has not composed
+  this API" failure stays OUTSIDE that catch — a misconfigured Host must
+  fail fast and name the missing domain instead of looking like a store
+  hiccup. The first draft of that case had the `require` inside the try,
+  and the test caught it.
 - CI run 40066793619 (head `3941cbad`): `architecture`, `typecheck` and `build`
   green; the `test` job red with **every affected test green** (82 files, 668
   passed, 6 skipped) plus one `Uncaught Exception: ENOENT ... /tmp/duya-cron-test-*/logs/app.log`
