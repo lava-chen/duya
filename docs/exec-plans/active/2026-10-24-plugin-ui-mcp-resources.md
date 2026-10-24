@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · owner：`/root`
 
 ## 目标与边界
 
@@ -56,14 +56,14 @@
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux，Node v24.19.0；允许网络但资源下载失败 | `npm run electron:build` | 1 | ripgrep / Electron 二进制 fetch 失败；未写入共享 `node_modules/electron` |
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux，Node v24.19.0 | `node scripts/build-electron.mjs` | 0 | Electron main/preload bundle 编译完成并复制运行时 native modules |
 | `21351df668adefc0357741a5f79a1513e297df61` + S1 dirty | Linux | `git diff --check` | 0 | 无空白错误 |
-| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0 | `npm run build:plugin-core` | 0 | 新增目录投影契约类型编译通过 |
-| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run apps/desktop/src/main/plugins/plugin-ui-surface-directory.test.ts` | 0 | 1 个文件、2 个测试通过；覆盖启用态投影与跨插件冲突隔离 |
-| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0；授权执行以允许检查脚本启动 git 子进程 | `npm run typecheck:all` | 0 | 全仓类型检查通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 可收紧 |
-| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0；授权执行以允许架构脚本启动 node 子进程 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
-| `ae5fe776d8f9befdd54a58e52ae9e9ae5403fdcb` + S2 dirty | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
+| `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0 | `npm run build:plugin-core` | 0 | 新增目录投影契约类型编译通过 |
+| `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0，Vitest 3.2.4 | `npx vitest run apps/desktop/src/main/plugins/plugin-ui-surface-directory.test.ts` | 0 | 1 个文件、2 个测试通过；覆盖启用态投影与跨插件冲突隔离 |
+| `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0；授权执行以允许检查脚本启动 git 子进程 | `npm run typecheck:all` | 0 | 全仓类型检查通过；Electron ratchet 无新增错误（206 个已知），9 个 baseline key 可收紧 |
+| `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0；授权执行以允许架构脚本启动 node 子进程 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
+| `da8f56bbf3a92e520144d32260bdbfc6a091ab1f` | Linux，Node v24.19.0 | `npm run build:electron` | 0 | Electron main / preload bundle 重建完成 |
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已实现，切片提交与当前 SHA 待记录。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
 下一步：推进 S3 MCP resources/read 宿主解析，并沿用 S2 的安装态 surface 目录。
