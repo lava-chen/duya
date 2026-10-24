@@ -1,7 +1,7 @@
 # 插件 UI 通过 MCP resources/read 加载
 
 状态：active · 负责人：Codex `/root` 会话 · 更新：2026-10-24
-分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · base：`21351df668adefc0357741a5f79a1513e297df61` · S2：`da8f56bbf3a92e520144d32260bdbfc6a091ab1f` · S3：`27a60f22809737dd26bffac748aeb7b3534f17d5` · S4：`5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb` · S5：`1d8cfcd9` · S6：`199d19fb` · owner：`/root`
+分支：`codex/plugin-ui-mcp-resources` · worktree：`.claude/worktrees/plugin-ui-mcp-resources` · 初始 base：`21351df668adefc0357741a5f79a1513e297df61` · rebase base：`cb7513dbe4fb96a54f8e527934daec031bb37943` · S1：`6105e8b0` · S2：`0c0c1e75` · S3：`2f13ca98` · S4：`603263aa` · S5：`bf388580` · S6：`99b0516a` · owner：`/root`
 
 ## 目标与边界
 
@@ -32,6 +32,7 @@
 ## 发现与决策
 
 - `origin/master` 基线为 `21351df668adefc0357741a5f79a1513e297df61`；旧 `work` 检出为 `2baa95df`，保持未修改。
+- PR 前 `git fetch origin master` 发现 master 已前进到 `cb7513dbe4fb96a54f8e527934daec031bb37943`；任务分支 12 个提交已无冲突 rebase 到此 SHA，所有切片代码提交 SHA 已更新为页眉所列短 SHA，rebase 后门禁重跑完成。
 - 当前 master 将架构入口放在 `docs/architecture/ARCHITECTURE.md`；`docs/exec-plans/README.md` 没有根规则旧版本提到的 “Verified baseline” 小节，基线将按本次工作重新测量。
 - `.codegraph/` 与 CodeGraph 工具均不可用；代码定位通过 `rg` 和源码交叉核对。
 - S1 将双语标题固定为当前产品的 `en` / `zh`；surface 位于 `apps[].ui.surfaces`，静态 `entry`、resource-only surface、两者并存均可声明。Desktop 三种 manifest 路径都把 surface 的 `server` 绑定到该插件实际声明的 `mcpServers`。
@@ -88,9 +89,14 @@
 | `0898ee6a` + S6 dirty | Linux，Node v24.19.0，npm 11.9.0；额外子进程执行权限 | `npm run typecheck:all` | 0 | 20 包构建、web bundle 和各 TS 门禁通过；Electron ratchet 无新增错误（206 个已知），9 个基线 key 收敛；recorder 4/4 |
 | `0898ee6a` + S6 dirty | Linux，Node v24.19.0；额外子进程执行权限 | `npm run architecture:check` | 0 | 无新增边界违规；255 个既有 fingerprint 不再触发 |
 | `0898ee6a` + S5/S6 dirty | Linux，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | UI、panel、manifest、resource host、capabilities 示例及 plugin-core 声明 9 个文件测试 | 0 | 9 个文件、103 项通过；此轮后示例测试再扩展 refresh 并以 `199d19fb` 的 44 项命令复验 |
+| `d34a4bab`（rebase 后） | Linux，Node v24.19.0，npm 11.9.0；额外子进程执行权限 | `npm run typecheck:all` | 0 | 20 包构建与全部 TS 门禁通过；Electron ratchet 无新增错误（206 已知），9 个 baseline key 收敛；recorder 4/4 |
+| `d34a4bab`（rebase 后） | Linux，Node v24.19.0；额外子进程执行权限 | `npm run architecture:check` | 0 | 无新增边界违规；1 个既有 fingerprint 不再触发 |
+| `d34a4bab`（rebase 后） | Linux，Node v24.19.0，Vitest 3.2.4；允许 loopback / stdio 子进程 | `npx vitest run packages/ui/src/lib/__tests__/plugin-app-ui-events.test.ts packages/ui/src/components/plugin-apps/MiniAppsView.test.tsx packages/ui/src/hooks/__tests__/usePanel.test.ts packages/ui/src/components/layout/PanelZone.test.tsx packages/capabilities/tests/mcp/report-viewer-example.test.ts packages/capabilities/tests/mcp/in-process-app-server.test.ts packages/plugin-core/tests/apps/declarations.test.ts apps/desktop/src/main/plugins/manifest.test.ts apps/desktop/src/main/plugins/__tests__/plugin-app-host.test.ts` | 0 | 9 个文件、103 项通过；日志含既有 jsdom canvas 未实现提示 |
+| `d34a4bab`（rebase 后） | Linux | `git diff --check origin/master...HEAD` | 0 | rebase 后任务 diff 无 whitespace error |
+| `d34a4bab`（rebase 后） | Linux，GitHub fetch | `git fetch origin master`；`git rebase origin/master` | 0 | master 为 `cb7513dbe4fb96a54f8e527934daec031bb37943`；12 个任务提交无冲突重放 |
 
 ## 接续 / 结果
 
-S1 契约与 manifest reader 已提交，代码切片提交为 `d426cd4ee8382f6aec941ce19ac87f5a91b73eb2`。S2 directory builder、IPC 和 preload list API 已提交于 `da8f56bbf3a92e520144d32260bdbfc6a091ab1f`。S3 MCP resource loader、worker bridge、tokenized loopback document mount 与架构说明已提交于 `27a60f22809737dd26bffac748aeb7b3534f17d5`。S4 panel UI 与目录入口已提交于 `5e0ee6c356dca1e040ffa171c6ad27d6d4131aeb`。S5 host→guest event 通道提交于 `1d8cfcd9`，本计划记录提交于 `0898ee6a`。S6 Report Viewer 示例与静态 `hello-app` manifest 回归提交于 `199d19fb`。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
+S1-S6 代码切片依次重放为 `6105e8b0`、`0c0c1e75`、`2f13ca98`、`603263aa`、`bf388580`、`99b0516a`；各计划进度文档也分别独立提交。分支已 rebase 到 `cb7513dbe4fb96a54f8e527934daec031bb37943`，rebase 后全仓类型检查、架构检查与 9 个相关测试文件均通过。共享 `/workspace/duya` 仍为 `work` / `2baa95df` 且干净。
 
-下一步：切片实现与全仓类型 / 架构检查已完成；fetch 最新 `origin/master`，若有前进则 rebase 并重跑门禁，然后发布任务分支并创建指向 `master` 的 draft PR。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
+下一步：将 rebase 后的任务分支推送到 `origin` 并创建指向 `master` 的 draft PR。真实 Electron UI/IPC/worker 路径仍受当前环境缺 Electron 二进制与 Xvfb 阻挡，PR 保持 draft 并标明此项。
