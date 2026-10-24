@@ -249,6 +249,9 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       // and folding them in here would stack a second tab for the same run
       // every time an emitter re-sent them.
       return `session::${(params?.sessionId as string | undefined) ?? ""}`;
+    case "plugin-app":
+      return `plugin-ui::${(params?.pluginId as string | undefined) ?? ""}`
+        + `::${(params?.surfaceId as string | undefined) ?? ""}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }
