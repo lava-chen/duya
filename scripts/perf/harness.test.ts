@@ -138,9 +138,13 @@ describe('the fixture generator', () => {
     // growing reply looks like.
     expect(fenced.chunks.length).toBeGreaterThan(1000);
     expect(fenced.chunks.some((chunk: { text: string }) => chunk.text.includes('```'))).toBe(true);
-    // Same size and cadence as the plain fixture, so the two are comparable.
+    // Same size and cadence as the plain fixture, so the two are comparable:
+    // the difference between their numbers is the highlighting, not the
+    // amount of text.
     expect(fenced.chunkChars).toBe(plain.chunkChars);
     expect(fenced.chunkCount).toBe(plain.chunkCount);
+    expect(fenced.chunks.length).toBe(plain.chunks.length);
+    expect(Math.abs(fenced.totalChars - plain.totalChars)).toBeLessThan(200);
   });
 
   it('keeps the fenced fixture deterministic', () => {
