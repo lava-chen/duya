@@ -556,6 +556,13 @@ export class TUIApp {
   /** Sum of every `token_usage` total seen this session. */
   private sessionTokens = 0;
   /**
+   * Transcript characters at the moment of the last billed call.
+   *
+   * The context estimate is "what the last request cost" plus "what has been
+   * added since", and this is the point the "since" is measured from.
+   */
+  private usageCharBaseline = 0;
+  /**
    * Last git branch read for the footer, and when.
    *
    * The footer repaints on every frame and a branch is a file read; caching for
@@ -1657,7 +1664,7 @@ export class TUIApp {
         // `0%`: the window is a property of the model, the usage is not yet a
         // reading. Getting this wrong is how an idle prompt claims to have used
         // nothing and implies the model is free.
-        contextPercent: budget !== null && budget > 0 && this.sessionTokens > 0
+        contextPercent: budget !== null && budget > 0 && this.contextTokens() !== null
           ? this.contextPercent()
           : null,
         contextBudget: budget,
@@ -1687,7 +1694,8 @@ export class TUIApp {
    */
   private usageSegment(): string {
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget !== null && budget > 0) return ` · ${this.contextBar()} ${this.contextPercent()}%`;
+    const tokens = this.contextTokens();
+    if (budget !== null && budget > 0 && tokens !== null) return ` · ${this.contextBar()} ${this.contextPercent()}%`;
     if (this.sessionTokens > 0) return ` · Σ ${formatTokens(this.sessionTokens)}`;
     return '';
   }
@@ -1832,6 +1840,9 @@ export class TUIApp {
           total,
         };
         this.sessionTokens += total;
+        // The context estimate is anchored here: everything the transcript
+        // holds from now on is what the NEXT request would have to carry.
+        this.usageCharBaseline = this.model.contextChars;
         this.scheduleRender();
         return;
       }
@@ -2450,9 +2461,13 @@ export class TUIApp {
     lines.push(`session      ${this.sessionTokens.toLocaleString('en-US')} tokens (sum of billed calls)`);
 
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget !== null && budget > 0) {
+    const contextTokens = this.contextTokens();
+    if (budget !== null && budget > 0 && contextTokens !== null) {
       const pct = this.contextPercent();
-      lines.push(`context      ${this.contextBar()} ${pct}% of ${formatTokens(budget)}`);
+      lines.push(
+        `context      ${this.contextBar()} ${pct}% of ${formatTokens(budget)}`
+        + ` (${contextTokens.toLocaleString('en-US')} tokens in the window)`,
+      );
     } else {
       lines.push(styles.muted('context      budget unknown for this model'));
     }
@@ -2460,11 +2475,31 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
-  /** Session tokens against the budget, clamped to 0–100. */
+  /**
+   * Tokens the NEXT request would carry, or null when that is not known yet.
+   *
+   * This is the CONTEXT, and it is not the spend. The provider's usage says
+   * how many tokens the last request cost; the transcript says how much has
+   * been added since. The session total is a different number — every billed
+   * call summed — and it grows with every turn without saying anything about
+   * how full the window is. Reading it as occupancy is how a long session
+   * ends up claiming a full window while the model still has room to work.
+   */
+  private contextTokens(): number | null {
+    const usage = this.lastUsage;
+    if (usage === null) return null;
+    // Four characters per token is the same rough rate pi uses for the tail
+    // of a conversation (`packages/ai/src/utils/estimate.ts:14`).
+    const added = Math.max(0, this.model.contextChars - this.usageCharBaseline);
+    return usage.total + Math.ceil(added / 4);
+  }
+
+  /** Context occupancy against the window, clamped to 0–100. */
   private contextPercent(): number {
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    if (budget === null || budget <= 0) return 0;
-    return Math.min(100, Math.max(0, Math.round((this.sessionTokens / budget) * 100)));
+    const tokens = this.contextTokens();
+    if (budget === null || budget <= 0 || tokens === null) return 0;
+    return Math.min(100, Math.max(0, Math.round((tokens / budget) * 100)));
   }
 
   /**

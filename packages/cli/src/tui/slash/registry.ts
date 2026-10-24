@@ -25,9 +25,10 @@
 
 import type { PopoverItem } from '@duya/input-completion';
 import {
+  availableSpecsFor,
   describeSpec,
+  findSpec,
   formatSpecLabel,
-  specsForSurface,
   type CommandLocale,
   type CommandSpec,
 } from '@duya/command-catalog';
@@ -82,10 +83,16 @@ export function hasTuiSlashCommand(name: string): boolean {
  * here would otherwise be advertised and then answer "unknown command" — the
  * exact failure mode the catalog's own integrity tests guard against, checked
  * once at startup instead of once per keystroke by the user.
+ *
+ * The catalog decides availability from the same two facts the handlers read
+ * (`ctx.busy`, and whether there is a session), so the popup never offers a
+ * command the handler is about to refuse.
  */
 export function advertisedSpecs(options: { readonly busy?: boolean } = {}): readonly CommandSpec[] {
-  return specsForSurface('cli', { busy: options.busy ?? false })
-    .filter((spec) => BY_NAME.has(spec.name));
+  return availableSpecsFor('cli', {
+    hasSession: true,
+    busy: options.busy ?? false,
+  }).filter((spec) => BY_NAME.has(spec.name));
 }
 
 /** Rows for the `/` completion popup. */
@@ -120,7 +127,7 @@ export function buildSlashHelpSections(locale: CommandLocale = 'zh'): ReadonlyAr
     const commands = TUI_SLASH_COMMANDS.filter((command) => command.group === group);
     if (commands.length === 0) continue;
     const specs = commands
-      .map((command) => specsForSurface('cli').find((spec) => spec.name === command.name))
+      .map((command) => findSpec(command.name))
       .filter((spec): spec is CommandSpec => spec !== undefined);
     const labels = specs.map((spec) => formatSpecLabel(spec));
     const width = Math.max(...labels.map((label) => label.length));

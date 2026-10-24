@@ -82,6 +82,10 @@ import {
   type HostLocalPluginRegistryApiV1,
 } from './local-plugin-registry-api.js';
 import {
+  createConfigAgent,
+  updateConfigAgentIdentity,
+} from './config-agents/config-agents-api.js';
+import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
 } from './ipc-message-adapters.js';
@@ -225,6 +229,13 @@ export interface HostWorkerDbBridgeOptions {
   readonly parsedDocumentsForSession?: (sessionId: string) => Promise<unknown[]>;
   /** Image payload rows for provider CDN rehydration in worker message history. */
   readonly imageAttachmentsForSession?: (sessionId: string) => Promise<readonly HostLocalImageAttachment[]>;
+  /**
+   * Directory holding `config.toml` for the config write side.
+   *
+   * Defaults to the shared data root — the same directory the Desktop config
+   * store writes, so the two writers address one config file.
+   */
+  readonly configRoot?: string;
   readonly logger?: RunControlPlaneLogger;
 }
 
@@ -1224,6 +1235,39 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           } catch {
             return { success: false, reason: 'transaction_failed' };
           }
+        }
+
+        // ==================== Config agents ====================
+        // The worker never writes config.toml itself — the process that owns
+        // the file does. These two actions are the agent-side CreateAgent /
+        // UpdateAgent tools; without them a model in the standalone Host
+        // could not spin up a teammate at all.
+        case 'config:agents:create': {
+          const name = payload.name;
+          if (typeof name !== 'string' || !name.trim()) {
+            throw new WorkerDbBridgeError('invalid_payload', 'agent name is required');
+          }
+          return createConfigAgent(name, optionalString(payload.description), {
+            ...(options.configRoot === undefined ? {} : { root: options.configRoot }),
+            ...(options.logger === undefined ? {} : { logger: options.logger }),
+          });
+        }
+        case 'config:agents:update': {
+          const agentId = payload.agentId;
+          if (typeof agentId !== 'string' || !agentId.trim()) {
+            throw new WorkerDbBridgeError('invalid_payload', 'agentId is required');
+          }
+          return updateConfigAgentIdentity(
+            agentId,
+            {
+              name: optionalString(payload.name),
+              description: optionalString(payload.description),
+            },
+            {
+              ...(options.configRoot === undefined ? {} : { root: options.configRoot }),
+              ...(options.logger === undefined ? {} : { logger: options.logger }),
+            },
+          );
         }
 
         default:

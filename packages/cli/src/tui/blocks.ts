@@ -411,6 +411,8 @@ export class TranscriptModel {
   private readonly thinkingByKey = new Map<string, ThinkingBlock>();
   private assistant: AssistantBlock | null = null;
   private thinking: ThinkingBlock | null = null;
+  /** Characters in the transcript a model request would carry. See `contextChars`. */
+  private contextCharCount = 0;
 
   /** The blocks, in order. */
   get blocks(): readonly Block[] {
@@ -422,7 +424,36 @@ export class TranscriptModel {
     this.closeOpenContent();
     const block: UserBlock = { kind: 'user', id: nextId('user'), text };
     this.items.push(block);
+    this.contextCharCount += text.length;
     return block;
+  }
+
+  /**
+   * Characters currently in the transcript that a model request would carry.
+   *
+   * This is the raw material for a CONTEXT estimate: the provider's usage says
+   * how many tokens the last request cost, and this says how much has been
+   * added since. It counts what actually goes back to the model — the user's
+   * words, the assistant's answers, the reasoning, and the tool calls with
+   * their results — because those are the parts that occupy the window.
+   *
+   * Maintained incrementally rather than recomputed: the footer asks for it on
+   * every frame, and walking ten thousand blocks per frame is the kind of cost
+   * the transcript cache exists to avoid.
+   */
+  get contextChars(): number {
+    return this.contextCharCount;
+  }
+
+  /** Chars of a tool input, as the request would carry them. */
+  private static inputLength(input: unknown): number {
+    if (typeof input === 'string') return input.length;
+    if (typeof input !== 'object' || input === null) return 0;
+    try {
+      return JSON.stringify(input)?.length ?? 0;
+    } catch {
+      return 0;
+    }
   }
 
   /** The assistant block currently receiving deltas, if any. */
@@ -448,6 +479,7 @@ export class TranscriptModel {
       const existing = this.assistantsByKey.get(key);
       if (existing !== undefined) {
         existing.text += text;
+        this.contextCharCount += text.length;
         return existing;
       }
     }
@@ -458,6 +490,7 @@ export class TranscriptModel {
       if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
     this.assistant.text += text;
+    this.contextCharCount += text.length;
     return this.assistant;
   }
 
@@ -478,6 +511,9 @@ export class TranscriptModel {
     }
     const target = block ?? this.assistant;
     if (target === null) return null;
+    // The whole-block frame REPLACES the deltas already counted, so the
+    // counter follows the replacement instead of adding to it.
+    this.contextCharCount += content.length - target.text.length;
     target.text = content;
     target.finalized = true;
     return target;
@@ -490,6 +526,7 @@ export class TranscriptModel {
       const existing = this.thinkingByKey.get(key);
       if (existing !== undefined) {
         existing.text += text;
+        this.contextCharCount += text.length;
         return existing;
       }
     }
@@ -509,6 +546,7 @@ export class TranscriptModel {
       if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
     this.thinking.text += text;
+    this.contextCharCount += text.length;
     return this.thinking;
   }
 
@@ -533,6 +571,8 @@ export class TranscriptModel {
     }
     const target = block ?? this.thinking;
     if (target === null) return null;
+    // The whole-block frame replaces the deltas already counted.
+    this.contextCharCount += content.length - target.text.length;
     target.text = content;
     target.finalized = true;
     sealThinkingDuration(target, at);
@@ -565,7 +605,10 @@ export class TranscriptModel {
     for (const block of this.toolsByCallId.values()) {
       if (block.status !== 'running') continue;
       block.status = 'unknown';
-      block.result ??= 'Run ended before a tool result was received.';
+      if (block.result === undefined) {
+        block.result = 'Run ended before a tool result was received.';
+        this.contextCharCount += block.result.length;
+      }
       changed = true;
     }
     return changed;
@@ -604,6 +647,10 @@ export class TranscriptModel {
     };
     this.toolsByCallId.set(callId, block);
     this.items.push(block);
+    // The call's arguments go back to the model with the next request, so
+    // they occupy the window too. Counted once, when the block is created:
+    // the announcement and the authoritative call carry the same input.
+    this.contextCharCount += TranscriptModel.inputLength(input);
     return block;
   }
 
@@ -617,6 +664,8 @@ export class TranscriptModel {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
     block.result = result;
+    // The result goes back to the model with the next request as well.
+    this.contextCharCount += result.length;
     block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
     // A todo write returns the WHOLE list (the tool is merge-semantic), so the
     // result the transcript was about to print as JSON becomes the list it
@@ -868,6 +917,7 @@ export class TranscriptModel {
     this.thinkingByKey.clear();
     this.assistant = null;
     this.thinking = null;
+    this.contextCharCount = 0;
   }
 
   /**
@@ -894,8 +944,15 @@ export class TranscriptModel {
       if (this.items[index]!.kind === 'user') lastUserIndex = index;
     }
     const userBlocks = this.items.slice(0, lastUserIndex + 1);
+    // The kept user blocks still occupy the window, so their characters are
+    // counted again after the clear that follows.
+    const keptChars = userBlocks.reduce(
+      (total, block) => total + (block.kind === 'user' ? block.text.length : 0),
+      0,
+    );
     this.clear();
     for (const block of userBlocks) this.items.push(block);
+    this.contextCharCount = keptChars;
     for (const frame of frames) this.apply(frame);
   }
 }

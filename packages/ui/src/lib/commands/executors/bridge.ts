@@ -49,6 +49,16 @@ export interface CommandAppBridge {
     permissionMode?: 'ask' | 'auto' | 'bypass';
     workingDirectory?: string | null;
     messageCount?: number;
+    /**
+     * A turn is currently streaming.
+     *
+     * The catalog's `availableWhileBusy` is a declaration; this is the fact it
+     * is checked against. Without it a desktop command that mutates the
+     * conversation would run mid-turn, while the same command in the CLI TUI
+     * refuses with "press Esc first" — the same command, two different
+     * answers, decided by which surface the user happened to be in.
+     */
+    isStreaming?: boolean;
   };
   /** Clear the current conversation (desktop semantic decided by the executor). */
   clearMessages(): void;

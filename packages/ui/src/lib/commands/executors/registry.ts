@@ -14,7 +14,22 @@
  *
  * `runSlashCommand` never throws — it converts executor errors into
  * `{ type: 'error' }` results so the composer can surface them.
+ *
+ * ## The availability gate
+ *
+ * Before the executor runs, the shared catalog is asked whether the command
+ * can run right now (`commandAvailability`). It answers from two facts the
+ * bridge knows — is there a session, is a turn streaming — and the catalog's
+ * own `requiresSession` / `availableWhileBusy` declarations.
+ *
+ * This is the one place the answer is produced, so a command that mutates the
+ * conversation mid-turn is refused the same way on the Desktop as it is in the
+ * CLI TUI ("press Esc first"). Without the gate, `availableWhileBusy` was a
+ * declaration nothing read: the Desktop advertised commands as unsafe to run
+ * while busy and then ran them anyway.
  */
+
+import { commandAvailability, findSpec } from '@duya/command-catalog';
 
 import type { CommandContext, CommandResult } from '../types';
 import { parseCommand } from '../parser';
@@ -50,7 +65,8 @@ export function getCommandExecutor(name: string): CommandExecutorFn | undefined 
  * - the executor's CommandResult,
  * - `{ type: 'forward', prompt: input }` when the command is unknown or has
  *   no executor (caller sends it to the agent as plain text),
- * - `{ type: 'error' }` when the bridge is missing or the executor throws.
+ * - `{ type: 'error' }` when the bridge is missing, the command cannot run
+ *   right now, or the executor throws.
  */
 export async function runSlashCommand(input: string): Promise<CommandResult> {
   const parsed = parseCommand(input);
@@ -68,6 +84,9 @@ export async function runSlashCommand(input: string): Promise<CommandResult> {
     return { type: 'error', message: `/${parsed.command.name}: app bridge unavailable` };
   }
 
+  const refusal = availabilityRefusal(parsed.command.name, app);
+  if (refusal) return refusal;
+
   try {
     return await executor({
       args: parsed.args,
@@ -80,4 +99,27 @@ export async function runSlashCommand(input: string): Promise<CommandResult> {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/**
+ * The catalog's verdict for this command at this moment, or null when it may
+ * run.
+ *
+ * The spec is looked up by the CANONICAL name: the user may have typed an
+ * alias, and it is the canonical command whose availability is declared.
+ */
+function availabilityRefusal(
+  canonicalName: string,
+  app: NonNullable<ReturnType<typeof getCommandAppBridge>>,
+): CommandResult | null {
+  const spec = findSpec(canonicalName);
+  if (spec === undefined) return null;
+
+  const snapshot = app.getSessionSnapshot();
+  const verdict = commandAvailability(spec, {
+    hasSession: Boolean(snapshot.sessionId),
+    busy: snapshot.isStreaming === true,
+  });
+  if (verdict.available) return null;
+  return { type: 'error', message: verdict.reason };
 }
