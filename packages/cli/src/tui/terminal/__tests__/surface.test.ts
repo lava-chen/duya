@@ -18,14 +18,13 @@ interface Harness {
   readonly setRows: (rows: number) => void;
 }
 
-function harness(rows = 10, reserve?: number): Harness {
+function harness(rows = 10): Harness {
   const chunks: string[] = [];
   let screenRows = rows;
   const surface = new InlineSurface({
     output: { write: (chunk: string) => chunks.push(chunk) } as unknown as NodeJS.WritableStream,
     size: () => ({ rows: screenRows, columns: 80 }),
     strategy: 'standard',
-    ...(reserve === undefined ? {} : { reserve }),
   });
   return {
     surface,
@@ -88,9 +87,10 @@ describe('InlineSurface', () => {
 
   it('commits every row the moment it leaves the live area', () => {
     const h = harness(4);
-    // One chrome row leaves three for the conversation. The default reserve is
-    // one screen, so a row is printed as soon as it leaves the live area — which
-    // is the side of the trade that cannot leave text unwritten anywhere.
+    // One chrome row leaves three for the conversation. A row is printed as
+    // soon as it leaves the live area, which is the side of the trade that
+    // cannot leave text unwritten anywhere: the scrollback can never be short
+    // of a row the agent has already produced.
     h.surface.render({ scroll: document(1), chrome: ['S'], caret: null });
     const result = h.surface.render({ scroll: document(9), chrome: ['S'], caret: null });
     expect(result.committed).toBe(6);
@@ -101,47 +101,22 @@ describe('InlineSurface', () => {
     expect(occurrences(h.written(), '<row 7>')).toBe(1);
   });
 
-  it('holds rows back for scroll-back only when asked, and the gap is real', () => {
-    const h = harness(4, 3);
+  it('holds nothing back: every row is either committed or on screen', () => {
+    const h = harness(4);
     h.surface.render({ scroll: document(200), chrome: ['S'], caret: null });
-    // Three live rows, nine held: the first 191 are committed. Rows 191-196 are
-    // held and therefore printed NOWHERE — not in the scrollback, not on screen.
-    // That is the price of app-owned scroll-back, and this test exists to keep
-    // the price visible rather than to argue it away.
-    expect(h.surface.committedRows).toBe(191);
-    expect(occurrences(h.written(), '<row 191>')).toBe(0);
-    expect(occurrences(h.written(), '<row 197>')).toBe(1);
-    // Scrolling back does reach them — that is what the hold was for.
-    const back = h.surface.render({ scroll: document(200), chrome: ['S'], caret: null, viewEnd: 194 });
-    expect(back.atBoundary).toBe(false);
-    expect(occurrences(h.written(), '<row 191>')).toBe(1);
-  });
-
-  it('reports the boundary for any scroll-back under the default reserve', () => {
-    const h = harness(6);
-    h.surface.render({ scroll: document(40), chrome: ['S'], caret: null });
-    const committed = h.surface.committedRows;
-    // Five live rows and a reserve of one screen, so the committed boundary is
-    // always exactly where the visible window starts: there is nothing held to
-    // scroll back into, and the honest answer to PgUp is that the history is in
-    // the terminal's own scrollback. Reporting the boundary is what lets the
-    // caller say so instead of leaving the key looking broken.
-    expect(committed).toBe(35);
-    expect(h.surface.render({ scroll: document(40), chrome: ['S'], caret: null, viewEnd: 38 }).atBoundary).toBe(true);
-  });
-
-  it('does not repaint a committed row when the view is past it', () => {
-    const h = harness(6);
-    h.surface.render({ scroll: document(40), chrome: ['S'], caret: null });
-    const boundary = h.written().length;
-    h.surface.render({ scroll: document(40), chrome: ['S'], caret: null, viewEnd: 2 });
-    const frame = since(h.written(), boundary);
-    // Rows 0-34 are scrollback. Nothing is rewritten — the live area is pinned to
-    // the boundary and already holds the rows it is pinned to — and in
-    // particular not one committed row is printed a second time.
-    expect(occurrences(frame, '<row')).toBe(0);
-    expect(occurrences(h.written(), '<row 0>')).toBe(1);
-    expect(rowAt(h.written(), 1)).toBe('<row 35>');
+    // Three live rows: the first 197 are committed and 197-199 are on screen.
+    // There is no hold buffer between them, and that is a correctness property
+    // rather than a tuning choice. A commit prints the row at the TOP of the
+    // scroll region; extra uncommitted rows would therefore scroll the rows the
+    // reader is looking at into the scrollback while the rows actually being
+    // committed were overwritten before they were ever printed — losing them
+    // and reordering the history.
+    expect(h.surface.committedRows).toBe(197);
+    for (const index of [0, 100, 196]) {
+      expect(occurrences(h.written(), `<row ${index}>`)).toBe(1);
+    }
+    expect(rowAt(h.written(), 1)).toBe('<row 197>');
+    expect(rowAt(h.written(), 3)).toBe('<row 199>');
   });
 
   it('prints each committed row exactly once', () => {
@@ -281,19 +256,6 @@ describe('InlineSurface', () => {
     const before = h.written().length;
     h.surface.render({ scroll: document(4), chrome: ['S'], caret: null });
     expect(since(h.written(), before).endsWith('\x1b[?25l')).toBe(true);
-  });
-
-  it('does not commit while the view is scrolled back', () => {
-    const h = harness(6);
-    h.surface.render({ scroll: document(20), chrome: ['S'], caret: null });
-    const committedBefore = h.surface.committedRows;
-    expect(committedBefore).toBeGreaterThan(0);
-    // Scrolling up is not "the document got shorter": it is the same document
-    // with a view end above the tail. A commit here would print rows the user is
-    // currently reading for a second time.
-    const result = h.surface.render({ scroll: document(20), chrome: ['S'], caret: null, viewEnd: 10 });
-    expect(result.committed).toBe(0);
-    expect(h.surface.committedRows).toBe(committedBefore);
   });
 
   it('commits ANSI, never the markup the renderers speak', () => {
