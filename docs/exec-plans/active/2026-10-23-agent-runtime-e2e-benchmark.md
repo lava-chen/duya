@@ -124,12 +124,12 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 真实的首帧 leading edge 只花 0.29 ms 就起帧，而旧口径把整个 70 ms 节流窗口算给了它。
 现在帧用「携带它最后一个字节的那次 write」封口。
 
-### 剩余瓶颈（实测、均未修）
+### 剩余瓶颈（实测）
 
 | 瓶颈 | 代价 | 为什么没修 |
 | --- | --- | --- |
 | 技能加载 | 冷 **84–160 ms**（热 12–17 ms） | 威胁扫描已优化（见上）；剩下的分解见下方「再更正」，**主体是 I/O 等待**（Defender 逐文件扫描），没有语义可省 |
-| worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名。**机制已验证可行**：1.38 MB 的合成 CJS 模块，冷 require 20.5 ms → 缓存命中 10.7 ms（首次写缓存反而 30.6 ms）。卡点是打包与发布契约，不是可行性 |
+| worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | **已修**（见下方「worker bundle 编译缓存（已修）」）：环境变量 `NODE_COMPILE_CACHE` **确实覆盖进程入口**，之前那条结论是错的；真正的卡点是 **Node 只在干净退出时落盘**，而生产是 `kill` 路径 |
 | 三个 db action 未实现 | ~1 ms/次，但**功能坏** | `plugin:registry:list` / `plugin:setup:list-all` / `mailbox:claimBatch` 在 Host 侧仍抛 `unimplemented_domain`：CLI/TUI 路径因此**加载不到插件技能**、mailbox 领取每次失败。属功能缺口，不是延迟瓶颈，建议单独 PR |
 | 标题生成多一次 provider 调用 | 不在关键路径 | 代码上它在助手回复**完成后**才发起，不阻塞首 token；改它会动「标题何时出现」的用户可见行为 |
 
@@ -152,6 +152,47 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 > 热加载（同一进程第二次）只要 **12–17 ms**（plan 445 的进程内快照缓存命中）。
 > 结论：威胁扫描那块已经拿掉，剩下的**主要是 I/O 等待**，没有语义可省；
 > 唯一还能省的是 fingerprint 的 236 次 `stat`（≈10 ms），收益太小，本轮不做。
+
+### worker bundle 编译缓存（已修）
+
+4.38 MB 的 bundle 每个 worker spawn 都要重新编译（V8 `wrapSafe` ~94 ms）。修法是
+**环境变量 + 主动落盘**两件事，缺一不可：
+
+| 做法 | 结果 |
+| --- | --- |
+| 只注入 `NODE_COMPILE_CACHE` | **更慢**：每次 spawn 白付「生成 code cache 却丢弃」的开销 |
+| 只 flush 不注入 | 无效：没有缓存可写 |
+| 注入 + `module.flushCompileCache()` | 每个 spawn 省 **~68 ms** |
+
+关键事实（都是实测，不是推断）：
+
+- `NODE_COMPILE_CACHE` **覆盖进程入口**（之前那条「不缓存入口」的结论是错的）：入口即被缓存，
+  冷 448 ms → 热 38.6 ms。
+- Node **只在干净退出时**写 compile cache：被 SIGKILL / SIGTERM 杀的进程一个字节都留不下，
+  存活期间不写，SIGTERM handler 里的 `process.exit(0)` 也不写。而生产就是 kill 路径
+  （`worker-manager.ts` 的 `killWorkerImpl()`：win32 走 `child.kill()`，其它平台 SIGTERM）。
+- `module.flushCompileCache()`（Node ≥ 22.10 / Electron 44 都有）能在**存活期间**落盘：同步、
+  幂等、~2–4 ms。
+
+落点：两条 spawn 路径都注入环境变量（Host/Desktop 的 `createWorkerEnvironment()`，以及
+Desktop 自己的 `getAgentRuntimeCommand()`）；worker 在 **bundle 入口**
+（`packages/cli/src/agent-worker-entry.ts`）顶部 flush 一次。缓存目录放在 data root 下
+（`cache/node-compile`），data root 固定 → 生产上跨 spawn 命中。打包链路**不用动**，
+`harness-bundle/worker-entry.js` 仍是入口。
+
+基准 A/B（`npm run eval:agent:runtime`，7 样本 × 3 轮开/关对照；下表是 3 轮热样本
+中位数的均值，热样本 = 第 2 个 sample 起，即缓存已命中）：
+
+| 场景 / 指标 | cache 开 | cache 关 | 差 |
+| --- | --- | --- | --- |
+| firstToken `acceptedToProviderRequestMs` | 342.8 ms | 411.5 ms | **−68.7 ms** |
+| firstToken `submitToProviderRequestMs` | 365.4 ms | 443.1 ms | **−77.7 ms** |
+| firstToken `runDurationMs` | 520.6 ms | 587.7 ms | **−67.1 ms** |
+| toolRound `submitToProviderRequestMs` | 372.8 ms | 430.5 ms | **−57.7 ms** |
+| toolRound `runDurationMs` | 427.8 ms | 481.0 ms | **−53.2 ms** |
+
+代价是**第一个** spawn：冷样本比关缓存慢 **40–170 ms**（要编译 + 写 1.9 MB 缓存条目），
+从第二个 spawn 起回本。实测缓存条目：`v24.16.0-x64-cf738c9d/64fd3293` = 1,926,188 B。
 
 ### 另一个瓶颈：turn review 的 git 快照（已修）
 
@@ -187,16 +228,22 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 
 ### 其它实测结论
 
-- **Node 的 compile cache 帮不到 worker bundle。** `module.enableCompileCache()` 只缓存
-  **被 `require()` 的模块**，不缓存**进程入口**；而 `child_process.fork()` 是**起一个全新
-  node 进程**（不是 POSIX fork），父进程打开的开关也**不会**被继承。所以 4.38 MB 的
-  worker bundle 每次 spawn 都要重新编译。
-  实测参照：require 一个 2.4 MB 的 CJS 模块，冷 49 ms → 热 5 ms（**省 ~45 ms**）。
-  要让 worker 吃到这块收益，必须让 bundle 变成「被 require 的模块」（一个小 launcher），
-  **而这会动打包链路**（`check-packaged-artifacts.mjs` 的 `PRIMARY_AGENT_ENTRY`
-  锁定 `harness-bundle/worker-entry.js`），留作下一批。
-  本次仍保留父进程侧 `enableWorkerCompileCache()`：它对 **Host 进程**自身的模块加载有效
-  （Electron 冷启动），对首 token 路径无收益。
+- **~~Node 的 compile cache 帮不到 worker bundle~~ —— 这条结论是错的，已更正。**
+  `module.enableCompileCache()` 确实**不导出** `NODE_COMPILE_CACHE`，子进程继承不到；
+  但**环境变量 `NODE_COMPILE_CACHE` 会覆盖进程入口本身**（两次独立实测：入口即被缓存，
+  冷 448 ms → 热 38.6 ms）。`child_process.fork()` 起的是全新 node 进程，所以唯一可行的
+  通道就是环境变量。**打包链路不用动**，`harness-bundle/worker-entry.js` 仍是入口。
+- **真正的卡点是落盘时机**：Node **只在进程干净退出时**把 compile cache 写到磁盘；
+  被 SIGKILL / SIGTERM 杀掉的进程**一个字节都留不下**，进程存活期间也不写，
+  连 SIGTERM handler 里的 `process.exit(0)` 也不写。而生产正是 kill 路径。
+  所以「只注入环境变量」= 每次 spawn 白付「生成 code cache 却丢弃」的开销，**净效果更慢**
+  （实测：开缓存 434.8 ms vs 关缓存 413.0 ms）。
+- **解法是 `module.flushCompileCache()`**（Node ≥ 22.10 / Electron 44 都有）：在 worker
+  **存活期间**主动落盘，同步、幂等、~2–4 ms。放在 bundle 入口（`agent-worker-entry.ts`）
+  顶部：真 bundle 实测 cache 开+flush 后续 spawn **102–108 ms**，cache 关 **172–186 ms**，
+  **每次 spawn 省 ~68 ms**；被 SIGKILL 后条目仍在（`17118644` / 2053 KB）。
+- 父进程侧 `enableWorkerCompileCache()` 保留：它对 **Host 进程**自身的模块加载有效
+  （Electron 冷启动）；worker 走「环境变量 + flush」两条腿。
 - **多模态探测 25 ms 是基准的冷缓存假象**：探测走 `modelCapability:get/set`，
   Host 侧**已实现**（`worker-db-bridge.ts:220-229`），缓存本该命中；
   但基准每个样本用**独立 dataRoot**，能力表每次都是空的。真实使用（同一个 DB）会命中。
@@ -274,5 +321,5 @@ host 提交 prompt 行后，engine 前置的 prompt 与 timeline 里那一行是
 `shared-client-vertical.test.ts` 里脚本化 provider 按「最新 user 消息」识别提问，
 收到 rail 就直接 500。本地 A/B 对拍（回退该 commit 后重建 bundle）定位到根因。
 
-未做（带实测数字见「剩余瓶颈」）：bundle 编译缓存 launcher、技能加载剩余开销
-（读文件 + 目录遍历）、三个 db action、标题生成去重。
+未做（带实测数字见「剩余瓶颈」）：技能加载剩余开销（读文件 + 目录遍历）、三个 db action、
+标题生成去重。bundle 编译缓存已修：环境变量 `NODE_COMPILE_CACHE` + `module.flushCompileCache()`。
