@@ -19,6 +19,12 @@
 //      only forwards a handler whose channel appears in that list, so a
 //      handler registered under a name missing from it is silently dropped
 //
+// A handler may also name its channel through a constant
+// (`ipcMain.handle(GPU_STATUS_CHANNEL, ...)`), which is what the GPU
+// diagnostics module does. The census resolves those constants, so a
+// registered handler reads as registered instead of stranding a channel the
+// preload really can reach.
+//
 // If this test ever needs updating, fix the contract first. Adding a channel
 // to the ignore list is only correct when the renderer genuinely calls it
 // through a different transport, and that reasoning belongs in a comment.
@@ -48,22 +54,43 @@ function tsFiles(dir: string): string[] {
   return out;
 }
 
-const REGISTER = /ipcMain\.handle\(\s*[`'"]?([A-Za-z0-9:_-]+)[`'"]?/g;
+const REGISTER = /ipcMain\.handle\(\s*(?:[`'"]([A-Za-z0-9:_-]+)[`'"]|([A-Za-z_$][\w$]*))/g;
 const LAZY_REGISTER = /(?<![.\w])register\(\s*[`'"]([A-Za-z0-9:_-]+)[`'"]/g;
 const LAZY_GROUP = /registerLazyIpcHandlers\(\s*\{[\s\S]*?channels:\s*\[([\s\S]*?)\]/g;
 const QUOTED = /[`'"]([A-Za-z0-9:_-]+)[`'"]/g;
 const INVOKE = /\.invoke\(\s*[`'"]([A-Za-z0-9:_-]+)[`'"]/g;
 const LISTEN = /\.on\(\s*[`'"]([A-Za-z0-9:_-]+)[`'"]/g;
+// A channel name held in a constant: `export const GPU_STATUS_CHANNEL =
+// 'gpu:get-status'`. The handler names the constant, so the census has to
+// read the value out of the declaration to see which channel it answers.
+const CONSTANT = /\b(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*['"`]([A-Za-z0-9:_-]+)['"`]/g;
 
 function collect(): { registered: Set<string>; invoked: Set<string>; listened: Set<string> } {
   const registered = new Set<string>();
+  const sources = tsFiles(mainRoot).map((file) => readFileSync(file, 'utf8'));
 
-  for (const file of tsFiles(mainRoot)) {
-    const text = readFileSync(file, 'utf8');
+  // The constants first: a handler may name a constant declared in another
+  // module, so the whole map has to exist before any registration is read.
+  const constants = new Map<string, string>();
+  for (const text of sources) {
+    CONSTANT.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = CONSTANT.exec(text)) !== null) {
+      if (!constants.has(m[1])) constants.set(m[1], m[2]);
+    }
+  }
+
+  for (const text of sources) {
     let m: RegExpExecArray | null;
 
     REGISTER.lastIndex = 0;
-    while ((m = REGISTER.exec(text)) !== null) registered.add(m[1]);
+    while ((m = REGISTER.exec(text)) !== null) {
+      // A literal channel name is used as it stands; an identifier is the
+      // name of a constant, and the constant holds the channel name.
+      const literal = m[1];
+      const identifier = m[2];
+      registered.add(literal ?? (identifier === undefined ? '' : constants.get(identifier) ?? identifier));
+    }
 
     LAZY_REGISTER.lastIndex = 0;
     while ((m = LAZY_REGISTER.exec(text)) !== null) registered.add(m[1]);

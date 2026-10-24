@@ -1889,7 +1889,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/message/message-projectors.ts": {
-      "bytes": 26288,
+      "bytes": 27497,
       "imports": [
         {
           "path": "packages/agent-core/src/message/message-framework.ts",
@@ -1931,7 +1931,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/message/index.ts": {
-      "bytes": 3450,
+      "bytes": 3474,
       "imports": [
         {
           "path": "packages/agent-core/src/message/message-projectors.ts",
@@ -13911,7 +13911,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/skills/skill-scanner.ts": {
-      "bytes": 23746,
+      "bytes": 30869,
       "imports": [
         {
           "path": "../../../node_modules/zod/index.js",
@@ -28457,11 +28457,11 @@
       "format": "esm"
     },
     "packages/host/src/worker-context/imageResizer.ts": {
-      "bytes": 7923,
+      "bytes": 8405,
       "imports": [
         {
           "path": "../../../node_modules/jimp/dist/esm/index.js",
-          "kind": "import-statement",
+          "kind": "dynamic-import",
           "original": "jimp"
         }
       ],
@@ -28607,7 +28607,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session/turn-review.ts": {
-      "bytes": 6860,
+      "bytes": 10367,
       "imports": [
         {
           "path": "node:child_process",
@@ -29000,6 +29000,32 @@
           "path": "packages/host/src/worker-db-client.ts",
           "kind": "dynamic-import",
           "original": "@duya/host/worker-db-client"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/worker-limits.ts": {
+      "bytes": 9074,
+      "imports": [
+        {
+          "path": "node:module",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/data/src/data-paths.ts",
+          "kind": "import-statement",
+          "original": "@duya/data/data-paths"
         }
       ],
       "format": "esm"
@@ -30064,29 +30090,8 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/worker-limits.ts": {
-      "bytes": 5279,
-      "imports": [
-        {
-          "path": "node:os",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/data/src/data-paths.ts",
-          "kind": "import-statement",
-          "original": "@duya/data/data-paths"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 32469,
+      "bytes": 36528,
       "imports": [
         {
           "path": "child_process",
@@ -30095,6 +30100,11 @@
         },
         {
           "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:module",
           "kind": "import-statement",
           "external": true
         },
@@ -30209,7 +30219,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 4489,
+      "bytes": 4617,
       "imports": [
         {
           "path": "node:fs",
@@ -34209,7 +34219,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 127539,
+      "bytes": 131183,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -36148,12 +36158,17 @@
       "format": "esm"
     },
     "packages/cli/src/agent-worker-entry.ts": {
-      "bytes": 197,
+      "bytes": 593,
       "imports": [
         {
           "path": "packages/host/src/worker-process-entry.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-process-entry"
+        },
+        {
+          "path": "packages/host/src/worker-limits.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-limits"
         },
         {
           "path": "packages/cli/src/worker-services.ts",
@@ -37688,6 +37703,21 @@
           "external": true
         },
         {
+          "path": "node:module",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "fs",
           "kind": "require-call",
           "external": true
@@ -37763,12 +37793,7 @@
           "external": true
         },
         {
-          "path": "node:os",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "node:path",
+          "path": "node:module",
           "kind": "require-call",
           "external": true
         },
@@ -38189,7 +38214,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -38273,13 +38298,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -40217,7 +40242,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41240,10 +41265,10 @@
           "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1526
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -41252,10 +41277,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50721
+          "bytesInOutput": 50729
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1880
+          "bytesInOutput": 1884
         },
         "../../../node_modules/@jimp/plugin-fisheye/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -41636,19 +41661,19 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
         },
         "packages/host/src/worker-session/turn-review.ts": {
-          "bytesInOutput": 2872
+          "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9009
+          "bytesInOutput": 8992
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -41819,7 +41844,7 @@
           "bytesInOutput": 1779
         },
         "packages/agent-core/src/message/message-projectors.ts": {
-          "bytesInOutput": 2391
+          "bytesInOutput": 2420
         },
         "packages/agent-core/src/message/index.ts": {
           "bytesInOutput": 5
@@ -42092,7 +42117,7 @@
           "bytesInOutput": 344
         },
         "packages/agent-core/src/skills/skill-scanner.ts": {
-          "bytesInOutput": 11191
+          "bytesInOutput": 12282
         },
         "packages/host/src/skills/conditionalSkills.ts": {
           "bytesInOutput": 1230
@@ -42128,7 +42153,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42734,7 +42759,7 @@
           "bytesInOutput": 1025
         },
         "packages/host/src/worker-context/imageResizer.ts": {
-          "bytesInOutput": 2235
+          "bytesInOutput": 2319
         },
         "packages/host/src/worker-context/image-attachment-context.ts": {
           "bytesInOutput": 2376
@@ -42756,6 +42781,9 @@
         },
         "packages/host/src/worker-config/self-init.ts": {
           "bytesInOutput": 479
+        },
+        "packages/host/src/worker-limits.ts": {
+          "bytesInOutput": 1314
         },
         "packages/cli/src/api/errors.ts": {
           "bytesInOutput": 385
@@ -42872,10 +42900,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 9939
-        },
-        "packages/host/src/worker-limits.ts": {
-          "bytesInOutput": 1014
+          "bytesInOutput": 10687
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -43025,7 +43050,7 @@
           "bytesInOutput": 3026
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 49479
+          "bytesInOutput": 49842
         },
         "packages/host/src/worker-mentions.ts": {
           "bytesInOutput": 5647
@@ -43526,10 +43551,10 @@
           "bytesInOutput": 258
         },
         "packages/cli/src/agent-worker-entry.ts": {
-          "bytesInOutput": 20
+          "bytesInOutput": 26
         }
       },
-      "bytes": 4597660
+      "bytes": 4600638
     }
   }
 }
