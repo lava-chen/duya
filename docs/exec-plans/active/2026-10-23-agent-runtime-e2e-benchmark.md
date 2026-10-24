@@ -279,6 +279,11 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 | 69a84dab | Windows | `npm run typecheck:all` | 0 | OK |
 | 69a84dab | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
 | 69a84dab | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更 |
+| 7065881e（PR #398 合并后，base `codex/tui-perf-benchmark`） | Windows | `npx vitest run packages/agent-runtime` | 0 | 103 files / 1142 passed |
+| 7065881e | Windows | `npx vitest run packages/host/tests/worker-product-runtime --maxWorkers=2` | 0 | 23 files / 128 passed |
+| 7065881e | Windows | `npm run typecheck:all` | 0 | OK（typecheck-electron-gate 无新增类型错误） |
+| 7065881e | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| 7065881e | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更（bundle commit 07958196） |
 
 ## 接续 / 结果
 
@@ -317,6 +322,11 @@ host 提交 prompt 行后，engine 前置的 prompt 与 timeline 里那一行是
   判定需要知道对话在哪里结束，所以 `ModelMessage` 增加了 `origin`，host 从
   `metadata.runtimeContext` 推出「系统附带行」。
 - host 把提示词行投影了两次时，只发一次。
+
+**合并结论**：PR #398 已用 merge commit 集成进 `codex/tui-perf-benchmark`
+（merge commit `7065881e`，2026-10-24 10:35 CST）。合并后在 `7065881e` 上重跑
+`typecheck:all` / `architecture:check` / `bundle:verify` 与两个相关包测试，全绿（见上方
+验证表）。该 PR 的 base 不是 master，因此仓库 CI 矩阵未对其运行，**本地门禁即全部证据**。
 
 未做（带实测数字见「剩余瓶颈」）：bundle 编译缓存 launcher、技能加载剩余开销
 （读文件 + 目录遍历）、三个 db action、标题生成去重。
