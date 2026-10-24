@@ -284,6 +284,13 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 | 7065881e | Windows | `npm run typecheck:all` | 0 | OK（typecheck-electron-gate 无新增类型错误） |
 | 7065881e | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
 | 7065881e | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更（bundle commit 07958196） |
+| 9d72bb09（修复批次 4） | Windows | `npx vitest run packages/agent-runtime` | 0 | 103 files / 1145 passed |
+| 9d72bb09 | Windows | `npx vitest run packages/host/tests` | 0 | 177 files / 1635 passed，1 skipped |
+| 9d72bb09 | Windows | `npx vitest run packages/host/tests/worker-product-runtime packages/ai/test` | 0 | 75 files / 651 passed |
+| 9d72bb09（**变异**） | Windows | 把契约改回「host 那份留在 host 放的位置」 | 1 | 契约矩阵 7/12 变红（`expected 3 to be -1`）；真实链路 3/3 变红（`expected '<system-reminder>…' to contain 'PROMPT-QUESTION-MARKER'`）——该用例确实咬住这个缺陷 |
+| 9d72bb09 | Windows | `npm run typecheck:all` | 0 | OK |
+| 9d72bb09 | Windows | `npm run architecture:check` | 0 | OK — no new boundary violations |
+| 9d72bb09 | Windows | `npm run bundle:verify` | 0 | FRESH，0/922 输入变更（bundle commit 9d72bb09） |
 
 ## 接续 / 结果
 
@@ -327,6 +334,54 @@ host 提交 prompt 行后，engine 前置的 prompt 与 timeline 里那一行是
 （merge commit `7065881e`，2026-10-24 10:35 CST）。合并后在 `7065881e` 上重跑
 `typecheck:all` / `architecture:check` / `bundle:verify` 与两个相关包测试，全绿（见上方
 验证表）。该 PR 的 base 不是 master，因此仓库 CI 矩阵未对其运行，**本地门禁即全部证据**。
+
+### 请求必须以提问收尾（修复批次 4，PR #404）
+
+批次 3 的契约措辞是「提问是**人说过的话**里的最后一句，系统附带的行可以跟在后面」。
+这条断言在**缺陷仍然存在**时是通过的——系统附带的行（rail、hook 块、附件正文）也是
+`user` 行，而那正是模型读的东西。缺陷现场模型说的是「最后一条 user 消息」。
+
+宿主链路的实测顺序（探针打印 `assembleRequestMessages` 的入参）：
+
+```
+hostMessages = [prior-user-1, client-msg-1(提问), context×3]
+origins     = [null, null, "context", "context", "context"]
+```
+
+提问行在 rail **之前**——因为 rail 是 `applyContextRail` 追加到投影末尾的，而提问行
+是宿主提交到 timeline 的。所以宿主投影里的提问从来就不是最后一行。
+
+于是规则改成第 5 条：**请求以提问收尾**，`origin: 'context'` 的行被移到提问之前。
+「host 那份优先且留在 host 放的位置」这条不再成立——那个位置必须让出来。
+
+| | 批次 3 | 批次 4 |
+| --- | --- | --- |
+| 契约措辞 | 提问是**人说过的话**里的最后一句 | **请求**以提问收尾 |
+| 系统附带行 | 允许跟在提问后面 | 移到提问**前面** |
+| 工具续轮 | 不带提示词 | 同上，且顺序完全按宿主保留（Anthropic 的工具结果也走 `user` 行，配对不能动） |
+
+三层测试各管一段：
+
+- `packages/agent-runtime/test/request-assembly.test.ts`：契约矩阵（12 例），覆盖
+  hook / rail / 附件三种来源。
+- `packages/host/tests/worker-product-runtime/engine-prompt-order-proof.test.ts`：
+  真实 Host → Runtime → Provider 链路，断言**请求最后一行**是提问。
+- `packages/ai/test/prompt-last-provider-payload.test.ts`：Anthropic 与 OpenAI
+  Responses 的最终 wire payload。Anthropic 的 `mergeConsecutiveRoles` 会把提问与
+  它后面的 rail 合并成一个 `user` 块，所以断言的是合并块的**最后一个 content part**；
+  另有一条反向断言证明顺序回归时该块末尾确实是 rail。
+
+**变异验证**：把契约改回「host 那份留在 host 放的位置」，契约矩阵 7/12 变红
+（含 `expected 3 to be -1`，正是 3 条 rail 落在提问之后），真实链路 3/3 变红，
+报错 `expected '<system-reminder>…' to contain 'PROMPT-QUESTION-MARKER'`——最后一行是
+rail，精确复现缺陷。随后已还原。
+
+**架构判断**：`origin` 保留，但**不当作最终的 Prompt Assembly 模型**。后续把
+`source` / `authority` / `placement` 建模为独立的语义结构，再由 Provider Adapter
+编译——duya 是多 Provider（Anthropic 顶层 `system` 参数、OpenAI `system`/`developer`、
+Gemini `system_instruction`），不能照搬任何一家的消息结构；而且未经信任的项目文档、
+Memory 或工具结果不能仅因是自动注入就升级为 `developer`。本次修复只动**顺序**，
+不碰**权限**：系统附带行只是移动，没有提权。
 
 未做（带实测数字见「剩余瓶颈」）：bundle 编译缓存 launcher、技能加载剩余开销
 （读文件 + 目录遍历）、三个 db action、标题生成去重。
