@@ -175,6 +175,8 @@ base：`51014d6737ff74254fbb2ab954ddbb5b6a802563`（当前 `origin/master`）· 
 | 同上 / 仅本计划文档未提交；`node_modules/`、`dist/` ignored | 同上，受限授权 | `npm run architecture:check`（第三次 rebase 后） | 0 | 2703 findings 均已容忍；无新增边界违规；2 条旧指纹消退，baseline 未写入 |
 | 同上 / 同范围；测试数据根 `/tmp/duya-workflow-data` | 同上 | `DUYA_DATA_ROOT=/tmp/duya-workflow-data npx vitest run packages/workflow/tests scripts/architecture/slice-classification.test.ts` | 0 | 5 files / 47 tests passed；新包 graph、并发、失败和恢复 fixture 及架构分类覆盖通过 |
 | 同上 / 同范围 | 同上，受限授权 | `npm run typecheck:all`（第三次 rebase 后） | 0 | 21 包构建；protocol/client-core/core/workflow/runtime/web/Electron/CLI/voice/evals 全部通过；Electron ratchet 无新增类型错误（206 条已知 / 102 keys，9 keys 收缩）；eval 4/4 |
+| `ef1a77d9c4df355c83f1ec17664a363e5ab31bda` / CI 在 PR merge ref `98416e7d2d9874cd0514624bc5e8f94b104a633f` 执行；代码未变 | GitHub Actions Ubuntu 26.04 · Node v22.23.3 · npm 10.9.9 | `npm run test:rules`（CI workflow run 909，architecture job） | 1 | 5 passed / 1 failed；唯一失败是新 `workflow` workspace 缺少包级 `AGENTS.md`；同 job 其余边界、worker bundle freshness（0/945）和 closure steps 通过 |
+| `ef1a77d9c4df355c83f1ec17664a363e5ab31bda` / `packages/workflow/AGENTS.md` 已新增；本计划随后一并记录 | Linux 6.18.55 x86_64 · Node v24.19.0 · npm 11.9.0 | `npm run test:rules` | 0 | 6/6 tests passed；覆盖 24 个 workspace packages；39 条既有文档路径提示为非阻断 warning |
 
 ## 接续 / 结果
 
@@ -184,4 +186,4 @@ S5 将 DAG hash 绑定到校验后的整份定义；DWF hash 覆盖解析出的�
 
 S6 把并发、失败隔离和 stopped recovery 图提取为可复用 fixture；纯包恢复用例只使用注入 Host、ports 和内存 journal，无数据库或 worker。数值轨迹断言并发峰值 2、live retune 后在途任务顺序、AIMD `[4, 5, 2, 3]` 和退避 `[125, 500]` ms。最终全仓类型和架构门禁通过，S6 定向回归为 20 files / 260 tests。
 
-已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 draft PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期；修复提交已先后 rebase 到 `c426d029`、`1296b7c7` 与最新 `51014d67`。第三次 rebase 的 bundle 冲突按源码重建，freshness 为 0/945 变化；最新 base 上的 architecture、typecheck、workflow/classification 测试和 bundle freshness 均通过。计划文档记录待提交；随后 force-with-lease 更新 PR、等待 GitHub 全量 CI，全部通过后按用户授权合并。合并后再 clone ZCode 官方开源仓库，在独立目录只读学习对比，不移植代码。
+已将 `codex/workflow-core-package` 推送到 origin，并创建到 `master` 的 PR #436（`https://github.com/lava-chen/duya/pull/436`）。首轮 CI 揭示 architecture slice map 漏登和 Host worker bundle 过期，均已修复并 rebase 到最新 `51014d67`；第三次 rebase 的 bundle 冲突按源码重建，freshness 为 0/945 变化。最新 base 上的本地 architecture、typecheck、workflow/classification 测试和 bundle freshness 均通过。workflow run 909 又发现新 workspace 缺少包级 `AGENTS.md`；已添加边界指南，`npm run test:rules` 本地 6/6 通过。此修复待提交推送，随后等当前 PR head 的全量 CI 全绿后按用户授权合并。官方仓库已确认为 `zai-org/ZCode`；合并后再克隆到独立目录只读学习比较，不移植代码。
