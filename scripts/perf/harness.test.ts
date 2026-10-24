@@ -1,0 +1,624 @@
+/**
+ * scripts/perf/harness.test.ts — the unit tests of the performance harness.
+ *
+ * WHY THE TESTS LIVE HERE AND NOT IN `e2e/perf/`
+ *
+ * The vitest collection list (`vitest.config.ts`) does not include `e2e/**`:
+ * a test file under `e2e/perf/` is a test nobody ever runs, and
+ * `scripts/check-test-coverage.mjs` reports exactly that as an orphan. The
+ * collected location for a script-side test is a `.test.ts` file under
+ * `scripts/`, so the harness's pure functions are tested from here.
+ *
+ * It also closes a real CI hole: `scripts/ci/test-scope.mjs` counts the
+ * `.mjs` files under `scripts/` as unit files, so a PR that only touches
+ * `scripts/perf/**` used to make `vitest run --changed` fail with "No test
+ * files found". There is a real test file next to those scripts now.
+ *
+ * WHAT IS TESTED
+ *
+ * The parts of the harness that decide what a report SAYS: the metric
+ * aggregation, the fixture generator's determinism, the report writer, and
+ * the measurement lock's mutex. Nothing here launches Electron — the
+ * measurement side is exercised by the harness itself.
+ */
+
+import { describe, expect, it, afterEach } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import {
+  frameIntervals,
+  percentile,
+  round,
+  stability,
+  summarize,
+  sum,
+} from '../../e2e/perf/lib/metrics.mjs';
+import {
+  FIXTURE_IDS,
+  buildFencedStreamChunks,
+  buildSessionMessages,
+  buildStreamChunks,
+  buildToolStormRows,
+  buildTypingFixture,
+  fixtureDigest,
+  historyRowKind,
+} from '../../e2e/perf/lib/fixtures.mjs';
+import { buildReport, renderMarkdown } from '../../e2e/perf/lib/report.mjs';
+import { evaluateBudget } from '../../e2e/perf/lib/first-screen-budget.mjs';
+import {
+  acquireInternalLock,
+  acquireLock,
+  readLockOwner,
+  releaseInternalLock,
+  releaseLock,
+  resolveLockDir,
+  resolveEffectiveLockDir,
+  REPO_ROOT,
+} from '../../e2e/perf/lib/lock.mjs';
+import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
+import { signalBudgetMs } from '../../e2e/perf/lib/scenario-kit.mjs';
+
+describe('the metric aggregation', () => {
+  it('reads the percentile off the sorted sample', () => {
+    expect(percentile([10, 20, 30, 40], 0.5)).toBe(25);
+    expect(percentile([10, 20, 30, 40], 0.95)).toBeCloseTo(38.5, 5);
+    expect(percentile([7], 0.95)).toBe(7);
+    expect(percentile([], 0.5)).toBeNull();
+  });
+
+  it('ignores the values that are not numbers', () => {
+    expect(percentile([1, Number.NaN, 3, null as unknown as number], 0.5)).toBe(2);
+    expect(sum([1, Number.NaN, 3])).toBe(4);
+  });
+
+  it('summarizes a sample without inventing a value', () => {
+    const summary = summarize([100, 200, 300]);
+    expect(summary.count).toBe(3);
+    expect(summary.min).toBe(100);
+    expect(summary.max).toBe(300);
+    expect(summary.mean).toBe(200);
+    expect(summary.p50).toBe(200);
+    expect(summary.spreadPct).toBe(100);
+    expect(summarize([]).count).toBe(0);
+    expect(summarize([]).p50).toBeNull();
+  });
+
+  it('classifies the noise level by the coefficient of variation', () => {
+    // A constant metric has no variance: it is a count, not a signal.
+    expect(stability([5, 5, 5]).cv).toBe(0);
+    expect(stability([5, 5, 5]).level).toBe('low');
+    // A spread of a few percent is quiet enough for a CI gate.
+    expect(stability([100, 101, 99]).level).toBe('low');
+    // A wild spread is noise.
+    expect(stability([100, 200, 300]).level).toBe('high');
+    // One sample cannot say anything about the noise.
+    expect(stability([100]).level).toBe('unknown');
+    expect(stability([]).cv).toBeNull();
+  });
+
+  it('drops the frame gaps that are not frames', () => {
+    // A gap larger than two seconds is a backgrounded tab, not a frame.
+    expect(frameIntervals([0, 16, 32, 4000])).toEqual([16, 16]);
+    expect(frameIntervals([])).toEqual([]);
+  });
+
+  it('rounds to a stable number of decimals', () => {
+    expect(round(1.005, 2)).toBe(1);
+    expect(round(1.2345, 2)).toBe(1.23);
+    expect(round(null)).toBeNull();
+    expect(round(Number.POSITIVE_INFINITY)).toBeNull();
+  });
+});
+
+describe('the fixture generator', () => {
+  it('publishes the agreed fixture ids', () => {
+    expect(FIXTURE_IDS).toEqual([
+      'perf/session-100',
+      'perf/session-1000',
+      'perf/session-10000',
+      'perf/stream-long-reply',
+      'perf/stream-long-reply-fenced',
+      'perf/stream-tool-storm',
+      'perf/typing-30s',
+    ]);
+  });
+
+  it('puts code blocks in the fenced fixture and only there', () => {
+    // The plain long-reply fixture is prose, so the shared harness cannot see
+    // what a syntax-highlighted code block costs while a reply is growing.
+    // The fenced fixture is the same prose with code blocks mixed in, so the
+    // difference between the two IS the highlighting cost.
+    const plain = buildStreamChunks('perf/stream-long-reply');
+    const plainText = plain.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(plainText).not.toContain('```');
+
+    const fenced = buildFencedStreamChunks('perf/stream-long-reply-fenced');
+    const fencedText = fenced.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(fencedText).toContain('```ts');
+    expect(fencedText).toContain('```python');
+    expect(fencedText).toContain('```bash');
+    // The fence markers are split across chunks on purpose: that is what a
+    // growing reply looks like.
+    expect(fenced.chunks.length).toBeGreaterThan(1000);
+    expect(fenced.chunks.some((chunk: { text: string }) => chunk.text.includes('```'))).toBe(true);
+    // Same size and cadence as the plain fixture, so the two are comparable:
+    // the difference between their numbers is the highlighting, not the
+    // amount of text.
+    expect(fenced.chunkChars).toBe(plain.chunkChars);
+    expect(fenced.chunkCount).toBe(plain.chunkCount);
+    expect(fenced.chunks.length).toBe(plain.chunks.length);
+    expect(Math.abs(fenced.totalChars - plain.totalChars)).toBeLessThan(200);
+  });
+
+  it('keeps the fenced fixture deterministic', () => {
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).toBe(
+      fixtureDigest('perf/stream-long-reply-fenced'),
+    );
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).not.toBe(
+      fixtureDigest('perf/stream-long-reply'),
+    );
+  });
+
+  it('builds the requested number of rows', () => {
+    expect(buildSessionMessages('perf/session-100').length).toBe(100);
+    expect(buildSessionMessages('perf/session-1000').length).toBe(1000);
+    expect(buildSessionMessages('perf/session-10000').length).toBe(10000);
+  });
+
+  it('keeps the documented message mix', () => {
+    const rows = buildSessionMessages('perf/session-100');
+    const kinds = rows.map((row: { msg_type: string }) => row.msg_type);
+    const toolRows = kinds.filter((kind: string) => kind === 'tool_use' || kind === 'tool_result');
+    // One 10-row block: 4 user, 4 assistant, 2 tool rows.
+    expect(toolRows.length).toBe(20);
+    expect(historyRowKind(0)).toBe('user');
+    expect(historyRowKind(5)).toBe('tool_use');
+    expect(historyRowKind(6)).toBe('tool_result');
+  });
+
+  it('is deterministic, so two runs measure the same data', () => {
+    expect(fixtureDigest('perf/session-100')).toBe(fixtureDigest('perf/session-100'));
+    expect(buildSessionMessages('perf/session-100')).toEqual(buildSessionMessages('perf/session-100'));
+  });
+
+  it('namespaces the row ids without changing the digest', () => {
+    // The transcript store appends with INSERT OR IGNORE on the message id,
+    // so two sessions of one database need different ids.
+    const plain = buildSessionMessages('perf/session-100');
+    const namespaced = buildSessionMessages('perf/session-100', { idPrefix: 'session-a' });
+    expect(namespaced[0].id).not.toBe(plain[0].id);
+    expect(namespaced[0].id.startsWith('session-a-')).toBe(true);
+    // The digest is over the canonical payload, so it does not move.
+    expect(fixtureDigest('perf/session-100', { idPrefix: 'session-a' })).toBe(
+      fixtureDigest('perf/session-100'),
+    );
+  });
+
+  it('builds the tool storm and the typing schedule', () => {
+    const storm = buildToolStormRows('perf/stream-tool-storm');
+    expect(storm.rows.length).toBe(400);
+    expect(storm.batches.length).toBe(50);
+    const typing = buildTypingFixture('perf/typing-30s');
+    expect(typing.keystrokes).toBe(500);
+    expect(typing.text.length).toBe(500);
+  });
+
+  it('keeps the local evidence harness out of the fixture contract namespace', () => {
+    // A fixture id names ONE content. The shared harness owns the `perf/*`
+    // contract; a harness that renders different bytes under one of those ids
+    // would make every cross-harness number comparison meaningless. The local
+    // evidence harness therefore uses its own `ui-harness/` namespace.
+    const harnessSource = readFileSync(
+      path.join(REPO_ROOT, 'packages/ui/src/components/chat/__tests__/harness/main.tsx'),
+      'utf8',
+    );
+    const localIds = [...harnessSource.matchAll(/'([a-z][a-z0-9-]*\/[a-z0-9-]+)'/gi)].map((match) => match[1]!);
+    expect(localIds.length).toBeGreaterThan(0);
+    for (const id of localIds) {
+      expect(FIXTURE_IDS).not.toContain(id);
+    }
+
+    const driverSource = readFileSync(
+      path.join(REPO_ROOT, 'e2e/perf/agents/agent-b/run-bench.mjs'),
+      'utf8',
+    );
+    const defaultScenario = driverSource.match(/scenario:\s*'([^']+)'/)?.[1];
+    expect(defaultScenario).toBeDefined();
+    expect(FIXTURE_IDS).not.toContain(defaultScenario);
+  });
+});
+
+describe('the first-screen budget', () => {
+  const budget = { tolerancePct: 5, firstScreen: { chunkCount: 7, bytes: 3_626_123 }, entryChunkBytes: 2_726_133 };
+  const payload = (bytes: number, chunkCount = 7) => ({
+    firstScreen: { chunkCount, bytes },
+    entryChunkBytes: 2_726_133,
+  });
+
+  it('lets a payload inside the tolerance through', () => {
+    // The measured build-to-build spread is ~0.1 %, so a 5 % tolerance is
+    // generous; a payload a few percent over the baseline is still the same
+    // build, not a regression.
+    const result = evaluateBudget(payload(3_626_123), budget);
+    expect(result.violations).toEqual([]);
+  });
+
+  it('fails a payload that grew past the tolerance', () => {
+    const result = evaluateBudget(payload(4_000_000), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('the first screen grew to 4000000 bytes');
+    expect(result.violations[0]).toContain('over the budget');
+  });
+
+  it('passes a payload that got smaller', () => {
+    // The budget is one-sided: an improvement must never fail the gate.
+    expect(evaluateBudget(payload(2_000_000), budget).violations).toEqual([]);
+  });
+
+  it('fails when nothing was measured', () => {
+    // A gate over a measurement that measured nothing proves nothing.
+    const result = evaluateBudget(payload(0, 0), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('was not measured');
+  });
+
+  it('fails when the budget has no baseline to compare against', () => {
+    const result = evaluateBudget(payload(3_626_123), { tolerancePct: 5 });
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('no firstScreen.bytes');
+  });
+
+  it('reports the chunk count and the entry chunk without gating them', () => {
+    // There is no calibrated threshold for these, so they are reported.
+    const result = evaluateBudget(payload(3_626_123, 9), budget);
+    expect(result.violations).toEqual([]);
+    const metrics = result.checks.map((check: { metric: string }) => check.metric);
+    expect(metrics).toContain('firstScreen.chunkCount');
+    expect(metrics).toContain('entryChunkBytes');
+  });
+});
+
+describe('the report writer', () => {
+  const report = buildReport({
+    results: [
+      {
+        scenario: 'startup',
+        title: 'Electron process start to a usable composer',
+        fixture: 'perf/session-100',
+        fixtureDigest: 'abc123',
+        status: 'ok',
+        samples: [
+          { index: 0, metrics: { 'startup.typeable_ms': 1200 }, observed: {} },
+          { index: 1, metrics: { 'startup.typeable_ms': 1300 }, observed: {} },
+        ],
+        notes: { fixture: 'perf/session-100' },
+      },
+    ],
+    environment: { buildType: 'production', cpuModel: 'test cpu', cpuCount: 8, totalMemoryMB: 1024 },
+    startedAt: new Date().toISOString(),
+    durationMs: 1234,
+    samplesPerScenario: 2,
+    lock: { enabled: true, held: true, agent: 'agentA-harness', mode: 'per-scenario' },
+  });
+
+  it('summarizes every metric of every sample', () => {
+    expect(report.results[0].summary['startup.typeable_ms'].count).toBe(2);
+    expect(report.results[0].summary['startup.typeable_ms'].p50).toBe(1250);
+  });
+
+  it('names the scenario and its fixture', () => {
+    expect(report.results[0].scenario).toBe('startup');
+    expect(report.results[0].fixture).toBe('perf/session-100');
+    expect(report.results[0].fixtureDigest).toBe('abc123');
+  });
+
+  it('lists the metrics that are quiet enough for a CI gate', () => {
+    // 1200 and 1300 differ, so the metric is a signal and not a constant.
+    expect(report.ciCandidates.map((candidate: { metric: string }) => candidate.metric)).toContain(
+      'startup.typeable_ms',
+    );
+  });
+
+  it('renders a markdown summary with the environment and the lock state', () => {
+    const markdown = renderMarkdown(report);
+    expect(markdown).toContain('# Duya Desktop performance report');
+    expect(markdown).toContain('production');
+    expect(markdown).toContain('`startup.typeable_ms`');
+    expect(markdown).toContain('measurement lock');
+  });
+});
+
+describe('the measurement lock', () => {
+  const temporaryDirectories: string[] = [];
+
+  afterEach(() => {
+    for (const directory of temporaryDirectories.splice(0)) {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  function lockDir(): string {
+    const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-lock-'));
+    temporaryDirectories.push(directory);
+    return path.join(directory, 'perf-bench.lock');
+  }
+
+  it('gives the lock to exactly one holder', () => {
+    const dir = lockDir();
+    const first = acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    expect(first.acquired).toBe(true);
+    const second = acquireInternalLock({ lockDir: dir, agent: 'agent-b' });
+    expect(second.acquired).toBe(false);
+    expect(second.reason).toContain('agent-a');
+    releaseInternalLock(dir);
+  });
+
+  it('records who holds it', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    expect(readLockOwner(dir)?.agent).toBe('agent-a');
+    releaseInternalLock(dir);
+    expect(readLockOwner(dir)).toBeNull();
+  });
+
+  it('can be taken over when the holder went away', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    // A crashed holder must not block the sprint forever: a lock older than
+    // the timeout is stale and may be taken over.
+    const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b', timeoutMin: -1 });
+    expect(takeover.acquired).toBe(true);
+    expect(readLockOwner(dir)?.agent).toBe('agent-b');
+    releaseInternalLock(dir);
+  });
+
+  it('can be taken over when the holder process is gone', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    // A holder that crashed leaves a lock that nobody holds. Waiting the
+    // whole stale timeout for it would stall the sprint for 30 minutes of
+    // a machine that is not being measured at all.
+    writeFileSync(
+      path.join(dir, 'owner.json'),
+      JSON.stringify({ agent: 'agent-a', pid: 0x7ffffff0, acquiredAt: Date.now() }),
+      'utf8',
+    );
+    const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b' });
+    expect(takeover.acquired).toBe(true);
+    expect(readLockOwner(dir)?.agent).toBe('agent-b');
+    releaseInternalLock(dir);
+  });
+
+  it('resolves a lock directory inside the repository by default', () => {
+    const dir = resolveLockDir();
+    expect(path.isAbsolute(dir)).toBe(true);
+    expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+
+  it('stays exclusive when the holder took it through the external script', () => {
+    // The external script records the pid of its sentinel and keeps it alive
+    // for as long as the lock is held. The in-repo implementation treats a
+    // dead owner as a crashed holder and takes the lock over — which would let
+    // a script-driven agent and an in-repo agent measure on the same machine
+    // at the same time.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-lock-script.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        'try { fs.mkdirSync(LOCK_DIR); } catch (error) {',
+        "  if (error.code !== 'EEXIST') throw error;",
+        '  process.exit(2);',
+        '}',
+        'fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '  agent: process.argv[3] ?? "script-agent", pid: process.pid, acquiredAt: Date.now(),',
+        '}, null, 2), "utf8");',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+
+    // The live holder owns the lock, so the in-repo implementation must not
+    // take it over.
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+    expect(readLockOwner(dir)?.holderPid).toBe(process.pid);
+    const second = acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    expect(second.acquired).toBe(false);
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+
+    releaseInternalLock(dir);
+  });
+
+  it('never leaves the harness pid where the lock script would kill it', () => {
+    // The shared script stops the process recorded in `pid` when the lock is
+    // released. If the harness ever wrote its own pid there, the release
+    // would terminate the harness: the run dies after its first scenario,
+    // without an error message and without a report.
+    //
+    // The fake script below records the pid it WOULD kill instead of killing
+    // it, so the invariant can be asserted without ending the test runner.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-killing-lock-script.mjs');
+    const killLog = path.join(path.dirname(dir), 'fake-kill-log.txt');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        `const KILL_LOG = ${JSON.stringify(killLog)};`,
+        "const command = process.argv[2];",
+        "if (command === 'acquire') {",
+        '  fs.mkdirSync(LOCK_DIR, { recursive: true });',
+        '  fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '    agent: "script-agent", pid: 424242, acquiredAt: Date.now(),',
+        '  }), "utf8");',
+        '  process.exit(0);',
+        '}',
+        'const owner = JSON.parse(fs.readFileSync(path.join(LOCK_DIR, "owner.json"), "utf8"));',
+        'fs.writeFileSync(KILL_LOG, String(owner.pid));',
+        'fs.unlinkSync(path.join(LOCK_DIR, "owner.json"));',
+        'fs.rmdirSync(LOCK_DIR);',
+        'process.exit(0);',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+    releaseLock({ script: scriptPath, lockDir: dir });
+
+    const wouldKill = readFileSync(killLog, 'utf8');
+    expect(wouldKill).not.toBe(String(process.pid));
+    // The script's own pid is still the one it is allowed to stop.
+    expect(wouldKill).toBe('424242');
+  });
+
+  it('keeps the in-repo holder out of the field the script would kill', () => {
+    // The same hazard from the other side: an agent that measures with the
+    // in-repo lock writes its pid into the shared owner file, and a stray
+    // `node perf-bench-lock.mjs release` would stop it.
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    const owner = readLockOwner(dir);
+    expect(owner?.pid).toBeNull();
+    expect(owner?.holderPid).toBe(process.pid);
+    releaseInternalLock(dir);
+  });
+
+  it('takes the lock directory from the script that was passed', () => {
+    // The script owns its directory. Deriving it from a search of the
+    // repository can find a DIFFERENT copy of the script, and then the
+    // release operates on a directory nobody holds.
+    const scriptPath = path.join(tmpdir(), 'duya-perf-lock-script-dir', 'perf-bench-lock.mjs');
+    const expected = path.join(path.dirname(scriptPath), 'perf-bench.lock');
+    expect(resolveEffectiveLockDir({ script: scriptPath })).toBe(expected);
+  });
+});
+
+describe('the signal budget', () => {
+  it('gives the small transcripts a short budget and the largest one room to arrive', () => {
+    // The transcript arrives through the product's data path, and that path
+    // grows with the number of messages: the 10k fixture needed 73s to open
+    // and 104s to switch on a loaded machine, while the render took 189ms and
+    // 284ms. A budget below the data path turns a slow machine into a failed
+    // sample, which measures nothing.
+    expect(signalBudgetMs(100)).toBe(60_000);
+    expect(signalBudgetMs(1_000)).toBe(60_000);
+    expect(signalBudgetMs(10_000)).toBe(240_000);
+  });
+});
+
+describe('the app shutdown', () => {
+  const isProcessAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+    }
+  };
+
+  it('never kills a pid that was recycled by another process', async () => {
+    // When the app is already gone its pid can be handed to ANOTHER
+    // process. Killing that one takes the harness down with it, so the
+    // process name is checked before the tree is killed.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      await closePerfElectron({
+        process: () => ({ pid: child.pid }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      });
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('survives a pid that is already gone', async () => {
+    await expect(
+      closePerfElectron({
+        process: () => ({ pid: 0x7ffffff0 }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      }),
+    ).resolves.toEqual({ killed: [] });
+  });
+
+  // The leak this guards: `app.close()` resolves when Playwright is done
+  // with the WINDOW, and this app keeps its main process alive (it owns a
+  // gateway and an agent server). A sample that left the app running kept
+  // its profile locked and ~700 MB allocated, and the next sample measured
+  // a machine that was already busy.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the app when it survives the graceful close',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      // The name is what the guard looks at, so the stand-in is named
+      // like the app it stands in for.
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const child = spawn(binary, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+      try {
+        await closePerfElectron({
+          process: () => ({ pid: child.pid }),
+          close: async () => {
+            /* the close resolves, and the app stays alive */
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The pid Playwright hands out belongs to its own launcher (`cmd.exe` on
+  // Windows), not to the app, so the close finds the app by the namespace
+  // that is in the app's own command line.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the processes of one launch by its namespace',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const namespace = `perf-test-${Date.now()}`;
+      // `--` ends the option list, so the namespace reaches the command line
+      // instead of being read as an option the runtime does not know.
+      const child = spawn(
+        binary,
+        ['-e', 'setTimeout(() => {}, 30000)', '--', `--duya-namespace=${namespace}`],
+        { stdio: 'ignore' },
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const killed = killLaunchProcesses(namespace);
+        expect(killed.length).toBeGreaterThan(0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('leaves the processes of another launch alone', () => {
+    const killed = killLaunchProcesses('perf-test-namespace-that-does-not-exist');
+    expect(killed).toEqual([]);
+  });
+});

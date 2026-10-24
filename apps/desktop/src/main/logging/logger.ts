@@ -226,14 +226,28 @@ class Logger extends EventEmitter {
 
     try {
       this.rotateIfNeeded()
-      this.writeStream = fs.createWriteStream(this.logPath, {
+      const stream = fs.createWriteStream(this.logPath, {
         flags: 'a',
         encoding: 'utf-8',
         autoClose: true,
       })
+      this.writeStream = stream
 
-      this.writeStream.on('error', (err) => {
-        this.emit('error', err)
+      stream.on('error', (err) => {
+        // `EventEmitter.emit('error')` THROWS when nothing is listening for
+        // it, so a failed log write would take the whole app down. A log
+        // directory that went away, filled up, or turned read-only is a
+        // DEGRADED-logging condition, not a fatal one -- and the logger is
+        // the one component that must never crash the app.
+        if (this.listenerCount('error') > 0) {
+          this.emit('error', err)
+        }
+        // The sink is broken: drop it so the logger falls back to the
+        // guarded synchronous append. Queueing into a dead stream would
+        // re-queue the same batch on every flush and never drain.
+        if (this.writeStream === stream) {
+          this.writeStream = null
+        }
       })
     } catch (error) {
       // Fallback: cannot use logger here since it's being initialized

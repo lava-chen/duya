@@ -5,6 +5,7 @@
 > **交接（2026-10-23）**：第一波卡 01 / 07 / 08 / 09 的执行 agent 会话丢失，
 > 其工作区改动已由父 agent 提交为 **WIP 快照并推送到远端**（**未验证、未开 PR**）。
 > 远端分支状态、重建检出命令与环境坑见 [HANDOFF.md](./HANDOFF.md)。
+> 后续进展：卡 01 已由 PR #399 正式完成；卡 07 / 08 / 09 的 WIP 快照仍待接手方补验收并开 PR。
 > 本系列是 622 号工作项的**唯一状态源**；卡片状态只认**具名测试 + commit**。
 
 - 编号：622（610–621 已占用）
@@ -354,7 +355,7 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 
 | 卡 | 状态 | 首个失败证据（今天长什么样） | 验收命令 | 依赖 |
 | --- | --- | --- | --- | --- |
-| [01](01-import-graph-resolver.md) | `ee29d9cb`（WIP 快照，无绿测试 → **未完成**） | `import-graph.test.ts` 里**没有任何**裸 `@duya/*` 用例；`resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts` | T19 |
+| [01](01-import-graph-resolver.md) | completed（PR #399） | — | `npx vitest run scripts/architecture/import-graph.test.ts` | T19 |
 | [02](02-gate-wiring-and-single-resolver.md) | todo | `.github/workflows/test.yml` 里 `architecture:slice-graph` 命中 **0** 次；`agent-retirement-gate` 命中 **0** 次 | `grep -c "architecture:slice-graph" .github/workflows/test.yml` ≥ 1 且 `npm run architecture:check` 仍绿 | 01 |
 | [03](03-host-layer-verdict.md) | todo | `boundary-gates.test.ts` 没有"每个包都有层"的断言；10/20 包无层；G1 只审 523/2593 条 | `npx vitest run scripts/architecture/boundary-gates.test.ts` + `npm run architecture:boundaries` | 01 02 |
 | [04](04-remaining-unlayered-packages.md) | todo | 同上，"无层包"清单仍含 10 个 | `npx vitest run scripts/architecture/boundary-gates.test.ts` | 03 |
@@ -376,11 +377,12 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
   一卡一 PR，按 §5.1 的依赖顺序。
 - **2026-10-23 交接**：卡 01 / 07 / 08 / 09 已产出 WIP 提交并推送远端，
   接手方从 [HANDOFF.md](./HANDOFF.md) 接手；先 rebase 到最新 master，再补验收与 PR。
+  卡 01 已由 PR #399 完成；卡 07 / 08 / 09 的 WIP 快照仍待接手。
 - **下一步（一条能开始执行的动作）**：
-  认领 [01](01-import-graph-resolver.md)，先在 T19 的根因上补一条
-  `import-graph.test.ts` 用例，证明裸 `@duya/*` 今天解析为 `null`，
-  然后再动 `resolveTarget`。**完成判据**：该用例在 base 上红、在修好的树上绿，
-  且 `slice-cut-list.test.ts` 与 `slice-classification.test.ts` 仍全绿。
+  认领 [02](02-gate-wiring-and-single-resolver.md)，把 `architecture:slice-graph` 与
+  `agent-retirement-gate` 接进 CI，并让切片图与 `audit-imports.mjs` 用同一套解析口径。
+  **完成判据**：`grep -c "architecture:slice-graph" .github/workflows/test.yml` ≥ 1，
+  且 `npm run architecture:check` 仍绿。
 - **未做**：没有合并任何 PR（未经用户授权）；没有改任何生产代码、脚本或配置；
   没有运行 `npm test` 全量（本次是纯文档任务，见 [§8](#8-本次交付的验证记录)）。
 

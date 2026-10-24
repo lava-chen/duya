@@ -43,6 +43,8 @@ const mocks = vi.hoisted(() => {
     termCtorOptions: [] as Record<string, unknown>[],
     addonInstances: { unicode11: [] as unknown[], webgl: [] as unknown[] },
     webglShouldThrow: { value: false },
+    webglOnContextLoss: null as null | (() => void),
+    reportWebglContextLoss: vi.fn(async () => ({ ok: true, webglContextLossCount: 1 })),
     spawnTerminal: vi.fn(),
     resizeTerminal: vi.fn(async () => true),
     writeToTerminal: vi.fn(async () => true),
@@ -96,7 +98,8 @@ vi.mock("@xterm/addon-webgl", () => ({
       if (mocks.webglShouldThrow.value) throw new Error("WebGL2 unavailable");
       mocks.addonInstances.webgl.push(this);
     }
-    onContextLoss() {
+    onContextLoss(callback: () => void) {
+      mocks.webglOnContextLoss = callback;
       return { dispose() {} };
     }
     dispose() {
@@ -153,8 +156,14 @@ beforeEach(() => {
   mocks.addonInstances.unicode11.length = 0;
   mocks.addonInstances.webgl.length = 0;
   mocks.webglShouldThrow.value = false;
+  mocks.webglOnContextLoss = null;
   mocks.termSurface.options = { fontSize: 13, theme: {} };
   mocks.termSurface.unicode = { activeVersion: "" };
+  // The renderer reports a lost WebGL context to the main process so the
+  // degradation stops being invisible. Stub the preload bridge for it.
+  (window as unknown as { electronAPI?: unknown }).electronAPI = {
+    gpu: { reportWebglContextLoss: mocks.reportWebglContextLoss },
+  };
   useTerminalAppearanceStore.setState({ fontSize: 13, themeId: "auto" });
   mocks.spawnTerminal.mockImplementation(async (params: SpawnParamsStub) => ({
     ok: true,
@@ -173,6 +182,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
 describe("TerminalPanel appearance", () => {
@@ -202,6 +212,45 @@ describe("TerminalPanel appearance", () => {
     expect(mocks.addonInstances.webgl).toHaveLength(0);
     openMenu(container);
     await waitFor(() => expect(rendererBadge(container)).toBe("DOM"));
+  });
+
+  it("exposes the active renderer on the panel root", async () => {
+    const { container } = render(<TerminalPanel tab={TAB} />);
+    await waitFor(() => expect(mocks.addonInstances.webgl).toHaveLength(1));
+    await waitFor(() =>
+      expect(container.querySelector(".terminal-panel")?.getAttribute("data-renderer")).toBe("webgl"),
+    );
+  });
+
+  it("reports a lost WebGL context to the main process and falls back to DOM", async () => {
+    const { container } = render(<TerminalPanel tab={TAB} />);
+    await waitFor(() => expect(mocks.addonInstances.webgl).toHaveLength(1));
+    await waitFor(() =>
+      expect(container.querySelector(".terminal-panel")?.getAttribute("data-renderer")).toBe("webgl"),
+    );
+
+    act(() => {
+      mocks.webglOnContextLoss?.();
+    });
+
+    await waitFor(() =>
+      expect(container.querySelector(".terminal-panel")?.getAttribute("data-renderer")).toBe("dom"),
+    );
+    expect(mocks.reportWebglContextLoss).toHaveBeenCalledWith({
+      surface: "terminal",
+      reason: "webgl-context-lost",
+    });
+  });
+
+  it("reports an unavailable WebGL renderer to the main process", async () => {
+    mocks.webglShouldThrow.value = true;
+    render(<TerminalPanel tab={TAB} />);
+    await waitFor(() => expect(mocks.spawnTerminal).toHaveBeenCalled());
+
+    expect(mocks.reportWebglContextLoss).toHaveBeenCalledWith({
+      surface: "terminal",
+      reason: "webgl-unavailable",
+    });
   });
 
   it("zooms the font size from the control and applies it to the terminal", async () => {

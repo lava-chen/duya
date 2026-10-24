@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, forwardRef, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, forwardRef, useCallback, useRef, memo } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -68,6 +68,8 @@ import {
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { useProjectsStore } from "@/stores/projects-store";
+import { useShallow } from "zustand/react/shallow";
+import { AppSidebarProps, areSidebarPropsEqual } from "./sidebar/sidebar-props";
 import { restrictVerticalDragWithinContainer } from "@/lib/sidebarDrag";
 import { useBotActivityStore } from "@/stores/bot-activity-store";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -154,18 +156,21 @@ const settingsNavGroups: {
   },
 ];
 
-interface AppSidebarProps {
-  isSettingsPage?: boolean;
-  style?: React.CSSProperties;
-  /** Collapsed to the icon-only rail (title-bar toggle). */
-  collapsed?: boolean;
-  /** Expand back to the full sidebar (rail items call it before acting). */
-  onExpand?: () => void;
-  capabilities?: UiServices["capabilities"];
-}
-
-export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
-  function AppSidebar({ isSettingsPage = false, collapsed = false, onExpand, style, capabilities }, ref) {
+/**
+ * The sidebar tree.
+ *
+ * Memoised on the props that can actually change what the sidebar shows.
+ * The shell (`app-shell.tsx`) subscribes to the whole conversation store, so
+ * it re-renders on every store write — and the new-chat composer persists
+ * its draft to that store on every keystroke. Without this boundary the
+ * whole sidebar (project groups, bot rows, session rows) re-renders on
+ * every character the user types.
+ *
+ * The props the shell rebuilds on every render (`style`, `capabilities`)
+ * are compared by value — see `areSidebarPropsEqual`.
+ */
+const AppSidebarInner = memo(
+  forwardRef<HTMLDivElement, AppSidebarProps>(function AppSidebarInner({ isSettingsPage = false, collapsed = false, onExpand, style, capabilities }, ref) {
     const { t } = useTranslation();
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
@@ -364,6 +369,10 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     // hundreds of stale runs.
     const CRON_SIDEBAR_VISIBLE = 8;
 
+    // Narrow subscription: the sidebar subscribes to the slices it renders,
+    // not to the whole store. A whole-store subscription re-rendered the
+    // entire sidebar on every unrelated write — and the new-chat composer
+    // writes the draft to this store on every keystroke.
     const {
       threads,
       // Plan 549 (Track B): the archived-section roster lives in its
@@ -390,7 +399,32 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setProjectGroupBy,
       noProjectWorkspace,
       startNewChat,
-    } = useConversationStore();
+    } = useConversationStore(
+      useShallow((state) => ({
+        threads: state.threads,
+        archivedThreads: state.archivedThreads,
+        loadArchivedThreads: state.loadArchivedThreads,
+        activeThreadId: state.activeThreadId,
+        newChatSourceSessionId: state.newChatSourceSessionId,
+        loadFromDatabase: state.loadFromDatabase,
+        isHydrated: state.isHydrated,
+        createThread: state.createThread,
+        setActiveThread: state.setActiveThread,
+        currentView: state.currentView,
+        setCurrentView: state.setCurrentView,
+        setSettingsTab: state.setSettingsTab,
+        enterSettings: state.enterSettings,
+        exitSettings: state.exitSettings,
+        collapsedProjects: state.collapsedProjects,
+        toggleProjectExpanded: state.toggleProjectExpanded,
+        projectSortBy: state.projectSortBy,
+        setProjectSortBy: state.setProjectSortBy,
+        projectGroupBy: state.projectGroupBy,
+        setProjectGroupBy: state.setProjectGroupBy,
+        noProjectWorkspace: state.noProjectWorkspace,
+        startNewChat: state.startNewChat,
+      })),
+    );
     // Declared after the store read: it depends on the selection, and the
     // selection did not exist when this component's first lines ran.
     const newChatUnavailable = capabilities?.localFileAccess === false && !activeThreadId && !newChatSourceSessionId;
@@ -407,7 +441,15 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       hydrated: sectionsHydrated,
       loadFromDatabase: loadUserSectionsFromDb,
       toggleSectionCollapsed: toggleUserSectionCollapsed,
-    } = useSidebarSectionsStore();
+    } = useSidebarSectionsStore(
+      useShallow((state) => ({
+        sections: state.sections,
+        sectionProjects: state.sectionProjects,
+        hydrated: state.hydrated,
+        loadFromDatabase: state.loadFromDatabase,
+        toggleSectionCollapsed: state.toggleSectionCollapsed,
+      })),
+    );
     // In-memory collapse for system sections (cron / gateway / wakeup /
     // pinned / uncategorized). User-defined sections persist via SQLite;
     // system sections live only in renderer state because their shape is
@@ -2143,5 +2185,27 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         />
       </aside>
     );
-  }
+  }),
+  areSidebarPropsEqual,
 );
+
+/**
+ * The sidebar's public entry point.
+ *
+ * The shell hands down a fresh `onExpand` closure on every render. The tree
+ * below only needs to be able to expand the sidebar, so the volatile closure
+ * is kept in a ref and a STABLE callback is handed down instead — the memo
+ * boundary can then compare `onExpand` by identity instead of guessing that
+ * two different closures behave the same.
+ */
+export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(function AppSidebar(
+  { onExpand, ...rest },
+  ref,
+) {
+  const onExpandRef = useRef(onExpand);
+  onExpandRef.current = onExpand;
+  const stableOnExpand = useCallback(() => {
+    onExpandRef.current?.();
+  }, []);
+  return <AppSidebarInner {...rest} onExpand={stableOnExpand} ref={ref} />;
+});

@@ -16,8 +16,8 @@
 | 分支 | 提交 | 内容 | 验证状态 | PR |
 | --- | --- | --- | --- | --- |
 | `codex/plan-622` | `6c6a411f` | 622 计划系列（README + 11 张卡） | **已合并**：PR #384 → `c81ed169`，CI `architecture` / `test scope` 绿 | 已合 |
-| `codex/plan-perf-handoff` | `9765601e` `6bd8a0a6` | Desktop 性能爬坡计划归档 + 交接说明；`exec-plans/README.md`、`catalog.md` 索引同步；622 README 与 615 去掉性能任务引用 | `plan:sync` OK；`architecture:check` **未取得**（见 §3 环境坑 2） | 待开 |
-| `codex/622-01-import-graph-resolver` | `ee29d9cb` | 卡 01：`import-graph.mjs` 的 `resolveTarget` 解析裸 `@duya/*` 与子路径；`slice-cut-list.ts` 声明重算 | **全部未验证**（无 vitest / 无门禁） | 待开 |
+| `codex/plan-perf-handoff` | `9765601e` `6bd8a0a6` | 622 交接说明（本文件）+ 622 README 状态表补 WIP 快照标记 | `architecture:check` **未取得**（见 §3 环境坑 2） | #389 |
+| `codex/622-01-import-graph-resolver` | `ee29d9cb` | 卡 01：`import-graph.mjs` 的 `resolveTarget` 解析裸 `@duya/*` 与子路径；`slice-cut-list.ts` 声明重算 | **已被正式实现取代**：卡 01 由 PR #399 完成，本分支上的 WIP 快照仅作历史留档 | #399 |
 | `codex/622-07-workflow-dag-parallel` | `2b3db6b1` | 卡 07：`engine.ts` 同层无依赖节点交错执行 + 新增 `dag-concurrency.test.ts` | **未验证**；C2 失败级联未实现 | 待开 |
 | `codex/622-08-background-lifecycle` | `8acbe4ce` | 卡 08：**仅 Phase 1 测试层**（`background-lifecycle.test.ts`）+ 卡片记录 | **未验证**；Phase 4 F1 落盘**未实现** | 待开 |
 | `codex/622-09-security-governance` | `89569a63` | 卡 09：sandbox 真实接线、manifest 权限线格式来源、资源预算与外部副作用台账、4 个子项测试文件 | **未验证**（测试没跑过） | 待开 |
@@ -47,7 +47,7 @@ done
 cd .claude/worktrees/622-01 && node scripts/junction-worktree.mjs .
 ```
 
-**开工前先 rebase**（本文件与性能下线都改过 `exec-plans/README.md`、`catalog.md`、622 README）：
+**开工前先 rebase**（本文件改过 622 README 的状态表）：
 
 ```bash
 git -C .claude/worktrees/622-01 rebase origin/master   # 其余三个同理
@@ -79,7 +79,7 @@ git -C .claude/worktrees/622-01 rebase origin/master   # 其余三个同理
 622 系列的排序规则是**先修测量、再动结构**，不要跳步：
 
 ```
-卡 01（已 WIP 提交，待验证）→ 卡 02（门禁接线 + 两套解析器收敛）
+卡 01（已由 PR #399 完成）→ 卡 02（门禁接线 + 两套解析器收敛）
    → 卡 03（@duya/host 层归属裁决）→ 卡 04（其余无层包）
        → 卡 05（客户端轴反向门禁 G11）
        → 卡 06（runtime 纯净度：过渡导出 vs 实耦合）
@@ -124,6 +124,8 @@ git -C .claude/worktrees/622-01 rebase origin/master   # 其余三个同理
 
 ## 6. 当前未合并的东西
 
-- `codex/plan-perf-handoff`（本文件所在分支）：**未开 PR、未合并**。接手方开 PR 时正文写明：
-  Desktop UI 性能与 TUI 性能两项任务已从 mavis 手上移出，本计划按「移交（未完成）」归档。
-- 四个 WIP 快照分支：**未开 PR、未验证**。**不要**把它们当成完成的卡合进 master。
+- `codex/plan-perf-handoff`（本文件所在分支）：**PR #389**，只带本交接文档与 622 README 的状态表。
+  Desktop 性能爬坡计划本身**未归档**——它在 master 上仍是 active 计划并已推进到第二轮，
+  本文件只保留 622 系列的交接信息。
+- 卡 07 / 08 / 09 三个 WIP 快照分支：**未开 PR、未验证**。**不要**把它们当成完成的卡合进 master。
+- 卡 01 的 WIP 快照已被 PR #399 的正式实现取代，只作历史留档。

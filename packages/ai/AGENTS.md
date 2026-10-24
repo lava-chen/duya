@@ -28,8 +28,9 @@
 | `packages/ai/src/api/anthropic-messages.ts:1782` | `createAnthropicClient`（用官方 SDK）；tool-result 传输降级阶梯 `:1829`（L0 block → L1 text → L2 none）；cache breakpoint `:1868`。 |
 | `packages/ai/src/utils/retry.ts:63` | `DEFAULT_RETRY_CONFIG`：maxRetries 10、base 500 ms、max 32 s、multiplier 2、jitter 0.25、persistent 上限 6 h。 |
 | `packages/ai/src/runtime-adapter.ts` | `toRuntimeConfig` / `buildHeaders` / `redactSecrets` 等，统一导出在 `packages/ai/src/index.ts:99`。 |
+| `packages/ai/src/model-request-invariants.ts` | Model Request 权威边界：`checkModelRequest`（**报告而不抛异常**）+ 5 个 adapter 归约器。零 import，可留在根 barrel。 |
 
-公共面：`packages/ai/src/index.ts`（barrel）+ `packages/ai/src/context.ts`；另有 `packages/ai/src/retry-client.ts:23` 的 `createAIClientWithRetry`。
+公共面：`packages/ai/src/index.ts`（barrel）+ `packages/ai/src/context.ts` + `packages/ai/src/clients.ts`（vendor SDK 客户端面 **+ 5 个 payload 构造器** `toAnthropicMessages` / `toResponsesInput` / `toOpenAIMessages` / `toGeminiContents` / `toBedrockMessages`：各 adapter 的 wire 形状，断言「请求实际发了什么」时从这里取）；另有 `packages/ai/src/retry-client.ts:23` 的 `createAIClientWithRetry`。
 
 ## 3. 排障入口
 
@@ -47,3 +48,4 @@
 - `architecture-policy.yaml:80` 把 `ai` 声明为 **core 层**模块；模块条目 `legacy-ai` 在 `architecture-policy.yaml:789-793`（`managed: false`）。
 - **IO 是白名单而非例外**：`scripts/architecture/layer-purity.ts:303-337` 精确列出允许做 IO 的 6 个文件（`api/ollama-chat.ts`、`auth/oauth/device-code.ts`、`utils/backoff.ts`、`utils/idle-timeout.ts`、`system-one/client.ts`）。往本包任何**其它**文件加一个 `fetch(` 都会让架构门禁变红。
 - **内置 provider / 模型目录只在本包**：`packages/ai/src/providers/catalog-data.ts:40`。agent-protocol 侧**没有** provider 目录文件；`packages/agent-protocol/src/model-capabilities.ts` 只是能力记录的类型，不是模型目录。
+- **根 barrel 只能 re-export 零依赖模块**：`packages/ai/src/index.ts` 静态 re-export 一个静态依赖 vendor SDK 的模块，等于给 bundler 加一条**静态边**——SDK 会落进 renderer 的 entry chunk（实测 +248 KB，`npm run perf:first-screen-budget` 变红）。`clients.ts` 里那 5 个 payload 构造器所在的模块正是这种形状，所以它们只能从 `@duya/ai/clients` 取，**不得加回根入口**。`createAIClient` 里的动态 `import()` 不算静态边（懒加载），可以留在根入口。
