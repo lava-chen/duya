@@ -104,6 +104,11 @@ rail 是**工作数组状态**，不进 timeline（plan 619 Phase 3）。compact
 
 后两个此前**无法从测试断言**——payload 构造器是模块私有的。
 
+> 导出位置：5 个构造器都从 `@duya/ai/clients` 导出，而不是根入口 `@duya/ai`。
+> 其中三个所在的模块静态依赖 vendor SDK（`@anthropic-ai/sdk` / `openai`），而静态 re-export
+> 就是静态边——放在根入口会把 SDK 拖进渲染器首屏（+248 KB，CI 首屏预算会红）。
+> 根入口只留零依赖的 Model Request 边界模块。
+
 ### H-4（P1）没有任何测试跑完 Host → Runtime → adapter
 
 缺陷发生前的覆盖是两个半截：
@@ -157,7 +162,8 @@ emergency / preflight 仍按原样把 `ctx.deferred.current` 并入基线。
 | `packages/agent-runtime/test/request-assembly-context-survives-compaction.test.ts` | H-2 缺陷探针（characterization，修复后断言翻转） |
 | `packages/agent-runtime/test/compaction-probe-context.test.ts` | H-6：探针量的行集 == 请求携带的行集（压缩后 / 压缩前对照 + 反例臂） |
 | `packages/ai/src/api/{google-generative-ai,bedrock-converse}.ts` | 导出 `toGeminiContents` / `toBedrockMessages`，让边界可断言 |
-| `packages/ai/src/index.ts` | 导出边界模块与 5 个 payload 构造器 |
+| `packages/ai/src/index.ts` | 导出 Model Request 边界模块（零依赖，可安全留在根入口） |
+| `packages/ai/src/clients.ts` | 导出 5 个 payload 构造器（与 provider client 同处；三个构造器所在的模块静态依赖 vendor SDK，放在根入口会把 SDK 拖进渲染器首屏） |
 | `packages/agent-runtime/src/engine/request-assembly.ts` | **契约本体**：规则 1–5 |
 | `packages/agent-runtime/test/request-assembly.test.ts` | 契约矩阵（装配顺序 + 例外） |
 | `packages/agent-runtime/test/to-runtime-message-origin.test.ts` | H-5：`origin` 标记随替换转写存活 |
