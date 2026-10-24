@@ -49,6 +49,8 @@ export interface ToolInvokeDispatcherDeps {
   contextProvider?: () => ToolUseContext | undefined;
   /** Host execution invariants, checked after approval and immediately before dispatch. */
   beforeExecute?: (toolName: string, args: Record<string, unknown>, context?: ToolUseContext) => Promise<ToolInvokeOutcome | undefined>;
+  /** Synchronously reserve the execution context after every asynchronous check. */
+  acquireExecutionLease?: (context?: ToolUseContext) => { release(): void } | ToolInvokeOutcome;
   logger?: ToolExecutionLogger;
 }
 
@@ -232,12 +234,15 @@ export function createToolInvokeDispatcherFromRegistry(
       try {
         const refusal = await deps.beforeExecute?.(current.definition.name, args, context);
         if (refusal) return refusal;
+        const lease = deps.acquireExecutionLease?.(context);
+        if (lease && !('release' in lease)) return lease;
         const executor = current.executor;
-        const result = await executor.execute(
-          args,
-          deps.workingDirectory,
-          context,
-        );
+        let result: unknown;
+        try {
+          result = await executor.execute(args, deps.workingDirectory, context);
+        } finally {
+          lease?.release();
+        }
         const resultText = result && typeof result === 'object'
           ? toText((result as { result?: unknown }).result)
           : toText(result);

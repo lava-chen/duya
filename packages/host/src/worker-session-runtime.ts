@@ -1,5 +1,6 @@
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
 import { definedProperties } from './worker-context/defined-properties.js';
+import { ExecutionLocationError, ExecutionLocationFence } from './workspace/execution-location-fence.js';
 /** Host product session state and assembly; RunEngine owns model/tool scheduling. */
 import type { TurnOutputSink, ResolvedTurnTools, TurnPipelineRequest, TurnAssemblyRequest, TurnAssembly, RunStartRequest, RunHandle, RunAssemblyRequest, PromptUserRowCommit, LegacyTurnDelta, TurnModelProjection, RunTurnAssembly } from './worker-run-session-port.js';
 import type { WorkerSessionAssemblyPorts } from './worker-session-assembly-ports.js';
@@ -191,6 +192,7 @@ export class WorkerSession implements AgentRuntime {
         }
         let turnAppState: AppState = {};
         const toolUseContext: ToolUseContext = {
+            executionLocation: request.executionLocation ?? this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined),
             toolUseId: crypto.randomUUID(),
             abortController: abortController,
             getAppState: () => turnAppState,
@@ -235,6 +237,7 @@ export class WorkerSession implements AgentRuntime {
         const systemPrompt = this.refreshTurnSystemPrompt(request.systemPrompt);
         request.resolved.catalogView.currentRound = request.turn;
         const pipeline = this.buildTurnPipeline({
+            ...definedProperties({ executionLocation: request.executionLocation }),
             turn: request.turn,
             messages: request.messages,
             tools: request.tools,
@@ -449,6 +452,7 @@ export class WorkerSession implements AgentRuntime {
     }
     async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
         const { options, prompt, appliedProfile, publisher, turnContext } = request;
+        const executionLocation = this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined);
         const resolvedBase = await this._resolveTools(options, appliedProfile);
         const { registry, catalogView } = resolvedBase;
         let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
@@ -563,6 +567,7 @@ export class WorkerSession implements AgentRuntime {
             assemble: (input) => {
                 currentTools = input.tools;
                 const assembly = this.assembleTurn({
+                    executionLocation,
                     turn: input.turn,
                     systemPrompt: input.systemPrompt,
                     messages: input.messages,
@@ -879,6 +884,7 @@ export class WorkerSession implements AgentRuntime {
     private provider: 'anthropic' | 'openai' | 'ollama';
     private sessionId: string | undefined;
     private workingDirectory: string | undefined;
+    private readonly executionLocationFence = new ExecutionLocationFence(() => this.workingDirectory);
     private currentProjectId: (string | null) | undefined;
     private projectHome: string | undefined;
     private defaultWorkspaceDirectory: string | undefined;
@@ -2263,7 +2269,15 @@ export class WorkerSession implements AgentRuntime {
         return this.workingDirectory;
     }
     setWorkingDirectory(directory: string): void {
-        this.workingDirectory = directory;
+        if (directory === this.workingDirectory) return;
+        // Until run assembly can rebuild prompt, permissions and skills as one
+        // operation, changing only the directory during a run is unsafe.
+        if (this.abortController) {
+            throw new ExecutionLocationError('execution_context_run_active', 'Finish the current run before changing its execution directory.');
+        }
+        const snapshot = this.executionLocationFence.capture();
+        const transition = this.executionLocationFence.beginSwitch(snapshot.revision);
+        transition.commit(() => { this.workingDirectory = directory; });
     }
     setCurrentProjectId(projectId: string | null | undefined): void {
         this.currentProjectId = projectId ?? null;

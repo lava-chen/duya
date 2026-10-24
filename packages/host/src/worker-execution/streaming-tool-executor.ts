@@ -32,6 +32,7 @@ import { WorkerPool, getWorkerPool, type WorkerTaskExtended } from '@duya/host/w
 import { logger } from '@duya/host/worker-logger';
 import { LEGACY_TODO_WIRE_NAMES, TODO_TOOL_NAME } from '@duya/capabilities/TodoTool/TodoTool';
 import { checkCheckoutToolWrite } from '../workspace/tool-write-gate.js';
+import { acquireExecutionLocation } from '../workspace/execution-location-fence.js';
 
 export type {
   CanUseToolDecision,
@@ -176,7 +177,13 @@ export function createAgentToolExecutionPorts(
           ...(request.onOutput ? { onOutput: request.onOutput } : {}),
           ...(request.onProgress ? { onProgress: request.onProgress } : {}),
         };
-        return workerPool.executeTask(task);
+        const lease = acquireExecutionLocation(context, request.workingDirectory);
+        if (!lease.ok) return { taskId: request.id, success: false, result: `[${lease.code}] ${lease.message}`, error: lease.code };
+        try {
+          return await workerPool.executeTask(task);
+        } finally {
+          lease.release();
+        }
       },
     };
   }

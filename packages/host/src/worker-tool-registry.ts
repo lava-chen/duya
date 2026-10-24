@@ -11,6 +11,7 @@ import type { RiskTier } from '@duya/agent-runtime/authorization/permissions/pol
 import { activateConditionalSkills, getPendingConditionalSkillCount } from './skills/conditionalSkills.js';
 import type { Tool, ToolResult, ToolUseContext } from './worker-run-contracts.js';
 import { checkCheckoutToolWrite } from './workspace/tool-write-gate.js';
+import { acquireExecutionLocation } from './workspace/execution-location-fence.js';
 
 export type { ToolExposure } from '@duya/agent-runtime/tools/catalog/catalog-types';
 export type {
@@ -49,7 +50,18 @@ export class ToolRegistry extends RuntimeToolRegistry<Tool, ToolResult, ToolUseC
         metadata: { errorCode: denial.code, reason: denial.reason },
       };
     }
-    return super.execute(name, input, workingDirectory, context);
+    const lease = acquireExecutionLocation(context, workingDirectory);
+    if (!lease.ok) {
+      return {
+        id: crypto.randomUUID(), name, error: true, result: `[${lease.code}] ${lease.message}`,
+        metadata: { errorCode: lease.code },
+      };
+    }
+    try {
+      return await super.execute(name, input, workingDirectory, context);
+    } finally {
+      lease.release();
+    }
   }
 }
 

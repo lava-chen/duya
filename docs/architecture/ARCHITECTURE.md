@@ -75,6 +75,16 @@ entry points. Its shared architecture separates these layers:
   `duya-checkout.json`. Missing legacy base is reported as unknown rather than
   current HEAD. Resuming an isolated child restores its verified checkout,
   independently of the parent's cwd, and refuses missing or occupied checkouts.
+- **Execution location barrier**: Each WorkerSession binds tool contexts to a
+  directory and a monotonically increasing process-local revision. Registry,
+  shell-worker and deferred dispatch synchronously acquire that context after
+  asynchronous approval and ownership checks, and release it when execution
+  settles. A switch closes admission, refuses active executions, and invalidates
+  old contexts even if cancelled or moved back to the same path. Directory-only
+  mutation during an active run is refused until prompt, permission and skill
+  refresh can join the same transition. This barrier covers foreground tool
+  promises; background process leases and durable enter/exit recovery remain
+  prerequisites for exposing the main-session worktree tools.
 - **Database**: SQLite via better-sqlite3; default data root is `~/.duya`,
   with `DUYA_DATA_ROOT` overriding the shared root for databases, rollouts, and
   attachments. The default main database is `duya-main.db` beside
