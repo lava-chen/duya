@@ -28,10 +28,9 @@ name: Model catalog refresh
 # rather than rounded away.
 #
 # Opening the pull request needs a token that may create pull requests. The
-# built-in GITHUB_TOKEN is refused by default (Settings → Actions → General →
-# "Allow GitHub Actions to create and approve pull requests"), so the workflow
-# uses the NIGHTLY_PR_TOKEN secret when the repository has one and falls back
-# to GITHUB_TOKEN otherwise.
+# repository enables "Allow GitHub Actions to create and approve pull requests",
+# so the built-in GITHUB_TOKEN can do it; a NIGHTLY_PR_TOKEN secret, if the
+# repository has one, takes precedence.
 on:
   schedule:
     # 21:30 Beijing time (UTC+8). Late enough that the vendors' own catalogue

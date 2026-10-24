@@ -51,9 +51,9 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - **滚动分支**：每天新开一个 PR 会攒出一堆过期评审对象，所以固定一个分支 force-push。
 - **排序不能依赖 locale**：`localeCompare` 走 ICU 排序，结果随机器 locale 变。夜间任务跑在 Linux runner、
   目录却是在开发机上写的，本地化排序会让「上游没变」每晚都被判成「有变化」。改成码位序后两边一致。
-- **开 PR 需要有权限的 token**：仓库当前未开启 "Allow GitHub Actions to create and approve pull requests"，
-  `GITHUB_TOKEN` 默认建不了 PR。workflow 优先用 `NIGHTLY_PR_TOKEN` secret，没有则回退 `GITHUB_TOKEN`，
-  失败时打印可直接点开的 compare 链接并把任务标红。
+- **开 PR 需要有权限的 token**：仓库已于 2026-10-24 开启 "Allow GitHub Actions to create and approve pull requests"，
+  `GITHUB_TOKEN` 可以建 PR。workflow 仍优先用 `NIGHTLY_PR_TOKEN` secret（没有则回退 `GITHUB_TOKEN`），
+  建不出来时打印可直接点开的 compare 链接并把任务标红，不会静默跳过。
 - **「只有价格变了」的 PR 是常态**：OpenRouter 部分模型给的是换算价，会持续微漂
   （实测 `deepseek/deepseek-v4-pro` 二十分钟内漂 ~2.6%）。夜间任务因此几乎每晚都有差异可报，
   但模型增删列表会是空的。价格按上游原样写入，不做四舍五入掩盖。
