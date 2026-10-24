@@ -151,7 +151,7 @@
   border-radius: 6px;
   color: var(--review-muted);
   background: var(--surface-hover);
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
   text-overflow: ellipsis;
@@ -163,7 +163,7 @@
   padding: 2px 7px;
   border-radius: 6px;
   background: var(--surface-hover);
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
@@ -269,7 +269,7 @@
   flex: none;
   align-items: center;
   gap: 7px;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -314,7 +314,7 @@
   border-radius: 4px;
   color: var(--review-muted);
   background: color-mix(in srgb, var(--surface-hover) 80%, transparent);
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -326,7 +326,7 @@
   flex: none;
   align-items: center;
   gap: 7px;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -355,7 +355,7 @@
 .code-review-large-banner-pos {
   padding: 0 6px;
   color: var(--review-muted);
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -451,7 +451,7 @@
 .code-review-diff {
   min-width: max-content;
   padding-bottom: 20px;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 21px;
 }
@@ -575,7 +575,7 @@
   justify-content: center;
   margin-left: 6px;
   border-radius: 5px;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
 }

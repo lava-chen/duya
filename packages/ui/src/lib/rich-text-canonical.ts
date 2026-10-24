@@ -15,9 +15,9 @@
  *   - anything else        → its own `textContent`
  */
 
-/** Font stack shared with fenced code blocks in the markdown renderer. */
-export const CODE_FONT_FAMILY =
-  "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+/** Code font for inline styles; the stack itself is the --font-mono token
+ *  defined once in globals.css. */
+export const CODE_FONT_FAMILY = 'var(--font-mono)';
 
 /** Marks an atomic plugin-@-mention chip; value is the plugin id. */
 export const PLUGIN_MENTION_ATTR = 'pluginMention';

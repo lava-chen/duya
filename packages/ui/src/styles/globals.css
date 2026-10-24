@@ -34,6 +34,13 @@
   --color-warning-soft: var(--warning-soft);
   --color-error: var(--error);
   --color-error-soft: var(--error-soft);
+
+  /* Three font families, aligned with Claude Code: brand face first, then
+     the system stack. CJK has no named webfont — Windows falls back to
+     Microsoft YaHei via DirectWrite, macOS to PingFang, same as Claude Code. */
+  --font-sans: 'Styrene', ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC", "Hiragino Sans", "Microsoft YaHei", sans-serif;
+  --font-mono: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-serif: 'Copernicus', ui-serif, Georgia, Cambria, "Times New Roman", "Noto Serif CJK SC", "Source Han Serif SC", "PingFang SC", serif;
 }
 
 /* ProjectsView: row hover-reveal checkbox + inline action buttons */
