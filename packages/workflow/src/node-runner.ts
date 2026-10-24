@@ -37,6 +37,7 @@ export interface NodeRunContext {
   budget: BudgetLedger;
   decisions?: WorkflowDecisionPort | undefined;
   ports: WorkflowRuntimePorts;
+  signal?: AbortSignal | undefined;
   approvalMode: 'await' | 'suspend';
   /** Dry-run: plan but never call the host (§10.3 baseline). */
   dryRun?: boolean | undefined;
@@ -56,6 +57,39 @@ export interface NodeRunResult {
 }
 
 const DEFAULT_MAX_RETRIES = 1;
+const RETRY_BASE_DELAY_MS = 250;
+const RETRY_MAX_DELAY_MS = 30_000;
+
+/** Full-jitter exponential backoff with a 250 ms base and 30 s cap. */
+export function retryBackoffDelayMs(retryNumber: number, randomValue: number): number {
+  if (!Number.isInteger(retryNumber) || retryNumber < 1) throw new Error('retryNumber must be an integer >= 1');
+  const exponential = Math.min(RETRY_MAX_DELAY_MS, RETRY_BASE_DELAY_MS * 2 ** (retryNumber - 1));
+  const unit = Math.max(0, Math.min(1, randomValue));
+  return Math.min(RETRY_MAX_DELAY_MS, Math.round(exponential * (0.5 + unit)));
+}
+
+async function waitBeforeRetry(ctx: NodeRunContext, retryNumber: number): Promise<void> {
+  if (ctx.signal?.aborted) throw new Error('workflow cancelled');
+  const delay = retryBackoffDelayMs(retryNumber, ctx.ports.random.next());
+  if (!ctx.signal) return ctx.ports.clock.sleep(delay);
+
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => ctx.signal?.removeEventListener('abort', onAbort);
+    const onAbort = (): void => {
+      cleanup();
+      reject(new Error('workflow cancelled'));
+    };
+    ctx.signal?.addEventListener('abort', onAbort, { once: true });
+    if (ctx.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    void ctx.ports.clock.sleep(delay).then(
+      () => { cleanup(); resolve(); },
+      (error: unknown) => { cleanup(); reject(error); },
+    );
+  });
+}
 
 export function ctxFor(base: NodeRunContext, nodeId: string, itemIndex?: number): HostCallContext {
   return { runId: base.runId, nodeId, itemIndex };
@@ -410,9 +444,11 @@ export async function runNode(ctx: NodeRunContext): Promise<NodeRunResult> {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      if (ctx.signal?.aborted) throw new Error('workflow cancelled');
       return await runNodeOnce(ctx);
     } catch (err) {
       if (err instanceof SuspensionSignal) throw err;
+      if (ctx.signal?.aborted) throw err;
       // Budget exhaustion is a RUN-level stop (§6.4: journal-free,
       // replayable) — never converted into a skipped node.
       if (err instanceof BudgetExceededError) throw err;
@@ -433,6 +469,7 @@ export async function runNode(ctx: NodeRunContext): Promise<NodeRunResult> {
         action: node.tool ?? node.agent ?? nodeKindOf(node),
       });
       if (attempt <= maxRetries && RETRYABLE_CLASSES.has(errorClass)) {
+        await waitBeforeRetry(ctx, attempt);
         continue;
       }
       if (node.on_error === 'skip' || node.on_error === undefined) {
