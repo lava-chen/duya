@@ -128,7 +128,7 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 
 | 瓶颈 | 代价 | 为什么没修 |
 | --- | --- | --- |
-| 技能加载 | 读文件 ~50 ms + 目录遍历 ~70 ms | 威胁扫描本身已优化（见下）；剩下的是**读 236 个文件**和**遍历 4 个技能目录**。跨进程磁盘缓存本轮不做：缓存放 data root 在生产有效，但基准每样本独立 data root，测不出收益 |
+| 技能加载 | 冷 **84–160 ms**（热 12–17 ms） | 威胁扫描已优化（见上）；剩下的分解见下方「再更正」，**主体是 I/O 等待**（Defender 逐文件扫描），没有语义可省 |
 | worker bundle 编译 | ~94 ms（V8 `wrapSafe`） | node 的 compile cache **不缓存进程入口**；要吃到收益必须让 bundle 变成被 `require()` 的模块（小 launcher），而这会动打包链路（`PRIMARY_AGENT_ENTRY` 锁 `harness-bundle/worker-entry.js`）与 `bundle:verify` 的产物命名 |
 | 三个 db action 未实现 | ~1 ms/次，但**功能坏** | `plugin:registry:list` / `plugin:setup:list-all` / `mailbox:claimBatch` 在 Host 侧仍抛 `unimplemented_domain`：CLI/TUI 路径因此**加载不到插件技能**、mailbox 领取每次失败。属功能缺口，不是延迟瓶颈，建议单独 PR |
 | 标题生成多一次 provider 调用 | 不在关键路径 | 代码上它在助手回复**完成后**才发起，不阻塞首 token；改它会动「标题何时出现」的用户可见行为 |
@@ -137,6 +137,21 @@ Worker→Host IPC、Host→客户端 SSE 交付**全部未测**；`tui.test.ts` 
 > `initToolCatalog` 只有 **8 ms**（registryList 2 ms + createBuiltinRegistry 5 ms + register 1 ms）。
 > 真实热点是 `loadSkillsFromDirectory(user)` 的 **118–169 ms**：本机 `~/.duya/skills`
 > 有 4 个技能目录、236 个文件、3 MB、18 个 SKILL.md。
+>
+> **再更正（技能加载 118–169 ms 的内部归因也错了）**：CPU profile（`--cpu-prof`，
+> 采样间隔 200 µs）给出的冷加载分解是——
+>
+> | 阶段 | 代价 | 说明 |
+> | --- | --- | --- |
+> | I/O 等待 | **~60 ms** | Windows Defender 逐文件扫描；profile 里是 idle，**不可压缩**（除非少读文件） |
+> | fingerprint 遍历 | ~10 ms | plan 445 的快照指纹：对 236 个文件各 `stat` 一次取 mtime/size |
+> | 威胁扫描 | **7.5 ms** | 预筛后（原 75–155 ms） |
+> | 读 SKILL.md | ~5 ms | 21 个文件 / 280 KB，带防抖 stat 序列 |
+> | 目录遍历 | **1–4 ms** | 上一版记的「目录遍历 ~70 ms」是**误归因**：readdir + 逐条目 stat 实测只有 1–4 ms |
+>
+> 热加载（同一进程第二次）只要 **12–17 ms**（plan 445 的进程内快照缓存命中）。
+> 结论：威胁扫描那块已经拿掉，剩下的**主要是 I/O 等待**，没有语义可省；
+> 唯一还能省的是 fingerprint 的 236 次 `stat`（≈10 ms），收益太小，本轮不做。
 
 ### 另一个瓶颈：turn review 的 git 快照（已修）
 
@@ -230,6 +245,7 @@ master 的 `Test` workflow 里，`test` job 对 push 事件是 **skipped**（只
 | e9f9daec | Windows | `node docs-local/research/tui-perf-benchmark/measure-turn-review.cjs`（5 样本） | 0 | 快照中位数 **189 ms**（同脚本的旧算法复现：1426 ms） |
 | e10e0587（合并 origin/master 后） | Windows | `npx vitest run apps/desktop` | 0 | 292 files / 3477 passed，1 skipped |
 | e10e0587 | Windows | `npx vitest run apps/desktop/src/main/ipc/__tests__/ipc-contract.test.ts apps/desktop/src/main/ipc/__tests__/ipc-channel-contract.test.ts` | 0 | 2 files / 7 passed（合并前这 2 个文件都失败） |
+| 1747d15f | Windows / Node 24.16.0 | `node --cpu-prof` 采样技能冷加载 + `measure-skill-load.cjs` | 0 | 冷 84–160 ms / 热 12–17 ms；分解：I/O 等待 ~60 ms、fingerprint ~10 ms、扫描 7.5 ms、读 5 ms、遍历 1–4 ms |
 
 ## 接续 / 结果
 
