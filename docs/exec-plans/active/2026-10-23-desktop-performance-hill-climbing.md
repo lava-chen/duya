@@ -214,6 +214,12 @@ SHA：`ed3882de`（`codex/perf-integration`）/ 锁：`held: true`，`skippedSce
 | 合并后权威重跑 | `ed3882de`（dirty：计划文档 + agent-e 工具） | `node scripts/perf/run.mjs --samples 3 --agent mavis-reprofile --lock-mode strict --lock-wait-min 25` | 0 | **6 场景 33 样本零失败**；`lock.held = true`、`skippedScenarios = []`；报告 `docs-local/research/perf-harness/perf-2026-10-24T02-01-06-073Z.json` |
 | Suspense 边界实测 | 同上 | `docs-local/research/suspense-probe/probe.mjs`（真实 Electron，逐帧采样 `main.app-content`） | 0 | 切到懒加载视图时**空白帧 0**、视图约 26ms 落地 ⇒ E 的 follow-up 是 no-op |
 | 检出回收 | — | `bash scripts/remove-worktree.sh <name> --dry-run` → 实际执行 | 0 | 4 个检出（harness/streaming/state/gpu）各摘 56 个 junction 后由 `git worktree remove` 移除；**分支保留**；C 盘 2.47 → 7.63 GB |
+| 锁实现负对照 | `a1e4ce01`（集成检出） | `git stash push -- e2e/perf/lib/lock.mjs` → 跑 `scripts/perf/harness.test.ts` → `git stash pop` | 1（**预期**） | 精确变红：`expected 37000 to be 39260`（owner pid 是已死的脚本 pid，不是活进程），1 failed / 26 passed；还原后 27/27 绿 |
+| fixture 命名空间负对照 | `ae641a4d`（集成检出） | `git stash push -- packages/ui/src/components/chat/__tests__/harness/main.tsx` → 跑同一测试 → `git stash pop` | 1（**预期**） | 精确变红：`expected [ 'perf/session-100', …(5) ] to not include 'perf/stream-long-reply'`，1 failed / 27 passed；还原后 28/28 绿 |
+| 首屏预算门槛（本地） | `26e68f27` + 当前 master 的生产构建 | `npx vite build <worktree>` → `node scripts/perf/first-screen-budget.mjs` | 0 | 重建后的首屏 **3 626 123 B / 7 chunk**、entry **2 726 133 B**、总 JS 17 937 649 B / 339 chunk——与基线**逐字节一致**（entry 的 hash 变了，字节数没变） |
+| 首屏预算门槛（负对照） | 同上 | 用更小的预算（2 000 000 B）跑同一个构建 | 1（**预期**） | `FAIL: the first screen grew to 3626123 bytes (3541 KB, +81.31%), over the budget of 2100000 bytes`；另外「没有基线」「没有构建」分别返回 1 与 2 |
+| 首屏预算门槛（CI） | PR #404 `8b67dee4` | `gh pr checks 404` → `build` job | 0 | **CI 上真跑通了**：新加的 `First-screen JS budget` 步骤在 `electron:build` 之后执行并通过（这是本轮第一个机器无关的性能闸门） |
+| 本地门禁 | `26e68f27`（集成检出，dirty：无） | `npm run typecheck:all` / `npm run architecture:check` | 0 / 0 | typecheck 全过（含 `eval:agent:core:check` 4/4）；架构检查 `OK — no new boundary violations` |
 
 ## 接续 / 结果
 
