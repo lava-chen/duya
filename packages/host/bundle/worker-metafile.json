@@ -30208,6 +30208,32 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/local-plugin-registry-api.ts": {
+      "bytes": 4489,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "kind": "import-statement",
+          "original": "@iarna/toml"
+        },
+        {
+          "path": "packages/host/src/agent-profile-config.ts",
+          "kind": "import-statement",
+          "original": "./agent-profile-config.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/ipc-message-adapters.ts": {
       "bytes": 27865,
       "imports": [
@@ -30230,12 +30256,12 @@
       "format": "esm"
     },
     "packages/host/src/ipc-row-adapters.ts": {
-      "bytes": 7951,
+      "bytes": 12513,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 30005,
+      "bytes": 59495,
       "imports": [
         {
           "path": "node:crypto",
@@ -30268,6 +30294,11 @@
           "original": "./tool-approval-api.js"
         },
         {
+          "path": "packages/host/src/local-plugin-registry-api.ts",
+          "kind": "import-statement",
+          "original": "./local-plugin-registry-api.js"
+        },
+        {
           "path": "packages/host/src/ipc-message-adapters.ts",
           "kind": "import-statement",
           "original": "./ipc-message-adapters.js"
@@ -30281,7 +30312,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 33243,
+      "bytes": 34208,
       "imports": [
         {
           "path": "node:crypto",
@@ -37752,6 +37783,16 @@
           "external": true
         },
         {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:crypto",
           "kind": "require-call",
           "external": true
@@ -38232,13 +38273,13 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -42087,7 +42128,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -42840,7 +42881,10 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-db-bridge.ts": {
-          "bytesInOutput": 11
+          "bytesInOutput": 25
+        },
+        "packages/host/src/local-plugin-registry-api.ts": {
+          "bytesInOutput": 706
         },
         "packages/host/src/ipc-message-adapters.ts": {
           "bytesInOutput": 10
@@ -43485,7 +43529,7 @@
           "bytesInOutput": 20
         }
       },
-      "bytes": 4596904
+      "bytes": 4597660
     }
   }
 }
