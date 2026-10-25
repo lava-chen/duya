@@ -611,3 +611,6 @@ Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/work
 5. 等最新 head 的必需 review / CI 全绿后再请求集成授权。依赖顺序 #460 → #465 → 本 PR；未经用户明确授权不合并、不删除 worktree。
 
 可选后续增强（本 PR 不宣称已对齐）：非 Git 的 WorktreeCreate/Remove hooks、项目级默认基线设置、未知进程 intent 的自动对账、多个并行子代理的独立技能注册表。目前有后台子代理时主会话控制工具会拒绝切换，避免全局技能串目录。
+
+
+最终交付：[Draft PR #476](https://github.com/lava-chen/duya/pull/476)，代码提交 `9afe4c01` 已推送，base 为 `codex/worktree-p1`。提交后 `npm run bundle:verify` exit 0，**FRESH，0/958 输入变化**；该项已完成，只有新增源码改动后才需重新生成产物并复验。最新完整类型检查仍待最终退出码，CI/review 未等待完成，按用户要求交接。下一位 agent 以 PR 描述中更新后的待办为准。所有已跟踪任务文件已提交，剩余未跟踪项仅为依赖 overlay。
