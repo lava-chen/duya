@@ -14,6 +14,7 @@ export * from './local-model-capability-api.js';
 export * from './local-provider-model-capability-api.js';
 export * from './local-app-connection-api.js';
 export * from './local-plugin-setup-api.js';
+export * from './local-plugin-inventory-api.js';
 export * from './local-import-batch-api.js';
 export * from './local-turn-review-api.js';
 export * from './workspace-access.js';

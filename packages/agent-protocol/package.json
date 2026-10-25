@@ -131,6 +131,10 @@
       "types": "./dist/plugin-setup.d.ts",
       "import": "./dist/plugin-setup.js"
     },
+    "./plugin-inventory": {
+      "types": "./dist/plugin-inventory.d.ts",
+      "import": "./dist/plugin-inventory.js"
+    },
     "./import-batches": {
       "types": "./dist/import-batches.d.ts",
       "import": "./dist/import-batches.js"
