@@ -35,7 +35,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { ROOT } from './import-graph.mjs';
@@ -85,7 +85,24 @@ function dropFixture(relPath: string): void {
   if (!isFixture) {
     throw new Error(`refusing to remove a non-fixture path: ${relPath}`);
   }
-  rmSync(safeResolve(relPath), { recursive: true, force: true });
+  const target = safeResolve(relPath);
+  rmSync(target, { recursive: true, force: true });
+
+  // Remove the now-empty directories the fixture created. `rmdirSync` is
+  // non-recursive on purpose: if the real package is there, it is not empty
+  // and the removal stops. Without this, an empty `packages/bot` left behind
+  // by the leaf fixture reads as "the package exists" on the next run and
+  // turns R1 blind.
+  let dir = path.dirname(target);
+  const packagesDir = safeResolve('packages');
+  while (dir !== packagesDir && dir.startsWith(packagesDir + path.sep)) {
+    try {
+      rmdirSync(dir);
+    } catch {
+      break;
+    }
+    dir = path.dirname(dir);
+  }
 }
 
 describe('live tree: the S0 state is measured-clean with bot honestly pending', () => {
