@@ -2,7 +2,7 @@
 
 状态：complete · 负责人：本会话（tui-polish） · 更新：2026-10-25
 分支：`codex/tui-polish` · worktree：`.claude/worktrees/tui-polish` · base：`379d990b` · owner：Qoder 会话 `1cab68f9`
-集成：PR #469 由 `lava-chen` 以 merge commit `c94a1be6` 合入 master（2026-10-25T01:05:55Z）
+集成：PR #469 由 `lava-chen` 以 merge commit `c94a1be6` 合入 master（2026-10-25T01:05:55Z）；本计划归档由 PR #474 以 `0bab8f6a` 合入（01:39:11Z）
 
 ## 目标与边界
 
@@ -163,7 +163,29 @@ PR #469 由 `lava-chen` 合入 master（merge commit `c94a1be6`），在 master 
 | --- | --- | --- | --- | --- |
 | `c94a1be6`（master tip，含本 PR）+ 仅本计划文档未提交 | Win10 26200 x64 / Node 24.16.0 | 五条测试目标（同前） | 1 · 107 files / 1317 tests passed，1 failed | 唯一失败签名：`packages/cli/src/tui/__tests__/perf/baseline.test.ts > measures input→first-byte`，`expected 19.175599999998667 to be less than 7`。该用例不是本任务文件；单独连跑两次 835ms / 832ms 通过，单独跑整个 `packages/cli` 也 104 files / 1282 tests 全绿 → 判为负载敏感的计时阈值 flake，不是合并回归 |
 | 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | baseline 2530，未重录指纹；bundle FRESH 0/950（bundle commit 即 `455ccd24`） |
-| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | 环境未恢复，第 5 次同样失败；`40d3de56` 上的真机实录（`└ ✔ Todo list 0/1`、`↓6 Σ6 · ⚡ 4.3 tok/s`）仍是本任务唯一的真机证据 |
+| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | 当时记为「环境未恢复」，第 5 次同样失败（该归因由下一节推翻）；`40d3de56` 上的真机实录（`└ ✔ Todo list 0/1`、`↓6 Σ6 · ⚡ 4.3 tok/s`）仍是本任务唯一的真机证据 |
+
+### 归档 PR 与出网归因更正（2026-10-25）
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `8269095e`（归档 PR #474 head） | GitHub Actions ubuntu-latest / Node 22.x | `gh run view 40150385211` | success | `architecture` 与 `test scope` 两个 job success，`test` / `typecheck` / `build` **skipped** —— 纯 docs 改动被 `unit_scope` / `e2e_scope` 判为 skip，见 `.github/workflows/test.yml:420` 与 `:502`；PR 合并为 `0bab8f6a` |
+| `0d1e6b16`（master tip，含 #474）+ 工作树干净 | Win10 26200 x64 / Node 24.16.0 | `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 | baseline 2530 / tolerated 2739，无新增违规；「2 个指纹不再命中」的提示仍未 `--write` 重录；bundle FRESH 0/954，bundle commit 已是 `4195d9ae` |
+| `0d1e6b16` + 重建的 `packages/cli/bundle/cli.cjs` | 同上，真 provider | 真 PTY turn，第 6、7 次（`docs-local/tui-todo-6th.txt`、`tui-todo-7th.txt`） | 0 · `✗ fetch failed` ×2 | 两次转写里 `Todo list` 出现 0 次、`tok/s` 0 次；与合并前 5 次同签名 |
+
+**「属环境侧」这个判断是错的，已在下方结论里更正。** 同一时刻、同一工作树里做的对照实验：
+
+- `node -e fetch` 打 `https://api.minimaxi.com/anthropic/v1/messages`，用 `~/.duya/secrets.json` 里 `providers.minimax-cn.apiKey` 的真实密钥
+  发一条 `max_tokens: 8` 的请求 → **HTTP 200 且返回正常补全**。即出网、DNS、TLS、密钥、`config.toml:47` 的 `baseUrl` 都可用。
+- 而 `~/.duya/logs/background-host.log` 显示本轮 Host 起的 worker 正是本检出的
+  `…/tui-polish/packages/host/bundle/worker-entry.js`（`Duya Host listening at http://127.0.0.1:62090`，client-scoped），
+  所以发请求的进程没有跑错地方。
+- 之前用 `git checkout 40d3de56 -- packages/host/bundle` 做的旧 bundle 判别实验仍然失败，这一点没变：与本任务改的代码无关。
+
+结论：失败定位在 **Host/worker 进程内部发出的 provider 请求**这一层，与机器出网无关，也与本 PR 的代码无关。
+`✗ fetch failed` 只到 `TypeError: fetch failed` 为止，TUI 没有透出 `cause`，日志里也没有 provider 级错误行
+（`~/.duya/logs/agent/agent-unknown.log` 最近的 fetch 失败全是 `[Hooks] Stop http hook` / `[ConfigHook] PostTurn http hook` 这类被 skip 的旁路）。
+要拿到 `error.cause` 得给 provider 调用链加错误透出，属另一件事，不在本计划范围内，已按「新缺陷」交接。
 
 ### PR head CI
 
@@ -191,7 +213,8 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
 - 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；五次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造；`f820ff99` 带进 PR #454 的忙时 steer；`455ccd24` 带进 PR #456 的数据写路径）后各重跑一遍，最新全量为 108 files / 1318 tests。
-- 待补：`baf1bcfc` 起的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与各 head 的 CI 均已过，解除条件见「三次同步」。
+- 待补：`baf1bcfc` 起的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败；当时记为「属环境侧」，
+  该归因已被「归档 PR 与出网归因更正」一节推翻（出网与密钥实测可用，失败在 Host/worker 的请求层）。自动化门禁与各 head 的 CI 均已过。
 - CI 覆盖缺口：`9bdb896f`、`6dec8d45`、`3df192e2` 三个 head 事后按完整 SHA 查
   `actions/runs?head_sha=<full>&event=pull_request` 返回**空**，即 GitHub 在 PR 处于 CONFLICTING 的那段时间根本没给它们排 run；
   同期 `fb78ed13` / `bbeb9e04` / `baf1bcfc` / `455ccd24` / `7c072bbe` 都有。所以不能假定「每个 push 都有检查」，
@@ -199,8 +222,12 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 - 已合并：PR #469 https://github.com/lava-chen/duya/pull/469 由账户 `lava-chen` 以 merge commit `c94a1be6`（2026-10-25T01:05:55Z）合入 master；
   合并前的最新 head `7c072bbe` 上 5 个 job 全绿，满足「最新 head 有 run 且全绿」。本 agent 未自行集成，合并由用户侧执行。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
-- 回收：master tip `c94a1be6` 重验已做完（见上表），本计划归档到 `docs/exec-plans/archive/`；随后回收 `tui-polish` 检出与 `codex/tui-polish` 分支。
-- 残留（环境侧，不阻断）：真 provider 的一轮真机 turn 在合并后仍不可用（第 5 次 `fetch failed`）。出网恢复后重跑
+- 回收：master tip 重验（`c94a1be6` 全量 + `0d1e6b16` 门禁）已做完，本计划已归档到 `docs/exec-plans/archive/`（PR #474 `0bab8f6a`）；
+  `tui-polish` 检出与 `codex/tui-polish` / `codex/tui-post-merge-verify` 分支在最后一个记录 commit 集成后回收。
+- 残留（真机补验仍未闭合，但**不是**环境阻断）：第 6、7 次真 provider turn 依旧 `✗ fetch failed`，而出网 + 真实密钥的裸 fetch 实测 200。
+  待 Host/worker 的 provider 请求层修好后，重跑
   `MSYS_NO_PATHCONV=1 node docs-local/tui-pty-repro.mjs "10000:用 todo 工具建一条只含一项「写解析」的清单，建完就停下不要做别的|85000:enter" 190000 <dump>.txt`，
-  预期 `└ ✔ Todo list` 与 `⚡ N.N tok/s`。
-- 下一步：本轮归档改动走独立 PR 交付（分支 `codex/tui-post-merge-verify`，base `c94a1be6`）；集成后回收检出，本任务结束。
+  预期 `└ ✔ Todo list` 与 `⚡ N.N tok/s`；`40d3de56` 上的真机实录仍是本任务唯一的真机证据。
+- 下一步（新任务，不属本计划）：给 provider 调用链透出 `error.cause` 并定位这条 `fetch failed`。
+  线索：同机同密钥的裸 Node `fetch` 到 `baseUrl/v1/messages` 返回 200，失败只出现在 worker 进程发出的请求上；
+  `~/.duya/logs/agent/` 无 provider 级错误行，最近成对的 fetch 失败都是 `[Hooks] Stop http hook` / `[ConfigHook] PostTurn http hook` 这类被 skip 的旁路。
