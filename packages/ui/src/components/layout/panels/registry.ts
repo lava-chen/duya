@@ -16,7 +16,6 @@ import {
 import type { TranslationKey } from "@/i18n";
 import type { PageId, PageTab } from "./page-tab";
 import { FileTreePanel } from "./FileTreePanel";
-import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
 import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
@@ -26,11 +25,20 @@ import { PluginUiSurfacePanel } from "./PluginUiSurfacePanel";
 
 // Heavy, low-frequency panels stay out of the entry chunk (plan 426 Phase 5.2).
 // Rendered inside <Suspense> in PanelZone; chunks load from local disk in Electron.
+//
+// The terminal belongs here for the same reason: it is a panel the user opens
+// explicitly, and it drags in xterm plus four addons (core, fit, web-links,
+// unicode11, webgl). A static import put all of that into the first-screen
+// closure, where the renderer had to download, parse and evaluate it before
+// the first screen could paint.
 const CodeReviewPanel = lazy(() =>
   import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
 );
 const SessionMessagesPanel = lazy(() =>
   import("./SessionMessagesPanel").then((m) => ({ default: m.SessionMessagesPanel }))
+);
+const TerminalPanel = lazy(() =>
+  import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel }))
 );
 
 export type { PageId, PageTab } from "./page-tab";

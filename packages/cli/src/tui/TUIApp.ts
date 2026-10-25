@@ -142,6 +142,25 @@ const WHEEL_STEP_LINES = 3;
 const DOUBLE_CTRL_C_MS = 2000;
 
 /**
+ * Draft rows the queue preview shows above the composer. The block is chrome
+ * in inline mode — every row it gains pushes the composer down — so it is a
+ * fixed budget rather than "whatever is pending".
+ */
+const QUEUE_PREVIEW_ROWS = 3;
+
+/**
+ * Slash and bang lines belong to the controller, not to the running turn.
+ *
+ * `/queue` must open its panel and `!git status` must run here even while a run
+ * is live, so the busy-time keys route these through the ordinary submit path
+ * instead of turning them into steering guidance.
+ */
+function isControllerLine(text: string): boolean {
+  const head = text.trimStart();
+  return head.startsWith('/') || head.startsWith('!');
+}
+
+/**
  * How long a git branch read is reused.
  *
  * The footer repaints per frame; a checkout is a human action measured in
@@ -174,6 +193,12 @@ export interface TuiChoice {
   readonly label: string;
   readonly value: string;
   readonly description?: string;
+}
+
+/** One pending draft as the queue preview paints it. */
+export interface QueuedDraftView {
+  readonly text: string;
+  readonly mode: 'steer' | 'queue';
 }
 
 /** One row of a live settings list: a name, its current value, and what it does. */
@@ -238,9 +263,24 @@ export interface TUIAppOptions {  /** Window title. */
   /** Let the controller own accepted-message echo and pending drafts. */
   readonly echoSubmitted?: boolean;
   readonly canSubmit?: () => boolean;
-  readonly queuedPrompts?: () => readonly string[];
+  /**
+   * Pending drafts with their intended delivery, so the preview can tell a
+   * steer (consumed by the running turn) from a fresh turn.
+   */
+  readonly queuedDrafts?: () => readonly QueuedDraftView[];
   readonly queuePaused?: () => boolean;
   readonly onRecallQueued?: () => string | null;
+  /**
+   * Enter while a turn runs: inject the draft into that turn.
+   *
+   * `attachments` carries the same files `onSubmit` receives; a draft is one
+   * thing the user sent, so whichever way it travels it keeps its files.
+   */
+  readonly onSteer?: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
+  /** Tab while a turn runs: hold the draft for the next turn. */
+  readonly onQueueDraft?: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
+  /** Esc while a turn runs and the draft is not empty: stop, then send it. */
+  readonly onInterruptAndSend?: (text: string, attachments: readonly FileAttachment[]) => void;
   /** Called on the first Ctrl+C while a turn is running. */
   readonly onInterrupt?: () => void;
   /** Called on the second Ctrl+C inside `DOUBLE_CTRL_C_MS`, or `/exit`. */
@@ -806,6 +846,17 @@ export class TUIApp {
   /** Repaint external controller state, such as pending follow-ups. */
   refresh(): void {
     this.scheduler.requestImmediate();
+  }
+
+  /** Move a draft the controller recalled back into the composer. */
+  recallIntoComposer(text: string): void {
+    this.editor.setText(text, Array.from(text).length);
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  private isBusyNow(): boolean {
+    return this.options.isBusy?.() ?? this.busy;
   }
 
   /** Open a keyboard-navigable modal and resolve with the selected value. */
@@ -1518,14 +1569,17 @@ export class TUIApp {
   }
 
   private queuePreviewLines(): string[] {
-    const pending = this.options.queuedPrompts?.() ?? [];
+    const pending = this.options.queuedDrafts?.() ?? [];
     if (pending.length === 0 || this.terminalSize().rows < 7) return [];
-    const label = this.options.queuePaused?.() ? 'paused' : 'queued';
-    const latest = pending[pending.length - 1] ?? '';
-    return [escapeTags(compactActivity(
-      label + ' (' + pending.length + ') · ' + latest.replace(/\s+/gu, ' '),
-      Math.max(1, this.terminalSize().columns - 1),
-    ))];
+    const width = Math.max(1, this.terminalSize().columns - 1);
+    const shown = pending.slice(-QUEUE_PREVIEW_ROWS);
+    const hidden = pending.length - shown.length;
+    const lines = shown.map((draft) => escapeTags(compactActivity(
+      (draft.mode === 'steer' ? '↳ steer' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
+      width,
+    )));
+    if (hidden > 0) lines.unshift(`… ${hidden} earlier`);
+    return lines;
   }
 
   private placeCursor(): void {
@@ -1631,7 +1685,7 @@ export class TUIApp {
         ? 'Enter run / Tab fill / arrows choose'
         : 'Tab accept / arrows choose'
       : busy
-        ? 'Ctrl+C stop / Ctrl+T expand'
+        ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'transcript'
         ? `history ${selection}/${blockCount} / arrows select / left-right fold`
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 focus / arrows prompts`;
@@ -1654,9 +1708,9 @@ export class TUIApp {
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
     if (this.inlineSurface !== null) {
       const hint = this.options.queuePaused?.() && queued > 0
-        ? '/queue resume · Esc edit queued'
+        ? '/queue resume · Esc recall'
         : this.completion.isOpen ? context
-        : busy ? 'Enter queue · Esc interrupt' : '/ commands · F1 help';
+        : busy ? 'Enter steer · Tab queue · Esc stop' : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
@@ -3029,15 +3083,35 @@ exportHistory(): string[] {
       },
       tab: () => {
         if (this.focus === 'transcript' || this.editor.isEmpty) this.toggleFocus();
+        else if (this.isBusyNow() && this.options.onQueueDraft !== undefined && !isControllerLine(this.editor.text)) {
+          // Tab queues only while a turn runs; otherwise it stays the editor's
+          // indent, and the completion popup above still owns its accept.
+          const text = this.editor.submitIfPresent();
+          if (text !== null) {
+            this.refreshCompletion();
+            this.scheduler.requestImmediate();
+            void this.options.onQueueDraft(text, this.takeDraftAttachments(text));
+          }
+        }
         else this.editor.insert('  ');
       },
       escape: () => {
         if (this.focus === 'transcript') this.focus = 'input';
         else if (this.completion.isOpen) this.completion.close();
-        else if (this.options.isBusy?.() ?? this.busy) this.options.onInterrupt?.();
+        else if (this.isBusyNow()) {
+          // Esc means "stop"; with prose in the composer it means "stop, then
+          // send this". A command line stays put: stopping is the whole ask.
+          const text = this.editor.isEmpty || isControllerLine(this.editor.text)
+            ? null
+            : this.editor.submitIfPresent();
+          if (text !== null && this.options.onInterruptAndSend !== undefined) {
+            this.refreshCompletion();
+            this.options.onInterruptAndSend(text, this.takeDraftAttachments(text));
+          } else this.options.onInterrupt?.();
+        }
         else if (this.editor.isEmpty) {
           const queued = this.options.onRecallQueued?.();
-          if (queued != null) this.editor.setText(queued, Array.from(queued).length);
+          if (queued != null) this.recallIntoComposer(queued);
         }
         else this.closeOverlay();
       },
@@ -3178,6 +3252,19 @@ exportHistory(): string[] {
     this.editor.insert(labelled.label + ' ');
     this.refreshCompletion();
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * The attachments that travel with a draft leaving the composer.
+   *
+   * Attachments ride along only if their chip labels survived in the
+   * submitted text; edited-away or undone chips drop their attachment here.
+   * The draft list is emptied either way — the composer holds one draft.
+   */
+  private takeDraftAttachments(text: string): readonly FileAttachment[] {
+    const attachments = takeAttachmentsForSubmit(this.draftAttachments, text);
+    this.draftAttachments = [];
+    return attachments;
   }
 
   /**
@@ -3322,8 +3409,7 @@ exportHistory(): string[] {
     }
     // Attachments ride along only if their chip labels survived in the
     // submitted text; edited-away or undone chips drop their attachment here.
-    const attachments = takeAttachmentsForSubmit(this.draftAttachments, text);
-    this.draftAttachments = [];
+    const attachments = this.takeDraftAttachments(text);
     this.refreshCompletion();
     if (this.options.echoSubmitted !== false) {
       this.model.addUser(text);
@@ -3334,6 +3420,13 @@ exportHistory(): string[] {
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
     this.scheduler.requestImmediate();
+    // A draft typed while a turn runs is guidance for that turn, not a new
+    // turn behind it. The controller decides whether the run took it. Command
+    // lines are exempt: they are not prose and must still reach `onSubmit`.
+    if (this.isBusyNow() && this.options.onSteer !== undefined && !isControllerLine(text)) {
+      void this.options.onSteer(text, attachments);
+      return;
+    }
     void this.options.onSubmit(text, attachments);
   }
 

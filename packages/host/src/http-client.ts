@@ -73,6 +73,8 @@ import type {
   UnfencedRunWriteAuthorization,
   HostCapability,
   HostDeclaration,
+  HostMcpServerConfig,
+  HostSkillEntry,
   ProtocolCapability,
   ProtocolVersion,
 } from '@duya/agent-protocol';
@@ -2249,6 +2251,39 @@ export class HostSessionHttpClient implements
       { sessionId },
       INTEGRATION_SYNC_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /**
+   * The MCP servers the user configured, as the Host knows them.
+   *
+   * A READ: it needs no worker, no session and no Desktop app. The Host
+   * answers 404 with a named code when it was given no configuration
+   * source, which is a different answer from "the user configured none" —
+   * so a Host that cannot answer refuses instead of returning an empty list.
+   *
+   * `env` and `headers` never appear in the answer: they carry credentials,
+   * and the Host drops them before the response leaves the process.
+   */
+  async listMcpServers(): Promise<{ readonly servers: readonly HostMcpServerConfig[] }> {
+    return this.request('GET', '/v1/mcps');
+  }
+
+  /**
+   * The skills this session's project can use, as the Host knows them.
+   *
+   * A READ: the Host reads the skill directories and answers. It needs the
+   * session because the project's skills live next to the session's working
+   * directory, and it answers with that directory so a client can say which
+   * project the list is about.
+   *
+   * A Host that was given no inventory capability refuses with a named code
+   * (`skill_inventory_api_unavailable`), which is a different answer from "this
+   * user has no skills".
+   */
+  async listSkills(
+    sessionId: string,
+  ): Promise<{ readonly skills: readonly HostSkillEntry[]; readonly workingDirectory: string }> {
+    return this.request('GET', `/v1/skills?sessionId=${encodeURIComponent(sessionId)}`);
   }
 
   private async request<T>(

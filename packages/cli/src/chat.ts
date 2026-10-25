@@ -17,10 +17,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import readline from 'node:readline';
 import type {
   DurableTimelineEntry,
   FileAttachment,
+  HostMailboxItem,
   HostSessionListItem,
   HostSessionRecord,
   RunEvent,
@@ -44,7 +46,7 @@ import { HostEventStream } from './tui/host-event-stream.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { RunSession } from '@duya/client-core';
-import { TurnQueue, type TurnOutcome } from './tui/turn-queue.js';
+import { TurnQueue, type PendingDraft, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { OwnedSessions } from './owned-sessions.js';
@@ -305,8 +307,8 @@ function helpSections(locale: CommandLocale): ReadonlyArray<{
     {
       title: chinese ? '队列' : 'Queue',
       lines: chinese
-        ? ['/queue                  查看排队的后续消息', '/queue clear            丢弃排队消息', '/queue resume           继续处理排队消息']
-        : ['/queue                  Show queued follow-ups (resume or clear)', '/queue clear            Discard queued follow-ups', '/queue resume           Resume queued follow-ups'],
+        ? ['/queue                  查看、发送、编辑或撤回未发送的草稿', '/queue clear            丢弃全部草稿', '/queue resume           继续自动发送草稿', '忙碌时：Enter 插入当前回合 · Tab 排队 · Esc 停止并发送']
+        : ['/queue                  Review, send, edit or withdraw pending drafts', '/queue clear            Discard all pending drafts', '/queue resume           Resume automatic draining', 'While busy: Enter steers the turn · Tab queues · Esc stops and sends'],
     },
     {
       title: chinese ? '信息' : 'Info',
@@ -318,8 +320,8 @@ function helpSections(locale: CommandLocale): ReadonlyArray<{
     {
       title: chinese ? '桌面端' : 'Desktop',
       lines: chinese
-        ? ['桌面端还提供权限模式、面板命令（/diff /memory /mcp）、用户技能和模式切换。', '在桌面端输入 /help 查看完整列表。']
-        : ['The Desktop composer also exposes permission modes, panel commands', '(/diff /memory /mcp), user skills as slash commands, and mode toggles.', 'Type /help in the Desktop composer for that set.'],
+        ? ['桌面端还提供权限模式、/memory、模式切换和更多面板命令。', '在桌面端输入 /help 查看完整列表。']
+        : ['The Desktop composer also exposes permission modes, /memory, mode toggles', 'and more panel commands. Type /help in the Desktop composer for that set.'],
     },
   ];
 }
@@ -328,6 +330,8 @@ function helpSections(locale: CommandLocale): ReadonlyArray<{
 const BANG_OUTPUT_LIMIT = 8000;
 /** Wall-clock cap for a `!cmd` line, in milliseconds. */
 const BANG_TIMEOUT_MS = 30_000;
+/** `/queue` row that is not a draft; draft keys are `draft-<n>` and cannot collide. */
+const RESUME_QUEUE = '__resume';
 
 interface ShellResult {
   readonly code: number | null;
@@ -696,7 +700,7 @@ export async function chatTui(
       ['/sessions', 'resume', 'Browse previous sessions', '浏览历史会话'],
       ['/new', 'new', 'Start a new session', '开始一个新会话'],
       ['/clear', 'clear', 'Clear the visible transcript', '清空当前对话'],
-      ['/queue', 'queue', 'Resume or clear pending follow-ups', '继续或清除排队的后续消息'],
+      ['/queue', 'queue', 'Review, send, edit or withdraw pending drafts', '查看、发送、编辑或撤回未发送的草稿'],
       ['/help', 'help', 'Show chat commands', '显示聊天命令'],
       ['/exit', 'exit', 'End this chat', '结束当前聊天'],
     ];
@@ -729,7 +733,7 @@ export async function chatTui(
   };
 
   const queue = new TurnQueue({
-    runTurn,
+    execute: (text, draft) => runTurn(text, draft),
     onChange: (snapshot) => {
       const busyChanged = busy !== snapshot.busy;
       busy = snapshot.busy;
@@ -797,6 +801,257 @@ export async function chatTui(
     }
   }
 
+  /**
+   * Write a draft into the running turn's mailbox.
+   *
+   * `kind='followup'` with no apply mode is the one shape the live worker both
+   * claims as runtime guidance and leaves promotable: `promoteQueued` refuses
+   * rows already marked `runtime_instruction`, so routing a steer through
+   * `guide()` would strand it whenever the turn settles before a checkpoint.
+   *
+   * The files ride on the row: the worker reads a mailbox row's attachments
+   * back into the turn it injects, so a steered image reaches the agent.
+   */
+  function enqueueSteer(
+    runId: RunId,
+    text: string,
+    source: string,
+    attachments: readonly FileAttachment[] = [],
+  ): Promise<HostMailboxItem> {
+    return client.enqueue({
+      id: randomUUID(),
+      sessionId: activeSession.id,
+      submittedRunId: runId,
+      content: text.trim(),
+      kind: 'followup',
+      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
+      clientMsgId: randomUUID(),
+      source,
+    });
+  }
+
+  /** Cancel a pending mailbox row. Returns false when the run already read it. */
+  async function withdrawMailbox(id: string, reason: string): Promise<boolean> {
+    try {
+      if (await client.cancel(id, reason) !== null) return true;
+      tui.printNotice('The running turn had already read that draft; it cannot be withdrawn.');
+      return false;
+    } catch (error) {
+      if (!finished) {
+        tui.printError(
+          'Could not withdraw the draft: ' + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Enter while a turn runs. The text goes to the Host mailbox, where the live
+   * worker claims it at its next model boundary and injects it as runtime
+   * guidance. Steered text is guidance, not a durable timeline message, so the
+   * local echo is the only trace the user can scroll back to.
+   *
+   * The attachments ride on the mailbox row, so a steered image reaches the
+   * running turn instead of being dropped on the floor.
+   */
+  async function steerDraft(text: string, attachments: readonly FileAttachment[] = []): Promise<void> {
+    if (text.trim() === '') return;
+    const runId = activeRunId;
+    // A stopping run never reaches another checkpoint: that draft belongs to
+    // the next turn, which is also what `TurnQueue.submit` resumes into.
+    if (!busy || runId === null || cancellationRequested) {
+      queue.submit(text, { attachments });
+      return;
+    }
+    try {
+      const row = await enqueueSteer(runId, text, 'cli.tui.steer', attachments);
+      tui.printUser(text);
+      queue.submit(text, { mode: 'steer', mailboxId: row.id, echoed: true, attachments });
+    } catch (error) {
+      tui.printError(
+        'Could not steer the running turn; the draft will be sent as the next turn: '
+        + (error instanceof Error ? error.message : String(error)),
+      );
+      queue.submit(text, { attachments });
+    }
+  }
+
+  /** Tab while a turn runs: hold the draft for the next turn. */
+  function queueDraft(text: string, attachments: readonly FileAttachment[] = []): void {
+    if (text.trim() === '') return;
+    queue.submit(text, { attachments });
+  }
+
+  /**
+   * Esc with text in the composer while a turn runs: stop the run, then send
+   * the draft. `interrupt` pauses the queue for the usual reason; `resume`
+   * records that the post-cancellation drain is what the user asked for.
+   */
+  function interruptAndSend(text: string, attachments: readonly FileAttachment[] = []): void {
+    if (text.trim() === '') {
+      interrupt();
+      return;
+    }
+    if (!busy) {
+      queue.submit(text, { attachments });
+      return;
+    }
+    interrupt();
+    queue.resume();
+    queue.submit(text, { front: true, attachments });
+  }
+
+  function discardDrafts(): void {
+    const mailed = queue.drafts.filter((draft) => draft.mailboxId !== null);
+    queue.clear();
+    for (const draft of mailed) {
+      if (draft.mailboxId !== null) void withdrawMailbox(draft.mailboxId, 'user_discarded_drafts');
+    }
+  }
+
+  /**
+   * "Send now" from `/queue`. A held draft can still reach the running turn —
+   * the mailbox accepts it while the worker is live — so it is reclassified as
+   * a steer in place instead of waiting for the turn to settle.
+   */
+  async function sendNow(draft: PendingDraft): Promise<void> {
+    const runId = activeRunId;
+    if (!busy || runId === null || cancellationRequested) {
+      const removed = queue.remove(draft.key);
+      if (removed === null) return;
+      queue.submit(removed.text, { front: true, echoed: removed.echoed, attachments: removed.attachments });
+      queue.resume();
+      return;
+    }
+    try {
+      const row = await enqueueSteer(runId, draft.text, 'cli.tui.queue.send-now', draft.attachments);
+      if (queue.reclassify(draft.key, { mode: 'steer', mailboxId: row.id, echoed: true }) === null) {
+        // The turn settled while the panel was open and the draft is already
+        // running, so the row just written has no draft left to steer.
+        void withdrawMailbox(row.id, 'draft_already_running');
+        tui.printNotice('That draft was already on its way.');
+        return;
+      }
+      tui.printUser(draft.text);
+    } catch (error) {
+      if (!finished) {
+        tui.printError(
+          'Could not send the draft into the running turn: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  }
+
+  /**
+   * Take a draft out of the queue and back into the composer. A steer has to
+   * lose its mailbox row in the same breath, or the running turn would read it
+   * while the user is still editing it.
+   */
+  async function recallDraft(draft: PendingDraft): Promise<void> {
+    if (queue.remove(draft.key) === null) return;
+    if (draft.mailboxId !== null) await withdrawMailbox(draft.mailboxId, 'recalled_to_composer');
+    tui.recallIntoComposer(draft.text);
+  }
+
+  async function editDraft(draft: PendingDraft, next: string): Promise<void> {
+    if (draft.mailboxId !== null) {
+      let row: HostMailboxItem | null;
+      try {
+        row = await client.edit(draft.mailboxId, { content: next });
+      } catch (error) {
+        if (!finished) {
+          tui.printError('Could not edit the draft: ' + (error instanceof Error ? error.message : String(error)));
+        }
+        return;
+      }
+      if (row === null) {
+        tui.printNotice('The running turn already read this draft; the edit was not applied.');
+        return;
+      }
+      // A draft the drain already picked up still reaches the agent through
+      // its mailbox row, which now carries the edited text.
+      queue.reclassify(draft.key, { text: next });
+      tui.printNotice('Draft updated; the running turn will read the new text.');
+      return;
+    }
+    if (queue.reclassify(draft.key, { text: next }) === null) {
+      tui.printError('That draft is already running.');
+    }
+  }
+
+  function oneLine(text: string, max = 60): string {
+    const flat = text.replace(/\s+/gu, ' ').trim();
+    const chars = Array.from(flat);
+    return chars.length <= max ? flat : chars.slice(0, max - 1).join('') + '…';
+  }
+
+  /** `/queue`: one row per pending draft, then withdraw / edit / send-now on it. */
+  async function manageQueue(): Promise<void> {
+    const drafts = queue.drafts;
+    if (drafts.length === 0) {
+      tui.printNotice('No pending drafts.');
+      return;
+    }
+    const choices: TuiChoice[] = [
+      ...(queue.snapshot.paused
+        ? [{ label: 'Resume the queue', value: RESUME_QUEUE, description: `${drafts.length} pending` }]
+        : []),
+      ...drafts.map((draft, index) => ({
+        label: `${index + 1}. ${draft.mode === 'steer' ? '↳ ' : ''}${oneLine(draft.text)}`,
+        value: draft.key,
+        description: draft.mode === 'steer'
+          ? 'steer · the running turn reads it at its next step'
+          : 'queued · starts after the running turn',
+      })),
+    ];
+    const selected = await tui.choose('Pending drafts', choices);
+    if (selected === null) return;
+    if (selected === RESUME_QUEUE) {
+      queue.resume();
+      return;
+    }
+    const draft = queue.drafts.find((item) => item.key === selected);
+    if (draft === undefined) return;
+    const action = await tui.choose(
+      oneLine(draft.text, 48),
+      draft.mode === 'steer'
+        ? [
+            { label: 'Edit', value: 'edit', description: 'Rewrite it before the agent reads it' },
+            { label: 'Recall to composer', value: 'recall', description: 'Take it back and keep writing' },
+            { label: 'Withdraw', value: 'withdraw', description: 'Cancel it; the agent will not read it' },
+          ]
+        : [
+            { label: busy ? 'Send now (steer the running turn)' : 'Send now', value: 'send' },
+            { label: 'Edit', value: 'edit', description: 'Rewrite it before it is sent' },
+            { label: 'Recall to composer', value: 'recall', description: 'Take it back and keep writing' },
+            { label: 'Delete', value: 'delete', description: 'Drop it without sending' },
+          ],
+    );
+    if (action === null) return;
+    if (action === 'send') {
+      await sendNow(draft);
+      return;
+    }
+    if (action === 'recall') {
+      await recallDraft(draft);
+      return;
+    }
+    if (action === 'edit') {
+      const next = await tui.promptText('Edit pending draft', {
+        initialValue: draft.text,
+        placeholder: 'Text sent to the agent',
+      });
+      if (next === null || next.trim() === '') return;
+      await editDraft(draft, next);
+      return;
+    }
+    if (queue.remove(draft.key) !== null && draft.mailboxId !== null) {
+      await withdrawMailbox(draft.mailboxId, action === 'withdraw' ? 'user_withdrew_steer' : 'user_deleted_draft');
+    }
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -804,10 +1059,20 @@ export async function chatTui(
     completionSources,
     echoSubmitted: false,
     canSubmit: () => !sessionTransition,
-    queuedPrompts: () => queue.snapshot.pending,
-    queuedCount: () => queue.snapshot.pending.length,
+    queuedDrafts: () => queue.drafts.map((draft) => ({ text: draft.text, mode: draft.mode })),
+    queuedCount: () => queue.drafts.length,
     queuePaused: () => queue.snapshot.paused,
-    onRecallQueued: () => queue.takeLast(),
+    onRecallQueued: () => {
+      const draft = queue.takeLastDraft();
+      if (draft === null) return null;
+      // The recalled text goes back into the composer, so the mailbox row it
+      // was steering must not also be injected into the running turn.
+      if (draft.mailboxId !== null) void withdrawMailbox(draft.mailboxId, 'recalled_to_composer');
+      return draft.text;
+    },
+    onSteer: steerDraft,
+    onQueueDraft: queueDraft,
+    onInterruptAndSend: interruptAndSend,
     statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
     // The footer's right-hand column. Same facts as the status text above, but
     // split so the model can be right-aligned against the token counters
@@ -1002,7 +1267,7 @@ export async function chatTui(
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
   }
 
-  /**
+/**
    * Re-read the durable transcript and repaint it, in place.
    *
    * This is NOT `adoptSession`: the session did not change, only its
@@ -1018,7 +1283,39 @@ export async function chatTui(
     tui.replaceTranscript(await loadSessionMessages(client, sessionId));
   }
 
-  async function runTurn(prompt: string, attachments: readonly FileAttachment[] = []): Promise<TurnOutcome> {
+  async function runTurn(prompt: string, draft: PendingDraft): Promise<TurnOutcome> {
+    // The files travel with the draft, so the turn they start carries them.
+    const attachments = draft.attachments;
+    if (draft.mailboxId !== null) {
+      // A steer has two possible outcomes: the turn it was aimed at claimed it
+      // (observed/applied), or that turn settled first and the row is still
+      // pending. Only the second belongs to a new turn — the first must not be
+      // sent twice.
+      let row: HostMailboxItem | null;
+      try {
+        row = await client.getItem(draft.mailboxId);
+      } catch (error) {
+        tui.printError(
+          'Could not check whether the previous turn read your steer: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+        return 'failed';
+      }
+      if (row === null || row.status !== 'pending') return 'skipped';
+      let withdrawn: HostMailboxItem | null;
+      try {
+        withdrawn = await client.cancel(draft.mailboxId, 'steer_missed_turn');
+      } catch (error) {
+        tui.printError(
+          'Could not take over the unread steer: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+        return 'failed';
+      }
+      if (withdrawn === null) return 'skipped';
+      prompt = row.content;
+      tui.printNotice('The previous turn ended before it read your steer; sending it as a new turn.');
+    }
     if (unsettledRunId !== null) {
       await requestRemoteCancellation(unsettledRunId, 'chat cancellation retry');
       if (unsettledRunId !== null) {
@@ -1034,8 +1331,10 @@ export async function chatTui(
     const runSessionId = activeSession.id;
     const runStartedAt = Date.now();
     let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
-    // Pending drafts enter the transcript only when admitted to a Host turn.
-    tui.printUser(prompt);
+    // Pending drafts enter the transcript only when admitted to a Host turn —
+    // unless the controller already echoed them (a steer is shown the moment
+    // the user sends it).
+    if (!draft.echoed) tui.printUser(prompt);
     try {
       const start = await client.startAgentRun({
         sessionId: runSessionId,
@@ -1198,16 +1497,9 @@ export async function chatTui(
           }
         }
         else if (name === 'queue') {
-          if (args === 'clear') queue.clear();
+          if (args === 'clear') discardDrafts();
           else if (args === 'resume') queue.resume();
-          else {
-            const choice = await tui.choose('Pending follow-ups', [
-              { label: 'Resume queued follow-ups', value: 'resume' },
-              { label: 'Discard queued follow-ups', value: 'clear' },
-            ]);
-            if (choice === 'resume') queue.resume();
-            else if (choice === 'clear') queue.clear();
-          }
+          else await manageQueue();
         }
         else if (name === 'clear') tui.clearTranscript();
         else if (hasTuiSlashCommand(name)) {
@@ -1328,7 +1620,7 @@ export async function chatTui(
       ? attachments
       : [...attachments, shellContextAttachment(pendingShell.context, pendingShell.command, Date.now())];
 
-    queue.submit(line, pendingAttachments);
+    queue.submit(line, { attachments: pendingAttachments });
 
   }
 

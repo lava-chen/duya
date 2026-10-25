@@ -1,12 +1,51 @@
 /** Serial admission of local drafts into Host turns. This does not execute runs. */
 import type { FileAttachment } from '@duya/agent-protocol';
 
-export type TurnOutcome = 'completed' | 'cancelled' | 'failed';
+export type TurnOutcome = 'completed' | 'cancelled' | 'failed' | 'skipped';
 
-/** One queued draft: the prompt text plus the attachments submitted with it. */
-interface QueuedDraft {
+/**
+ * How a draft is meant to reach the agent while a run is active.
+ *
+ * `steer` is injected into the running turn at its next model boundary (Host
+ * mailbox `kind='followup'`); `queue` waits until the turn settles and starts
+ * a fresh user turn.
+ */
+export type DraftMode = 'steer' | 'queue';
+
+export interface PendingDraft {
+  /** Stable local identity; the wiring keys per-item operations on it. */
+  readonly key: string;
+  /** Host mailbox row id, when the draft was written to the running turn. */
+  readonly mailboxId: string | null;
   readonly text: string;
+  readonly mode: DraftMode;
+  /** The controller already printed this draft; the turn must not print it again. */
+  readonly echoed: boolean;
+  /**
+   * The files submitted with this draft.
+   *
+   * They are part of the draft rather than a separate channel: a draft is one
+   * thing the user sent, and the turn it starts carries the files with the
+   * text. A draft that is recalled drops them (see `takeLast`).
+   */
   readonly attachments: readonly FileAttachment[];
+}
+
+export interface SubmitDraftOptions {
+  readonly mode?: DraftMode;
+  readonly mailboxId?: string | null;
+  readonly echoed?: boolean;
+  /** Put the draft ahead of older ones (interrupt-and-send). */
+  readonly front?: boolean;
+  /** The files submitted with the draft; they ride along into the turn. */
+  readonly attachments?: readonly FileAttachment[];
+}
+
+export interface ReclassifyPatch {
+  readonly text?: string;
+  readonly mode?: DraftMode;
+  readonly mailboxId?: string | null;
+  readonly echoed?: boolean;
 }
 
 export interface TurnQueueSnapshot {
@@ -17,18 +56,19 @@ export interface TurnQueueSnapshot {
 }
 
 export interface TurnQueueOptions {
-  readonly runTurn: (text: string, attachments: readonly FileAttachment[]) => Promise<TurnOutcome>;
+  readonly execute: (text: string, draft: PendingDraft) => Promise<TurnOutcome>;
   readonly onChange: (snapshot: TurnQueueSnapshot) => void;
   readonly onError: (error: unknown) => void;
 }
 
 export class TurnQueue {
-  private readonly pending: QueuedDraft[] = [];
+  private readonly pending: PendingDraft[] = [];
   private busy = false;
   private paused = false;
   private closed = false;
   private resumeAfterActive = false;
   private draining: Promise<void> = Promise.resolve();
+  private nextKey = 1;
 
   constructor(private readonly options: TurnQueueOptions) {}
 
@@ -36,7 +76,12 @@ export class TurnQueue {
     return { busy: this.busy, paused: this.paused, pending: this.pending.map((draft) => draft.text) };
   }
 
-  submit(text: string, attachments: readonly FileAttachment[] = []): void {
+  /** Full drafts, newest last. The snapshot above stays text-only for callers that only paint. */
+  get drafts(): readonly PendingDraft[] {
+    return [...this.pending];
+  }
+
+  submit(text: string, options: SubmitDraftOptions = {}): void {
     if (this.closed || text.trim() === '') return;
     // A fresh input after interruption is an explicit new intent. Older queued
     // drafts still require the user's resume decision before automatic drain.
@@ -44,7 +89,16 @@ export class TurnQueue {
       if (this.busy) this.resumeAfterActive = true;
       else this.paused = false;
     }
-    this.pending.push({ text, attachments });
+    const draft: PendingDraft = {
+      key: `draft-${this.nextKey++}`,
+      mailboxId: options.mailboxId ?? null,
+      text,
+      mode: options.mode ?? 'queue',
+      echoed: options.echoed ?? false,
+      attachments: options.attachments ?? [],
+    };
+    if (options.front === true) this.pending.unshift(draft);
+    else this.pending.push(draft);
     this.changed();
     this.drain();
   }
@@ -73,9 +127,42 @@ export class TurnQueue {
    * silently re-attaching files the editor no longer shows as queued chips.
    */
   takeLast(): string | null {
+    return this.takeLastDraft()?.text ?? null;
+  }
+
+  takeLastDraft(): PendingDraft | null {
     const draft = this.pending.pop() ?? null;
     this.changed();
-    return draft?.text ?? null;
+    return draft;
+  }
+
+  remove(key: string): PendingDraft | null {
+    const index = this.pending.findIndex((draft) => draft.key === key);
+    if (index < 0) return null;
+    const [removed] = this.pending.splice(index, 1);
+    this.changed();
+    return removed ?? null;
+  }
+
+  /**
+   * Rewrite a pending draft in place, keeping its key and position. A queued
+   * draft sent into the running turn stays in line as a steer; an edited draft
+   * keeps the order the user gave it.
+   */
+  reclassify(key: string, patch: ReclassifyPatch): PendingDraft | null {
+    const index = this.pending.findIndex((draft) => draft.key === key);
+    const current = index < 0 ? undefined : this.pending[index];
+    if (current === undefined) return null;
+    const next: PendingDraft = {
+      ...current,
+      ...(patch.text === undefined ? {} : { text: patch.text }),
+      ...(patch.mode === undefined ? {} : { mode: patch.mode }),
+      ...(patch.mailboxId === undefined ? {} : { mailboxId: patch.mailboxId }),
+      ...(patch.echoed === undefined ? {} : { echoed: patch.echoed }),
+    };
+    this.pending[index] = next;
+    this.changed();
+    return next;
   }
 
   clear(): void {
@@ -111,7 +198,10 @@ export class TurnQueue {
         const draft = this.pending.shift();
         if (draft === undefined) break;
         this.changed();
-        const outcome = await this.options.runTurn(draft.text, draft.attachments);
+        const outcome = await this.options.execute(draft.text, draft);
+        // `skipped` means the draft was already delivered elsewhere (a steer
+        // the running turn claimed). It must not pause or resume anything.
+        if (outcome === 'skipped') continue;
         if (outcome !== 'completed') this.paused = outcome !== 'cancelled' || !this.resumeAfterActive;
         this.resumeAfterActive = false;
       }

@@ -237,6 +237,10 @@ describe('Host shared-client vertical execution', () => {
         expect(live.map((event) => event.seq)).toEqual([...new Set(live.map((event) => event.seq))].sort((a, b) => a - b));
         expect(live.some((event) => event.payload.type === 'tool.call_started')).toBe(true);
         expect(live.some((event) => event.payload.type === 'tool.call_completed')).toBe(true);
+        // A tool that ran to completion STATES its outcome. Without the bit the
+        // TUI paints `?` on every successful call.
+        const completed = live.find((event) => event.payload.type === 'tool.call_completed');
+        expect((completed?.payload as { outcome?: { outcome?: string } }).outcome?.outcome).toBe('success');
         expect(live.some((event) => event.payload.type === 'assistant.text_block' &&
           (event.payload as { text?: string }).text?.includes(finalText))).toBe(true);
         const replay = await client.readAgentRunEvents(started.runId, { afterSeq: 0 });
