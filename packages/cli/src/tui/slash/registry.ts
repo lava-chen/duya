@@ -46,6 +46,7 @@ import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
 import { EXPORT_COMMANDS } from './export.js';
 import { CAPABILITIES_COMMANDS } from './capabilities.js';
+import { DOCTOR_COMMANDS } from './doctor.js';
 import { READ_FILE_COMMANDS } from './read-file.js';
 import { HOTKEYS_COMMANDS } from './hotkeys.js';
 import { DIFF_COMMANDS } from './diff.js';
@@ -71,6 +72,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...PR_COMMANDS,
   ...EXPORT_COMMANDS,
   ...CAPABILITIES_COMMANDS,
+  ...DOCTOR_COMMANDS,
   ...READ_FILE_COMMANDS,
   ...DIFF_COMMANDS,
   ...COMPACT_COMMANDS,

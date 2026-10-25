@@ -238,6 +238,7 @@ describe('slash registry', () => {
       'cost',
       'delete',
       'diff',
+      'doctor',
       'effort',
       'export',
       'fork',

@@ -599,6 +599,28 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // Listing skills is a read.
     availableWhileBusy: true,
   },
+  {
+    // Plan PR-4. The doctor: a read-only diagnostic of the local install,
+    // running the same shared checks on both surfaces so a bug report means
+    // the same thing whichever surface produced it.
+    //
+    // `cli` only for now. The Desktop has no executor yet, and advertising it
+    // there without one is exactly the advertised-but-unrunnable state the
+    // catalog's integrity tests forbid; the Desktop entry lands together with
+    // its executor.
+    name: 'doctor',
+    label: 'Diagnose install',
+    labelZh: '诊断安装状态',
+    description: 'Diagnose the local Duya install',
+    descriptionZh: '诊断本机 Duya 安装状态',
+    category: 'info',
+    surfaces: ['cli'],
+    // The diagnostic needs no session — it looks at the install, not at a
+    // conversation.
+    requiresSession: false,
+    // A diagnostic is a read; it does not touch the run.
+    availableWhileBusy: true,
+  },
 
   // ── tools ─────────────────────────────────────────────────────────────
   {
