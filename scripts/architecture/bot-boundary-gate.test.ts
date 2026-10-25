@@ -78,6 +78,13 @@ function writeFixture(relFile: string, body: string): void {
 }
 
 function dropFixture(relPath: string): void {
+  // Fixtures are the only paths this helper may remove. `packages/bot` is a
+  // real package from S2 onward; deleting it recursively here would destroy a
+  // working tree that happens to contain the real source.
+  const isFixture = relPath.includes('__bot_boundary_fixture__') || relPath === 'packages/bot/src/leaf.ts';
+  if (!isFixture) {
+    throw new Error(`refusing to remove a non-fixture path: ${relPath}`);
+  }
   rmSync(safeResolve(relPath), { recursive: true, force: true });
 }
 
@@ -159,7 +166,7 @@ describe('R1 goes RED when a bot source file imports outside its allowlist', () 
       expect(hostFinding.spec).toBe('../../../host/src/index.js');
       expect(hostFinding.to).toBe('packages/host/src/index.ts');
     } finally {
-      dropFixture('packages/bot');
+      dropFixture(BOT_FIXTURE);
     }
   }, 120_000);
 
@@ -173,7 +180,7 @@ describe('R1 goes RED when a bot source file imports outside its allowlist', () 
       // is visible instead of silent.
       expect(r1.typeOnlyRefs.map((r) => r.owner)).toContain('@duya/host');
     } finally {
-      dropFixture('packages/bot');
+      dropFixture(BOT_FIXTURE);
     }
   }, 120_000);
 });
@@ -199,7 +206,7 @@ describe('R2 goes RED when a downward package imports bot', () => {
       ]);
     } finally {
       dropFixture(CORE_FIXTURE);
-      dropFixture('packages/bot');
+      dropFixture('packages/bot/src/leaf.ts');
     }
   }, 120_000);
 
