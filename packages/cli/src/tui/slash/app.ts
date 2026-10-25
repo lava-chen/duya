@@ -61,6 +61,40 @@ function readHandoff(payload: unknown): 'ok' | 'refused' | undefined {
   return undefined;
 }
 
+/**
+ * The refusal code a Host that cannot answer carries.
+ *
+ * The Host client's handover method returns the refusal as a domain outcome
+ * (`{ ok: false, code }`) rather than throwing it, so the code is read from
+ * the answer. A client that throws instead is still understood.
+ */
+const UNAVAILABLE_CODE = 'session_handoff_unavailable';
+
+/** The refusal code carried by an answer, when it carries one. */
+function refusalCode(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined;
+  const code = (payload as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * The panel a Host that cannot answer the handover gets.
+ *
+ * "This Host cannot answer" and "the handover was refused" are different
+ * facts: the first was never asked of an authority that could answer it, the
+ * second was asked and declined. Collapsing them would report a refusal that
+ * never happened.
+ */
+const UNAVAILABLE_PANEL: readonly string[] = [
+  'This Host does not serve the session handover, so it cannot answer.',
+  '',
+  '  That is different from a failed handover — here the request was',
+  '  never accepted by an authority that could perform it.',
+  '',
+  '  Source: Host session handover (POST /v1/local/session-handoff),',
+  '  404 session_handoff_unavailable.',
+];
+
 const APP_COMMAND: TuiSlashCommandDef = {
   name: 'app',
   description: 'Hand this session over to the desktop app',
@@ -81,21 +115,20 @@ const APP_COMMAND: TuiSlashCommandDef = {
     try {
       payload = await client.openInDesktopApp(ctx.session.id);
     } catch (error) {
-      // A Host without the handover route cannot answer. That is not the
-      // same as a failed handover, and it is rendered differently.
-      if (hostErrorCode(error) === 'session_handoff_unavailable') {
-        showPanel(ctx, 'Open in the desktop app', [
-          'This Host does not serve the session handover, so it cannot answer.',
-          '',
-          '  That is different from a failed handover — here the request was',
-          '  never accepted by an authority that could perform it.',
-          '',
-          '  Source: Host session handover (POST /v1/local/session-handoff),',
-          '  404 session_handoff_unavailable.',
-        ], { footer: FOOTER, scrollable: true });
+      // A client that throws the refusal instead of returning it is still
+      // understood: the code names the same fact.
+      if (hostErrorCode(error) === UNAVAILABLE_CODE) {
+        showPanel(ctx, 'Open in the desktop app', UNAVAILABLE_PANEL, { footer: FOOTER, scrollable: true });
         return { kind: 'handled' };
       }
       ctx.tui.printError(`Could not hand the session over: ${describeError(error)}`);
+      return { kind: 'handled' };
+    }
+
+    // The Host client returns the refusal as a domain outcome rather than
+    // throwing it, so "this Host cannot answer" is read from the answer.
+    if (refusalCode(payload) === UNAVAILABLE_CODE) {
+      showPanel(ctx, 'Open in the desktop app', UNAVAILABLE_PANEL, { footer: FOOTER, scrollable: true });
       return { kind: 'handled' };
     }
 

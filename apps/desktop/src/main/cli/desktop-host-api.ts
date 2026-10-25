@@ -80,6 +80,7 @@ import { createHostLocalModelCapabilityApi } from '@duya/host/local-model-capabi
 import { createHostLocalProviderModelCapabilityApi } from '@duya/host/local-provider-model-capability-api';
 import { createHostLocalProviderCatalogApi } from '@duya/host/local-provider-catalog-api';
 import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection-api';
+import { createHostLocalPluginInventoryApi } from '@duya/host/local-plugin-inventory-api';
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
 import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-instance-api';
 import { createHostPluginAppGrantApi } from '@duya/host/local-plugin-app-grant-api';
@@ -375,6 +376,9 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       new AppConnectionStore(mainDatabase, deriveConnectionSlug),
     ),
     localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase)),
+    // The plugin inventory the CLI's `/plugin` reads. The Desktop reads the
+    // same registry through its own page, so both surfaces see one list.
+    localPluginInventoryApi: createHostLocalPluginInventoryApi(),
     pluginAppInstanceApi,
     pluginAppGrantApi,
     pluginAppInvocationApi,

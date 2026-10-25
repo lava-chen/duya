@@ -1574,27 +1574,6 @@ export class HostSessionHttpClient implements
     return result.removed;
   }
 
-  /**
-   * The plugins installed on this machine.
-   *
-   * The payload is returned RAW: the shape of a plugin inventory belongs to
-   * the Host route, and the surface that renders it narrows the fields it
-   * shows. A Host that does not serve the inventory answers 404
-   * `plugin_inventory_api_unavailable` — a named refusal, not an empty list.
-   */
-  async listPlugins(): Promise<unknown> {
-    return this.request('GET', '/v1/local/plugins');
-  }
-
-  /**
-   * Hand a session over to the desktop app.
-   *
-   * A Host that does not serve the handover answers 404
-   * `session_handoff_unavailable` — a named refusal, not a failed handover.
-   */
-  async openInDesktopApp(sessionId: string): Promise<unknown> {
-    return this.request('POST', '/v1/local/session-handoff', { sessionId });
-  }
 
   async createPluginAppInstance(input: HostPluginAppInstanceCreateInput): Promise<PluginAppInstanceRecord> {
     const result = await this.request<{ instance: PluginAppInstanceRecord }>(
