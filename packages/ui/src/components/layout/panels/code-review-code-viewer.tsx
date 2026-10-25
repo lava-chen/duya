@@ -97,7 +97,10 @@ const GUTTER_UNSAFE_CSS = [
   "}",
 ].join("");
 
-function hashCodeContent(code: string): string {
+/** Stable content hash (djb2) — component keys must change whenever the
+ *  underlying text changes, so the library rebuilds instead of reusing
+ *  stale cached renders. Shared by the file viewer and the diff view. */
+export function hashCodeContent(code: string): string {
   let hash = 5381;
   for (let index = 0; index < code.length; index += 1) {
     hash = (hash * 33) ^ code.charCodeAt(index);

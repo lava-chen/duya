@@ -18,12 +18,11 @@ describe("PanelProvider tab metadata", () => {
     window.localStorage.clear();
     useConversationStore.setState({ activeThreadId: null });
     window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify({
-      tabs: [{ id: "canvas-tab", pageId: "preview", title: "Preview" }],
+      tabs: [{ id: "canvas-tab", pageId: "workspace", title: "Preview" }],
       activeTabId: "canvas-tab",
       panelOpen: true,
       panelView: "content",
       workspaceExpanded: false,
-      workspaceTreeOpen: false,
     }));
   });
 
@@ -37,6 +36,21 @@ describe("PanelProvider tab metadata", () => {
 
     expect(result.current).toBe(initialContext);
     expect(result.current.tabs[0]?.title).toBe("Preview");
+  });
+
+  it("drops persisted tabs whose page no longer exists", () => {
+    // A stale localStorage payload written before a page was removed from the
+    // registry must not crash (or resurrect) the provider.
+    window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify({
+      tabs: [{ id: "stale", pageId: "preview", title: "Preview" }],
+      activeTabId: "stale",
+      panelOpen: true,
+      panelView: "content",
+      workspaceExpanded: false,
+    }));
+    const { result } = renderHook(() => usePanel(), { wrapper });
+    expect(result.current.tabs).toHaveLength(0);
+    expect(result.current.activeTabId).toBeNull();
   });
 });
 
@@ -53,15 +67,15 @@ describe("PanelProvider user width memory", () => {
   it("rememberUserWidth persists a rounded width per page", () => {
     const { result } = renderPanel();
     act(() => {
-      result.current.rememberUserWidth("preview", 555.4);
+      result.current.rememberUserWidth("workspace", 555.4);
     });
-    expect(JSON.parse(window.localStorage.getItem(USER_WIDTHS_KEY)!)).toEqual({ preview: 555 });
+    expect(JSON.parse(window.localStorage.getItem(USER_WIDTHS_KEY)!)).toEqual({ workspace: 555 });
   });
 
   it("rememberUserWidth ignores non-finite widths", () => {
     const { result } = renderPanel();
     act(() => {
-      result.current.rememberUserWidth("preview", Number.NaN);
+      result.current.rememberUserWidth("workspace", Number.NaN);
     });
     expect(window.localStorage.getItem(USER_WIDTHS_KEY)).toBeNull();
   });
@@ -69,16 +83,16 @@ describe("PanelProvider user width memory", () => {
   it("resetPanelWidth drops the remembered entry and empties the store key when done", () => {
     const { result } = renderPanel();
     act(() => {
-      result.current.rememberUserWidth("preview", 700);
+      result.current.rememberUserWidth("workspace", 700);
     });
     act(() => {
-      result.current.resetPanelWidth("preview");
+      result.current.resetPanelWidth("workspace");
     });
     expect(window.localStorage.getItem(USER_WIDTHS_KEY)).toBeNull();
   });
 
   it("loads remembered widths across provider remounts", () => {
-    window.localStorage.setItem(USER_WIDTHS_KEY, JSON.stringify({ preview: 640 }));
+    window.localStorage.setItem(USER_WIDTHS_KEY, JSON.stringify({ workspace: 640 }));
     const first = renderPanel();
     // Simulate the drag-end path, then remount to prove persistence.
     act(() => {
@@ -86,7 +100,7 @@ describe("PanelProvider user width memory", () => {
     });
     const second = renderPanel();
     void second;
-    expect(JSON.parse(window.localStorage.getItem(USER_WIDTHS_KEY)!)).toEqual({ preview: 640 });
+    expect(JSON.parse(window.localStorage.getItem(USER_WIDTHS_KEY)!)).toEqual({ workspace: 640 });
   });
 });
 

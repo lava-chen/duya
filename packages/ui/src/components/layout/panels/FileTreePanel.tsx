@@ -17,8 +17,7 @@ import {
 } from "@/components/file-tree";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import type { PageId, PageTab } from "./page-tab";
-import { useOptionalPanel } from "@/hooks/usePanel";
+import type { PageTab } from "./page-tab";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 
@@ -215,27 +214,9 @@ function ContextMenu({
   );
 }
 
-export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: PageTab; embedded?: boolean; embeddedInPreview?: boolean }) {
+export function FileTreePanel({ tab, embedded }: { tab?: PageTab; embedded?: boolean }) {
   const { activeThreadId, threads } = useConversationStore();
   const { t } = useTranslation();
-  // Plan 220: when this component is embedded inside FilePreviewPanel
-  // it is rendered outside the PanelProvider tree, so usePanel() would
-  // throw. useOptionalPanel returns null in that case, and the file
-  // preview open falls through to the global `duya:open-page` event
-  // dispatcher (the App-level event handler picks it up).
-  const panel = useOptionalPanel();
-  const openOrActivatePage = useCallback(
-    (pageId: PageId, params?: Record<string, unknown>) => {
-      if (panel) {
-        panel.openOrActivatePage(pageId, params);
-        return;
-      }
-      window.dispatchEvent(new CustomEvent("duya:open-page", {
-        detail: { pageId, params },
-      }));
-    },
-    [panel],
-  );
 
   const [tree, setTree] = useState<FileTreeNode[]>([]);
   const [loading, setLoading] = useState(false);
@@ -300,24 +281,15 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
   const handleOpenFile = useCallback((treePath: string) => {
     const filePath = resolveTreePath(workingDirectory, treePath);
     setSelectedPath(treePath);
-    // When embedded inside FilePreviewPanel (PanelFileTreeSplit), dispatch
-    // `duya:open-file` so the parent preview panel switches its current
-    // file in place instead of opening a new tab. Note: the `embedded`
-    // prop from PanelZone is true for ALL pages (it controls header
-    // chrome), so `embeddedInPreview` distinguishes the PanelFileTreeSplit
-    // case from a standalone files-page tab.
-    if (embeddedInPreview) {
-      window.dispatchEvent(new CustomEvent("duya:open-file", {
-        detail: { filePath, workingDirectory },
-      }));
-      return;
-    }
-    openOrActivatePage("preview", {
-      filePath,
-      workingDirectory,
-      title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
-    });
-  }, [openOrActivatePage, workingDirectory, embeddedInPreview, t]);
+    // The workspace panel is the single file-viewing surface: hand the file
+    // to the same `duya:open-file-preview-panel` contract the chat file
+    // links use, so tree clicks and message links behave identically. A
+    // tree without a project root falls back to standalone mode, which the
+    // workspace panel renders without mounting a project tree.
+    const detail: Record<string, unknown> = { filePath, workingDirectory: workingDirectory ?? "" };
+    if (!workingDirectory) detail.standalone = true;
+    window.dispatchEvent(new CustomEvent("duya:open-file-preview-panel", { detail }));
+  }, [workingDirectory]);
 
   const handleContextMenu = useCallback(
     (path: string, type: "file" | "directory", event: React.MouseEvent) => {
