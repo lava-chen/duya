@@ -7,6 +7,7 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，draft PR #497 待真机冒烟转 ready |
+| 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
 | 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 评审领域边界与迁移合同；实施从 S0 门禁与行为基线开始，复用现有 Host / Harness |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |

@@ -230,6 +230,37 @@ html[data-glass-repair] .attachment-preview-overlay {
   -webkit-backdrop-filter: blur(0.02px);
 }
 
+/* Sidebar edge resize marker: purely visual (the hit zone lives in the
+   body-level handlers), speaking the unified resize pill language. */
+.sidebar-edge-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  cursor: col-resize;
+}
+
+.sidebar-edge-resizer .resize-handle-bar {
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.sidebar-edge-resizer[data-hover] .resize-handle-bar,
+.sidebar-edge-resizer[data-resizing] .resize-handle-bar {
+  opacity: 1;
+}
+
+.sidebar-edge-resizer[data-resizing] .resize-handle-bar {
+  background: var(--accent);
+  width: 56px;
+}
+
 .sidebar-logo {
   width: 1.8rem;
   height: 1.8rem;

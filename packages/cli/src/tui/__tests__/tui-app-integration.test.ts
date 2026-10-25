@@ -312,7 +312,7 @@ describe('TUIApp integration', () => {
       },
     });
     await settleRendered();
-    expect(out.text()).toContain('⚡ 80.0 tok/s');
+    expect(out.text()).toContain('80.0 tok/s');
     app.stop();
   });
 

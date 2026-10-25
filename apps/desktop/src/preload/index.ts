@@ -93,6 +93,8 @@ export const windowBackdrop: '' | 'mica' | 'vibrancy' =
 export interface PanelWindowContext {
   paneId: string | null
   pageId: string | null
+  /** Page params the main process passed for this pane, or `null`. */
+  params: Record<string, unknown> | null
 }
 
 export interface PanelWindowOpenResult {
@@ -195,6 +197,27 @@ function readLocationParam(name: string): string | null {
 }
 
 /**
+ * Decode the page params the main process attached to the detached window.
+ *
+ * Both transports carry the same raw JSON: the argv entry verbatim, the
+ * query value decoded once by `URLSearchParams`. Invalid JSON degrades to
+ * `null` — a broken payload must not take the window down.
+ */
+function readPanelParams(): Record<string, unknown> | null {
+  const raw = readRendererArg('--duya-panel-params=') ?? readLocationParam('duyaPanelParams');
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
  * The pane this window hosts, or `null` in the main window.
  *
  * The main process passes the pane id twice: as a renderer argument
@@ -206,6 +229,7 @@ function readLocationParam(name: string): string | null {
 export const panelWindowContext: PanelWindowContext = {
   paneId: readRendererArg('--duya-panel-id=') ?? readLocationParam('duyaPanel'),
   pageId: readRendererArg('--duya-panel-page=') ?? readLocationParam('duyaPanelPage'),
+  params: readPanelParams(),
 }
 
 // Preload script initialized
@@ -1322,7 +1346,7 @@ export interface ElectronAPI {
     /** The pane THIS window hosts; `null` in the main window. */
     context: PanelWindowContext
     /** Detach one pane into its own OS window (main window only). */
-    open: (paneId: string, pageId: string, title?: string) => Promise<PanelWindowOpenResult>
+    open: (paneId: string, pageId: string, title?: string, params?: Record<string, unknown>) => Promise<PanelWindowOpenResult>
     /**
      * Return one pane to the main window. Without an argument the pane this
      * window hosts is returned, which is what the detached window's own
@@ -2052,8 +2076,8 @@ const electronAPI: ElectronAPI = {
   },
   panelWindow: {
     context: panelWindowContext,
-    open: (paneId: string, pageId: string, title?: string) =>
-      ipcRenderer.invoke('panel-window:open', { paneId, pageId, title }) as Promise<PanelWindowOpenResult>,
+    open: (paneId: string, pageId: string, title?: string, params?: Record<string, unknown>) =>
+      ipcRenderer.invoke('panel-window:open', { paneId, pageId, title, params }) as Promise<PanelWindowOpenResult>,
     close: (paneId?: string) => {
       const target = paneId ?? panelWindowContext.paneId
       if (!target) {

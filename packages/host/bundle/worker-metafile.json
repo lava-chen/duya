@@ -518,7 +518,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/plugin-inventory.ts": {
-      "bytes": 3273,
+      "bytes": 2380,
       "imports": [],
       "format": "esm"
     },
@@ -22367,7 +22367,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -29992,7 +29992,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 98141,
+      "bytes": 98896,
       "imports": [],
       "format": "esm"
     },
@@ -30671,7 +30671,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 13517,
+      "bytes": 7129,
       "imports": [
         {
           "path": "node:fs",
@@ -30707,7 +30707,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-inventory-api.ts": {
-      "bytes": 2948,
+      "bytes": 2303,
       "imports": [
         {
           "path": "packages/host/src/local-plugin-registry-api.ts",
@@ -31087,7 +31087,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 38570,
+      "bytes": 40270,
       "imports": [
         {
           "path": "child_process",
@@ -31443,7 +31443,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 41606,
+      "bytes": 44047,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -39544,7 +39544,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14563
+          "bytesInOutput": 14550
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -39598,7 +39598,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
@@ -39697,10 +39697,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -39718,7 +39718,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39868,7 +39868,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -39934,7 +39934,7 @@
           "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -41653,13 +41653,13 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -41686,7 +41686,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42460,10 +42460,10 @@
           "bytesInOutput": 184
         },
         "../../../node_modules/supports-color/index.js": {
-          "bytesInOutput": 1707
+          "bytesInOutput": 1702
         },
         "../../../node_modules/debug/src/node.js": {
-          "bytesInOutput": 2034
+          "bytesInOutput": 2029
         },
         "../../../node_modules/debug/src/index.js": {
           "bytesInOutput": 144
@@ -43573,7 +43573,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -44296,7 +44296,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 36400
+          "bytesInOutput": 36435
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 961
@@ -44350,7 +44350,7 @@
           "bytesInOutput": 24
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 2398
+          "bytesInOutput": 1028
         },
         "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
           "bytesInOutput": 3170
@@ -44395,7 +44395,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 11124
+          "bytesInOutput": 11471
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -45067,7 +45067,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4720838
+      "bytes": 4719731
     }
   }
 }

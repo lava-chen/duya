@@ -7,7 +7,14 @@
 "use client";
 
 import type { ComponentType, ReactNode } from "react";
-import { CornersInIcon, CornersOutIcon, XIcon, type IconProps } from "@/components/icons";
+import {
+  ArrowDownLeftIcon,
+  ArrowUpRightIcon,
+  CornersInIcon,
+  CornersOutIcon,
+  XIcon,
+  type IconProps,
+} from "@/components/icons";
 import { fileExtensionFromName, getFileTypeIcon } from "@/components/file-tree/file-type-icon";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { PageTab } from "./page-tab";
@@ -24,6 +31,11 @@ interface PanelCardProps {
   onActivate?: () => void;
   onToggleExpand: () => void;
   onClose: () => void;
+  /**
+   * Detach this pane into its own OS window. Omitted on surfaces without the
+   * detached-window bridge (web), which removes the action from the header.
+   */
+  onPopout?: () => void;
   /** Test hook for the expand action (the lone-card case drives the workspace). */
   expandTestId?: string;
   children: ReactNode;
@@ -37,6 +49,7 @@ export function PanelCard({
   onActivate,
   onToggleExpand,
   onClose,
+  onPopout,
   expandTestId,
   children,
 }: PanelCardProps) {
@@ -53,6 +66,18 @@ export function PanelCard({
           {tab.title}
         </span>
         <span className="panel-card-actions">
+          {onPopout && (
+            <button
+              type="button"
+              className="panel-card-action"
+              onClick={onPopout}
+              title={t("panel.openInNewWindow")}
+              aria-label={t("panel.openInNewWindow")}
+              data-testid={`panel-popout-${tab.pageId}`}
+            >
+              <ArrowUpRightIcon size={14} stroke={1.5} />
+            </button>
+          )}
           {expandable && (
             <button
               type="button"
@@ -80,6 +105,53 @@ export function PanelCard({
         </span>
       </header>
       <div className="panel-card-body">{children}</div>
+    </section>
+  );
+}
+
+/**
+ * Placeholder shown in the wall while a pane lives in its own OS window.
+ *
+ * The pane keeps its grid slot so the wall's shape and column widths do not
+ * shift underneath the user, but the panel component itself is not mounted —
+ * a browser webview must not end up instantiated twice. The button hands the
+ * pane back to the wall, mirroring what the detached window's own header does.
+ */
+export function PanelCardDetachedPlaceholder({
+  tab,
+  icon: Icon,
+  onReturn,
+}: {
+  tab: PageTab;
+  icon: ComponentType<IconProps>;
+  onReturn: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <section className="panel-card panel-card-detached" data-pane-id={tab.id} aria-label={tab.title}>
+      <header className="panel-card-header">
+        <span className="panel-card-icon">
+          <CardIcon tab={tab} fallback={<Icon size={14} stroke={1.5} />} />
+        </span>
+        <span className="panel-card-title" title={tab.title}>
+          {tab.title}
+        </span>
+        <span className="panel-card-actions">
+          <button
+            type="button"
+            className="panel-card-action"
+            onClick={onReturn}
+            title={t("panel.returnToMain")}
+            aria-label={t("panel.returnToMain")}
+            data-testid={`panel-return-${tab.pageId}`}
+          >
+            <ArrowDownLeftIcon size={14} stroke={1.5} />
+          </button>
+        </span>
+      </header>
+      <div className="panel-card-body">
+        <div className="panel-card-detached-hint">{t("panel.detachedRunning")}</div>
+      </div>
     </section>
   );
 }

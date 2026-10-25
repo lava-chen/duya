@@ -194,7 +194,24 @@ describe('panel-window-manager', () => {
       const url = buildDetachedPanelUrl('file:///app/dist/index.html', 'pane-1', 'terminal');
       expect(url).toBe('file:///app/dist/index.html?duyaPanel=pane-1&duyaPanelPage=terminal');
     });
-  });
+
+    it('attaches page params as encoded JSON when provided', () => {
+      const url = buildDetachedPanelUrl(
+        'file:///app/dist/index.html',
+        'pane-1',
+        'preview',
+        { filePath: 'E:/demo/AGENTS.md' },
+      );
+      expect(url).toBe(
+        'file:///app/dist/index.html?duyaPanel=pane-1&duyaPanelPage=preview' +
+          `&duyaPanelParams=${encodeURIComponent('{"filePath":"E:/demo/AGENTS.md"}')}`,
+      );
+    });
+
+    it('omits the params transport for empty params', () => {
+      const url = buildDetachedPanelUrl('http://localhost:3000', 'pane-1', 'terminal', {});
+      expect(url).toBe('http://localhost:3000/?duyaPanel=pane-1&duyaPanelPage=terminal');
+    });  });
 
   describe('openDetachedPanel', () => {
     it('creates a window that knows which pane it hosts', async () => {
@@ -224,6 +241,22 @@ describe('panel-window-manager', () => {
       expect(second.alreadyOpen).toBe(true);
       expect(mocks.BrowserWindow.instances).toHaveLength(1);
       expect(lastWindow().focused).toBe(true);
+    });
+
+    it('passes page params to the preload through the argv transport', async () => {
+      await openDetachedPanel({
+        paneId: 'pane-2',
+        pageId: 'preview',
+        params: { filePath: 'E:/demo/AGENTS.md' },
+      });
+
+      const webPreferences = lastWindow().options.webPreferences as {
+        additionalArguments: string[];
+      };
+      expect(webPreferences.additionalArguments).toContain(
+        '--duya-panel-params={"filePath":"E:/demo/AGENTS.md"}',
+      );
+      expect(lastWindow().loadedUrl).toContain('duyaPanelParams=');
     });
 
     it('announces the new window to the main window', async () => {
