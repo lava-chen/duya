@@ -176,4 +176,25 @@ describe('the order the worker does its init work in', () => {
       'the reuse guard must be decided before the agent is destroyed',
     ).toBeLessThan(destroy);
   });
+
+  it('only records the init shape after the history restore succeeded', () => {
+    // A failed history/tool/skill restore must never leave the agent
+    // reusable: the next turn has to rebuild, because a rebuild is how it
+    // recovers. Recording the shape unconditionally would make the next init
+    // keep an agent with no history and no tools.
+    expect(
+      source,
+      'the init shape must be recorded only after the restore succeeded',
+    ).toMatch(/if \(restoreOk\) currentInitShape = initMsg;/);
+    expect(source).toContain('restoreOk = true;');
+  });
+
+  it('does not reuse an agent whose MCP handshake failed', () => {
+    // The reuse path skips the handshake, so a failed one would leave the
+    // session without MCP tools for its whole lifetime.
+    expect(
+      source,
+      'the reuse guard must require a successful MCP handshake',
+    ).toMatch(/!mcpHandshakeFailed\s*\n\s*&& canReuseAgentForInit/);
+  });
 });

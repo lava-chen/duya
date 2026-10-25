@@ -216,8 +216,8 @@ let existingMessageCount = 0;
 let currentInitShape: WorkerInitShape | null = null;
 /**
  * Whether the last MCP handshake threw. The reuse path keeps the agent AND
- * skips a new handshake, so without this flag one transient MCP failure would
- * leave the session without its MCP tools until the config changes.
+ * skips a new handshake, so a transient failure must block reuse: the next
+ * init rebuilds the agent, which is also what retries the handshake.
  */
 let mcpHandshakeFailed = false;
 let pendingCompactCommand: unknown = null;
@@ -2874,14 +2874,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             if (
                 agent !== null
                 && previousSessionId === sessionId
+                && !mcpHandshakeFailed
                 && canReuseAgentForInit(currentInitShape, initMsg)
             ) {
                 log('[Agent-Process] Re-init skipped: the agent configuration is unchanged');
                 sendToMain({ type: 'ready', sessionId });
-                // The handshake is the one thing a re-init would have retried.
-                // If the last attempt threw, retry it here instead of leaving
-                // the session without MCP tools until the config changes.
-                if (mcpHandshakeFailed) startMcpInitialization();
                 // A chat:start that arrived while this init was in flight is
                 // still queued, and the skip must not strand it.
                 void drainQueuedChatStart();
