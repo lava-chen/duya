@@ -6,8 +6,9 @@
  * - info.ts    help / status / cost / context / transcript / usage / skills
  * - model.ts   model / effort
  * - auth.ts    login / logout / permission
- * - session.ts new / clear / export / copy / rename / resume / stop / queue / compact
- * - view.ts    goal / deep-research / diff / loop / memory / mcp / add-dir / image / btw
+ * - session.ts new / clear / export / copy / rename / resume / stop / queue / compact / app
+ * - view.ts    goal / deep-research / diff / loop / memory / mcp / add-dir / image / btw / workflow
+ * - extensions.ts apps / plugin
  */
 
 import { registerCommandExecutors } from './registry';
@@ -16,12 +17,14 @@ import { MODEL_EXECUTORS } from './model';
 import { AUTH_EXECUTORS } from './auth';
 import { SESSION_EXECUTORS } from './session';
 import { VIEW_EXECUTORS } from './view';
+import { EXTENSION_EXECUTORS } from './extensions';
 
 registerCommandExecutors(INFO_EXECUTORS);
 registerCommandExecutors(MODEL_EXECUTORS);
 registerCommandExecutors(AUTH_EXECUTORS);
 registerCommandExecutors(SESSION_EXECUTORS);
 registerCommandExecutors(VIEW_EXECUTORS);
+registerCommandExecutors(EXTENSION_EXECUTORS);
 
 export * from './bridge';
 export * from './registry';

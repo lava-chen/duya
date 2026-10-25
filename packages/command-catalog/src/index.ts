@@ -258,6 +258,24 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    // The CLI and the desktop app share one Host and one set of sessions, so
+    // the handover between them is a Host call rather than something one
+    // process does to the other. The Desktop's own handler is idempotent: it
+    // brings the session back to the foreground of the app that already owns
+    // it, which is the only thing "open in the desktop app" can mean there.
+    name: 'app',
+    label: 'Open in desktop app',
+    labelZh: '在桌面端打开',
+    description: 'Hand this session over to the desktop app',
+    descriptionZh: '把当前会话交接到桌面端',
+    category: 'session',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // The handover asks the Host to open the session elsewhere; it does not
+    // touch the running turn.
+    availableWhileBusy: true,
+  },
+  {
     // `copy` has a Desktop executor (executors/session.ts) that no popover entry
     // ever reached, so the handler was unreachable from the composer. Listed
     // here because the capability is real; the metadata simply had to be
@@ -524,6 +542,51 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'info',
     surfaces: ['desktop'],
     requiresSession: true,
+  },
+  {
+    // The app connectors the Host has connected — slack, google,
+    // microsoft365, wecom, qq-mail, remote-mcp and the like. The CLI lists
+    // them as text; the Desktop opens the extensions page where they are
+    // managed. One description, two surfaces — the wording stays true for
+    // both, so it names the thing rather than the surface's gesture.
+    name: 'apps',
+    label: 'App connections',
+    labelZh: '应用连接',
+    description: 'Inspect the connected app connectors',
+    descriptionZh: '查看已连接的应用连接器',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the connections is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The plugins installed on this machine. The CLI lists them as text; the
+    // Desktop opens the marketplace where they are managed.
+    name: 'plugin',
+    label: 'Plugins',
+    labelZh: '插件',
+    description: 'Inspect the installed plugins',
+    descriptionZh: '查看已安装的插件',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the plugins is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The workflow runs the Host recorded. The CLI lists them as text; the
+    // Desktop opens the workflow page where they are managed.
+    name: 'workflow',
+    label: 'Workflow runs',
+    labelZh: '工作流运行',
+    description: 'Inspect the recorded workflow runs',
+    descriptionZh: '查看已记录的工作流运行',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the runs is a read.
+    availableWhileBusy: true,
   },
   {
     name: 'skills',

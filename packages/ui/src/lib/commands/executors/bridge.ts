@@ -66,6 +66,16 @@ export interface CommandAppBridge {
   resetSession(): Promise<{ oldSessionId: string; newSessionId: string }>;
   /** Interrupt the live turn (Esc equivalent). */
   stopTurn(): void;
+  /**
+   * Bring a session to the foreground of the desktop app: make it the active
+   * thread and put the view back on the chat.
+   *
+   * The Desktop IS the desktop app, so there is nothing for `/app` to hand the
+   * session to — this is the "re-open the session I am already in" gesture.
+   * The implementation lives in the composer because switching sessions is the
+   * store's `setActiveThread`, and the store is what actually moves the app.
+   */
+  focusSession(sessionId: string): void;
   /** Manually compact the current session's context (worker compaction). */
   compactContext(): void;
   /** Generate a conversation recap (same as the /recap popover action). */

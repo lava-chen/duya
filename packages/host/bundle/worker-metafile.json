@@ -517,6 +517,16 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/plugin-inventory.ts": {
+      "bytes": 2380,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-protocol/src/session-handoff.ts": {
+      "bytes": 1478,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/plugin-app-instances.ts": {
       "bytes": 2707,
       "imports": [],
@@ -595,7 +605,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5035,
+      "bytes": 5114,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -876,6 +886,16 @@
           "path": "packages/agent-protocol/src/plugin-setup.ts",
           "kind": "import-statement",
           "original": "./plugin-setup.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/plugin-inventory.ts",
+          "kind": "import-statement",
+          "original": "./plugin-inventory.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/session-handoff.ts",
+          "kind": "import-statement",
+          "original": "./session-handoff.js"
         },
         {
           "path": "packages/agent-protocol/src/plugin-app-instances.ts",
@@ -29716,7 +29736,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 94400,
+      "bytes": 96649,
       "imports": [],
       "format": "esm"
     },
@@ -30044,7 +30064,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 250888,
+      "bytes": 253583,
       "imports": [
         {
           "path": "node:crypto",
@@ -30274,6 +30294,105 @@
     "packages/host/src/local-plugin-setup-api.ts": {
       "bytes": 548,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
+      "bytes": 16092,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/yaml/dist/index.js",
+          "kind": "import-statement",
+          "original": "yaml"
+        },
+        {
+          "path": "packages/plugin-core/src/workflows/index.ts",
+          "kind": "import-statement",
+          "original": "../../workflows/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-install-paths.ts": {
+      "bytes": 6912,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/agent-profile-config.ts",
+          "kind": "import-statement",
+          "original": "./agent-profile-config.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/local-plugin-registry-api.ts": {
+      "bytes": 7129,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "kind": "import-statement",
+          "original": "@iarna/toml"
+        },
+        {
+          "path": "packages/plugin-core/src/plugins/loader/capability-discovery.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/plugins/loader/capability-discovery"
+        },
+        {
+          "path": "packages/host/src/agent-profile-config.ts",
+          "kind": "import-statement",
+          "original": "./agent-profile-config.js"
+        },
+        {
+          "path": "packages/host/src/plugin-install-paths.ts",
+          "kind": "import-statement",
+          "original": "./plugin-install-paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/local-plugin-inventory-api.ts": {
+      "bytes": 2303,
+      "imports": [
+        {
+          "path": "packages/host/src/local-plugin-registry-api.ts",
+          "kind": "import-statement",
+          "original": "./local-plugin-registry-api.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/local-plugin-app-grant-authority.ts": {
@@ -30721,94 +30840,6 @@
       ],
       "format": "esm"
     },
-    "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
-      "bytes": 16092,
-      "imports": [
-        {
-          "path": "fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "../../../node_modules/yaml/dist/index.js",
-          "kind": "import-statement",
-          "original": "yaml"
-        },
-        {
-          "path": "packages/plugin-core/src/workflows/index.ts",
-          "kind": "import-statement",
-          "original": "../../workflows/index.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/plugin-install-paths.ts": {
-      "bytes": 6912,
-      "imports": [
-        {
-          "path": "node:fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:os",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/host/src/agent-profile-config.ts",
-          "kind": "import-statement",
-          "original": "./agent-profile-config.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 7129,
-      "imports": [
-        {
-          "path": "node:fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "../../../node_modules/@iarna/toml/toml.js",
-          "kind": "import-statement",
-          "original": "@iarna/toml"
-        },
-        {
-          "path": "packages/plugin-core/src/plugins/loader/capability-discovery.ts",
-          "kind": "import-statement",
-          "original": "@duya/plugin-core/plugins/loader/capability-discovery"
-        },
-        {
-          "path": "packages/host/src/agent-profile-config.ts",
-          "kind": "import-statement",
-          "original": "./agent-profile-config.js"
-        },
-        {
-          "path": "packages/host/src/plugin-install-paths.ts",
-          "kind": "import-statement",
-          "original": "./plugin-install-paths.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/host/src/config-agents/bot-id.ts": {
       "bytes": 1792,
       "imports": [],
@@ -31017,7 +31048,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 40069,
+      "bytes": 40415,
       "imports": [
         {
           "path": "node:crypto",
@@ -31173,6 +31204,11 @@
           "path": "packages/host/src/local-plugin-setup-api.ts",
           "kind": "import-statement",
           "original": "./local-plugin-setup-api.js"
+        },
+        {
+          "path": "packages/host/src/local-plugin-inventory-api.ts",
+          "kind": "import-statement",
+          "original": "./local-plugin-inventory-api.js"
         },
         {
           "path": "packages/host/src/local-plugin-app-instance-api.ts",
@@ -38503,21 +38539,6 @@
           "external": true
         },
         {
-          "path": "child_process",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "fs",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "node:module",
-          "kind": "require-call",
-          "external": true
-        },
-        {
           "path": "node:fs",
           "kind": "require-call",
           "external": true
@@ -38549,6 +38570,21 @@
         },
         {
           "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "child_process",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:module",
           "kind": "require-call",
           "external": true
         },
@@ -38905,7 +38941,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14422
+          "bytesInOutput": 14435
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -38929,7 +38965,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -38962,7 +38998,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/session-compaction.ts": {
           "bytesInOutput": 30
@@ -38974,7 +39010,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -39079,7 +39115,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39109,6 +39145,12 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/plugin-setup.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/plugin-inventory.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/session-handoff.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/plugin-app-instances.ts": {
@@ -39148,10 +39190,10 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 427
+          "bytesInOutput": 439
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7353
+          "bytesInOutput": 7340
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -39160,10 +39202,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 46
+          "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 45
+          "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -39175,13 +39217,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -39190,7 +39232,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -39220,7 +39262,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -39232,7 +39274,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -39262,7 +39304,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -39286,7 +39328,7 @@
           "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -40855,7 +40897,7 @@
           "bytesInOutput": 4260
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "packages/agent-core/src/run-outcome.ts": {
           "bytesInOutput": 937
@@ -41005,7 +41047,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41029,13 +41071,13 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
@@ -43609,7 +43651,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 35599
+          "bytesInOutput": 35997
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 956
@@ -43659,6 +43701,15 @@
         "packages/host/src/worker-config/provider-catalog.ts": {
           "bytesInOutput": 24
         },
+        "packages/host/src/local-plugin-registry-api.ts": {
+          "bytesInOutput": 1028
+        },
+        "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
+          "bytesInOutput": 3170
+        },
+        "packages/host/src/plugin-install-paths.ts": {
+          "bytesInOutput": 1469
+        },
         "packages/host/src/tool-approval-api.ts": {
           "bytesInOutput": 5
         },
@@ -43700,15 +43751,6 @@
         },
         "packages/host/src/worker-db-bridge.ts": {
           "bytesInOutput": 25
-        },
-        "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 1028
-        },
-        "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
-          "bytesInOutput": 3170
-        },
-        "packages/host/src/plugin-install-paths.ts": {
-          "bytesInOutput": 1469
         },
         "packages/host/src/config-agents/config-agents-api.ts": {
           "bytesInOutput": 5
@@ -44362,7 +44404,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4693801
+      "bytes": 4694148
     }
   }
 }

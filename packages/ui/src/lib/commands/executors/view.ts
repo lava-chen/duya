@@ -24,6 +24,7 @@ import type { CommandExecutorFn } from './registry';
 import type { CommandContext, CommandResult } from '../types';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useBtwStore } from '@/stores/btw-store';
+import { peekUiServices } from '@/services';
 import { askSideQuestion } from '@/lib/agent-sse-client';
 
 /**
@@ -172,6 +173,24 @@ export const VIEW_EXECUTORS: Record<string, CommandExecutorFn> = {
         '已为你打开自动化页面，点击新建定时任务即可配置同样的内容。',
       ].join('\n'),
     };
+  },
+
+  /**
+   * `/workflow` → the workflow page (definitions and runs).
+   *
+   * A surface that has no workflows (the Web app) says so instead of opening
+   * a page that renders nothing — the same rule the sidebar follows when it
+   * disables the workflow entry.
+   */
+  workflow: (ctx) => {
+    const app = ctx.app;
+    if (!app) return bridgeMissing('workflow');
+    if (peekUiServices()?.capabilities.workflows === false) {
+      return { type: 'error', message: '当前平台不支持工作流。' };
+    }
+    useConversationStore.getState().setCurrentView('workflow');
+    app.toast('已打开工作流', 'info');
+    return { type: 'dismiss' };
   },
 
   /** Memory lives in 设置 → 记忆 (settings tab `memory`). */
