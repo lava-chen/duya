@@ -700,8 +700,8 @@ export const openrouterModels: Model<'openai-chat'>[] = [
     contextWindow: 262144,
     maxTokens: 235929,
     cost: {
-      input: 0.6725,
-      output: 3.1,
+      input: 0.6712,
+      output: 3.35,
       cacheRead: 0.15,
       cacheWrite: 0,
     },
