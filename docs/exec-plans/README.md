@@ -6,6 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
 | TUI 工具状态 | [2026-10-24 TUI 工具状态](active/2026-10-24-tui-tool-status-marks.md) | 门禁已过，PR #457 等 CI 与授权集成 |
@@ -27,6 +28,8 @@
 | CLI TUI 渲染 todolist | [2026-10-23 CLI todo 渲染](active/2026-10-23-cli-todo-list-render.md) | todo 清单渲染与 thinking 折叠预览已合并（PR #387）；底部常驻面板列 Phase 2 |
 | config 写侧下沉 | [2026-10-25 config 写侧下沉](active/2026-10-25-host-config-agents-write.md) | 共享规则已下沉 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update`；PR #433 已合并（`f59767f1`） |
 | 插件安装路径下沉 | [2026-10-25 插件安装路径](active/2026-10-25-host-plugin-install-path.md) | 独立 Host 已能解析插件 `installPath` 与 MCP 声明，恢复插件技能与 MCP；PR #443 已合并（`49b4771e`） |
+| computer-use 插件 | [2026-10-24 computer-use 插件审计](active/2026-10-24-computer-use-plugin-audit.md) | 在插件仓库建独立检出并完成 S0 基线：读实现、跑测试、记录 Windows skip 与退出码 |
+| 内置插件随本体分发 | [2026-10-24 内置插件随本体分发](active/2026-10-24-builtin-plugin-distribution.md) | 已实现并推 draft PR（主仓 #445、marketplace #4）：清单在插件仓、seed 改为 copy-then-swap、清单决定默认启停 |
 | rollout 换桶判定 | [2026-10-25 rollout 换桶](active/2026-10-25-data-rollout-bucket.md) | `appendBatch` 不再每批重命名 rollout 文件（路径带毫秒戳导致判定恒成立）；写路径耗时降 59%–68%；PR #462 已合并（`55cd1b97`） |
 | 读路径 fd 复用 | [2026-10-25 读路径 fd 复用](active/2026-10-25-data-read-range-fd.md) | 投影会话时一次打开 rollout 文件复用句柄，不再逐行 open/close；8000 条投影 656ms → 68ms；PR #466 已合并（`3b3e6470`） |
 | 消息写路径点查 | [2026-10-25 写路径点查](active/2026-10-25-data-append-index-lookup.md) | `appendBatch` 去重检查按批内 id 走主键点查，去掉长会话上的 O(N²)；待开 PR |

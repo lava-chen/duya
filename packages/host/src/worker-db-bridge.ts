@@ -268,6 +268,14 @@ function requireString(payload: Record<string, unknown>, key: string, action: st
   return value;
 }
 
+function requirePositiveInteger(payload: Record<string, unknown>, key: string, action: string): number {
+  const value = payload[key];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new WorkerDbBridgeError('invalid_payload', `${action} requires ${key} to be an integer >= 1`);
+  }
+  return value;
+}
+
 /** An optional payload string: absent stays absent, a present value is text. */
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -1157,6 +1165,9 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           return requireWorkflowRun().saveSnapshot({
             runId: requireString(payload, 'runId', action),
             definition: payload.definition,
+            ...(payload.maxConcurrency === undefined
+              ? {}
+              : { maxConcurrency: requirePositiveInteger(payload, 'maxConcurrency', action) }),
             nodeStack: (payload.nodeStack as WorkflowRunSnapshot['nodeStack']) ?? [],
             journal: (payload.journal as WorkflowRunSnapshot['journal']) ?? [],
           });
