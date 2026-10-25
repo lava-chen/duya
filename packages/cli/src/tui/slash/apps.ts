@@ -17,6 +17,12 @@
  * Host's contract, and this command does not ask for anything else, so
  * nothing sensitive can reach the terminal through it.
  *
+ * ## The list is a browser, not a table
+ *
+ * The rows render as a selectable list (`showEntries`): ↑↓ moves, the
+ * selected row's scopes show under it, and Enter opens the connection's
+ * detail page (account, scopes, last error), from which Esc comes back.
+ *
  * ## "No connections" and "this Host cannot answer" are different answers
  *
  * A Host without the app-connection API answers 404
@@ -28,7 +34,7 @@
  */
 
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
-import { describeError, hostErrorCode, showPanel } from './shared.js';
+import { describeError, hostErrorCode, showEntries, showPanel, type TuiViewEntry } from './shared.js';
 
 const FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
 
@@ -119,6 +125,34 @@ function connectionLines(connections: readonly AppConnectionEntry[]): string[] {
   return lines;
 }
 
+/** The detail page of one connection: identity, state, scopes, the last error. */
+function connectionDetailLines(entry: AppConnectionEntry): string[] {
+  const lines = [
+    entry.provider !== '' ? entry.provider : '(unknown provider)',
+    '',
+    `  account   ${entry.accountLabel !== '' ? entry.accountLabel : entry.accountId || '(no account)'}`,
+    `  status    ${entry.status}`,
+    `  scopes    ${entry.scopes.length === 0 ? '(none granted)' : ''}`,
+  ];
+  for (const scope of entry.scopes) lines.push(`    ${scope}`);
+  if (entry.lastError !== null) {
+    lines.push('', `  last error: ${entry.lastError}`);
+  }
+  return lines;
+}
+
+/** The interactive list, one selectable entry per connection. */
+function connectionEntries(connections: readonly AppConnectionEntry[]): TuiViewEntry[] {
+  return connections.map((entry) => ({
+    label: entry.provider !== '' ? entry.provider : '(unknown)',
+    value: `${entry.provider}:${entry.accountId || entry.accountLabel}`,
+    description: entry.accountLabel !== '' ? entry.accountLabel : entry.accountId || undefined,
+    valueLabel: entry.status,
+    summary: entry.scopes.length === 0 ? 'no scopes granted' : entry.scopes.join(', '),
+    detailLines: connectionDetailLines(entry),
+  }));
+}
+
 const APPS_COMMAND: TuiSlashCommandDef = {
   name: 'apps',
   description: 'List the connected app connectors',
@@ -154,7 +188,7 @@ const APPS_COMMAND: TuiSlashCommandDef = {
       return { kind: 'handled' };
     }
 
-    showPanel(ctx, 'App connections', connectionLines(connections), { footer: FOOTER, scrollable: true });
+    showEntries(ctx, 'App connections', connectionEntries(connections), connectionLines(connections));
     return { kind: 'handled' };
   },
 };

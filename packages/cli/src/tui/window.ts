@@ -87,6 +87,15 @@ export interface WindowSpec {
   readonly filterable?: boolean;
   /** Optional query already entered by the command that opened the window. */
   readonly initialFilter?: string;
+  /**
+   * The row the list opens on.
+   *
+   * A detail page that sends the user BACK reopens the list, and reopening
+   * at row 0 would make "look at three entries in a row" lose their place
+   * each time. Clamped on open, so a stale index after the items changed
+   * reads as the nearest row rather than an out-of-range selection.
+   */
+  readonly initialSelected?: number;
   /** Hint line at the bottom, e.g. `Enter recall · Esc close`. */
   readonly footer?: string;
   /** Enter with a selected row. The window is closed before the callback. */
@@ -126,7 +135,10 @@ export class WindowManager {
   /** Open (or replace) the window. Navigation state resets. */
   open(spec: WindowSpec): void {
     this.spec = spec;
-    this.selected = 0;
+    const rows = spec.items?.length ?? 0;
+    this.selected = rows > 0
+      ? Math.max(0, Math.min(spec.initialSelected ?? 0, rows - 1))
+      : 0;
     this.scrollTop = 0;
     this.filter = spec.initialFilter ?? '';
   }

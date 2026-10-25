@@ -44,7 +44,7 @@
  * smaller surface, which is the one mistake this line exists to prevent.
  */
 
-import { describeError, hostErrorCode, showPanel } from './shared.js';
+import { describeError, hostErrorCode, showEntries, showPanel, type TuiViewEntry } from './shared.js';
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 
 const FOOTER = 'Esc close';
@@ -154,6 +154,35 @@ function skillLines(inventory: SkillsInventoryResponse): string[] {
   return lines;
 }
 
+/** The detail page of one skill: what it is for and where it came from. */
+function skillDetailLines(inventory: SkillsInventoryResponse, skill: HostSkillEntry): string[] {
+  return [
+    skill.name,
+    ...(skill.description !== '' ? [skill.description] : []),
+    '',
+    `  source      ${skill.source !== '' ? skill.source : '(unknown)'}`,
+    `  invocable   ${skill.userInvocable ? 'yes — the model can run it for you' : 'no — background context only'}`,
+    `  enabled     ${skill.enabled ? 'yes' : 'no'}`,
+    '',
+    `  Invoke it in a message as /${skill.name}${skill.userInvocable ? '' : ' (when invocable)'}.`,
+    '',
+    PLUGIN_LIMITATION,
+    `  project  ${inventory.workingDirectory}`,
+  ];
+}
+
+/** The interactive list, one selectable entry per skill. */
+function skillEntries(inventory: SkillsInventoryResponse): TuiViewEntry[] {
+  return inventory.skills.map((skill) => ({
+    label: skill.name,
+    value: skill.id !== '' ? skill.id : skill.name,
+    description: skill.source,
+    valueLabel: skill.enabled ? (skill.userInvocable ? 'invocable' : 'context') : 'off',
+    summary: skill.description !== '' ? skill.description : undefined,
+    detailLines: skillDetailLines(inventory, skill),
+  }));
+}
+
 const SKILLS_COMMAND: TuiSlashCommandDef = {
   name: 'skills',
   description: 'List available skills',
@@ -197,7 +226,7 @@ const SKILLS_COMMAND: TuiSlashCommandDef = {
       return { kind: 'handled' };
     }
 
-    showPanel(ctx, 'Skills', skillLines(inventory), { footer: FOOTER, scrollable: true });
+    showEntries(ctx, 'Skills', skillEntries(inventory), skillLines(inventory));
     return { kind: 'handled' };
   },
 };

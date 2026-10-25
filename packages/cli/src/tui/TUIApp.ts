@@ -71,7 +71,7 @@ import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.j
 import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
-import { WindowManager } from './window.js';
+import { WindowManager, type WindowItem } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
@@ -1069,6 +1069,64 @@ export class TUIApp {
       lines,
       ...(options.footer === undefined ? {} : { footer: options.footer }),
       ...(options.scrollable === undefined ? {} : { scrollable: options.scrollable }),
+    });
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Open a selectable list of view entries (plugins, connections, skills…).
+   *
+   * The difference from `chooseFiltered` is lifecycle, not looks: this list is
+   * a BROWSER, not a picker. It stays open after Enter, and Enter hands the
+   * selected value to `onEnter`, which is expected to open the entry's detail
+   * page via {@link showDetailPanel} — whose Esc then comes back here. A
+   * command that only needs "pick one and leave" keeps using `chooseFiltered`.
+   *
+   * `initialSelected` re-opens the list on the row that opened the detail, so
+   * browsing several entries does not lose the user's place.
+   */
+  showListPanel(
+    title: string,
+    items: readonly WindowItem[],
+    options: {
+      readonly footer?: string;
+      readonly onEnter?: (value: string) => void;
+      readonly initialSelected?: number;
+    } = {},
+  ): void {
+    if (this.windowOpenBlocked()) return;
+    this.completion.close();
+    this.windowMgr.open({
+      title,
+      items,
+      filterable: true,
+      footer: options.footer ?? 'type to filter · ↑↓ choose · Enter details · Esc close',
+      ...(options.onEnter === undefined ? {} : { onSubmit: options.onEnter }),
+      ...(options.initialSelected === undefined ? {} : { initialSelected: options.initialSelected }),
+    });
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Open a scrollable detail page over a list entry.
+   *
+   * Closing the page (Esc) calls `onBack`, which re-opens the list the entry
+   * came from — the browser cycle a view command wants. Without `onBack` this
+   * is exactly `showPanel` with a back hint.
+   */
+  showDetailPanel(
+    title: string,
+    lines: readonly string[],
+    options: { readonly footer?: string; readonly onBack?: () => void } = {},
+  ): void {
+    if (this.windowOpenBlocked()) return;
+    this.completion.close();
+    this.windowMgr.open({
+      title,
+      lines,
+      scrollable: true,
+      footer: options.footer ?? 'Esc back',
+      ...(options.onBack === undefined ? {} : { onCancel: options.onBack }),
     });
     this.scheduler.requestImmediate();
   }
@@ -3589,6 +3647,21 @@ exportHistory(): string[] {
 
   /** Keep the popup in sync with editor mutations and caret movement. */
   private refreshInputCompletion(): void {
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Recompute the popup from the CURRENT editor state, on someone else's
+   * behalf.
+   *
+   * An async candidate source (`plugin-candidates.ts`) can land rows while the
+   * popup is already open — the user typed `@` before the inventory answered.
+   * The recomputation is the same one every keystroke runs; the only new thing
+   * is that it runs again after the fetch, so the rows appear without the user
+   * having to type another character.
+   */
+  recheckCompletion(): void {
     this.refreshCompletion();
     this.scheduler.requestImmediate();
   }

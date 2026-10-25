@@ -304,14 +304,16 @@ export interface PluginMentionSpan {
 
 // A boundary char (or start of input) is consumed by the first group so it is
 // not part of the token; the token itself allows dots so marketplace ids like
-// `wechat.pay` resolve. Mirrors the regex in plugin-mentions.ts.
+// `wechat.pay` resolve. Mirrors the regex in @duya/input-completion's
+// plugin-mentions module.
 const PLUGIN_MENTION_TOKEN_RE = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)/g;
 
 /**
  * Find `@token` occurrences that resolve to an installed plugin. Resolution
- * mirrors `rewritePluginMentionTokens` (plugin-mentions.ts): a token matches
- * the plugin id, its display name, or the slugified display name. Tokens that
- * resolve to nothing are skipped, so prose like "email me @home" stays prose.
+ * mirrors `rewritePluginMentionTokens` (@duya/input-completion): a token
+ * matches the plugin id, its display name, or the slugified display name.
+ * Tokens that resolve to nothing are skipped, so prose like "email me @home"
+ * stays prose.
  */
 export function findPluginMentionSpans(
   text: string,
