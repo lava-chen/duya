@@ -80,4 +80,28 @@ describe('buildComposerLayout', () => {
     expect(result.cursorRow).toBe(3);
     expect(result.cursorColumn).toBe(6);
   });
+
+  it('shows the predicted next prompt as a placeholder while the editor is empty', () => {
+    const result = buildComposerLayout('', 0, {
+      columns: 20,
+      terminalRows: 16,
+      placeholder: '跑一下测试',
+    });
+
+    expect(result.hasPlaceholder).toBe(true);
+    expect(result.lines[1]).toBe('❯ 跑一下测试');
+    // The cursor stays at the start of the text area, right after the prompt.
+    expect(result.cursorColumn).toBe(3);
+  });
+
+  it('drops the placeholder as soon as the editor holds text', () => {
+    const result = buildComposerLayout('hello', 5, {
+      columns: 20,
+      terminalRows: 16,
+      placeholder: '跑一下测试',
+    });
+
+    expect(result.hasPlaceholder).toBe(false);
+    expect(result.lines[1]).toBe('❯ hello');
+  });
 });

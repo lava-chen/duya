@@ -19,6 +19,7 @@ export * from './main-database.js';
 export * from './main-settings-store.js';
 export * from './main-attachment-store.js';
 export * from './chat-turn-review-store.js';
+export * from './chat-turn-suggestion-store.js';
 export * from './message-log.js';
 export * from './rollout-events.js';
 export * from './message-repair.js';

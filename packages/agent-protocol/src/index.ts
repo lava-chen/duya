@@ -94,6 +94,7 @@ export * from './plugin-app-instances.js';
 export * from './plugin-app-invocations.js';
 export * from './import-batches.js';
 export * from './turn-review.js';
+export * from './turn-suggestion.js';
 export * from './sidebar-sections.js';
 export * from './usage-api.js';
 export * from './host-health.js';

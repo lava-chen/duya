@@ -15,6 +15,13 @@ export interface ComposerLayoutOptions {
   readonly maxRows?: number;
   /** Use the Unicode prompt and border glyphs when supported by the caller. */
   readonly unicode?: boolean;
+  /**
+   * The next prompt predicted for the last turn.
+   *
+   * It is drawn in the composer's first body row while the editor is empty,
+   * so it reads as a hint rather than as text the user typed.
+   */
+  readonly placeholder?: string;
 }
 
 export interface ComposerLayout {
@@ -28,6 +35,8 @@ export interface ComposerLayout {
   readonly bodyRows: number;
   /** 0-based index of the first visible wrapped text row. */
   readonly firstVisibleRow: number;
+  /** True when the first body row carries the placeholder instead of text. */
+  readonly hasPlaceholder: boolean;
 }
 
 /**
@@ -84,8 +93,16 @@ export function buildComposerLayout(
     return clipToColumns(`${prefix}${line}`, columns);
   });
 
+  // The placeholder takes the first body row only while the editor is empty:
+  // a composer that holds text shows the text, never the hint.
+  const placeholder = text.length === 0 ? (options.placeholder ?? '').trim() : '';
+  const hasPlaceholder = placeholder.length > 0;
+  const paintedBody = hasPlaceholder
+    ? bodyLines.map((line, index) => (index === 0 ? clipToColumns(`${prompt}${placeholder}`, columns) : line))
+    : bodyLines;
+
   const border = makeBorder(columns, unicode);
-  const lines = hasBorders ? [border, ...bodyLines, border] : bodyLines;
+  const lines = hasBorders ? [border, ...paintedBody, border] : paintedBody;
   const cursorVisibleRow = wrapped.cursorRow - firstVisibleRow;
   const cursorPrefix = cursorVisibleRow === 1 && firstVisibleRow === 0
     ? prompt
@@ -98,7 +115,7 @@ export function buildComposerLayout(
   );
   const cursorRow = (hasBorders ? 1 : 0) + cursorVisibleRow;
 
-  return { lines, cursorRow, cursorColumn, bodyRows, firstVisibleRow };
+  return { lines, cursorRow, cursorColumn, bodyRows, firstVisibleRow, hasPlaceholder };
 }
 
 /** Split on hard newlines and keep the editor's code-point cursor index global. */

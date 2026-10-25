@@ -52,6 +52,7 @@ import type {
   SessionId,
   StartAgentRunResult,
 } from '@duya/agent-protocol';
+import type { HostLocalTurnSuggestionRecord } from '@duya/agent-protocol/turn-suggestion';
 import { isRecord } from './envelope.js';
 import type { UiStartRunInput } from '@/services/ui-services';
 
@@ -403,6 +404,31 @@ export class ApiClient {
     if (catalog === null || catalog === undefined) return null;
     if (!isRecord(catalog)) throw new ApiError(200, 'invalid_provider_catalog');
     return catalog as unknown as HostProviderCatalog;
+  }
+
+  /**
+   * The end-of-turn suggestion the worker predicted for this session.
+   *
+   * `null` means the Host has no suggestion for the session — including the
+   * case where the turn produced none, which is a normal outcome.
+   */
+  async getLatestTurnSuggestion(sessionId: string): Promise<HostLocalTurnSuggestionRecord | null> {
+    const body = await this.#readJson(
+      `/api/turn-suggestions/latest?sessionId=${encodeURIComponent(sessionId)}`,
+      {},
+    );
+    const suggestion = body['suggestion'];
+    if (suggestion === null || suggestion === undefined) return null;
+    if (!isRecord(suggestion)) throw new ApiError(200, 'invalid_turn_suggestion');
+    const text = suggestion['suggestion'];
+    if (typeof text !== 'string') throw new ApiError(200, 'invalid_turn_suggestion');
+    return {
+      id: String(suggestion['id'] ?? ''),
+      sessionId: String(suggestion['sessionId'] ?? sessionId),
+      turnId: String(suggestion['turnId'] ?? ''),
+      suggestion: text,
+      createdAt: typeof suggestion['createdAt'] === 'number' ? suggestion['createdAt'] : 0,
+    };
   }
 
   async cancelHostRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult> {

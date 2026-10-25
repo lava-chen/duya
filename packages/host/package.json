@@ -143,6 +143,10 @@
       "types": "./dist/local-turn-review-api.d.ts",
       "import": "./dist/local-turn-review-api.js"
     },
+    "./local-turn-suggestion-api": {
+      "types": "./dist/local-turn-suggestion-api.d.ts",
+      "import": "./dist/local-turn-suggestion-api.js"
+    },
     "./local-mailbox-api": {
       "types": "./dist/local-mailbox-api.d.ts",
       "import": "./dist/local-mailbox-api.js"
