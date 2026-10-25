@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { resolveProject } from '../memory-state/projectResolver';
 import { ChatTurnReviewStore } from '@duya/data/chat-turn-review-store';
+import { ChatTurnSuggestionStore } from '@duya/data/chat-turn-suggestion-store';
 import { MainSettingsStore } from '@duya/data/main-settings-store';
 import { TerminalHistoryStore } from '@duya/data/terminal-history-store';
 import { GatewayUserMapStore } from '@duya/data/gateway-user-map-store';
@@ -47,6 +48,7 @@ import type {
   HostLocalUsageApiV1,
   HostLocalImportBatchApiV1,
   HostLocalTurnReviewApiV1,
+  HostLocalTurnSuggestionApiV1,
   HostLocalMailboxApiV1,
   HostLocalPendingWakeApiV1,
   HostLockApiV1,
@@ -91,6 +93,7 @@ import { createHostLocalSidebarSectionsApi } from '@duya/host/local-sidebar-sect
 import { createHostLocalUsageApi } from '@duya/host/local-usage-api';
 import { createHostLocalImportBatchApi } from '@duya/host/local-import-batch-api';
 import { createHostLocalTurnReviewApi } from '@duya/host/local-turn-review-api';
+import { createHostLocalTurnSuggestionApi } from '@duya/host/local-turn-suggestion-api';
 import { createHostLocalMailboxApi } from '@duya/host/local-mailbox-api';
 import {
   createHostLocalAgentProfileApi,
@@ -236,6 +239,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   const workspaceAccess = createDatabaseWorkspaceAccess(stores.coreDb.db, stores.workspaces);
   const settings = new MainSettingsStore(mainDatabase);
   const turnReviews = new ChatTurnReviewStore(mainDatabase);
+  const turnSuggestions = new ChatTurnSuggestionStore(mainDatabase);
   const api = createHostSessionApi({
     stores,
     rolloutRoot: resolveRolloutRoot(),
@@ -423,6 +427,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     }),
     localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase)),
     localTurnReviewApi: createHostLocalTurnReviewApi(turnReviews),
+    localTurnSuggestionApi: createHostLocalTurnSuggestionApi(turnSuggestions),
     localMailboxApi: createHostLocalMailboxApi(stores.mailbox),
     localPendingWakeApi: createHostLocalPendingWakeApi(stores.wakes),
     workflowRunApi: createHostWorkflowRunApi(stores),
@@ -673,6 +678,11 @@ export function getDesktopHostLocalImportBatchApi(): HostLocalImportBatchApiV1 {
 
 export function getDesktopHostLocalTurnReviewApi(): HostLocalTurnReviewApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host turn-review API is not running');
+  return sessionApiClient;
+}
+
+export function getDesktopHostLocalTurnSuggestionApi(): HostLocalTurnSuggestionApiV1 {
+  if (!sessionApiClient) throw new Error('Desktop Host turn-suggestion API is not running');
   return sessionApiClient;
 }
 

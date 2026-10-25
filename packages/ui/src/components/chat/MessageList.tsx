@@ -6,7 +6,6 @@ import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperati
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
-import { NextStepSuggestions } from './NextStepSuggestions';
 import { Button } from '@/components/ui/Button';
 import { ChevronDownIcon } from '@/components/icons';
 import { WorkflowRunStream } from '@/components/workflow/WorkflowRunCard';
@@ -28,9 +27,6 @@ interface MessageListProps {
   error?: string | null;
   sessionId: string;
   onEditMessage?: (messageId: string) => void;
-  /** Predicted follow-up prompts shown as cards at the end of the stream. */
-  nextStepSuggestions?: string[];
-  onNextStepSelect?: (value: string) => void;
 }
 
 interface GroupedMessage {
@@ -813,8 +809,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   error,
   sessionId,
   onEditMessage,
-  nextStepSuggestions,
-  onNextStepSelect,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -1491,14 +1485,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
         {/* Compaction status is rendered inline where it happened via the
             live streaming `compact` action row (and durably via the
             persisted `isCompactSummary` message). */}
-
-        {/* End-of-turn next-step suggestion cards */}
-        {!isStreaming && onNextStepSelect && nextStepSuggestions && nextStepSuggestions.length > 0 && (
-          <NextStepSuggestions
-            suggestions={nextStepSuggestions}
-            onSelect={onNextStepSelect}
-          />
-        )}
       </div>
     </div>
 

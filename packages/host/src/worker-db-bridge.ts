@@ -64,6 +64,10 @@ import type {
   TurnReviewWriteInput,
 } from '@duya/agent-protocol/turn-review';
 import type {
+  HostLocalTurnSuggestionApiV1,
+  TurnSuggestionWriteInput,
+} from '@duya/agent-protocol/turn-suggestion';
+import type {
   HostLocalAttachmentApiV1,
   HostLocalParsedDocumentInput,
   HostWorkspaceRegistrationApiV1,
@@ -210,6 +214,14 @@ export interface HostWorkerDbBridgeOptions {
    * keeps them for its own review surface.
    */
   readonly turnReviewApi?: HostLocalTurnReviewApiV1;
+  /**
+   * Host turn suggestion store — serves `turn-suggestion:save`.
+   *
+   * The worker predicts the next prompt the user would type once a turn
+   * finishes, and every surface reads that row back through the Host, so the
+   * suggestion is not tied to whichever client was attached.
+   */
+  readonly turnSuggestionApi?: HostLocalTurnSuggestionApiV1;
   /**
    * Host attachment store — serves `attachment:store`.
    *
@@ -377,6 +389,12 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
       throw new WorkerDbBridgeError('unimplemented_domain', 'turn review domain requires options.turnReviewApi');
     }
     return options.turnReviewApi;
+  };
+  const requireTurnSuggestion = (): HostLocalTurnSuggestionApiV1 => {
+    if (options.turnSuggestionApi === undefined) {
+      throw new WorkerDbBridgeError('unimplemented_domain', 'turn suggestion domain requires options.turnSuggestionApi');
+    }
+    return options.turnSuggestionApi;
   };
   const requireAttachment = (): HostLocalAttachmentApiV1 => {
     if (options.attachmentApi === undefined) {
@@ -1203,6 +1221,25 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
             capturedAt: typeof payload.capturedAt === 'number' ? payload.capturedAt : Date.now(),
           };
           await requireTurnReview().saveTurnReview(input);
+          return true;
+        }
+
+        // ==================== Turn suggestion ====================
+        case 'turn-suggestion:save': {
+          const sessionId = optionalString(payload.sessionId) ?? '';
+          const turnId = optionalString(payload.turnId) ?? '';
+          const suggestion = optionalString(payload.suggestion) ?? '';
+          if (!sessionId || !turnId || !suggestion) {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} requires sessionId, turnId and suggestion`);
+          }
+          const input: TurnSuggestionWriteInput = {
+            id: optionalString(payload.id) ?? randomUUID(),
+            sessionId,
+            turnId,
+            suggestion,
+            createdAt: typeof payload.createdAt === 'number' ? payload.createdAt : Date.now(),
+          };
+          await requireTurnSuggestion().saveTurnSuggestion(input);
           return true;
         }
 

@@ -16,8 +16,7 @@ import { PermissionPrompt } from './PermissionPrompt';
 import { ConnectorAuthRequiredCard } from './ConnectorAuthRequiredCard';
 import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
 import { usePermissions } from '@/hooks/usePermissions';
-import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
-import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
+import { useTurnSuggestion } from '@/hooks/useTurnSuggestion';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, subscribeToConnectorAuthRequired, clearConnectorAuthRequired, attachToExistingStream, getSnapshot, type ConnectorAuthRequiredData } from '@/lib/stream-session-manager';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
@@ -1155,18 +1154,12 @@ export function ChatView({
     };
   }, []);
 
-  // End-of-turn next-step suggestions: predicted follow-up prompts shown
-  // as cards at the end of the message list. Clicking one prefills (not
-  // sends) the input box.
+  // End-of-turn suggestion: the next prompt the worker predicted for the
+  // turn that just finished. It is drawn as the composer's placeholder, and
+  // pressing Enter on an empty composer adopts it.
   const {
-    suggestions: nextStepSuggestions,
-    dismiss: dismissNextStepSuggestions,
-  } = useNextStepSuggestions({ sessionId, isStreaming });
-
-  const handleNextStepSelect = useCallback((value: string) => {
-    dispatchPrefillChatInput(value);
-    dismissNextStepSuggestions();
-  }, [dismissNextStepSuggestions]);
+    suggestion: turnSuggestion,
+  } = useTurnSuggestion({ sessionId, isStreaming });
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1267,6 +1260,7 @@ export function ChatView({
                     permissionMode={permissionMode}
                     onPermissionModeChange={allowPermissionModeChange ? handlePermissionModeChange : undefined}
                     placeholder={t('chat.typeMessage')}
+                    suggestion={turnSuggestion ?? undefined}
                     messages={messages}
                     planModeEnabled={planModeEnabled}
                     onPlanModeChange={handlePlanModeChange}
@@ -1302,8 +1296,6 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onEditMessage={handleEditMessage}
-              nextStepSuggestions={nextStepSuggestions}
-              onNextStepSelect={handleNextStepSelect}
             />
           </div>
         )}
@@ -1404,6 +1396,7 @@ export function ChatView({
                 placeholder={
                   isArchivedSession ? t('chat.archivedReadonlyPlaceholder') : t('chat.typeMessage')
                 }
+                suggestion={turnSuggestion ?? undefined}
                 isStreaming={isStreaming}
                 hasQueuedMessages={hasQueuedMessages}
                 sessionId={sessionId}

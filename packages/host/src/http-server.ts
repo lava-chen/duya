@@ -193,6 +193,7 @@ import type {
   TurnReviewFileStatus,
   TurnReviewWriteInput,
 } from '@duya/agent-protocol/turn-review';
+import type { HostLocalTurnSuggestionApiV1, TurnSuggestionWriteInput } from '@duya/agent-protocol/turn-suggestion';
 import type {
   HostLocalTerminalHistoryApiV1,
   TerminalHistoryQuery,
@@ -401,6 +402,8 @@ export interface HostSessionHttpServerOptions {
   readonly localImportBatchApi?: HostLocalImportBatchApiV1;
   /** Local-only review history; payloads contain raw paths and patch contents. */
   readonly localTurnReviewApi?: HostLocalTurnReviewApiV1;
+  /** Local-only end-of-turn suggestions; the text a user would type next. */
+  readonly localTurnSuggestionApi?: HostLocalTurnSuggestionApiV1;
   /** Local-only command history; values may contain user-entered secrets. */
   readonly localTerminalHistoryApi?: HostLocalTerminalHistoryApiV1;
   /** Local-only read of background bash tasks reported by this Host's workers. */
@@ -1832,6 +1835,45 @@ export class HostSessionHttpServer {
       }
       try {
         await api.saveTurnReview(input);
+        this.#sendJson(res, 200, { success: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/turn-suggestions/latest' && req.method === 'GET') {
+      const api = this.#options.localTurnSuggestionApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'turn_suggestion_api_unavailable' } });
+        return;
+      }
+      const sessionId = url.searchParams.get('sessionId');
+      if (!isBoundedString(sessionId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_turn_suggestion_query' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, { suggestion: await api.getLatestTurnSuggestion(sessionId) });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/turn-suggestions' && req.method === 'POST') {
+      const api = this.#options.localTurnSuggestionApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'turn_suggestion_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const input = parseTurnSuggestionWriteInput(body);
+      if (!input) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_turn_suggestion' } });
+        return;
+      }
+      try {
+        await api.saveTurnSuggestion(input);
         this.#sendJson(res, 200, { success: true });
       } catch (error) {
         this.#sendApiError(res, error);
@@ -5625,6 +5667,24 @@ function readProviderModelCapability(value: unknown): ProviderModelCapabilityRec
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseTurnSuggestionWriteInput(body: Record<string, unknown>): TurnSuggestionWriteInput | null {
+  if (
+    typeof body.id !== 'string' || body.id.length === 0 ||
+    typeof body.sessionId !== 'string' || body.sessionId.length === 0 ||
+    typeof body.turnId !== 'string' || body.turnId.length === 0 ||
+    typeof body.suggestion !== 'string' ||
+    typeof body.createdAt !== 'number' || !Number.isSafeInteger(body.createdAt)
+  ) return null;
+
+  return {
+    id: body.id,
+    sessionId: body.sessionId,
+    turnId: body.turnId,
+    suggestion: body.suggestion,
+    createdAt: body.createdAt,
+  };
 }
 
 function parseTurnReviewWriteInput(body: Record<string, unknown>): TurnReviewWriteInput | null {

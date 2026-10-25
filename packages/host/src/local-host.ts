@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { parse } from '@iarna/toml';
 import {
   ChatTurnReviewStore,
+  ChatTurnSuggestionStore,
   DatabaseHost,
   LegacyImport,
   MainSettingsStore,
@@ -78,6 +79,7 @@ import { createHostLocalSidebarSectionsApi } from './local-sidebar-sections-api.
 import { createHostLocalUsageApi } from './local-usage-api.js';
 import { createHostLocalImportBatchApi } from './local-import-batch-api.js';
 import { createHostLocalTurnReviewApi } from './local-turn-review-api.js';
+import { createHostLocalTurnSuggestionApi } from './local-turn-suggestion-api.js';
 import { createHostLocalMailboxApi } from './local-mailbox-api.js';
 import { createHostLocalPendingWakeApi } from './local-pending-wakes-api.js';
 import { createHostMcpInventoryApi } from './mcp-inventory-api.js';
@@ -455,6 +457,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const workspaceAccess = options.workspaces ?? createDatabaseWorkspaceAccess(core.database.db, core.stores.workspaces);
     const settings = new MainSettingsStore(mainDatabase.db);
     const turnReviews = new ChatTurnReviewStore(mainDatabase.db);
+    const turnSuggestions = new ChatTurnSuggestionStore(mainDatabase.db);
     const api = createHostSessionApi({
       stores: core.stores,
       rolloutRoot,
@@ -509,6 +512,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // The same rule for the domains the worker writes through the bridge:
     // one instance per API, shared by the HTTP surface and the bridge.
     const localTurnReviewApi = createHostLocalTurnReviewApi(turnReviews);
+    const localTurnSuggestionApi = createHostLocalTurnSuggestionApi(turnSuggestions);
     const localSendMessageStateApi = createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db));
     const workflowRunApi = createHostWorkflowRunApi(core.stores);
     const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
@@ -639,6 +643,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           pluginSetupApi: localPluginSetupApi,
           workflowRunApi,
           turnReviewApi: localTurnReviewApi,
+          turnSuggestionApi: localTurnSuggestionApi,
           attachmentApi: localAttachmentApi,
           sendMessageStateApi: localSendMessageStateApi,
           logger: executionLogger,
@@ -744,6 +749,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       }),
       localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase.db)),
       localTurnReviewApi,
+      localTurnSuggestionApi,
       localMailboxApi,
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
       workflowRunApi,
