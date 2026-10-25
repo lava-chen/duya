@@ -275,8 +275,10 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
       // every time an emitter re-sent them.
       return `session::${(params?.sessionId as string | undefined) ?? ""}`;
     case "plugin-app":
+      // Surface Apps dedup on the surface id; entry Apps carry no surface, so
+      // their appId closes the key — one tab per App of a plugin either way.
       return `plugin-ui::${(params?.pluginId as string | undefined) ?? ""}`
-        + `::${(params?.surfaceId as string | undefined) ?? ""}`;
+        + `::${(params?.surfaceId as string | undefined) ?? (params?.appId as string | undefined) ?? ""}`;
     default:
       return `${pageId}::${JSON.stringify(params ?? {})}`;
   }
