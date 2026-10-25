@@ -4,22 +4,35 @@
  * Where the Desktop's `/doctor` facts come from.
  *
  * Every fact is taken IN THIS PROCESS — there is no HTTP probe, because the
- * Desktop is the Host. The CLI has to reach for `http://127.0.0.1:<port>`
+ * Desktop IS the Host. The CLI has to reach for `http://127.0.0.1:<port>`
  * because it is a different process; here the plugin registry, the core
  * database and the status handler are one function call away.
  *
  * The heavy modules (the plugin manager, the desktop Host API client) are
  * imported lazily so that registering the diagnostics handler does not widen
  * the main process's boot graph for a command most sessions never run.
+ *
+ * ## The three-valued answer
+ *
+ * The shared layer asks for `known` / `failed` / `unavailable`, and the
+ * difference matters: `unavailable` means "the Host could not be asked", and
+ * it becomes a `skipped` check. The Desktop is never unavailable — it is
+ * running, and it is this code — so a failure here is always `failed`: the
+ * answer came back wrong, which is a fact about the install.
  */
 
 import { app } from 'electron';
 
-import { getCoreStoresOrNull } from '../db/core-connection';
-import { getMainWindow } from '../core/window-manager';
+import type {
+  DoctorFact,
+  DoctorHostProbe,
+  DoctorPluginValue,
+  DoctorProfile,
+  DoctorSessionValue,
+  DoctorStatusValue,
+} from '@duya/host/diagnostics';
 
-import type { DesktopFactsApi } from './doctor-report';
-import type { DoctorProfile } from '../../contracts/doctor';
+import { getCoreStoresOrNull } from '../db/core-connection';
 
 /**
  * Which kind of installation this is.
@@ -37,61 +50,38 @@ export function desktopProfile(): DoctorProfile {
 }
 
 /**
- * Collect every fact the desktop checks need.
+ * The Desktop's own status: does the in-process health API answer?
  *
- * A fact that could not be collected is reported as such — `readable: false`
- * with the reason — rather than as a count of zero, so the report can tell
- * "the registry is broken" from "there are no plugins".
+ * A status code of 200 with no auth failure is what the shared layer reads
+ * as "the desktop app reports healthy status", and it is the same fact the
+ * CLI's HTTP probe reports when `/v1/status` answers.
  */
-export async function collectDesktopFacts(): Promise<DesktopFactsApi> {
-  return {
-    status: await collectStatus(),
-    window: collectWindow(),
-    plugins: await collectPlugins(),
-    sessions: collectSessions(),
-    database: await collectDatabase(),
-  };
-}
-
-/** The Desktop's own status: does the in-process health API answer? */
-async function collectStatus(): Promise<DesktopFactsApi['status']> {
+async function probeStatus(): Promise<DoctorFact<DoctorStatusValue>> {
   try {
     const { getDesktopHostHealthApi } = await import('../cli/desktop-host-api');
-    const health = await getDesktopHostHealthApi().getHealth();
-    return {
-      reachable: true,
-      detail: `Host API v${health.apiVersion} · database ${health.databaseReady ? 'ready' : 'not ready'}`,
-    };
+    await getDesktopHostHealthApi().getHealth();
+    return { kind: 'known', value: { statusCode: 200, authFailed: false, serverError: false } };
   } catch (error) {
     return {
-      reachable: false,
-      detail: error instanceof Error ? error.message : String(error),
+      kind: 'failed',
+      reason: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-/** The main window. A detached or closed window is still a running app. */
-function collectWindow(): DesktopFactsApi['window'] {
-  const window = getMainWindow();
-  if (!window) return { present: false, detail: 'no main window has been created yet' };
-  if (window.isDestroyed()) return { present: false, detail: 'the main window has been destroyed' };
-  return { present: true, detail: `window id ${window.id}` };
 }
 
 /**
  * The plugin registry — the same registry the CLI reads over
  * `GET /v1/plugins`, so both surfaces report the same count.
  */
-async function collectPlugins(): Promise<DesktopFactsApi['plugins']> {
+async function listPlugins(): Promise<DoctorFact<DoctorPluginValue>> {
   try {
     const { getPluginManager } = await import('../plugins/PluginManager');
     const installed = getPluginManager().listInstalled();
-    return { readable: true, count: installed.length };
+    return { kind: 'known', value: { count: installed.length } };
   } catch (error) {
     return {
-      readable: false,
-      count: null,
-      detail: error instanceof Error ? error.message : String(error),
+      kind: 'failed',
+      reason: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -102,40 +92,26 @@ async function collectPlugins(): Promise<DesktopFactsApi['plugins']> {
  * The count comes from the core database's session table, which is the same
  * table the CLI's `GET /v1/sessions` reads.
  */
-function collectSessions(): DesktopFactsApi['sessions'] {
+function querySessions(): Promise<DoctorFact<DoctorSessionValue>> {
   const stores = getCoreStoresOrNull();
   if (!stores) {
-    return {
-      queryWorks: false,
-      count: null,
-      detail: 'the core database is not initialized',
-    };
+    return Promise.resolve({
+      kind: 'failed' as const,
+      reason: 'the core database is not initialized',
+    });
   }
   try {
     const sessions = stores.sessions.list();
-    return { queryWorks: true, count: sessions.length };
+    return Promise.resolve({ kind: 'known' as const, value: { hasSessions: sessions.length > 0 } });
   } catch (error) {
-    return {
-      queryWorks: false,
-      count: null,
-      detail: error instanceof Error ? error.message : String(error),
-    };
+    return Promise.resolve({
+      kind: 'failed' as const,
+      reason: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
-/** The core SQLite database. */
-async function collectDatabase(): Promise<DesktopFactsApi['database']> {
-  try {
-    const { getDesktopHostHealthApi } = await import('../cli/desktop-host-api');
-    const health = await getDesktopHostHealthApi().getHealth();
-    return {
-      ready: health.databaseReady,
-      ...(health.databaseReady ? {} : { detail: 'the Host reports databaseReady = false' }),
-    };
-  } catch (error) {
-    return {
-      ready: false,
-      detail: error instanceof Error ? error.message : String(error),
-    };
-  }
+/** The Desktop's {@link DoctorHostProbe}: the install, read in place. */
+export function createDesktopDoctorProbe(): DoctorHostProbe {
+  return { probeStatus, listPlugins, querySessions };
 }

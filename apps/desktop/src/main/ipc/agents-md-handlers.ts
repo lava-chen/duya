@@ -15,12 +15,14 @@
  * at any directory on the machine, so the handler accepts the session id
  * instead and resolves the directory itself, from the session row it owns.
  *
- * The resolved directory is then checked with the same root-boundary
- * primitive the sandboxed file tools use (`isPathWithinRoots`): a lexical
- * check (resolve + relative) AND a symlink-escape check (realpath against
- * realpath). The target does not exist yet on the create path, so the
- * lexical check is the best available guarantee — and it is a guarantee,
- * because the target is always `AGENTS.md` inside the root.
+ * The repository root is then resolved from that working directory (the git
+ * toplevel, or the working directory itself outside a checkout) and checked
+ * with the same root-boundary primitive the sandboxed file tools use
+ * (`isPathWithinRoots`): a lexical check (resolve + relative) AND a
+ * symlink-escape check (realpath against realpath). The check that matters
+ * here is the other direction — the session's working directory must be
+ * INSIDE the resolved root, so the root can only ever be the session's own
+ * directory or an ancestor of it.
  *
  * ## Trust
  *
@@ -32,9 +34,9 @@ import { ipcMain } from 'electron';
 import * as path from 'node:path';
 
 import { isPathWithinRoots } from '@duya/sandbox';
+import { resolveAgentsMdRoot, writeInitAgentsMd } from '@duya/host/agents-md';
 
 import { assertTrustedSender } from './trusted-sender';
-import { ensureRepoAgentsMd } from './agents-md-writer';
 import { getCoreStoresOrNull } from '../db/core-connection';
 
 import type { InitAgentsMdResult } from '../../contracts/doctor';
@@ -88,28 +90,21 @@ export function registerAgentsMdHandlers(): void {
     const resolved = resolveSessionWorkingDirectory(sessionId);
     if (!resolved.path) return failure(resolved.error ?? 'The session could not be resolved.');
 
-    const root = resolved.path;
-    const target = path.join(root, 'AGENTS.md');
-    // The root must contain the target, and the root must be readable: the
-    // boundary primitive silently skips a root it cannot anchor, so a root
-    // that cannot be resolved fails the check instead of passing it.
-    if (!isPathWithinRoots(target, [root])) {
-      return failure('The session working directory does not contain the target file.');
-    }
-
+    const workingDirectory = resolved.path;
+    let root: string;
     try {
-      const result = ensureRepoAgentsMd(root);
-      return {
-        ok: true,
-        path: result.path,
-        created: result.created,
-        upgraded: result.upgraded,
-        unchanged: result.unchanged,
-        version: result.version,
-        ...(result.replacedUnmarked ? { replacedUnmarked: true } : {}),
-      } satisfies InitAgentsMdResult;
+      root = await resolveAgentsMdRoot(workingDirectory);
     } catch (error) {
       return failure(error instanceof Error ? error.message : String(error));
     }
+
+    // The resolved root must CONTAIN the session's working directory: the
+    // root is the session's own directory or an ancestor of it, never a
+    // sibling and never somewhere else on the machine.
+    if (!isPathWithinRoots(workingDirectory, [root])) {
+      return failure('The resolved repository root does not contain the session working directory.');
+    }
+
+    return writeInitAgentsMd(root);
   });
 }

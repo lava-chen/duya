@@ -1,10 +1,14 @@
 /**
- * The Desktop's doctor report assembly.
+ * The Desktop's doctor adapter.
  *
- * The facts are INJECTED, so the decisions under test — which check belongs
- * to which category, what a fact that could not be read means, and how the
- * checks roll up — are exercised without an Electron runtime and without the
- * user's real plugin registry and database.
+ * The CHECKS are the shared layer's — they are tested there, against the
+ * shared layer's own fixtures. What is under test HERE is the adapter: that
+ * the Desktop's in-process facts are shaped the way the shared layer reads
+ * them, and that the report the renderer receives is the shared layer's
+ * report, unchanged.
+ *
+ * The facts are INJECTED, so the decisions are exercised without an Electron
+ * runtime and without the user's real plugin registry and database.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -12,13 +16,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import {
-  finalizeDoctorResult,
-  resetTiming,
-  runDesktopDiagnostics,
-  runOfflineDiagnostics,
-  type DesktopFactsApi,
-} from '../doctor-report';
+import type { DoctorHostProbe } from '@duya/host/diagnostics';
+
+import { collectDoctorReport } from '../doctor-report';
 import type { DoctorCheck } from '../../../contracts/doctor';
 
 let configRoot: string;
@@ -31,133 +31,63 @@ afterEach(() => {
   fs.rmSync(configRoot, { recursive: true, force: true });
 });
 
-function findCheck(checks: DoctorCheck[], id: string): DoctorCheck {
+function findCheck(checks: readonly DoctorCheck[], id: string): DoctorCheck {
   const found = checks.find((check) => check.id === id);
   if (!found) throw new Error(`no check named ${id}`);
   return found;
 }
 
-function healthyFacts(): DesktopFactsApi {
+function healthyProbe(): DoctorHostProbe {
   return {
-    status: { reachable: true, detail: 'Host API v1' },
-    window: { present: true, detail: 'window id 1' },
-    plugins: { readable: true, count: 3 },
-    sessions: { queryWorks: true, count: 12 },
-    database: { ready: true },
+    async probeStatus() {
+      return { kind: 'known', value: { statusCode: 200, authFailed: false, serverError: false } };
+    },
+    async listPlugins() {
+      return { kind: 'known', value: { count: 3 } };
+    },
+    async querySessions() {
+      return { kind: 'known', value: { hasSessions: true } };
+    },
   };
 }
 
-describe('runOfflineDiagnostics', () => {
-  it('reports the config root and the config files', () => {
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runOfflineDiagnostics(checks, { configRoot });
+describe('the desktop doctor adapter', () => {
+  it('runs the shared checks against the desktop facts', async () => {
+    const report = await collectDoctorReport(healthyProbe(), 'development', configRoot);
 
-    expect(findCheck(checks, 'config_root_exists').status).toBe('ok');
-    // A missing config.toml is a warning, not an error: the app creates one.
-    expect(findCheck(checks, 'config_file_exists').status).toBe('warning');
-    expect(findCheck(checks, 'config_secrets_parses').status).toBe('warning');
-    expect(findCheck(checks, 'runtime_process').status).toBe('ok');
-  });
-
-  it('reports a missing config root as an error', () => {
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runOfflineDiagnostics(checks, { configRoot: path.join(configRoot, 'nope') });
-
-    expect(findCheck(checks, 'config_root_exists').status).toBe('error');
-  });
-
-  it('reports unparseable secrets as an error', () => {
-    fs.writeFileSync(path.join(configRoot, 'secrets.json'), '{ not json', 'utf-8');
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runOfflineDiagnostics(checks, { configRoot });
-
-    expect(findCheck(checks, 'config_secrets_parses').status).toBe('error');
-  });
-
-  it('reports a config file that exists', () => {
-    fs.writeFileSync(path.join(configRoot, 'config.toml'), '_config_version = 1\n', 'utf-8');
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runOfflineDiagnostics(checks, { configRoot });
-
-    expect(findCheck(checks, 'config_file_exists').status).toBe('ok');
-  });
-});
-
-describe('runDesktopDiagnostics', () => {
-  it('answers the desktop, plugin and session categories in place', () => {
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runDesktopDiagnostics(checks, healthyFacts());
-
-    expect(findCheck(checks, 'desktop_reachable').status).toBe('ok');
-    expect(findCheck(checks, 'desktop_window').status).toBe('ok');
-    expect(findCheck(checks, 'database_ready').status).toBe('ok');
-    expect(findCheck(checks, 'plugin_registry_readable').status).toBe('ok');
-    expect(findCheck(checks, 'plugin_count').status).toBe('ok');
-    expect(findCheck(checks, 'session_query_works').status).toBe('ok');
-    expect(findCheck(checks, 'session_count').status).toBe('ok');
-  });
-
-  it('never reports "the desktop could not be reached" as a skip', () => {
-    // On the Desktop surface the desktop IS this process, so an unreadable
-    // registry is an ERROR, not a skipped check.
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runDesktopDiagnostics(checks, {
-      ...healthyFacts(),
-      plugins: { readable: false, count: null, detail: 'registry is corrupt' },
-    });
-
-    expect(findCheck(checks, 'plugin_registry_readable').status).toBe('error');
-    expect(findCheck(checks, 'plugin_count').status).toBe('skipped');
-    expect(findCheck(checks, 'plugin_registry_readable').hint).toBe('registry is corrupt');
-  });
-
-  it('counts the plugins and the sessions it was told about', () => {
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runDesktopDiagnostics(checks, healthyFacts());
-
-    expect(findCheck(checks, 'plugin_count').message).toContain('3 plugins');
-    expect(findCheck(checks, 'session_count').message).toContain('12 sessions');
-  });
-});
-
-describe('finalizeDoctorResult', () => {
-  it('is ok when nothing failed', () => {
-    const checks: DoctorCheck[] = [];
-    resetTiming(checks);
-    runDesktopDiagnostics(checks, healthyFacts());
-
-    const report = finalizeDoctorResult(checks, 'development');
-
-    expect(report.overallStatus).toBe('ok');
-    expect(report.summary.ok).toBe(7);
+    expect(findCheck(report.checks, 'desktop_reachable').status).toBe('ok');
+    expect(findCheck(report.checks, 'desktop_status_ok').status).toBe('ok');
+    expect(findCheck(report.checks, 'plugin_registry_readable').status).toBe('ok');
+    expect(findCheck(report.checks, 'plugin_count').status).toBe('ok');
+    expect(findCheck(report.checks, 'session_query_works').status).toBe('ok');
     expect(report.profile).toBe('development');
   });
 
-  it('is warning when only warnings were raised, and error when something failed', () => {
-    const checks: DoctorCheck[] = [
-      { id: 'a', category: 'config', status: 'warning', message: 'warned' },
-      { id: 'b', category: 'config', status: 'skipped', message: 'not applicable' },
-    ];
-    expect(finalizeDoctorResult(checks, 'unknown').overallStatus).toBe('warning');
+  it('reports a broken registry as failed, never as skipped', async () => {
+    const probe: DoctorHostProbe = {
+      ...healthyProbe(),
+      async listPlugins() {
+        return { kind: 'failed', reason: 'the registry file is unreadable' };
+      },
+    };
 
-    checks.push({ id: 'c', category: 'config', status: 'error', message: 'broken' });
-    const report = finalizeDoctorResult(checks, 'unknown');
-    expect(report.overallStatus).toBe('error');
-    expect(report.summary).toEqual({ errors: 1, warnings: 1, skipped: 1, ok: 0 });
+    const report = await collectDoctorReport(probe, 'development', configRoot);
+
+    // `skipped` means "this check could not run". The desktop IS running, so
+    // a registry that cannot be read is a failure, not an absence of
+    // information. The COUNT is skipped, though: with the registry unreadable
+    // there is no count to report, and "no plugins" would be a lie.
+    expect(findCheck(report.checks, 'plugin_registry_readable').status).toBe('error');
+    expect(findCheck(report.checks, 'plugin_count').status).toBe('skipped');
   });
 
-  it('does not let a skipped check lower the overall status', () => {
-    const report = finalizeDoctorResult(
-      [{ id: 'a', category: 'plugin', status: 'skipped', message: 'not applicable' }],
-      'unknown',
-    );
-    expect(report.overallStatus).toBe('ok');
+  it('produces the shared report shape the renderer renders', async () => {
+    const report = await collectDoctorReport(healthyProbe(), 'development', configRoot);
+
+    expect(report.version).toBe('1.0.0');
+    expect(typeof report.timestamp).toBe('number');
+    expect(['ok', 'warning', 'error']).toContain(report.overallStatus);
+    expect(report.summary.ok + report.summary.warnings + report.summary.errors + report.summary.skipped)
+      .toBe(report.checks.length);
   });
 });

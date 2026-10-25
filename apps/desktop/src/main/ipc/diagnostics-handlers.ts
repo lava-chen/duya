@@ -22,17 +22,10 @@
 import { ipcMain } from 'electron';
 
 import { assertTrustedSender } from './trusted-sender';
-import {
-  desktopConfigRoot,
-  finalizeDoctorResult,
-  resetTiming,
-  runDesktopDiagnostics,
-  runOfflineDiagnostics,
-  type DesktopFactsApi,
-} from './doctor-report';
-import { collectDesktopFacts, desktopProfile } from './doctor-facts';
+import { collectDoctorReport } from './doctor-report';
+import { createDesktopDoctorProbe, desktopProfile } from './doctor-facts';
 
-import type { DoctorCheck, DoctorReport } from '../../contracts/doctor';
+import type { DoctorResult } from '../../contracts/doctor';
 
 /** The channel the renderer invokes. */
 export const DIAGNOSTICS_RUN_CHANNEL = 'diagnostics:run';
@@ -41,20 +34,11 @@ export const DIAGNOSTICS_RUN_CHANNEL = 'diagnostics:run';
  * Assemble the report.
  *
  * Split out from the handler so the shape can be exercised without an
- * Electron event, and so the reading order is explicit: the offline checks
- * first (they are the cheapest and the least likely to fail), then the
- * in-process ones, then the roll-up.
+ * Electron event. The checks come from the shared diagnostics layer; this
+ * function only supplies the Desktop's facts and profile.
  */
-export async function collectDoctorReport(): Promise<DoctorReport> {
-  const checks: DoctorCheck[] = [];
-  resetTiming(checks);
-
-  runOfflineDiagnostics(checks, { configRoot: desktopConfigRoot() });
-
-  const facts: DesktopFactsApi = await collectDesktopFacts();
-  runDesktopDiagnostics(checks, facts);
-
-  return finalizeDoctorResult(checks, desktopProfile());
+export async function collectDesktopDoctorReport(): Promise<DoctorResult> {
+  return collectDoctorReport(createDesktopDoctorProbe(), desktopProfile());
 }
 
 /** Register the diagnostics channels. */
@@ -62,6 +46,6 @@ export function registerDiagnosticsHandlers(): void {
   ipcMain.handle(DIAGNOSTICS_RUN_CHANNEL, async (event) => {
     // Guard first, before anything is read from the event.
     assertTrustedSender(event, {}, DIAGNOSTICS_RUN_CHANNEL);
-    return collectDoctorReport();
+    return collectDesktopDoctorReport();
   });
 }
