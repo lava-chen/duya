@@ -80,6 +80,7 @@
 - [2026-10-21 master CI 修复](archive/2026-10-21-ci-green-master.md)：收敛 master 上 95 个失败测试文件与 17 个 E2E 失败；根因、Linux 独有失败与三个 E2E 产品 bug 的修法见正文。
 - [Claude Code 式工具组 UI 对齐（P1）](archive/2026-10-23-claude-code-tool-group-parity.md)：轮级汇总行、caret 行尾常显、展开态持久、分组卡片化；PR #368 已合并 `2c91e9b7`。**其中轮级统计已被 P2 回退**，见下一条。
 - [工具组 P2：组级折叠态 / diff 增强 / 路径头](archive/2026-10-23-tool-group-flatten-and-diff.md)：路径头 + 复制、diff 语法高亮，以及把折叠态改回「轮级只报耗时、组级承载统计」；PR #374 已合并 `43df59f4`。两份计划的「发现与决策」记了各自的取舍与被改回去的原因。
+- [TUI 三项用户反馈缺陷](archive/2026-10-24-tui-reported-defects.md)：todo 因结果信封未剥离而隐身、`/model` 补厂商 preset（只读字段 `presetModels`，不写 `config.toml`）、底部统计分三组并加 `⚡ tok/s`；PR #469 已合并 `c94a1be6`。真机补验受 provider 出网阻塞的判别过程与 bundle EOL 陷阱见正文。
 
 ## Backlog
 
