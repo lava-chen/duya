@@ -163,6 +163,37 @@ describe('inline mode', () => {
     expect(out.text()).not.toContain('┌');
   });
 
+  it('lists pending drafts above the composer, one row each and three at most', async () => {
+    const out = sink();
+    const drafts = [
+      { text: 'first', mode: 'queue' as const },
+      { text: 'second', mode: 'queue' as const },
+      { text: 'third', mode: 'steer' as const },
+      { text: 'fourth', mode: 'queue' as const },
+      { text: 'fifth', mode: 'steer' as const },
+    ];
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      queuedDrafts: () => drafts,
+      onSubmit: () => {},
+    });
+    app.start();
+    await settleRendered();
+    app.stop();
+    const text = out.text();
+    // The budget is fixed: this block is chrome, and a queue that grows would
+    // push the composer down a row per draft until the terminal ran out.
+    expect(text).toContain('… 2 earlier');
+    expect(text).toContain('↳ steer · third');
+    expect(text).toContain('⧗ queued · fourth');
+    expect(text).toContain('↳ steer · fifth');
+    // The two oldest drafts are behind the summary row, not in it.
+    expect(text).not.toContain('· first');
+    expect(text).not.toContain('· second');
+  });
+
   it('keeps keys working without a Screen to bind them to', async () => {
     const submitted: string[] = [];
     const { app, input } = makeApp({ inline: true, submitted });

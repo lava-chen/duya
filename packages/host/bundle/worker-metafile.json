@@ -38923,7 +38923,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -40966,7 +40966,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -42385,7 +42385,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -42394,10 +42394,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 8992
+          "bytesInOutput": 9009
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -43456,7 +43456,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44320,7 +44320,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692673
+      "bytes": 4692697
     }
   }
 }
