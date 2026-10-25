@@ -258,6 +258,25 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    // The CLI and the desktop app share one Host and one set of sessions, so
+    // the handover between them is a Host call rather than something one
+    // process does to the other. `cli` only for now: the Desktop handler for
+    // this command is not in this change, and advertising it there without a
+    // Desktop executor is the advertised-but-unrunnable state the catalog's
+    // integrity tests forbid.
+    name: 'app',
+    label: 'Open in desktop app',
+    labelZh: '在桌面端打开',
+    description: 'Hand this session over to the desktop app',
+    descriptionZh: '把当前会话交接到桌面端',
+    category: 'session',
+    surfaces: ['cli'],
+    requiresSession: true,
+    // The handover asks the Host to open the session elsewhere; it does not
+    // touch the running turn.
+    availableWhileBusy: true,
+  },
+  {
     // `copy` has a Desktop executor (executors/session.ts) that no popover entry
     // ever reached, so the handler was unreachable from the composer. Listed
     // here because the capability is real; the metadata simply had to be
@@ -510,6 +529,55 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     category: 'info',
     surfaces: ['desktop'],
     requiresSession: true,
+  },
+  {
+    // The app connectors the Host has connected — slack, google,
+    // microsoft365, wecom, qq-mail, remote-mcp and the like. `cli` only for
+    // now: the Desktop handler for this command is not in this change, and
+    // advertising it there without a Desktop executor is the advertised-but-
+    // unrunnable state the catalog's integrity tests forbid.
+    name: 'apps',
+    label: 'App connections',
+    labelZh: '应用连接',
+    description: 'List the connected app connectors',
+    descriptionZh: '列出已连接的应用连接器',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    // Listing the connections is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The plugins installed on this machine. `cli` only for now: the Desktop
+    // handler for this command is not in this change, and advertising it
+    // there without a Desktop executor is the advertised-but-unrunnable state
+    // the catalog's integrity tests forbid.
+    name: 'plugin',
+    label: 'Plugins',
+    labelZh: '插件',
+    description: 'List the installed plugins',
+    descriptionZh: '列出已安装的插件',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    // Listing the plugins is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The workflow runs the Host recorded. `cli` only for now: the Desktop
+    // handler for this command is not in this change, and advertising it
+    // there without a Desktop executor is the advertised-but-unrunnable state
+    // the catalog's integrity tests forbid.
+    name: 'workflow',
+    label: 'Workflow runs',
+    labelZh: '工作流运行',
+    description: 'List the workflow runs this Host recorded',
+    descriptionZh: '列出该 Host 记录的工作流运行',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    // Listing the runs is a read.
+    availableWhileBusy: true,
   },
   {
     name: 'skills',

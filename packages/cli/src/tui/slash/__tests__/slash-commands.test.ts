@@ -226,6 +226,8 @@ describe('slash registry', () => {
     // A fixed list on purpose: an assertion built by filtering the expected
     // values against the actual names would pass no matter what was added.
     expect([...names].sort()).toEqual([
+      'app',
+      'apps',
       'archive',
       'btw',
       'capabilities',
@@ -242,6 +244,7 @@ describe('slash registry', () => {
       'hotkeys',
       'model',
       'permission',
+      'plugin',
       'pr',
       'read-file',
       'rename',
@@ -250,6 +253,7 @@ describe('slash registry', () => {
       'stop',
       'thinking',
       'transcript',
+      'workflow',
     ]);
   });
 
