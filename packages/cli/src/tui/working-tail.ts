@@ -80,6 +80,41 @@ export interface WorkingTailOptions {
   readonly unicode: boolean;
   /** Terminal width. The line is fitted to it — see the wrapping note. */
   readonly columns: number;
+  /**
+   * False when the row is shown for background work while the turn itself is
+   * idle. The glyph then is a static dot: a spinner that keeps turning with
+   * nothing running reads as a hang.
+   */
+  readonly active?: boolean;
+}
+
+/** Static glyph for an idle row that still has live background work. */
+export const IDLE_TASK_GLYPH_UNICODE = '•';
+export const IDLE_TASK_GLYPH_ASCII = '*';
+
+export interface BackgroundSummaryCounts {
+  /** Background bash processes still running. */
+  readonly bashRunning: number;
+  /** Subagents still running. */
+  readonly subagentRunning: number;
+  /** Every tracked task, terminal ones included. */
+  readonly totalTasks: number;
+}
+
+/**
+ * Compose the summary segments after the activity label.
+ *
+ * The counts are the RUNNING ones: a task list that says "2 background" after
+ * both finished would be a claim about work in flight that is not there.
+ * `/tasks details` appears whenever there is anything at all to inspect, which
+ * is the one thing a user needs when the counts have gone quiet.
+ */
+export function backgroundSummarySuffix(counts: BackgroundSummaryCounts): string {
+  const parts: string[] = [];
+  if (counts.bashRunning > 0) parts.push(`${counts.bashRunning} background`);
+  if (counts.subagentRunning > 0) parts.push(`${counts.subagentRunning} subagent`);
+  if (counts.totalTasks > 0) parts.push('/tasks details');
+  return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
 }
 
 /**
@@ -95,7 +130,9 @@ export interface WorkingTailOptions {
  * `?7l` that is supposed to prevent exactly that is ignored.
  */
 export function workingTailLine(options: WorkingTailOptions): string {
-  const glyph = spinnerGlyph(options.frame, options.unicode);
+  const glyph = options.active === false
+    ? (options.unicode ? IDLE_TASK_GLYPH_UNICODE : IDLE_TASK_GLYPH_ASCII)
+    : spinnerGlyph(options.frame, options.unicode);
   const width = Math.max(8, options.columns - 1);
   const label = compactActivity(options.label, Math.max(1, width - glyph.length - 1));
   return `{cyan-fg}${glyph}{/cyan-fg} ${label}`;

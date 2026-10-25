@@ -62,6 +62,7 @@ function servicesWith(sessions: readonly HostSessionRecord[]): UiServices {
       update: async () => { throw new Error('not used'); },
       delete: async () => { throw new Error('not used'); },
       readMessages: async () => { throw new Error('not used'); },
+      readAllMessages: async () => { throw new Error('not used'); },
     },
     runs: {
       listBySession: async () => [],
@@ -102,7 +103,7 @@ describe('ipc-client on a host that is not Electron', () => {
       sessions: {
         ...base.sessions,
         get: async () => hostSession(),
-        readMessages: async () => ({ sessionId: SESSION_ID, messages: [hostMessage], nextCursor: null }),
+        readAllMessages: async () => ({ sessionId: SESSION_ID, messages: [hostMessage], nextCursor: null }),
       },
     });
 
@@ -192,7 +193,7 @@ describe('ipc-client on a host that is not Electron', () => {
       sessions: {
         ...base.sessions,
         get: async () => hostSession(),
-        readMessages: async () => ({ sessionId: SESSION_ID, messages: rows, nextCursor: null }),
+        readAllMessages: async () => ({ sessionId: SESSION_ID, messages: rows, nextCursor: null }),
       },
     });
 
@@ -291,6 +292,43 @@ describe('ipc-client on a host that is not Electron', () => {
       projectName: 'Browser project',
       workingDirectory: 'workspace',
     });
+    clearUiServices(services);
+  });
+
+  it('reads a whole transcript in ONE Host call instead of paging it', async () => {
+    // The Host's paged read re-projects the ENTIRE transcript on every page,
+    // so paging a 10k-message transcript costs 100 projections of 10k rows
+    // (measured: 16.7s of paging against 0.3s for one projection). The
+    // renderer asks for the whole transcript in one read.
+    //
+    // This is a CALL-COUNT gate, not a timing gate: the number is exact on any
+    // machine, so a regression that reintroduces per-page projection fails
+    // here instead of showing up as a slow session.
+    let wholeReads = 0;
+    let pagedReads = 0;
+    const base = servicesWith([hostSession()]);
+    const services = {
+      ...base,
+      sessions: {
+        ...base.sessions,
+        get: async () => hostSession(),
+        readAllMessages: async () => {
+          wholeReads += 1;
+          return { sessionId: SESSION_ID, messages: [], nextCursor: null };
+        },
+        readMessages: async () => {
+          pagedReads += 1;
+          return { sessionId: SESSION_ID, messages: [], nextCursor: null };
+        },
+      },
+    };
+    configureUiServices(services);
+
+    const loaded = await getThreadIPC(SESSION_ID);
+
+    expect(loaded).not.toBeNull();
+    expect(wholeReads).toBe(1);
+    expect(pagedReads).toBe(0);
     clearUiServices(services);
   });
 });

@@ -28,6 +28,10 @@ import type {
   CreateAgentRunInput,
   HostRunApiV1,
   HostRunExecutionApiV1,
+  HostSessionCompactionApiV1,
+  HostSessionSideQuestionApiV1,
+  HostMcpInventoryApiV1,
+  HostSkillInventoryApiV1,
   HostTaskApiV1,
   HostProjectApiV1,
   HostProjectCreateInput,
@@ -75,8 +79,14 @@ import type {
   HostToolApprovalInput,
   HostToolApprovalScopeType,
 } from '@duya/agent-protocol';
-import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
+import type {
+  HostCheckoutApiV1,
+  HostIntegrationApiV1,
+  HostLocalBackgroundTaskApiV1,
+  HostLockApiV1,
+} from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
+import { HostSkillInventoryError } from './skills/skill-inventory-api.js';
 import { ClientLeaseTracker } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
@@ -154,9 +164,13 @@ import type {
   HostLocalAppConnectionApiV1,
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type { HostPluginInventoryApiV1 } from '@duya/agent-protocol/plugin-inventory';
+import type { HostSessionHandoffApiV1 } from '@duya/agent-protocol/session-handoff';
+import type { HostAgentsMdApiV1 } from '@duya/agent-protocol/doctor';
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
 import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.js';
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
+import { routeBackgroundTasks } from './background-task-routes.js';
 import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
@@ -200,6 +214,7 @@ import type {
 import { HostSessionApiError } from './session-api.js';
 import { HostTaskApiError } from './task-api.js';
 import { HostRunApiError } from './run-api.js';
+import { HostSessionCompactionError } from './session-compaction.js';
 import { HostProjectApiError } from './project-api.js';
 import { isHostResearchAction, type HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 
@@ -348,6 +363,32 @@ export interface HostSessionHttpServerOptions {
   readonly localAppConnectionApi?: HostLocalAppConnectionApiV1;
   /** Local-only access to plugin setup values, which may contain credentials. */
   readonly localPluginSetupApi?: HostLocalPluginSetupApiV1;
+  /**
+   * Local-only plugin inventory, projected to the fields a client may see.
+   *
+   * Optional: a Host composed without the plugin registry cannot say which
+   * plugins are installed, and it answers 404 `plugin_inventory_api_unavailable`
+   * rather than reporting an empty list — "no plugins" and "this Host cannot
+   * say" are different facts.
+   */
+  readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
+  /**
+   * Handing a session over to the desktop app.
+   *
+   * Optional, and deliberately absent from a Host the TUI owns: only a Host
+   * that lives inside the desktop app can ask its renderer to switch
+   * sessions. Such a Host answers 404 `session_handoff_unavailable`, which
+   * is "this Host cannot do that" rather than "the handoff failed".
+   */
+  readonly sessionHandoffApi?: HostSessionHandoffApiV1;
+  /**
+   * Writing the repository-root `AGENTS.md`.
+   *
+   * Optional: a Host that cannot write into the workspace does not offer the
+   * capability, and answers 404 `agents_md_api_unavailable` — "this Host
+   * cannot do that" rather than "the write failed".
+   */
+  readonly agentsMdApi?: HostAgentsMdApiV1;
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
   readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
@@ -361,6 +402,8 @@ export interface HostSessionHttpServerOptions {
   readonly localTurnReviewApi?: HostLocalTurnReviewApiV1;
   /** Local-only command history; values may contain user-entered secrets. */
   readonly localTerminalHistoryApi?: HostLocalTerminalHistoryApiV1;
+  /** Local-only read of background bash tasks reported by this Host's workers. */
+  readonly localBackgroundTaskApi?: HostLocalBackgroundTaskApiV1;
   /** Local-only mailbox persistence and run-loop state transitions. */
   readonly localMailboxApi?: HostLocalMailboxApiV1;
   /** Local-only durable wake queue markers. */
@@ -369,6 +412,29 @@ export interface HostSessionHttpServerOptions {
   readonly runApi?: HostRunApiV1;
   /** Host-owned execution: start/cancel real runs (plan 12 gate 3). */
   readonly runExecutionApi?: HostRunExecutionApiV1;
+  /**
+   * Session-level manual compaction. Optional: a Host without a worker behind
+   * it cannot compact, and it answers 404 with a named code rather than
+   * pretending the session can be compacted.
+   */
+  readonly sessionCompactionApi?: HostSessionCompactionApiV1;
+  /**
+   * Session-level side questions. Optional for the same reason as the
+   * compaction capability above.
+   */
+  readonly sideQuestionApi?: HostSessionSideQuestionApiV1;
+  /**
+   * Read-only inventory of the user's configured MCP servers. Optional: a
+   * Host that was not given a configuration source answers 404 with a named
+   * code instead of pretending the user configured no servers.
+   */
+  readonly mcpInventoryApi?: HostMcpInventoryApiV1;
+  /**
+   * Read-only inventory of the skills a session can use. Optional: a Host
+   * that was not given the capability answers 404 with a named code instead
+   * of pretending the user has no skills.
+   */
+  readonly skillInventoryApi?: HostSkillInventoryApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi: HostTaskApiV1;
@@ -765,6 +831,29 @@ export class HostSessionHttpServer {
       // A lease is a presence signal, not a lock: the response stays open and
       // the Host counts it until the client goes away.
       this.#holdClientLease(res);
+      return;
+    }
+    // The MCP inventory is matched BEFORE every namespaced route below, on
+    // purpose: it is a top-level path, and a matcher registered earlier that
+    // swallows `/v1/<anything>` would make this answer "unknown route"
+    // instead of "this Host has no inventory capability".
+    if (url.pathname === '/v1/mcps') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      await this.#listMcpServers(res);
+      return;
+    }
+    // The skills inventory sits next to the MCP inventory, and for the same
+    // reason: it is a top-level path, so it is answered before the
+    // namespaced routes below can claim it.
+    if (url.pathname === '/v1/skills') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      await this.#listSkills(url, res);
       return;
     }
     if (url.pathname === '/v1/research/actions') {
@@ -1508,6 +1597,13 @@ export class HostSessionHttpServer {
       }
       return;
     }
+    if (url.pathname === '/v1/local/background-tasks' ||
+        url.pathname.startsWith('/v1/local/background-tasks/')) {
+      await routeBackgroundTasks(req, url, res, this.#options.localBackgroundTaskApi, {
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
+      return;
+    }
     if (url.pathname === '/v1/local/plugin-app-instances' ||
         url.pathname.startsWith('/v1/local/plugin-app-instances/')) {
       try {
@@ -1586,6 +1682,72 @@ export class HostSessionHttpServer {
       try {
         await api.clearPluginSetupValues(pluginId);
         this.#sendJson(res, 200, { success: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugins' && req.method === 'GET') {
+      const api = this.#options.localPluginInventoryApi;
+      if (!api) {
+        // An empty list would be a lie: it would claim the machine has no
+        // plugins, when the truth is that this Host cannot answer at all.
+        this.#sendJson(res, 404, { error: { code: 'plugin_inventory_api_unavailable' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, await api.listPluginInventory());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/session-handoff' && req.method === 'POST') {
+      const api = this.#options.sessionHandoffApi;
+      if (!api) {
+        // "This Host has no desktop app to hand the session to" is not
+        // "the handoff failed". The caller tells them apart by the code.
+        this.#sendJson(res, 404, { error: { code: 'session_handoff_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isBoundedString(body.sessionId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_session_handoff_request' } });
+        return;
+      }
+      try {
+        const result = await api.openInDesktopApp({ sessionId: body.sessionId });
+        if (!result.ok) {
+          this.#sendJson(res, 409, { error: { code: result.code, message: result.message } });
+          return;
+        }
+        this.#sendJson(res, 200, { ok: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/agents-md' && req.method === 'POST') {
+      const api = this.#options.agentsMdApi;
+      if (!api) {
+        // "This Host cannot write into the workspace" is not "the write
+        // failed". The caller tells them apart by the code.
+        this.#sendJson(res, 404, { error: { code: 'agents_md_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isBoundedString(body.sessionId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_agents_md_request' } });
+        return;
+      }
+      try {
+        // The result carries the outcome, including a refusal the Host can
+        // explain ("this session has no working directory"). A refusal is a
+        // 200 with `ok: false`: the request was well formed and was answered.
+        const result = await api.writeAgentsMd({ sessionId: body.sessionId });
+        this.#sendJson(res, 200, result);
       } catch (error) {
         this.#sendApiError(res, error);
       }
@@ -2480,6 +2642,26 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
+      return;
+    }
+
+    // The session-level exits MUST be matched before the generic session
+    // matcher below: `/v1/sessions/{id}/compact` and `/v1/sessions/{id}/btw`
+    // are session paths, and a generic matcher registered first would
+    // swallow them.
+    const sessionCompactMatch = /^\/v1\/sessions\/([^/]+)\/compact$/.exec(url.pathname);
+    if (req.method === 'POST' && sessionCompactMatch) {
+      const sessionId = this.#decodePathPart(sessionCompactMatch[1]!, res);
+      if (sessionId === null) return;
+      await this.#compactSession(sessionId as SessionId, req, res);
+      return;
+    }
+
+    const sessionBtwMatch = /^\/v1\/sessions\/([^/]+)\/btw$/.exec(url.pathname);
+    if (req.method === 'POST' && sessionBtwMatch) {
+      const sessionId = this.#decodePathPart(sessionBtwMatch[1]!, res);
+      if (sessionId === null) return;
+      await this.#askSideQuestion(sessionId as SessionId, req, res);
       return;
     }
 
@@ -4599,6 +4781,168 @@ export class HostSessionHttpServer {
     this.#sendJson(res, 404, { error: { code: 'not_found' } });
   }
 
+  /**
+   * Manual compaction of a session's context.
+   *
+   * The success answer is an SSE stream, because a compaction is a multi-minute
+   * LLM call: a silent connection is a connection a proxy will cut, so the
+   * stream carries a keepalive while the worker works.
+   *
+   * The failures are JSON, and they are decided BEFORE any header is written.
+   * That is why the capability RESERVES synchronously: a refusal (no worker,
+   * a busy session, a compaction already in flight) is an HTTP status, and a
+   * status cannot be chosen after the response has started.
+   */
+  async #compactSession(sessionId: SessionId, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const api = this.#options.sessionCompactionApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'agent_compaction_unavailable' } });
+      return;
+    }
+    const body = await this.#readJson(req, res);
+    if (body === null) return;
+    if (body.instructions !== undefined && typeof body.instructions !== 'string') {
+      this.#sendJson(res, 400, { error: { code: 'invalid_compact_request' } });
+      return;
+    }
+    const instructions = typeof body.instructions === 'string' ? body.instructions : undefined;
+    if (!(await this.#sessionExists(sessionId))) {
+      this.#sendJson(res, 404, { error: { code: 'session_not_found' } });
+      return;
+    }
+    const reservation = api.reserve({
+      sessionId,
+      ...(instructions === undefined ? {} : { instructions }),
+    });
+    if (!reservation.ok) {
+      this.#sendJson(res, reservation.status, { error: { code: reservation.code, message: reservation.message } });
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+    try {
+      for await (const event of reservation.events) {
+        if (res.destroyed) break;
+        res.write(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`);
+        if (event.event === 'compact:completed' || event.event === 'compact:failed') break;
+      }
+    } catch (error) {
+      logger.error('Session compaction stream failed', error instanceof Error ? error : new Error(String(error)), { sessionId });
+      if (!res.destroyed && !res.writableEnded) {
+        res.write(`event: compact:failed\ndata: ${JSON.stringify({
+          status: 'error',
+          code: 'internal_error',
+          message: 'The compaction stream failed.',
+        })}\n\n`);
+      }
+    } finally {
+      if (!res.destroyed && !res.writableEnded) res.end();
+    }
+  }
+
+  /**
+   * A side question: one answer, no transcript change, no run.
+   *
+   * Deliberately NOT refused while a turn is running. That is the whole point
+   * of a side question, and the worker's own command handler answers it
+   * alongside the running turn.
+   */
+  async #askSideQuestion(sessionId: SessionId, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const api = this.#options.sideQuestionApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'agent_side_question_unavailable' } });
+      return;
+    }
+    const body = await this.#readJson(req, res);
+    if (body === null) return;
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (question.length === 0) {
+      this.#sendJson(res, 400, { error: { code: 'invalid_side_question_request' } });
+      return;
+    }
+    if (!(await this.#sessionExists(sessionId))) {
+      this.#sendJson(res, 404, { error: { code: 'session_not_found' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.ask({ sessionId, question }));
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * The MCP servers the user configured.
+   *
+   * A Host without the capability answers 404 with a named code. "This Host
+   * cannot tell you" and "this user configured nothing" are different
+   * answers, and only the second one is an empty list — collapsing them
+   * would let a client render "no MCP servers" on a Host that simply was
+   * not given a configuration source.
+   */
+  async #listMcpServers(res: ServerResponse): Promise<void> {
+    const api = this.#options.mcpInventoryApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'mcp_inventory_api_unavailable' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.listServers());
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * The skills a session can use.
+   *
+   * A Host without the capability answers 404 with a named code. "This Host
+   * cannot tell you" and "this user has no skills" are different answers, and
+   * only the second one is an empty list — collapsing them would let a client
+   * render "no skills" on a Host that simply was not given the capability.
+   */
+  async #listSkills(url: URL, res: ServerResponse): Promise<void> {
+    const api = this.#options.skillInventoryApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'skill_inventory_api_unavailable' } });
+      return;
+    }
+    const sessionId = url.searchParams.get('sessionId');
+    if (sessionId === null || sessionId.trim() === '') {
+      this.#sendJson(res, 400, { error: { code: 'missing_session_id' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.listSkills({ sessionId }));
+    } catch (error) {
+      if (error instanceof HostSkillInventoryError) {
+        // The refusal names itself: "this Host has no session projection" and
+        // "this session is not on this Host" are different problems, and a
+        // 500 for either would be a lie about what the Host knows.
+        this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /** Whether the Host's own session store knows this session. */
+  async #sessionExists(sessionId: SessionId): Promise<boolean> {
+    try {
+      return (await this.#options.api.get(sessionId)) !== null;
+    } catch {
+      // A store that cannot answer is not a store that says "no". Treating an
+      // unreadable store as "session missing" would refuse a request against
+      // a session that exists, which is a different failure from the one the
+      // caller asked about.
+      return true;
+    }
+  }
+
   async #readJson(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown> | null> {
     const contentType = req.headers['content-type'];
     if (typeof contentType !== 'string' || !/^application\/json(?:\s*;|$)/i.test(contentType)) {
@@ -4867,6 +5211,13 @@ export class HostSessionHttpServer {
   }
 
   #sendApiError(res: ServerResponse, error: unknown): void {
+    if (error instanceof HostSessionCompactionError) {
+      // The status is carried by the error: "no live worker" and "the side
+      // question failed" are different problems, and a 500 for either would
+      // be a lie about what the Host knows.
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      return;
+    }
     if (error instanceof HostCheckoutApiError) {
       // A Host missing the provider or the resolver is a composition gap, not a
       // client mistake: it must not read like "no checkout".

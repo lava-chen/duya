@@ -18,7 +18,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     theme: "dark",
     locale: "en",
     provider: "",
-    messageFont: "serif",
     skillAdditionalPaths: [],
     summaryLLMConfig: null,
     summaryLLMEnabled: false,
@@ -92,7 +91,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
         try { return JSON.parse(val); } catch { return val; }
       })(),
       provider: raw.provider ?? defaults.provider,
-      messageFont: (raw.messageFont as AppSettings["messageFont"]) ?? defaults.messageFont,
       skillAdditionalPaths: raw.skillAdditionalPaths
         ? JSON.parse(raw.skillAdditionalPaths)
         : defaults.skillAdditionalPaths,
@@ -209,7 +207,6 @@ export function useSettings(): {
     theme: "dark",
     locale: "en",
     provider: "",
-    messageFont: "serif",
     skillAdditionalPaths: [],
     summaryLLMConfig: null,
     summaryLLMEnabled: false,

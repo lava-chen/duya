@@ -116,7 +116,7 @@ describe('desktop commands have an executor', () => {
     'queue', 'model', 'permission', 'effort', 'login', 'logout', 'help',
     'status', 'cost', 'context', 'transcript', 'recap', 'skills', 'plan',
     'goal', 'deep-research', 'diff', 'loop', 'memory', 'mcp', 'add-dir',
-    'image', 'btw',
+    'image', 'btw', 'app', 'apps', 'plugin', 'workflow', 'doctor', 'init',
   ];
 
   it('registers an executor for every command the catalog advertises', () => {

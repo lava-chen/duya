@@ -36,7 +36,7 @@
  * line count stays exactly `Σ blockHeights` (the join's newline terminates the
  * previous block's last line; it does not open a new one). `heights()` and
  * `totalLines()` exist so scroll math can run off that sum without building
- * the flattened string, and `revealSelectedBlock` depends on them agreeing
+ * the flattened string, and `visibleWindow()` depends on them agreeing
  * with `paintTranscript`'s window to the line.
  */
 

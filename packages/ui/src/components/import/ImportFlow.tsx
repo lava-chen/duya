@@ -82,7 +82,7 @@ export function ImportFlow({ onComplete, onClose }: ImportFlowProps) {
         <div className="flex items-center justify-between mb-6">
           <span
             className="font-semibold text-lg"
-            style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}
+            style={{ fontFamily: 'var(--font-serif)' }}
           >
             DUYA
           </span>

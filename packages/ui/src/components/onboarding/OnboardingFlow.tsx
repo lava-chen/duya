@@ -264,7 +264,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
         <div className="flex items-center justify-between px-6 py-4 border-b border-border/30 shrink-0">
           <div className="flex items-center gap-2.5">
             <img src="./icon.png" alt="DUYA" className="w-7 h-7 rounded-lg" />
-            <span className="font-semibold text-base" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>
+            <span className="font-semibold text-base" style={{ fontFamily: 'var(--font-serif)' }}>
               DUYA
             </span>
           </div>
