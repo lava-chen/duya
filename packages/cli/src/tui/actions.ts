@@ -35,6 +35,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'history', keys: ['Ctrl+R'], label: 'Search and recall input history', context: 'global' },
   { id: 'usage', keys: ['Ctrl+P'], label: 'Token usage and context window', context: 'global' },
   { id: 'interrupt', keys: ['Ctrl+C'], label: 'Interrupt the running turn · press twice to exit', context: 'global' },
+  { id: 'stop-or-send', keys: ['Esc'], label: 'Stop the run · stop and send the draft · recall a queued draft when empty', context: 'editor' },
   { id: 'clear', keys: ['Ctrl+L'], label: 'Clear the transcript', context: 'global' },
   { id: 'expand-all', keys: ['Ctrl+T'], label: 'Expand / collapse every block', context: 'global' },
   { id: 'focus', keys: ['F6'], label: 'Move focus between input and background tasks', context: 'global' },
@@ -50,7 +51,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'undo', keys: ['Ctrl+Z'], label: 'Undo the last edit', context: 'editor' },
   { id: 'yank', keys: ['Ctrl+Y'], label: 'Yank back the last kill', context: 'editor' },
   { id: 'yank-pop', keys: ['Alt+Y'], label: 'Cycle the yank through older kills', context: 'editor' },
-  { id: 'indent', keys: ['Tab'], label: 'Indent · history recall when the line is empty', context: 'editor' },
+  { id: 'indent', keys: ['Tab'], label: 'Indent · queue while a turn runs · history recall when empty', context: 'editor' },
   { id: 'complete', keys: ['/', '@'], label: 'Trigger command / file completion', context: 'editor' },
   // Ctrl+D is deliberately NOT a delete-forward. Every line editor makes it
   // one, and every one of them also makes it the exit gesture on an empty

@@ -57,6 +57,21 @@ export interface HostProviderCatalogProvider {
   /** The provider's default model, when it declares one. */
   readonly defaultModel?: string;
   readonly models: readonly HostProviderCatalogModel[];
+  /**
+   * The built-in presets this vendor is known for, minus the ones already in
+   * `models`.
+   *
+   * `enabled_models` is a hand-written list, so a configured provider normally
+   * names one or two models while its vendor has a dozen. A picker that reads
+   * only `models` therefore cannot reach any of them without an edit to
+   * `config.toml`. These rows are the answer to "which models could this
+   * provider serve", and they are kept separate because they are NOT
+   * configured: selecting one makes the run resolve a model the configuration
+   * does not list, which `resolveModel` accepts with a warning rather than a
+   * refusal, and rewriting `config.toml` from the Host is not something this
+   * codebase does.
+   */
+  readonly presetModels?: readonly HostProviderCatalogModel[];
 }
 
 /** The whole catalog, plus where it was read from. */
