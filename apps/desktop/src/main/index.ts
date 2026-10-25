@@ -62,6 +62,7 @@ import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { ensureOfficialMarketplace, syncAllMarketplaces } from './plugins/marketplace/manager';
 import { syncBuiltinPlugins } from './plugins/catalog';
+import { applyBuiltinPluginDefaults } from './plugins/builtin-install';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
@@ -533,6 +534,39 @@ if (gotTheLock) {
     // already exists. setImmediate runs on the next libuv poll phase,
     // interleaved with the OS-level input pump.
     await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // ============================================================
+    // Step 4.26: Register the plugins the installer ships with
+    // ============================================================
+    // The seed above put the shipped plugins in the user-home cache, so they
+    // are in the store. This registers them as installed, so a user who never
+    // opens the store still gets them — the builtin manifest decides whether
+    // each one starts enabled.
+    //
+    // It runs after the window is up on purpose: registering copies files,
+    // and there is no reason to hold up the first paint for it.
+    void applyBuiltinPluginDefaults()
+      .then((outcome) => {
+        if (outcome.installed.length > 0 || outcome.updated.length > 0) {
+          logger.info(
+            'Builtin plugins registered',
+            {
+              installed: outcome.installed,
+              updated: outcome.updated,
+              failed: outcome.failed.map((item) => item.id),
+            },
+            'Main',
+          );
+        }
+      })
+      .catch((error: unknown) => {
+        logger.error(
+          'Builtin plugin registration failed',
+          error instanceof Error ? error : new Error(String(error)),
+          undefined,
+          'Main',
+        );
+      });
 
     // Plan 426 Phase 3: resolve performance.lowPower BEFORE any child
     // processes spawn — the agent server inherits DUYA_LOW_POWER from
