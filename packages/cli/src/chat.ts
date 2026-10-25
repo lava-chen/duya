@@ -875,6 +875,24 @@ export async function chatTui(
   }
 
   /**
+   * Rewrite `@<pluginId>` mentions for every draft that travels into a turn.
+   *
+   * `runTurn` does this for a fresh send and for a queued draft it executes,
+   * but a steer never goes through `runTurn`: its mailbox row is injected into
+   * the running turn, so it has to be rewritten before `enqueue`. Without
+   * that call a mention inside a steer reaches the model as bare prose while
+   * the same words in a fresh send reach it as a structured link.
+   */
+  function rewriteDraftMentions(text: string): string {
+    return rewritePluginMentionTokens(
+      text,
+      pluginCandidates.capabilities(),
+      pluginCandidates.connectedProviders(),
+      [],
+    ).content;
+  }
+
+  /**
    * Enter while a turn runs. The text goes to the Host mailbox, where the live
    * worker claims it at its next model boundary and injects it as runtime
    * guidance. Steered text is guidance, not a durable timeline message, so the
@@ -893,7 +911,7 @@ export async function chatTui(
       return;
     }
     try {
-      const row = await enqueueSteer(runId, text, 'cli.tui.steer', attachments);
+      const row = await enqueueSteer(runId, rewriteDraftMentions(text), 'cli.tui.steer', attachments);
       tui.printUser(text);
       queue.submit(text, { mode: 'steer', mailboxId: row.id, echoed: true, attachments });
     } catch (error) {
@@ -953,7 +971,12 @@ export async function chatTui(
       return;
     }
     try {
-      const row = await enqueueSteer(runId, draft.text, 'cli.tui.queue.send-now', draft.attachments);
+      const row = await enqueueSteer(
+        runId,
+        rewriteDraftMentions(draft.text),
+        'cli.tui.queue.send-now',
+        draft.attachments,
+      );
       if (queue.reclassify(draft.key, { mode: 'steer', mailboxId: row.id, echoed: true }) === null) {
         // The turn settled while the panel was open and the draft is already
         // running, so the row just written has no draft left to steer.
@@ -1422,13 +1445,14 @@ export async function chatTui(
     const runSessionId = activeSession.id;
     const runStartedAt = Date.now();
     let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
-    // Plugin mentions are rewritten ONCE, here, for every path into a turn —
-    // a fresh send, a queued draft and a steer all reach this line. The user
-    // typed `@<pluginId>`; the model gets the structured `[@Name](plugin://id)`
-    // link (same rewrite the desktop composer runs), and the structured
-    // mention lists ride the options bag so the worker's plugin-activation
-    // injection fires. `displayContent` keeps the transcript showing what the
-    // user typed, not the encoded form.
+    // Plugin mentions are rewritten for every path that starts a turn — a
+    // fresh send and a queued draft both reach this line. (A steer does not:
+    // its mailbox row is injected into the running turn and is rewritten
+    // where it is enqueued.) The user typed `@<pluginId>`; the model gets the
+    // structured `[@Name](plugin://id)` link (same rewrite the desktop
+    // composer runs), and the structured mention lists ride the options bag
+    // so the worker's plugin-activation injection fires. `displayContent`
+    // keeps the transcript showing what the user typed, not the encoded form.
     const mentionRewrite = rewritePluginMentionTokens(
       prompt,
       pluginCandidates.capabilities(),

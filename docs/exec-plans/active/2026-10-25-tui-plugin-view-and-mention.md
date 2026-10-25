@@ -32,7 +32,7 @@
 - [x] S2 协议+Host：`HostPluginInventoryEntry` 增加可选 `description` / `appConnections` / `mcpServers` / `skillNames`（仅名称，无凭据无路径）；registry 读 manifest + skills 目录；`plugin-inventory-http.test.ts` 升级为结构化凭据边界断言
 - [x] S3 下沉 `rewritePluginMentionTokens` → `@duya/input-completion`（含 `PluginMentionCapabilities`/`PluginMentionRewrite` 类型）；ui 改 import、测试随迁（12 用例）
 - [x] S4 TUI 交互列表：WindowManager 增 `initialSelected`；TUIApp 增 `showListPanel`/`showDetailPanel`/`recheckCompletion`；TuiSlashHost 增可选方法；shared 增 `showEntries`（交互优先、静态回退）；plugin/apps/skills/mcp 四命令改造
-- [x] S5 TUI @ mention：`tui/plugin-candidates.ts`（TTL 缓存 + stale-while-revalidate + onUpdated 重绘）；chat.ts `context()` 出插件行、会话边界刷新、`runTurn` 统一改写（fresh/queued/steer 三路共此一处）并带 `options.mentionedPlugins/mentionedProviders/displayContent`
+- [x] S5 TUI @ mention：`tui/plugin-candidates.ts`（TTL 缓存 + stale-while-revalidate + onUpdated 重绘）；chat.ts `context()` 出插件行、会话边界刷新、`runTurn` 统一改写（fresh / queued 两路）并在 steer 入队处单独改写（mailbox 内容不经 `runTurn`）、带 `options.mentionedPlugins/mentionedProviders/displayContent`
 - [x] S6 测试与门禁：见验证记录（cli 1414 全绿、ui lib 276 绿、chat 组件 517 绿、host 5 绿、input-completion 63 绿、architecture:check OK；typecheck:all 待出）
 - [ ] S7 提交、PR、真机冒烟记录
 
@@ -58,6 +58,7 @@
 | 同上 | 同 | `npx vitest run packages/ui/src/lib/__tests__ packages/ui/src/components/chat` | 0，276+517 passed | ui 侧 mention import 迁移后全绿 |
 | 同上 | 同 | `npm run architecture:check` | 0，OK no new boundary violations | 2 条 baseline 指纹不再触发；按规不 `--write`（master 漂移勿顺手收缩） |
 | 同上 | 同 | `npm run typecheck:all` | 0（9 条 electron-gate baseline 指纹收缩，未 `--write`） | 全链类型门禁过 |
+| master 77bd7848 后 rebase + steer 改写修复 | win32 / Node v24.16.0 / worktree | `npx vitest run packages/cli/src/__tests__/chat-tui-foundation.test.ts` | 0，20 passed | 新增「steer 入队前改写 mention」用例钉住 mailbox 内容 |
 
 ## 接续 / 结果
 
