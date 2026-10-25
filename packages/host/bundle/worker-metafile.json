@@ -1093,7 +1093,7 @@
       "format": "esm"
     },
     "packages/data/src/message-log.ts": {
-      "bytes": 130556,
+      "bytes": 132719,
       "imports": [
         {
           "path": "node:fs",
@@ -38869,7 +38869,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14435
+          "bytesInOutput": 14422
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -40816,7 +40816,7 @@
           "bytesInOutput": 4260
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1134
+          "bytesInOutput": 1121
         },
         "packages/agent-core/src/run-outcome.ts": {
           "bytesInOutput": 937
@@ -40990,7 +40990,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42385,7 +42385,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -42394,10 +42394,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9009
+          "bytesInOutput": 8992
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -42811,7 +42811,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -43456,7 +43456,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44320,7 +44320,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4692697
+      "bytes": 4692603
     }
   }
 }
