@@ -6,11 +6,11 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 转 ready，e2e 与真机冒烟已补 |
+| 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 已转 ready，e2e 已补，真机冒烟待用户 |
 | 下一步建议下沉 | [2026-10-25 下一步建议下沉到 worker/Host](active/2026-10-25-next-step-suggestion-host.md) | S0 摸底完成；S1 起做 protocol + data 契约与表；PR #496 已合并 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
-| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 评审领域边界与迁移合同；实施从 S0 门禁与行为基线开始，复用现有 Host / Harness |
+| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0 门禁与行为基线已落地（bot-boundary gate＋消费者清单＋四域基线）；待 review / CI，下一步 S1 Host Bot 接口 |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
