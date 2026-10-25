@@ -80,9 +80,25 @@ CLI handler 只能经 `ctx.client`（`HostSessionHttpClient` 的 public 方法�
 - [x] 建 worktree + junction + 依赖构建
 - [x] 写本计划
 - [x] PR-1 会话类（compact / btw / diff）— 已合并（PR #461 → `379d990b`）
-- [x] PR-2 能力类：mcp / skills — 实现完成，门禁与 PR 待办
-- [ ] PR-3 扩展类：app / apps / plugin / workflow
-- [ ] PR-4 新功能类：doctor / init
+- [x] PR-2 能力类：mcp / skills — 已合并（PR #463 → `26bc3c9d`）
+- [x] PR-3 扩展类：app / apps / plugin / workflow — 已合并（PR #477 → `f94ff69a`）
+- [x] PR-4 新功能类：doctor / init — 已合并（PR #481 → `080daeda`）
+
+## 交付结果（2026-10-25）
+
+11 条命令全部在**桌面 + CLI 双端**可用，catalog 里每条的 `surfaces` 都是 `['desktop', 'cli']`。
+
+| PR | 命令 | 合并 |
+| --- | --- | --- |
+| #461 | compact / btw / diff | `379d990b` |
+| #463 | mcp / skills | `26bc3c9d` |
+| #477 | app / apps / plugin / workflow | `f94ff69a` |
+| #481 | doctor / init | `080daeda` |
+
+两个共享契约值得记一笔：
+
+- **doctor 的报告形状定义在 `@duya/agent-protocol/doctor`**，不在 host 也不在 renderer。host 拥有**检查**，renderer 拿不到 host 包，所以形状必须放在两端都够得着的地方；分类表也跟过去——renderer 自己抄一份表，正是当年 `database` 检查消失的原因。
+- **`/init` 的客户端只发 session id，不发路径**。路径由 Host 从自己持有的 session 行里解析，CLI 走 Host（workspace 可能在另一台机器），桌面走 IPC（`assertTrustedSender` + `isPathWithinRoots`）。用户自己写的、没有 marker 的 `AGENTS.md` 会被覆盖，命令会明确说出来。
 
 ### PR-1 已实现（work package 拆分）
 
