@@ -449,6 +449,14 @@ const NOT_TURN_ENTRIES: readonly NotATurnEntry[] = Object.freeze([
     reason: 'Session titling, its own `AIClient`.',
   }),
   Object.freeze({
+    path: 'packages/host/src/worker-session/turn-suggestion.ts',
+    receiver: 'llmClient',
+    symbol: 'generateTurnSuggestion',
+    reason:
+      'End-of-turn next-prompt suggestion, its own `AIClient` — the same ' +
+      'post-turn call shape as session titling, and not an agent turn.',
+  }),
+  Object.freeze({
     path: 'packages/host/src/worker-tool-services/session-search.ts',
     receiver: 'client',
     symbol: 'streamSummary',
@@ -711,14 +719,19 @@ describe('H8.2 — measured consumer inventory', () => {
     expect(byConsumer('subagent')).toBe(0);
     expect(byConsumer('desktop')).toBe(0);
     // The look-alikes are excluded on purpose — documented so the exclusion is
-    // a number someone can challenge, not a silent filter. EIGHT `@duya/ai`
+    // a number someone can challenge, not a silent filter. NINE `@duya/ai`
     // calls plus the registry's own prose. Plan 610 S4c-d3 took this from 8 by
     // deleting the two `duyaAgent` look-alikes that lived in the removed loop,
     // and added back three for the engine's own model ports. Plan 610's worker
     // move did not change the COUNT — it moved six of the rows to
     // `packages/host/src` — which is the point of asserting the number: a
     // census that quietly loses a call site is not a census.
-    expect(NOT_TURN_ENTRIES.length).toBe(9);
+    //
+    // PR #496 moved it from 9 to 10 for the same reason the count exists: the
+    // next-prompt suggestion is a NINTH `@duya/ai` call site in the worker — it
+    // predicts the next user prompt after a turn — and it is not a turn. The
+    // row names it, so the call site is classified rather than invisible.
+    expect(NOT_TURN_ENTRIES.length).toBe(10);
     expect(NOT_TURN_ENTRIES.filter((e) => e.receiver === null).length).toBe(1);
   });
 });
