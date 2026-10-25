@@ -106,6 +106,34 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
         type: 'error',
         data: { message: event.error.message, code: event.error.code },
       };
+    // A subagent runs behind one parent tool call and can outlive it by
+    // minutes. `agent_progress` is the frame the TUI already understands
+    // (`ActivityTracker` for the chrome label, `BackgroundTaskModel` for the
+    // task list), so the durable events map onto that vocabulary instead of
+    // inventing a second one.
+    case 'subagent.started':
+      return {
+        type: 'agent_progress',
+        data: {
+          agentEventType: 'subagent_started',
+          subagentId: event.subagentId,
+          agentName: event.agentName,
+          agentType: event.agentType,
+          parentToolCallId: event.parentToolCallId,
+          ...(event.agentDescription === undefined ? {} : { agentDescription: event.agentDescription }),
+        },
+      };
+    case 'subagent.completed':
+      return {
+        type: 'agent_progress',
+        data: {
+          agentEventType: 'subagent_completed',
+          subagentId: event.subagentId,
+          status: event.status,
+          durationMs: event.durationMs,
+          ...(event.summary === undefined ? {} : { summary: event.summary }),
+        },
+      };
     case 'run.completed':
       return { type: 'done', data: { reason: event.stopReason ?? event.status } };
     default:

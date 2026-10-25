@@ -46,6 +46,7 @@ export * from './permission.js';
 export * from './permission-requests.js';
 export * from './tool-approvals.js';
 export * from './locks.js';
+export * from './background-tasks.js';
 export * from './capabilities.js';
 export * from './host-capabilities.js';
 export { ingestMessage, ingestMessages } from './message-ingest.js';
