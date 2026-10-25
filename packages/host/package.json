@@ -291,6 +291,14 @@
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
     },
+    "./diagnostics": {
+      "types": "./dist/diagnostics/index.d.ts",
+      "import": "./dist/diagnostics/index.js"
+    },
+    "./diagnostics/*": {
+      "types": "./dist/diagnostics/*.d.ts",
+      "import": "./dist/diagnostics/*.js"
+    },
     "./config-agents": {
       "types": "./dist/config-agents/index.d.ts",
       "import": "./dist/config-agents/index.js"

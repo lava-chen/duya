@@ -1,7 +1,7 @@
 /**
- * packages/cli/src/commands/doctor-timing.ts
+ * packages/host/src/diagnostics/timing.ts
  *
- * Wall-clock attribution for `duya doctor` checks.
+ * Wall-clock attribution for doctor checks.
  *
  * ## Why this is not a `Date.now()` pair at each call site
  *
@@ -20,12 +20,24 @@
  *
  * ## Why the baseline is keyed by the array
  *
- * `doctor.ts` and `doctor-config.ts` both push into a `CheckResult[]` they were
- * handed, and both need the same accounting. Keying the baseline off the array
- * identity lets every existing signature stay `checks: CheckResult[]`, so this
- * needs no plumbing through the call graph — and, unlike a module-level
- * variable, it cannot leak state between two reports built in one process
- * (tests do exactly that).
+ * Every module that pushes into a `CheckResult[]` it was handed needs the
+ * same accounting. Keying the baseline off the array identity lets every
+ * signature stay `checks: CheckResult[]`, so this needs no plumbing through
+ * the call graph — and, unlike a module-level variable, it cannot leak state
+ * between two reports built in one process (tests do exactly that).
+ *
+ * ## Why this file MUST live beside `types.ts`
+ *
+ * The baseline is a module-level `WeakMap`. If `pushCheck` and `resetTiming`
+ * were ever loaded from two different module instances — the same source file
+ * reached through two different specifiers — the two halves would write to two
+ * different maps. `resetTiming` would record a baseline that `pushCheck` never
+ * reads, and every check would report the 1ms floor. The durations would look
+ * plausible and be wrong.
+ *
+ * That is why this moved into the shared diagnostics directory together with
+ * the types: every surface imports BOTH from the same package subpath, so
+ * there is exactly one copy of this module in any process.
  *
  * ## Why the floor is 1ms and not 0
  *
@@ -35,7 +47,7 @@
  * reported as 1ms.
  */
 
-import type { CheckResult } from './doctor.js';
+import type { CheckResult } from './types.js';
 
 /** Smallest duration reported, so a fast check never looks unmeasured. */
 const MIN_REPORTED_DURATION_MS = 1;

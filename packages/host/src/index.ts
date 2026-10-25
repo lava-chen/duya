@@ -78,3 +78,4 @@ export * from './group-turn.js';
 export * from './local-sidebar-sections-api.js';
 export * from './local-usage-api.js';
 export * from './agent-profile-config.js';
+export * from './diagnostics/index.js';
