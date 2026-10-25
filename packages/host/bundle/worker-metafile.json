@@ -41653,7 +41653,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -45067,7 +45067,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4719254
+      "bytes": 4719266
     }
   }
 }

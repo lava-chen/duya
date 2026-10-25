@@ -29,8 +29,14 @@ test('expanded side panel keeps the floating composer and integrated project tre
     project_name: path.basename(projectDir),
   });
 
-  await app.page.evaluate(({ threadId, projectDir, filePath }) => {
+  await app.page.evaluate(() => {
     window.localStorage.setItem('duya-onboarding-completed', 'true');
+  });
+
+  // Seed localStorage from an init script rather than from the live page: the
+  // page being reloaded flushes its own panel state on `pagehide`, and that
+  // flush would overwrite a value written just before the reload.
+  await app.page.addInitScript(({ threadId, projectDir, filePath }) => {
     window.localStorage.setItem('duya-conversations', JSON.stringify({
       state: {
         currentView: 'chat',
