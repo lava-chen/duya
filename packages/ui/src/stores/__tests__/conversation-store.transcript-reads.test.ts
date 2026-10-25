@@ -21,7 +21,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  getThreadIPC: vi.fn(async () => null as unknown),
+  getThreadIPC: vi.fn(async (_id: string) => null as unknown),
   listThreadsIPC: vi.fn(async () => [] as unknown[]),
 }));
 
@@ -60,6 +60,7 @@ function threadRow(id: string) {
     id,
     title: id,
     workingDirectory: '/tmp/duya-workspace',
+    projectName: null,
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
   };
