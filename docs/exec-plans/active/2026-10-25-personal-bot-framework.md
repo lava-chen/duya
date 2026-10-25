@@ -161,6 +161,9 @@
 | 同上 | 同上 | 行为基线五组（见 S0 执行记录表） | 0；全绿 | 首次 identity 运行 1 文件加载失败，归因 C 盘 0 可用（工具 stdout 落 C:%TEMP%），清理后重跑全绿；本机 Electron 可加载，#483 记录的 Linux wake 加载失败未复现 |
 | 同上 | 同上 | `npm run typecheck:all` | 0；含全部 workspace 构建与类型 / ratchet / recorder checks | 本检出 junction 依赖直接通过（@types/picomatch 已在树内），无需 #483 时代的私有 overlay |
 | 同上 | Git | 暂存具名文件（gate 三件套、package.json、test.yml、wiring 测试、本计划、README 行） | — | 不入 Git：junction 链接、/e/tmp 日志 |
+| `24590d10` 首推 | ubuntu 22.x CI | architecture job | 1；agent-retirement reference ratchet FAIL：773/772，测试断言字符串字面量新增 1 条退役层引用（`bot-boundary-gate.test.ts:333`） | ratchet 只减不增，禁 bump baseline；修法=断言去退役路径字面量，改钉结构性事实（成员/消费方数下限+desktop 接线），退役层身份由 census 输出与计划文档承载 |
+| `c8946122`（ratchet 修复后 head） | win32 本地 | `node scripts/architecture/agent-retirement-gate.mjs`（pipefail 取真实退出码） | 0；ratchet PASS 772/772 / 0 new | 本地与门禁+retirement 测试 24 例全绿 |
+| `c8946122` | ubuntu 22.x CI（PR #495） | architecture / build / typecheck / test / test scope 五检查 | 全 pass；test 8m33s 含新测试文件在 Linux 首跑 | CI 结论覆盖本机验证；PR 待 review 与集成授权 |
 
 ## 接续 / 结果
 
