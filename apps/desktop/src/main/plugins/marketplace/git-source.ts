@@ -53,6 +53,17 @@ export interface MarketplaceSourceConfig {
   displayName?: string;
   path?: string;
   ref?: string;
+  /**
+   * Set when the user hides the source: it stays configured and cloned, but
+   * its plugins are left out of the catalog and the startup sync.
+   */
+  hidden?: boolean;
+  /**
+   * Tombstone for a removed pre-seeded official source. The entry keeps its
+   * key so `ensureOfficialMarketplace()` does not restore the source on the
+   * next launch; everything else ignores it.
+   */
+  removed?: boolean;
 }
 
 /** Resolve the effective ordered list of clone URLs for a git source.

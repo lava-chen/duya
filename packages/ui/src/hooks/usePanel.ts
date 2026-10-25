@@ -28,7 +28,6 @@ export interface PanelContextValue {
   panelOpen: boolean;
   setPanelOpen: (open: boolean) => void;
   togglePanel: () => void;
-  panelWidth: number;
   setPanelWidth: (width: number) => void;
 
   workspaceExpanded: boolean;
@@ -41,8 +40,6 @@ export interface PanelContextValue {
 
   tabs: PageTab[];
   activeTabId: string | null;
-  /** The side panel's column tree: which column holds which pane. */
-  layout: WorkspaceLayout;
 
   openPanel: (pageId: PageId, params?: Record<string, unknown>) => string;
   closePanel: (tabId: string) => void;
@@ -63,7 +60,27 @@ export interface PanelContextValue {
   togglePaneExpanded: (paneId: string) => void;
 }
 
+/**
+ * The geometry of the panel region.
+ *
+ * These two values change on EVERY FRAME of a drag: the region's width when
+ * the outer edge is dragged, the column ratios when a wall separator is
+ * dragged. They used to live in the shared panel context, which meant that
+ * every consumer of that context -- the app shell, the chat view, the
+ * sidebar, every panel header -- re-rendered on every pixel of the drag.
+ *
+ * Only the panel zone reads them, so they have their own context now: a drag
+ * re-renders the zone that moves and nobody else.
+ */
+export interface PanelGeometryValue {
+  /** The pixel width of the panel region. */
+  panelWidth: number;
+  /** The side panel's column tree: which column holds which pane. */
+  layout: WorkspaceLayout;
+}
+
 export const PanelContext = createContext<PanelContextValue | null>(null);
+export const PanelGeometryContext = createContext<PanelGeometryValue | null>(null);
 
 const MIN_PANEL_WIDTH = 300;
 // Hard ceiling keeps the panel from eating the main column on extra-wide
@@ -77,6 +94,14 @@ const MIN_CHAT_WIDTH = 420;
 // The panel must not exceed this share of the workspace. Keeps the
 // chat column readable on both 1280px and 4K windows.
 const MAX_PANEL_RATIO = 0.6;
+/**
+ * How long the panel state waits before it is written to localStorage.
+ *
+ * Long enough that a drag (which changes the state on every frame) writes
+ * nothing, short enough that the state is on disk before the user can
+ * plausibly leave.
+ */
+const PERSIST_DEBOUNCE_MS = 250;
 // Re-export the layout constants for siblings (e.g. PanelZone) that need
 // the same caps when computing drag-resize bounds.
 export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH };
@@ -494,9 +519,29 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // Persist the slice of state that needs to survive a reload.
   // `panelWidth` is intentionally excluded — it's a transient UI
   // affordance, not part of the panel "contents".
+  //
+  // The write is DEBOUNCED. The wall's layout changes on every frame of a
+  // separator drag, and a localStorage write is a synchronous, disk-backed
+  // write: doing it per frame put a blocking write on the drag's critical
+  // path. Now a drag writes nothing and the state is written once, when the
+  // gesture settles.
   useEffect(() => {
-    savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout });
+    const timer = setTimeout(() => {
+      savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout });
+    }, PERSIST_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
   }, [tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout]);
+
+  // The debounced write must not lose the last state when the window goes
+  // away before the timer fires, so the pending state is flushed on the way
+  // out.
+  useEffect(() => {
+    const flush = () => {
+      savePersistedState(currentSessionKeyRef.current, panelStateRef.current);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   useEffect(() => {
     const previousSessionKey = currentSessionKeyRef.current;
@@ -1021,7 +1066,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       panelOpen,
       setPanelOpen,
       togglePanel,
-      panelWidth,
       setPanelWidth: handleSetWidth,
       rememberUserWidth,
       resetPanelWidth,
@@ -1033,7 +1077,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       setPanelView,
       tabs,
       activeTabId,
-      layout,
       openPanel,
       closePanel,
       activateTab,
@@ -1048,7 +1091,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     [
       panelOpen,
       togglePanel,
-      panelWidth,
       handleSetWidth,
       rememberUserWidth,
       resetPanelWidth,
@@ -1058,7 +1100,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       panelView,
       tabs,
       activeTabId,
-      layout,
       openPanel,
       closePanel,
       activateTab,
@@ -1072,7 +1113,19 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  return React.createElement(PanelContext.Provider, { value }, children);
+  // The geometry has its own context: it changes on every frame of a drag,
+  // and only the panel zone reads it. Keeping it out of the shared context
+  // is what stops a drag from re-rendering the whole app shell.
+  const geometry = useMemo<PanelGeometryValue>(
+    () => ({ panelWidth, layout }),
+    [panelWidth, layout],
+  );
+
+  return React.createElement(
+    PanelGeometryContext.Provider,
+    { value: geometry },
+    React.createElement(PanelContext.Provider, { value }, children),
+  );
 }
 
 export function usePanel(): PanelContextValue {
@@ -1091,6 +1144,20 @@ export function usePanel(): PanelContextValue {
  */
 export function useOptionalPanel(): PanelContextValue | null {
   return useContext(PanelContext);
+}
+
+/**
+ * The geometry of the panel region: its width and the wall's column tree.
+ *
+ * Read it only where the geometry is actually drawn. A component that reads
+ * it re-renders on every frame of a drag.
+ */
+export function usePanelGeometry(): PanelGeometryValue {
+  const ctx = useContext(PanelGeometryContext);
+  if (!ctx) {
+    throw new Error("usePanelGeometry must be used within a PanelProvider");
+  }
+  return ctx;
 }
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;

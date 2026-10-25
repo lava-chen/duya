@@ -44,16 +44,20 @@ import { resolveLockDir, resolveLockScript, withMeasurementLock } from './lib/lo
 import startupScenario from './scenarios/startup.mjs';
 import sessionSwitchScenario from './scenarios/session-switch.mjs';
 import streamScenario from './scenarios/stream.mjs';
+import sendToFirstOutputScenario from './scenarios/send-to-first-output.mjs';
 import typingScenario from './scenarios/typing.mjs';
 import panelsScenario from './scenarios/panels.mjs';
+import panelDragScenario from './scenarios/panel-drag.mjs';
 import gpuScenario from './scenarios/gpu.mjs';
 
 const SCENARIOS = [
   startupScenario,
   sessionSwitchScenario,
   streamScenario,
+  sendToFirstOutputScenario,
   typingScenario,
   panelsScenario,
+  panelDragScenario,
   gpuScenario,
 ];
 
@@ -70,6 +74,7 @@ function parseArgs(argv) {
     panels: 3,
     baseline: null,
     lockDir: null,
+    fixtures: null,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -84,6 +89,7 @@ function parseArgs(argv) {
     else if (arg === '--lock-mode') options.lockMode = next();
     else if (arg === '--agent') options.agent = next();
     else if (arg === '--panels') options.panels = Number.parseInt(next(), 10);
+    else if (arg === '--fixtures') options.fixtures = next().split(',').map((s) => s.trim()).filter(Boolean);
     else if (arg === '--baseline') options.baseline = path.resolve(REPO_ROOT, next());
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`unknown argument: ${arg}`);
@@ -102,6 +108,7 @@ function usage() {
       '  node e2e/perf/run.mjs [--scenarios a,b] [--samples N] [--out DIR]',
       '                           [--lock-script PATH] [--lock-dir PATH] [--lock-wait-min N]',
       '                           [--no-lock] [--lock-mode MODE] [--agent NAME] [--panels N]',
+      '                           [--fixtures a,b]',
       '',
       `scenarios: ${SCENARIOS.map((scenario) => scenario.id).join(', ')}`,
       '',
