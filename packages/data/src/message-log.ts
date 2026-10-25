@@ -836,23 +836,31 @@ export class MessageLog {
     const timelineRows: TimelineEntryRow[] = [];
     /** Index metadata by entry id, for turnId/createdAt fallbacks below. */
     const metaById = new Map<string, { turnId: string | null; createdAt: number }>();
-    for (const row of rows) {
-      let entry: RolloutLine;
-      try {
-        entry = JSON.parse(this.readRange(absolutePath, row.file_offset, row.byte_len)) as RolloutLine;
-      } catch {
-        // Corrupt line: scan() reconciles partial tails at startup; here we
-        // surface the row as an opaque compaction-kind payload would break
-        // consumers, so skip it. The file byte range stays intact for audit.
-        this.logger.warn(
-          'Unparseable rollout line skipped in projection',
-          { sessionId, seq: row.seq },
-          this.logComponent,
-        );
-        continue;
+    // One file handle for the whole projection. The loop below reads one
+    // byte range per message, and opening and closing the file for every
+    // range made a long session pay two extra syscalls per message.
+    const reader = this.openRangeReader(absolutePath);
+    try {
+      for (const row of rows) {
+        let entry: RolloutLine;
+        try {
+          entry = JSON.parse(reader.read(row.file_offset, row.byte_len)) as RolloutLine;
+        } catch {
+          // Corrupt line: scan() reconciles partial tails at startup; here we
+          // surface the row as an opaque compaction-kind payload would break
+          // consumers, so skip it. The file byte range stays intact for audit.
+          this.logger.warn(
+            'Unparseable rollout line skipped in projection',
+            { sessionId, seq: row.seq },
+            this.logComponent,
+          );
+          continue;
+        }
+        metaById.set(entry.id ?? '', { turnId: row.turn_id, createdAt: row.created_at });
+        timelineRows.push({ entry, seq: row.seq });
       }
-      metaById.set(entry.id ?? '', { turnId: row.turn_id, createdAt: row.created_at });
-      timelineRows.push({ entry, seq: row.seq });
+    } finally {
+      reader.close();
     }
 
     const projected = options?.includeSuperseded
@@ -2239,11 +2247,14 @@ export class MessageLog {
 
   /** Create the file (and parent directories) if it does not exist. */
   private ensureFile(absolutePath: string): void {
+    // The append path calls this on every batch, and the file almost always
+    // exists already. Probing the file first skips the directory-creation
+    // syscall in that common case: an existing file implies its directory
+    // exists, and a missing one still gets both created below.
+    if (fs.existsSync(absolutePath)) return;
     const dir = path.dirname(absolutePath);
     fs.mkdirSync(dir, { recursive: true });
-    if (!fs.existsSync(absolutePath)) {
-      fs.writeFileSync(absolutePath, '', 'utf8');
-    }
+    fs.writeFileSync(absolutePath, '', 'utf8');
   }
 
   /**
@@ -2288,6 +2299,48 @@ export class MessageLog {
     } finally {
       fs.closeSync(fd);
     }
+  }
+
+  /**
+   * A reader over one rollout file that keeps the handle open.
+   *
+   * `readRange` opened and closed the file for every byte range, so a
+   * projection over N messages paid 2N extra syscalls that had nothing to
+   * do with the content. The bytes are unchanged: every range is still
+   * read at its own offset, with its own length.
+   *
+   * When the file cannot be opened — a missing rollout, for instance — the
+   * reader falls back to the per-range open/read/close path, so each row
+   * still fails on its own exactly as it did before.
+   */
+  private openRangeReader(absolutePath: string): {
+    read: (offset: number, len: number) => string;
+    close: () => void;
+  } {
+    let fd: number;
+    try {
+      fd = fs.openSync(absolutePath, 'r');
+    } catch {
+      return {
+        read: (offset: number, len: number) => this.readRange(absolutePath, offset, len),
+        close: () => {},
+      };
+    }
+    const handle = fd;
+    return {
+      read: (offset: number, len: number) => {
+        const buf = Buffer.alloc(len);
+        fs.readSync(handle, buf, 0, len, offset);
+        return buf.toString('utf8');
+      },
+      close: () => {
+        try {
+          fs.closeSync(handle);
+        } catch {
+          /* already closed */
+        }
+      },
+    };
   }
 
   /**
@@ -2382,19 +2435,25 @@ export class MessageLog {
 
   /** Get the cached rollout path, or resolve + write back + cache on first access. */
   private getOrCreateRolloutPath(sessionId: string, createdAt: number): string {
-    const desired = this.resolvePath(sessionId, createdAt);
     const existing = this.getRolloutPath(sessionId);
-    if (existing && existing !== desired) {
+    if (existing) {
       // Plan 506 (C1): the generation layout is sticky — the active file
       // must stay beside its archive segments, so never re-bucket it into
       // a new date directory. Only legacy single files move.
       if (path.basename(existing) === 'active.jsonl') return existing;
+      // The filename embeds a millisecond-precision stamp, so it differs on
+      // every batch. Only the DATE BUCKET decides where the file belongs;
+      // treating every stamp change as a move renamed the rollout file and
+      // rewrote sessions.rollout_path on every single append.
+      if (!this.isDifferentDateBucket(existing, createdAt)) return existing;
       // Date bucket changed (cross-midnight session) — move the file.
+      const desired = this.resolvePath(sessionId, createdAt);
+      if (desired === existing) return existing;
       this.moveRollout(sessionId, existing, desired);
       return desired;
     }
-    if (existing) return existing;
 
+    const desired = this.resolvePath(sessionId, createdAt);
     const absolutePath = this.resolvePathOnDisk(desired);
     this.ensureFile(absolutePath);
 
@@ -2440,6 +2499,27 @@ export class MessageLog {
 
     this.pathCache.set(sessionId, desired);
     return desired;
+  }
+
+  /**
+   * Whether `existing` lives in a different UTC date bucket than `createdAt`.
+   *
+   * A rollout path is `sessions/<yyyy>/<mm>/<dd>/rollout-<stamp>-<id>.jsonl`.
+   * The stamp is millisecond-precision, so it changes on every batch; the
+   * bucket is the part that decides where the file belongs.
+   *
+   * A path that is not in that layout — a legacy flat path, or a bot
+   * session's absolute path — cannot be compared this way, so it counts as
+   * a different bucket: the caller then moves the file exactly as before.
+   */
+  private isDifferentDateBucket(existing: string, createdAt: number): boolean {
+    const segments = existing.split(/[\\/]/);
+    if (segments.length < 5 || segments[0] !== 'sessions') return true;
+    const date = new Date(createdAt);
+    const yyyy = String(date.getUTCFullYear()).padStart(4, '0');
+    const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(date.getUTCDate()).padStart(2, '0');
+    return segments[1] !== yyyy || segments[2] !== mm || segments[3] !== dd;
   }
 
   /**
