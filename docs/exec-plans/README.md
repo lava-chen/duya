@@ -6,6 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 待 review、CI 与真机冒烟 |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
