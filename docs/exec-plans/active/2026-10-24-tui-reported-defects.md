@@ -122,7 +122,7 @@ PR 描述与实录提交推上去之后，master 又前进 7 个 commit——PR 
 | --- | --- | --- | --- | --- |
 | `baf1bcfc`（merge `origin/master`）+ 无本地未提交 | Win10 26200 x64 / Node 24.16.0 | `npx vitest run --pool=forks packages/cli packages/agent-runtime/test/tools/execution/streaming-tool-executor.test.ts packages/agent-runtime/test/run-engine-ports-drain.test.ts packages/host/tests/worker-config/provider-catalog.test.ts packages/data/tests/message-log-read-range.test.ts` | 0 · 107 files / 1293 tests passed | 冲突仍只有 `packages/host/bundle/**`（worker-entry + metafile），`npm run bundle:worker` 从合并后源码重建解决；多出的 4 个用例来自 master 的读路径改动 |
 | 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | `bundle:verify` 必须放在最后跑（行尾陷阱见上）；干净树上 FRESH 0/950 |
-| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | **本轮真机验收未完成**：连「只回一个字」的最小 prompt 也 `fetch failed`，而 `api.minimaxi.com` / `api.minimax.cn` / `api.minimax.io` 三处 `curl` 均返回 404（说明可达）、本机无 proxy 环境变量 → 判为 provider 侧或出网策略问题，与本任务改动无关；同一 bundle 的真机证据沿用 `40d3de56` 那一行 |
+| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | **本轮真机验收未完成，且与本任务改动无关**：最小 prompt（「只回一个字」）也 `fetch failed`；`api.minimaxi.com` / `api.minimax.cn` / `api.minimax.io` 三处 `curl` 均可达（根路径 404），`POST https://api.minimaxi.com/anthropic/v1/messages` 返回 401（说明 TLS 与出网正常，是无凭据的预期码），本机无 proxy 环境变量。判别实验：`git checkout 40d3de56 -- packages/host/bundle`（真机 1.5 小时前刚成功的那一版）后跑同一 prompt，仍 `✗ fetch failed` → 归因于环境（provider 侧或凭据获取），不是合并或重建 bundle 引入。跑失败时 `docs-local/tui-frames.jsonl` 未生成，说明 turn 在产帧前就断了；`~/.duya/logs/background-host.log` 记录 worker 用的正是本检出的 `packages/host/bundle/worker-entry.js`，Host 正常 listen |
 
 阻塞与解除条件：出网恢复后用同一脚本重跑
 （`MSYS_NO_PATHCONV=1 node docs-local/tui-pty-repro.mjs` 加 todo 提示词），转写区出现 `└ ✔ Todo list`、底部出现 `⚡ N.N tok/s` 即解除。
@@ -151,7 +151,7 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
 - 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；三次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造）后各重跑一遍，最新全量为 107 files / 1293 tests。
-- 待补：`baf1bcfc` 上的真机一轮 turn 因 provider `fetch failed` 未完成，自动化门禁与 CI 均已过；解除条件见「三次同步」。
+- 待补：`baf1bcfc` 上的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与该 head 的 CI 均已过，解除条件见「三次同步」。
 - 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（head `baf1bcfc`，CI run `40146195715` 5 个 job 全绿；GitHub 侧无必需 review / 必需检查，保持可 review，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
