@@ -614,3 +614,57 @@ Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/work
 
 
 最终交付：[Draft PR #476](https://github.com/lava-chen/duya/pull/476)，代码提交 `9afe4c01` 已推送，base 为 `codex/worktree-p1`。提交后 `npm run bundle:verify` exit 0，**FRESH，0/958 输入变化**；该项已完成，只有新增源码改动后才需重新生成产物并复验。最新完整类型检查仍待最终退出码，CI/review 未等待完成，按用户要求交接。下一位 agent 以 PR 描述中更新后的待办为准。所有已跟踪任务文件已提交，剩余未跟踪项仅为依赖 overlay。
+
+## 2026-10-25 Windows 接续验证、CI 修复与外壳补验
+
+owner：ZCode 会话（接手 PR #476）。worktree `.claude/worktrees/worktree-complete`，分支 `codex/worktree-complete`，起点 head `92b5fb5f`。环境 Windows 10.0.26200 / Node v24.16.0 / Git Bash。
+
+### 前任遗留项的处置
+
+- `typecheck:all`（前任无最终结论）：92b5fb5f 原样与修复后复跑均 exit 0。`architecture:check` exit 0（2775 tolerated，无新增违规）。
+- CI：#476 base 为 `codex/worktree-p1`，`test.yml` 的 `pull_request` 只匹配 `master`，分支永远无 CI。已用 `workflow_dispatch` 手动触发（run 40154181380，head 92b5fb5f）获取信号。
+- ajv 打包扫描误报评估：**确认是扫描器误报，非打包缺陷**。`worker-metafile.json` 证实 `ajv-formats/dist/formats.js` 是已打包 input（12263 字节、0 import）；bundle 里的 `require("ajv-formats/dist/formats")` 位于 ajv standalone codegen 的带标签模板字面量（`(0,MTe._)\`require(...).${r}\``），是生成代码的数据。扫描器手写词法器在 15MB 压缩代码中被更早的正则字面量内引字符（如 `/"/g`）带偏、误入代码位。本 PR 不修扫描器（正确修法是完整 tokenizer 或改用 metafile imports 作为事实源，修错会漏报真问题），也不加 baseline；单独立项处理。
+
+### CI run 40154181380 失败归因与修复（绿的部分：architecture / test scope / typecheck×3）
+
+前任 Linux 只跑 Host 209 文件，未覆盖 apps/desktop 与跨平台路径，遗留以下回归：
+
+| 失败（文件×用例） | 平台 | 根因 | 修复 |
+| --- | --- | --- | --- |
+| run-create-ack-real-bridge×7、terminal-publication-barrier×3、h8-2-worker-run-channel-seam×7、desktop-native-run-closed-loop×2 | 全平台 | `9afe4c01` 的 `getDesktopCheckoutService()` 要求先经 `createDesktopHostWorkspaceLifecycleApis` 初始化，desktop bridge 测试环境未初始化即触发 run:create admission | `desktop-host-api.ts` 改为按 `getCoreStores()` 身份懒构造（生产等价：启动路径本就用同一 singleton）；4 个 harness 补 `SessionStore` 迁移与 stores 形状 |
+| citation-drift×6（envelope.ts×5、run.ts×1）+ sse-event.ts×1 | 全平台 | `9afe4c01` 移动 router.ts 行号未更新 agent-protocol 的 file:line 引用；本轮 router 提取又带出 1 处 | 更新 7 处引用行号，`13-citation-drift.test.ts` 全绿 |
+| workspace-lifecycle-handlers×1 | 全平台 | 新增 `control` 通道未更新通道清单断言 | 断言补 `workspace-lifecycle:checkout:control`，并新增 control 契约用例 |
+| session-checkout-service×2、tool-write-gate×1 | 仅 Windows | 开发机全局 `core.autocrlf` 把 worktree 检出重写为 CRLF，内容断言失配 | `makeRepo` fixture 显式 `core.autocrlf=false`（托管 worktree 共享该配置） |
+| checkout-integration-http×1 | 仅 Windows | Host 注册时把路径归一化为 `c:/...`，与原生 `C:\...` fixture 逐字比较失配 | 改用进入前 `status` 的 cwd 作"回家"基准（平台无关且语义更准） |
+| run-turn-provider-integration×1（60s 超时）、build 矩阵 ui-states E4.4 主题切换 E2E×1（60 过 1 失） | macos / 三平台 | 疑慢机 flake（同套件 ubuntu/windows 及本机均过） | 不改断言，待新 CI 复核 |
+
+### 外壳验收补齐（新增用例，全部通过）
+
+- Desktop 聊天轮光标：`handlePostChat` 内联块提取为 `decideChatExecutionDirectory`（沿用本文件 `resolveBotProviderConfigFallback` 的导出纯函数模式），4 用例覆盖 client / recover-transition / pinned（含 options 不变性）/ 缺目录 pinned。
+- Desktop IPC control 通道：转发已解析命令且结果逐字返回（未知字段被 parser 剥除）、非法 sessionId / 非法命令拒绝。
+- Desktop 嵌入式 Host 真链路（`desktop-host-workspace-lifecycle.test.ts`）：真 `startDesktopHostApi` + 真 SQLite + 真 Git，`HostSessionHttpClient` 驱动 enter → status → exit(remove)，保留修改与拒绝删除均有断言。
+- Web BFF 双 transport（`workspace-lifecycle-connectivity.test.ts`）：TUI 客户端与 Web adapter 对同一 Host 的 control 一致（enter/status/exit 一轮，含拒绝路径）。
+
+### 本轮验证记录（Windows / Node v24.16.0）
+
+| 命令 / 范围 | 结果 |
+| --- | --- |
+| `npm run typecheck:all` | exit 0（92b5fb5f 与修复后各一轮，均在本 worktree） |
+| `npm run architecture:check` | exit 0；无新增违规 |
+| 新增/修复的外壳与 harness 用例（router 4、IPC 9、desktop 嵌入式 4、web 连通 3、4 个 bridge harness 25、citation-drift 6） | 全部通过 |
+| PR 回归集（workspace / managed-shell / worker-subagents / checkout-* / run-turn-* / session-service / CLI worktree，33 文件） | 32 passed / 1 skipped；285 passed / 5 skipped；exit 0 |
+| `node scripts/check-packaged-artifacts.mjs --bundle` | 仅既有 ajv 误报（见上），其余 0 finding |
+
+### 后续：新会话 worktree 组合交互（P5 提案，未实现）
+
+参照：ZCode Desktop 新版 New session 流（用户截图）与 `E:\cloned-projects\ZCode` 旧版 `packages/ui/src/git-branch-switcher/`（display.ts / switchAssist.ts）、`v4/SessionPane.tsx` 的 worktree 徽标数据。截图中的形态：选文件夹（Search folders + Recent + Open folder）→ Branch 行（默认当前分支，展开为可搜索分支列表，键盘选择，如 pr-441）→ Worktree 开关（默认开）→ 描述任务开始会话；侧栏会话项带 🔗 计数与 ⚠️ 徽标。
+
+duya 落地边界（复用本 PR 的 Host 能力，缺的只有分支列表与 UI）：
+
+- 新会话面板：选 workspace（已有）→ 可选分支 + Worktree 开关 → 创建会话后立即 `control enter { base: 分支, branchName }`（复用既有 pending/409 防线与 run admission）。
+- 需新增 Host 只读 API：按 root 列分支（含当前分支标记）；UI 侧 BranchPicker（可搜索 + 键盘导航）。
+- 侧栏会话徽标：在 worktree 中（分支名 / 🔗）与 pending transition（⚠️ → recover 入口）。
+- 学 switchAssist 的受阻引导：`checkout_background_busy` / dirty 等拒绝 code 映射为原因 + 动作入口，而非只报错。
+- 不做独立分支切换器（只在 enter 语境选基线）；分支列表只读。
+
+状态：仅设计记录，待用户排期后另开切片实现。
