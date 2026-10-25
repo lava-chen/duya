@@ -1373,7 +1373,7 @@ html[data-theme="light"] .ask-question-option.selected {
 .ask-question-dismiss kbd,
 .ask-question-continue kbd {
   border-radius: 0.35rem;
-  font-family: var(--font-mono), monospace;
+  font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 500;
   line-height: 1;
@@ -1480,7 +1480,7 @@ html[data-theme="light"] .ask-question-option.selected {
   white-space: pre-wrap;
   word-break: break-all;
   padding: 0.5rem 0.75rem;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   margin: 0;
   max-height: 10rem;
@@ -1718,7 +1718,7 @@ html[data-theme="light"] .ask-question-option.selected {
 }
 
 .permission-prompt-plan-tool {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   padding: 0.1rem 0.4rem;
   border-radius: 0.25rem;

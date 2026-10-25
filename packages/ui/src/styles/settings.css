@@ -42,9 +42,9 @@
   margin: 0;
 }
 
-/* Copernicus font for settings titles */
+/* Serif display stack for settings titles (see --font-serif token) */
 .settings-title-copernicus {
-  font-family: 'Copernicus', Georgia, 'Times New Roman', serif;
+  font-family: var(--font-serif);
   font-size: 1.5rem;
   font-weight: 700;
   color: var(--text);
@@ -288,7 +288,7 @@
 
 .settings-migration-path {
   color: var(--text-muted);
-  font-family: monospace;
+  font-family: var(--font-mono);
   word-break: break-all;
 }
 
@@ -533,8 +533,8 @@
   /* Match the page font. antd v6 only sets font-family: inherit on
      .ant-select-input; the .ant-select-content / content-value used to
      display the selected value falls back to the browser sans-serif
-     stack and visually clashes with Styrene. */
-  font-family: 'Styrene', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+     stack and visually clashes with the UI font. */
+  font-family: var(--font-sans);
 }
 
 /* antd v6: the root element is the visual trigger. */
@@ -779,7 +779,7 @@
 .skill-path-text {
   flex: 1;
   font-size: 0.85rem;
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -929,7 +929,7 @@
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
   background: var(--surface);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 0.7rem;
 }
 

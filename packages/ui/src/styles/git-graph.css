@@ -169,7 +169,7 @@
 }
 
 .git-graph-cell-hash {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .git-graph-subject {
@@ -372,7 +372,7 @@
 }
 
 .git-graph-detail-mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 /* The sha is the one field worth taking away, so it is a control rather than
@@ -387,7 +387,7 @@
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   text-align: left;
 }
 

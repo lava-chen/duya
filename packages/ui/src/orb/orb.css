@@ -40,8 +40,7 @@
   --orb-easing: cubic-bezier(0.16, 1, 0.3, 1); /* Apple-style ease-out */
 
   /* ── 字体 ── */
-  --orb-font-family: 'Styrene', 'Microsoft YaHei', 'PingFang SC',
-    -apple-system, BlinkMacSystemFont, sans-serif;
+  --orb-font-family: var(--font-sans);
   --orb-font-size-input: 13px;
   --orb-font-size-result: 14px;
   --orb-font-size-bubble: 11px;

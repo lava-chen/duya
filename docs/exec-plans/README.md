@@ -6,6 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
 | TUI 工具状态 | [2026-10-24 TUI 工具状态](active/2026-10-24-tui-tool-status-marks.md) | 门禁已过，PR #457 等 CI 与授权集成 |
 | Slash 命令实施 | [2026-10-24 slash command implementation](active/2026-10-24-slash-command-implementation.md) | 11 命令 / 4 PR 串行；PR-1 会话类（compact/btw/diff）接线中，CLI `/compact` 复用 plan 613 |
 | 动态工作流核心包 | [2026-10-24 动态工作流核心包](active/2026-10-24-dynamic-workflow-package.md) | S0 已对账并记录基线；提交文档切片后定 S1 包边界并抽取零 IO 核心 |
