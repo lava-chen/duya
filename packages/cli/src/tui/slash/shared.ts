@@ -41,6 +41,7 @@ import {
   type Message as TranscriptMessage,
 } from '@duya/agent-protocol/transcript';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
+import type { WindowItem } from '../window.js';
 import type { TuiSlashContext } from './types.js';
 
 const MESSAGE_PAGE_SIZE = 200;
@@ -111,6 +112,77 @@ export function showPanel(
   }
   ctx.tui.printNotice(title);
   for (const line of lines) ctx.tui.printNotice(line);
+}
+
+/** One viewable entry of an interactive list panel. */
+export interface TuiViewEntry {
+  /** The row's name — what the filter matches and what the user reads. */
+  readonly label: string;
+  /** Stable identity handed back by `onEnter`. */
+  readonly value: string;
+  /** The per-row qualifier, dimmed after the label. */
+  readonly description?: string;
+  /** The right-hand column, e.g. `on`, `connected`. */
+  readonly valueLabel?: string;
+  /** The one-line explanation shown under the SELECTED row. */
+  readonly summary?: string;
+  /** The full detail page opened on Enter. */
+  readonly detailLines: readonly string[];
+}
+
+/** The list footer when the host offers an interactive browser. */
+export const VIEW_LIST_FOOTER = 'type to filter · ↑↓ choose · Enter details · Esc close';
+
+/**
+ * Present entries as an interactive list when the host offers one.
+ *
+ * Enter opens the entry's detail page; Esc comes back to the list, on the
+ * row that opened it. This is the browser shape the `/plugin` `/apps`
+ * `/skills` `/mcp` view commands share — codex's `/plugins` cycle, adapted
+ * to the docked window the TUI already has.
+ *
+ * The fallbacks keep every older surface honest: a host without the browser
+ * methods, or an EMPTY entry list (an empty list window would read as a
+ * broken one), renders `fallbackLines` through the plain panel instead.
+ * Those lines are the command's own static rendering, so a harness that only
+ * has `printNotice` still sees the same facts.
+ */
+export function showEntries(
+  ctx: TuiSlashContext,
+  title: string,
+  entries: readonly TuiViewEntry[],
+  fallbackLines: readonly string[],
+): void {
+  const tui = ctx.tui;
+  if (tui.showListPanel === undefined || tui.showDetailPanel === undefined || entries.length === 0) {
+    showPanel(ctx, title, fallbackLines, { footer: '↑↓ / PgUp / PgDn scroll · Esc close', scrollable: true });
+    return;
+  }
+
+  const items: WindowItem[] = entries.map((entry) => ({
+    label: entry.label,
+    value: entry.value,
+    ...(entry.description === undefined ? {} : { description: entry.description }),
+    ...(entry.valueLabel === undefined ? {} : { valueLabel: entry.valueLabel }),
+    ...(entry.summary === undefined ? {} : { detail: entry.summary }),
+  }));
+
+  const openList = (selected: number): void => {
+    tui.showListPanel!(title, items, {
+      footer: VIEW_LIST_FOOTER,
+      ...(selected > 0 ? { initialSelected: selected } : {}),
+      onEnter: (value) => {
+        const index = entries.findIndex((entry) => entry.value === value);
+        const entry = entries[index];
+        if (entry === undefined) return;
+        tui.showDetailPanel!(`${title} · ${entry.label}`, entry.detailLines, {
+          footer: 'Esc back',
+          onBack: () => openList(Math.max(0, index)),
+        });
+      },
+    });
+  };
+  openList(0);
 }
 
 /**

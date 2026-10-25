@@ -123,6 +123,29 @@ describe('WindowManager', () => {
     expect(body).not.toContain('item-0');
     expect(body).toContain('…');
   });
+
+  it('opens on the row initialSelected names, clamped to the list', () => {
+    const mgr = new WindowManager();
+    const items = [
+      { label: 'first', value: 'a' },
+      { label: 'second', value: 'b' },
+      { label: 'third', value: 'c' },
+    ];
+    mgr.open({ title: 'Browse', items, initialSelected: 2 });
+    expect(mgr.render(20)).toContain('❯ third');
+    // A stale index from a shorter list clamps to the last row.
+    mgr.open({ title: 'Browse', items: items.slice(0, 1), initialSelected: 2 });
+    expect(mgr.render(20)).toContain('❯ first');
+  });
+
+  it('fires onCancel when a detail page is closed, keeping submit semantics separate', () => {
+    const mgr = new WindowManager();
+    let back = 0;
+    mgr.open({ title: 'Detail', lines: ['facts'], onCancel: () => { back += 1; } });
+    mgr.handleKey('escape');
+    expect(back).toBe(1);
+    expect(mgr.isActive).toBe(false);
+  });
 });
 
 describe('action registry', () => {

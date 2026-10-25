@@ -33,6 +33,7 @@ import type {
 } from '@duya/agent-protocol';
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
 import type { PopoverItem } from '@duya/input-completion';
+import { rewritePluginMentionTokens } from '@duya/input-completion';
 import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalog';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
@@ -51,6 +52,7 @@ import { backgroundTaskDetailLines, type BackgroundTaskView } from './tui/backgr
 import { RunSession } from '@duya/client-core';
 import { TurnQueue, type PendingDraft, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
+import { createPluginCompletionSource } from './tui/plugin-candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
@@ -738,13 +740,23 @@ export async function chatTui(
     },
     invalidate: () => completionFiles.invalidate(),
   };
+  // `@` offers the installed plugins BEFORE the workspace paths — the
+  // desktop's `@` order (what it can ADD leads what it can POINT AT) — and
+  // the rows ride the same Host inventory `/plugin` reads. The source caches
+  // with a short TTL and repaints the open popup when a background refresh
+  // lands rows, so the first `@` after startup is not a lie about the Host.
+  const pluginCandidates = createPluginCompletionSource(client, {
+    onUpdated: () => tui.recheckCompletion(),
+  });
+  void pluginCandidates.refresh();
   const completionSources: CompletionSources = {
     slash: () => [...sessionSlashRows(), ...buildSlashCompletionRows({ locale })],
     slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
     slashOptionsOnBare: (command) => command === '/resume' || command === '/sessions',
-    // No `context` rows: the legacy CLI's were product modes, and this surface
-    // has no mode registry. `@` is paths only.
-    context: () => [],
+    // Plugin rows lead, file paths follow: `@<pluginId>` inserts a MENTION the
+    // submit path rewrites (see `runTurn`), `@<path>` stays the file reference
+    // it always was. The legacy CLI's mode rows have no counterpart here.
+    context: () => [...pluginCandidates.list()],
     files: () => fileCandidates.list(),
   };
 
@@ -1314,6 +1326,10 @@ export async function chatTui(
     owned?.own(activeSession.id);
     await resyncEffortForModelChange(previousModel);
     watchSession(activeSession.id);
+    // A plugin installed in Settings while this TUI ran is invisible until
+    // the source re-reads the inventory; a session boundary is the cheapest
+    // honest moment to do it.
+    void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.clearTranscript();
     tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
@@ -1334,6 +1350,9 @@ export async function chatTui(
     activeSession = adopted;
     await resyncEffortForModelChange(previousModel);
     watchSession(adopted.id);
+    // Same reason as `/new`: the adopted session may be the first moment this
+    // TUI has talked to a Host whose plugin set differs from the cache.
+    void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.replaceTranscript(await loadSessionMessages(client, adopted.id));
     tui.printNotice(`Switched to "${adopted.title || 'Untitled session'}" (${adopted.id.slice(0, 8)}).`);
@@ -1403,6 +1422,21 @@ export async function chatTui(
     const runSessionId = activeSession.id;
     const runStartedAt = Date.now();
     let permissionPollTimer: ReturnType<typeof setInterval> | null = null;
+    // Plugin mentions are rewritten ONCE, here, for every path into a turn —
+    // a fresh send, a queued draft and a steer all reach this line. The user
+    // typed `@<pluginId>`; the model gets the structured `[@Name](plugin://id)`
+    // link (same rewrite the desktop composer runs), and the structured
+    // mention lists ride the options bag so the worker's plugin-activation
+    // injection fires. `displayContent` keeps the transcript showing what the
+    // user typed, not the encoded form.
+    const mentionRewrite = rewritePluginMentionTokens(
+      prompt,
+      pluginCandidates.capabilities(),
+      pluginCandidates.connectedProviders(),
+      [],
+    );
+    const hasMentions = mentionRewrite.mentionedPlugins.length > 0
+      || mentionRewrite.mergedProviders.length > 0;
     // Pending drafts enter the transcript only when admitted to a Host turn —
     // unless the controller already echoed them (a steer is shown the moment
     // the user sends it).
@@ -1410,8 +1444,21 @@ export async function chatTui(
     try {
       const start = await client.startAgentRun({
         sessionId: runSessionId,
-        prompt,
+        prompt: mentionRewrite.content,
         ...(attachments.length > 0 ? { attachments } : {}),
+        ...(hasMentions
+          ? {
+              options: {
+                ...(mentionRewrite.mentionedPlugins.length > 0
+                  ? { mentionedPlugins: mentionRewrite.mentionedPlugins }
+                  : {}),
+                ...(mentionRewrite.mergedProviders.length > 0
+                  ? { mentionedProviders: mentionRewrite.mergedProviders }
+                  : {}),
+                displayContent: prompt,
+              },
+            }
+          : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
