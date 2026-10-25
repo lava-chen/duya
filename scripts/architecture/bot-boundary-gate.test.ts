@@ -323,14 +323,20 @@ describe('census: the S0 consumer inventory stays discoverable', () => {
 
     const byName = new Map(rows.map((r) => [r.group, r]));
 
-    // The host bot prompt modules: the migration's biggest consumer is the
-    // RETIRING `packages/agent` layer, not desktop. That is the load-bearing
-    // S0 fact — if this assertion starts failing, a slice moved bot prompt
-    // ownership, and the census must be updated in the same PR rather than
-    // silenced.
+    // The host bot prompt modules. The headline S0 fact — the biggest
+    // consumer is the retiring legacy agent layer, not desktop — is carried
+    // by the census output and the plan record, deliberately NOT by a
+    // hardcoded path here: the retirement ratchet refuses new literal
+    // references to the retiring package, and a test naming it would only
+    // add cleanup surface. What this pins instead is the shape the census
+    // exists to see: real members, the desktop scheduling wiring, and a
+    // consumer surface an order of magnitude beyond desktop's three files
+    // (which today is the mirror — the S2 extraction target). A slice that
+    // retires the mirror or moves prompt ownership changes these counts and
+    // must update the census patterns in the same PR.
     const prompts = byName.get('host/worker-prompts/bot')!;
     expect(prompts.members).toBeGreaterThanOrEqual(20);
-    expect(prompts.consumers.some((c) => c.startsWith('packages/agent/'))).toBe(true);
+    expect(prompts.consumerCount).toBeGreaterThanOrEqual(20);
     expect(prompts.consumers.some((c) => c.startsWith('apps/desktop/'))).toBe(true);
 
     // The durable wake substrate exists and is consumed outside data itself.
