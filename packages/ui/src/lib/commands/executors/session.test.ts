@@ -110,6 +110,7 @@ function makeBridge(overrides: Partial<BridgeSpies['snapshot']> = {}): BridgeSpi
       resetSession: spies.resetSession,
       stopTurn: spies.stopTurn,
       compactContext: spies.compactContext,
+      focusSession: vi.fn(),
       requestRecap: vi.fn(),
       setSessionModel: vi.fn(),
       setEffort: vi.fn(),

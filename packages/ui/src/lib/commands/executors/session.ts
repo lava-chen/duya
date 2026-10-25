@@ -391,4 +391,30 @@ export const SESSION_EXECUTORS: Record<string, CommandExecutorFn> = {
     app.toast('已开始压缩上下文（后台运行）', 'info');
     return { type: 'dismiss' };
   },
+
+  /**
+   * `/app` → the desktop app.
+   *
+   * codex's `/app` hands the session over to the Desktop App. On the Desktop
+   * there is no other app to hand it to, so the command becomes the
+   * idempotent "bring THIS session back to the foreground": it re-opens the
+   * session the composer is attached to and says so.
+   *
+   * The switch is the store's `setActiveThread` — the same call the sidebar
+   * rows make — so the view returns to the chat with that session active. The
+   * app's optional session-handoff capability (`openInDesktopApp`) is the
+   * OTHER direction of the same gesture: how a CLI asks this app to open a
+   * session.
+   */
+  app: (ctx) => {
+    const app = ctx.app;
+    if (!app) return { type: 'error', message: '/app: app bridge unavailable' };
+    const { sessionId } = app.getSessionSnapshot();
+    if (!sessionId) {
+      return { type: 'error', message: '/app: 当前没有打开的会话。' };
+    }
+    app.focusSession(sessionId);
+    app.toast('当前会话已在桌面端打开', 'info');
+    return { type: 'dismiss' };
+  },
 };
