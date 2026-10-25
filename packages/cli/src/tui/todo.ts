@@ -20,6 +20,16 @@
  * payload already carries the whole list, so the CLI parses it out of the
  * result it was going to print anyway.
  *
+ * The list is not the whole payload, though: `StreamingToolExecutor` wraps
+ * every result in the model-visible status envelope
+ * (`[completed] <tool>\n{…}\n[Duration: Nms]`), so the JSON sits between two
+ * lines the parser was never meant to look at. `unwrapResultEnvelope` removes
+ * them before parsing — the same grammar
+ * `packages/agent-runtime/src/context/compact/transforms/reformatCompress.ts`
+ * uses for the same reason. Without it the result of a todo write is a string
+ * that starts with `[completed] todo`, `JSON.parse` never runs, and the
+ * transcript shows the bare `Todo list` head with no items under it.
+ *
  * ## The reference shapes
  *
  * - codex (`codex-rs/tui/src/history_cell/plans.rs`): `PlanUpdateCell` draws
@@ -59,6 +69,22 @@ export function isTodoTool(name: string): boolean {
 const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'completed']);
 
 /**
+ * Undo the model-visible status/duration envelope around a tool result.
+ *
+ * Both lines are optional: a result that never went through the executor (a
+ * replayed transcript row, a worker that states its own text) carries none, and
+ * the input is returned untouched for those.
+ */
+function unwrapResultEnvelope(result: string): string {
+  const lines = result.split('\n');
+  const head = lines[0] ?? '';
+  if (head.startsWith('[completed] ') || head.startsWith('[failed] ')) lines.shift();
+  const tail = lines.at(-1);
+  if (tail !== undefined && /^\[Duration: \d+ms\]$/.test(tail.trim())) lines.pop();
+  return lines.join('\n');
+}
+
+/**
  * Read the todo items out of a tool result, or `null` when it is not one.
  *
  * `null` means "this result is not a todo list" — the caller keeps whatever
@@ -66,7 +92,7 @@ const TODO_STATUSES: ReadonlySet<string> = new Set(['pending', 'in_progress', 'c
  * is a real answer and not a failure.
  */
 export function parseTodoItems(result: string): TuiTodoItem[] | null {
-  const trimmed = result.trim();
+  const trimmed = unwrapResultEnvelope(result).trim();
   if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
 
   let parsed: unknown;

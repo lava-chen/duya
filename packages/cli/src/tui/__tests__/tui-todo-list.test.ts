@@ -69,12 +69,46 @@ describe('todo result parsing', () => {
     expect(parseTodoItems(todoResult([{ id: 'a', content: '', status: 'pending' }])))
       .toEqual([{ id: 'a', content: 'a', status: 'pending' }]);
   });
+
+  it('reads the list out of the envelope the executor wraps around the result', () => {
+    // The fixture above hands a bare JSON document, which is what let this suite
+    // stay green while the checklist never appeared on screen: the live wire
+    // never carries one. `StreamingToolExecutor` wraps EVERY result in
+    // `[completed] <tool>\n…\n[Duration: Nms]`, so the string that reaches the
+    // transcript starts with `[completed] todo`, `JSON.parse` was never reached,
+    // and the row rendered as the bare `Todo list` head.
+    const wrapped = `[completed] todo\n${todoResult(THREE_ITEMS)}\n[Duration: 185ms]`;
+    expect(parseTodoItems(wrapped)).toEqual(parseTodoItems(todoResult(THREE_ITEMS)));
+    expect(parseTodoItems(`[failed] todo\n${todoResult(THREE_ITEMS)}\n[Duration: 12ms]`))
+      .toHaveLength(3);
+  });
+
+  it('does not invent a list out of prose that merely mentions one', () => {
+    // Unwrapping must not turn the parser into a substring search: a result
+    // with no JSON body is still not a todo list.
+    expect(parseTodoItems('[completed] todo\nNo tasks currently tracked.\n[Duration: 3ms]')).toBeNull();
+  });
 });
 
 describe('todo rendering', () => {
   it('draws the head with the progress count and one marker per item', () => {
     const rendered = strip(renderTranscript(todoModel(THREE_ITEMS))).split('\n');
     expect(rendered).toEqual([
+      '└ ✔ Todo list 1/3',
+      '    ✔ Read the schema',
+      '    ● Implement the parser',
+      '    ○ Write the tests',
+    ]);
+  });
+
+  it('draws the list from the payload the live wire actually carries', () => {
+    // The render contract pinned above reads a tidied result. This reads the
+    // enveloped one, because that is the string `tool.call_completed` puts on
+    // the wire, and the gap between the two is why the checklist went missing.
+    const model = new TranscriptModel();
+    model.upsertTool('call-1', 'todo', { todos: THREE_ITEMS });
+    model.completeTool('call-1', `[completed] todo\n${todoResult(THREE_ITEMS)}\n[Duration: 185ms]`, false);
+    expect(strip(renderTranscript(model)).split('\n')).toEqual([
       '└ ✔ Todo list 1/3',
       '    ✔ Read the schema',
       '    ● Implement the parser',
