@@ -135,7 +135,7 @@
 
 ## S1 执行记录（2026-10-25）
 
-已实现、已验证、未合并。分支 `codex/bot-framework-s1`（base＝S0 分支 `codex/bot-framework-s0` @ `e13da4aa`，PR 目标 S0 分支，栈式 review）。
+已实现、已验证、未合并。分支 `codex/bot-framework-s1`（base＝master `f24166ec`——S0 已由用户合入 #495，S1 提交 rebase 至其上，PR 目标 master）。
 
 **交付（S1 = Host Bot 接口，1 个窄 PR）**
 
@@ -194,4 +194,4 @@ PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI�
 
 **S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
 
-**S1 切片接续（2026-10-25 第三会话）**：Host Bot 接口已落地（见「S1 执行记录」），分支 `codex/bot-framework-s1`（栈式 base＝S0 head，PR 目标 S0 分支）。S1 验收——Desktop/TUI 同一 Bot 语义、revision 冲突结构化拒绝、requestId 跨进程去重、身份 journal 崩溃修复——已由 22 例具名测试满足；两 bridge legacy 形状回归全绿。**下一步**：S2 提取 `packages/bot` 领域包（domain/application/ports 下沉、host adapter、workspace/build/gates 接线、bot-boundary gate R1 由 pending 翻为 measured），前置＝S1 PR 集成或与 S0 同栈评审。
+**S1 切片接续（2026-10-25 第三会话）**：Host Bot 接口已落地（见「S1 执行记录」），分支 `codex/bot-framework-s1`（base＝master `f24166ec`，S0 已合并后 rebase）。S1 验收——Desktop/TUI 同一 Bot 语义、revision 冲突结构化拒绝、requestId 跨进程去重、身份 journal 崩溃修复——已由 22 例具名测试满足；两 bridge legacy 形状回归全绿。**下一步**：S2 提取 `packages/bot` 领域包（domain/application/ports 下沉、host adapter、workspace/build/gates 接线、bot-boundary gate R1 由 pending 翻为 measured），前置＝S1 PR 集成或与 S0 同栈评审。
