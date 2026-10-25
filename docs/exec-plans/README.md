@@ -6,7 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 待合并，真机冒烟待用户 |
+| TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
 | 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 已合并，e2e 已补，真机冒烟待用户 |
 | 下一步建议下沉 | [2026-10-25 下一步建议下沉到 worker/Host](active/2026-10-25-next-step-suggestion-host.md) | S0 摸底完成；S1 起做 protocol + data 契约与表；PR #496 已合并 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
