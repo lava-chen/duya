@@ -23,6 +23,8 @@ import { I18nContext } from "@/components/layout/I18nProvider";
 import {
   ArrowsClockwiseIcon,
   DotsThreeIcon,
+  EyeIcon,
+  EyeSlashIcon,
   GearSixIcon,
   GlobeSimpleIcon,
   PowerIcon,
@@ -459,6 +461,22 @@ export function MarketplacePage({
               setMarketplaceBusy(null);
             }
           }}
+          onSetHidden={async (name, hidden) => {
+            const api = getPluginAPI();
+            if (!api) return;
+            setMarketplaceBusy(name);
+            try {
+              const res = await api.registry.marketplace.setHidden(name, hidden);
+              if (!res.success) {
+                setSourceError(res.error ?? t("extensions.actionFailed"));
+              } else {
+                setSourceError(null);
+              }
+              await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+            } finally {
+              setMarketplaceBusy(null);
+            }
+          }}
         />
       </Modal>
     </div>
@@ -866,6 +884,7 @@ function SourcesPanel({
   onAdd,
   onRefresh,
   onRemove,
+  onSetHidden,
 }: {
   marketplaces: MarketplaceViewDTO[];
   busy: string | null;
@@ -875,8 +894,14 @@ function SourcesPanel({
   onAdd: (source: string) => Promise<void>;
   onRefresh: (name?: string) => Promise<void>;
   onRemove: (name: string) => Promise<void>;
+  onSetHidden: (name: string, hidden: boolean) => Promise<void>;
 }) {
   const { t } = useTranslation();
+  const [showHidden, setShowHidden] = useState(false);
+  const hiddenCount = marketplaces.filter((market) => market.hidden).length;
+  const visibleMarketplaces = marketplaces.filter(
+    (market) => showHidden || !market.hidden
+  );
 
   return (
     <div className="space-y-4">
@@ -928,14 +953,17 @@ function SourcesPanel({
           </p>
         </div>
       ) : (
+        <>
         <div className="space-y-1">
-          {marketplaces.map((market) => {
+          {visibleMarketplaces.map((market) => {
             const isBusy = busy === market.name || busy === "__all";
-            const isOfficial = /official$/i.test(market.name);
             return (
               <div
                 key={market.name}
-                className="flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-[var(--surface-hover)]"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-2 py-2 transition-colors hover:bg-[var(--surface-hover)]",
+                  market.hidden && "opacity-60"
+                )}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
@@ -947,6 +975,11 @@ function SourcesPanel({
                         ? t("marketplace.sources.kindGit")
                         : t("marketplace.sources.kindLocal")}
                     </span>
+                    {market.hidden && (
+                      <span className="shrink-0 rounded-full bg-[var(--surface-hover)] px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                        {t("marketplace.sources.hiddenBadge")}
+                      </span>
+                    )}
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {t("marketplace.sources.pluginCount", {
                         count: market.pluginCount,
@@ -987,12 +1020,27 @@ function SourcesPanel({
                     variant="ghost"
                     size="sm"
                     shape="square"
-                    disabled={isBusy || busy !== null || isOfficial}
+                    disabled={isBusy || busy !== null}
                     title={
-                      isOfficial
-                        ? t("marketplace.sources.officialNoRemove")
-                        : t("marketplace.sources.remove")
+                      market.hidden
+                        ? t("marketplace.sources.unhide")
+                        : t("marketplace.sources.hide")
                     }
+                    aria-label={
+                      market.hidden
+                        ? t("marketplace.sources.unhide")
+                        : t("marketplace.sources.hide")
+                    }
+                    onClick={() => void onSetHidden(market.name, !market.hidden)}
+                  >
+                    {market.hidden ? <EyeIcon size={14} /> : <EyeSlashIcon size={14} />}
+                  </IconButton>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    shape="square"
+                    disabled={isBusy || busy !== null}
+                    title={t("marketplace.sources.remove")}
                     aria-label={t("marketplace.sources.remove")}
                     className="text-[var(--error)] hover:bg-[var(--error-soft)]"
                     onClick={() => void onRemove(market.name)}
@@ -1004,6 +1052,18 @@ function SourcesPanel({
             );
           })}
         </div>
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowHidden((v) => !v)}
+            className="rounded-full px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-[var(--surface-hover)] hover:text-foreground"
+          >
+            {showHidden
+              ? t("marketplace.sources.collapseHidden")
+              : t("marketplace.sources.showHidden", { count: hiddenCount })}
+          </button>
+        )}
+        </>
       )}
     </div>
   );

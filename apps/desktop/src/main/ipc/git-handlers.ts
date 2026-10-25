@@ -864,13 +864,16 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false, locals: [], remotes: [] };
     }
     // Single `for-each-ref` pass over both refs/heads and refs/remotes so
-    // the result is consistent under concurrent ref creation. The format
-    // yields: HEAD marker (only for current local branch), full refname,
-    // short SHA.
+    // the result is consistent under concurrent ref creation. The format is
+    // space-delimited: HEAD marker (only for the current local branch), full
+    // refname, short SHA. A space is a legal delimiter because refnames and
+    // object names can never contain one — unlike the previous concatenated
+    // format, whose regex split silently ate the tail of any branch name
+    // ending in four or more hex characters (`pr-441` parsed as `pr-`).
     const output = stdoutOf(
       runGit(cwd, [
         'for-each-ref',
-        '--format=%(HEAD)%(refname)%(objectname:short)',
+        '--format=%(HEAD) %(refname) %(objectname:short)',
         'refs/heads',
         'refs/remotes',
       ], 256 * 1024),
@@ -881,14 +884,9 @@ export function registerGitHandlers(): void {
     const remotes: GitBranchRef[] = [];
     for (const line of output.split('\n')) {
       if (!line) continue;
-      const current = line[0] === '*';
-      const rest = line.slice(1);
-      // Split the short SHA off the tail — refnames can contain any of the
-      // characters GIT_REF_NAME_RE allows, so head-splitting is unsafe.
-      const shaMatch = rest.match(/^(.+?)([0-9a-f]{4,})$/);
-      if (!shaMatch) continue;
-      const fullName = shaMatch[1];
-      const head = shaMatch[2];
+      const [headMarker, fullName, head] = line.split(' ');
+      if (!fullName || !head) continue;
+      const current = headMarker === '*';
       if (fullName.startsWith('refs/heads/')) {
         locals.push({ name: fullName.slice('refs/heads/'.length), current, head });
       } else if (fullName.startsWith('refs/remotes/')) {

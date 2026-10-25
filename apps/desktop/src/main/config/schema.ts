@@ -264,17 +264,24 @@ export interface PluginEntry {
  *  A marketplace is a git repo (or local dir) containing a
  *  `marketplace.json` catalog that lists installable plugins. */
 export interface MarketplaceEntry {
-  source: {
-    source: 'git' | 'local';
-    /** git clone URL (https only). Required when source === 'git'. */
-    url?: string;
-    /** Absolute local directory. Required when source === 'local'. */
-    path?: string;
-    /** Optional branch/tag to track. */
-    ref?: string;
-  };
+  /** `git` clones a repo; `local` reads a directory in place. */
+  source: 'git' | 'local';
+  /** git clone URL (https only). */
+  url?: string;
+  /** Ordered git URLs (primary → mirror); wins over `url` when set. */
+  urls?: string[];
+  /** UI label for the source; falls back to the registry key. */
+  displayName?: string;
+  /** Absolute local directory. Required when source === 'local'. */
+  path?: string;
+  /** Optional branch/tag to track. */
+  ref?: string;
   /** ISO timestamp of when the user added the marketplace. */
   addedAt?: string;
+  /** Hidden sources keep their config and clone but leave the catalog. */
+  hidden?: boolean;
+  /** Tombstone for a removed default source, so startup seeding skips it. */
+  removed?: boolean;
 }
 
 /** [[skills.config]] entry — per-skill enabled override (decision 15). */
