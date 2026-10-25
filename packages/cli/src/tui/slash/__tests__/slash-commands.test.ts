@@ -377,6 +377,34 @@ describe('/effort', () => {
     expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
   });
 
+  it('keeps the ladder when the session sits on a preset instead of a configured model', async () => {
+    // `/model` can put the session on a vendor preset the configuration never
+    // named. Reading only `models` here would silently downgrade that session
+    // to the default four levels.
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({
+      getProviderCatalog: vi.fn(async () => ({
+        providers: [
+          {
+            providerId: 'p1',
+            name: 'Provider One',
+            providerType: 'anthropic',
+            hasApiKey: true,
+            models: [{ modelId: 'gpt-x', reasoningEffortOptions: ['low', 'high'] }],
+            presetModels: [
+              { modelId: 'gpt-r', reasoningEffortOptions: ['low', 'medium', 'high', 'max'] },
+            ],
+          },
+        ],
+        configRoot: '/tmp/duya-config',
+      })),
+      ...settings('medium'),
+    }, { choose }, { ...SESSION, model: 'gpt-r' } as HostSessionRecord);
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
+    expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+  });
+
   it('marks the persisted level as the current row', async () => {
     const choose = vi.fn(async () => null);
     const ctx = makeContext({ ...capability(['low', 'high']), ...settings('high') }, { choose });
@@ -678,6 +706,72 @@ describe('/model', () => {
     const ctx = makeContext({ ...capabilities, update });
     await command('model').run(ctx, 'p2/gpt-x');
     expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-x', providerId: 'p2' });
+  });
+
+  /**
+   * The same provider with the vendor presets the Host attaches to it.
+   *
+   * `enabled_models` is a hand-typed list, so a vendor with a dozen models is
+   * usually configured with two. Without `presetModels` those ten are
+   * unreachable from the picker, which is the report this answers.
+   */
+  const presetCapabilities = {
+    getProviderCatalog: async () => ({
+      providers: [
+        {
+          providerId: 'p1',
+          name: 'Provider One',
+          providerType: 'anthropic',
+          hasApiKey: true,
+          models: [
+            { modelId: 'gpt-x', contextWindow: 200_000 },
+            { modelId: 'gpt-xl', contextWindow: 1_000_000 },
+          ],
+          presetModels: [{ modelId: 'gpt-r', contextWindow: 128_000, supportsReasoning: true }],
+        },
+      ],
+      configRoot: '/tmp/duya-config',
+    }),
+  };
+
+  it('offers a preset after the configured models of its provider, flagged', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...presetCapabilities, update: vi.fn() }, { choose });
+    await command('model').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { label: string; description?: string }[];
+    // A preset is a different promise than a configured row, so it is not
+    // interleaved into it: it sorts last within its own provider.
+    expect(offered.map((row) => row.label)).toEqual(['gpt-x', 'gpt-xl', 'gpt-r']);
+    expect(offered[2]?.description).toContain('preset');
+    expect(offered[2]?.description).toContain('reasoning');
+    expect(offered[0]?.description).not.toContain('preset');
+  });
+
+  it('switches to a preset and says the configuration file was not written', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, model: 'gpt-r' } as HostSessionRecord,
+    }));
+    const ctx = makeContext(
+      { ...presetCapabilities, update },
+      { choose: async () => 'p1::gpt-r' },
+    );
+    const outcome = await command('model').run(ctx, '');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-r' });
+    expect(ctx.notices.join('\n')).toContain(
+      'gpt-r is a Provider One preset, so it is not written into config.toml.',
+    );
+    expect(outcome.kind).toBe('session_updated');
+  });
+
+  it('reaches a preset by name with no picker', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, model: 'gpt-r' } as HostSessionRecord,
+    }));
+    const ctx = makeContext({ ...presetCapabilities, update });
+    await command('model').run(ctx, 'gpt-r');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-r' });
   });
 });
 
