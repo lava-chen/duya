@@ -201,9 +201,22 @@ describe('command catalog desktop parity', () => {
     const spec = findSpec('doctor');
     expect(spec).toBeDefined();
     expect(spec?.category).toBe('info');
-    expect(spec?.surfaces).toEqual(['cli']);
+    // Both surfaces run the same shared checks, so both advertise it.
+    expect(spec?.surfaces).toEqual(['desktop', 'cli']);
     expect(spec?.requiresSession).not.toBe(true);
     expect(spec?.availableWhileBusy).toBe(true);
+  });
+
+  it('resolves /init, which writes into the session\'s checkout', () => {
+    const spec = findSpec('init');
+    expect(spec).toBeDefined();
+    expect(spec?.category).toBe('session');
+    expect(spec?.surfaces).toEqual(['desktop', 'cli']);
+    // The write lands in the session's own checkout, so there has to be a
+    // session to know which checkout that is.
+    expect(spec?.requiresSession).toBe(true);
+    // It writes a file into the user's repository.
+    expect(spec?.availableWhileBusy).toBe(false);
   });
 
   it('does not claim desktop support for commands it lacks an executor for', () => {

@@ -243,6 +243,7 @@ describe('slash registry', () => {
       'export',
       'fork',
       'hotkeys',
+      'init',
       'mcp',
       'model',
       'permission',

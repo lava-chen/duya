@@ -211,6 +211,27 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     requiresSession: true,
   },
   {
+    // Plan PR-4. The init: create the repository-root AGENTS.md, so that
+    // every agent that opens the checkout reads the same instructions.
+    //
+    // The write lands in the SESSION's checkout. The client names the
+    // session; the Host resolves the directory, because a path in a client
+    // request is a path an attacker chooses.
+    name: 'init',
+    label: 'Create AGENTS.md',
+    labelZh: '创建 AGENTS.md',
+    description: 'Create an AGENTS.md at the repository root',
+    descriptionZh: '在仓库根目录创建 AGENTS.md',
+    category: 'session',
+    surfaces: ['desktop', 'cli'],
+    // The file goes into the session's own checkout, so there has to be a
+    // session to know which checkout that is.
+    requiresSession: true,
+    // It writes a file into the user's repository: not something to do in
+    // the middle of a running turn.
+    availableWhileBusy: false,
+  },
+  {
     name: 'export',
     label: 'Export conversation',
     labelZh: '导出对话',
@@ -604,17 +625,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // running the same shared checks on both surfaces so a bug report means
     // the same thing whichever surface produced it.
     //
-    // `cli` only for now. The Desktop has no executor yet, and advertising it
-    // there without one is exactly the advertised-but-unrunnable state the
-    // catalog's integrity tests forbid; the Desktop entry lands together with
-    // its executor.
+    // The CLI asks the Desktop's CLI API over HTTP; the Desktop reads the
+    // same facts in-process. The CHECKS are the shared layer's either way.
     name: 'doctor',
     label: 'Diagnose install',
     labelZh: '诊断安装状态',
     description: 'Diagnose the local Duya install',
     descriptionZh: '诊断本机 Duya 安装状态',
     category: 'info',
-    surfaces: ['cli'],
+    surfaces: ['desktop', 'cli'],
     // The diagnostic needs no session — it looks at the install, not at a
     // conversation.
     requiresSession: false,
