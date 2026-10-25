@@ -87,6 +87,7 @@ export * from './model-capabilities.js';
 export * from './provider-catalog.js';
 export * from './app-connections.js';
 export * from './plugin-setup.js';
+export * from './plugin-inventory.js';
 export * from './plugin-app-instances.js';
 export * from './plugin-app-invocations.js';
 export * from './import-batches.js';

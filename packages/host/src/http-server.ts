@@ -159,6 +159,7 @@ import type {
   HostLocalAppConnectionApiV1,
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type { HostPluginInventoryApiV1 } from '@duya/agent-protocol/plugin-inventory';
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
 import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.js';
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
@@ -354,6 +355,15 @@ export interface HostSessionHttpServerOptions {
   readonly localAppConnectionApi?: HostLocalAppConnectionApiV1;
   /** Local-only access to plugin setup values, which may contain credentials. */
   readonly localPluginSetupApi?: HostLocalPluginSetupApiV1;
+  /**
+   * Local-only plugin inventory, projected to the fields a client may see.
+   *
+   * Optional: a Host composed without the plugin registry cannot say which
+   * plugins are installed, and it answers 404 `plugin_inventory_api_unavailable`
+   * rather than reporting an empty list — "no plugins" and "this Host cannot
+   * say" are different facts.
+   */
+  readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
   readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
@@ -1638,6 +1648,21 @@ export class HostSessionHttpServer {
       try {
         await api.clearPluginSetupValues(pluginId);
         this.#sendJson(res, 200, { success: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugins' && req.method === 'GET') {
+      const api = this.#options.localPluginInventoryApi;
+      if (!api) {
+        // An empty list would be a lie: it would claim the machine has no
+        // plugins, when the truth is that this Host cannot answer at all.
+        this.#sendJson(res, 404, { error: { code: 'plugin_inventory_api_unavailable' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, await api.listPluginInventory());
       } catch (error) {
         this.#sendApiError(res, error);
       }

@@ -228,6 +228,7 @@ import type {
   HostLocalAppConnectionApiV1,
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
 import type {
   HostPluginAppInstanceApiV1,
   HostPluginAppInstanceCreateInput,
@@ -1664,6 +1665,28 @@ export class HostSessionHttpClient implements
       '/v1/local/plugin-setup-values',
     );
     return result.values;
+  }
+
+  /**
+   * The plugin inventory this Host serves.
+   *
+   * The list is a PROJECTION of the Host's registry: identity, the user's
+   * intent, and whether the plugin's files are on disk. The manifest — which
+   * can carry MCP server credentials — and the install paths never cross
+   * this boundary.
+   *
+   * A Host that cannot serve the inventory refuses with 404
+   * `plugin_inventory_api_unavailable`, which reaches the caller as a
+   * `HostSessionHttpError` carrying that code. It is deliberately not an
+   * empty list: an empty list is the observed fact that no plugin is
+   * installed, and a refusal is the different fact that this Host cannot
+   * say.
+   *
+   * The answer is a WRAPPER object, the same shape the MCP and skill
+   * inventories answer with, so every inventory reads the same way.
+   */
+  async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
+    return this.request('GET', '/v1/local/plugins');
   }
 
   async mergePluginSetupValues(pluginId: string, values: Record<string, string>): Promise<void> {

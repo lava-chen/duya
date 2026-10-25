@@ -66,6 +66,7 @@ import { createHostLocalProviderModelCapabilityApi } from './local-provider-mode
 import { createHostLocalProviderCatalogApi } from './local-provider-catalog-api.js';
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
+import { createHostLocalPluginInventoryApi } from './local-plugin-inventory-api.js';
 import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
 import { createHostPluginAppInvocationApi, type HostPluginAppInvocationAuthority } from './local-plugin-app-invocation-api.js';
 import { createHostPluginAppGrantApi } from './local-plugin-app-grant-api.js';
@@ -689,6 +690,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
       localPluginSetupApi,
+      // The plugin inventory, projected to the fields a client may see. The
+      // standalone Host reads the same `config.toml` the Desktop does, so
+      // both answer the same list.
+      localPluginInventoryApi: createHostLocalPluginInventoryApi(),
       pluginAppInstanceApi,
       pluginAppInvocationApi,
       pluginAppGrantApi,
