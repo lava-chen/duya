@@ -70,6 +70,9 @@ const CATALOG = {
       providerType: 'anthropic',
       hasApiKey: true,
       models: [{ modelId: 'MiniMax-M3', contextWindow: 1_000_000 }],
+      // What the vendor serves but `enabled_models` never typed out. A picker
+      // that reads only `models` cannot reach it.
+      presetModels: [{ modelId: 'MiniMax-M2.5', contextWindow: 200_000, supportsReasoning: true }],
     },
   ],
   configRoot: '/tmp/duya-config',
@@ -186,5 +189,50 @@ describe('/model in the TUI', () => {
     app.stop();
 
     expect(updates).toEqual([{ model: 'MiniMax-M3', providerId: 'minimax-cn' }]);
+  });
+
+  it('paints a vendor preset as its own row and switches to it', async () => {
+    const { app, input } = makeApp();
+    app.start();
+    await settle();
+
+    const command = resolveTuiSlashCommand('model');
+    if (command === undefined) throw new Error('/model is not registered');
+    const updates: Array<{ model?: string; providerId?: string }> = [];
+    const client = {
+      getProviderCatalog: async () => CATALOG,
+      update: async (
+        _sessionId: string,
+        _expectedUpdatedAt: unknown,
+        patch: { model?: string; providerId?: string },
+      ) => {
+        updates.push(patch);
+        return { updated: true, session: { ...session(), ...patch } };
+      },
+    };
+    const running = command.run(
+      { client: client as never, session: session() as never, tui: app, busy: false },
+      '',
+    );
+    await settle();
+
+    const panel = (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n');
+    // The preset is on screen and says what it is, rather than posing as a
+    // model the configuration claims.
+    expect(panel).toContain('MiniMax-M2.5');
+    expect(panel).toContain('MiniMax CN · 200k ctx · reasoning · preset');
+    // Configured before preset inside the same provider.
+    expect(panel.indexOf('MiniMax-M3')).toBeLessThan(panel.indexOf('MiniMax-M2.5'));
+
+    // Rows: deepseek-flash (current), deepseek-pro, MiniMax-M3, MiniMax-M2.5.
+    press(input, 'down');
+    press(input, 'down');
+    press(input, 'down');
+    await settle();
+    press(input, 'return');
+    await running;
+    app.stop();
+
+    expect(updates).toEqual([{ model: 'MiniMax-M2.5', providerId: 'minimax-cn' }]);
   });
 });

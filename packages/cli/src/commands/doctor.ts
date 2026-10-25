@@ -4,442 +4,67 @@
  * `duya doctor` — read-only diagnostic that checks the health of DUYA's
  * local runtime, CLI API server, data stores, and config files.
  *
- * Design principles (from phase-2a-doctor-audit.md):
+ * ## This file is a THIN SHELL
+ *
+ * The report shape, the checks, the timing and the redaction all live in the
+ * shared diagnostics layer (`@duya/host/diagnostics`), because the Desktop
+ * has to be able to run the same checks and say the same things. What stays
+ * here is the CLI's part and nothing else:
+ *
+ *  - WHERE the config root is (`resolveConfigRoot()`);
+ *  - HOW the Host is reached (the Desktop's CLI API, over HTTP);
+ *  - how the result is printed (text or JSON) and what the exit code means.
+ *
+ * Design principles:
  * - Never throws; always produces output (text or JSON)
  * - Desktop app unavailability is reported as `skipped` checks, not failure
  * - No credentials, tokens, or absolute paths in output
  * - exit 0 for ok/warning; exit 1 for error
  */
 
-import { CliApiClient, type ProbeResult } from '../api/client.js';
-import { readCliApiRuntime } from '../api/runtime-config.js';
-import { isPidAlive } from '../api/runtime-config.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
-import { runConfigChecks } from './doctor-config.js';
-import { redactDoctorJson } from './doctor-redact.js';
-import { pushCheck, resetTiming } from './doctor-timing.js';
+import {
+  redactDoctorJson,
+  renderText,
+  runDiagnostics,
+  type CheckResult,
+  type DoctorIssue,
+  type DoctorResult,
+} from '@duya/host/diagnostics';
+import { resolveDoctorConfigRoot } from './doctor-config.js';
+import { createDesktopCliApiProbe, resolveRuntimeFact } from './doctor-probe.js';
+
+export type { CheckResult, DoctorIssue, DoctorResult };
+export { renderText };
 
 /**
- * One structured reason a check is not `ok`.
+ * Run the CLI's doctor and return the report.
  *
- * A `hint` is a sentence for a human; an issue is the same information split
- * into parts a support tool can act on. `cause` says what is wrong, `measured`
- * is what was observed, `expected` is what the check wanted, and `remedy` is
- * the next action. All four are free text and all four go through redaction in
- * `doctor-redact.ts` — the same invariant `hint` and `details` already carry.
- *
- * Mirrors the reference implementation's `DoctorIssue`, minus `severity` and
- * `fields` (duya has one status per check and no per-field selection) and with
- * `remedy` required, because duya has no separate `remediation` field to hold a
- * remedy that carries no cause.
+ * Exported so the TUI's `/doctor` can run the SAME checks and render the same
+ * result, rather than growing a second implementation.
  */
-export interface DoctorIssue {
-  /** Why this is a problem. */
-  readonly cause: string;
-  /** What the check actually observed, when it is worth stating. */
-  readonly measured?: string;
-  /** What the check required instead. */
-  readonly expected?: string;
-  /** What the user should do next. */
-  readonly remedy: string;
-}
-
-export interface CheckResult {
-  id: string;
-  category: 'config' | 'runtime' | 'desktop' | 'database' | 'plugin' | 'session';
-  status: 'ok' | 'warning' | 'error' | 'skipped';
-  message: string;
-  hint?: string;
-  details?: Record<string, unknown>;
-  /**
-   * Structured reasons behind a non-ok status. Optional: not every check has
-   * been migrated, and adding it to every check would be mechanical work with a
-   * real chance of a wrong `measured` value, so it is opt-in per check.
-   */
-  issues?: readonly DoctorIssue[];
-  /**
-   * Milliseconds spent producing this check, measured by `pushCheck`. Present
-   * on every check a report records, which is what lets a reader tell a slow
-   * check from a broken one.
-   */
-  durationMs?: number;
-}
-
-export interface DoctorResult {
-  version: string;
-  timestamp: number;
-  overallStatus: 'ok' | 'warning' | 'error';
-  profile: 'production' | 'development' | 'unknown';
-  checks: CheckResult[];
-  summary: {
-    errors: number;
-    warnings: number;
-    skipped: number;
-    ok: number;
-  };
-}
-
-/**
- * Run all diagnostic checks and return the aggregated result.
- */
-async function runDiagnostics(): Promise<DoctorResult> {
-  const checks: CheckResult[] = [];
-  // Timing starts before any work so the first check is charged for the file
-  // reads that produced it rather than reporting the 1ms floor.
-  resetTiming(checks);
-  let profile: 'production' | 'development' | 'unknown' = 'unknown';
-
-  // ── Phase 0: Offline config checks ──────────────────────────────────────
-  // Reads ~/.duya/config.toml + secrets.json directly from disk so config
-  // diagnostics still work when the desktop app is not running.
-
-  runConfigChecks(checks);
-
-  // ── Phase 1: Local runtime checks ───────────────────────────────────────
-
-  // runtime_file_exists
-  let runtimeLookup: Awaited<ReturnType<typeof readCliApiRuntime>> | null = null;
-  try {
-    runtimeLookup = await readCliApiRuntime();
-  } catch {
-    pushCheck(checks, {
-      id: 'runtime_file_exists',
-      category: 'runtime',
-      status: 'error',
-      message: 'Cannot read runtime file',
-      hint: 'Ensure DUYA has been launched at least once.',
-    });
-  }
-
-  if (runtimeLookup) {
-    if (runtimeLookup.kind === 'not_running') {
-      pushCheck(checks, {
-        id: 'runtime_file_exists',
-        category: 'runtime',
-        status: 'warning',
-        message: 'Runtime file not found',
-        hint: 'Open the DUYA app to create the runtime file.',
-      });
-    } else if (runtimeLookup.kind === 'malformed') {
-      pushCheck(checks, {
-        id: 'runtime_file_exists',
-        category: 'runtime',
-        status: 'error',
-        message: 'Runtime file is malformed',
-        hint: 'The runtime file is not valid JSON or has invalid fields.',
-        issues: [{
-          cause: 'The runtime file could not be parsed, so the CLI cannot find the desktop API address',
-          measured: 'runtime file is not valid JSON or is missing required fields',
-          expected: 'a runtime file containing a valid port and token',
-          remedy: 'Quit and relaunch the DUYA app so it rewrites the runtime file.',
-        }],
-      });
-      // Can't proceed with desktop checks
-      return finalizeResult(checks, profile);
-    } else {
-      pushCheck(checks, {
-        id: 'runtime_file_exists',
-        category: 'runtime',
-        status: 'ok',
-        message: 'Runtime file exists',
-      });
-
-      // runtime_file_valid
-      const { runtime } = runtimeLookup;
-      pushCheck(checks, {
-        id: 'runtime_file_valid',
-        category: 'runtime',
-        status: 'ok',
-        message: 'Runtime file is valid',
-      });
-
-      // runtime_pid_alive
-      if (runtime.pid !== undefined) {
-        const alive = isPidAlive(runtime.pid);
-        pushCheck(checks, {
-          id: 'runtime_pid_alive',
-          category: 'runtime',
-          status: alive ? 'ok' : 'warning',
-          message: alive
-            ? `Desktop process (PID ${runtime.pid}) is alive`
-            : `Desktop process (PID ${runtime.pid}) is not responding`,
-          hint: alive ? undefined : 'Restart DUYA if the app appears frozen.',
-        });
-      } else {
-        pushCheck(checks, {
-          id: 'runtime_pid_alive',
-          category: 'runtime',
-          status: 'skipped',
-          message: 'PID not recorded in runtime file',
-        });
-      }
-    }
-  }
-
-  // ── Phase 2: Desktop API checks ──────────────────────────────────────────
-
-  const client = new CliApiClient();
-
-  // desktop_reachable
-  const statusProbe = await client.probe('/v1/status');
-  if (!statusProbe.reachable) {
-    pushCheck(checks, {
-      id: 'desktop_reachable',
-      category: 'desktop',
-      status: 'error',
-      message: 'Cannot connect to DUYA desktop app',
-      hint: statusProbe.message,
-    });
-    // Remaining desktop checks depend on connection
-    pushCheck(checks, { id: 'desktop_auth_ok', category: 'desktop', status: 'skipped', message: 'Desktop not reachable' });
-    pushCheck(checks, { id: 'desktop_status_ok', category: 'desktop', status: 'skipped', message: 'Desktop not reachable' });
-    pushCheck(checks, { id: 'plugin_registry_readable', category: 'plugin', status: 'skipped', message: 'Desktop not reachable' });
-    pushCheck(checks, { id: 'plugin_count', category: 'plugin', status: 'skipped', message: 'Desktop not reachable' });
-    pushCheck(checks, { id: 'session_query_works', category: 'session', status: 'skipped', message: 'Desktop not reachable' });
-    pushCheck(checks, { id: 'session_count', category: 'session', status: 'skipped', message: 'Desktop not reachable' });
-    return finalizeResult(checks, profile);
-  }
-
-  // desktop connection successful
-  pushCheck(checks, {
-    id: 'desktop_reachable',
-    category: 'desktop',
-    status: 'ok',
-    message: 'Desktop app is reachable',
+export async function runCliDiagnostics(): Promise<DoctorResult> {
+  return runDiagnostics({
+    configRoot: resolveDoctorConfigRoot(),
+    runtime: await resolveRuntimeFact(),
+    probe: createDesktopCliApiProbe(),
   });
-
-  // desktop_auth_ok
-  if (statusProbe.error === 'auth_failed' || statusProbe.statusCode === 401) {
-    pushCheck(checks, {
-      id: 'desktop_auth_ok',
-      category: 'desktop',
-      status: 'warning',
-      message: 'Authentication failed',
-      hint: 'The DUYA app may have restarted. Retry the command.',
-    });
-  } else if (statusProbe.error === 'server_error' || statusProbe.statusCode >= 500) {
-    pushCheck(checks, {
-      id: 'desktop_auth_ok',
-      category: 'desktop',
-      status: 'error',
-      message: 'Server error during authentication',
-      hint: statusProbe.message,
-    });
-  } else {
-    pushCheck(checks, {
-      id: 'desktop_auth_ok',
-      category: 'desktop',
-      status: 'ok',
-      message: 'Authentication successful',
-    });
-  }
-
-  // desktop_status_ok
-  if (statusProbe.statusCode === 200) {
-    pushCheck(checks, {
-      id: 'desktop_status_ok',
-      category: 'desktop',
-      status: 'ok',
-      message: 'Desktop app reports healthy status',
-    });
-  } else if (statusProbe.statusCode >= 400) {
-    pushCheck(checks, {
-      id: 'desktop_status_ok',
-      category: 'desktop',
-      status: 'warning',
-      message: `Desktop returned HTTP ${statusProbe.statusCode}`,
-      hint: statusProbe.message,
-    });
-  } else {
-    pushCheck(checks, {
-      id: 'desktop_status_ok',
-      category: 'desktop',
-      status: 'ok',
-      message: 'Desktop app is responding',
-    });
-  }
-
-  // ── Phase 3: Plugin registry checks ─────────────────────────────────────
-
-  const pluginsProbe = await client.probe('/v1/plugins');
-  if (!pluginsProbe.reachable || pluginsProbe.statusCode >= 400) {
-    pushCheck(checks, {
-      id: 'plugin_registry_readable',
-      category: 'plugin',
-      status: 'error',
-      message: 'Cannot read plugin registry',
-      hint: pluginsProbe.reachable
-        ? `Server returned HTTP ${pluginsProbe.statusCode}`
-        : pluginsProbe.message,
-    });
-    pushCheck(checks, { id: 'plugin_count', category: 'plugin', status: 'skipped', message: 'Registry not readable' });
-  } else {
-    pushCheck(checks, {
-      id: 'plugin_registry_readable',
-      category: 'plugin',
-      status: 'ok',
-      message: 'Plugin registry is readable',
-    });
-
-    // Get plugin count
-    try {
-      const plugins = await client.get<{ plugins: unknown[] }>('/v1/plugins');
-      const count = Array.isArray(plugins.plugins) ? plugins.plugins.length : 0;
-      pushCheck(checks, {
-        id: 'plugin_count',
-        category: 'plugin',
-        status: 'ok',
-        message: `${count} plugin${count !== 1 ? 's' : ''} registered`,
-        details: { count },
-      });
-    } catch {
-      pushCheck(checks, {
-        id: 'plugin_count',
-        category: 'plugin',
-        status: 'skipped',
-        message: 'Could not determine plugin count',
-      });
-    }
-  }
-
-  // ── Phase 4: Session database checks ────────────────────────────────────
-
-  const sessionProbe = await client.probe('/v1/sessions?limit=1&offset=0');
-  if (!sessionProbe.reachable || sessionProbe.statusCode >= 400) {
-    pushCheck(checks, {
-      id: 'session_query_works',
-      category: 'session',
-      status: 'error',
-      message: 'Cannot query session database',
-      hint: sessionProbe.reachable
-        ? `Server returned HTTP ${sessionProbe.statusCode}`
-        : sessionProbe.message,
-      // The HTTP status is the measured value here, and it separates a server
-      // that is answering wrongly from one that is not answering at all.
-      issues: [{
-        cause: sessionProbe.reachable
-          ? `The desktop app rejected the session query with HTTP ${sessionProbe.statusCode}`
-          : 'The desktop app did not answer the session query',
-        measured: sessionProbe.reachable
-          ? `HTTP ${sessionProbe.statusCode} from GET /v1/sessions`
-          : sessionProbe.message,
-        expected: 'HTTP 2xx from GET /v1/sessions',
-        remedy: 'Restart the DUYA app; if it persists, check app.log for a database error.',
-      }],
-    });
-    pushCheck(checks, { id: 'session_count', category: 'session', status: 'skipped', message: 'Query failed' });
-  } else {
-    pushCheck(checks, {
-      id: 'session_query_works',
-      category: 'session',
-      status: 'ok',
-      message: 'Session database is queryable',
-    });
-
-    // Get session count
-    try {
-      const sessions = await client.get<{ sessions: unknown[] }>('/v1/sessions?limit=1&offset=0');
-      // We can't get total count from this endpoint, just mark as info
-      pushCheck(checks, {
-        id: 'session_count',
-        category: 'session',
-        status: 'ok',
-        message: 'Session query returned successfully',
-        details: { hasSessions: Array.isArray(sessions.sessions) },
-      });
-    } catch {
-      pushCheck(checks, {
-        id: 'session_count',
-        category: 'session',
-        status: 'skipped',
-        message: 'Could not determine session count',
-      });
-    }
-  }
-
-  return finalizeResult(checks, profile);
-}
-
-function finalizeResult(checks: CheckResult[], profile: 'production' | 'development' | 'unknown'): DoctorResult {
-  const errors = checks.filter(c => c.status === 'error').length;
-  const warnings = checks.filter(c => c.status === 'warning').length;
-  const skipped = checks.filter(c => c.status === 'skipped').length;
-  const ok = checks.filter(c => c.status === 'ok').length;
-
-  let overallStatus: 'ok' | 'warning' | 'error' = 'ok';
-  if (errors > 0) {
-    overallStatus = 'error';
-  } else if (warnings > 0) {
-    overallStatus = 'warning';
-  }
-
-  return {
-    version: '1.0.0',
-    timestamp: Date.now(),
-    overallStatus,
-    profile,
-    checks,
-    summary: { errors, warnings, skipped, ok },
-  };
 }
 
 /**
- * Render doctor result as human-readable text.
+ * Whether the report could not reach a Host at all.
  *
- * Exported so the structured-issue rendering is testable without shelling out
- * to the command; the report shape it consumes is the public `DoctorResult`.
+ * A `skipped` `desktop_reachable` is the shared layer's way of saying "this
+ * Host could not answer", which is an absence of information rather than a
+ * failure — the report says so. The EXIT CODE is the CLI command's own
+ * contract, and it keeps saying what it always said: a desktop app that
+ * cannot be reached is a problem with the install, and `duya doctor` exits 1
+ * so a script can act on it.
  */
-export function renderText(result: DoctorResult): string {
-  const lines: string[] = [
-    'DUYA Doctor — Read-Only Diagnostic Report',
-    '==========================================',
-    '',
-  ];
-
-  // Group by category
-  const categories = ['config', 'runtime', 'desktop', 'plugin', 'session'] as const;
-  for (const cat of categories) {
-    const catChecks = result.checks.filter(c => c.category === cat);
-    if (catChecks.length === 0) continue;
-
-    lines.push(`[${cat}]`);
-    for (const check of catChecks) {
-      const prefix = check.status === 'ok' ? '[OK]' :
-        check.status === 'warning' ? '[WARNING]' :
-          check.status === 'error' ? '[ERROR]' : '[SKIPPED]';
-      lines.push(`${prefix.padEnd(12)} ${check.message}`);
-      if (check.hint) {
-        lines.push(`            → ${check.hint}`);
-      }
-      // Structured issues exist for support tooling, but the human report is
-      // where a user reads the fix, so measured/expected are printed rather
-      // than hidden in the JSON view.
-      for (const issue of check.issues ?? []) {
-        lines.push(`            · ${issue.cause}`);
-        if (issue.measured !== undefined) {
-          lines.push(`              measured: ${issue.measured}`);
-        }
-        if (issue.expected !== undefined) {
-          lines.push(`              expected: ${issue.expected}`);
-        }
-        // The hint already prints the same command for migrated checks; showing
-        // the remedy twice would make the report worse, not better.
-        if (issue.remedy !== check.hint) {
-          lines.push(`              fix: ${issue.remedy}`);
-        }
-      }
-    }
-    lines.push('');
-  }
-
-  lines.push(
-    `Summary: ${result.summary.errors} error${result.summary.errors !== 1 ? 's' : ''}, ` +
-    `${result.summary.warnings} warning${result.summary.warnings !== 1 ? 's' : ''}, ` +
-    `${result.summary.skipped} skipped, ` +
-    `${result.summary.ok} ok`,
+function hostWasUnreachable(result: DoctorResult): boolean {
+  return result.checks.some(
+    (check) => check.id === 'desktop_reachable' && check.status === 'skipped',
   );
-
-  return lines.join('\n');
 }
 
 /**
@@ -447,7 +72,7 @@ export function renderText(result: DoctorResult): string {
  * Returns exit code: 0 for ok/warning, 1 for error.
  */
 export async function runDoctorCommand(format: OutputFormat): Promise<number> {
-  const result = await runDiagnostics();
+  const result = await runCliDiagnostics();
 
   if (format === 'json') {
     // The JSON view is the artifact people paste into a bug report, so it goes
@@ -459,5 +84,5 @@ export async function runDoctorCommand(format: OutputFormat): Promise<number> {
     process.stdout.write(renderText(result) + '\n');
   }
 
-  return result.overallStatus === 'error' ? 1 : 0;
+  return result.overallStatus === 'error' || hostWasUnreachable(result) ? 1 : 0;
 }

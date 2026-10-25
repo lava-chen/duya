@@ -9,9 +9,9 @@
  * configured.
  *
  * So these tests assert the thing that was broken: the catalog lists the
- * providers the CONFIGURATION declares, their models, and the facts a
+ * providers the CONFIGURATION declares, their models, the facts a
  * configuration file cannot carry (context window, reasoning, thinking
- * tiers).
+ * tiers), and the presets a vendor serves that nobody typed into the file.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
@@ -113,6 +113,60 @@ describe('readProviderCatalog', () => {
     // The built-in ladder for MiniMax M3: low, medium, high, max.
     expect(model?.reasoningEffortOptions).toEqual(['low', 'medium', 'high', 'max']);
     expect(model?.contextWindow).toBe(1_000_000);
+  });
+
+  it('offers the vendor presets the configuration never typed out', () => {
+    writeConfig(REAL_CONFIG);
+
+    const catalog = readProviderCatalog(tmpRoot);
+    const minimax = catalog.providers.find((provider) => provider.providerId === 'minimax-cn');
+    // The built-in MiniMax CN list, minus the two rows `enabled_models` already
+    // claims. A preset is not a duplicate of a configured model.
+    expect(minimax?.presetModels?.map((model) => model.modelId)).toEqual([
+      'MiniMax-M3.1-Flash',
+      'MiniMax-M2.5',
+      'MiniMax-M2.1',
+      'MiniMax-M2',
+    ]);
+    // Presets carry the same facts as configured rows, because the picker has
+    // to show what switching to one would mean.
+    const preset = minimax?.presetModels?.find((model) => model.modelId === 'MiniMax-M2.5');
+    expect(preset?.contextWindow).toBeGreaterThan(0);
+  });
+
+  it('resolves a preset entry by id prefix when the catalog splits one vendor across endpoints', () => {
+    writeConfig(`
+[providers.glm]
+  id = "glm"
+  name = "GLM"
+  providerType = "openai-compatible"
+  [providers.glm.options]
+  enabled_models = [ "glm-4.6" ]
+`);
+
+    const catalog = readProviderCatalog(tmpRoot);
+    const presets = catalog.providers[0]?.presetModels ?? [];
+    // `glm` matches no entry exactly, so it takes the first extension —
+    // `glm-cn`. Two regions' lists merged into one would be a row that looks
+    // right and bills differently.
+    expect(presets.length).toBeGreaterThan(0);
+    expect(presets.map((model) => model.modelId)).not.toContain('glm-4.6');
+  });
+
+  it('invents no presets for a provider the built-in catalog does not know', () => {
+    writeConfig(`
+[providers.my-proxy]
+  id = "my-proxy"
+  name = "Local proxy"
+  providerType = "openai-compatible"
+  [providers.my-proxy.options]
+  enabled_models = [ "some-model" ]
+`);
+
+    const catalog = readProviderCatalog(tmpRoot);
+    // A custom baseUrl is not `openrouter`; suggesting its models would put
+    // rows on screen the endpoint does not serve.
+    expect(catalog.providers[0]?.presetModels).toBeUndefined();
   });
 
   it('reports a missing configuration by naming the file, not as an empty catalog', () => {

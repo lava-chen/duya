@@ -238,7 +238,9 @@ function TerminalPtyPanel({ tab }: Props) {
       allowProposedApi: true,
       convertEol: true,
       cursorBlink: true,
-      fontFamily: "JetBrains Mono, Cascadia Mono, SFMono-Regular, Consolas, monospace",
+      // xterm renders through canvas and cannot resolve var(); mirror the
+      // --font-mono token (globals.css) as a literal here.
+      fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       fontSize: fontSizeRef.current,
       lineHeight: 1.35,
       scrollback: 5000,

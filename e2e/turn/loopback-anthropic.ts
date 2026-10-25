@@ -40,15 +40,13 @@
  * It is a PROVIDER, not a fake agent. It has one input (a request body) and
  * one output (SSE bytes); it knows nothing about runs, sessions, manifests,
  * budgets or terminals, and it cannot emit a `chat:*` frame, append a
- * `RunEvent` or settle a run. It names no tools, so it cannot cause one to
- * run. The executor decides what the turn does; this decides the bytes for one
- * HTTP request. If the agent loop were deleted, this server would behave
- * identically — which is the test of a provider.
+ * `RunEvent` or settle a run. Optional tool calls use names taken from the
+ * request's advertised tools, but this server still only decides the bytes
+ * returned for one HTTP request. The executor decides what the turn does.
  *
- * The narrower surface than E4.1's fixture (one text-only turn, no thinking, no
- * tool call, no injected error) is deliberate and is the spec's whole need: it
- * proves the boundary, the model call and the durable receipt, not the
- * behaviour matrix.
+ * The default response stays text-only for the E4.4 turn-boundary check. The
+ * optional tool-call response lets the plugin UI smoke test exercise MCP tool
+ * execution and host events through the same real Agent Server and worker.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -65,6 +63,11 @@ export interface LoopbackAnthropicOptions {
    *  format carries them. */
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  /** Optional first-request MCP tool calls, selected by an advertised tool-name fragment. */
+  readonly toolCalls?: readonly {
+    readonly nameIncludes: string;
+    readonly input: Record<string, unknown>;
+  }[];
 }
 
 export interface LoopbackAnthropic {
@@ -72,6 +75,8 @@ export interface LoopbackAnthropic {
   readonly baseUrl: string;
   /** Every `POST /v1/messages` the real client made, in order. */
   readonly requests: ReadonlyArray<{ readonly model: unknown; readonly toolNames: readonly string[] }>;
+  /** Tool calls the model fixture actually returned, in request order. */
+  readonly toolCallsSent: ReadonlyArray<{ readonly name: string; readonly input: Record<string, unknown> }>;
   /** Every `x-api-key` header seen, which is how the spec proves the client
    *  used the endpoint it was given rather than a configured provider. */
   readonly authHeadersSeen: readonly string[];
@@ -138,6 +143,50 @@ function writeTurn(res: ServerResponse, opts: LoopbackAnthropicOptions): void {
   sseFrame(res, 'message_stop', { type: 'message_stop' });
 }
 
+function writeToolCalls(
+  res: ServerResponse,
+  opts: LoopbackAnthropicOptions,
+  calls: ReadonlyArray<{ name: string; input: Record<string, unknown> }>,
+): void {
+  sseFrame(res, 'message_start', {
+    type: 'message_start',
+    message: {
+      id: `msg_loopback_tool_${Date.now()}`,
+      type: 'message',
+      role: 'assistant',
+      model: opts.model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: opts.inputTokens ?? 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
+    },
+  });
+  calls.forEach((call, index) => {
+    sseFrame(res, 'content_block_start', {
+      type: 'content_block_start',
+      index,
+      content_block: { type: 'tool_use', id: `toolu_loopback_${Date.now()}_${index}`, name: call.name, input: {} },
+    });
+    sseFrame(res, 'content_block_delta', {
+      type: 'content_block_delta',
+      index,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.input) },
+    });
+    sseFrame(res, 'content_block_stop', { type: 'content_block_stop', index });
+  });
+  sseFrame(res, 'message_delta', {
+    type: 'message_delta',
+    delta: { stop_reason: 'tool_use', stop_sequence: null },
+    usage: { output_tokens: opts.outputTokens ?? 8 },
+  });
+  sseFrame(res, 'message_stop', { type: 'message_stop' });
+}
+
 /**
  * Start the loopback endpoint on an ephemeral port, so parallel spec files
  * never collide and nothing is reachable off the machine.
@@ -146,6 +195,7 @@ export async function startLoopbackAnthropic(
   opts: LoopbackAnthropicOptions,
 ): Promise<LoopbackAnthropic> {
   const requests: Array<{ model: unknown; toolNames: string[] }> = [];
+  const toolCallsSent: Array<{ name: string; input: Record<string, unknown> }> = [];
   const authHeadersSeen: string[] = [];
 
   const handler = (req: IncomingMessage, res: ServerResponse): void => {
@@ -175,7 +225,19 @@ export async function startLoopbackAnthropic(
         'cache-control': 'no-cache',
         connection: 'keep-alive',
       });
-      writeTurn(res, opts);
+      const matchingCalls = (requests.length === 1 ? opts.toolCalls ?? [] : [])
+        .flatMap((plannedToolCall) => {
+          const matchingTool = tools.find((tool) => String(tool.name ?? '').includes(plannedToolCall.nameIncludes));
+          if (!matchingTool || typeof matchingTool.name !== 'string') return [];
+          const call = { name: matchingTool.name, input: plannedToolCall.input };
+          toolCallsSent.push(call);
+          return [call];
+        });
+      if (matchingCalls.length > 0) {
+        writeToolCalls(res, opts, matchingCalls);
+      } else {
+        writeTurn(res, opts);
+      }
       res.end();
     })();
   };
@@ -187,6 +249,7 @@ export async function startLoopbackAnthropic(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
+    toolCallsSent,
     authHeadersSeen,
     close: () =>
       new Promise<void>((resolve) => {

@@ -73,8 +73,13 @@ import type {
   UnfencedRunWriteAuthorization,
   HostCapability,
   HostDeclaration,
+  HostMcpServerConfig,
+  HostSkillEntry,
   ProtocolCapability,
   ProtocolVersion,
+  BackgroundTaskListV1,
+  BackgroundTaskOutputV1,
+  HostLocalBackgroundTaskApiV1,
 } from '@duya/agent-protocol';
 import type { HostResearchAction, HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import type {
@@ -226,6 +231,9 @@ import type {
   HostLocalAppConnectionApiV1,
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
+import type { HostSessionHandoffResult } from '@duya/agent-protocol/session-handoff';
+import type { InitAgentsMdResult } from '@duya/agent-protocol/doctor';
 import type {
   HostPluginAppInstanceApiV1,
   HostPluginAppInstanceCreateInput,
@@ -373,6 +381,7 @@ export class HostSessionHttpClient implements
   HostLocalImportBatchApiV1,
   HostLocalTurnReviewApiV1,
   HostLocalTerminalHistoryApiV1,
+  HostLocalBackgroundTaskApiV1,
   HostLocalMailboxApiV1,
   HostLocalPendingWakeApiV1,
   WorkflowRunApiV1,
@@ -1570,6 +1579,7 @@ export class HostSessionHttpClient implements
     return result.removed;
   }
 
+
   async createPluginAppInstance(input: HostPluginAppInstanceCreateInput): Promise<PluginAppInstanceRecord> {
     const result = await this.request<{ instance: PluginAppInstanceRecord }>(
       'POST', '/v1/local/plugin-app-instances', input,
@@ -1640,6 +1650,87 @@ export class HostSessionHttpClient implements
       '/v1/local/plugin-setup-values',
     );
     return result.values;
+  }
+
+  /**
+   * The plugin inventory this Host serves.
+   *
+   * The list is a PROJECTION of the Host's registry: identity, the user's
+   * intent, and whether the plugin's files are on disk. The manifest — which
+   * can carry MCP server credentials — and the install paths never cross
+   * this boundary.
+   *
+   * A Host that cannot serve the inventory refuses with 404
+   * `plugin_inventory_api_unavailable`, which reaches the caller as a
+   * `HostSessionHttpError` carrying that code. It is deliberately not an
+   * empty list: an empty list is the observed fact that no plugin is
+   * installed, and a refusal is the different fact that this Host cannot
+   * say.
+   *
+   * The answer is a WRAPPER object, the same shape the MCP and skill
+   * inventories answer with, so every inventory reads the same way.
+   */
+  async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
+    return this.request('GET', '/v1/local/plugins');
+  }
+
+  /**
+   * Ask the desktop app to take over this session.
+   *
+   * The two refusals are DOMAIN outcomes rather than transport failures, so
+   * they are returned instead of thrown and stay distinguishable:
+   * `session_handoff_unavailable` means this Host has no desktop app to
+   * hand the session to, and any other code means the desktop app was asked
+   * and refused. A transport failure still throws.
+   */
+  async openInDesktopApp(sessionId: string): Promise<HostSessionHandoffResult> {
+    try {
+      await this.request<{ ok: true }>('POST', '/v1/local/session-handoff', { sessionId });
+      return { ok: true };
+    } catch (error) {
+      if (!(error instanceof HostSessionHttpError)) throw error;
+      if (error.status === 404) {
+        return {
+          ok: false,
+          code: error.code,
+          message: 'This Host has no desktop app to hand the session to.',
+        };
+      }
+      if (error.status === 409) {
+        return { ok: false, code: error.code, message: error.message };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write the repository-root `AGENTS.md` for a session.
+   *
+   * The session id is the whole request: the Host owns where the workspace
+   * lives, so the client never names a path.
+   *
+   * A Host that cannot write into the workspace answers 404
+   * `agents_md_api_unavailable`. That is "this Host cannot do that", not
+   * "the write failed", and the two are returned as distinguishable domain
+   * outcomes rather than thrown.
+   */
+  async writeAgentsMd(sessionId: string): Promise<InitAgentsMdResult> {
+    try {
+      return await this.request<InitAgentsMdResult>('POST', '/v1/local/agents-md', { sessionId });
+    } catch (error) {
+      if (!(error instanceof HostSessionHttpError)) throw error;
+      if (error.status === 404) {
+        return {
+          ok: false,
+          created: false,
+          upgraded: false,
+          unchanged: false,
+          version: 0,
+          error: 'This Host cannot write into the workspace.',
+        };
+      }
+      throw error;
+    }
   }
 
   async mergePluginSetupValues(pluginId: string, values: Record<string, string>): Promise<void> {
@@ -1809,6 +1900,31 @@ export class HostSessionHttpClient implements
 
   async recordTerminalCommand(input: TerminalHistoryRecordInput): Promise<void> {
     await this.request('POST', '/v1/local/terminal-history/record', input);
+  }
+
+  async listBackgroundTasks(sessionId: string): Promise<BackgroundTaskListV1> {
+    const query = new URLSearchParams({ sessionId });
+    return this.request<BackgroundTaskListV1>('GET', `/v1/local/background-tasks?${query.toString()}`);
+  }
+
+  async readBackgroundTaskOutput(
+    sessionId: string,
+    taskId: string,
+    maxBytes?: number,
+  ): Promise<BackgroundTaskOutputV1 | null> {
+    const query = new URLSearchParams({ sessionId });
+    if (maxBytes !== undefined) query.set('maxBytes', String(maxBytes));
+    try {
+      return await this.request<BackgroundTaskOutputV1>(
+        'GET',
+        `/v1/local/background-tasks/${encodeURIComponent(taskId)}/output?${query.toString()}`,
+      );
+    } catch (error) {
+      // The contract says an absent task is null, not an exception: a task can
+      // finish and be evicted between the list the user saw and this read.
+      if (error instanceof HostSessionHttpError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async getItem(id: string): Promise<HostMailboxItem | null> {
@@ -2249,6 +2365,39 @@ export class HostSessionHttpClient implements
       { sessionId },
       INTEGRATION_SYNC_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /**
+   * The MCP servers the user configured, as the Host knows them.
+   *
+   * A READ: it needs no worker, no session and no Desktop app. The Host
+   * answers 404 with a named code when it was given no configuration
+   * source, which is a different answer from "the user configured none" —
+   * so a Host that cannot answer refuses instead of returning an empty list.
+   *
+   * `env` and `headers` never appear in the answer: they carry credentials,
+   * and the Host drops them before the response leaves the process.
+   */
+  async listMcpServers(): Promise<{ readonly servers: readonly HostMcpServerConfig[] }> {
+    return this.request('GET', '/v1/mcps');
+  }
+
+  /**
+   * The skills this session's project can use, as the Host knows them.
+   *
+   * A READ: the Host reads the skill directories and answers. It needs the
+   * session because the project's skills live next to the session's working
+   * directory, and it answers with that directory so a client can say which
+   * project the list is about.
+   *
+   * A Host that was given no inventory capability refuses with a named code
+   * (`skill_inventory_api_unavailable`), which is a different answer from "this
+   * user has no skills".
+   */
+  async listSkills(
+    sessionId: string,
+  ): Promise<{ readonly skills: readonly HostSkillEntry[]; readonly workingDirectory: string }> {
+    return this.request('GET', `/v1/skills?sessionId=${encodeURIComponent(sessionId)}`);
   }
 
   private async request<T>(

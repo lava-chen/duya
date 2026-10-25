@@ -63,6 +63,7 @@ import {
   wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector } from '../lib/collector.mjs';
+import { readStartupPhases, startupPhaseMetrics } from '../lib/startup-phases.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
 import { snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
@@ -101,6 +102,7 @@ export default {
       await waitForAppReady(cold.page);
       const coldTypeable = await waitForTypeable(cold.page);
       const coldPaint = await readPaintTiming(cold.page);
+      const coldPhases = await readStartupPhases(cold.page);
       const coldHydration = await readHydrationState(cold.page);
       const coldResource = await coldProbe.stop();
       await closePerfElectron(cold.app);
@@ -153,6 +155,7 @@ export default {
       const reloadTypeable = await waitForTypeable(measured.page);
       const bootSnapshot = await readCollector(measured.page);
       const reloadPaint = await readPaintTiming(measured.page);
+      const reloadPhases = await readStartupPhases(measured.page);
 
       const metrics = {
         // The contract's names.
@@ -198,6 +201,12 @@ export default {
         'startup.warm.cpu.renderer_pct': resource['cpu.renderer_pct'],
         'startup.warm.mem.peakMB': resource['mem.peakMB'],
         'startup.warm.mem.growthMB': resource['mem.growthMB'],
+        // The boot split into the phases that own it. The cold boot is the
+        // one a user waits for; the reload of the same boot path is the warm
+        // reference that shows how much of the cold cost is Chromium's cold
+        // path rather than the app's.
+        ...startupPhaseMetrics('startup.cold', coldPhases),
+        ...startupPhaseMetrics('startup.reload', reloadPhases),
       };
 
       samples.push({

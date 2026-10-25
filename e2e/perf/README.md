@@ -133,6 +133,34 @@ The harness works around it by letting the app sync itself in the prepare
 phase (`sync:threads-changed` → `forceSync()` → `loadFromDatabase()`, which
 IS a `set()`).
 
+### The boot split into phases
+
+`startup.firstPaint_ms` is one number for a boot with several owners: the
+browser process start, the main process' own startup chain, the renderer's
+cold initialization, and the first screen's JavaScript. The phase metrics
+say which of them to attack, measured on the renderer's own clock
+(`performance.timeOrigin`):
+
+| metric | what it waits for |
+| --- | --- |
+| `startup.cold.phase.navToHtml_ms` | navigation start -> the HTML document arrived |
+| `startup.cold.phase.htmlToDcl_ms` | the HTML arrived -> DOMContentLoaded (the first screen's JavaScript: fetch, compile, execute) |
+| `startup.cold.phase.dclToPaint_ms` | DOMContentLoaded -> the first contentful paint |
+| `startup.cold.phase.navToDcl_ms` | navigation start -> DOMContentLoaded |
+| `startup.cold.phase.navToPaint_ms` | navigation start -> the first contentful paint |
+
+`startup.reload.phase.*` carries the same five for the instrumented reload
+of the same boot path. The reload is the WARM reference: the same phases on
+a renderer that is already up. The difference between the cold and the warm
+numbers is the part of the boot that is Chromium's cold path, not the app's
+— measured on a cold `file://` boot, `navToHtml` is 700-980 ms cold and
+2-6 ms warm, while `htmlToDcl` (the app's own JavaScript) is 275-370 ms cold
+and 99-177 ms warm.
+
+The resource entries of a `file://` document do not exist (a file URL is not
+a fetchable resource in the timing timeline), so the split is anchored on
+the document's own milestones.
+
 ## Metric names
 
 Fixed by the plan: `startup.firstPaint_ms`, `startup.typeable_ms`,

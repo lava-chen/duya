@@ -35,6 +35,10 @@ import {
 import type { TuiSlashCommandDef, TuiSlashGroup } from './types.js';
 import { SESSION_INFO_COMMANDS } from './session-info.js';
 import { SESSION_OPS_COMMANDS } from './session-ops.js';
+import { APPS_COMMANDS } from './apps.js';
+import { PLUGIN_COMMANDS } from './plugin.js';
+import { WORKFLOW_COMMANDS } from './workflow.js';
+import { APP_COMMANDS } from './app.js';
 import { CHECKOUT_COMMANDS } from './checkout.js';
 import { PR_COMMANDS } from './pr.js';
 import { MODEL_COMMANDS } from './model.js';
@@ -42,11 +46,16 @@ import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
 import { EXPORT_COMMANDS } from './export.js';
 import { CAPABILITIES_COMMANDS } from './capabilities.js';
+import { DOCTOR_COMMANDS } from './doctor.js';
+import { INIT_COMMANDS } from './init.js';
 import { READ_FILE_COMMANDS } from './read-file.js';
 import { HOTKEYS_COMMANDS } from './hotkeys.js';
 import { DIFF_COMMANDS } from './diff.js';
 import { COMPACT_COMMANDS } from './compact.js';
 import { BTW_COMMANDS } from './btw.js';
+import { MCP_COMMANDS } from './mcp.js';
+import { SKILLS_COMMANDS } from './skills.js';
+import { TASKS_COMMANDS } from './tasks.js';
 
 /** Every command this surface can actually run. */
 export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
@@ -55,15 +64,24 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...SETTINGS_COMMANDS,
   ...HOTKEYS_COMMANDS,
   ...SESSION_INFO_COMMANDS,
+  ...APPS_COMMANDS,
+  ...PLUGIN_COMMANDS,
+  ...WORKFLOW_COMMANDS,
   ...SESSION_OPS_COMMANDS,
+  ...APP_COMMANDS,
   ...CHECKOUT_COMMANDS,
   ...PR_COMMANDS,
   ...EXPORT_COMMANDS,
   ...CAPABILITIES_COMMANDS,
+  ...DOCTOR_COMMANDS,
+  ...INIT_COMMANDS,
   ...READ_FILE_COMMANDS,
   ...DIFF_COMMANDS,
   ...COMPACT_COMMANDS,
   ...BTW_COMMANDS,
+  ...MCP_COMMANDS,
+  ...SKILLS_COMMANDS,
+  ...TASKS_COMMANDS,
 ];
 
 const BY_NAME = new Map<string, TuiSlashCommandDef>();

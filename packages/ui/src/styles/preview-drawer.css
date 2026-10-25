@@ -58,7 +58,7 @@
   padding: 0.25rem 0.4rem 0.25rem 0.5rem;
   border-bottom: 1px solid var(--border-weak);
   background: var(--surface-hover);
-  font-family: var(--font-mono, 'Fira Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
 }
@@ -99,7 +99,7 @@
   min-height: 0;
   background: var(--terminal-bg);
   color: var(--text);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.35;
   outline: none;
@@ -145,7 +145,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--terminal-muted);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   pointer-events: none;
 }
@@ -413,7 +413,7 @@
   width: 26px;
   height: 18px;
   border-radius: 5px;
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 9px;
   line-height: 1;
 }
@@ -536,7 +536,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .terminal-reference-chip-meta {
@@ -613,7 +613,7 @@
 }
 
 .duya-startup-name {
-  font-family: "Windsor", "Georgia", "Times New Roman", serif;
+  font-family: var(--font-serif);
   font-size: 30px;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -682,7 +682,7 @@
 
 /* Monospace title variant for command-line previews inside the drawer. */
 .task-card-row-title-mono {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: -0.01em;
   word-break: break-all;
@@ -1539,7 +1539,7 @@ html[data-backdrop] .panel-zone .sidebar-panel-inner {
   display: block;
   padding: 0 12px 0 10px;
   color: color-mix(in srgb, var(--muted) 72%, transparent);
-  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   font-feature-settings: "tnum";
   line-height: 20.8px;
@@ -1621,7 +1621,7 @@ html[data-backdrop] .panel-zone .sidebar-panel-inner {
   display: block;
   padding: 0 !important;
   background: transparent !important;
-  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -1969,7 +1969,7 @@ html[data-backdrop] .panel-zone .sidebar-panel-inner {
 .bash-task-output-pre {
   margin: 0;
   color: var(--text);
-  font-family: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
