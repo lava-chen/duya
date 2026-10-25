@@ -106,6 +106,9 @@ node E:\Projects\duya\.claude\perf-bench-lock.mjs release
 - [x] 第五轮：数据路径 O(n²) 根因定位 + 修法（PR #444，Host 新增整读）
 - [x] 第五轮：同轮 before/after 权威对照（10k 打开 35.2 s → **1.4 s**，切换 47.7 s → **1.7 s**）
 - [x] 第五轮：投影次数门禁（机器无关，确定性）
+- [x] 第六轮：Web 侧同一条 O(n²) 路径（PR #458，83 507 ms → 1 006 ms，CI 五项全绿）
+- [x] 第七轮：终端离开首屏（PR #473，首屏 −14.00 %，已合并）
+- [x] 第八轮：启动冷路径诊断（四个假设全部证伪）+ 相位分解进 harness
 
 派工状态：A/B/C/D/E 五个 Agent 均已认领独占路径并交付第一轮。第二轮的 F（首屏依赖闭包）与 G（虚拟化）由集成者直接派工；第四轮由集成者收口（harness 与 CSS 属共享范围）。
 
@@ -440,6 +443,68 @@ BFF 每页上限 100，比 Desktop 的 200 更狠 → 同样 1 万条消息，**
 - **Electron 启动的测量要用渲染器自己的时钟**。Playwright 的 `app.windows()` 报出 `file:` URL 的时刻比 `performance.timeOrigin` 晚约 700 ms（CDP 挂接延迟），照着它算会得出「窗口创建后有 900 ms 黑洞」的假结论。
 - **面板的懒加载边界要用「真的打开它」来验**。本轮的终端探针一开始误报失败，原因是终端启动器只在**有活跃会话**时渲染（`currentView === "chat" && activeThreadId`），而探针的 profile 没有会话——**是探针错了，不是产品坏了**。最后用仓库自己的 `panels` 场景（它本来就会开终端）验证，结论才可靠。
 
+## 第八轮：启动的冷路径（先把「那一秒」钉死）
+
+第八轮先不打性能，而是把第七轮留下的那个假设钉死：「冷启动比 reload 多出来的那一秒多是什么」。第七轮的结论是「`file://` 渲染器没有 V8 code cache」——**第八轮证明它不成立**，并且顺带把另外三条看起来很合理的修法全部证伪。
+
+### 测法
+
+探针 `docs-local/research/perf-coldstart/probe3.mjs`（研究脚本，不入库）：真实 Electron + 生产构建 + `file://` 预览，用**渲染器自己的** `performance.timeOrigin` 计时（Playwright 挂接延迟会骗人，见第七轮），配 `app.getAppMetrics()` 读进程谱系。开发树：`perf-coldstart`（基于 master `12ede3a1`）。
+
+### 冷启动的四段（实测）
+
+| 阶段 | 冷启动 | 同进程 reload |
+| --- | --- | --- |
+| 导航开始 → HTML 就绪 | **700–980 ms** | **2–6 ms** |
+| HTML → DCL（首屏 JS：拉取+编译+执行） | 275–370 ms | 99–177 ms |
+| DCL → 首绘 | 3–133 ms | — |
+
+**冷启动 1.4 s 里约 1.07 s 是 Chromium 自己的进程热身**（浏览器进程 ~400 ms + 渲染器冷初始化 ~670 ms），**我们能动的只有 ~470 ms**：主进程初始化链 264 ms + 首屏 JS 220 ms。
+
+主进程初始化链的分段（插桩实测）：早段 8 ms / **DB 105 ms** / 配置+频道+插件 84 ms / `createWindow` 67 ms。
+
+### 被证伪的四个假设
+
+1. **「`file://` 渲染器没有 V8 code cache，所以要用 Claude 的预编译 code cache」——不成立。** profile 里的 `Code Cache/js` 只有 index（**没有脚本缓存**；只有 preload 有 78 KB 的 code cache）；同一 userData 的二次启动（热 profile）**不比冷启动快**（热中位 796 ms vs 冷中位 960 ms）。而且首屏只有 2.98 MB，按主进程 4.0 MB → 48 ms 的解析速度，code cache 最多值几十 ms。**Claude 那招在 Duya 的渲染器上没有落点。**
+2. **「那 700 ms 是 network service 冷启动，预热它就能省」——不成立。** 在 `whenReady` 最开头强制拉起 network service 后，`navToRequest` 中位 816 ms vs 基线 ~710 ms。
+3. **「提前创建窗口能让渲染器提前热身」——不成立。** A/B 中位 **1 642 ms（改）vs 1 610 ms（基线）**。`app.getAppMetrics()` 显示 **Chromium 直到导航才起渲染器进程**，提前建窗口换不来提前初始化。
+4. **「`app.getGPUFeatureStatus()` 是同步 IPC，会把启动链卡住」——不成立。** 插桩显示基线链长 **233 ms**、延后后 388 ms（同一台机器同一段代码），那 865 ms 全在**异步**的 `app.getGPUInfo('complete')` 上，不阻塞主线程。
+
+另外两条也试了、都**无可测收益**：把插件市场 `git clone` 与远程 MCP rehydrate 延后到窗口就绪之后——firstPaint 1 460 vs 1 424 ms（clone 主要是网络等待，不抢 CPU）。
+
+**结论：启动这条 journey 剩下的可动量只有 ~470 ms，其中 Chromium 的冷渲染器初始化那 ~670 ms 我们改不动。** 继续在这条线上找「一键提速」是找不到的。
+
+### 首屏入口 chunk 到底是谁
+
+`npx vite build --sourcemap` + 逐字节归因（`docs-local/research/perf-coldstart/chunk-attribution.mjs`）：
+
+| 模块 | 入口 chunk 里的字节 |
+| --- | --- |
+| `@xterm/xterm` + 4 个 addon | **~490 KB** ← 第七轮 #473 已修（已合并） |
+| `katex` | **260 KB** |
+| `i18n/en.ts` + `i18n/zh.ts` | **270 KB**（两种语言都在首屏） |
+| `stream-session-manager` | 74 KB |
+| `@dnd-kit/core` / `tailwind-merge` / `zod` / 各家模型目录 | ~180 KB |
+
+### 本轮交付：把相位分解做成 harness 能力（PR #480）
+
+第七轮的分解探针是研究脚本，不在 `scripts/perf/run.mjs` 里，所以「启动慢」只能看到两个端点。本轮把它变成 harness 的常驻指标：
+
+- `e2e/perf/lib/startup-phases.mjs`（新增）：纯函数 `startupPhases(navigation, paints)` 把一次文档加载拆成 `navToHtml` / `htmlToDcl` / `dclToPaint`，外加读页面用的 `readStartupPhases()` 与按前缀展开指标的 `startupPhaseMetrics()`。
+- `e2e/perf/scenarios/startup.mjs`：`startup.cold.phase.*`（冷启动）与 `startup.reload.phase.*`（同进程 reload 的热参考）两组指标。
+- `scripts/perf/harness.test.ts`：5 个用例（分段正确 / 没有导航条目时全为 null 而不是 0 / 没绘制时绘制段为 null / 里程碑尚未发生时不报负数 / 指标命名）。**负对照**：把 `htmlToDcl` 的算法改错即红。
+- `e2e/perf/README.md`：指标含义与「reload 是热参考」写进契约段。
+
+**为什么它值一个 PR**：这轮四次尝试全部证伪，每一次的代价都是重新搭一套测量。相位分解进 harness 之后，下一个 Agent 不用再从零复现这四段。
+
+### 发现与决策（新增）
+
+- **「`file://` 没有 V8 code cache」是错的**：只有 preload 有 code cache，页面脚本没有；热 profile 也不比冷 profile 快。**How to apply**：以后看到「冷启动慢，先上 code cache」这个念头，先去 profile 目录里看一眼 `Code Cache/js` 有没有东西。
+- **Chromium 直到导航才起渲染器进程**（`app.getAppMetrics()` 的 `Tab` 条目在导航时才出现）。**How to apply**：想靠「提前建窗口」给渲染器热身是无效的，别再试。
+- **同步 ≠ 阻塞**：`app.getGPUFeatureStatus()` 是同步 API，但它不阻塞主线程；真正贵的是后面的异步 `getGPUInfo('complete')`。**How to apply**：判断一个调用是否拖累启动，看它在等什么，不要看它是不是 async。
+- **可测量的边界要自己划**：本轮四次修法里有三次「机制上说得通」但墙钟无差异。**How to apply**：机制假设必须配一个 A/B，否则不进主干。
+- **归因要用逐字节 sourcemap，不要用文件大小猜**：`npx vite build --sourcemap` 之后按 mapping 归因，才能知道入口 chunk 里 490 KB 是 xterm、260 KB 是 katex。
+
 ## 集成记录
 
 | PR | Agent | 内容 | 状态 |
@@ -536,18 +601,18 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 | # | 机会 | 已测收益 / 证据 | 状态 | 归属 |
 | --- | --- | --- | --- | --- |
-| **0** | **启动的冷路径（渲染器没有 code cache）** | 第七轮：同一份代码，`startup.reload.firstPaint_ms` 只有 **48–96 ms**，冷启动的首屏却是 **1 258–1 435 ms**；同一轮里把首屏砍掉 14 % 只换来约 **35 ms**（≈0.07 ms/KB） | **待做**：先做对照实验证明「多出来的那一秒是 `file://` 没有 V8 code cache + 冷文件缓存」，再决定怎么改（渲染器资源换来源 / 预热 code cache / 别的）。**没有证明之前不要动手** | A |
+| **0** | **启动的冷路径** | 第八轮把冷启动拆成四段：**导航→HTML 700–980 ms（Chromium 冷渲染器初始化，reload 只要 2–6 ms）** / HTML→DCL 275–370 ms（首屏 JS）/ DCL→首绘 3–133 ms。**我们能动的只有 ~470 ms**（初始化链 264 ms + 首屏 JS 220 ms） | **已证伪三条**：「`file://` 没有 V8 code cache」（`Code Cache/js` 里没有脚本缓存，热 profile 也不更快）、「预热 network service」（中位 816 vs 710 ms）、「提前建窗口让渲染器热身」（1 642 vs 1 610 ms，Chromium 直到导航才起渲染器进程）。**剩下可动的只有那 ~470 ms** | A |
 | **1** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
 | 2 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
 | 3 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
 | 4 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
-| 5 | 首屏 entry chunk 里剩下的一方模块 | 第七轮给了兑换率：砍 14 % 首屏只换约 35 ms（≈0.07 ms/KB）→ 剩下的 2 985 017 B **最多**再值约 200 ms | **待做，但排在冷路径之后**。用 `npx vite build --sourcemap` + `first-screen.mjs` 的 per-chunk sources 归因，找还留在首屏的「点击才到」模块 | E |
+| 5 | 首屏 entry chunk 里剩下的一方模块 | 第八轮逐字节归因（sourcemap）：xterm + addon **~490 KB**（#473 已修）、**katex 260 KB**、**i18n 中英两份 270 KB**、`stream-session-manager` 74 KB、dnd-kit/tailwind-merge/zod/模型目录 ~180 KB。第七轮给了兑换率：砍 14 % 首屏只换约 35 ms（≈0.07 ms/KB） | **待做**：katex 只在消息含公式时需要、两种语言只用一种——但**两者都要把「首屏需要的同步内容」改成异步加载**（公式/文案会闪一下），**必须配真机验证再上**，不能只改字节 | E |
 | 6 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
 | 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
 | 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253，**#473 再棘轮到 2 985 017**）。**#444**：投影次数门禁。**#458**：请求次数门禁。**#473**：终端不得回到首屏（`registry.test.tsx`）+ 字节棘轮 | 集成者 + A |
 | 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
 | 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
-| 11 | 启动的分解测量应该进 harness | 第七轮的探针（`docs-local/research/perf-startup/probe.mjs`）能拆出 boot / 主进程初始化链 / 渲染器文档加载 / 首屏绘制四段，但它是研究脚本，不在 `scripts/perf/run.mjs` 里 | **待做**：做成 `e2e/perf/scenarios/startup-phases.mjs`，让以后「启动慢」有分段的数可查，而不是只能看两个端点 | A |
+| 11 | 启动的分解测量应该进 harness | 第七轮的探针（`docs-local/research/perf-startup/probe.mjs`）能拆出 boot / 主进程初始化链 / 渲染器文档加载 / 首屏绘制四段，但它是研究脚本，不在 `scripts/perf/run.mjs` 里 | **已完成（第八轮）**：`e2e/perf/lib/startup-phases.mjs` + `startup.cold.phase.*` / `startup.reload.phase.*` 两组指标 + 5 个单测 | A |
 
 **已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。**#458** 把 Web 侧同一条路径也修掉了（真实 Host + 真实 BFF：100 次分页 83 507 ms → 1 次整读 1 006 ms，**83×**），并带上四条请求次数门禁——**同一个根因的第二条路径**。**#473** 把终端（xterm + 4 个 addon，**485 617 B**）从首屏入口 chunk 里请了出去，首屏 3 470 634 → **2 985 017 B（−14.00 %）**，并棘轮了字节预算——但**墙钟只换来约 35 ms**，这个兑换率本身是本轮最值钱的结论。
 ## 验证记录
@@ -614,13 +679,19 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | 第七轮墙钟 A-B-A | 同上，同一台机器，同一天 | 分解探针量「导航开始 → 首屏绘制」，before 7 + after 7 + after 7 样本 | 0 | before 中位 844 / 均值 856；after 合并 14 样本中位 **810** / 均值 **820** ⇒ **约 −35 ms，落在噪声内** |
 | 第七轮门禁 | `perf-startup` | `vitest run packages/ui/src/components/layout/panels/registry.test.tsx` | 0 / 1（**预期**） | 2/2 绿；负对照（改回静态引入）2 个用例全红 |
 | 第七轮真机验证 | `perf-startup`（改后构建） | `node scripts/perf/run.mjs --scenarios panels --samples 2 …` | 0 | 2 个样本都是 `files:opened, terminal:opened, browser:opened`——懒加载的终端在真实 Electron 里正常打开 |
+| 第八轮冷/热对照 | `perf-coldstart`（master `12ede3a1`，生产构建 + `file://` 预览） | `docs-local/research/perf-coldstart/probe3.mjs`（渲染器自己的 `performance.timeOrigin`） | 0 | 冷启四段：导航→HTML **700–980 ms** / HTML→DCL **275–370 ms** / DCL→首绘 3–133 ms；同进程 reload 对照 **2–6 ms** / 99–177 ms ⇒ 冷启 1.4 s 里约 **1.07 s 是 Chromium 自己的热身** |
+| 第八轮假设证伪 A/B | 同上 | 四条修法各一次 A/B（代码卡在 `docs-local/research/perf-coldstart/*.patch`，**均未合入**） | 0 | 预热 network service：navToRequest 中位 816 vs 基线 ~710 ms；提前建窗口：**1 642 vs 1 610 ms**（`app.getAppMetrics` 证明 Chromium 直到导航才起渲染器进程）；延后 `getGPUFeatureStatus`：链长 233 vs 388 ms；延后启动期网络 I/O：firstPaint 1 460 vs 1 424 ms |
+| 第八轮 code cache 核查 | 同上 | 读 profile 目录 `Code Cache/js` + 同 userData 二次启动对照 | 0 | **页面脚本没有 code cache**（只有 index；preload 有 78 KB）；热 profile 中位 796 ms **不慢于**冷 profile 中位 960 ms ⇒ Claude 的预编译 code cache 在 Duya 渲染器上没有落点 |
+| 第八轮字节归因 | `perf-coldstart` | `npx vite build --sourcemap` + `docs-local/research/perf-coldstart/chunk-attribution.mjs` 逐字节 mapping | 0 | 入口 chunk 2 570 686 B 归因 2 514 077 B：xterm+addon **~490 KB** / katex **260 372 B** / i18n 中英 **270 496 B** / `stream-session-manager` 74 390 B / dnd-kit+tailwind-merge+zod+模型目录 ~180 KB |
+| 第八轮门禁 | `perf-coldstart` | `vitest run scripts/perf/harness.test.ts` | 0 | **45/45 绿**（新增 5 个相位用例：分段正确 / 没有导航条目时全为 null 而不是 0 / 没绘制时绘制段为 null / 里程碑没发生时不报负数 / 指标命名）；负对照（改错 `htmlToDcl` 算法）即红 |
+| 第八轮本地门禁 | `perf-coldstart` | `npm run typecheck:all` / `npm run architecture:check` | 0 / 0 | typecheck 全过（`typecheck-electron-gate: OK — no new type errors`）；架构 `OK — no new boundary violations` |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
 已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）、**#444 `d26bec34`（Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s，含投影次数门禁）**。
-未合并：**#458**（第六轮：Web 侧整读，83×）、**#473**（第七轮：终端离开首屏，首屏 −14.00 %）与本文档 PR，均待集成者 review。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
+未合并：**#458**（第六轮：Web 侧整读，83×）——已合入 master `f94ff69a` 并重建产物，等授权合并。**#473**（第七轮：终端离开首屏，首屏 −14.00 %）与 **#459**（第六/七轮文档）**已由 owner 合并**（`eb367799` / `f5561c17`）。**第八轮的两个 PR 待授权**：#480（相位分解进 harness，五项 CI 全绿）、#479（本文档）。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
 
 回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
