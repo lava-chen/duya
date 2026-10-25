@@ -435,10 +435,21 @@ export class HostSessionHttpClient implements
       throw new Error(`Host refused the client lease: ${response.status}`);
     }
     let closed = false;
+    // The lease IS this response: one open request the Host counts. The
+    // reference must outlive this call — a Response nobody holds is collected,
+    // undici cancels its unread body, and the TCP connection drops, which the
+    // Host reads as "last client gone" and answers by shutting itself down
+    // with the session's mid-turn workers still running (observed 2026-10-25:
+    // the footer froze at the previous turn's totals and the run died with
+    // `terminated` about forty seconds into a turn). Keeping the Response
+    // reachable from the returned object is the whole fix; close then tears
+    // the same request down deliberately.
+    const held = response;
     return {
       close: () => {
         if (closed) return;
         closed = true;
+        void held.body?.cancel().catch(() => undefined);
         controller.abort();
       },
     };
