@@ -487,8 +487,10 @@ export function CodeViewer({
       "--diffs-light-bg": "var(--main-bg)",
       "--diffs-dark-bg": "var(--main-bg)",
       // Explicit mono font: the library's Shadow-DOM fallback lands Chinese
-      // comments in a serif face on Windows unless overridden.
-      "--diffs-font-family": 'var(--font-mono, "Cascadia Code", Consolas, monospace)',
+      // comments in a serif face on Windows unless overridden. Custom
+      // properties inherit into the shadow tree with var() already resolved
+      // against the host document's :root.
+      "--diffs-font-family": 'var(--font-mono)',
       "--diffs-font-size": `${fontSizePx}px`,
       "--code-comment-add-tooltip": JSON.stringify(
         canCreateComment ? labels.addCommentTooltip : "",

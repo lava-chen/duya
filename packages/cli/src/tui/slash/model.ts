@@ -20,6 +20,17 @@
  * configured. It also only ever described the CURRENT provider, so a model of
  * another provider could not be picked at all.
  *
+ * ## Configured models and presets
+ *
+ * `enabled_models` is a list someone typed into a file, so a provider with a
+ * dozen available models usually has two configured. The catalog carries the
+ * vendor's preset list next to it (`presetModels`), and both are offered: the
+ * configured rows first, then the presets marked `preset`. Picking a preset
+ * switches the session without touching `config.toml` — `resolveModel` accepts
+ * a model the provider serves but the configuration does not list, with a
+ * warning rather than a refusal, and rewriting a hand-edited file from a
+ * picker is not this command's business.
+ *
  * ## Switching provider and model together
  *
  * A model only means something together with its provider, so the picker
@@ -55,6 +66,13 @@ interface ModelChoice {
   readonly isCurrent: boolean;
   /** False when the provider has no API key: the row would fail on the next turn. */
   readonly hasApiKey: boolean;
+  /**
+   * True when the model comes from the vendor's preset list rather than from
+   * `enabled_models`. Shown as its own row, not merged into the configured
+   * ones, because it is a different promise: the provider serves it, the
+   * configuration does not claim to.
+   */
+  readonly isPreset: boolean;
 }
 
 /** `1.0M ctx` / `200k ctx`, pi's thresholds rather than `1000k`. */
@@ -79,6 +97,7 @@ function describeChoice(
   provider: HostProviderCatalogProvider,
   model: HostProviderCatalogModel,
   isCurrent: boolean,
+  isPreset: boolean,
 ): string {
   const flags = [
     provider.name,
@@ -86,6 +105,7 @@ function describeChoice(
     model.supportsReasoning === true ? 'reasoning' : '',
     describeTiers(model),
     provider.hasApiKey ? '' : 'no API key',
+    isPreset ? 'preset' : '',
     isCurrent ? 'current' : '',
   ].filter((flag) => flag !== '');
   return flags.join(' · ');
@@ -94,20 +114,26 @@ function describeChoice(
 /**
  * Every model the catalog knows, ordered by how likely it is to be the one
  * the user wants: the current model, then the rest of the current provider,
- * then every other provider.
+ * then every other provider — and within a provider, its configured models
+ * before its presets.
  */
 function listChoices(catalog: HostProviderCatalog, session: HostSessionRecord): ModelChoice[] {
   const choices: ModelChoice[] = [];
   for (const provider of catalog.providers) {
-    for (const model of provider.models) {
+    const rows: Array<{ model: HostProviderCatalogModel; isPreset: boolean }> = [
+      ...provider.models.map((model) => ({ model, isPreset: false })),
+      ...(provider.presetModels ?? []).map((model) => ({ model, isPreset: true })),
+    ];
+    for (const { model, isPreset } of rows) {
       const isCurrent = provider.providerId === session.providerId && model.modelId === session.model;
       choices.push({
         providerId: provider.providerId,
         providerName: provider.name,
         modelId: model.modelId,
-        description: describeChoice(provider, model, isCurrent),
+        description: describeChoice(provider, model, isCurrent, isPreset),
         isCurrent,
         hasApiKey: provider.hasApiKey,
+        isPreset,
       });
     }
   }
@@ -117,6 +143,7 @@ function listChoices(catalog: HostProviderCatalog, session: HostSessionRecord): 
     const rightSameProvider = right.providerId === session.providerId;
     if (leftSameProvider !== rightSameProvider) return leftSameProvider ? -1 : 1;
     if (left.providerId !== right.providerId) return left.providerId.localeCompare(right.providerId);
+    if (left.isPreset !== right.isPreset) return left.isPreset ? 1 : -1;
     return left.modelId.localeCompare(right.modelId);
   });
 }
@@ -243,6 +270,7 @@ async function legacyChoices(ctx: TuiSlashContext): Promise<ModelChoice[] | null
         description: flags.join(' · '),
         isCurrent,
         hasApiKey: true,
+        isPreset: false,
       });
     }
     return choices;
@@ -358,7 +386,14 @@ const MODEL_COMMAND: TuiSlashCommandDef = {
       const providerChanged = picked.providerId !== ctx.session.providerId;
       ctx.tui.printNotice(
         `Model switched to ${session.model} (${picked.providerName}).`
-        + (providerChanged ? ' Provider changed too.' : ''),
+        + (providerChanged ? ' Provider changed too.' : '')
+        // A preset is not configured: the session now names a model the
+        // provider serves and `enabled_models` does not, which `resolveModel`
+        // accepts with a warning. Saying so is the difference between "I
+        // picked a model" and "I changed my configuration".
+        + (picked.isPreset
+          ? ` ${picked.modelId} is a ${picked.providerName} preset, so it is not written into config.toml.`
+          : ''),
       );
       return { kind: 'session_updated', session };
     } catch (error) {

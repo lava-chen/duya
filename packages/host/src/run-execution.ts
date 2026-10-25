@@ -66,6 +66,7 @@ import { SessionState, WorkerSessionRegistry } from './worker-session-registry.j
 import { normalizeWorkerEvent } from './worker-frames.js';
 import { WorkerPermissionRequests } from './worker-permission-requests.js';
 import { LiveRunEventHub } from './live-run-event-hub.js';
+import { BackgroundTaskIndex } from './background-task-index.js';
 import type { SessionServiceCaller } from './session-service.js';
 import type { ChildProcess } from 'node:child_process';
 
@@ -179,6 +180,14 @@ export class HostRunExecutionError extends Error {
 
 export class HostRunExecutionController {
   readonly permissionRequests: WorkerPermissionRequests | undefined;
+  /**
+   * Latest background bash snapshot per session.
+   *
+   * Workers push it over the parent IPC link; the Desktop forwards it to its
+   * renderer, but a standalone Host had no consumer. This is that consumer,
+   * and the read-only route serves it to HTTP clients.
+   */
+  readonly backgroundTasks = new BackgroundTaskIndex();
   readonly #options: HostRunExecutionControllerOptions;
   readonly #registry: WorkerSessionRegistry;
   readonly #workerManager: WorkerManager;
@@ -733,6 +742,13 @@ export class HostRunExecutionController {
     }
     if (type === 'db:request') {
       await this.#serveDbRequest(sessionId, msg, source);
+      return;
+    }
+
+    if (type === 'bash_task:update') {
+      // The worker's registry is the only writer of bash task state; this
+      // message is already a complete snapshot, so replace rather than merge.
+      this.backgroundTasks.apply(sessionId, msg.tasks);
       return;
     }
 

@@ -609,6 +609,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Host utilities.',
   },
   {
+    prefix: 'apps/desktop/src/main/sessions',
+    category: 'host-ui',
+    why: 'The session handoff the Desktop answers for the Host: bring the window forward and tell the renderer which session to open. It is host transport with no domain decisions of its own, the same job `apps/desktop/src/main/ipc` does.',
+  },
+  {
     prefix: 'packages/agent/src/cli',
     category: 'host-ui',
     why: 'The agent CLI surface: pure command descriptors mixed with the runner that builds an agent. M5.2 splits them; the whole directory is host-facing today.',

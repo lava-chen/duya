@@ -38,7 +38,7 @@
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 /* ============================================
@@ -127,7 +127,7 @@
 .attachment-preview-subtitle {
   font-size: 0.75rem;
   color: var(--muted);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .attachment-preview-body {
@@ -243,7 +243,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .attachment-preview-code-content {
@@ -251,7 +251,7 @@
   margin: 0;
   padding: 1.25rem;
   overflow: auto;
-  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
@@ -293,7 +293,7 @@
   margin: 0;
   padding: 1.25rem;
   overflow: auto;
-  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
@@ -333,7 +333,7 @@
 
 .attachment-preview-doc-text {
   margin: 0;
-  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
@@ -531,7 +531,7 @@
 .image-preview-panel-subtitle {
   font-size: 0.75rem;
   color: var(--muted);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .image-preview-panel-body {
@@ -603,7 +603,7 @@
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text);
-  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .image-preview-panel-text-filename,
@@ -617,7 +617,7 @@
   margin: 0;
   padding: 1.25rem;
   overflow: auto;
-  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);
@@ -687,7 +687,7 @@
 
 .image-preview-panel-doc-text {
   margin: 0;
-  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--text);

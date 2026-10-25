@@ -33,6 +33,7 @@ import type {
   HostIntegrationSyncStatus,
   HostIntegrationSyncWritten,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestStatus,
@@ -283,6 +284,29 @@ export class ApiClient {
     return { sessionId, messages, nextCursor: readNullableString(body['nextCursor']) };
   }
 
+  /**
+   * The WHOLE transcript, in one request.
+   *
+   * The paged read re-projects the entire transcript on every page, so a
+   * client that pages to the end pays for the transcript once per page. This
+   * asks the Host for one projection of the whole thing instead.
+   */
+  async readAllHostMessages(sessionId: SessionId, query: HostMessageReadAllQuery = {}): Promise<HostMessagePage> {
+    // The source projection is a Host-side filter this transport cannot
+    // express — the same refusal the paged read makes.
+    if (query.sources !== undefined) throw new ApiError(400, 'unsupported_message_filter');
+    const params = new URLSearchParams({ all: '1' });
+    if (query.includeSuperseded !== undefined) params.set('includeSuperseded', String(query.includeSuperseded));
+    const body = await this.#readJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`, {});
+    if (!Array.isArray(body['messages'])) throw new ApiError(200, 'invalid_message_page');
+    const messages: HostMessagePage['messages'][number][] = [];
+    for (const value of body['messages']) {
+      const item = readHostMessageItem(value);
+      if (item !== null) messages.push(item);
+    }
+    return { sessionId, messages, nextCursor: readNullableString(body['nextCursor']) };
+  }
+
   async listHostRuns(sessionId: SessionId, limit = 50, options: RequestOptions = {}): Promise<readonly {
     runId: RunId; sessionId: SessionId; status: DurableRunStatus;
     createdAt: number; startedAt: number | null; finishedAt: number | null;
@@ -481,6 +505,24 @@ export class ApiClient {
     if (options.cursor !== undefined) params.set('cursor', options.cursor);
     const body = await this.#readJson(
       `/api/sessions/${encodeURIComponent(sessionId)}/messages?${params.toString()}`,
+      { ...options },
+    );
+    return readMessagePage(body);
+  }
+
+  /**
+   * The WHOLE durable history, in one request.
+   *
+   * The paged read re-projects the entire transcript on every page, so
+   * reading a 10k-message session to the end costs 100 projections of 10k
+   * rows. This asks for one projection of the whole thing.
+   */
+  async readAllMessages(
+    sessionId: string,
+    options: RequestOptions = {},
+  ): Promise<MessagePageResult> {
+    const body = await this.#readJson(
+      `/api/sessions/${encodeURIComponent(sessionId)}/messages?all=1`,
       { ...options },
     );
     return readMessagePage(body);

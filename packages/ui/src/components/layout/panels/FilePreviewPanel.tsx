@@ -230,7 +230,7 @@ const PreviewCodeContent = memo(function PreviewCodeContent({
       }}
       codeTagProps={{
         style: {
-          fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
+          fontFamily: "var(--font-mono)",
         },
       }}
     >

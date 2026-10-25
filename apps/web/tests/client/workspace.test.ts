@@ -119,32 +119,37 @@ describe('Workspace selection', () => {
     expect(selectionRequests.every(({ signal }) => signal.aborted)).toBe(true);
   });
 
-  it('loads every durable history page for the selected session', async () => {
-    const pageRequests: string[] = [];
+  it('loads the whole durable history in ONE read instead of paging it', async () => {
+    // The Host's paged read re-projects the ENTIRE transcript on every page, so
+    // paging a 10k-message transcript costs 100 projections of 10k rows. The
+    // web app asks for the whole transcript in one read.
+    //
+    // The gate is the REQUEST COUNT, not a duration: it is exact on any
+    // machine, so a regression that reintroduces per-page projection fails
+    // here instead of showing up as a slow session.
+    const requests: string[] = [];
     const bff = createStubBff({
       sessions: [{ id: 'session-a', title: 'A 会话' }],
       runs: { 'session-a': [] },
       overrides: {
         '/api/sessions/session-a/messages': async (url) => {
-          const cursor = url.searchParams.get('cursor');
-          pageRequests.push(cursor ?? 'first');
-          const id = cursor === null ? 'm-old' : 'm-new';
+          requests.push(url.search);
           return new Response(JSON.stringify({
             sessionId: 'session-a',
-            messages: [{
+            messages: ['m-old', 'm-new'].map((id, index) => ({
               id,
-              sequence: cursor === null ? 1 : 2,
-              createdAt: cursor === null ? 1 : 2,
+              sequence: index + 1,
+              createdAt: index + 1,
               turnId: null,
               entry: {
                 type: 'message',
                 id,
                 parentId: null,
-                createdAt: cursor === null ? 1 : 2,
+                createdAt: index + 1,
                 message: { role: 'user', content: id },
               },
-            }],
-            nextCursor: cursor === null ? 'page-2' : null,
+            })),
+            nextCursor: null,
           }), { status: 200, headers: { 'content-type': 'application/json' } });
         },
       },
@@ -153,7 +158,9 @@ describe('Workspace selection', () => {
     await workspace.start();
     await workspace.select('session-a');
 
-    expect(pageRequests).toEqual(['first', 'page-2']);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain('all=1');
+    expect(requests[0]).not.toContain('cursor=');
     expect(workspace.getSnapshot().messages.map((message) => message.id)).toEqual(['m-old', 'm-new']);
     workspace.stop();
   });

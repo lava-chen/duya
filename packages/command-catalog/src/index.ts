@@ -211,6 +211,27 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     requiresSession: true,
   },
   {
+    // Plan PR-4. The init: create the repository-root AGENTS.md, so that
+    // every agent that opens the checkout reads the same instructions.
+    //
+    // The write lands in the SESSION's checkout. The client names the
+    // session; the Host resolves the directory, because a path in a client
+    // request is a path an attacker chooses.
+    name: 'init',
+    label: 'Create AGENTS.md',
+    labelZh: '创建 AGENTS.md',
+    description: 'Create an AGENTS.md at the repository root',
+    descriptionZh: '在仓库根目录创建 AGENTS.md',
+    category: 'session',
+    surfaces: ['desktop', 'cli'],
+    // The file goes into the session's own checkout, so there has to be a
+    // session to know which checkout that is.
+    requiresSession: true,
+    // It writes a file into the user's repository: not something to do in
+    // the middle of a running turn.
+    availableWhileBusy: false,
+  },
+  {
     name: 'export',
     label: 'Export conversation',
     labelZh: '导出对话',
@@ -255,6 +276,24 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['cli'],
     requiresSession: true,
     // A file read does not touch the run.
+    availableWhileBusy: true,
+  },
+  {
+    // The CLI and the desktop app share one Host and one set of sessions, so
+    // the handover between them is a Host call rather than something one
+    // process does to the other. The Desktop's own handler is idempotent: it
+    // brings the session back to the foreground of the app that already owns
+    // it, which is the only thing "open in the desktop app" can mean there.
+    name: 'app',
+    label: 'Open in desktop app',
+    labelZh: '在桌面端打开',
+    description: 'Hand this session over to the desktop app',
+    descriptionZh: '把当前会话交接到桌面端',
+    category: 'session',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // The handover asks the Host to open the session elsewhere; it does not
+    // touch the running turn.
     availableWhileBusy: true,
   },
   {
@@ -458,6 +497,20 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    // The one view whose whole purpose is to be opened WHILE a turn runs: a
+    // promoted bash command or a subagent outlives the model's answer, and the
+    // user needs to inspect it without waiting for the run to finish.
+    name: 'tasks',
+    label: 'Background tasks',
+    labelZh: '后台任务',
+    description: 'Show background bash tasks and subagents',
+    descriptionZh: '查看后台 bash 任务与子代理',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: true,
+  },
+  {
     name: 'transcript',
     label: 'Transcript stats',
     labelZh: '转录统计',
@@ -512,14 +565,79 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     requiresSession: true,
   },
   {
+    // The app connectors the Host has connected — slack, google,
+    // microsoft365, wecom, qq-mail, remote-mcp and the like. The CLI lists
+    // them as text; the Desktop opens the extensions page where they are
+    // managed. One description, two surfaces — the wording stays true for
+    // both, so it names the thing rather than the surface's gesture.
+    name: 'apps',
+    label: 'App connections',
+    labelZh: '应用连接',
+    description: 'Inspect the connected app connectors',
+    descriptionZh: '查看已连接的应用连接器',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the connections is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The plugins installed on this machine. The CLI lists them as text; the
+    // Desktop opens the marketplace where they are managed.
+    name: 'plugin',
+    label: 'Plugins',
+    labelZh: '插件',
+    description: 'Inspect the installed plugins',
+    descriptionZh: '查看已安装的插件',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the plugins is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // The workflow runs the Host recorded. The CLI lists them as text; the
+    // Desktop opens the workflow page where they are managed.
+    name: 'workflow',
+    label: 'Workflow runs',
+    labelZh: '工作流运行',
+    description: 'Inspect the recorded workflow runs',
+    descriptionZh: '查看已记录的工作流运行',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    requiresSession: true,
+    // Listing the runs is a read.
+    availableWhileBusy: true,
+  },
+  {
     name: 'skills',
     label: 'Skills',
     labelZh: '技能列表',
     description: 'List available skills',
     descriptionZh: '列出可用的技能',
     category: 'info',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Listing skills is a read.
+    availableWhileBusy: true,
+  },
+  {
+    // Plan PR-4. The doctor: a read-only diagnostic of the local install,
+    // running the same shared checks on both surfaces so a bug report means
+    // the same thing whichever surface produced it.
+    //
+    // The CLI asks the Desktop's CLI API over HTTP; the Desktop reads the
+    // same facts in-process. The CHECKS are the shared layer's either way.
+    name: 'doctor',
+    label: 'Diagnose install',
+    labelZh: '诊断安装状态',
+    description: 'Diagnose the local Duya install',
+    descriptionZh: '诊断本机 Duya 安装状态',
+    category: 'info',
+    surfaces: ['desktop', 'cli'],
+    // The diagnostic needs no session — it looks at the install, not at a
+    // conversation.
+    requiresSession: false,
+    // A diagnostic is a read; it does not touch the run.
     availableWhileBusy: true,
   },
 
@@ -599,12 +717,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'mcp',
-    label: 'MCP connections',
-    labelZh: 'MCP 连接',
-    description: 'Open MCP connection settings',
-    descriptionZh: '打开 MCP 连接设置',
+    label: 'MCP servers',
+    labelZh: 'MCP 服务器',
+    // The Desktop opens the extensions page where MCP servers are inspected
+    // and configured; the CLI lists the configured ones as text. One
+    // description, two surfaces — the wording stays true for both.
+    description: 'Inspect the configured MCP servers',
+    descriptionZh: '查看已配置的 MCP 服务器',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Opening a panel does not touch the run.
     availableWhileBusy: true,
   },

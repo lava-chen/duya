@@ -550,6 +550,7 @@ export class WorkflowRunStore {
             definition: snapshot.definition,
             ...(snapshot.definitionHash !== undefined ? { definitionHash: snapshot.definitionHash } : {}),
             ...(snapshot.definitionHashSource !== undefined ? { definitionHashSource: snapshot.definitionHashSource } : {}),
+            ...(snapshot.maxConcurrency !== undefined ? { maxConcurrency: snapshot.maxConcurrency } : {}),
             nodeStack: snapshot.nodeStack ?? [],
           }),
           updated_at: snapshot.updatedAt ?? Date.now(),
@@ -574,6 +575,7 @@ export class WorkflowRunStore {
       ...(parsed.definitionHashSource === 'dag' || parsed.definitionHashSource === 'dwf-script'
         ? { definitionHashSource: parsed.definitionHashSource }
         : {}),
+      ...(typeof parsed.maxConcurrency === 'number' ? { maxConcurrency: parsed.maxConcurrency } : {}),
       nodeStack: parsed.nodeStack ?? [],
       // Legacy read path: rows written before migration 31 still carry the
       // journal inline, and migration 31 may not have run on an old DB.

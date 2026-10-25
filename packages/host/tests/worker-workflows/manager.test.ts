@@ -5,7 +5,7 @@
  * journal dual-write persistence.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   WorkflowManager,
   Journal,
@@ -26,9 +26,11 @@ class MemoryRunStore implements WorkflowRunStoreLike {
     definition: unknown;
     definitionHash?: string;
     definitionHashSource?: 'dag' | 'dwf-script';
+    maxConcurrency?: number;
     nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
     journal: JournalRecord[];
   }>();
+  failNextSnapshotWrite = false;
 
   async createRun(input: Parameters<WorkflowRunStoreLike['createRun']>[0]): Promise<ManagedRun> {
     const run: ManagedRun = {
@@ -79,11 +81,16 @@ class MemoryRunStore implements WorkflowRunStoreLike {
   }
 
   async saveSnapshot(input: Parameters<WorkflowRunStoreLike['saveSnapshot']>[0]): Promise<void> {
+    if (this.failNextSnapshotWrite) {
+      this.failNextSnapshotWrite = false;
+      throw new Error('snapshot write failed');
+    }
     const previous = this.blobs.get(input.runId);
     this.blobs.set(input.runId, {
       definition: input.definition,
       ...(input.definitionHash !== undefined ? { definitionHash: input.definitionHash } : previous?.definitionHash !== undefined ? { definitionHash: previous.definitionHash } : {}),
       ...(input.definitionHashSource !== undefined ? { definitionHashSource: input.definitionHashSource } : previous?.definitionHashSource !== undefined ? { definitionHashSource: previous.definitionHashSource } : {}),
+      ...(input.maxConcurrency !== undefined ? { maxConcurrency: input.maxConcurrency } : previous?.maxConcurrency !== undefined ? { maxConcurrency: previous.maxConcurrency } : {}),
       nodeStack: input.nodeStack,
       journal: input.journal.length > 0 ? input.journal as JournalRecord[] : previous?.journal ?? [],
     });
@@ -154,19 +161,31 @@ const SECRET = 'test-secret';
 describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
   it('retunes a live run in place and emits the concurrency change', async () => {
     const store = new MemoryRunStore();
-    let started = 0;
-    let signalStarted!: () => void;
-    const bothStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
-    let releaseAgents!: () => void;
-    const blocked = new Promise<void>((resolve) => { releaseAgents = resolve; });
+    const def = parseWorkflowDef({
+      name: 'live-retune',
+      description: 'Live concurrency retune fixture',
+      phases: [{
+        phase: 'work', title: 'Work', nodes: [
+          { id: 'a1', agent: 'general-purpose', prompt: 'step one' },
+          { id: 'a2', agent: 'general-purpose', prompt: 'step two' },
+          { id: 'a3', agent: 'general-purpose', prompt: 'step three' },
+        ],
+      }],
+    });
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+    const startSignals: Array<() => void> = [];
+    const firstStarted = new Promise<void>((resolve) => startSignals.push(resolve));
+    const secondStarted = new Promise<void>((resolve) => startSignals.push(resolve));
+    const thirdStarted = new Promise<void>((resolve) => startSignals.push(resolve));
     const host = fixtureHost();
     const concurrentHost: WorkflowHost = {
       ...host,
       async runAgent(spec) {
         host.agentCalls.push(spec.prompt);
-        started++;
-        if (started === 2) signalStarted();
-        await blocked;
+        started.push(spec.prompt);
+        startSignals[started.length - 1]?.();
+        await new Promise<void>((resolve) => releases.set(spec.prompt, resolve));
         return { ok: true, output: `done:${spec.prompt}` };
       },
     };
@@ -174,21 +193,99 @@ describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
     const manager = new WorkflowManager({
       host: concurrentHost,
       store,
-      maxConcurrency: 2,
+      maxConcurrency: 1,
       onObservation: (event) => observations.push(event),
     });
 
-    const launch = manager.launch({ def: WF_DEF, params: {} });
-    await bothStarted;
-    expect(manager.setRunConcurrency('run-1', 1)).toBe(true);
-    expect(observations).toEqual([{ type: 'concurrency-changed', runId: 'run-1', previous: 2, current: 1 }]);
+    const launch = manager.launch({ def, params: {} });
+    await firstStarted;
+    expect(started).toEqual(['step one']);
+    store.failNextSnapshotWrite = true;
+    await expect(manager.setRunConcurrency('run-1', 2)).rejects.toThrow('snapshot write failed');
+    expect(observations).toEqual([]);
+
+    expect(await manager.setRunConcurrency('run-1', 2)).toBe(true);
+    await secondStarted;
+    expect(started).toEqual(['step one', 'step two']);
+    expect(await manager.setRunConcurrency('run-1', 1)).toBe(true);
+    expect(store.blobs.get('run-1')?.maxConcurrency).toBe(1);
+    expect(observations).toEqual([
+      { type: 'concurrency-changed', runId: 'run-1', previous: 1, current: 2 },
+      { type: 'concurrency-changed', runId: 'run-1', previous: 2, current: 1 },
+    ]);
     expect(store.runs.size).toBe(1);
     expect(host.agentCalls).toEqual(['step one', 'step two']);
 
-    releaseAgents();
+    releases.get('step one')?.();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(started).toEqual(['step one', 'step two']);
+    releases.get('step two')?.();
+    await thirdStarted;
+    expect(started).toEqual(['step one', 'step two', 'step three']);
+    releases.get('step three')?.();
     expect((await launch).status).toBe('complete');
     expect(store.runs.size).toBe(1);
-    expect(host.agentCalls).toHaveLength(2);
+    expect(host.agentCalls).toHaveLength(3);
+  });
+
+  it('restores the persisted run gate after stopped recovery', async () => {
+    const store = new MemoryRunStore();
+    const run = await store.createRun({ id: 'run-cap', workflowName: WF_DEF.name, status: 'stopped' });
+    await store.saveSnapshot({
+      runId: run.id,
+      definition: WF_DEF,
+      maxConcurrency: 1,
+      nodeStack: [],
+      journal: [],
+    });
+
+    let active = 0;
+    let peak = 0;
+    let started = 0;
+    const releases: Array<() => void> = [];
+    const host: WorkflowHost = {
+      ...fixtureHost(),
+      async runAgent(spec) {
+        started++;
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => releases.push(() => { active--; resolve(); }));
+        return { ok: true, output: `done:${spec.prompt}` };
+      },
+    };
+    const manager = new WorkflowManager({ host, store, maxConcurrency: 3 });
+
+    const recovery = manager.resumeStopped(run.id);
+    await vi.waitFor(() => expect(started).toBe(1));
+    expect(peak).toBe(1);
+    releases.shift()?.();
+    await vi.waitFor(() => expect(started).toBe(2));
+    expect(peak).toBe(1);
+    releases.shift()?.();
+    expect((await recovery).status).toBe('complete');
+  });
+
+  it('backfills the configured default for a legacy snapshot without a run gate', async () => {
+    const store = new MemoryRunStore();
+    const run = await store.createRun({ id: 'run-old-cap', workflowName: WF_DEF.name, status: 'stopped' });
+    await store.saveSnapshot({ runId: run.id, definition: WF_DEF, nodeStack: [], journal: [] });
+    const manager = new WorkflowManager({ host: fixtureHost(), store, maxConcurrency: 2 });
+
+    expect((await manager.resumeStopped(run.id)).status).toBe('complete');
+    expect(store.blobs.get(run.id)?.maxConcurrency).toBe(2);
+  });
+
+  it('rejects a corrupt persisted run gate instead of silently using the default', async () => {
+    const store = new MemoryRunStore();
+    const run = await store.createRun({ id: 'run-bad-cap', workflowName: WF_DEF.name, status: 'stopped' });
+    await store.saveSnapshot({ runId: run.id, definition: WF_DEF, maxConcurrency: 0, nodeStack: [], journal: [] });
+    const manager = new WorkflowManager({ host: fixtureHost(), store, maxConcurrency: 2 });
+
+    await expect(manager.resumeStopped(run.id)).resolves.toMatchObject({
+      status: 'failed',
+      errorClass: 'invalid_run_snapshot',
+    });
+    expect(store.runs.get(run.id)?.status).toBe('stopped');
   });
 
   it('a suspended run stays blocked across reconciliation and resumes from its cache', async () => {

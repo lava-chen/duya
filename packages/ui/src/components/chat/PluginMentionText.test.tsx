@@ -3,6 +3,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { PluginMentionText } from './PluginMentionChip';
+import { CODE_FONT_FAMILY } from '@/lib/rich-text-canonical';
 import type { PluginMentionTarget } from '@/lib/message-input-logic';
 
 const targets: PluginMentionTarget[] = [
@@ -26,7 +27,7 @@ describe('PluginMentionText', () => {
 
     const label = chip?.querySelector('span');
     expect(label?.textContent).toBe('WeChat Pay');
-    expect(label?.style.fontFamily).toContain('Fira Mono');
+    expect(label?.style.fontFamily).toBe(CODE_FONT_FAMILY);
     expect(label?.style.color.replace(/\s/g, '')).toMatch(/3b82f6|rgb\(59,130,246\)/);
   });
 

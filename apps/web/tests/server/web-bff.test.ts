@@ -340,6 +340,48 @@ describe('Web BFF over the real local Host HTTP listener', () => {
     expect(invalidPermissionPatch.status).toBe(400);
   }, 30_000);
 
+  it('serves the whole transcript in ONE read and refuses a whole read that carries a page', async () => {
+    // The Host's paged read re-projects the ENTIRE transcript on every page, so
+    // paging a 10k-message transcript costs 100 projections of 10k rows.
+    // `all=1` asks the Host for ONE projection of the whole thing.
+    const host = await startTestHost();
+    const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);
+    const session = await hostClient.create({ title: 'Whole transcript session', mode: 'code' });
+    await hostClient.appendTimeline(session.id, {
+      entries: ['m1', 'm2', 'm3'].map((id, index) => ({
+        type: 'message' as const,
+        id,
+        parentId: null,
+        createdAt: 1_700_000_000_000 + index,
+        message: { role: 'user' as const, content: id },
+      })),
+    });
+    const bff = await startTestBff(host);
+
+    const whole = await fetch(`${bff.origin}/api/sessions/${encodeURIComponent(session.id)}/messages?all=1`);
+    const wholeBody = await whole.json() as { messages: readonly { id: string }[]; nextCursor: string | null };
+
+    expect(whole.status).toBe(200);
+    expect(wholeBody.messages.map((message) => message.id)).toEqual(['m1', 'm2', 'm3']);
+    expect(wholeBody.nextCursor).toBeNull();
+
+    // The paged contract is unchanged: one page and a cursor.
+    const paged = await fetch(`${bff.origin}/api/sessions/${encodeURIComponent(session.id)}/messages?limit=2`);
+    const pagedBody = await paged.json() as { messages: readonly { id: string }[]; nextCursor: string | null };
+    expect(paged.status).toBe(200);
+    expect(pagedBody.messages).toHaveLength(2);
+    expect(pagedBody.nextCursor).not.toBeNull();
+
+    // A whole read and a page are contradictory: refuse instead of quietly
+    // ignoring one of them.
+    for (const query of ['all=1&limit=2', 'all=1&cursor=abc', 'all=maybe']) {
+      const refused = await fetch(`${bff.origin}/api/sessions/${encodeURIComponent(session.id)}/messages?${query}`);
+      expect(refused.status, query).toBe(400);
+      const body = await refused.json() as { error?: { code?: string } };
+      expect(body.error?.code, query).toBe('invalid_message_query');
+    }
+  }, 30_000);
+
   it('does not confuse tool approval ledger entries with worker PermissionRequests', async () => {
     const host = await startTestHost();
     const hostClient = new HostSessionHttpClient(host.origin, HOST_TOKEN);

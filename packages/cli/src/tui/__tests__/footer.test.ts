@@ -169,6 +169,39 @@ describe('buildFooterLines', () => {
     expect(row).toContain('⚡ 63.0 tok/s');
   });
 
+  it('keeps the three kinds of number as three groups', () => {
+    // Spend, window and speed are three different answers. Printed with a bare
+    // space between every token they read as one undifferentiated run, which is
+    // what made this row look untidy rather than informative.
+    const row = plain(footer({
+      stats: {
+        inputTokens: 49_000,
+        outputTokens: 1600,
+        totalTokens: 50_600,
+        contextPercent: 5,
+        contextBudget: 1_000_000,
+        outputTokensPerSecond: 63,
+      },
+    })[1] ?? '');
+    expect(row).toContain('↑49k ↓1.6k Σ51k · 5%/1.0M · ⚡ 63.0 tok/s');
+  });
+
+  it('colours the rate as the one live measurement on the row', () => {
+    const row = footer({
+      stats: {
+        inputTokens: 49_000,
+        outputTokens: 1600,
+        totalTokens: 50_600,
+        contextPercent: 5,
+        contextBudget: 1_000_000,
+        outputTokensPerSecond: 63,
+      },
+    })[1] ?? '';
+    expect(row).toContain('{cyan-fg}⚡ 63.0 tok/s{/cyan-fg}');
+    // The counters stay muted: colour means kind here, not emphasis.
+    expect(row).toContain('{gray-fg}↑49k ↓1.6k Σ51k{/gray-fg}');
+  });
+
   it('omits the rate entirely when the provider reported no duration', () => {
     // A missing duration is not a zero rate: it says "nobody measured this
     // call", and showing `⚡ 0.0 tok/s` would be a measurement nobody made.

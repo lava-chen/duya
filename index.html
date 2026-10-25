@@ -74,7 +74,10 @@
         animation: duya-boot-pulse 2.4s ease-in-out infinite;
       }
       .duya-boot-name {
-        font-family: "Windsor", "Georgia", "Times New Roman", serif;
+        /* Literal serif stack (splash renders before the CSS bundle, so the
+           --font-serif token cannot resolve here). Copernicus comes from the
+           @font-face in base.css when it has loaded; Georgia covers the gap. */
+        font-family: "Copernicus", "Georgia", "Times New Roman", serif;
         font-size: 30px;
         font-weight: 700;
         letter-spacing: 0.01em;

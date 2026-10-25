@@ -60,6 +60,10 @@ import {
 } from '../../e2e/perf/lib/lock.mjs';
 import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
 import { signalBudgetMs } from '../../e2e/perf/lib/scenario-kit.mjs';
+import {
+  startupPhaseMetrics,
+  startupPhases,
+} from '../../e2e/perf/lib/startup-phases.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -278,6 +282,60 @@ describe('the first-screen budget', () => {
     const metrics = result.checks.map((check: { metric: string }) => check.metric);
     expect(metrics).toContain('firstScreen.chunkCount');
     expect(metrics).toContain('entryChunkBytes');
+  });
+});
+
+describe('the startup phase split', () => {
+  // A cold `file://` boot measured on the renderer's own clock: the
+  // navigation starts, the HTML arrives 700 ms later (Chromium's cold
+  // renderer), the first screen's JavaScript takes another 300 ms, and the
+  // paint follows.
+  const navigation = { responseEnd: 718.1, domContentLoadedEventEnd: 992.7 };
+  const paints = { 'first-paint': 992.7, 'first-contentful-paint': 996 };
+
+  it('splits the boot into the phases that own it', () => {
+    const phases = startupPhases(navigation, paints);
+    expect(phases.navToHtml_ms).toBe(718.1);
+    expect(phases.htmlToDcl_ms).toBeCloseTo(274.6, 1);
+    expect(phases.dclToPaint_ms).toBeCloseTo(3.3, 1);
+    expect(phases.navToDcl_ms).toBe(992.7);
+    expect(phases.navToPaint_ms).toBe(996);
+  });
+
+  it('reports nothing rather than a wrong number when the document never loaded', () => {
+    // A missing navigation entry is a measurement that measured nothing; it
+    // must not turn into a zero that reads like "the boot was instant".
+    const phases = startupPhases(null, paints);
+    expect(phases.navToHtml_ms).toBeNull();
+    expect(phases.htmlToDcl_ms).toBeNull();
+    expect(phases.navToPaint_ms).toBeNull();
+  });
+
+  it('leaves the paint phase empty when the document never painted', () => {
+    const phases = startupPhases(navigation, {});
+    expect(phases.navToDcl_ms).toBe(992.7);
+    expect(phases.dclToPaint_ms).toBeNull();
+    expect(phases.navToPaint_ms).toBeNull();
+  });
+
+  it('reports nothing rather than a wrong number when the milestones have not happened yet', () => {
+    // `domContentLoadedEventEnd` is still 0 before DOMContentLoaded fires.
+    // Taken at face value it would report an instant HTML phase and a
+    // negative JavaScript phase.
+    const phases = startupPhases({ responseEnd: 0, domContentLoadedEventEnd: 0 }, paints);
+    expect(phases.navToHtml_ms).toBeNull();
+    expect(phases.htmlToDcl_ms).toBeNull();
+    expect(phases.navToDcl_ms).toBeNull();
+    expect(phases.dclToPaint_ms).toBeNull();
+  });
+
+  it('names the phase metrics under the prefix of the boot they belong to', () => {
+    const metrics = startupPhaseMetrics('startup.cold', startupPhases(navigation, paints));
+    expect(metrics['startup.cold.phase.navToHtml_ms']).toBe(718.1);
+    expect(metrics['startup.cold.phase.htmlToDcl_ms']).toBeCloseTo(274.6, 1);
+    expect(metrics['startup.cold.phase.dclToPaint_ms']).toBeCloseTo(3.3, 1);
+    expect(metrics['startup.cold.phase.navToDcl_ms']).toBe(992.7);
+    expect(metrics['startup.cold.phase.navToPaint_ms']).toBe(996);
   });
 });
 
