@@ -46,5 +46,8 @@ Claude Code 桌面端实测（2026-10-25，见 `docs-local/research/claude-deskt
 - [x] i18n + 样式
 - [x] resize 交互实测：分隔条 = slider thumb，值=一侧面板百分比（a11y `Resize A and B = N`），键盘步进 ~1.6%/键、下限 10%；聚焦态蓝色指示条、拖拽态 "Resize" 药丸 + 指示条；聊天列可压至 ~190px
 - [x] resize 视觉统一：ResizeHandle 药丸指示条（沿缝方向 36×4，拖拽 56×4 + accent）+ 拖拽中 "调整大小" badge；覆盖面板墙列/行分隔、面板区左缘、侧栏边缘
-- [x] 门禁：ui tsc 0、layout vitest 224 例 0、panel-window-manager 21 例 0、typecheck:all 0、architecture:check 0
+- [x] 第二轮实测补充：`+` 的 "Clear context" chip 是用户安装的 Claude Mod 渲染（非原生，笔记已更正）；session rail 四卡（Context/Connectors/Environment/Changes）与折叠摘要模式实测
+- [x] TaskDrawer → session rail：overlay 抽屉改 `.chat-body-row` 内常驻挤压列；section 卡片化；新增 ContextCard（46% used + 分段色条 + 10 桶图例，读 context-usage-store，零桶隐藏、free space 收尾）；窄容器 ≤980px 退回 overlay
+- [x] 门禁：ui tsc 0、layout vitest **227 例** 0（含 ContextCard 3 例）、typecheck:all 0、architecture:check 0
+- [ ] 真机 Electron 冒烟（弹出/收回 + rail 挤压列 + Context 卡数据）
 - [ ] PR
