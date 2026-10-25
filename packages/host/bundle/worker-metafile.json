@@ -29089,6 +29089,11 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-init-fingerprint.ts": {
+      "bytes": 8098,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/worker-config/file-config.ts": {
       "bytes": 18267,
       "imports": [
@@ -29252,7 +29257,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 168949,
+      "bytes": 173221,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -29483,6 +29488,11 @@
           "path": "packages/host/src/worker-compaction/token-estimate.ts",
           "kind": "import-statement",
           "original": "./worker-compaction/token-estimate.js"
+        },
+        {
+          "path": "packages/host/src/worker-init-fingerprint.ts",
+          "kind": "import-statement",
+          "original": "./worker-init-fingerprint.js"
         },
         {
           "path": "packages/host/src/worker-config/self-init.ts",
@@ -39718,7 +39728,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -41653,7 +41663,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -41686,7 +41696,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42463,7 +42473,7 @@
           "bytesInOutput": 1702
         },
         "../../../node_modules/debug/src/node.js": {
-          "bytesInOutput": 2029
+          "bytesInOutput": 2034
         },
         "../../../node_modules/debug/src/index.js": {
           "bytesInOutput": 144
@@ -43243,7 +43253,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 61811
+          "bytesInOutput": 62153
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -43507,7 +43517,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 702
+          "bytesInOutput": 708
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -44222,6 +44232,9 @@
         },
         "packages/host/src/worker-compaction/token-estimate.ts": {
           "bytesInOutput": 117
+        },
+        "packages/host/src/worker-init-fingerprint.ts": {
+          "bytesInOutput": 1963
         },
         "packages/host/src/worker-config/file-config.ts": {
           "bytesInOutput": 4629
@@ -45067,7 +45080,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4719731
+      "bytes": 4722085
     }
   }
 }
