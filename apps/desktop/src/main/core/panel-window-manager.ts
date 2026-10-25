@@ -44,10 +44,14 @@ export const PANEL_WINDOW_EVENT_CHANNEL = 'panel-window:event';
 export const PANEL_ID_ARG_PREFIX = '--duya-panel-id=';
 /** Argument the preload reads the detached panel page id from. */
 export const PANEL_PAGE_ARG_PREFIX = '--duya-panel-page=';
+/** Argument the preload reads the detached panel page params (encoded JSON) from. */
+export const PANEL_PARAMS_ARG_PREFIX = '--duya-panel-params=';
 /** Query parameter the detached window's URL carries. */
 export const PANEL_ID_QUERY_PARAM = 'duyaPanel';
 /** Query parameter the detached window's URL carries. */
 export const PANEL_PAGE_QUERY_PARAM = 'duyaPanelPage';
+/** Query parameter the detached window's URL carries (encoded JSON). */
+export const PANEL_PARAMS_QUERY_PARAM = 'duyaPanelParams';
 
 /** Default detached-window size. Wide enough for a terminal or a diff view. */
 const DEFAULT_PANEL_WINDOW_WIDTH = 1127;
@@ -69,6 +73,8 @@ export interface DetachPanelRequest {
   paneId: string;
   pageId: string;
   title?: string;
+  /** Page params the detached window mounts the panel with. */
+  params?: Record<string, unknown>;
 }
 
 /** Result of a detach request. */
@@ -173,11 +179,27 @@ export function buildDetachedPanelUrl(
   rendererUrl: string,
   paneId: string,
   pageId: string,
+  params?: Record<string, unknown>,
 ): string {
   const url = new URL(rendererUrl);
   url.searchParams.set(PANEL_ID_QUERY_PARAM, paneId);
   url.searchParams.set(PANEL_PAGE_QUERY_PARAM, pageId);
+  if (params && Object.keys(params).length > 0) {
+    url.searchParams.set(PANEL_PARAMS_QUERY_PARAM, encodePanelParams(params));
+  }
   return url.toString();
+}
+
+/**
+ * Serialize page params for the argv / query transport.
+ *
+ * One JSON string serves both paths: the argv entry is passed verbatim (the
+ * argument array never goes through a shell), and the query value is encoded
+ * once by `URLSearchParams` when the URL is built, so the preload reads the
+ * same raw JSON from either side.
+ */
+export function encodePanelParams(params: Record<string, unknown>): string {
+  return JSON.stringify(params);
 }
 
 /** Cached renderer URL — resolving it probes the dev server, so do it once. */
@@ -201,6 +223,7 @@ export async function openDetachedPanel(
   request: DetachPanelRequest,
 ): Promise<DetachPanelResult> {
   const { paneId, pageId } = request;
+  const params = request.params;
   const title = request.title?.trim() || 'DUYA';
 
   const existing = entries.get(paneId);
@@ -243,6 +266,9 @@ export async function openDetachedPanel(
       additionalArguments: [
         `${PANEL_ID_ARG_PREFIX}${paneId}`,
         `${PANEL_PAGE_ARG_PREFIX}${pageId}`,
+        ...(params && Object.keys(params).length > 0
+          ? [`${PANEL_PARAMS_ARG_PREFIX}${encodePanelParams(params)}`]
+          : []),
       ],
     },
   });
@@ -292,7 +318,7 @@ export async function openDetachedPanel(
   // window for as long as the boot takes. The window shows itself on
   // `ready-to-show`, and a failed load is reported through the log and by
   // closing the window again.
-  const detachedUrl = buildDetachedPanelUrl(rendererUrl, paneId, pageId);
+  const detachedUrl = buildDetachedPanelUrl(rendererUrl, paneId, pageId, params);
   void window.loadURL(detachedUrl).catch((error: unknown) => {
     getLogger().error(
       'Failed to load detached panel window',

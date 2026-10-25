@@ -1534,6 +1534,12 @@ const zh: Record<TranslationKey, string> = {
   'panel.noSources': '暂无来源。',
   'panel.addPage': '新增页面',
   'panel.sidebar': '侧栏',
+  'panel.openInNewWindow': '在新窗口中打开',
+  'panel.detachedRunning': '此面板已在独立窗口中打开。',
+  'panel.returnToMain': '收回主窗口',
+  'panel.alwaysOnTop': '置顶窗口',
+  'panel.alwaysOnTopOff': '取消置顶',
+  'panel.resizeBadge': '调整大小',
 
   'taskDrawer.title': '任务',
   'taskDrawer.ariaLabel': '任务列表',

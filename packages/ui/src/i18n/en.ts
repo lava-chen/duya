@@ -1557,6 +1557,12 @@ const en = {
   'panel.noSources': 'No sources yet.',
   'panel.addPage': 'Add Page',
   'panel.sidebar': 'Sidebar',
+  'panel.openInNewWindow': 'Open in new window',
+  'panel.detachedRunning': 'This panel is open in its own window.',
+  'panel.returnToMain': 'Return to main window',
+  'panel.alwaysOnTop': 'Keep window on top',
+  'panel.alwaysOnTopOff': 'Stop keeping on top',
+  'panel.resizeBadge': 'Resize',
 
   'taskDrawer.title': 'Tasks',
   'taskDrawer.ariaLabel': 'Task list',

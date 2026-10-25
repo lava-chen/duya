@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PageTab } from "./panels/registry";
 import type { WorkspaceLayout } from "./panels/layout-model";
@@ -17,7 +17,24 @@ const mocks = vi.hoisted(() => ({
     expandedPaneId: null,
     activePaneId: null,
   } as WorkspaceLayout,
+  panelWindow: {
+    context: { paneId: null, pageId: null, params: null },
+    getState: vi.fn(async () => ({ ok: true, detached: false, alwaysOnTop: false })),
+    open: vi.fn(async () => ({ ok: true, paneId: "files", windowId: 2 })),
+    close: vi.fn(async () => ({ ok: true, paneId: "files" })),
+    setAlwaysOnTop: vi.fn(async () => ({ ok: true })),
+    onEvent: vi.fn((_callback: (event: { type: string }) => void) => () => {}),
+  },
 }));
+
+function installPanelWindowBridge() {
+  (window as unknown as { electronAPI: { panelWindow: unknown } }).electronAPI = {
+    panelWindow: mocks.panelWindow,
+  };
+  return () => {
+    delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  };
+}
 
 vi.mock("@/hooks/usePanel", () => ({
   MAX_PANEL_RATIO: 0.6,
@@ -233,5 +250,92 @@ describe("PanelZone panel wall", () => {
     mocks.panelOpen = false;
     rerender(<PanelZone />);
     expect(screen.queryByTestId("plugin-frame-surface")).toBeNull();
+  });
+});
+
+describe("PanelZone detached panes", () => {
+  it("shows no popout action without the Electron bridge", () => {
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    const { container } = render(<PanelZone />);
+    expect(screen.queryByTestId("panel-popout-files")).toBeNull();
+    expect(container.querySelectorAll(".panel-card")).toHaveLength(1);
+  });
+
+  it("renders a detached pane as a placeholder that mounts no panel component", async () => {
+    const cleanup = installPanelWindowBridge();
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: true, alwaysOnTop: false });
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    const { container } = render(<PanelZone />);
+    await waitFor(() => {
+      expect(container.querySelector(".panel-card-detached")).toBeTruthy();
+    });
+    // The placeholder keeps the grid slot but mounts no panel surface.
+    expect(screen.queryByTestId("browser-files")).toBeNull();
+    expect(screen.getByTestId("panel-return-files")).toBeTruthy();
+    cleanup();
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
+  });
+
+  it("pops a card out through the bridge and swaps it for the placeholder", async () => {
+    const cleanup = installPanelWindowBridge();
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
+    mocks.panelWindow.open.mockResolvedValue({ ok: true, paneId: "files", windowId: 2 });
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files", params: { filePath: "E:/demo/AGENTS.md" } }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    render(<PanelZone />);
+    const popout = await screen.findByTestId("panel-popout-files");
+    popout.click();
+
+    await waitFor(() => {
+      expect(mocks.panelWindow.open).toHaveBeenCalledWith(
+        "files",
+        "files",
+        "Files",
+        { filePath: "E:/demo/AGENTS.md" },
+      );
+      expect(screen.getByTestId("panel-return-files")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("browser-files")).toBeNull();
+    cleanup();
+  });
+
+  it("hands a detached pane back on the placeholder's return action", async () => {
+    const cleanup = installPanelWindowBridge();
+    const eventSink: { current: null | ((event: { type: string; paneId?: string }) => void) } = { current: null };
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: true, alwaysOnTop: false });
+    mocks.panelWindow.onEvent.mockImplementation(
+      (callback: (event: { type: string; paneId?: string }) => void) => {
+        eventSink.current = callback;
+        return () => {};
+      },
+    );
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    render(<PanelZone />);
+    // Wait until the effect has subscribed, so the sink holds the callback.
+    await screen.findByTestId("panel-return-files");
+    expect(eventSink.current).not.toBeNull();
+
+    const returnBtn = screen.getByTestId("panel-return-files");
+    returnBtn.click();
+    expect(mocks.panelWindow.close).toHaveBeenCalledWith("files");
+
+    // The pane is back on the wall once the main process confirms the return.
+    eventSink.current?.({ type: "returned", paneId: "files" });
+    await screen.findByTestId("browser-files");
+
+    cleanup();
+    mocks.panelWindow.onEvent.mockImplementation((_callback: unknown) => () => {});
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
   });
 });
