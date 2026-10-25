@@ -698,3 +698,65 @@ describe('git:review-turn-detail', () => {
     });
   });
 });
+
+describe('git:list-branches', () => {
+  beforeEach(() => {
+    mocks.fs.existsSync.mockReset();
+    mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
+    mocks.spawn.spawnSync.mockReset();
+    mocks.captured.handle.clear();
+    registerGitHandlers();
+  });
+
+  /**
+   * The regression this pins: the parser previously concatenated
+   * `%(HEAD)%(refname)%(objectname:short)` without delimiters and split the
+   * SHA off with a hex-tail regex, so any branch name ending in four or more
+   * hex characters lost its tail (`pr-441` parsed as `pr-`, three
+   * `codex/perf-plan-roundN` branches all collapsed to
+   * `codex/perf-plan-roun`). The UI then rendered wrong names and React
+   * flagged duplicate keys. The space-delimited format cannot misparse:
+   * refnames and object names can never contain a space.
+   */
+  const BRANCHES_FIXTURE = [
+    '* refs/heads/master 9cb96ef',
+    ' refs/heads/pr-441 4ca1832',
+    ' refs/heads/pr-442 4ca1833',
+    ' refs/heads/codex/perf-plan-round6 f94ff69',
+    ' refs/remotes/origin/pr-441 4ca1832',
+    ' refs/remotes/origin/HEAD 9cb96ef',
+    '',
+  ].join('\n');
+
+  it('keeps hex-suffixed branch names whole instead of eating their tails', async () => {
+    mockGit([{ args: ['for-each-ref'], result: spawnResult(BRANCHES_FIXTURE) }]);
+    const result = await invokeHandler('git:list-branches', {}, '/tmp/repo') as {
+      isGitRepo: boolean;
+      locals: Array<{ name: string; current: boolean; head: string }>;
+      remotes: Array<{ name: string; remote: string; head: string }>;
+    };
+
+    expect(result.isGitRepo).toBe(true);
+    expect(result.locals).toEqual([
+      { name: 'master', current: true, head: '9cb96ef' },
+      { name: 'pr-441', current: false, head: '4ca1832' },
+      { name: 'pr-442', current: false, head: '4ca1833' },
+      { name: 'codex/perf-plan-round6', current: false, head: 'f94ff69' },
+    ]);
+    // Remote refs keep their names too, and the HEAD pseudo-ref stays hidden.
+    expect(result.remotes).toEqual([
+      { name: 'pr-441', remote: 'origin', head: '4ca1832' },
+    ]);
+  });
+
+  it('reports not-a-repo when git cannot run at all', async () => {
+    const failed = spawnResult('');
+    (failed as { error?: Error }).error = new Error('spawn failed');
+    mockGit([{ args: ['for-each-ref'], result: failed }]);
+    const result = await invokeHandler('git:list-branches', {}, '/tmp/repo');
+
+    expect(result).toEqual({ isGitRepo: false, locals: [], remotes: [] });
+  });
+});
