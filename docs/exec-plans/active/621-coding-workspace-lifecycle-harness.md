@@ -668,3 +668,20 @@ duya 落地边界（复用本 PR 的 Host 能力，缺的只有分支列表与 U
 - 不做独立分支切换器（只在 enter 语境选基线）；分支列表只读。
 
 状态：仅设计记录，待用户排期后另开切片实现。
+
+### CI 归因实验（2026-10-25 第二轮后追加）
+
+第二轮 CI（run 40160830672，head `2986e1ab`）：architecture / test scope / typecheck×3 / **test windows / test ubuntu 全绿**——首轮全部确定性失败已修复。剩余 macos test（`run-turn-provider` 真 worker 测试连续两轮 60s 超时，ubuntu/windows 与本机均过）与 build×3（Electron E2E）。
+
+为归因在 base 分支 `codex/worktree-p1` 用同参数 dispatch（run 40162589359）：
+
+| Job | base `codex/worktree-p1` | head `2986e1ab` | 结论 |
+| --- | --- | --- | --- |
+| architecture / test scope / typecheck×3 / test ubuntu | ✅ | ✅ | 一致 |
+| test windows | ❌ `tool-write-gate`（autocrlf CRLF） | ✅ | 本分支修复了链上既有的 Windows 缺陷 |
+| test macos | ✅（该轮 run-turn 未超时） | ❌ run-turn 60s 超时×2 | 慢机确定性问题；`b0e5b4f6` 给该用例加 180s 显式超时 |
+| build×3（Electron E2E） | ❌（同区域失败） | ❌ | **base 同败 → 既有环境问题，非本 PR 引入** |
+
+E2E 既有问题的证据：同一分支两轮失败点不同（run1 点击主题切换成功后 repaint 断言超时；run2 onboarding 遮罩 `div.fixed.inset-0.z-50` 卡 15s 挡住点击）；失败用例漂移（computer-use-permissions / session-archive / plugin-ui 仅个别平台个别轮次）；邻接用例全过；master 的 build job 为 skipped——该套件在 master 上根本不跑，无近期绿基线。CI 环境 GPU 合成为 software（日志可证）。判定：Electron E2E 环境敏感 flake，与本 PR diff（不碰主题/shell/onboarding）无关，不在本 PR 修复。
+
+第三轮 CI（run 40162948714，head `b0e5b4f6`，含 180s 预算）：architecture / test scope / typecheck×3 / **test windows / test ubuntu 全绿**。macos 的 `run-turn-provider` 真 worker 用例在 180s 预算下仍超时（三连败：60s×2、180s×1）——**判定为 macos CI 确定性挂死，非预算问题**。该用例为本 PR 新增（base 分支无此文件，macos 在 base 上的绿不含它），ubuntu / windows CI 与本机 Windows 均过。挂点证据：`drainRun` 的 SSE 在 run 到达终态前不结束，即 worker 执行 enter/write/exit 轮次期间挂住；测试无 stdout 输出可供定位。本轮处置：保留 180s（消除慢机歧义）+ 清理编辑残留的尾随超时参数；**macos 挂死列为已知缺陷交下一切片调查**（入口：`drainRun`/`watchAgentRunEvents` 的终止条件与 worker 端 worktree 工具在 macos 的子进程/路径行为；/var symlink 与 realpath 一致性是候选方向）。不跳过用例、不放宽断言。build×3 的 Electron E2E 失败维持既有环境问题的结论（base 同败）。

@@ -244,8 +244,9 @@ function expectedBudget(effort: 'low' | 'medium' | 'high', maxTokens: number | u
 
 describe('Host turn input contract — production worker and provider', () => {
   // A real worker doing three real git operations (worktree add, write,
-  // worktree remove); CI's slow runners (macos) have twice exceeded the 60s
-  // default while ubuntu/windows and dev machines stay well under.
+  // worktree remove). 180s keeps slow CI runners out of the picture; the
+  // macos CI hang documented in plan 621 is not a timeout-budget problem
+  // (it outlived 180s) and needs its own investigation.
   it('enters a worktree, writes there and exits through the production worker', { timeout: 180_000 }, async () => {
     const toolStream = (round: number, name: string, input: Record<string, unknown>): string => {
       const events = [
@@ -284,7 +285,7 @@ describe('Host turn input contract — production worker and provider', () => {
       // Auxiliary provider calls may follow the four main model rounds.
       expect(provider.requests.length).toBeGreaterThanOrEqual(4);
     } finally { await provider.close(); await host.close(); }
-  }, 60_000);
+  });
 
   it('carries the requested effort into the next real provider request', async () => {
     const { host, client, provider, sessionId } = await startHarness();
