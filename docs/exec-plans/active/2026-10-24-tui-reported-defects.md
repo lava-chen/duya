@@ -127,6 +127,18 @@ PR 描述与实录提交推上去之后，master 又前进 7 个 commit——PR 
 阻塞与解除条件：出网恢复后用同一脚本重跑
 （`MSYS_NO_PATHCONV=1 node docs-local/tui-pty-repro.mjs` 加 todo 提示词），转写区出现 `└ ✔ Todo list`、底部出现 `⚡ N.N tok/s` 即解除。
 
+### 四次同步 master（`f820ff99`）
+
+`9bdb896f` / `6dec8d45` 两个实录 push 之后，PR 又变 CONFLICTING：master 带进 PR #454（忙时 steer / queue / stop-and-send，
+`4533c3cc`）。它改 `TUIApp.ts`、`turn-queue.ts`、`actions.ts`、`dev/preview.ts`，与本任务的 `footer.ts`、`todo.ts`、
+`slash/*` 无文本重叠，git 自动合并干净；为排除语义撞车（两者都经 `TUIApp.ts` 驱动底部行）整体重跑：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `f820ff99`（merge `origin/master`）+ 无本地未提交 | Win10 26200 x64 / Node 24.16.0 | 同上五条测试目标 | 0 · 108 files / 1318 tests passed | 冲突仍只有 `packages/host/bundle/**`，`npm run bundle:worker` 重建解决；新增的 25 个用例来自 steer 的 `tui-busy-draft-keys` / `turn-queue` |
+| 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | 架构 baseline 从 2730 降到 **2530**（master 的重构缩了债），「2 fingerprints no longer triggered」依旧不重录；bundle FRESH 0/950 |
+| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | 环境未恢复：`build:cli-dev` 后重跑同一 prompt 仍失败，与上一条的判别结论一致（旧 bundle 同样失败），不是 steer 合并引入 |
+
 ### PR head CI
 
 | SHA | 环境 | 命令或操作 | 结果 | 证据 |
@@ -142,7 +154,7 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 - 源码零重叠：`todo.ts`、`footer.ts`、`slash/model.ts`、`slash/effort.ts`、协议目录、Host 目录读取器都只本任务在改。
 - 会撞的只有两处，且都是追加：`docs/exec-plans/README.md` 的表行（#454 #464 #466 #467 #468 都改），
   `packages/cli/src/tui/slash/__tests__/slash-commands.test.ts`（#463 #464 也在加命令用例）。
-- 本轮三次 `git merge origin/master` 的冲突都只是 `packages/host/bundle/**`，一律用 `npm run bundle:worker`
+- 本轮四次 `git merge origin/master` 的冲突都只是 `packages/host/bundle/**`，一律用 `npm run bundle:worker`
   从合并后源码重建解决，不手改产物。
 - PR #457（工具状态 indeterminate）在本任务开工时是在途 CONFLICTING，故第 1 项只修解析、不碰状态位；
   它已合入 `dc6d4ee7`，合并后真机重跑显示 `└ ✔ Todo list 0/1`，两边改动可叠加。
@@ -150,9 +162,10 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 ## 接续 / 结果
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
-- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；三次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造）后各重跑一遍，最新全量为 107 files / 1293 tests。
-- 待补：`baf1bcfc` 上的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与该 head 的 CI 均已过，解除条件见「三次同步」。
-- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（head `baf1bcfc`，CI run `40146195715` 5 个 job 全绿；GitHub 侧无必需 review / 必需检查，保持可 review，未获授权不合并）。
+- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；四次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造；`f820ff99` 带进 PR #454 的忙时 steer）后各重跑一遍，最新全量为 108 files / 1318 tests。
+- 待补：`baf1bcfc` 起的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与各 head 的 CI 均已过，解除条件见「三次同步」。
+- CI 覆盖缺口：`9bdb896f` 与 `6dec8d45` 两个 push 之后 `gh run list --branch` 里查不到对应的 `pull_request` run（同期别的分支有 run），所以不能假定「每个 push 都有检查」；集成前应核验**最新 head** 上确实有 run，而不是引用上一个 head 的绿色结果。
+- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（GitHub 侧无必需 review / 必需检查，保持可 review，未获授权不合并）。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
 - 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
-- 下一步：请用户授权集成——验收条件（无冲突、最新 head CI 全绿、工作树干净）已满足，唯一缺口是上条真机补验；获授权后用 merge commit 合并，再同步 master 重验并回收检出。
+- 下一步：请用户授权集成——验收条件（无冲突、最新 head 有 run 且全绿、工作树干净）里只剩「最新 head 的 CI」与真机补验两项待落；获授权后用 merge commit 合并，再同步 master 重验并回收检出。
