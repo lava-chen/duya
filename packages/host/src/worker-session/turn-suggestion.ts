@@ -183,6 +183,9 @@ export async function generateTurnSuggestion(
       systemPrompt: SUGGESTION_SYSTEM_PROMPT,
       maxTokens: 60,
       temperature: 0.0,
+      // The timeout has to reach the provider, or it only stops us waiting
+      // while the request keeps running.
+      signal: controller.signal,
     });
 
     let text = '';
@@ -203,6 +206,7 @@ export async function generateTurnSuggestion(
     return { suggestion: null };
   } finally {
     clearTimeout(timeoutId);
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
   }
 }
 

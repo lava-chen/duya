@@ -10,9 +10,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildTurnSuggestionInput,
+  generateTurnSuggestion,
   parseTurnSuggestion,
 } from '../../src/worker-session/turn-suggestion.js';
 import type { Message } from '@duya/agent-core/message';
+import type { AIClient, SSEEvent } from '@duya/ai';
 
 function msg(role: Message['role'], content: string): Message {
   return { role, content, timestamp: Date.now() };
@@ -81,5 +83,70 @@ describe('buildTurnSuggestionInput', () => {
 
     expect(input).toContain('[USER]: 第 29 轮');
     expect(input).not.toContain('第 0 轮');
+  });
+});
+
+describe('generateTurnSuggestion', () => {
+  const conversation = [msg('user', '修复登录报错'), msg('assistant', '已经修好了')];
+
+  /** A client that answers with the given text and records what it was given. */
+  function answeringClient(text: string): AIClient & { options: { signal?: AbortSignal } | undefined } {
+    const record = { options: undefined as { signal?: AbortSignal } | undefined };
+    return {
+      get options() {
+        return record.options;
+      },
+      async *streamChat(_messages, options) {
+        record.options = options;
+        yield { type: 'text', data: text } as SSEEvent;
+      },
+    } as AIClient & { options: { signal?: AbortSignal } | undefined };
+  }
+
+  it('returns the parsed suggestion', async () => {
+    const client = answeringClient('run the tests');
+    const result = await generateTurnSuggestion(conversation, client);
+
+    expect(result.suggestion).toBe('run the tests');
+  });
+
+  it('hands the provider an abort signal, so the timeout can reach it', async () => {
+    const client = answeringClient('run the tests');
+    await generateTurnSuggestion(conversation, client);
+
+    expect(client.options?.signal).toBeInstanceOf(AbortSignal);
+    expect(client.options?.signal?.aborted).toBe(false);
+  });
+
+  it('stops on an external abort and answers with no suggestion', async () => {
+    const controller = new AbortController();
+    const client: AIClient = {
+      async *streamChat(_messages, options) {
+        // A provider that never answers on its own: only the abort ends it.
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+        yield { type: 'text', data: 'run the tests' } as SSEEvent;
+      },
+    };
+
+    const pending = generateTurnSuggestion(conversation, client, controller.signal);
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ suggestion: null });
+  });
+
+  it('never throws when the model call fails', async () => {
+    const client: AIClient = {
+      async *streamChat() {
+        yield { type: 'error', data: 'provider exploded' } as SSEEvent;
+      },
+    };
+
+    await expect(generateTurnSuggestion(conversation, client)).resolves.toEqual({ suggestion: null });
+  });
+
+  it('answers with no suggestion when there is no model client', async () => {
+    await expect(generateTurnSuggestion(conversation, undefined)).resolves.toEqual({ suggestion: null });
   });
 });
