@@ -501,12 +501,29 @@ export class MessageLog {
       // alone would still bloat the file when callers re-send the full message
       // list (e.g. after compaction, onMessagesCompacted re-appends the entire
       // currentMessages). Keep first occurrence within the batch too.
-      const indexedIds = this.getIndexedIds(sessionId);
+      // Dedup against the index. The lookup is scoped to the ids THIS batch
+      // carries: a full per-session scan reads the whole `(session_id, seq)`
+      // index range, so appending N messages a batch at a time costs O(N^2)
+      // index rows over the session's life. The append path only ever asks
+      // about the ids it is about to write, so those are looked up by
+      // PRIMARY KEY instead — O(batch) rows, not O(session).
+      //
+      // Two rules, unchanged: an id already indexed for this session is not
+      // written again, and an id repeated inside the batch is written only on
+      // its first occurrence.
+      const candidateIds: string[] = [];
       const seenIds = new Set<string>();
-      const freshEvents: NewEvent[] = [];
       for (const ev of sessionEvents) {
-        if (indexedIds.has(ev.id) || seenIds.has(ev.id)) continue;
+        if (seenIds.has(ev.id)) continue;
         seenIds.add(ev.id);
+        candidateIds.push(ev.id);
+      }
+      const indexedIds = this.getIndexedIdsIn(sessionId, candidateIds);
+      const freshEvents: NewEvent[] = [];
+      const emittedIds = new Set<string>();
+      for (const ev of sessionEvents) {
+        if (indexedIds.has(ev.id) || emittedIds.has(ev.id)) continue;
+        emittedIds.add(ev.id);
         freshEvents.push(ev);
       }
       if (freshEvents.length === 0) continue;
@@ -836,23 +853,31 @@ export class MessageLog {
     const timelineRows: TimelineEntryRow[] = [];
     /** Index metadata by entry id, for turnId/createdAt fallbacks below. */
     const metaById = new Map<string, { turnId: string | null; createdAt: number }>();
-    for (const row of rows) {
-      let entry: RolloutLine;
-      try {
-        entry = JSON.parse(this.readRange(absolutePath, row.file_offset, row.byte_len)) as RolloutLine;
-      } catch {
-        // Corrupt line: scan() reconciles partial tails at startup; here we
-        // surface the row as an opaque compaction-kind payload would break
-        // consumers, so skip it. The file byte range stays intact for audit.
-        this.logger.warn(
-          'Unparseable rollout line skipped in projection',
-          { sessionId, seq: row.seq },
-          this.logComponent,
-        );
-        continue;
+    // One file handle for the whole projection. The loop below reads one
+    // byte range per message, and opening and closing the file for every
+    // range made a long session pay two extra syscalls per message.
+    const reader = this.openRangeReader(absolutePath);
+    try {
+      for (const row of rows) {
+        let entry: RolloutLine;
+        try {
+          entry = JSON.parse(reader.read(row.file_offset, row.byte_len)) as RolloutLine;
+        } catch {
+          // Corrupt line: scan() reconciles partial tails at startup; here we
+          // surface the row as an opaque compaction-kind payload would break
+          // consumers, so skip it. The file byte range stays intact for audit.
+          this.logger.warn(
+            'Unparseable rollout line skipped in projection',
+            { sessionId, seq: row.seq },
+            this.logComponent,
+          );
+          continue;
+        }
+        metaById.set(entry.id ?? '', { turnId: row.turn_id, createdAt: row.created_at });
+        timelineRows.push({ entry, seq: row.seq });
       }
-      metaById.set(entry.id ?? '', { turnId: row.turn_id, createdAt: row.created_at });
-      timelineRows.push({ entry, seq: row.seq });
+    } finally {
+      reader.close();
     }
 
     const projected = options?.includeSuperseded
@@ -2020,8 +2045,13 @@ export class MessageLog {
       : lines;
 
     // Ids already indexed for the target are true duplicates — appendBatch
-    // filters them from the file write; count them as skipped.
-    const existing = this.getIndexedIds(sessionId);
+    // filters them from the file write; count them as skipped. Only the
+    // imported lines' ids can be duplicates, so they are looked up by
+    // PRIMARY KEY rather than by scanning the session's whole index.
+    const existing = this.getIndexedIdsIn(
+      sessionId,
+      finalLines.map((l) => l.id),
+    );
     const fresh = finalLines.filter((l) => !existing.has(l.id));
 
     // Shift numeric rebase bounds past the existing tail (see docblock).
@@ -2294,6 +2324,48 @@ export class MessageLog {
   }
 
   /**
+   * A reader over one rollout file that keeps the handle open.
+   *
+   * `readRange` opened and closed the file for every byte range, so a
+   * projection over N messages paid 2N extra syscalls that had nothing to
+   * do with the content. The bytes are unchanged: every range is still
+   * read at its own offset, with its own length.
+   *
+   * When the file cannot be opened — a missing rollout, for instance — the
+   * reader falls back to the per-range open/read/close path, so each row
+   * still fails on its own exactly as it did before.
+   */
+  private openRangeReader(absolutePath: string): {
+    read: (offset: number, len: number) => string;
+    close: () => void;
+  } {
+    let fd: number;
+    try {
+      fd = fs.openSync(absolutePath, 'r');
+    } catch {
+      return {
+        read: (offset: number, len: number) => this.readRange(absolutePath, offset, len),
+        close: () => {},
+      };
+    }
+    const handle = fd;
+    return {
+      read: (offset: number, len: number) => {
+        const buf = Buffer.alloc(len);
+        fs.readSync(handle, buf, 0, len, offset);
+        return buf.toString('utf8');
+      },
+      close: () => {
+        try {
+          fs.closeSync(handle);
+        } catch {
+          /* already closed */
+        }
+      },
+    };
+  }
+
+  /**
    * Resolve the absolute path for a rollout file. Prefers the canonical
    * `<rootDir>/<relativePath>` location; when absent, falls back to the legacy
    * doubled-tree layout `<rootDir>/sessions/<relativePath>` written by an
@@ -2349,13 +2421,36 @@ export class MessageLog {
     }
   }
 
-  /** Ids already indexed for a session — used to make file writes idempotent. */
-  private getIndexedIds(sessionId: string): Set<string> {
-    return new Set(
-      (this.db
-        .prepare('SELECT id FROM message_index WHERE session_id = ?')
-        .all(sessionId) as Array<{ id: string }>).map((r) => r.id),
-    );
+  /**
+   * The subset of `ids` that is already indexed for `sessionId`.
+   *
+   * The append path only needs to know whether the ids it is about to write
+   * are already indexed, so it asks about those ids alone. `message_index.id`
+   * is the table's PRIMARY KEY, so each id resolves through the primary-key
+   * index — a point lookup — instead of walking the session's whole
+   * `(session_id, seq)` range.
+   *
+   * `id` is a GLOBAL primary key, so an id can belong to another session;
+   * the session filter is applied here so the answer matches "indexed for
+   * THIS session", which is what the callers mean.
+   *
+   * Chunked to stay under SQLite's bound-parameter limit.
+   */
+  private getIndexedIdsIn(sessionId: string, ids: readonly string[]): Set<string> {
+    const found = new Set<string>();
+    if (ids.length === 0) return found;
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(`SELECT id, session_id FROM message_index WHERE id IN (${placeholders})`)
+        .all(...chunk) as Array<{ id: string; session_id: string }>;
+      for (const row of rows) {
+        if (row.session_id === sessionId) found.add(row.id);
+      }
+    }
+    return found;
   }
 
   /**
