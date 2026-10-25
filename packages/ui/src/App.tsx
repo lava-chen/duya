@@ -22,7 +22,6 @@ import { composeReplyContent } from "@/components/chat/bot/reply";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
-import { FontProvider } from "@/contexts/FontContext";
 import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
@@ -151,11 +150,9 @@ export function App({ onReady }: { onReady?: () => void } = {}) {
   const app = (
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
-        <FontProvider>
-          <WorkspaceLifecycleProvider port={workspaceLifecycle}>
-            <AppShellInner onReady={onReady} uiServices={uiServices} />
-          </WorkspaceLifecycleProvider>
-        </FontProvider>
+        <WorkspaceLifecycleProvider port={workspaceLifecycle}>
+          <AppShellInner onReady={onReady} uiServices={uiServices} />
+        </WorkspaceLifecycleProvider>
       </I18nProvider>
     </QueryClientProvider>
   );
@@ -1271,18 +1268,16 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
 
   return (
     <I18nProvider>
-      <FontProvider>
-        {/* The lazily loaded surfaces suspend here. Only one view is rendered
-            at a time, so the boundary never takes the eager content down
-            with it. */}
-        <AppShell capabilities={uiServices?.capabilities}>
-          <Suspense fallback={null}>{renderView()}</Suspense>
-        </AppShell>
-        <SearchCommandPalette />
-        {bootPhase !== "hidden" && (
-          <StartupLanding phase={bootPhase} status={bootStatus} />
-        )}
-      </FontProvider>
+      {/* The lazily loaded surfaces suspend here. Only one view is rendered
+          at a time, so the boundary never takes the eager content down
+          with it. */}
+      <AppShell capabilities={uiServices?.capabilities}>
+        <Suspense fallback={null}>{renderView()}</Suspense>
+      </AppShell>
+      <SearchCommandPalette />
+      {bootPhase !== "hidden" && (
+        <StartupLanding phase={bootPhase} status={bootStatus} />
+      )}
     </I18nProvider>
   );
 }
