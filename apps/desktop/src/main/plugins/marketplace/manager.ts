@@ -113,6 +113,8 @@ export interface MarketplaceView {
   path?: string;
   ref?: string;
   addedAt?: string;
+  /** Hidden sources stay configured but their plugins leave the catalog. */
+  hidden: boolean;
   /** Present when the clone is missing or the manifest is unreadable. */
   error?: string;
   pluginCount: number;
@@ -128,12 +130,29 @@ function writeConfigMarketplaces(entries: Record<string, MarketplaceSourceConfig
   getConfigStore().set('marketplaces', entries);
 }
 
+/** True when `name` is a source seeded by `ensureOfficialMarketplace()`. */
+function isDefaultOfficialSource(name: string): boolean {
+  return DEFAULT_OFFICIAL_SOURCES.some((seed) => seed.registryName === name);
+}
+
+/**
+ * Removed default sources keep a `removed` tombstone in `[marketplaces]`, so
+ * presence of the key alone does not mean the source is active.
+ */
+function isConfigured(
+  configs: Record<string, MarketplaceSourceConfig & { addedAt?: string }>,
+  name: string,
+): boolean {
+  const cfg = configs[name];
+  return Boolean(cfg) && cfg.removed !== true;
+}
+
 /** List every configured marketplace with its live sync status. */
 export function listMarketplaces(): MarketplaceView[] {
   const configs = readConfigMarketplaces();
   const statuses = new Map(getMarketplaceStatuses().map((s) => [s.marketplace, s]));
 
-  return Object.entries(configs).map(([name, cfg]) => {
+  return Object.entries(configs).filter(([, cfg]) => !cfg.removed).map(([name, cfg]) => {
     const status = statuses.get(name);
     let displayName: string | undefined;
     let pluginNames: string[] = [];
@@ -157,6 +176,7 @@ export function listMarketplaces(): MarketplaceView[] {
       path: cfg.path,
       ref: cfg.ref,
       addedAt: cfg.addedAt,
+      hidden: cfg.hidden === true,
       error: status?.error,
       pluginCount: status?.pluginCount ?? 0,
       pluginNames,
@@ -185,7 +205,7 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
 
   if (parsed.kind === 'git') {
     const provisional = slugFromUrl(parsed.url!);
-    if (configs[provisional]) {
+    if (isConfigured(configs, provisional)) {
       throw new Error(`marketplace "${provisional}" is already configured`);
     }
     const result = await cloneMarketplace({ urls: [parsed.url!], name: provisional, ref: parsed.ref });
@@ -196,7 +216,7 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
       }
       name = safeMarketplaceDirName(manifest.name);
       if (name !== provisional) {
-        if (configs[name] || fs.existsSync(getMarketplaceCloneDir(name))) {
+        if (isConfigured(configs, name) || fs.existsSync(getMarketplaceCloneDir(name))) {
           removeMarketplaceClone(provisional);
           throw new Error(`marketplace "${name}" is already configured`);
         }
@@ -217,7 +237,7 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
       throw new MarketplaceSourceError('invalid_request', 'no marketplace.json found in the local directory');
     }
     name = safeMarketplaceDirName(manifest.name);
-    if (configs[name]) {
+    if (isConfigured(configs, name)) {
       throw new Error(`marketplace "${name}" is already configured`);
     }
     stored = { source: 'local', path: dir, ref: parsed.ref };
@@ -231,17 +251,29 @@ export async function addMarketplace(input: string, ref?: string): Promise<Marke
   logger.info('Marketplace added', { name, kind: stored.source }, COMPONENT);
 
   const view = listMarketplaces().find((m) => m.name === name);
-  return view ?? { name, kind: stored.source, pluginCount: 0, pluginNames: [], ...stored };
+  return view ?? {
+    ...stored,
+    name,
+    kind: stored.source,
+    hidden: stored.hidden === true,
+    pluginCount: 0,
+    pluginNames: [],
+  };
 }
 
 /**
  * Remove a marketplace. Refuses while plugins installed from it remain —
  * remove those first (codex keeps installed plugins independent of the
  * marketplace, so this is a bookkeeping guard, not a data-consistency one).
+ *
+ * Default official sources are removed too: their key stays in config as a
+ * `removed` tombstone so `ensureOfficialMarketplace()` does not restore them
+ * on the next launch. User-added sources are deleted outright.
  */
 export function removeMarketplace(name: string): void {
   const configs = readConfigMarketplaces();
-  if (!configs[name]) {
+  const cfg = configs[name];
+  if (!cfg || cfg.removed) {
     throw new Error(`marketplace "${name}" is not configured`);
   }
 
@@ -255,15 +287,40 @@ export function removeMarketplace(name: string): void {
     );
   }
 
-  if (configs[name].source === 'git') {
+  if (cfg.source === 'git') {
     removeMarketplaceClone(name);
   }
   const next = { ...configs };
-  delete next[name];
+  if (isDefaultOfficialSource(name)) {
+    next[name] = { ...cfg, removed: true };
+  } else {
+    delete next[name];
+  }
   writeConfigMarketplaces(next);
   invalidatePluginCatalogCache();
 
   getLogger().info('Marketplace removed', { name }, COMPONENT);
+}
+
+/**
+ * Hide or unhide a marketplace source. Hiding keeps the config and clone in
+ * place (so the source can be restored without re-cloning) but drops its
+ * plugins from the catalog and skips it during startup sync.
+ */
+export function setMarketplaceHidden(name: string, hidden: boolean): void {
+  const configs = readConfigMarketplaces();
+  const cfg = configs[name];
+  if (!cfg || cfg.removed) {
+    throw new Error(`marketplace "${name}" is not configured`);
+  }
+
+  const entry: MarketplaceSourceConfig & { addedAt?: string } = { ...cfg };
+  if (hidden) entry.hidden = true;
+  else delete entry.hidden;
+
+  writeConfigMarketplaces({ ...configs, [name]: entry });
+  invalidatePluginCatalogCache();
+  getLogger().info(hidden ? 'Marketplace hidden' : 'Marketplace shown', { name }, COMPONENT);
 }
 
 /**
@@ -274,7 +331,7 @@ export async function refreshMarketplace(name: string): Promise<MarketplaceView>
   const logger = getLogger();
   const configs = readConfigMarketplaces();
   const cfg = configs[name];
-  if (!cfg) {
+  if (!cfg || cfg.removed) {
     throw new Error(`marketplace "${name}" is not configured`);
   }
 
@@ -330,7 +387,10 @@ export async function refreshMarketplace(name: string): Promise<MarketplaceView>
 export async function syncAllMarketplaces(): Promise<MarketplaceSyncOutcome[]> {
   const configs = readConfigMarketplaces();
   const outcomes: MarketplaceSyncOutcome[] = [];
-  for (const name of Object.keys(configs)) {
+  for (const [name, cfg] of Object.entries(configs)) {
+    // Hidden and removed sources stay out of the startup sync: hidden ones
+    // contribute no catalog entries, removed ones are tombstones.
+    if (cfg.hidden || cfg.removed) continue;
     try {
       await refreshMarketplace(name);
       outcomes.push({ marketplace: name });

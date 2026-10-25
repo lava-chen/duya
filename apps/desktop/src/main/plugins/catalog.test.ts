@@ -274,4 +274,33 @@ describe('getMarketplaceStatuses — multi-plugin marketplace', () => {
       rmSync(m2, { recursive: true, force: true });
     }
   });
+
+  it('reports a hidden source but leaves its plugins out of the catalog', async () => {
+    const { getMarketplaceStatuses, getPluginCatalog } = await import('./catalog.js');
+    const hidden = buildMarketplace('hidden-mp', ['alpha-hidden', 'beta-hidden']);
+    const visible = buildMarketplace('visible-mp', ['alpha-visible']);
+    configMocks.marketplaces = {
+      'hidden-mp': { source: 'local', path: hidden, hidden: true },
+      'visible-mp': { source: 'local', path: visible },
+    };
+    // Bust the catalog TTL so earlier tests' cached list cannot mask the
+    // hidden source.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000);
+
+    try {
+      const status = getMarketplaceStatuses().find((s) => s.marketplace === 'hidden-mp');
+      // The source dialog still shows the plugin count while hidden.
+      expect(status?.pluginCount).toBe(2);
+
+      const ids = getPluginCatalog().map((entry) => entry.id);
+      expect(ids).not.toContain('com.duya.alpha-hidden');
+      expect(ids).not.toContain('com.duya.beta-hidden');
+      expect(ids).toContain('com.duya.alpha-visible');
+    } finally {
+      clock.mockRestore();
+      configMocks.marketplaces = {};
+      rmSync(hidden, { recursive: true, force: true });
+      rmSync(visible, { recursive: true, force: true });
+    }
+  });
 });

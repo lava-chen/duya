@@ -394,6 +394,9 @@ function getMarketplaceCatalogEntries(): {
   const seenDirs = new Set<string>();
 
   for (const [name, config] of Object.entries(readConfigMarketplaces())) {
+    // Removed official sources leave a tombstone so startup seeding does not
+    // restore them; they contribute neither entries nor status.
+    if (config.removed) continue;
     const dir = marketplaceDirFor(name, config);
     if (!dir || !fs.existsSync(dir)) {
       statuses.push({
@@ -439,6 +442,17 @@ function getMarketplaceCatalogEntries(): {
         displayName: config.displayName,
         error: 'no marketplace.json found',
         pluginCount: 0,
+      });
+      continue;
+    }
+
+    // Hidden sources keep their status (so the source dialog can show the
+    // count) but contribute no catalog entries.
+    if (config.hidden) {
+      statuses.push({
+        marketplace: name,
+        displayName: config.displayName,
+        pluginCount: manifest.plugins.length,
       });
       continue;
     }
