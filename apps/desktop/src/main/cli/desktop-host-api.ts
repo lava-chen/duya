@@ -110,6 +110,7 @@ import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
+import { createDesktopSessionHandoffApi } from '../sessions/session-handoff';
 import { createHostResearchApi } from '@duya/host/research-api';
 import { createDatabaseWorkspaceAccess } from '@duya/host/workspace-access';
 import {
@@ -325,7 +326,11 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   };
   pluginAppInvocationInternalApi = pluginAppInvocationApi;
   const runApi = createHostRunApi(stores);
-  const server = new HostSessionHttpServer({
+  // The options object is a variable, not an inline literal: the session
+  // handoff below is the Desktop's answer to the Host's OPTIONAL
+  // session-handoff capability, and it reaches the Host through the option
+  // slot the Host reads it from.
+  const hostApiOptions = {
     api,
     localSessionApi: createHostLocalSessionApi({
       stores,
@@ -409,7 +414,11 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     integrationSync: workspaceLifecycle.integrationSync,
     host: HOST,
     token,
-  });
+    // "Open this session in the desktop app" — how a CLI's `/app` reaches
+    // the running app through the Host it is attached to.
+    sessionHandoffApi: createDesktopSessionHandoffApi(),
+  };
+  const server = new HostSessionHttpServer(hostApiOptions);
 
   await server.listen();
   const runtime: HostApiRuntime = {
