@@ -32,17 +32,6 @@
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.26);
 }
 
-@media (max-width: 760px) {
-  .panel-file-tree {
-    position: absolute;
-    z-index: 18;
-    inset: 0 0 0 auto;
-    width: min(84vw, 320px);
-    min-width: 240px;
-    box-shadow: -18px 0 36px rgba(0, 0, 0, 0.24);
-  }
-}
-
 /* When the workspace cannot fit the chat minimum plus the smallest panel
    (420 + 300 = 720px), float the panel so the chat column never shrinks below
    MIN_CHAT_WIDTH. */

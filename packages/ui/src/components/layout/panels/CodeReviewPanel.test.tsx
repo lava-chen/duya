@@ -28,6 +28,28 @@ vi.mock("@/hooks/usePanel", () => ({
   useOptionalPanel: () => ({ workspaceExpanded: true }),
 }));
 
+// PatchDiff renders inside a Shadow DOM that jsdom cannot query across.
+// Project the raw patch into the light DOM — prefix stripped, like the
+// real renderer — so the diff-content assertions below keep verifying the
+// parse → render data flow.
+vi.mock("@pierre/diffs/react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@pierre/diffs/react")>();
+  return {
+    ...actual,
+    PatchDiff: ({ patch, className }: { patch: string; className?: string }) => (
+      <div className={className}>
+        {patch
+          .split("\n")
+          .map((line) => line.replace(/^[ +-]/, ""))
+          .filter((line) => line.length > 0)
+          .map((line, index) => (
+            <div key={index}>{line}</div>
+          ))}
+      </div>
+    ),
+  };
+});
+
 vi.mock("@/components/icons", () => {
   const MockIcon = () => <span />;
   return {

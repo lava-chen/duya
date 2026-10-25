@@ -45,7 +45,6 @@ vi.mock("./panels/registry", () => {
       review: { id: "review", labelKey: "panel.review", icon },
       terminal: { id: "terminal", labelKey: "panel.terminal", icon },
       browser: { id: "browser", labelKey: "panel.browser", icon },
-      preview: { id: "preview", labelKey: "panel.preview", icon },
     },
     getPageDescriptor: (id: string) => ({
       id,

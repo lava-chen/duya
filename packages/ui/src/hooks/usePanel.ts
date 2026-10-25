@@ -32,8 +32,6 @@ export interface PanelContextValue {
 
   workspaceExpanded: boolean;
   setWorkspaceExpanded: (expanded: boolean) => void;
-  workspaceTreeOpen: boolean;
-  setWorkspaceTreeOpen: (open: boolean) => void;
 
   panelView: PanelView;
   setPanelView: (view: PanelView) => void;
@@ -119,7 +117,6 @@ interface PersistedPanelState {
   panelOpen: boolean;
   panelView: PanelView;
   workspaceExpanded: boolean;
-  workspaceTreeOpen: boolean;
   /**
    * The panel wall: which card sits in which grid cell, and how the wall's
    * width and height are split. Payloads written before the wall existed do
@@ -135,7 +132,6 @@ function emptyPanelState(): PersistedPanelState {
     panelOpen: false,
     panelView: "picker",
     workspaceExpanded: false,
-    workspaceTreeOpen: false,
   };
 }
 
@@ -210,7 +206,6 @@ function loadPersistedState(sessionKey: string, t: TFunc): PersistedPanelState |
       panelOpen: !!parsed.panelOpen,
       panelView: parsed.panelView === "picker" ? "picker" : "content",
       workspaceExpanded: parsed.workspaceExpanded === true,
-      workspaceTreeOpen: parsed.workspaceTreeOpen === true,
       layout: parsed.layout && typeof parsed.layout === "object"
         ? (parsed.layout as WorkspaceLayout)
         : undefined,
@@ -243,8 +238,6 @@ function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
     case "workspace":
       // A single workspace page owns the open-file tabs.
       return "workspace::__files__";
-    case "preview":
-      return `preview::${(params?.filePath as string | undefined) ?? "__picker__"}`;
     case "review":
       // The review panel is a singleton view of one round of work. Keying on
       // the round rather than on the whole params blob means clicking two
@@ -468,7 +461,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   );
   const [panelView, setPanelView] = useState<PanelView>(initial.panelView);
   const [workspaceExpanded, setWorkspaceExpandedState] = useState(initial.workspaceExpanded);
-  const [workspaceTreeOpen, setWorkspaceTreeOpen] = useState(initial.workspaceTreeOpen);
   const [tabs, setTabs] = useState<PageTab[]>(initial.tabs);
   // The column tree. It owns WHERE a pane lives; `tabs` owns what the pane
   // shows. The active pane is the tree's focus, so the active tab id and the
@@ -478,7 +470,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const currentSessionKeyRef = useRef(sessionKey);
   const panelStateRef = useRef<PersistedPanelState>(initial);
-  panelStateRef.current = { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout };
+  panelStateRef.current = { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, layout };
 
   // Mirrors for the stable callbacks below: they read the current tree and
   // the current region width without being re-created on every render.
@@ -527,10 +519,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // gesture settles.
   useEffect(() => {
     const timer = setTimeout(() => {
-      savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout });
+      savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, layout });
     }, PERSIST_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [tabs, activeTabId, panelOpen, panelView, workspaceExpanded, workspaceTreeOpen, layout]);
+  }, [tabs, activeTabId, panelOpen, panelView, workspaceExpanded, layout]);
 
   // The debounced write must not lose the last state when the window goes
   // away before the timer fires, so the pending state is flushed on the way
@@ -557,7 +549,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setPanelOpen(next.panelOpen);
     setPanelView(next.panelView);
     setWorkspaceExpandedState(next.workspaceExpanded);
-    setWorkspaceTreeOpen(next.workspaceTreeOpen);
   }, [sessionKey]);
 
   const setWorkspaceExpanded = useCallback((expanded: boolean) => {
@@ -764,35 +755,21 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       // (sidebar markdown preview) keep the existing
       // `workingDirectory required` invariant.
       if (!filePath.trim() || (!standalone && !workingDirectory.trim())) return;
-      const params: Record<string, unknown> = {
-        filePath,
-        workingDirectory,
-        title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
-      };
-      if (standalone) params.standalone = true;
-      // Forward the agent's read line range so the preview panel can
-      // scroll to and highlight the exact lines on first mount. The
-      // follow-up `duya:preview-focus-lines` event handles re-focus on
-      // an already-open tab (see openLocalArtifactTarget).
-      if (typeof detail?.lineStart === "number" && Number.isFinite(detail.lineStart)) {
-        params.lineStart = detail.lineStart;
-        if (typeof detail?.lineEnd === "number" && Number.isFinite(detail.lineEnd)) {
-          params.lineEnd = detail.lineEnd;
-        }
-      }
-      // Reset the embedded file tree to closed so the preview opens as a
-      // focused editor (per PanelFileTreeSplit design intent), not a split
-      // browser. Users can still expand it via the toolbar toggle.
-      setWorkspaceTreeOpen(false);
+      // Forward the agent's read line range so the workspace panel can scroll
+      // to and highlight the exact lines on first mount. Later opens of an
+      // already-mounted file arrive through the same event, so re-focusing a
+      // reused tab needs no separate channel.
+      const lineStart = typeof detail?.lineStart === "number" && Number.isFinite(detail.lineStart)
+        ? detail.lineStart
+        : undefined;
+      const lineEnd = typeof detail?.lineEnd === "number" && Number.isFinite(detail.lineEnd)
+        ? detail.lineEnd
+        : undefined;
       // The workspace page is a singleton: hand the file to the panel's own
       // tab strip instead of opening one page tab per file.
       openOrActivatePage("workspace", { workingDirectory });
       window.dispatchEvent(new CustomEvent("duya:workspace-open-file", {
-        detail: {
-          filePath,
-          lineStart: params.lineStart,
-          lineEnd: params.lineEnd,
-        },
+        detail: { filePath, lineStart, lineEnd },
       }));
     };
 
@@ -1071,8 +1048,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       resetPanelWidth,
       workspaceExpanded,
       setWorkspaceExpanded,
-      workspaceTreeOpen,
-      setWorkspaceTreeOpen,
       panelView,
       setPanelView,
       tabs,
@@ -1096,7 +1071,6 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       resetPanelWidth,
       workspaceExpanded,
       setWorkspaceExpanded,
-      workspaceTreeOpen,
       panelView,
       tabs,
       activeTabId,

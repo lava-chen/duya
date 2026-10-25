@@ -443,19 +443,15 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
       { start: 12, end: 20 },
       { standalone: true },
     );
-    // Two events: the open-file-preview-panel (with line range baked in)
-    // AND the follow-up preview-focus-lines so already-open tabs can
-    // re-focus. Both must keep the standalone + line-range payload.
-    expect(dispatched).toHaveLength(2);
-    const previewEvent = dispatched.find((d) => d.event === 'duya:open-file-preview-panel');
-    const focusEvent = dispatched.find((d) => d.event === 'duya:preview-focus-lines');
-    expect(previewEvent).toBeDefined();
-    expect(previewEvent?.detail.standalone).toBe(true);
-    expect(previewEvent?.detail.lineStart).toBe(12);
-    expect(previewEvent?.detail.lineEnd).toBe(20);
-    expect(focusEvent).toBeDefined();
-    expect(focusEvent?.detail.lineStart).toBe(12);
-    expect(focusEvent?.detail.lineEnd).toBe(20);
+    // One event: the open-file-preview-panel with the line range baked in.
+    // The workspace panel re-runs the focus on every event, so an
+    // already-mounted file re-focuses without a separate follow-up.
+    expect(dispatched).toHaveLength(1);
+    const previewEvent = dispatched[0];
+    expect(previewEvent.event).toBe('duya:open-file-preview-panel');
+    expect(previewEvent.detail.standalone).toBe(true);
+    expect(previewEvent.detail.lineStart).toBe(12);
+    expect(previewEvent.detail.lineEnd).toBe(20);
   });
 
   it('standalone mode falls back to file dir on Windows too', () => {

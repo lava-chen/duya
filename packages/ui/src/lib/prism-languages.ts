@@ -6,8 +6,8 @@
 // languages silently fall back to plain text (react-syntax-highlighter
 // wraps refractor.highlight in try/catch).
 //
-// Shared by chat CodeBlock and the FilePreviewPanel so both renderers
-// use the same registered set.
+// Shared by the chat CodeBlock so every markdown code fence uses the
+// same registered set.
 
 import { PrismLight } from 'react-syntax-highlighter';
 import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';

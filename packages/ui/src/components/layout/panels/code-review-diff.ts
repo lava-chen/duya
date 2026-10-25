@@ -12,22 +12,16 @@ export interface ReviewDiffHunk {
   lines: ReviewDiffLine[];
 }
 
-export interface CollapsedReviewLines {
-  type: 'collapsed';
-  count: number;
-}
-
-export type ReviewDisplayLine = ReviewDiffLine | CollapsedReviewLines;
-
-export type ReviewSplitRow =
-  | { type: 'line'; oldLine?: ReviewDiffLine; newLine?: ReviewDiffLine }
-  | CollapsedReviewLines;
-
 export interface ReviewFilePatch {
   path: string;
   oldPath?: string;
   status: 'modified' | 'added' | 'deleted' | 'renamed' | 'binary' | 'untracked';
   hunks: ReviewDiffHunk[];
+  /**
+   * This file's verbatim slice of the source patch (including the
+   * `diff --git` line), fed straight into @pierre/diffs' `PatchDiff`.
+   */
+  raw: string;
 }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
@@ -68,71 +62,6 @@ export function parseUnifiedDiff(patch: string): ReviewDiffHunk[] {
   return hunks;
 }
 
-/** Replaces long unchanged runs with an explicit, expandable context marker. */
-export function collapseContextLines(
-  lines: ReviewDiffLine[],
-  collapsed: boolean,
-  visibleContext = 3,
-): ReviewDisplayLine[] {
-  if (!collapsed) return lines;
-
-  const result: ReviewDisplayLine[] = [];
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index];
-    if (line.type !== 'context') {
-      result.push(line);
-      index += 1;
-      continue;
-    }
-
-    let end = index;
-    while (end < lines.length && lines[end].type === 'context') end += 1;
-    const run = lines.slice(index, end);
-    const hiddenCount = run.length - visibleContext * 2;
-    if (hiddenCount > 0) {
-      result.push(...run.slice(0, visibleContext));
-      result.push({ type: 'collapsed', count: hiddenCount });
-      result.push(...run.slice(-visibleContext));
-    } else {
-      result.push(...run);
-    }
-    index = end;
-  }
-  return result;
-}
-
-/** Aligns deletion/addition runs into rows for a side-by-side diff. */
-export function toSplitRows(lines: ReviewDisplayLine[]): ReviewSplitRow[] {
-  const rows: ReviewSplitRow[] = [];
-  for (let index = 0; index < lines.length;) {
-    const line = lines[index];
-    if (line.type === 'collapsed') {
-      rows.push(line);
-      index += 1;
-      continue;
-    }
-    if (line.type === 'context') {
-      rows.push({ type: 'line', oldLine: line, newLine: line });
-      index += 1;
-      continue;
-    }
-
-    const removed: ReviewDiffLine[] = [];
-    const added: ReviewDiffLine[] = [];
-    while (index < lines.length && lines[index].type !== 'context' && lines[index].type !== 'collapsed') {
-      const changed = lines[index] as ReviewDiffLine;
-      if (changed.type === 'remove') removed.push(changed);
-      if (changed.type === 'add') added.push(changed);
-      index += 1;
-    }
-    const rowCount = Math.max(removed.length, added.length);
-    for (let row = 0; row < rowCount; row += 1) {
-      rows.push({ type: 'line', oldLine: removed[row], newLine: added[row] });
-    }
-  }
-  return rows;
-}
-
 /** Counts add/remove lines across hunks — the per-file (+N −M) diffstat. */
 export function countPatchChanges(hunks: ReviewDiffHunk[]): { additions: number; removals: number } {
   let additions = 0;
@@ -171,7 +100,9 @@ export function parseReviewPatch(patch: string): ReviewFilePatch[] {
 
   function finishCurrent() {
     if (current) {
-      current.hunks = parseUnifiedDiff(bodyLines.join('\n'));
+      const body = bodyLines.join('\n');
+      current.hunks = parseUnifiedDiff(body);
+      current.raw = body;
       if (!current.status) current.status = 'modified';
       files.push(current);
     }
@@ -182,8 +113,8 @@ export function parseReviewPatch(patch: string): ReviewFilePatch[] {
       finishCurrent();
       const match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
       const path = match ? match[2] : line.slice('diff --git '.length);
-      current = { path, status: 'modified', hunks: [] };
-      bodyLines = [];
+      current = { path, status: 'modified', hunks: [], raw: '' };
+      bodyLines = [line];
       continue;
     }
     if (!current) continue;
