@@ -160,6 +160,7 @@ import type {
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryApiV1 } from '@duya/agent-protocol/plugin-inventory';
+import type { HostSessionHandoffApiV1 } from '@duya/agent-protocol/session-handoff';
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
 import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.js';
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
@@ -364,6 +365,15 @@ export interface HostSessionHttpServerOptions {
    * say" are different facts.
    */
   readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
+  /**
+   * Handing a session over to the desktop app.
+   *
+   * Optional, and deliberately absent from a Host the TUI owns: only a Host
+   * that lives inside the desktop app can ask its renderer to switch
+   * sessions. Such a Host answers 404 `session_handoff_unavailable`, which
+   * is "this Host cannot do that" rather than "the handoff failed".
+   */
+  readonly sessionHandoffApi?: HostSessionHandoffApiV1;
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
   readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
@@ -1663,6 +1673,32 @@ export class HostSessionHttpServer {
       }
       try {
         this.#sendJson(res, 200, await api.listPluginInventory());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/session-handoff' && req.method === 'POST') {
+      const api = this.#options.sessionHandoffApi;
+      if (!api) {
+        // "This Host has no desktop app to hand the session to" is not
+        // "the handoff failed". The caller tells them apart by the code.
+        this.#sendJson(res, 404, { error: { code: 'session_handoff_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isBoundedString(body.sessionId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_session_handoff_request' } });
+        return;
+      }
+      try {
+        const result = await api.openInDesktopApp({ sessionId: body.sessionId });
+        if (!result.ok) {
+          this.#sendJson(res, 409, { error: { code: result.code, message: result.message } });
+          return;
+        }
+        this.#sendJson(res, 200, { ok: true });
       } catch (error) {
         this.#sendApiError(res, error);
       }

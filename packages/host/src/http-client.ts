@@ -229,6 +229,7 @@ import type {
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
+import type { HostSessionHandoffResult } from '@duya/agent-protocol/session-handoff';
 import type {
   HostPluginAppInstanceApiV1,
   HostPluginAppInstanceCreateInput,
@@ -1687,6 +1688,35 @@ export class HostSessionHttpClient implements
    */
   async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
     return this.request('GET', '/v1/local/plugins');
+  }
+
+  /**
+   * Ask the desktop app to take over this session.
+   *
+   * The two refusals are DOMAIN outcomes rather than transport failures, so
+   * they are returned instead of thrown and stay distinguishable:
+   * `session_handoff_unavailable` means this Host has no desktop app to
+   * hand the session to, and any other code means the desktop app was asked
+   * and refused. A transport failure still throws.
+   */
+  async openInDesktopApp(sessionId: string): Promise<HostSessionHandoffResult> {
+    try {
+      await this.request<{ ok: true }>('POST', '/v1/local/session-handoff', { sessionId });
+      return { ok: true };
+    } catch (error) {
+      if (!(error instanceof HostSessionHttpError)) throw error;
+      if (error.status === 404) {
+        return {
+          ok: false,
+          code: error.code,
+          message: 'This Host has no desktop app to hand the session to.',
+        };
+      }
+      if (error.status === 409) {
+        return { ok: false, code: error.code, message: error.message };
+      }
+      throw error;
+    }
   }
 
   async mergePluginSetupValues(pluginId: string, values: Record<string, string>): Promise<void> {

@@ -135,6 +135,10 @@
       "types": "./dist/plugin-inventory.d.ts",
       "import": "./dist/plugin-inventory.js"
     },
+    "./session-handoff": {
+      "types": "./dist/session-handoff.d.ts",
+      "import": "./dist/session-handoff.js"
+    },
     "./import-batches": {
       "types": "./dist/import-batches.d.ts",
       "import": "./dist/import-batches.js"
