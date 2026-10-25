@@ -14,8 +14,11 @@ export const WIDGET_CSS_BRIDGE = /* css */ `
   --warning-soft: rgba(245, 158, 11, 0.2);
   --error: #ef4444;
   --error-soft: rgba(239, 68, 68, 0.1);
-  --font-sans: 'Styrene', "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-mono: 'Fira Mono', ui-monospace, "Cascadia Mono", "Consolas", monospace;
+  /* Mirrors the --font-sans / --font-mono tokens in globals.css. Kept as
+     literals: the sandbox is a separate document and cannot resolve the
+     main document's custom properties. */
+  --font-sans: 'Styrene', ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC", "Hiragino Sans", "Microsoft YaHei", sans-serif;
+  --font-mono: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --border-radius-md: 8px;
   --border-radius-lg: 12px;
 `;
