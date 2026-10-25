@@ -194,7 +194,7 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
  * identity wins). Ids that fail the bot-id rule (e.g. legacy config keys)
  * skip seeding until a migration tool lands (485 Phase 4).
  */
-function seedBotProfileIfMissing(
+export function seedBotProfileIfMissing(
   id: string,
   entry: CustomAgentConfig,
   store: { getConfigDir(): string },

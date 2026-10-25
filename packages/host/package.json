@@ -319,6 +319,14 @@
       "types": "./dist/config-agents/index.d.ts",
       "import": "./dist/config-agents/index.js"
     },
+
+    "./bot": {
+
+      "types": "./dist/bot/index.d.ts",
+
+      "import": "./dist/bot/index.js"
+
+    },
     "./authorization/connector-approval-cache": {
       "types": "./dist/authorization/connector-approval-cache.d.ts",
       "import": "./dist/authorization/connector-approval-cache.js"

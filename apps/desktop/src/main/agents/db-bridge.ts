@@ -12,7 +12,8 @@ import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
 import type { CoreSession } from '@duya/data/session-store';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
-import { createConfigAgentFromName, patchConfigAgentIdentity } from '../config/agents';
+import { getDesktopBotService } from '../config/bot-application';
+import { BotServiceError } from '@duya/host/bot';
 import { readConfigAgents } from '@duya/host/agent-profile-config';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../renderer/lib/providers/legacy';
 import { toRuntimeConfig } from '@duya/ai';
@@ -1936,13 +1937,20 @@ export async function dispatchDbAction(
       if (!input.name || !input.name.trim()) {
         throw new Error('agent name is required');
       }
-      const created = createConfigAgentFromName(input.name, input.description);
+      // S1: the legacy identity tools go through the Bot application service
+      // (one writer over the config store + profile.json), answering the
+      // legacy `{ id, name }` shape the tools already consume.
+      const service = await getDesktopBotService();
+      const receipt = await service.createBot({
+        name: input.name,
+        ...(input.description === undefined ? {} : { description: input.description }),
+      });
       getLogger().info(
-        `Agent created via CreateAgent tool: '${created.id}' (${input.name.trim()})`,
-        { agentId: created.id },
+        `Agent created via CreateAgent tool: '${receipt.id}' (${input.name.trim()})`,
+        { agentId: receipt.id },
         LogComponent.AgentProcess,
       );
-      return { id: created.id, name: created.config.name ?? created.id };
+      return { id: receipt.id, name: receipt.name };
     }
 
     case 'config:agents:update': {
@@ -1950,16 +1958,63 @@ export async function dispatchDbAction(
       if (!input.agentId) {
         throw new Error('agentId is required');
       }
-      const updated = patchConfigAgentIdentity(input.agentId, {
-        name: input.name,
-        description: input.description,
+      const service = await getDesktopBotService();
+      const receipt = await service.updateBot({
+        id: input.agentId,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.description === undefined ? {} : { description: input.description }),
       });
       getLogger().info(
         `Agent updated via UpdateAgent tool: '${input.agentId}'`,
         { agentId: input.agentId },
         LogComponent.AgentProcess,
       );
-      return { id: input.agentId, name: updated.name ?? input.agentId };
+      return { id: receipt.id, name: receipt.name };
+    }
+
+    // ==================== Bot application (S1) ====================
+    // The typed Bot surface: same service as the legacy actions above, full
+    // receipts and structured revision conflicts. BotServiceError already
+    // carries `[code] message`, so the transport's error string stays
+    // machine-readable without a new wire shape.
+    case 'bot:create': {
+      const input = p as { name?: string; description?: string; requestId?: string };
+      if (!input.name || !input.name.trim()) {
+        throw new BotServiceError('bot_invalid_name', 'bot name is required');
+      }
+      const service = await getDesktopBotService();
+      return service.createBot({
+        name: input.name,
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      });
+    }
+    case 'bot:update': {
+      const input = p as { botId?: string; agentId?: string; name?: string; description?: string; expectedRevision?: number };
+      const botId = input.botId ?? input.agentId;
+      if (!botId) {
+        throw new BotServiceError('bot_not_found', 'botId is required');
+      }
+      const service = await getDesktopBotService();
+      return service.updateBot({
+        id: botId,
+        ...(input.name === undefined ? {} : { name: input.name }),
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.expectedRevision === undefined ? {} : { expectedRevision: input.expectedRevision }),
+      });
+    }
+    case 'bot:get': {
+      const input = p as { botId?: string; agentId?: string };
+      const botId = input.botId ?? input.agentId;
+      if (!botId) {
+        throw new BotServiceError('bot_not_found', 'botId is required');
+      }
+      const service = await getDesktopBotService();
+      return service.getBot(botId);
+    }
+    case 'bot:list': {
+      const service = await getDesktopBotService();
+      return service.listBots();
     }
 
     case 'config:vision:get': {
