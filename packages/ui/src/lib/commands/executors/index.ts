@@ -8,6 +8,8 @@
  * - auth.ts    login / logout / permission
  * - session.ts new / clear / export / copy / rename / resume / stop / queue / compact
  * - view.ts    goal / deep-research / diff / loop / memory / mcp / add-dir / image / btw
+ * - doctor.ts  doctor
+ * - init.ts    init
  */
 
 import { registerCommandExecutors } from './registry';
@@ -16,12 +18,16 @@ import { MODEL_EXECUTORS } from './model';
 import { AUTH_EXECUTORS } from './auth';
 import { SESSION_EXECUTORS } from './session';
 import { VIEW_EXECUTORS } from './view';
+import { DOCTOR_EXECUTORS } from './doctor';
+import { INIT_EXECUTORS } from './init';
 
 registerCommandExecutors(INFO_EXECUTORS);
 registerCommandExecutors(MODEL_EXECUTORS);
 registerCommandExecutors(AUTH_EXECUTORS);
 registerCommandExecutors(SESSION_EXECUTORS);
 registerCommandExecutors(VIEW_EXECUTORS);
+registerCommandExecutors(DOCTOR_EXECUTORS);
+registerCommandExecutors(INIT_EXECUTORS);
 
 export * from './bridge';
 export * from './registry';
