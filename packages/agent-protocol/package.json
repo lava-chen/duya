@@ -147,6 +147,10 @@
       "types": "./dist/turn-review.d.ts",
       "import": "./dist/turn-review.js"
     },
+    "./doctor": {
+      "types": "./dist/doctor.d.ts",
+      "import": "./dist/doctor.js"
+    },
     "./sidebar-sections": {
       "types": "./dist/sidebar-sections.d.ts",
       "import": "./dist/sidebar-sections.js"

@@ -233,6 +233,7 @@ import type {
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
 import type { HostSessionHandoffResult } from '@duya/agent-protocol/session-handoff';
+import type { InitAgentsMdResult } from '@duya/agent-protocol/doctor';
 import type {
   HostPluginAppInstanceApiV1,
   HostPluginAppInstanceCreateInput,
@@ -1697,6 +1698,36 @@ export class HostSessionHttpClient implements
       }
       if (error.status === 409) {
         return { ok: false, code: error.code, message: error.message };
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Write the repository-root `AGENTS.md` for a session.
+   *
+   * The session id is the whole request: the Host owns where the workspace
+   * lives, so the client never names a path.
+   *
+   * A Host that cannot write into the workspace answers 404
+   * `agents_md_api_unavailable`. That is "this Host cannot do that", not
+   * "the write failed", and the two are returned as distinguishable domain
+   * outcomes rather than thrown.
+   */
+  async writeAgentsMd(sessionId: string): Promise<InitAgentsMdResult> {
+    try {
+      return await this.request<InitAgentsMdResult>('POST', '/v1/local/agents-md', { sessionId });
+    } catch (error) {
+      if (!(error instanceof HostSessionHttpError)) throw error;
+      if (error.status === 404) {
+        return {
+          ok: false,
+          created: false,
+          upgraded: false,
+          unchanged: false,
+          version: 0,
+          error: 'This Host cannot write into the workspace.',
+        };
       }
       throw error;
     }

@@ -1671,6 +1671,21 @@ export function MessageInput({
         // their own pages — dispatch a best-effort intent event.
         window.dispatchEvent(new CustomEvent(`duya:open-${panel}-panel`));
       },
+      // `/doctor` — the report is assembled in the main process, because the
+      // renderer cannot read the disk and the plugin registry / core database
+      // live on the other side of the bridge.
+      runDoctor: async () => {
+        const api = window.electronAPI?.diagnostics;
+        if (!api?.run) throw new Error('the diagnostics channel is not available');
+        return api.run();
+      },
+      // `/init` — a session id, never a path: the main process resolves the
+      // session's working directory and checks it against the session root.
+      initWorkspaceAgentsMd: async (targetSessionId: string) => {
+        const api = window.electronAPI?.workspace;
+        if (!api?.initAgentsMd) throw new Error('the workspace channel is not available');
+        return api.initAgentsMd(targetSessionId);
+      },
       promptInput: ({ title, placeholder, initialValue }) =>
         new Promise<string | null>((resolve) => {
           setPromptRequest({ title, placeholder, initialValue, resolve });

@@ -20,6 +20,7 @@
  */
 
 import type { ModeModifierId } from '@/types/mode-id';
+import type { DoctorReport, InitAgentsMdResult } from '@/contracts/doctor';
 
 /** Panels a slash command can open. Keep in sync with PanelZone/PAGE_REGISTRY. */
 export type SlashCommandPanel =
@@ -96,6 +97,23 @@ export interface CommandAppBridge {
   // — Panels —
   /** Open a side panel by id (window event based; no-op if not registered). */
   openPanel(panel: SlashCommandPanel): void;
+
+  // — Diagnostics & workspace files —
+  /**
+   * Run the Desktop's in-process diagnostic report (`/doctor`).
+   *
+   * Optional: a bridge registered by a composer that predates the channel
+   * does not have it, and the executor refuses with a clear message rather
+   * than throwing.
+   */
+  runDoctor?(): Promise<DoctorReport>;
+  /**
+   * Write the repository-root `AGENTS.md` for a session (`/init`).
+   *
+   * Takes a session id, never a path: the main process resolves the
+   * session's working directory and checks it against the session root.
+   */
+  initWorkspaceAgentsMd?(sessionId: string): Promise<InitAgentsMdResult>;
 
   // — Dialogs & feedback —
   /** Prompt the user for a single line of text; null when cancelled. */

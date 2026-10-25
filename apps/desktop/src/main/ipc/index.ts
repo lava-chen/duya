@@ -38,6 +38,8 @@ import {
   registerSidebarSectionsHandlers,
 } from './db-handlers';
 import { registerPanelWindowHandlers } from './panel-window-handlers';
+import { registerDiagnosticsHandlers } from './diagnostics-handlers';
+import { registerAgentsMdHandlers } from './agents-md-handlers';
 
 export {
   registerSystemHandlers,
@@ -71,4 +73,6 @@ export {
   registerBashTaskHandlers,
   registerBangHandlers,
   registerPanelWindowHandlers,
+  registerDiagnosticsHandlers,
+  registerAgentsMdHandlers,
 };

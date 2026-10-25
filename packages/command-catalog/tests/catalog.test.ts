@@ -181,13 +181,42 @@ describe('command catalog desktop parity', () => {
 
   it('no longer resolves the commands that had no implementation', () => {
     // `review` duplicated `/diff` (both open the code-review panel), and
-    // `simplify` / `doctor` / `commit` only ever produced a prompt naming a
-    // skill that does not exist. duya ships six `.system` skills — none of
-    // them is one of these four. Leaving them resolvable would send the user
-    // to a skill that cannot be loaded.
-    for (const name of ['review', 'simplify', 'doctor', 'commit']) {
+    // `simplify` / `commit` only ever produced a prompt naming a skill that
+    // does not exist. duya ships six `.system` skills — none of them is one of
+    // these three. Leaving them resolvable would send the user to a skill
+    // that cannot be loaded.
+    //
+    // `doctor` used to be on this list and no longer is: it was here because
+    // it named a skill that does not exist, and PR-4 gave it a real
+    // implementation — the shared doctor checks, run from the CLI TUI.
+    for (const name of ['review', 'simplify', 'commit']) {
       expect(findSpec(name), name).toBeUndefined();
     }
+  });
+
+  it('resolves /doctor, which PR-4 gave a real implementation', () => {
+    // The counterpart to the test above: a command that used to be
+    // unresolvable because it named a skill that does not exist now has an
+    // executor, so the catalog may advertise it.
+    const spec = findSpec('doctor');
+    expect(spec).toBeDefined();
+    expect(spec?.category).toBe('info');
+    // Both surfaces run the same shared checks, so both advertise it.
+    expect(spec?.surfaces).toEqual(['desktop', 'cli']);
+    expect(spec?.requiresSession).not.toBe(true);
+    expect(spec?.availableWhileBusy).toBe(true);
+  });
+
+  it('resolves /init, which writes into the session\'s checkout', () => {
+    const spec = findSpec('init');
+    expect(spec).toBeDefined();
+    expect(spec?.category).toBe('session');
+    expect(spec?.surfaces).toEqual(['desktop', 'cli']);
+    // The write lands in the session's own checkout, so there has to be a
+    // session to know which checkout that is.
+    expect(spec?.requiresSession).toBe(true);
+    // It writes a file into the user's repository.
+    expect(spec?.availableWhileBusy).toBe(false);
   });
 
   it('does not claim desktop support for commands it lacks an executor for', () => {

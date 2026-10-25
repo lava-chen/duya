@@ -7,16 +7,19 @@
  *    a user can act on a check without reading the JSON view.
  * 2. An issue is safe — every string in it is redacted on the way to `--json`.
  *    `issues` is caller-authored free text, so failing to redact it would open
- *    a leak channel that the `doctor-redact` module header explicitly promises
+ *    a leak channel that the `redact` module header explicitly promises
  *    does not exist. The permission-check shape below is the realistic case: its
  *    remedy is a copy-pasteable `chmod` carrying an absolute path.
  */
 
 import { describe, it, expect } from 'vitest';
-import { redactDoctorJson } from '../doctor-redact.js';
-import { renderText } from '../doctor.js';
-import { pushCheck, resetTiming } from '../doctor-timing.js';
-import type { CheckResult, DoctorIssue, DoctorResult } from '../doctor.js';
+import {
+  redactDoctorJson,
+  renderText,
+  pushCheck,
+  resetTiming,
+} from '../src/diagnostics/index.js';
+import type { CheckResult, DoctorIssue, DoctorResult } from '../src/diagnostics/index.js';
 
 const HOME = 'C:\\Users\\lavachen';
 const SECRETS = `${HOME}\\.duya\\secrets.json`;

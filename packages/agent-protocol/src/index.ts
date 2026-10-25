@@ -97,6 +97,7 @@ export * from './turn-review.js';
 export * from './sidebar-sections.js';
 export * from './usage-api.js';
 export * from './host-health.js';
+export * from './doctor.js';
 
 // Plan 621 slice B — observation contracts. Both describe facts the Host
 // recomputes from git or GitHub; none of them is an identity (§4.3).

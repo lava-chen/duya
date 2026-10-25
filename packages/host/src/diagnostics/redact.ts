@@ -1,5 +1,7 @@
 /**
- * Redaction pipeline for `duya doctor --json`.
+ * packages/host/src/diagnostics/redact.ts
+ *
+ * Redaction pipeline for the JSON view of a doctor report.
  *
  * ## Why the JSON view needs its own pipeline
  *
@@ -7,7 +9,7 @@
  * permission check tells the user to run `chmod 600 "<path>"`, and a hint you
  * cannot copy and run is a hint that does not help.
  *
- * The same report in `--json` is the artifact people paste into a bug report.
+ * The same report in JSON is the artifact people paste into a bug report.
  * That is a different audience with a different risk profile, so it gets a
  * different renderer — not a filtered copy of the human one. This mirrors how
  * the reference implementation separates `redacted_json_report` from its
@@ -20,7 +22,7 @@
  *
  *   `C:\Users\lavachen\.duya\secrets.json`  →  `~/.duya\secrets.json`
  *   `C:\Other\.duya\secrets.json`            →  `C:\Users\…\.duya\secrets.json`
- *   `/home/lavachen/.duya/secrets.json`      →  `~/.duya/secrets.json`
+ *   `/home/lavachen/.duya/secrets.json`      →  `~/.duya\secrets.json`
  *
  * ## What is deliberately NOT redacted
  *
@@ -29,7 +31,7 @@
  * high-entropy-string detector here would be speculative and would mangle
  * hashes, ids and URLs.
  *
- * URLs and CLI arguments. `--json` output includes things like `/v1/sessions`,
+ * URLs and CLI arguments. JSON output includes things like `/v1/sessions`,
  * which looks like an absolute path but is a route. Blanket path-matching would
  * corrupt them; the rules above are anchored on a user-home prefix precisely so
  * that only the part that identifies a person is removed.
@@ -49,7 +51,7 @@
  */
 
 import * as os from 'node:os';
-import type { DoctorIssue, DoctorResult } from './doctor.js';
+import type { DoctorIssue, DoctorResult } from './types.js';
 
 export interface RedactionOptions {
   /**
@@ -139,8 +141,8 @@ function redactIssue(issue: DoctorIssue, home: string): unknown {
  *
  * The shape mirrors `DoctorResult` field for field. It is NOT indexed by check
  * id the way the reference implementation does — that would be a breaking change
- * for every consumer of `duya doctor --json`, and nothing here needs lookup
- * faster than a filter.
+ * for every consumer of the JSON report, and nothing here needs lookup faster
+ * than a filter.
  */
 export function redactDoctorJson(result: DoctorResult, options: RedactionOptions = {}): unknown {
   const home = options.home ?? os.homedir();
