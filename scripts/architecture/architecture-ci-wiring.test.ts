@@ -15,5 +15,9 @@ describe('architecture CI wiring', () => {
     expect(commands).toContain('npm run architecture:slice-graph');
     expect(commands).toContain('npm run agent-retirement-gate');
     expect(commands).toContain('npm run architecture:baseline-ratchet');
+    // The Bot boundary gate (framework plan S0): without this assertion the
+    // gate could ship as a script nobody runs — the exact failure T14b's
+    // comment above the workflow step records for two earlier gates.
+    expect(commands).toContain('npm run architecture:bot-boundary');
   });
 });

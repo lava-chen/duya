@@ -78,6 +78,7 @@
     "architecture:headless": "node scripts/architecture/headless-load-gate.mjs",
     "architecture:browser-closure": "node scripts/architecture/browser-closure-gate.mjs",
     "architecture:client-closure": "node scripts/architecture/client-closure-gate.mjs",
+    "architecture:bot-boundary": "node scripts/architecture/bot-boundary-gate.mjs",
     "architecture:ipc-census": "node scripts/architecture/ipc-channel-census.mjs",
     "pretest": "npm run build:packages && npm run bundle:worker && node scripts/ensure-sqlite-abi.mjs node",
     "check:encoding": "node scripts/check-text-encoding.mjs",
