@@ -196,6 +196,12 @@ export const PanelWindowOpenSchema = z.object({
   paneId: PanelIdSchema,
   pageId: PanelPageIdSchema,
   title: z.string().max(200).optional(),
+  /**
+   * Page params the detached window needs to mount the same content the
+   * docked card shows (e.g. a file path). Passed through opaquely; the
+   * renderer validates what it consumes.
+   */
+  params: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const PanelWindowPaneSchema = z.object({

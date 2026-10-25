@@ -43,6 +43,7 @@ import type {
   SessionId,
   StartAgentRunResult,
 } from '@duya/agent-protocol';
+import type { HostLocalTurnSuggestionRecord } from '@duya/agent-protocol/turn-suggestion';
 import type { HostApiBridge } from '@duya/client-core';
 import { createRunProjection } from '@duya/client-core';
 import type { UiPlatformCapabilities, UiRunRecord, UiServices, UiStartRunInput } from './ui-services.js';
@@ -148,5 +149,16 @@ export function createUiServices(options: CreateUiServicesOptions): UiServices {
     ...(bridge.getProviderCatalog === undefined
       ? {}
       : { providers: { catalog: (): Promise<HostProviderCatalog | null> => bridge.getProviderCatalog!() } }),
+    // The end-of-turn suggestion is present only when the bridge can read one.
+    // A bridge that cannot leaves the namespace out, and the composer keeps
+    // its ordinary placeholder.
+    ...(bridge.getLatestTurnSuggestion === undefined
+      ? {}
+      : {
+          turnSuggestions: {
+            latest: (sessionId: SessionId): Promise<HostLocalTurnSuggestionRecord | null> =>
+              bridge.getLatestTurnSuggestion!(sessionId),
+          },
+        }),
   };
 }

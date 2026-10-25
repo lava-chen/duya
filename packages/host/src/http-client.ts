@@ -270,6 +270,11 @@ import type {
   HostLocalTurnReviewSummary,
   TurnReviewWriteInput,
 } from '@duya/agent-protocol/turn-review';
+import type {
+  HostLocalTurnSuggestionApiV1,
+  HostLocalTurnSuggestionRecord,
+  TurnSuggestionWriteInput,
+} from '@duya/agent-protocol/turn-suggestion';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 // Leave headroom for the Agent Server's existing 30s IPC request deadline.
@@ -380,6 +385,7 @@ export class HostSessionHttpClient implements
   HostLocalUsageApiV1,
   HostLocalImportBatchApiV1,
   HostLocalTurnReviewApiV1,
+  HostLocalTurnSuggestionApiV1,
   HostLocalTerminalHistoryApiV1,
   HostLocalBackgroundTaskApiV1,
   HostLocalMailboxApiV1,
@@ -435,10 +441,21 @@ export class HostSessionHttpClient implements
       throw new Error(`Host refused the client lease: ${response.status}`);
     }
     let closed = false;
+    // The lease IS this response: one open request the Host counts. The
+    // reference must outlive this call — a Response nobody holds is collected,
+    // undici cancels its unread body, and the TCP connection drops, which the
+    // Host reads as "last client gone" and answers by shutting itself down
+    // with the session's mid-turn workers still running (observed 2026-10-25:
+    // the footer froze at the previous turn's totals and the run died with
+    // `terminated` about forty seconds into a turn). Keeping the Response
+    // reachable from the returned object is the whole fix; close then tears
+    // the same request down deliberately.
+    const held = response;
     return {
       close: () => {
         if (closed) return;
         closed = true;
+        void held.body?.cancel().catch(() => undefined);
         controller.abort();
       },
     };
@@ -1887,6 +1904,19 @@ export class HostSessionHttpClient implements
       `/v1/local/turn-reviews/by-turn?${query.toString()}`,
     );
     return result.review;
+  }
+
+  async saveTurnSuggestion(input: TurnSuggestionWriteInput): Promise<void> {
+    await this.request('POST', '/v1/local/turn-suggestions', input);
+  }
+
+  async getLatestTurnSuggestion(sessionId: string): Promise<HostLocalTurnSuggestionRecord | null> {
+    const query = new URLSearchParams({ sessionId });
+    const result = await this.request<{ suggestion: HostLocalTurnSuggestionRecord | null }>(
+      'GET',
+      `/v1/local/turn-suggestions/latest?${query.toString()}`,
+    );
+    return result.suggestion;
   }
 
   async suggestTerminalHistory(query: TerminalHistoryQuery): Promise<readonly TerminalHistorySuggestion[]> {

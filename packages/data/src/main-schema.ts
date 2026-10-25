@@ -2317,6 +2317,31 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Plan 2026-10-25: the end-of-turn suggestion the worker predicts after a
+    // turn finishes. One row per turn; a surface reads the newest row of the
+    // session. No foreign key: the turn reviews table lost its FK in migration
+    // 47 for the same reason (a session row may be removed while the derived
+    // rows are still being read).
+    id: 60,
+    name: 'create_chat_turn_suggestions',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_turn_suggestions (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          turn_id TEXT NOT NULL,
+          suggestion TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          UNIQUE(session_id, turn_id)
+        )
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_chat_turn_suggestions_latest
+          ON chat_turn_suggestions(session_id, created_at DESC)
+      `);
+    },
+  },
 ];
 
 /** Build the ordered migrations with host-owned domain ports bound in. */

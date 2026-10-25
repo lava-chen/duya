@@ -93,15 +93,22 @@ export function formatTokenCount(count: number): string {
 }
 
 /**
- * Measured output throughput: `⚡ 63.0 tok/s`.
+ * Measured output throughput: `7.4 tok/s`.
  *
  * One decimal, because the difference between 12 and 13 tok/s is noise and
  * the difference between 12 and 120 is not. No `~` prefix: this number is
  * measured against the provider's own request duration, not estimated from
  * streamed text.
+ *
+ * Plain text on purpose, no decorative glyph. This label rides the right edge
+ * of the footer, where a width the table under-measures is not a cosmetic
+ * slip but the row's last character being pushed onto ConPTY's final column
+ * and clipped — `⚡` measured 1 cell in the width table while Windows Terminal
+ * drew 2, and `medium` reached the user as `mediu` (2026-10-25). The accent
+ * colour already sets this group apart; it does not need an emoji too.
  */
 export function formatTokensPerSecond(rate: number): string {
-  return `⚡ ${rate.toFixed(1)} tok/s`;
+  return `${rate.toFixed(1)} tok/s`;
 }
 
 /**

@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { parse } from '@iarna/toml';
 import {
   ChatTurnReviewStore,
+  ChatTurnSuggestionStore,
   DatabaseHost,
   LegacyImport,
   MainSettingsStore,
@@ -78,6 +79,7 @@ import { createHostLocalSidebarSectionsApi } from './local-sidebar-sections-api.
 import { createHostLocalUsageApi } from './local-usage-api.js';
 import { createHostLocalImportBatchApi } from './local-import-batch-api.js';
 import { createHostLocalTurnReviewApi } from './local-turn-review-api.js';
+import { createHostLocalTurnSuggestionApi } from './local-turn-suggestion-api.js';
 import { createHostLocalMailboxApi } from './local-mailbox-api.js';
 import { createHostLocalPendingWakeApi } from './local-pending-wakes-api.js';
 import { createHostMcpInventoryApi } from './mcp-inventory-api.js';
@@ -110,6 +112,15 @@ import type { HostRunExecutionLogger } from './run-execution.js';
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 0;
+
+/**
+ * How long an idle shutdown of a client-scoped Host waits for mid-turn workers
+ * before killing them. Long enough for a normal turn's tail (persistence, a
+ * pending tool call) to land, short enough that a restart in this window meets
+ * a `DatabaseOwnerLockError` that names a process which then goes away on its
+ * own rather than one that would hold the lock indefinitely.
+ */
+const DEFAULT_IDLE_SHUTDOWN_DRAIN_MS = 120_000;
 const SLUG_SHORT_LENGTH = 4;
 const SLUG_LONG_LENGTH = 6;
 
@@ -201,6 +212,17 @@ export interface StartLocalHostOptions {
    * it gives up and releases the database.
    */
   readonly clientLeaseIdleTimeoutMs?: number;
+  /**
+   * How long the idle shutdown of a client-scoped Host waits for mid-turn
+   * workers to finish before killing them.
+   *
+   * The idle path means the clients vanished without a word — a crashed
+   * terminal, a dropped lease. The turn they were watching is still running,
+   * and its results persist only if the worker finishes, so the shutdown
+   * drains first and kills after the cap. An explicit close (Ctrl+C, the
+   * owner calling `close()`) never drains.
+   */
+  readonly idleShutdownDrainTimeoutMs?: number;
   /**
    * Where run diagnostics go. Defaults to `file` when `ephemeral` is set and
    * `stdio` otherwise — an embedded Host shares a terminal with someone else's
@@ -397,9 +419,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
    *
    * The client-lease watcher calls it when the last client leaves, so it has
    * to be reachable from the server options below — hence the forward
-   * reference rather than a closure over the returned handle.
+   * reference rather than a closure over the returned handle. `drainTimeoutMs`
+   * bounds how long mid-turn workers get to finish before they are killed;
+   * only the idle path passes one, an explicit close stops right now.
    */
-  let shutdownHost: (() => Promise<void>) | null = null;
+  let shutdownHost: ((drainTimeoutMs?: number) => Promise<void>) | null = null;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -433,6 +457,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const workspaceAccess = options.workspaces ?? createDatabaseWorkspaceAccess(core.database.db, core.stores.workspaces);
     const settings = new MainSettingsStore(mainDatabase.db);
     const turnReviews = new ChatTurnReviewStore(mainDatabase.db);
+    const turnSuggestions = new ChatTurnSuggestionStore(mainDatabase.db);
     const api = createHostSessionApi({
       stores: core.stores,
       rolloutRoot,
@@ -487,6 +512,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // The same rule for the domains the worker writes through the bridge:
     // one instance per API, shared by the HTTP surface and the bridge.
     const localTurnReviewApi = createHostLocalTurnReviewApi(turnReviews);
+    const localTurnSuggestionApi = createHostLocalTurnSuggestionApi(turnSuggestions);
     const localSendMessageStateApi = createHostLocalSendMessageStateApi(new SendMessageStateStore(mainDatabase.db));
     const workflowRunApi = createHostWorkflowRunApi(core.stores);
     const pluginAppInstanceApi = createHostPluginAppInstanceApi(core.stores.appInstances);
@@ -617,6 +643,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           pluginSetupApi: localPluginSetupApi,
           workflowRunApi,
           turnReviewApi: localTurnReviewApi,
+          turnSuggestionApi: localTurnSuggestionApi,
           attachmentApi: localAttachmentApi,
           sendMessageStateApi: localSendMessageStateApi,
           logger: executionLogger,
@@ -722,6 +749,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       }),
       localImportBatchApi: createHostLocalImportBatchApi(new ImportBatchStore(mainDatabase.db)),
       localTurnReviewApi,
+      localTurnSuggestionApi,
       localMailboxApi,
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
       workflowRunApi,
@@ -791,7 +819,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
                 ? {}
                 : { idleTimeoutMs: options.clientLeaseIdleTimeoutMs }),
               onIdle: () => {
-                void shutdownHost?.();
+                void shutdownHost?.(options.idleShutdownDrainTimeoutMs ?? DEFAULT_IDLE_SHUTDOWN_DRAIN_MS);
               },
             },
           }
@@ -809,7 +837,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     if (!options.ephemeral) writeRuntimeFile(runtimeFilePath, runtime);
 
     let closed = false;
-    shutdownHost = async (): Promise<void> => {
+    shutdownHost = async (drainTimeoutMs = 0): Promise<void> => {
       if (closed) return;
       closed = true;
       try {
@@ -821,8 +849,24 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           try {
             await runExecution?.permissionRequests?.closeAll();
           } finally {
-            runExecution?.supervision.workerManager.stopIdleReaper();
-            runExecution?.supervision.workerManager.killAll();
+            // An idle shutdown means the clients vanished, not that the turn
+            // they were watching should die mid-flight: give mid-turn workers
+            // a bounded window to settle so their results persist, then kill
+            // whatever remains. The HTTP server is already closed, so no new
+            // client can attach into a Host that is on its way out, and the
+            // window is capped — a restart during the drain meets the
+            // database-lock error naming this process, which then goes away.
+            // An explicit close passes no drain and kills immediately.
+            const workerManager = runExecution?.supervision.workerManager;
+            if (workerManager !== undefined && drainTimeoutMs > 0 && workerManager.hasActiveTurn()) {
+              executionLogger.info('Idle shutdown: waiting for mid-turn workers to settle', { timeoutMs: drainTimeoutMs });
+              const outcome = await workerManager.waitForWorkersToSettle(drainTimeoutMs);
+              if (outcome === 'timeout') {
+                executionLogger.warn('Idle shutdown: workers still mid-turn after the drain cap, killing', { timeoutMs: drainTimeoutMs });
+              }
+            }
+            workerManager?.stopIdleReaper();
+            workerManager?.killAll();
           }
         } catch {
           // A worker that already exited is not a shutdown failure.

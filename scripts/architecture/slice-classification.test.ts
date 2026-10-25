@@ -290,6 +290,8 @@ const MOVED_TO_CLI =
   'moved to packages/cli/src when the CLI surface was reorganised; now host-ui';
 const MOVED_TO_AGENT_PROTOCOL_TEST =
   'moved to packages/agent-protocol/test when the protocol package was extracted into @duya/agent-protocol; that test directory is deliberately unclassified';
+const REMOVED_WITH_THE_NEXT_STEP_SERVICE =
+  'deleted when the next-step suggestion moved into the worker; the desktop-only service and its IPC handler were replaced by the worker turn suggestion and the turn-suggestion handler, so no successor file carries this path';
 
 const RECORDED_LOSSES: readonly RecordedLoss[] = [
   // packages/ui/src :: host-ui (765)
@@ -1939,6 +1941,11 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'packages/agent/src/compact/transforms/canvasTransform.ts', from: 'runtime-coordination', why: REMOVED_WITH_BUILTIN_CANVAS },
   { path: 'packages/agent/src/process/browser-backend.ts', from: 'runtime-coordination', why: REMOVED_WITH_EXTERNAL_BROWSER_CAPABILITY },
   { path: 'packages/agent/src/process/gui-backend.ts', from: 'runtime-coordination', why: REMOVED_WITH_EXTERNAL_BROWSER_CAPABILITY },
+  { path: 'apps/desktop/src/main/ipc/next-step-handlers.ts', from: 'host-ui', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  { path: 'apps/desktop/src/main/services/next-step/next-step-llm.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.test.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  { path: 'apps/desktop/src/main/services/next-step/next-step-service.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
 ];
 
 /**

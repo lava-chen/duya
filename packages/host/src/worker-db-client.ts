@@ -478,6 +478,16 @@ export const turnReviewDb = {
   }) => sendDbRequest('turn-review:save', data),
 };
 
+export const turnSuggestionDb = {
+  save: (data: {
+    id: string;
+    sessionId: string;
+    turnId: string;
+    suggestion: string;
+    createdAt: number;
+  }) => sendDbRequest('turn-suggestion:save', data),
+};
+
 // ==================== Lock Operations ====================
 
 export const lockDb = {

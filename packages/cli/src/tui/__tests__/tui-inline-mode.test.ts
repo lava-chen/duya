@@ -309,7 +309,7 @@ describe('inline mode', () => {
     });
     await settleRendered();
     app.stop();
-    expect(out.text()).toContain('⚡ 80.0 tok/s');
+    expect(out.text()).toContain('80.0 tok/s');
   });
 
   it('shows no rate when the usage frame carries no request duration', async () => {
