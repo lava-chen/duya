@@ -1,7 +1,7 @@
 # 下一步建议下沉到 worker/Host 并改为输入框 placeholder
 
 状态：active · 负责人：mavis 会话 `mvs_c2c6b417aeed49c393c3b4fd4d079992` · 更新：2026-10-25
-分支：`codex/next-step-suggestions` · worktree：`E:/Projects/duya/.claude/worktrees/next-step-suggestions` · base：`270ba528` · owner：mavis
+分支：`codex/next-step-suggestions` · worktree：`E:/Projects/duya/.claude/worktrees/next-step-suggestions` · base：`270ba528`（已合并 master `77bd7848`） · owner：mavis · PR：#496
 
 ## 目标与边界
 
@@ -31,9 +31,12 @@
 - [x] S4 共享 UI：UiServices 端口 + 双路 client + hook + placeholder；Desktop preload/IPC；Web BFF
 - [x] S5 TUI：composer 灰字提示 + 采纳预填
 - [x] S6 删除旧路径 + 更新 ARCHITECTURE.md
-- [x] S7 门禁 + commit + PR
+- [x] S7 门禁 + commit + PR（PR #496）
 
 ## 发现与决策
+
+- **desktop 的 protocol 子路径必须逐个写进 paths**：`apps/desktop/tsconfig.main.json` 用 `moduleResolution: node`，不认 package `exports`，所以 `@duya/agent-protocol/turn-suggestion` 不会解析到 `dist/turn-suggestion.d.ts`（TS2307）。该文件本来就把每个 protocol 子路径显式映射到 `dist/*.d.ts`，新增子路径必须补一行。
+- **删除文件要在 slice census 里逐条登记退休**：`scripts/architecture/slice-census.txt` 是冻结基线，**不能**批量重录；文件删除会让 `slice-classification.test.ts` 的「recorded MINUS current」断言变红，正确做法是在该测试的 `RECORDED_LOSSES` 里逐路径登记 bucket 与原因。
 
 - **生成放在 worker，不放 Host HTTP 层**：turn 后派生物已有同构先例——`title-generator.ts`（turn 后单发 LLM）与 `turn-review.ts`（turn 后 git diff）都在 `packages/host/src/worker-session/`，由 `worker-process-entry.ts` 在消息落库后 fire-and-forget 触发。模型客户端用 `agent.readModelClient()`（`worker-session-runtime.ts:188`），因此**不再需要 Electron provider store**，也不再需要自己拼 fetch。
 - **落库而非只走事件**：`chat_turn_reviews` 先例表明三端一致读法 = 落库 + Host 路由。建议存 `chat_turn_suggestions`（main 库，migration id 60，现最大 id 59），worker 经 `sendDbRequest('turn-suggestion:save')` 写入（`worker-db-client.ts:465` 形状），Host db bridge 派发（`worker-db-bridge.ts:1187`），Desktop 侧还有一份 bridge（`apps/desktop/src/main/agents/db-bridge.ts:2342`）要同步加。
@@ -52,11 +55,15 @@
 | `270ba528` + 本次改动 | Windows 11 / Node 22 | `npx vitest run packages/ui/src/i18n packages/ui/src/hooks packages/ui/src/components/chat packages/cli/src/tui packages/host/tests packages/data/tests` | 0：405 passed / 1 skipped（406 文件） | `$env:TEMP\duya-test.log` |
 | 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规（3 条旧指纹随删除失效，未重录） | 见「发现与决策」末条 |
 | 同上 | 同上 | `npx tsc -p packages/ui/tsconfig.json --noEmit` | 0 | 共享渲染层类型通过 |
+| `885e7ff7`（合并 master `77bd7848` 后） | 同上 | `npm run typecheck:all` 分段 | 0：protocol / client-core / core / workflow / runtime / web / electron gate / cli / web-app / voice / evals / eval:agent:core 全过 | electron gate 首次报 1 条新错误（desktop 缺 paths 映射），补映射后为 0 |
+| 同上 | 同上 | `npx vitest run scripts/architecture packages/ui/src/i18n packages/ui/src/hooks packages/ui/src/components/chat packages/cli/src/tui packages/host/tests packages/data/tests` | 0：423 passed / 1 skipped（424 文件，4172 用例） | `$env:TEMP\duya-test-post-merge.log` |
+| 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规 | 3 条旧指纹失效，未重录 baseline |
+| 同上 | 同上 | `npm run bundle:worker` | 0：worker bundle 重建，产物含 `turn-suggestion:save` 与 `/v1/local/turn-suggestions` | bundle 内符号名被压缩，按字面量与 metafile 输入集核对 |
 
 ## 接续 / 结果
 
-- 已实现：S0 摸底结论与本计划。
-- 已验证：无（尚未产生代码）。
-- PR：未创建。
+- 已实现：S0–S7 全部完成，代码在 `codex/next-step-suggestions`（PR #496）。
+- 已验证：类型门禁、架构门禁、相关测试全部退出码 0（见「验证记录」）。真机三端对话未跑。
+- PR：#496 `feat(agent): move the next-step suggestion into the worker`。
 - 阻塞：无。
-- 下一步：S1 —— 在 `packages/agent-protocol` 加 `turn-suggestion` 契约，在 `packages/data` 加 store 与 migration id 60；完成判据：`npx vitest run packages/data` 通过。
+- 下一步：等 PR #496 的 review 与 CI；真机按「测试计划」逐端走一轮，确认 turn 结束后 placeholder 出现灰字建议、Enter 采纳填入且不发送。
