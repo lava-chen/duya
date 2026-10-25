@@ -1,37 +1,42 @@
 #!/usr/bin/env node
 /**
- * Sync duya's per-provider model shards from a public model directory.
+ * Refresh duya's per-provider model shards from public model directories.
  *
- * Why this exists: src/providers/<provider>.models.ts holds a curated snapshot
- * of each vendor's models — context window, max output, input modalities,
- * reasoning flag and $/token cost. Vendors rotate model names and context
- * sizes constantly (e.g. DeepSeek renamed `deepseek-v4-flash` to
- * `deepseek-flash` and retired the legacy ids). This script pulls the current
- * upstream metadata so the params duya needs can be refreshed in one pass.
+ * Why this exists: src/providers/<provider>.models.ts holds the built-in
+ * capability directory for every model duya can talk to — context window,
+ * max output, input modalities, reasoning flag, thinking ladder and
+ * $/million-token pricing. Vendors rotate model names constantly, so the
+ * directory drifts out of date and the preset seeds in catalog-data.ts stop
+ * matching it (a preset id that no shard knows gets no context window and no
+ * thinking ladder at runtime).
  *
  * Sources (both public, no API key):
- *   openrouter  https://openrouter.ai/api/v1/models   (default)
- *   modelsdev   https://models.dev/api.json           (--source=modelsdev)
+ *   modelsdev   https://models.dev/api.json     (default — direct vendor ids)
+ *   openrouter  https://openrouter.ai/api/v1/models
  *
- * Upstream metadata is mapped into duya's `Model` shape:
- *   contextWindow <- context_length
- *   maxTokens     <- top_provider.max_completion_tokens
- *   input         <- architecture.input_modalities ('image' -> text + image)
- *   reasoning     <- supported_parameters includes 'reasoning'
- *   cost          <- pricing.* rounded to 6 decimals (matches checked-in shards)
+ * Why models.dev is the default: it publishes the id the vendor's own
+ * endpoint serves (`claude-sonnet-4-6`, `glm-5.3`, `MiniMax-M3`), which is
+ * what duya's preset seeds must contain. OpenRouter publishes proxy-side ids
+ * (`anthropic/claude-sonnet-4.6`) that only apply to the openrouter shard.
+ *
+ * Unit contract: `Model.cost` is $/MILLION tokens — the runtime reads it as
+ * `inputPerMillion` (apps/desktop provider-store). models.dev already quotes
+ * per-million; OpenRouter quotes per-token, so its numbers are scaled up.
+ *
+ * Governance contract: `compat` and `thinkingLevelMap` are hand-tuned per
+ * model and survive every refresh. A refresh may add, drop or re-price
+ * models; it never edits a thinking ladder or a wire-compat flag.
  *
  * Modes:
- *   (default)     report  — print every provider's models + params (no writes)
- *   --json        emit the mapped catalog as JSON (machine-readable)
- *   --diff        report + per-provider added/removed id deltas (no writes)
- *   --merge       write: refresh known ids, keep ids no longer upstream
- *   --write       write: replace each shard with exactly what upstream serves
- *   --only=a,b    restrict to a comma-separated provider subset
- *   --source=X    openrouter (default) | modelsdev
+ *   (default)   report — print upstream vs. checked-in deltas (no writes)
+ *   --diff      report + field-level changes for ids present on both sides
+ *   --write     write: replace each shard with the upstream selection
+ *   --merge     write: refresh known ids, keep checked-in ids upstream dropped
+ *   --only=a,b  restrict to a comma-separated shard subset
  *
  * Run:
  *   node packages/ai/scripts/sync-models.mjs
- *   node packages/ai/scripts/sync-models.mjs --diff --only=deepseek
+ *   node packages/ai/scripts/sync-models.mjs --diff --only=anthropic
  *   npm run sync:models -w @duya/ai -- --write
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -41,96 +46,542 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const providersDir = join(__dirname, '..', 'src', 'providers');
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/models';
 const MODELS_DEV_URL = 'https://models.dev/api.json';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/models';
 
-const SHARD_HEADER = `// Model data. Sourced from https://openrouter.ai/api/v1/models (public,
-// no key). OpenRouter is a no-auth model directory that proxies all the
-// major Chinese vendors; we strip the upstream prefix and route through
-// the provider's direct baseUrl. contextWindow / maxTokens / cost /
-// modalities / reasoning flag all come from upstream metadata, which the
-// direct endpoints honour identically.
-`;
+// ─── Shared thinking ladders ────────────────────────────────────────────────
+// Anthropic-compatible endpoints take `thinking.budget_tokens`; the harness
+// maps its own levels onto vendor names. Anthropic itself accepts
+// off/low/medium/high; the Chinese token-plan endpoints add `max`.
+const THINKING_ANTHROPIC =
+  "thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },";
+const THINKING_ANTHROPIC_MAX =
+  "thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },";
+
+// ─── Curated id selections ─────────────────────────────────────────────────
+// models.dev groups list every alias a vendor ever shipped. duya only offers
+// the ids a user can actually pick today, so each shard pins its selection
+// here: `include` keeps a hand-picked list, `exclude` drops known noise.
+const OPENAI_IDS = [
+  'gpt-4o', 'gpt-4o-mini',
+  'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano',
+  'o1', 'o1-pro', 'o3', 'o3-pro', 'o3-mini', 'o4-mini',
+  'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5-pro',
+  'gpt-5.1', 'gpt-5.2', 'gpt-5.2-pro', 'gpt-5.3-codex',
+  'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.4-pro',
+  'gpt-5.5', 'gpt-5.5-pro',
+  'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.6-terra',
+  'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol',
+];
+
+const GOOGLE_IDS = [
+  'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite',
+  'gemini-3.1-pro-preview', 'gemini-3.1-flash-lite',
+  'gemini-3.5-flash', 'gemini-3.5-flash-lite',
+  'gemini-3.6-flash', 'gemini-3.7-flash', 'gemini-3.8-flash',
+  'gemini-4-argon',
+  'gemini-pro-latest', 'gemini-flash-latest',
+];
+
+// DashScope CN also serves GLM / Kimi / DeepSeek / MiniMax — those live in
+// their own shards, so drop them here. Same for the math / translation /
+// realtime aliases, which are not chat models.
+const QWEN_EXCLUDE = [
+  /^(glm|kimi|deepseek|MiniMax|siliconflow|moonshot)/,
+  /math|doc-turbo|deep-research|character|asr|livetranslate|omni.*realtime|qwen-mt|qvq/,
+  /qwen2-5-omni/,
+];
+
+// The Bailian coding plan serves Qwen, GLM, Kimi and MiniMax. Only the Qwen
+// models are listed here: the other vendors' models are already described by
+// their own shards, and listing them twice would give one model id two
+// different output ceilings (the plan proxies them with its own caps).
+const BAILIAN_IDS = [
+  'qwen3.8-max', 'qwen3.8-flash', 'qwen3.8-omni-flash',
+  'qwen3.7-plus', 'qwen3.7-max', 'qwen3.6-plus', 'qwen3.5-plus',
+  'qwen3.5-35b-a3b', 'qwen3-max-2026-01-23',
+  'qwen3-coder-plus', 'qwen3-coder-next',
+];
+
+const BEDROCK_IDS = [
+  'anthropic.claude-opus-5', 'anthropic.claude-opus-5-5',
+  'anthropic.claude-sonnet-5', 'anthropic.claude-sonnet-5-5',
+  'anthropic.claude-opus-4-8', 'anthropic.claude-opus-4-7',
+  'anthropic.claude-opus-4-6-v1', 'anthropic.claude-opus-4-5-20251101-v1:0',
+  'anthropic.claude-opus-4-1-20250805-v1:0',
+  'anthropic.claude-sonnet-4-6', 'anthropic.claude-sonnet-4-5-20250929-v1:0',
+  'anthropic.claude-haiku-5-5', 'anthropic.claude-haiku-4-5-20251001-v1:0',
+  'anthropic.claude-fable-5', 'anthropic.claude-fable-5-1',
+  'openai.gpt-6.1-sol', 'openai.gpt-6-sol', 'openai.gpt-6-astra',
+  'openai.gpt-5.6-terra', 'openai.gpt-5.6-sol', 'openai.gpt-5.5', 'openai.gpt-5.4',
+  'openai.gpt-oss-120b', 'openai.gpt-oss-20b',
+  'amazon.nova-pro-v1:0', 'amazon.nova-2-lite-v1:0',
+  'zai.glm-5', 'qwen.qwen3-coder-next', 'qwen.qwen3-235b-a22b-2507-v1:0',
+  'moonshotai.kimi-k2.5', 'minimax.minimax-m2.5', 'minimax.minimax-m2.1',
+  'deepseek.v3.2', 'xai.grok-4.6', 'xai.grok-4.3',
+];
+
+// OpenRouter proxies everything, so its shard is a flagship seed only — the
+// provider fetches the full catalogue at runtime (`/api/v1/models`).
+// OpenRouter names the 4.x generations with a dot (`claude-opus-4.7`) while
+// models.dev names them with a dash; the ids here are OpenRouter's own.
+const OPENROUTER_IDS = [
+  'anthropic/claude-opus-5', 'anthropic/claude-sonnet-5',
+  'anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5',
+  'anthropic/claude-fable-5', 'anthropic/claude-fable-5.1',
+  'anthropic/claude-opus-4.8', 'anthropic/claude-opus-4.7',
+  'anthropic/claude-opus-4.6', 'anthropic/claude-opus-4.5',
+  'anthropic/claude-sonnet-4.6', 'anthropic/claude-sonnet-4.5',
+  'anthropic/claude-haiku-5.5', 'anthropic/claude-haiku-4.5',
+  'anthropic/claude-opus-4.1',
+  'openai/gpt-6.1-sol', 'openai/gpt-6.1-sol-pro',
+  'openai/gpt-6-sol', 'openai/gpt-6-sol-pro',
+  'openai/gpt-6-astra', 'openai/gpt-6-astra-pro',
+  'openai/gpt-6-luna', 'openai/gpt-6-luna-pro',
+  'openai/gpt-5.6-sol', 'openai/gpt-5.6-terra', 'openai/gpt-5.6-luna',
+  'openai/gpt-5.5', 'openai/gpt-5.5-pro',
+  'openai/gpt-5.4', 'openai/gpt-5.4-mini', 'openai/gpt-5.4-nano', 'openai/gpt-5.4-pro',
+  'openai/gpt-5.3-codex', 'openai/gpt-5.2', 'openai/gpt-5.2-pro',
+  'openai/gpt-5.2-chat', 'openai/gpt-5.2-codex',
+  'openai/gpt-5.1', 'openai/gpt-5.1-codex',
+  'openai/gpt-5', 'openai/gpt-5-mini', 'openai/gpt-5-pro',
+  'openai/gpt-4o', 'openai/gpt-4o-mini',
+  'openai/gpt-4.1', 'openai/gpt-4.1-mini', 'openai/gpt-4.1-nano',
+  'openai/o1', 'openai/o1-pro', 'openai/o3', 'openai/o3-pro',
+  'openai/o3-mini', 'openai/o4-mini',
+  'openai/gpt-oss-120b', 'openai/gpt-oss-20b',
+  'google/gemini-4-argon', 'google/gemini-3.8-flash', 'google/gemini-3.7-flash',
+  'google/gemini-3.6-flash', 'google/gemini-3.5-flash', 'google/gemini-3.5-flash-lite',
+  'google/gemini-3.1-pro-preview', 'google/gemini-3.1-flash-lite',
+  'google/gemini-2.5-pro', 'google/gemini-2.5-flash', 'google/gemini-2.5-flash-lite',
+  'deepseek/deepseek-v4-pro', 'deepseek/deepseek-v4-flash',
+  'deepseek/deepseek-v3.2', 'deepseek/deepseek-chat', 'deepseek/deepseek-r1-0528',
+  'qwen/qwen3.8-max-prime', 'qwen/qwen3.8-omni-flash', 'qwen/qwen3.8-flash',
+  'qwen/qwen3.8-27b', 'qwen/qwen3.7-plus', 'qwen/qwen3.7-max', 'qwen/qwen3.7-flash',
+  'qwen/qwen3.6-plus', 'qwen/qwen3.6-flash',
+  'qwen/qwen3.5-plus-20260420', 'qwen/qwen3.5-397b-a17b', 'qwen/qwen3.5-122b-a10b',
+  'qwen/qwen3-coder-next', 'qwen/qwen3-coder-flash', 'qwen/qwen3-coder',
+  'x-ai/grok-4.7', 'x-ai/grok-4.6', 'x-ai/grok-4.5', 'x-ai/grok-4.3',
+  'x-ai/grok-4.20', 'x-ai/grok-4.20-multi-agent', 'x-ai/grok-build-0.1',
+  'moonshotai/kimi-k3', 'moonshotai/kimi-k3.1-pro', 'moonshotai/kimi-k2.7-code',
+  'moonshotai/kimi-k2.6', 'moonshotai/kimi-k2.5',
+  'minimax/minimax-m3', 'minimax/minimax-m3.1-flash',
+  'minimax/minimax-m2.7', 'minimax/minimax-m2.5', 'minimax/minimax-m2.1',
+  'z-ai/glm-5.3', 'z-ai/glm-5.3-flash', 'z-ai/glm-5.2', 'z-ai/glm-5.1',
+  'z-ai/glm-5', 'z-ai/glm-5-turbo', 'z-ai/glm-4.7',
+  'stepfun/step-5-preview', 'stepfun/step-3.7-flash', 'stepfun/step-3.5-flash',
+  'meta-llama/llama-3.3-70b-instruct', 'mistralai/mistral-large-4-0',
+];
 
 /**
- * Per-provider mapping. `prefix` is the OpenRouter vendor segment stripped
- * from every model id. `include` restricts to an explicit id list (used when
- * the direct endpoint serves only a subset); `idMap` renames an upstream id to
- * the vendor's native id. `write: false` marks hand-curated shards that must
- * not be regenerated wholesale.
+ * Per-shard refresh configuration.
  *
- * `compat` is the provider-level default emitted into every generated entry
- * (pi-mono governance: thinking config must survive a sync). Per-model
- * `compat` / `thinkingLevelMap` already present in a checked-in shard are
- * preserved verbatim and take precedence over these defaults.
+ * `sections` — one entry per exported array in the file. A file may hold two
+ * (glm.models.ts carries an openai-chat and an anthropic list).
+ *
+ * source: 'modelsdev' (group = models.dev slug) | 'openrouter' (prefix = the
+ * OpenRouter vendor segment).
+ *
+ * mode: 'write' replaces the array with the upstream selection; 'merge'
+ * refreshes the ids upstream still serves and keeps the checked-in ids it
+ * dropped (used where duya's endpoint serves a hand-collected superset).
  */
-const PROVIDERS = {
-  anthropic: { prefix: 'anthropic', api: 'anthropic', baseUrl: 'https://api.anthropic.com' },
-  deepseek: {
-    prefix: 'deepseek',
-    api: 'openai-chat',
-    baseUrl: 'https://api.deepseek.com/v1',
-    // Direct api.deepseek.com serves only these two ids; upstream carries the
-    // V4.1 model names, the API exposes them as deepseek-flash / deepseek-v4-pro.
-    include: ['deepseek-v4.1-flash', 'deepseek-v4-pro-0813'],
-    idMap: {
-      'deepseek-v4.1-flash': 'deepseek-flash',
-      'deepseek-v4-pro-0813': 'deepseek-v4-pro',
-    },
-    compat: "compat: { openAIThinkingFormat: 'deepseek-style', requiresReasoningContentOnAssistantMessages: true },",
+const SHARDS = [
+  {
+    key: 'anthropic',
+    file: 'anthropic.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// models.dev publishes the ids api.anthropic.com serves, which is what the
+// preset seeds in catalog-data.ts contain — OpenRouter's proxy ids
+// (claude-sonnet-4.6) do not exist on the direct endpoint.
+// contextWindow / maxTokens / modalities / reasoning / pricing come from
+// upstream metadata; compat and thinkingLevelMap are duya's own and survive
+// every refresh.
+`,
+    sections: [
+      {
+        exportName: 'anthropicModels',
+        api: 'anthropic',
+        providerId: 'anthropic',
+        baseUrl: 'https://api.anthropic.com',
+        source: 'modelsdev',
+        group: 'anthropic',
+        // Dated snapshots (claude-sonnet-4-5-20250929) are aliases of the
+        // rolling ids; the preset seeds use the rolling ones.
+        exclude: [/-\d{8}$/],
+        thinking: THINKING_ANTHROPIC,
+      },
+    ],
   },
-  qwen: {
-    prefix: 'qwen',
-    api: 'openai-chat',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    compat: "compat: { openAIThinkingFormat: 'qwen-style' },",
+  {
+    key: 'openai',
+    file: 'openai.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Chat Completions catalogue. Pricing is $/million tokens, the unit the
+// runtime reads (provider-store maps Model.cost onto inputPerMillion).
+`,
+    sections: [
+      {
+        exportName: 'openAIModels',
+        api: 'openai-chat',
+        providerId: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        source: 'modelsdev',
+        group: 'openai',
+        include: OPENAI_IDS,
+        thinking: THINKING_ANTHROPIC,
+        compat: "compat: { openAIThinkingFormat: 'openai-standard' },",
+      },
+    ],
   },
-  kimi: {
-    prefix: 'moonshotai',
-    api: 'openai-chat',
-    baseUrl: 'https://api.moonshot.ai/v1',
-    compat: "compat: { openAIThinkingFormat: 'reasoning-content' },",
+  {
+    key: 'openai-responses',
+    file: 'openai-responses.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Responses catalogue. Same model line as the Chat Completions shard;
+// only the wire format differs, so the two files carry the same selection.
+`,
+    sections: [
+      {
+        exportName: 'openaiResponsesModels',
+        api: 'openai-responses',
+        providerId: 'openai',
+        baseUrl: 'https://api.openai.com/v1',
+        source: 'modelsdev',
+        group: 'openai',
+        include: OPENAI_IDS,
+        thinking: THINKING_ANTHROPIC,
+        compat:
+          "compat: { openAIThinkingFormat: 'reasoning-content', fixedTemperature: 1 },",
+      },
+    ],
   },
-  minimax: {
-    prefix: 'minimax',
-    api: 'anthropic',
-    baseUrl: 'https://api.minimax.io/anthropic',
-    write: false,
+  {
+    key: 'google',
+    file: 'google.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// Gemini chat models. Image / TTS / live / embedding / research aliases are
+// not chat models and are left out.
+`,
+    sections: [
+      {
+        exportName: 'googleModels',
+        api: 'gemini',
+        providerId: 'google',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        source: 'modelsdev',
+        group: 'google',
+        include: GOOGLE_IDS,
+        thinking: THINKING_ANTHROPIC,
+      },
+    ],
   },
-  xai: { prefix: 'x-ai', api: 'openai-chat', baseUrl: 'https://api.x.ai/v1' },
-  stepfun: { prefix: 'stepfun', api: 'openai-chat', baseUrl: 'https://api.stepfun.com/v1' },
-  glm: { prefix: 'z-ai', api: 'openai-chat', baseUrl: 'https://api.z.ai/api/paas/v4', write: false },
-  google: {
-    prefix: 'google',
-    api: 'gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    write: false,
+  {
+    key: 'deepseek',
+    file: 'deepseek.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+//
+// api.deepseek.com serves exactly two ids: deepseek-flash (the V4.1 Flash
+// line, which replaced the retired deepseek-v4-flash /
+// deepseek-v4-flash-vision-exp ids) and deepseek-v4-pro.
+//
+// Pricing: DeepSeek bills off-peak (default, ~82% of hours) and peak (UTC
+// Mon-Fri 01:00-04:00 and 06:00-10:00, 2x off-peak). Model.cost holds a
+// single number per field, so the values below are off-peak rates; peak usage
+// is 2x.
+`,
+    sections: [
+      {
+        exportName: 'deepseekModels',
+        api: 'openai-chat',
+        providerId: 'deepseek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        source: 'modelsdev',
+        group: 'deepseek',
+        include: ['deepseek-flash', 'deepseek-v4-pro'],
+        compat:
+          "compat: { openAIThinkingFormat: 'deepseek-style', requiresReasoningContentOnAssistantMessages: true },",
+      },
+    ],
   },
-  // Hand-curated shard: report only, never overwrite.
-  openai: { prefix: 'openai', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1', write: false },
-};
-
-// models.dev groups providers under different slugs than our provider ids.
-const MODELS_DEV_SLUG = {
-  anthropic: 'anthropic',
-  deepseek: 'deepseek',
-  qwen: 'alibaba',
-  kimi: 'moonshotai',
-  minimax: 'minimax',
-  xai: 'xai',
-  stepfun: 'stepfun',
-  glm: 'zai',
-  google: 'google',
-  openai: 'openai',
-};
+  {
+    key: 'qwen',
+    file: 'qwen.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The DashScope CN catalogue (dashscope.aliyuncs.com/compatible-mode/v1).
+// DashScope also serves GLM / Kimi / DeepSeek / MiniMax — those live in their
+// own shards, so they are filtered out here.
+`,
+    sections: [
+      {
+        exportName: 'qwenModels',
+        api: 'openai-chat',
+        providerId: 'qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        source: 'modelsdev',
+        group: ['alibaba-cn', 'alibaba'],
+        exclude: QWEN_EXCLUDE,
+      },
+    ],
+  },
+  {
+    key: 'kimi',
+    file: 'kimi.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Moonshot global catalogue (api.moonshot.ai).
+`,
+    sections: [
+      {
+        exportName: 'kimiModels',
+        api: 'openai-chat',
+        providerId: 'kimi',
+        baseUrl: 'https://api.moonshot.ai/v1',
+        source: 'modelsdev',
+        group: ['moonshotai', 'moonshotai-cn'],
+        compat: "compat: { openAIThinkingFormat: 'reasoning-content' },",
+      },
+    ],
+  },
+  {
+    key: 'glm',
+    file: 'glm.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+//
+// Two catalogues live here: the pay-as-you-go OpenAI-compatible endpoint
+// (open.bigmodel.cn/api/paas/v4) and the coding-plan Anthropic endpoint
+// (open.bigmodel.cn/api/anthropic). They serve different model sets.
+`,
+    sections: [
+      {
+        exportName: 'glmModels',
+        api: 'openai-chat',
+        providerId: 'glm',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        source: 'modelsdev',
+        group: ['zhipuai', 'zai'],
+        compat: "compat: { openAIThinkingFormat: 'glm-style' },",
+        thinking: THINKING_ANTHROPIC,
+      },
+      {
+        exportName: 'glmAnthropicModels',
+        api: 'anthropic',
+        providerId: 'glm',
+        baseUrl: 'https://open.bigmodel.cn/api/anthropic',
+        source: 'modelsdev',
+        group: ['zai-coding-plan', 'zai'],
+        thinking: THINKING_ANTHROPIC_MAX,
+      },
+    ],
+  },
+  {
+    key: 'minimax',
+    file: 'minimax.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The MiniMax international token-plan catalogue (api.minimax.io/anthropic).
+//
+// MiniMax streams unsigned thinking fragments, so the endpoint accepts
+// signature:"" on replayed blocks, and its thinking budget is adaptive rather
+// than a fixed budget_tokens.
+`,
+    sections: [
+      {
+        exportName: 'minimaxModels',
+        api: 'anthropic',
+        providerId: 'minimax',
+        baseUrl: 'https://api.minimax.io/anthropic',
+        source: 'modelsdev',
+        group: 'minimax-coding-plan',
+        costGroup: 'minimax',
+        thinking: THINKING_ANTHROPIC_MAX,
+        compat: (id) =>
+          `compat: { forceAdaptiveThinking: true, maxOutputTokens: ${
+            id.startsWith('MiniMax-M3') ? 128000 : 131072
+          }, allowEmptySignature: true },`,
+      },
+    ],
+  },
+  {
+    key: 'minimax-cn',
+    file: 'minimax-cn.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The MiniMax China token-plan catalogue (api.minimaxi.com/anthropic).
+`,
+    sections: [
+      {
+        exportName: 'minimaxCnModels',
+        api: 'anthropic',
+        providerId: 'minimax-cn',
+        baseUrl: 'https://api.minimaxi.com/anthropic',
+        source: 'modelsdev',
+        group: 'minimax-cn-coding-plan',
+        costGroup: 'minimax-cn',
+        thinking: THINKING_ANTHROPIC_MAX,
+        compat: (id) =>
+          `compat: { forceAdaptiveThinking: true, maxOutputTokens: ${
+            id.startsWith('MiniMax-M3') ? 128000 : 131072
+          }, allowEmptySignature: true },`,
+      },
+    ],
+  },
+  {
+    key: 'xai',
+    file: 'xai.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The xAI catalogue (api.x.ai). The imagine* entries are image/video models
+// and are not chat models.
+`,
+    sections: [
+      {
+        exportName: 'xaiModels',
+        api: 'anthropic',
+        providerId: 'xai',
+        baseUrl: 'https://api.x.ai/v1',
+        source: 'modelsdev',
+        group: 'xai',
+        exclude: [/imagine/],
+        thinking: THINKING_ANTHROPIC,
+      },
+    ],
+  },
+  {
+    key: 'stepfun',
+    file: 'stepfun.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Step Plan catalogue (api.stepfun.ai/step_plan/v1). step-router-v1 is a
+// router, not a model, and the audio models are not chat models.
+`,
+    sections: [
+      {
+        exportName: 'stepfunModels',
+        api: 'anthropic',
+        providerId: 'stepfun',
+        baseUrl: 'https://api.stepfun.ai/step_plan/v1',
+        source: 'modelsdev',
+        group: 'stepfun-step-plan',
+        costGroup: 'stepfun',
+        exclude: [/router|audio|tts|asr/],
+        thinking: THINKING_ANTHROPIC,
+      },
+    ],
+  },
+  {
+    key: 'volcengine',
+    file: 'volcengine.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Volcengine Ark coding-plan catalogue
+// (ark.cn-beijing.volces.com/api/coding): Doubao Seed plus the GLM / Kimi /
+// DeepSeek / MiniMax models Ark resells under the plan.
+`,
+    sections: [
+      {
+        exportName: 'volcengineModels',
+        api: 'anthropic',
+        providerId: 'volcengine',
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+        source: 'modelsdev',
+        group: 'volcengine-coding-plan',
+        costGroup: 'volcengine',
+        thinking: THINKING_ANTHROPIC,
+      },
+    ],
+  },
+  {
+    key: 'bailian',
+    file: 'bailian.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Aliyun Bailian coding-plan catalogue
+// (coding.dashscope.aliyuncs.com/apps/anthropic).
+//
+// 'merge' mode: the plan's own catalogue lists more than models.dev tracks,
+// so ids upstream dropped are kept instead of deleted.
+`,
+    sections: [
+      {
+        exportName: 'bailianModels',
+        api: 'anthropic',
+        providerId: 'bailian',
+        baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+        source: 'modelsdev',
+        group: 'alibaba-coding-plan',
+        include: BAILIAN_IDS,
+        fallbackGroup: ['alibaba-cn', 'alibaba'],
+        thinking: THINKING_ANTHROPIC_MAX,
+      },
+    ],
+  },
+  {
+    key: 'xiaomi',
+    file: 'xiaomi.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+// The Xiaomi MiMo catalogue (api.xiaomimimo.com/anthropic) and its token-plan
+// sibling, which serve the same model line.
+`,
+    sections: [
+      {
+        exportName: 'xiaomiModels',
+        api: 'anthropic',
+        providerId: 'xiaomi',
+        baseUrl: 'https://api.xiaomimimo.com/anthropic',
+        source: 'modelsdev',
+        group: ['xiaomi', 'xiaomi-token-plan-cn'],
+        thinking: THINKING_ANTHROPIC_MAX,
+      },
+    ],
+  },
+  {
+    key: 'bedrock',
+    file: 'bedrock.models.ts',
+    header: `// Model data. Sourced from https://models.dev/api.json (public, no key).
+//
+// AWS Bedrock ConverseStream catalogue. Model ids are Bedrock model IDs
+// (<provider>.<name>); the region-prefixed aliases (us.*, eu.*, global.*)
+// are the same models routed to one region, so only the unprefixed ids are
+// listed. Pricing is per-million-tokens (USD) on the on-demand rate; see
+// https://aws.amazon.com/bedrock/pricing/ for current values.
+`,
+    sections: [
+      {
+        exportName: 'bedrockModels',
+        api: 'bedrock',
+        providerId: 'bedrock',
+        baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
+        source: 'modelsdev',
+        group: 'amazon-bedrock',
+        include: BEDROCK_IDS,
+        thinking: THINKING_ANTHROPIC_MAX,
+      },
+    ],
+  },
+  {
+    key: 'openrouter',
+    file: 'openrouter.models.ts',
+    header: `// Model data. Sourced from https://openrouter.ai/api/v1/models (public,
+// no key). OpenRouter is a no-auth model directory that proxies all the
+// major vendors; the ids keep the upstream vendor prefix because that is
+// what the endpoint serves. Pricing is converted from OpenRouter's per-token
+// quotes to the per-million unit the runtime reads.
+//
+// This list is a flagship seed — the provider fetches the full catalogue at
+// runtime from /api/v1/models.
+`,
+    sections: [
+      {
+        exportName: 'openrouterModels',
+        api: 'openai-chat',
+        providerId: 'openrouter',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        source: 'openrouter',
+        include: OPENROUTER_IDS,
+      },
+    ],
+  },
+];
 
 const args = process.argv.slice(2);
 const has = (flag) => args.includes(flag);
 const valueOf = (flag) => args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
 
 const MODE = has('--write') ? 'write' : has('--merge') ? 'merge' : has('--diff') ? 'diff' : 'report';
-const AS_JSON = has('--json');
-const SOURCE = valueOf('--source') ?? 'openrouter';
 const only = new Set(
   (valueOf('--only') ?? '')
     .split(',')
@@ -138,100 +589,245 @@ const only = new Set(
     .filter(Boolean),
 );
 
-const roundCost = (value) => Number(Number(value || 0).toFixed(6));
-const bareId = (prefix, id) => (prefix ? id.slice(prefix.length + 1) : id);
+const round6 = (value) => Number(Number(value || 0).toFixed(6));
 
-function mapOpenRouter(slug, provider, entry) {
-  const upstreamId = bareId(provider.prefix, entry.id);
-  const inputModalities = entry.architecture?.input_modalities ?? [];
-  const params = entry.supported_parameters ?? [];
-  const ctx = entry.context_length ?? 0;
-  const p = entry.pricing ?? {};
-  return {
-    id: provider.idMap?.[upstreamId] ?? upstreamId,
-    name: entry.name || upstreamId,
-    api: provider.api,
-    providerId: slug,
-    baseUrl: provider.baseUrl,
-    reasoning: params.includes('reasoning'),
-    input: inputModalities.includes('image') ? ['text', 'image'] : ['text'],
-    contextWindow: ctx,
-    maxTokens: entry.top_provider?.max_completion_tokens ?? entry.max_completion_tokens ?? ctx,
-    cost: {
-      input: roundCost(p.prompt),
-      output: roundCost(p.completion),
-      cacheRead: roundCost(p.input_cache_read),
-      cacheWrite: roundCost(p.input_cache_write),
-    },
-  };
+/**
+ * Whether a pricing block actually carries a price.
+ *
+ * The subscription-plan groups (token plan, coding plan) publish an explicit
+ * zero cost, which is not a price — the plan is a flat fee. Treating those
+ * zeros as "free" would make every token-plan model look free at runtime.
+ */
+const hasPrice = (cost) => Boolean(cost && (cost.input || cost.output));
+
+/** Normalise a pricing number to $/million tokens. */
+const perMillion = (value) => round6((value || 0) * 1e6);
+
+/** Accept a single group name or a list of them. */
+const toArray = (value) =>
+  value === undefined ? [] : Array.isArray(value) ? value : [value];
+
+/**
+ * Order model ids by code unit, not by locale.
+ *
+ * `localeCompare` sorts through ICU collation, whose result depends on the
+ * default locale of the process. The nightly refresh runs on a Linux runner
+ * while the shards were written on a developer machine, so a locale-sensitive
+ * order can turn "nothing changed upstream" into a whole-shard reordering
+ * every single night. Code-unit order is the same on every machine and every
+ * Node build, which is what makes the nightly job's "no change" early exit
+ * mean what it says.
+ */
+function compareIds(a, b) {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
-function mapModelsDev(slug, provider, modelId, m) {
-  const inputModalities = m.modalities?.input ?? [];
-  return {
-    id: provider.idMap?.[modelId] ?? modelId,
-    name: m.name || modelId,
-    api: provider.api,
-    providerId: slug,
-    baseUrl: provider.baseUrl,
+function matchesFilters(id, section) {
+  if (section.include && !section.include.includes(id)) return false;
+  for (const pattern of section.exclude ?? []) {
+    if (typeof pattern === 'string' ? id === pattern : pattern.test(id)) return false;
+  }
+  return true;
+}
+
+function buildCost(rates) {
+  const cost = {
+    input: rates.input,
+    output: rates.output,
+    cacheRead: rates.cacheRead,
+    cacheWrite: rates.cacheWrite,
+  };
+  if (rates.tiers && rates.tiers.length > 0) cost.tiers = rates.tiers;
+  return cost;
+}
+
+function mapModelsDev(section, id, m, pricing) {
+  const input = m.modalities?.input ?? [];
+  const tiers = (pricing?.tiers ?? [])
+    .filter((tier) => tier.tier?.type === 'context' && tier.tier?.size !== undefined)
+    .map((tier) => ({
+      inputTokensAbove: tier.tier.size,
+      input: round6(tier.input ?? 0),
+      output: round6(tier.output ?? 0),
+      cacheRead: round6(tier.cache_read ?? 0),
+      cacheWrite: round6(tier.cache_write ?? 0),
+    }))
+    .sort((a, b) => a.inputTokensAbove - b.inputTokensAbove);
+
+  const model = {
+    id,
+    name: m.name || id,
+    api: section.api,
+    providerId: section.providerId,
+    baseUrl: section.baseUrl,
     reasoning: m.reasoning === true,
-    input: inputModalities.includes('image') ? ['text', 'image'] : ['text'],
+    input: input.includes('image') ? ['text', 'image'] : ['text'],
     contextWindow: m.limit?.context ?? 0,
     maxTokens: m.limit?.output ?? 0,
-    cost: {
-      input: roundCost(m.cost?.input),
-      output: roundCost(m.cost?.output),
-      cacheRead: roundCost(m.cost?.cache_read),
-      cacheWrite: roundCost(m.cost?.cache_write),
-    },
+  };
+
+  // A model with no published price keeps the field absent — "unknown price"
+  // and "free" are different answers, and the runtime treats an absent cost
+  // as unknown.
+  if (pricing) {
+    model.cost = buildCost({
+      input: round6(pricing.input ?? 0),
+      output: round6(pricing.output ?? 0),
+      cacheRead: round6(pricing.cache_read ?? 0),
+      cacheWrite: round6(pricing.cache_write ?? 0),
+      tiers,
+    });
+  }
+  return model;
+}
+
+function mapOpenRouter(section, entry) {
+  const id = entry.id;
+  const ctx = entry.context_length ?? 0;
+  const pricing = entry.pricing ?? {};
+  const params = entry.supported_parameters ?? [];
+  const modalities = entry.architecture?.input_modalities ?? [];
+  return {
+    id,
+    name: entry.name || id,
+    api: section.api,
+    providerId: section.providerId,
+    baseUrl: section.baseUrl,
+    reasoning: params.includes('reasoning'),
+    input: modalities.includes('image') ? ['text', 'image'] : ['text'],
+    contextWindow: ctx,
+    maxTokens: entry.top_provider?.max_completion_tokens ?? entry.max_completion_tokens ?? ctx,
+    cost: buildCost({
+      input: perMillion(pricing.prompt),
+      output: perMillion(pricing.completion),
+      cacheRead: perMillion(pricing.input_cache_read),
+      cacheWrite: perMillion(pricing.input_cache_write),
+    }),
   };
 }
 
-/** Drop OpenRouter variant rows: ':batch' / ':free' suffixes and '~' aliases. */
-function selectOpenRouter(provider, all) {
-  const allow = provider.include ? new Set(provider.include) : null;
-  return all.filter((m) => {
-    if (provider.prefix && !m.id.startsWith(`${provider.prefix}/`)) return false;
-    const tail = bareId(provider.prefix, m.id);
-    if (tail.startsWith('~') || tail.includes(':')) return false;
-    return !allow || allow.has(tail);
-  });
+async function fetchModelsDev() {
+  const res = await fetch(MODELS_DEV_URL);
+  if (!res.ok) throw new Error(`models.dev returned HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchOpenRouter() {
+  const res = await fetch(OPENROUTER_URL);
+  if (!res.ok) throw new Error(`OpenRouter returned HTTP ${res.status}`);
+  return (await res.json()).data;
+}
+
+async function collectUpstream(section, sources) {
+  const models = new Map();
+  const missing = [];
+  if (section.source === 'modelsdev') {
+    // A shard may read several groups: the CN and the global catalogue of the
+    // same vendor carry the same model line under slightly different ids, and
+    // the union is what a user can actually pick.
+    const groups = toArray(section.group);
+    // Token-plan / coding-plan groups publish no per-token price (the plan is
+    // a subscription), so the pay-as-you-go group of the same vendor supplies
+    // the pricing.
+    const costGroups = toArray(section.costGroup);
+    // Groups consulted only for the ids an explicit selection names but the
+    // primary group does not list (a plan's catalogue is spread over the
+    // vendor's pay-as-you-go groups).
+    const fallbackGroups = toArray(section.fallbackGroup);
+
+    const primary = new Map();
+    for (const groupName of groups) {
+      const group = sources.modelsdev[groupName];
+      if (!group?.models) throw new Error(`models.dev has no "${groupName}" group`);
+      for (const [id, m] of Object.entries(group.models)) {
+        if (!primary.has(id)) primary.set(id, m);
+      }
+    }
+    const fallback = new Map();
+    for (const groupName of fallbackGroups) {
+      const group = sources.modelsdev[groupName];
+      if (!group?.models) throw new Error(`models.dev has no "${groupName}" group`);
+      for (const [id, m] of Object.entries(group.models)) {
+        if (!fallback.has(id)) fallback.set(id, m);
+      }
+    }
+
+    const pick = (id) => primary.get(id) ?? fallback.get(id);
+
+    const select = (id, m) => {
+      let pricing = hasPrice(m.cost) ? m.cost : undefined;
+      if (!pricing) {
+        for (const groupName of [...costGroups, ...fallbackGroups]) {
+          const candidate = sources.modelsdev[groupName]?.models?.[id];
+          if (hasPrice(candidate?.cost)) {
+            pricing = candidate.cost;
+            break;
+          }
+        }
+      }
+      models.set(id, mapModelsDev(section, id, m, pricing));
+    };
+
+    if (section.include) {
+      // An explicit selection: every pinned id must resolve, and ids the
+      // upstream dropped are reported rather than silently kept.
+      for (const id of section.include) {
+        const m = pick(id);
+        if (!m) {
+          missing.push(id);
+          continue;
+        }
+        select(id, m);
+      }
+    } else {
+      for (const [id, m] of primary) {
+        if (m.tool_call !== true) continue;
+        if (!matchesFilters(id, section)) continue;
+        select(id, m);
+      }
+    }
+  } else {
+    for (const entry of sources.openrouter) {
+      const id = entry.id;
+      if (id.includes(':') || id.includes('~')) continue;
+      if (!matchesFilters(id, section)) continue;
+      models.set(id, mapOpenRouter(section, entry));
+    }
+  }
+  return { models, missing };
 }
 
 /**
- * Extract governance-critical fields (`compat`, `thinkingLevelMap`) from a
- * checked-in model block so a sync refresh can re-emit them verbatim. This is
- * what prevents `--write`/`--merge` from silently stripping thinking config
- * (the root cause of "every new model needs its compat re-added by hand").
+ * Pull one field (a `key: { ... }` object) out of a checked-in model block,
+ * verbatim — including its trailing comma. Hand-tuned governance fields must
+ * survive a refresh byte for byte.
  */
-function extractExtras(block) {
-  const extras = [];
-  for (const key of ['compat', 'thinkingLevelMap']) {
-    const startMatch = block.match(new RegExp(`\\n    ${key}: `));
-    if (!startMatch) continue;
-    let depth = 0;
-    let started = false;
-    let end = -1;
-    for (let i = startMatch.index + 1; i < block.length; i++) {
-      const c = block[i];
-      if (c === '{') {
-        depth++;
-        started = true;
-      } else if (c === '}') {
-        depth--;
-        if (started && depth === 0) {
-          const comma = block.indexOf(',', i);
-          end = comma === -1 ? i : comma;
-          break;
-        }
+function extractField(block, key) {
+  const startMatch = block.match(new RegExp(`\\n    ${key}: `));
+  if (!startMatch) return undefined;
+  let depth = 0;
+  let started = false;
+  let end = -1;
+  for (let i = startMatch.index + 1; i < block.length; i++) {
+    const c = block[i];
+    if (c === '{') {
+      depth++;
+      started = true;
+    } else if (c === '}') {
+      depth--;
+      if (started && depth === 0) {
+        const comma = block.indexOf(',', i);
+        end = comma === -1 ? i : comma;
+        break;
       }
     }
-    if (end !== -1) extras.push(block.slice(startMatch.index + 1, end + 1));
   }
-  return extras;
+  if (end === -1) return undefined;
+  return block.slice(startMatch.index + 1, end + 1).trim();
 }
 
-function modelBlock(m, extras = []) {
+function modelBlock(m, { thinking, compat }) {
   const lines = [
     '  {',
     `    id: '${m.id}',`,
@@ -240,148 +836,171 @@ function modelBlock(m, extras = []) {
     `    providerId: '${m.providerId}',`,
     `    baseUrl: '${m.baseUrl}',`,
     `    reasoning: ${m.reasoning},`,
-    `    input: [${m.input.map((i) => `'${i}'`).join(', ')}],`,
-    `    contextWindow: ${m.contextWindow},`,
-    `    maxTokens: ${m.maxTokens},`,
-    '    cost: {',
-    `      input: ${m.cost.input},`,
-    `      output: ${m.cost.output},`,
-    `      cacheRead: ${m.cost.cacheRead},`,
-    `      cacheWrite: ${m.cost.cacheWrite},`,
-    '    },',
   ];
-  // Governance extras (compat / thinkingLevelMap) go before the closing brace.
-  lines.push(...extras.map((e) => e.replace(/\n$/, '')));
+  if (thinking) lines.push(`    ${thinking}`);
+  if (compat) lines.push(`    ${compat}`);
+  lines.push(`    input: [${m.input.map((i) => `'${i}'`).join(', ')}],`);
+  lines.push(`    contextWindow: ${m.contextWindow},`);
+  lines.push(`    maxTokens: ${m.maxTokens},`);
+  if (m.cost) {
+    lines.push('    cost: {');
+    lines.push(`      input: ${m.cost.input},`);
+    lines.push(`      output: ${m.cost.output},`);
+    lines.push(`      cacheRead: ${m.cost.cacheRead},`);
+    lines.push(`      cacheWrite: ${m.cost.cacheWrite},`);
+    if (m.cost.tiers) {
+      lines.push('      tiers: [');
+      for (const tier of m.cost.tiers) {
+        lines.push(
+          `        { inputTokensAbove: ${tier.inputTokensAbove}, input: ${tier.input}, output: ${tier.output}, cacheRead: ${tier.cacheRead}, cacheWrite: ${tier.cacheWrite} },`,
+        );
+      }
+      lines.push('      ],');
+    }
+    lines.push('    },');
+  }
   lines.push('  },');
   return lines.join('\n');
 }
 
-function renderShard(slug, api, blocks) {
-  return (
-    `${SHARD_HEADER}import type { Model } from '../types.js';\n\n` +
-    `export const ${slug}Models: Model<'${api}'>[] = [\n${blocks.join('\n')}\n];\n`
-  );
-}
-
-function shardPath(slug) {
-  return join(providersDir, `${slug}.models.ts`);
-}
-
-/** Parse a checked-in shard into its line ending + id -> raw model block text. */
-function readShard(slug) {
+/** Read a checked-in shard: its line ending and, per exported array, its blocks. */
+function readShard(file) {
   try {
-    const src = readFileSync(shardPath(slug), 'utf8');
+    const src = readFileSync(join(providersDir, file), 'utf8');
     const eol = src.includes('\r\n') ? '\r\n' : '\n';
-    const blocks = new Map();
-    for (const match of src.matchAll(/\r?\n(  \{\r?\n[\s\S]*?\r?\n  \},)/g)) {
-      const id = match[1].match(/id: '([^']+)'/)?.[1];
-      if (id) blocks.set(id, match[1].replace(/\r\n/g, '\n'));
+    const sections = new Map();
+    const re = /export const (\w+): Model<'[^']+'>\[\] = \[/g;
+    let match;
+    while ((match = re.exec(src)) !== null) {
+      const start = match.index + match[0].length;
+      const end = src.indexOf('];', start);
+      const body = src.slice(start, end === -1 ? src.length : end);
+      const blocks = new Map();
+      for (const blockMatch of body.matchAll(/\r?\n(  \{\r?\n[\s\S]*?\r?\n  \},)/g)) {
+        const id = blockMatch[1].match(/id: '([^']+)'/)?.[1];
+        if (id) blocks.set(id, blockMatch[1].replace(/\r\n/g, '\n'));
+      }
+      sections.set(match[1], blocks);
     }
-    return { eol, blocks };
+    return { eol, sections };
   } catch {
-    return { eol: '\n', blocks: new Map() };
+    return { eol: '\n', sections: new Map() };
   }
 }
 
-function fmtModel(m) {
-  const flags = [m.reasoning ? 'reason' : 'plain', m.input.join('+')].join('/');
-  return `${m.id.padEnd(34)} ctx=${String(m.contextWindow).padEnd(8)} out=${String(m.maxTokens).padEnd(
-    7,
-  )} ${flags.padEnd(16)} $${m.cost.input}/$${m.cost.output}`;
+function renderShard(shard, rendered) {
+  const parts = [shard.header, `import type { Model } from '../types.js';\n`];
+  for (const { section, blocks } of rendered) {
+    parts.push(
+      `\nexport const ${section.exportName}: Model<'${section.api}'>[] = [\n${blocks.join('\n')}\n];\n`,
+    );
+  }
+  return parts.join('');
 }
 
-async function buildCatalog() {
-  const slugs = Object.keys(PROVIDERS)
-    .filter((slug) => only.size === 0 || only.has(slug))
-    .sort();
-  const catalog = {};
-
-  if (SOURCE === 'modelsdev') {
-    const res = await fetch(MODELS_DEV_URL);
-    if (!res.ok) throw new Error(`models.dev returned HTTP ${res.status}`);
-    const data = await res.json();
-    for (const slug of slugs) {
-      const provider = PROVIDERS[slug];
-      const group = data[MODELS_DEV_SLUG[slug]];
-      if (!group?.models) continue;
-      const allow = provider.include ? new Set(provider.include) : null;
-      catalog[slug] = Object.entries(group.models)
-        .filter(([id, m]) => m.tool_call === true && (!allow || allow.has(id)))
-        .map(([id, m]) => mapModelsDev(slug, provider, id, m))
-        .sort((a, b) => a.id.localeCompare(b.id));
-    }
-    return catalog;
+function fieldChanges(before, after) {
+  const changes = [];
+  const pick = (block, key) => block.match(new RegExp(`\\n    ${key}: ([^\\n]+),`))?.[1];
+  for (const key of ['contextWindow', 'maxTokens', 'reasoning']) {
+    const a = pick(before, key);
+    const b = pick(after, key);
+    if (a !== undefined && b !== undefined && a !== b) changes.push(`${key} ${a}→${b}`);
   }
-
-  const res = await fetch(OPENROUTER_URL);
-  if (!res.ok) throw new Error(`OpenRouter returned HTTP ${res.status}`);
-  const data = (await res.json()).data;
-  for (const slug of slugs) {
-    const provider = PROVIDERS[slug];
-    catalog[slug] = selectOpenRouter(provider, data)
-      .map((m) => mapOpenRouter(slug, provider, m))
-      .sort((a, b) => a.id.localeCompare(b.id));
+  const costBefore = before.match(/cost: \{([\s\S]*?)\n    \}/)?.[1];
+  const costAfter = after.match(/cost: \{([\s\S]*?)\n    \}/)?.[1];
+  if (costBefore !== undefined && costAfter !== undefined && costBefore !== costAfter) {
+    changes.push('cost');
   }
-  return catalog;
+  return changes;
 }
 
 async function main() {
-  const catalog = await buildCatalog();
-
-  if (AS_JSON) {
-    console.log(JSON.stringify(catalog, null, 2));
-    return;
+  const shards = SHARDS.filter((s) => only.size === 0 || only.has(s.key));
+  if (shards.length === 0) {
+    throw new Error(`no shard matched --only=${[...only].join(',')}`);
   }
 
-  let changes = 0;
-  for (const slug of Object.keys(catalog).sort()) {
-    const provider = PROVIDERS[slug];
-    const models = catalog[slug];
-    const { eol, blocks: checkedIn } = readShard(slug);
-    const upstreamIds = new Set(models.map((m) => m.id));
-    const added = models.filter((m) => !checkedIn.has(m.id)).map((m) => m.id);
-    const removed = [...checkedIn.keys()].filter((id) => !upstreamIds.has(id));
+  const needsModelsDev = shards.some((s) =>
+    s.sections.some((section) => section.source === 'modelsdev'),
+  );
+  const needsOpenRouter = shards.some((s) =>
+    s.sections.some((section) => section.source === 'openrouter'),
+  );
 
-    console.log(`\n== ${slug}  (${models.length} models from ${SOURCE})`);
-    for (const m of models) {
-      const mark = checkedIn.size === 0 || checkedIn.has(m.id) ? ' ' : '+';
-      console.log(` ${mark} ${fmtModel(m)}`);
-    }
-    if (MODE !== 'report' && (added.length || removed.length)) {
-      console.log(`   delta: +${added.length}${added.length ? ` [${added.join(', ')}]` : ''}`);
-      console.log(`          -${removed.length}${removed.length ? ` [${removed.join(', ')}]` : ''}`);
+  const sources = {
+    modelsdev: needsModelsDev ? await fetchModelsDev() : {},
+    openrouter: needsOpenRouter ? await fetchOpenRouter() : [],
+  };
+
+  let changeCount = 0;
+
+  for (const shard of shards) {
+    const { eol, sections: checkedIn } = readShard(shard.file);
+    const rendered = [];
+
+    for (const section of shard.sections) {
+      const { models: upstream, missing } = await collectUpstream(section, sources);
+      const existing = checkedIn.get(section.exportName) ?? new Map();
+      const upstreamIds = new Set(upstream.keys());
+      const added = [...upstream.keys()].filter((id) => !existing.has(id));
+      const removed = [...existing.keys()].filter((id) => !upstreamIds.has(id));
+
+      console.log(
+        `\n== ${shard.key}/${section.exportName}  (${upstream.size} upstream, ${existing.size} checked in)`,
+      );
+      if (added.length) console.log(`   +${added.length}: ${added.join(', ')}`);
+      if (removed.length) console.log(`   -${removed.length}: ${removed.join(', ')}`);
+      if (missing.length) {
+        console.log(`   ! pinned but not upstream: ${missing.join(', ')}`);
+      }
+
+      const blocks = [];
+      const ids = [...upstream.keys()].sort(compareIds);
+      for (const id of ids) {
+        const model = upstream.get(id);
+        const previous = existing.get(id);
+        const thinking = previous ? extractField(previous, 'thinkingLevelMap') : section.thinking;
+        const compat = previous
+          ? extractField(previous, 'compat')
+          : typeof section.compat === 'function'
+            ? section.compat(id)
+            : section.compat;
+        const block = modelBlock(model, { thinking, compat });
+        if (MODE === 'diff' && previous) {
+          const changes = fieldChanges(previous, block);
+          if (changes.length) console.log(`   ~ ${id}: ${changes.join(', ')}`);
+        }
+        blocks.push(block);
+      }
+
+      if (MODE === 'write' || MODE === 'merge') {
+        const sectionMode = section.mode ?? MODE;
+        if (sectionMode === 'merge') {
+          for (const [id, block] of existing) {
+            if (!upstreamIds.has(id)) blocks.push(block);
+          }
+          blocks.sort((a, b) => {
+            const idOf = (block) => block.match(/id: '([^']+)'/)?.[1] ?? '';
+            return compareIds(idOf(a), idOf(b));
+          });
+        }
+      }
+
+      changeCount += added.length + removed.length;
+      rendered.push({ section, blocks });
     }
 
-    if (MODE === 'report' || MODE === 'diff') {
-      changes += added.length + removed.length;
-      continue;
+    if (MODE === 'write' || MODE === 'merge') {
+      const text = renderShard(shard, rendered);
+      writeFileSync(
+        join(providersDir, shard.file),
+        eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text,
+      );
+      console.log(`   wrote src/providers/${shard.file}`);
     }
-    if (provider.write === false) {
-      console.log(`   (${slug} is hand-curated — not written)`);
-      continue;
-    }
-
-    let blocks;
-    // Per-model extras preserved verbatim; provider-level defaults fill in
-    // for new/unknown ids so thinking config never regresses on sync.
-    const extrasFor = (m) => {
-      const preserved = checkedIn.has(m.id) ? extractExtras(checkedIn.get(m.id)) : [];
-      if (preserved.length) return preserved;
-      return provider.compat ? [provider.compat] : [];
-    };
-    if (MODE === 'merge') {
-      const merged = new Map(models.map((m) => [m.id, modelBlock(m, extrasFor(m))]));
-      for (const [id, block] of checkedIn) if (!merged.has(id)) merged.set(id, block);
-      blocks = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([, b]) => b);
-    } else {
-      blocks = models.map((m) => modelBlock(m, extrasFor(m)));
-    }
-    writeFileSync(shardPath(slug), eol === '\r\n' ? renderShard(slug, provider.api, blocks).replace(/\n/g, '\r\n') : renderShard(slug, provider.api, blocks));
-    console.log(`   wrote src/providers/${slug}.models.ts (${blocks.length} models)`);
-    changes += added.length + removed.length;
   }
 
-  if (MODE !== 'report') console.log(`\n${changes} id-level change(s) detected.`);
+  if (MODE !== 'report') console.log(`\n${changeCount} id-level change(s) detected.`);
 }
 
 main().catch((err) => {

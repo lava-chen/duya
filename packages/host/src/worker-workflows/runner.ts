@@ -29,7 +29,7 @@
  * and only re-executes new or changed nodes.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 
 import {
@@ -49,6 +49,9 @@ import { BudgetLedger, type HostAgentSpec, type HostCallResult, type WorkflowHos
 import { openRunLog, type RunLog } from './run-log.js';
 import type { SavedWorkflowArgDeclaration } from './dwf/contracts.js';
 import { workflowRunDb } from '../worker-db-client.js';
+import { computeDefinitionHash } from '@duya/workflow';
+
+const sha256 = { sha256: (value: string): string => createHash('sha256').update(value).digest('hex') };
 
 // ─── deps supplied by the worker composition root ───
 
@@ -79,6 +82,8 @@ export interface WorkflowRunCreateRequest {
 export interface WorkflowDefinitionSnapshot {
   runId: string;
   definition: unknown;
+  definitionHash?: string;
+  definitionHashSource?: 'dag' | 'dwf-script';
   nodeStack?: Array<{ nodeId: string; status: string; output?: unknown }>;
 }
 
@@ -182,6 +187,16 @@ export interface WorkflowRunnerDeps {
   execution: {
     createPorts: (workingDirectory: string) => WorkflowExecutionPorts;
   };
+}
+
+function isJournalRecordShape(value: unknown): value is JournalRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<JournalRecord>;
+  return Number.isSafeInteger(record.seq) && typeof record.kind === 'string' &&
+    typeof record.nodeId === 'string' && Number.isSafeInteger(record.attempt) &&
+    typeof record.atMs === 'number' && Number.isFinite(record.atMs) &&
+    ['node_result', 'decision', 'approval', 'artifact', 'phase'].includes(record.kind) &&
+    ['pending', 'running', 'succeeded', 'failed', 'skipped', 'waiting'].includes(String(record.status));
 }
 
 /** Per-tool identity supplied by the workflow host to preserve tool state isolation. */
@@ -303,6 +318,8 @@ export function legacyTransport(deps: WorkflowRunnerDeps): WorkflowRunnerTranspo
       await workflowRunDb.saveSnapshot({
         runId: snapshot.runId,
         definition: snapshot.definition,
+        ...(snapshot.definitionHash !== undefined ? { definitionHash: snapshot.definitionHash } : {}),
+        ...(snapshot.definitionHashSource !== undefined ? { definitionHashSource: snapshot.definitionHashSource } : {}),
         nodeStack: snapshot.nodeStack ?? [],
         // The journal is not part of the blob any more (plan 560 migration 31).
         journal: [],
@@ -604,6 +621,30 @@ export async function launchSavedWorkflow(
     return;
   }
 
+  // DWF recovery binds the full executable source: TypeScript body plus
+  // normalized frontmatter. Args are run inputs and remain outside this hash.
+  const definitionHash = computeDefinitionHash(
+    { name: resolved.name, script: resolved.script, frontmatter: resolved.meta },
+    sha256,
+  );
+  let resumeSeed: JournalRecord[] | undefined;
+  if (req.resumeFromRunId) {
+    try {
+      const prior = await workflowRunDb.loadSnapshot(req.resumeFromRunId);
+      if (!prior || prior.definitionHashSource !== 'dwf-script' || prior.definitionHash !== definitionHash) {
+        await failFrame('resume refused: DWF script definition hash is missing or does not match');
+        return;
+      }
+      const raw = await workflowRunDb.loadJournal(req.resumeFromRunId);
+      if (!Array.isArray(raw)) throw new Error('prior workflow journal is unavailable');
+      if (raw.some((record) => !isJournalRecordShape(record))) throw new Error('prior workflow journal contains invalid records');
+      resumeSeed = raw as JournalRecord[];
+    } catch (err) {
+      await failFrame(`resume refused: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+  }
+
   // 3. Run row + snapshot seed. On the run-anchored path main created the row
   //    (and will store the definition from the `ready` frame), so both calls
   //    are no-ops there.
@@ -628,6 +669,8 @@ export async function launchSavedWorkflow(
         description: resolved.meta.description,
         args: resolved.meta.args ?? {},
       },
+      definitionHash,
+      definitionHashSource: 'dwf-script',
       nodeStack: [],
     });
   } catch (err) {
@@ -640,29 +683,8 @@ export async function launchSavedWorkflow(
   //    (plan 565 Phase A) loads the prior run's journal first and seeds the
   //    sink's read side so the constructor rebuilds the replay cache — the
   //    prior run's records are cache keys only, never re-persisted here.
-  let resumeSeed: JournalRecord[] | undefined;
   if (req.resumeFromRunId) {
-    try {
-      const raw = await workflowRunDb.loadJournal(req.resumeFromRunId);
-      // Shape guard: only well-formed records with a numeric seq may seed the
-      // cache — a corrupt or foreign payload degrades to a cold start, never
-      // to a crash or a poisoned cache.
-      resumeSeed = (Array.isArray(raw) ? raw : []).filter(
-        (r): r is JournalRecord =>
-          !!r && typeof r === 'object' && typeof (r as JournalRecord).seq === 'number',
-      );
-      runLog.line(
-        'info',
-        `resume from ${req.resumeFromRunId}: ${resumeSeed.length} seeded journal records`,
-      );
-    } catch (err) {
-      // Seeding is best-effort: a missing/unreadable predecessor means the
-      // run simply pays full price, which is exactly a fresh launch.
-      runLog.line(
-        'warn',
-        `resume seed unavailable (${err instanceof Error ? err.message : String(err)}) — starting cold`,
-      );
-    }
+    runLog.line('info', `resume from ${req.resumeFromRunId}: ${resumeSeed?.length ?? 0} seeded journal records`);
   }
   const journal = new Journal(new TransportJournalSink(transport, req.runId, resumeSeed));
 

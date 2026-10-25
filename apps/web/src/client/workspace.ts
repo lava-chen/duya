@@ -530,23 +530,12 @@ export class Workspace {
   }
 
   async #readFullHistory(sessionId: string, lease: SelectionLeaseLike): Promise<MessagePageResult> {
-    const messages: DurableMessageRow[] = [];
-    const compactions: MessagePageResult['compactions'][number][] = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | undefined;
-    for (;;) {
-      const page = await this.#api.readMessages(sessionId, {
-        signal: lease.signal,
-        ...(cursor === undefined ? {} : { cursor }),
-      });
-      if (!lease.isCurrent()) return { messages, compactions, nextCursor: null };
-      messages.push(...page.messages);
-      compactions.push(...page.compactions);
-      if (page.nextCursor === null) return { messages, compactions, nextCursor: null };
-      if (seenCursors.has(page.nextCursor)) throw new Error('message_history_cursor_repeated');
-      seenCursors.add(page.nextCursor);
-      cursor = page.nextCursor;
-    }
+    // The whole history in ONE read. The paged read re-projects the entire
+    // transcript on every page, so paging to the end of a 10k-message session
+    // costs 100 projections of 10k rows; the whole read projects it once.
+    const page = await this.#api.readAllMessages(sessionId, { signal: lease.signal });
+    if (!lease.isCurrent()) return { messages: [], compactions: [], nextCursor: null };
+    return page;
   }
 }
 

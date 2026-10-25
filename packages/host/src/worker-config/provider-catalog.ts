@@ -24,6 +24,13 @@
  * `options.model_context` when the user has spelled the window out (the
  * OpenRouter provider carries hundreds of entries that way).
  *
+ * It also does not name the models the user has NOT written down, and a picker
+ * built from `enabled_models` alone can therefore only ever offer the two or
+ * three rows someone typed into a file. Each provider's vendor presets — the
+ * curated `defaultModels` of the built-in catalog, which is exactly what the
+ * Desktop's provider editor offers when adding a provider — travel as a
+ * separate list (`presetModels`) so a client can show them as what they are.
+ *
  * READ-ONLY, like every other reader in this directory: `config.toml` is
  * hand-edited and a bad write there wipes every provider. The one writer in
  * the Host is `../config-agents`, and it edits the `[agents]` namespace only
@@ -33,7 +40,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parse } from '@iarna/toml';
-import { allProviderModels, getSupportedThinkingLevels, type Model } from '@duya/ai';
+import {
+  allProviderModels,
+  BUILTIN_CATALOG,
+  getSupportedThinkingLevels,
+  type Model,
+  type ProviderCatalogEntry,
+} from '@duya/ai';
 import type {
   HostProviderCatalog,
   HostProviderCatalogModel,
@@ -143,6 +156,49 @@ function toCatalogModel(
 }
 
 /**
+ * The built-in preset entry a configured provider's vendor corresponds to.
+ *
+ * A `config.toml` provider id and a catalog entry id are the same string for
+ * every provider the Desktop wrote (`minimax-cn`, `glm-cn`, `openrouter`,
+ * `lm-studio`), and differ only where the catalog splits one vendor across
+ * endpoints (`anthropic` vs `anthropic-official`, `qwen` vs `qwen-openai`). So:
+ * exact id first, then the FIRST entry whose id extends it. Taking the first
+ * rather than every match is deliberate — `glm` resolves to `glm-cn` — because
+ * the presets are a suggestion list, and a wrong suggestion is a row the user
+ * can see and reject, while a merge of two regions' lists is a row that looks
+ * right and bills differently.
+ */
+function findPresetEntry(providerId: string): ProviderCatalogEntry | undefined {
+  const entries = BUILTIN_CATALOG.list().filter((entry) => entry.category !== 'media');
+  const prefix = `${providerId}-`;
+  return entries.find((entry) => entry.id === providerId)
+    ?? entries.find((entry) => entry.id.startsWith(prefix));
+}
+
+/**
+ * The preset models of a provider: what its vendor is known for, minus what
+ * the configuration already lists.
+ *
+ * Empty when the vendor has no catalog entry — a custom `baseUrl` provider is
+ * not the same thing as `openrouter`, and inventing a preset list for it would
+ * put models on screen that its endpoint does not serve.
+ */
+function presetModelsFor(
+  provider: ConfiguredProvider,
+  configured: readonly string[],
+): HostProviderCatalogModel[] {
+  const entry = findPresetEntry(provider.id);
+  if (entry === undefined) return [];
+  const ids: string[] = [];
+  for (const model of entry.defaultModels) {
+    const modelId = model.modelId.trim();
+    if (modelId === '' || configured.includes(modelId) || ids.includes(modelId)) continue;
+    ids.push(modelId);
+  }
+  return ids.map((modelId) => toCatalogModel(provider, modelId));
+}
+
+/**
  * Read the whole catalog.
  *
  * Never throws: a missing or malformed configuration comes back as an empty
@@ -190,6 +246,7 @@ export function readProviderCatalog(configRootOverride?: string): HostProviderCa
     if (provider.defaultModel !== undefined && !modelIds.includes(provider.defaultModel)) {
       modelIds.unshift(provider.defaultModel);
     }
+    const presetModels = presetModelsFor(provider, modelIds);
     return {
       providerId: provider.id,
       name: provider.name,
@@ -198,6 +255,7 @@ export function readProviderCatalog(configRootOverride?: string): HostProviderCa
       hasApiKey: hasApiKey(secrets, provider.id),
       ...(provider.defaultModel !== undefined ? { defaultModel: provider.defaultModel } : {}),
       models: modelIds.map((modelId) => toCatalogModel(provider, modelId)),
+      ...(presetModels.length === 0 ? {} : { presetModels }),
     };
   });
 

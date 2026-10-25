@@ -184,12 +184,51 @@ Plugin UI Apps are declared under `extensions["com.duya.client"].apps` and
 normalized to optional `PluginManifest.apps`. The shared, browser-safe schema
 is exported from `@duya/plugin-core/apps/declarations`; Desktop's existing
 manifest reader validates canonical package containment and regular entry
-files. App IDs, requested capabilities and state schema versions remain
-metadata, not grants or live instance state. The installed-plugin view projects
-only these App declarations, without exposing the rest of a manifest's MCP
-configuration. Codex's root `apps` connector-file reference is unchanged.
-Launch must recheck entry containment; instance persistence and iframe launch
-are subsequent slices. See `610-architecture-series/22-wave3-dispatch.md`.
+files when the legacy `entry` is present. An App may keep that static entry,
+declare resource-backed `ui.surfaces`, or carry both. Each surface declares
+English and Chinese titles, an icon identifier, an `ui://` resource URI, and
+the name of an MCP server discovered from that same plugin; surface IDs are
+unique within the plugin. App IDs, requested capabilities and state schema
+versions remain metadata, not grants or live instance state. The installed-
+plugin view projects only these App declarations, without exposing the rest
+of a manifest's MCP configuration.
+The Main process also exposes a read-only UI surface directory projected from
+installed Plugin Apps. It returns enabled plugins' surfaces, omits every
+surface id claimed more than once across installed plugins, and reports those
+conflicts for diagnosis. Plugin install, enable, disable, remove, and setup
+changes reuse the existing `plugin-app:changed` notification so directory
+consumers can refetch; this directory is metadata and does not own tab state.
+The desktop Apps view opens each surface through the existing panel tab
+registry, keyed by plugin and surface identity. It mounts the iframe only while
+its panel card is open and visible, and closes session-only surfaces when no
+chat is active. The original static-entry launcher remains available for
+compatibility.
+Surface content is read through the declared plugin MCP server's existing
+client and must be one `text/html` text resource at the exact declared
+`ui://` URI, no larger than 8 MiB. The Main process rechecks server ownership
+and content shape, then serves that HTML as a single document at the existing
+tokenized loopback origin. Its mount cannot expose package files; the iframe
+keeps its opaque origin and launch nonce, and the document CSP blocks network
+connections. When a session worker is unavailable, the host connects the same
+MCP client implementation to only the declared server for the read. No MCP
+Apps widget protocol, tab state, or persistent panel DOM is introduced; the
+legacy static `entry` path remains supported. Codex's root `apps`
+connector-file reference is unchanged. See
+`610-architecture-series/22-wave3-dispatch.md`.
+
+The existing guest-to-host `bind` / `invoke` / `revoke` messages remain in
+place. A resource page may send `ready` with its launch document token after
+loading; the renderer accepts it only from the current opaque-origin iframe.
+While a session surface is mounted, the renderer watches that session's
+successful tool results for completed `duya_ui_select`,
+`duya_ui_highlight`, and `duya_ui_refresh` calls from the surface's exact
+plugin-scoped MCP server. Waiting for the result lets it use final arguments
+when the stream first reported a partial tool call. Each event must name the
+current surface, and select/highlight payloads are JSON-cloned and limited to
+8 KiB. The host sends the event only to the launched frame with its document
+token. Static entry pages need not implement this host-event handshake. This
+small event seam does not add MCP Apps widgets, tools, or subscriptions to the
+protocol.
 
 `@duya/host/plugin-app-bridge` provides the T31a validation kernel around a
 Host-created source/origin/nonce and session/run binding. It accepts only
@@ -1020,6 +1059,9 @@ The plan 587/610 cutover moved execution out of `@duya/agent`. Current ownership
   contracts. Zero IO.
 - `@duya/agent-runtime` - `RunEngineImpl`, the single run execution engine, plus
   run identity, event ordering, and the model/tool/context port contracts.
+- `@duya/workflow` - dynamic YAML/DAG workflow engine: schema, expression
+  validation, journal replay, and scheduling. Host injects persistence,
+  progress, worker execution, clocks, hashes, and token crypto.
 - `@duya/host` - the product worker: `WorkerSession` (the agent class), the
   concrete tool registry, compaction coordination, hooks, modes, and
   `driveRunWithEngine`.
@@ -1621,7 +1663,7 @@ Canvas UI, persistence, and agent tools are provided by the Marketplace plugin i
 
 ## Package Workspace
 
-25 workspace packages. The layering below is not advisory — it is enforced by
+26 workspace packages. The layering below is not advisory — it is enforced by
 `architecture-policy.yaml` and checked by `npm run architecture:check`.
 
 ```
@@ -1629,6 +1671,7 @@ packages/
 ├── agent-protocol/       @duya/agent-protocol - Transport-neutral wire contract (zero runtime deps)
 ├── agent-core/           @duya/agent-core - Pure run reasoning: terminal state, budget, durability (zero IO)
 ├── agent-runtime/        @duya/agent-runtime - Run execution engine: run identity, sequence, RunEvent stream
+├── workflow/             @duya/workflow - Pure YAML/DAG workflow engine and scheduler; Host injects effects
 ├── host/                 @duya/host - Electron-independent Host services, worker session, tool registry, RunOrchestrator
 ├── ai/                   @duya/ai - Multi-protocol LLM adapter
 ├── capabilities/         @duya/capabilities - Tool implementations: FS tool stack, tool contracts, path policy
@@ -1663,10 +1706,10 @@ module its root, `managed` flag, and its `requires:` list.
 | --- | --- | --- |
 | `protocol` | `agent-protocol` | Zero runtime dependencies. Everything speaks it. |
 | `core` | `agent-core`, `ai` | `agent-core` performs no IO. `ai` is core by declaration — its IO is inventoried as a carve-out, not smuggled. |
-| `runtime` | `agent-runtime` | Provider-independent run execution. |
+| `runtime` | `agent-runtime`, `workflow` | Provider-independent turn execution and pure product workflow orchestration. |
 | `host` | `desktop`, `cli`, `gateway` | Composition layer. |
 
-`agent-protocol`, `agent-core`, and `agent-runtime` are `managed: true`
+`agent-protocol`, `agent-core`, `agent-runtime`, and `workflow` are `managed: true`
 boundaries — zero tolerance, never baselined. `requires:` lists are *declared*
 edges: counted and visible, never blocking on their own. A dependency edge that
 is not declared is what the gate blocks on.

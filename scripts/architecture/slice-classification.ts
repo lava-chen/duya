@@ -270,6 +270,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'The run execution engine: transports, event emission, replay cursors, backpressure, control channels. Async coordination with no host dependency.',
   },
   {
+    prefix: 'packages/workflow/src',
+    category: 'runtime-coordination',
+    why: 'The dynamic workflow scheduler and recovery engine. It coordinates DAG nodes through injected ports without owning host IO.',
+  },
+  {
     prefix: 'packages/host/src',
     category: 'runtime-coordination',
     why: 'THE Host, Electron-agnostic: manifest freeze, the run orchestrator, worker lifecycle, the tool registry, the run control plane and the HTTP surface. It hosts the runtime and relays events, which is the job `apps/desktop/src/main/agents` did before the extraction, and the `skills`, `managed-shell`, `connector-services` and `authorization` directories inside it carry their own narrower rules above.',
@@ -604,6 +609,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Host utilities.',
   },
   {
+    prefix: 'apps/desktop/src/main/sessions',
+    category: 'host-ui',
+    why: 'The session handoff the Desktop answers for the Host: bring the window forward and tell the renderer which session to open. It is host transport with no domain decisions of its own, the same job `apps/desktop/src/main/ipc` does.',
+  },
+  {
     prefix: 'packages/agent/src/cli',
     category: 'host-ui',
     why: 'The agent CLI surface: pure command descriptors mixed with the runner that builds an agent. M5.2 splits them; the whole directory is host-facing today.',
@@ -680,6 +690,10 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
   {
     prefix: 'packages/agent-runtime/test',
     why: 'Runtime tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/workflow/tests',
+    why: 'Workflow package tests and graph fixtures. They verify runtime behavior but are not runtime implementation code.',
   },
   {
     prefix: 'packages/ai/test',

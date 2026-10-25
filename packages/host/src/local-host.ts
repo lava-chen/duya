@@ -66,6 +66,8 @@ import { createHostLocalProviderModelCapabilityApi } from './local-provider-mode
 import { createHostLocalProviderCatalogApi } from './local-provider-catalog-api.js';
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
+import { createHostLocalPluginInventoryApi } from './local-plugin-inventory-api.js';
+import { createHostLocalAgentsMdApi } from './local-agents-md-api.js';
 import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
 import { createHostPluginAppInvocationApi, type HostPluginAppInvocationAuthority } from './local-plugin-app-invocation-api.js';
 import { createHostPluginAppGrantApi } from './local-plugin-app-grant-api.js';
@@ -77,6 +79,9 @@ import { createHostLocalImportBatchApi } from './local-import-batch-api.js';
 import { createHostLocalTurnReviewApi } from './local-turn-review-api.js';
 import { createHostLocalMailboxApi } from './local-mailbox-api.js';
 import { createHostLocalPendingWakeApi } from './local-pending-wakes-api.js';
+import { createHostMcpInventoryApi } from './mcp-inventory-api.js';
+import { createHostSkillInventoryApi } from './skills/skill-inventory-api.js';
+import { readUserMcpToml } from './connector-services/config.js';
 import { createHostWorkflowRunApi } from './workflow-run-api.js';
 import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
@@ -86,6 +91,14 @@ import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
+import {
+  SessionCompactor,
+  SessionSideQuestioner,
+} from './session-compaction.js';
+import type {
+  HostSessionCompactionApiV1,
+  HostSessionSideQuestionApiV1,
+} from '@duya/agent-protocol';
 import { createHostResearchApi } from './research-api.js';
 import { createHostWorkspaceLifecycleApis } from './workspace-lifecycle-api.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
@@ -514,11 +527,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
       ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     });
+    // Hoisted out of the worker block below: the session-level exits are
+    // composed from the same run layer and log through the same sink.
+    const executionLogger: HostRunExecutionLogger =
+      diagnosticsSink === 'file'
+        ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
+        : createStdioDiagnosticsLogger();
     if (options.workerPath !== undefined) {
-      const executionLogger: HostRunExecutionLogger =
-        diagnosticsSink === 'file'
-          ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
-          : createStdioDiagnosticsLogger();
       const sessionService = createHostSessionService({
         sessions: api,
         runs: createHostRunApi(core.stores),
@@ -611,6 +626,44 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       integrations: core.stores.integrations,
     });
 
+    // The session-level exits. They exist only when this Host actually owns
+    // a worker manager: a Host that cannot reach a worker cannot compact a
+    // session or answer a side question, and saying so with a 404 and a named
+    // code is honest where a route that always fails is not.
+    let sessionCompactionApi: HostSessionCompactionApiV1 | undefined;
+    let sideQuestionApi: HostSessionSideQuestionApiV1 | undefined;
+    if (runExecution !== null) {
+      const workerManager = runExecution.supervision.workerManager;
+      const workerPort = {
+        hasWorker: (sessionId: string): boolean => workerManager.hasWorker(sessionId),
+        sendCommand: (sessionId: string, command: Record<string, unknown>): boolean =>
+          workerManager.sendCommand(sessionId, command),
+        onWorkerMessage: (
+          listener: (sessionId: string, message: Record<string, unknown>) => void,
+        ): (() => void) =>
+          workerManager.addMessageListener((sessionId, message) => {
+            listener(sessionId, message);
+          }),
+      };
+      sessionCompactionApi = new SessionCompactor(
+        {
+          ...workerPort,
+          // A session with a live, unsettled run is mid-turn. Compacting it
+          // underneath the running turn would rewrite the history the turn is
+          // still reasoning about.
+          isSessionBusy: (sessionId: string): boolean =>
+            runExecution.currentSessionAttempt(sessionId) !== null,
+        },
+        { logger: executionLogger },
+      );
+      sideQuestionApi = new SessionSideQuestioner(workerPort, { logger: executionLogger });
+    }
+
+    // One settings surface, read by the HTTP route and by the skills
+    // inventory: the inventory needs the per-skill enable overrides, and two
+    // instances of the same store would be two readers of one table.
+    const localSettingsApi = createHostLocalSettingsApi(settings);
+
     server = new HostSessionHttpServer({
       api,
       localSessionApi,
@@ -619,7 +672,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   // reading a file rather than restoring a transcript through it.
   workspaceFileApi: createHostLocalWorkspaceFileApi({ workspaces: workspaceAccess }),
       localAttachmentApi,
-      localSettingsApi: createHostLocalSettingsApi(settings),
+      localSettingsApi,
       localTerminalHistoryApi: createHostLocalTerminalHistoryApi(new TerminalHistoryStore(mainDatabase.db)),
       localGatewayUserMapApi: createHostLocalGatewayUserMapApi(new GatewayUserMapStore(mainDatabase.db)),
       localChannelPersistenceApi: createHostLocalChannelPersistenceApi(new ChannelPersistenceStore(mainDatabase.db)),
@@ -638,6 +691,14 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),
       localPluginSetupApi,
+      // The plugin inventory, projected to the fields a client may see. The
+      // standalone Host reads the same `config.toml` the Desktop does, so
+      // both answer the same list.
+      localPluginInventoryApi: createHostLocalPluginInventoryApi(),
+      // The repository-root AGENTS.md write. The client names a session and
+      // the Host resolves the directory, because a path from a client is a
+      // path an attacker chooses.
+      agentsMdApi: createHostLocalAgentsMdApi(core.stores.sessions),
       pluginAppInstanceApi,
       pluginAppInvocationApi,
       pluginAppGrantApi,
@@ -652,7 +713,44 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       localPendingWakeApi: createHostLocalPendingWakeApi(core.stores.wakes),
       workflowRunApi,
       runApi: createHostRunApi(core.stores),
-      ...(runExecution === undefined || runExecution === null ? {} : { runExecutionApi: runExecution }),
+      ...(runExecution === undefined || runExecution === null
+        ? {}
+        : {
+          runExecutionApi: runExecution,
+          // The index lives on the execution controller because that is the
+          // only object holding the worker message link it is fed from.
+          localBackgroundTaskApi: runExecution.backgroundTasks,
+        }),
+      ...(sessionCompactionApi === undefined ? {} : { sessionCompactionApi }),
+      ...(sideQuestionApi === undefined ? {} : { sideQuestionApi }),
+      // The MCP inventory reads the SAME `config.toml` the rest of this Host
+      // reads, from the Host's own data root — so a Host started against a
+      // custom data root reports the servers THAT root configures, and not
+      // the ones the machine's default root happens to carry.
+      mcpInventoryApi: createHostMcpInventoryApi({
+        listServers: () => readUserMcpToml({ configRoot: dataRoot }),
+      }),
+      // The skills inventory reads the user's skills directory and the
+      // session's project directories, so the SESSION decides which project
+      // the answer is about — never `process.cwd()`, which is wherever the
+      // Host happened to start.
+      skillInventoryApi: createHostSkillInventoryApi({
+        // The same directory the agent's own loader reads
+        // (`getSkillDirectories`), so the list a client sees is the list the
+        // agent would load.
+        userSkillsDir: path.join(os.homedir(), '.duya', 'skills'),
+        // The custom skills directory lives in the Host's own `config.toml`.
+        dataRoot,
+        sessions: {
+          async readWorkingDirectory(sessionId) {
+            const session = await localSessionApi.readLocalSession(sessionId, {
+              includeAllSessions: true,
+            });
+            return session?.workingDirectory ?? null;
+          },
+        },
+        settings: localSettingsApi,
+      }),
       goalApi,
       modeStateApi,
       taskApi,

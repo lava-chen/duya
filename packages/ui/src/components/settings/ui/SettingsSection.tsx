@@ -35,7 +35,7 @@ export function SettingsSection({
                 "text-[1.15rem] font-bold tracking-tight",
                 variant === "danger" && "text-destructive"
               )}
-              style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}
+              style={{ fontFamily: 'var(--font-serif)' }}
             >
               {title}
             </h3>

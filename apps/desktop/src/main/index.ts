@@ -66,6 +66,8 @@ import { applyBuiltinPluginDefaults } from './plugins/builtin-install';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { registerDiagnosticsHandlers } from './ipc/diagnostics-handlers';
+import { registerAgentsMdHandlers } from './ipc/agents-md-handlers';
 import { registerPluginAppHostHandlers } from './plugins/plugin-app-host';
 import { reconcilePluginAppDeclarations } from './services/app-connections/declarative/reconcile';
 import { getAppConnectionService } from './services/app-connections/app-connection-service';
@@ -1103,6 +1105,11 @@ registerBangHandlers();
 // become its own OS window. The main window keeps the layout; this
 // registration only owns the window lifecycle.
 registerPanelWindowHandlers();
+// `/doctor` and `/init`: the desktop side of the two slash commands. The
+// diagnostics report is assembled in this process (the Desktop IS the Host),
+// and `/init` writes the repository-root AGENTS.md for a session.
+registerDiagnosticsHandlers();
+registerAgentsMdHandlers();
 
 // =============================================================================
 // Graceful Shutdown

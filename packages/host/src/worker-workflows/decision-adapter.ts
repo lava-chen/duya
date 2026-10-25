@@ -28,28 +28,13 @@ import {
   DecisionUnavailableError,
 } from '../decisions/index.js';
 import type { DecisionNodeSpec, DecisionQuestionSpec } from './schema.js';
-
-export interface DecisionAnswerOut {
-  kind: 'choice' | 'noul' | 'score';
-  /** Typed value entering the when scope (choice → option, noul/score → number). */
-  value: string | number;
-  p?: number;
-  confidence?: number;
-  /** 'yes' | 'no' | 'uncertain' for noul; 'confident' | 'uncertain' otherwise. */
-  verdict: 'yes' | 'no' | 'confident' | 'uncertain';
-  /** True when the value came from on_low_confidence.default, not the model. */
-  defaulted?: boolean;
-}
-
-export interface DecisionRunOutcome {
-  /** Question id → resolved answer. */
-  answers: Record<string, DecisionAnswerOut>;
-  /** Typed values only — the node output riding the scope. */
-  output: Record<string, string | number>;
-  /** Question ids that landed in the gray band (runner escalates). */
-  lowConfidence: string[];
-  source: 'decision' | 'unavailable';
-}
+import {
+  uncertainOutcomeFor,
+  type DecisionAnswerOut,
+  type DecisionRunOutcome,
+  type WorkflowDecisionPort,
+} from '@duya/workflow';
+export { uncertainOutcomeFor, type DecisionAnswerOut, type DecisionRunOutcome };
 
 function composeChoiceInstructions(q: Extract<DecisionQuestionSpec, { type: 'choice' }>): string {
   const optionLines = Object.entries(q.criteria).map(([option, desc]) => `- ${option}: ${desc}`);
@@ -57,29 +42,7 @@ function composeChoiceInstructions(q: Extract<DecisionQuestionSpec, { type: 'cho
   return parts.join('\n');
 }
 
-/** Everything uncertain — the no-backend path (rule + llm tier absent). */
-export function uncertainOutcomeFor(node: DecisionNodeSpec): DecisionRunOutcome {
-  const answers: Record<string, DecisionAnswerOut> = {};
-  const output: Record<string, string | number> = {};
-  const lowConfidence: string[] = [];
-  const fallbackDefault =
-    node.on_low_confidence && typeof node.on_low_confidence === 'object'
-      ? node.on_low_confidence.default
-      : undefined;
-  for (const id of Object.keys(node.questions)) {
-    const q = node.questions[id];
-    if (!q) continue;
-    if (fallbackDefault !== undefined && typeof fallbackDefault !== 'boolean') {
-      answers[id] = { kind: q.type, value: fallbackDefault as string | number, verdict: 'uncertain', defaulted: true };
-      output[id] = fallbackDefault as string | number;
-    } else {
-      lowConfidence.push(id);
-    }
-  }
-  return { answers, output, lowConfidence, source: 'unavailable' };
-}
-
-export class WorkflowDecisionAdapter {
+export class WorkflowDecisionAdapter implements WorkflowDecisionPort {
   constructor(
     private readonly service: DecisionService,
     private readonly policy: DecisionPolicy = DEFAULT_DECISION_POLICY,
@@ -171,6 +134,10 @@ export class WorkflowDecisionAdapter {
   /** Everything uncertain — the no-backend path (rule + llm tier absent). */
   allUncertain(node: DecisionNodeSpec): DecisionRunOutcome {
     return uncertainOutcomeFor(node);
+  }
+
+  isUnavailable(err: unknown): boolean {
+    return WorkflowDecisionAdapter.isUnavailableError(err);
   }
 
   /** Expose DecisionUnavailableError identity without importing it everywhere. */

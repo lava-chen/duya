@@ -22,6 +22,7 @@ const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
   || (__filename.includes('-stdout-pressure') && 'stdout-pressure')
   || (__filename.includes('-permission') && 'permission')
   || (__filename.includes('-plugin-app') && 'plugin-app')
+  || (__filename.includes('-bash-task') && 'bash-task')
   || (__filename.includes('-db') && 'db')
   || (__filename.includes('-hang') && 'hang')
   || 'complete';
@@ -269,6 +270,26 @@ process.stdin.on('data', (chunk) => {
         emitTerminal('completed');
         process.send({ type: 'chat:done', sessionId: command.sessionId });
       })();
+    } else if (MODE === 'bash-task') {
+      // The shape is the worker's own registry shape (startTime / lastProgress),
+      // not the HTTP summary: the Host is the one that narrows it.
+      const startedAt = Date.now() - 12000;
+      const outputFile = require('node:path').join(__dirname, 'bash-task-output.log');
+      try { require('node:fs').writeFileSync(outputFile, 'listening on 3000\\n'); } catch {}
+      process.send({
+        type: 'bash_task:update',
+        sessionId: command.sessionId,
+        tasks: [
+          { id: 'task-running', pid: 4242, outputFile, command: 'sleep 60', status: 'running',
+            startTime: startedAt, lastProgress: { bytes: 18 }, autoPromoted: true },
+          { id: 'task-done', pid: 4243, outputFile: '', command: 'echo hi', status: 'completed',
+            startTime: startedAt - 5000, endTime: startedAt - 4000, exitCode: 0, lastProgress: { bytes: 3 } },
+        ],
+      });
+      emitTextBlock('bash task snapshot sent');
+      emitTurnCompleted('end_turn');
+      emitTerminal('completed');
+      process.send({ type: 'chat:done', sessionId: command.sessionId });
     } else if (MODE === 'db') {
       (async () => {
         try {
@@ -319,7 +340,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'array-action' | 'permission' | 'plugin-app' | 'stdout-pressure',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'bash-task' | 'array-action' | 'permission' | 'plugin-app' | 'stdout-pressure',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -499,6 +520,60 @@ describe('Host-owned run execution', () => {
       // Replay reads the same durable sequence from a fresh cursor.
       const replay = await client.readAgentRunEvents(runId, { afterSeq: 0 });
       expect(replay.map((event) => event.seq)).toEqual(events.map((event) => event.seq));
+
+      await host.close();
+      host = undefined;
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('caches worker bash_task:update frames and serves them through the read API', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-bash-tasks-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const workerPath = await writeStubWorker(root, 'bash-task');
+      const started = await startHostWithSession(root, workerPath);
+      host = started.host;
+      const { client, sessionId } = started;
+
+      // Before the worker reports, the Host has measured nothing — which is
+      // different from "nothing is running".
+      expect(await client.listBackgroundTasks(sessionId)).toEqual({ observed: false, tasks: [] });
+
+      const start = await client.startAgentRun({ sessionId, prompt: 'run a background command' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+
+      let record = null;
+      for (let i = 0; i < 100; i += 1) {
+        record = await client.getAgentRun(start.runId);
+        if (record?.terminal) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(record?.status).toBe('completed');
+
+      const list = await client.listBackgroundTasks(sessionId);
+      expect(list.observed).toBe(true);
+      // Running first, then newest; the worker's registry fields are narrowed
+      // into the HTTP summary rather than passed through.
+      expect(list.tasks.map((task) => [task.id, task.status])).toEqual([
+        ['task-running', 'running'],
+        ['task-done', 'completed'],
+      ]);
+      expect(list.tasks[0]).toMatchObject({ pid: 4242, outputBytes: 18, autoPromoted: true });
+      expect(list.tasks[1]).toMatchObject({ exitCode: 0, outputBytes: 3 });
+
+      // The tail is read on demand from the file the worker named. The path
+      // itself never appears in the summary.
+      const output = await client.readBackgroundTaskOutput(sessionId, 'task-running');
+      expect(output?.text).toContain('listening on 3000');
+      expect(output?.truncated).toBe(false);
+      expect(await client.readBackgroundTaskOutput(sessionId, 'task-missing')).toBeNull();
+
+      // Another session cannot see this one's snapshot.
+      expect(await client.listBackgroundTasks('some-other-session')).toEqual({ observed: false, tasks: [] });
 
       await host.close();
       host = undefined;

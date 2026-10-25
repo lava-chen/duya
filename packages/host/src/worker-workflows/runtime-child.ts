@@ -199,6 +199,8 @@ export async function runWorkflowRuntimeChild(
         type: 'workflow:ready',
         runId: init.runId,
         definition: snapshot.definition,
+        definitionHash: snapshot.definitionHash,
+        definitionHashSource: snapshot.definitionHashSource,
       });
     },
 

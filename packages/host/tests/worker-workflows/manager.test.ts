@@ -1,6 +1,6 @@
 /**
  * manager.test.ts — plan 552 Phase 4 gate: kill -9 recovery (crash
- * reconciliation → interrupted → resume replays the journal cache →
+ * reconciliation → stopped recovery and resume replays the journal cache →
  * complete), dedup idempotency, wait-tracker timeout application, and
  * journal dual-write persistence.
  */
@@ -16,14 +16,19 @@ import {
   type JournalRecord,
   type WorkflowHost,
   computeReqHash,
-  createResumeToken,
 } from '../../src/worker-workflows/index.js';
 
 // ─── in-memory store fake (mirrors the core-db store semantics) ───
 
 class MemoryRunStore implements WorkflowRunStoreLike {
   readonly runs = new Map<string, ManagedRun>();
-  readonly blobs = new Map<string, { definition: unknown; nodeStack: unknown[]; journal: unknown[] }>();
+  readonly blobs = new Map<string, {
+    definition: unknown;
+    definitionHash?: string;
+    definitionHashSource?: 'dag' | 'dwf-script';
+    nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
+    journal: JournalRecord[];
+  }>();
 
   async createRun(input: Parameters<WorkflowRunStoreLike['createRun']>[0]): Promise<ManagedRun> {
     const run: ManagedRun = {
@@ -73,8 +78,15 @@ class MemoryRunStore implements WorkflowRunStoreLike {
     return true;
   }
 
-  async saveSnapshot(input: { runId: string; definition: unknown; nodeStack: unknown[]; journal: unknown[] }): Promise<void> {
-    this.blobs.set(input.runId, { definition: input.definition, nodeStack: input.nodeStack, journal: input.journal });
+  async saveSnapshot(input: Parameters<WorkflowRunStoreLike['saveSnapshot']>[0]): Promise<void> {
+    const previous = this.blobs.get(input.runId);
+    this.blobs.set(input.runId, {
+      definition: input.definition,
+      ...(input.definitionHash !== undefined ? { definitionHash: input.definitionHash } : previous?.definitionHash !== undefined ? { definitionHash: previous.definitionHash } : {}),
+      ...(input.definitionHashSource !== undefined ? { definitionHashSource: input.definitionHashSource } : previous?.definitionHashSource !== undefined ? { definitionHashSource: previous.definitionHashSource } : {}),
+      nodeStack: input.nodeStack,
+      journal: input.journal.length > 0 ? input.journal as JournalRecord[] : previous?.journal ?? [],
+    });
   }
 
   async loadSnapshot(runId: string) {
@@ -87,8 +99,13 @@ class MemoryRunStore implements WorkflowRunStoreLike {
     if (blob) blob.journal.push(record);
   }
 
-  async loadJournal(runId: string): Promise<unknown[]> {
+  async loadJournal(runId: string): Promise<JournalRecord[]> {
     return this.blobs.get(runId)?.journal ?? [];
+  }
+
+  async replaceJournal(runId: string, records: JournalRecord[]): Promise<void> {
+    const blob = this.blobs.get(runId);
+    if (blob) blob.journal = [...records];
   }
 
   async listWaitingPast(now: number): Promise<ManagedRun[]> {
@@ -135,7 +152,46 @@ const WF_DEF = parseWorkflowDef({
 const SECRET = 'test-secret';
 
 describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
-  it('suspend → crash reconcile → interrupted → resume replays cache → complete', async () => {
+  it('retunes a live run in place and emits the concurrency change', async () => {
+    const store = new MemoryRunStore();
+    let started = 0;
+    let signalStarted!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let releaseAgents!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseAgents = resolve; });
+    const host = fixtureHost();
+    const concurrentHost: WorkflowHost = {
+      ...host,
+      async runAgent(spec) {
+        host.agentCalls.push(spec.prompt);
+        started++;
+        if (started === 2) signalStarted();
+        await blocked;
+        return { ok: true, output: `done:${spec.prompt}` };
+      },
+    };
+    const observations: unknown[] = [];
+    const manager = new WorkflowManager({
+      host: concurrentHost,
+      store,
+      maxConcurrency: 2,
+      onObservation: (event) => observations.push(event),
+    });
+
+    const launch = manager.launch({ def: WF_DEF, params: {} });
+    await bothStarted;
+    expect(manager.setRunConcurrency('run-1', 1)).toBe(true);
+    expect(observations).toEqual([{ type: 'concurrency-changed', runId: 'run-1', previous: 2, current: 1 }]);
+    expect(store.runs.size).toBe(1);
+    expect(host.agentCalls).toEqual(['step one', 'step two']);
+
+    releaseAgents();
+    expect((await launch).status).toBe('complete');
+    expect(store.runs.size).toBe(1);
+    expect(host.agentCalls).toHaveLength(2);
+  });
+
+  it('a suspended run stays blocked across reconciliation and resumes from its cache', async () => {
     const store = new MemoryRunStore();
     const host = fixtureHost();
     const manager = new WorkflowManager({ host, store, secret: SECRET, approvalMode: 'suspend' });
@@ -168,7 +224,7 @@ describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
     expect((await store.getRun(first.runId))?.status).toBe('complete');
   });
 
-  it('mid-execution crash: orphaned active run → interrupted → resume replays its cache', async () => {
+  it('mid-execution crash: orphaned active run → stopped → explicit recovery replays its cache', async () => {
     const store = new MemoryRunStore();
     const host = fixtureHost();
     const manager = new WorkflowManager({ host, store, secret: SECRET, approvalMode: 'suspend' });
@@ -187,17 +243,70 @@ describe('WorkflowManager — kill -9 recovery (plan 552 Phase 4 gate)', () => {
       seq: 0, kind: 'node_result', nodeId: 'a1', attempt: 1, reqHash: a1Hash,
       status: 'succeeded', result: 'done:step one', atMs: Date.now(),
     } as JournalRecord);
+    await store.appendJournal(run.id, {
+      seq: 1, kind: 'node_result', nodeId: 'a2', attempt: 1,
+      status: 'running', result: null, atMs: Date.now(),
+    } as JournalRecord);
 
     // Reconciliation sees an active run the (new) engine is NOT running.
     const stale = await manager.reconcile();
     expect(stale.map((s) => s.runId)).toEqual([run.id]);
-    expect((await store.getRun(run.id))?.status).toBe('interrupted');
+    expect((await store.getRun(run.id))?.status).toBe('stopped');
+    expect((await store.loadJournal(run.id)).find((record) => record.nodeId === 'a2'))
+      .toMatchObject({ status: 'skipped', errorClass: 'orphan_running' });
 
-    // Resume replays a1 from the journal cache (zero re-pay) and finishes.
-    const token = createResumeToken(SECRET, { runId: run.id, nodeId: 'gate', issuedAt: Date.now() });
-    const result = await manager.resume(run.id, { token, decision: 'approve' });
+    // Explicit recovery replays a1 from the journal cache (zero re-pay).
+    const recoveryManager = new WorkflowManager({ host, store, secret: SECRET, approvalMode: 'await' });
+    const result = await recoveryManager.resumeStopped(run.id);
     expect(result.status).toBe('complete');
     expect(host.agentCalls).toEqual(['step two']); // a1 cached, a2 truly ran
+  });
+
+  it('rejects resume when the frozen DAG definition hash no longer matches', async () => {
+    const store = new MemoryRunStore();
+    const host = fixtureHost();
+    const manager = new WorkflowManager({ host, store, secret: SECRET, approvalMode: 'suspend' });
+    const first = await manager.launch({ def: WF_DEF, params: {} });
+    if (first.status !== 'waiting') throw new Error('expected waiting');
+    const snapshot = store.blobs.get(first.runId)!;
+    snapshot.definition = { ...(snapshot.definition as object), description: 'tampered DAG' };
+
+    const result = await manager.resume(first.runId, { token: first.resumeToken, decision: 'approve' });
+
+    expect(result).toMatchObject({ status: 'failed', errorClass: 'definition_hash_mismatch' });
+    expect((await store.getRun(first.runId))?.status).toBe('blocked');
+    expect(host.agentCalls).toEqual(['step one', 'step two']);
+  });
+
+  it('prunes unresolved failure markers durably while keeping independent cache hits', async () => {
+    const store = new MemoryRunStore();
+    const host = fixtureHost();
+    const manager = new WorkflowManager({ host, store, secret: SECRET, approvalMode: 'await' });
+    const run = await store.createRun({ workflowName: WF_DEF.name, status: 'stopped', params: {} });
+    await store.saveSnapshot({ runId: run.id, definition: WF_DEF, nodeStack: [], journal: [] });
+    const stepTwoHash = computeReqHash('node_result', {
+      agent: 'general-purpose', prompt: 'step two', model: undefined, item: undefined,
+    });
+    await store.appendJournal(run.id, {
+      seq: 0, kind: 'node_result', nodeId: 'a1', attempt: 1,
+      status: 'failed', result: null, errorClass: 'transient', atMs: Date.now(),
+    } as JournalRecord);
+    await store.appendJournal(run.id, {
+      seq: 1, kind: 'node_result', nodeId: 'a2', attempt: 1, reqHash: stepTwoHash,
+      status: 'succeeded', result: 'done:step two', atMs: Date.now(),
+    } as JournalRecord);
+    await store.appendJournal(run.id, {
+      seq: 2, kind: 'phase', nodeId: 'work', attempt: 1,
+      status: 'failed', result: null, atMs: Date.now(),
+    } as JournalRecord);
+
+    const result = await manager.resumeStopped(run.id);
+
+    expect(result.status).toBe('complete');
+    expect(host.agentCalls).toEqual(['step one']);
+    expect((await store.loadJournal(run.id)).some((record) => record.status === 'failed')).toBe(false);
+    expect((await store.loadJournal(run.id)).find((record) => record.nodeId === 'a2'))
+      .toMatchObject({ status: 'succeeded', result: 'done:step two' });
   });
 
   it('journal records dual-write into the snapshot blob as they happen', async () => {

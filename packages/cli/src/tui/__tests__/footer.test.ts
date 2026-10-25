@@ -38,6 +38,7 @@ function footer(patch: Partial<FooterInput> = {}): string[] {
       totalTokens: 50_600,
       contextPercent: 5,
       contextBudget: 1_000_000,
+      outputTokensPerSecond: null,
     },
     model: { provider: 'deepseek', model: 'deepseek-flash', thinking: 'high' },
     styles,
@@ -154,6 +155,79 @@ describe('buildFooterLines', () => {
     }
   });
 
+  it('shows the measured output rate when the provider reported a duration', () => {
+    const row = plain(footer({
+      stats: {
+        inputTokens: 49_000,
+        outputTokens: 1600,
+        totalTokens: 50_600,
+        contextPercent: 5,
+        contextBudget: 1_000_000,
+        outputTokensPerSecond: 63,
+      },
+    })[1] ?? '');
+    expect(row).toContain('⚡ 63.0 tok/s');
+  });
+
+  it('keeps the three kinds of number as three groups', () => {
+    // Spend, window and speed are three different answers. Printed with a bare
+    // space between every token they read as one undifferentiated run, which is
+    // what made this row look untidy rather than informative.
+    const row = plain(footer({
+      stats: {
+        inputTokens: 49_000,
+        outputTokens: 1600,
+        totalTokens: 50_600,
+        contextPercent: 5,
+        contextBudget: 1_000_000,
+        outputTokensPerSecond: 63,
+      },
+    })[1] ?? '');
+    expect(row).toContain('↑49k ↓1.6k Σ51k · 5%/1.0M · ⚡ 63.0 tok/s');
+  });
+
+  it('colours the rate as the one live measurement on the row', () => {
+    const row = footer({
+      stats: {
+        inputTokens: 49_000,
+        outputTokens: 1600,
+        totalTokens: 50_600,
+        contextPercent: 5,
+        contextBudget: 1_000_000,
+        outputTokensPerSecond: 63,
+      },
+    })[1] ?? '';
+    expect(row).toContain('{cyan-fg}⚡ 63.0 tok/s{/cyan-fg}');
+    // The counters stay muted: colour means kind here, not emphasis.
+    expect(row).toContain('{gray-fg}↑49k ↓1.6k Σ51k{/gray-fg}');
+  });
+
+  it('omits the rate entirely when the provider reported no duration', () => {
+    // A missing duration is not a zero rate: it says "nobody measured this
+    // call", and showing `⚡ 0.0 tok/s` would be a measurement nobody made.
+    const row = plain(footer()[1] ?? '');
+    expect(row).not.toContain('tok/s');
+  });
+
+  it('keeps the rate inside the width, however narrow', () => {
+    for (const width of [20, 30, 40, 60, 80, 120]) {
+      const rows = footer({
+        width,
+        stats: {
+          inputTokens: 49_000,
+          outputTokens: 1600,
+          totalTokens: 50_600,
+          contextPercent: 5,
+          contextBudget: 1_000_000,
+          outputTokensPerSecond: 63,
+        },
+      });
+      for (const row of rows) {
+        expect(visibleWidth(plain(row))).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
   it('drops the model before it drops the counters', () => {
     const narrow = plain(footer({ width: 34 })[1] ?? '');
     expect(narrow).toContain('↑49k');
@@ -182,6 +256,7 @@ describe('buildFooterLines', () => {
         totalTokens: 0,
         contextPercent: null,
         contextBudget: 1_000_000,
+        outputTokensPerSecond: null,
       },
     })[1] ?? '');
     expect(row).toContain('?/1.0M');
@@ -195,6 +270,7 @@ describe('buildFooterLines', () => {
         totalTokens: 0,
         contextPercent: null,
         contextBudget: null,
+        outputTokensPerSecond: null,
       },
       model: null,
     });
@@ -210,6 +286,7 @@ describe('buildFooterLines', () => {
         totalTokens: 950_000,
         contextPercent: 95,
         contextBudget: 1_000_000,
+        outputTokensPerSecond: null,
       },
     })[1] ?? '';
     expect(hot).toContain('{bright-red-fg}95%/1.0M{/bright-red-fg}');
@@ -220,6 +297,7 @@ describe('buildFooterLines', () => {
         totalTokens: 800_000,
         contextPercent: 80,
         contextBudget: 1_000_000,
+        outputTokensPerSecond: null,
       },
     })[1] ?? '';
     expect(warm).toContain('{yellow-fg}80%/1.0M{/yellow-fg}');

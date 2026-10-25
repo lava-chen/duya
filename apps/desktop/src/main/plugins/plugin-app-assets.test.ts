@@ -53,6 +53,25 @@ describe('Plugin App package assets', () => {
     expect(await script.text()).toContain('postMessage');
   });
 
+  it('serves a resource document only at its tokenized index path', async () => {
+    const html = '<!doctype html><main id="resource">resource-backed</main>';
+    const entry = await server.openDocument('surface-session', html);
+    const response = await fetch(entry);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(response.headers.get('content-security-policy')).toContain("connect-src 'none'");
+    expect(await response.text()).toBe(html);
+    expect((await fetch(new URL('./asset.js', entry))).status).toBe(404);
+    server.revoke('surface-session');
+    expect((await fetch(entry)).status).toBe(404);
+  });
+
+  it('rejects empty and oversized resource documents before mounting them', async () => {
+    await expect(server.openDocument('empty', '')).rejects.toThrow('plugin_app_resource_size_invalid');
+    await expect(server.openDocument('large', 'x'.repeat(8 * 1024 * 1024 + 1)))
+      .rejects.toThrow('plugin_app_resource_size_invalid');
+  });
+
   it('refuses unknown mounts, encoded traversal, escaped symlinks and foreign Host headers', async () => {
     const entry = await launch();
     const pathname = new URL(entry).pathname;

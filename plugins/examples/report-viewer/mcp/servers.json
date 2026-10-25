@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "name": "reports",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["${DUYA_PLUGIN_ROOT}/mcp/reports-server.mjs"],
+      "startupTimeoutSec": 10
+    }
+  ]
+}

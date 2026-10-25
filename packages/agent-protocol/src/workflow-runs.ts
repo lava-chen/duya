@@ -13,6 +13,7 @@ export type WorkflowRunStatus =
   | 'blocked'
   | 'budget_limited'
   | 'complete'
+  | 'stopped'
   | 'interrupted'
   | 'cancelled'
   | 'failed';
@@ -94,6 +95,10 @@ export interface WorkflowRunFilter {
 export interface WorkflowRunSnapshot {
   runId: string;
   definition: unknown;
+  /** Full SHA-256 of the frozen definition source used by this run. */
+  definitionHash?: string;
+  /** `dag` hashes normalized WorkflowDef; `dwf-script` hashes script body + frontmatter. */
+  definitionHashSource?: 'dag' | 'dwf-script';
   nodeStack: Array<{ nodeId: string; status: string; output?: unknown }>;
   /**
    * @deprecated Journal records live in `workflow_run_events`. This remains
@@ -108,6 +113,8 @@ export interface WorkflowRunSnapshot {
 export interface WorkflowRunSnapshotSaveInput {
   runId: string;
   definition: unknown;
+  definitionHash?: string;
+  definitionHashSource?: WorkflowRunSnapshot['definitionHashSource'];
   nodeStack?: WorkflowRunSnapshot['nodeStack'];
   /** Legacy compatibility; records are persisted in the event table. */
   journal?: JournalRecord[];
@@ -130,6 +137,8 @@ export interface WorkflowRunApiV1 {
   saveSnapshot(snapshot: WorkflowRunSnapshotSaveInput): Promise<boolean>;
   loadSnapshot(runId: string): Promise<WorkflowRunSnapshot | null>;
   appendJournalRecord(runId: string, record: JournalRecord): Promise<boolean>;
+  /** Replace a journal after replay pruning; implementations must be atomic. */
+  replaceJournal(runId: string, records: JournalRecord[]): Promise<boolean>;
   listEvents(runId: string, afterSeq?: number): Promise<JournalRecord[]>;
   latestEventSeq(runId: string): Promise<number | null>;
   getEventCount(runId: string): Promise<number>;

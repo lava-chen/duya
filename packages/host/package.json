@@ -115,6 +115,10 @@
       "types": "./dist/local-plugin-setup-api.d.ts",
       "import": "./dist/local-plugin-setup-api.js"
     },
+    "./local-plugin-inventory-api": {
+      "types": "./dist/local-plugin-inventory-api.d.ts",
+      "import": "./dist/local-plugin-inventory-api.js"
+    },
     "./local-plugin-app-instance-api": {
       "types": "./dist/local-plugin-app-instance-api.d.ts",
       "import": "./dist/local-plugin-app-instance-api.js"
@@ -290,6 +294,22 @@
     "./agent-profile-config": {
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
+    },
+    "./agents-md": {
+      "types": "./dist/agents-md/index.d.ts",
+      "import": "./dist/agents-md/index.js"
+    },
+    "./agents-md/*": {
+      "types": "./dist/agents-md/*.d.ts",
+      "import": "./dist/agents-md/*.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics/index.d.ts",
+      "import": "./dist/diagnostics/index.js"
+    },
+    "./diagnostics/*": {
+      "types": "./dist/diagnostics/*.d.ts",
+      "import": "./dist/diagnostics/*.js"
     },
     "./config-agents": {
       "types": "./dist/config-agents/index.d.ts",
@@ -603,6 +623,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@duya/workflow": "0.1.0",
     "@duya/agent-core": "0.1.0",
     "@duya/agent-runtime": "0.1.0",
     "@duya/agent-protocol": "0.1.0",
@@ -612,7 +633,7 @@
     "chokidar": "^3.6.0",
     "@duya/capabilities": "0.1.0",
     "@duya/memory": "0.1.0",
-    "handlebars": "^4.7.9",
+    "handlebars": "^4.7.10",
     "marked": "^17.0.6",
     "zod": "^4.3.6",
     "@duya/plugin-core": "0.1.0",
