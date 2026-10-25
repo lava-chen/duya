@@ -118,13 +118,13 @@ describe('conversation store — a session switch reads the transcript once', ()
     // Hold the previous session's transcript open, then let the user switch
     // while it is still loading. The stale read must not be written under the
     // session the user is looking at now.
-    let releaseRead: ((value: unknown) => void) | null = null;
+    let releaseRead: { resolve: ((value: unknown) => void) | null } = { resolve: null };
     mocks.getThreadIPC.mockImplementation((id: string) => {
       if (id !== PREVIOUS) {
         return Promise.resolve({ thread: threadRow(id), messages: [] });
       }
       return new Promise((resolve) => {
-        releaseRead = resolve;
+        releaseRead.resolve = resolve;
       });
     });
 
@@ -139,7 +139,7 @@ describe('conversation store — a session switch reads the transcript once', ()
     const refresh = useConversationStore.getState().loadFromDatabase();
     useConversationStore.setState({ activeThreadId: SESSION });
 
-    releaseRead?.({
+    releaseRead.resolve?.({
       thread: threadRow(PREVIOUS),
       messages: [{ id: 'old', role: 'assistant', content: 'old', timestamp: 1 }],
     });
