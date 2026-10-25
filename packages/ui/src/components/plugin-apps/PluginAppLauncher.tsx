@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { useTranslation } from "@/hooks/useTranslation";
 import { useConversationStore } from "@/stores/conversation-store";
-import { PluginAppHost } from "./PluginAppHost";
+import { useOptionalPanel } from "@/hooks/usePanel";
 
 interface PluginAppLauncherProps {
   pluginId: string;
   apps: ReadonlyArray<{ appId: string; entry?: string; runtime?: 'agent-run' | 'standalone' }>;
-  /** Shown when no chat session is selected — the App needs a running one to bind. */
-  emptyHint?: string;
 }
 
 /**
@@ -18,25 +16,34 @@ interface PluginAppLauncherProps {
  *
  * The App is hosted as an external mini app: it runs in an opaque-origin
  * sandboxed frame and reaches the agent only through the session this launcher
- * asks the Main process to mint.
+ * asks the Main process to mint. Launching opens the App as a side-panel page
+ * — the panel is the App's only surface; nothing takes over the window.
  */
-export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLauncherProps) {
-  const [openAppId, setOpenAppId] = useState<string | null>(null);
+export function PluginAppLauncher({ pluginId, apps }: PluginAppLauncherProps) {
+  const { t } = useTranslation();
+  const panel = useOptionalPanel();
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
-
-  useEffect(() => {
-    if (!openAppId) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenAppId(null);
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [openAppId]);
+  const [hint, setHint] = useState<string | null>(null);
 
   const staticApps = apps.filter((app) => app.entry !== undefined);
   if (staticApps.length === 0) return null;
 
-  const open = staticApps.find((app) => app.appId === openAppId);
+  const open = (app: { appId: string; entry?: string; runtime?: 'agent-run' | 'standalone' }) => {
+    // An agent-run App acts inside a chat session; a standalone App owns its
+    // MCP runtime and needs none. Without a session the launch is refused
+    // here instead of opening a panel that cannot bind.
+    if (app.runtime !== 'standalone' && !activeThreadId) {
+      setHint(t("apps.selectChat"));
+      return;
+    }
+    setHint(null);
+    panel?.openOrActivatePage("plugin-app", {
+      pluginId,
+      appId: app.appId,
+      title: app.appId,
+      availability: app.runtime === 'standalone' ? "always" : "session",
+    });
+  };
 
   return (
     <div className="mt-2 space-y-2 pl-11">
@@ -46,28 +53,14 @@ export function PluginAppLauncher({ pluginId, apps, emptyHint }: PluginAppLaunch
             key={app.appId}
             variant="secondary"
             size="sm"
-            onClick={() => setOpenAppId(app.appId === openAppId ? null : app.appId)}
+            onClick={() => open(app)}
           >
             {app.appId}
           </Button>
         ))}
       </div>
-
-      {open ? createPortal(
-        <div className="plugin-app-overlay" role="dialog" aria-modal="true" aria-label={open.appId}>
-          <div className="plugin-app-overlay-bar">
-            <span>{open.appId}</span>
-            <Button variant="secondary" size="sm" onClick={() => setOpenAppId(null)}>Close</Button>
-          </div>
-          {open.runtime === 'standalone' || activeThreadId ? (
-            <PluginAppHost pluginId={pluginId} appId={open.appId} chatSessionId={open.runtime === 'standalone' ? undefined : activeThreadId ?? undefined} />
-          ) : (
-            <div className="plugin-app-host-error" role="alert">
-              {emptyHint ?? "Select a chat session before opening an App."}
-            </div>
-          )}
-        </div>,
-        document.body,
+      {hint ? (
+        <p className="plugin-app-host-error" role="alert">{hint}</p>
       ) : null}
     </div>
   );
