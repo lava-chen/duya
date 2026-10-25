@@ -20,6 +20,7 @@ import {
   type RunEventEnvelope,
   type SessionId,
 } from '@duya/agent-protocol';
+import type { HostLocalTurnSuggestionRecord } from '@duya/agent-protocol/turn-suggestion';
 import { HostSessionHttpClient, HostSessionHttpError } from '@duya/host/http-client';
 
 const LOOPBACK = '127.0.0.1';
@@ -304,6 +305,18 @@ async function routeRequest(context: RequestContext): Promise<void> {
       return;
     }
 
+    // The end-of-turn suggestion the worker predicted for this session.
+    if (request.method === 'GET' && requestUrl.pathname === '/api/turn-suggestions/latest') {
+      const sessionId = requestUrl.searchParams.get('sessionId');
+      if (!isBoundedString(sessionId, 1, 200)) {
+        sendJson(response, 400, { error: { code: 'invalid_turn_suggestion_query' } });
+        return;
+      }
+      const suggestion = await readLatestTurnSuggestion(context.client, sessionId);
+      sendJson(response, 200, { suggestion });
+      return;
+    }
+
     // The checkout and integration namespaces (plan 621). The BFF is a
     // FORWARDER here: the Host owns the session -> checkout -> pull-request
     // mapping, and a facade that re-derived it would be a second answer to the
@@ -439,6 +452,25 @@ async function sendHandshake(context: RequestContext): Promise<void> {
 async function readProviderCatalog(client: HostSessionHttpClient): Promise<HostProviderCatalog | null> {
   try {
     return await client.getProviderCatalog();
+  } catch (error) {
+    if (error instanceof HostSessionHttpError && error.status === 404) return null;
+    throw error;
+  }
+}
+
+/**
+ * The Host's end-of-turn suggestion, or `null` when it has none.
+ *
+ * A Host that does not serve suggestions refuses the read with a 404; that is
+ * the absence of a suggestion, not a failure of the read, so it becomes
+ * `null` here and the composer simply shows its ordinary placeholder.
+ */
+async function readLatestTurnSuggestion(
+  client: HostSessionHttpClient,
+  sessionId: string,
+): Promise<HostLocalTurnSuggestionRecord | null> {
+  try {
+    return await client.getLatestTurnSuggestion(sessionId);
   } catch (error) {
     if (error instanceof HostSessionHttpError && error.status === 404) return null;
     throw error;

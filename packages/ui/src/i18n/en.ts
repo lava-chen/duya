@@ -161,7 +161,7 @@ const en = {
   'bashTaskOutput.retry': 'Retry',
   'bashTaskOutput.readError': 'Could not read output: {error}',
   'bashTaskOutput.jumpToBottom': 'Jump to latest output',
-  'chat.nextStepSuggestions': 'Suggested next steps',
+  'chat.turnSuggestionHint': 'Try: {text}',
   'chat.contextCompressed': 'Context compressed to save tokens',
   'chat.mainTitle': 'What can I help you with?',
   'chat.subtitle': 'Ask me to write code, explain concepts, or help with your project.',

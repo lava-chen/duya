@@ -105,6 +105,9 @@
       "@duya/agent-protocol/research-api": [
         "../../packages/agent-protocol/dist/research-api.d.ts"
       ],
+      "@duya/agent-protocol/turn-suggestion": [
+        "../../packages/agent-protocol/dist/turn-suggestion.d.ts"
+      ],
       "@duya/agent-protocol/worker-protocol": [
         "../../packages/agent-protocol/dist/worker-protocol.d.ts"
       ],

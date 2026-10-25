@@ -496,6 +496,14 @@ pages session profiles through `HostSessionApiV1.list`.
 Recap and next-step suggestions now page the same Host message projection and
 adapt it to their existing prompt DTOs; their Main services no longer query
 `MessageLog` directly.
+The end-of-turn suggestion moved out of the Desktop app and into the worker:
+`packages/host/src/worker-session/turn-suggestion.ts` predicts the next prompt
+on the turn's own model client, the row lands through the worker DB bridge
+(`turn-suggestion:save`) into `chat_turn_suggestions`, and every surface reads
+it back through `HostLocalTurnSuggestionApiV1` — Desktop over its embedded Host
+and the Web over the BFF, so the suggestion is no longer a Desktop-only
+feature. The shared renderer draws it as the composer's placeholder and adopts
+it on Enter; the CLI TUI draws it in its composer the same way.
 Research and Research Memory actions from the Agent DB bridge now use the
 allowlisted `HostResearchApiV1` over authenticated `POST /v1/research/actions`.
 Desktop and standalone Host compose the same Data-backed service, and the

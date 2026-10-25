@@ -107,6 +107,10 @@
       "types": "./dist/chat-turn-review-store.d.ts",
       "import": "./dist/chat-turn-review-store.js"
     },
+    "./chat-turn-suggestion-store": {
+      "types": "./dist/chat-turn-suggestion-store.d.ts",
+      "import": "./dist/chat-turn-suggestion-store.js"
+    },
     "./message-log": {
       "types": "./dist/message-log.d.ts",
       "import": "./dist/message-log.js"

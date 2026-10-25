@@ -187,6 +187,14 @@ interface MessageInputProps {
   permissionMode?: PermissionModeUi;
   onPermissionModeChange?: (mode: PermissionModeUi) => void;
   placeholder?: string;
+  /**
+   * The next prompt the worker predicted for the last turn.
+   *
+   * It is drawn as the composer's placeholder, and pressing Enter on an empty
+   * composer adopts it: the text lands in the input box, visible and editable,
+   * and the user still presses Enter to send it.
+   */
+  suggestion?: string;
   // Slash-command popover placement. Default `top` keeps the popup above the
   // input (chat history). Pass `bottom` on the welcome / start page where
   // there is more room below the input.
@@ -454,6 +462,7 @@ export function MessageInput({
   permissionMode,
   onPermissionModeChange,
   placeholder,
+  suggestion,
   popoverPlacement = 'top',
   onExecuteCommand,
   onClearMessages,
@@ -2047,10 +2056,23 @@ export function MessageInput({
         const hasContent = inputValue.trim() || attachments.length > 0;
         if (hasContent) {
           handleSubmit({ preventDefault: () => {} } as FormEvent);
+          return;
+        }
+        // An empty composer with a suggestion adopts it instead of sending:
+        // the text lands in the input box, visible and editable, and the user
+        // still presses Enter to send it.
+        if (suggestion) {
+          setInputValue(suggestion);
+          prePasteValueRef.current = suggestion;
+          adjustTextareaHeight();
+          requestAnimationFrame(() => {
+            textareaRef.current?.focus();
+            adjustTextareaHeight();
+          });
         }
       }
     },
-    [isStreaming, inputValue, attachments, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit],
+    [isStreaming, inputValue, attachments, popoverMode, filteredItems, selectedIndex, insertItem, closePopover, handleSubmit, suggestion],
   );
 
   const handleStop = useCallback(() => {
@@ -2295,7 +2317,13 @@ export function MessageInput({
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePasteEvent}
-            placeholder={cliBadge ? t('messageInput.describeWhat') : (placeholder || t('chat.placeholder'))}
+            placeholder={
+              suggestion
+                ? t('chat.turnSuggestionHint', { text: suggestion })
+                : cliBadge
+                  ? t('messageInput.describeWhat')
+                  : (placeholder || t('chat.placeholder'))
+            }
             disabled={disabled}
             mentionTargets={pluginMentionTargets}
           />

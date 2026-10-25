@@ -1,0 +1,62 @@
+# 下一步建议下沉到 worker/Host 并改为输入框 placeholder
+
+状态：active · 负责人：mavis 会话 `mvs_c2c6b417aeed49c393c3b4fd4d079992` · 更新：2026-10-25
+分支：`codex/next-step-suggestions` · worktree：`E:/Projects/duya/.claude/worktrees/next-step-suggestions` · base：`270ba528` · owner：mavis
+
+## 目标与边界
+
+用户能观察到的变化：
+
+- 「下一步建议」不再是桌面端专属。**生成下沉到 worker**（与 session 标题生成同层），Desktop / Web / TUI 三端都能拿到。
+- 呈现从「消息流底部 3 张卡片」改为「**输入框 placeholder 一条灰字建议**」；空输入按 Enter 采纳填入，不自动发送。
+- 删掉桌面端手写的 provider/模型读取与 anthropic/openai/ollama 三套 fetch，改用 `@duya/ai` 的 AIClient。
+
+不在本次范围：suggestion speculation（预跑建议 turn）；服务端推送（grok 的 `x.ai/follow_ups` 路线）；recap 能力。
+
+关联：基线 master `270ba528`（PR #476）。外部参考：`claude-code-haha/src/services/PromptSuggestion/promptSuggestion.ts`（运行时内生成 + placeholder + 抑制规则）、`grok-build/.../acp_handler/follow_ups.rs`（服务端推送 chips）。
+
+## 验收
+
+- `npx vitest run <相关文件>`：协议 / data / host / ui / cli 相关用例通过；先记录基线失败再比较。
+- `npm run typecheck:all` 与 `npm run architecture:check` 退出码 0。
+- 真机：Desktop、Web、TUI 各跑一轮对话，turn 结束后输入框出现一条灰字建议，按 Enter 采纳填入。
+- 旧卡片与旧生成通道消失：`git grep -n "nextSteps:request\|NextStepSuggestions\|next-step-service"` 无结果。
+
+## 进度
+
+- [x] S0 摸底：turn-review 同构链路 + UI/TUI 接入点
+- [x] S1 protocol + data：DTO、store、migration id 60
+- [x] S2 host：worker 生成 + db bridge 落库
+- [x] S3 host/client-core：HTTP 路由 + http-client + HostApiBridge
+- [x] S4 共享 UI：UiServices 端口 + 双路 client + hook + placeholder；Desktop preload/IPC；Web BFF
+- [x] S5 TUI：composer 灰字提示 + 采纳预填
+- [x] S6 删除旧路径 + 更新 ARCHITECTURE.md
+- [x] S7 门禁 + commit + PR
+
+## 发现与决策
+
+- **生成放在 worker，不放 Host HTTP 层**：turn 后派生物已有同构先例——`title-generator.ts`（turn 后单发 LLM）与 `turn-review.ts`（turn 后 git diff）都在 `packages/host/src/worker-session/`，由 `worker-process-entry.ts` 在消息落库后 fire-and-forget 触发。模型客户端用 `agent.readModelClient()`（`worker-session-runtime.ts:188`），因此**不再需要 Electron provider store**，也不再需要自己拼 fetch。
+- **落库而非只走事件**：`chat_turn_reviews` 先例表明三端一致读法 = 落库 + Host 路由。建议存 `chat_turn_suggestions`（main 库，migration id 60，现最大 id 59），worker 经 `sendDbRequest('turn-suggestion:save')` 写入（`worker-db-client.ts:465` 形状），Host db bridge 派发（`worker-db-bridge.ts:1187`），Desktop 侧还有一份 bridge（`apps/desktop/src/main/agents/db-bridge.ts:2342`）要同步加。
+- **共享 UI 的双路范式**：`packages/ui/src/lib/ipc-client.ts` 用 `peekUiServices()` 分流——有则走 Host/Web，没有则 `window.electronAPI!`（例 `:539`、`:544`）。Desktop **没有**装配 `UiServices`（`apps/desktop/src/renderer/main.tsx` 只装 workspace-lifecycle），所以新能力必须保留 electronAPI 回落，否则 Desktop 直接失效。Web 有 `UiServices`（`apps/web/src/main.tsx:11`），但 BFF 是逐路由显式转发（`apps/web/src/server/web-bff.ts:146` 起），要新增 `/api/...` 路由。
+- **呈现形态取 placeholder**：Claude Code 把建议放在输入框 placeholder（`PromptInput.tsx:2014`），不放在消息流里。共享 UI 的 placeholder 由 `MessageInput.tsx:189` 的 prop 决定，灰字靠 `RichTextInput.tsx:396` 的 `data-placeholder` 渲染（伪元素，不可点击）→ 采纳用 Enter，**不需要**改 RichTextInput。
+- **采纳沿用 prefill 事件**：`dispatchPrefillChatInput`（`packages/ui/src/lib/prefill-chat-input-event.ts:31`）语义正是「外部注入文本 + 聚焦 + 可见可编辑 + 不自动发送」，唯一消费方是 `MessageInput.tsx:1111`。
+- **TUI 没有 placeholder 概念**：composer 只画用户文本（`packages/cli/src/tui/composer-layout.ts:45`、`TUIApp.ts:1598`），灰字提示只在交互弹窗里有（`TUIApp.ts:2064`）。采纳可用 `recallIntoComposer`（`TUIApp.ts:929`）。
+- **读取是短轮询，不是单次读**：worker 的预测在 turn 结束后才落库（多一次模型调用），所以客户端轮询到「属于本轮」的行为止；用 `createdAt >= turn 结束时刻 - 1.5s` 判定新鲜度，**空建议也是本轮的答案**（写空串），据此区分「本轮没有建议」和「还没写完」。
+- **不做 suggestion speculation**：Claude Code 的预跑建议 turn 收益不确定、成本高，本轮不引入。
+- **架构基线不动**：`architecture-check --write` 会往 `.architecture-baseline.json` 追加 328 条指纹（其中 251 条是 permitted），那是规则禁止的「加指纹掩盖」；门禁本身退出码 0，只提示 3 条因本次删除而失效的旧指纹，保持原样。
+
+## 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `270ba528` + 本次改动 | Windows 11 / Node 22 | `npx vitest run packages/ui/src/i18n packages/ui/src/hooks packages/ui/src/components/chat packages/cli/src/tui packages/host/tests packages/data/tests` | 0：405 passed / 1 skipped（406 文件） | `$env:TEMP\duya-test.log` |
+| 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规（3 条旧指纹随删除失效，未重录） | 见「发现与决策」末条 |
+| 同上 | 同上 | `npx tsc -p packages/ui/tsconfig.json --noEmit` | 0 | 共享渲染层类型通过 |
+
+## 接续 / 结果
+
+- 已实现：S0 摸底结论与本计划。
+- 已验证：无（尚未产生代码）。
+- PR：未创建。
+- 阻塞：无。
+- 下一步：S1 —— 在 `packages/agent-protocol` 加 `turn-suggestion` 契约，在 `packages/data` 加 store 与 migration id 60；完成判据：`npx vitest run packages/data` 通过。

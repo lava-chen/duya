@@ -918,8 +918,14 @@ export interface RecapAPI {
   onRecapResult: (callback: (data: { sessionId: string; recap: string; timestamp: number }) => void) => () => void
 }
 
-export interface NextStepAPI {
-  request: (sessionId: string) => Promise<{ success: boolean; suggestions: string[]; error?: string }>
+export interface TurnSuggestionAPI {
+  latest: (
+    sessionId: string,
+  ) => Promise<{
+    success: boolean
+    suggestion: { id: string; sessionId: string; turnId: string; suggestion: string; createdAt: number } | null
+    error?: string
+  }>
 }
 
 export interface PluginCatalogEntry {
@@ -1580,7 +1586,7 @@ export interface ElectronAPI {
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
-  nextSteps: NextStepAPI
+  turnSuggestions: TurnSuggestionAPI
   mailbox: MailboxAPI
   // Agent Server API
   agentServer: {
@@ -2738,8 +2744,8 @@ const electronAPI: ElectronAPI = {
       };
     },
   },
-  nextSteps: {
-    request: (sessionId: string) => ipcRenderer.invoke('nextSteps:request', sessionId),
+  turnSuggestions: {
+    latest: (sessionId: string) => ipcRenderer.invoke('turnSuggestions:latest', sessionId),
   },
   // Mailbox API (Plan 202 — PR1)
   mailbox: {
