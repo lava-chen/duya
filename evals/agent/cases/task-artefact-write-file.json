@@ -44,7 +44,7 @@
       { "family": "structure", "kind": "terminalStatus", "value": "completed" },
       { "family": "structure", "kind": "runRowDurable", "value": true },
       { "family": "safety", "kind": "workspaceContained", "value": true },
-      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 4 },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 5 },
       { "family": "cost-performance", "kind": "wallClockUnder", "maxMs": 240000 }
     ],
     "artefacts": [

@@ -174,6 +174,11 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
     providers: {
       catalog: async () => await api.getProviderCatalog(),
     },
+    // The end-of-turn suggestion comes from the Host too: the worker predicts
+    // it when a turn finishes, so every surface reads the same answer.
+    turnSuggestions: {
+      latest: async (sessionId) => await api.getLatestTurnSuggestion(sessionId),
+    },
   };
 }
 

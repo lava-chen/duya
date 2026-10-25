@@ -25,6 +25,7 @@ import { useGitStatus } from '@/hooks/useGitStatus';
 import { useBashTasks } from '@/hooks/useBashTasks';
 import { setTaskDrawerOpen, useTaskDrawerOpen } from './task-drawer-store';
 import { dispatchOpenSessionPanel } from '@/lib/open-session-panel-event';
+import { ContextCard } from './ContextCard';
 import { EnvironmentInfoSection } from './EnvironmentInfoSection';
 import { AgentListSection } from './AgentListSection';
 import { BashTaskSection } from './BashTaskSection';
@@ -32,6 +33,11 @@ import { SourcesSection } from './SourcesSection';
 import { ArtifactsSection } from './ArtifactsSection';
 import { WorkspaceLifecycleSection } from './WorkspaceLifecycleSection';
 
+// Session rail (the reference desktop app calls it "session details"): a
+// persistent column inside the chat row, NOT an overlay. Opening it narrows
+// the transcript instead of covering it, and each section renders as its own
+// rounded card the way the reference product's Context / Environment /
+// Changes cards do.
 export function TaskDrawer() {
   const open = useTaskDrawerOpen();
   const onClose = useCallback(() => setTaskDrawerOpen(false), []);
@@ -57,53 +63,46 @@ export function TaskDrawer() {
   return (
     <AnimatePresence>
       {open && (
-        <motion.div
+        <motion.aside
           key="task-card-rail"
-          className="task-card-rail"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.16, ease: "easeOut" }}
+          className="task-card-rail task-card-shell"
+          initial={{ opacity: 0, x: 18 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 14 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          aria-label="Session details"
+          data-testid="task-card"
         >
-          <motion.aside
-            initial={{ opacity: 0, x: 18 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 14 }}
-            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="task-card-shell"
-            role="dialog"
-            aria-label="Session details"
-            data-testid="task-card"
-          >
-            <div className="task-card-list">
-              <div className="task-card-list-inner">
-                <EnvironmentInfoSection gitStatus={gitStatus} />
+          <div className="task-card-list">
+            <div className="task-card-list-inner">
+              <ContextCard sessionId={activeThreadId} />
 
-                <AgentListSection
-                  agents={agents}
-                  onOpen={(sessionId, agent) =>
-                    dispatchOpenSessionPanel(sessionId, agent.name)
-                  }
-                />
+              <EnvironmentInfoSection gitStatus={gitStatus} />
 
-                <BashTaskSection tasks={bashTasks} />
+              <AgentListSection
+                agents={agents}
+                onOpen={(sessionId, agent) =>
+                  dispatchOpenSessionPanel(sessionId, agent.name)
+                }
+              />
 
-                <SourcesSection
-                  userAttachments={sources.userAttachments}
-                  browserUrls={sources.browserUrls}
-                  others={sources.others}
-                />
+              <BashTaskSection tasks={bashTasks} />
 
-                <ArtifactsSection
-                  artifacts={artifacts}
-                  cwd={thread?.workingDirectory ?? null}
-                />
+              <SourcesSection
+                userAttachments={sources.userAttachments}
+                browserUrls={sources.browserUrls}
+                others={sources.others}
+              />
 
-                <WorkspaceLifecycleSection />
-              </div>
+              <ArtifactsSection
+                artifacts={artifacts}
+                cwd={thread?.workingDirectory ?? null}
+              />
+
+              <WorkspaceLifecycleSection />
             </div>
-          </motion.aside>
-        </motion.div>
+          </div>
+        </motion.aside>
       )}
     </AnimatePresence>
   );

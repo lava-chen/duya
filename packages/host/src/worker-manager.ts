@@ -888,6 +888,46 @@ export class WorkerManager {
   }
 
   /**
+   * Whether any supervised worker is mid-turn.
+   *
+   * "Mid-turn" is the session registry's answer: STREAMING while the model
+   * loop runs, COMPLETING while its tail (persistence, title generation)
+   * settles. A worker sitting in IDLE costs nothing to kill; one of these two
+   * states is the difference between killing a process and destroying a turn
+   * the user is watching.
+   */
+  hasActiveTurn(): boolean {
+    for (const sessionId of this.workers.keys()) {
+      const state = this.sessionLifecycle.getState(sessionId);
+      if (state === 'STREAMING' || state === 'COMPLETING') return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resolve once no supervised worker is mid-turn, or when `timeoutMs` has
+   * elapsed — `'settled'` vs `'timeout'`, never a throw.
+   *
+   * The client-scoped Host's idle shutdown waits here before `killAll`: its
+   * clients left (a crashed terminal, a dropped lease), but the turn they
+   * were watching is still running and its results persist only if the worker
+   * finishes. Polling rather than subscribing is deliberate — the registry
+   * has no change event, and this runs once on a shutdown path, where a 500ms
+   * granularity costs nothing.
+   */
+  async waitForWorkersToSettle(timeoutMs: number, pollIntervalMs = 500): Promise<'settled' | 'timeout'> {
+    const startedAt = Date.now();
+    for (;;) {
+      if (!this.hasActiveTurn()) return 'settled';
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= timeoutMs) return 'timeout';
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(pollIntervalMs, timeoutMs - elapsed));
+      });
+    }
+  }
+
+  /**
    * Absolute path of the agent process bundle. Public because the run-anchored
    * workflow runtime (plan 560 D2) spawns the SAME bundle under a different
    * `DUYA_AGENT_ROLE` rather than duplicating the packaged/dev resolution

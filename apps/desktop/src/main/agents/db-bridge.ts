@@ -24,6 +24,7 @@ import type {
   TurnReviewFile,
   TurnReviewWriteInput,
 } from '@duya/agent-protocol';
+import type { TurnSuggestionWriteInput } from '@duya/agent-protocol/turn-suggestion';
 import { isHostResearchAction } from '@duya/agent-protocol/research-api';
 import { isJsonValue } from '@duya/agent-protocol';
 import type { ApiProvider } from '../config/provider-types';
@@ -52,6 +53,7 @@ import {
   getDesktopHostLocalModelCapabilityApi,
   getDesktopHostLocalPluginSetupApi,
   getDesktopHostLocalTurnReviewApi,
+  getDesktopHostLocalTurnSuggestionApi,
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
   getDesktopHostPluginAppInvocationApi,
@@ -2363,6 +2365,25 @@ export async function dispatchDbAction(
         capturedAt: typeof p.capturedAt === 'number' ? p.capturedAt : now,
       };
       await getDesktopHostLocalTurnReviewApi().saveTurnReview(input);
+      return true;
+    }
+
+    case 'turn-suggestion:save': {
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      const turnId = typeof p.turnId === 'string' ? p.turnId : '';
+      const suggestion = typeof p.suggestion === 'string' ? p.suggestion : '';
+      if (!sessionId || !turnId) {
+        throw new Error('Invalid turn suggestion payload');
+      }
+
+      const input: TurnSuggestionWriteInput = {
+        id: typeof p.id === 'string' ? p.id : randomUUID(),
+        sessionId,
+        turnId,
+        suggestion,
+        createdAt: typeof p.createdAt === 'number' ? p.createdAt : now,
+      };
+      await getDesktopHostLocalTurnSuggestionApi().saveTurnSuggestion(input);
       return true;
     }
 

@@ -14,11 +14,12 @@ import type { ProviderRuntimeConfig } from '@duya/ai';
 import { logger } from '@duya/host/worker-logger';
 import { parseUsageCall, createTurnUsageLedger, foldUsageCall } from '@duya/agent-core/usage/call-usage';
 import { seedTokenUsageFromHistory, parsePersistedTokenUsage } from '@duya/agent-core/usage/seed-token-usage';
-import { messageDb, attachmentDb, pluginDb, settingDb, sessionDb, toolApprovalDb, turnReviewDb, goalDb, pluginAppBindingDb, } from '@duya/host/worker-db-client';
+import { messageDb, attachmentDb, pluginDb, settingDb, sessionDb, toolApprovalDb, turnReviewDb, turnSuggestionDb, goalDb, pluginAppBindingDb, } from '@duya/host/worker-db-client';
 import { createSurfaceAwarePermissionHandler } from '@duya/host/authorization/worker-approval-card';
 import { enqueue, dequeue, hasCommandsInQueue, clearCommandQueue, getCommandQueueLength, } from '@duya/host/worker-command-queue';
 import type { QueuedCommand } from '@duya/host/worker-command-queue';
 import { generateSessionTitle } from '@duya/host/worker-session/title-generator';
+import { generateTurnSuggestion } from '@duya/host/worker-session/turn-suggestion';
 import { getSteeringConfig } from '@duya/host/worker-hooks/config';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '@duya/host/worker-prompts/modes/types';
@@ -1481,6 +1482,57 @@ function announceRefusedRun(
         },
     });
 }
+/**
+ * The in-flight suggestion generation per session.
+ *
+ * A new turn makes the previous suggestion irrelevant, so the previous call is
+ * aborted when the next turn starts rather than left to answer for a turn that
+ * is already over.
+ */
+const turnSuggestionAbortBySession = new Map<string, AbortController>();
+
+function abortTurnSuggestion(currentSessionId: string): void {
+    const controller = turnSuggestionAbortBySession.get(currentSessionId);
+    if (!controller)
+        return;
+    turnSuggestionAbortBySession.delete(currentSessionId);
+    controller.abort();
+}
+
+/**
+ * Predict the next prompt the user would type and persist it.
+ *
+ * The row is written even when there is no suggestion (an empty suggestion),
+ * so a surface can tell "this turn produced nothing" from "the answer is not
+ * here yet" without guessing.
+ */
+async function persistTurnSuggestion(
+    currentSessionId: string,
+    turnId: string,
+    messages: readonly Message[],
+    llmClient: Parameters<typeof generateTurnSuggestion>[1],
+): Promise<void> {
+    const controller = new AbortController();
+    turnSuggestionAbortBySession.set(currentSessionId, controller);
+    try {
+        const { suggestion } = await generateTurnSuggestion(messages, llmClient, controller.signal, currentSessionId);
+        await turnSuggestionDb.save({
+            id: randomUUID(),
+            sessionId: currentSessionId,
+            turnId,
+            suggestion: suggestion ?? '',
+            createdAt: Date.now(),
+        });
+    }
+    catch (error) {
+        warn('[Agent-Process] Failed to persist turn suggestion:', error instanceof Error ? error.message : String(error));
+    }
+    finally {
+        if (turnSuggestionAbortBySession.get(currentSessionId) === controller) {
+            turnSuggestionAbortBySession.delete(currentSessionId);
+        }
+    }
+}
 async function persistTurnReview(currentSessionId: string, turnId: string, baseline: unknown): Promise<void> {
     if (!baseline)
         return;
@@ -1625,6 +1677,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         }
     }
     const workingDirectory = agent.readWorkingDirectory() ?? '';
+    // A new turn makes the previous turn's suggestion irrelevant; the call
+    // still in flight for it is stopped here.
+    abortTurnSuggestion(msg.sessionId);
     const { captureTurnReviewBaseline } = await import('./worker-session/turn-review.js');
     const turnReviewBaseline = captureTurnReviewBaseline(workingDirectory);
     const titleModelOption = msg.options?.titleGenerationModel;
@@ -2492,6 +2547,21 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
                 }
                 catch (titleErr) {
                     log('[Agent-Process] Title generation error:', titleErr);
+                }
+            })();
+        }
+        // End-of-turn suggestion: predict the next prompt the user would type.
+        // It runs on the agent's own model client and never blocks the turn —
+        // the row lands after the turn ended, and every surface reads it back
+        // through the Host.
+        const shouldSuggest = !isBotPipeline && assistantMessageCount >= 1;
+        if (shouldSuggest) {
+            void (async () => {
+                try {
+                    await persistTurnSuggestion(msg.sessionId, msg.id, agentMessages, agent.readModelClient());
+                }
+                catch (suggestionErr) {
+                    warn('[Agent-Process] Turn suggestion failed:', suggestionErr instanceof Error ? suggestionErr.message : String(suggestionErr));
                 }
             })();
         }
