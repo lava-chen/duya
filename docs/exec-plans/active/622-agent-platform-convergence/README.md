@@ -1,12 +1,19 @@
 # 622 — 平台收口系列（依赖测量先行）
 
 > **一句话**：先把「依赖图测不准」这件事修好，再谈拆包、提层、退役。
+>
+> **交接（2026-10-23）**：第一波卡 01 / 07 / 08 / 09 的执行 agent 会话丢失，
+> 其工作区改动已由父 agent 提交为 **WIP 快照并推送到远端**（**未验证、未开 PR**）。
+> 远端分支状态、重建检出命令与环境坑见 [HANDOFF.md](./HANDOFF.md)。
+> 后续进展：卡 01 已由 PR #399 正式完成；卡 07 / 08 / 09 的 WIP 快照仍待接手方补验收并开 PR。
 > 本系列是 622 号工作项的**唯一状态源**；卡片状态只认**具名测试 + commit**。
 
 - 编号：622（610–621 已占用）
 - 目录名 `622-agent-platform-convergence` 沿用 610 系列的 `NNN-<kebab>` 惯例
 - 基线：`d9eb7dba`（= `origin/master`，2026-10-23）
-- 状态：active · 负责人：worker（`codex/plan-622`）· 更新：2026-10-23
+- 状态：active · 负责人：Codex（`codex/622-02-gate-wiring`）· 更新：2026-10-24
+- 当前执行基线：`18a144e8ee25952cf19da3b45191cdc8a91e84bc`；初始测量基线仍记录于下文 §4.1。
+- 02 实现提交：`73c067c4396d9cee4097cbee372136a32a96e342` · PR：[#405](https://github.com/lava-chen/duya/pull/405)（open；architecture/typecheck/build 通过；全量测试的 2 个失败在 base 复现）。
 
 ---
 
@@ -17,13 +24,14 @@
 [§3 裁决摘要](#3-裁决摘要)。
 
 复核结论一句话：**本仓最紧的不是设计，是测量。**
-`architecture:check` 100% 豁免、层表只覆盖 20 个包里的 10 个、切片图跨包边为 0——
-在测量修好之前拆包，等于在一个坏尺子上量长度再决定怎么切。
+01 与 02 已修复切片图的裸 `@duya/*` 解析并把边图对账接进 CI：共同扫描范围内
+2587 个已解析边三元组完全一致。剩余问题是层表只覆盖 20 个包里的 10 个，以及
+`architecture:check` 仍有 2608 条被接受的历史发现；层表裁决依赖这把新尺子。
 
 ### 边界
 
-- **只排期，不改代码。** 卡片描述「怎么改」，执行由后续 agent 在各自检出完成。
-- 独占路径（本系列只写文档）：`docs/exec-plans/active/622-agent-platform-convergence/**`、
+- **计划只排期和记录，不实现代码。** 各卡片由对应 owner 在独立分支执行，状态见 §6。
+- 独占路径（本计划只写文档）：`docs/exec-plans/active/622-agent-platform-convergence/**`、
   `docs/exec-plans/README.md`、`docs/exec-plans/catalog.md`。
 - 每张卡片的**执行**路径在卡内「独占路径」字段单独声明，不属于本系列。
 
@@ -45,24 +53,19 @@
 
 三条实测事实（方法见 [§4 验证契约](#4-验证契约)）：
 
-1. **切片图看不见任何跨包边。**
-   `scripts/architecture/import-graph.mjs` 的 `resolveTarget`（`:283-319`）把裸
-   `@duya/<rest>` 映射到 `packages/<rest 第一段>`（**子路径被丢弃**），候选只试
-   `<pkg>.ts` / `<pkg>/index.ts`；而本仓**没有任何包在根目录放 `index.ts`**
-   （入口一律 `src/index.ts`，实测 20/20）。结果：
-   **755 个唯一 `@duya/*` 说明符全部解析为 `null`**，
-   图里跨包 value 边 **0 条**，同包边 4132 条。
-   正确的解析器（`audit-imports.mjs`，按各包 `package.json` 的 `name`/`exports` 建注册表）
-   在同一棵树上看到 **2593 条跨边界边**。
+1. **切片图跨包解析已修复（01 / PR #399）。**
+   解析器按 manifest name、子路径和 exports 回退定位 workspace 源文件；architecture CI
+   比较 graph 与 audit 在共同扫描范围的 `(from, spec, to)` 多重集合，当前各 **2587** 条、
+   差异 **0**。`audit-imports` 总计 2593 条，其中 6 条 unresolved 单独计数。
 2. **层门禁只看得见 20.2%。**
    `scripts/architecture/boundary-gates.mjs` 的 `LAYERS`（`:67-75`）只有四层
    （protocol / core / runtime / host），覆盖 10 个包；**另外 10 个包不在任何层**
    （`client-core` `command-catalog` `data` `host` `input-completion` `plugin-core`
    `sandbox` `tooling` `ui` `voice`）。实测：**2593 条跨边界边里 G1 只审 523 条（20.2%），
    跳过 2070 条（79.8%）**。跳过的主因是**源包无层**（1627 条）。
-3. **主门禁当前 100% 豁免。**
-   `architecture:check` 实测：检测 2608 / tolerated 2608 / blocking 0，
-   baseline 2785 条指纹、**255 条已不再触发**。绿色目前只证明"没有新增违规"。
+3. **主门禁仍 100% 接受当前发现。**
+   02 将 baseline 从 2785 收缩到 **2530** 个既存指纹，当前检查 2608 / tolerated 2608 /
+   blocking 0；按 scope 的退役引用 ratchet 和 baseline 只减检查已接入 CI。
 
 **推论**：现在拆 `@duya/host`（461 文件 / 95,948 LOC）等于在一个测不出跨包依赖的尺子上
 做结构决策——新拆出的包会落在**没有层、没有反向边门禁**的状态里，而现状的 `@duya/host`
@@ -75,8 +78,8 @@
 
 | 卡 | 标题 | 解决的审计断言 | 依赖 | 状态 |
 | --- | --- | --- | --- | --- |
-| [01](01-import-graph-resolver.md) | 修 `import-graph` 裸 `@duya/*` 解析 | A1 | 610 T19 | todo |
-| [02](02-gate-wiring-and-single-resolver.md) | 两套解析器收敛 + 关键门禁接进 CI | A2 A3 A4 | 01 | todo |
+| [01](01-import-graph-resolver.md) | 修 `import-graph` 裸 `@duya/*` 解析 | A1 | 610 T19 | done · PR #399 merged (`bb87d484`) |
+| [02](02-gate-wiring-and-single-resolver.md) | 两套解析器收敛 + 关键门禁接进 CI | A2 A3 A4 | 01 | done · `73c067c4` · PR #405 open, latest-head CI pending |
 | [03](03-host-layer-verdict.md) | `@duya/host` 层归属裁决 | A5 A6 | 01 02 | todo |
 | [04](04-remaining-unlayered-packages.md) | 其余无层包的层归属 | A5 | 03 | todo |
 | [05](05-client-axis-reverse-gate.md) | 客户端轴反向依赖门禁 G11 | B17 | 03 04 | todo |
@@ -308,13 +311,13 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 
 ### 5.2 路径所有权
 
-本系列**只写文档**，不碰生产代码。下表是各卡在**执行时**的独占路径，
+本计划自身**只写文档**，不碰生产代码。下表是各卡在**执行时**的独占路径，
 用于并行派工时不互相覆盖。
 
 | 卡 | 独占路径（执行时） |
 | --- | --- |
 | 01 | `scripts/architecture/import-graph.mjs`、`scripts/architecture/import-graph.test.ts`、`scripts/architecture/slice-cut-list.ts`、`scripts/architecture/slice-cut-list.test.ts`、`scripts/architecture/slice-classification.ts`、`scripts/architecture/slice-classification.test.ts`、`packages/agent-protocol/test/02-cycle-budget.test.ts` |
-| 02 | `scripts/architecture/architecture-check.mjs`、`.github/workflows/test.yml`、`package.json`（script 行）、`scripts/architecture/audit-imports.mjs`、`scripts/architecture/boundary-gates.mjs` |
+| 02 | `scripts/architecture/**`（resolver registry、退役 ratchet、baseline ratchet）、`.github/workflows/test.yml`、`package.json`（script 行）、`.architecture-baseline.json`、`docs/architecture/ARCHITECTURE_MAP.md` |
 | 03 | `scripts/architecture/boundary-gates.mjs`（`LAYERS` / `sourceLayerOf`）、`scripts/architecture/boundary-gates.test.ts`、`docs/architecture/ARCHITECTURE_MAP.md` |
 | 04 | `scripts/architecture/boundary-gates.mjs`、`scripts/architecture/boundary-gates.test.ts` |
 | 05 | `scripts/architecture/client-closure-gate.mjs`、`scripts/architecture/client-closure-gate.test.ts`、`scripts/architecture/boundary-gates.mjs` |
@@ -339,7 +342,6 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | [610 A8.2 / A8.3](../610-architecture-series/15-slice-a8-client-core.md) | **排序在…之前 / 被…覆盖**。A8.2（client-core 层定义）被 [04](04-remaining-unlayered-packages.md) 吸收；A8.3（客户端轴反向门禁）是 [05](05-client-axis-reverse-gate.md) 的**主体** |
 | [610 §12 / §13 退役](../610-architecture-series/12-agent-retirement-coordination.md) | **引用**。退役的消费者清单与顺序由既有计划拥有；[10](10-retirement-and-doc-truth.md) 只做**收尾 + CI 守卫 + 文档事实源**，不重写退役序列 |
 | [多 Agent 编排 Phase 1–4](../2026-10-23-multi-agent-orchestrator.md) | **引用 + 排序在…之前**。Phase 1（A1 补测 / A4 `FakeWorkflowHost`）**阻塞** [07](07-workflow-dag-parallel.md) 与 [08](08-background-subagent-lifecycle.md)；Phase 4（F1 落盘 / F3 状态映射）是 [08](08-background-subagent-lifecycle.md) 的**主体**，本系列不复制 |
-| [Desktop 性能爬坡](../2026-10-23-desktop-performance-hill-climbing.md) | **无交集**。该计划的 A–E 独占路径与本系列不重叠 |
 
 ---
 
@@ -349,17 +351,17 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 > 不认 `Waiting` / `In progress` / `已开工` 这类词。
 > 一张卡没有可复跑的绿测试，就是没完成，无论代码写到哪里。
 
-| 卡 | 状态 | 首个失败证据（今天长什么样） | 验收命令 | 依赖 |
+| 卡 | 状态 | 基线失败证据 | 验收命令 | 依赖 |
 | --- | --- | --- | --- | --- |
-| [01](01-import-graph-resolver.md) | todo | `import-graph.test.ts` 里**没有任何**裸 `@duya/*` 用例；`resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts` | T19 |
-| [02](02-gate-wiring-and-single-resolver.md) | todo | `.github/workflows/test.yml` 里 `architecture:slice-graph` 命中 **0** 次；`agent-retirement-gate` 命中 **0** 次 | `grep -c "architecture:slice-graph" .github/workflows/test.yml` ≥ 1 且 `npm run architecture:check` 仍绿 | 01 |
+| [01](01-import-graph-resolver.md) | done · PR #399 merged (`bb87d484`) | 原始 `d9eb7dba` 上 `resolveTarget('@duya/agent-protocol', …)` 返回 `null`（755/755 全 null） | `npx vitest run scripts/architecture/import-graph.test.ts`；`npm run architecture:slice-graph` | 610 T19 |
+| [02](02-gate-wiring-and-single-resolver.md) | done · `73c067c4` · PR #405 open | 原始 `d9eb7dba` 中 `architecture:slice-graph` 与 `agent-retirement-gate` 均未接入 workflow；旧 baseline 2785 条，255 条已失效 | 6 个架构测试文件 / 49 tests；`npm run architecture:slice-graph`；`npm run agent-retirement-gate`；`npm run architecture:check`；`npm run architecture:baseline-ratchet -- HEAD`；`npm run architecture:boundaries` | 01 |
 | [03](03-host-layer-verdict.md) | todo | `boundary-gates.test.ts` 没有"每个包都有层"的断言；10/20 包无层；G1 只审 523/2593 条 | `npx vitest run scripts/architecture/boundary-gates.test.ts` + `npm run architecture:boundaries` | 01 02 |
 | [04](04-remaining-unlayered-packages.md) | todo | 同上，"无层包"清单仍含 10 个 | `npx vitest run scripts/architecture/boundary-gates.test.ts` | 03 |
 | [05](05-client-axis-reverse-gate.md) | todo | G11 只覆盖浏览器入口；`packages/client-core` / `packages/ui` / `packages/cli` 的反向边无人守 | `npx vitest run scripts/architecture/client-closure-gate.test.ts` | 03 04 |
 | [06](06-runtime-purity.md) | todo | `authorization/permissions/types.ts:1` / `policy.ts:1` 的 `export * from '@duya/capabilities/permissions'` 让 runtime 运行时依赖 capabilities | `npx vitest run packages/agent-runtime/test/**` | 04 |
-| [07](07-workflow-dag-parallel.md) | todo | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
-| [08](08-background-subagent-lifecycle.md) | todo | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
-| [09](09-security-and-governance.md) | todo | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
+| [07](07-workflow-dag-parallel.md) | `2b3db6b1`（WIP 快照，无绿测试 → **未完成**） | 「同层两个无依赖节点的 host 调用**交错**执行」今天失败（`engine.ts:198` 的 `for…await` 串行） | `npx vitest run packages/host/tests/worker-workflows/**` | 多 Agent Phase 1 |
+| [08](08-background-subagent-lifecycle.md) | `8acbe4ce`（WIP 快照，仅 Phase 1 测试层 → **未完成**） | `packages/host/tests/worker-subagents/background-lifecycle.test.ts` **不存在**（零专属测试） | `npx vitest run packages/host/tests/worker-subagents/background-lifecycle.test.ts` | 多 Agent Phase 1 |
+| [09](09-security-and-governance.md) | `89569a63`（WIP 快照，无绿测试 → **未完成**） | `wrapCommand` / `executeIsolated` 零生产消费者；manifest `hasRules:false` | `npx vitest run packages/sandbox/tests/ packages/host/tests/**manifest**` | — |
 | [10](10-retirement-and-doc-truth.md) | todo | 退役门禁 `OPEN`（770 处引用）；`ARCHITECTURE_MAP.md:16` 写「23 packages」；`test-inventory.json` 162 处指向已删文件 | `node scripts/architecture/agent-retirement-gate.mjs` + `npm run test:inventory` | — |
 | [11](11-resident-reconciler.md) | todo | `packages/host` / `packages/cli` 无任何对账启动路径；`reconcileRollouts` 无开机调用 | `npx vitest run packages/host/tests/**reconcil**` | 08 |
 
@@ -367,24 +369,26 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 
 ## 7. 接续点
 
-- 分支：`codex/plan-622`；worktree：`.claude/worktrees/plan-622`；
-  base：`d9eb7dba96f63b3e07b4fba9c068acd017616913`。
-- 本系列**只产出文档**。所有卡片的执行由后续 agent 在各自独立检出完成，
-  一卡一 PR，按 §5.1 的依赖顺序。
-- **下一步（一条能开始执行的动作）**：
-  认领 [01](01-import-graph-resolver.md)，先在 T19 的根因上补一条
-  `import-graph.test.ts` 用例，证明裸 `@duya/*` 今天解析为 `null`，
-  然后再动 `resolveTarget`。**完成判据**：该用例在 base 上红、在修好的树上绿，
-  且 `slice-cut-list.test.ts` 与 `slice-classification.test.ts` 仍全绿。
-- **未做**：没有合并任何 PR（未经用户授权）；没有改任何生产代码、脚本或配置；
-  没有运行 `npm test` 全量（本次是纯文档任务，见 [§8](#8-本次交付的验证记录)）。
+- 当前分支：`codex/622-02-gate-wiring`；worktree：`.claude/worktrees/622-02-gate-wiring`；
+  base：`18a144e8ee25952cf19da3b45191cdc8a91e84bc`。
+- [01](01-import-graph-resolver.md) 已由 PR #399 合并（`bb87d484`）；[02](02-gate-wiring-and-single-resolver.md)
+  已在实现提交 `73c067c4396d9cee4097cbee372136a32a96e342` 完成验收，PR [#405](https://github.com/lava-chen/duya/pull/405)
+  已创建；最新 PR head 的 CI/review 待完成。
+- **下一步**：查看最新 PR head 的 CI/review 并处理具体问题；必需检查通过后等待获授权集成。
+  集成后启动 [03](03-host-layer-verdict.md)，按 §5.1 的依赖顺序推进。
+- **未做**：未合并任何 PR；未运行 `npm test` 全量；未运行 `electron:build`
+  （本卡未改运行时或打包路径）。
+- **2026-10-23 交接**：卡 07 / 08 / 09 已产出 WIP 提交并推送远端但未验证、未开 PR，
+  远端分支状态与重建检出命令见 [HANDOFF.md](./HANDOFF.md)；接手方先 rebase 再补验收与 PR。
 
 ---
 
-## 8. 本次交付的验证记录
+## 8. 本系列执行验证记录
 
-本系列**只产出文档**，不修改任何生产代码、脚本或配置。
-下列命令是**本次交付**实跑的，退出码与关键行逐字记录。
+### 8.1 初始文档审计（2026-10-23）
+
+此表保留系列首次文档审计的历史证据；01 与 02 后续执行记录见各自卡片。
+下列命令的退出码与关键结果来自当时实跑记录。
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
@@ -399,14 +403,21 @@ console.log('G1 examines', examined, 'of', d.crossBoundaryEdges.length);
 | `d9eb7dba` / 干净 | 同上 | 一次性链接检查（`/tmp/check-links.mjs`，扫 14 个 md） | **0** | `files scanned : 14` · `links checked : 240` · `broken : 0` |
 | `d9eb7dba` / 干净 | 同上 | 一次性锚点检查（`/tmp/check-anchors.mjs`） | **0** | `anchors checked: 10` · `broken anchors : 0`（跨文件锚点改为文件级链接，避免 slug 脆弱） |
 
-**本次交付没有跑的**（如实记录）：
+**初始文档审计没有跑的**（如实记录）：
 
 - `npm test` 全量——本次是**纯文档**变更，没有生产代码改动，
   跑全量不会增加对文档的信心，只会消耗预算。
-  ⇒ **卡片执行时必须跑各自的相关测试**，本系列的卡片已写明验收命令。
+  ⇒ 后续卡片执行时跑各自相关测试；验收命令记在对应卡片中。
 - `npm run typecheck:all`——同上，无代码变更。
 - `npm run electron:build`——同上，无构建产物变更。
 - **未验证的外部事实**：`packages/agent` 退役后的真实 worker 构建与加载
   （由既有 [12](../610-architecture-series/12-agent-retirement-coordination.md) 的
-  运行时验收负责，本系列只排期）。
+  运行时验收负责）。
+
+### 8.2 卡片执行状态（2026-10-24）
+
+| 卡 | 提交 / PR | 验收证据 |
+| --- | --- | --- |
+| [01](01-import-graph-resolver.md) | `bb87d484` · [PR #399 merged](https://github.com/lava-chen/duya/pull/399) | `import-graph.test.ts` 与 `architecture:slice-graph`，详见 01 卡 |
+| [02](02-gate-wiring-and-single-resolver.md) | `73c067c4396d9cee4097cbee372136a32a96e342` · [PR #405 open](https://github.com/lava-chen/duya/pull/405) | 6 files / 49 tests、全量 `typecheck:all`、架构 CI 与变异证明通过；full test 的 2 个 IPC 失败已在 base 复现，详见 02 卡 |
 

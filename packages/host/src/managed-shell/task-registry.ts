@@ -49,6 +49,36 @@ export type ProgressListener = (task: BashBackgroundTask) => void;
 /** Global listener receives a snapshot of all tasks on any change. */
 export type AnyChangeListener = (tasks: BashBackgroundTask[]) => void;
 
+export interface OutputTail {
+  readonly text: string;
+  readonly totalBytes: number;
+  readonly truncated: boolean;
+}
+
+/**
+ * Read at most `maxBytes` from the end of an output file.
+ *
+ * Returns null when the file cannot be read (missing, permissions); an empty
+ * file is a real answer (`text: ''`), not a missing one. The `truncated` flag
+ * is what lets a caller decide how to say "this is the tail", instead of every
+ * caller inventing its own prefix.
+ */
+export function readOutputTail(outputFile: string, maxBytes: number): OutputTail | null {
+  if (outputFile === '') return null;
+  try {
+    const stat = statSync(outputFile);
+    if (stat.size === 0) return { text: '', totalBytes: 0, truncated: false };
+
+    const buf = readFileSync(outputFile, { encoding: 'utf-8' });
+    if (buf.length > maxBytes) {
+      return { text: buf.slice(buf.length - maxBytes), totalBytes: stat.size, truncated: true };
+    }
+    return { text: buf, totalBytes: stat.size, truncated: false };
+  } catch {
+    return null;
+  }
+}
+
 export class BashTaskRegistry {
   private readonly store: Pick<ReturnType<typeof getBashTaskStore>, 'persist' | 'rehydrate'>;
   private readonly killTree: typeof killProcessTree;
@@ -237,24 +267,14 @@ export class BashTaskRegistry {
     const task = this.tasks.get(taskId);
     if (!task || !task.outputFile) return null;
 
-    try {
-      const stat = statSync(task.outputFile);
-      if (stat.size === 0) return { text: '', totalBytes: 0 };
-
-      const readStart = Math.max(0, stat.size - maxBytes);
-      const buf = readFileSync(task.outputFile, { encoding: 'utf-8' });
-
-      if (buf.length > maxBytes) {
-        return {
-          text: `(truncated - ${stat.size} bytes total)\n\n` + buf.slice(buf.length - maxBytes),
-          totalBytes: stat.size,
-        };
-      }
-
-      return { text: buf, totalBytes: stat.size };
-    } catch {
-      return null;
-    }
+    const tail = readOutputTail(task.outputFile, maxBytes);
+    if (tail === null) return null;
+    return {
+      // The registry's callers (agent tools) get a note in the text itself so
+      // a clipped read does not look like a command that printed nothing.
+      text: tail.truncated ? `(truncated - ${tail.totalBytes} bytes total)\n\n` + tail.text : tail.text,
+      totalBytes: tail.totalBytes,
+    };
   }
 
   /**

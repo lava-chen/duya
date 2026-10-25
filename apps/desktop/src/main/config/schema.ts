@@ -4,6 +4,8 @@
  * `~/.duya/secrets.json`, never here.
  */
 
+import type { CustomAgentConfig } from '@duya/host/config-agents';
+
 // ==== leaf shapes referenced by the top-level document ====
 export interface StorageConfig {
   database_path: string;
@@ -98,86 +100,20 @@ export interface AgentConfig {
   busy_message_mode: 'followup' | 'queued';
 }
 
-/** [agents.<id>] — user-defined agent profile driven entirely by config.toml.
- *  id (map key) is the agent_profile_id used by sessions. Mirrors the
- *  openclaw AgentConfig surface (workspace / model / tools), kept minimal:
- *  model / workspace / system-prompt path / tools / plugins. */
-export interface CustomAgentToolsConfig {
-  /** Base tool profile: 'full' | 'coding' | 'minimal' | 'research' (maps to allow/deny presets). */
-  profile?: string;
-  /** Additional allowed tool patterns (wildcards supported, e.g. 'file:*'). */
-  allow?: string[];
-  /** Denied tool patterns; deny wins. */
-  deny?: string[];
-}
-
-/** Plan 474 §2.4: structured prompt persona — overrides the registry
- *  fallback for prompt rendering only (runtime profile.json still wins). */
-export interface CustomAgentPromptIdentityConfig {
-  name?: string;
-  description?: string;
-  /** How the bot speaks (tone/style hint rendered by the botIdentity section). */
-  voice?: string;
-}
-
-/** Plan 474 §2.4: section gating. Unknown section names are ignored
- *  (forward compatible with sections landing via 476/479/481). */
-export interface CustomAgentPromptSectionsConfig {
-  /** Whitelist: when non-empty, only these registered sections render. */
-  enable?: string[];
-  /** Blacklist: these sections never render; wins over enable. */
-  disable?: string[];
-}
-
-/** Plan 474 §2.4: `[agents.<id>.prompt]` table (bot system-prompt config). */
-export interface CustomAgentPromptConfig {
-  sections?: CustomAgentPromptSectionsConfig;
-  identity?: CustomAgentPromptIdentityConfig;
-}
-
-export interface CustomAgentConfig {
-  /** Display name (falls back to the map key). */
-  name?: string;
-  /** One-line role description. */
-  description?: string;
-  /** Provider/model ref, e.g. 'anthropic/claude-sonnet-4-20250514'. Empty → fallback to config.model.default. */
-  model?: string;
-  /**
-   * Provider store id the `model` belongs to (set by the bot settings UI).
-   * Without it the model id is resolved against the default provider, which
-   * breaks when the model is enabled on a non-default provider.
-   */
-  provider?: string;
-  /**
-   * This agent's own thinking level (bound to the model): 'off' disables
-   * thinking, 'low'/'medium'/'high' map to the provider's native reasoning
-   * effort. Absent → the runtime default ('medium').
-   */
-  reasoning?: 'off' | 'low' | 'medium' | 'high';
-
-  /** This agent's own working directory. Empty → default workspace (~/.duya/workspace). */
-  workspace?: string;
-  /** Path to this agent's global instruction file (系统提示词配置路径). Empty → <workspace>/AGENTS.md. */
-  agents_md?: string;
-  /** Tool allow/deny/profile. */
-  tools?: CustomAgentToolsConfig;
-  /** Plugin / mcp references enabled for this agent (e.g. 'mcp:github'). */
-  plugins?: string[];
-  /** Bot system-prompt section config (Plan 474 P3.2). Preserved as-is on upsert. */
-  prompt?: CustomAgentPromptConfig;
-  /**
-   * Plan 493 (Phase D): soft-delete timestamp in Unix ms. When set, the
-   * agent is in the soft-deleted state — its tree lives under
-   * `<agentsDir>/.deleted/<deletedAt>-<id>/`, IPC handlers report "not
-   * found", and the sidebar / drawer hide it from the default list.
-   * `undefined` or `null` (and the JSON round-trip `null`) means "live".
-   */
-  deleted_at?: number | null;
-  /** Optional free-text note from the caller (e.g. "owner request"). */
-  deleted_reason?: string | null;
-  /** Scheduled wall-clock time (Unix ms) when the bot will be physically removed. */
-  deleted_purge_at?: number | null;
-}
+/**
+ * `[agents.<id>]` — user-defined agent profiles driven entirely by config.toml.
+ *
+ * The shape lives in `@duya/host/config-agents`: the Desktop config store,
+ * the standalone Host and the worker all read and write the same tables, so a
+ * field only one of them knows about is a field the other two drop.
+ */
+export type {
+  CustomAgentConfig,
+  CustomAgentPromptConfig,
+  CustomAgentPromptIdentityConfig,
+  CustomAgentPromptSectionsConfig,
+  CustomAgentToolsConfig,
+} from '@duya/host/config-agents';
 
 /**
  * Desktop voice input config (`[voice]`). STT engine is local whisper.cpp by

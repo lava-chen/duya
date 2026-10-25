@@ -3,40 +3,15 @@ import * as path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { parse as parseToml } from '@iarna/toml';
 import { resolveDataRoot } from '@duya/data/data-paths';
+import type { CustomAgentConfig } from './config-agents/agent-config-schema.js';
 
-export interface CustomAgentToolsConfig {
-  profile?: string;
-  allow?: string[];
-  deny?: string[];
-}
-
-export interface CustomAgentPromptIdentityConfig {
-  name?: string;
-  description?: string;
-  voice?: string;
-}
-
-export interface CustomAgentPromptSectionsConfig {
-  enable?: string[];
-  disable?: string[];
-}
-
-export interface CustomAgentPromptConfig {
-  sections?: CustomAgentPromptSectionsConfig;
-  identity?: CustomAgentPromptIdentityConfig;
-}
-
-export interface CustomAgentConfig {
-  name?: string;
-  description?: string;
-  model?: string;
-  provider?: string;
-  workspace?: string;
-  agents_md?: string;
-  tools?: CustomAgentToolsConfig;
-  plugins?: string[];
-  prompt?: CustomAgentPromptConfig;
-}
+export type {
+  CustomAgentConfig,
+  CustomAgentPromptConfig,
+  CustomAgentPromptIdentityConfig,
+  CustomAgentPromptSectionsConfig,
+  CustomAgentToolsConfig,
+} from './config-agents/agent-config-schema.js';
 
 /** Resolve the shared user configuration root without depending on Electron. */
 export function resolveConfigRoot(): string {

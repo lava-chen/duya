@@ -9,6 +9,24 @@
  *   1. GATEWAY_COMMANDS - the built-in, static command set.
  *   2. DYNAMIC_COMMANDS - runtime-registered commands (e.g. installed skills
  *      exposed as slash commands) appended via `registerDynamicCommands()`.
+ *
+ * ## Every command here must be executable
+ *
+ * The gateway only DETECTS commands. Execution happens Main-side, in
+ * `handleGatewayCommand` (`apps/desktop/src/main/gateway/message-bus.ts`), and
+ * anything without a Main-side implementation falls into that function's
+ * `default:` branch and answers `尚未在此构建中启用`.
+ *
+ * That fallback is a good last resort, but it is not a substitute for being in
+ * the registry at all: `COMMAND_REGISTRY` is what the Telegram adapter uploads
+ * as the bot's `/commands` menu (`adapters/telegram/index.ts`), and
+ * `generateHelpText` lists the same set in `/help`. A command the Main process
+ * cannot run must therefore not be advertised — the user would tap it from a
+ * menu that the product itself published.
+ *
+ * So this list is deliberately the set Main-side actually implements:
+ * `help` / `new` / `reset` / `clear` / `stop` / `status`. Adding a command
+ * here means adding its Main-side case in the same change.
  */
 
 import type { CommandDef } from './types.js';
@@ -31,45 +49,8 @@ const GATEWAY_COMMANDS: CommandDef[] = [
     category: 'session',
   },
   {
-    name: 'retry',
-    description: 'Resend the last user message',
-    category: 'session',
-  },
-  {
-    name: 'undo',
-    description: 'Remove the last user/assistant exchange',
-    category: 'session',
-  },
-  {
     name: 'stop',
     description: 'Stop the current stream/session',
-    category: 'session',
-  },
-  {
-    name: 'save',
-    description: 'Save the current session',
-    category: 'session',
-  },
-  {
-    name: 'sessions',
-    description: 'List available sessions',
-    category: 'session',
-  },
-  {
-    name: 'resume',
-    description: 'Resume a session by name',
-    argsHint: '[name]',
-    category: 'session',
-  },
-  {
-    name: 'history',
-    description: 'Show a summary of the current session history',
-    category: 'session',
-  },
-  {
-    name: 'title',
-    description: 'Set the session title',
-    argsHint: '<name>',
     category: 'session',
   },
 
@@ -81,143 +62,9 @@ const GATEWAY_COMMANDS: CommandDef[] = [
     category: 'info',
   },
   {
-    name: 'commands',
-    description: 'List all available commands (including dynamic)',
-    category: 'info',
-  },
-  {
     name: 'status',
     description: 'Show session info',
     category: 'info',
-  },
-  {
-    name: 'about',
-    description: 'Show bot introduction',
-    category: 'info',
-  },
-
-  // --- Model / provider ---
-  {
-    name: 'model',
-    description: 'Show or switch the current model',
-    argsHint: '[provider:model]',
-    category: 'model',
-  },
-  {
-    name: 'provider',
-    description: 'Show the current provider',
-    category: 'model',
-  },
-  {
-    name: 'reasoning',
-    description: 'Toggle or show reasoning display',
-    category: 'model',
-  },
-
-  // --- Context / usage ---
-  {
-    name: 'usage',
-    description: 'Show context/usage estimate',
-    category: 'context',
-  },
-  {
-    name: 'compress',
-    description: 'Trigger context compression',
-    argsHint: '[here [N] | focus topic]',
-    category: 'context',
-  },
-  {
-    name: 'position',
-    description: 'Show context position/cursor',
-    category: 'context',
-  },
-  {
-    name: 'insights',
-    description: 'Show usage insights',
-    argsHint: '[days]',
-    category: 'context',
-  },
-
-  // --- Account / config ---
-  {
-    name: 'whoami',
-    description: 'Show current user id and role in the group',
-    category: 'account',
-  },
-  {
-    name: 'profile',
-    description: 'Show the current profile name and home directory',
-    category: 'config',
-  },
-  {
-    name: 'sethome',
-    description: 'Set the current chat as the home channel',
-    category: 'config',
-  },
-
-  // --- Personality / voice ---
-  {
-    name: 'personality',
-    description: 'Show or change the agent personality',
-    argsHint: '[name]',
-    category: 'model',
-  },
-  {
-    name: 'voice',
-    description: 'Control messaging voice replies',
-    argsHint: '[on|off|tts|status]',
-    category: 'voice',
-  },
-
-  // --- Background / rollback / steer ---
-  {
-    name: 'background',
-    description: 'Run a prompt in a separate background session',
-    argsHint: '<prompt>',
-    category: 'session',
-  },
-  {
-    name: 'rollback',
-    description: 'List or restore filesystem checkpoints',
-    argsHint: '[number]',
-    category: 'context',
-  },
-  {
-    name: 'steer',
-    description: 'Inject a message into the current run',
-    argsHint: '<message>',
-    category: 'session',
-  },
-
-  // --- Display / fast mode ---
-  {
-    name: 'fast',
-    description: 'Toggle fast mode',
-    argsHint: '[on|off]',
-    category: 'model',
-  },
-  {
-    name: 'verbose',
-    description: 'Toggle detailed tool progress',
-    argsHint: '[on|off]',
-    category: 'context',
-  },
-
-  // --- Maintenance / lifecycle ---
-  {
-    name: 'reload-mcp',
-    description: 'Reload MCP servers from config',
-    category: 'config',
-  },
-  {
-    name: 'update',
-    description: 'Update DUYA to the latest version',
-    category: 'config',
-  },
-  {
-    name: 'delete',
-    description: 'Delete the current session',
-    category: 'session',
   },
 ];
 

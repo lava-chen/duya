@@ -75,12 +75,6 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
   // Session commands that need badge mode
   { label: pickLabelByName('compact'), value: '/compact', description: '压缩对话上下文以节省 token', descriptionEn: 'Compress conversation context to save tokens', builtIn: true, kind: 'agent_command' as const },
   { label: pickLabelByName('export'), value: '/export', description: '将会话导出为 markdown/json/html', descriptionEn: 'Export conversation to markdown/json/html', builtIn: true, kind: 'agent_command' as const },
-  // Skill commands
-  { label: pickLabelByName('review'), value: '/review', description: '审查代码变更并给出详细反馈', descriptionEn: 'Review code changes with detailed feedback', builtIn: true, kind: 'agent_skill' as const },
-  { label: pickLabelByName('simplify'), value: '/simplify', description: '简化并重构复杂的代码', descriptionEn: 'Simplify and refactor complex code', builtIn: true, kind: 'agent_skill' as const },
-  { label: pickLabelByName('doctor'), value: '/doctor', description: '诊断项目问题并给出修复建议', descriptionEn: 'Diagnose project issues and suggest fixes', builtIn: true, kind: 'agent_skill' as const },
-  { label: pickLabelByName('commit'), value: '/commit', description: '智能生成 Git 提交信息', descriptionEn: 'Generate smart Git commit messages', builtIn: true, kind: 'agent_skill' as const },
-  { label: pickLabelByName('plan'), value: '/plan', description: '为复杂任务进入规划模式', descriptionEn: 'Enter planning mode for complex tasks', builtIn: true, kind: 'agent_skill' as const },
 ];
 
 function pickLabel(cmd: { labelZh?: string; label?: string; name: string }): string {

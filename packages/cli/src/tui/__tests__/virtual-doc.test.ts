@@ -55,7 +55,7 @@ describe('visibleWindow', () => {
   const heights = [3, 2, 0, 4];
 
   it('ends at the newest line when the reader is following', () => {
-    const window = visibleWindow(heights, 4, 0);
+    const window = visibleWindow(heights, 4, 0, true);
     expect(window.totalLines).toBe(9);
     expect(window.maxStart).toBe(5);
     expect(window.lineStart).toBe(5);
@@ -64,35 +64,60 @@ describe('visibleWindow', () => {
   });
 
   it('moves the window up by the scroll offset', () => {
-    const window = visibleWindow(heights, 4, 2);
+    // The offset is absolute: line 3 from the TOP, not two lines back from the
+    // newest one.
+    const window = visibleWindow(heights, 4, 3, false);
     expect(window.lineStart).toBe(3);
     expect(window.lineEnd).toBe(7);
     expect(window.following).toBe(false);
   });
 
+  it('keeps the window on the content while the document grows', () => {
+    // The reader scrolled up to line 3. Two more lines arrive at the bottom,
+    // and the window must stay on line 3 — an offset counted from the tail
+    // would have dragged the viewport along with the newest line.
+    const before = visibleWindow(heights, 4, 3, false);
+    const grown = visibleWindow([...heights, 2], 4, 3, false);
+    expect(grown.lineStart).toBe(before.lineStart);
+    expect(grown.lineStart).toBe(3);
+  });
+
+  it('pins the window to the newest line while following', () => {
+    const window = visibleWindow([...heights, 2], 4, 3, true);
+    expect(window.lineStart).toBe(window.maxStart);
+    expect(window.lineStart).toBe(7);
+  });
+
   it('clamps a scroll past the top instead of reporting a negative start', () => {
-    const window = visibleWindow(heights, 4, 10_000);
+    // The offset counts from the TOP, so a negative one is past the top.
+    const window = visibleWindow(heights, 4, -10, false);
     expect(window.lineStart).toBe(0);
     expect(window.lineEnd).toBe(4);
   });
 
+  it('clamps a scroll past the bottom to the newest line', () => {
+    const window = visibleWindow(heights, 4, 10_000, false);
+    expect(window.lineStart).toBe(5);
+    expect(window.lineEnd).toBe(9);
+  });
+
   it('reports an empty document as empty, not as one blank line', () => {
-    const window = visibleWindow([], 4, 0);
+    const window = visibleWindow([], 4, 0, true);
     expect(window).toMatchObject({ totalLines: 0, lineStart: 0, lineEnd: 0, firstBlock: 0, lastBlock: 0 });
   });
 
   it('names the blocks the window intersects, skipping zero-height ones', () => {
     // Window [3, 7): line 3 is inside block 1 (lines 3..4), and the empty block
     // 2 sits at line 5. It must not be dragged in: it has nothing to paint.
-    expect(visibleWindow(heights, 4, 2).firstBlock).toBe(1);
-    expect(visibleWindow(heights, 4, 2).lastBlock).toBe(4);
+    expect(visibleWindow(heights, 4, 3, false).firstBlock).toBe(1);
+    expect(visibleWindow(heights, 4, 3, false).lastBlock).toBe(4);
 
     // A window entirely inside block 3 (lines 5..8) names only that block.
-    expect(visibleWindow(heights, 2, 1)).toMatchObject({ lineStart: 6, firstBlock: 3, lastBlock: 4 });
+    expect(visibleWindow(heights, 2, 6, false)).toMatchObject({ lineStart: 6, firstBlock: 3, lastBlock: 4 });
   });
 
   it('never reports a window wider than the document', () => {
-    const window = visibleWindow([1, 1], 24, 0);
+    const window = visibleWindow([1, 1], 24, 0, true);
     expect(window.lineStart).toBe(0);
     expect(window.lineEnd).toBe(2);
   });
@@ -145,7 +170,7 @@ describe('TranscriptPane', () => {
   it('measures the whole document but paints only the window', () => {
     const model = modelOf(200);
     const renderer = new TranscriptRenderer();
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: true });
     // A block is not one line: the renderer owns that decision, so the document
     // height is asked for rather than assumed.
     expect(pane.measure(80)).toBe(renderer.totalLines(model, { ...OPTIONS, width: 80 }));
@@ -162,19 +187,20 @@ describe('TranscriptPane', () => {
   it('shows older lines when the reader scrolls back', () => {
     const model = modelOf(200);
     const renderer = new TranscriptRenderer();
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 5 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: false });
     const canvas = new SceneCanvas(80, 10);
     pane.paint(canvas, { row: 0, column: 0, width: 80, height: 10 });
     const window = pane.window(80, 10);
-    // Five lines further back than the follow window: the same query answers it,
-    // which is what the inline path will read instead of its own viewEnd.
-    expect(window.lineStart).toBe(window.maxStart - 5);
+    // The reader scrolled back to the top, and the same query answers it
+    // without a second window implementation to disagree with.
+    expect(window.lineStart).toBe(0);
+    expect(window.following).toBe(false);
     expect(canvas.textAt(0).trimEnd()).toBe(plainLine(renderer, model, window.lineStart));
   });
 
   it('paints nothing beyond the viewport, even when the window is taller', () => {
     const model = modelOf(5);
-    const pane = new TranscriptPane({ renderer: new TranscriptRenderer(), model, options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer: new TranscriptRenderer(), model, options: OPTIONS, scrollTop: 0, following: true });
     const canvas = new SceneCanvas(20, 4);
     pane.paint(canvas, { row: 0, column: 0, width: 20, height: 4 });
     expect(pane.stats.linesPainted).toBe(4);
@@ -187,7 +213,7 @@ describe('10k blocks', () => {
   it('paints the viewport for a cost bounded by the viewport', () => {
     const model = modelOf(BLOCKS);
     const renderer = new TranscriptRenderer();
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: true });
 
     // Warm the cache once: this is the frame where the markdown work happens.
     expect(pane.measure(80)).toBe(renderer.totalLines(model, { ...OPTIONS, width: 80 }));
@@ -208,7 +234,7 @@ describe('10k blocks', () => {
   it('repaints the same window for free', () => {
     const model = modelOf(BLOCKS);
     const renderer = new TranscriptRenderer();
-    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollLines: 0 });
+    const pane = new TranscriptPane({ renderer, model, options: OPTIONS, scrollTop: 0, following: true });
     pane.measure(80);
     const hitsBefore = renderer.stats.hits;
 

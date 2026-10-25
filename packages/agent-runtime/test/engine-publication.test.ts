@@ -416,6 +416,28 @@ describe('the engine publishes assistant.usage ONCE per turn', () => {
     await h.completed;
     expect(only(h.offered, 'assistant.usage')).toEqual([]);
   });
+
+  it('carries the provider request duration on the published usage', async () => {
+    // The duration is what makes the output rate derivable downstream, so it
+    // has to survive the engine. It is OMITTED rather than zeroed when the
+    // provider measured nothing.
+    const h = harness({
+      frames: [
+        { type: 'usage', inputTokens: 10, outputTokens: 1600, requestDurationMs: 20_000 },
+      ],
+    });
+    await h.completed;
+
+    const event = h.offered[only(h.offered, 'assistant.usage')[0] ?? -1];
+    expect(event).toMatchObject({
+      usage: { inputTokens: 10, outputTokens: 1600, requestDurationMs: 20_000 },
+    });
+
+    const bare = harness({ frames: [{ type: 'usage', inputTokens: 10, outputTokens: 1600 }] });
+    await bare.completed;
+    const bareEvent = bare.offered[only(bare.offered, 'assistant.usage')[0] ?? -1];
+    expect(bareEvent?.usage).not.toHaveProperty('requestDurationMs');
+  });
 });
 
 // ============================================================================

@@ -36,7 +36,7 @@ export function CompleteStep({ onEnter }: CompleteStepProps) {
             className="text-2xl font-bold"
             style={{
               color: "var(--text)",
-              fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif",
+              fontFamily: 'var(--font-serif)',
             }}
           >
             {t("onboarding.completeTitle")}

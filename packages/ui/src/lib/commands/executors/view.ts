@@ -24,6 +24,7 @@ import type { CommandExecutorFn } from './registry';
 import type { CommandContext, CommandResult } from '../types';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useBtwStore } from '@/stores/btw-store';
+import { peekUiServices } from '@/services';
 import { askSideQuestion } from '@/lib/agent-sse-client';
 
 /**
@@ -80,6 +81,24 @@ export const VIEW_EXECUTORS: Record<string, CommandExecutorFn> = {
     }
     app.toggleMode('goal');
     return { type: 'forward', prompt: fullLine(ctx) };
+  },
+
+  /**
+   * Plan mode is a session-level mode modifier — the same one the composer's
+   * "Plan Mode" chip toggles (`useSlashCommands.ts` → `modeValue: 'plan-task'`).
+   * Switching it on is what makes the agent plan before it edits.
+   *
+   * `toggleMode` is a toggle, so re-running `/plan` turns the mode back off.
+   * That matches tapping the chip twice, which is what the user sees.
+   *
+   * The mode is mutually exclusive with `research` (`MODE_EXCLUSIVE_WITH` in
+   * `@/types/mode-id`), so turning plan mode on drops research mode.
+   */
+  plan: (ctx) => {
+    const app = ctx.app;
+    if (!app) return bridgeMissing('plan');
+    app.toggleMode('plan-task');
+    return { type: 'dismiss' };
   },
 
   /**
@@ -154,6 +173,24 @@ export const VIEW_EXECUTORS: Record<string, CommandExecutorFn> = {
         '已为你打开自动化页面，点击新建定时任务即可配置同样的内容。',
       ].join('\n'),
     };
+  },
+
+  /**
+   * `/workflow` → the workflow page (definitions and runs).
+   *
+   * A surface that has no workflows (the Web app) says so instead of opening
+   * a page that renders nothing — the same rule the sidebar follows when it
+   * disables the workflow entry.
+   */
+  workflow: (ctx) => {
+    const app = ctx.app;
+    if (!app) return bridgeMissing('workflow');
+    if (peekUiServices()?.capabilities.workflows === false) {
+      return { type: 'error', message: '当前平台不支持工作流。' };
+    }
+    useConversationStore.getState().setCurrentView('workflow');
+    app.toast('已打开工作流', 'info');
+    return { type: 'dismiss' };
   },
 
   /** Memory lives in 设置 → 记忆 (settings tab `memory`). */

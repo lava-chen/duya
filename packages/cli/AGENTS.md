@@ -26,7 +26,8 @@
 | `packages/cli/src/index.ts:34` | 公共面：根导出 + subpath `./contract`、`./tui`、`./providers`、`./host-session`、`./host-task-store`、`./transcript-persistence`、`./worker-services` |
 | `packages/cli/src/index.ts:46` | `buildProgram` 是纯函数，不做 IO、不改 argv；`bin/duya` 负责接线 |
 | `packages/cli/src/index.ts:69` | `duya serve` → `startLocalHost`（`@duya/host/local-host`） |
-| `packages/cli/src/tui-command.ts:97` | `duya tui` → 附着已有 Host，或起一个 ephemeral Host |
+| `packages/cli/src/tui-command.ts:97` | `duya tui` → 附着已有 Host；没有就拉起一个后台 Host |
+| `packages/cli/src/tui/background-host.ts:1` | 后台 Host 启动器：独立进程 + 等 descriptor，不是进程内 ephemeral |
 | `packages/cli/src/contract/index.ts:24` | 硬规则：本模块**不得**导入 agent 运行时；agent 工具经此到控制面，不进 agent 内部 |
 | `packages/cli/src/program/build-agent-runner.ts:12` | 进程内派发 + stdout/stderr 捕获（外部 `duya` CLI 不捕获，用户要看到输出） |
 | `packages/cli/src/agent-worker-entry.ts:1` | worker bundle 入口；本包同时是 worker 的**装配方**（`workerProcessAssembly`） |
@@ -37,8 +38,9 @@
 | --- | --- | --- |
 | `dev:tui` 报 MODULE_NOT_FOUND | `package.json:114` | `dev:tui` 跑的是打包产物 `bundle/cli.cjs`（gitignored，见 `.gitignore:144`）；新克隆/新 worktree 没有它，先跑 `npm run build:cli-dev`（`package.json:113`） |
 | `duya serve` 起不来 | `packages/cli/src/index.ts:69` | 起 Host 的唯一入口；端口非法直接 `exitCode=64`（`:63`） |
-| `duya tui` 连不上 | `packages/cli/src/tui-command.ts:97` | 先尝试附着已有 Host，失败才起 ephemeral |
-| CLI 说"没有 worker" | `packages/cli/src/worker-path.ts:5` | 解析不到 worker 入口时 Host 以 LEDGER-ONLY 模式运行（`packages/cli/src/index.ts:74`） |
+| `duya tui` 连不上 | `packages/cli/src/tui-command.ts:97` | 先附着已有 Host，没有就拉起后台 Host（`serve --client-scoped`） |
+| `duya tui` 报数据库已被占用 | `packages/cli/src/tui-command.ts` 的 `hostUnavailableMessage` | 数据目录被别的进程占着；改用 `DUYA_DATA_ROOT` 另开一份 |
+| CLI 说"没有 worker" | `packages/cli/src/worker-path.ts:5` | 解析不到 worker 入口时 Host 以 LEDGER-ONLY 模式运行（无 `agent_run_execution`，客户端会拒绝附着） |
 | `duya_cli` 工具命令找不到 | `packages/cli/src/program/descriptors.ts` | 命令集在这里冻结；agent 工具与 CLI 共用同一份描述符（`packages/cli/src/contract/index.ts:9`） |
 | agent 工具的输出污染了 TTY | `packages/cli/src/program/build-agent-runner.ts:12` | 只有这条路径捕获 stdout/stderr |
 
@@ -46,4 +48,5 @@
 
 - 架构层 `host`（`architecture-policy.yaml:119`），模块 `legacy-cli` `managed: false`（`:795`），`requires` 含 `duya-host`、`data`、`agent-protocol`、`client-core`、`legacy-ai`、`command-catalog`（`:811`）。
 - 硬规则：`packages/cli/src/contract/index.ts:24` 与 `packages/cli/src/index.ts:8` 都禁止导入 agent 运行时。CLI 与 agent 之间的唯一通道是 HTTP 控制面。
+- Commander 选项按**驼峰属性名**存值：`--client-scoped` 要用 `getOptionValue('clientScoped')` 读。用连字符名读会得到 `undefined`，选项被静默忽略——`--api-format` 与 `--runtime-file` 曾因此失效。
 - `bundle/cli.cjs` 是 gitignored 的构建产物（`scripts/build-cli-bundle.mjs:23`），不是源码，别去"修"它。

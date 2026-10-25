@@ -15,41 +15,37 @@
  * out of `listConfigAgents` / `getConfigAgent`, and their on-disk tree
  * lives under `<agentsDir>/.deleted/<deletedAt>-<id>/`.
  */
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { CustomAgentConfig } from './schema.js';
 import { getConfigStore } from './store-instance.js';
-import { assertValidBotId, isSafeBotId } from './agent-id.js';
+import { isSafeBotId } from './agent-id.js';
 import {
   getBotDeletedAgentDir,
-  getBotDeletedDir,
   getBotProfilePath,
-  getDuyaAgentsRoot,
   resolveDuyaAgentDir,
 } from './agent-paths.js';
 import { readBotProfile, writeBotProfile, type BotProfile, type BotProfileInput } from './bot-profile.js';
 import { getLogger, LogComponent } from '../logging/logger';
+import {
+  allocateBotId as allocateBotIdShared,
+  assertConfigAgentId,
+  buildUpsertedAgent,
+  isSoftDeletedConfigAgent,
+  mergeTakenBotIds,
+  seedBotProfileIfMissing as seedBotProfileIfMissingShared,
+  slugifyBotIdFromName,
+} from '@duya/host/config-agents';
+import type {
+  AgentIdentityPatch,
+  AgentUpsertInput,
+  CreatedConfigAgent,
+} from '@duya/host/config-agents';
+
+export type { AgentIdentityPatch, AgentUpsertInput, CreatedConfigAgent };
+export { isSoftDeletedConfigAgent, slugifyBotIdFromName };
 
 const logger = getLogger();
-
-export interface AgentUpsertInput {
-  name: string;
-  description?: string;
-  /** Role subtitle — profile.json ONLY (485 §2.4), never stored in config.toml. */
-  title?: string;
-  model?: string;
-  /** Provider store id the `model` belongs to. Absent → preserve the existing value. */
-  provider?: string;
-  /** Thinking level bound to the model ('off'|'low'|'medium'|'high'). Absent → preserve the existing value. */
-  reasoning?: 'off' | 'low' | 'medium' | 'high';
-  workspace?: string;
-  agents_md?: string;
-  tools?: { profile?: string; allow?: string[]; deny?: string[] };
-  plugins?: string[];
-  /** Color token for the initial-circle avatar, seeded into `agents/<id>/profile.json` on first creation. */
-  avatarColor?: string;
-}
 
 /** Plan 493 (Phase D): a soft-deleted agent record for the drawer / IPC. */
 export interface DeletedConfigAgent {
@@ -64,14 +60,6 @@ export interface DeletedConfigAgent {
 /** Plan 493 (Phase D): default soft-delete grace period: 30 days. */
 export const SOFT_DELETE_GRACE_MS = 30 * 24 * 60 * 60 * 1000;
 
-/**
- * True iff `cfg` is in the soft-deleted state. The CustomAgentConfig
- * field is nullable because JSON round-trip restores `undefined` to
- * `undefined` and `null` to `null`; both mean "live".
- */
-export function isSoftDeletedConfigAgent(cfg: CustomAgentConfig | undefined): boolean {
-  return !!(cfg && typeof cfg.deleted_at === 'number' && cfg.deleted_at > 0);
-}
 
 /**
  * Plan 493 (Phase D): list live config-agents only. Soft-deleted agents
@@ -173,9 +161,7 @@ export function listBots(): BotListItem[] {
 }
 
 export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAgentConfig {
-  if (!id || !/^[a-z0-9][a-z0-9-]*$/.test(id)) {
-    throw new Error(`agent id must be lowercase alphanumeric + dashes, got '${id}'`);
-  }
+  assertConfigAgentId(id);
   if (!input.name || !input.name.trim()) {
     throw new Error('agent name is required');
   }
@@ -189,29 +175,10 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
   if (isSoftDeletedConfigAgent(agents[id])) {
     throw new Error(`agent '${id}' is soft-deleted; restore or purge it before re-creating`);
   }
-  const next: CustomAgentConfig = {
-    name: input.name.trim(),
-    description: input.description?.trim() || undefined,
-    model: input.model?.trim() || undefined,
-    // Provider only changes when the caller carries it (the settings forms
-    // always do); callers that patch other fields must not drop the binding.
-    provider: input.provider !== undefined
-      ? input.provider.trim() || undefined
-      : agents[id]?.provider,
-    // Reasoning only changes when the caller carries it; patch callers must
-    // not drop the bound thinking level.
-    reasoning: input.reasoning !== undefined
-      ? input.reasoning
-      : agents[id]?.reasoning,
-    workspace: input.workspace?.trim() || undefined,
-    agents_md: input.agents_md?.trim() || undefined,
-    tools: input.tools && Object.keys(input.tools).length ? input.tools : undefined,
-    plugins: input.plugins && input.plugins.length ? input.plugins : undefined,
-    // Plan 474 P3.2: `[agents.<id>.prompt]` is hand-edited toml config —
-    // the upsert input has no prompt surface, so preserve the existing
-    // table instead of dropping it on re-upsert.
-    prompt: agents[id]?.prompt,
-  };
+  // The merge rules live in `@duya/host/config-agents` so the Desktop config
+  // store and the standalone Host cannot drift apart on what an upsert
+  // preserves (provider / reasoning / prompt) and what it clears.
+  const next = buildUpsertedAgent(agents[id], input);
   agents[id] = next;
   store.set('agents', agents);
   if (isNewAgent) {
@@ -224,7 +191,7 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
  * Plan 485 P2.1: on first creation, seed `agents/<id>/profile.json` from
  * the config entry. Best-effort — a profile write failure must never roll
  * back the config save. Existing profiles are never overwritten (runtime
- * identity wins). Ids that fail `isSafeBotId` (e.g. legacy config keys)
+ * identity wins). Ids that fail the bot-id rule (e.g. legacy config keys)
  * skip seeding until a migration tool lands (485 Phase 4).
  */
 function seedBotProfileIfMissing(
@@ -234,20 +201,13 @@ function seedBotProfileIfMissing(
   avatarColor?: string,
   title?: string,
 ): void {
-  if (!isSafeBotId(id)) return;
-  try {
-    const profilePath = getBotProfilePath(id, store.getConfigDir());
-    if (fs.existsSync(profilePath)) return;
-    writeBotProfile(profilePath, {
-      name: entry.name || id,
-      title: title?.trim() || '',
-      description: entry.description ?? '',
-      avatarColor: avatarColor?.trim() || undefined,
-    });
-  } catch (err) {
-    // Best-effort: a profile seeding failure must not fail the config write.
-    logger.warn('Failed to seed agent profile', { id, error: err instanceof Error ? err.message : String(err) }, LogComponent.ConfigManager);
-  }
+  seedBotProfileIfMissingShared(store.getConfigDir(), id, entry, {
+    avatarColor,
+    title,
+    onError: (err) => {
+      logger.warn('Failed to seed agent profile', { id, error: err instanceof Error ? err.message : String(err) }, LogComponent.ConfigManager);
+    },
+  });
 }
 
 /**
@@ -263,67 +223,20 @@ function seedBotProfileIfMissing(
  * bot's stale on-disk tree.
  */
 export function collectTakenBotIds(duyaRoot?: string): Set<string> {
-  const taken = new Set<string>();
   const store = getConfigStore();
   const root = duyaRoot ?? store.getConfigDir();
   const agents = (store.getByPath('agents') ?? {}) as Record<string, CustomAgentConfig>;
-  for (const id of Object.keys(agents)) taken.add(id);
-
-  const agentsRoot = getDuyaAgentsRoot(root);
-  const deletedDirName = path.basename(getBotDeletedDir(root));
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
-  } catch {
-    return taken; // agents root does not exist yet — config view only
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === deletedDirName) {
-      // Tombstone dir names carry the deletion timestamp as a prefix;
-      // recover the agent id from `<ts>-<id>`.
-      try {
-        for (const tomb of fs.readdirSync(path.join(agentsRoot, entry.name))) {
-          const match = /^\d+-([a-z0-9][a-z0-9-]{0,62})$/.exec(tomb);
-          if (match) taken.add(match[1]!);
-        }
-      } catch {
-        // Unreadable tombstone dir — skip it rather than fail allocation.
-      }
-      continue;
-    }
-    taken.add(entry.name);
-  }
-  return taken;
-}
-
-/** 6 lowercase hex chars — always inside BOT_ID_PATTERN's charset. */
-function randomBotIdSuffix(): string {
-  return crypto.randomBytes(3).toString('hex');
+  return mergeTakenBotIds(Object.keys(agents), root);
 }
 
 /**
  * Allocate a unique bot id. `desiredId` wins when free; otherwise
  * `<desiredId>-<6 hex chars>` is retried until unique. The base is
  * truncated to 48 chars so the worst case (48 + dash + 6 = 55) stays
- * inside the 63-char BOT_ID_PATTERN limit.
+ * inside the 63-char bot-id limit.
  */
 export function allocateBotId(desiredId: string, duyaRoot?: string): string {
-  assertValidBotId(desiredId);
-  const taken = collectTakenBotIds(duyaRoot);
-  if (!taken.has(desiredId)) return desiredId;
-  const base = desiredId.slice(0, 48);
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = `${base}-${randomBotIdSuffix()}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-  throw new Error(`could not allocate a unique bot id from '${desiredId}'`);
-}
-
-/** Result of a create-semantics bot creation — `id` is the ACTUAL id. */
-export interface CreatedConfigAgent {
-  id: string;
-  config: CustomAgentConfig;
+  return allocateBotIdShared(desiredId, collectTakenBotIds(duyaRoot));
 }
 
 /**
@@ -335,23 +248,6 @@ export interface CreatedConfigAgent {
 export function createConfigAgentUnique(desiredId: string, input: AgentUpsertInput): CreatedConfigAgent {
   const id = allocateBotId(desiredId);
   return { id, config: upsertConfigAgent(id, input) };
-}
-
-/**
- * Derive a bot id candidate from a display name (Plan 492 P4 CreateAgent
- * tool path and Plan 502 UI path — the caller only supplies a name, no id).
- * Slug rules: lowercase, non-alphanumerics collapse to dashes, and
- * non-ASCII names (e.g. Chinese) fall back to the generic `bot` base.
- * Uniqueness itself is allocateBotId's job.
- */
-export function slugifyBotIdFromName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  const base = slug.length >= 2 ? slug : 'bot';
-  return /^[a-z0-9][a-z0-9-]*$/.test(base) ? base : 'bot';
 }
 
 /**
@@ -370,12 +266,6 @@ export function createConfigAgentFromName(
     name: trimmed,
     description: description?.trim() || undefined,
   });
-}
-
-/** Fields the agent-side UpdateAgent tool may change (grok parity). */
-export interface AgentIdentityPatch {
-  name?: string;
-  description?: string;
 }
 
 /**

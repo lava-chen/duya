@@ -23,7 +23,8 @@
  */
 
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -37,19 +38,32 @@ import {
 } from '../../e2e/perf/lib/metrics.mjs';
 import {
   FIXTURE_IDS,
+  buildFencedStreamChunks,
   buildSessionMessages,
+  buildStreamChunks,
   buildToolStormRows,
   buildTypingFixture,
   fixtureDigest,
   historyRowKind,
 } from '../../e2e/perf/lib/fixtures.mjs';
 import { buildReport, renderMarkdown } from '../../e2e/perf/lib/report.mjs';
+import { evaluateBudget } from '../../e2e/perf/lib/first-screen-budget.mjs';
 import {
   acquireInternalLock,
+  acquireLock,
   readLockOwner,
   releaseInternalLock,
+  releaseLock,
   resolveLockDir,
+  resolveEffectiveLockDir,
+  REPO_ROOT,
 } from '../../e2e/perf/lib/lock.mjs';
+import { closePerfElectron, killLaunchProcesses } from '../../e2e/perf/lib/launch.mjs';
+import { signalBudgetMs } from '../../e2e/perf/lib/scenario-kit.mjs';
+import {
+  startupPhaseMetrics,
+  startupPhases,
+} from '../../e2e/perf/lib/startup-phases.mjs';
 
 describe('the metric aggregation', () => {
   it('reads the percentile off the sorted sample', () => {
@@ -110,9 +124,46 @@ describe('the fixture generator', () => {
       'perf/session-1000',
       'perf/session-10000',
       'perf/stream-long-reply',
+      'perf/stream-long-reply-fenced',
       'perf/stream-tool-storm',
       'perf/typing-30s',
     ]);
+  });
+
+  it('puts code blocks in the fenced fixture and only there', () => {
+    // The plain long-reply fixture is prose, so the shared harness cannot see
+    // what a syntax-highlighted code block costs while a reply is growing.
+    // The fenced fixture is the same prose with code blocks mixed in, so the
+    // difference between the two IS the highlighting cost.
+    const plain = buildStreamChunks('perf/stream-long-reply');
+    const plainText = plain.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(plainText).not.toContain('```');
+
+    const fenced = buildFencedStreamChunks('perf/stream-long-reply-fenced');
+    const fencedText = fenced.chunks.map((chunk: { text: string }) => chunk.text).join('');
+    expect(fencedText).toContain('```ts');
+    expect(fencedText).toContain('```python');
+    expect(fencedText).toContain('```bash');
+    // The fence markers are split across chunks on purpose: that is what a
+    // growing reply looks like.
+    expect(fenced.chunks.length).toBeGreaterThan(1000);
+    expect(fenced.chunks.some((chunk: { text: string }) => chunk.text.includes('```'))).toBe(true);
+    // Same size and cadence as the plain fixture, so the two are comparable:
+    // the difference between their numbers is the highlighting, not the
+    // amount of text.
+    expect(fenced.chunkChars).toBe(plain.chunkChars);
+    expect(fenced.chunkCount).toBe(plain.chunkCount);
+    expect(fenced.chunks.length).toBe(plain.chunks.length);
+    expect(Math.abs(fenced.totalChars - plain.totalChars)).toBeLessThan(200);
+  });
+
+  it('keeps the fenced fixture deterministic', () => {
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).toBe(
+      fixtureDigest('perf/stream-long-reply-fenced'),
+    );
+    expect(fixtureDigest('perf/stream-long-reply-fenced')).not.toBe(
+      fixtureDigest('perf/stream-long-reply'),
+    );
   });
 
   it('builds the requested number of rows', () => {
@@ -157,6 +208,134 @@ describe('the fixture generator', () => {
     const typing = buildTypingFixture('perf/typing-30s');
     expect(typing.keystrokes).toBe(500);
     expect(typing.text.length).toBe(500);
+  });
+
+  it('keeps the local evidence harness out of the fixture contract namespace', () => {
+    // A fixture id names ONE content. The shared harness owns the `perf/*`
+    // contract; a harness that renders different bytes under one of those ids
+    // would make every cross-harness number comparison meaningless. The local
+    // evidence harness therefore uses its own `ui-harness/` namespace.
+    const harnessSource = readFileSync(
+      path.join(REPO_ROOT, 'packages/ui/src/components/chat/__tests__/harness/main.tsx'),
+      'utf8',
+    );
+    const localIds = [...harnessSource.matchAll(/'([a-z][a-z0-9-]*\/[a-z0-9-]+)'/gi)].map((match) => match[1]!);
+    expect(localIds.length).toBeGreaterThan(0);
+    for (const id of localIds) {
+      expect(FIXTURE_IDS).not.toContain(id);
+    }
+
+    const driverSource = readFileSync(
+      path.join(REPO_ROOT, 'e2e/perf/agents/agent-b/run-bench.mjs'),
+      'utf8',
+    );
+    const defaultScenario = driverSource.match(/scenario:\s*'([^']+)'/)?.[1];
+    expect(defaultScenario).toBeDefined();
+    expect(FIXTURE_IDS).not.toContain(defaultScenario);
+  });
+});
+
+describe('the first-screen budget', () => {
+  const budget = { tolerancePct: 5, firstScreen: { chunkCount: 7, bytes: 3_626_123 }, entryChunkBytes: 2_726_133 };
+  const payload = (bytes: number, chunkCount = 7) => ({
+    firstScreen: { chunkCount, bytes },
+    entryChunkBytes: 2_726_133,
+  });
+
+  it('lets a payload inside the tolerance through', () => {
+    // The measured build-to-build spread is ~0.1 %, so a 5 % tolerance is
+    // generous; a payload a few percent over the baseline is still the same
+    // build, not a regression.
+    const result = evaluateBudget(payload(3_626_123), budget);
+    expect(result.violations).toEqual([]);
+  });
+
+  it('fails a payload that grew past the tolerance', () => {
+    const result = evaluateBudget(payload(4_000_000), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('the first screen grew to 4000000 bytes');
+    expect(result.violations[0]).toContain('over the budget');
+  });
+
+  it('passes a payload that got smaller', () => {
+    // The budget is one-sided: an improvement must never fail the gate.
+    expect(evaluateBudget(payload(2_000_000), budget).violations).toEqual([]);
+  });
+
+  it('fails when nothing was measured', () => {
+    // A gate over a measurement that measured nothing proves nothing.
+    const result = evaluateBudget(payload(0, 0), budget);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('was not measured');
+  });
+
+  it('fails when the budget has no baseline to compare against', () => {
+    const result = evaluateBudget(payload(3_626_123), { tolerancePct: 5 });
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toContain('no firstScreen.bytes');
+  });
+
+  it('reports the chunk count and the entry chunk without gating them', () => {
+    // There is no calibrated threshold for these, so they are reported.
+    const result = evaluateBudget(payload(3_626_123, 9), budget);
+    expect(result.violations).toEqual([]);
+    const metrics = result.checks.map((check: { metric: string }) => check.metric);
+    expect(metrics).toContain('firstScreen.chunkCount');
+    expect(metrics).toContain('entryChunkBytes');
+  });
+});
+
+describe('the startup phase split', () => {
+  // A cold `file://` boot measured on the renderer's own clock: the
+  // navigation starts, the HTML arrives 700 ms later (Chromium's cold
+  // renderer), the first screen's JavaScript takes another 300 ms, and the
+  // paint follows.
+  const navigation = { responseEnd: 718.1, domContentLoadedEventEnd: 992.7 };
+  const paints = { 'first-paint': 992.7, 'first-contentful-paint': 996 };
+
+  it('splits the boot into the phases that own it', () => {
+    const phases = startupPhases(navigation, paints);
+    expect(phases.navToHtml_ms).toBe(718.1);
+    expect(phases.htmlToDcl_ms).toBeCloseTo(274.6, 1);
+    expect(phases.dclToPaint_ms).toBeCloseTo(3.3, 1);
+    expect(phases.navToDcl_ms).toBe(992.7);
+    expect(phases.navToPaint_ms).toBe(996);
+  });
+
+  it('reports nothing rather than a wrong number when the document never loaded', () => {
+    // A missing navigation entry is a measurement that measured nothing; it
+    // must not turn into a zero that reads like "the boot was instant".
+    const phases = startupPhases(null, paints);
+    expect(phases.navToHtml_ms).toBeNull();
+    expect(phases.htmlToDcl_ms).toBeNull();
+    expect(phases.navToPaint_ms).toBeNull();
+  });
+
+  it('leaves the paint phase empty when the document never painted', () => {
+    const phases = startupPhases(navigation, {});
+    expect(phases.navToDcl_ms).toBe(992.7);
+    expect(phases.dclToPaint_ms).toBeNull();
+    expect(phases.navToPaint_ms).toBeNull();
+  });
+
+  it('reports nothing rather than a wrong number when the milestones have not happened yet', () => {
+    // `domContentLoadedEventEnd` is still 0 before DOMContentLoaded fires.
+    // Taken at face value it would report an instant HTML phase and a
+    // negative JavaScript phase.
+    const phases = startupPhases({ responseEnd: 0, domContentLoadedEventEnd: 0 }, paints);
+    expect(phases.navToHtml_ms).toBeNull();
+    expect(phases.htmlToDcl_ms).toBeNull();
+    expect(phases.navToDcl_ms).toBeNull();
+    expect(phases.dclToPaint_ms).toBeNull();
+  });
+
+  it('names the phase metrics under the prefix of the boot they belong to', () => {
+    const metrics = startupPhaseMetrics('startup.cold', startupPhases(navigation, paints));
+    expect(metrics['startup.cold.phase.navToHtml_ms']).toBe(718.1);
+    expect(metrics['startup.cold.phase.htmlToDcl_ms']).toBeCloseTo(274.6, 1);
+    expect(metrics['startup.cold.phase.dclToPaint_ms']).toBeCloseTo(3.3, 1);
+    expect(metrics['startup.cold.phase.navToDcl_ms']).toBe(992.7);
+    expect(metrics['startup.cold.phase.navToPaint_ms']).toBe(996);
   });
 });
 
@@ -254,9 +433,250 @@ describe('the measurement lock', () => {
     releaseInternalLock(dir);
   });
 
+  it('can be taken over when the holder process is gone', () => {
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-a' });
+    // A holder that crashed leaves a lock that nobody holds. Waiting the
+    // whole stale timeout for it would stall the sprint for 30 minutes of
+    // a machine that is not being measured at all.
+    writeFileSync(
+      path.join(dir, 'owner.json'),
+      JSON.stringify({ agent: 'agent-a', pid: 0x7ffffff0, acquiredAt: Date.now() }),
+      'utf8',
+    );
+    const takeover = acquireInternalLock({ lockDir: dir, agent: 'agent-b' });
+    expect(takeover.acquired).toBe(true);
+    expect(readLockOwner(dir)?.agent).toBe('agent-b');
+    releaseInternalLock(dir);
+  });
+
   it('resolves a lock directory inside the repository by default', () => {
     const dir = resolveLockDir();
     expect(path.isAbsolute(dir)).toBe(true);
     expect(path.basename(dir)).toBe('perf-bench.lock');
+  });
+
+  it('stays exclusive when the holder took it through the external script', () => {
+    // The external script records the pid of its sentinel and keeps it alive
+    // for as long as the lock is held. The in-repo implementation treats a
+    // dead owner as a crashed holder and takes the lock over — which would let
+    // a script-driven agent and an in-repo agent measure on the same machine
+    // at the same time.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-lock-script.mjs');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        'try { fs.mkdirSync(LOCK_DIR); } catch (error) {',
+        "  if (error.code !== 'EEXIST') throw error;",
+        '  process.exit(2);',
+        '}',
+        'fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '  agent: process.argv[3] ?? "script-agent", pid: process.pid, acquiredAt: Date.now(),',
+        '}, null, 2), "utf8");',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+
+    // The live holder owns the lock, so the in-repo implementation must not
+    // take it over.
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+    expect(readLockOwner(dir)?.holderPid).toBe(process.pid);
+    const second = acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    expect(second.acquired).toBe(false);
+    expect(readLockOwner(dir)?.agent).toBe('agent-script');
+
+    releaseInternalLock(dir);
+  });
+
+  it('never leaves the harness pid where the lock script would kill it', () => {
+    // The shared script stops the process recorded in `pid` when the lock is
+    // released. If the harness ever wrote its own pid there, the release
+    // would terminate the harness: the run dies after its first scenario,
+    // without an error message and without a report.
+    //
+    // The fake script below records the pid it WOULD kill instead of killing
+    // it, so the invariant can be asserted without ending the test runner.
+    const dir = lockDir();
+    const scriptPath = path.join(path.dirname(dir), 'fake-killing-lock-script.mjs');
+    const killLog = path.join(path.dirname(dir), 'fake-kill-log.txt');
+    writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import path from 'node:path';",
+        `const LOCK_DIR = ${JSON.stringify(dir)};`,
+        `const KILL_LOG = ${JSON.stringify(killLog)};`,
+        "const command = process.argv[2];",
+        "if (command === 'acquire') {",
+        '  fs.mkdirSync(LOCK_DIR, { recursive: true });',
+        '  fs.writeFileSync(path.join(LOCK_DIR, "owner.json"), JSON.stringify({',
+        '    agent: "script-agent", pid: 424242, acquiredAt: Date.now(),',
+        '  }), "utf8");',
+        '  process.exit(0);',
+        '}',
+        'const owner = JSON.parse(fs.readFileSync(path.join(LOCK_DIR, "owner.json"), "utf8"));',
+        'fs.writeFileSync(KILL_LOG, String(owner.pid));',
+        'fs.unlinkSync(path.join(LOCK_DIR, "owner.json"));',
+        'fs.rmdirSync(LOCK_DIR);',
+        'process.exit(0);',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const acquisition = acquireLock({ script: scriptPath, lockDir: dir, agent: 'agent-script' });
+    expect(acquisition.acquired).toBe(true);
+    releaseLock({ script: scriptPath, lockDir: dir });
+
+    const wouldKill = readFileSync(killLog, 'utf8');
+    expect(wouldKill).not.toBe(String(process.pid));
+    // The script's own pid is still the one it is allowed to stop.
+    expect(wouldKill).toBe('424242');
+  });
+
+  it('keeps the in-repo holder out of the field the script would kill', () => {
+    // The same hazard from the other side: an agent that measures with the
+    // in-repo lock writes its pid into the shared owner file, and a stray
+    // `node perf-bench-lock.mjs release` would stop it.
+    const dir = lockDir();
+    acquireInternalLock({ lockDir: dir, agent: 'agent-in-repo' });
+    const owner = readLockOwner(dir);
+    expect(owner?.pid).toBeNull();
+    expect(owner?.holderPid).toBe(process.pid);
+    releaseInternalLock(dir);
+  });
+
+  it('takes the lock directory from the script that was passed', () => {
+    // The script owns its directory. Deriving it from a search of the
+    // repository can find a DIFFERENT copy of the script, and then the
+    // release operates on a directory nobody holds.
+    const scriptPath = path.join(tmpdir(), 'duya-perf-lock-script-dir', 'perf-bench-lock.mjs');
+    const expected = path.join(path.dirname(scriptPath), 'perf-bench.lock');
+    expect(resolveEffectiveLockDir({ script: scriptPath })).toBe(expected);
+  });
+});
+
+describe('the signal budget', () => {
+  it('gives the small transcripts a short budget and the largest one room to arrive', () => {
+    // The transcript arrives through the product's data path, and that path
+    // grows with the number of messages: the 10k fixture needed 73s to open
+    // and 104s to switch on a loaded machine, while the render took 189ms and
+    // 284ms. A budget below the data path turns a slow machine into a failed
+    // sample, which measures nothing.
+    expect(signalBudgetMs(100)).toBe(60_000);
+    expect(signalBudgetMs(1_000)).toBe(60_000);
+    expect(signalBudgetMs(10_000)).toBe(240_000);
+  });
+});
+
+describe('the app shutdown', () => {
+  const isProcessAlive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException)?.code === 'EPERM';
+    }
+  };
+
+  it('never kills a pid that was recycled by another process', async () => {
+    // When the app is already gone its pid can be handed to ANOTHER
+    // process. Killing that one takes the harness down with it, so the
+    // process name is checked before the tree is killed.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    try {
+      await closePerfElectron({
+        process: () => ({ pid: child.pid }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      });
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      child.kill();
+    }
+  });
+
+  it('survives a pid that is already gone', async () => {
+    await expect(
+      closePerfElectron({
+        process: () => ({ pid: 0x7ffffff0 }),
+        close: async () => {
+          throw new Error('close timeout');
+        },
+      }),
+    ).resolves.toEqual({ killed: [] });
+  });
+
+  // The leak this guards: `app.close()` resolves when Playwright is done
+  // with the WINDOW, and this app keeps its main process alive (it owns a
+  // gateway and an agent server). A sample that left the app running kept
+  // its profile locked and ~700 MB allocated, and the next sample measured
+  // a machine that was already busy.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the app when it survives the graceful close',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      // The name is what the guard looks at, so the stand-in is named
+      // like the app it stands in for.
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const child = spawn(binary, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+      try {
+        await closePerfElectron({
+          process: () => ({ pid: child.pid }),
+          close: async () => {
+            /* the close resolves, and the app stays alive */
+          },
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // The pid Playwright hands out belongs to its own launcher (`cmd.exe` on
+  // Windows), not to the app, so the close finds the app by the namespace
+  // that is in the app's own command line.
+  it.skipIf(process.platform !== 'win32')(
+    'kills the processes of one launch by its namespace',
+    async () => {
+      const directory = mkdtempSync(path.join(tmpdir(), 'duya-perf-electron-'));
+      const binary = path.join(directory, 'electron.exe');
+      copyFileSync(process.execPath, binary);
+      const namespace = `perf-test-${Date.now()}`;
+      // `--` ends the option list, so the namespace reaches the command line
+      // instead of being read as an option the runtime does not know.
+      const child = spawn(
+        binary,
+        ['-e', 'setTimeout(() => {}, 30000)', '--', `--duya-namespace=${namespace}`],
+        { stdio: 'ignore' },
+      );
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const killed = killLaunchProcesses(namespace);
+        expect(killed.length).toBeGreaterThan(0);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        expect(isProcessAlive(child.pid)).toBe(false);
+      } finally {
+        child.kill();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('leaves the processes of another launch alone', () => {
+    const killed = killLaunchProcesses('perf-test-namespace-that-does-not-exist');
+    expect(killed).toEqual([]);
   });
 });

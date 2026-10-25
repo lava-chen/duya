@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HostSessionRecord } from '@duya/agent-protocol';
+import { allProviderModels } from '@duya/ai';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 
 import {
@@ -117,11 +118,13 @@ function makeActions() {
   const interrupt = vi.fn();
   const adoptSession = vi.fn(async () => {});
   const startFreshSession = vi.fn(async () => {});
+  const reloadTranscript = vi.fn(async () => {});
   return {
     interrupt,
     adoptSession,
     startFreshSession,
-    actions: { interrupt, adoptSession, startFreshSession } satisfies TuiSlashActions,
+    reloadTranscript,
+    actions: { interrupt, adoptSession, startFreshSession, reloadTranscript } satisfies TuiSlashActions,
   };
 }
 
@@ -223,27 +226,39 @@ describe('slash registry', () => {
     // A fixed list on purpose: an assertion built by filtering the expected
     // values against the actual names would pass no matter what was added.
     expect([...names].sort()).toEqual([
+      'app',
+      'apps',
       'archive',
+      'btw',
       'capabilities',
       'checkout',
+      'compact',
       'context',
       'copy',
       'cost',
       'delete',
+      'diff',
+      'doctor',
       'effort',
       'export',
       'fork',
       'hotkeys',
+      'init',
+      'mcp',
       'model',
       'permission',
+      'plugin',
       'pr',
       'read-file',
       'rename',
       'settings',
+      'skills',
       'status',
       'stop',
+      'tasks',
       'thinking',
       'transcript',
+      'workflow',
     ]);
   });
 
@@ -271,6 +286,34 @@ describe('slash registry', () => {
         expect(owner === undefined || owner === command.name).toBe(true);
         seen.set(alias, command.name);
       }
+    }
+  });
+
+  it('has a handler for every command the catalog advertises to the CLI', () => {
+    // The reverse of the test above. The catalog said a command was a CLI
+    // command; the CLI must be able to run it. A catalog entry with no
+    // handler would be advertised and then answer "unknown command" — the
+    // failure mode the catalog's own integrity tests forbid.
+    //
+    // Six commands are implemented by the chat loop itself rather than by a
+    // `slash/` handler: they need the loop's queue, transcript and session
+    // transition, which a handler cannot reach. They are listed here so the
+    // exception is visible instead of implied.
+    const IMPLEMENTED_BY_THE_CHAT_LOOP = ['new', 'resume', 'clear', 'queue', 'exit', 'help'];
+    const advertised = specsForSurface('cli').map((spec) => spec.name);
+    const missing = advertised.filter(
+      (name) => !hasTuiSlashCommand(name) && !IMPLEMENTED_BY_THE_CHAT_LOOP.includes(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('keeps the chat-loop exceptions and the catalog in step', () => {
+    // The exception list above is a literal; if the catalog drops one of
+    // these commands, or a handler for one appears, this fails so the
+    // exception does not quietly become a lie.
+    for (const name of ['new', 'resume', 'clear', 'queue', 'exit', 'help']) {
+      expect(specsForSurface('cli').some((spec) => spec.name === name), name).toBe(true);
+      expect(hasTuiSlashCommand(name), name).toBe(false);
     }
   });
 
@@ -336,6 +379,34 @@ describe('/effort', () => {
       })),
       ...settings('medium'),
     }, { choose });
+    await command('effort').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
+    expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
+  });
+
+  it('keeps the ladder when the session sits on a preset instead of a configured model', async () => {
+    // `/model` can put the session on a vendor preset the configuration never
+    // named. Reading only `models` here would silently downgrade that session
+    // to the default four levels.
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({
+      getProviderCatalog: vi.fn(async () => ({
+        providers: [
+          {
+            providerId: 'p1',
+            name: 'Provider One',
+            providerType: 'anthropic',
+            hasApiKey: true,
+            models: [{ modelId: 'gpt-x', reasoningEffortOptions: ['low', 'high'] }],
+            presetModels: [
+              { modelId: 'gpt-r', reasoningEffortOptions: ['low', 'medium', 'high', 'max'] },
+            ],
+          },
+        ],
+        configRoot: '/tmp/duya-config',
+      })),
+      ...settings('medium'),
+    }, { choose }, { ...SESSION, model: 'gpt-r' } as HostSessionRecord);
     await command('effort').run(ctx, '');
     const offered = choose.mock.calls[0]?.[1] as readonly { value: string }[];
     expect(offered.map((choice) => choice.value)).toEqual(['auto', 'low', 'medium', 'high', 'max']);
@@ -444,7 +515,7 @@ describe('/hotkeys', () => {
     const body = host.panels[0]?.lines.join('\n') ?? '';
     expect(body).toContain('Global');
     expect(body).toContain('Editor');
-    expect(body).toContain('Transcript');
+    expect(body).toContain('Background tasks');
     expect(body).toContain('Ctrl+R');
     // The row only exists because the binding does: see the `exit` def in
     // `actions.ts`. An advertised key that is not listed here is a key the
@@ -643,6 +714,72 @@ describe('/model', () => {
     await command('model').run(ctx, 'p2/gpt-x');
     expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-x', providerId: 'p2' });
   });
+
+  /**
+   * The same provider with the vendor presets the Host attaches to it.
+   *
+   * `enabled_models` is a hand-typed list, so a vendor with a dozen models is
+   * usually configured with two. Without `presetModels` those ten are
+   * unreachable from the picker, which is the report this answers.
+   */
+  const presetCapabilities = {
+    getProviderCatalog: async () => ({
+      providers: [
+        {
+          providerId: 'p1',
+          name: 'Provider One',
+          providerType: 'anthropic',
+          hasApiKey: true,
+          models: [
+            { modelId: 'gpt-x', contextWindow: 200_000 },
+            { modelId: 'gpt-xl', contextWindow: 1_000_000 },
+          ],
+          presetModels: [{ modelId: 'gpt-r', contextWindow: 128_000, supportsReasoning: true }],
+        },
+      ],
+      configRoot: '/tmp/duya-config',
+    }),
+  };
+
+  it('offers a preset after the configured models of its provider, flagged', async () => {
+    const choose = vi.fn(async () => null);
+    const ctx = makeContext({ ...presetCapabilities, update: vi.fn() }, { choose });
+    await command('model').run(ctx, '');
+    const offered = choose.mock.calls[0]?.[1] as readonly { label: string; description?: string }[];
+    // A preset is a different promise than a configured row, so it is not
+    // interleaved into it: it sorts last within its own provider.
+    expect(offered.map((row) => row.label)).toEqual(['gpt-x', 'gpt-xl', 'gpt-r']);
+    expect(offered[2]?.description).toContain('preset');
+    expect(offered[2]?.description).toContain('reasoning');
+    expect(offered[0]?.description).not.toContain('preset');
+  });
+
+  it('switches to a preset and says the configuration file was not written', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, model: 'gpt-r' } as HostSessionRecord,
+    }));
+    const ctx = makeContext(
+      { ...presetCapabilities, update },
+      { choose: async () => 'p1::gpt-r' },
+    );
+    const outcome = await command('model').run(ctx, '');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-r' });
+    expect(ctx.notices.join('\n')).toContain(
+      'gpt-r is a Provider One preset, so it is not written into config.toml.',
+    );
+    expect(outcome.kind).toBe('session_updated');
+  });
+
+  it('reaches a preset by name with no picker', async () => {
+    const update = vi.fn(async () => ({
+      updated: true as const,
+      session: { ...SESSION, model: 'gpt-r' } as HostSessionRecord,
+    }));
+    const ctx = makeContext({ ...presetCapabilities, update });
+    await command('model').run(ctx, 'gpt-r');
+    expect(update.mock.calls[0]?.[2]).toEqual({ model: 'gpt-r' });
+  });
 });
 
 describe('/usage', () => {
@@ -712,16 +849,23 @@ describe('/context', () => {
   });
 
   it('falls back to the built-in catalog when the Host has no capability row', async () => {
+    // The model comes from the built-in catalog itself, not from a hardcoded
+    // id: the catalog is refreshed from upstream model metadata, and a
+    // hardcoded id breaks the next time upstream renames a model. (It did —
+    // `claude-sonnet-4` became `claude-sonnet-4-6`, and this test failed in
+    // every run whose affected scope reached packages/cli.)
+    const catalogModel = allProviderModels.find((model) => model.contextWindow === 1_000_000);
+    if (!catalogModel) throw new Error('the built-in catalog must offer a 1M model');
     const ctx = makeContext({
       readMessages: async () => page([
         message('assistant', 'x', { tokenUsage: { input_tokens: 100_000, output_tokens: 1 } }),
       ]),
       getProviderModelCapability: async () => null,
-    }, {}, { ...SESSION, model: 'claude-sonnet-4' } as HostSessionRecord);
+    }, {}, { ...SESSION, model: catalogModel.id } as HostSessionRecord);
     await command('context').run(ctx, '');
     const out = ctx.notices.join('\n');
-    // 1M for claude-sonnet-4 in the built-in catalog — the same chain the
-    // Desktop ring and auto-compaction resolve against.
+    // 1M for a catalog model — the same chain the Desktop ring and
+    // auto-compaction resolve against.
     expect(out).toContain('1.0M');
     expect(out).toContain('built-in model catalog');
   });

@@ -1,8 +1,8 @@
 # 01 — 修 `import-graph` 的裸 `@duya/*` 解析
 
-状态：todo · 负责人：待认领 · 更新：2026-10-23
-分支：待建（建议 `codex/622-01-import-graph-resolver`） · worktree：待分配
-base：`d9eb7dba96f63b3e07b4fba9c068acd017616913` · owner：待认领
+状态：completed（merged） · 负责人：lava-chen · 更新：2026-10-24
+分支：`codex/622-01-import-graph-resolver` · PR：[#399](https://github.com/lava-chen/duya/pull/399)（已合并）
+base：`d9eb7dba96f63b3e07b4fba9c068acd017616913` · owner：lava-chen（Codex 续接）
 
 关联：[622 README](./README.md) · 根因记录在 [610 T19](../610-architecture-series/19-fast-track-queue.md)（**不重述**）
 
@@ -34,12 +34,12 @@ base：`d9eb7dba96f63b3e07b4fba9c068acd017616913` · owner：待认领
 
 ## 验收
 
-### 首个失败证据（今天长什么样）
+### 修复前的失败形态（基线）
 
-**今天的失败形态**：`scripts/architecture/import-graph.test.ts` 里
+**修复前的失败形态**：`scripts/architecture/import-graph.test.ts` 里
 **没有任何一条**针对裸 `@duya/*` 的用例——该文件现有的 `resolveTarget` 断言只有两条，
 都是**相对路径**（`:231` 解析 `./index.js`、`:236` 断言不存在的路径返回 `null`）。
-所以这条缺陷今天**连一个会红的用例都没有**。
+所以基线对这条缺陷**没有会红的用例**。
 
 第一条必须先写的用例：
 
@@ -48,7 +48,7 @@ scripts/architecture/import-graph.test.ts
   it('resolves a bare @duya specifier to the file that declares it', ...)
 ```
 
-**今天跑它，红的形态是**：断言 `resolveTarget('@duya/agent-protocol', 'packages/host/src/x.ts')`
+**基线预期红的形态**：断言 `resolveTarget('@duya/agent-protocol', 'packages/host/src/x.ts')`
 应返回 `packages/agent-protocol/src/index.ts`，**实际返回 `null`**。
 
 **全量证据**（2026-10-23 实测，`d9eb7dba`）：
@@ -61,27 +61,18 @@ scripts/architecture/import-graph.test.ts
 ### 验收命令与预期结果
 
 ```bash
-# 1) 新增用例先红
+# 基线返回 null 的证据见上；变异 ① 验证候选缺失会让同一根断言失败
 npx vitest run scripts/architecture/import-graph.test.ts
-#    预期（修前）：新增用例红，失败信息指向返回值 null
+# PR CI：26/26 passed
 
-# 2) 修后绿，且旁边两条不许坏
-npx vitest run scripts/architecture/import-graph.test.ts
-#    预期：全部 passed
-
-# 3) 下游不许坏
 npx vitest run scripts/architecture/slice-cut-list.test.ts
-#    预期：16/16 passed（今天实测 16/16）
+# PR CI：18/18 passed
 
 npx vitest run scripts/architecture/slice-classification.test.ts
-#    预期：30/30 passed（今天实测 30/30）
+# PR CI：30/30 passed
 
-# 4) 图里出现跨包边，且数字与正确解析器一致
 npm run architecture:slice-graph
-#    预期：新增跨包维度，跨包 value 边 > 0
-
-node scripts/architecture/audit-imports.mjs | sed -n '/cross-boundary edges/p'
-#    预期：cross-boundary edges 2593（今天的真值），两边的跨包数字必须对得上
+# PR CI：valueEdges 7729；共同范围 2587 条 cross-owner triples 与 audit-imports 一致，差异 0
 ```
 
 ### 完成判据
@@ -91,34 +82,30 @@ node scripts/architecture/audit-imports.mjs | sed -n '/cross-boundary edges/p'
 resolver 一动，下列声明必须**逐条重测并更新**，不能留旧数字：
 
 - `slice-cut-list.ts` 的每条 `edges` 与 `CUT_LIST_INVARIANTS.requiredPairs`
-  （其中 `main-to-agent-value` 现在的 `cut` 字段写着"另外 59 条是否真的消失要等
-  `resolveTarget` 学会这个解析才能回答"——**本卡就是那个答案的产出点**）。
-- `slice-classification.ts:45` 的 owner 分类（现在看不见跨包边）。
-- `packages/agent-protocol/test/02-cycle-budget.test.ts` 的 SCC 计数，
-  以及它对 `audit-modules.mjs` 的交叉校验断言。
+  （`main-to-agent-value` 旧 `cut` 曾把另外 59 条列为未知；现已更新为它们改写到其他包，主进程到 workspace 的 337 条边由图可见）。
+- `slice-classification.ts:45` 的 owner 分类：已重测，分类规则按路径判定，本次 resolver 变化不改变 owner 值。
+- `packages/agent-protocol/test/02-cycle-budget.test.ts` 的 SCC 计数与 `audit-modules.mjs` 交叉校验：全量 Vitest 通过，断言不需改数。
 
 ### 变异证明（门禁卡必填）
 
-- **变异 ①**：候选表建好后，删掉 `packages/<x>/src/index.ts` 那一条
-  → 新增用例**必须红**。
-- **变异 ②**：`main-to-agent-value` 的声明边数必须**退回今天的失真值**
-  （证明这条断言今天靠"少算"通过，不是靠"算对"通过）。
-- 还原后按字节校验（SHA-256 逐字节回原值），**共享检出上的脏文件一律不走 `git checkout --`**。
+- **变异 ①（自动化）**：在隔离 fixture 中复制 resolver 和依赖，删除 `src/index.ts` 候选；复用裸包根断言后必须抛错。临时副本在 `finally` 中删除，并核对仓库 resolver 的 SHA-256 前后相同。
+- **变异 ②（自动化）**：把 `main-to-agent-value.edges` 在内存副本改回历史失真值 60；相同的 whole-pair mismatch 检查必须报告 `{ stated: 60, measured: 1 }`。真实声明仍为 1。
+- 变异不写入仓库源文件；① 的临时树清理后，原 resolver SHA-256 保持不变，② 只修改内存对象。
 
 ---
 
 ## 进度
 
-- [ ] 写 `import-graph.test.ts` 的裸 `@duya/*` 用例，确认红（失败形态是返回值 `null`，不是"文件不存在"）
-- [ ] 给 `resolveTarget` 加候选：`packages/<pkg>/src/index.ts`、
+- [x] 写裸 `@duya/*` 根与子路径用例；变异 ① 证明移除 `src/index.ts` 候选会令相同根断言失败
+- [x] 给 `resolveTarget` 加候选：`packages/<pkg>/src/index.ts`、
       `packages/<pkg>/src/<subpath>.ts`、`packages/<pkg>/src/<subpath>/index.ts`
       ——**按子路径拼接，不是按第一段**
-- [ ] 用 `audit-imports.mjs` 的 `exports` 映射做**权威回退**：
+- [x] 用 `audit-imports.mjs` 的 `exports` 映射做**权威回退**：
       读各包 `package.json` 的 `exports`，把 `.` 与 `./<sub>` 映射到 `./src/...`
       （`audit-imports.mjs:165` 的 `workspaceExportTargets` 已有这个形状，可直接复用而不是重写）
-- [ ] 逐条重测并更新 `slice-cut-list.ts` / `slice-classification.ts` / SCC 计数的声明
-- [ ] 跑 §验收 的 4 组命令
-- [ ] 做变异 ① ②，按字节还原
+- [x] 重测 cut-list、分类与 SCC 交叉校验；边数声明保持实测的 28 / 1，分类和 SCC 计数未变化
+- [x] 跑 §验收命令；CI 全量 Vitest、架构门禁、typecheck 和 build 均通过
+- [x] 变异 ① ② 均通过；只改临时副本或内存数据，工作树源文件 SHA-256 不变
 
 ---
 
@@ -160,24 +147,22 @@ resolver 一动，下列声明必须**逐条重测并更新**，不能留旧数�
 | `d9eb7dba` / 干净 | 同上 | `git ls-files '*.ts' '*.tsx' '*.mts' '*.js' '*.mjs'` \| grep -v `/dist/` \| xargs `grep -oh "@duya/[^'\"]*"` | 0 | 裸 `@duya/*` 出现总次数 **3178** |
 | `d9eb7dba` / 干净 | 同上 | `npx vitest run scripts/architecture/slice-cut-list.test.ts` | 0 | 1 file / **16 passed** |
 | `d9eb7dba` / 干净 | 同上 | `npx vitest run scripts/architecture/slice-classification.test.ts` | 0 | 1 file / **30 passed** |
+| `9837f576` / PR merge tree `b2a56a39` | GitHub Actions · Ubuntu 26.04.1 · Node v22.23.3 · npm 10.9.9 | 全量 Vitest（workflow unit scope: full） | 0 | **1132** test files passed / 2 skipped；**12761** passed / 2 expected fail / 21 skipped；import-graph 26、slice-cut-list 18、slice-classification 30 passed；变异 ① ② 的自动证明通过 |
+| `9837f576` / PR merge tree `b2a56a39` | 同上 | `npm run architecture:slice-graph`（含 `compare-import-graphs.mjs`） | 0 | graph valueEdges **7729**；共同扫描范围 cross-owner triples **2587**，audit-imports resolved triples **2587**，tuple disagreements **0**；audit 总 cross-boundary **2593**（另含 6 条 unresolved） |
+| `9837f576` / PR merge tree `b2a56a39` | 同上 | `npm run architecture:check`、架构 self-test / boundary gates、typecheck、build | 0 | architecture、typecheck、build jobs 全部 success（Actions run [39991011384](https://github.com/lava-chen/duya/actions/runs/39991011384)） |
 
 ---
 
 ## 接续 / 结果
 
-- **已实现 / 已验证 / 已合并**：本卡**尚未开工**。以上是开工前的基线取证。
-- **未提交路径**：无（本卡未开工）。
-- **副作用**：无。
+- **已实现 / 已验证 / 已合并**：PR #399 于 2026-10-24 合并，merge commit `bb87d484ddac4dfd3e2d2413973402b0a38f1c03`；解析器、回归测试、逐条对账和两项变异证明已完成。
+- **未提交路径**：无。
+- **副作用**：无；变异只在临时 fixture 和内存中进行。
 - **阻塞**：无。
-- **回收**：不回收（本卡未开工）。
+- **回收**：无临时文件遗留。
 
-**下一步**：认领本卡，先只做"写一条红用例"这一步——
-在 `import-graph.test.ts` 加 `it('resolves a bare @duya specifier to the file that declares it')`，
-确认它红且失败信息是返回值 `null`。
-**完成判据**：该用例在 base 上红、在修好的树上绿，且 `slice-cut-list.test.ts`
-与 `slice-classification.test.ts` 仍全绿。
+**完成判据**：新解析器的根/子路径/exports 回退用例通过；cut list 与分类声明对齐当前扫描；共同文件范围内 `(from, spec, to)` 三元组与 `audit-imports` 完全相等；变异 ① ② 都能击中相同断言。所有验收均在 PR CI 通过。
 
-**回退**：本卡只动 `scripts/architecture/**` 与 `packages/agent-protocol/test/**`，
-无生产代码、无数据迁移、无 schema 变更 ⇒ 单提交 revert 即回原状。
-若已把新边写进 baseline，**回退要同时 `git checkout` baseline 文件**，
-不允许留下"新指纹"（根 `AGENTS.md`）。
+**回退**：本卡动 `scripts/architecture/**`、`package.json`、`.github/workflows/test.yml` 与本计划文件；
+无生产代码、无数据迁移、无 schema 变更 ⇒ revert 本卡提交即可回原状。
+若以后把新边写进 baseline，回退时也要还原 baseline，不能遗留新指纹（根 `AGENTS.md`）。

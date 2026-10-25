@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations'
+import type {
+  PluginAppDefinition,
+  PluginUiSurfaceDirectory,
+} from '@duya/plugin-core/apps/declarations'
 
 // Sandboxed preloads can only require electron/events/timers/vm — node:crypto
 // is unavailable here. The preload runs in a Chromium context, so Web Crypto's
@@ -28,6 +31,10 @@ import type {
   GitRepositoryState,
 } from '../contracts/git'
 import type { WorkspaceLifecycleAPI } from '../contracts/workspace-lifecycle'
+// The doctor report and the `/init` outcome. Type-only: the payload shapes
+// live in the shared contracts directory so the main process, this bridge and
+// the renderer cannot drift apart.
+import type { DoctorReport, InitAgentsMdResult } from '../contracts/doctor'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
  *  row (ProjectRow) but with `paths` decoded from JSON to an array. */
@@ -1025,7 +1032,7 @@ export interface PluginAppAPI {
    * package and mints the session. The App itself never names its own
    * authority.
    */
-  open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) => Promise<{
+  open: (payload: { pluginId: string; appId: string; chatSessionId?: string; surfaceId?: string }) => Promise<{
     ok: boolean
     error?: string
     sessionId?: string
@@ -1055,6 +1062,9 @@ export interface PluginAPI {
   }
   registry: {
     list: () => Promise<{ success: boolean; data: PluginRegistryEntry[]; error?: string }>
+  }
+  uiSurfaces: {
+    list: () => Promise<{ success: boolean; data: PluginUiSurfaceDirectory; error?: string }>
   }
   detail: {
     get: (pluginId: string) => Promise<{ success: boolean; data: PluginCatalogEntry | null; error?: string }>
@@ -1461,6 +1471,26 @@ export interface ElectronAPI {
   session: SessionAPI
   rollout: RolloutAPI
   modeState: ModeStateAPI
+  /**
+   * `/doctor` — the Desktop's in-process diagnostic report.
+   *
+   * The report is assembled in the main process: the renderer cannot read
+   * the disk, and the plugin registry, the core database and the process
+   * facts all live on the other side of the bridge.
+   */
+  diagnostics: {
+    run: () => Promise<DoctorReport>
+  }
+  /**
+   * `/init` — write the repository-root `AGENTS.md` for a session.
+   *
+   * The channel takes a SESSION ID rather than a path: the main process
+   * resolves the session's working directory itself and checks it against
+   * the session root, so a renderer cannot point the write anywhere else.
+   */
+  workspace: {
+    initAgentsMd: (sessionId: string) => Promise<InitAgentsMdResult>
+  }
   search: SearchAPI
   message: MessageAPI
   usage: UsageAPI
@@ -2291,6 +2321,16 @@ const electronAPI: ElectronAPI = {
     // Plan 506 (A3): explicit index rebuild from the rollout files.
     reconcile: () => ipcRenderer.invoke('db:rollout:reconcile'),
   },
+  diagnostics: {
+    // `/doctor` — the report is assembled in the main process.
+    run: () => ipcRenderer.invoke('diagnostics:run'),
+  },
+  workspace: {
+    // `/init` — a session id, never a path: the main process resolves the
+    // session's working directory and checks it against the session root.
+    initAgentsMd: (sessionId: string) =>
+      ipcRenderer.invoke('workspace:init-agents-md', sessionId),
+  },
   modeState: {
     get: (sessionId: string, mode: string) =>
       ipcRenderer.invoke('db:session:get_mode_state', sessionId, mode),
@@ -2807,6 +2847,9 @@ const electronAPI: ElectronAPI = {
     registry: {
       list: () => ipcRenderer.invoke('plugin:registry:list'),
     },
+    uiSurfaces: {
+      list: () => ipcRenderer.invoke('plugin:ui-surfaces:list'),
+    },
     detail: {
       get: (pluginId: string) => ipcRenderer.invoke('plugin:detail:get', pluginId),
     },
@@ -2837,7 +2880,7 @@ const electronAPI: ElectronAPI = {
   // and can only post a message to the renderer that hosts it, which
   // relays it here with the session handle.
   pluginApp: {
-    open: (payload: { pluginId: string; appId: string; chatSessionId?: string }) =>
+    open: (payload: { pluginId: string; appId: string; chatSessionId?: string; surfaceId?: string }) =>
       ipcRenderer.invoke('plugin-app:open', payload),
     call: (payload: { sessionId: string; launchNonce: string; message: unknown }) =>
       ipcRenderer.invoke('plugin-app:call', payload),

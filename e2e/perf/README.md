@@ -46,14 +46,29 @@ the report says so.
 | `perf/session-1000` | 1 000 history messages |
 | `perf/session-10000` | 10 000 history messages |
 | `perf/stream-long-reply` | one long reply, streamed token by token |
+| `perf/stream-long-reply-fenced` | the same reply with code blocks in it |
 | `perf/stream-tool-storm` | 200 tool calls (400 rows) flowing in |
 | `perf/typing-30s` | 30 s of typing, one keystroke per 60 ms |
+
+The fenced long reply exists because the plain one is prose: without a code
+block there is no syntax highlighting, so the harness cannot see what a
+highlighted block costs while the reply is still growing. The two fixtures
+have the same size, the same cadence and the same vocabulary, so the
+difference between their numbers is the highlighting.
 
 A history fixture repeats a 10-row block: 40 % user text, 40 % assistant
 text, 20 % tool rows (`tool_use` + its `tool_result`). The rows are shaped
 like the flat IPC message DTO, so they can be injected through the real
 bridge (`electronAPI.message.replace`). `fixtureDigest(id)` is the SHA-256 of
 the canonical payload and is printed in every report.
+
+**An id names one content.** A report is only comparable to another report
+when both name the same fixture id AND that id resolves to the same bytes.
+A harness that renders different content under a `perf/*` id must use its own
+namespace instead — the local evidence harness under `e2e/perf/agents/agent-b/`
+uses `ui-harness/*` for exactly that reason (see its README). Changing the
+content of an existing id is not allowed: it changes the digest and silently
+invalidates every archived number that used it.
 
 **Seed the same fixture into two sessions? Give the rows different ids.**
 The transcript store appends with `INSERT OR IGNORE` on the message id, so
@@ -98,18 +113,53 @@ so `startup.cold.typeable_ms` is null and the evidence is in the sample.
 
 ### The hydration defect this harness works around
 
-`packages/ui/src/stores/conversation-store.ts` marks itself hydrated in
-`onRehydrateStorage` by MUTATING the state (`s.isHydrated = true`). Zustand
-v5 does not notify subscribers after that callback, so on a profile whose
-persisted store state is absent the mutation is never observed: `isHydrated`
-stays false in React, `app-sidebar.tsx` never calls `loadFromDatabase()`,
-the session list stays empty and the welcome composer stays disabled
-(`WelcomeView.tsx`: `disabled={!isHydrated || !selectedProject}`).
+**This defect is fixed** (PR #400): the normalization now runs inside the
+`merge` that zustand's persist middleware performs, so `isHydrated` is
+published with that single write and the subscribers are notified. The
+workaround below is therefore no longer required for the measured boot — but
+the harness still performs it, because the prepare phase needs a profile the
+app can hydrate, and the sync nudge is how that profile is built.
+
+For the record, the defect was this: `packages/ui/src/stores/conversation-store.ts`
+marked itself hydrated in `onRehydrateStorage` by MUTATING the state
+(`s.isHydrated = true`). Zustand v5 does not notify subscribers after that
+callback, so on a profile whose persisted store state was absent the mutation
+was never observed: `isHydrated` stayed false in React, `app-sidebar.tsx`
+never called `loadFromDatabase()`, the session list stayed empty and the
+welcome composer stayed disabled (`WelcomeView.tsx`:
+`disabled={!isHydrated || !selectedProject}`).
 
 The harness works around it by letting the app sync itself in the prepare
 phase (`sync:threads-changed` → `forceSync()` → `loadFromDatabase()`, which
-IS a `set()`). **The defect itself is not fixed here** — it belongs to the
-owner of the conversation store.
+IS a `set()`).
+
+### The boot split into phases
+
+`startup.firstPaint_ms` is one number for a boot with several owners: the
+browser process start, the main process' own startup chain, the renderer's
+cold initialization, and the first screen's JavaScript. The phase metrics
+say which of them to attack, measured on the renderer's own clock
+(`performance.timeOrigin`):
+
+| metric | what it waits for |
+| --- | --- |
+| `startup.cold.phase.navToHtml_ms` | navigation start -> the HTML document arrived |
+| `startup.cold.phase.htmlToDcl_ms` | the HTML arrived -> DOMContentLoaded (the first screen's JavaScript: fetch, compile, execute) |
+| `startup.cold.phase.dclToPaint_ms` | DOMContentLoaded -> the first contentful paint |
+| `startup.cold.phase.navToDcl_ms` | navigation start -> DOMContentLoaded |
+| `startup.cold.phase.navToPaint_ms` | navigation start -> the first contentful paint |
+
+`startup.reload.phase.*` carries the same five for the instrumented reload
+of the same boot path. The reload is the WARM reference: the same phases on
+a renderer that is already up. The difference between the cold and the warm
+numbers is the part of the boot that is Chromium's cold path, not the app's
+— measured on a cold `file://` boot, `navToHtml` is 700-980 ms cold and
+2-6 ms warm, while `htmlToDcl` (the app's own JavaScript) is 275-370 ms cold
+and 99-177 ms warm.
+
+The resource entries of a `file://` document do not exist (a file URL is not
+a fetchable resource in the timing timeline), so the split is anchored on
+the document's own milestones.
 
 ## Metric names
 

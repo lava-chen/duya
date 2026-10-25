@@ -510,6 +510,11 @@ const mocks = vi.hoisted(() => {
       messages: [] as Array<Record<string, unknown>>,
       nextCursor: null,
     })),
+    readAllMessages: vi.fn(async (sessionId: string) => ({
+      sessionId,
+      messages: [] as Array<Record<string, unknown>>,
+      nextCursor: null,
+    })),
     readProjectedTimeline: vi.fn(async (sessionId: string) => ({
       sessionId,
       entries: [] as Array<Record<string, unknown>>,
@@ -994,7 +999,7 @@ describe('db-handlers (core store thin forward)', () => {
       };
       // The read-back goes through Host too, so the append result is read
       // from the Host message projection.
-      mocks.hostSessionApi.readMessages.mockResolvedValueOnce({
+      mocks.hostSessionApi.readAllMessages.mockResolvedValueOnce({
         sessionId: 's1',
         messages: [{ id: 'm1', sequence: 0, createdAt: 1000, turnId: null, entry: {} }],
         nextCursor: null,
@@ -1011,9 +1016,8 @@ describe('db-handlers (core store thin forward)', () => {
       expect(mocks.hostSessionApi.appendTimeline).toHaveBeenCalledWith('s1', {
         entries: [data],
       });
-      expect(mocks.hostSessionApi.readMessages).toHaveBeenCalledWith('s1', {
+      expect(mocks.hostSessionApi.readAllMessages).toHaveBeenCalledWith('s1', {
         includeSuperseded: true,
-        limit: 200,
       });
       expect(mocks.adapters.hostMessageItemsToIpcMessages).toHaveBeenCalledTimes(1);
       expect(result).toMatchObject({ __tag: 'ipcMsg', id: 'm1' });
@@ -1036,7 +1040,7 @@ describe('db-handlers (core store thin forward)', () => {
         { id: 'm1', sequence: 0, createdAt: 1000, turnId: null, entry: {} },
         { id: 'm2', sequence: 1, createdAt: 1001, turnId: null, entry: {} },
       ];
-      mocks.hostSessionApi.readMessages.mockResolvedValueOnce({
+      mocks.hostSessionApi.readAllMessages.mockResolvedValueOnce({
         sessionId: 's1',
         messages: items,
         nextCursor: null,
@@ -1051,15 +1055,31 @@ describe('db-handlers (core store thin forward)', () => {
       // the handler default `includeSuperseded` to true, so the options bag is
       // now always forwarded. Assert the full call shape rather than the
       // legacy single-argument form.
-      expect(mocks.hostSessionApi.readMessages).toHaveBeenCalledWith('s1', {
+      expect(mocks.hostSessionApi.readAllMessages).toHaveBeenCalledWith('s1', {
         includeSuperseded: true,
-        limit: 200,
       });
       expect(mocks.adapters.hostMessageItemsToIpcMessages).toHaveBeenCalledWith(
         's1',
         items,
       );
       expect(result).toHaveLength(2);
+    });
+
+    it('reads the transcript in ONE Host call instead of paging it', async () => {
+      // The Host's paged read projects the WHOLE transcript on every page, so
+      // paging a 10k-message transcript costs 50 projections of 10k rows
+      // (measured: 16.7s of paging against 0.3s for one projection). The
+      // handler asks for the whole transcript in one call.
+      mocks.hostSessionApi.readAllMessages.mockResolvedValueOnce({
+        sessionId: 's1',
+        messages: [],
+        nextCursor: null,
+      } as never);
+
+      await invokeHandler('db:message:getBySession', {}, 's1');
+
+      expect(mocks.hostSessionApi.readAllMessages).toHaveBeenCalledTimes(1);
+      expect(mocks.hostSessionApi.readMessages).not.toHaveBeenCalled();
     });
   });
 

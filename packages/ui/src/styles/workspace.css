@@ -4,6 +4,53 @@
  * imports domain files in cascade order.
  */
 /* ============================================
+   Workspace row
+
+   The row that holds the chat column and the side panel. It is the flex
+   context both of them size themselves in, and the container the
+   `@container` queries in composer-panels.css / preview-drawer.css /
+   code-review.css measure.
+
+   These rules were lost with the canvas runtime's removal (bcf0d946), which
+   took the whole former conductor.css with it. Without them the row is a
+   plain block box: the chat column grows with its transcript instead of
+   being constrained, the shell clips the overflow, and the transcript can no
+   longer be scrolled to its end. The container context is gone with it, so
+   every `@container` rule in the workspace stops applying.
+   ============================================ */
+
+.app-workspace-row {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+/* The expanded panel takes over the whole workspace row. */
+.panel-zone.panel-zone-expanded {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  flex-basis: auto;
+  border-left: 0;
+  background: var(--main-bg);
+}
+
+.panel-zone-expanded .sidebar-panel-inner {
+  width: 100% !important;
+  background: var(--main-bg);
+}
+
+.panel-zone-expanded .panel-header::after {
+  background: linear-gradient(90deg, transparent, var(--main-bg) 24%, var(--main-bg));
+}
+
+/* ============================================
    File Tree Panel Styles
    ============================================ */
 
@@ -1326,7 +1373,7 @@ html[data-theme="light"] .ask-question-option.selected {
 .ask-question-dismiss kbd,
 .ask-question-continue kbd {
   border-radius: 0.35rem;
-  font-family: var(--font-mono), monospace;
+  font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 500;
   line-height: 1;
@@ -1433,7 +1480,7 @@ html[data-theme="light"] .ask-question-option.selected {
   white-space: pre-wrap;
   word-break: break-all;
   padding: 0.5rem 0.75rem;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   margin: 0;
   max-height: 10rem;
@@ -1671,7 +1718,7 @@ html[data-theme="light"] .ask-question-option.selected {
 }
 
 .permission-prompt-plan-tool {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.7rem;
   padding: 0.1rem 0.4rem;
   border-radius: 0.25rem;

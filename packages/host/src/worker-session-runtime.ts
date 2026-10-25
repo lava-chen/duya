@@ -8,7 +8,9 @@ import { parseMailboxAttachments } from '@duya/host/worker-context/attachment-im
 import { isModelLikelyMultimodal } from '@duya/capabilities/utils/multimodal-detection';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { DEFAULT_MAX_OUTPUT_TOKENS, } from '@duya/host/worker-run-contracts';
-import type { PluginAppInvocationResult, PluginAppMcpDescriptor } from '@duya/agent-protocol';
+import type { PluginAppInvocationResult, PluginAppMcpDescriptor, PluginAppResourceRead } from '@duya/agent-protocol';
+import { scopedPluginServerName } from '@duya/plugin-core';
+import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declarations';
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
@@ -108,7 +110,7 @@ import { CompactionManager, createCompactionManager, type CompactionProbe } from
 import { resolveCompactionContextWindow } from '@duya/host/worker-compaction/context-window';
 import { PROGRESS_UPDATE_TOOL, PROGRESS_UPDATE_TOOL_NAME, ToolGroupProgressTracker, readProgressUpdateCall, } from '@duya/agent-runtime/turns/tool-group-progress';
 import type { CompactOptions } from '@duya/agent-runtime/context/compact/types';
-import { MessageTimeline, buildAgentContext, ingestMessage, ingestMessages, projectModelMessages, extractLegacySystemSegments, projectTimelinePersistenceMessages, getLegacyCompactionCheckpoint, type CompactionEntry, type RuntimeContextAgentMessage, type AgentMessage, } from '@duya/agent-core/message';
+import { MessageTimeline, buildAgentContext, ingestMessage, ingestMessages, projectModelMessages, projectSystemPrompt, extractLegacySystemSegments, projectTimelinePersistenceMessages, getLegacyCompactionCheckpoint, type CompactionEntry, type RuntimeContextAgentMessage, type AgentMessage, } from '@duya/agent-core/message';
 import { AgentMessageFactory } from '@duya/agent-runtime/message/message-factories';
 import { THREAD_METADATA_KEY, applyReplyQuoteContext, collectMessageIds, isBranchedMessage, mergeThreadMetadata, messageToQuoteText, readThreadMeta, resolveReplyMeta, } from '@duya/agent-core/message/threads';
 import { MessageCompactionController } from '@duya/host/worker-compaction/bound-controller';
@@ -456,15 +458,17 @@ export class WorkerSession implements AgentRuntime {
         if (this.messages.length === 0 && options?.messages?.length) {
             this.setMessages([...options.messages]);
         }
-        const projected = this._projectModelMessages(systemPrompt, { injectHookContexts: true });
-        const projection: TurnModelProjection = {
-            systemPrompt: projected.systemPromptContent,
-            messages: projected.messages,
-        };
+        // The SYSTEM half of the projection, on its own: the turn's MESSAGES are
+        // projected by `projectTurnMessages()` below, which the engine calls
+        // per turn and which must re-project so a later turn sees the tool
+        // results the previous turn appended. Asking for both here walked the
+        // timeline twice per turn, which measured at ~30 ms of the first-token
+        // budget on every turn.
+        const projectionSystemPrompt = this._projectSystemPrompt(systemPrompt);
         const moded = await this.applyTurnModes({
             options,
             turnContext,
-            systemPrompt: projection.systemPrompt,
+            systemPrompt: projectionSystemPrompt,
             resolved: resolvedBase,
         });
         systemPrompt = moded.systemPrompt;
@@ -522,6 +526,12 @@ export class WorkerSession implements AgentRuntime {
             checkPermission: async (toolName, args, invocationId) => normalizeCanUseToolDecision(await canUseTool(toolName, args, invocationId))
         });
         let currentTools: readonly Tool[] = resolvedTools;
+        // The turn's messages, projected onto the provider boundary. Named so
+        // the lazy `projection.messages` getter and the engine's own call site
+        // share ONE projection path -- a getter cannot use `this` for the
+        // session, so the arrow function is what carries it.
+        const projectTurnMessages = (): Message[] =>
+            this._projectModelMessages('', { injectHookContexts: true }).messages;
         return {
             resolved,
             turnContext,
@@ -529,8 +539,23 @@ export class WorkerSession implements AgentRuntime {
             canUseTool: guardedCanUseTool,
             progressToolName,
             systemPrompt,
-            projection,
-            projectTurnMessages: (): Message[] => this._projectModelMessages('', { injectHookContexts: true }).messages,
+            projection: {
+                // LAZY on the messages half, and EAGER on the system half --
+                // but the system half is now CHEAP, because it no longer walks
+                // the timeline's rows onto the provider boundary.
+                //
+                // Before, this field was computed by a full projection that ran
+                // a second time inside `projectTurnMessages()` below, and
+                // nothing read it: the measured cost of the duplicate walk was
+                // ~30 ms of the first-token budget on every turn.
+                get systemPrompt(): string {
+                    return projectionSystemPrompt;
+                },
+                get messages(): Message[] {
+                    return projectTurnMessages();
+                },
+            },
+            projectTurnMessages,
             refreshDeclaredTools: () => {
                 declaredToolsForRequest = new Set(currentTools.map((t) => t.name));
                 return declaredToolsForRequest;
@@ -2134,6 +2159,39 @@ export class WorkerSession implements AgentRuntime {
                 };
             });
     }
+    async readPluginUiSurfaceResource(input: {
+        pluginId: string;
+        server: string;
+        resourceUri: string;
+    }): Promise<PluginAppResourceRead> {
+        const serverName = scopedPluginServerName(input.pluginId, input.server);
+        const manager = this.mcpManager;
+        if (!manager) throw new Error('plugin_app_resource_server_unavailable');
+        const client = manager.getClient(serverName);
+        if (!client) throw new Error('plugin_app_resource_server_unavailable');
+        const config = client.getConfig();
+        if (client.getName() !== serverName || client.getSource() !== 'plugin' || config.pluginId !== input.pluginId) {
+            throw new Error('plugin_app_resource_server_mismatch');
+        }
+        const contents = await manager.readResource(serverName, input.resourceUri);
+        if (contents.length !== 1 || contents[0]?.uri !== input.resourceUri) {
+            throw new Error('plugin_app_resource_invalid');
+        }
+        const resource = contents[0];
+        if (typeof resource.text !== 'string' || typeof resource.mimeType !== 'string' ||
+            resource.mimeType.split(';', 1)[0]?.trim().toLowerCase() !== 'text/html') {
+            throw new Error('plugin_app_resource_mime_unsupported');
+        }
+        const sizeBytes = Buffer.byteLength(resource.text, 'utf8');
+        if (sizeBytes === 0) throw new Error('plugin_app_resource_invalid');
+        if (sizeBytes > PLUGIN_UI_RESOURCE_MAX_BYTES) throw new Error('plugin_app_resource_too_large');
+        return {
+            source: config.source ?? 'unknown',
+            pluginId: config.pluginId,
+            serverName,
+            contents,
+        };
+    }
     async invokePluginAppMcpTool(input: {
         runId: string;
         toolId: string;
@@ -2245,6 +2303,43 @@ export class WorkerSession implements AgentRuntime {
     }
     shouldCompact(): boolean {
         return this.compactionController.shouldCompact();
+    }
+    /**
+     * The SYSTEM half of the projection, without the message half.
+     *
+     * Split out because the two halves are needed at different moments: the
+     * turn's system prompt is assembled before the turn's messages are
+     * projected for the provider, and the message projection is the expensive
+     * half -- it re-projects every timeline row onto the provider boundary.
+     * Asking for both at once meant walking the timeline twice per turn,
+     * which measured at ~30 ms of the first-token budget on every turn.
+     *
+     * The result is byte-identical to the `systemPromptContent` of
+     * {@link _projectModelMessages} for the same timeline.
+     */
+    private _projectSystemPrompt(systemPromptContent: string): string {
+        const snapshot = this.timeline.snapshot();
+        const context = buildAgentContext(snapshot);
+        const systemSegments = extractLegacySystemSegments(context.messages, context.compaction);
+        const projectedSystem = projectSystemPrompt(systemSegments);
+        // The projection can return blocks instead of a string when a system
+        // segment carries structured content (a `legacy_system` row or a
+        // compaction's `reinjectedSystemMessages`). Those blocks are dropped
+        // here — the model never sees them. Plan 619 defect b tracks the
+        // size of the blind spot before the real fix lands; until then the
+        // drop is counted, not silent.
+        const systemFromProjection = typeof projectedSystem === 'string' ? projectedSystem : '';
+        if (typeof projectedSystem !== 'string' && projectedSystem.length > 0) {
+            const blockCount = projectedSystem.length;
+            this.systemBlockDropCount += blockCount;
+            logger.warn(
+                `[Agent] dropped ${blockCount} structured system block(s) from the projection ` +
+                `(total ${this.systemBlockDropCount}); plan 619 defect b`,
+            );
+        }
+        return systemPromptContent && systemFromProjection
+            ? `${systemPromptContent}\n\n---\n\n## Conversation Context\n\n${systemFromProjection}`
+            : (systemPromptContent || systemFromProjection);
     }
     private _projectModelMessages(systemPromptContent: string, opts: {
         injectHookContexts?: boolean;

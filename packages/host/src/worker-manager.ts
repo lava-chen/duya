@@ -1,5 +1,6 @@
 import { fork, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
+import nodeModule from 'node:module';
 import type { StopDisposition } from '@duya/agent-protocol';
 import { isWorkerTranscriptMutationAction } from './worker-transcript-mutations.js';
 import {
@@ -11,6 +12,76 @@ import {
 } from './worker-limits.js';
 
 export { createWorkerEnvironment };
+
+/**
+ * Turn on Node's on-disk compile cache for the Host process.
+ *
+ * ## Why
+ *
+ * Node can cache V8's compiled code for the modules a process loads, keyed
+ * by each file's content hash. The first run compiles and writes the cache;
+ * every later run reuses it. Measured on this machine, requiring a 2.4 MB
+ * CommonJS module went from ~49 ms cold to ~5 ms warm.
+ *
+ * The Host process is the one that loads thousands of modules at startup
+ * (the CLI, the tool registry, the prompt system), so this is a real saving
+ * on every Host start.
+ *
+ * ## What it does NOT cover, and why that matters here
+ *
+ * `fork()` starts a BRAND NEW Node process rather than duplicating this
+ * one, and `module.enableCompileCache()` does not export `NODE_COMPILE_CACHE`
+ * to children -- so this switch does not reach the worker by inheritance.
+ * It is also called after the Host's own entry point has been compiled, so
+ * it can only cover the modules loaded from here on.
+ *
+ * The worker gets the cache through the environment instead:
+ * `createWorkerEnvironment()` sets `NODE_COMPILE_CACHE`, which DOES cover
+ * the entry point -- the bundle itself is cached, verified against the real
+ * bundle -- and takes a bundle spawn from ~172 ms to ~103 ms (measured,
+ * Electron 44 / Node 24.20). The worker flushes the cache while it is
+ * alive, because Node only writes it on a clean exit and the Host kills its
+ * workers. This function stays because the HOST's own module loading is a
+ * separate win (Electron cold start), not the worker's.
+ *
+ * ## Why it is best-effort
+ *
+ * The cache is an optimisation. An unwritable cache directory, a runtime
+ * without `enableCompileCache`, or a runtime that has disabled it must
+ * degrade to today's behaviour -- never fail a spawn. The status is logged
+ * once so an operator can see whether the cache is actually in play.
+ */
+let compileCacheReported = false;
+export function enableWorkerCompileCache(logger?: { info: (message: string, fields?: Record<string, unknown>) => void; warn: (message: string, fields?: Record<string, unknown>) => void }): void {
+    if (compileCacheReported) return;
+    const enable = (nodeModule as unknown as {
+        enableCompileCache?: () => { status: number | string; message?: string };
+    }).enableCompileCache;
+    if (typeof enable !== 'function') {
+        compileCacheReported = true;
+        logger?.info('Worker compile cache unavailable in this runtime; the Host compiles its modules on every start');
+        return;
+    }
+    try {
+        const result = enable.call(nodeModule);
+        compileCacheReported = true;
+        // `status` is Node's numeric `CompileCacheStatus` enum (FAILED=0,
+        // ENABLED=1, ALREADY_ENABLED=2, DISABLED=3) on Node 22+, not a string.
+        const statusCode = typeof result?.status === 'number' ? result.status : undefined;
+        const status = statusCode === undefined
+            ? String(result?.status ?? 'unknown')
+            : (['FAILED', 'ENABLED', 'ALREADY_ENABLED', 'DISABLED'][statusCode] ?? `UNKNOWN(${statusCode})`);
+        if (status === 'FAILED') {
+            logger?.warn(`Worker compile cache could not be enabled: ${result.message ?? 'unknown reason'}`);
+            return;
+        }
+        logger?.info(`Worker compile cache ${status.toLowerCase()}`);
+    }
+    catch (err) {
+        compileCacheReported = true;
+        logger?.warn(`Worker compile cache could not be enabled: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
 
 /** Session state hooks required by worker supervision. */
 export interface WorkerSessionLifecycle {
@@ -85,6 +156,16 @@ export class WorkerManager {
   private onWorkerCrash: ((sessionId: string) => void) | null = null;
   private onWorkerExit: ((sessionId: string, child: ChildProcess) => void) | null = null;
   private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void) | null = null;
+  /**
+   * Extra subscribers to the raw worker frame stream.
+   *
+   * The primary handler above is a SINGLE slot, which is why a second
+   * consumer used to be impossible: assigning the slot would displace the
+   * first one. The session-level exits (manual compaction, side questions)
+   * need their own subscription, so the fan-out is a set and the slot became
+   * one member of it.
+   */
+  private readonly messageListeners = new Set<(sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void>();
   // H6: Track intentionally killed workers so their exit is not misjudged as a crash
   private intentionalKills = new WeakSet<ChildProcess>();
   // Plan 426 Phase 2: idle recycling. lastActivityAt refreshes on every
@@ -138,8 +219,37 @@ export class WorkerManager {
     this.onWorkerExit = handler;
   }
 
+  /**
+   * Install the PRIMARY worker-frame handler.
+   *
+   * A thin wrapper over {@link addMessageListener} that keeps its historical
+   * REPLACE semantics: the previous primary is removed, and every OTHER
+   * subscriber stays. A caller that assigned this twice used to lose the
+   * first handler; a caller that subscribes through
+   * {@link addMessageListener} is unaffected either way.
+   */
   setMessageHandler(handler: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void): void {
+    if (this.onWorkerMessage !== null) {
+      this.messageListeners.delete(this.onWorkerMessage);
+    }
     this.onWorkerMessage = handler;
+    this.messageListeners.add(handler);
+  }
+
+  /**
+   * Subscribe to the raw worker frame stream.
+   *
+   * Returns an unsubscribe function. Frames are delivered to EVERY
+   * subscriber, in subscription order, and one subscriber throwing does not
+   * stop the others: a broken extra consumer must not silence the run layer.
+   */
+  addMessageListener(
+    listener: (sessionId: string, msg: Record<string, unknown>, child: ChildProcess) => void,
+  ): () => void {
+    this.messageListeners.add(listener);
+    return () => {
+      this.messageListeners.delete(listener);
+    };
   }
 
   /**
@@ -264,6 +374,14 @@ export class WorkerManager {
     }
 
     const maxMemoryMB = getWorkerMaxMemoryMB();
+
+    // The Host's own compile cache. The worker does NOT inherit it -- a
+    // forked child is a brand new Node process and `enableCompileCache()`
+    // exports no environment variable -- so the worker reaches the cache
+    // through `NODE_COMPILE_CACHE` in the environment below, and flushes it
+    // while it is alive: Node only writes the cache on a clean exit, and
+    // the Host kills its workers.
+    enableWorkerCompileCache(this.logger);
 
     const env = createWorkerEnvironment(
       sessionId,
@@ -431,6 +549,17 @@ export class WorkerManager {
       }
       if (this.onWorkerMessage) {
         this.onWorkerMessage(sessionId, msg, child);
+      }
+      for (const listener of [...this.messageListeners]) {
+        if (listener === this.onWorkerMessage) continue;
+        try {
+          listener(sessionId, msg, child);
+        } catch (err) {
+          this.logger.warn('Worker message listener failed', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     });
 

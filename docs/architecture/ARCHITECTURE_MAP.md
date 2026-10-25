@@ -45,9 +45,10 @@ The **Debug entry** column is relative to that package's own root.
 
 ### Dependency direction
 
-A package may only depend downward. The enforced layer table lives in
-`scripts/architecture/boundary-gates.mjs:67-75` — **not** in the `layers:` block
-of `architecture-policy.yaml`, which the main checker never reads.
+A package may only depend downward. Run `npm run architecture:boundaries` to
+enforce the layer table in `scripts/architecture/boundary-gates.mjs:67-75` —
+**not** the `layers:` block of `architecture-policy.yaml`, which
+`architecture:check` never reads.
 
 ```
 protocol  @duya/agent-protocol

@@ -139,6 +139,22 @@ export interface ModelMessage {
   readonly id: string;
   /** Correlates a tool-role result with the assistant's originating call. */
   readonly toolCallId?: string;
+  /**
+   * What this row IS at the model boundary.
+   *
+   * `conversation` (the default) is something the person said, the model's own
+   * reply, or a tool result. `context` is a row the SYSTEM attached -- the
+   * volatile-context rail, a hook's block, an attachment's extracted text --
+   * and each of those says in so many words that it is not part of the user's
+   * message.
+   *
+   * The engine needs the difference to END THE REQUEST with the question: the
+   * system-attached rows are moved in front of it, because they are `user`
+   * rows too and a model reads a conversation from the end. A host that does
+   * not mark its context rows simply has every row read as conversation, which
+   * is the conservative reading.
+   */
+  readonly origin?: 'conversation' | 'context';
 }
 
 /** Why the provider stopped producing. Drives the engine's stop decision. */
@@ -198,7 +214,16 @@ export type ModelFrame =
   | { readonly type: 'tool_use_started'; readonly call: ToolCallRequest }
   | { readonly type: 'tool_use_delta'; readonly callId: ToolCallId; readonly delta: string }
   | { readonly type: 'tool_use'; readonly call: ToolCallRequest }
-  | { readonly type: 'usage'; readonly inputTokens: number; readonly outputTokens: number; readonly totalTokens?: number }
+  | { readonly type: 'usage'; readonly inputTokens: number; readonly outputTokens: number; readonly totalTokens?: number; /**
+   * The physical duration of the provider request that produced this usage,
+   * in milliseconds.
+   *
+   * Measured at the provider call and carried as a number, because a
+   * consumer cannot reconstruct it from chunk timestamps — those may be
+   * buffered and would no longer describe when the provider produced the
+   * content. Absent when the producer did not measure it.
+   */
+   readonly requestDurationMs?: number }
   | { readonly type: 'turn_stopped'; readonly reason: ModelStopReason }
   | { readonly type: 'error'; readonly message: string; readonly code?: string; readonly retryable: boolean };
 

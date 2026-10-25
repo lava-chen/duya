@@ -61,16 +61,28 @@ export const hot = true;
 
 Done.`;
 
+/**
+ * The scenarios of the LOCAL evidence harness.
+ *
+ * These ids live in their own `ui-harness/` namespace on purpose. The shared
+ * performance harness (`e2e/perf/lib/fixtures.mjs`) owns the `perf/*` fixture
+ * contract, and `perf/stream-long-reply` there is a PLAIN TEXT reply of 2 000
+ * chunks — while the reply rendered here carries three fenced code blocks.
+ * The same id with different content would make every cross-harness number
+ * comparison meaningless, so the local harness names its scenarios
+ * differently. See `e2e/perf/agents/agent-b/README.md` for the mapping from
+ * the labels the first round's archived evidence used.
+ */
 export const SCENARIOS: Record<string, Scenario> = {
-  'perf/stream-long-reply': {
-    id: 'perf/stream-long-reply',
+  'ui-harness/stream-long-reply': {
+    id: 'ui-harness/stream-long-reply',
     text: REPLY,
     chunk: CHUNK,
     tools: [],
     toolEvery: 0,
   },
-  'perf/stream-tool-storm': {
-    id: 'perf/stream-tool-storm',
+  'ui-harness/stream-tool-storm': {
+    id: 'ui-harness/stream-tool-storm',
     text: SHORT_REPLY,
     chunk: CHUNK,
     tools: TOOL_STORM,
@@ -206,8 +218,8 @@ interface BenchWindow extends Window {
 
 function App() {
   const params = new URLSearchParams(window.location.search);
-  const scenarioId = params.get('scenario') ?? 'perf/stream-long-reply';
-  const scenario = SCENARIOS[scenarioId] ?? SCENARIOS['perf/stream-long-reply']!;
+  const scenarioId = params.get('scenario') ?? 'ui-harness/stream-long-reply';
+  const scenario = SCENARIOS[scenarioId] ?? SCENARIOS['ui-harness/stream-long-reply']!;
 
   useEffect(() => {
     instrumentation.observeRegion('history', document.getElementById('history'));

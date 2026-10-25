@@ -55,14 +55,15 @@
  *     thinking. Anything else (a paragraph, a notice) starts a new stanza.
  *
  * Only the markers change the text, never the line count of a block: the block
- * model is a flat list, `renderTranscript` joins blocks with `'\n'`, and
- * `TUIApp.revealSelectedBlock` locates the selection by summing per-block
- * heights. A separator row therefore belongs to the block BELOW it, so the sum
- * stays honest and no per-block `+1` appears anywhere.
+ * model is a flat list, `renderTranscript` joins blocks with `'\n'`, and the
+ * scroll math locates a line by summing per-block heights. A separator row
+ * therefore belongs to the block BELOW it, so the sum stays honest and no
+ * per-block `+1` appears anywhere.
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
 import { splitStreamCommit } from './stream-commit.js';
+import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
   formatToolResult,
   isShellTool,
@@ -908,8 +909,107 @@ function toolNodeRow(
   styles: Styles,
   connector: '├' | '└',
 ): string {
+  // A todo write is a LIST, not a call with an argument: `todo(todo-1,
+  // todo-2)` says nothing a reader did not already know, while the head below
+  // says how far the list got.
+  if (isTodoTool(block.name)) {
+    return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
+  }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/**
+ * The head of a todo write: what the list is, and how far it got.
+ *
+ * The count is the same shape codex uses for `Updated Plan` (`N/M complete`) and
+ * minimax-code uses for its todo cell (`Todo list 2/4`): a reader who glances at
+ * the row learns the progress without reading the items under it.
+ */
+function todoHeadline(block: Extract<Block, { kind: 'tool' }>): string {
+  const items = block.todos;
+  if (items === undefined || items.length === 0) return 'Todo list';
+  const { completed, total } = countTodos(items);
+  return `Todo list ${completed}/${total}`;
+}
+
+/** Items drawn before the rest of a long list are folded away. */
+const TODO_MAX_ITEMS = 20;
+
+/**
+ * The list under a todo write's head: one marker per item.
+ *
+ * The markers are minimax-code's (`✓` done, `●` running, `○` to do) — a
+ * checklist without a box glyph per row. The list is drawn whether or not tool
+ * results are shown: the list IS the point of the call, so hiding it behind a
+ * disclosure would hide the only thing the reader came for.
+ */
+function todoBody(
+  items: readonly TuiTodoItem[],
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
+  if (items.length === 0) return [];
+  const shown = items.slice(0, TODO_MAX_ITEMS);
+  const lines: string[] = [];
+  for (const item of shown) lines.push(...todoRows(item, styles, indent, width));
+  if (items.length > shown.length) {
+    lines.push(`${indent}${styles.muted(`… ${items.length - shown.length} more`)}`);
+  }
+  return lines;
+}
+
+/** One item, folded to the pane width. */
+function todoRows(
+  item: TuiTodoItem,
+  styles: Styles,
+  indent: string,
+  width: number | undefined,
+): string[] {
+  const marker = todoMarker(item.status, styles);
+  // The marker takes one column and the space after it takes another, so the
+  // text starts two columns in — the continuation rows indent to match.
+  const budget = width === undefined
+    ? undefined
+    : Math.max(1, Math.floor(width) - indent.length - 2);
+  const folded = budget === undefined
+    ? [[item.content]]
+    : wrapAtoms([{ text: item.content, style: null }], budget, codePointWidth)
+      .map((row) => [row.map((atom) => atom.text).join('')]);
+  return folded.map((row, index) => {
+    const prefix = index === 0 ? `${indent}${marker} ` : `${indent}  `;
+    return prefix + todoText(row[0] ?? '', item.status, styles);
+  });
+}
+
+/** The status glyph of one item. */
+function todoMarker(status: TuiTodoStatus, styles: Styles): string {
+  switch (status) {
+    case 'completed': return styles.success('✔');
+    case 'in_progress': return styles.accent('●');
+    case 'pending': return styles.muted('○');
+  }
+}
+
+/** The text of one item, styled by its status. */
+function todoText(text: string, status: TuiTodoStatus, styles: Styles): string {
+  switch (status) {
+    case 'completed': {
+      // The style FUNCTIONS each wrap their argument in exactly one tag pair,
+      // so nesting two of them would escape the inner tags as text. The pairs
+      // are composed by hand instead, and the text is escaped exactly once.
+      const muted = rawTagPair(styles.muted);
+      // The own renderer can strike through; blessed folds it to muted.
+      const strike = styles.renderer === 'own' ? rawTagPair(styles.strike) : null;
+      const inner = strike === null
+        ? escapeTags(text)
+        : `${strike.open}${escapeTags(text)}${strike.close}`;
+      return `${muted.open}${inner}${muted.close}`;
+    }
+    case 'in_progress': return styles.bold(text);
+    case 'pending': return escapeTags(text);
+  }
 }
 
 /** One call inside a batch: the bare target, at the batch's child column. */
@@ -980,8 +1080,12 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
     if (block === undefined) break;
     if (block.kind === 'tool') {
       const family = toolGroupKey(block.name);
+      // Two todo writes are two DIFFERENT lists, not two calls of one batch:
+      // the second is the state AFTER the first. Batching them would hide the
+      // second list behind a `todo 2 calls` header.
+      const batchable = !isTodoTool(block.name);
       let end = index;
-      while (end + 1 < blocks.length) {
+      while (batchable && end + 1 < blocks.length) {
         const next = blocks[end + 1];
         if (next === undefined || next.kind !== 'tool' || toolGroupKey(next.name) !== family) break;
         end += 1;
@@ -1008,7 +1112,7 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
  * and where the blank rows go.
  *
  * A separator belongs to the block BELOW it, so `Σ heights` stays the flattened
- * line count and `revealSelectedBlock` needs no per-block `+1`.
+ * line count and the scroll math needs no per-block `+1`.
  */
 export function planTranscript(blocks: readonly Block[]): BlockPlan[] {
   const units = buildUnits(blocks);
@@ -1082,6 +1186,14 @@ function nodeBody(
   }
   if (block.kind !== 'tool') return [];
 
+  // A todo write draws its list whether or not tool results are shown: the list
+  // IS the result of the call, and a disclosure that hid it would hide the only
+  // thing the reader came for.
+  if (isTodoTool(block.name)) {
+    if (block.status === 'running') return [];
+    return todoBody(block.todos ?? [], styles, plan.bodyIndent, options.width);
+  }
+
   const result = block.result?.trimEnd() ?? '';
   if (block.status === 'running' || result.trim() === '') return [];
   const isExpanded = blockExpanded(block.id, options);
@@ -1151,11 +1263,12 @@ export function renderPlannedBlock(
  *   while it streams, `Thought for 1.2s` once it closes. A character count was
  *   the old evidence line; elapsed time is the same evidence with a number a
  *   reader can compare across turns.
- * - a collapsed block is a three-line PREVIEW, not an absence. Reasoning that
+ * - a collapsed block is a ONE-line PREVIEW, not an absence. Reasoning that
  *   is visible while it runs (tail-following, so the newest thought is the one
- *   on screen) and folded to its first three lines once done is what makes the
- *   transcript readable without a toggle. The `… N more lines` row is the
- *   disclosure, and `[+]`/`[-]` marks the toggle.
+ *   on screen) and folded to a single line once done is what makes the
+ *   transcript readable without a toggle. The head's `[+]`/`[-]` IS the
+ *   disclosure: a folded thought used to cost three preview rows PLUS a
+ *   `… N more lines` row, so one paragraph of reasoning took five rows.
  * - long blocks are bounded in CHARACTERS before any line work, because
  *   splitting and tagging tens of kilobytes to keep three lines is work no
  *   reader ever sees. The bound follows the same edge as the preview so the
@@ -1165,8 +1278,8 @@ export function renderPlannedBlock(
  * is an execution node, so it carries the same `├`/`└` as a tool call.
  */
 
-/** Preview budget in whole lines, matching minimax-code's collapsed cell. */
-const THINKING_PREVIEW_LINES = 3;
+/** Preview budget in whole lines. One row: the head's `[+]` is the disclosure. */
+const THINKING_PREVIEW_LINES = 1;
 
 /** Characters kept from a preview before line selection. See `renderThinking`. */
 const THINKING_PREVIEW_MAX_CHARS = 2_000;
@@ -1218,30 +1331,25 @@ function thinkingBody(
   if (expanded) return thinkingRows(source.split('\n'), styles, indent, width);
 
   const edge = block.finalized ? 'head' : 'tail';
-  const { text, truncated } = boundThinkingText(source, edge);
+  const { text } = boundThinkingText(source, edge);
   const rows = thinkingRows(text.split('\n'), styles, indent, width);
-  if (rows.length <= THINKING_PREVIEW_LINES && !truncated) return rows;
+  if (rows.length <= THINKING_PREVIEW_LINES) return rows;
 
-  // The preview is three ROWS, not three source lines: a folded line is
-  // several rows, and a budget counted in source lines would grow with the
-  // width of the reasoning. minimax-code bounds its previews the same way
-  // (`truncateToVisualLines`).
+  // ONE row of preview, and no separate overflow row: the head's `[+]`
+  // already says there is more, and the overflow row was what turned one
+  // paragraph of reasoning into five rows of transcript.
+  //
+  // The preview is one ROW, not one source line: a folded line is several
+  // rows, and a budget counted in source lines would grow with the width of
+  // the reasoning.
   const slice = edge === 'head'
     ? rows.slice(0, THINKING_PREVIEW_LINES)
     : rows.slice(-THINKING_PREVIEW_LINES);
-  // Blank rows are what separates paragraphs in reasoning, so a slice can end
-  // on one and waste a third of the budget on an empty line. Trim them from
-  // the edges only — an inner blank still separates the two thoughts it sits
-  // between. The omitted count is recomputed from what is actually shown.
-  const kept = trimBlankEdges(slice);
-  const omitted = rows.length - kept.length;
-  // A character bound can hide more than `omitted` lines, so it reports the
-  // kind of overflow rather than a count that would be a lie.
-  const overflow = truncated
-    ? `${edge === 'head' ? 'more' : 'earlier'} content`
-    : `${omitted} ${edge === 'head' ? 'more' : 'earlier'} ${omitted === 1 ? 'line' : 'lines'}`;
-  const hint = styles.muted(`${indent}… ${overflow}`);
-  return edge === 'head' ? [...kept, hint] : [hint, ...kept];
+  // Blank rows are what separates paragraphs in reasoning, so a slice can land
+  // on one and spend the whole budget on an empty line. Trim them from the
+  // edges only; an inner blank still separates the two thoughts it sits
+  // between.
+  return trimBlankEdges(slice);
 }
 
 /** Drop blank rows from both ends, keeping the blanks in between. */

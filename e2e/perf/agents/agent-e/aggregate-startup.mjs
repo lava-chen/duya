@@ -61,7 +61,9 @@ for (const block of blocks) {
     continue;
   }
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const variant = block.startsWith('baseline') ? 'baseline' : 'after';
+  // The block name may carry a prefix (e.g. `clean-baseline-b1`), so the
+  // variant is detected anywhere in the name rather than at the start.
+  const variant = block.includes('baseline') ? 'baseline' : 'after';
   variants[variant].push(...data.results);
   perBlock.push({
     block,

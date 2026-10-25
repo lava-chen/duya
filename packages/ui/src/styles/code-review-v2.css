@@ -214,7 +214,7 @@
   margin-left: auto;
   display: flex;
   gap: 6px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11.5px;
   flex: 0 0 auto;
 }
@@ -305,7 +305,7 @@
 
 .rev-rail-hash {
   color: var(--muted);
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 10.5px;
 }
 

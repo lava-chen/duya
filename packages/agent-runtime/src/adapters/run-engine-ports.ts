@@ -518,6 +518,26 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
  * adapter must not produce, because the caller could not tell an absent row
  * from a dropped block. That marker remains a guard rather than a live code
  * path, and is stated so nobody reads it as a claim that images survive.
+ *
+ * ## Why `origin` crosses, and why it is the CLASSIFIER the engine needs
+ *
+ * `metadata.runtimeContext === true` is the marker every producer of a
+ * system-attached row already sets -- the volatile-context rail
+ * (`worker-context/context-rail.ts:87`), a hook's block
+ * (`worker-hooks/injection.ts:277`), an attachment's extracted text
+ * (`message-projectors.ts:159`). The HOST's projection turns it into
+ * `origin: 'context'` on its way in (`worker-run-composition.ts:314`), and the
+ * request contract uses that marker to tell "the system attached this row" from
+ * "the person said this" (`request-assembly.ts:153`).
+ *
+ * Without it, the compaction replacement was UNCLASSIFIABLE: a runtime-context
+ * row came back from `toRuntimeMessage` looking exactly like a person speaking,
+ * so the request could not tell which rows were the system's own -- and the
+ * engine's rule for keeping the context rows across a compaction
+ * (`run-engine.ts`, `#requestHistory`) had no way to exclude the replacement's own
+ * copy of them. Carrying the marker is what makes that exclusion exact rather
+ * than a guess, and the two changes are one change: without the marker the
+ * exclusion cannot be expressed, and with it the exclusion is a partition.
  */
 export function toRuntimeMessage(message: Message): ModelMessage {
   return {
@@ -536,6 +556,11 @@ export function toRuntimeMessage(message: Message): ModelMessage {
     // unidentified rows of the same role. Stated rather than hidden.
     id: message.id ?? `unidentified:${message.role}`,
     content: toRuntimeContent(message.content),
+    // The SYSTEM's own rows keep their identity across this boundary. Spread
+    // rather than a named `origin: undefined`, because the field is optional
+    // under `exactOptionalPropertyTypes` and naming it with no value is not
+    // the same as omitting it.
+    ...(message.metadata?.runtimeContext === true ? { origin: 'context' as const } : {}),
   };
 }
 
@@ -1156,15 +1181,21 @@ function readToolResultPayload(message: Message): {
   const content = message.content;
   if (message.role === 'tool') {
     const text = typeof content === 'string' ? content : JSON.stringify(content);
+    // A STATED status outranks the text markers. The executor stamps `success`
+    // on every result it saw complete and `error` on the ones it wrapped, so a
+    // result that carries a bit is answering the question directly. Without
+    // this arm the success bit did not exist and every successful call reached
+    // the protocol's `indeterminate` arm -- which the transcript paints as `?`.
+    const stated = statedToolOutcome(message.status);
     // The marker arm is an INFERENCE, so only its POSITIVE result is evidence.
-    // No `<tool_error>` in the text is not a statement that the call succeeded --
+    // No failure marker in the text is not a statement that the call succeeded --
     // it is the absence of a marker in a format that carries no status field --
     // so it resolves to `undefined` and reaches the protocol's `indeterminate`
     // arm. `text.includes(...)` used to hand back a bare `false` here, which
     // read downstream as a producer that said "did not fail".
     return {
       content: text,
-      isError: text.includes('<tool_error>') ? true : undefined,
+      isError: stated ?? (FAILURE_MARKER.test(text) ? true : undefined),
       callId: message.tool_call_id ?? '',
     };
   }
@@ -1181,4 +1212,20 @@ function readToolResultPayload(message: Message): {
     isError: block.is_error,
     callId: block.tool_use_id,
   };
+}
+
+/** Both failure envelopes the runtime emits, wrapped or bare. */
+const FAILURE_MARKER = /<(?:tool_error|tool_use_error)>/u;
+
+/**
+ * A status bit the producer STATED, as the two values this adapter can carry.
+ *
+ * `undefined` means the producer did not answer -- the neutral messages
+ * ("waiting for approval") and older producers carry no bit -- and must stay
+ * `undefined` rather than becoming a success nobody claimed.
+ */
+function statedToolOutcome(status: unknown): boolean | undefined {
+  if (status === 'success' || status === 'done') return false;
+  if (status === 'error' || status === 'failed') return true;
+  return undefined;
 }

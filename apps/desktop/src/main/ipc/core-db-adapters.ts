@@ -16,76 +16,24 @@
  * See plan 328 decision 2 for the field-by-field mapping contract.
  */
 
-import type { HostPermissionRequest, HostMailboxItem } from '@duya/agent-protocol';
+import type { HostPermissionRequest } from '@duya/agent-protocol';
 import type {
-  SessionCreateInput,
   SessionPatch,
   CoreTask,
   TaskCreateInput,
   TaskUpdateInput,
   PermissionCreateInput,
   PermissionResolveInput,
-  MailboxItem,
 } from '../db/core';
 
 // ─── Session adapters ───
 
 /**
- * Extension keys stored in `sessions.extensions` that map to top-level
- * columns in the old `chat_sessions` table.
+ * `ipcSessionToCoreCreate` moved to `@duya/host/ipc-row-adapters` (the Host
+ * worker db bridge creates sessions from the same flat payload, so both
+ * bridges must agree on the mapping).
  */
-const SESSION_EXTENSION_KEYS = [
-  'system_prompt',
-  'context_summary',
-  'context_summary_updated_at',
-  'plan_mode_enabled',
-  'goal_mode_enabled',
-  'source',
-] as const;
-
-/**
- * Map an IPC session create payload to SessionCreateInput.
- * `permissionMode` is resolved by the caller (via resolvePermissionProfile)
- * before calling this function — the adapter does not do business logic.
- *
- * Old `parent_id` / `parent_session_id` are merged into `parentSessionId`.
- * Old `draft_message` → `draft`. Old `permission_profile` → `permissionMode`.
- * Extension-bound fields (system_prompt, context summaries, etc.) go to `extensions`.
- */
-export function ipcSessionToCoreCreate(
-  data: Record<string, unknown>,
-  permissionMode: string,
-): SessionCreateInput {
-  const parentSessionId =
-    (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
-
-  const extensions: Record<string, unknown> = {};
-  for (const key of SESSION_EXTENSION_KEYS) {
-    if (data[key] !== undefined) {
-      extensions[key] = data[key];
-    }
-  }
-
-  return {
-    id: data.id as string,
-    title: data.title as string | undefined,
-    workingDirectory: data.working_directory as string | undefined,
-    projectName: data.project_name as string | undefined,
-    status: data.status as string | undefined,
-    model: data.model as string | undefined,
-    providerId: data.provider_id as string | undefined,
-    mode: data.mode as string | undefined,
-    permissionMode,
-    agentProfileId: (data.agent_profile_id as string | null | undefined) ?? null,
-    parentSessionId,
-    agentType: data.agent_type as string | undefined,
-    agentName: data.agent_name as string | undefined,
-    draft: (data.draft_message as string | null | undefined) ?? null,
-    extensions,
-    createdAt: data.created_at as number | undefined,
-    updatedAt: data.updated_at as number | undefined,
-  };
-}
+export { ipcSessionToCoreCreate } from '@duya/host/ipc-row-adapters';
 
 /**
  * Map an IPC session update payload to SessionPatch.
@@ -266,53 +214,8 @@ export function ipcPermissionToResolve(extra?: {
 // ─── Mailbox adapters ───
 
 /**
- * Map a MailboxItem (core store, camelCase) back to the old `agent_mailbox`
- * row shape (snake_case). JSON fields are re-serialized to match the old
- * `SELECT * FROM agent_mailbox` shape.
- *
- * Column mapping notes:
- *  - `submittedRunId` → `submitted_during_run_id`
- *  - `resultingEventId` → `resulting_user_msg_id`
- *  - `attachments` (array|null) → `attachments_json` (JSON string)
- *  - `meta.constraints` → `constraints_json`
- *  - `meta.editHistory` → `edit_history_json`
- *  - `cancelReason` also feeds `failure_reason` (collapsed in core store)
+ * `coreMailboxToIpcRow` moved to `@duya/host/ipc-row-adapters` (plan 12
+ * gate 1: the Host worker db bridge serves the mailbox domain and must emit
+ * the same legacy row shape).
  */
-export function coreMailboxToIpcRow(item: MailboxItem | HostMailboxItem): Record<string, unknown> {
-  const meta = item.meta ?? {};
-  const constraints = meta.constraints;
-  const editHistory = meta.editHistory;
-  return {
-    id: item.id,
-    session_id: item.sessionId,
-    submitted_during_run_id: item.submittedRunId,
-    content: item.content,
-    kind: item.kind,
-    status: item.status,
-    priority: item.priority,
-    constraints_json: constraints !== undefined ? JSON.stringify(constraints) : null,
-    attachments_json: item.attachments ? JSON.stringify(item.attachments) : null,
-    source: item.source,
-    client_msg_id: item.clientMsgId,
-    created_at: item.createdAt,
-    claim_token: item.claimToken,
-    claim_expires_at: item.claimExpiresAt,
-    observed_at: item.observedAt,
-    observed_at_checkpoint: item.observedAtCheckpoint,
-    observed_by_run_id: item.observedByRunId,
-    injected_run_id: item.injectedRunId,
-    claim_attempts: item.claimAttempts,
-    last_claim_error: item.lastClaimError,
-    edit_locked_at: item.editLockedAt,
-    apply_mode: item.applyMode,
-    applied_at: item.appliedAt,
-    applied_at_checkpoint: item.appliedAtCheckpoint,
-    applied_summary: item.appliedSummary,
-    resulting_user_msg_id: item.resultingEventId,
-    failure_reason: item.cancelReason,
-    edit_history_json: editHistory !== undefined ? JSON.stringify(editHistory) : null,
-    cancelled_at: item.cancelledAt,
-    cancelled_by: item.cancelledBy,
-    cancel_reason: item.cancelReason,
-  };
-}
+export { coreMailboxToIpcRow } from '@duya/host/ipc-row-adapters';

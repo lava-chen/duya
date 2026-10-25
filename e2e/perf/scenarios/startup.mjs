@@ -63,6 +63,7 @@ import {
   wakeConversationStore,
 } from '../lib/launch.mjs';
 import { installCollector, readCollector } from '../lib/collector.mjs';
+import { readStartupPhases, startupPhaseMetrics } from '../lib/startup-phases.mjs';
 import { buildSessionMessages, fixtureDigest } from '../lib/fixtures.mjs';
 import { snapshotToMetrics, startResourceProbe } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
@@ -101,6 +102,7 @@ export default {
       await waitForAppReady(cold.page);
       const coldTypeable = await waitForTypeable(cold.page);
       const coldPaint = await readPaintTiming(cold.page);
+      const coldPhases = await readStartupPhases(cold.page);
       const coldHydration = await readHydrationState(cold.page);
       const coldResource = await coldProbe.stop();
       await closePerfElectron(cold.app);
@@ -126,10 +128,11 @@ export default {
       const processStart = readProcessStartMs(measured.app) ?? ctx.launchMark;
       const probe = await startResourceProbe(measured.page);
       await waitForAppReady(measured.page);
-      // The conversation store does not hydrate on its own in this build (see
-      // the productDefect note), so the harness lets the app sync itself
-      // through the product's own sync event. `startup.typeable_ms` includes
-      // this nudge; `startup.warm.typeableAfterSync_ms` is the app's own cost
+      // The harness lets the app sync itself through the product's own sync
+      // event, which is how the measured profile is prepared. The store
+      // hydrates on its own now (PR #400); the nudge is what fills the
+      // session list for this profile. `startup.typeable_ms` includes the
+      // nudge; `startup.warm.typeableAfterSync_ms` is the app's own cost
       // after it.
       const syncedAt = Date.now();
       await wakeConversationStore(measured.app, measured.page, { settleMs: 0 });
@@ -152,6 +155,7 @@ export default {
       const reloadTypeable = await waitForTypeable(measured.page);
       const bootSnapshot = await readCollector(measured.page);
       const reloadPaint = await readPaintTiming(measured.page);
+      const reloadPhases = await readStartupPhases(measured.page);
 
       const metrics = {
         // The contract's names.
@@ -197,6 +201,12 @@ export default {
         'startup.warm.cpu.renderer_pct': resource['cpu.renderer_pct'],
         'startup.warm.mem.peakMB': resource['mem.peakMB'],
         'startup.warm.mem.growthMB': resource['mem.growthMB'],
+        // The boot split into the phases that own it. The cold boot is the
+        // one a user waits for; the reload of the same boot path is the warm
+        // reference that shows how much of the cold cost is Chromium's cold
+        // path rather than the app's.
+        ...startupPhaseMetrics('startup.cold', coldPhases),
+        ...startupPhaseMetrics('startup.reload', reloadPhases),
       };
 
       samples.push({
@@ -258,11 +268,13 @@ export default {
           'the *.reload.* metrics come from an instrumented reload of the same boot path, '
           + 'because an init script cannot reach the first document',
         productDefect:
-          'on a profile whose persisted store state is absent, the conversation store never '
-          + 'reports itself hydrated (onRehydrateStorage mutates the state instead of setting '
-          + 'it), so the session list stays empty and the welcome composer stays disabled. '
-          + 'The prepare phase works around it by letting the app sync itself; the defect '
-          + 'itself is in packages/ui/src/stores/conversation-store.ts and is NOT fixed here',
+          'FIXED (PR #400): the conversation store used to report itself hydrated by mutating '
+          + 'the state in onRehydrateStorage, which zustand v5 does not publish to the '
+          + 'subscribers - so on a profile without persisted store state the session list '
+          + 'stayed empty and the welcome composer stayed disabled. The normalization now '
+          + 'runs inside the merge that the persist middleware performs, so isHydrated is '
+          + 'published with that single write. The prepare phase still nudges the app to sync '
+          + 'itself, because that is how the measured profile is built',
       },
     };
   },

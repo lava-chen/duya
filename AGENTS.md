@@ -49,6 +49,7 @@ npm run electron:build       # required before test:e2e
 - TypeScript strict；用 `unknown` 窄化外部数据，边界使用已有 schema helper 或 zod。
 - 注释用英文。日志用所属包的结构化 logger，禁止生产代码 `console.log/warn/error`，不记录密钥或消息正文。
 - UI 使用 `globals.css` 的主题变量，适配 light / dark。
+- UI 文案遵循 “Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.” 优先用布局、间距和视觉层级表达关系；避免重复的辅助标签和解释，同时保留必要的字段标识、状态与错误反馈及无障碍名称。
 
 ## 验证
 

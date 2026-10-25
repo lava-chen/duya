@@ -59,7 +59,7 @@ interface GeminiPart {
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
 
-interface GeminiContent {
+export interface GeminiContent {
   role: 'user' | 'model';
   parts: GeminiPart[];
 }
@@ -110,7 +110,7 @@ interface GeminiResponse {
 // Request conversion (duya Message[] → GeminiRequest)
 // =============================================================================
 
-function toGeminiContents(messages: Message[]): GeminiContent[] {
+export function toGeminiContents(messages: Message[]): GeminiContent[] {
   const out: GeminiContent[] = [];
   for (const m of messages) {
     if (m.role === 'system') continue;

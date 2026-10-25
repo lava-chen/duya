@@ -10,6 +10,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  backgroundSummarySuffix,
+  IDLE_TASK_GLYPH_ASCII,
+  IDLE_TASK_GLYPH_UNICODE,
   SPINNER_ASCII,
   SPINNER_UNICODE,
   nextSpinnerFrame,
@@ -135,6 +138,64 @@ describe('workingTailLine', () => {
     // that the frame never resets.
     expect(line.startsWith('{cyan-fg}')).toBe(true);
     expect(line).toContain('{/cyan-fg}');
+  });
+});
+
+describe('backgroundSummarySuffix', () => {
+  it('adds nothing when there is nothing to report', () => {
+    expect(backgroundSummarySuffix({ bashRunning: 0, subagentRunning: 0, totalTasks: 0 })).toBe('');
+  });
+
+  it('names only the running halves', () => {
+    expect(backgroundSummarySuffix({ bashRunning: 1, subagentRunning: 0, totalTasks: 1 }))
+      .toBe(' · 1 background · /tasks details');
+    expect(backgroundSummarySuffix({ bashRunning: 0, subagentRunning: 2, totalTasks: 2 }))
+      .toBe(' · 2 subagent · /tasks details');
+    expect(backgroundSummarySuffix({ bashRunning: 1, subagentRunning: 1, totalTasks: 4 }))
+      .toBe(' · 1 background · 1 subagent · /tasks details');
+  });
+
+  it('still offers the details once everything has finished', () => {
+    // Finished tasks are inspectable after the fact, which is the one thing
+    // the user needs when the counts have gone quiet.
+    expect(backgroundSummarySuffix({ bashRunning: 0, subagentRunning: 0, totalTasks: 3 }))
+      .toBe(' · /tasks details');
+  });
+});
+
+describe('an idle tail with live background work', () => {
+  it('uses a static glyph instead of a spinner', () => {
+    // Nothing in the TURN is moving while a promoted command runs; a spinning
+    // glyph would claim otherwise and read as a hang when it does not advance.
+    const line = workingTailLine({
+      frame: 0,
+      label: 'Ready · /tasks details',
+      unicode: true,
+      columns: 80,
+      active: false,
+    });
+    expect(line).toContain(IDLE_TASK_GLYPH_UNICODE);
+    expect([...line].some((ch) => SPINNER_UNICODE.includes(ch))).toBe(false);
+    expect(line).toContain('/tasks details');
+  });
+
+  it('has an ascii fallback for the idle glyph', () => {
+    const line = workingTailLine({ frame: 0, label: 'x', unicode: false, columns: 80, active: false });
+    expect(line).toContain(IDLE_TASK_GLYPH_ASCII);
+    expect([...line].some((ch) => SPINNER_ASCII.includes(ch))).toBe(false);
+  });
+
+  it('does not cut a tag while fitting a long summary', () => {
+    const line = workingTailLine({
+      frame: 0,
+      label: 'Ready · 1 background · /tasks details'.repeat(10),
+      unicode: true,
+      columns: 30,
+      active: false,
+    });
+    expect(line.split('{').length).toBe(line.split('}').length);
+    const rendered = line.replace(/\{[^}]*\}/gu, '');
+    expect(Array.from(rendered).length).toBeLessThan(30);
   });
 });
 

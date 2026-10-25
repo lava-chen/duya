@@ -61,7 +61,11 @@ export interface TrustLevel {
 // Threat Patterns
 // ============================================================================
 
-const SKILL_THREAT_PATTERNS: [RegExp, string, Severity, Category, string][] = [
+/**
+ * The threat patterns, exported so a test can hold the scan to the behaviour
+ * of the reference implementation it replaced (see the scanner tests).
+ */
+export const SKILL_THREAT_PATTERNS: [RegExp, string, Severity, Category, string][] = [
   // ── Prompt injection ────────────────────────────────────────────────────
   // ── Prompt injection (expanded patterns from hermes-agent) ──────────────
   [
@@ -358,6 +362,16 @@ const INVISIBLE_CHARS: ReadonlySet<string> = new Set([
   '\u2066', '\u2067', '\u2068', '\u2069',
 ]);
 
+/**
+ * One test for "does this line hold any invisible character at all".
+ *
+ * The scan still reports the character the SET ORDER picks, so this only
+ * decides whether the per-character loop has to run at all.
+ */
+const INVISIBLE_CHAR_REGEX = new RegExp(
+  `[${[...INVISIBLE_CHARS].map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')}]`,
+);
+
 // Structural limits
 const MAX_FILE_COUNT = 50;
 const MAX_TOTAL_SIZE_KB = 1024;
@@ -401,7 +415,139 @@ const VERDICT_INDEX: Record<Verdict, 0 | 1 | 2> = {
 // ============================================================================
 
 /**
+ * Does this pattern source use a LINE anchor?
+ *
+ * `^` and `$` mean "start/end of this line" when the pattern is tested
+ * against one line, and "start/end of the whole content" when it is tested
+ * against the content. A pattern that uses one cannot be answered by a
+ * whole-content pass, so it keeps the per-line path.
+ *
+ * Escaped characters (`\$`) and character classes (`[^>]`) do not count: the
+ * `$` in `[^>]` is a literal, and `\$` is an escaped dollar.
+ */
+export function hasLineAnchor(source: string): boolean {
+  let index = 0;
+  while (index < source.length) {
+    const char = source[index];
+    if (char === '\\') {
+      // An escape consumes the next character, whatever it is.
+      index += 2;
+      continue;
+    }
+    if (char === '[') {
+      // A character class: skip to its closing bracket.
+      let cursor = index + 1;
+      if (source[cursor] === '^') cursor += 1;
+      if (source[cursor] === ']') cursor += 1;
+      while (cursor < source.length && source[cursor] !== ']') {
+        if (source[cursor] === '\\') cursor += 1;
+        cursor += 1;
+      }
+      index = cursor + 1;
+      continue;
+    }
+    if (char === '^' || char === '$') return true;
+    index += 1;
+  }
+  return false;
+}
+
+/** Patterns the whole-content pre-filter is allowed to answer for. */
+const PRE_FILTERED_PATTERN_INDEXES = new Set<number>();
+/** The union of those patterns, scanned once over the whole content. */
+const CONTENT_PRE_FILTER: RegExp | null = (() => {
+  const sources: string[] = [];
+  SKILL_THREAT_PATTERNS.forEach(([pattern], index) => {
+    if (hasLineAnchor(pattern.source)) return;
+    PRE_FILTERED_PATTERN_INDEXES.add(index);
+    sources.push(`(?:${pattern.source})`);
+  });
+  if (sources.length === 0) return null;
+  // The `i` flag can only ADD matches (a case-sensitive pattern may then
+  // match where it would not have), and the pre-filter only decides which
+  // lines are worth the exact per-pattern test.
+  return new RegExp(sources.join('|'), 'gi');
+})();
+
+/**
+ * The lines that can contain a threat-pattern hit, in ascending order.
+ *
+ * `null` means "every line" — the pre-filter is unavailable, so every line
+ * has to be tested exactly.
+ */
+function collectCandidateLines(content: string, lineCount: number): number[] | null {
+  if (CONTENT_PRE_FILTER === null) return null;
+  const candidates = new Set<number>();
+  // Line starts, so a match can be mapped back to the lines it touches.
+  const lineStarts: number[] = [0];
+  for (let i = 0; i < content.length; i++) {
+    if (content.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  }
+  const lineOf = (offset: number): number => {
+    let low = 0;
+    let high = lineStarts.length - 1;
+    while (low < high) {
+      const mid = (low + high + 1) >> 1;
+      if (lineStarts[mid]! <= offset) low = mid;
+      else high = mid - 1;
+    }
+    return low;
+  };
+  const regex = new RegExp(CONTENT_PRE_FILTER.source, CONTENT_PRE_FILTER.flags);
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    if (match[0].length === 0) {
+      regex.lastIndex += 1;
+      continue;
+    }
+    // Every line the match TOUCHES is a candidate: the engine skips the
+    // positions a match consumed, so a hit inside a span is only reachable
+    // through the span's own lines.
+    const firstLine = lineOf(match.index);
+    const lastLine = lineOf(match.index + match[0].length - 1);
+    for (let line = firstLine; line <= lastLine && line < lineCount; line++) {
+      candidates.add(line);
+    }
+  }
+  // Ascending: the per-pattern loop reports findings line by line, and the
+  // order of the findings is part of what this function promises.
+  return [...candidates].sort((a, b) => a - b);
+}
+
+/**
  * Scan a single file for threat patterns and invisible unicode.
+ *
+ * ## Why this is not one regex per pattern per line
+ *
+ * The obvious implementation tests every threat pattern against every line:
+ * 79 patterns x 329 lines is ~26 000 regex calls for a typical SKILL.md, and
+ * that cost showed up in the worker as several milliseconds PER SKILL — the
+ * skill scan was the largest single cost of loading a session's skills.
+ *
+ * The scan now runs in two steps:
+ *
+ *  1. ONE pass of a combined regex (the union of every threat pattern) over
+ *     the whole content says which LINES contain a hit at all.
+ *  2. Only those lines get the exact per-pattern test that decides what was
+ *     found.
+ *
+ * Step 2 is the original logic, so the findings are the same findings; step 1
+ * only decides which lines are worth asking. A line with no hit costs one
+ * regex call instead of 79.
+ *
+ * ## Why step 1 cannot hide a finding
+ *
+ * The combined regex is built from the same pattern sources, so any position
+ * a single pattern matches is also matched by the combined one. The lines
+ * that are KEPT are every line a reported match TOUCHES, not just the line
+ * the match starts on: a match may span lines, and the engine skips the
+ * positions it consumed, so a later hit inside such a span would otherwise
+ * never be reported.
+ *
+ * Patterns that use a line anchor (`^` / `$`) are excluded from step 1: `^`
+ * means "start of THIS line" in the original per-line test and "start of the
+ * content" in a whole-content pass, so those two are not interchangeable.
+ * There are none today; the exclusion keeps that true if one is added.
  */
 export function scanSkillFile(
   content: string,
@@ -409,17 +555,32 @@ export function scanSkillFile(
 ): SkillFinding[] {
   const findings: SkillFinding[] = [];
   const lines = content.split('\n');
-  const seen = new Set<string>();
+  const candidateLines = collectCandidateLines(content, lines.length);
+  const allLines: number[] = [];
+  for (let i = 0; i < lines.length; i++) allLines.push(i);
 
-  // Pattern matching
-  for (const [pattern, patternId, severity, category, description] of SKILL_THREAT_PATTERNS) {
-    for (let i = 0; i < lines.length; i++) {
-      const key = `${patternId}:${i}`;
-      if (seen.has(key)) continue;
+  // One finding per (patternId, line): the original kept a set keyed by that
+  // pair, which for the current id set can only ever hold the entry the loop
+  // is about to add. The map keeps that rule without building a key string
+  // per (pattern, line).
+  const reportedById = new Map<string, Set<number>>();
 
+  // Pattern matching. The outer loop stays pattern-major so the findings keep
+  // the order they had before the pre-filter existed.
+  for (let p = 0; p < SKILL_THREAT_PATTERNS.length; p++) {
+    const [pattern, patternId, severity, category, description] = SKILL_THREAT_PATTERNS[p]!;
+    // A pre-filtered pattern cannot match a line the pre-filter cleared, so
+    // only the candidate lines are worth asking.
+    const lineIndexes = PRE_FILTERED_PATTERN_INDEXES.has(p)
+      ? (candidateLines ?? allLines)
+      : allLines;
+    for (const i of lineIndexes) {
+      const reported = reportedById.get(patternId);
+      if (reported?.has(i)) continue;
       const line = lines[i] ?? '';
       if (pattern.test(line)) {
-        seen.add(key);
+        if (reported) reported.add(i);
+        else reportedById.set(patternId, new Set([i]));
         const match = line.trim();
         findings.push({
           patternId,
@@ -437,6 +598,9 @@ export function scanSkillFile(
   // Invisible unicode
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
+    // One test for "does this line hold any invisible character at all"; the
+    // loop below then reports the same character the set order would.
+    if (!INVISIBLE_CHAR_REGEX.test(line)) continue;
     for (const char of INVISIBLE_CHARS) {
       if (line.includes(char)) {
         findings.push({

@@ -20,6 +20,7 @@
  */
 
 import type { ModeModifierId } from '@/types/mode-id';
+import type { DoctorReport, InitAgentsMdResult } from '@/contracts/doctor';
 
 /** Panels a slash command can open. Keep in sync with PanelZone/PAGE_REGISTRY. */
 export type SlashCommandPanel =
@@ -49,6 +50,16 @@ export interface CommandAppBridge {
     permissionMode?: 'ask' | 'auto' | 'bypass';
     workingDirectory?: string | null;
     messageCount?: number;
+    /**
+     * A turn is currently streaming.
+     *
+     * The catalog's `availableWhileBusy` is a declaration; this is the fact it
+     * is checked against. Without it a desktop command that mutates the
+     * conversation would run mid-turn, while the same command in the CLI TUI
+     * refuses with "press Esc first" — the same command, two different
+     * answers, decided by which surface the user happened to be in.
+     */
+    isStreaming?: boolean;
   };
   /** Clear the current conversation (desktop semantic decided by the executor). */
   clearMessages(): void;
@@ -56,6 +67,16 @@ export interface CommandAppBridge {
   resetSession(): Promise<{ oldSessionId: string; newSessionId: string }>;
   /** Interrupt the live turn (Esc equivalent). */
   stopTurn(): void;
+  /**
+   * Bring a session to the foreground of the desktop app: make it the active
+   * thread and put the view back on the chat.
+   *
+   * The Desktop IS the desktop app, so there is nothing for `/app` to hand the
+   * session to — this is the "re-open the session I am already in" gesture.
+   * The implementation lives in the composer because switching sessions is the
+   * store's `setActiveThread`, and the store is what actually moves the app.
+   */
+  focusSession(sessionId: string): void;
   /** Manually compact the current session's context (worker compaction). */
   compactContext(): void;
   /** Generate a conversation recap (same as the /recap popover action). */
@@ -76,6 +97,23 @@ export interface CommandAppBridge {
   // — Panels —
   /** Open a side panel by id (window event based; no-op if not registered). */
   openPanel(panel: SlashCommandPanel): void;
+
+  // — Diagnostics & workspace files —
+  /**
+   * Run the Desktop's in-process diagnostic report (`/doctor`).
+   *
+   * Optional: a bridge registered by a composer that predates the channel
+   * does not have it, and the executor refuses with a clear message rather
+   * than throwing.
+   */
+  runDoctor?(): Promise<DoctorReport>;
+  /**
+   * Write the repository-root `AGENTS.md` for a session (`/init`).
+   *
+   * Takes a session id, never a path: the main process resolves the
+   * session's working directory and checks it against the session root.
+   */
+  initWorkspaceAgentsMd?(sessionId: string): Promise<InitAgentsMdResult>;
 
   // — Dialogs & feedback —
   /** Prompt the user for a single line of text; null when cancelled. */

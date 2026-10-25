@@ -207,7 +207,7 @@ function StreamingFilePreview({
             }}
             codeTagProps={{
               style: {
-                fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                fontFamily: "var(--font-mono)",
               },
             }}
           >

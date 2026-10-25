@@ -1,0 +1,16 @@
+{
+  "recordedAt": "2026-10-25",
+  "commit": "291dbb2b",
+  "note": "The renderer bundle after the terminal left the first screen: `packages/ui/src/components/layout/panels/registry.ts` loads `TerminalPanel` through `React.lazy`, so `@xterm/xterm` and its four addons (fit, web-links, unicode11, webgl) are fetched when the user opens a terminal panel instead of before the first screen can paint. Measured with a production build on the reference machine (Intel Core i5-14600KF / 31.8 GB / Node v24.16.0 / Windows, vite production build). The budget is one-sided: growth fails the gate, an improvement passes. Tighten it after a measured win, the way the architecture baselines are ratcheted.",
+  "calibration": "The terminal cut is a structural move, not a measurement drift: the first-screen payload dropped 485617 bytes (-14.00 %) with the chunk count unchanged, and the entry chunk dropped 485617 bytes (-18.89 %). The previous baseline was already 2.73 % above its recorded value on this tree, so this baseline sits 485617 bytes BELOW the state it replaces - reverting the change measures 3470634 bytes, which overshoots the 5 % limit (3134268 bytes) by 336366 bytes and fails the gate. The relative tolerance is unchanged.",
+  "tolerancePct": 5,
+  "firstScreen": {
+    "chunkCount": 7,
+    "bytes": 2985017
+  },
+  "entryChunkBytes": 2085027,
+  "totalJs": {
+    "chunkCount": 340,
+    "bytes": 17778937
+  }
+}

@@ -52,7 +52,12 @@ const GENERATED_DIRS = new Set([
   '.git', '.codegraph', '.claude', 'node_modules', 'dist', 'dist-electron',
   'bundle', 'release', 'coverage', 'storybook-static', '.e2e-userdata',
 ]);
-const SELF_FILES = new Set(['scripts/architecture/agent-retirement-gate.mjs']);
+const RETIREMENT_BASELINE_FILE = 'scripts/architecture/agent-retirement-gate-baseline.json';
+const RETIREMENT_SCOPES = ['production-source', 'build-tooling', 'active-config', 'test-target'];
+const SELF_FILES = new Set([
+  'scripts/architecture/agent-retirement-gate.mjs',
+  RETIREMENT_BASELINE_FILE,
+]);
 
 const DIRECT_PACKAGE_RE = /@duya\/agent(?![\w-])/gi;
 const LEGACY_PACKAGE_PATH_RE = /\bpackages[\\/]+agent(?![\w-])(?:[\\/]+(?:src|dist|bundle|skills))?/gi;
@@ -236,6 +241,64 @@ function sortedFindings(findings) {
     || left.match.localeCompare(right.match));
 }
 
+export function validateRetirementBaseline(baseline) {
+  if (!baseline || baseline.version !== 1) {
+    throw new Error('retirement baseline must use version 1');
+  }
+  if (!Number.isInteger(baseline.referenceCount) || baseline.referenceCount < 0) {
+    throw new Error('retirement baseline referenceCount must be a non-negative integer');
+  }
+  if (!baseline.byScope || typeof baseline.byScope !== 'object' || Array.isArray(baseline.byScope)) {
+    throw new Error('retirement baseline must include per-scope counts');
+  }
+
+  let total = 0;
+  for (const scope of RETIREMENT_SCOPES) {
+    const count = baseline.byScope[scope];
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(`retirement baseline ${scope} count must be a non-negative integer`);
+    }
+    total += count;
+  }
+  if (total !== baseline.referenceCount) {
+    throw new Error(
+      `retirement baseline counts do not add up: byScope=${total}, referenceCount=${baseline.referenceCount}`,
+    );
+  }
+
+  return baseline;
+}
+
+export function compareRetirementBaseline(report, baseline) {
+  const validBaseline = validateRetirementBaseline(baseline);
+  const increasesByScope = Object.fromEntries(RETIREMENT_SCOPES.map((scope) => [
+    scope,
+    Math.max(0, report.byScope[scope] - validBaseline.byScope[scope]),
+  ]));
+  const scopeIncrease = Object.values(increasesByScope).reduce((sum, count) => sum + count, 0);
+  const totalIncrease = Math.max(0, report.referenceCount - validBaseline.referenceCount);
+
+  return {
+    baselineReferenceCount: validBaseline.referenceCount,
+    currentReferenceCount: report.referenceCount,
+    newReferenceCount: Math.max(totalIncrease, scopeIncrease),
+    baselineByScope: validBaseline.byScope,
+    currentByScope: report.byScope,
+    increasesByScope,
+  };
+}
+
+function readRetirementBaseline(root) {
+  const baselinePath = path.join(root, RETIREMENT_BASELINE_FILE);
+  let baseline;
+  try {
+    baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
+  } catch (error) {
+    throw new Error(`could not read ${RETIREMENT_BASELINE_FILE}: ${error.message}`);
+  }
+  return validateRetirementBaseline(baseline);
+}
+
 export function collectAgentRetirementReport(root = REPO_ROOT) {
   const absoluteRoot = path.resolve(root);
   const files = [];
@@ -327,8 +390,13 @@ export function formatAgentRetirementReport(report) {
     `references: ${report.referenceCount} (${report.blockingReferenceCount} confirmed old-package, ${scopeSummary})`,
     `artifact/build selectors: ${report.hostMappedSelectorCount} mapped to Host, ${report.unverifiedSelectorCount} unverified`,
     `bounded synthetic fixture references: ${report.fixtureReferenceCount}`,
+    `retirement work remaining: ${report.blockingReferenceCount} confirmed references, ${report.unverifiedSelectorCount} unverified selectors`,
+    `reference ratchet: ${report.ratchet.newReferenceCount === 0 ? 'PASS' : 'FAIL'} — ${report.ratchet.currentReferenceCount} current / ${report.ratchet.baselineReferenceCount} baseline / ${report.ratchet.newReferenceCount} new`,
     'runtime acceptance remains separate: production worker must build and load with packages/agent absent',
   ];
+  for (const [scope, count] of Object.entries(report.ratchet.increasesByScope)) {
+    if (count > 0) lines.push(`new ${scope} references: ${count}`);
+  }
   for (const finding of report.findings) {
     if (finding.fixtureContext) continue;
     const classification = finding.blocking
@@ -369,9 +437,22 @@ function main(args) {
   }
 
   const report = collectAgentRetirementReport(options.root);
+  let baseline;
+  try {
+    baseline = readRetirementBaseline(options.root);
+  } catch (error) {
+    process.stderr.write(`agent-retirement: baseline error: ${error.message}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const ratchet = compareRetirementBaseline(report, baseline);
+  const outputReport = { ...report, ratchet };
   process.stdout.write(options.json
-    ? `${JSON.stringify(report, null, 2)}\n`
-    : `${formatAgentRetirementReport(report)}\n`);
+    ? `${JSON.stringify(outputReport, null, 2)}\n`
+    : `${formatAgentRetirementReport(outputReport)}\n`);
+  if (report.scannedFiles === 0 || report.scannedRoots.length === 0 || ratchet.newReferenceCount > 0) {
+    process.exitCode = 1;
+  }
   if (options.strict) {
     const failures = strictFailures(report);
     if (failures.length > 0) {

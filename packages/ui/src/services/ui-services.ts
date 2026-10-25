@@ -1,6 +1,7 @@
 import type {
   CancelAgentRunResult,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
@@ -93,6 +94,14 @@ export interface UiServices {
     ): Promise<HostSessionUpdateResult>;
     delete(sessionId: SessionId, expectedUpdatedAt?: number): Promise<HostSessionDeleteResult>;
     readMessages(sessionId: SessionId, query?: HostMessageReadQuery): Promise<HostMessagePage>;
+    /**
+     * The WHOLE message projection, projected once.
+     *
+     * The paged read re-projects the entire transcript on every page, so a
+     * client that reads a transcript end to end through the pages pays for it
+     * once per page. A client that wants the whole transcript asks for it here.
+     */
+    readAllMessages(sessionId: SessionId, query?: HostMessageReadAllQuery): Promise<HostMessagePage>;
   };
   readonly runs: {
     listBySession(sessionId: SessionId, limit?: number, signal?: AbortSignal): Promise<readonly UiRunRecord[]>;

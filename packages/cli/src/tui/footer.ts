@@ -47,6 +47,15 @@ export interface FooterStats {
   /** 0–100, or null when no context budget is known for the model. */
   readonly contextPercent: number | null;
   readonly contextBudget: number | null;
+  /**
+   * Output tokens per second of the most recent billed call, or null when
+   * the provider reported no duration for it.
+   *
+   * Null and zero are different answers: null means "nobody measured this
+   * call", zero would mean "the model emitted nothing in no time", which is
+   * not a rate anybody observed.
+   */
+  readonly outputTokensPerSecond: number | null;
 }
 
 /** The right-hand identity of the second row. */
@@ -70,6 +79,9 @@ export interface FooterInput {
   readonly home?: string;
 }
 
+/** Between the groups on the stats row: one column each side, like the hints. */
+const SEPARATOR = ' · ';
+
 /** Human token count: `940`, `12.3k`, `1.2M` — pi's thresholds. */
 export function formatTokenCount(count: number): string {
   const value = Math.max(0, Math.round(count));
@@ -78,6 +90,18 @@ export function formatTokenCount(count: number): string {
   if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
   if (value < 10_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   return `${Math.round(value / 1_000_000)}M`;
+}
+
+/**
+ * Measured output throughput: `⚡ 63.0 tok/s`.
+ *
+ * One decimal, because the difference between 12 and 13 tok/s is noise and
+ * the difference between 12 and 120 is not. No `~` prefix: this number is
+ * measured against the provider's own request duration, not estimated from
+ * streamed text.
+ */
+export function formatTokensPerSecond(rate: number): string {
+  return `⚡ ${rate.toFixed(1)} tok/s`;
 }
 
 /**
@@ -191,10 +215,10 @@ export function buildFooterLines(input: FooterInput): string[] {
     : `${withBranch} • ${input.sessionName}`;
 
   const stats = input.stats;
-  const parts: string[] = [];
-  if (stats.inputTokens > 0) parts.push(`↑${formatTokenCount(stats.inputTokens)}`);
-  if (stats.outputTokens > 0) parts.push(`↓${formatTokenCount(stats.outputTokens)}`);
-  if (stats.totalTokens > 0) parts.push(`Σ${formatTokenCount(stats.totalTokens)}`);
+  const counters: string[] = [];
+  if (stats.inputTokens > 0) counters.push(`↑${formatTokenCount(stats.inputTokens)}`);
+  if (stats.outputTokens > 0) counters.push(`↓${formatTokenCount(stats.outputTokens)}`);
+  if (stats.totalTokens > 0) counters.push(`Σ${formatTokenCount(stats.totalTokens)}`);
 
   const budget = stats.contextBudget ?? null;
   const percent = stats.contextPercent;
@@ -203,23 +227,37 @@ export function buildFooterLines(input: FooterInput): string[] {
   const contextLabel = budget !== null && budget > 0
     ? `${percent === null ? '?' : `${Math.round(percent)}%`}/${formatTokenCount(budget)}`
     : '';
-  if (contextLabel !== '') parts.push(contextLabel);
-  const statsPlain = parts.join(' ');
+  // The output rate of the MOST RECENT billed call, measured against the
+  // provider's own request duration. It is omitted entirely when the provider
+  // reported no duration, rather than shown as a zero.
+  const rate = stats.outputTokensPerSecond;
+  const rateLabel = rate !== null && Number.isFinite(rate) ? formatTokensPerSecond(rate) : '';
+
+  // Three GROUPS, not a run of bare tokens. The counters answer "what has this
+  // session spent", the context pair "how much of the window is left", the rate
+  // "how fast did the last answer come". Single spaces made five numbers of
+  // three different kinds read as one undifferentiated run, which is the shape
+  // this row was criticised for; the separator and one colour per kind are what
+  // tell them apart without adding a row or a label.
+  const groups = [counters.join(' '), contextLabel, rateLabel].filter((group) => group !== '');
+  const statsPlain = groups.join(SEPARATOR);
 
   const model = input.model ?? null;
   const provider = model?.provider === undefined || model.provider === '' ? '' : `(${model.provider}) `;
   const thinking = model?.thinking === undefined || model.thinking === '' ? '' : ` • ${model.thinking}`;
   const modelPlain = model === null ? '' : `${provider}${model.model}${thinking}`;
 
-  // The context percentage is the only coloured text in the footer: it is the
-  // one number that means "something must be done". When it is not carrying a
-  // warning it is plain muted, which is also the fallback below.
-  const highlight = contextLabel !== '' && percent !== null && percent > 70
-    ? (percent > 90 ? styles.error : styles.warning)(contextLabel)
-    : null;
-  const statsTagged = highlight === null
-    ? styles.muted(statsPlain)
-    : styles.muted(statsPlain.slice(0, statsPlain.length - contextLabel.length)) + highlight;
+  // Colour carries kind, and the context percentage is the one number that can
+  // mean "something must be done" — so it is the only thing allowed to be red
+  // or yellow, and outside a warning it is plain muted like the counters.
+  const contextStyle = percent === null || budget === null || budget <= 0
+    ? null
+    : percent > 90 ? styles.error : percent > 70 ? styles.warning : null;
+  const statsTagged = groups.map((group) => {
+    if (group === rateLabel) return styles.accent(group);
+    if (group === contextLabel && contextStyle !== null) return contextStyle(group);
+    return styles.muted(group);
+  }).join(styles.muted(SEPARATOR));
 
   const row1 = composeRow(withSession, input.hint ?? '', width, styles);
   const row2 = composeRow(statsPlain, modelPlain, width, styles, statsTagged);

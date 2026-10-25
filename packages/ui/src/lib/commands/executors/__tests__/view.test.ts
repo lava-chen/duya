@@ -62,6 +62,7 @@ function makeBridge(overrides: Partial<CommandAppBridge> = {}): CommandAppBridge
     resetSession: vi.fn(async () => ({ oldSessionId: 'a', newSessionId: 'b' })),
     stopTurn: vi.fn(),
     compactContext: vi.fn(),
+    focusSession: vi.fn(),
     requestRecap: vi.fn(async () => ({ success: true, recap: 'r' })),
     setSessionModel: vi.fn(),
     setEffort: vi.fn(),
@@ -136,6 +137,74 @@ describe('/deep-research', () => {
 
     expect(bridge.toggleMode).toHaveBeenCalledWith('research');
     expect(result.type).toBe('text');
+  });
+});
+
+describe('/plan', () => {
+  it('enables plan mode', async () => {
+    const result = await runSlashCommand('/plan');
+
+    expect(bridge.toggleMode).toHaveBeenCalledWith('plan-task');
+    expect(result).toEqual({ type: 'dismiss' });
+  });
+
+  it('does not forward anything to the agent — the mode chip is the whole effect', async () => {
+    await runSlashCommand('/plan');
+
+    expect(bridge.sendPrompt).not.toHaveBeenCalled();
+  });
+});
+
+describe('availability gate', () => {
+  it('refuses a command the catalog declares unsafe mid-turn', async () => {
+    // `/compact` rewrites the conversation's context, so the catalog declares
+    // no `availableWhileBusy` for it. The Desktop used to run it anyway —
+    // `availableWhileBusy` was a declaration nothing read.
+    bridge = makeBridge({
+      getSessionSnapshot: () => ({ sessionId: 'session-1', isStreaming: true }),
+    });
+    setCommandAppBridge(bridge);
+
+    const result = await runSlashCommand('/compact');
+
+    expect(result.type).toBe('error');
+    expect(result.type === 'error' && result.message).toContain('/compact');
+    expect(bridge.compactContext).not.toHaveBeenCalled();
+  });
+
+  it('runs the same command when no turn is streaming', async () => {
+    const result = await runSlashCommand('/compact');
+
+    expect(bridge.compactContext).toHaveBeenCalled();
+    expect(result).toEqual({ type: 'dismiss' });
+  });
+
+  it('allows a command the catalog declares safe mid-turn', async () => {
+    // `/diff` only opens a panel — it reads git state and touches no run.
+    bridge = makeBridge({
+      getSessionSnapshot: () => ({
+        sessionId: 'session-1',
+        workingDirectory: 'E:\\Projects\\duya',
+        isStreaming: true,
+      }),
+    });
+    setCommandAppBridge(bridge);
+
+    const result = await runSlashCommand('/diff');
+
+    expect(bridge.openPanel).toHaveBeenCalledWith('code-review');
+    expect(result).toEqual({ type: 'dismiss' });
+  });
+
+  it('refuses a session-scoped command when no session is open', async () => {
+    bridge = makeBridge({ getSessionSnapshot: () => ({}) });
+    setCommandAppBridge(bridge);
+
+    const result = await runSlashCommand('/plan');
+
+    expect(result.type).toBe('error');
+    expect(result.type === 'error' && result.message).toContain('/plan');
+    expect(bridge.toggleMode).not.toHaveBeenCalled();
   });
 });
 
