@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FileAttachment } from '@duya/agent-protocol';
 import { TurnQueue, type PendingDraft, type TurnOutcome } from '../turn-queue.js';
 
 function harness() {
@@ -165,5 +166,24 @@ describe('draft identity', () => {
     expect(h.queue.takeLastDraft()).toBeNull();
     h.releases.shift()!('completed');
     await h.queue.whenIdle();
+  });
+
+  it('carries the submitted files with the draft into the turn', async () => {
+    const h = harness();
+    const attachment: FileAttachment = {
+      id: 'att-1',
+      kind: 'image',
+      name: 'shot.png',
+      type: 'image/png',
+      url: 'C:/tmp/shot.png',
+      size: 12,
+      path: 'C:/tmp/shot.png',
+    };
+    h.queue.submit('look at this', { attachments: [attachment] });
+    expect(h.drafts[0]?.attachments).toEqual([attachment]);
+    h.releases.shift()!('completed');
+    await h.queue.whenIdle();
+    // The draft that reached the turn still carries the files.
+    expect(h.drafts[0]?.attachments).toEqual([attachment]);
   });
 });

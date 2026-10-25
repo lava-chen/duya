@@ -1,4 +1,6 @@
 /** Serial admission of local drafts into Host turns. This does not execute runs. */
+import type { FileAttachment } from '@duya/agent-protocol';
+
 export type TurnOutcome = 'completed' | 'cancelled' | 'failed' | 'skipped';
 
 /**
@@ -19,6 +21,14 @@ export interface PendingDraft {
   readonly mode: DraftMode;
   /** The controller already printed this draft; the turn must not print it again. */
   readonly echoed: boolean;
+  /**
+   * The files submitted with this draft.
+   *
+   * They are part of the draft rather than a separate channel: a draft is one
+   * thing the user sent, and the turn it starts carries the files with the
+   * text. A draft that is recalled drops them (see `takeLast`).
+   */
+  readonly attachments: readonly FileAttachment[];
 }
 
 export interface SubmitDraftOptions {
@@ -27,6 +37,8 @@ export interface SubmitDraftOptions {
   readonly echoed?: boolean;
   /** Put the draft ahead of older ones (interrupt-and-send). */
   readonly front?: boolean;
+  /** The files submitted with the draft; they ride along into the turn. */
+  readonly attachments?: readonly FileAttachment[];
 }
 
 export interface ReclassifyPatch {
@@ -39,6 +51,7 @@ export interface ReclassifyPatch {
 export interface TurnQueueSnapshot {
   readonly busy: boolean;
   readonly paused: boolean;
+  /** The queued prompt TEXTS. Attachments are not surfaced here. */
   readonly pending: readonly string[];
 }
 
@@ -82,6 +95,7 @@ export class TurnQueue {
       text,
       mode: options.mode ?? 'queue',
       echoed: options.echoed ?? false,
+      attachments: options.attachments ?? [],
     };
     if (options.front === true) this.pending.unshift(draft);
     else this.pending.push(draft);
@@ -104,6 +118,14 @@ export class TurnQueue {
     this.drain();
   }
 
+  /**
+   * Recall the newest queued draft's TEXT for editing.
+   *
+   * The attachments are dropped, not re-queued: the recalled text still
+   * carries the chip labels, and resubmitting filters against an empty draft
+   * list — the user re-attaches by pasting again rather than the queue
+   * silently re-attaching files the editor no longer shows as queued chips.
+   */
   takeLast(): string | null {
     return this.takeLastDraft()?.text ?? null;
   }
