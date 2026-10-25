@@ -77,6 +77,7 @@ import { HOST_APPROVAL_API_STUBS } from '../control-plane/__tests__/host-approva
 import { createControlPlane, _resetControlPlaneForTesting } from '../control-plane/control-plane-service';
 import { roleOrigin, type CommandSenderConfig } from '../control-plane/command-receipt';
 import { RUN_STORE_MIGRATIONS, RunStore } from '../db/core/run-store';
+import { SessionStore } from '@duya/data/session-store';
 import { AttachmentStore, GoalStore, PermissionLedger, TaskStore } from '../db/core/stores';
 import { Mailbox } from '../db/core/mailbox';
 
@@ -92,6 +93,11 @@ let dir: string;
 let db: Database.Database;
 
 function applySchema(handle: Database.Database): void {
+  // The bridge's run admission consults the session store (checkout cursors),
+  // so the sessions table must exist even though these cases never write one.
+  for (const migration of [...SessionStore.migrations].sort((a, b) => a.id - b.id)) {
+    migration.up(handle);
+  }
   for (const migration of [...RUN_STORE_MIGRATIONS].sort((a, b) => a.id - b.id)) {
     migration.up(handle);
   }
@@ -191,7 +197,7 @@ beforeEach(() => {
     tasks: new TaskStore(db),
     mailbox: new Mailbox(db),
   };
-  hoisted.stores = { runs: aggregates.runs, research: null };
+  hoisted.stores = { sessions: new SessionStore(db), runs: aggregates.runs, research: null };
   __setDesktopHostRunApiForTesting(createHostRunApi({ runs: aggregates.runs }));
   createControlPlaneRepository({ stores: aggregates, ...HOST_APPROVAL_API_STUBS });
   createControlPlane({

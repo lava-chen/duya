@@ -36,6 +36,10 @@ export function makeRepo(options: RepoOptions = {}): string {
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 'test@duya.local');
   git(dir, 'config', 'user.name', 'duya test');
+  // Keep committed LF content byte-identical in every worktree of this repo,
+  // whatever the machine's global autocrlf does to text checkouts. Managed
+  // worktrees share this config, so content assertions stay deterministic.
+  git(dir, 'config', 'core.autocrlf', 'false');
   writeFileSync(path.join(dir, 'README.md'), '# fixture\n');
   if (options.gitignore !== undefined) {
     writeFileSync(path.join(dir, '.gitignore'), options.gitignore);

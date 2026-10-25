@@ -393,6 +393,41 @@ function safeNormalize(value: string): string | null {
   }
 }
 
+/** The `session:get` columns the chat cursor decision reads. */
+export interface ChatExecutionCursorRow {
+  working_directory?: string;
+  executionLocation?: { revision?: number; pending?: unknown };
+}
+
+/** What a chat request must do with the session's persisted execution location. */
+export type ChatExecutionDirectoryDecision =
+  | { kind: 'client' }
+  | { kind: 'recover-transition' }
+  | { kind: 'pinned'; workingDirectory: string | undefined; options: Record<string, unknown> };
+
+/**
+ * Decide whether a chat request may trust the client's working directory.
+ *
+ * A session that has switched checkouts carries a persisted execution
+ * location: the client cache is stale by definition, a pending transition
+ * must be recovered before another run starts, and a settled cursor pins
+ * the run to the persisted directory (and stamps the revision the run must
+ * carry so a stale batch cannot execute after a later switch).
+ */
+export function decideChatExecutionDirectory(
+  cursorRow: ChatExecutionCursorRow | undefined | null,
+  options: Record<string, unknown> | undefined,
+): ChatExecutionDirectoryDecision {
+  const revision = cursorRow?.executionLocation?.revision ?? 0;
+  if (revision <= 0) return { kind: 'client' };
+  if (cursorRow?.executionLocation?.pending) return { kind: 'recover-transition' };
+  return {
+    kind: 'pinned',
+    workingDirectory: cursorRow?.working_directory,
+    options: { ...options, checkoutExecutionRevision: revision },
+  };
+}
+
 export interface BotProviderConfigFallbackDeps {
   readConfigAgents?: typeof readConfigAgents;
   resolveBotOrDefaultProvider?: (
@@ -1001,15 +1036,16 @@ async function handlePostChat(
     // Persisted checkout cursors override a client cache; workspace identity stays unchanged.
     try {
       if (dbRequest) {
-        const cursorRow = await dbRequest('session:get', { id: sessionId }) as { working_directory?: string; executionLocation?: { revision?: number; pending?: unknown } } | undefined;
-        if ((cursorRow?.executionLocation?.revision ?? 0) > 0) {
-          if (cursorRow?.executionLocation?.pending) {
-            revertStreamingLock();
-            sendJson(res, 409, { error: 'Recover the checkout transition before starting another run.' });
-            return;
-          }
-          workingDirectory = cursorRow?.working_directory;
-          parsed.options = { ...parsed.options, checkoutExecutionRevision: cursorRow?.executionLocation?.revision };
+        const cursorRow = await dbRequest('session:get', { id: sessionId }) as ChatExecutionCursorRow | undefined;
+        const cursor = decideChatExecutionDirectory(cursorRow, parsed.options);
+        if (cursor.kind === 'recover-transition') {
+          revertStreamingLock();
+          sendJson(res, 409, { error: 'Recover the checkout transition before starting another run.' });
+          return;
+        }
+        if (cursor.kind === 'pinned') {
+          workingDirectory = cursor.workingDirectory;
+          parsed.options = cursor.options;
         }
       }
     } catch (error) {

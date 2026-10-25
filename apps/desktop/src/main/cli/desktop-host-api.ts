@@ -143,8 +143,30 @@ export interface DesktopHostApiHandle {
 
 let sessionApiClient: HostSessionHttpClient | null = null;
 let desktopCheckoutService: SessionCheckoutService | null = null;
+let desktopCheckoutServiceStores: CoreStores | null = null;
+/**
+ * The checkout controls the db bridge, the HTTP surface and the IPC handlers
+ * share. Built from the boot-time core stores — the same singleton every
+ * caller already reads — on first use, so a process that serves db actions
+ * before (or without) the full Host boot cannot observe "not initialized"
+ * for stores it can already see. Rebuilt if the store identity changes,
+ * which is what partially-booted test harnesses do between cases.
+ */
 export function getDesktopCheckoutService(): SessionCheckoutService {
-  if (!desktopCheckoutService) throw new Error('Desktop checkout controls are not initialized.');
+  const stores = getCoreStores();
+  if (desktopCheckoutService === null || desktopCheckoutServiceStores !== stores) {
+    desktopCheckoutServiceStores = stores;
+    desktopCheckoutService = new SessionCheckoutService({
+      sessions: stores.sessions,
+      runs: stores.runs,
+      validateActor: (actor) => {
+        if (!actor.runId || actor.epoch === undefined || stores.runs.currentEpoch(actor.runId) !== actor.epoch
+          || stores.runs.getRun(actor.runId)?.session_id !== actor.sessionId || stores.runs.getRun(actor.runId)?.status !== 'running') {
+          throw new Error('The checkout control attempt is no longer current.');
+        }
+      },
+    });
+  }
   return desktopCheckoutService;
 }
 let runningHandle: DesktopHostApiHandle | null = null;
@@ -518,13 +540,6 @@ export function getDesktopHostWorkspaceLifecycleApi(): DesktopHostWorkspaceLifec
 export function createDesktopHostWorkspaceLifecycleApis(
   stores: CoreStores,
 ): HostWorkspaceLifecycleApis {
-  desktopCheckoutService = new SessionCheckoutService({ sessions: stores.sessions, runs: stores.runs,
-    validateActor: (actor) => {
-      if (!actor.runId || actor.epoch === undefined || stores.runs.currentEpoch(actor.runId) !== actor.epoch
-        || stores.runs.getRun(actor.runId)?.session_id !== actor.sessionId || stores.runs.getRun(actor.runId)?.status !== 'running') {
-        throw new Error('The checkout control attempt is no longer current.');
-      }
-    } });
   return createHostWorkspaceLifecycleApis({
     sessions: stores.sessions,
     runs: stores.runs,

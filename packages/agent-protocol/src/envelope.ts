@@ -14,23 +14,23 @@
  * ## `seq` ownership moved from the host to the runtime
  *
  * The id space is PER-SESSION but the counter is PER-TURN. Every POST reopens
- * the stream with `let seqNum = 0` (apps/desktop/src/main/agents/server/router.ts:1675)
+ * the stream with `let seqNum = 0` (apps/desktop/src/main/agents/server/router.ts:1731)
  * and increments from
- * there (apps/desktop/src/main/agents/server/router.ts:1813), writing that
+ * there (apps/desktop/src/main/agents/server/router.ts:1869), writing that
  * value as the SSE `id:` and pushing it into the session-wide ring via
- * `updateLastEventId` / `recordEvent` (apps/desktop/src/main/agents/server/router.ts:1813-1815).
+ * `updateLastEventId` / `recordEvent` (apps/desktop/src/main/agents/server/router.ts:1869-1871).
  *
  * `session.lastEventId` and the ring are never reset between turns, so **turn
  * two re-mints ids 1..M that turn one already used.**
  *
  * The reconnect path is NOT the broken part — it was already fixed. Replay
- * writes each record's original `eventId` (apps/desktop/src/main/agents/server/router.ts:3081-3090)
+ * writes each record's original `eventId` (apps/desktop/src/main/agents/server/router.ts:3134-3149)
  * and the live
- * counter resumes from `session.lastEventId` (apps/desktop/src/main/agents/server/router.ts:3104),
+ * counter resumes from `session.lastEventId` (apps/desktop/src/main/agents/server/router.ts:3160),
  * with the regression note
- * at apps/desktop/src/main/agents/server/router.ts:3101-3103 recording the
+ * at apps/desktop/src/main/agents/server/router.ts:3157-3159 recording the
  * `let seqNum = 0` bug that preceded it). What
- * breaks is the collision above: `getEventsSince(sessionId, lastEventId)` (apps/desktop/src/main/agents/server/router.ts:3078)
+ * breaks is the collision above: `getEventsSince(sessionId, lastEventId)` (apps/desktop/src/main/agents/server/router.ts:3134)
  * filters on
  * `eventId > lastEventId`, so after a second turn a
  * reconnecting client can be handed turn-one events, or be handed nothing at
