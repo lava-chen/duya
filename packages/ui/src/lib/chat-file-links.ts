@@ -96,8 +96,7 @@ export function isSidebarPreviewFile(filePath: string): boolean {
 }
 
 /** Extract the directory part of a path without pulling in the Node
- *  `path` module (renderer should stay lightweight). Mirrors the
- *  implementation in FilePreviewPanel.tsx. */
+ *  `path` module (renderer should stay lightweight). */
 function getDirectoryPath(filePath: string): string {
   const idx = Math.max(filePath.lastIndexOf('\\'), filePath.lastIndexOf('/'));
   return idx > 0 ? filePath.slice(0, idx) : filePath;
@@ -303,14 +302,12 @@ export interface FocusLineRange {
 /**
  * Artifact cards should prefer DUYA's internal surfaces over external apps:
  * HTML → Browser panel, Office → Office panel, previewable local assets →
- * Preview panel. Falls back to the generic local-file handler otherwise.
+ * the workspace panel. Falls back to the generic local-file handler otherwise.
  *
- * When `lineRange` is supplied for a previewable file, the preview panel
- * both opens (or activates) with the line range in its params and receives
- * a follow-up `duya:preview-focus-lines` event. The follow-up matters when
- * a tab for this file is already open — `dedupKey` would only activate the
- * existing tab without re-running its params, so the event is what actually
- * drives the scroll-to-line in that case.
+ * When `lineRange` is supplied for a previewable file, the line range rides
+ * along in the open event's params; the workspace panel scrolls to and
+ * highlights those lines, both on first open and when the file is already
+ * mounted (the panel re-runs the focus on every event).
  */
 export function openLocalArtifactTarget(
   filePath: string,
@@ -333,14 +330,14 @@ export function openLocalArtifactTarget(
     // Standalone mode: the caller knows the file lives outside the chat
     // workspace (e.g. the agent pointed at ~/Downloads/notes.md while the
     // active thread cwd is a different project). In that case we don't
-    // want the preview panel to mount the file's directory as its
-    // project root — that previously caused the integrated file tree to
-    // expose arbitrary external directories. Passing an empty
-    // workingDirectory tells the panel to render the file alone (no
-    // tree, no breadcrumb root); the IPC skips isInsideRoot as well.
-    // Default behavior (options.standalone falsy) is unchanged so the
-    // sidebar file preview's relative-link case keeps its existing
-    // fallback to the file's own directory.
+    // want the file panel to mount the file's directory as its project
+    // root — that previously caused the integrated file tree to expose
+    // arbitrary external directories. Passing an empty workingDirectory
+    // tells the panel to render the file alone (no tree, no breadcrumb
+    // root); the IPC skips isInsideRoot as well. Default behavior
+    // (options.standalone falsy) is unchanged so the sidebar file
+    // preview's relative-link case keeps its existing fallback to the
+    // file's own directory.
     const standalone = options?.standalone === true;
     const detail: {
       filePath: string;
@@ -360,18 +357,6 @@ export function openLocalArtifactTarget(
       }
     }
     window.dispatchEvent(new CustomEvent('duya:open-file-preview-panel', { detail }));
-    // Re-broadcast as a focus-lines event so an already-open tab for this
-    // file (matched by filePath) can scroll to the new range without
-    // requiring a fresh tab. Skipped when there's no line range to focus.
-    if (hasLineRange) {
-      window.dispatchEvent(new CustomEvent('duya:preview-focus-lines', {
-        detail: {
-          filePath: resolved,
-          lineStart: detail.lineStart,
-          lineEnd: detail.lineEnd,
-        },
-      }));
-    }
     return;
   }
   openLocalFileTarget(resolved, cwd);

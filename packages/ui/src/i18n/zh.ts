@@ -1341,7 +1341,6 @@ const zh: Record<TranslationKey, string> = {
 
   'panel.files': '文件',
   'panel.launchersAria': '面板',
-  'panel.preview': '预览',
   'panel.review': '代码审阅',
   'panel.workflow.title': '工作流',
   'panel.workflow.tabDefinitions': '定义',
@@ -1521,9 +1520,6 @@ const zh: Record<TranslationKey, string> = {
   'panel.openPanel': '打开侧栏',
   'panel.collapsePanel': '收起面板',
   'panel.expandPanel': '展开面板',
-  'panel.projectFileTree': '项目文件树',
-  'panel.collapseFileTree': '收起文件树',
-  'panel.expandFileTree': '展开文件树',
   'panel.closeTab': '关闭标签',
   'panel.unavailable': '未实现',
   'panel.taskList': '任务列表',

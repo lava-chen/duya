@@ -4,7 +4,6 @@
 import { lazy, type ComponentType } from "react";
 import {
   FolderIcon,
-  FileTextIcon,
   GitDiffIcon,
   GlobeIcon,
   TerminalIcon,
@@ -17,7 +16,6 @@ import type { TranslationKey } from "@/i18n";
 import type { PageId, PageTab } from "./page-tab";
 import { FileTreePanel } from "./FileTreePanel";
 import { BrowserPanel } from "./BrowserPanel";
-import { FilePreviewPanel } from "./FilePreviewPanel";
 import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
@@ -95,20 +93,6 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 620,
     defaultExpanded: false,
     component: FileWorkspacePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
-  preview: {
-    id: "preview",
-    labelKey: "panel.preview",
-    icon: FileTextIcon,
-    multiInstance: true,
-    available: true,
-    // Code/markdown preview stays readable down to ~360px; the previous
-    // 640/820 values forced the panel past the visible window on 1280px
-    // laptops with the standard left sidebar.
-    minWidth: 360,
-    preferredWidth: 480,
-    defaultExpanded: false,
-    component: FilePreviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   review: {
     id: "review",

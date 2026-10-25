@@ -448,123 +448,25 @@
   background: var(--main-bg);
 }
 
-.code-review-diff {
-  min-width: max-content;
+/* Diff body. PatchDiff renders line rows inside a Shadow DOM styled by
+   the library; only the light-DOM container is styled here. */
+.code-review-file-diff {
+  display: block;
   padding-bottom: 20px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 21px;
 }
 
-.code-review-hunk {
-  margin: 14px 0;
-  border-top: 1px solid var(--border-weak);
-  border-bottom: 1px solid var(--border-weak);
+.code-review-file-diff diffs-container {
+  display: block;
+  width: 100%;
+  min-height: 100%;
 }
 
-.code-review-hunk-header {
-  min-height: 27px;
-  padding: 3px 14px;
-  overflow: hidden;
-  color: var(--review-muted);
-  background: color-mix(in srgb, var(--surface-hover) 56%, transparent);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.code-review-line {
-  display: grid;
-  grid-template-columns: 46px 20px minmax(0, 1fr);
-  min-height: 21px;
-  color: color-mix(in srgb, var(--text) 92%, transparent);
-}
-
-.code-review-line-number,
-.code-review-line-prefix {
-  user-select: none;
-}
-
-.code-review-line-number {
-  padding-right: 10px;
-  color: color-mix(in srgb, var(--text-muted) 72%, transparent);
-  text-align: right;
-}
-
-.code-review-line-prefix {
-  color: var(--review-muted);
-  text-align: center;
-}
-
-.code-review-line-code {
-  min-width: 0;
-  padding-right: 18px;
-  overflow: hidden;
-  white-space: pre;
-}
-
-.code-review-line.is-wrapped .code-review-line-code {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.code-review-line-add {
-  border-left: 3px solid var(--review-add);
-  background: color-mix(in srgb, var(--review-add) 14%, transparent);
-}
-
-.code-review-line-add .code-review-line-prefix,
 .is-add {
   color: var(--review-add);
 }
 
-.code-review-line-remove {
-  border-left: 3px solid var(--review-remove);
-  background: color-mix(in srgb, var(--review-remove) 13%, transparent);
-}
-
-.code-review-line-remove .code-review-line-prefix,
 .is-remove {
   color: var(--review-remove);
-}
-
-.code-review-collapsed-lines {
-  display: flex;
-  width: calc(100% - 16px);
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  margin: 2px 8px;
-  padding: 3px 10px;
-  border: 0;
-  border-radius: 8px;
-  color: var(--review-muted);
-  background: transparent;
-  font: inherit;
-  text-align: left;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-
-.code-review-collapsed-lines:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-.code-review-diff-split {
-  min-width: 720px;
-}
-
-.code-review-split-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-
-.code-review-split-row > .code-review-line:first-child {
-  border-right: 1px solid var(--border-weak);
-}
-
-.code-review-line-empty {
-  border-left: 3px solid transparent;
-  background: color-mix(in srgb, var(--surface-hover) 24%, transparent);
 }
 
 .code-review-file-status {
@@ -643,90 +545,6 @@
   .code-review-file-header {
     padding: 8px 10px;
   }
-}
-
-.panel-file-split {
-  position: relative;
-  display: flex;
-  width: 100%;
-  /* Lives below the full-width preview toolbar inside the flex-column
-   * panel, so it flexes to the remaining height instead of 100%. */
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--main-bg);
-}
-
-.panel-file-detail {
-  display: flex;
-  /* Minimum detail width so the preview toolbar's accented "Open"
-   * dropdown (≈80px) plus two icon buttons (2×28px) plus gaps and
-   * toolbar side paddings always fit horizontally without clipping.
-   * Without this floor, .panel-file-tree (min-width:220px) would take
-   * priority inside .panel-file-split and collapse the preview area
-   * below the width of its own toolbar → overflow:hidden then clips
-   * the right-half of every button on the actions strip. */
-  min-width: 280px;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-
-.panel-file-tree {
-  width: clamp(220px, 20vw, 300px);
-  min-width: 220px;
-  flex: 0 0 clamp(220px, 20vw, 300px);
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--main-bg);
-}
-
-/* The tree's own 40px header only holds a duplicate collapse toggle;
- * the preview toolbar's tree toggle is always visible, so the row is
- * dead weight under the full-width header — hide it. */
-.panel-file-tree-header {
-  display: none;
-  align-items: center;
-  justify-content: flex-end;
-  height: 40px;
-  flex: 0 0 40px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
-}
-
-.panel-file-tree-header button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  min-width: 28px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: #616161;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-[data-theme="dark"] .panel-file-tree-header button {
-  color: #a0a0a0;
-}
-
-.panel-file-tree-header button:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-[data-theme="dark"] .panel-file-tree-header button:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.panel-file-tree .file-tree-panel-embedded {
-  height: 100%;
 }
 
 .office-toolbar-actions button.active {
