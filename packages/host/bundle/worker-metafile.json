@@ -518,7 +518,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/plugin-inventory.ts": {
-      "bytes": 2380,
+      "bytes": 3273,
       "imports": [],
       "format": "esm"
     },
@@ -30671,7 +30671,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 7129,
+      "bytes": 13517,
       "imports": [
         {
           "path": "node:fs",
@@ -30707,7 +30707,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-inventory-api.ts": {
-      "bytes": 2303,
+      "bytes": 2948,
       "imports": [
         {
           "path": "packages/host/src/local-plugin-registry-api.ts",
@@ -39718,7 +39718,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39778,7 +39778,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -41659,7 +41659,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -41692,13 +41692,13 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -42460,10 +42460,10 @@
           "bytesInOutput": 184
         },
         "../../../node_modules/supports-color/index.js": {
-          "bytesInOutput": 1702
+          "bytesInOutput": 1707
         },
         "../../../node_modules/debug/src/node.js": {
-          "bytesInOutput": 2029
+          "bytesInOutput": 2034
         },
         "../../../node_modules/debug/src/index.js": {
           "bytesInOutput": 144
@@ -43507,7 +43507,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 702
+          "bytesInOutput": 708
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -44158,7 +44158,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44350,7 +44350,7 @@
           "bytesInOutput": 24
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 1028
+          "bytesInOutput": 2398
         },
         "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
           "bytesInOutput": 3170
@@ -45067,7 +45067,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4719731
+      "bytes": 4721188
     }
   }
 }
