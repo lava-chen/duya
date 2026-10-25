@@ -19,7 +19,7 @@ interface FakeTuiOptions {
   readonly onInterrupt: () => void;
   readonly onExit: () => void;
   readonly isBusy: () => boolean;
-  readonly queuedPrompts: () => readonly string[];
+  readonly queuedDrafts: () => readonly { readonly text: string; readonly mode: 'steer' | 'queue' }[];
   readonly queuePaused: () => boolean;
 }
 

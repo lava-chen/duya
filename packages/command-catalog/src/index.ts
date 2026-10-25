@@ -518,7 +518,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'List available skills',
     descriptionZh: '列出可用的技能',
     category: 'info',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Listing skills is a read.
     availableWhileBusy: true,
   },
@@ -599,12 +599,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'mcp',
-    label: 'MCP connections',
-    labelZh: 'MCP 连接',
-    description: 'Open MCP connection settings',
-    descriptionZh: '打开 MCP 连接设置',
+    label: 'MCP servers',
+    labelZh: 'MCP 服务器',
+    // The Desktop opens the extensions page where MCP servers are inspected
+    // and configured; the CLI lists the configured ones as text. One
+    // description, two surfaces — the wording stays true for both.
+    description: 'Inspect the configured MCP servers',
+    descriptionZh: '查看已配置的 MCP 服务器',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Opening a panel does not touch the run.
     availableWhileBusy: true,
   },
