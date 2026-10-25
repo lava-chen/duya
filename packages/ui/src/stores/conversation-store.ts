@@ -249,8 +249,19 @@ interface ConversationState {
   setProjectSortBy: (sortBy: ProjectSortBy) => void;
   setProjectGroupBy: (groupBy: ProjectGroupBy) => void;
   toggleThreadExpanded: (threadId: string) => void;
-  loadFromDatabase: () => Promise<void>;
-  loadThreadMessages: (threadId: string, options?: { force?: boolean }) => Promise<void>;
+  loadFromDatabase: (options?: { hydrateActiveTranscript?: boolean }) => Promise<void>;
+  loadThreadMessages: (
+    threadId: string,
+    options?: {
+      force?: boolean;
+      /**
+       * A transcript that has ALREADY been read for this navigation.
+       *
+       * The type is the reader's own, so the two can never drift apart.
+       */
+      transcript?: Awaited<ReturnType<typeof getThreadIPC>>;
+    },
+  ) => Promise<void>;
   syncThreadToDatabase: (thread: Thread) => Promise<void>;
   /** @deprecated Plan 317: frontend no longer writes chat messages; the Agent worker is the authoritative writer. */
   syncMessageToDatabase: (threadId: string, message: Message) => Promise<void>;
@@ -1155,8 +1166,22 @@ export const useConversationStore = create<ConversationState>()(
         // session's transcript. Keeping this ordered avoids a race where
         // the broad DB refresh overwrites the active session messages with
         // an empty/stale map after loadThreadMessages has already finished.
-        await get().loadFromDatabase();
-        await get().loadThreadMessages(id, { force: true });
+        //
+        // The transcript is read ONCE for this navigation. It used to be
+        // read three times: once by the metadata refresh below, once by the
+        // forced message load, and once more when the chat view mounted.
+        // On a long session each of those is the whole history, so a single
+        // switch read the entire transcript three times over.
+        //
+        // The read starts BEFORE the metadata refresh, because the two do
+        // not depend on each other and the transcript is the slow one.
+        const transcriptPromise = getThreadIPC(id).catch((err) => {
+          console.error('[Store] Failed to read the transcript:', err);
+          return null;
+        });
+        await get().loadFromDatabase({ hydrateActiveTranscript: false });
+        const transcript = await transcriptPromise;
+        await get().loadThreadMessages(id, { force: true, transcript });
         console.log(`[Store] setActiveThread DONE: ${id.slice(0, 8)}, total=${(performance.now() - startTime).toFixed(1)}ms`);
       },
 
@@ -1195,7 +1220,13 @@ export const useConversationStore = create<ConversationState>()(
           }
 
           const dbStart = performance.now();
-          const data = await getThreadIPC(threadId);
+          // The transcript may already have been read for this navigation:
+          // the caller passes it in rather than paying for the same read
+          // twice. `undefined` means "not read yet"; `null` means "the read
+          // failed" and is not a reason to read again.
+          const data = options?.transcript !== undefined
+            ? options.transcript
+            : await getThreadIPC(threadId);
           console.log(`[Store] getThreadIPC DONE: ${threadId.slice(0, 8)}, messages=${data?.messages?.length ?? 0}, elapsed=${(performance.now() - dbStart).toFixed(1)}ms`);
           if (data) {
             let messages = mapIpcMessagesToStore(data.messages || []);
@@ -1571,7 +1602,7 @@ export const useConversationStore = create<ConversationState>()(
         });
       },
 
-      loadFromDatabase: async () => {
+      loadFromDatabase: async (options) => {
         const { lastSyncAt, isHydrated } = get();
         const now = Date.now();
         const STALE_TIME = 30000;
@@ -1581,7 +1612,21 @@ export const useConversationStore = create<ConversationState>()(
         }
 
         try {
-          const dbThreads = await listThreadsIPC();
+          // The session list, the projects, the no-project workspace and the
+          // active session's transcript do not depend on each other. They
+          // used to be read one after another, so the switch waited for the
+          // SUM of them -- with the transcript, which is the big one, read in
+          // the middle of that chain.
+          const activeAtStart = get().activeThreadId;
+          const hydrateActive = options?.hydrateActiveTranscript !== false;
+          const [dbThreads, projectsRaw, noProjectWorkspace, activeTranscript] = await Promise.all([
+            listThreadsIPC(),
+            getProjectGroupsIPC(),
+            getNoProjectWorkspaceIPC(),
+            hydrateActive && activeAtStart && get().messages[activeAtStart] === undefined
+              ? getThreadIPC(activeAtStart)
+              : Promise.resolve(null),
+          ]);
           // Filter out gateway sessions (gw- prefix) - they are managed separately in the Gateway Dashboard
           const filteredThreads = dbThreads.filter(t => !t.id.startsWith('gw-'));
 
@@ -1626,7 +1671,8 @@ export const useConversationStore = create<ConversationState>()(
           const messages: Record<string, Message[]> = { ...get().messages };
           let activeThreadId = get().activeThreadId;
           if (activeThreadId && dbThreadIds.has(activeThreadId) && messages[activeThreadId] === undefined) {
-            const threadData = await getThreadIPC(activeThreadId);
+            // The transcript was read above, in parallel with the rest.
+            const threadData = activeTranscript;
             if (threadData) {
               messages[activeThreadId] = mapIpcMessagesToStore(threadData.messages || []);
               registerLoadedMessages(activeThreadId, threadData.messages);
@@ -1661,15 +1707,15 @@ export const useConversationStore = create<ConversationState>()(
           }
 
           // Load projects (already converted to camelCase by getProjectGroupsIPC)
-          const projects: ProjectGroup[] = (await getProjectGroupsIPC()).map((p) => ({
+          const projects: ProjectGroup[] = projectsRaw.map((p) => ({
             ...p,
             createdAt: p.createdAt ?? p.lastActivity ?? Date.now(),
             isExpanded: true,
           }));
 
-          // Load the canonical no-project workspace path so the sidebar can
-          // route no-project sessions into the "无项目" group.
-          const noProjectWorkspace = await getNoProjectWorkspaceIPC();
+          // The canonical no-project workspace path, so the sidebar can route
+          // no-project sessions into the "无项目" group. Read above, in
+          // parallel with the rest.
 
           set({
             threads: mergedThreads,
