@@ -54,8 +54,8 @@
 
 ## 接续 / 结果
 
-已实现：S1+S2 落码并过全部可跑门禁；已验证：上表；未验证：Electron 真机视觉/交互冒烟。
-PR：https://github.com/lava-chen/duya/pull/486（draft，head ceeed05c）
-回收：未回收（PR 未集成）。
-下一步：真机冒烟（聊天链接/文件树打开 → workspace 页；审查面板 diff 模式分栏与折叠交互）通过后转 ready；集成授权后 merge。
+已实现：S1+S2 落码并过全部可跑门禁；已验证：上表与 e2e（`e2e/ipc/file-workspace.spec.ts` 1 passed）及合并后 CI 5 项 SUCCESS；未验证：Electron 真机视觉/交互冒烟。
+PR：https://github.com/lava-chen/duya/pull/486（merged，`147ceda3`）
+回收：worktree 可回收（分支已并入 master）。
+下一步：真机冒烟（聊天链接/文件树打开 → workspace 页；审查面板 diff 模式分栏与折叠交互）；发现问题开新分支修复并走 PR。
 

@@ -59,18 +59,18 @@
 | 同上 | 同 | `npm run architecture:check` | 0，OK no new boundary violations | 2 条 baseline 指纹不再触发；按规不 `--write`（master 漂移勿顺手收缩） |
 | 同上 | 同 | `npm run typecheck:all` | 0（9 条 electron-gate baseline 指纹收缩，未 `--write`） | 全链类型门禁过 |
 | master 77bd7848 后 rebase + steer 改写修复 | win32 / Node v24.16.0 / worktree | `npx vitest run packages/cli/src/__tests__/chat-tui-foundation.test.ts` | 0，20 passed | 新增「steer 入队前改写 mention」用例钉住 mailbox 内容 |
+| 合并后（`3213e6e0`） | GitHub Actions ubuntu 22.x / 本机 win32 | `gh pr checks 497`；`node scripts/architecture/bundle-verify.mjs` | 0，5 项 SUCCESS；bundle FRESH 0/987 | 合并 commit 后重验 CI 与 bundle 新鲜度 |
 
 ## 接续 / 结果
 
-已实现并验证（见验证记录），交付状态：**draft PR 等待 review / CI / 真机冒烟**。
+已实现并验证（见验证记录），交付状态：**已合并（PR #497，`3213e6e0`）；真机冒烟待用户**。
 
-- 分支 `codex/tui-plugin-slash-mention`（4 commits，head `7dedabd9`→docs 收尾后以实际为准），PR：https://github.com/lava-chen/duya/pull/497（draft，base master）
+- 分支 `codex/tui-plugin-slash-mention`（已合并后删除远端分支），PR：https://github.com/lava-chen/duya/pull/497（merged，base master）
 - 提交切分：①host 清单投影 ②mention 改写下沉 input-completion ③TUI 交互列表 + @ mention ④计划文档
 - 未提交路径：无（`packages/capabilities/src/ModuleTool/inline-content.ts` 仅有 CRLF checkout 噪声、无内容差异，不属本任务，未动）
 - 副作用：无（构建产物均在 worktree 内；`build:packages` 重建了 worktree 的 dist，属本检出产物）
 - 阻塞/待办：真机冒烟——`npm run build:cli-dev` 后 `npm run dev:tui`：
   1. `/plugin` `/apps` `/skills` `/mcp`：↑↓ 选中、Enter 进详情、Esc 返回且停原行；
   2. `@` 弹出插件行（Host 有插件时），接受 `@<id>` 提交后 Host 日志出现 `Plugin activation: <id>`，转写中 prompt 为 `[@Name](plugin://id)` 而用户气泡为原文。
-- 下一条动作：用户真机冒烟通过 → 转 ready 交 review/CI；发现交互问题回到 S4/S5 修复。
-回收：不回收——PR 未集成，worktree 与分支按指南保留。
-下一步：等待真机冒烟结果；集成须获用户授权后由集成者核对必需 review/CI。
+- 下一条动作：真机冒烟；发现问题时开新分支修复并走 PR。
+回收：worktree 可回收（分支已并入 master，成果可达）。
