@@ -55,7 +55,7 @@
 ## 接续 / 结果
 
 已实现：S1+S2 落码并过全部可跑门禁；已验证：上表；未验证：Electron 真机视觉/交互冒烟。
-PR：<待填>（draft）
+PR：https://github.com/lava-chen/duya/pull/486（draft，head ceeed05c）
 回收：未回收（PR 未集成）。
-下一步：真机冒烟通过后转 ready；集成授权后 merge。
+下一步：真机冒烟（聊天链接/文件树打开 → workspace 页；审查面板 diff 模式分栏与折叠交互）通过后转 ready；集成授权后 merge。
 
