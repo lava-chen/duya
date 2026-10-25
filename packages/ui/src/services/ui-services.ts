@@ -19,6 +19,7 @@ import type {
   StartAgentRunInput,
   StartAgentRunResult,
 } from '@duya/agent-protocol';
+import type { HostLocalTurnSuggestionRecord } from '@duya/agent-protocol/turn-suggestion';
 import type { RunSessionSnapshot } from '@duya/client-core';
 
 /** Read-only view of a single authoritative RunSession projection. */
@@ -131,6 +132,17 @@ export interface UiServices {
    */
   readonly providers?: {
     catalog(): Promise<HostProviderCatalog | null>;
+  };
+  /**
+   * The end-of-turn suggestion: the next prompt the worker predicted the user
+   * would type after the last turn.
+   *
+   * OPTIONAL. A surface whose Host does not serve suggestions leaves the
+   * namespace out, and the composer then shows its ordinary placeholder —
+   * which is the truth, rather than a suggestion the surface made up.
+   */
+  readonly turnSuggestions?: {
+    latest(sessionId: SessionId): Promise<HostLocalTurnSuggestionRecord | null>;
   };
   /**
    * Register a local directory as a workspace, when the surface can.

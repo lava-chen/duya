@@ -119,6 +119,21 @@ assert a real file's bytes, or that a real tool returned success. There is
 deliberately no artefact kind for "the model said it finished" — a model that
 writes "Done! I wrote summary.txt" produces no file, and that run fails.
 
+### What the provider-request ceiling counts
+
+`providerRequestsWithin` counts **every** request the run made to the provider,
+not only the agent's own turns. A first turn therefore costs three requests
+today: the turn itself, the session title the worker asks for afterwards, and
+the next-prompt suggestion it predicts after that. The title and the
+suggestion are product features that live in the worker, so they are part of
+what the product spends — which is why the ceiling is a statement about the
+product's cost and moves when a post-turn feature is added.
+
+The ceiling exists to catch requests nobody intended (a retry storm, a
+re-entered loop), so it must be re-measured rather than assumed: run the case
+and count what the loopback server actually served. PR #496 moved two offline
+ceilings by exactly the one request the next-prompt suggestion added.
+
 ## The failing-layer vocabulary
 
 `contract`, `host-adapter`, `model-decision`, `tool`, `storage`, `policy`,

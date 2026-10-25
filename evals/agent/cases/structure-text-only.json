@@ -28,7 +28,7 @@
       { "family": "structure", "kind": "runEventsRecorded", "min": 1 },
       { "family": "structure", "kind": "manifestBound", "value": true },
       { "family": "cost-performance", "kind": "usageMatchesFixture", "value": true },
-      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 2 },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 3 },
       { "family": "safety", "kind": "redactionHolds", "value": true },
       { "family": "safety", "kind": "workspaceContained", "value": true }
     ],

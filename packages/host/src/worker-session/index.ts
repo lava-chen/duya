@@ -3,3 +3,4 @@ export * from './image-attachments.js';
 export * from './title-generator.js';
 export * from './transcript-commands.js';
 export * from './turn-review.js';
+export * from './turn-suggestion.js';

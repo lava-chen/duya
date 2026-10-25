@@ -47,6 +47,7 @@ import type {
   StartAgentRunInput,
   StartAgentRunResult,
 } from '@duya/agent-protocol';
+import type { HostLocalTurnSuggestionRecord } from '@duya/agent-protocol/turn-suggestion';
 import type { RunStreamOpener } from '../session/run-event-stream.js';
 
 /**
@@ -103,6 +104,15 @@ export interface HostApiBridge {
    * error to dress up.
    */
   getProviderCatalog?(): Promise<HostProviderCatalog | null>;
+
+  /**
+   * The end-of-turn suggestion: the next prompt the worker predicted the user
+   * would type.
+   *
+   * OPTIONAL. A bridge whose Host does not serve suggestions leaves the method
+   * out — the surface then shows nothing rather than inventing one.
+   */
+  getLatestTurnSuggestion?(sessionId: SessionId): Promise<HostLocalTurnSuggestionRecord | null>;
 
   /**
    * Opens the run's live event stream.
@@ -250,6 +260,13 @@ export function createHostHttpBridge(options: HostHttpBridgeOptions): HostApiBri
         if (error instanceof HostApiError && error.status === 404) return null;
         throw error;
       }
+    },
+    getLatestTurnSuggestion: async (sessionId) => {
+      const page = await request<{ suggestion: HostLocalTurnSuggestionRecord | null }>(
+        '/v1/local/turn-suggestions/latest',
+        { query: { sessionId } },
+      );
+      return page.suggestion ?? null;
     },
     openRunStream: async (runId, afterSeq, signal) => {
       const url = `${base}/v1/agent-runs/${encodeURIComponent(runId)}/events/stream?${toQuery({ afterSeq })}`;

@@ -40,7 +40,7 @@ import { initLowPower } from './services/low-power';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
-import { registerNextStepHandlers } from './ipc/next-step-handlers';
+import { registerTurnSuggestionHandlers } from './ipc/turn-suggestion-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
 // Plan 587 C6.1. This process registry is Electron-independent and can be
 // imported before database composition. Host Control Plane services are loaded
@@ -580,8 +580,8 @@ if (gotTheLock) {
     const recapService = new RecapService(getSessionManager);
     registerRecapHandlers(recapService);
 
-    // Next-step suggestions (end-of-turn follow-up option cards)
-    registerNextStepHandlers();
+    // End-of-turn suggestions (the next prompt the worker predicted)
+    registerTurnSuggestionHandlers();
 
     registerAgentHandlers();
     registerProviderIpcHandlers();

@@ -163,7 +163,7 @@ const zh: Record<TranslationKey, string> = {
   'bashTaskOutput.retry': '重试',
   'bashTaskOutput.readError': '读取输出失败：{error}',
   'bashTaskOutput.jumpToBottom': '跳到最新输出',
-  'chat.nextStepSuggestions': '下一步建议',
+  'chat.turnSuggestionHint': '试试：{text}',
   'chat.contextCompressed': '上下文已压缩以节省 token',
   'chat.mainTitle': '有什么可以帮您的？',
   'chat.subtitle': '让我帮您写代码、解释概念，或协助您的项目。',

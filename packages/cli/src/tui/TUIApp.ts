@@ -274,6 +274,13 @@ export interface TUIAppOptions {  /** Window title. */
   readonly queuePaused?: () => boolean;
   readonly onRecallQueued?: () => string | null;
   /**
+   * The next prompt the worker predicted for the last turn.
+   *
+   * It is drawn as the composer's placeholder while the editor is empty, and
+   * Enter on an empty composer adopts it into the editor.
+   */
+  readonly turnSuggestion?: () => string | null;
+  /**
    * Enter while a turn runs: inject the draft into that turn.
    *
    * `attachments` carries the same files `onSubmit` receives; a draft is one
@@ -1681,6 +1688,7 @@ export class TUIApp {
       terminalRows: availableRows,
       maxRows: this.maxInputRows,
       unicode: this.terminalEnv.unicodeBox,
+      ...(this.options.turnSuggestion?.() ? { placeholder: this.options.turnSuggestion!() ?? undefined } : {}),
     });
     const borderRows = layout.lines.length - layout.bodyRows;
     if (!inline) {
@@ -1692,13 +1700,17 @@ export class TUIApp {
         borderColor: effortBorderColor(this.effortLevel()),
         height,
         bottom: this.composerBottom(size),
-        lines: body.map(escapeTags),
+        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder),
       });
       this.fullScreen.update('transcript', {
         bottom: height + STATUS_ROWS + this.popupRows(),
       });
     } else {
-      this.inlineInputLines = this.colorComposerRules(layout.lines, borderRows > 0);
+      this.inlineInputLines = this.colorComposerRules(
+        layout.lines,
+        borderRows > 0,
+        layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
+      );
     }
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
@@ -1785,14 +1797,38 @@ export class TUIApp {
    * because a border that tints the thing you are typing is a filter, not an
    * indicator — pi colours the frame for the same reason.
    */
-  private colorComposerRules(lines: readonly string[], hasRules: boolean): string[] {
-    if (!hasRules || lines.length < 2) return lines.map(escapeTags);
+  private colorComposerRules(lines: readonly string[], hasRules: boolean, placeholderRow = -1): string[] {
+    const mutedTag = this.theme.tags.muted;
+    const paint = (line: string, index: number): string => {
+      const escaped = escapeTags(line);
+      return index === placeholderRow ? `{${mutedTag}}${escaped}{/${mutedTag}}` : escaped;
+    };
+    if (!hasRules || lines.length < 2) return lines.map(paint);
     const tag = effortBorderTag(this.effortLevel(), this.theme.name);
     const tagBody = `{${tag}}`;
     const close = `{/${tag}}`;
     return lines.map((line, index) => {
+      const painted = index === 0 || index === lines.length - 1
+        ? `${tagBody}${escapeTags(line)}${close}`
+        : paint(line, index);
+      return index === placeholderRow ? `{${mutedTag}}${painted}{/${mutedTag}}` : painted;
+    });
+  }
+
+  /**
+   * Paint the composer's body rows, dimming the placeholder row.
+   *
+   * The placeholder is the next prompt the worker predicted for the last turn.
+   * It is drawn muted so it reads as a hint rather than as text the user
+   * typed.
+   */
+  private colorComposerBody(lines: readonly string[], placeholderRow: number, hasPlaceholder: boolean): string[] {
+    const mutedTag = this.theme.tags.muted;
+    return lines.map((line, index) => {
       const escaped = escapeTags(line);
-      return index === 0 || index === lines.length - 1 ? `${tagBody}${escaped}${close}` : escaped;
+      return hasPlaceholder && index === placeholderRow
+        ? `{${mutedTag}}${escaped}{/${mutedTag}}`
+        : escaped;
     });
   }
 
@@ -3347,6 +3383,12 @@ exportHistory(): string[] {
         else if (this.editor.isEmpty) {
           const queued = this.options.onRecallQueued?.();
           if (queued != null) this.recallIntoComposer(queued);
+          else {
+            // Nothing queued and an empty composer: adopt the predicted next
+            // prompt, which then sits in the editor for the user to edit.
+            const suggestion = this.options.turnSuggestion?.() ?? null;
+            if (suggestion != null && suggestion.length > 0) this.recallIntoComposer(suggestion);
+          }
         }
         else this.closeOverlay();
       },

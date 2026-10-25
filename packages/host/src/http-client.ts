@@ -270,6 +270,11 @@ import type {
   HostLocalTurnReviewSummary,
   TurnReviewWriteInput,
 } from '@duya/agent-protocol/turn-review';
+import type {
+  HostLocalTurnSuggestionApiV1,
+  HostLocalTurnSuggestionRecord,
+  TurnSuggestionWriteInput,
+} from '@duya/agent-protocol/turn-suggestion';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 // Leave headroom for the Agent Server's existing 30s IPC request deadline.
@@ -380,6 +385,7 @@ export class HostSessionHttpClient implements
   HostLocalUsageApiV1,
   HostLocalImportBatchApiV1,
   HostLocalTurnReviewApiV1,
+  HostLocalTurnSuggestionApiV1,
   HostLocalTerminalHistoryApiV1,
   HostLocalBackgroundTaskApiV1,
   HostLocalMailboxApiV1,
@@ -1898,6 +1904,19 @@ export class HostSessionHttpClient implements
       `/v1/local/turn-reviews/by-turn?${query.toString()}`,
     );
     return result.review;
+  }
+
+  async saveTurnSuggestion(input: TurnSuggestionWriteInput): Promise<void> {
+    await this.request('POST', '/v1/local/turn-suggestions', input);
+  }
+
+  async getLatestTurnSuggestion(sessionId: string): Promise<HostLocalTurnSuggestionRecord | null> {
+    const query = new URLSearchParams({ sessionId });
+    const result = await this.request<{ suggestion: HostLocalTurnSuggestionRecord | null }>(
+      'GET',
+      `/v1/local/turn-suggestions/latest?${query.toString()}`,
+    );
+    return result.suggestion;
   }
 
   async suggestTerminalHistory(query: TerminalHistoryQuery): Promise<readonly TerminalHistorySuggestion[]> {

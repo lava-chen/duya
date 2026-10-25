@@ -694,6 +694,15 @@ export async function chatTui(
   const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
   let cancellationRequested = false;
+  /**
+   * The next prompt the worker predicted for the last turn.
+   *
+   * It is drawn as the composer's placeholder and Enter on an empty composer
+   * adopts it. The worker writes it after the turn ends, so the read back is
+   * a short poll rather than a single fetch.
+   */
+  let turnSuggestion: string | null = null;
+  let turnSuggestionSeq = 0;
   let unsettledRunId: RunId | null = null;
   let sessionTransition = false;
   let finished = false;
@@ -1103,6 +1112,33 @@ export async function chatTui(
     }
   }
 
+  /**
+   * Read back the next prompt the worker predicted for the turn that ended.
+   *
+   * The prediction is written after the turn ends, so the row is accepted only
+   * once it is fresh enough to belong to THIS turn; an older row is the
+   * previous turn's suggestion and is ignored.
+   */
+  async function refreshTurnSuggestion(sessionId: SessionId): Promise<void> {
+    const seq = ++turnSuggestionSeq;
+    const endedAt = Date.now();
+    const deadline = endedAt + 15_000;
+    while (seq === turnSuggestionSeq && Date.now() < deadline) {
+      try {
+        const record = await client.getLatestTurnSuggestion(sessionId);
+        if (seq !== turnSuggestionSeq) return;
+        if (record !== null && record.createdAt >= endedAt - 1_500) {
+          turnSuggestion = record.suggestion.trim().length > 0 ? record.suggestion : null;
+          tui.refresh();
+          return;
+        }
+      } catch {
+        // A failed read is not a failed feature: the next attempt may work.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -1152,6 +1188,7 @@ export async function chatTui(
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
+    turnSuggestion: () => turnSuggestion,
     canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
     onSubmit: (text, attachments) => { void handleLine(text, attachments); },
     onInterrupt: interrupt,
@@ -1440,6 +1477,10 @@ export async function chatTui(
     }
     if (finished) return 'cancelled';
     cancellationRequested = false;
+    // A new turn retires the previous turn's suggestion, and the read still
+    // in flight for it is stopped with it.
+    turnSuggestionSeq += 1;
+    turnSuggestion = null;
     const streamAbort = new AbortController();
     activeStream = streamAbort;
     const runSessionId = activeSession.id;
@@ -1597,6 +1638,8 @@ export async function chatTui(
         tui.printError('Run stopped with status ' + record.status + '. Pending drafts are paused.');
         return 'failed';
       }
+      // The turn is over; the worker predicts the next prompt for it.
+      void refreshTurnSuggestion(runSessionId);
       return 'completed';
     } catch (error) {
       if (!finished && !cancellationRequested) {
