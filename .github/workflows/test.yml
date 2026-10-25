@@ -276,6 +276,15 @@ jobs:
       - name: Client entry closure (G11-1)
         run: npm run architecture:client-closure
 
+      # The Bot boundary (framework plan S0): the direction rules the future
+      # `@duya/bot` package depends on, enforced BEFORE the package exists —
+      # bot downward (pending until S2 scaffolds it, then measured), no
+      # reverse edge from the downward packages into bot, and no client edge
+      # into the host composition layer. Its mutation tests prove the teeth;
+      # this step is what keeps them from rotting.
+      - name: Bot boundary gate
+        run: npm run architecture:bot-boundary
+
       # The bundle is tracked, so a source edit that is never rebuilt is a lie
       # the next reader has to discover. This compares the committed bundle
       # against every first-party input changed since the bundle commit; it does

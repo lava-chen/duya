@@ -1,6 +1,6 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
-状态：active，设计与本次验证完成、待 review；生产迁移未开始 · 负责人：Codex / root · 更新：2026-10-25
+状态：active，设计已交付（draft PR #483 待 review）；S0 门禁与行为基线切片已实现并验证，待 PR review / CI · 负责人：Codex / root · 更新：2026-10-25
 分支：`plan/bot-framework-foundation` · worktree：`.claude/worktrees/bot-framework-plan` · base：`270ba52869b6414094e553dd7f9abde5a1e429f7` · owner：本会话 root
 
 ## 目标与边界
@@ -93,6 +93,46 @@
 
 每片执行根门禁；变更 main/preload 需 Electron 构建与真实桥；UI 用 Playwright；worker 或依赖 / 打包边界需重新构建并验证真实 Host→worker→provider 夹具→ledger。已有单测通过不替代后台 resident 和恢复链路。
 
+## S0 执行记录（2026-10-25）
+
+已实现、已验证、未合并。分支 `codex/bot-framework-s0`（base＝本计划分支 `plan/bot-framework-foundation` @ `1618a909`，PR 目标 master，交付 commit `24590d10`）；worktree `.claude/worktrees/bot-framework-s0`；owner 本会话。622 真实 head 核对：01 已合并（#399）、02 已合并（#405，README 状态滞后）、03/04 仍 todo——S0 依赖的 slice-graph / 门禁基建已就绪。
+
+**交付（S0 = 1 个门禁 PR）**
+
+- `scripts/architecture/bot-boundary-gate.mjs/.ts/.test.ts`，三条规则：
+  - **R1 bot 下向**：`packages/bot/src/` 出现后，其全部非测试源文件的 value import 只允许 `@duya/agent-protocol` / `@duya/agent-core`；种子覆盖全部源文件而非 barrel，子路径无法绕过；不穿行 allowlist 包（agent-core 自己的依赖归它自己的门禁管）。包未提出时如实报 `pending`，目录存在但无源码报 `blind`。
+  - **R2 反向边**：`agent-protocol / agent-core / agent-runtime / data / memory` 五包不得 value-import bot（"runtime 不知道 bot 存在"是 import 语句级语义，直接边扫描）。
+  - **R3 客户端轴**：`packages/ui` / `packages/client-core` 不得 value-import `@duya/host` 或 desktop main / preload / renderer（622-05 的 Bot 切片；`packages/cli` 不在本规则内，其本地 Host 启动边归 G11-1 管）。
+  - 防假绿：scanned 只计成功读取的文件并设 floor（R2≥100、R3≥100，实测 333 / 652）；Windows 瞬时读失败重试一次，仍失败计入 `unreadable` 上报。首版曾把 walk 计数当 scanned、且绝对路径转换错误导致全树假绿，被 census 全 0 暴露后重写——该教训已写进代码注释。
+- `--census`：可复跑的消费者清单探针（下表）。
+- 接线：`npm run architecture:bot-boundary`、test.yml architecture job 新 step、`architecture-ci-wiring.test.ts` 断言（防"有门禁没人跑"）。
+- 测试 13 例：live 树绿（R1 pending / R2 R3 零发现、unreadable=0）＋三规则变异红→绿（value import 红；demote 成 `import type` 后绿且 typeOnly 计数可见）＋ blind/finding 拒绝判定＋ census 组存在性断言（含"退役层 `packages/agent` 是 host bot prompt 最大消费方"这一承重事实，移动归属时必须同 PR 更新）。
+
+**反向边探针（本次树实测）**：UI / client-core → host / desktop 的 value 与 type 边均为 0；agent-core / runtime / protocol / data / memory → host / desktop 均为 0；host Bot 模块 value 闭包内 host 文件 187 个，全部下向包，不触 desktop / electron 路径。
+
+**消费者清单**（`node scripts/architecture/bot-boundary-gate.mjs --census`；完整数字可复跑）
+
+| 组 | 消费者要点 | 迁移注意 |
+| --- | --- | --- |
+| host/worker-prompts/bot（24 文件） | 29 个消费者；最大方是退役层 `packages/agent`（25 文件），desktop 仅 3（wake-dispatcher / routine-wake / config/groups） | S5 prompt 快照的现役面；退役层镜像副本是 S2 提包时的主要清退对象 |
+| host/worker-prompts/configs/bot、worker-tools/bot-builtin | 各 1–2 个消费者，均含 agent 镜像 | 同上 |
+| host/config-agents/bot-*（3 文件） | host 内部 2 处 | S1 Host 单写入口落点 |
+| data/pending-wakes + protocol/wake* | data 4 / protocol barrel 1 | S3 inbox 合同的现有底座 |
+| desktop/wake/*（19 文件） | 11，全部 desktop 内部 | S3 退役对象；现状 desktop 串联合同的实证 |
+| desktop/channels/*（23 文件） | 7 | S4 退役对象 |
+| desktop/automation/*（28 文件） | 14 | S6 复用 Scheduler，触发适配 |
+| ui/chat/bot*（50 文件） | 2（Composer / GroupRoomChatView） | S4/S7 统一投影 |
+
+**行为基线**（本检出实测全绿；迁移切片以同名测试对照，不以数量对照）
+
+| 域 | 具名测试 | 结果 |
+| --- | --- | --- |
+| 身份 | `config-agents-write` / `agent-profile-config` / `worker-db-bridge-config-agents` / `bot-toolset` | 4 文件 29 用例 |
+| prompt | host `tests/worker-prompts/`（partition / profile-sections / mode-composition / digest） | 4 文件 28 用例 |
+| wake | desktop `wake/__tests__/`（dispatcher / preemption / idle / automation / ack-redrive / watchdog 等） | 10 文件 94 用例 |
+| 投递 | desktop `channels/__tests__/`（delivery / telegram connector+offset / inbound-filter / secret-store 等） | 9 文件 117 用例 |
+| bot 专属桌面面 | ipc `bot-channel-handlers` / config `bot-profile`+`bot-identity-rpc` / cli `bot-channels` / agents router `provider-fallback` | 5 文件 46 用例 |
+
 ## 关键决策
 
 - 本次 master 从 `2baa95df` fetch 到 `270ba528`，master pull --ff-only 成功；原 `work` 分支保留。最新 tree 与旧会话时间点明显不同，全部迁移定位以最新源码为准。
@@ -115,6 +155,15 @@
 | 同上 | 同上，Electron binary 缺失 | 先前 4 文件运行另含 Desktop wake-dispatcher、channel-ack-redrive 两 suite | 1；Host 14 用例通过，2 wake suite 在加载期失败：Electron failed to install correctly / fetch failed | 没有执行到 wake 断言；不下载或删除共享 Electron 安装，不将其写成回归通过 |
 | 同上 | Python 3 / Git | 7 文档 UTF-8、相对链接、tracked/planned visibility 对照 base | 新断链 0；138 条本地链接中 1 条 base 已失效 | 原有 README→2026-10-24-dynamic-workflow-package.md 不在 base tree，本次未修改 |
 | 同上 | Git | `git diff --check` / 三个新增文件 check-ignore | 0 / 未被忽略 | 本次只暂存 7 个具名文档 |
+| `1618a909` + S0 三件套与接线 | win32 / Node 24.16.0 / Vitest 3.2.4 | `npx vitest run scripts/architecture/ --no-file-parallelism` | 0；19 文件 335 用例全绿（含本次新增 13 例与 wiring 断言） | 1 个 vitest worker RPC 超时噪音未影响结果；本机内存压力需单文件串行 |
+| 同上 | 同上 | `npm run architecture:check` | 0；无新增违规 | 2 条既有 baseline fingerprint 失效为既有债务，未顺手 `--write` |
+| 同上 | 同上 | `node scripts/architecture/bot-boundary-gate.mjs` 与 `--census` | 0；R1 pending / R2 OK(333) / R3 OK(652)，PASS | 消费者清单见 S0 执行记录 |
+| 同上 | 同上 | 行为基线五组（见 S0 执行记录表） | 0；全绿 | 首次 identity 运行 1 文件加载失败，归因 C 盘 0 可用（工具 stdout 落 C:%TEMP%），清理后重跑全绿；本机 Electron 可加载，#483 记录的 Linux wake 加载失败未复现 |
+| 同上 | 同上 | `npm run typecheck:all` | 0；含全部 workspace 构建与类型 / ratchet / recorder checks | 本检出 junction 依赖直接通过（@types/picomatch 已在树内），无需 #483 时代的私有 overlay |
+| 同上 | Git | 暂存具名文件（gate 三件套、package.json、test.yml、wiring 测试、本计划、README 行） | — | 不入 Git：junction 链接、/e/tmp 日志 |
+| `24590d10` 首推 | ubuntu 22.x CI | architecture job | 1；agent-retirement reference ratchet FAIL：773/772，测试断言字符串字面量新增 1 条退役层引用（`bot-boundary-gate.test.ts:333`） | ratchet 只减不增，禁 bump baseline；修法=断言去退役路径字面量，改钉结构性事实（成员/消费方数下限+desktop 接线），退役层身份由 census 输出与计划文档承载 |
+| `c8946122`（ratchet 修复后 head） | win32 本地 | `node scripts/architecture/agent-retirement-gate.mjs`（pipefail 取真实退出码） | 0；ratchet PASS 772/772 / 0 new | 本地与门禁+retirement 测试 24 例全绿 |
+| `c8946122` | ubuntu 22.x CI（PR #495） | architecture / build / typecheck / test / test scope 五检查 | 全 pass；test 8m33s 含新测试文件在 Linux 首跑 | CI 结论覆盖本机验证；PR 待 review 与集成授权 |
 
 ## 接续 / 结果
 
@@ -122,4 +171,5 @@
 
 PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI；没有申请或执行合并。当前工具无法读取原 ChatGPT 完整线程；必要时由后续对话补全文，不阻塞有源码支撑的方案。
 回收：保留 worktree 与分支，等待设计 review / PR 集成，不执行删除。
-下一步：review [draft #483](https://github.com/lava-chen/duya/pull/483) 的边界与迁移合同；实施接手从 **S0** 开始，先对齐 622 的层门禁实际 head，提交能证明反向依赖被拒的变异用例与现有行为基线。
+
+**S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
