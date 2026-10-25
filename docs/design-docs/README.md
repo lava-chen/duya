@@ -4,6 +4,7 @@
 
 | 主题 | 记录 |
 | --- | --- |
+| 个人长期 Bot | [personal-bot-framework](personal-bot-framework.md)：Bot / Session / Run、包边界、持久唤醒、记忆与迁移合同（设计提案） |
 | CLI 控制面 | [roadmap](cli-control-plane/roadmap.md)及同目录阶段决策 |
 | Gateway 职责 | [channel-only-gateway](channel-only-gateway.md) |
 | 多模型推理 | [2026-07-29 架构方案](2026-07-29-multi-model-reasoning-architecture.md) |
