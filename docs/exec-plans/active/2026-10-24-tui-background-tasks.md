@@ -71,6 +71,7 @@
 9. **真机验证用 stub worker，而不是真模型。** `tui-command.ts` 的 `DUYA_TUI_ATTACH=1` + `DUYA_TUI_HOST_ORIGIN/TOKEN` 是现成的入口：终端、Host、HTTP/SSE、缓存、路由、投影、渲染全走生产代码，只有 worker 换成会发 `bash_task:update` 与 `subagent.started` 的桩。因此"前台超 15s 自动转后台"这条触发链没有被端到端跑（`autoPromoted` 是桩直接给的字段的值），它由 BashTool 自身用例覆盖；本步的视图只负责如实显示注册表告诉它的东西。
 10. **桩 TUI 也要跟上生产选项面。** `chat-tui-host-stop-continue.test.ts` 的假 `TUIApp` 缺 `setBackgroundTasks` 等新方法，轮询器在真实 busy 期把快照推进去时抛错，`onError` 每轮重报，把本该唯一的 `runtime_crash` 挤成 6 条错误。补上四个方法后恢复。给 TUI 增加选项方法时，所有 mock `TUIApp` 都要同步。
 11. **"产物只是再生噪声"这个判断在这里不成立。** 首版 PR 不带 `packages/host/bundle/*`，CI 的 `bundle:verify` 直接失败：它按历史比较"bundle 提交"与"任一第一方输入的最后提交"，本任务改了 `agent-protocol/src/index.ts`（新增 `export * from './background-tasks.js'`），所以即使重新生成的 `worker-entry.js` 差异几乎全是 esbuild 标识符改名，也必须提交一次再生结果把 bundle 提交推到后面。命令是 `npm run bundle:worker`——`npm run build:packages` 不会更新 bundle，跑完 `git status` 仍然干净，容易误判成"没有变化"。
+12. **与 master 的真重叠只有"焦点层叫什么"，不是两套功能并存。** master 自 merge base 起没有碰 transcript 聚焦层，本任务在 Phase 7 把它整层换成任务视图（`focus: 'input' | 'tasks'`，见发现 3），所以 `TUIApp.ts` 三处冲突里两处是并集、一处要挑边：忙碌期状态栏提示取 master 的 `Enter steer · Tab queue · Esc stop`（它描述合并后树上真实存在的键行为，master 的 `tui-busy-draft-keys.test.ts` 也断言这三个词），Tab 键分支取本任务的 `focus === 'tasks'` 判定加 master 的排队分支。master 唯一因此过期的断言是 `'transcript'` 这个字面量，改成 `'tasks'` 后用例语义不变——仍断言"Tab 在空输入框上切焦点而不是进排队"。
 
 ## 验证记录
 
@@ -99,13 +100,14 @@
 | `26cef6db` | 同上 | `npm run bundle:verify`；`npm run architecture:check`；`npx vitest run packages/cli packages/host/tests/{background-task-index,background-task-routes,run-execution}.test.ts` | 0 · `FRESH 0/953 bundle inputs`；2738 tolerated 无新增违规；首轮 1 失败 / 1325，重跑两次均 109 文件 / 1325 全绿 | 首轮那条失败在随后两次同命令运行中不可复现（记录为 flake，未定位到用例） |
 | `26cef6db` | GitHub Actions | `gh pr view 464 --json statusCheckRollup` | 全 pass · architecture / test scope / typecheck / test / build | 修好 bundle 后 architecture 由 FAIL 转 pass |
 | `8887d295`（文档提交） | GitHub Actions | `gh pr checks 464 --watch` | 全 pass · architecture 2m30s / test scope 8s / typecheck 4m50s / test 5m52s / build 3m23s | PR 状态 MERGEABLE、非 draft、无 required review 阻塞记录 |
+| `8449a39b`（merge 提交） | 同上 | `git merge origin/master`（`0bab8f6a`）解 7 处冲突后：`npm run typecheck:all`；`npm run architecture:check`；`architecture:client-closure` / `slice-graph` / `boundaries` / `browser-closure`；`npm run plan:sync`；`npm run test:rules`；`npx vitest run packages/cli packages/agent-protocol`；`npx vitest run packages/host/tests/{background-task-index,background-task-routes,run-execution}.test.ts`；`npm run bundle:verify` | 均 0 · typecheck 0；architecture 2747 tolerated / baseline 2530 无新增违规；plan:sync 16 行 / 28 file refs / 14 test-name refs OK；test:rules 6/6；CLI + protocol 137 文件 / 1814 用例；host 3 文件 / 28 用例；bundle `FRESH 0/957` | 首轮 vitest 1 失败 / 1814：`tui-busy-draft-keys.test.ts` 断言 `focus` 为 `'transcript'`，见发现 12；改断言后全绿 |
 
 ## 接续 / 结果
 
 已实现：Phase 1–9（契约、Host 缓存与只读路由、客户端方法、1s 轮询器、subagent 投影、任务模型、摘要行、任务视图与详情、`/tasks` 与 catalog 条目）。
-已验证：上表单元/集成/门禁项；`packages/cli` 全量 1260 用例；跨包 typecheck 与架构门禁；真机 PTY 7 步（`tmp/tui-bg-realrun.log`）。
-未验证：真模型驱动的 `sleep 60` 前台超时自动转后台触发链（发现 9）；Desktop 侧未改动。
+已验证：上表单元/集成/门禁项；`packages/cli` 全量 1260 用例；跨包 typecheck 与架构门禁；真机 PTY 7 步（`tmp/tui-bg-realrun.log`）；合并 master 后的 9 项门禁与 CLI + protocol 1814 用例（见 `8449a39b` 行）。
+未验证：真模型驱动的 `sleep 60` 前台超时自动转后台触发链（发现 9）；Desktop 侧未改动；合并后的真机 PTY 7 步**未**重跑（本次只做冲突解决与门禁复验）。
 本任务不提交的本地改动：只剩 `packages/capabilities/src/ModuleTool/inline-content.ts` 与 `packages/host/bundle/package.json` 的行尾差异（`git diff --numstat` 为 0 行内容变化），已 `git restore`。worker bundle **必须**提交：`scripts/architecture/bundle-verify.mjs` 比较 bundle 提交与其第一方输入的最后改动，`packages/agent-protocol/src/index.ts` 现在多转出了契约文件，历史即判 STALE；重建命令是 `npm run bundle:worker`（`build:packages` 不含它），产物差异基本是 esbuild 压缩标识符改名，metafile 才记录真实新增输入。
-PR：[#464](https://github.com/lava-chen/duya/pull/464)（base `master`，head `codex/tui-background-tasks`，非 draft）；未合并，等待 review 与 Test workflow。
+PR：[#464](https://github.com/lava-chen/duya/pull/464)（base `master`，head `codex/tui-background-tasks`，非 draft）；未合并。已把 `origin/master`（`0bab8f6a`）合并进分支（merge 提交 `8449a39b`），冲突全部解决且门禁全绿，等新 head 上的 CI 重跑与 review 后按授权集成。
 回收：未开始；分支与 worktree 在 PR 集成前保留。
-下一步：等 PR #464 的最新 head 上必需检查通过后按授权集成；随后同步 master、重验并回收 worktree。第二步（kill / 子会话实时 transcript / 输出流式 / 自动展开收起）另立计划。
+下一步：在 PR #464 的新 head（`8449a39b`）上跑 CI 与 review，通过后按授权集成；随后重验真机 PTY 7 步、同步 master 并回收 worktree。第二步（kill / 子会话实时 transcript / 输出流式 / 自动展开收起）另立计划。
