@@ -1,3 +1,4 @@
+import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -528,8 +529,17 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       diagnosticsSink === 'file'
         ? createFileDiagnosticsLogger(resolveHostDiagnosticsLogPath(dataRoot))
         : createStdioDiagnosticsLogger();
+    const checkoutService = new SessionCheckoutService({
+      backgroundBusy: (cwd) => hasBackgroundCheckoutLease(cwd, dataRoot),
+      sessions: core.stores.sessions, runs: core.stores.runs,
+      validateActor: (actor) => {
+        if (!runExecution || !actor.runId || actor.epoch === undefined) throw new Error('Checkout control requires a live worker attempt.');
+        runExecution.validateSessionCaller({ sessionId: actor.sessionId, runId: actor.runId, epoch: actor.epoch });
+      },
+    });
     if (options.workerPath !== undefined) {
       const sessionService = createHostSessionService({
+        checkoutService,
         sessions: api,
         runs: createHostRunApi(core.stores),
         execution: {
@@ -549,6 +559,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         },
       });
       runExecution = new HostRunExecutionController({
+        checkoutService,
         runs: core.stores.runs,
         permissionRequests: createHostPermissionRequestApi(core.stores),
         sessionDefaults: async (sessionId) => {
@@ -581,6 +592,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           };
         },
         bridge: createHostWorkerDbBridge({
+          checkoutService,
           sessionService,
           runs: core.stores.runs,
           sessions: core.stores.sessions,
@@ -616,6 +628,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // Plan 621: the checkout / integration namespaces, assembled once so the
     // headless Host and the Desktop's embedded Host answer the same way.
     const workspaceLifecycle = createHostWorkspaceLifecycleApis({
+      dataRoot,
       sessions: core.stores.sessions,
       runs: core.stores.runs,
       integrations: core.stores.integrations,
@@ -711,6 +724,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // place (`createHostWorkspaceLifecycleApis`) because the Desktop's
       // embedded Host serves the same routes and must answer the same way.
       ...workspaceLifecycle,
+      sessionCheckoutApi: { control: (id, command) => checkoutService.control(id, command) },
       host: HOST,
       port: options.port ?? DEFAULT_PORT,
       token,
@@ -810,3 +824,4 @@ export async function readLocalHostRuntime(dataRoot = resolveDataRoot()): Promis
   }
   return isPidAlive(value.pid) ? value as unknown as LocalHostRuntime : null;
 }
+import { SessionCheckoutService } from './workspace/session-checkout-service.js';

@@ -24,7 +24,9 @@ export type {
 } from '@duya/agent-runtime/tools/catalog';
 export { MCPRegistryReplaceError } from '@duya/agent-runtime/tools/catalog';
 
-export interface ToolExecutor extends RuntimeToolExecutor<ToolUseContext, ToolResult> {}
+export interface ToolExecutor extends RuntimeToolExecutor<ToolUseContext, ToolResult> {
+  readonly controlsExecutionLocation?: boolean;
+}
 
 const conditionalSkillEffects = {
   getPendingCount: getPendingConditionalSkillCount,
@@ -58,7 +60,9 @@ export class ToolRegistry extends RuntimeToolRegistry<Tool, ToolResult, ToolUseC
       };
     }
     try {
-      return await super.execute(name, input, workingDirectory, context);
+      const boundContext = context && this.getExecutor(name)?.controlsExecutionLocation && lease.beginSwitch
+        ? { ...context, beginExecutionLocationSwitch: lease.beginSwitch } : context;
+      return await super.execute(name, input, workingDirectory, boundContext);
     } finally {
       lease.release();
     }

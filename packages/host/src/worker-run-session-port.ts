@@ -106,6 +106,7 @@ export interface TurnModelProjection {
     readonly messages: Message[];
 }
 export interface RunTurnAssembly {
+    prepare?(): Promise<void>;
     readonly resolved: ResolvedTurnTools;
     readonly turnContext: TurnContext;
     readonly tools: readonly Tool[];

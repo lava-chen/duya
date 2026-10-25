@@ -2169,6 +2169,10 @@ export class HostSessionHttpClient implements
   }
 
   // ── Plan 621: checkout and integration observations ───────────────────
+  async controlSessionCheckout(sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand): Promise<import('@duya/agent-protocol').SessionCheckoutResult> {
+    const response = await this.request<{ result: import('@duya/agent-protocol').SessionCheckoutResult }>('POST', '/v1/checkouts/control', { sessionId, command }, 120_000);
+    return response.result;
+  }
   //
   // Every surface — Desktop, TUI, Web — asks the Host through these methods
   // and nowhere else. A surface that reached into git or GitHub itself would

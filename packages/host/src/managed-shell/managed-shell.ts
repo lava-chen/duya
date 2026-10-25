@@ -24,7 +24,7 @@
 import { openSync, readSync, closeSync, statSync } from 'fs';
 import { open, type FileHandle } from 'fs/promises';
 import { join } from 'path';
-import { createProcessScope, type ProcessScope, type ProcessTreeKiller } from '@duya/agent-runtime';
+import { createProcessScope, type ProcessScope, type ProcessTreeKiller, type ScopedProcess } from '@duya/agent-runtime';
 import { BASH_MAX_TIMEOUT_MS } from '@duya/capabilities/ShellCommandTool/constants';
 import type {
   ShellCommandCompletion,
@@ -125,21 +125,34 @@ export async function startManagedShell(
     );
   }
 
-  const proc = scope.spawn(shellPath, shellArgs, {
+  scope.track(() => fd.close().catch(() => { /* already closed */ }));
+  let checkoutLeaseId: string;
+  try { checkoutLeaseId = reserveCheckoutTask({ taskId, cwd, ...(sessionId ? { sessionId } : {}) }, dependencies.dataRoot); }
+  catch (error) { await scope.dispose(); throw error; }
+  let proc: ScopedProcess;
+  try { proc = scope.spawn(shellPath, shellArgs, {
     cwd,
     env,
     // stdin is closed: managed commands must never block on a TTY read.
     stdio: ['ignore', fd.fd, fd.fd],
     windowsHide: true,
-  });
+  }); } catch (error) {
+    releaseCheckoutTask(checkoutLeaseId, dependencies.dataRoot);
+    await scope.dispose();
+    throw error;
+  }
 
   const pid = proc.pid ?? -1;
+  try { bindCheckoutTaskPid(checkoutLeaseId, pid, dependencies.dataRoot); }
+  catch (error) { await proc.kill(); await proc.exited; releaseCheckoutTask(checkoutLeaseId, dependencies.dataRoot); await scope.dispose(); throw error; }
 
   // The descriptor and the abort listener are released by the scope, so neither
   // has to be unwound on each exit path.
-  scope.track(() => fd.close().catch(() => { /* already closed */ }));
 
   registry.register({
+    workingDirectory: cwd,
+    ...(sessionId ? { sessionId } : {}),
+    checkoutLeaseId,
     id: taskId,
     pid,
     outputFile,
@@ -187,6 +200,7 @@ export async function startManagedShell(
   const settle = (exitCode: number, spawnError?: string): void => {
     if (settled) return;
     settled = true;
+    releaseCheckoutTask(checkoutLeaseId, dependencies.dataRoot);
     clearWatchdog();
     void scope.dispose();
     abortSignal?.removeEventListener('abort', onAbort);
@@ -309,3 +323,4 @@ export function readOutputTail(outputFile: string, maxBytes: number): string {
     return '';
   }
 }
+import { reserveCheckoutTask, bindCheckoutTaskPid, releaseCheckoutTask } from '../workspace/task-leases.js';

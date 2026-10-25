@@ -25,6 +25,7 @@ import { canonicalPath, isDirectory, removeEmptyDirectory, samePath } from './fs
 import { allocateCheckoutName, managedRootFor, slugifyWorktreeName } from './paths.js';
 import { bindOwner, clearOwner, readOwner } from './checkout-metadata.js';
 import { readCheckoutBase, writeCheckoutOrigin } from './checkout-origin.js';
+import { checkpointSessionComponent } from './checkpoint-session.js';
 import { inspectRegistration, worktreeEntries } from './registration.js';
 import { evaluateReclaim, reclaimCheckout, type ReclaimInputs } from './worktree-removal.js';
 
@@ -34,7 +35,7 @@ const CHECKPOINT_KEEP = 20;
 const CHECKPOINT_PREFIX = 'refs/duya/checkpoint';
 
 /** A git ref component may not contain these; session ids are UUIDs today. */
-const SAFE_REF_COMPONENT = /^[A-Za-z0-9._-]+$/;
+const SAFE_REF_COMPONENT = /^[A-Za-z0-9._:-]+$/;
 
 export interface CheckoutProviderPorts extends Partial<ReclaimInputs> {
   /** Overridable clock, for tests that must not depend on wall time. */
@@ -72,6 +73,9 @@ export class GitCheckoutProvider implements CheckoutProvider {
   async create(input: {
     sourceCwd: string;
     base?: string;
+    allowDirtySource?: boolean;
+    branchName?: string;
+    operationId?: string;
     ownerSessionId: string;
     label: string;
   }): Promise<CheckoutRoot> {
@@ -87,7 +91,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
     const sourceRoot = canonicalPath(trimmedRoot);
 
     const base = input.base?.trim() || 'HEAD';
-    const baseShaRaw = await gitOrNull(sourceRoot, ['rev-parse', '--verify', `${base}^{commit}`]);
+    const baseShaRaw = await gitOrNull(sourceRoot, ['rev-parse', '--verify', '--end-of-options', `${base}^{commit}`]);
     const baseSha = baseShaRaw?.trim();
     if (!baseSha) {
       throw new CheckoutError(
@@ -102,7 +106,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
     if (status === null) {
       throw new CheckoutError('resolve_failed', `cannot read the git status of ${sourceRoot}`);
     }
-    if (status.trim().length > 0) {
+    if (status.trim().length > 0 && !input.allowDirtySource) {
       throw new CheckoutError(
         'dirty_worktree',
         `checkout creation requires a clean source worktree, but ${sourceRoot} has uncommitted changes`,
@@ -119,7 +123,8 @@ export class GitCheckoutProvider implements CheckoutProvider {
     mkdirSync(path.dirname(root), { recursive: true });
 
     try {
-      await git(sourceRoot, ['worktree', 'add', '--detach', '--no-checkout', root, baseSha]);
+      if (input.branchName) await git(sourceRoot, ['check-ref-format', '--branch', input.branchName]);
+      await git(sourceRoot, ['worktree', 'add', ...(input.branchName ? ['-b', input.branchName] : ['--detach']), '--no-checkout', root, baseSha]);
     } catch (err) {
       await this.rollback(sourceRoot, root);
       throw new CheckoutError(
@@ -137,7 +142,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
           `base ${baseSha} does not contain a working directory for ${relativeCwd}`,
         );
       }
-      await writeCheckoutOrigin(root, baseSha);
+      await writeCheckoutOrigin(root, baseSha, input.operationId);
       const owner = input.ownerSessionId.trim();
       if (owner) await bindOwner(root, owner);
       return { root, cwd, sourceRoot, sourceCwd, baseSha };
@@ -358,7 +363,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
     const head = headRaw?.trim();
     if (!head) throw new CheckoutError('no_head', `checkout at ${root} has no HEAD`);
 
-    const prefix = `${CHECKPOINT_PREFIX}/${session}/`;
+    const prefix = `${CHECKPOINT_PREFIX}/${checkpointSessionComponent(session)}/`;
     const existing = await gitOrNull(root, ['for-each-ref', '--format=%(refname)', prefix]);
     const sequence = (existing ?? '')
       .split('\n')

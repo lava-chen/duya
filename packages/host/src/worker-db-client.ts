@@ -235,6 +235,9 @@ export const pluginAppBindingDb = {
 // ==================== Session Operations ====================
 
 export const sessionDb = {
+  reclaimCheckout: (root: string) => sendDbRequest('session:checkoutReclaim', { root }) as Promise<{ removed: boolean; reason?: string }>,
+  checkoutControl: (id: string, command: import('@duya/agent-protocol').SessionCheckoutCommand) =>
+    sendDbRequest('session:checkoutControl', { id, command }) as Promise<import('@duya/agent-protocol').SessionCheckoutResult>,
   create: (data: {
     id: string;
     title?: string;
@@ -283,6 +286,9 @@ export const sessionDb = {
 // Phase 2 adds continuous management scoped to sessions the caller spawned.
 export const sessionSpawnDb = {
   spawn: (data: {
+    use_worktree?: boolean;
+    source_branch?: string;
+    branch_name?: string;
     parentSessionId: string;
     workingDirectory: string;
     prompt: string;

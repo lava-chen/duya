@@ -428,6 +428,25 @@ export class SessionStore {
       .run(JSON.stringify(ext), Date.now(), id);
   }
 
+  /** Atomically advance the execution cursor and journal, preserving unrelated extensions. */
+  compareAndSetExecutionLocation(
+    id: string,
+    expectedRevision: number,
+    expectedCwd: string,
+    state: import('@duya/agent-protocol').SessionCheckoutState,
+  ): boolean {
+    const result = this.db.prepare(`UPDATE sessions SET
+      working_directory = @cwd,
+      extensions = json_set(extensions, '$.executionLocation', json(@state), '$.checkout', json(@checkout)),
+      updated_at = @now
+      WHERE id = @id AND working_directory = @expectedCwd
+      AND COALESCE(json_extract(extensions, '$.executionLocation.revision'), 0) = @expectedRevision`).run({
+      id, expectedRevision, expectedCwd, cwd: state.cwd,
+      state: JSON.stringify(state), checkout: JSON.stringify(state.checkout), now: Date.now(),
+    });
+    return result.changes === 1;
+  }
+
   // ─── Rollout path ───
 
   getRolloutPath(id: string): string | null {

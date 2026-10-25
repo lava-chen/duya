@@ -997,7 +997,27 @@ async function handlePostChat(
 
     const prompt = parsed.prompt || '';
     let providerConfig = parsed.providerConfig;
-    const workingDirectory = parsed.workingDirectory;
+    let workingDirectory = parsed.workingDirectory;
+    // Persisted checkout cursors override a client cache; workspace identity stays unchanged.
+    try {
+      if (dbRequest) {
+        const cursorRow = await dbRequest('session:get', { id: sessionId }) as { working_directory?: string; executionLocation?: { revision?: number; pending?: unknown } } | undefined;
+        if ((cursorRow?.executionLocation?.revision ?? 0) > 0) {
+          if (cursorRow?.executionLocation?.pending) {
+            revertStreamingLock();
+            sendJson(res, 409, { error: 'Recover the checkout transition before starting another run.' });
+            return;
+          }
+          workingDirectory = cursorRow?.working_directory;
+          parsed.options = { ...parsed.options, checkoutExecutionRevision: cursorRow?.executionLocation?.revision };
+        }
+      }
+    } catch (error) {
+      revertStreamingLock();
+      httpLogger.error('Failed to read execution location', error instanceof Error ? error : new Error(String(error)), { sessionId });
+      sendJson(res, 503, { error: 'Could not verify the session execution location.' });
+      return;
+    }
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
     // Plan 506 — see `resolveBotProviderConfigFallback` above.

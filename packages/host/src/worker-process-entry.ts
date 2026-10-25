@@ -1609,6 +1609,21 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         agent.journal = undefined;
     }
     await agent.waitForMcpReady(3000);
+    let savedCheckoutRevision = 0;
+    try {
+        const row = (msg.options?.wakeless === true ? undefined : await sessionDb.get(msg.sessionId)) as { executionLocation?: { revision?: number; pending?: unknown } } | undefined;
+        savedCheckoutRevision = row?.executionLocation?.revision ?? 0;
+    } catch (error) {
+        sendToMain({ type: 'chat:error', sessionId: msg.sessionId, message: `Cannot verify the saved execution location: ${error instanceof Error ? error.message : String(error)}` });
+        return;
+    }
+    if (savedCheckoutRevision > 0 || (msg.options && 'checkoutExecutionRevision' in msg.options && typeof msg.options.checkoutExecutionRevision === 'number')) {
+        try { await agent.restoreExecutionLocation(); }
+        catch (error) {
+            sendToMain({ type: 'chat:error', sessionId: msg.sessionId, message: error instanceof Error ? error.message : String(error) });
+            return;
+        }
+    }
     const workingDirectory = agent.readWorkingDirectory() ?? '';
     const { captureTurnReviewBaseline } = await import('./worker-session/turn-review.js');
     const turnReviewBaseline = captureTurnReviewBaseline(workingDirectory);

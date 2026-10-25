@@ -33,5 +33,6 @@ export function mapSystemCodingSlots(ctx: PromptContext): Record<string, unknown
     system_capability_hooks: matchesAny(enabled, CAPABILITY_PATTERNS.hooks),
     system_capability_permission: matchesAny(enabled, CAPABILITY_PATTERNS.permission),
     system_capability_compact: matchesAny(enabled, CAPABILITY_PATTERNS.compact),
+    system_capability_worktree: enabled.has('enter_worktree'),
   }
 }

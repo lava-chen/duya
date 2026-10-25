@@ -106,3 +106,4 @@ export type { LifecycleViolationCode } from './run-ledger.js';
 
 export type { FileAttachment } from './file-attachment.js';
 export type { CommunicationPlatform } from './communication-platform.js';
+export type { SessionCheckoutAttachment, SessionCheckoutCommand, SessionCheckoutJournal, SessionCheckoutState, SessionCheckoutResult, HostSessionCheckoutApiV1 } from './session-checkout.js';

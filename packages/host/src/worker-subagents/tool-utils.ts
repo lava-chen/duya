@@ -22,6 +22,10 @@ export const SUBAGENT_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
   MESSAGE_SESSION_TOOL_NAME,
   GET_TASK_OUTPUT_TOOL_NAME,
   KILL_TASK_TOOL_NAME,
+  // A task checkout is assigned by its parent and has a fixed terminal receipt.
+  'enter_worktree',
+  'exit_worktree',
+  'sync_worktree',
 ])
 
 export type ResolvedAgentTools = {

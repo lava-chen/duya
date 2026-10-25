@@ -262,6 +262,7 @@ export function createLegacyAssembleTurn(
     attachments?: readonly FileAttachment[],
 ): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
     return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
+        await handle.prepare?.();
         const messages = handle.projectTurnMessages();
         const assembly = handle.assemble({
             turn: input.turn,

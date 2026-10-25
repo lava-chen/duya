@@ -563,3 +563,51 @@ Node 24.19 / Linux；env：`DUYA_DATA_ROOT` / `DUYA_APP_DATA_PATH` 使用 `/work
 已交付：[draft PR #465](https://github.com/lava-chen/duya/pull/465)，依赖 [#460](https://github.com/lava-chen/duya/pull/460)，源码与产物 head 为 `f4854159`，本记录随交付文档提交；本轮源码无未提交改动。第三方依赖 overlay 为本地 untracked 配置，未进入 PR。
 远端：#460 的 `ac73b758` 已通过 architecture（包含修复后的退役引用门禁）与 test scope，类型、测试、构建继续运行；#465 刚创建，CI / review 待完成。两个 PR 均保留 draft，未合并、未发布、未回收。
 下一步：核对 #465 最新 head 的 CI / review，修复本 PR 引入的问题；P1b 接入 Host 持久化切换 journal、后台任务占用、主会话 enter/exit 工具，以及下一模型轮的 prompt / permission / skills / catalog 原子刷新。之后再接子会话隔离参数与三端共用入口。P1a 完成不代表 P1 主会话工具已完成。
+
+## P1b–P4 全量接续（2026-10-24）
+
+用户要求快速完成全部剩余范围。owner：Codex `/root`；分支 `codex/worktree-complete`；独立 worktree `/workspace/work/duya-worktree-complete`；base `edc90abe`（依赖 #460 / #465，两个 PR 最新 CI 已全绿，尚未合并）。Harness 无 workspace_get_context / managed worktree 工具，按 Git 与本计划对账并手工创建检出；依赖使用本检出的 overlay，禁止穿过链接安装。
+
+实现顺序与验收：
+
+- [x] Host 单一 checkout 控制服务：enter/name/path/base、exit/keep/remove、同步基线/冲突/abort；git 注册和 owner 文件仍为权限权威。
+- [x] SessionStore 原子更新执行位置与切换 journal，重启恢复；run admission 与切换互斥；后台 shell 和子任务占用时拒绝切换/回收，不自动杀任务。
+- [x] agent 的 enter_worktree / exit_worktree / sync_worktree 工具；控制调用交还自身执行占用，旧批次调用仍被 epoch 拦截；下一模型轮重建 cwd、AGENTS、skills、权限和 catalog。
+- [x] 子会话 use_worktree、source_branch、branch_name；子代理无改动安全清理、有成果保留完整回执。
+- [x] HTTP / Desktop 共用控制服务，TUI slash 与共享 UI 接入实际操作和当前执行位置展示。
+- [ ] 实际 Git、DB、worker 和 UI 链路验证；记录基线失败并比较；类型、架构、retirement、完整构建、产物新鲜度通过后 PR 交付。未经授权不合并。
+
+范围覆盖 Host / data / protocol / Runtime 控制端口、CLI / command-catalog、共享 UI 与 Desktop/Web 适配器；不改变既有 manifest 指纹：执行位置是显式的会话覆盖层，记录实际切换，不重写已经冻结的 run-start 事实。
+
+
+2026-10-25 接续验证：
+
+- 已实现协议、SQLite CAS/journal、Host 控制服务、主会话工具和下一模型轮刷新；Desktop/Web/TUI 共用控制路径，子会话支持隔离和独立分支，子代理保留清理回执。默认从本地 HEAD 创建；显式 `fresh` 使用本地 origin/HEAD，不隐式联网。
+- 实际 Git/DB 已覆盖脏源目录排除、保留修改、安全删除、run admission、重启恢复、子会话稳定目录、同步冲突和 owned-merge abort。主会话工具测试验证真实 WorkerSession 下一轮 AGENTS 与 cwd 刷新、旧批次写入拒绝。
+- 本地 Chromium + Playwright 已跑共享 UI → HTTP → 真实 Host → Git，验证创建、返回、重新进入、保留修改与清理空检出；环境没有 Playwright MCP，因此使用本地浏览器执行。可复现命令：`node node_modules/playwright/cli.js test --config=e2e/workspace/playwright.config.ts`（需 Node SQLite ABI 与已安装 Chromium）。
+- 架构检查无新增违规；retirement 引用 ratchet PASS（772/772），旧 agent 包整体退休仍为仓库既有 OPEN 状态，不属于本切片。
+- 当前基线 `edc90abe` + 本切片未提交文件；完整类型检查、Electron 构建、打包 worker 回环和相关回归继续执行，最终退出码与 PR 记录在后续接续项。未合并，保留本检出。
+
+
+### 2026-10-25 用户要求立即收尾并通过 PR 交接
+
+实现状态：P1b–P4 的代码已补齐；验收和集成尚未全部完成。独立分支 `codex/worktree-complete`，base `edc90abe5d32c4d478292ea866dc1ebde3312d05`，PR 目标为 `codex/worktree-p1`（依赖 #465 / #460）。最终交付提交为本段所在提交；不合并，不回收当前 worktree。只有本任务代码、测试、文档和新产物入库，node_modules overlay 不提交。
+
+已验证（Linux / Node 24，源码在本检出，最后一轮 dirty 范围为本 PR）：
+
+- `vitest run`：workspace、managed-shell、session-service、checkout-integration-http、CLI slash、worker-subagents、run-turn-provider-integration、turn-pipeline-producer，**34 文件 / 372 passed / 1 skipped**（既有跳过用例）；额外 `location-skills.test.ts` **1 passed**。新真实 worker 回环实际执行 enter → write → exit，并核对文件只落在隔离目录；实际技能加载器验证旧项目技能移除、新目录技能加载。
+- `node node_modules/playwright/cli.js test --config=e2e/workspace/playwright.config.ts`：**1 passed**，真实 Chromium / 共享组件 → HTTP → Host → Git，含创建、保留修改、重新进入、安全删除、同步冲突和 abort。它没有覆盖完整 Desktop IPC 或 Web BFF 外壳。
+- `npm run architecture:check` exit 0；`npm run check:test-coverage` exit 0；`npm run agent-retirement-gate` 引用 ratchet PASS（772/772，退休整体仍 OPEN）；`npm run electron:build` exit 0。已重新生成最终 worker 产物。
+- 全量 Host 209 文件第一次运行：1807 pass / 35 fail / 1 skip。其中 34 项与既有基线逐用例名称相符，均为 `/home/agent/.duya/test-namespaces/...` 的 ENOENT；额外 1 项是旧 assembly 调用次数断言，已更新并在上述 372 项回归中通过。
+- `npm run typecheck:all` 最后一轮仍在运行，**没有最终成功结论**。前一轮已定位并修正新增 router logger 参数错误；另一次 memory 声明找不到发生在并行 build 清理 dist 时。不要改 baseline 掩盖错误。
+- `npm run bundle:verify` 在提交前报告 38 个未提交输入，必须在交付提交后重跑；严格 `node scripts/check-packaged-artifacts.mjs --bundle` 仍命中既有 `ajv-formats/dist/formats` 模板扫描误报（evidence: no externals），同基线表现。本 PR 未扩充缺陷 baseline。
+
+给接手 agent 的执行顺序：
+
+1. 核对当前 PR head、依赖 #465/#460、同一计划和 `git status`；从本分支继续建自己的独立 worktree，避免改共享 `/workspace/duya`。本地依赖使用既有 overlay，不穿过链接 npm install。
+2. 优先查看当前 `typecheck:all` 的最终退出码和最新 PR CI。若仍在同一环境，日志为 `/workspace/work/duya-worktree-complete-typecheck.log`；否则从当前 PR head 重跑 `npm run typecheck:all`、`npm run architecture:check` 和提交后的 `npm run bundle:verify`，修复新增错误后推送。
+3. 补齐真实 Desktop IPC / Web BFF 外壳验收，尤其聊天轮切换、重启恢复、后台进程占用、子会话并行，以及所有控件操作。新 browser spec 只证明共享组件与真实 Host 链路。
+4. 评估严格打包扫描的既有 ajv 模板误报；需要修扫描器时修检测逻辑并加回归，禁止直接加 baseline。未知 PID 的进程 intent 当前保守保留，后续可增加有监督的恢复/解释入口，不能把未知当已退出。
+5. 等最新 head 的必需 review / CI 全绿后再请求集成授权。依赖顺序 #460 → #465 → 本 PR；未经用户明确授权不合并、不删除 worktree。
+
+可选后续增强（本 PR 不宣称已对齐）：非 Git 的 WorktreeCreate/Remove hooks、项目级默认基线设置、未知进程 intent 的自动对账、多个并行子代理的独立技能注册表。目前有后台子代理时主会话控制工具会拒绝切换，避免全局技能串目录。

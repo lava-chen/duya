@@ -254,6 +254,7 @@ export async function bindIsolatedWorktree(
 
 /** One session's checkout attachment, as stored under `sessions.extensions.checkout`. */
 export interface CheckoutRunRecord {
+  cleanup?: { removed: boolean; reason?: string };
   /** Linked worktree root (the identity the owner file lives in). */
   root: string;
   /** Working directory the session actually ran in (`root` + source subdir). */
@@ -290,7 +291,7 @@ export async function finalizeCheckoutRun(input: {
   sessionId: string;
   record: CheckoutRunRecord;
   outcome: CheckoutRunOutcome;
-}): Promise<void> {
+}): Promise<{ removed: boolean; reason?: string }> {
   const { sessionId, record, outcome } = input;
 
   if (outcome === 'completed') {
@@ -320,6 +321,16 @@ export async function finalizeCheckoutRun(input: {
     );
   }
 
+  let cleanup: { removed: boolean; reason?: string } = { removed: false, reason: 'results_retained' };
+  if (outcome === 'completed' && record.baseSha) {
+    try {
+      const head = (await gitOrNull(record.root, ['rev-parse', '--verify', 'HEAD']))?.trim();
+      const status = await gitOrNull(record.root, ['status', '--porcelain']);
+      if (head === record.baseSha && status !== null && !status.trim()) cleanup = await sessionDb.reclaimCheckout(record.root);
+    } catch { cleanup = { removed: false, reason: 'cleanup_unavailable' }; }
+  }
+  record.cleanup = cleanup;
+
   try {
     await sessionDb.setExtension(sessionId, 'checkout', {
       root: record.root,
@@ -328,6 +339,7 @@ export async function finalizeCheckoutRun(input: {
       enteredAt: record.enteredAt,
       leftAt: Date.now(),
       lastOutcome: outcome,
+      cleanup,
     });
   } catch (err) {
     logger.warn(
@@ -336,4 +348,5 @@ export async function finalizeCheckoutRun(input: {
       'SubAgent',
     );
   }
+  return cleanup;
 }

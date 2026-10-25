@@ -28,9 +28,10 @@ import { createHostCheckoutApi } from './checkout-api.js';
 import { createHostIntegrationApi } from './integration-api.js';
 import { observePr as observeIntegrationPr } from './scm/index.js';
 import { createIntegrationSync, type IntegrationSync } from './scm/sync.js';
-import { createAlivenessInputs } from './workspace/aliveness.js';
+import { createAlivenessInputs, cwdInsideRoot } from './workspace/aliveness.js';
 import { createCheckoutProvider, gitOrNull, inspectRegistration } from './workspace/index.js';
 import { canonicalPath } from './workspace/fs-utils.js';
+import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 
 /** A session, as far as the workspace namespaces care. */
 export interface WorkspaceLifecycleSession {
@@ -50,6 +51,7 @@ export interface WorkspaceLifecycleRunSource {
 }
 
 export interface HostWorkspaceLifecycleApiOptions {
+  readonly dataRoot?: string;
   readonly sessions: WorkspaceLifecycleSessionSource;
   readonly runs: WorkspaceLifecycleRunSource;
   readonly integrations: IntegrationStore;
@@ -70,8 +72,8 @@ export function createHostWorkspaceLifecycleApis(
   const checkoutApi = createHostCheckoutApi({
     // A's provider IS the observation port structurally, so the wiring is one
     // object literal — no adapter, no second implementation of §4.5.
-    port: createCheckoutProvider(
-      createAlivenessInputs({
+    port: createCheckoutProvider({
+      ...createAlivenessInputs({
         listRunsBySession: (sessionId, limit) => runs.listRunsBySession(sessionId, limit ?? 50),
         listRunningRunCwds: async () => {
           // A `running` run is by construction the session's NEWEST run, so
@@ -87,7 +89,9 @@ export function createHostWorkspaceLifecycleApis(
           return cwds;
         },
       }),
-    ),
+      cwdInUse: async (root) => hasBackgroundCheckoutLease(root, options.dataRoot) || sessions.list().some((session) =>
+        runs.listRunsBySession(session.id, 1)[0]?.status === 'running' && cwdInsideRoot(root, session.workingDirectory)),
+    }),
     resolveSessionCheckoutRoot: async (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session || session.workingDirectory === '') return null;

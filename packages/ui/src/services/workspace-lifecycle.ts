@@ -60,6 +60,7 @@ import type {
  */
 export interface WorkspaceLifecyclePort {
   readonly checkouts: {
+    control?: (sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand) => Promise<import('@duya/agent-protocol').SessionCheckoutResult>;
     /** The checkout the given session sits in, and whether it may write there. */
     observeForSession(sessionId: SessionId): Promise<HostSessionCheckoutView>;
     /** One checkout by root path. */

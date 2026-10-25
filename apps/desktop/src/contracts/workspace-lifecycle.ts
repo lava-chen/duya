@@ -31,6 +31,7 @@ export type WorkspaceLifecycleReclaimResult =
 
 /** The checkout half of the bridge: observation and the one delete request. */
 export interface WorkspaceLifecycleCheckoutAPI {
+  control?: (sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand) => Promise<import('@duya/agent-protocol').SessionCheckoutResult>;
   /** The checkout the session sits in, and whether it owns it. */
   observeForSession: (sessionId: string) => Promise<HostSessionCheckoutView>;
   /** One checkout by root path. */

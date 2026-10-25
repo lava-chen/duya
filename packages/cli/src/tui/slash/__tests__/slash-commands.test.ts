@@ -250,6 +250,7 @@ describe('slash registry', () => {
       'stop',
       'thinking',
       'transcript',
+      'worktree',
     ]);
   });
 

@@ -746,6 +746,7 @@ export class WorkerSubagentService<
         // `subagent:kill` worker command) abort, and `runAgent` listens on it.
         const taskAbortController = new AbortController();
         const record = backgroundAgentLifecycle.register({
+          ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
           taskId,
           parentSessionId: parentSessionId ?? '',
           subAgentSessionId,
@@ -801,6 +802,7 @@ export class WorkerSubagentService<
           background: true,
           ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
           ...(usesWorktree ? { isolation: 'worktree' as const } : {}),
+          ...(checkoutEntry?.cleanup ? { checkoutCleanup: checkoutEntry.cleanup } : {}),
           ...(warnings.length ? { warnings } : {}),
         });
         if (parentSessionId) {
@@ -1036,6 +1038,7 @@ export class WorkerSubagentService<
           ...(usage ? { usage } : {}),
           ...(childWorkingDirectory ? { workingDirectory: childWorkingDirectory } : {}),
           ...(usesWorktree ? { isolation: 'worktree' as const } : {}),
+          ...(checkoutEntry?.cleanup ? { checkoutCleanup: checkoutEntry.cleanup } : {}),
           ...(warnings.length ? { warnings } : {}),
           ...(runFailed ? { error: String(resultMetadata.agentError) } : {}),
         }),

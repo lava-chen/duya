@@ -151,6 +151,7 @@ export interface AttemptFencedRunStore extends RunRepository {
 }
 
 export interface HostRunExecutionControllerOptions {
+  readonly checkoutService?: import('./workspace/session-checkout-service.js').SessionCheckoutService;
   /** The ONE durable run ledger; shared with the Host Run API (no second store). */
   readonly runs: AttemptFencedRunStore;
   /** Resolves a session's turn defaults; `null` means the session does not exist. */
@@ -313,6 +314,19 @@ export class HostRunExecutionController {
   }
 
   async startAgentRun(input: StartAgentRunInput, caller?: SessionServiceCaller): Promise<StartAgentRunResult> {
+    let release: (() => void) | undefined;
+    try {
+      release = this.#options.checkoutService?.reserveRun(input.sessionId);
+      return await this.#startAgentRunReserved(input, caller);
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && String(error.code).startsWith('checkout_')) {
+        return { accepted: false, stage: 'refused_run_open_failed', reason: error instanceof Error ? error.message : String(error) };
+      }
+      throw error;
+    } finally { release?.(); }
+  }
+
+  async #startAgentRunReserved(input: StartAgentRunInput, caller?: SessionServiceCaller): Promise<StartAgentRunResult> {
     if (caller) this.validateSessionCaller(caller);
     const sessionId = input.sessionId;
     const defaults = await this.#options.sessionDefaults(sessionId);
@@ -423,7 +437,7 @@ export class HostRunExecutionController {
     const intent: RunTurnIntent = {
       ...(caller === undefined ? {} : { parentRunId: caller.runId }),
       ...(effectiveMaxTurns === undefined ? {} : { maxTurns: effectiveMaxTurns }),
-      ...(input.workingDirectory === undefined
+      ...(input.workingDirectory === undefined || (this.#options.checkoutService?.read(sessionId).revision ?? 0) > 0
         ? { workingDirectory: defaults.workingDirectory }
         : { workingDirectory: input.workingDirectory }),
       ...(input.model !== undefined
@@ -465,7 +479,9 @@ export class HostRunExecutionController {
       prompt: input.prompt,
       // The bag the Host hands on: the adjudicated keys are gone, and the
       // resolved values are in them.
-      options: overrides.options,
+      options: { ...overrides.options,
+        ...((this.#options.checkoutService?.read(sessionId).revision ?? 0) > 0
+          ? { checkoutExecutionRevision: this.#options.checkoutService!.read(sessionId).revision } : {}) },
     };
 
     if (caller) this.#delegationBySession.set(sessionId, caller);

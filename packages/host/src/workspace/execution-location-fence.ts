@@ -22,6 +22,7 @@ export interface ExecutionLocationDenial {
 export interface ExecutionLocationLease {
   readonly ok: true;
   release(): void;
+  beginSwitch?(): ExecutionLocationSwitch;
 }
 
 /** Process-local capability. Never serialize this into a manifest or tool input. */
@@ -62,6 +63,13 @@ export class ExecutionLocationFence {
         let released = false;
         return {
           ok: true,
+          beginSwitch: () => {
+            if (released || revision !== this.revision) throw new ExecutionLocationError('stale_execution_context', 'This control invocation no longer owns its execution context.');
+            if (this.active !== 1) throw new ExecutionLocationError('execution_context_busy', 'Other tools are still executing in this context.');
+            released = true;
+            this.active -= 1;
+            return this.beginSwitch(revision);
+          },
           release: () => {
             if (released) return;
             released = true;

@@ -115,6 +115,7 @@ export function createElectronWorkspaceLifecyclePort(): PartialWorkspaceLifecycl
   if (!api) return {};
   return {
     checkouts: {
+      ...(api.checkouts.control ? { control: api.checkouts.control } : {}),
       observeForSession: (sessionId) => api.checkouts.observeForSession(sessionId),
       observeCheckout: (root) => api.checkouts.observeCheckout(root),
       requestReclaim: (root) => api.checkouts.requestReclaim(root),

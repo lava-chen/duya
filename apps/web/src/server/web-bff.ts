@@ -316,6 +316,14 @@ async function routeRequest(context: RequestContext): Promise<void> {
       return;
     }
 
+    if (request.method === 'POST' && requestUrl.pathname === '/api/checkouts/control') {
+      const body = await readJsonBody(request);
+      if (!isRecord(body) || !isBoundedString(body.sessionId, 1, 256) || !isRecord(body.command)) {
+        sendJson(response, 400, { error: { code: 'invalid_checkout_command' } }); return;
+      }
+      const result = await context.client.controlSessionCheckout(body.sessionId, body.command as unknown as import('@duya/agent-protocol').SessionCheckoutCommand);
+      sendJson(response, 200, { result }); return;
+    }
     if (request.method === 'POST' && requestUrl.pathname === '/api/checkouts/reclaim') {
       const body = await readJsonBody(request);
       if (!isReclaimInput(body)) {

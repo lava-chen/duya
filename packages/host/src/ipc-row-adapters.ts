@@ -64,6 +64,7 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     agent_type: session.agentType,
     agent_name: session.agentName,
     ...(ext.checkout === undefined ? {} : { checkout: ext.checkout }),
+    ...(ext.executionLocation === undefined ? {} : { executionLocation: ext.executionLocation }),
     plan_mode_enabled: ext.plan_mode_enabled ?? 0,
     goal_mode_enabled: ext.goal_mode_enabled ?? 0,
     draft_message: session.draft ?? '',

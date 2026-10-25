@@ -25,6 +25,9 @@ export interface BashTaskProgress {
 }
 
 export interface BashBackgroundTask {
+  workingDirectory?: string;
+  sessionId?: string;
+  checkoutLeaseId?: string;
   id: string;
   pid: number;
   outputFile: string;

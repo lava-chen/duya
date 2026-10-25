@@ -641,6 +641,11 @@ export async function chatTui(
   if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
 
   let activeSession = initialSession;
+  const executionCwd = (): string => {
+    const cursor = activeSession.extensions?.executionLocation;
+    return cursor !== null && typeof cursor === 'object' && 'cwd' in cursor && typeof cursor.cwd === 'string'
+      ? cursor.cwd : process.cwd();
+  };
   /**
    * Reasoning effort for subsequent runs, or null for "let the model decide".
    *
@@ -708,7 +713,15 @@ export async function chatTui(
   // `@` offers workspace paths. The walk is cached briefly rather than for the
   // session — see `createFileCompletionSource` — because a chat session lives
   // long enough for the tree to change under it.
-  const fileCandidates = createFileCompletionSource(path.resolve(process.cwd()));
+  let completionCwd = executionCwd();
+  let completionFiles = createFileCompletionSource(path.resolve(completionCwd));
+  const fileCandidates: typeof completionFiles = {
+    list: () => {
+      if (completionCwd !== executionCwd()) { completionCwd = executionCwd(); completionFiles = createFileCompletionSource(path.resolve(completionCwd)); }
+      return completionFiles.list();
+    },
+    invalidate: () => completionFiles.invalidate(),
+  };
   const completionSources: CompletionSources = {
     slash: () => [...sessionSlashRows(), ...buildSlashCompletionRows({ locale })],
     slashOptions: (command) => command === '/resume' || command === '/sessions' ? sessionRows : [],
@@ -799,7 +812,7 @@ export async function chatTui(
     queuedCount: () => queue.snapshot.pending.length,
     queuePaused: () => queue.snapshot.paused,
     onRecallQueued: () => queue.takeLast(),
-    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)}`,
+    statusText: () => `${activeSession.providerId} · ${activeSession.model || options.model || 'default'} · ${activeSession.id.slice(0, 8)} · ${executionCwd()}`,
     // The footer's right-hand column. Same facts as the status text above, but
     // split so the model can be right-aligned against the token counters
     // instead of sharing one crowded row with them.
@@ -1035,7 +1048,7 @@ export async function chatTui(
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
         ...(effort !== null ? { effort } : {}),
-        workingDirectory: process.cwd(),
+        workingDirectory: executionCwd(),
       });
       if (!start.accepted) {
         if (cancellationRequested || finished) return 'cancelled';
@@ -1115,6 +1128,12 @@ export async function chatTui(
       }
       if (cancellationRequested || finished) return 'cancelled';
       const record = await client.getAgentRun(start.runId);
+      // Tools may have moved the session while this run was streaming.
+      // Refresh only this session's display/completion cache before the next prompt.
+      if (activeSession.id === runSessionId) {
+        try { const refreshed = await client.get(runSessionId); if (refreshed) activeSession = refreshed; }
+        catch { /* The next /worktree status can refresh a disconnected client. */ }
+      }
       if (record === null) {
         tui.printError('Run stream closed without a settled record. Pending drafts are paused.');
         return 'failed';

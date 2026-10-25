@@ -474,6 +474,17 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // workspace-lifecycle panel, not as a composer command, so advertising
     // it there without a Desktop executor would be the advertised-but-
     // unrunnable state the catalog's integrity tests forbid.
+    name: 'worktree',
+    label: 'Worktree controls',
+    labelZh: 'Worktree 操作',
+    description: 'Create, enter, leave, synchronize or recover this session checkout',
+    descriptionZh: '创建、进入、退出、同步或恢复当前会话的工作副本',
+    category: 'session',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: false,
+  },
+  {
     name: 'checkout',
     label: 'Checkout status',
     labelZh: '工作副本状态',

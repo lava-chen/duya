@@ -1897,6 +1897,24 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 - Entry: `packages/host/bundle/worker-entry.js`
 - Production: `resources/harness-bundle/worker-entry.js`
 
+### Session checkout controls
+
+`SessionCheckoutService` in Host owns enter, exit, recovery and base synchronization.
+Tools, local HTTP, Desktop IPC, TUI and shared UI call this service. SessionStore
+commits the execution directory, checkout attachment and operation journal in one
+revision-checked write; the logical workspace binding remains stable. Run admission
+reserves the session before asynchronous startup, while worker tools hold execution
+leases. A control tool exchanges its own lease for a switch barrier. Subsequent model
+rounds rebuild directory-scoped instructions, skills, permissions and tool catalogs;
+previously assembled calls retain their old revision and are refused.
+
+Shell workers and background subagents write separate process intents before dispatch.
+Checkout switching and reclamation consult these records as well as the run ledger.
+Unknown process state retains the checkout. Exit checkpoints committed HEAD, returns
+the cursor and releases ownership before requesting guarded reclamation. Sync records
+its merge commit identity, reports conflicts, and refuses to abort another merge.
+The immutable run-start manifest is not rewritten when the execution directory changes.
+
 ### Host Worker Bundle (`packages/host/bundle/` — tracked, verified)
 
 **Decision (plan 610 T03): keep it tracked, and gate it.** The alternative —

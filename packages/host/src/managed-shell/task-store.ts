@@ -31,6 +31,9 @@ const STORE_FILENAME = 'bash-tasks.json';
 const DEFAULT_TASK_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h
 
 interface PersistedTask {
+  workingDirectory?: string;
+  sessionId?: string;
+  checkoutLeaseId?: string;
   id: string;
   pid: number;
   outputFile: string;
@@ -57,6 +60,9 @@ interface PersistedSnapshot {
  */
 function toPersisted(task: BashBackgroundTask): PersistedTask {
   return {
+    ...(task.workingDirectory ? { workingDirectory: task.workingDirectory } : {}),
+    ...(task.sessionId ? { sessionId: task.sessionId } : {}),
+    ...(task.checkoutLeaseId ? { checkoutLeaseId: task.checkoutLeaseId } : {}),
     id: task.id,
     pid: task.pid,
     outputFile: task.outputFile,
@@ -74,6 +80,9 @@ function toPersisted(task: BashBackgroundTask): PersistedTask {
 
 function fromPersisted(record: PersistedTask): BashBackgroundTask {
   return {
+    ...(record.workingDirectory ? { workingDirectory: record.workingDirectory } : {}),
+    ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+    ...(record.checkoutLeaseId ? { checkoutLeaseId: record.checkoutLeaseId } : {}),
     id: record.id,
     pid: record.pid,
     outputFile: record.outputFile,

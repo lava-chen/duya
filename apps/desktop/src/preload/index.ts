@@ -2602,6 +2602,8 @@ const electronAPI: ElectronAPI = {
   // for the one reclaim request, and every answer is the Host's own DTO.
   workspaceLifecycle: {
     checkouts: {
+      control: (sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand) =>
+        ipcRenderer.invoke('workspace-lifecycle:checkout:control', sessionId, command),
       observeForSession: (sessionId: string) =>
         ipcRenderer.invoke('workspace-lifecycle:checkout:observe-for-session', sessionId),
       observeCheckout: (root: string) =>

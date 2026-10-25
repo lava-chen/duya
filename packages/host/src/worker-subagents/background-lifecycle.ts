@@ -14,8 +14,10 @@ import {
 import { parseModelVerdict } from './task-verification.js'
 import { sendBackgroundNotification } from '../worker-context/background-notification.js'
 import { finalizeCheckoutRun, type CheckoutRunRecord } from './worktree.js'
+import { reserveCheckoutTask, bindCheckoutTaskPid, releaseCheckoutTask } from '../workspace/task-leases.js'
 
 export interface RegisterInput {
+  workingDirectory?: string
   taskId: string
   parentSessionId: string
   subAgentSessionId: string
@@ -61,6 +63,12 @@ function isKillableStatus(status: TaskStatus): boolean {
 }
 
 export class BackgroundAgentLifecycle {
+  private processLeases = new Map<string, string>()
+  hasActiveExecutions(): boolean { return this.processLeases.size > 0 }
+  private releaseProcessLease(taskId: string): void {
+    const lease = this.processLeases.get(taskId)
+    if (lease) { releaseCheckoutTask(lease); this.processLeases.delete(taskId) }
+  }
   private tasks = new Map<string, TaskRecord>()
   private drained = new Set<string>()
   /** Checkout attachment per task, set at register and consumed by the
@@ -114,6 +122,11 @@ export class BackgroundAgentLifecycle {
   register(input: RegisterInput): TaskRecord {
     if (this.tasks.has(input.taskId)) {
       throw new Error(`BackgroundAgentLifecycle: duplicate taskId ${input.taskId}`)
+    }
+    if (input.workingDirectory) {
+      const lease = reserveCheckoutTask({ taskId: input.taskId, cwd: input.workingDirectory, sessionId: input.subAgentSessionId })
+      bindCheckoutTaskPid(lease, process.pid)
+      this.processLeases.set(input.taskId, lease)
     }
     // Prune expired drained records here too: if the last task drained and no
     // new task is ever drained again, lazy pruning in markDrained would leave
@@ -326,15 +339,18 @@ export class BackgroundAgentLifecycle {
    * finished task into an unhandled rejection.
    */
   private async finalizeCheckout(taskId: string, outcome: 'completed' | 'failed' | 'cancelled'): Promise<void> {
+    this.releaseProcessLease(taskId)
     const checkout = this.checkouts.get(taskId)
     if (!checkout) return
     const record = this.tasks.get(taskId)
     if (!record) return
-    await finalizeCheckoutRun({
+    const cleanup = await finalizeCheckoutRun({
       sessionId: record.subAgentSessionId,
       record: checkout,
       outcome,
     })
+    try { await OutputFileWriter.append(record.outputFilePath, { type: 'checkout_receipt', root: checkout.root, baseSha: checkout.baseSha, cleanup }) }
+    catch (error) { logger.warn('[SubAgent] failed to append checkout receipt', { taskId, error }, 'SubAgent') }
   }
 
   getAll(): TaskRecord[] {
@@ -436,6 +452,7 @@ export class BackgroundAgentLifecycle {
         await this.enqueueTaskNotification(taskId, 'failed', { error: message })
       }
     } finally {
+      this.releaseProcessLease(taskId)
       try { await OutputFileWriter.close(r.outputFilePath) } catch { /* ignore */ }
       for (const cb of r.subscribers) cb(r)
     }
@@ -475,6 +492,8 @@ export class BackgroundAgentLifecycle {
       }, 'SubAgent')
       return
     }
+    const checkout = this.checkouts.get(taskId)
+    const receipt = checkout ? `\nCheckout: ${checkout.root}; base: ${checkout.baseSha || 'unknown'}; ${checkout.cleanup?.removed ? 'unchanged checkout removed' : `retained (${checkout.cleanup?.reason ?? 'results_retained'})`}.` : ''
     const input: BuildTaskNotificationInput = {
       taskId,
       status,
@@ -482,7 +501,7 @@ export class BackgroundAgentLifecycle {
       agentName: r.agentName,
       description: r.description,
       outputFilePath: r.outputFilePath,
-      ...(extras.finalMessage === undefined ? {} : { finalMessage: extras.finalMessage }),
+      ...(extras.finalMessage === undefined && !receipt ? {} : { finalMessage: `${extras.finalMessage ?? ''}${receipt}` }),
       ...(extras.totalToolUseCount === undefined ? {} : { totalToolUseCount: extras.totalToolUseCount }),
       ...(extras.totalDurationMs === undefined ? {} : { totalDurationMs: extras.totalDurationMs }),
       ...(extras.error === undefined ? {} : { error: extras.error }),
