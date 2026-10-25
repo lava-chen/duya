@@ -133,6 +133,22 @@
 | 投递 | desktop `channels/__tests__/`（delivery / telegram connector+offset / inbound-filter / secret-store 等） | 9 文件 117 用例 |
 | bot 专属桌面面 | ipc `bot-channel-handlers` / config `bot-profile`+`bot-identity-rpc` / cli `bot-channels` / agents router `provider-fallback` | 5 文件 46 用例 |
 
+## S1 执行记录（2026-10-25）
+
+已实现、已验证、未合并。分支 `codex/bot-framework-s1`（base＝S0 分支 `codex/bot-framework-s0` @ `e13da4aa`，PR 目标 S0 分支，栈式 review）。
+
+**交付（S1 = Host Bot 接口，1 个窄 PR）**
+
+- `@duya/agent-protocol/bot-api`：Bot 身份的 wire DTO——`BotRecord`（canonical 视图：profile.json 优先、config 兜底、id 最后）、`CreateBotCommand`（带 `requestId` 幂等）、`UpdateBotCommand`（带 `expectedRevision`）、`BotCommandReceipt`（形状兼容 legacy `{id,name}`）、`BotErrorCode` 四值联合。只放身份：调度 / inbox / 投递的 DTO 属于 S3/S4，wire 不承诺未实现的行为。
+- `config.toml` schema 增加 `revision` 字段：facade 创建=1、每次 facade 更新 +1；0=前 facade 时代条目。facade 是唯一 revision 权威。
+- `host/src/bot/`：`ports.ts`（ConfigStore/Profile 两个端口，Host 文件后端与 Desktop store 后端各一套适配器）、`journal.ts`（`<agentsRoot>/.identity-journal.jsonl` 追加式意图账本：create/update 意图先行，applied 标记收尾，requestId→receipt 去重跨进程存活，损坏尾行计数不炸加载）、`service.ts`（应用服务：create/update/get/list/repair；revision 冲突以 `bot_revision_conflict` 结构化拒绝并携带 stored/expected；update 一个意图覆盖 config + profile 两处身份写入，repair 同步补齐）、`bridge-assembly.ts`（bridge 惰性单例，首分发执行 repair）。
+- 接线：`worker-db-bridge` 的 legacy `config:agents:create/update` 改走 service（响应形状不变），新增 `bot:create/update/get/list` 四动作；Desktop `db-bridge` 同构（store 后端适配器 `bot-application.ts`）。Desktop 与 TUI 从此共用同一套 create/update/read 语义。
+- 未新增第二调度器：Desktop wake dispatcher 仍是唯一调度 owner（S3 前置合同）。
+
+**测试（22 例新增，全绿）**：service 14（canonical 视图合并、revision 冲突结构化拒绝、requestId 去重同进程+跨进程、崩溃窗口 repair 四态：create 补齐/确认已应用/冲突保留/torn tail 计数、软删过滤、内存端口同用例）+ bridge 8（legacy 形状回归 + bot:* 全契约）。
+
+**过程中的实证教训**（已写进代码）：journal 意图行初版漏写 `v` 字段，被自己的加载守卫判为 corrupt，dedup/repair 全部静默失效——由测试暴露后修复 writer 而非放松 guard。Windows 瞬时文件锁的处理延续 S0 的 readImports 重试约定。
+
 ## 关键决策
 
 - 本次 master 从 `2baa95df` fetch 到 `270ba528`，master pull --ff-only 成功；原 `work` 分支保留。最新 tree 与旧会话时间点明显不同，全部迁移定位以最新源码为准。
@@ -164,6 +180,10 @@
 | `24590d10` 首推 | ubuntu 22.x CI | architecture job | 1；agent-retirement reference ratchet FAIL：773/772，测试断言字符串字面量新增 1 条退役层引用（`bot-boundary-gate.test.ts:333`） | ratchet 只减不增，禁 bump baseline；修法=断言去退役路径字面量，改钉结构性事实（成员/消费方数下限+desktop 接线），退役层身份由 census 输出与计划文档承载 |
 | `c8946122`（ratchet 修复后 head） | win32 本地 | `node scripts/architecture/agent-retirement-gate.mjs`（pipefail 取真实退出码） | 0；ratchet PASS 772/772 / 0 new | 本地与门禁+retirement 测试 24 例全绿 |
 | `c8946122` | ubuntu 22.x CI（PR #495） | architecture / build / typecheck / test / test scope 五检查 | 全 pass；test 8m33s 含新测试文件在 Linux 首跑 | CI 结论覆盖本机验证；PR 待 review 与集成授权 |
+| S1 全量（host src/bot + protocol bot-api + 两 bridge + schema revision） | win32 / Node 24.16.0 / Vitest 3.2.4 | `npx vitest run packages/host/tests/ --no-file-parallelism` | 0；1984 passed / 5 skipped（含 S1 新增 22 例与既有 identity/prompt 基线） | host 全域回归 |
+| 同上 | 同上 | `npm run build:packages` / `npm run typecheck:all` | 0 / 0 | workspace 全构建与类型门禁 |
+| 同上 | 同上 | apps/desktop tsconfig.main tsc --noEmit | 206 errors＝base 基线逐条持平，本次 0 新增 | desktop main 预存错误按文件归因（base 对照） |
+| 同上 | 同上 | `npm run architecture:check` / bot-boundary gate / agent-retirement ratchet | 0 / PASS（R3 652） / PASS 772/772 | 三门禁全绿；2 条既有 fingerprint 失效未顺手 shrink |
 
 ## 接续 / 结果
 
@@ -173,3 +193,5 @@ PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI�
 回收：保留 worktree 与分支，等待设计 review / PR 集成，不执行删除。
 
 **S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
+
+**S1 切片接续（2026-10-25 第三会话）**：Host Bot 接口已落地（见「S1 执行记录」），分支 `codex/bot-framework-s1`（栈式 base＝S0 head，PR 目标 S0 分支）。S1 验收——Desktop/TUI 同一 Bot 语义、revision 冲突结构化拒绝、requestId 跨进程去重、身份 journal 崩溃修复——已由 22 例具名测试满足；两 bridge legacy 形状回归全绿。**下一步**：S2 提取 `packages/bot` 领域包（domain/application/ports 下沉、host adapter、workspace/build/gates 接线、bot-boundary gate R1 由 pending 翻为 measured），前置＝S1 PR 集成或与 S0 同栈评审。
