@@ -61,4 +61,15 @@
 
 ## 接续 / 结果
 
-（进行中）下一步：S2 协议+Host 投影扩展。
+已实现并验证（见验证记录），交付状态：**draft PR 等待 review / CI / 真机冒烟**。
+
+- 分支 `codex/tui-plugin-slash-mention`（4 commits，head `7dedabd9`→docs 收尾后以实际为准），PR：https://github.com/lava-chen/duya/pull/497（draft，base master）
+- 提交切分：①host 清单投影 ②mention 改写下沉 input-completion ③TUI 交互列表 + @ mention ④计划文档
+- 未提交路径：无（`packages/capabilities/src/ModuleTool/inline-content.ts` 仅有 CRLF checkout 噪声、无内容差异，不属本任务，未动）
+- 副作用：无（构建产物均在 worktree 内；`build:packages` 重建了 worktree 的 dist，属本检出产物）
+- 阻塞/待办：真机冒烟——`npm run build:cli-dev` 后 `npm run dev:tui`：
+  1. `/plugin` `/apps` `/skills` `/mcp`：↑↓ 选中、Enter 进详情、Esc 返回且停原行；
+  2. `@` 弹出插件行（Host 有插件时），接受 `@<id>` 提交后 Host 日志出现 `Plugin activation: <id>`，转写中 prompt 为 `[@Name](plugin://id)` 而用户气泡为原文。
+- 下一条动作：用户真机冒烟通过 → 转 ready 交 review/CI；发现交互问题回到 S4/S5 修复。
+回收：不回收——PR 未集成，worktree 与分支按指南保留。
+下一步：等待真机冒烟结果；集成须获用户授权后由集成者核对必需 review/CI。
