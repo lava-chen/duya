@@ -295,6 +295,14 @@
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
     },
+    "./agents-md": {
+      "types": "./dist/agents-md/index.d.ts",
+      "import": "./dist/agents-md/index.js"
+    },
+    "./agents-md/*": {
+      "types": "./dist/agents-md/*.d.ts",
+      "import": "./dist/agents-md/*.js"
+    },
     "./config-agents": {
       "types": "./dist/config-agents/index.d.ts",
       "import": "./dist/config-agents/index.js"
