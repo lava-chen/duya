@@ -44,16 +44,15 @@ test('expanded side panel keeps the floating composer and integrated project tre
     }));
     window.localStorage.setItem(`duya:panel:v2:${threadId}`, JSON.stringify({
       tabs: [{
-        id: 'preview-tab',
-        pageId: 'preview',
+        id: 'workspace-tab',
+        pageId: 'workspace',
         title: 'preview.md',
         params: { filePath, workingDirectory: projectDir },
       }],
-      activeTabId: 'preview-tab',
+      activeTabId: 'workspace-tab',
       panelOpen: true,
       panelView: 'content',
       workspaceExpanded: true,
-      workspaceTreeOpen: true,
     }));
   }, { threadId, projectDir, filePath });
 
@@ -63,8 +62,8 @@ test('expanded side panel keeps the floating composer and integrated project tre
   await expect(workspace).toBeVisible({ timeout: 30_000 });
   await expect(workspace.getByText('Preview workspace')).toBeVisible();
   await expect(app.page.locator('.workspace-floating-composer')).toBeVisible();
-  await expect(workspace.locator('.panel-file-detail')).toBeVisible();
-  await expect(workspace.locator('.panel-file-tree')).toBeVisible();
+  await expect(workspace.locator('.fw-main')).toBeVisible();
+  await expect(workspace.locator('.fw-sidebar')).toBeVisible();
 
   const outputDir = path.resolve(__dirname, '..', '..', 'output', 'playwright');
   fs.mkdirSync(outputDir, { recursive: true });
@@ -73,12 +72,10 @@ test('expanded side panel keeps the floating composer and integrated project tre
     fullPage: false,
   });
 
-  // `file-tree-toggle` exists twice by design: once in the file-preview
-  // header and once inside the tree panel itself (both flip the same
-  // `workspaceTreeOpen` flag). Scope to the header button, which stays
-  // mounted after the tree collapses.
-  await workspace.locator('.file-preview-actions').getByTestId('file-tree-toggle').click();
-  await expect(workspace.locator('.panel-file-tree')).toHaveCount(0);
+  // The header's tree toggle flips the sidebar; the workspace panel owns both
+  // the file tree and the open-file tabs, so there is no second toggle.
+  await workspace.locator('.fw-head button[aria-pressed]').click();
+  await expect(workspace.locator('.fw-sidebar')).toHaveCount(0);
   await app.page.getByTestId('workspace-expand').click();
   await expect(app.page.locator('.panel-zone-expanded')).toHaveCount(0);
   await expect(app.page.locator('.panel-zone-open')).toBeVisible();
