@@ -166,7 +166,7 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: 63,
       },
     })[1] ?? '');
-    expect(row).toContain('⚡ 63.0 tok/s');
+    expect(row).toContain('63.0 tok/s');
   });
 
   it('keeps the three kinds of number as three groups', () => {
@@ -183,7 +183,7 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: 63,
       },
     })[1] ?? '');
-    expect(row).toContain('↑49k ↓1.6k Σ51k · 5%/1.0M · ⚡ 63.0 tok/s');
+    expect(row).toContain('↑49k ↓1.6k Σ51k · 5%/1.0M · 63.0 tok/s');
   });
 
   it('colours the rate as the one live measurement on the row', () => {
@@ -197,14 +197,14 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: 63,
       },
     })[1] ?? '';
-    expect(row).toContain('{cyan-fg}⚡ 63.0 tok/s{/cyan-fg}');
+    expect(row).toContain('{cyan-fg}63.0 tok/s{/cyan-fg}');
     // The counters stay muted: colour means kind here, not emphasis.
     expect(row).toContain('{gray-fg}↑49k ↓1.6k Σ51k{/gray-fg}');
   });
 
   it('omits the rate entirely when the provider reported no duration', () => {
     // A missing duration is not a zero rate: it says "nobody measured this
-    // call", and showing `⚡ 0.0 tok/s` would be a measurement nobody made.
+    // call", and showing `0.0 tok/s` as a rate would be a measurement nobody made.
     const row = plain(footer()[1] ?? '');
     expect(row).not.toContain('tok/s');
   });

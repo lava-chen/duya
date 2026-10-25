@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
+import { useTranslation } from "@/hooks/useTranslation";
 
 /**
  * Which edge of the boundary the handle sits on.
@@ -54,6 +55,8 @@ export function ResizeHandle({
   onReset,
   label,
 }: ResizeHandleProps) {
+  const { t } = useTranslation();
+  const [dragging, setDragging] = useState(false);
   const isDragging = useRef(false);
   const startXRef = useRef(0);
   const startYRef = useRef(0);
@@ -79,6 +82,7 @@ export function ResizeHandle({
     (e: React.MouseEvent) => {
       e.preventDefault();
       isDragging.current = true;
+      setDragging(true);
       startXRef.current = e.clientX;
       startYRef.current = e.clientY;
       pendingDeltaRef.current = 0;
@@ -105,6 +109,7 @@ export function ResizeHandle({
     const handleMouseUp = () => {
       if (!isDragging.current) return;
       isDragging.current = false;
+      setDragging(false);
       if (frameRef.current !== null) {
         cancelAnimationFrame(frameRef.current);
         frameRef.current = null;
@@ -190,8 +195,10 @@ export function ResizeHandle({
       aria-valuemin={minWidth}
       aria-valuemax={typeof maxWidth === "number" ? Math.round(maxWidth) : undefined}
       tabIndex={onWidthRequest ? 0 : undefined}
+      data-resizing={dragging ? "true" : undefined}
     >
       <div className="resize-handle-bar" />
+      {dragging && <div className="resize-handle-badge">{t("panel.resizeBadge")}</div>}
     </div>
   );
 }

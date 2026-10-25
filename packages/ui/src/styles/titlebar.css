@@ -208,6 +208,7 @@
   flex-direction: column;
   flex: 0 0 auto;
   min-height: 0;
+  position: relative;
   background: color-mix(in srgb, var(--bg-canvas) 78%, transparent);
 }
 
