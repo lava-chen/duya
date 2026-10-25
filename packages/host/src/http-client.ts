@@ -231,6 +231,8 @@ import type {
   HostLocalAppConnectionApiV1,
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
+import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
+import type { HostSessionHandoffResult } from '@duya/agent-protocol/session-handoff';
 import type {
   HostPluginAppInstanceApiV1,
   HostPluginAppInstanceCreateInput,
@@ -1576,6 +1578,7 @@ export class HostSessionHttpClient implements
     return result.removed;
   }
 
+
   async createPluginAppInstance(input: HostPluginAppInstanceCreateInput): Promise<PluginAppInstanceRecord> {
     const result = await this.request<{ instance: PluginAppInstanceRecord }>(
       'POST', '/v1/local/plugin-app-instances', input,
@@ -1646,6 +1649,57 @@ export class HostSessionHttpClient implements
       '/v1/local/plugin-setup-values',
     );
     return result.values;
+  }
+
+  /**
+   * The plugin inventory this Host serves.
+   *
+   * The list is a PROJECTION of the Host's registry: identity, the user's
+   * intent, and whether the plugin's files are on disk. The manifest — which
+   * can carry MCP server credentials — and the install paths never cross
+   * this boundary.
+   *
+   * A Host that cannot serve the inventory refuses with 404
+   * `plugin_inventory_api_unavailable`, which reaches the caller as a
+   * `HostSessionHttpError` carrying that code. It is deliberately not an
+   * empty list: an empty list is the observed fact that no plugin is
+   * installed, and a refusal is the different fact that this Host cannot
+   * say.
+   *
+   * The answer is a WRAPPER object, the same shape the MCP and skill
+   * inventories answer with, so every inventory reads the same way.
+   */
+  async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
+    return this.request('GET', '/v1/local/plugins');
+  }
+
+  /**
+   * Ask the desktop app to take over this session.
+   *
+   * The two refusals are DOMAIN outcomes rather than transport failures, so
+   * they are returned instead of thrown and stay distinguishable:
+   * `session_handoff_unavailable` means this Host has no desktop app to
+   * hand the session to, and any other code means the desktop app was asked
+   * and refused. A transport failure still throws.
+   */
+  async openInDesktopApp(sessionId: string): Promise<HostSessionHandoffResult> {
+    try {
+      await this.request<{ ok: true }>('POST', '/v1/local/session-handoff', { sessionId });
+      return { ok: true };
+    } catch (error) {
+      if (!(error instanceof HostSessionHttpError)) throw error;
+      if (error.status === 404) {
+        return {
+          ok: false,
+          code: error.code,
+          message: 'This Host has no desktop app to hand the session to.',
+        };
+      }
+      if (error.status === 409) {
+        return { ok: false, code: error.code, message: error.message };
+      }
+      throw error;
+    }
   }
 
   async mergePluginSetupValues(pluginId: string, values: Record<string, string>): Promise<void> {
