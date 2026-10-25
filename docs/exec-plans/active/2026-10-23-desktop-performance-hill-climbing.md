@@ -505,6 +505,75 @@ BFF 每页上限 100，比 Desktop 的 200 更狠 → 同样 1 万条消息，**
 - **可测量的边界要自己划**：本轮四次修法里有三次「机制上说得通」但墙钟无差异。**How to apply**：机制假设必须配一个 A/B，否则不进主干。
 - **归因要用逐字节 sourcemap，不要用文件大小猜**：`npx vite build --sourcemap` 之后按 mapping 归因，才能知道入口 chunk 里 490 KB 是 xterm、260 KB 是 katex。
 
+## 第九轮：三条用户可感知的卡顿（会话切换 / 面板拖拽 / 发消息到首输出）
+
+第九轮的三条线全部来自**用户报告**，不是我们自己找的机会：切换会话加载慢、拖面板宽度卡、回车到 agent 开始输出之间有好几秒。方法学不变：先量后改，一条 journey 一个 PR，门禁数次数/字节而不是毫秒。
+
+### 先量「真实数据的体量」——它决定了 fixture 该长什么样
+
+用户 profile（`~/.duya`，只读统计）：**739 条会话 / 90 687 行 `message_index`**；平均 **11.3 KB/条**，最大会话 **2137 条 / 24 078 390 B**（tool 行平均 4681 B、最大 3.47 MB）。
+
+现有 fixture `perf/session-10000` 每行只有 **330 B**——比真实会话小 **34 倍**。用它测出来的切换耗时**不代表用户体感**：真实会话走的是「整读 24 MB → JSON 解析 → IPC 序列化 → 渲染器再解析」。
+
+本轮新增 `perf/session-2000-heavy`（2000 行 / **27.65 MB** / 平均 14.5 KB），形状对齐真实最大会话。既有三个 fixture 的 digest **逐字节未变**（`4d2459973ad0464c` / `cef99158fc1b9ed9` / `5dde675567b2bcf4`），历史数字仍可比。
+
+### PR-A：worker 不再每轮重建 agent，MCP 握手先于 drain
+
+**根因**（读码 + 用户自己的 worker 日志双向确认）：
+
+1. `router.ts:1325` **每一轮**都发 `init`；worker 收到就把 agent 销毁重建——重建要重扫工具目录、重扫 skill、重读整段历史、重做一次 MCP 握手。
+2. `worker-process-entry.ts` 里 MCP 初始化 IIFE 排在 `drainQueuedChatStart()` **之后**，而 `handleChatStart` 第一步是 `await agent.waitForMcpReady(3000)` → **必然等满 3 秒**。用户自己的 `~/.duya/logs/agent/*.log` 里每轮都有一行 `MCP ready timeout after 3000ms`。
+
+**改法**：同配置不再重建 agent（`packages/host/src/worker-init-fingerprint.ts`：对塑造 agent 的字段做规范化指纹，key 排序无关）；MCP 握手在 drain 之前启动。
+
+**实测**（生产 Electron + loopback provider，外部测量锁，同会话连发两轮）：
+
+| | turn1 提交→provider | turn2 提交→provider |
+| --- | --- | --- |
+| 改前 | 3750 / 4089 / 3718 ms | 3435 / 3585 / 3494 ms |
+| 改后 | 4071 / 3764 / 4072 / 3715 / 3946 / 3916 ms | **1500 / 1526 / 3596 / 1574 / 1156 / 1267 ms** |
+
+turn2 六个样本里五个从 ~3.5 s 降到 ~1.2–1.6 s。那个 3596 ms 的慢样本的根因也查到了：**MCP 握手跨过了两轮**（日志里出现两次 `MCP ready timeout after 3000ms`，而 MCP 真正连接失败在第三次超时之后），第二轮又等满 3 秒。
+
+**门禁**（`packages/host/tests/worker-init-fingerprint.test.ts`，22 用例）：指纹判等（模型/供应商/key/baseURL/工作目录/系统提示/语言/平台/权限规则/项目/skill 路径/三个开关任一变化即重建）+ 源码顺序断言（MCP 握手在 drain 之前、只启动一次、复用守卫在销毁之前）。**变异证明**：把顺序改回去即红（1 failed / 21 passed）。
+
+**没解决的**：turn1 的 3.7–4.1 s（首轮仍要建 agent + 等握手）与偶发的 3.6 s（握手跨轮）。本机 MCP 握手被一个连不上的 `settings:test-mcp` 拖到 3.5–5 s，连接超时在哪设置尚未查明。
+
+### PR-B：一次切换只整读一次 transcript
+
+**根因**：一次切换把整段历史读了**三遍**——`loadFromDatabase` 一次、`loadThreadMessages` 一次、`ChatView` 挂载时为了读 model/plan/goal 三个字段再一次。每次都是「整读 + 解析 + IPC 序列化 + 渲染器再解析」，在 24 MB 的会话上就是三倍。
+
+**改法**：`setActiveThread` 先启动 transcript 的读，再并行做元数据刷新，把结果传给 `loadThreadMessages`；`ChatView` 改读 `getThreadMetadataIPC`（只读会话行，不读 transcript）。
+
+**实测**（`perf/session-2000-heavy`，生产 Electron，外部测量锁）：
+
+| | open | switch |
+| --- | --- | --- |
+| 改前 | 1587 ms | 2329 ms |
+| 改后 | **831 ms** | **793 ms** |
+
+**门禁**（`packages/ui/src/stores/__tests__/conversation-store.transcript-reads.test.ts`）：数**整读次数**——store 侧 1 次（改前 2 次）+ ChatView 侧 0 次（改前 1 次），合计 3 → 1。**变异证明**：把 store 改回基线即红（`expected "spy" to be called 1 times, but got 2 times`）。
+
+### PR-C：拖面板宽度时，全 app 跟着重渲染
+
+**根因**（读码 + harness 计数）：`panelWidth` 与墙的 `layout` 放在**共享的 panel context** 里，而这两个值**每一帧都变**。于是拖一下面板边缘——app shell、侧栏（含全部会话行）、聊天视图、每个面板头部——每帧全部重渲染。另外墙内分隔条每帧改 `layout` → 每帧一次 `JSON.stringify` + **同步** `localStorage.setItem`；边缘拖拽每帧一次「写完宽度立刻 `getBoundingClientRect`」的强制同步布局。
+
+**改法**：把「热」几何值拆进独立的 `PanelGeometryContext`（只有 panel zone 读它）；面板状态持久化改去抖（拖拽期间 0 次写，落定后 1 次）；拖拽期间缓存工作区宽度，不再每帧强制布局。
+
+**门禁**（`packages/ui/src/hooks/__tests__/panel-drag-renders.test.ts`）：数**重渲染次数**与**localStorage 写次数**——共享 context 的消费者在宽度变化时 0 次重渲染（改前 1 次/帧）；布局连续变化期间 0 次写（改前每帧 1 次），落定后恰好 1 次。**变异证明**：把 `panelWidth` 塞回共享 context 即红（`expected 2 to be 1`）。
+
+### 本轮新增的 harness 能力（PR #0）
+
+- `e2e/perf/scenarios/send-to-first-output.mjs`：提交→provider 收到、提交→首个可见输出、provider→首个输出、SSE 首块/首内容。
+- `e2e/perf/scenarios/panel-drag.mjs`：真实鼠标事件拖面板边缘与墙内分隔条；在页面里 patch `Storage.prototype` **数 localStorage 写次数**（产品自己的写，不是估算）。
+- `e2e/perf/lib/fixtures.mjs`：`perf/session-2000-heavy`。
+- `e2e/perf/lib/launch.mjs`：注入按 4 MB 分块（Host 的 HTTP 请求体上限 16 MB，27 MB 的会话一次注入会被 413 拒）。
+- `e2e/perf/run.mjs`：`--fixtures` 选项。
+
+### 本轮的数据缺失发现（独立于性能，未修）
+
+用户 profile 里 **702 / 739 条会话的 `rollout_path` 指向的文件在磁盘上已不存在**（`~/.duya/sessions` 只剩 2026/10/25 两个文件）。`message-log.ts:794` 的恢复分支会调 `findRolloutFileBySessionId` 递归扫 `<root>/sessions/**` 再返回空数组——**老会话的转录是空的**，而且每次读都要先做一次全盘扫描。这是数据问题不是性能问题，本轮只记录，不修。
+
 ## 集成记录
 
 | PR | Agent | 内容 | 状态 |

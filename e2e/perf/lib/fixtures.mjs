@@ -41,17 +41,32 @@ export const FIXTURE_IDS = Object.freeze([
   'perf/session-100',
   'perf/session-1000',
   'perf/session-10000',
+  'perf/session-2000-heavy',
   'perf/stream-long-reply',
   'perf/stream-long-reply-fenced',
   'perf/stream-tool-storm',
   'perf/typing-30s',
 ]);
 
-/** The history fixtures, keyed by id, with the row count each one carries. */
-const HISTORY_SIZES = new Map([
-  ['perf/session-100', 100],
-  ['perf/session-1000', 1000],
-  ['perf/session-10000', 10000],
+/**
+ * The history fixtures: the row count and the text size of each one.
+ *
+ * The three `perf/session-*` fixtures keep the size they always had, so a
+ * number measured against them stays comparable with the earlier rounds.
+ *
+ * `perf/session-2000-heavy` is the one that matches a REAL session. The
+ * fixtures above carry ~330 bytes per row, but a session in a real profile
+ * carries ~11 KB per row (tool rows ~4.7 KB, assistant rows ~4.5 KB, user
+ * rows ~7 KB): the read path parses, projects and clones every byte of it, so
+ * a fixture with small rows understates the cost of a real switch by more
+ * than an order of magnitude. This one carries 2000 rows of ~11 KB -- the
+ * shape of the largest sessions in a real profile (2137 rows / 24 MB).
+ */
+const HISTORY_SPECS = new Map([
+  ['perf/session-100', { count: 100, textWords: 28, toolWords: 24 }],
+  ['perf/session-1000', { count: 1000, textWords: 28, toolWords: 24 }],
+  ['perf/session-10000', { count: 10000, textWords: 28, toolWords: 24 }],
+  ['perf/session-2000-heavy', { count: 2000, textWords: 2100, toolWords: 750 }],
 ]);
 
 /** Fixed vocabulary — the fixture text must not depend on anything external. */
@@ -110,10 +125,11 @@ export function historyRowKind(index) {
  * the product would read back zero rows).
  */
 export function buildSessionMessages(fixtureId, options = {}) {
-  const total = HISTORY_SIZES.get(fixtureId);
-  if (total === undefined) {
+  const spec = HISTORY_SPECS.get(fixtureId);
+  if (spec === undefined) {
     throw new Error(`not a history fixture: ${fixtureId}`);
   }
+  const total = spec.count;
   const random = makeRandom(options.seed ?? 0x5eed1234);
   const baseTime = options.baseTime ?? 1_700_000_000_000;
   const idPrefix = options.idPrefix
@@ -149,7 +165,7 @@ export function buildSessionMessages(fixtureId, options = {}) {
       rows.push({
         id,
         role: 'tool',
-        content: filler(random, 24),
+        content: filler(random, spec.toolWords),
         created_at: createdAt,
         msg_type: 'tool_result',
         tool_name: toolName,
@@ -160,7 +176,7 @@ export function buildSessionMessages(fixtureId, options = {}) {
     rows.push({
       id,
       role: kind,
-      content: filler(random, 28),
+      content: filler(random, spec.textWords),
       created_at: createdAt,
       msg_type: 'text',
     });
@@ -370,12 +386,14 @@ export function buildTypingFixture(fixtureId = 'perf/typing-30s', options = {}) 
 
 /** Human-readable description of a fixture, for the report. */
 export function describeFixture(fixtureId) {
-  if (HISTORY_SIZES.has(fixtureId)) {
+  if (HISTORY_SPECS.has(fixtureId)) {
+    const spec = HISTORY_SPECS.get(fixtureId);
     return {
       id: fixtureId,
       kind: 'history-session',
-      messageCount: HISTORY_SIZES.get(fixtureId),
+      messageCount: spec.count,
       mix: '40% user text, 40% assistant text, 20% tool rows (10-row block)',
+      bytesPerRowApprox: Math.round((spec.textWords * 8 * 6.4 + spec.toolWords * 6.4) / 10),
     };
   }
   if (fixtureId === 'perf/stream-long-reply') {
@@ -429,7 +447,7 @@ export function describeFixture(fixtureId) {
  * the digest stays the same whichever session the rows were seeded into.
  */
 export function fixturePayload(fixtureId, options = {}) {
-  if (HISTORY_SIZES.has(fixtureId)) {
+  if (HISTORY_SPECS.has(fixtureId)) {
     // The canonical payload is the UN-namespaced one: the per-session id
     // namespace changes the row ids (the transcript store keys on them) but
     // not the fixture content, so it must not change the digest. Every other

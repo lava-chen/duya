@@ -26,7 +26,6 @@ vi.mock("@/hooks/usePanel", () => ({
   MIN_PANEL_WIDTH: 300,
   usePanel: () => ({
     panelOpen: mocks.panelOpen,
-    panelWidth: 760,
     setPanelOpen: vi.fn(),
     setPanelWidth: vi.fn(),
     togglePanel: vi.fn(),
@@ -37,12 +36,17 @@ vi.mock("@/hooks/usePanel", () => ({
     resetPanelWidth: vi.fn(),
     tabs: mocks.tabs,
     activeTabId: mocks.activeTabId,
-    layout: mocks.layout,
     workspaceExpanded: false,
     setWorkspaceExpanded: vi.fn(),
     setColumnWidths: vi.fn(),
     setRowHeights: vi.fn(),
     togglePaneExpanded: vi.fn(),
+  }),
+  // The geometry has its own context: it changes on every frame of a drag,
+  // so it is not part of the shared one.
+  usePanelGeometry: () => ({
+    panelWidth: 760,
+    layout: mocks.layout,
   }),
 }));
 

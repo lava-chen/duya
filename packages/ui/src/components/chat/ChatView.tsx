@@ -23,7 +23,7 @@ import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import { ChatHeader, hasCustomTitleBar } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
-import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
+import { getThreadMetadataIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
 import { findModelById } from '@duya/ai';
 import type { ModelPricing } from '@/lib/context-usage-utils';
 import { useSettings } from '@/hooks/useSettings';
@@ -491,28 +491,28 @@ export function ChatView({
   // Priority: 1) session saved model (if not default) 2) lastSelectedModel
   useEffect(() => {
     if (sessionId) {
-      getThreadIPC(sessionId)
-        .then(async data => {
-          if (data?.thread) {
-            setSessionProviderId(data.thread.providerId || '');
+      getThreadMetadataIPC(sessionId)
+        .then(async thread => {
+          if (thread) {
+            setSessionProviderId(thread.providerId || '');
             // Priority 1: Session has a specific model saved (and it's not the DB default)
-            if (data.thread.model && data.thread.model !== DB_DEFAULT_MODEL) {
+            if (thread.model && thread.model !== DB_DEFAULT_MODEL) {
               // Check if model is in UI format "[providerName] modelId"
-              const isUiFormat = data.thread.model.startsWith('[');
+              const isUiFormat = thread.model.startsWith('[');
               if (isUiFormat) {
-                setSessionModel(data.thread.model);
+                setSessionModel(thread.model);
               } else {
                 // Pure model name - need to rebuild UI format using provider_id
-                let providerName = data.thread.providerId || 'Unknown';
+                let providerName = thread.providerId || 'Unknown';
                 try {
-                  const provider = await getProviderIPC(data.thread.providerId || '');
+                  const provider = await getProviderIPC(thread.providerId || '');
                   if (provider) {
                     providerName = provider.name || provider.providerType || provider.id;
                   }
                 } catch {
                   // Ignore error, use providerId as fallback
                 }
-                setSessionModel(`[${providerName}] ${data.thread.model}`);
+                setSessionModel(`[${providerName}] ${thread.model}`);
               }
             }
             // Priority 2: Use global lastSelectedModel if available
@@ -526,18 +526,18 @@ export function ChatView({
             // Restore the permission-mode selector from the session row so
             // the composer shows the mode the worker will actually use, and
             // the user always sees the current mode after switching sessions.
-            setPermissionMode(permissionProfileToUi(data.thread.permissionProfile));
+            setPermissionMode(permissionProfileToUi(thread.permissionProfile));
 
             // Load agent profile binding. The profile is fixed at session
             // creation (no in-session agent switching), so only sync the id.
-            setAgentProfileId(data.thread.agentProfileId ?? getProfileIdForMode('main'));
+            setAgentProfileId(thread.agentProfileId ?? getProfileIdForMode('main'));
 
             // Plan 413e: restore the plan-task session toggle from the
             // session row so the user's persisted plan mode survives
             // restarts. MessageInput syncs this prop back into its
             // activeModes set.
-            setPlanModeEnabled(!!data.thread.planModeEnabled);
-            setGoalModeEnabled(!!data.thread.goalModeEnabled);
+            setPlanModeEnabled(!!thread.planModeEnabled);
+            setGoalModeEnabled(!!thread.goalModeEnabled);
           }
         })
         .catch(console.error);

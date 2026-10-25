@@ -48,7 +48,7 @@ import {
 } from '../lib/scenario-kit.mjs';
 import { round } from '../lib/metrics.mjs';
 
-const FIXTURES = ['perf/session-100', 'perf/session-1000', 'perf/session-10000'];
+const DEFAULT_FIXTURES = ['perf/session-100', 'perf/session-1000', 'perf/session-10000'];
 
 /** Wait until a specific message row is painted. */
 async function waitForMessageRow(page, messageId, timeoutMs) {
@@ -104,11 +104,12 @@ async function scrollTranscript(page, steps = 40) {
 export default {
   id: 'session-switch',
   title: 'Opening and switching sessions with large transcripts',
-  fixture: FIXTURES.join(', '),
+  fixture: DEFAULT_FIXTURES.join(', '),
 
   async run(ctx) {
     const samples = [];
     const notes = {};
+    const FIXTURES = ctx.options.fixtures?.length ? ctx.options.fixtures : DEFAULT_FIXTURES;
 
     for (const fixtureId of FIXTURES) {
       const digest = fixtureDigest(fixtureId);

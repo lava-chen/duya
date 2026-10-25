@@ -576,6 +576,29 @@ export async function getThreadIPC(id: string): Promise<{ thread: Thread; messag
   }
 }
 
+/**
+ * The thread row WITHOUT its transcript.
+ *
+ * The chat view needs the session's model, permission profile, agent profile
+ * and plan/goal flags -- all of which live on the thread row. Reading them
+ * through `getThreadIPC` also reads the WHOLE history, because that function
+ * is the one that fills the transcript.
+ *
+ * On a long session that is megabytes of JSON, read on every session switch,
+ * for three fields. This function reads the row and nothing else.
+ */
+export async function getThreadMetadataIPC(id: string): Promise<Thread | null> {
+  const services = peekUiServices()
+  if (services) {
+    const session = await services.sessions.get(id as HostSessionRecord['id'])
+    if (!session) return null
+    return hostSessionToThread(session)
+  }
+  const dbThread = await window.electronAPI!.thread!.get(id) as DbThread | undefined
+  if (!dbThread) return null
+  return dbThreadToThread(dbThread)
+}
+
 export async function createThreadIPC(data: {
   id: string
   title?: string
