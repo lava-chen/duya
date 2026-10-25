@@ -110,6 +110,44 @@ describe('conversation store — a session switch reads the transcript once', ()
 
     expect(mocks.getThreadIPC).not.toHaveBeenCalled();
   });
+
+  it('does not land an in-flight transcript on the session the user switched to', async () => {
+    const PREVIOUS = 'session-a';
+    mocks.listThreadsIPC.mockImplementation(async () => [threadRow(PREVIOUS), threadRow(SESSION)]);
+
+    // Hold the previous session's transcript open, then let the user switch
+    // while it is still loading. The stale read must not be written under the
+    // session the user is looking at now.
+    let releaseRead: ((value: unknown) => void) | null = null;
+    mocks.getThreadIPC.mockImplementation((id: string) => {
+      if (id !== PREVIOUS) {
+        return Promise.resolve({ thread: threadRow(id), messages: [] });
+      }
+      return new Promise((resolve) => {
+        releaseRead = resolve;
+      });
+    });
+
+    useConversationStore.setState({
+      threads: [threadRow(PREVIOUS), threadRow(SESSION)],
+      activeThreadId: PREVIOUS,
+      messages: {},
+      lastSyncAt: 0,
+      isHydrated: true,
+    });
+
+    const refresh = useConversationStore.getState().loadFromDatabase();
+    useConversationStore.setState({ activeThreadId: SESSION });
+
+    releaseRead?.({
+      thread: threadRow(PREVIOUS),
+      messages: [{ id: 'old', role: 'assistant', content: 'old', timestamp: 1 }],
+    });
+    await refresh;
+
+    expect(useConversationStore.getState().messages[SESSION]).toBeUndefined();
+    expect(useConversationStore.getState().activeThreadId).toBe(SESSION);
+  });
 });
 
 describe('chat view — mounting reads the session row, not the transcript', () => {

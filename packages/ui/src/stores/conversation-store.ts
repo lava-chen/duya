@@ -1619,13 +1619,20 @@ export const useConversationStore = create<ConversationState>()(
           // the middle of that chain.
           const activeAtStart = get().activeThreadId;
           const hydrateActive = options?.hydrateActiveTranscript !== false;
+          // Remember whose transcript this refresh is reading. The active
+          // session can change while the read is in flight (a sidebar click
+          // during a background sync), so the result must stay bound to the
+          // session it came from instead of landing under whatever session
+          // happens to be active when the refresh finishes.
+          const transcriptOwner =
+            hydrateActive && activeAtStart && get().messages[activeAtStart] === undefined
+              ? activeAtStart
+              : null;
           const [dbThreads, projectsRaw, noProjectWorkspace, activeTranscript] = await Promise.all([
             listThreadsIPC(),
             getProjectGroupsIPC(),
             getNoProjectWorkspaceIPC(),
-            hydrateActive && activeAtStart && get().messages[activeAtStart] === undefined
-              ? getThreadIPC(activeAtStart)
-              : Promise.resolve(null),
+            transcriptOwner ? getThreadIPC(transcriptOwner) : Promise.resolve(null),
           ]);
           // Filter out gateway sessions (gw- prefix) - they are managed separately in the Gateway Dashboard
           const filteredThreads = dbThreads.filter(t => !t.id.startsWith('gw-'));
@@ -1670,7 +1677,12 @@ export const useConversationStore = create<ConversationState>()(
           // individual navigation still calls loadThreadMessages().
           const messages: Record<string, Message[]> = { ...get().messages };
           let activeThreadId = get().activeThreadId;
-          if (activeThreadId && dbThreadIds.has(activeThreadId) && messages[activeThreadId] === undefined) {
+          if (
+            activeThreadId &&
+            activeThreadId === transcriptOwner &&
+            dbThreadIds.has(activeThreadId) &&
+            messages[activeThreadId] === undefined
+          ) {
             // The transcript was read above, in parallel with the rest.
             const threadData = activeTranscript;
             if (threadData) {
