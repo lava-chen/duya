@@ -35,3 +35,8 @@ export { filterItems, filterItemsFuzzy, filterItemsRanked } from './filter.js';
 export { resolveItemSelection, cycleIndex } from './insert.js';
 export { fuzzyMatch, fuzzyFilter } from './fuzzy.js';
 export type { FuzzyMatchResult } from './fuzzy.js';
+export {
+  rewritePluginMentionTokens,
+  type PluginMentionCapabilities,
+  type PluginMentionRewrite,
+} from './plugin-mentions.js';

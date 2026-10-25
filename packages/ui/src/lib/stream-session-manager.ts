@@ -26,7 +26,7 @@ import {
 } from './streaming-tool-input';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
-import type { PluginMentionCapabilities } from './plugin-mentions';
+import type { PluginMentionCapabilities } from '@duya/input-completion';
 import { interruptChat } from './agent-sse-client';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -1612,11 +1612,10 @@ export class StreamSessionManager {
     existingProviders: string[],
   ): Promise<{ content: string; mentionedPlugins: PluginMentionCapabilities[]; mergedProviders: string[] }> {
     try {
-      // Deliberately does NOT go through plugin-ipc/plugin-types: those pull in
-      // @duya/plugin-core at runtime, which is heavy for the message-library
-      // entry points (test runners, SSR shims). Access the preload surface
-      // directly with a minimal inline shape instead.
-      const { rewritePluginMentionTokens } = await import('./plugin-mentions');
+      // The rewrite is the shared input-completion module; the dynamic import
+      // keeps it out of the message-library entry points' initial graph the
+      // same way the previous local import did.
+      const { rewritePluginMentionTokens } = await import('@duya/input-completion');
       const win = window as unknown as {
         electronAPI?: {
           plugin?: {

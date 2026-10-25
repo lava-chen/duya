@@ -1,8 +1,9 @@
 /**
- * Tests for plugin mention rewriting (apps/desktop/src/renderer/lib/plugin-mentions.ts).
+ * Tests for plugin mention rewriting (moved from the desktop's renderer lib;
+ * both the desktop composer and the CLI chat loop now run THIS module).
  */
 import { describe, expect, it } from 'vitest';
-import { rewritePluginMentionTokens, type PluginMentionCapabilities } from '../plugin-mentions';
+import { rewritePluginMentionTokens, type PluginMentionCapabilities } from '../src/index.js';
 
 function plugin(overrides: Partial<PluginMentionCapabilities> & { pluginId: string }): PluginMentionCapabilities {
   return {
