@@ -10,13 +10,32 @@ import { initLogger, getLogger, LogComponent } from '../logging/logger';
 const logger = initLogger({ level: 'WARN' });
 
 export const isTestMode = process.env.DUYA_TEST === '1';
+
+/**
+ * Read `app` without letting a missing export kill module evaluation.
+ *
+ * Two shapes of "no app" exist and the optional chain only covers the first:
+ *  - under vitest the `electron` package resolves to a plain string, so the
+ *    named import is simply `undefined`;
+ *  - a partial `vi.mock('electron', factory)` returns a proxy that THROWS on
+ *    any export it does not define, and the throw happens on the binding
+ *    access itself — `app?.` never runs.
+ *
+ * Unit tests import modules that reach this file, so without the guard every
+ * such suite dies at module-eval time.
+ */
+function readElectronApp(): { isPackaged?: boolean } | undefined {
+  try {
+    return app as unknown as { isPackaged?: boolean } | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // app.isPackaged returns true when Playwright _electron launches the Electron
 // binary directly, even in dev. Treat test mode as dev so setupDevMode(),
 // getRendererUrl(), and other isDev-gated paths work correctly.
-// Optional chain: under vitest the `electron` package resolves to a plain
-// string (no `app`), and unit tests import modules that reach this file —
-// without the guard every such suite dies at module-eval time.
-export const isDev = !app?.isPackaged || isTestMode;
+export const isDev = !readElectronApp()?.isPackaged || isTestMode;
 export const isPreviewMode = process.env.DUYA_PREVIEW_MODE === 'true';
 export const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
