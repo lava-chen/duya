@@ -1057,7 +1057,15 @@ selfTest:
   # package escapes all targeted conductor; its size-9 renderer SCC also left.
   # Carrier details are recorded in the external capability migration plan.
   # The fingerprint baseline is unchanged; new findings still block.
-  module-dependency: 96
+  # 96 -> 95 (2026-10-25, turn suggestion moved into the worker, PR #496).
+  # Measured with the same checker: ONE edge removed, zero added. The edge was
+  # `apps/desktop/src/main/services/next-step/next-step-llm.ts` importing
+  # `../../../renderer/lib/providers/types` — a main -> renderer dependency that
+  # existed only because the desktop-only next-step service read the renderer
+  # provider types. The file is deleted with that service, so the violation is
+  # gone rather than hidden: restoring the file makes this count read 96 again.
+  # The fingerprint baseline is unchanged; new findings still block.
+  module-dependency: 95
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/
