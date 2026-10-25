@@ -112,6 +112,60 @@ describe('client-scoped Host', () => {
     }
   }, 30_000);
 
+  it('keeps the lease across collector pressure — a lease is a held response, not a forgotten one', async () => {
+    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-lease-gc-'));
+    const dataRoot = path.join(temporaryRoot, 'data');
+    const runtimeFilePath = path.join(dataRoot, 'runtime', 'host-api.json');
+    let host: LocalHostHandle | undefined;
+
+    try {
+      host = await startLocalHost({
+        dataRoot,
+        databasePath: path.join(dataRoot, 'databases', 'duya-main.db'),
+        rolloutRoot: path.join(dataRoot, 'sessions'),
+        attachmentsRoot: path.join(dataRoot, 'attachments'),
+        runtimeFilePath,
+        port: 0,
+        token: 'client-lease-gc-token',
+        clientScoped: true,
+        clientLeaseIdleTimeoutMs: 800,
+      });
+      const client = new HostSessionHttpClient(host.origin, 'client-lease-gc-token');
+      const lease = await client.openClientLease();
+      expect(lease).not.toBeNull();
+
+      // Allocation churn in the window. Before the fix, `openClientLease`
+      // let the lease Response go out of scope; when the collector reclaims
+      // it, undici's fetch finalizer aborts the request and the connection
+      // drops, which the Host reads as "last client gone" — the 2026-10-25
+      // incident that killed a mid-turn worker. Reclamation is deferred
+      // rather than immediate (NODE_DEBUG=undici shows `request errored`
+      // about eight seconds after the reference is dropped in a plain
+      // script), and its cadence varies by environment, so this test is a
+      // tripwire rather than a proof: on the fixed client it passes
+      // deterministically, on a regressed one it fails whenever the
+      // collector fires inside the window.
+      let sink: number[][] = [];
+      for (let round = 0; round < 5; round += 1) {
+        sink = [];
+        for (let i = 0; i < 1_200; i += 1) sink.push(new Array<number>(8_192).fill(i));
+      }
+      sink = [];
+
+      // Longer than the idle timeout: a dropped lease stops the Host and
+      // removes the runtime file within it.
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      expect(await exists(runtimeFilePath)).toBe(true);
+
+      lease?.close();
+      expect(await waitUntilGone(runtimeFilePath, 15_000)).toBe(true);
+      host = undefined;
+    } finally {
+      await host?.close();
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('stays up while another client is still attached', async () => {
     const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-lease-two-'));
     const dataRoot = path.join(temporaryRoot, 'data');

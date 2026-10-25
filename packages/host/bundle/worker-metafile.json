@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 52236,
+      "bytes": 52012,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -547,11 +547,6 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/agent-protocol/src/turn-suggestion.ts": {
-      "bytes": 1120,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/agent-protocol/src/sidebar-sections.ts": {
       "bytes": 1741,
       "imports": [],
@@ -615,7 +610,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5375,
+      "bytes": 5336,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -926,11 +921,6 @@
           "path": "packages/agent-protocol/src/turn-review.ts",
           "kind": "import-statement",
           "original": "./turn-review.js"
-        },
-        {
-          "path": "packages/agent-protocol/src/turn-suggestion.ts",
-          "kind": "import-statement",
-          "original": "./turn-suggestion.js"
         },
         {
           "path": "packages/agent-protocol/src/sidebar-sections.ts",
@@ -1274,7 +1264,7 @@
       "format": "esm"
     },
     "packages/data/src/main-schema.ts": {
-      "bytes": 99557,
+      "bytes": 98605,
       "imports": [
         {
           "path": "packages/data/src/tool-approval-state.ts",
@@ -1369,11 +1359,6 @@
     },
     "packages/data/src/chat-turn-review-store.ts": {
       "bytes": 5932,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/data/src/chat-turn-suggestion-store.ts": {
-      "bytes": 2385,
       "imports": [],
       "format": "esm"
     },
@@ -1603,7 +1588,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2366,
+      "bytes": 2316,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1709,11 +1694,6 @@
           "path": "packages/data/src/chat-turn-review-store.ts",
           "kind": "import-statement",
           "original": "./chat-turn-review-store.js"
-        },
-        {
-          "path": "packages/data/src/chat-turn-suggestion-store.ts",
-          "kind": "import-statement",
-          "original": "./chat-turn-suggestion-store.js"
         },
         {
           "path": "packages/data/src/message-log.ts",
@@ -2111,17 +2091,6 @@
     },
     "packages/host/src/worker-session/title-generator.ts": {
       "bytes": 32919,
-      "imports": [
-        {
-          "path": "packages/host/src/worker-logger.ts",
-          "kind": "import-statement",
-          "original": "../worker-logger.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/worker-session/turn-suggestion.ts": {
-      "bytes": 8578,
       "imports": [
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -15272,7 +15241,7 @@
       "format": "esm"
     },
     "packages/client-core/src/transport/host-api.ts": {
-      "bytes": 14144,
+      "bytes": 13401,
       "imports": [],
       "format": "esm"
     },
@@ -22398,7 +22367,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -29283,7 +29252,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 171915,
+      "bytes": 168949,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -29364,11 +29333,6 @@
           "path": "packages/host/src/worker-session/title-generator.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-session/title-generator"
-        },
-        {
-          "path": "packages/host/src/worker-session/turn-suggestion.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/worker-session/turn-suggestion"
         },
         {
           "path": "packages/host/src/worker-hooks/config.ts",
@@ -30028,7 +29992,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 98862,
+      "bytes": 98896,
       "imports": [],
       "format": "esm"
     },
@@ -30417,7 +30381,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 258597,
+      "bytes": 256234,
       "imports": [
         {
           "path": "node:crypto",
@@ -30868,11 +30832,6 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/host/src/local-turn-suggestion-api.ts": {
-      "bytes": 526,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/host/src/local-mailbox-api.ts": {
       "bytes": 2149,
       "imports": [],
@@ -31128,7 +31087,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 38570,
+      "bytes": 40270,
       "imports": [
         {
           "path": "child_process",
@@ -31423,7 +31382,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 64996,
+      "bytes": 63306,
       "imports": [
         {
           "path": "node:crypto",
@@ -31484,7 +31443,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 41965,
+      "bytes": 44047,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -31695,11 +31654,6 @@
           "path": "packages/host/src/local-turn-review-api.ts",
           "kind": "import-statement",
           "original": "./local-turn-review-api.js"
-        },
-        {
-          "path": "packages/host/src/local-turn-suggestion-api.ts",
-          "kind": "import-statement",
-          "original": "./local-turn-suggestion-api.js"
         },
         {
           "path": "packages/host/src/local-mailbox-api.ts",
@@ -39590,7 +39544,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14635
+          "bytesInOutput": 14550
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -39614,7 +39568,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -39644,10 +39598,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-compaction.ts": {
           "bytesInOutput": 30
@@ -39659,7 +39613,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -39743,10 +39697,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -39764,7 +39718,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1955
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -39814,9 +39768,6 @@
         "packages/agent-protocol/src/turn-review.ts": {
           "bytesInOutput": 30
         },
-        "packages/agent-protocol/src/turn-suggestion.ts": {
-          "bytesInOutput": 30
-        },
         "packages/agent-protocol/src/sidebar-sections.ts": {
           "bytesInOutput": 30
         },
@@ -39845,10 +39796,10 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 451
+          "bytesInOutput": 445
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 7353
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -39857,10 +39808,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 33
+          "bytesInOutput": 46
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 32
+          "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 91
@@ -39872,13 +39823,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -39887,7 +39838,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -39913,14 +39864,11 @@
         "packages/data/src/chat-turn-review-store.ts": {
           "bytesInOutput": 30
         },
-        "packages/data/src/chat-turn-suggestion-store.ts": {
-          "bytesInOutput": 30
-        },
         "packages/data/src/message-log-ports.ts": {
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -39932,7 +39880,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 39
+          "bytesInOutput": 52
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -39983,10 +39931,10 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 328
+          "bytesInOutput": 322
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -41705,13 +41653,13 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -41738,7 +41686,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42113,10 +42061,10 @@
           "bytesInOutput": 413
         },
         "../../../node_modules/jpeg-js/lib/encoder.js": {
-          "bytesInOutput": 7780
+          "bytesInOutput": 7772
         },
         "../../../node_modules/jpeg-js/lib/decoder.js": {
-          "bytesInOutput": 13442
+          "bytesInOutput": 13441
         },
         "../../../node_modules/jpeg-js/index.js": {
           "bytesInOutput": 84
@@ -42245,7 +42193,7 @@
           "bytesInOutput": 131
         },
         "../../../node_modules/utif2/UTIF.js": {
-          "bytesInOutput": 62422
+          "bytesInOutput": 62424
         },
         "../../../node_modules/@jimp/js-tiff/dist/esm/index.js": {
           "bytesInOutput": 627
@@ -42515,7 +42463,7 @@
           "bytesInOutput": 1702
         },
         "../../../node_modules/debug/src/node.js": {
-          "bytesInOutput": 2034
+          "bytesInOutput": 2029
         },
         "../../../node_modules/debug/src/index.js": {
           "bytesInOutput": 144
@@ -43088,7 +43036,7 @@
           "bytesInOutput": 1629
         },
         "../../../node_modules/sax/lib/sax.js": {
-          "bytesInOutput": 21579
+          "bytesInOutput": 21571
         },
         "../../../node_modules/xml2js/lib/bom.js": {
           "bytesInOutput": 121
@@ -43295,7 +43243,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 62444
+          "bytesInOutput": 61811
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -43347,9 +43295,6 @@
         },
         "packages/host/src/worker-session/title-generator.ts": {
           "bytesInOutput": 10074
-        },
-        "packages/host/src/worker-session/turn-suggestion.ts": {
-          "bytesInOutput": 4057
         },
         "packages/host/src/worker-hooks/config.ts": {
           "bytesInOutput": 3415
@@ -44213,7 +44158,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44351,7 +44296,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 36657
+          "bytesInOutput": 36435
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 961
@@ -44450,7 +44395,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 11124
+          "bytesInOutput": 11471
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -44570,7 +44515,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/run-agent.ts": {
-          "bytesInOutput": 8613
+          "bytesInOutput": 8618
         },
         "packages/host/src/worker-subagents/tool-utils.ts": {
           "bytesInOutput": 603
@@ -45122,7 +45067,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4724428
+      "bytes": 4719731
     }
   }
 }
