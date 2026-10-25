@@ -111,7 +111,6 @@ import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
-import { createDesktopSessionHandoffApi } from '../sessions/session-handoff';
 import { createHostResearchApi } from '@duya/host/research-api';
 import { createDatabaseWorkspaceAccess } from '@duya/host/workspace-access';
 import {
@@ -327,6 +326,12 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   };
   pluginAppInvocationInternalApi = pluginAppInvocationApi;
   const runApi = createHostRunApi(stores);
+  // Loaded lazily on purpose: the session handoff needs the main window, and
+  // the window manager drags `electron` into this module's import graph. This
+  // file is imported by every Desktop module that talks to the Host, and unit
+  // tests mock `electron` partially — a static edge to the window manager
+  // would evaluate the real `electron` bindings in every such suite.
+  const { createDesktopSessionHandoffApi } = await import('../sessions/session-handoff');
   // The options object is a variable, not an inline literal: the session
   // handoff below is the Desktop's answer to the Host's OPTIONAL
   // session-handoff capability, and it reaches the Host through the option
