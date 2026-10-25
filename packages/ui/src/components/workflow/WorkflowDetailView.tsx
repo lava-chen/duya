@@ -96,7 +96,7 @@ const titleStyle: CSSProperties = {
   fontWeight: 600,
   lineHeight: 1.3,
   color: 'var(--text)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   wordBreak: 'break-word',
 };
 
@@ -182,7 +182,7 @@ const pathInlineStyle: CSSProperties = {
 const pathTextStyle: CSSProperties = {
   fontSize: '12px',
   color: 'var(--muted)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -307,7 +307,7 @@ const scriptHeaderStyle: CSSProperties = {
   borderBottom: '1px solid var(--border)',
   fontSize: '12px',
   color: 'var(--muted)',
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
 };
 
 const scriptBoxStyle: CSSProperties = {
@@ -322,7 +322,7 @@ const scriptBodyStyle: CSSProperties = {
   padding: '12px',
   fontSize: '12px',
   lineHeight: 1.65,
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   overflow: 'auto',
   maxHeight: '520px',
   background: 'transparent',
@@ -345,7 +345,7 @@ const dialogPromptStyle: CSSProperties = {
   color: 'var(--muted)',
   fontSize: '12px',
   lineHeight: 1.6,
-  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+  fontFamily: 'var(--font-mono)',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   maxHeight: '168px',
@@ -1075,7 +1075,7 @@ function DefinitionTab({
                   style={{
                     ...paramInputStyle,
                     ...(nameInvalid ? { borderColor: 'var(--error)' } : null),
-                    fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+                    fontFamily: 'var(--font-mono)',
                   }}
                   value={arg.name}
                   onChange={(event) => patchArg(arg.key, { name: event.target.value })}
@@ -1112,7 +1112,7 @@ function DefinitionTab({
                   className="wf-detail-field"
                   style={{
                     ...paramInputStyle,
-                    fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+                    fontFamily: 'var(--font-mono)',
                   }}
                   value={arg.defaultText}
                   onChange={(event) => patchArg(arg.key, { defaultText: event.target.value })}
@@ -1212,7 +1212,7 @@ function DefinitionTab({
               customStyle={scriptBodyStyle}
               codeTagProps={{
                 style: {
-                  fontFamily: 'var(--font-mono, ui-monospace, "SF Mono", monospace)',
+                  fontFamily: 'var(--font-mono)',
                 },
               }}
             >

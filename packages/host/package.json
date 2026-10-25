@@ -115,6 +115,10 @@
       "types": "./dist/local-plugin-setup-api.d.ts",
       "import": "./dist/local-plugin-setup-api.js"
     },
+    "./local-plugin-inventory-api": {
+      "types": "./dist/local-plugin-inventory-api.d.ts",
+      "import": "./dist/local-plugin-inventory-api.js"
+    },
     "./local-plugin-app-instance-api": {
       "types": "./dist/local-plugin-app-instance-api.d.ts",
       "import": "./dist/local-plugin-app-instance-api.js"
@@ -290,6 +294,22 @@
     "./agent-profile-config": {
       "types": "./dist/agent-profile-config.d.ts",
       "import": "./dist/agent-profile-config.js"
+    },
+    "./agents-md": {
+      "types": "./dist/agents-md/index.d.ts",
+      "import": "./dist/agents-md/index.js"
+    },
+    "./agents-md/*": {
+      "types": "./dist/agents-md/*.d.ts",
+      "import": "./dist/agents-md/*.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics/index.d.ts",
+      "import": "./dist/diagnostics/index.js"
+    },
+    "./diagnostics/*": {
+      "types": "./dist/diagnostics/*.d.ts",
+      "import": "./dist/diagnostics/*.js"
     },
     "./config-agents": {
       "types": "./dist/config-agents/index.d.ts",

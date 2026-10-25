@@ -29,6 +29,7 @@ import type {
   AgentRunRecord,
   CancelAgentRunResult,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
@@ -66,6 +67,16 @@ export interface HostApiBridge {
   ): Promise<HostSessionUpdateResult>;
   deleteSession(sessionId: SessionId, expectedUpdatedAt?: number): Promise<HostSessionDeleteResult>;
   readMessages(sessionId: SessionId, query?: HostMessageReadQuery): Promise<HostMessagePage>;
+  /**
+   * The WHOLE message projection, projected once.
+   *
+   * `readMessages` pages, and every page re-projects the entire transcript: a
+   * client that reads a transcript end to end through the pages pays for the
+   * transcript once PER PAGE (measured on a 10k-message session: 16.7s of
+   * paging against 0.3s for one projection). A client that wants the whole
+   * transcript asks for it here.
+   */
+  readAllMessages(sessionId: SessionId, query?: HostMessageReadAllQuery): Promise<HostMessagePage>;
 
   listRuns(sessionId: SessionId, limit?: number): Promise<readonly AgentRunRecord[]>;
   startRun(input: StartAgentRunInput): Promise<StartAgentRunResult>;
@@ -193,6 +204,10 @@ export function createHostHttpBridge(options: HostHttpBridgeOptions): HostApiBri
     readMessages: (sessionId, query) => request<HostMessagePage>(
       `/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       { query: toQueryValues(query) },
+    ),
+    readAllMessages: (sessionId, query) => request<HostMessagePage>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+      { query: { all: '1', ...toQueryValues(query) } },
     ),
     listRuns: (sessionId, limit) => request<readonly AgentRunRecord[]>(
       '/v1/agent-runs',

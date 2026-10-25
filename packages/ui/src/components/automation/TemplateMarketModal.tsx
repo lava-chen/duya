@@ -92,7 +92,7 @@ export function TemplateMarketModal({
                     className="text-base mb-1"
                     style={{
                       color: 'var(--text)',
-                      fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif",
+                      fontFamily: 'var(--font-serif)',
                       fontWeight: 400,
                     }}
                   >

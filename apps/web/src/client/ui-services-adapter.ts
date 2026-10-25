@@ -61,6 +61,7 @@ export function createWebUiServices(options: WebUiServicesOptions = {}): UiServi
         return await api.deleteHostSession(sessionId, expectedUpdatedAt);
       },
       readMessages: (sessionId, query) => api.readHostMessages(sessionId, query),
+      readAllMessages: (sessionId, query) => api.readAllHostMessages(sessionId, query),
     },
     runs: {
       listBySession: (sessionId, limit, signal) => api.listHostRuns(sessionId, limit, { signal }),

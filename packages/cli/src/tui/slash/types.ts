@@ -72,6 +72,8 @@ export interface TuiSlashHost {
   effectiveKeyBindings?(): readonly ActionDef[];
   /** Repaint now — used after a preference that the TUI itself does not hold. */
   refresh?(): void;
+  /** Enter the background task view (same as F6). */
+  openTasks?(): void;
 }
 
 export interface TuiSlashContext {

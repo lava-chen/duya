@@ -224,7 +224,14 @@ async function routeRequest(context: RequestContext): Promise<void> {
         sendJson(response, 400, { error: { code: 'invalid_message_query' } });
         return;
       }
-      sendJson(response, 200, await context.client.readMessages(sessionId, query));
+      // `all=1` asks for the WHOLE transcript. The Host's paged read projects
+      // the entire transcript on every page, so paging to the end of a
+      // 10k-message session costs 100 projections of 10k rows.
+      if (query.all) {
+        sendJson(response, 200, await context.client.readAllMessages(sessionId, query.projection));
+        return;
+      }
+      sendJson(response, 200, await context.client.readMessages(sessionId, query.paged));
       return;
     }
 
@@ -581,17 +588,40 @@ function isWorkspaceRelativePath(value: unknown): value is string {
     !value.split('/').includes('..') && !value.includes('\0');
 }
 
-function parseMessageQuery(params: URLSearchParams): { readonly cursor?: string; readonly limit?: number; readonly includeSuperseded?: boolean } | null {
-  if (hasUnexpectedKeys(params, ['cursor', 'limit', 'includeSuperseded'])) return null;
+/**
+ * The message query of `GET /api/sessions/:id/messages`.
+ *
+ * `all=1` is the whole transcript: the Host projects it ONCE and hands back
+ * every row. It is the opposite of a page, so it cannot carry a cursor or a
+ * limit — asking for both is a contradiction, and the route refuses it rather
+ * than quietly ignoring one of them.
+ */
+function parseMessageQuery(params: URLSearchParams): {
+  readonly all: boolean;
+  readonly projection: { readonly includeSuperseded?: boolean };
+  readonly paged: { readonly cursor?: string; readonly limit: number; readonly includeSuperseded?: boolean };
+} | null {
+  if (hasUnexpectedKeys(params, ['cursor', 'limit', 'includeSuperseded', 'all'])) return null;
   const cursor = params.get('cursor');
   const limit = parseLimit(params.get('limit'), 50, 100);
   const includeSuperseded = parseBoolean(params.get('includeSuperseded'));
+  const all = params.get('all');
   if (limit === null || includeSuperseded === null ||
       (cursor !== null && (cursor.length === 0 || cursor.length > 2_048))) return null;
+  if (all !== null && all !== '1') return null;
+  const whole = all === '1';
+  // A whole read and a page are contradictory: refusing beats ignoring one.
+  if (whole && (cursor !== null || params.has('limit'))) return null;
   return {
-    ...(cursor === null ? {} : { cursor }),
-    limit,
-    ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+    all: whole,
+    projection: {
+      ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+    },
+    paged: {
+      ...(cursor === null ? {} : { cursor }),
+      limit,
+      ...(includeSuperseded === undefined ? {} : { includeSuperseded }),
+    },
   };
 }
 

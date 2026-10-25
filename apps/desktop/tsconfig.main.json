@@ -72,6 +72,9 @@
       "@duya/agent-protocol/transcript": [
         "../../packages/agent-protocol/dist/transcript/index.d.ts"
       ],
+      "@duya/agent-protocol/doctor": [
+        "../../packages/agent-protocol/dist/doctor.d.ts"
+      ],
       "@duya/agent-protocol/message-timeline": [
         "../../packages/agent-protocol/dist/message-timeline.d.ts"
       ],

@@ -14,6 +14,7 @@ export * from './local-model-capability-api.js';
 export * from './local-provider-model-capability-api.js';
 export * from './local-app-connection-api.js';
 export * from './local-plugin-setup-api.js';
+export * from './local-plugin-inventory-api.js';
 export * from './local-import-batch-api.js';
 export * from './local-turn-review-api.js';
 export * from './workspace-access.js';
@@ -78,5 +79,7 @@ export * from './group-turn.js';
 export * from './local-sidebar-sections-api.js';
 export * from './local-usage-api.js';
 export * from './agent-profile-config.js';
+
+export * from './diagnostics/index.js';
 
 export { SessionCheckoutService, SessionCheckoutError, parseSessionCheckoutCommand } from './workspace/session-checkout-service.js';

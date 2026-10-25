@@ -370,7 +370,7 @@
   border: 1px solid var(--border-weak);
   color: var(--muted);
   font-size: 0.72rem;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
 }
 
 /* Typing indicator — assistant-bubble styled pill (grok
@@ -787,7 +787,7 @@
   border: 1px solid var(--bot-code-border);
   border-radius: 10px;
   overflow: hidden;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.6;
 }
@@ -1163,7 +1163,7 @@
   background: var(--bot-code-bg);
   border-radius: 6px;
   color: var(--bot-code-fg);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.55;
   overflow-x: auto;
@@ -1251,7 +1251,7 @@
   background: var(--bot-code-bg);
   border-radius: 6px;
   color: var(--bot-code-fg);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -1473,7 +1473,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 12px;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   color: var(--muted);
 }
 
@@ -1851,7 +1851,7 @@
 .bot-send-card__secret-path {
   font-size: 0.75rem;
   opacity: 0.7;
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .bot-send-card__secret-hint {
@@ -2203,7 +2203,7 @@
 }
 
 .bot-permission-card__tool {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   font-weight: 600;
 }
@@ -2284,7 +2284,7 @@
 }
 
 .bot-tool-approval-card__tool {
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   font-weight: 600;
 }

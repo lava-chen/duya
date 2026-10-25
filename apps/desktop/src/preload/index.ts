@@ -31,6 +31,10 @@ import type {
   GitRepositoryState,
 } from '../contracts/git'
 import type { WorkspaceLifecycleAPI } from '../contracts/workspace-lifecycle'
+// The doctor report and the `/init` outcome. Type-only: the payload shapes
+// live in the shared contracts directory so the main process, this bridge and
+// the renderer cannot drift apart.
+import type { DoctorReport, InitAgentsMdResult } from '../contracts/doctor'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
  *  row (ProjectRow) but with `paths` decoded from JSON to an array. */
@@ -1467,6 +1471,26 @@ export interface ElectronAPI {
   session: SessionAPI
   rollout: RolloutAPI
   modeState: ModeStateAPI
+  /**
+   * `/doctor` — the Desktop's in-process diagnostic report.
+   *
+   * The report is assembled in the main process: the renderer cannot read
+   * the disk, and the plugin registry, the core database and the process
+   * facts all live on the other side of the bridge.
+   */
+  diagnostics: {
+    run: () => Promise<DoctorReport>
+  }
+  /**
+   * `/init` — write the repository-root `AGENTS.md` for a session.
+   *
+   * The channel takes a SESSION ID rather than a path: the main process
+   * resolves the session's working directory itself and checks it against
+   * the session root, so a renderer cannot point the write anywhere else.
+   */
+  workspace: {
+    initAgentsMd: (sessionId: string) => Promise<InitAgentsMdResult>
+  }
   search: SearchAPI
   message: MessageAPI
   usage: UsageAPI
@@ -2296,6 +2320,16 @@ const electronAPI: ElectronAPI = {
     }) => ipcRenderer.invoke('db:rollout:import', input),
     // Plan 506 (A3): explicit index rebuild from the rollout files.
     reconcile: () => ipcRenderer.invoke('db:rollout:reconcile'),
+  },
+  diagnostics: {
+    // `/doctor` — the report is assembled in the main process.
+    run: () => ipcRenderer.invoke('diagnostics:run'),
+  },
+  workspace: {
+    // `/init` — a session id, never a path: the main process resolves the
+    // session's working directory and checks it against the session root.
+    initAgentsMd: (sessionId: string) =>
+      ipcRenderer.invoke('workspace:init-agents-md', sessionId),
   },
   modeState: {
     get: (sessionId: string, mode: string) =>
