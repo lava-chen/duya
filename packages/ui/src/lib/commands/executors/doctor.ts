@@ -22,6 +22,7 @@
 
 import type { CommandExecutorFn } from './registry';
 import type { CommandContext, CommandResult } from '../types';
+import { DOCTOR_CATEGORIES } from '@/contracts/doctor';
 import type {
   DoctorCategory,
   DoctorCheck,
@@ -29,15 +30,15 @@ import type {
   DoctorStatus,
 } from '@/contracts/doctor';
 
-/** The categories, in presentation order. */
-const CATEGORY_ORDER: readonly DoctorCategory[] = [
-  'config',
-  'runtime',
-  'desktop',
-  'database',
-  'plugin',
-  'session',
-];
+/**
+ * The categories, in presentation order.
+ *
+ * The SHARED list, not a local copy: the report the renderer draws is the
+ * shared layer's report, and a renderer with its own category table would
+ * drop a category the shared layer produced — which is exactly how the
+ * original `database` check vanished.
+ */
+const CATEGORY_ORDER: readonly DoctorCategory[] = DOCTOR_CATEGORIES;
 
 /**
  * The mark for a status.
