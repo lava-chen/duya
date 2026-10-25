@@ -101,6 +101,9 @@ master 在本任务期间前进了 12 个 commit，其中 PR #455 重写了 `pac
 处理顺序由此确定：**门禁先跑、`bundle:verify` 放最后，中间 `git checkout --` 该文件**，不要把它混进本任务提交。
 连带影响：worker bundle 的字节会跟着内联文本的行尾变（`bytesInOutput` 在 1955 / 1968 之间摆），
 本机重复构建不复现同一字节；本任务因此不追产物噪声，只在合并 commit 里保留 CI 已验过的那一份。
+同一机制还会让 bundle 产物在内容完全相同的情况下被 `git status` 报成 modified（`git diff --stat` 为空、去 CR 后 `md5` 相同、
+`git update-index --refresh` 也不消）——这是 `* text=auto` 与 `core.autocrlf=false` 的 eol 歧义态，
+一律 `git checkout --` 复位，绝不把这种类噪声提交进任务。
 
 ### 二次同步 master（`40d3de56`）
 
@@ -139,6 +142,18 @@ PR 描述与实录提交推上去之后，master 又前进 7 个 commit——PR 
 | 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | 架构 baseline 从 2730 降到 **2530**（master 的重构缩了债），「2 fingerprints no longer triggered」依旧不重录；bundle FRESH 0/950 |
 | 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | 环境未恢复：`build:cli-dev` 后重跑同一 prompt 仍失败，与上一条的判别结论一致（旧 bundle 同样失败），不是 steer 合并引入 |
 
+### 五次同步 master（`455ccd24`）
+
+`3df192e2` 推上去后 master 又进 13 个 commit（PR #456 数据写路径等）。核对 `git diff --stat HEAD^1 HEAD -- packages/cli/src/tui packages/host/src/worker-config packages/agent-protocol` 为**空**——这一批完全没碰本任务改的路径；仍按惯例全量重跑：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `455ccd24`（merge `origin/master`）+ 无本地未提交 | Win10 26200 x64 / Node 24.16.0 | 同上五条测试目标 | 0 · 108 files / 1318 tests passed | 冲突仍只有 `packages/host/bundle/**`，重建解决 |
+| 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | baseline 仍 2530，未重录指纹；bundle FRESH 0/950 |
+
+至此这条分支的节奏已经变成「master 每十几分钟动一次，PR 就变一次 CONFLICTING」，
+所以集成时要以**当时的最新 head** 重验，不能引用上面任何一次的绿色记录。
+
 ### PR head CI
 
 | SHA | 环境 | 命令或操作 | 结果 | 证据 |
@@ -154,7 +169,7 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 - 源码零重叠：`todo.ts`、`footer.ts`、`slash/model.ts`、`slash/effort.ts`、协议目录、Host 目录读取器都只本任务在改。
 - 会撞的只有两处，且都是追加：`docs/exec-plans/README.md` 的表行（#454 #464 #466 #467 #468 都改），
   `packages/cli/src/tui/slash/__tests__/slash-commands.test.ts`（#463 #464 也在加命令用例）。
-- 本轮四次 `git merge origin/master` 的冲突都只是 `packages/host/bundle/**`，一律用 `npm run bundle:worker`
+- 本轮五次 `git merge origin/master` 的冲突都只有 `packages/host/bundle/**`，一律用 `npm run bundle:worker`
   从合并后源码重建解决，不手改产物。
 - PR #457（工具状态 indeterminate）在本任务开工时是在途 CONFLICTING，故第 1 项只修解析、不碰状态位；
   它已合入 `dc6d4ee7`，合并后真机重跑显示 `└ ✔ Todo list 0/1`，两边改动可叠加。
@@ -162,7 +177,7 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 ## 接续 / 结果
 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
-- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；四次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造；`f820ff99` 带进 PR #454 的忙时 steer）后各重跑一遍，最新全量为 108 files / 1318 tests。
+- 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；五次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造；`f820ff99` 带进 PR #454 的忙时 steer；`455ccd24` 带进 PR #456 的数据写路径）后各重跑一遍，最新全量为 108 files / 1318 tests。
 - 待补：`baf1bcfc` 起的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与各 head 的 CI 均已过，解除条件见「三次同步」。
 - CI 覆盖缺口：`9bdb896f` 与 `6dec8d45` 两个 push 之后 `gh run list --branch` 里查不到对应的 `pull_request` run（同期别的分支有 run），所以不能假定「每个 push 都有检查」；集成前应核验**最新 head** 上确实有 run，而不是引用上一个 head 的绿色结果。
 - 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（GitHub 侧无必需 review / 必需检查，保持可 review，未获授权不合并）。
