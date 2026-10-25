@@ -123,6 +123,7 @@ describe('the fixture generator', () => {
       'perf/session-100',
       'perf/session-1000',
       'perf/session-10000',
+      'perf/session-2000-heavy',
       'perf/stream-long-reply',
       'perf/stream-long-reply-fenced',
       'perf/stream-tool-storm',
