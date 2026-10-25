@@ -223,7 +223,11 @@ modules:
   - id: duya-host
     roots: [packages/host]
     managed: true
-    requires: [agent-protocol, agent-runtime, agent-core, workflow, legacy-ai, data, capabilities, memory, legacy-plugin-core]
+    # Personal Bot framework S2: `bot` is added for the extracted Bot domain
+    # package — the Host is the ONLY upward edge (its `src/bot/` file adapters
+    # assemble `@duya/bot`'s service over the TOML / fs backends), mirroring
+    # the S0 bot-boundary gate's direction rules.
+    requires: [agent-protocol, agent-runtime, agent-core, workflow, legacy-ai, data, capabilities, memory, legacy-plugin-core, bot]
     publicEntrypoints:
       - packages/host/src/index.ts
       - packages/host/src/session-api.ts
@@ -296,6 +300,22 @@ modules:
     requires: [agent-protocol, agent-core]
     publicEntrypoints:
       - packages/workflow/src/index.ts
+    owner: host
+
+  # Personal Bot framework S2 (2026-10-25 plan): the pure Bot domain moved out
+  # of `packages/host/src` — identity entry shapes, bot-id path-safety rules,
+  # the identity journal's state machine, the storage ports and the identity
+  # application service. Declared rather than baselined: the package is
+  # zero-IO by construction (no `node:*` import in `packages/bot/src`), its
+  # only measured dependency is `agent-protocol` (the wire DTOs), and the S0
+  # bot-boundary gate measures the whole import closure. `duya-host` below
+  # declares the one upward edge (`host -> bot`); nothing else may require it.
+  - id: bot
+    roots: [packages/bot]
+    managed: true
+    requires: [agent-protocol]
+    publicEntrypoints:
+      - packages/bot/src/index.ts
     owner: host
 
   # Node-only local BFF. A future browser entry needs its own narrower module.

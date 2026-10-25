@@ -1,12 +1,15 @@
 /**
- * The Bot identity application service over the Host file backend (S1).
+ * The Bot identity application service over the Host file backend (S1; S2
+ * moved the pure core to `@duya/bot` — these cases stay because the crash
+ * windows they pin are FILE states, exercised through the Host barrel).
  *
  * These are the named tests the plan's S1 slice hangs its acceptance on:
  * one service answering Desktop and TUI alike, revision conflicts REJECTED,
  * requestId dedup across crashes, and the identity journal rolling pending
  * intents forward at open. The crash cases are simulated the only honest way
  * — by writing the journal line and NOT writing the config, exactly the
- * on-disk state a killed process leaves behind.
+ * on-disk state a killed process leaves behind. The in-memory-port case of
+ * this suite moved to `packages/bot/tests/bot-service-in-memory.test.ts`.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -19,7 +22,6 @@ import {
   BOT_IDENTITY_JOURNAL_FILENAME,
   BotIdentityJournal,
   BotServiceError,
-  createBotService,
   openHostBotService,
 } from '../../src/bot/index.js';
 import { getDuyaAgentsRoot } from '../../src/config-agents/bot-paths.js';
@@ -289,39 +291,5 @@ describe('bot service — list and soft-delete', () => {
     const service = await openHostBotService(root);
     const list = await service.listBots();
     expect(list.map((r) => r.id)).toEqual(['a-bot', 'b-bot']);
-  });
-});
-
-describe('bot service — in-memory ports (the Desktop adapter shape)', () => {
-  it('runs the same use cases over non-file ports', async () => {
-    const agents: Record<string, Record<string, unknown>> = {};
-    const service = createBotService({
-      config: {
-        async readAgents() {
-          return agents as never;
-        },
-        async writeAgents(next) {
-          Object.keys(agents).forEach((k) => delete agents[k]);
-          Object.assign(agents, next);
-        },
-        async takenIds(keys) {
-          return new Set(keys);
-        },
-      },
-      profile: {
-        async seedProfile() {
-          return true;
-        },
-        async readProfile() {
-          return null;
-        },
-      },
-      journal: new BotIdentityJournal(fs.mkdtempSync(path.join(os.tmpdir(), 'duya-bot-journal-'))),
-    });
-
-    const created = await service.createBot({ name: 'Mem Bot' });
-    const patched = await service.updateBot({ id: created.id, name: 'Renamed', expectedRevision: created.revision });
-    expect(patched).toMatchObject({ id: created.id, name: 'Renamed', revision: 2 });
-    expect(await service.getBot(created.id)).toMatchObject({ name: 'Renamed', revision: 2 });
   });
 });

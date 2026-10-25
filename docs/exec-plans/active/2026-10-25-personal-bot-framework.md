@@ -149,6 +149,23 @@
 
 **过程中的实证教训**（已写进代码）：journal 意图行初版漏写 `v` 字段，被自己的加载守卫判为 corrupt，dedup/repair 全部静默失效——由测试暴露后修复 writer 而非放松 guard。Windows 瞬时文件锁的处理延续 S0 的 readImports 重试约定。
 
+## S2 执行记录（2026-10-26）
+
+已实现、已验证、未合并。分支 `codex/bot-framework-s2`（base＝S1 分支 `codex/bot-framework-s1` @ `9fdf40fe`，栈式 PR）。实现由子 agent 在专用 worktree 执行、协调者独立复核全部门禁。
+
+**交付（S2 = packages/bot 领域包提取，纯移动）**
+
+- `packages/bot`（name `@duya/bot`，managed）：`src/domain/`（BotIdentityEntry 及子形状、BotProfile 纯类型、applyIdentityPatch/buildUpsertedAgent/canonical 合并/bot-id 纯规则、BotServiceError；allocateBotId 的随机后缀改为注入 `randomSuffix`）；`src/journal/`（BotIdentityJournalState 纯状态机 + InMemoryBotIdentityJournal，文件格式与文件名不变）；`src/ports/`（IdentityStorePort/ProfilePort/JournalPort）；`src/application/`（createBotService，repair/revision/requestId 语义一字未改）。
+- Host 侧 `host/src/bot/` 变薄为适配器：toml-config-store / fs-profile-store / file-journal + 组装；index.ts re-export S1 全部导出名——`apps/desktop` 零 diff（git diff 为空），`worker-db-bridge.ts` 一行未改。
+- 接线：`architecture-policy.yaml` 声明 bot 模块（managed、requires [agent-protocol]、host.requires + bot）；`scripts/build-packages.mjs` BUILD_ORDER 插入 @duya/bot；vitest.config WORKSPACE_SOURCE_ALIASES + bot。三个 baseline JSON 一字未动。
+- 测试：S1 的 22 例语义原样保留（host 文件后端 13 + bridge 8 + 内存 1），新增 21 例纯测试（注入式后缀、状态机接缝、100 次耗尽/截断/corrupt/seq 续号/dedup 仅对 applied 生效）。
+
+**门禁翻转**：bot-boundary gate R1 由 PENDING 翻为 **MEASURED，9 个 bot 源文件 0 findings**（import 闭包仅 agent-protocol）——S0 预言的"包出现即受测"成立。R2 OK(336)、R3 OK(654)。
+
+**验证**（协调者独立复核）：build:packages 0（bot 先于 host）；vitest 5 文件 43 例全绿；typecheck:all 0；architecture:check 新增违规 0（3 条既有 fingerprint 失效未 --write）；retirement ratchet 772/772；host 全量 2000 passed / 5 skipped；desktop diff 空；packages/bot/src 零 `node:*` 导入。
+
+**裁量记录**（子 agent 报告，协调者认可）：randomSuffix 为可选注入（bot 内 Math.random 兜底，host 注入 crypto——保 desktop 零 diff）；worktree 内手工补 @duya/bot junction（junction-worktree.mjs 从主检出枚举包，看不见本 worktree 新包）；boundary-gates LAYERS 未动（host 本不在 LAYERS scope，bot 仅 import protocol 无 finding）。
+
 ## 关键决策
 
 - 本次 master 从 `2baa95df` fetch 到 `270ba528`，master pull --ff-only 成功；原 `work` 分支保留。最新 tree 与旧会话时间点明显不同，全部迁移定位以最新源码为准。
@@ -197,3 +214,5 @@ PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI�
 **S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
 
 **S1 切片接续（2026-10-25 第三会话）**：Host Bot 接口已落地（见「S1 执行记录」），分支 `codex/bot-framework-s1`（base＝master `f24166ec`，S0 已合并后 rebase）。S1 验收——Desktop/TUI 同一 Bot 语义、revision 冲突结构化拒绝、requestId 跨进程去重、身份 journal 崩溃修复——已由 22 例具名测试满足；两 bridge legacy 形状回归全绿。**下一步**：S2 提取 `packages/bot` 领域包（domain/application/ports 下沉、host adapter、workspace/build/gates 接线、bot-boundary gate R1 由 pending 翻为 measured），前置＝S1 PR 集成或与 S0 同栈评审。
+
+**S2 切片接续（2026-10-26 第四会话）**：packages/bot 提取已落地（见「S2 执行记录」），R1 门禁已翻 MEASURED。**下一步**：S3 持久唤醒与 resident——S3a 存储合同（bot_inbox + bot_dispatch_receipts + reserve/confirm receipt 操作）已派发；S3b 为 openRun 加 dispatchKey 幂等受理接缝（receipt 预留 runId，复用 Control Plane 的 reused 拒绝重派语义）+ Bot dispatcher + resident lease；S3c Desktop bot handler 转发切流。
