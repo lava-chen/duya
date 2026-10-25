@@ -22,6 +22,7 @@ import readline from 'node:readline';
 import type {
   BackgroundTaskOutputV1,
   DurableTimelineEntry,
+  FileAttachment,
   HostMailboxItem,
   HostSessionListItem,
   HostSessionRecord,
@@ -36,6 +37,11 @@ import { describeSpec, findSpec, type CommandLocale } from '@duya/command-catalo
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { resolveDataRoot } from '@duya/data';
 import { TUIApp, shouldUseTui, type CompletionSources, type TuiChoice } from './tui/index.js';
+import {
+  appendShellContext,
+  shellContextAttachment,
+  shellContextEntry,
+} from './tui/shell-context.js';
 import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
@@ -686,6 +692,9 @@ export async function chatTui(
   let finished = false;
   let finish: () => void = () => {};
   const finishedPromise = new Promise<void>((resolve) => { finish = resolve; });
+  // Accumulated output of `!` shell runs since the last message, awaiting the
+  // next normal submission (see `tui/shell-context.ts`).
+  let pendingShellContext: { command: string; context: string } | null = null;
 
   let sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
   const sessionSlashRows = (): PopoverItem[] => {
@@ -802,14 +811,23 @@ export async function chatTui(
    * claims as runtime guidance and leaves promotable: `promoteQueued` refuses
    * rows already marked `runtime_instruction`, so routing a steer through
    * `guide()` would strand it whenever the turn settles before a checkpoint.
+   *
+   * The files ride on the row: the worker reads a mailbox row's attachments
+   * back into the turn it injects, so a steered image reaches the agent.
    */
-  function enqueueSteer(runId: RunId, text: string, source: string): Promise<HostMailboxItem> {
+  function enqueueSteer(
+    runId: RunId,
+    text: string,
+    source: string,
+    attachments: readonly FileAttachment[] = [],
+  ): Promise<HostMailboxItem> {
     return client.enqueue({
       id: randomUUID(),
       sessionId: activeSession.id,
       submittedRunId: runId,
       content: text.trim(),
       kind: 'followup',
+      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
       clientMsgId: randomUUID(),
       source,
     });
@@ -836,33 +854,36 @@ export async function chatTui(
    * worker claims it at its next model boundary and injects it as runtime
    * guidance. Steered text is guidance, not a durable timeline message, so the
    * local echo is the only trace the user can scroll back to.
+   *
+   * The attachments ride on the mailbox row, so a steered image reaches the
+   * running turn instead of being dropped on the floor.
    */
-  async function steerDraft(text: string): Promise<void> {
+  async function steerDraft(text: string, attachments: readonly FileAttachment[] = []): Promise<void> {
     if (text.trim() === '') return;
     const runId = activeRunId;
     // A stopping run never reaches another checkpoint: that draft belongs to
     // the next turn, which is also what `TurnQueue.submit` resumes into.
     if (!busy || runId === null || cancellationRequested) {
-      queue.submit(text);
+      queue.submit(text, { attachments });
       return;
     }
     try {
-      const row = await enqueueSteer(runId, text, 'cli.tui.steer');
+      const row = await enqueueSteer(runId, text, 'cli.tui.steer', attachments);
       tui.printUser(text);
-      queue.submit(text, { mode: 'steer', mailboxId: row.id, echoed: true });
+      queue.submit(text, { mode: 'steer', mailboxId: row.id, echoed: true, attachments });
     } catch (error) {
       tui.printError(
         'Could not steer the running turn; the draft will be sent as the next turn: '
         + (error instanceof Error ? error.message : String(error)),
       );
-      queue.submit(text);
+      queue.submit(text, { attachments });
     }
   }
 
   /** Tab while a turn runs: hold the draft for the next turn. */
-  function queueDraft(text: string): void {
+  function queueDraft(text: string, attachments: readonly FileAttachment[] = []): void {
     if (text.trim() === '') return;
-    queue.submit(text);
+    queue.submit(text, { attachments });
   }
 
   /**
@@ -870,18 +891,18 @@ export async function chatTui(
    * the draft. `interrupt` pauses the queue for the usual reason; `resume`
    * records that the post-cancellation drain is what the user asked for.
    */
-  function interruptAndSend(text: string): void {
+  function interruptAndSend(text: string, attachments: readonly FileAttachment[] = []): void {
     if (text.trim() === '') {
       interrupt();
       return;
     }
     if (!busy) {
-      queue.submit(text);
+      queue.submit(text, { attachments });
       return;
     }
     interrupt();
     queue.resume();
-    queue.submit(text, { front: true });
+    queue.submit(text, { front: true, attachments });
   }
 
   function discardDrafts(): void {
@@ -902,12 +923,12 @@ export async function chatTui(
     if (!busy || runId === null || cancellationRequested) {
       const removed = queue.remove(draft.key);
       if (removed === null) return;
-      queue.submit(removed.text, { front: true, echoed: removed.echoed });
+      queue.submit(removed.text, { front: true, echoed: removed.echoed, attachments: removed.attachments });
       queue.resume();
       return;
     }
     try {
-      const row = await enqueueSteer(runId, draft.text, 'cli.tui.queue.send-now');
+      const row = await enqueueSteer(runId, draft.text, 'cli.tui.queue.send-now', draft.attachments);
       if (queue.reclassify(draft.key, { mode: 'steer', mailboxId: row.id, echoed: true }) === null) {
         // The turn settled while the panel was open and the draft is already
         // running, so the row just written has no draft left to steer.
@@ -1084,7 +1105,7 @@ export async function chatTui(
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
     canAnswerPermissions: () => activeRunId !== null && !cancellationRequested,
-    onSubmit: (text) => { void handleLine(text); },
+    onSubmit: (text, attachments) => { void handleLine(text, attachments); },
     onInterrupt: interrupt,
     onExit: () => close(),
     // The task view is fed from two places: this poller (bash) and the run's
@@ -1322,6 +1343,8 @@ export async function chatTui(
   }
 
   async function runTurn(prompt: string, draft: PendingDraft): Promise<TurnOutcome> {
+    // The files travel with the draft, so the turn they start carries them.
+    const attachments = draft.attachments;
     if (draft.mailboxId !== null) {
       // A steer has two possible outcomes: the turn it was aimed at claimed it
       // (observed/applied), or that turn settled first and the row is still
@@ -1375,6 +1398,7 @@ export async function chatTui(
       const start = await client.startAgentRun({
         sessionId: runSessionId,
         prompt,
+        ...(attachments.length > 0 ? { attachments } : {}),
         ...(options.model !== undefined ? { model: options.model } : {}),
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
@@ -1509,11 +1533,14 @@ export async function chatTui(
     }
   }
 
-  async function handleLine(line: string): Promise<void> {
+  async function handleLine(line: string, attachments: readonly FileAttachment[] = []): Promise<void> {
     const text = line.trim();
     if (text === '') return;
     const command = /^\/([^\s]+)(?:\s+(.*))?$/u.exec(text);
     if (command !== null) {
+      // Slash commands are local surface actions; nothing downstream can
+      // consume attachments, so say so instead of silently losing them.
+      if (attachments.length > 0) tui.printNotice('Attachments are ignored with slash commands.');
       const name = command[1]?.toLowerCase() ?? '';
       const args = command[2]?.trim() ?? '';
       try {
@@ -1605,35 +1632,54 @@ export async function chatTui(
       }
       return;
     }
-    // Bang prefix: `!cmd` runs a shell command in this terminal and prints
-    // the result instead of sending it to the agent (minimax/codex parity,
-    // and the same contract the Desktop composer implements). Checked after
-    // the slash branch because `!/usr/bin/...` is a path, not a command.
+    // Bang prefix: `!cmd` runs a shell command in this terminal and shows the
+    // result in a transcript card instead of sending it to the agent
+    // (minimax/codex parity, and the same contract the Desktop composer
+    // implements). `!!cmd` opts the run OUT of the context the next message
+    // carries. Checked after the slash branch because `!/usr/bin/...` is a
+    // path, not a command.
     if (text.startsWith('!')) {
-      const shellLine = text.slice(1).trim();
+      if (attachments.length > 0) tui.printNotice('Attachments are ignored with shell commands.');
+      const excludeFromContext = text.startsWith('!!');
+      const shellLine = text.slice(excludeFromContext ? 2 : 1).trim();
       if (shellLine === '') {
         tui.printError('Usage: !<shell command>');
         return;
       }
-      tui.printNotice(`$ ${shellLine}`);
+      const callId = tui.beginLocalShell(shellLine);
       try {
         const result = await runShellLine(shellLine);
-        for (const line of result.output.split('\n')) tui.printNotice(line);
-        if (result.timedOut) {
-          tui.printError(`Command timed out after ${BANG_TIMEOUT_MS / 1000}s`);
-        } else if (result.code !== null && result.code !== 0) {
-          tui.printError(
-            `Exited with code ${result.code}`
-            + (result.signal === null ? '' : ` (signal ${result.signal})`),
-          );
+        const footer = result.timedOut
+          ? `[Timed out after ${BANG_TIMEOUT_MS / 1000}s]`
+          : result.code === null
+            ? '[Exit code: unknown]'
+            : result.code === 0
+              ? '[Exit code: 0]'
+              : `[Exit code: ${result.code}${result.signal === null ? '' : ` (signal ${result.signal})`}]`;
+        const body = result.output.trimEnd() === '' ? '' : `${result.output.trimEnd()}\n`;
+        tui.finishLocalShell(callId, `${body}${footer}`, result.timedOut || result.code !== 0);
+        if (!excludeFromContext) {
+          const entry = shellContextEntry(shellLine, process.cwd(), `${body}${footer}`);
+          pendingShellContext = {
+            command: shellLine,
+            context: appendShellContext(pendingShellContext?.context ?? null, entry),
+          };
         }
       } catch (error) {
-        tui.printError(error instanceof Error ? error.message : String(error));
+        tui.finishLocalShell(callId, error instanceof Error ? error.message : String(error), true);
       }
       return;
     }
 
-    queue.submit(line);
+    // The pending `!` output rides along only with a normal message: it is
+    // context the user is about to ask about, and nothing else consumes it.
+    const pendingShell: { command: string; context: string } | null = pendingShellContext;
+    pendingShellContext = null;
+    const pendingAttachments = pendingShell === null
+      ? attachments
+      : [...attachments, shellContextAttachment(pendingShell.context, pendingShell.command, Date.now())];
+
+    queue.submit(line, { attachments: pendingAttachments });
 
   }
 
