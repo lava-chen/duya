@@ -95,7 +95,7 @@
 
 ## S0 执行记录（2026-10-25）
 
-已实现、已验证、未合并。分支 `codex/bot-framework-s0`（base＝本计划分支 `plan/bot-framework-foundation` @ `1618a909`，PR 目标 master）；worktree `.claude/worktrees/bot-framework-s0`；owner 本会话。622 真实 head 核对：01 已合并（#399）、02 已合并（#405，README 状态滞后）、03/04 仍 todo——S0 依赖的 slice-graph / 门禁基建已就绪。
+已实现、已验证、未合并。分支 `codex/bot-framework-s0`（base＝本计划分支 `plan/bot-framework-foundation` @ `1618a909`，PR 目标 master，交付 commit `24590d10`）；worktree `.claude/worktrees/bot-framework-s0`；owner 本会话。622 真实 head 核对：01 已合并（#399）、02 已合并（#405，README 状态滞后）、03/04 仍 todo——S0 依赖的 slice-graph / 门禁基建已就绪。
 
 **交付（S0 = 1 个门禁 PR）**
 
@@ -169,4 +169,4 @@
 PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI；没有申请或执行合并。当前工具无法读取原 ChatGPT 完整线程；必要时由后续对话补全文，不阻塞有源码支撑的方案。
 回收：保留 worktree 与分支，等待设计 review / PR 集成，不执行删除。
 
-**S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；分支 `codex/bot-framework-s0`（base＝`1618a909`，PR 目标 master，PR 链接随创建补记）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
+**S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
