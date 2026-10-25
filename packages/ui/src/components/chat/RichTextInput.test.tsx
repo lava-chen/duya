@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { RichTextInput } from './RichTextInput';
+import { CODE_FONT_FAMILY } from '@/lib/rich-text-canonical';
 import type { PluginMentionTarget } from '@/lib/message-input-logic';
 
 const TARGETS: PluginMentionTarget[] = [
@@ -92,7 +93,7 @@ describe('RichTextInput plugin mention chips', () => {
 
     const label = chip?.querySelector('span');
     expect(label?.textContent).toBe('WeChat Pay');
-    expect(label?.style.fontFamily).toContain('Fira Mono');
+    expect(label?.style.fontFamily).toBe(CODE_FONT_FAMILY);
     expect(label?.style.color.replace(/\s/g, '')).toMatch(/3b82f6|rgb\(59,130,246\)/);
   });
 

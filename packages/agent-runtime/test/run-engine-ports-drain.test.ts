@@ -207,6 +207,43 @@ describe('a real tool result keeps every field the loop reads', () => {
     expect(failed?.kind === 'tool_result' ? failed.callId : null).toBe('call-old');
   });
 
+  it('reads a STATED status bit before inferring from the text', () => {
+    // The executor stamps the bit on both outcomes, so a result carrying one
+    // answers the question instead of leaving it to a marker search.
+    const clean = toDrainItem({
+      message: toolMessage('[completed] read\nok', { status: 'success' } as unknown as Partial<Message>),
+    });
+    expect(clean?.kind === 'tool_result' ? clean.isError : null).toBe(false);
+
+    const failed = toDrainItem({
+      message: toolMessage('boom', { status: 'error' } as unknown as Partial<Message>),
+    });
+    expect(failed?.kind === 'tool_result' ? failed.isError : null).toBe(true);
+  });
+
+  it('lets a stated status outrank a failure marker quoted in the content', () => {
+    // Reading a file that CONTAINS `<tool_error>` is a successful call. Only
+    // the producer's own status can tell that apart from a real failure.
+    const quoted = toDrainItem({
+      message: toolMessage('<tool_error>quoted from a fixture</tool_error>', {
+        status: 'success',
+      } as unknown as Partial<Message>),
+    });
+    expect(quoted?.kind === 'tool_result' ? quoted.isError : null).toBe(false);
+  });
+
+  it('stays indeterminate when a producer states no status and quotes no marker', () => {
+    const silent = toDrainItem({ message: toolMessage('[completed] read\nok') });
+    expect(silent?.kind === 'tool_result' ? silent.isError : null).toBeUndefined();
+  });
+
+  it('reads the bare `<tool_use_error>` envelope as a failure', () => {
+    const planError = toDrainItem({
+      message: toolMessage('<tool_use_error>cyclic dependency</tool_use_error>'),
+    });
+    expect(planError?.kind === 'tool_result' ? planError.isError : null).toBe(true);
+  });
+
   it('carries the producer metadata verbatim, for the two consumers that read it', () => {
     // `recordToolCatalogSchemaRead` (`:2715`) and the renderer's preview path
     // (`:2750`) both read keys the runtime cannot enumerate, so the whole object

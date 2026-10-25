@@ -80,6 +80,7 @@ import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
+  backgroundSummarySuffix,
   nextSpinnerFrame,
   spinnerGlyph,
   workingTailLine,
@@ -87,9 +88,22 @@ import {
 } from './working-tail.js';
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
+import { BackgroundTaskModel, formatTaskDuration, taskStatusGlyph, type BackgroundTaskGroup, type BackgroundTaskRow, type BackgroundTaskView } from './background-tasks.js';
+import type { BackgroundTaskListV1 } from '@duya/agent-protocol';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
+import type { FileAttachment } from '@duya/agent-protocol';
 import type { CommandLocale } from '@duya/command-catalog';
 import { calculateOutputTokensPerSecond } from '@duya/ai';
+import {
+  attachmentChipLabel,
+  extractPathPasteCandidate,
+  findAttachmentLimitViolation,
+  resolveClipboardFileAttachment,
+  resolvePathAttachment,
+  takeAttachmentsForSubmit,
+  type TuiDraftAttachment,
+} from './attachments.js';
+import { disposeClipboardTempDir, readClipboardAttachments } from './clipboard-image.js';
 
 /** DECSET 2026: begin synchronized update. */
 const SYNC_BEGIN = '\x1b[?2026h';
@@ -131,6 +145,25 @@ const WHEEL_STEP_LINES = 3;
 const DOUBLE_CTRL_C_MS = 2000;
 
 /**
+ * Draft rows the queue preview shows above the composer. The block is chrome
+ * in inline mode — every row it gains pushes the composer down — so it is a
+ * fixed budget rather than "whatever is pending".
+ */
+const QUEUE_PREVIEW_ROWS = 3;
+
+/**
+ * Slash and bang lines belong to the controller, not to the running turn.
+ *
+ * `/queue` must open its panel and `!git status` must run here even while a run
+ * is live, so the busy-time keys route these through the ordinary submit path
+ * instead of turning them into steering guidance.
+ */
+function isControllerLine(text: string): boolean {
+  const head = text.trimStart();
+  return head.startsWith('/') || head.startsWith('!');
+}
+
+/**
  * How long a git branch read is reused.
  *
  * The footer repaints per frame; a checkout is a human action measured in
@@ -163,6 +196,12 @@ export interface TuiChoice {
   readonly label: string;
   readonly value: string;
   readonly description?: string;
+}
+
+/** One pending draft as the queue preview paints it. */
+export interface QueuedDraftView {
+  readonly text: string;
+  readonly mode: 'steer' | 'queue';
 }
 
 /** One row of a live settings list: a name, its current value, and what it does. */
@@ -218,14 +257,33 @@ export interface TUIAppOptions {  /** Window title. */
   /** Status bar text, recomputed on every render. */
   readonly statusText?: () => string;  /** Seed history, e.g. from `~/.duya/.cli_history`. */
   readonly history?: readonly string[];
-  /** Called with each submitted prompt. */
-  readonly onSubmit: (text: string) => void | Promise<void>;
+  /**
+   * Called with each submitted prompt. `attachments` carries the files whose
+   * chip labels survived in the submitted text (see `attachments.ts`); it is
+   * empty for the common no-attachment prompt.
+   */
+  readonly onSubmit: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
   /** Let the controller own accepted-message echo and pending drafts. */
   readonly echoSubmitted?: boolean;
   readonly canSubmit?: () => boolean;
-  readonly queuedPrompts?: () => readonly string[];
+  /**
+   * Pending drafts with their intended delivery, so the preview can tell a
+   * steer (consumed by the running turn) from a fresh turn.
+   */
+  readonly queuedDrafts?: () => readonly QueuedDraftView[];
   readonly queuePaused?: () => boolean;
   readonly onRecallQueued?: () => string | null;
+  /**
+   * Enter while a turn runs: inject the draft into that turn.
+   *
+   * `attachments` carries the same files `onSubmit` receives; a draft is one
+   * thing the user sent, so whichever way it travels it keeps its files.
+   */
+  readonly onSteer?: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
+  /** Tab while a turn runs: hold the draft for the next turn. */
+  readonly onQueueDraft?: (text: string, attachments: readonly FileAttachment[]) => void | Promise<void>;
+  /** Esc while a turn runs and the draft is not empty: stop, then send it. */
+  readonly onInterruptAndSend?: (text: string, attachments: readonly FileAttachment[]) => void;
   /** Called on the first Ctrl+C while a turn is running. */
   readonly onInterrupt?: () => void;
   /** Called on the second Ctrl+C inside `DOUBLE_CTRL_C_MS`, or `/exit`. */
@@ -338,6 +396,18 @@ export interface TUIAppOptions {  /** Window title. */
    * inside the app: how many rows the box is showing right now.
    */
   readonly maxInputRows?: number;
+  /**
+   * Ask the wiring for a fresh background-bash snapshot.
+   *
+   * The TUI cannot read the Host itself; opening the task view is the one
+   * moment it needs a reading the poller may have stopped making.
+   */
+  readonly onBackgroundTasksRefresh?: () => void;
+  /**
+   * Open one task's detail. The wiring reads the output tail (an I/O it owns)
+   * and calls `showPanel`; the TUI only knows what it has already seen.
+   */
+  readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
 }
 
 /**
@@ -436,6 +506,18 @@ export class TUIApp {
   private deltaDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pacer = new Pacer();
   private readonly paste = new PasteBurstDetector();
+  /**
+   * Attachments queued for the NEXT submission, each standing in the editor
+   * buffer through its chip `label`. Plain-text labels over interval mapping:
+   * the editor stays a text buffer, and an attachment whose label was edited
+   * or deleted away simply does not appear in the submitted text, which is
+   * exactly the "delete the chip to drop the attachment" semantic.
+   */
+  private draftAttachments: TuiDraftAttachment[] = [];
+  /** Counter for chip labels; grows for the session, never resets on submit. */
+  private chipSeq = 0;
+  /** Counter for local `!` shell cards. */
+  private localShellSeq = 0;
 
   /** Transcript-wide expansion; the same flag `/settings` calls expand blocks. */
   private expanded: boolean;
@@ -451,10 +533,9 @@ export class TUIApp {
    * this one is a ceiling the user sets.
    */
   private maxInputRows: number;
-  private focus: 'input' | 'transcript' = 'input';
-  private selectedBlockIndex = -1;
-  private readonly expandedBlockIds = new Set<string>();
-  private readonly collapsedBlockIds = new Set<string>();
+  private focus: 'input' | 'tasks' = 'input';
+  /** Selected row in the task view, over `backgroundTaskRows()`. */
+  private selectedTaskRow = -1;
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -504,6 +585,12 @@ export class TUIApp {
    * only decides when to repaint it (plan 615 Phase 6).
    */
   private readonly activity = new ActivityTracker();
+  /**
+   * Background bash (polled from the Host) and subagents (from the run's own
+   * frames), merged for the summary line and the task view. Completed entries
+   * stay until the session is left so they can still be inspected.
+   */
+  private readonly backgroundTasks = new BackgroundTaskModel();
 
   /**
    * Whether a modal owns the input. Stored on the tracker (it decides the label)
@@ -771,11 +858,83 @@ export class TUIApp {
       this.inputDriver.stop();
     }
     this.terminal.dispose();
+    // Clipboard images live in a temp directory the worker reads by path only
+    // during a turn, so this process exiting ends the file's useful life.
+    void disposeClipboardTempDir();
   }
 
   /** Repaint external controller state, such as pending follow-ups. */
   refresh(): void {
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Adopt a fresh Host snapshot of background bash tasks.
+   *
+   * The task view is fed by two sources (see `background-tasks.ts`); this is
+   * the polled half. Subagents arrive through `push()` as run frames.
+   */
+  setBackgroundTasks(snapshot: BackgroundTaskListV1): void {
+    if (!this.backgroundTasks.applyBashSnapshot(snapshot)) return;
+    this.clampTaskSelection();
+    this.scheduler.requestImmediate();
+  }
+
+  /** True while any tracked task — bash or subagent — is still running. */
+  hasRunningBackgroundTasks(): boolean {
+    return this.backgroundTasks.hasRunning();
+  }
+
+  /** True while the task view owns the arrows (F6 / `/tasks`). */
+  isTaskViewOpen(): boolean {
+    return this.focus === 'tasks';
+  }
+
+  /** Grouped tasks for the task view and the summary line. */
+  backgroundTaskGroups(): readonly BackgroundTaskGroup[] {
+    return this.backgroundTasks.groups();
+  }
+
+  /** Flattened, selection-ordered rows for the task view. */
+  backgroundTaskRows(): readonly BackgroundTaskRow[] {
+    return this.backgroundTasks.rows();
+  }
+
+  /**
+   * Enter the task view. F6 and `/tasks` both land here so the two entrances
+   * cannot disagree about what "the task view" selects.
+   */
+  openTasks(): void {
+    if (this.disposed) return;
+    if (this.focus !== 'tasks') {
+      this.focus = 'tasks';
+      this.completion.close();
+      const rows = this.backgroundTaskRows();
+      this.selectedTaskRow = rows.length === 0 ? -1 : 0;
+    }
+    // The bash half is polled, not pushed; opening the view is the explicit
+    // request for a current reading while the timer is quiet.
+    this.options.onBackgroundTasksRefresh?.();
+    this.scheduler.requestImmediate();
+  }
+
+  /** Force a repaint after the wiring read a fresh snapshot out of band. */
+  private clampTaskSelection(): void {
+    const count = this.backgroundTasks.rows().length;
+    if (count === 0) this.selectedTaskRow = -1;
+    else if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
+    else if (this.selectedTaskRow >= count) this.selectedTaskRow = count - 1;
+  }
+
+  /** Move a draft the controller recalled back into the composer. */
+  recallIntoComposer(text: string): void {
+    this.editor.setText(text, Array.from(text).length);
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  private isBusyNow(): boolean {
+    return this.options.isBusy?.() ?? this.busy;
   }
 
   /** Open a keyboard-navigable modal and resolve with the selected value. */
@@ -1085,12 +1244,13 @@ export class TUIApp {
     }
 
     const tail = this.workingTailLines();
+    const tasks = this.taskViewLines();
     const queued = this.queuePreviewLines();
     // Composer, then popup, then footer — pi's order. The candidate list hangs
     // directly under the line being typed into, so the reader's eye does not
     // have to jump over the input to find it, and the footer stays at the
     // bottom of the page rather than being pushed up by a list that grew.
-    const chrome = [...tail, ...queued, ...this.inlineInputLines, ...this.inlinePopupLines, ...this.inlineStatusLines];
+    const chrome = [...tail, ...tasks, ...queued, ...this.inlineInputLines, ...this.inlinePopupLines, ...this.inlineStatusLines];
     // The caret's row is an index into `scroll`, so it is offset by everything
     // that sits above the composer. Its column is the editor's own column plus
     // the prompt marker's width, because that is what is actually printed.
@@ -1099,6 +1259,7 @@ export class TUIApp {
         ? {
             row:
               tail.length +
+              tasks.length +
               queued.length +
               this.inputCursor.cursorRow - 1,
             column: this.inputCursor.cursorCol + 1,
@@ -1109,13 +1270,6 @@ export class TUIApp {
       scroll: this.inlineTranscriptLines,
       chrome,
       caret,
-      // Scrolling back must not commit: those rows may be wanted again, and the
-      // terminal cannot be told to take a committed row back. `viewEnd` is the
-      // line the live area ends at — everything above it is already in the
-      // terminal's scrollback.
-      ...(this.follow
-        ? {}
-        : { viewEnd: Math.max(0, this.scrollTop) }),
     });
   }
 
@@ -1135,6 +1289,12 @@ export class TUIApp {
    * Shown only in inline mode. Full-screen mode has a fixed four-row layout and
    * the status line is where its activity has always lived; giving it a tail too
    * is a separate change to that layout, not something to smuggle in here.
+   *
+   * The row outlives the turn when background work does not: a promoted bash
+   * command or a subagent can still be running after the model is done, and a
+   * summary that vanished at `done` would leave the only working thing on
+   * screen invisible. The glyph goes static in that case — nothing in the TURN
+   * is moving, and a spinner would say otherwise.
    */
   private workingTailLines(): string[] {
     // Keyed on the inline surface, not on the absence of the status bar: the
@@ -1142,15 +1302,103 @@ export class TUIApp {
     // grows its own tail later must not be switched off by this line.
     if (this.inlineSurface === null) return [];
     const busy = this.options.isBusy?.() ?? this.busy;
-    if (!busy && !this.waitingForPermission) return [];
+    const counts = this.backgroundSummaryCounts();
+    const active = busy || this.waitingForPermission;
+    if (!active && counts.backgroundSummaryTotal === 0) return [];
     return [
       workingTailLine({
         frame: this.spinnerFrame,
-        label: this.activityLabel(busy),
+        label: this.activityLabel(busy) + backgroundSummarySuffix({
+          bashRunning: counts.bashRunning,
+          subagentRunning: counts.subagentRunning,
+          totalTasks: counts.backgroundSummaryTotal,
+        }),
         unicode: this.terminalEnv.unicodeBox,
         columns: this.terminalSize().columns,
+        active,
       }),
     ];
+  }
+
+  /**
+   * Chrome rows above the composer in inline mode: the working tail, the task
+   * list while it is focused, and the queued-prompt preview. Every layout
+   * budget subtracts exactly this, or a frame would claim a row it does not
+   * have and push the footer off the bottom.
+   */
+  private aboveComposerRows(): number {
+    return this.workingTailLines().length + this.taskViewLines().length + this.queuePreviewLines().length;
+  }
+
+  /** Running/total counts for the summary, computed once per paint. */
+  private backgroundSummaryCounts(): {
+    bashRunning: number;
+    subagentRunning: number;
+    backgroundSummaryTotal: number;
+  } {
+    let bashRunning = 0;
+    let subagentRunning = 0;
+    let total = 0;
+    for (const group of this.backgroundTasks.groups()) {
+      total += group.tasks.length;
+      if (group.id === 'bash') bashRunning = group.running;
+      else subagentRunning = group.running;
+    }
+    return { bashRunning, subagentRunning, backgroundSummaryTotal: total };
+  }
+
+  /**
+   * The task list, rendered into the chrome above the composer while the
+   * task focus owns the arrows. Empty in every other focus: it is a mode, not
+   * a permanently docked panel.
+   */
+  private taskViewLines(): string[] {
+    if (this.focus !== 'tasks' || this.inlineSurface === null) return [];
+    const width = Math.max(1, this.terminalSize().columns - 1);
+    const rows = this.backgroundTaskRows();
+    const lines: string[] = [];
+    lines.push(escapeTags(compactActivity(
+      'Tasks · ↑↓ select · ←→ fold · Enter open · Esc back',
+      width,
+    )));
+    if (rows.length === 0) {
+      lines.push(escapeTags(compactActivity(
+        this.backgroundTasks.observed ? 'No background tasks.' : 'Background task list unavailable for this Host.',
+        width,
+      )));
+      return lines;
+    }
+    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10));
+    const selected = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
+    const first = Math.max(0, Math.min(selected - (budget - 1), Math.max(0, rows.length - budget)));
+    for (let index = first; index < Math.min(rows.length, first + budget); index += 1) {
+      const row = rows[index]!;
+      lines.push(row.kind === 'group'
+        ? this.taskGroupLine(row.group, index === selected, width)
+        : this.taskRowLine(row.task, index === selected, width));
+    }
+    return lines;
+  }
+
+  private taskGroupLine(group: BackgroundTaskGroup, selected: boolean, width: number): string {
+    const marker = group.collapsed ? '▸' : '▾';
+    const running = group.running > 0 ? ` · ${group.running} running` : '';
+    const text = compactActivity(`${marker} ${group.label} (${group.tasks.length})${running}`, width - 2);
+    return selected ? `{cyan-fg}❯ ${text}{/cyan-fg}` : `{gray-fg}  ${text}{/gray-fg}`;
+  }
+
+  private taskRowLine(task: BackgroundTaskView, selected: boolean, width: number): string {
+    const elapsed = formatTaskDuration((task.endedAtMs ?? Date.now()) - task.startedAtMs);
+    const suffix = task.status === 'running'
+      ? ` · ${elapsed}`
+      : ` · ${task.status} · ${elapsed}`;
+    // Truncate the PLAIN text: fitting a line that already carries tags would
+    // count markup as columns and can cut a tag in half (see working-tail.ts).
+    const text = compactActivity(
+      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}`,
+      width,
+    );
+    return selected ? `{cyan-fg}${text}{/cyan-fg}` : text;
   }
 
   /**
@@ -1188,15 +1436,12 @@ export class TUIApp {
   }
 
   private renderOptions(): RenderOptions {
-    const selectedBlock = this.model.blocks[this.selectedBlockIndex];
     return {
       expanded: this.expanded,
       // Either switch opens a result body: `expanded` is the transcript-wide
       // toggle, this one is the standing preference from `/settings`.
       showToolResults: this.expanded || this.showToolResults,
       toolResultLines: 5,
-      expandedBlockIds: this.expandedBlockIds,
-      collapsedBlockIds: this.collapsedBlockIds,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
       // plan 615 Phase 0: markdown emphasis/strike map to italic/strike only
@@ -1211,9 +1456,6 @@ export class TUIApp {
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
         : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
-      ...(this.focus === 'transcript' && selectedBlock !== undefined
-        ? { selectedBlockId: selectedBlock.id }
-        : {}),
     };
   }
 
@@ -1227,7 +1469,7 @@ export class TUIApp {
    *
    * The windowing arithmetic that used to live here (maxStart, clamp, slice) is
    * `visibleWindow()` behind the pane now. Keeping it here meant the inline path
-   * had to re-express the same decision as a `viewEnd` offset, and two
+   * had to re-express the same decision as a viewport offset, and two
    * expressions of "which line is on top" is exactly the disagreement plan 615
    * Phase 4 set out to remove.
    */
@@ -1251,7 +1493,9 @@ export class TUIApp {
       return;
     }
     this.fullScreen.update('transcript', {
-      borderColor: this.focus === 'transcript' ? 'cyan' : 'gray',
+      // The border is the focus tell in full-screen mode: the task list owns
+      // the arrows while the transcript does not respond to them at all.
+      borderColor: this.focus === 'tasks' ? 'cyan' : 'gray',
       lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
     });
   }
@@ -1300,7 +1544,7 @@ export class TUIApp {
       this.terminalSize().rows -
         this.footerRows() -
         (this.inlineSurface !== null
-          ? this.workingTailLines().length + this.queuePreviewLines().length
+          ? this.aboveComposerRows()
           : 0) -
         this.popupRows(),
     );
@@ -1355,7 +1599,7 @@ export class TUIApp {
     const size = this.terminalSize();
     const inline = this.inlineSurface !== null;
     const availableRows = Math.max(1, size.rows - this.footerRows() -
-      (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0) - this.popupRows());
+      (inline ? this.aboveComposerRows() : 0) - this.popupRows());
     if (!inline) {
       // Blessed computes padding from the presence of a border object, even
       // when individual edges are false. Remove the object on tiny screens.
@@ -1441,7 +1685,7 @@ export class TUIApp {
    */
   private paintDockPanel(body: readonly string[], inline: boolean, size: TerminalSize): void {
     const budget = Math.max(1, size.rows - this.footerRows() - 2
-      - (inline ? this.workingTailLines().length + this.queuePreviewLines().length : 0));
+      - (inline ? this.aboveComposerRows() : 0));
     const visible = body.slice(0, budget);
     if (inline) {
       const columns = Math.max(1, size.columns - 1);
@@ -1495,14 +1739,17 @@ export class TUIApp {
   }
 
   private queuePreviewLines(): string[] {
-    const pending = this.options.queuedPrompts?.() ?? [];
+    const pending = this.options.queuedDrafts?.() ?? [];
     if (pending.length === 0 || this.terminalSize().rows < 7) return [];
-    const label = this.options.queuePaused?.() ? 'paused' : 'queued';
-    const latest = pending[pending.length - 1] ?? '';
-    return [escapeTags(compactActivity(
-      label + ' (' + pending.length + ') · ' + latest.replace(/\s+/gu, ' '),
-      Math.max(1, this.terminalSize().columns - 1),
-    ))];
+    const width = Math.max(1, this.terminalSize().columns - 1);
+    const shown = pending.slice(-QUEUE_PREVIEW_ROWS);
+    const hidden = pending.length - shown.length;
+    const lines = shown.map((draft) => escapeTags(compactActivity(
+      (draft.mode === 'steer' ? '↳ steer' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
+      width,
+    )));
+    if (hidden > 0) lines.unshift(`… ${hidden} earlier`);
+    return lines;
   }
 
   private placeCursor(): void {
@@ -1597,8 +1844,8 @@ export class TUIApp {
       ? `${spinnerGlyph(this.spinnerFrame, this.terminalEnv.unicodeBox)} `
       : '';
     const tail = this.follow ? '' : ' [paused]';
-    const blockCount = this.model.blocks.length;
-    const selection = this.selectedBlockIndex < 0 ? 0 : this.selectedBlockIndex + 1;
+    const taskRows = this.backgroundTaskRows();
+    const taskSelection = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow + 1;
     const context = this.interactivePrompt?.kind === 'select'
       ? 'Enter select / Esc cancel'
       : this.interactivePrompt?.kind === 'text'
@@ -1608,10 +1855,10 @@ export class TUIApp {
         ? 'Enter run / Tab fill / arrows choose'
         : 'Tab accept / arrows choose'
       : busy
-        ? 'Ctrl+C stop / Ctrl+T expand'
-      : this.focus === 'transcript'
-        ? `history ${selection}/${blockCount} / arrows select / left-right fold`
-        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 focus / arrows prompts`;
+        ? 'Enter steer · Tab queue · Esc stop'
+      : this.focus === 'tasks'
+        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
     // inline TUI's geometry goes wrong on a narrow terminal. `?7l` is disabled
@@ -1631,13 +1878,18 @@ export class TUIApp {
     const queueSegment = queued > 0 ? ` · ⧗ ${queued}` : '';
     if (this.inlineSurface !== null) {
       const hint = this.options.queuePaused?.() && queued > 0
-        ? '/queue resume · Esc edit queued'
+        ? '/queue resume · Esc recall'
         : this.completion.isOpen ? context
-        : busy ? 'Enter queue · Esc interrupt' : '/ commands · F1 help';
+        : busy ? 'Enter steer · Tab queue · Esc stop' : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
-    const fixed = text + ' · ' + spinner + this.activityLabel(busy) + tail + usage + queueSegment + ' · ' + context;
+    const counts = this.backgroundSummaryCounts();
+    const fixed = text + ' · ' + spinner + this.activityLabel(busy) + backgroundSummarySuffix({
+      bashRunning: counts.bashRunning,
+      subagentRunning: counts.subagentRunning,
+      totalTasks: counts.backgroundSummaryTotal,
+    }) + tail + usage + queueSegment + ' · ' + context;
     this.fullScreen.update('status', {
       lines: ['{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}'],
     });
@@ -1821,6 +2073,12 @@ export class TUIApp {
   /** Feed one frame from the run. The only entry point for run output. */
   push(frame: LegacyFrame): void {
     const activityChanged = this.updateActivity(frame);
+    // Subagent rows are run-scoped, so they arrive as frames rather than in
+    // the Host snapshot (which knows only about bash tasks).
+    if (this.backgroundTasks.applyFrame(frame)) {
+      this.clampTaskSelection();
+      this.scheduleRender();
+    }
     const key = readBlockKey(frameRecord(frame.data));
     switch (frame.type) {
       case 'text_delta': {
@@ -2160,9 +2418,8 @@ export class TUIApp {
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
-    this.selectedBlockIndex = -1;
-    this.expandedBlockIds.clear();
-    this.collapsedBlockIds.clear();
+    this.selectedTaskRow = -1;
+    this.backgroundTasks.clear();
     this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.scheduler.requestImmediate();
@@ -2246,9 +2503,8 @@ export class TUIApp {
     this.follow = true;
     this.scrollTop = 0;
     this.focus = 'input';
-    this.selectedBlockIndex = -1;
-    this.expandedBlockIds.clear();
-    this.collapsedBlockIds.clear();
+    this.selectedTaskRow = -1;
+    this.backgroundTasks.clear();
     this.activity.phase = 'ready';
     this.clearActiveActivity();
     this.noteTranscriptMutation();
@@ -2563,14 +2819,14 @@ exportHistory(): string[] {
   get renderState(): {
     expanded: boolean;
     follow: boolean;
-    focus: 'input' | 'transcript';
-    selectedBlockIndex: number;
+    focus: 'input' | 'tasks';
+    selectedTaskRow: number;
   } {
     return {
       expanded: this.expanded,
       follow: this.follow,
       focus: this.focus,
-      selectedBlockIndex: this.selectedBlockIndex,
+      selectedTaskRow: this.selectedTaskRow,
     };
   }
 
@@ -2711,6 +2967,16 @@ exportHistory(): string[] {
         this.refreshInputCompletion();
       }
     });
+    // Clipboard attachments. Ctrl+V is also the paste chord many terminals
+    // intercept (Windows Terminal pastes text itself and sends bracketed
+    // paste), so Alt+V repeats the action for the terminals that never deliver
+    // Ctrl+V to the application.
+    this.bindKey(['C-v', 'M-v'], () => {
+      if (this.swallowForWindow()) return;
+      if (this.interactivePrompt === null && this.focus === 'input') {
+        void this.pasteClipboardAttachment();
+      }
+    });
     // Rebindable global actions, dispatched from the action table with this
     // session's overrides applied. The editor and completion keys stay on
     // their fixed bindings: their routing is priority-ordered, not flat.
@@ -2720,8 +2986,6 @@ exportHistory(): string[] {
     this.bindAction('expand-all', () => {
       if (this.interactivePrompt !== null) return;
       this.expanded = !this.expanded;
-      this.expandedBlockIds.clear();
-      this.collapsedBlockIds.clear();
       this.scheduler.requestImmediate();
     });
     this.bindAction('follow-tail', () => { if (this.interactivePrompt === null) this.followTail(); });
@@ -2735,29 +2999,37 @@ exportHistory(): string[] {
     // process. It stays bound above, verbatim.
 
     // ── Mouse wheel ─────────────────────────────────────────────────────
-    // With mouse reporting ENABLED the terminal ships the wheel as SGR mouse
-    // sequences, which blessed parses into `mouse` events — and which
-    // therefore never reach the key path as synthesized ↑/↓. That is the
-    // whole point: without it, terminals like Warp translate the wheel into
-    // arrow keys, and the arrows in input focus recall HISTORY, so the wheel
-    // could never scroll the transcript at all. Only the wheel is consumed:
-    // clicks stay with the terminal, so text selection keeps working.
-    this.output.write(enableMouseReporting());
-    this.onMouse((event) => {
-      const action = event.action;
-      if (action !== 'wheelup' && action !== 'wheeldown') return;
-      if (this.interactivePrompt !== null || this.overlay.isActive) return;
-      if (this.windowMgr.isActive) {
-        this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
-        this.scheduler.requestImmediate();
-        return;
-      }
-      this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
-    });
+    // Full-screen mode owns its viewport, so it owns the wheel too: with mouse
+    // reporting ENABLED the terminal ships the wheel as SGR sequences instead
+    // of scrolling its own scrollback — and instead of a terminal like Warp
+    // translating it into ↑/↓, which would recall input history. Only the
+    // wheel is consumed; clicks stay with the terminal so text selection keeps
+    // working.
+    //
+    // Inline mode deliberately does the opposite. There the terminal owns the
+    // scrollback (that is the point of the mode), and the live area is only one
+    // screen deep, so an app-owned scroll would have nowhere to go. Capturing
+    // the wheel would take scrolling away from the one buffer that has the
+    // history. The popup windows lose wheel scrolling in inline; they still
+    // page with PgUp/PgDn.
+    if (this.inlineSurface === null) {
+      this.output.write(enableMouseReporting());
+      this.onMouse((event) => {
+        const action = event.action;
+        if (action !== 'wheelup' && action !== 'wheeldown') return;
+        if (this.interactivePrompt !== null || this.overlay.isActive) return;
+        if (this.windowMgr.isActive) {
+          this.windowMgr.handleKey(action === 'wheelup' ? 'up' : 'down');
+          this.scheduler.requestImmediate();
+          return;
+        }
+        this.scrollByLines(action === 'wheelup' ? -WHEEL_STEP_LINES : WHEEL_STEP_LINES);
+      });
+    }
     this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
       else if (this.swallowForWindow()) return;
-      else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(false);
+      else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(true);
       else if (this.interactivePrompt === null) {
         this.editor.moveLeft();
         if (this.focus === 'input') this.refreshInputCompletion();
@@ -2766,7 +3038,7 @@ exportHistory(): string[] {
     this.bindKey(['right'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor + 1);
       else if (this.swallowForWindow()) return;
-      else if (this.interactivePrompt === null && this.focus === 'transcript') this.setSelectedBlockExpanded(true);
+      else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(false);
       else if (this.interactivePrompt === null) {
         this.editor.moveRight();
         if (this.focus === 'input') this.refreshInputCompletion();
@@ -2855,13 +3127,20 @@ exportHistory(): string[] {
       });
     }
 
+    // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
+    // no app-owned viewport to page: the rows above the live area are already
+    // in the terminal's scrollback, and the terminal's own PgUp is the thing
+    // that reaches them. Paging here would set `follow = false`, which freezes
+    // the live area AND stops commits — the transcript would stop updating
+    // while the agent is still streaming. Windowed popups still get the keys in
+    // both modes; they own a pager of their own.
     this.bindKey(['pageup'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
         this.windowMgr.handleKey('pageup');
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null) this.scrollBy(-1);
+      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(-1);
     });
     this.bindKey(['pagedown'], () => {
       if (this.interactivePrompt === null && this.windowMgr.isActive) {
@@ -2869,7 +3148,7 @@ exportHistory(): string[] {
         this.scheduler.requestImmediate();
         return;
       }
-      if (this.interactivePrompt === null) this.scrollBy(1);
+      if (this.interactivePrompt === null && this.inlineSurface === null) this.scrollBy(1);
     });
 
     // Everything else is text. Notably this is where CJK arrives: measured on
@@ -2924,7 +3203,7 @@ exportHistory(): string[] {
         this.handleOverlayKey(ch, key);
         return;
       }
-      if (this.focus === 'transcript') this.focus = 'input';
+      if (this.focus === 'tasks') this.focus = 'input';
       this.editor.insert(ch);
       this.paste.feed(ch, now());
       this.refreshCompletion();
@@ -2972,29 +3251,49 @@ exportHistory(): string[] {
 
     const fallbacks: Record<CompletionKey, () => void> = {
       up: () => {
-        if (this.focus === 'transcript') this.moveSelectedBlock(-1);
+        if (this.focus === 'tasks') this.moveTaskSelection(-1);
         else this.editor.historyPrevious();
       },
       down: () => {
-        if (this.focus === 'transcript') this.moveSelectedBlock(1);
+        if (this.focus === 'tasks') this.moveTaskSelection(1);
         else this.editor.historyNext();
       },
       tab: () => {
-        if (this.focus === 'transcript' || this.editor.isEmpty) this.toggleFocus();
+        if (this.focus === 'tasks' || this.editor.isEmpty) this.toggleFocus();
+        else if (this.isBusyNow() && this.options.onQueueDraft !== undefined && !isControllerLine(this.editor.text)) {
+          // Tab queues only while a turn runs; otherwise it stays the editor's
+          // indent, and the completion popup above still owns its accept.
+          const text = this.editor.submitIfPresent();
+          if (text !== null) {
+            this.refreshCompletion();
+            this.scheduler.requestImmediate();
+            void this.options.onQueueDraft(text, this.takeDraftAttachments(text));
+          }
+        }
         else this.editor.insert('  ');
       },
       escape: () => {
-        if (this.focus === 'transcript') this.focus = 'input';
+        if (this.focus === 'tasks') this.focus = 'input';
         else if (this.completion.isOpen) this.completion.close();
-        else if (this.options.isBusy?.() ?? this.busy) this.options.onInterrupt?.();
+        else if (this.isBusyNow()) {
+          // Esc means "stop"; with prose in the composer it means "stop, then
+          // send this". A command line stays put: stopping is the whole ask.
+          const text = this.editor.isEmpty || isControllerLine(this.editor.text)
+            ? null
+            : this.editor.submitIfPresent();
+          if (text !== null && this.options.onInterruptAndSend !== undefined) {
+            this.refreshCompletion();
+            this.options.onInterruptAndSend(text, this.takeDraftAttachments(text));
+          } else this.options.onInterrupt?.();
+        }
         else if (this.editor.isEmpty) {
           const queued = this.options.onRecallQueued?.();
-          if (queued != null) this.editor.setText(queued, Array.from(queued).length);
+          if (queued != null) this.recallIntoComposer(queued);
         }
         else this.closeOverlay();
       },
       return: () => {
-        if (this.focus === 'transcript') this.focus = 'input';
+        if (this.focus === 'tasks') this.openSelectedTask();
         else this.onEnter();
       },
     };
@@ -3067,13 +3366,136 @@ exportHistory(): string[] {
     }
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
-    if (this.focus === 'transcript') this.focus = 'input';
+    if (this.focus === 'tasks') this.focus = 'input';
+    // A paste that is one absolute path to an attachable file becomes a chip
+    // instead of text (terminal file drags arrive exactly this way). The shape
+    // test is synchronous; the `stat` is not, so the fallback — pasting the
+    // raw text — happens from the async continuation.
+    const pathCandidate = extractPathPasteCandidate(text);
+    if (pathCandidate !== null) {
+      void this.acceptPathPaste(pathCandidate, text);
+      return;
+    }
     this.editor.insert(text);
     // Bracketed paste already tells us exactly where the payload ends, so its
     // embedded newlines are literal and must not arm the burst Enter heuristic.
     this.paste.reset();
     this.refreshCompletion();
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Resolve a pasted path into a draft attachment, or fall back to pasting
+   * the raw text when it resolves to nothing (missing file, non-attachable
+   * extension, directory).
+   */
+  private async acceptPathPaste(candidate: string, rawText: string): Promise<void> {
+    const attachment = await resolvePathAttachment(candidate);
+    if (attachment === null) {
+      // Not an attachable file — the paste is ordinary text after all. The
+      // burst heuristic is still reset: bracketed paste delivered this as one
+      // payload, so its newlines are literal regardless of what we do with it.
+      this.paste.reset();
+      this.editor.insert(rawText);
+      this.refreshCompletion();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.addDraftAttachment(attachment);
+  }
+
+  /**
+   * Queue an attachment and insert its chip label at the cursor.
+   *
+   * Returns without any effect when the draft would exceed the count or size
+   * limits, or when the same file is already queued — the user sees the chip
+   * not appearing rather than an error for a redundant gesture.
+   */
+  private addDraftAttachment(attachment: Omit<TuiDraftAttachment, 'label'>): void {
+    if (this.draftAttachments.some((existing) => existing.filePath === attachment.filePath)) return;
+    const violation = findAttachmentLimitViolation(this.draftAttachments, attachment.size);
+    if (violation === 'count') {
+      this.printError(`Attachment limit reached (${this.draftAttachments.length}/10). Submit before attaching more.`);
+      return;
+    }
+    if (violation === 'total-size') {
+      this.printError('Attachments exceed the 100 MB total limit.');
+      return;
+    }
+    this.chipSeq += 1;
+    const labelled: TuiDraftAttachment = { ...attachment, label: attachmentChipLabel(attachment, this.chipSeq) };
+    this.draftAttachments.push(labelled);
+    if (this.focus === 'tasks') this.focus = 'input';
+    this.editor.insert(labelled.label + ' ');
+    this.refreshCompletion();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * The attachments that travel with a draft leaving the composer.
+   *
+   * Attachments ride along only if their chip labels survived in the
+   * submitted text; edited-away or undone chips drop their attachment here.
+   * The draft list is emptied either way — the composer holds one draft.
+   */
+  private takeDraftAttachments(text: string): readonly FileAttachment[] {
+    const attachments = takeAttachmentsForSubmit(this.draftAttachments, text);
+    this.draftAttachments = [];
+    return attachments;
+  }
+
+  /**
+   * Open a local `!` shell card and return the callId to complete it with.
+   *
+   * Rendered through the ordinary bash tool card (`upsertTool` with a
+   * `{ command }` input): the running spinner, the output disclosure and the
+   * failure styling already exist there, and a locally-run command is visually
+   * the same animal as an agent-run one.
+   */
+  beginLocalShell(command: string): string {
+    this.localShellSeq += 1;
+    const callId = `local-shell:${this.localShellSeq}`;
+    this.model.upsertTool(callId, 'bash', { command });
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+    return callId;
+  }
+
+  /** Complete a local `!` shell card with its combined output. */
+  finishLocalShell(callId: string, output: string, failed: boolean): void {
+    this.model.completeTool(callId, output, failed);
+    this.noteTranscriptMutation();
+    this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Read the clipboard for an image or copied files and queue what comes
+   * back. Bound to Ctrl+V and Alt+V (terminals like Windows Terminal consume
+   * Ctrl+V for their own text paste, which never reaches this process).
+   */
+  private async pasteClipboardAttachment(): Promise<void> {
+    let result: Awaited<ReturnType<typeof readClipboardAttachments>>;
+    try {
+      result = await readClipboardAttachments();
+    } catch (error) {
+      this.printError('Could not read the clipboard: ' + (error instanceof Error ? error.message : String(error)));
+      return;
+    }
+    if (result.kind === 'empty') return;
+    if (result.kind === 'unsupported') {
+      this.printNotice('Clipboard attachments need Windows (Ctrl+V); paste a file path instead.');
+      return;
+    }
+    if (result.kind === 'image') {
+      const attachment = await resolveClipboardFileAttachment(result.filePath, 'image/png');
+      if (attachment !== null) this.addDraftAttachment(attachment);
+      return;
+    }
+    for (const filePath of result.paths) {
+      // A copied file is explicit intent: any extension is accepted.
+      const attachment = await resolveClipboardFileAttachment(filePath, null);
+      if (attachment !== null) this.addDraftAttachment(attachment);
+    }
   }
 
   private movePromptCursor(cursor: number): void {
@@ -3162,6 +3584,9 @@ exportHistory(): string[] {
       this.scheduler.requestImmediate();
       return;
     }
+    // Attachments ride along only if their chip labels survived in the
+    // submitted text; edited-away or undone chips drop their attachment here.
+    const attachments = this.takeDraftAttachments(text);
     this.refreshCompletion();
     if (this.options.echoSubmitted !== false) {
       this.model.addUser(text);
@@ -3172,7 +3597,14 @@ exportHistory(): string[] {
     // Render the user's own line before the turn starts, so the transcript
     // shows what was asked rather than jumping straight to the answer.
     this.scheduler.requestImmediate();
-    void this.options.onSubmit(text);
+    // A draft typed while a turn runs is guidance for that turn, not a new
+    // turn behind it. The controller decides whether the run took it. Command
+    // lines are exempt: they are not prose and must still reach `onSubmit`.
+    if (this.isBusyNow() && this.options.onSteer !== undefined && !isControllerLine(text)) {
+      void this.options.onSteer(text, attachments);
+      return;
+    }
+    void this.options.onSubmit(text, attachments);
   }
 
   private onCtrlC(): void {
@@ -3194,7 +3626,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
-    if (this.focus === 'transcript') this.focus = 'input';
+    if (this.focus === 'tasks') this.focus = 'input';
     this.follow = true;
     this.scrollTop = 0;
     this.scheduler.requestImmediate();
@@ -3202,79 +3634,50 @@ exportHistory(): string[] {
 
   private toggleFocus(): void {
     if (this.focus === 'input') {
-      this.focus = 'transcript';
-      this.completion.close();
-      this.selectedBlockIndex = this.model.blocks.length - 1;
-      this.revealSelectedBlock();
+      this.openTasks();
     } else {
       this.focus = 'input';
       this.refreshCompletion();
+      this.scheduler.requestImmediate();
     }
-    this.scheduler.requestImmediate();
   }
 
-  private moveSelectedBlock(delta: number): void {
-    const count = this.model.blocks.length;
+  private moveTaskSelection(delta: number): void {
+    const count = this.backgroundTaskRows().length;
     if (count === 0) return;
-    const current = this.selectedBlockIndex < 0 ? count - 1 : this.selectedBlockIndex;
-    this.selectedBlockIndex = Math.max(0, Math.min(count - 1, current + delta));
-    this.revealSelectedBlock();
+    const current = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
+    this.selectedTaskRow = Math.max(0, Math.min(count - 1, current + delta));
     this.scheduler.requestImmediate();
   }
 
-  private setSelectedBlockExpanded(expanded: boolean): void {
-    const block = this.model.blocks[this.selectedBlockIndex];
-    if (block === undefined) return;
-    const hasDetails = block.kind === 'thinking' ||
-      (block.kind === 'tool' && block.result !== undefined && block.result.trim() !== '');
-    if (!hasDetails) return;
-
-    this.expandedBlockIds.delete(block.id);
-    this.collapsedBlockIds.delete(block.id);
-    if (expanded) this.expandedBlockIds.add(block.id);
-    else this.collapsedBlockIds.add(block.id);
-    this.revealSelectedBlock();
+  /** Fold (false) or unfold (true) the group the selection sits in. */
+  private setTaskGroupAtSelection(collapsed: boolean): void {
+    const rows = this.backgroundTaskRows();
+    const row = this.selectedTaskRow < 0 ? undefined : rows[this.selectedTaskRow];
+    if (row === undefined) return;
+    const group = row.kind === 'group' ? row.group : this.backgroundTasks.groups().find((g) => g.id === row.task.kind);
+    if (group === undefined) return;
+    this.backgroundTasks.setGroupCollapsed(group.id, collapsed);
+    this.clampTaskSelection();
     this.scheduler.requestImmediate();
   }
 
-  private revealSelectedBlock(): void {
-    const blocks = this.model.blocks;
-    const selected = blocks[this.selectedBlockIndex];
-    if (selected === undefined) return;
-
-    const options = this.renderOptions();
-    // Heights come from the same cache the paint path reads, so the window
-    // arithmetic here can never disagree with what is on screen. Blocks are
-    // joined with '\n', and a stanza gap is the FIRST line of the block below
-    // it, so a block's start line is the plain sum of the heights before it —
-    // no per-block +1.
-    const heights = this.transcript.heights(this.model, options);
-    let selectedStart = 0;
-    for (let index = 0; index < this.selectedBlockIndex; index += 1) {
-      selectedStart += heights[index] ?? 0;
+  private openSelectedTask(): void {
+    const rows = this.backgroundTaskRows();
+    const row = this.selectedTaskRow < 0 ? undefined : rows[this.selectedTaskRow];
+    if (row === undefined) return;
+    if (row.kind === 'group') {
+      this.backgroundTasks.toggleGroup(row.group.id);
+      this.clampTaskSelection();
+      this.scheduler.requestImmediate();
+      return;
     }
+    this.openTaskDetail(row.task);
+  }
 
-    const selectedRows = heights[this.selectedBlockIndex] ?? 0;
-    const totalRows = heights.reduce((total, lines) => total + lines, 0);
-    const viewportRows = this.visibleTranscriptRows();
-    const maxStart = Math.max(0, totalRows - viewportRows);
-    // Following pins the window to the newest line; otherwise the viewport
-    // stays where the reader put it and the selected block is brought into it.
-    let start = this.follow
-      ? maxStart
-      : Math.max(0, Math.min(maxStart, this.scrollTop));
-    if (selectedStart < start) start = selectedStart;
-    else if (selectedStart + selectedRows > start + viewportRows) {
-      start = selectedStart + selectedRows - viewportRows;
-    }
-    start = Math.max(0, Math.min(maxStart, start));
-    this.scrollTop = start;
-    // Reaching the bottom IS following again, and it is the only way there:
-    // the reader scrolls to the last line and the transcript starts following
-    // again. Deriving this from the offset rather than setting it separately
-    // is what stops "I scrolled to the bottom but it still says paused" from
-    // being reachable.
-    this.follow = start >= maxStart;
+  /** Render the detail window; output is read on demand (Phase 8). */
+  private openTaskDetail(task: BackgroundTaskView): void {
+    this.options.onBackgroundTaskOpen?.(task);
   }
 
   private scrollBy(pages: number): void {

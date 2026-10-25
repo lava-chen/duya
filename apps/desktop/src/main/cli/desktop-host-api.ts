@@ -80,6 +80,7 @@ import { createHostLocalModelCapabilityApi } from '@duya/host/local-model-capabi
 import { createHostLocalProviderModelCapabilityApi } from '@duya/host/local-provider-model-capability-api';
 import { createHostLocalProviderCatalogApi } from '@duya/host/local-provider-catalog-api';
 import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection-api';
+import { createHostLocalPluginInventoryApi } from '@duya/host/local-plugin-inventory-api';
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
 import { createHostPluginAppInstanceApi } from '@duya/host/local-plugin-app-instance-api';
 import { createHostPluginAppGrantApi } from '@duya/host/local-plugin-app-grant-api';
@@ -325,7 +326,17 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   };
   pluginAppInvocationInternalApi = pluginAppInvocationApi;
   const runApi = createHostRunApi(stores);
-  const server = new HostSessionHttpServer({
+  // Loaded lazily on purpose: the session handoff needs the main window, and
+  // the window manager drags `electron` into this module's import graph. This
+  // file is imported by every Desktop module that talks to the Host, and unit
+  // tests mock `electron` partially — a static edge to the window manager
+  // would evaluate the real `electron` bindings in every such suite.
+  const { createDesktopSessionHandoffApi } = await import('../sessions/session-handoff');
+  // The options object is a variable, not an inline literal: the session
+  // handoff below is the Desktop's answer to the Host's OPTIONAL
+  // session-handoff capability, and it reaches the Host through the option
+  // slot the Host reads it from.
+  const hostApiOptions = {
     api,
     localSessionApi: createHostLocalSessionApi({
       stores,
@@ -370,6 +381,9 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       new AppConnectionStore(mainDatabase, deriveConnectionSlug),
     ),
     localPluginSetupApi: createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase)),
+    // The plugin inventory the CLI's `/plugin` reads. The Desktop reads the
+    // same registry through its own page, so both surfaces see one list.
+    localPluginInventoryApi: createHostLocalPluginInventoryApi(),
     pluginAppInstanceApi,
     pluginAppGrantApi,
     pluginAppInvocationApi,
@@ -409,7 +423,11 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     integrationSync: workspaceLifecycle.integrationSync,
     host: HOST,
     token,
-  });
+    // "Open this session in the desktop app" — how a CLI's `/app` reaches
+    // the running app through the Host it is attached to.
+    sessionHandoffApi: createDesktopSessionHandoffApi(),
+  };
+  const server = new HostSessionHttpServer(hostApiOptions);
 
   await server.listen();
   const runtime: HostApiRuntime = {

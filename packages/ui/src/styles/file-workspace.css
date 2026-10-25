@@ -370,7 +370,7 @@
   position: relative;
   overflow: auto;
   min-height: 0;
-  font-family: var(--font-mono, "Cascadia Code", "SFMono-Regular", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: var(--fw-code-row);
 }
@@ -425,7 +425,7 @@
   padding: 0;
   background: transparent;
   color: var(--muted);
-  font-family: var(--font-sans, sans-serif);
+  font-family: var(--font-sans);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
@@ -509,7 +509,7 @@
   border-radius: 5px;
   background: var(--panel-surface);
   overflow: hidden;
-  font-family: var(--font-sans, sans-serif);
+  font-family: var(--font-sans);
 }
 
 .fw-cmt-hd {

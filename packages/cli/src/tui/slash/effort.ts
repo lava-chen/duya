@@ -45,8 +45,9 @@ const DEFAULT_MODEL_EFFORTS: readonly string[] = ['low', 'medium', 'high', 'max'
  *
  * 1. The provider catalog — the built-in model directory knows each model's
  *    own ladder (`MiniMax-M3` answers to off/low/medium/high/max, a GLM
- *    model to off/low/medium/high). This is the per-model tiering the user
- *    configured providers carry.
+ *    model to off/low/medium/high). Read across both of a provider's lists,
+ *    since `/model` can put the session on a preset the configuration never
+ *    named.
  * 2. `ProviderModelCapabilityRecord.reasoningEffortOptions` — the override
  *    table the Desktop provider editor writes.
  * 3. The four levels the Desktop offers, when neither source says anything.
@@ -76,7 +77,11 @@ async function declaredLevels(ctx: TuiSlashContext): Promise<string[]> {
   try {
     const catalog = await ctx.client.getProviderCatalog();
     const provider = catalog.providers.find((entry) => entry.providerId === ctx.session.providerId);
-    const entry = provider?.models.find((candidate) => candidate.modelId === model);
+    // A `/model` pick can be a preset: the provider serves it, `enabled_models`
+    // does not list it. Reading only `models` would drop the ladder of exactly
+    // the models that were just made selectable.
+    const entry = [...(provider?.models ?? []), ...(provider?.presetModels ?? [])]
+      .find((candidate) => candidate.modelId === model);
     const tiers = entry?.reasoningEffortOptions ?? [];
     if (tiers.length > 0) return [...tiers];
   } catch {

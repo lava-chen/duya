@@ -62,6 +62,7 @@ function makeBridge(overrides: Partial<CommandAppBridge> = {}): CommandAppBridge
     resetSession: vi.fn(async () => ({ oldSessionId: 'a', newSessionId: 'b' })),
     stopTurn: vi.fn(),
     compactContext: vi.fn(),
+    focusSession: vi.fn(),
     requestRecap: vi.fn(async () => ({ success: true, recap: 'r' })),
     setSessionModel: vi.fn(),
     setEffort: vi.fn(),
