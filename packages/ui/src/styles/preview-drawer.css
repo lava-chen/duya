@@ -1119,23 +1119,16 @@
   width: 7px;
 }
 
+/* The zone's edge handle uses the unified pill language: invisible seam, a
+   short pill on hover/focus, accent while resizing (the generic rules in
+   workspace.css carry the states; only the hit area differs here). */
 .panel-zone .resize-handle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.panel-zone .resize-handle:focus-visible .resize-handle-bar {
-  opacity: 1;
-}
-
-.panel-zone .resize-handle:hover {
-  background: var(--surface-hover);
+  outline: none;
 }
 
 .panel-zone .resize-handle-bar {
-  height: 100%;
-  border-radius: 0;
-  background: var(--accent);
+  width: 36px;
+  height: 4px;
 }
 
 .panel-zone-resizing,

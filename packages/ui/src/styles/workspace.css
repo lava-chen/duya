@@ -221,6 +221,94 @@
   overflow: hidden;
 }
 
+/* Placeholder card shown while a pane lives in its own OS window. */
+.panel-card-detached .panel-card-title {
+  cursor: default;
+  color: var(--text-secondary);
+}
+
+.panel-card-detached-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 0 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+/* A detached panel window: the panel fills the window, with its own slim
+   header replacing the native title bar's missing actions (pin / return). */
+.detached-panel-root {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background: var(--main-bg);
+  color: var(--text-primary);
+}
+
+.detached-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detached-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}
+
+.detached-panel-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.detached-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.detached-panel-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.detached-panel-action:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.detached-panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* The separators sit in the gaps between the cards. */
 .panel-wall-separator {
   position: absolute;
@@ -262,9 +350,17 @@
   cursor: row-resize;
 }
 
+/* The wall's separators follow the unified pill language; only their hit
+   area is special (full seam, wider than the pill). The column separator's
+   pill runs horizontally along the seam, the row separator's vertically. */
 .panel-zone .panel-wall-separator .resize-handle-bar {
-  width: 3px;
-  height: 40px;
+  width: 36px;
+  height: 4px;
+}
+
+.panel-zone .panel-wall-separator-row .resize-handle-bar {
+  width: 4px;
+  height: 36px;
 }
 
 /* Browser guests are stateful. Keep every browser tab mounted so switching
@@ -495,7 +591,12 @@
   outline: none;
 }
 
-/* Resize Handle */
+/* Resize Handle.
+   One visual language for every resize affordance (panel wall separators,
+   the panel zone's edge, the sidebar edge): the seam stays invisible until
+   the pointer or keyboard focus reaches it, then a short pill — oriented
+   along the seam — marks it, and an actual drag additionally floats a
+   "Resize" badge above the pill, the way the reference product does. */
 .resize-handle {
   width: 4px;
   background: transparent;
@@ -505,25 +606,67 @@
   justify-content: center;
   position: relative;
   z-index: 10;
-  transition: background-color 0.2s ease;
-}
-
-.resize-handle:hover {
-  background: var(--accent-soft);
 }
 
 .resize-handle-bar {
-  height: 40px;
-  background: var(--border);
-  border-radius: 1px;
+  width: 36px;
+  height: 4px;
+  flex: 0 0 auto;
+  background: var(--border-strong);
+  border-radius: 999px;
   opacity: 0;
-  transition: opacity 0.2s ease, background-color 0.2s ease;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+/* Horizontal seams (side top/bottom): the pill runs along the seam, so it
+   turns vertical. */
+.resize-handle-top .resize-handle-bar,
+.resize-handle-bottom .resize-handle-bar {
+  width: 4px;
+  height: 36px;
 }
 
 .resize-handle:hover .resize-handle-bar,
-.resize-handle:active .resize-handle-bar {
+.resize-handle:focus-visible .resize-handle-bar {
   opacity: 1;
+}
+
+.resize-handle:focus-visible {
+  outline: none;
+}
+
+.resize-handle:focus-visible .resize-handle-bar,
+.resize-handle[data-resizing] .resize-handle-bar {
   background: var(--accent);
+  opacity: 1;
+}
+
+.resize-handle[data-resizing] .resize-handle-bar {
+  width: 56px;
+}
+
+.resize-handle-top[data-resizing] .resize-handle-bar,
+.resize-handle-bottom[data-resizing] .resize-handle-bar {
+  width: 4px;
+  height: 56px;
+}
+
+.resize-handle-badge {
+  position: absolute;
+  left: 50%;
+  top: -30px;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 11;
 }
 
 /* Chat header — session title bar above the transcript */
