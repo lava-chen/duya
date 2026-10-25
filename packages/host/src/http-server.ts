@@ -166,6 +166,7 @@ import type {
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryApiV1 } from '@duya/agent-protocol/plugin-inventory';
 import type { HostSessionHandoffApiV1 } from '@duya/agent-protocol/session-handoff';
+import type { HostAgentsMdApiV1 } from '@duya/agent-protocol/doctor';
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
 import { HostPluginAppInstanceApiError } from './local-plugin-app-instance-api.js';
 import { routePluginAppInstances } from './plugin-app-instance-routes.js';
@@ -380,6 +381,14 @@ export interface HostSessionHttpServerOptions {
    * is "this Host cannot do that" rather than "the handoff failed".
    */
   readonly sessionHandoffApi?: HostSessionHandoffApiV1;
+  /**
+   * Writing the repository-root `AGENTS.md`.
+   *
+   * Optional: a Host that cannot write into the workspace does not offer the
+   * capability, and answers 404 `agents_md_api_unavailable` — "this Host
+   * cannot do that" rather than "the write failed".
+   */
+  readonly agentsMdApi?: HostAgentsMdApiV1;
   readonly pluginAppInstanceApi?: HostPluginAppInstanceApiV1;
   readonly pluginAppGrantApi?: HostPluginAppGrantApiV1;
   readonly pluginAppInvocationApi?: HostPluginAppInvocationApiV1;
@@ -1714,6 +1723,31 @@ export class HostSessionHttpServer {
           return;
         }
         this.#sendJson(res, 200, { ok: true });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/agents-md' && req.method === 'POST') {
+      const api = this.#options.agentsMdApi;
+      if (!api) {
+        // "This Host cannot write into the workspace" is not "the write
+        // failed". The caller tells them apart by the code.
+        this.#sendJson(res, 404, { error: { code: 'agents_md_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isBoundedString(body.sessionId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_agents_md_request' } });
+        return;
+      }
+      try {
+        // The result carries the outcome, including a refusal the Host can
+        // explain ("this session has no working directory"). A refusal is a
+        // 200 with `ok: false`: the request was well formed and was answered.
+        const result = await api.writeAgentsMd({ sessionId: body.sessionId });
+        this.#sendJson(res, 200, result);
       } catch (error) {
         this.#sendApiError(res, error);
       }

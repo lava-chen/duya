@@ -33,6 +33,7 @@ import type { InitAgentsMdResult } from '@duya/agent-protocol/doctor';
 
 import {
   buildInitAgentsMdTemplate,
+  INIT_AGENTS_MD_MARKER_REGEX,
   INIT_AGENTS_MD_VERSION,
   readInitAgentsMdVersion,
 } from './init-template.js';
@@ -106,15 +107,20 @@ export async function writeInitAgentsMd(root: string): Promise<InitAgentsMdResul
     };
   }
 
-  const marked = existing !== null && readInitAgentsMdVersion(existing) > 0;
+  // The MARKER's presence is what says duya wrote the file, not the version
+  // it carries: a file recorded at version 0 still carries a marker, and it
+  // is duya's file just as much as one recorded at version 3.
+  const marked = existing !== null && INIT_AGENTS_MD_MARKER_REGEX.test(existing);
   return {
     ok: true,
     path: target,
     created: existing === null,
-    upgraded: existing !== null && marked,
+    // The file existed and was rewritten — that is an upgrade, whether or not
+    // it carried a marker. `replacedUnmarked` says the extra thing: it was
+    // the user's own file, not one duya wrote.
+    upgraded: existing !== null,
     unchanged: false,
     version: INIT_AGENTS_MD_VERSION,
-    // A file with no duya marker was the user's own; say so out loud.
     ...(existing !== null && !marked ? { replacedUnmarked: true } : {}),
   };
 }
