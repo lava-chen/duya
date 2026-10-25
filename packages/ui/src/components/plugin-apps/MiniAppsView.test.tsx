@@ -9,6 +9,8 @@ type TestStreamEvent =
 const mocks = vi.hoisted(() => ({
   activeThreadId: null as string | null,
   includeStaticApp: false,
+  /** Overrides the registry's app list; null keeps the default. */
+  registryApps: null as ReadonlyArray<{ appId: string; entry?: string; runtime?: 'agent-run' | 'standalone' }> | null,
   translate: (key: string) => key,
   openOrActivatePage: vi.fn(),
   openApp: vi.fn(),
@@ -34,7 +36,7 @@ vi.mock("@/lib/plugin-ipc", () => ({
   getPluginAPI: () => ({
     registry: { list: async () => ({ success: true, data: [{
       id: "com.duya.viewer", name: "Viewer", description: "Read-only view", enabled: true,
-      apps: mocks.includeStaticApp ? [{ appId: "legacy-view", entry: "index.html" }] : [],
+      apps: mocks.registryApps ?? (mocks.includeStaticApp ? [{ appId: "legacy-view", entry: "index.html" }] : []),
     }] }) },
     uiSurfaces: { list: mocks.listSurfaces },
   }),
@@ -80,6 +82,7 @@ const sessionSurface = {
 beforeEach(() => {
   mocks.activeThreadId = null;
   mocks.includeStaticApp = false;
+  mocks.registryApps = null;
   mocks.openOrActivatePage.mockReset();
   mocks.openApp.mockReset();
   mocks.listSurfaces.mockReset().mockResolvedValue({
@@ -246,5 +249,33 @@ describe("Mini Apps Plugin UI surface directory", () => {
     render(<MiniAppsView />);
     expect(await screen.findByRole("button", { name: "legacy-view" })).toBeTruthy();
     expect(await screen.findByRole("alert")).toHaveTextContent("surface directory unavailable");
+  });
+
+  it("opens a static entry App as a panel tab instead of a fullscreen overlay", async () => {
+    mocks.includeStaticApp = true;
+    mocks.activeThreadId = "thread-1";
+    render(<MiniAppsView />);
+    fireEvent.click(await screen.findByRole("button", { name: "legacy-view" }));
+    expect(mocks.openOrActivatePage).toHaveBeenCalledWith("plugin-app", expect.objectContaining({
+      pluginId: "com.duya.viewer", appId: "legacy-view", title: "legacy-view", availability: "session",
+    }));
+  });
+
+  it("opens a standalone App as a session-independent panel without a chat", async () => {
+    mocks.registryApps = [{ appId: "canvas", entry: "index.html", runtime: "standalone" }];
+    render(<MiniAppsView />);
+    fireEvent.click(await screen.findByRole("button", { name: "canvas" }));
+    expect(mocks.openOrActivatePage).toHaveBeenCalledWith("plugin-app", expect.objectContaining({
+      pluginId: "com.duya.viewer", appId: "canvas", title: "canvas", availability: "always",
+    }));
+  });
+
+  it("refuses an agent-run App without a chat session instead of opening a panel", async () => {
+    mocks.includeStaticApp = true;
+    mocks.activeThreadId = null;
+    render(<MiniAppsView />);
+    fireEvent.click(await screen.findByRole("button", { name: "legacy-view" }));
+    expect(mocks.openOrActivatePage).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("apps.selectChat");
   });
 });

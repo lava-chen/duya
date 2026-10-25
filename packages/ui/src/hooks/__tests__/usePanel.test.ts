@@ -267,4 +267,28 @@ describe("PanelProvider plugin UI surfaces", () => {
     });
     expect(result.current.tabs).toHaveLength(2);
   });
+
+  it("folds repeated opens of an entry App and separates entry Apps by appId", () => {
+    const { result } = renderHook(() => usePanel(), { wrapper });
+    let firstTabId = "";
+    act(() => {
+      firstTabId = result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.canvas", appId: "canvas", title: "canvas",
+      });
+    });
+    act(() => {
+      result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.canvas", appId: "canvas", title: "canvas",
+      });
+    });
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.activeTabId).toBe(firstTabId);
+
+    act(() => {
+      result.current.openOrActivatePage("plugin-app", {
+        pluginId: "com.duya.canvas", appId: "notes", title: "notes",
+      });
+    });
+    expect(result.current.tabs).toHaveLength(2);
+  });
 });

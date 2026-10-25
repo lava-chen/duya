@@ -32,6 +32,8 @@ export interface MarketplaceViewDTO {
   path?: string;
   ref?: string;
   addedAt?: string;
+  /** Hidden sources stay configured but their plugins leave the catalog. */
+  hidden: boolean;
   error?: string;
   pluginCount: number;
   pluginNames: string[];
@@ -71,6 +73,9 @@ export function getPluginAPI() {
         },
         remove: async (name: string) => {
           return api.plugin.marketplace.remove({ name });
+        },
+        setHidden: async (name: string, hidden: boolean) => {
+          return api.plugin.marketplace.setHidden({ name, hidden });
         },
         refresh: async (name?: string) => {
           return api.plugin.marketplace.refresh({ name });
