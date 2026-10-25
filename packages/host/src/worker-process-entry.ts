@@ -214,6 +214,12 @@ let existingMessageCount = 0;
  * which the turn needs.
  */
 let currentInitShape: WorkerInitShape | null = null;
+/**
+ * Whether the last MCP handshake threw. The reuse path keeps the agent AND
+ * skips a new handshake, so without this flag one transient MCP failure would
+ * leave the session without its MCP tools until the config changes.
+ */
+let mcpHandshakeFailed = false;
 let pendingCompactCommand: unknown = null;
 let compactedPending = false;
 let liveTotalInput = 0;
@@ -2792,6 +2798,7 @@ function startMcpInitialization(): void {
                 agent: sessionForMcp,
                 reason: 'initialization',
             });
+            mcpHandshakeFailed = false;
             log(`[Agent-Process] Initialized MCP servers: ${result.action.clientsConnected} connected, ` +
                 `${result.action.toolsAdded} tools, ${result.action.toolsRemoved} removed ` +
                 `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`);
@@ -2801,6 +2808,7 @@ function startMcpInitialization(): void {
             }
         }
         catch (mcpErr) {
+            mcpHandshakeFailed = true;
             warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
         }
         finally {
@@ -2870,6 +2878,10 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             ) {
                 log('[Agent-Process] Re-init skipped: the agent configuration is unchanged');
                 sendToMain({ type: 'ready', sessionId });
+                // The handshake is the one thing a re-init would have retried.
+                // If the last attempt threw, retry it here instead of leaving
+                // the session without MCP tools until the config changes.
+                if (mcpHandshakeFailed) startMcpInitialization();
                 // A chat:start that arrived while this init was in flight is
                 // still queued, and the skip must not strand it.
                 void drainQueuedChatStart();
@@ -2931,6 +2943,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             try {
                 await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
                 const restoredSession = requireWorkerSession();
+                let restoreOk = false;
                 try {
                     currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
                     const [_, __, history] = await Promise.all([
@@ -3007,6 +3020,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                             warn('[Agent-Process] Failed to restore/create session goal:', err);
                         }
                     }
+                    restoreOk = true;
                 }
                 catch (err) {
                     warn('[Agent-Process] Failed to load messages from DB:', err);
@@ -3017,7 +3031,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 // right after `initAgent` so that a failed history restore
                 // still leaves the next turn rebuilding -- that failure is
                 // recoverable, and a rebuild is how it recovers.
-                currentInitShape = initMsg;
+                if (restoreOk) currentInitShape = initMsg;
             }
             catch (err) {
                 initError = err instanceof Error ? err.message : String(err);
