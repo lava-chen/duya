@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { redactPathInText, redactDoctorJson } from '../doctor-redact.js';
-import type { DoctorResult } from '../doctor.js';
+import { redactPathInText, redactDoctorJson } from '../src/diagnostics/index.js';
+import type { DoctorResult } from '../src/diagnostics/index.js';
 
 const HOME = 'C:\\Users\\lavachen';
 
