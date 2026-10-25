@@ -13,8 +13,8 @@ import {
 } from "@/components/settings/ui";
 import { type TranslationKey } from "@/i18n";
 
-// Two functional font presets. Anything other than "system" renders as the
-// Duya-loaded font stack (Styrene) via globals.css defaults.
+// Interface font presets, mirroring Claude Code's Appearance settings:
+// the brand stack by default, the OS UI stack as the alternative.
 const FONT_KEYS = [
   { value: "duya", key: 'settings.appearance.fontDuya' },
   { value: "system", key: 'settings.appearance.fontSystem' },

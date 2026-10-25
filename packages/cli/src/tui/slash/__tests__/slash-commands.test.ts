@@ -250,6 +250,7 @@ describe('slash registry', () => {
       'skills',
       'status',
       'stop',
+      'tasks',
       'thinking',
       'transcript',
     ]);
@@ -508,7 +509,7 @@ describe('/hotkeys', () => {
     const body = host.panels[0]?.lines.join('\n') ?? '';
     expect(body).toContain('Global');
     expect(body).toContain('Editor');
-    expect(body).toContain('Transcript');
+    expect(body).toContain('Background tasks');
     expect(body).toContain('Ctrl+R');
     // The row only exists because the binding does: see the `exit` def in
     // `actions.ts`. An advertised key that is not listed here is a key the

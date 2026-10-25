@@ -82,6 +82,10 @@ vi.mock('../tui/index.js', () => ({
     replaceTranscript() {}
     chooseFiltered() { return Promise.resolve(null); }
     choose() { return Promise.resolve(null); }
+    setBackgroundTasks() {}
+    hasRunningBackgroundTasks() { return false; }
+    isTaskViewOpen() { return false; }
+    showPanel() {}
   },
 }));
 import { chatTui } from '../chat.js';

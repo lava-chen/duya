@@ -55,10 +55,10 @@
  *     thinking. Anything else (a paragraph, a notice) starts a new stanza.
  *
  * Only the markers change the text, never the line count of a block: the block
- * model is a flat list, `renderTranscript` joins blocks with `'\n'`, and
- * `TUIApp.revealSelectedBlock` locates the selection by summing per-block
- * heights. A separator row therefore belongs to the block BELOW it, so the sum
- * stays honest and no per-block `+1` appears anywhere.
+ * model is a flat list, `renderTranscript` joins blocks with `'\n'`, and the
+ * scroll math locates a line by summing per-block heights. A separator row
+ * therefore belongs to the block BELOW it, so the sum stays honest and no
+ * per-block `+1` appears anywhere.
  */
 
 import type { Block, TranscriptModel } from './blocks.js';
@@ -1112,7 +1112,7 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
  * and where the blank rows go.
  *
  * A separator belongs to the block BELOW it, so `Σ heights` stays the flattened
- * line count and `revealSelectedBlock` needs no per-block `+1`.
+ * line count and the scroll math needs no per-block `+1`.
  */
 export function planTranscript(blocks: readonly Block[]): BlockPlan[] {
   const units = buildUnits(blocks);

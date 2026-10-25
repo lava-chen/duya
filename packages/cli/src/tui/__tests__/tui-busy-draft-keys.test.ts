@@ -110,7 +110,9 @@ describe('composer keys while a turn runs', () => {
     await settle();
 
     expect(calls.queued).toEqual([]);
-    expect(app.renderState.focus).toBe('transcript');
+    // The focus layer is the task view, not the transcript pane: the task
+    // view replaced the transcript focus layer wholesale.
+    expect(app.renderState.focus).toBe('tasks');
     app.stop();
   });
 

@@ -7,6 +7,7 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
+| 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
 | TUI 工具状态 | [2026-10-24 TUI 工具状态](active/2026-10-24-tui-tool-status-marks.md) | 门禁已过，PR #457 等 CI 与授权集成 |
 | Slash 命令实施 | [2026-10-24 slash command implementation](active/2026-10-24-slash-command-implementation.md) | 11 命令 / 4 PR 串行；PR-1 会话类（compact/btw/diff）接线中，CLI `/compact` 复用 plan 613 |
 | 动态工作流核心包 | [2026-10-24 动态工作流核心包](active/2026-10-24-dynamic-workflow-package.md) | S0 已对账并记录基线；提交文档切片后定 S1 包边界并抽取零 IO 核心 |
@@ -34,6 +35,7 @@
 | TUI 滚动语义 | [2026-10-23 TUI 滚动锚定](active/2026-10-23-tui-scroll-anchor.md) | 视窗改为绝对偏移 + 独立 follow，PR #388 已合并（`aec08d75`） |
 | TUI inline 滚动 | [2026-10-24 TUI inline 滚动](active/2026-10-24-tui-inline-scroll.md) | inline 不再接管滚轮，滚动交还终端 scrollback；修 `viewEnd` → `viewTop`，并拦住会让流式画面冻结的上滚入口 |
 | TUI 上下文占用 | [2026-10-23 TUI 上下文占用](active/2026-10-23-tui-context-usage.md) | 占用率与会话花费拆开，已过用例与变异验证，待门禁与 PR |
+| TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
 | TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
