@@ -1019,6 +1019,7 @@ export interface MarketplaceViewDTO {
   path?: string
   ref?: string
   addedAt?: string
+  hidden: boolean
   error?: string
   pluginCount: number
   pluginNames: string[]
@@ -1084,6 +1085,7 @@ export interface PluginAPI {
     list: () => Promise<{ success: boolean; data: MarketplaceViewDTO[]; error?: string }>
     add: (payload: { source: string; ref?: string }) => Promise<{ success: boolean; data?: MarketplaceViewDTO; error?: string }>
     remove: (payload: { name: string }) => Promise<{ success: boolean; data?: null; error?: string }>
+    setHidden: (payload: { name: string; hidden: boolean }) => Promise<{ success: boolean; data?: null; error?: string }>
     refresh: (payload: { name?: string }) => Promise<{ success: boolean; data: MarketplaceSyncOutcomeDTO[]; error?: string }>
   }
   installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
@@ -2869,6 +2871,7 @@ const electronAPI: ElectronAPI = {
       list: () => ipcRenderer.invoke('plugin:marketplace:list'),
       add: (payload: { source: string; ref?: string }) => ipcRenderer.invoke('plugin:marketplace:add', payload),
       remove: (payload: { name: string }) => ipcRenderer.invoke('plugin:marketplace:remove', payload),
+      setHidden: (payload: { name: string; hidden: boolean }) => ipcRenderer.invoke('plugin:marketplace:set-hidden', payload),
       refresh: (payload: { name?: string }) => ipcRenderer.invoke('plugin:marketplace:refresh', payload),
     },
     installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => ipcRenderer.invoke('plugin:install-local', payload),
