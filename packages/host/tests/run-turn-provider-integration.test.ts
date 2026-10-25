@@ -243,7 +243,10 @@ function expectedBudget(effort: 'low' | 'medium' | 'high', maxTokens: number | u
 }
 
 describe('Host turn input contract — production worker and provider', () => {
-  it('enters a worktree, writes there and exits through the production worker', async () => {
+  // A real worker doing three real git operations (worktree add, write,
+  // worktree remove); CI's slow runners (macos) have twice exceeded the 60s
+  // default while ubuntu/windows and dev machines stay well under.
+  it('enters a worktree, writes there and exits through the production worker', { timeout: 180_000 }, async () => {
     const toolStream = (round: number, name: string, input: Record<string, unknown>): string => {
       const events = [
         { type: 'message_start', message: { id: `msg-${round}`, type: 'message', role: 'assistant', model: 'test-model', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
