@@ -26,7 +26,7 @@
 - [x] 来源对话框：移除按钮对所有来源可用，增加隐藏/取消隐藏与“显示已隐藏”
 - [x] i18n 中文/英文键
 - [x] 测试与门禁
-- [ ] commit 与 PR
+- [x] commit 与 PR
 - [ ] 真机 Electron 验收（需要重建 Electron 并手动点来源对话框）
 
 ## 发现与决策
@@ -48,7 +48,7 @@
 
 已实现：配置项 `hidden` / `removed`、manager 删除墓碑与隐藏、catalog 过滤、IPC `plugin:marketplace:set-hidden`、来源对话框隐藏/取消隐藏/显示已隐藏、i18n。
 已验证：上述 vitest 12 项、typecheck、architecture check。
-已合并：无。PR：未创建。
-下一步：review diff 后 commit 并以 PR 交付；如需真机验收，先 `npm run electron:build` 再手动检查来源对话框。
+已合并：无。PR：[#492](https://github.com/lava-chen/duya/pull/492)（提交 `0020fa77`），待 review 与集成授权。
+下一步：如需真机验收，先 `npm run electron:build` 再手动检查来源对话框；否则等 PR CI 与 review。
 
 回收：未回收，任务进行中。

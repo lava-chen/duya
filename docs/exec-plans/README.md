@@ -39,7 +39,7 @@
 | TUI 上下文占用 | [2026-10-23 TUI 上下文占用](active/2026-10-23-tui-context-usage.md) | 占用率与会话花费拆开，已过用例与变异验证，待门禁与 PR |
 | TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
 | TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
-| 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 删除墓碑、隐藏开关与目录过滤已实现并通过测试与门禁；待开 PR，真机 Electron 验收未跑 |
+| 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 删除墓碑、隐藏开关与目录过滤已实现并通过测试与门禁；PR #492 待 review，真机 Electron 验收未跑 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 
