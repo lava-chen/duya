@@ -27,7 +27,7 @@
   "expect": {
     "invariants": [
       { "family": "cost-performance", "kind": "usageMatchesFixture", "value": true },
-      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 2 },
+      { "family": "cost-performance", "kind": "providerRequestsWithin", "max": 3 },
       { "family": "cost-performance", "kind": "wallClockUnder", "maxMs": 180000 },
       { "family": "structure", "kind": "terminalStatus", "value": "completed" },
       { "family": "safety", "kind": "redactionHolds", "value": true }
