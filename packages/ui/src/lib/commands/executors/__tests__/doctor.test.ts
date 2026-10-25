@@ -15,9 +15,9 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { DOCTOR_EXECUTORS, renderDoctorReport } from '../doctor';
 import type { CommandContext, CommandResult } from '../../types';
-import type { DoctorReport } from '@/contracts/doctor';
+import type { DoctorResult } from '@duya/agent-protocol';
 
-function makeReport(overrides: Partial<DoctorReport> = {}): DoctorReport {
+function makeReport(overrides: Partial<DoctorResult> = {}): DoctorResult {
   return {
     version: '1.0.0',
     timestamp: 1_700_000_000_000,

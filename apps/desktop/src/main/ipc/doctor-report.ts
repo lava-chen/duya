@@ -20,35 +20,39 @@
  *
  * ## This module is a LOCAL stand-in for the Host diagnostics layer
  *
- * The Host-owned diagnostics layer (`packages/host/src/diagnostics/`) is
- * being written by another worker, and it owns the CHECKS. Until it lands,
- * this module assembles the same report shape so the Desktop has a working
- * `/doctor` today.
+ * The Host-owned diagnostics layer (`packages/host/src/diagnostics/`) owns the
+ * CHECKS, and it is being written by another worker. It is not on this branch
+ * yet, so this module assembles the same report shape so the Desktop has a
+ * working `/doctor` today.
  *
- * The three entry points below deliberately carry the Host layer's names and
- * signatures:
+ * The three entry points below deliberately carry the Host layer's names, and
+ * the check ids and messages below are the Host layer's ids and messages, so
+ * that a report produced on either surface reads the same way:
  *
- *   - `runOfflineDiagnostics(checks, { configRoot })`
- *   - `runDesktopDiagnostics(checks, facts)`
- *   - `finalizeDoctorResult(checks, profile)`
+ *   - `runOfflineDiagnostics(checks, { configRoot })`   -> `runOfflineDiagnostics`
+ *   - `runDesktopDiagnostics(checks, facts)`           -> `runHostDiagnostics(checks, probe)`
+ *   - `finalizeDoctorResult(checks, profile)`          -> `finalizeDoctorResult`
  *
- * so that swapping to the Host layer is a matter of deleting this file and
- * changing one import. See the handoff notes for the exact diff.
+ * `doctor-facts.ts` is the part that SURVIVES the swap: it is the Desktop's
+ * in-process implementation of the Host layer's `DoctorHostProbe` port (the
+ * CLI's implementation probes over HTTP). Only this file's check bodies go
+ * away when the Host layer lands.
+ *
+ * The REPORT SHAPE is not a local copy: it is `@duya/agent-protocol/doctor`,
+ * the one contract the Host, the CLI and this renderer agree on.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { resolveConfigRoot } from '@duya/host/agent-profile-config';
-
 import type {
+  CheckResult,
   DoctorCategory,
-  DoctorCheck,
   DoctorOverallStatus,
   DoctorProfile,
-  DoctorReport,
-  DoctorSummary,
-} from '../../contracts/doctor';
+  DoctorResult,
+} from '@duya/agent-protocol';
 
 /** The report schema version — bumped when the WIRE shape changes. */
 export const DOCTOR_REPORT_VERSION = '1.0.0';
@@ -99,15 +103,15 @@ const MIN_REPORTED_DURATION_MS = 1;
  * span. Keyed by array identity so two reports built in one process (the
  * tests do exactly that) cannot leak state into each other.
  */
-const timingBaselines = new WeakMap<DoctorCheck[], number>();
+const timingBaselines = new WeakMap<CheckResult[], number>();
 
 /** Start attributing durations to `checks`. */
-export function resetTiming(checks: DoctorCheck[]): void {
+export function resetTiming(checks: CheckResult[]): void {
   timingBaselines.set(checks, Date.now());
 }
 
 /** Append `check`, stamped with the time since the previous push. */
-function pushCheck(checks: DoctorCheck[], check: DoctorCheck): void {
+function pushCheck(checks: CheckResult[], check: CheckResult): void {
   const now = Date.now();
   const previous = timingBaselines.get(checks);
   timingBaselines.set(checks, now);
@@ -131,7 +135,7 @@ function pushCheck(checks: DoctorCheck[], check: DoctorCheck): void {
  * can be pointed at a fixture directory.
  */
 export function runOfflineDiagnostics(
-  checks: DoctorCheck[],
+  checks: CheckResult[],
   options: { readonly configRoot: string },
 ): void {
   const root = options.configRoot;
@@ -224,7 +228,7 @@ export function runOfflineDiagnostics(
  * surface the desktop cannot be unreachable. A check that could not be
  * answered reports `error` with the reason.
  */
-export function runDesktopDiagnostics(checks: DoctorCheck[], facts: DesktopFactsApi): void {
+export function runDesktopDiagnostics(checks: CheckResult[], facts: DesktopFactsApi): void {
   // desktop_reachable
   pushCheck(checks, {
     id: 'desktop_reachable',
@@ -307,10 +311,10 @@ export function runDesktopDiagnostics(checks: DoctorCheck[], facts: DesktopFacts
  * check that does not apply says nothing about the health of the app.
  */
 export function finalizeDoctorResult(
-  checks: DoctorCheck[],
+  checks: CheckResult[],
   profile: DoctorProfile,
-): DoctorReport {
-  const summary: DoctorSummary = {
+): DoctorResult {
+  const summary = {
     errors: checks.filter((c) => c.status === 'error').length,
     warnings: checks.filter((c) => c.status === 'warning').length,
     skipped: checks.filter((c) => c.status === 'skipped').length,

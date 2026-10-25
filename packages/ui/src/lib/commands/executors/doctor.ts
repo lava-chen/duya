@@ -23,11 +23,11 @@
 import type { CommandExecutorFn } from './registry';
 import type { CommandContext, CommandResult } from '../types';
 import type {
+  CheckResult,
   DoctorCategory,
-  DoctorCheck,
-  DoctorReport,
+  DoctorResult,
   DoctorStatus,
-} from '@/contracts/doctor';
+} from '@duya/agent-protocol';
 
 /** The categories, in presentation order. */
 const CATEGORY_ORDER: readonly DoctorCategory[] = [
@@ -53,7 +53,7 @@ const STATUS_MARK: Record<DoctorStatus, string> = {
 };
 
 /** The category a check belongs to, or `undefined` when it is unknown. */
-function categoryOf(check: DoctorCheck): DoctorCategory | undefined {
+function categoryOf(check: CheckResult): DoctorCategory | undefined {
   return CATEGORY_ORDER.includes(check.category) ? check.category : undefined;
 }
 
@@ -65,7 +65,7 @@ function categoryOf(check: DoctorCheck): DoctorCategory | undefined {
  * check is printed under it — a report that names a problem without saying
  * what to do about it has only moved the work to the reader.
  */
-export function renderDoctorReport(report: DoctorReport): string {
+export function renderDoctorReport(report: DoctorResult): string {
   const lines: string[] = [];
   lines.push(`duya ${report.version} · ${report.profile}`);
   lines.push(
@@ -109,7 +109,7 @@ export const DOCTOR_EXECUTORS: Record<string, CommandExecutorFn> = {
       return { type: 'error', message: '/doctor: 诊断通道不可用，请重启应用后再试。' };
     }
 
-    let report: DoctorReport;
+    let report: DoctorResult;
     try {
       report = await app.runDoctor();
     } catch (error) {

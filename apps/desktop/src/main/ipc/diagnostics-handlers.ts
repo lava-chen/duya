@@ -32,7 +32,7 @@ import {
 } from './doctor-report';
 import { collectDesktopFacts, desktopProfile } from './doctor-facts';
 
-import type { DoctorCheck, DoctorReport } from '../../contracts/doctor';
+import type { CheckResult, DoctorResult } from '@duya/agent-protocol';
 
 /** The channel the renderer invokes. */
 export const DIAGNOSTICS_RUN_CHANNEL = 'diagnostics:run';
@@ -45,8 +45,8 @@ export const DIAGNOSTICS_RUN_CHANNEL = 'diagnostics:run';
  * first (they are the cheapest and the least likely to fail), then the
  * in-process ones, then the roll-up.
  */
-export async function collectDoctorReport(): Promise<DoctorReport> {
-  const checks: DoctorCheck[] = [];
+export async function collectDoctorReport(): Promise<DoctorResult> {
+  const checks: CheckResult[] = [];
   resetTiming(checks);
 
   runOfflineDiagnostics(checks, { configRoot: desktopConfigRoot() });

@@ -11,6 +11,14 @@
  * The heavy modules (the plugin manager, the desktop Host API client) are
  * imported lazily so that registering the diagnostics handler does not widen
  * the main process's boot graph for a command most sessions never run.
+ *
+ * ## How this file survives the Host diagnostics layer
+ *
+ * It is the Desktop's implementation of the Host layer's `DoctorHostProbe`
+ * port — the seam between "what the doctor checks" and "how the facts are
+ * obtained". The CLI implements the same port with an HTTP client; this one
+ * reads the facts in place. When the Host layer lands, the probe's shape
+ * changes (three-valued facts instead of booleans) and nothing else does.
  */
 
 import { app } from 'electron';
@@ -19,7 +27,7 @@ import { getCoreStoresOrNull } from '../db/core-connection';
 import { getMainWindow } from '../core/window-manager';
 
 import type { DesktopFactsApi } from './doctor-report';
-import type { DoctorProfile } from '../../contracts/doctor';
+import type { DoctorProfile } from '@duya/agent-protocol';
 
 /**
  * Which kind of installation this is.

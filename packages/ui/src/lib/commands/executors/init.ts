@@ -22,7 +22,7 @@
 
 import type { CommandExecutorFn } from './registry';
 import type { CommandContext, CommandResult } from '../types';
-import type { InitAgentsMdResult } from '@/contracts/doctor';
+import type { InitAgentsMdResult } from '@duya/agent-protocol';
 
 /** The outcome, as the user reads it. */
 function describe(result: InitAgentsMdResult): string {

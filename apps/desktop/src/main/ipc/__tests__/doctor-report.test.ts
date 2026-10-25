@@ -19,7 +19,7 @@ import {
   runOfflineDiagnostics,
   type DesktopFactsApi,
 } from '../doctor-report';
-import type { DoctorCheck } from '../../../contracts/doctor';
+import type { CheckResult } from '@duya/agent-protocol';
 
 let configRoot: string;
 
@@ -31,7 +31,7 @@ afterEach(() => {
   fs.rmSync(configRoot, { recursive: true, force: true });
 });
 
-function findCheck(checks: DoctorCheck[], id: string): DoctorCheck {
+function findCheck(checks: CheckResult[], id: string): CheckResult {
   const found = checks.find((check) => check.id === id);
   if (!found) throw new Error(`no check named ${id}`);
   return found;
@@ -49,7 +49,7 @@ function healthyFacts(): DesktopFactsApi {
 
 describe('runOfflineDiagnostics', () => {
   it('reports the config root and the config files', () => {
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runOfflineDiagnostics(checks, { configRoot });
 
@@ -61,7 +61,7 @@ describe('runOfflineDiagnostics', () => {
   });
 
   it('reports a missing config root as an error', () => {
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runOfflineDiagnostics(checks, { configRoot: path.join(configRoot, 'nope') });
 
@@ -70,7 +70,7 @@ describe('runOfflineDiagnostics', () => {
 
   it('reports unparseable secrets as an error', () => {
     fs.writeFileSync(path.join(configRoot, 'secrets.json'), '{ not json', 'utf-8');
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runOfflineDiagnostics(checks, { configRoot });
 
@@ -79,7 +79,7 @@ describe('runOfflineDiagnostics', () => {
 
   it('reports a config file that exists', () => {
     fs.writeFileSync(path.join(configRoot, 'config.toml'), '_config_version = 1\n', 'utf-8');
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runOfflineDiagnostics(checks, { configRoot });
 
@@ -89,7 +89,7 @@ describe('runOfflineDiagnostics', () => {
 
 describe('runDesktopDiagnostics', () => {
   it('answers the desktop, plugin and session categories in place', () => {
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runDesktopDiagnostics(checks, healthyFacts());
 
@@ -105,7 +105,7 @@ describe('runDesktopDiagnostics', () => {
   it('never reports "the desktop could not be reached" as a skip', () => {
     // On the Desktop surface the desktop IS this process, so an unreadable
     // registry is an ERROR, not a skipped check.
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runDesktopDiagnostics(checks, {
       ...healthyFacts(),
@@ -118,7 +118,7 @@ describe('runDesktopDiagnostics', () => {
   });
 
   it('counts the plugins and the sessions it was told about', () => {
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runDesktopDiagnostics(checks, healthyFacts());
 
@@ -129,7 +129,7 @@ describe('runDesktopDiagnostics', () => {
 
 describe('finalizeDoctorResult', () => {
   it('is ok when nothing failed', () => {
-    const checks: DoctorCheck[] = [];
+    const checks: CheckResult[] = [];
     resetTiming(checks);
     runDesktopDiagnostics(checks, healthyFacts());
 
@@ -141,7 +141,7 @@ describe('finalizeDoctorResult', () => {
   });
 
   it('is warning when only warnings were raised, and error when something failed', () => {
-    const checks: DoctorCheck[] = [
+    const checks: CheckResult[] = [
       { id: 'a', category: 'config', status: 'warning', message: 'warned' },
       { id: 'b', category: 'config', status: 'skipped', message: 'not applicable' },
     ];

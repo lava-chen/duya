@@ -20,7 +20,7 @@
  */
 
 import type { ModeModifierId } from '@/types/mode-id';
-import type { DoctorReport, InitAgentsMdResult } from '@/contracts/doctor';
+import type { DoctorResult, InitAgentsMdResult } from '@duya/agent-protocol';
 
 /** Panels a slash command can open. Keep in sync with PanelZone/PAGE_REGISTRY. */
 export type SlashCommandPanel =
@@ -96,7 +96,7 @@ export interface CommandAppBridge {
    * does not have it, and the executor refuses with a clear message rather
    * than throwing.
    */
-  runDoctor?(): Promise<DoctorReport>;
+  runDoctor?(): Promise<DoctorResult>;
   /**
    * Write the repository-root `AGENTS.md` for a session (`/init`).
    *

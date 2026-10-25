@@ -32,9 +32,9 @@ import type {
 } from '../contracts/git'
 import type { WorkspaceLifecycleAPI } from '../contracts/workspace-lifecycle'
 // The doctor report and the `/init` outcome. Type-only: the payload shapes
-// live in the shared contracts directory so the main process, this bridge and
-// the renderer cannot drift apart.
-import type { DoctorReport, InitAgentsMdResult } from '../contracts/doctor'
+// live in `@duya/agent-protocol/doctor`, the one contract the Host, the CLI
+// and the renderer agree on.
+import type { DoctorResult, InitAgentsMdResult } from '@duya/agent-protocol'
 
 /** Plan 525 Phase 2.5 — wire shape of a `projects` row. Mirrors the DB
  *  row (ProjectRow) but with `paths` decoded from JSON to an array. */
@@ -1479,7 +1479,7 @@ export interface ElectronAPI {
    * facts all live on the other side of the bridge.
    */
   diagnostics: {
-    run: () => Promise<DoctorReport>
+    run: () => Promise<DoctorResult>
   }
   /**
    * `/init` — write the repository-root `AGENTS.md` for a session.

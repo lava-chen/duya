@@ -50,7 +50,9 @@ export const INIT_AGENTS_MD_MARKER_REGEX = /<!-- duya-init:version\s+(\d+)\s*-->
 export function readInitAgentsMdVersion(body: string): number {
   const match = body.match(INIT_AGENTS_MD_MARKER_REGEX);
   if (!match) return 0;
-  const parsed = Number.parseInt(match[1], 10);
+  const captured = match[1];
+  if (captured === undefined) return 0;
+  const parsed = Number.parseInt(captured, 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
