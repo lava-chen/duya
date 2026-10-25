@@ -113,6 +113,45 @@ describe('inline mode', () => {
     expect(missing).toEqual([]);
   });
 
+  it('leaves the mouse wheel to the terminal, and only full-screen claims it', async () => {
+    const inlineRun = makeApp({ inline: true });
+    inlineRun.app.start();
+    await settleRendered();
+    inlineRun.app.stop();
+
+    const fullRun = makeApp();
+    fullRun.app.start();
+    await settle();
+    fullRun.app.stop();
+
+    // With mouse reporting on, the terminal ships the wheel as SGR mouse
+    // sequences instead of scrolling its own scrollback. Inline mode has no
+    // app-owned viewport, so claiming the wheel would make the conversation
+    // unscrollable; full-screen owns such a viewport and has to receive it.
+    expect(inlineRun.out.text()).not.toContain('\x1b[?1002h');
+    expect(fullRun.out.text()).toContain('\x1b[?1002h');
+  });
+
+  it('keeps following the tail on pageup, so streaming keeps committing', async () => {
+    const { app, out, input } = makeApp({ inline: true });
+    app.start();
+    flood(app, 60);
+    await settleRendered();
+    expect(app.renderState.follow).toBe(true);
+
+    press(input, 'pageup');
+    await settleRendered();
+    // Older rows are already in the terminal's scrollback; paging here would
+    // set follow=false, and in this mode that freezes the live area AND stops
+    // commits — the conversation would stop updating mid-stream.
+    expect(app.renderState.follow).toBe(true);
+
+    app.push({ type: 'text_delta', data: { content: 'after-pageup\n' } });
+    await settleRendered();
+    app.stop();
+    expect(out.text()).toContain('after-pageup');
+  });
+
   it('draws a composer prompt between horizontal rules without panel corners', async () => {
     const { app, out } = makeApp({ inline: true });
     app.start();
@@ -122,6 +161,37 @@ describe('inline mode', () => {
     expect(out.text()).toMatch(/❯|> /u);
     expect(out.text()).toMatch(/─{3}|-{3}/u);
     expect(out.text()).not.toContain('┌');
+  });
+
+  it('lists pending drafts above the composer, one row each and three at most', async () => {
+    const out = sink();
+    const drafts = [
+      { text: 'first', mode: 'queue' as const },
+      { text: 'second', mode: 'queue' as const },
+      { text: 'third', mode: 'steer' as const },
+      { text: 'fourth', mode: 'queue' as const },
+      { text: 'fifth', mode: 'steer' as const },
+    ];
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      queuedDrafts: () => drafts,
+      onSubmit: () => {},
+    });
+    app.start();
+    await settleRendered();
+    app.stop();
+    const text = out.text();
+    // The budget is fixed: this block is chrome, and a queue that grows would
+    // push the composer down a row per draft until the terminal ran out.
+    expect(text).toContain('… 2 earlier');
+    expect(text).toContain('↳ steer · third');
+    expect(text).toContain('⧗ queued · fourth');
+    expect(text).toContain('↳ steer · fifth');
+    // The two oldest drafts are behind the summary row, not in it.
+    expect(text).not.toContain('· first');
+    expect(text).not.toContain('· second');
   });
 
   it('keeps keys working without a Screen to bind them to', async () => {

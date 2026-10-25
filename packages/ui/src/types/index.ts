@@ -85,7 +85,6 @@ export interface AppSettings {
   theme: "dark" | "light" | "system";
   locale: string;
   provider: string;
-  messageFont: "serif" | "sans-serif";
   skillAdditionalPaths: string[];
   summaryLLMConfig: SummaryLLMConfig | null;
   summaryLLMEnabled: boolean;
@@ -104,6 +103,8 @@ export interface AppSettings {
   // Title generation model
   titleGenerationModel?: string;
   // Appearance settings
+  // Interface font preset ("duya" brand stack | "system" OS stack), see
+  // AppearanceSection — mirrors Claude Code's Interface font setting.
   font?: string;
   compactMode?: boolean;
   messageFontSize?: 'small' | 'medium' | 'large';

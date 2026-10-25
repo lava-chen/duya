@@ -103,7 +103,7 @@ function SkillCard({
               {skill.description}
             </p>
           </div>
-          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center text-xs font-medium" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>
+          <div className="flex-shrink-0 w-8 h-8 rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] flex items-center justify-center text-xs font-medium" style={{ fontFamily: 'var(--font-serif)' }}>
             {isExpanded ? "-" : "+"}
           </div>
         </div>

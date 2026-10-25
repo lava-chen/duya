@@ -202,7 +202,7 @@
 .inline-task-row-git-changes {
   display: inline-flex;
   gap: 6px;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   white-space: nowrap;
 }

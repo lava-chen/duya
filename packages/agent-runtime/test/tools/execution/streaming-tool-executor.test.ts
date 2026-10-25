@@ -322,6 +322,25 @@ describe('Runtime streaming tool execution', () => {
     expect(terminalMessage(updates, 'failed-call')?.content).toContain('disk unavailable');
   });
 
+  it('states success on a completed call, not just the absence of an error', async () => {
+    const registry: TestRegistry = new ToolRegistry();
+    registry.register(definition('read'), {
+      execute: async () => ({ id: 'read-result', name: 'read', result: 'ok' }),
+    });
+
+    const executor = makeExecutor(registry, makeContext());
+    executor.addTool({ id: 'ok-call', name: 'read', input: {} });
+    const updates = await drain(executor);
+    executor.dispose();
+
+    // A result with no stated status reaches the drain as `indeterminate`, and
+    // the transcript paints `?` on a call that plainly succeeded.
+    expect(terminalMessage(updates, 'ok-call')).toMatchObject({
+      role: 'tool',
+      status: 'success',
+    });
+  });
+
   it('binds approval to the stable invocation id and does not execute while approval is paused', async () => {
     const registry: TestRegistry = new ToolRegistry();
     const context = makeContext();
@@ -343,6 +362,7 @@ describe('Runtime streaming tool execution', () => {
     expect(context.appState.approvedInvocations['approved-call']).toBe(true);
     expect(execute).toHaveBeenCalledOnce();
     expect(terminalMessage(approvedUpdates, 'approved-call')?.content).toContain('written');
+    expect(terminalMessage(approvedUpdates, 'approved-call')?.status).toBe('success');
 
     const pausedRegistry: TestRegistry = new ToolRegistry();
     const pausedExecute = vi.fn(async () => ({ id: 'should-not-run', name: 'write', result: 'unexpected' }));

@@ -30,6 +30,12 @@ export * from './tasks.js';
 export * from './projects.js';
 export * from './session-api.js';
 export * from './session-fork.js';
+// Session-level exits that create no run: manual compaction and side questions.
+export * from './session-compaction.js';
+// Read-only inventory of the user's configured MCP servers.
+export * from './mcp-inventory.js';
+// Read-only inventory of the skills a session can use.
+export * from './skill-inventory.js';
 export * from './rollout-events.js';
 export type { JournalRecord } from './workflow-journal.js';
 export * from './workflow-runs.js';
@@ -40,6 +46,7 @@ export * from './permission.js';
 export * from './permission-requests.js';
 export * from './tool-approvals.js';
 export * from './locks.js';
+export * from './background-tasks.js';
 export * from './capabilities.js';
 export * from './host-capabilities.js';
 export { ingestMessage, ingestMessages } from './message-ingest.js';

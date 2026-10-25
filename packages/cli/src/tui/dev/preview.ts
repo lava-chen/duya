@@ -103,8 +103,8 @@ const tui = new TUIApp({
   }),
   effort: () => effort,
   contextBudgetTokens: () => 200_000,
-  queuedPrompts: () => queue.snapshot.pending,
-  queuedCount: () => queue.snapshot.pending.length,
+  queuedDrafts: () => queue.drafts.map((draft) => ({ text: draft.text, mode: draft.mode })),
+  queuedCount: () => queue.drafts.length,
   queuePaused: () => queue.snapshot.paused,
   isBusy: () => queue.snapshot.busy,
   canAnswerPermissions: () => true,
@@ -121,7 +121,7 @@ const tui = new TUIApp({
     context: () => [],
     files: () => [],
   },
-  onSubmit: async (text) => {
+  onSubmit: async (text, attachments) => {
     if (text === '/exit') stop();
     else if (text === '/queue') queue.resume();
     else if (text === '/model') {
@@ -188,7 +188,7 @@ const tui = new TUIApp({
         { label: 'Terminal lifecycle · modal return', value: 'terminal' },
       ]);
       if (value !== null) tui.printNotice('Selected: ' + value);
-    } else queue.submit(text);
+    } else queue.submit(text, { attachments });
   },
   onInterrupt: () => { interrupted = true; answerPermission?.(false); queue.pause(); },
   onExit: stop,

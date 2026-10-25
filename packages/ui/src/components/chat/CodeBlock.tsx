@@ -36,7 +36,7 @@ function CodeBlockInner({ children, className, copyLabel = 'Copy', copiedLabel =
   return (
     <div className={`relative group rounded-lg overflow-hidden border ${borderColor} ${bgColor}`}>
       <div className={`flex items-center justify-between px-4 py-2 text-xs ${bgColor} ${isDark ? 'text-[#8b949e]' : 'text-muted-foreground/70'}`}>
-        <span className="font-medium" style={{ fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" }}>{language || 'text'}</span>
+        <span className="font-medium" style={{ fontFamily: "var(--font-mono)" }}>{language || 'text'}</span>
         <Button
           variant="ghost"
           size="sm"
@@ -69,7 +69,7 @@ function CodeBlockInner({ children, className, copyLabel = 'Copy', copiedLabel =
           }}
           codeTagProps={{
             style: {
-              fontFamily: "'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+              fontFamily: "var(--font-mono)",
             },
           }}
         >

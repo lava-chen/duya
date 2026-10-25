@@ -206,7 +206,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'Compress conversation context to save tokens',
     descriptionZh: '压缩对话上下文以节省 token',
     category: 'session',
-    surfaces: ['desktop'],
+    // The CLI reaches the same worker-side compaction through a Host HTTP exit.
+    surfaces: ['desktop', 'cli'],
     requiresSession: true,
   },
   {
@@ -457,6 +458,20 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    // The one view whose whole purpose is to be opened WHILE a turn runs: a
+    // promoted bash command or a subagent outlives the model's answer, and the
+    // user needs to inspect it without waiting for the run to finish.
+    name: 'tasks',
+    label: 'Background tasks',
+    labelZh: '后台任务',
+    description: 'Show background bash tasks and subagents',
+    descriptionZh: '查看后台 bash 任务与子代理',
+    category: 'info',
+    surfaces: ['cli'],
+    requiresSession: true,
+    availableWhileBusy: true,
+  },
+  {
     name: 'transcript',
     label: 'Transcript stats',
     labelZh: '转录统计',
@@ -517,7 +532,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     description: 'List available skills',
     descriptionZh: '列出可用的技能',
     category: 'info',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Listing skills is a read.
     availableWhileBusy: true,
   },
@@ -563,10 +578,13 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'diff',
     label: 'Code review',
     labelZh: '代码审查',
-    description: 'Open the code review panel (git diff)',
-    descriptionZh: '打开代码审查面板（git diff）',
+    // Desktop opens the code-review panel; the CLI prints the same working
+    // tree diff as text. One description, two surfaces — the wording stays
+    // true for both.
+    description: 'Show the code changes in the working tree (git diff)',
+    descriptionZh: '查看工作区的代码改动（git diff）',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // The panel reads git state; it does not touch the run.
     availableWhileBusy: true,
   },
@@ -595,12 +613,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'mcp',
-    label: 'MCP connections',
-    labelZh: 'MCP 连接',
-    description: 'Open MCP connection settings',
-    descriptionZh: '打开 MCP 连接设置',
+    label: 'MCP servers',
+    labelZh: 'MCP 服务器',
+    // The Desktop opens the extensions page where MCP servers are inspected
+    // and configured; the CLI lists the configured ones as text. One
+    // description, two surfaces — the wording stays true for both.
+    description: 'Inspect the configured MCP servers',
+    descriptionZh: '查看已配置的 MCP 服务器',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     // Opening a panel does not touch the run.
     availableWhileBusy: true,
   },
@@ -634,7 +655,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '不打断当前对话的旁侧问答',
     argsHint: '[question]',
     category: 'tools',
-    surfaces: ['desktop'],
+    surfaces: ['desktop', 'cli'],
     requiresSession: true,
     // A side question is asked PRECISELY while a turn runs — that is the
     // whole point of the command, so it must not be gated on an idle turn.

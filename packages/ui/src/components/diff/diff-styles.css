@@ -76,7 +76,7 @@
 
 /* Diff container */
 .diff-container {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.6;
 }

@@ -6,6 +6,10 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
+| 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
+| TUI 工具状态 | [2026-10-24 TUI 工具状态](active/2026-10-24-tui-tool-status-marks.md) | 门禁已过，PR #457 等 CI 与授权集成 |
+| Slash 命令实施 | [2026-10-24 slash command implementation](active/2026-10-24-slash-command-implementation.md) | 11 命令 / 4 PR 串行；PR-1 会话类（compact/btw/diff）接线中，CLI `/compact` 复用 plan 613 |
 | 动态工作流核心包 | [2026-10-24 动态工作流核心包](active/2026-10-24-dynamic-workflow-package.md) | S0 已对账并记录基线；提交文档切片后定 S1 包边界并抽取零 IO 核心 |
 | 插件 UI MCP 资源 | [2026-10-24 插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | 完成 S1 契约后先报告 schema diff 与受影响调用方，再推进 S2 |
 | 输出速度 tok/s | [2026-10-23 输出速度](active/2026-10-23-output-token-rate.md) | provider 校准路径：ai 测时长 → 协议契约 → 帧携带 → TUI 展示 |
@@ -21,12 +25,18 @@
 | 多 Agent 编排 | [2026-10-23 多 Agent Orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | 评估已出：codex 无队列/DAG/重试可抄；duya 依赖与重试已具备。Phase 1 补测（子 agent 状态机零覆盖）→ Phase 2 DAG 并行 + 失败级联 |
 | Agent Runtime 真实基准 | [2026-10-23 Agent Runtime 基准](active/2026-10-23-agent-runtime-e2e-benchmark.md) | 基准已跑通并定位瓶颈；待 PR 集成 |
 | Desktop 性能爬坡 | [2026-10-23 Desktop 性能爬坡](active/2026-10-23-desktop-performance-hill-climbing.md) | 5 个 Agent 各占一条独占路径：先由 A 交 Harness v1，再由 B/C/D/E 建基线、各出一个可证明收益的 PR |
-| CLI TUI 渲染 todolist | [2026-10-23 CLI todo 渲染](active/2026-10-23-cli-todo-list-render.md) | todo 清单渲染与 thinking 折叠预览已实现并过门禁，待开 PR；底部常驻面板列 Phase 2 |
+| CLI TUI 渲染 todolist | [2026-10-23 CLI todo 渲染](active/2026-10-23-cli-todo-list-render.md) | todo 清单渲染与 thinking 折叠预览已合并（PR #387）；底部常驻面板列 Phase 2 |
 | config 写侧下沉 | [2026-10-25 config 写侧下沉](active/2026-10-25-host-config-agents-write.md) | 共享规则已下沉 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update`；PR #433 已合并（`f59767f1`） |
 | 插件安装路径下沉 | [2026-10-25 插件安装路径](active/2026-10-25-host-plugin-install-path.md) | 独立 Host 已能解析插件 `installPath` 与 MCP 声明，恢复插件技能与 MCP；PR #443 已合并（`49b4771e`） |
+| rollout 换桶判定 | [2026-10-25 rollout 换桶](active/2026-10-25-data-rollout-bucket.md) | `appendBatch` 不再每批重命名 rollout 文件（路径带毫秒戳导致判定恒成立）；写路径耗时降 59%–68%；PR #462 已合并（`55cd1b97`） |
+| 读路径 fd 复用 | [2026-10-25 读路径 fd 复用](active/2026-10-25-data-read-range-fd.md) | 投影会话时一次打开 rollout 文件复用句柄，不再逐行 open/close；8000 条投影 656ms → 68ms；PR #466 已合并（`3b3e6470`） |
+| 消息写路径点查 | [2026-10-25 写路径点查](active/2026-10-25-data-append-index-lookup.md) | `appendBatch` 去重检查按批内 id 走主键点查，去掉长会话上的 O(N²)；待开 PR |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
-| TUI 滚动语义 | [2026-10-23 TUI 滚动锚定](active/2026-10-23-tui-scroll-anchor.md) | 视窗改为绝对偏移 + 独立 follow，已过门禁待开 PR；参考 pi 的 scroll-view |
+| TUI 滚动语义 | [2026-10-23 TUI 滚动锚定](active/2026-10-23-tui-scroll-anchor.md) | 视窗改为绝对偏移 + 独立 follow，PR #388 已合并（`aec08d75`） |
+| TUI inline 滚动 | [2026-10-24 TUI inline 滚动](active/2026-10-24-tui-inline-scroll.md) | inline 不再接管滚轮，滚动交还终端 scrollback；修 `viewEnd` → `viewTop`，并拦住会让流式画面冻结的上滚入口 |
 | TUI 上下文占用 | [2026-10-23 TUI 上下文占用](active/2026-10-23-tui-context-usage.md) | 占用率与会话花费拆开，已过用例与变异验证，待门禁与 PR |
+| TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
+| TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 

@@ -80,10 +80,10 @@ describe('command catalog lookup', () => {
   });
 
   it('resolves a command the surface does not advertise (rule 1)', () => {
-    // /compact is desktop-only, yet the CLI can still resolve it by name.
-    expect(findSpec('compact')?.surfaces).toEqual(['desktop']);
-    expect(findSpec('compact')).toBeDefined();
-    expect(specsForSurface('cli').some((spec) => spec.name === 'compact')).toBe(false);
+    // /loop is desktop-only, yet the CLI can still resolve it by name.
+    expect(findSpec('loop')?.surfaces).toEqual(['desktop']);
+    expect(findSpec('loop')).toBeDefined();
+    expect(specsForSurface('cli').some((spec) => spec.name === 'loop')).toBe(false);
   });
 
   it('returns nothing for an unknown token', () => {
@@ -96,10 +96,14 @@ describe('command catalog per-surface views', () => {
   it('gives each surface its own advertised set', () => {
     const desktop = specsForSurface('desktop').map((spec) => spec.name);
     const cli = specsForSurface('cli').map((spec) => spec.name);
+    // Session commands now exist on both surfaces.
     expect(desktop).toContain('diff');
-    expect(cli).not.toContain('diff');
+    expect(cli).toContain('diff');
+    expect(cli).toContain('compact');
+    expect(cli).toContain('btw');
     expect(cli).toContain('fork');
     expect(desktop).not.toContain('fork');
+    expect(cli).not.toContain('loop');
   });
 
   it('hides session-scoped commands when there is no session', () => {
@@ -160,14 +164,16 @@ describe('command catalog desktop parity', () => {
   });
 
   it('still resolves every command the Desktop registry listed', () => {
-    const desktopOnly = [
+    // Every one of these has a Desktop executor. Some of them also exist on
+    // the CLI now; the assertion is that the Desktop never lost one.
+    const desktopCommands = [
       'clear', 'compact', 'export', 'help', 'status', 'cost', 'recap', 'model',
       'plan', 'goal', 'resume',
       'rename', 'stop', 'queue', 'login', 'logout', 'permission', 'effort',
       'context', 'transcript', 'skills', 'deep-research', 'diff', 'loop',
       'memory', 'mcp', 'add-dir', 'image', 'btw', 'copy', 'stop',
     ];
-    for (const name of desktopOnly) {
+    for (const name of desktopCommands) {
       expect(findSpec(name), name).toBeDefined();
       expect(findSpec(name)?.surfaces, name).toContain('desktop');
     }
