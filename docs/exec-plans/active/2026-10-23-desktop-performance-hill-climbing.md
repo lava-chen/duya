@@ -492,7 +492,7 @@ BFF 每页上限 100，比 Desktop 的 200 更狠 → 同样 1 万条消息，**
 
 - `e2e/perf/lib/startup-phases.mjs`（新增）：纯函数 `startupPhases(navigation, paints)` 把一次文档加载拆成 `navToHtml` / `htmlToDcl` / `dclToPaint`，外加读页面用的 `readStartupPhases()` 与按前缀展开指标的 `startupPhaseMetrics()`。
 - `e2e/perf/scenarios/startup.mjs`：`startup.cold.phase.*`（冷启动）与 `startup.reload.phase.*`（同进程 reload 的热参考）两组指标。
-- `scripts/perf/harness.test.ts`：4 个用例（分段正确 / 没有导航条目时全为 null 而不是 0 / 没绘制时绘制段为 null / 指标命名）。**负对照**：把 `htmlToDcl` 的算法改错即红。
+- `scripts/perf/harness.test.ts`：5 个用例（分段正确 / 没有导航条目时全为 null 而不是 0 / 没绘制时绘制段为 null / 里程碑尚未发生时不报负数 / 指标命名）。**负对照**：把 `htmlToDcl` 的算法改错即红。
 - `e2e/perf/README.md`：指标含义与「reload 是热参考」写进契约段。
 
 **为什么它值一个 PR**：这轮四次尝试全部证伪，每一次的代价都是重新搭一套测量。相位分解进 harness 之后，下一个 Agent 不用再从零复现这四段。
@@ -612,7 +612,7 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253，**#473 再棘轮到 2 985 017**）。**#444**：投影次数门禁。**#458**：请求次数门禁。**#473**：终端不得回到首屏（`registry.test.tsx`）+ 字节棘轮 | 集成者 + A |
 | 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
 | 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
-| 11 | 启动的分解测量应该进 harness | 第七轮的探针（`docs-local/research/perf-startup/probe.mjs`）能拆出 boot / 主进程初始化链 / 渲染器文档加载 / 首屏绘制四段，但它是研究脚本，不在 `scripts/perf/run.mjs` 里 | **已完成（第八轮）**：`e2e/perf/lib/startup-phases.mjs` + `startup.cold.phase.*` / `startup.reload.phase.*` 两组指标 + 4 个单测 | A |
+| 11 | 启动的分解测量应该进 harness | 第七轮的探针（`docs-local/research/perf-startup/probe.mjs`）能拆出 boot / 主进程初始化链 / 渲染器文档加载 / 首屏绘制四段，但它是研究脚本，不在 `scripts/perf/run.mjs` 里 | **已完成（第八轮）**：`e2e/perf/lib/startup-phases.mjs` + `startup.cold.phase.*` / `startup.reload.phase.*` 两组指标 + 5 个单测 | A |
 
 **已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。**#458** 把 Web 侧同一条路径也修掉了（真实 Host + 真实 BFF：100 次分页 83 507 ms → 1 次整读 1 006 ms，**83×**），并带上四条请求次数门禁——**同一个根因的第二条路径**。**#473** 把终端（xterm + 4 个 addon，**485 617 B**）从首屏入口 chunk 里请了出去，首屏 3 470 634 → **2 985 017 B（−14.00 %）**，并棘轮了字节预算——但**墙钟只换来约 35 ms**，这个兑换率本身是本轮最值钱的结论。
 ## 验证记录
@@ -683,7 +683,7 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | 第八轮假设证伪 A/B | 同上 | 四条修法各一次 A/B（代码卡在 `docs-local/research/perf-coldstart/*.patch`，**均未合入**） | 0 | 预热 network service：navToRequest 中位 816 vs 基线 ~710 ms；提前建窗口：**1 642 vs 1 610 ms**（`app.getAppMetrics` 证明 Chromium 直到导航才起渲染器进程）；延后 `getGPUFeatureStatus`：链长 233 vs 388 ms；延后启动期网络 I/O：firstPaint 1 460 vs 1 424 ms |
 | 第八轮 code cache 核查 | 同上 | 读 profile 目录 `Code Cache/js` + 同 userData 二次启动对照 | 0 | **页面脚本没有 code cache**（只有 index；preload 有 78 KB）；热 profile 中位 796 ms **不慢于**冷 profile 中位 960 ms ⇒ Claude 的预编译 code cache 在 Duya 渲染器上没有落点 |
 | 第八轮字节归因 | `perf-coldstart` | `npx vite build --sourcemap` + `docs-local/research/perf-coldstart/chunk-attribution.mjs` 逐字节 mapping | 0 | 入口 chunk 2 570 686 B 归因 2 514 077 B：xterm+addon **~490 KB** / katex **260 372 B** / i18n 中英 **270 496 B** / `stream-session-manager` 74 390 B / dnd-kit+tailwind-merge+zod+模型目录 ~180 KB |
-| 第八轮门禁 | `perf-coldstart` | `vitest run scripts/perf/harness.test.ts` | 0 | **44/44 绿**（新增 4 个相位用例）；负对照（改错 `htmlToDcl` 算法）即红 |
+| 第八轮门禁 | `perf-coldstart` | `vitest run scripts/perf/harness.test.ts` | 0 | **45/45 绿**（新增 5 个相位用例：分段正确 / 没有导航条目时全为 null 而不是 0 / 没绘制时绘制段为 null / 里程碑没发生时不报负数 / 指标命名）；负对照（改错 `htmlToDcl` 算法）即红 |
 | 第八轮本地门禁 | `perf-coldstart` | `npm run typecheck:all` / `npm run architecture:check` | 0 / 0 | typecheck 全过（`typecheck-electron-gate: OK — no new type errors`）；架构 `OK — no new boundary violations` |
 
 ## 接续 / 结果
