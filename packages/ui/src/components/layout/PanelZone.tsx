@@ -5,7 +5,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useTranslation } from "@/hooks/useTranslation";
 import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel, usePanelGeometry } from "@/hooks/usePanel";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
-import { PanelCard } from "./panels/PanelCard";
+import { PanelCard, PanelCardDetachedPlaceholder } from "./panels/PanelCard";
 import { WALL_PAGE_IDS } from "./panels/wall-pages";
 import { panelParamsFor, shortcutFor } from "./panels/launch";
 import {
@@ -70,6 +70,14 @@ export function PanelZone() {
   const [wallSize, setWallSize] = useState({ width: 0, height: 0 });
   const taskDrawerOpen = useTaskDrawerOpen();
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  // Panes currently living in their own OS window. The bridge only exists in
+  // the Electron build; on the web the set stays empty and no popout action
+  // is offered. The wall keeps each detached pane's grid slot (rendered as a
+  // placeholder) so the layout does not shift underneath the user.
+  const [detachedPaneIds, setDetachedPaneIds] = useState<ReadonlySet<string>>(new Set());
+  const detachedBridge = useRef(
+    typeof window !== "undefined" ? window.electronAPI?.panelWindow : undefined,
+  );
   const activePluginSurface = activeTab?.pageId === "plugin-app";
   const activeSurfaceAvailable = activePluginSurface && (
     activeTab.params?.availability === "always" || !!activeThreadId
@@ -141,6 +149,88 @@ export function PanelZone() {
     const workspace = document.querySelector(".app-workspace-row");
     return workspace?.getBoundingClientRect().width ?? window.innerWidth;
   }, []);
+
+  // Sync the detached set with the main process: panes that were detached in
+  // a previous session of this renderer (or by another surface) are spotted
+  // through getState, and every later transition arrives as an event.
+  useEffect(() => {
+    const bridge = detachedBridge.current;
+    if (!bridge) return;
+    let cancelled = false;
+    const sync = async () => {
+      for (const tab of tabs) {
+        const state = await bridge.getState(tab.id).catch(() => null);
+        if (cancelled) return;
+        if (state?.ok && state.detached) {
+          setDetachedPaneIds((prev) => {
+            if (prev.has(tab.id)) return prev;
+            const next = new Set(prev);
+            next.add(tab.id);
+            return next;
+          });
+        }
+      }
+    };
+    void sync();
+    const unsubscribe = bridge.onEvent((event) => {
+      if (event.type === "opened") {
+        setDetachedPaneIds((prev) => new Set(prev).add(event.paneId));
+      } else if (event.type === "returned") {
+        setDetachedPaneIds((prev) => {
+          if (!prev.has(event.paneId)) return prev;
+          const next = new Set(prev);
+          next.delete(event.paneId);
+          return next;
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [tabs]);
+
+  // A pane can be closed from several places (the card's own close action,
+  // the session-availability sweep, a session switch). Once its tab is gone
+  // the wall no longer renders it, so nothing else would ever ask the main
+  // process to close its detached window: without this it survives as an
+  // orphan with no row to return to.
+  useEffect(() => {
+    const bridge = detachedBridge.current;
+    if (!bridge) return;
+    for (const paneId of detachedPaneIds) {
+      if (!tabsById.has(paneId)) void bridge.close(paneId).catch(() => {});
+    }
+  }, [detachedPaneIds, tabsById]);
+
+  /** Detach a pane into its own OS window (Electron only). */
+  const handlePopout = useCallback(
+    (paneId: string) => {
+      const bridge = detachedBridge.current;
+      const tab = tabsById.get(paneId);
+      if (!bridge || !tab) return;
+      void bridge
+        .open(tab.id, tab.pageId, tab.title, tab.params)
+        .then((result) => {
+          if (result.ok) {
+            setDetachedPaneIds((prev) => new Set(prev).add(tab.id));
+            if (layout.expandedPaneId === paneId) togglePaneExpanded(paneId);
+          }
+        })
+        .catch(() => {});
+    },
+    [tabsById, layout.expandedPaneId, togglePaneExpanded],
+  );
+
+  /** Hand a detached pane back to the wall; the event closes the loop. */
+  const handleReturn = useCallback(
+    (paneId: string) => {
+      const bridge = detachedBridge.current;
+      if (!bridge) return;
+      void bridge.close(paneId).catch(() => {});
+    },
+    [],
+  );
 
   const clampActiveWidth = useCallback(
     (width: number) => {
@@ -314,7 +404,6 @@ export function PanelZone() {
       const tab = tabsById.get(paneId);
       if (!tab) return null;
       const descriptor = getPageDescriptor(tab.pageId);
-      const Component = descriptor.component;
       const Icon = tab.pageId === "plugin-app"
         ? getPluginUiSurfaceIcon(tab.params?.icon)
         : descriptor.icon;
@@ -325,6 +414,27 @@ export function PanelZone() {
       // expands the card and the region together, so a maximized panel always
       // covers the entire content column.
       const controlsWorkspace = layout.panes.length <= 1;
+      const isDetached = detachedPaneIds.has(paneId);
+      if (isDetached) {
+        return (
+          <div
+            key={paneId}
+            className="panel-wall-cell"
+            data-pane-id={paneId}
+            style={{
+              ...cardStyle(layout.panes.indexOf(paneId)),
+              display: hidden ? "none" : undefined,
+            }}
+          >
+            <PanelCardDetachedPlaceholder
+              tab={tab}
+              icon={Icon}
+              onReturn={() => handleReturn(paneId)}
+            />
+          </div>
+        );
+      }
+      const Component = descriptor.component;
       return (
         <div
           key={paneId}
@@ -359,6 +469,9 @@ export function PanelZone() {
               if (isExpanded) setWorkspaceExpanded(false);
               closePanel(paneId);
             }}
+            onPopout={detachedBridge.current
+              ? () => handlePopout(paneId)
+              : undefined}
             expandTestId={controlsWorkspace ? "workspace-expand" : undefined}
           >
             <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
@@ -373,7 +486,10 @@ export function PanelZone() {
     [
       cardStyle,
       closePanel,
+      detachedPaneIds,
       expandedPaneId,
+      handlePopout,
+      handleReturn,
       layout.panes,
       tabsById,
       togglePaneExpanded,

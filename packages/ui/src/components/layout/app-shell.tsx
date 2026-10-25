@@ -5,6 +5,7 @@ import { AppRail, TitleBar } from "@/components/layout/TitleBar";
 import { UpdateBadge } from "@/components/update/UpdateBadge";
 import { lazy, Suspense, useState, useCallback, useRef, useEffect, type CSSProperties } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
+import { useTranslation } from "@/hooks/useTranslation";
 import { useNavHistoryStore, registerNavApplier, type NavHistoryEntry } from "@/stores/nav-history-store";
 import { PanelProvider, usePanel } from "@/hooks/usePanel";
 import { PanelZone } from "@/components/layout/PanelZone";
@@ -39,6 +40,7 @@ const SIDEBAR_COLLAPSED_KEY = "duya-sidebar-collapsed";
 const RESIZER_EDGE_PX = 4;
 
 function AppShellInner({ children, capabilities }: AppShellProps) {
+  const { t } = useTranslation();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
   const { currentView, isHydrated, activeThreadId, settingsTab } = useConversationStore();
@@ -100,6 +102,9 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
 
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [isResizing, setIsResizing] = useState(false);
+  // Whether the pointer is inside the invisible edge hit zone; drives the
+  // unified resize pill on the sidebar's edge.
+  const [sidebarEdgeHover, setSidebarEdgeHover] = useState(false);
   // Sidebar collapse (icon rail). Renderer-local with a localStorage hint so
   // the choice survives restarts; plan 571 will move it into the tab shell.
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
@@ -152,12 +157,13 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
   // Cursor affordance for the invisible edge zone (no visual footprint).
   const handleBodyMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      if (isResizing || sidebarCollapsed) return;
+      if (isResizing) return;
       const el = sidebarRef.current;
       if (!el) return;
       const edge = el.getBoundingClientRect().right;
-      document.body.style.cursor =
-        Math.abs(e.clientX - edge) <= RESIZER_EDGE_PX ? "col-resize" : "";
+      const near = !sidebarCollapsed && Math.abs(e.clientX - edge) <= RESIZER_EDGE_PX;
+      document.body.style.cursor = near ? "col-resize" : "";
+      setSidebarEdgeHover((prev) => (prev === near ? prev : near));
     },
     [isResizing, sidebarCollapsed]
   );
@@ -270,6 +276,17 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
                 maxWidth: effectiveSidebarWidth,
               }}
             />
+            {/* Purely visual: the edge's hit zone stays in the body-level
+                handlers; this marker only carries the unified pill. */}
+            <div
+              className="sidebar-edge-resizer"
+              data-hover={sidebarEdgeHover && !sidebarCollapsed ? "true" : undefined}
+              data-resizing={isResizing ? "true" : undefined}
+              aria-hidden="true"
+            >
+              <div className="resize-handle-bar" />
+              {isResizing && <div className="resize-handle-badge">{t("panel.resizeBadge")}</div>}
+            </div>
           </div>
           <div className="app-content-column">
             {!isMac && <TitleBar />}
