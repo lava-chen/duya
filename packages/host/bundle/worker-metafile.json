@@ -2121,7 +2121,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session/turn-suggestion.ts": {
-      "bytes": 8357,
+      "bytes": 8578,
       "imports": [
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -39644,7 +39644,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -39740,7 +39740,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 700
@@ -39875,10 +39875,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -43349,7 +43349,7 @@
           "bytesInOutput": 10074
         },
         "packages/host/src/worker-session/turn-suggestion.ts": {
-          "bytesInOutput": 4005
+          "bytesInOutput": 4057
         },
         "packages/host/src/worker-hooks/config.ts": {
           "bytesInOutput": 3415
@@ -44213,7 +44213,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -45122,7 +45122,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4724370
+      "bytes": 4724428
     }
   }
 }
