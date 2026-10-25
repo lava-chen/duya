@@ -3,7 +3,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel } from "@/hooks/usePanel";
+import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel, usePanelGeometry } from "@/hooks/usePanel";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { PanelCard, PanelCardDetachedPlaceholder } from "./panels/PanelCard";
 import { WALL_PAGE_IDS } from "./panels/wall-pages";
@@ -33,7 +33,6 @@ const WALL_PADDING = 8;
 export function PanelZone() {
   const {
     panelOpen,
-    panelWidth,
     setPanelOpen,
     setPanelWidth,
     openOrActivatePage,
@@ -43,13 +42,15 @@ export function PanelZone() {
     resetPanelWidth,
     tabs,
     activeTabId,
-    layout,
     workspaceExpanded,
     setWorkspaceExpanded,
     setColumnWidths,
     setRowHeights,
     togglePaneExpanded,
   } = usePanel();
+  // The geometry lives in its own context: it changes on every frame of a
+  // drag, and only this component draws it.
+  const { panelWidth, layout } = usePanelGeometry();
   const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const currentView = useConversationStore((s) => s.currentView);
@@ -138,6 +139,17 @@ export function PanelZone() {
     [openOrActivatePage, cwd, activeThreadId]
   );
 
+  // The workspace width is measured ONCE per drag, not once per frame: a
+  // `getBoundingClientRect` right after the width was written forces a
+  // synchronous layout, and doing that on every frame of the drag is a
+  // layout thrash. The value is read again when there is no drag in flight.
+  const dragWorkspaceWidthRef = useRef<number | null>(null);
+
+  const measureWorkspaceWidth = useCallback((): number => {
+    const workspace = document.querySelector(".app-workspace-row");
+    return workspace?.getBoundingClientRect().width ?? window.innerWidth;
+  }, []);
+
   // Sync the detached set with the main process: panes that were detached in
   // a previous session of this renderer (or by another surface) are spotted
   // through getState, and every later transition arrives as an event.
@@ -178,6 +190,19 @@ export function PanelZone() {
     };
   }, [tabs]);
 
+  // A pane can be closed from several places (the card's own close action,
+  // the session-availability sweep, a session switch). Once its tab is gone
+  // the wall no longer renders it, so nothing else would ever ask the main
+  // process to close its detached window: without this it survives as an
+  // orphan with no row to return to.
+  useEffect(() => {
+    const bridge = detachedBridge.current;
+    if (!bridge) return;
+    for (const paneId of detachedPaneIds) {
+      if (!tabsById.has(paneId)) void bridge.close(paneId).catch(() => {});
+    }
+  }, [detachedPaneIds, tabsById]);
+
   /** Detach a pane into its own OS window (Electron only). */
   const handlePopout = useCallback(
     (paneId: string) => {
@@ -209,15 +234,17 @@ export function PanelZone() {
 
   const clampActiveWidth = useCallback(
     (width: number) => {
-      const workspace = document.querySelector(".app-workspace-row");
-      const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
+      // When lowerBound > upperBound (narrow workspace), the shared clamp
+      // picks upperBound so the drag never pushes the panel past the chat
+      // column's protected minimum width.
+      const workspaceWidth = dragWorkspaceWidthRef.current ?? measureWorkspaceWidth();
       return clampWidthToBounds(width, {
         minWidth: activePanelMinWidth,
         maxWidth: activeDescriptor?.maxWidth,
         maxWidthRatio: activePanelMaxRatio,
       }, workspaceWidth);
     },
-    [activePanelMaxRatio, activePanelMinWidth, activeDescriptor]
+    [activePanelMaxRatio, activePanelMinWidth, activeDescriptor, measureWorkspaceWidth]
   );
 
   const handleResize = useCallback(
@@ -530,10 +557,12 @@ export function PanelZone() {
           side="left"
           onResizeStart={() => {
             resizeStartWidthRef.current = panelWidth;
+            dragWorkspaceWidthRef.current = measureWorkspaceWidth();
             setResizing(true);
           }}
           onResize={handleResize}
           onResizeEnd={() => {
+            dragWorkspaceWidthRef.current = null;
             setResizing(false);
             if (activeTab) {
               rememberUserWidth(activeTab.pageId, lastDragWidthRef.current);

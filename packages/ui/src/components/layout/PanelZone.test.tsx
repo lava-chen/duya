@@ -43,7 +43,6 @@ vi.mock("@/hooks/usePanel", () => ({
   MIN_PANEL_WIDTH: 300,
   usePanel: () => ({
     panelOpen: mocks.panelOpen,
-    panelWidth: 760,
     setPanelOpen: vi.fn(),
     setPanelWidth: vi.fn(),
     togglePanel: vi.fn(),
@@ -54,12 +53,17 @@ vi.mock("@/hooks/usePanel", () => ({
     resetPanelWidth: vi.fn(),
     tabs: mocks.tabs,
     activeTabId: mocks.activeTabId,
-    layout: mocks.layout,
     workspaceExpanded: false,
     setWorkspaceExpanded: vi.fn(),
     setColumnWidths: vi.fn(),
     setRowHeights: vi.fn(),
     togglePaneExpanded: vi.fn(),
+  }),
+  // The geometry has its own context: it changes on every frame of a drag,
+  // so it is not part of the shared one.
+  usePanelGeometry: () => ({
+    panelWidth: 760,
+    layout: mocks.layout,
   }),
 }));
 
@@ -278,6 +282,32 @@ describe("PanelZone detached panes", () => {
     // The placeholder keeps the grid slot but mounts no panel surface.
     expect(screen.queryByTestId("browser-files")).toBeNull();
     expect(screen.getByTestId("panel-return-files")).toBeTruthy();
+    cleanup();
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
+  });
+
+  it("closes the detached window when its tab is closed from the wall", async () => {
+    const cleanup = installPanelWindowBridge();
+    mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: true, alwaysOnTop: false });
+    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    const { container, rerender } = render(<PanelZone />);
+    await waitFor(() => {
+      expect(container.querySelector(".panel-card-detached")).toBeTruthy();
+    });
+    mocks.panelWindow.close.mockClear();
+
+    // The tab is gone, so the wall has nothing left to return the pane to.
+    mocks.tabs = [];
+    mocks.layout = wall([]);
+    rerender(<PanelZone />);
+
+    await waitFor(() => {
+      expect(mocks.panelWindow.close).toHaveBeenCalledWith("files");
+    });
+
     cleanup();
     mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
   });

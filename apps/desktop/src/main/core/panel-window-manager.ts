@@ -316,8 +316,8 @@ export async function openDetachedPanel(
   // The load is deliberately NOT awaited: the renderer is a full SPA, and
   // waiting for it would stall the "open in a new window" call in the main
   // window for as long as the boot takes. The window shows itself on
-  // `ready-to-show`, and a failed load is reported through the log and by
-  // closing the window again.
+  // `ready-to-show`, and a failed load is reported through the log and the
+  // pane is returned to the wall.
   const detachedUrl = buildDetachedPanelUrl(rendererUrl, paneId, pageId, params);
   void window.loadURL(detachedUrl).catch((error: unknown) => {
     getLogger().error(
@@ -326,9 +326,14 @@ export async function openDetachedPanel(
       { paneId },
       LogComponent.Main,
     );
-    entry.closing = true;
-    entries.delete(paneId);
-    if (!window.isDestroyed()) window.destroy();
+    // The wall already turned this pane into a placeholder on `opened`, so a
+    // silent destroy would leave it stuck there. Announcing the return is the
+    // only way back: it re-docks the pane and removes the placeholder.
+    if (entries.get(paneId) === entry) {
+      returnPanelToMain(paneId, 'requested');
+    } else if (!window.isDestroyed()) {
+      window.destroy();
+    }
   });
 
   broadcastPanelEvent({ type: 'opened', paneId, windowId: window.webContents.id });

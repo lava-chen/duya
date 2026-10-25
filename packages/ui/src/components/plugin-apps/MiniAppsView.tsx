@@ -92,7 +92,6 @@ export function MiniAppsView() {
                   <PluginAppLauncher
                     pluginId={plugin.id}
                     apps={plugin.apps ?? []}
-                    emptyHint={t("apps.selectChat")}
                   />
                   {pluginSurfaces.length > 0 ? (
                     <div className="mt-2 flex flex-wrap items-center gap-2" aria-label={t("apps.description")}>
