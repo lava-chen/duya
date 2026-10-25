@@ -314,8 +314,8 @@ function helpSections(locale: CommandLocale): ReadonlyArray<{
     {
       title: chinese ? '桌面端' : 'Desktop',
       lines: chinese
-        ? ['桌面端还提供权限模式、面板命令（/diff /memory /mcp）、用户技能和模式切换。', '在桌面端输入 /help 查看完整列表。']
-        : ['The Desktop composer also exposes permission modes, panel commands', '(/diff /memory /mcp), user skills as slash commands, and mode toggles.', 'Type /help in the Desktop composer for that set.'],
+        ? ['桌面端还提供权限模式、/memory、模式切换和更多面板命令。', '在桌面端输入 /help 查看完整列表。']
+        : ['The Desktop composer also exposes permission modes, /memory, mode toggles', 'and more panel commands. Type /help in the Desktop composer for that set.'],
     },
   ];
 }

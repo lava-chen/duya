@@ -30,6 +30,8 @@ import type {
   HostRunExecutionApiV1,
   HostSessionCompactionApiV1,
   HostSessionSideQuestionApiV1,
+  HostMcpInventoryApiV1,
+  HostSkillInventoryApiV1,
   HostTaskApiV1,
   HostProjectApiV1,
   HostProjectCreateInput,
@@ -79,6 +81,7 @@ import type {
 } from '@duya/agent-protocol';
 import type { HostCheckoutApiV1, HostIntegrationApiV1, HostLockApiV1 } from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
+import { HostSkillInventoryError } from './skills/skill-inventory-api.js';
 import { ClientLeaseTracker } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
@@ -383,6 +386,18 @@ export interface HostSessionHttpServerOptions {
    * compaction capability above.
    */
   readonly sideQuestionApi?: HostSessionSideQuestionApiV1;
+  /**
+   * Read-only inventory of the user's configured MCP servers. Optional: a
+   * Host that was not given a configuration source answers 404 with a named
+   * code instead of pretending the user configured no servers.
+   */
+  readonly mcpInventoryApi?: HostMcpInventoryApiV1;
+  /**
+   * Read-only inventory of the skills a session can use. Optional: a Host
+   * that was not given the capability answers 404 with a named code instead
+   * of pretending the user has no skills.
+   */
+  readonly skillInventoryApi?: HostSkillInventoryApiV1;
   readonly goalApi?: HostGoalApiV1;
   readonly modeStateApi?: HostModeStateApiV1;
   readonly taskApi: HostTaskApiV1;
@@ -779,6 +794,29 @@ export class HostSessionHttpServer {
       // A lease is a presence signal, not a lock: the response stays open and
       // the Host counts it until the client goes away.
       this.#holdClientLease(res);
+      return;
+    }
+    // The MCP inventory is matched BEFORE every namespaced route below, on
+    // purpose: it is a top-level path, and a matcher registered earlier that
+    // swallows `/v1/<anything>` would make this answer "unknown route"
+    // instead of "this Host has no inventory capability".
+    if (url.pathname === '/v1/mcps') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      await this.#listMcpServers(res);
+      return;
+    }
+    // The skills inventory sits next to the MCP inventory, and for the same
+    // reason: it is a top-level path, so it is answered before the
+    // namespaced routes below can claim it.
+    if (url.pathname === '/v1/skills') {
+      if (req.method !== 'GET') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      await this.#listSkills(url, res);
       return;
     }
     if (url.pathname === '/v1/research/actions') {
@@ -4723,6 +4761,61 @@ export class HostSessionHttpServer {
     try {
       this.#sendJson(res, 200, await api.ask({ sessionId, question }));
     } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * The MCP servers the user configured.
+   *
+   * A Host without the capability answers 404 with a named code. "This Host
+   * cannot tell you" and "this user configured nothing" are different
+   * answers, and only the second one is an empty list — collapsing them
+   * would let a client render "no MCP servers" on a Host that simply was
+   * not given a configuration source.
+   */
+  async #listMcpServers(res: ServerResponse): Promise<void> {
+    const api = this.#options.mcpInventoryApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'mcp_inventory_api_unavailable' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.listServers());
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * The skills a session can use.
+   *
+   * A Host without the capability answers 404 with a named code. "This Host
+   * cannot tell you" and "this user has no skills" are different answers, and
+   * only the second one is an empty list — collapsing them would let a client
+   * render "no skills" on a Host that simply was not given the capability.
+   */
+  async #listSkills(url: URL, res: ServerResponse): Promise<void> {
+    const api = this.#options.skillInventoryApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'skill_inventory_api_unavailable' } });
+      return;
+    }
+    const sessionId = url.searchParams.get('sessionId');
+    if (sessionId === null || sessionId.trim() === '') {
+      this.#sendJson(res, 400, { error: { code: 'missing_session_id' } });
+      return;
+    }
+    try {
+      this.#sendJson(res, 200, await api.listSkills({ sessionId }));
+    } catch (error) {
+      if (error instanceof HostSkillInventoryError) {
+        // The refusal names itself: "this Host has no session projection" and
+        // "this session is not on this Host" are different problems, and a
+        // 500 for either would be a lie about what the Host knows.
+        this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+        return;
+      }
       this.#sendApiError(res, error);
     }
   }
