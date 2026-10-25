@@ -643,7 +643,30 @@ async function seedSessionOnce(page, args) {
         // would stall a measurement instead of exercising the streaming path.
         permission_profile: input.permissionProfile,
       });
-      const replaced = await api.message.replace(input.sessionId, input.messages, 0);
+      // The transcript is seeded in chunks: the Host's HTTP bridge rejects a
+      // request body over 16 MB, and a realistic session (2000 rows of ~11 KB)
+      // is bigger than that. `db:message:replace` is an append (INSERT OR
+      // IGNORE), so chunking lands exactly the same rows.
+      const CHUNK_BYTES = 4 * 1024 * 1024;
+      const chunks = [];
+      let current = [];
+      let currentBytes = 0;
+      for (const message of input.messages) {
+        const size = JSON.stringify(message).length + 1;
+        if (current.length > 0 && currentBytes + size > CHUNK_BYTES) {
+          chunks.push(current);
+          current = [];
+          currentBytes = 0;
+        }
+        current.push(message);
+        currentBytes += size;
+      }
+      if (current.length > 0) chunks.push(current);
+      let replaced = null;
+      for (const chunk of chunks) {
+        replaced = await api.message.replace(input.sessionId, chunk, 0);
+        if (replaced?.success === false) break;
+      }
       // Read the transcript back through the same bridge: a seed that the
       // product cannot read back is not a seed, and a scenario that measures
       // an empty transcript reports numbers about nothing.

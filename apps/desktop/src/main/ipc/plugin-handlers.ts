@@ -23,6 +23,7 @@ import {
   listMarketplaces,
   refreshMarketplace,
   removeMarketplace,
+  setMarketplaceHidden,
   syncAllMarketplaces,
   type MarketplaceSyncOutcome,
 } from '../plugins/marketplace/manager';
@@ -295,6 +296,20 @@ export function registerPluginHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:marketplace:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:set-hidden ---
+  // Hiding keeps the source configured and cloned but removes its plugins
+  // from the catalog; `hidden: false` restores it without re-cloning.
+  ipcMain.handle('plugin:marketplace:set-hidden', async (_event, payload: { name: string; hidden: boolean }) => {
+    try {
+      setMarketplaceHidden(payload.name, payload.hidden === true);
+      return { success: true, data: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:set-hidden failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, error: message };
     }
   });
