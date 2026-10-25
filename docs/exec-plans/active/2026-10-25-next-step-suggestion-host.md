@@ -74,7 +74,8 @@
 ## 接续 / 结果
 
 - 已实现：S0–S7 全部完成，代码在 `codex/next-step-suggestions`（PR #496）。
-- 已验证：类型门禁、架构门禁、相关测试全部退出码 0（见「验证记录」）。真机三端对话未跑。
+- 已验证：本地类型门禁、架构门禁、相关测试全部退出码 0；CI 第二轮 **5 个 job 全绿**（architecture / test scope / typecheck / test / build，run 40205690754，head `0f8c073d`）。真机三端对话未跑。
 - PR：#496 `feat(agent): move the next-step suggestion into the worker`。
 - 阻塞：无。
-- 下一步：等 PR #496 的 review 与 CI；真机按「测试计划」逐端走一轮，确认 turn 结束后 placeholder 出现灰字建议、Enter 采纳填入且不发送。
+- 下一步：等 review；真机按「测试计划」逐端走一轮，确认 turn 结束后 placeholder 出现灰字建议、Enter 采纳后变白实字且不发送。
+- 待定：生成方式（turn 后单独一次模型调用 / agent 工具调用 / 纯本地推导）已向用户征询，未答复前不改实现。
