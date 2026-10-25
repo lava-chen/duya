@@ -99,7 +99,7 @@ renderer)打印一个完整回合,ANSI 去掉后:
 PR #387：https://github.com/lava-chen/duya/pull/387 —— CI 全绿，门禁与渲染实录见上。
 已合并（2026-10-24，`mergedAt 08:07Z`）。合并后真机反馈「有 todo 仍不显示」是解析侧问题
 （执行器给的结果带 `[completed]` / `[Duration]` 信封），由
-[2026-10-24 TUI 三项反馈缺陷](2026-10-24-tui-reported-defects.md)修复，本计划不再跟进。
+[2026-10-24 TUI 三项反馈缺陷](../archive/2026-10-24-tui-reported-defects.md)修复，本计划不再跟进。
 
 未提交路径：无。worktree `.claude/worktrees/tui-todo-list` 独占 `packages/cli/src/tui/**`。
 下一步:等 review 与 CI；获集成授权后合并并重验,再回收检出。

@@ -24,7 +24,6 @@
 | Agent Runtime 真实基准 | [2026-10-23 Agent Runtime 基准](active/2026-10-23-agent-runtime-e2e-benchmark.md) | 基准已跑通并定位瓶颈；待 PR 集成 |
 | Desktop 性能爬坡 | [2026-10-23 Desktop 性能爬坡](active/2026-10-23-desktop-performance-hill-climbing.md) | 5 个 Agent 各占一条独占路径：先由 A 交 Harness v1，再由 B/C/D/E 建基线、各出一个可证明收益的 PR |
 | CLI TUI 渲染 todolist | [2026-10-23 CLI todo 渲染](active/2026-10-23-cli-todo-list-render.md) | todo 清单渲染与 thinking 折叠预览已合并（PR #387）；底部常驻面板列 Phase 2 |
-| TUI 三项反馈缺陷 | [2026-10-24 TUI 反馈缺陷](active/2026-10-24-tui-reported-defects.md) | todo 因结果信封未剥而隐身、`/model` 补厂商 preset、底部统计分三组；门禁与 CI 已过，PR #469 待集成，真机补验等 provider 出网恢复 |
 | config 写侧下沉 | [2026-10-25 config 写侧下沉](active/2026-10-25-host-config-agents-write.md) | 共享规则已下沉 `packages/host/config-agents`，Host bridge 接上 `config:agents:create/update`；PR #433 已合并（`f59767f1`） |
 | 插件安装路径下沉 | [2026-10-25 插件安装路径](active/2026-10-25-host-plugin-install-path.md) | 独立 Host 已能解析插件 `installPath` 与 MCP 声明，恢复插件技能与 MCP；PR #443 已合并（`49b4771e`） |
 | rollout 换桶判定 | [2026-10-25 rollout 换桶](active/2026-10-25-data-rollout-bucket.md) | `appendBatch` 不再每批重命名 rollout 文件（路径带毫秒戳导致判定恒成立）；写路径耗时降 59%–68%；PR #462 已合并（`55cd1b97`） |

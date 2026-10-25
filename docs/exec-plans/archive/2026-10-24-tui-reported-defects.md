@@ -1,7 +1,8 @@
 # TUI 三项用户反馈缺陷：todo 不显示、模型只能选 config 已有、底部统计不美观
 
-状态：active · 负责人：本会话（tui-polish） · 更新：2026-10-24
+状态：complete · 负责人：本会话（tui-polish） · 更新：2026-10-25
 分支：`codex/tui-polish` · worktree：`.claude/worktrees/tui-polish` · base：`379d990b` · owner：Qoder 会话 `1cab68f9`
+集成：PR #469 由 `lava-chen` 以 merge commit `c94a1be6` 合入 master（2026-10-25T01:05:55Z）
 
 ## 目标与边界
 
@@ -22,7 +23,7 @@
 | 上下文占用组在某些 provider 上缺席 | `stats.contextBudget` 本身为 null，属数据来源，不是行渲染；本次只保证「有 budget 时分组正确」 |
 | minimax-cn 上报 `input_tokens = 0` | provider 侧事实，`↑` 省略是既有设计 |
 
-关联：[CLI todo 渲染](2026-10-23-cli-todo-list-render.md)（第 1 项的原始计划）、[输出速度 tok/s](2026-10-23-output-token-rate.md)（第 3 项的速度标签来源）。
+关联：[CLI todo 渲染](../active/2026-10-23-cli-todo-list-render.md)（第 1 项的原始计划）、[输出速度 tok/s](../active/2026-10-23-output-token-rate.md)（第 3 项的速度标签来源）。
 
 ## 验收
 
@@ -154,12 +155,24 @@ PR 描述与实录提交推上去之后，master 又前进 7 个 commit——PR 
 至此这条分支的节奏已经变成「master 每十几分钟动一次，PR 就变一次 CONFLICTING」，
 所以集成时要以**当时的最新 head** 重验，不能引用上面任何一次的绿色记录。
 
+### 集成后重验（master `c94a1be6`）
+
+PR #469 由 `lava-chen` 合入 master（merge commit `c94a1be6`），在 master tip 上按同一套目标重跑：
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `c94a1be6`（master tip，含本 PR）+ 仅本计划文档未提交 | Win10 26200 x64 / Node 24.16.0 | 五条测试目标（同前） | 1 · 107 files / 1317 tests passed，1 failed | 唯一失败签名：`packages/cli/src/tui/__tests__/perf/baseline.test.ts > measures input→first-byte`，`expected 19.175599999998667 to be less than 7`。该用例不是本任务文件；单独连跑两次 835ms / 832ms 通过，单独跑整个 `packages/cli` 也 104 files / 1282 tests 全绿 → 判为负载敏感的计时阈值 flake，不是合并回归 |
+| 同上 | 同上 | `npm run typecheck:all` · `npm run architecture:check` · `npm run bundle:verify` | 0 · 0 · 0 | baseline 2530，未重录指纹；bundle FRESH 0/950（bundle commit 即 `455ccd24`） |
+| 同上 | 同上，真 provider | 真 PTY 一轮真实 turn | 1 · `✗ fetch failed` | 环境未恢复，第 5 次同样失败；`40d3de56` 上的真机实录（`└ ✔ Todo list 0/1`、`↓6 Σ6 · ⚡ 4.3 tok/s`）仍是本任务唯一的真机证据 |
+
 ### PR head CI
 
 | SHA | 环境 | 命令或操作 | 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | `fb78ed13`（本轮实录提交，即 PR head） | GitHub Actions ubuntu-latest / Node 22.x | `gh run view 40109121091` | success | 5 个 job 全绿：test scope 9s、architecture 2m27s、typecheck 6m55s、test 4m21s、build 2m10s；PR `MERGEABLE` / `mergeStateStatus CLEAN` |
 | `bbeb9e04` · `baf1bcfc` | 同上 | `gh run view 40109781940` · `gh run view 40146195715` | success · success | 两次 head 各自 5 个 job 全绿，含合并 master 之后的 `baf1bcfc` |
+| `455ccd24` | 同上 | `gh run view 40148649762` | cancelled | 被下一次 push（`7c072bbe`）按 `concurrency: cancel-in-progress` 取消，不是失败；同情形还有 `40d3de56` 的 40108816461 |
+| `7c072bbe`（最终 PR head） | 同上 | `gh run view 40148711291` | success | test scope / architecture / test / typecheck / build 5 个 job 全 success；这一 head 即被合入 `c94a1be6` 的 head |
 
 master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 `required_approving_review_count = 0`，
 所以这 5 项都是非必需检查——按仓库约定仍逐条记录，非必需失败由获授权的集成者评估，本次无失败。
@@ -179,8 +192,15 @@ master 规则集 `Protect master branch` 的 `required_status_checks` 为空且 
 - 已实现：三项全部落地，含 `/effort` 的连带修正。
 - 已验证：单元、真机 PTY、typecheck、architecture、bundle 重建；五次合入 `origin/master`（`4bf210cc` 12 个 commit，含重写行内绘制的 PR #455；`40d3de56` 带进 PR #457；`baf1bcfc` 带进 PR #466 的读路径改造；`f820ff99` 带进 PR #454 的忙时 steer；`455ccd24` 带进 PR #456 的数据写路径）后各重跑一遍，最新全量为 108 files / 1318 tests。
 - 待补：`baf1bcfc` 起的真机一轮 turn 未完成——provider 调用返回 `fetch failed`，判别实验证明旧 bundle 同样失败，属环境侧；自动化门禁与各 head 的 CI 均已过，解除条件见「三次同步」。
-- CI 覆盖缺口：`9bdb896f` 与 `6dec8d45` 两个 push 之后 `gh run list --branch` 里查不到对应的 `pull_request` run（同期别的分支有 run），所以不能假定「每个 push 都有检查」；集成前应核验**最新 head** 上确实有 run，而不是引用上一个 head 的绿色结果。
-- 未合并：PR #469 https://github.com/lava-chen/duya/pull/469（GitHub 侧无必需 review / 必需检查，保持可 review，未获授权不合并）。
+- CI 覆盖缺口：`9bdb896f`、`6dec8d45`、`3df192e2` 三个 head 事后按完整 SHA 查
+  `actions/runs?head_sha=<full>&event=pull_request` 返回**空**，即 GitHub 在 PR 处于 CONFLICTING 的那段时间根本没给它们排 run；
+  同期 `fb78ed13` / `bbeb9e04` / `baf1bcfc` / `455ccd24` / `7c072bbe` 都有。所以不能假定「每个 push 都有检查」，
+  集成前必须核验**当时的最新 head** 上确实有 run 且全绿，而不是引用上一个 head 的绿色结果。
+- 已合并：PR #469 https://github.com/lava-chen/duya/pull/469 由账户 `lava-chen` 以 merge commit `c94a1be6`（2026-10-25T01:05:55Z）合入 master；
+  合并前的最新 head `7c072bbe` 上 5 个 job 全绿，满足「最新 head 有 run 且全绿」。本 agent 未自行集成，合并由用户侧执行。
 - 副作用：`packages/host/bundle/**` 为重建产物，随源码同 commit 交付。
-- 回收：PR 集成、master 重验后由本 agent 走 managed 工具回收；未集成前保留分支与检出。
-- 下一步：请用户授权集成——验收条件（无冲突、最新 head 有 run 且全绿、工作树干净）里只剩「最新 head 的 CI」与真机补验两项待落；获授权后用 merge commit 合并，再同步 master 重验并回收检出。
+- 回收：master tip `c94a1be6` 重验已做完（见上表），本计划归档到 `docs/exec-plans/archive/`；随后回收 `tui-polish` 检出与 `codex/tui-polish` 分支。
+- 残留（环境侧，不阻断）：真 provider 的一轮真机 turn 在合并后仍不可用（第 5 次 `fetch failed`）。出网恢复后重跑
+  `MSYS_NO_PATHCONV=1 node docs-local/tui-pty-repro.mjs "10000:用 todo 工具建一条只含一项「写解析」的清单，建完就停下不要做别的|85000:enter" 190000 <dump>.txt`，
+  预期 `└ ✔ Todo list` 与 `⚡ N.N tok/s`。
+- 下一步：本轮归档改动走独立 PR 交付（分支 `codex/tui-post-merge-verify`，base `c94a1be6`）；集成后回收检出，本任务结束。
