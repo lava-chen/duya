@@ -43,7 +43,7 @@ MiniMax input=0 的上报口径；blessed 宽度表 vendoring（cell-width.ts �
 - [x] Fix B：WorkerManager.waitForWorkersToSettle + local-host idle 停机 drain
 - [x] Fix C：formatTokensPerSecond 去掉 ⚡
 - [x] 门禁与测试
-- [ ] commit + PR
+- [x] commit + PR（#487）
 
 ## 发现与决策
 
@@ -79,7 +79,17 @@ MiniMax input=0 的上报口径；blessed 宽度表 vendoring（cell-width.ts �
 
 ## 接续 / 结果
 
-（待填）
+已实现并已验证（门禁全绿）；已开 PR，待 review / CI 与集成授权：
 
-回收：worktree 保留至 PR 集成。
-下一步：基线测试 → 实现 A/B/C → 门禁 → PR。
+- PR：https://github.com/lava-chen/duya/pull/487（base master，head `codex/tui-lease-drain-footer`）
+- commits：`df60a49b`（lease 保留 Response + 哨兵用例 + 本计划）、
+  `b2355d4c`（idle 停机 drain：WorkerManager.waitForWorkersToSettle +
+  local-host idleShutdownDrainTimeoutMs，默认 120s）、
+  `95739c59`（footer 速率标签去 ⚡）。
+- 未提交路径：无（capabilities/inline-content.ts 的 EOL 幻影 diff 为检出产物，
+  未纳入提交）。
+- 副作用：无外部副作用；worktree 保留待集成。
+- 阻塞：无。真机冒烟（重启 dev:tui 观察 footer 完整 + 长回合存活）留给集成后。
+
+回收：PR 未集成，worktree 与分支保留。
+下一步：review / CI 通过后由获授权集成者合并；合并后重验 `npm run build:cli-dev` + `dev:tui` 真机冒烟，然后按 worktree 指南回收本检出。
