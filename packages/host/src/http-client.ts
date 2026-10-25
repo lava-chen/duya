@@ -77,6 +77,9 @@ import type {
   HostSkillEntry,
   ProtocolCapability,
   ProtocolVersion,
+  BackgroundTaskListV1,
+  BackgroundTaskOutputV1,
+  HostLocalBackgroundTaskApiV1,
 } from '@duya/agent-protocol';
 import type { HostResearchAction, HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import type {
@@ -377,6 +380,7 @@ export class HostSessionHttpClient implements
   HostLocalImportBatchApiV1,
   HostLocalTurnReviewApiV1,
   HostLocalTerminalHistoryApiV1,
+  HostLocalBackgroundTaskApiV1,
   HostLocalMailboxApiV1,
   HostLocalPendingWakeApiV1,
   WorkflowRunApiV1,
@@ -1865,6 +1869,31 @@ export class HostSessionHttpClient implements
 
   async recordTerminalCommand(input: TerminalHistoryRecordInput): Promise<void> {
     await this.request('POST', '/v1/local/terminal-history/record', input);
+  }
+
+  async listBackgroundTasks(sessionId: string): Promise<BackgroundTaskListV1> {
+    const query = new URLSearchParams({ sessionId });
+    return this.request<BackgroundTaskListV1>('GET', `/v1/local/background-tasks?${query.toString()}`);
+  }
+
+  async readBackgroundTaskOutput(
+    sessionId: string,
+    taskId: string,
+    maxBytes?: number,
+  ): Promise<BackgroundTaskOutputV1 | null> {
+    const query = new URLSearchParams({ sessionId });
+    if (maxBytes !== undefined) query.set('maxBytes', String(maxBytes));
+    try {
+      return await this.request<BackgroundTaskOutputV1>(
+        'GET',
+        `/v1/local/background-tasks/${encodeURIComponent(taskId)}/output?${query.toString()}`,
+      );
+    } catch (error) {
+      // The contract says an absent task is null, not an exception: a task can
+      // finish and be evicted between the list the user saw and this read.
+      if (error instanceof HostSessionHttpError && error.status === 404) return null;
+      throw error;
+    }
   }
 
   async getItem(id: string): Promise<HostMailboxItem | null> {

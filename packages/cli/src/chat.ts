@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import readline from 'node:readline';
 import type {
+  BackgroundTaskOutputV1,
   DurableTimelineEntry,
   HostMailboxItem,
   HostSessionListItem,
@@ -39,6 +40,8 @@ import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
+import { BackgroundTaskPoller } from './tui/background-task-poller.js';
+import { backgroundTaskDetailLines, type BackgroundTaskView } from './tui/background-tasks.js';
 import { RunSession } from '@duya/client-core';
 import { TurnQueue, type PendingDraft, type TurnOutcome } from './tui/turn-queue.js';
 import { createFileCompletionSource } from './tui/candidates.js';
@@ -1084,7 +1087,62 @@ export async function chatTui(
     onSubmit: (text) => { void handleLine(text); },
     onInterrupt: interrupt,
     onExit: () => close(),
+    // The task view is fed from two places: this poller (bash) and the run's
+    // own frames (subagents). Opening the view asks for one current reading,
+    // because the timer is deliberately quiet while nothing is live.
+    onBackgroundTasksRefresh: () => { void backgroundPoller.poll(); },
+    onBackgroundTaskOpen: (task) => { void openBackgroundTask(task); },
   });
+
+  /**
+   * Background bash lives in the worker's registry; the Host caches the
+   * snapshot and this reads it. Polling stops on its own when no turn is
+   * running and nothing is still live, so an idle prompt costs nothing.
+   */
+  const backgroundPoller = new BackgroundTaskPoller({
+    list: (sessionId) => client.listBackgroundTasks(sessionId),
+    sessionId: () => (sessionTransition ? null : activeSession.id),
+    isActive: () => busy || tui.isTaskViewOpen() || tui.hasRunningBackgroundTasks(),
+    onChange: (snapshot) => {
+      if (!finished) tui.setBackgroundTasks(snapshot);
+    },
+    onError: (error) => {
+      if (!finished) {
+        tui.printError(
+          'Could not read background tasks: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    },
+  });
+  backgroundPoller.start();
+
+  /**
+   * Enter on a task row: read the output tail (bash only) and show the detail
+   * panel. The read is on demand, not streamed — the protocol has no stdout
+   * delta, and a tail snapshot is what the Host already keeps.
+   */
+  async function openBackgroundTask(task: BackgroundTaskView): Promise<void> {
+    let output: BackgroundTaskOutputV1 | null = null;
+    if (task.kind === 'bash') {
+      try {
+        output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
+      } catch (error) {
+        if (!finished) {
+          tui.printError(
+            'Could not read task output: '
+            + (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
+    }
+    if (finished) return;
+    tui.showPanel(
+      task.kind === 'bash' ? 'Background task' : 'Subagent',
+      backgroundTaskDetailLines(task, output),
+      { footer: '↑↓ / PgUp / PgDn scroll · Esc close', scrollable: true },
+    );
+  }
 
   tui.onPermissionDecision = (requestId, decision, answers?: QuestionAnswers) => {
     if (activeRunId === null || cancellationRequested) return;
@@ -1149,6 +1207,7 @@ export async function chatTui(
     if (finished) return;
     finished = true;
     if (remoteWatchTimer !== null) clearInterval(remoteWatchTimer);
+    backgroundPoller.stop();
     remoteWatch.stop();
     queue.close();
     cancellationRequested = true;

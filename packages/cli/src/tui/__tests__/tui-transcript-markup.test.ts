@@ -208,7 +208,7 @@ describe('tool groups', () => {
   });
 
   it('adds exactly one header row per batch to the ungrouped line count', () => {
-    // `revealSelectedBlock` sums per-block heights from the same plan, so the
+    // The scroll math sums per-block heights from the same plan, so the
     // remaining invariant is that a batch costs exactly one extra row — its
     // summary — and no separator rows.
     const grouped = renderTranscript(groupModel(), OPTIONS).split('\n').length;

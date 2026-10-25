@@ -53,6 +53,7 @@ import { COMPACT_COMMANDS } from './compact.js';
 import { BTW_COMMANDS } from './btw.js';
 import { MCP_COMMANDS } from './mcp.js';
 import { SKILLS_COMMANDS } from './skills.js';
+import { TASKS_COMMANDS } from './tasks.js';
 
 /** Every command this surface can actually run. */
 export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
@@ -76,6 +77,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...BTW_COMMANDS,
   ...MCP_COMMANDS,
   ...SKILLS_COMMANDS,
+  ...TASKS_COMMANDS,
 ];
 
 const BY_NAME = new Map<string, TuiSlashCommandDef>();
