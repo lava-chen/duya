@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  collapseContextLines,
   countPatchChanges,
   fileLanguageLabel,
   parseReviewPatch,
   parseUnifiedDiff,
-  toSplitRows,
 } from './code-review-diff';
 
 const PATCH = [
@@ -36,35 +34,36 @@ describe('code review diff parsing', () => {
     ]);
   });
 
-  it('pairs changed runs and collapses only long unchanged ranges', () => {
-    const [hunk] = parseUnifiedDiff(PATCH);
-    const split = toSplitRows(hunk.lines);
-
-    expect(split[1]).toEqual({
-      type: 'line',
-      oldLine: { type: 'remove', content: '  return before;', oldLineNumber: 5 },
-      newLine: { type: 'add', content: '  const after = before;', newLineNumber: 5 },
-    });
-    expect(split[2]).toEqual({
-      type: 'line',
-      oldLine: undefined,
-      newLine: { type: 'add', content: '  return after;', newLineNumber: 6 },
-    });
-
-    const longContext = Array.from({ length: 9 }, (_, index) => ({
-      type: 'context' as const,
-      content: `line ${index + 1}`,
-      oldLineNumber: index + 1,
-      newLineNumber: index + 1,
-    }));
-    expect(collapseContextLines(longContext, true)).toHaveLength(7);
-    expect(collapseContextLines(longContext, true)[3]).toEqual({ type: 'collapsed', count: 3 });
-  });
-
   it('counts per-file additions and removals from parsed hunks', () => {
     const [filePatch] = parseReviewPatch(PATCH);
     expect(countPatchChanges(filePatch.hunks)).toEqual({ additions: 2, removals: 1 });
     expect(countPatchChanges([])).toEqual({ additions: 0, removals: 0 });
+  });
+
+  it('keeps the verbatim per-file patch for the diff renderer', () => {
+    const [filePatch] = parseReviewPatch(PATCH);
+    expect(filePatch.raw).toBe(PATCH);
+
+    const multi = [
+      PATCH,
+      'diff --git a/src/other.ts b/src/other.ts',
+      '--- a/src/other.ts',
+      '+++ b/src/other.ts',
+      '@@ -1,1 +1,1 @@',
+      '-old',
+      '+new',
+    ].join('\n');
+    const files = parseReviewPatch(multi);
+    expect(files).toHaveLength(2);
+    expect(files[0].raw).toBe(PATCH);
+    expect(files[1].raw).toBe([
+      'diff --git a/src/other.ts b/src/other.ts',
+      '--- a/src/other.ts',
+      '+++ b/src/other.ts',
+      '@@ -1,1 +1,1 @@',
+      '-old',
+      '+new',
+    ].join('\n'));
   });
 
   it('maps file extensions to short language badges', () => {

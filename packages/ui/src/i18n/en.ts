@@ -1363,7 +1363,6 @@ const en = {
 
   'panel.files': 'Files',
   'panel.launchersAria': 'Panels',
-  'panel.preview': 'Preview',
   'panel.review': 'Code Review',
   'panel.workflow.title': 'Workflows',
   'panel.workflow.tabDefinitions': 'Definitions',
@@ -1544,9 +1543,6 @@ const en = {
   'panel.openPanel': 'Open Side Panel',
   'panel.collapsePanel': 'Collapse Panel',
   'panel.expandPanel': 'Expand Panel',
-  'panel.projectFileTree': 'Project File Tree',
-  'panel.collapseFileTree': 'Collapse File Tree',
-  'panel.expandFileTree': 'Expand File Tree',
   'panel.closeTab': 'Close Tab',
   'panel.unavailable': 'Not available',
   'panel.taskList': 'Task List',

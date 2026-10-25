@@ -81,10 +81,9 @@ export function PanelHeader() {
   );
 
   const entries = Object.values(PAGE_REGISTRY).filter(
-    // `preview` is event-driven (opens with a filePath) and
-    // `session-messages` is event-driven (opens with a sessionId) — neither
-    // has a meaningful empty-state, so both stay out of the add-page menu.
-    (entry) => entry.id !== "preview" && entry.id !== "session-messages" && entry.id !== "plugin-app",
+    // `session-messages` is event-driven (opens with a sessionId) and has no
+    // meaningful empty-state, so it stays out of the add-page menu.
+    (entry) => entry.id !== "session-messages" && entry.id !== "plugin-app",
   );
 
   const menuItems: MenuAction[] = entries.map((entry) => ({

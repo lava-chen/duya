@@ -17,6 +17,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, waitFor, cleanup, act } from '@testing-library/react';
 
+// jsdom lacks the browser constructs @pierre/diffs' <diffs-container> web
+// component relies on while the panel's diff view mounts. The component
+// works in the real renderer; these stubs only satisfy its feature probes.
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+(globalThis as Record<string, unknown>).ResizeObserver ??= ResizeObserverStub;
+if (typeof CSSStyleSheet !== 'undefined' && typeof CSSStyleSheet.prototype.replaceSync !== 'function') {
+  Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', {
+    value: () => {},
+    configurable: true,
+    writable: true,
+  });
+}
+
 const gitIpc = vi.hoisted(() => ({
   getGitLatestTurnReview: vi.fn(),
   getGitTurnHistory: vi.fn(),

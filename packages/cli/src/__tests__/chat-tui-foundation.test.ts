@@ -79,6 +79,7 @@ vi.mock('../tui/index.js', () => ({
     hasRunningBackgroundTasks(): boolean { return false; }
     isTaskViewOpen(): boolean { return this.taskViewOpen; }
     showPanel(title: string, lines: readonly string[]): void { this.panels.push({ title, lines }); }
+    recheckCompletion(): void {}
   },
   shouldUseTui: () => true,
 }));
@@ -722,6 +723,119 @@ describe('chatTui production callback wiring', () => {
     const body = app.panels[0]?.lines.join('\n') ?? '';
     expect(body).toContain('found the answer');
     expect(body).toContain('transcript is not shown here');
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('rewrites an @plugin mention into a structured link and carries the mention lists', async () => {
+    const client = makeClient({
+      listPlugins: vi.fn(async () => ({
+        plugins: [
+          {
+            id: 'wechat-pay',
+            name: 'WeChat Pay',
+            enabled: true,
+            marketplace: 'official',
+            installed: true,
+            appConnections: ['slack'],
+            mcpServers: ['wechat-pay-server'],
+            skillNames: [],
+          },
+        ],
+      })),
+      listAppConnections: vi.fn(async () => [
+        { provider: 'slack', status: 'connected' },
+      ]),
+    });
+    const { running, app } = await startChat(client);
+    // The mention rewrite reads the plugin cache; make sure the wiring-time
+    // refresh has landed before submitting, or the race decides the test.
+    await waitUntil(() => vi.mocked(client.listPlugins).mock.calls.length >= 1);
+    app.options.onSubmit('use @wechat-pay to charge');
+    await waitUntil(() => vi.mocked(client.startAgentRun).mock.calls.length === 1);
+
+    const call = vi.mocked(client.startAgentRun).mock.calls[0]![0];
+    expect(call.prompt).toBe('use [@WeChat Pay](plugin://wechat-pay) to charge');
+    const options = call.options as Record<string, unknown> | undefined;
+    expect(options?.['displayContent']).toBe('use @wechat-pay to charge');
+    expect(options?.['mentionedProviders']).toEqual(['slack']);
+    const mentioned = options?.['mentionedPlugins'] as Array<Record<string, unknown>>;
+    expect(mentioned).toHaveLength(1);
+    expect(mentioned[0]).toMatchObject({ pluginId: 'wechat-pay', name: 'WeChat Pay' });
+
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('rewrites an @plugin mention before a steer reaches the mailbox', async () => {
+    const acceptance = deferred<{ accepted: true; runId: RunId }>();
+    const firstStream = deferred<void>();
+    const enqueued: { content: string }[] = [];
+    const client = makeClient({
+      listPlugins: vi.fn(async () => ({
+        plugins: [
+          {
+            id: 'wechat-pay',
+            name: 'WeChat Pay',
+            enabled: true,
+            installed: true,
+            appConnections: ['slack'],
+            mcpServers: [],
+            skillNames: [],
+          },
+        ],
+      })),
+      listAppConnections: vi.fn(async () => [{ provider: 'slack', status: 'connected' }]),
+      startAgentRun: vi.fn(() => acceptance.promise),
+      watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
+        if (runId === 'run-first') await firstStream.promise;
+      }),
+      enqueue: vi.fn(async (input: { content: string }) => {
+        enqueued.push({ content: input.content });
+        return { id: 'row-1', status: 'pending', content: input.content };
+      }),
+      getItem: vi.fn(async () => ({ id: 'row-1', status: 'applied', content: 'charge @wechat-pay' })),
+    });
+    const { running, app } = await startChat(client);
+    await waitUntil(() => vi.mocked(client.listPlugins).mock.calls.length >= 1);
+
+    app.options.onSubmit('first');
+    await waitUntil(() => vi.mocked(client.startAgentRun).mock.calls.length === 1);
+    acceptance.resolve({ accepted: true, runId: 'run-first' as RunId });
+    await waitUntil(() => app.options.isBusy());
+
+    await app.options.onSteer('charge @wechat-pay');
+    // The mailbox row is read by the RUNNING turn, which never passes through
+    // `runTurn`: the rewrite has to happen here or the mention stays prose.
+    expect(enqueued).toEqual([{ content: 'charge [@WeChat Pay](plugin://wechat-pay)' }]);
+    // The transcript still shows what the user typed.
+    expect(app.users).toEqual(['first', 'charge @wechat-pay']);
+
+    firstStream.resolve();
+    await waitUntil(() => !app.options.isBusy());
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
+  it('sends a mention-free prompt without the mention options', async () => {
+    const client = makeClient({
+      listPlugins: vi.fn(async () => ({
+        plugins: [
+          { id: 'wechat-pay', name: 'WeChat Pay', enabled: true, installed: true },
+        ],
+      })),
+    });
+    const { running, app } = await startChat(client);
+    await waitUntil(() => vi.mocked(client.listPlugins).mock.calls.length >= 1);
+    app.options.onSubmit('email me @home');
+    await waitUntil(() => vi.mocked(client.startAgentRun).mock.calls.length === 1);
+
+    const call = vi.mocked(client.startAgentRun).mock.calls[0]![0];
+    // A token that resolves to no plugin is prose, not a mention: the prompt
+    // travels verbatim and no option bag rides along.
+    expect(call.prompt).toBe('email me @home');
+    expect(call.options).toBeUndefined();
 
     app.options.onExit();
     await expect(running).resolves.toBe(0);

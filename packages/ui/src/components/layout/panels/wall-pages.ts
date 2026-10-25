@@ -3,13 +3,14 @@
 // The wall shows one card per open page. These are the kinds the user can
 // add from the wall's empty cell:
 //
-//   files    — the project file tree
-//   preview  — the file viewer (opened by clicking a file; not added by hand)
-//   review   — the code review diff
-//   browser  — the embedded browser
-//   terminal — a shell
+//   files     — the project file tree
+//   workspace — the file viewer (opened by clicking a file; not added by hand)
+//   review    — the code review diff
+//   browser   — the embedded browser
+//   terminal  — a shell
 //
 // Plugin Apps use the generic Apps view rather than this panel registry.
+// Session-messages panels are also event-only, but they are not wall pages.
 
 import type { PageId } from "./page-tab";
 
@@ -20,6 +21,3 @@ export const WALL_PAGE_IDS: readonly PageId[] = [
   "browser",
   "terminal",
 ];
-
-/** The pages that are opened by events and never added by hand. */
-export const WALL_EVENT_PAGE_IDS: readonly PageId[] = ["preview", "session-messages"];

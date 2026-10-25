@@ -51,6 +51,26 @@ function configRootWithInstalledPlugin(): string {
     }),
     'utf8',
   );
+  // The manifest facts a client may see: a description, and the app
+  // connector ids the plugin declares. The credential-shaped manifest
+  // fields stay out of the projection by construction; the fixture carries
+  // the declarations so the boundary test can prove it.
+  fs.mkdirSync(path.join(installed, '.duya-plugin'), { recursive: true });
+  fs.writeFileSync(
+    path.join(installed, '.duya-plugin', 'plugin.json'),
+    JSON.stringify({
+      name: 'com.duya.documents',
+      version: '1.0.0',
+      description: 'Document workflows for the duya suite',
+      components: {
+        appConnections: ['slack', 'google'],
+        mcpServers: ['documents'],
+      },
+    }),
+    'utf8',
+  );
+  fs.mkdirSync(path.join(installed, 'skills', 'doc-review'), { recursive: true });
+  fs.writeFileSync(path.join(installed, 'skills', 'doc-review', 'SKILL.md'), '---\nname: doc-review\n---\n', 'utf8');
   fs.mkdirSync(path.join(root, 'plugins-data', 'com.duya.documents'), { recursive: true });
   return root;
 }
@@ -110,6 +130,10 @@ describe('the Host plugin inventory route', () => {
             marketplace: 'official',
             installed: true,
             hasDataPath: true,
+            description: 'Document workflows for the duya suite',
+            appConnections: ['slack', 'google'],
+            mcpServers: ['documents'],
+            skillNames: ['doc-review'],
           },
         ],
       });
@@ -129,18 +153,38 @@ describe('the Host plugin inventory route', () => {
       const response = await fetch(`${origin}/v1/local/plugins`, {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
-      const body = await response.text();
+      const body = (await response.json()) as {
+        plugins: Array<Record<string, unknown>>;
+      };
 
-      // The registry entry for this plugin DOES carry the MCP server with its
-      // env, headers, command, args and url. None of it may appear here.
-      expect(body).not.toContain('super-secret');
-      expect(body).not.toContain('documents-mcp');
-      expect(body).not.toContain('mcpServers');
-      expect(body).not.toContain('manifest');
-      expect(body).not.toContain('installPath');
-      expect(body).not.toContain('dataPath');
-      expect(body).not.toContain('headers');
-      expect(body).not.toContain('env');
+      // The component summaries are NAMES; the declarations behind them —
+      // the manifest itself, the install and data paths, and every
+      // credential-shaped MCP field — never appear, at any depth.
+      const flattened = JSON.stringify(body);
+      for (const secret of [
+        'super-secret',
+        'documents-mcp',
+        '--stdio',
+        'https://documents.example',
+        'Bearer',
+        'installPath',
+        'dataPath',
+        'manifest',
+        'env',
+        'headers',
+        'command',
+        'args',
+        'url',
+      ]) {
+        expect(flattened).not.toContain(secret);
+      }
+      const plugin = body.plugins[0];
+      expect(plugin).toMatchObject({
+        description: 'Document workflows for the duya suite',
+        appConnections: ['slack', 'google'],
+        mcpServers: ['documents'],
+        skillNames: ['doc-review'],
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

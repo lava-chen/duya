@@ -3,10 +3,15 @@
  *
  * The composer `@` popover lists installed plugins (one row per plugin,
  * regardless of how many apps/MCP servers/skills it contributes). Selecting
- * a plugin inserts `@<pluginId> ` into the textarea. Submitted verbatim,
+ * a plugin inserts `@<pluginId> ` into the composer. Submitted verbatim,
  * that bare token would reach the model as prose; this helper rewrites it
  * into a codex-style structured link `[@Name](plugin://pluginId)` the model
  * can resolve, and returns structured mention data for per-turn injection.
+ *
+ * Lives here rather than in either surface because both composers run the
+ * SAME rewrite — the desktop's stream session manager and the CLI's chat
+ * loop — and a rule this regex-shaped is one drift away from "the two
+ * surfaces disagree about what a mention is".
  *
  * Codex parity (`codex-rs/core/src/plugins/mentions.rs` + `injection.rs`):
  *   - a plugin mention is a typed target (`plugin://` scheme);
@@ -68,9 +73,9 @@ export interface PluginMentionRewrite {
  */
 export function rewritePluginMentionTokens(
   content: string,
-  availablePlugins: PluginMentionCapabilities[],
-  connectedProviders: string[],
-  existingProviders: string[],
+  availablePlugins: readonly PluginMentionCapabilities[],
+  connectedProviders: readonly string[],
+  existingProviders: readonly string[],
 ): PluginMentionRewrite {
   if (!content || !content.includes('@') || availablePlugins.length === 0) {
     return { content, mentionedPlugins: [], mergedProviders: [...existingProviders] };

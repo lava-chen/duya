@@ -77,6 +77,23 @@ export interface HostPluginRegistryEntry {
   readonly dataPath?: string | undefined;
   /** The manifest declarations read from the package directory. */
   readonly manifest?: HostPluginManifest | undefined;
+  /**
+   * The manifest's own description, when the package declares one.
+   *
+   * A fact about the plugin a client may render; nothing in it is
+   * credential material.
+   */
+  readonly description?: string | undefined;
+  /**
+   * App connector ids the manifest declares (`components.appConnections`).
+   *
+   * The ids are what a plugin mention names so the worker can say which of
+   * the plugin's apps are connected this turn; the declarations behind the
+   * ids never leave the Host.
+   */
+  readonly appConnections?: readonly string[] | undefined;
+  /** Skill names discovered in the package's skill directory. */
+  readonly skillNames?: readonly string[] | undefined;
 }
 
 export interface HostLocalPluginRegistryApiV1 {
@@ -163,12 +180,157 @@ function withInstalledFiles(
   if (!installPath) return entry;
   const dataPath = resolvePluginDataPath(pluginId, { roots });
   const manifest = readPluginManifestShape(installPath);
+  const facts = readPluginPackageFacts(installPath);
   return {
     ...entry,
     installPath,
     ...(dataPath === undefined ? {} : { dataPath }),
     ...(manifest === undefined ? {} : { manifest }),
+    ...(facts === undefined ? {} : facts),
   };
+}
+
+/**
+ * True when `target` stays within `directory` (or is `directory` itself).
+ *
+ * Every path this module reads is built from a resolved install directory
+ * and fixed segments, so the check states an invariant rather than repairs
+ * one: a boundary that is written down cannot be walked past.
+ */
+function isInsideDirectory(directory: string, target: string): boolean {
+  const root = path.resolve(directory);
+  const resolved = path.resolve(target);
+  return resolved === root || resolved.startsWith(root + path.sep);
+}
+
+/**
+ * The manifest file of an installed plugin, as raw JSON.
+ *
+ * The lookup order is the duya adapter's (`.duya-plugin/plugin.json`, then a
+ * root `plugin.json`), so a package the Desktop reads resolves to the same
+ * manifest here. `undefined` when neither exists or neither parses — a
+ * package without a readable manifest still serves its MCP and skill
+ * directories, so this is a degraded listing, not a broken install.
+ */
+function readPluginManifestJson(installPath: string): Record<string, unknown> | undefined {
+  const candidates = [
+    path.join(installPath, '.duya-plugin', 'plugin.json'),
+    path.join(installPath, 'plugin.json'),
+  ];
+  for (const file of candidates) {
+    if (!isInsideDirectory(installPath, file)) continue;
+    let raw: string;
+    try {
+      raw = fs.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The identity facts a manifest carries: its description and the app
+ * connector ids it declares, plus the skill names the package's skill
+ * directory holds.
+ *
+ * All three are NAMES — the projection rule the inventory route exists to
+ * keep. The manifest's MCP servers, permissions, icons and every
+ * credential-shaped field stay out of this shape entirely. `undefined` per
+ * field means "not observed", not "empty".
+ */
+function readPluginPackageFacts(
+  installPath: string,
+): Pick<HostPluginRegistryEntry, 'description' | 'appConnections' | 'skillNames'> | undefined {
+  const manifest = readPluginManifestJson(installPath);
+  const description = manifest === undefined ? undefined : readManifestDescription(manifest);
+  const appConnections = manifest === undefined ? undefined : readManifestAppConnections(manifest);
+  const skillNames = readPluginSkillNames(installPath);
+  if (description === undefined && appConnections === undefined && skillNames === undefined) {
+    return undefined;
+  }
+  return {
+    ...(description === undefined ? {} : { description }),
+    ...(appConnections === undefined ? {} : { appConnections }),
+    ...(skillNames === undefined ? {} : { skillNames }),
+  };
+}
+
+/** The manifest's `description`, when it is a non-empty string. */
+function readManifestDescription(manifest: Record<string, unknown>): string | undefined {
+  const value = manifest['description'];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/**
+ * The app connector ids a manifest declares.
+ *
+ * v2 declares them under `components.appConnections` as a string array; a
+ * bare top-level `appConnections` is accepted so hand-authored manifests
+ * that skipped the `components` wrapper still list. Elements that are
+ * objects with an `appId` string are narrowed too — the same tolerance the
+ * desktop's zod schema applies. A malformed entry is skipped rather than
+ * failing the whole plugin.
+ */
+function readManifestAppConnections(manifest: Record<string, unknown>): string[] | undefined {
+  const components = manifest['components'];
+  const raw = (typeof components === 'object' && components !== null && !Array.isArray(components)
+    ? (components as Record<string, unknown>)['appConnections']
+    : undefined)
+    ?? manifest['appConnections'];
+  if (!Array.isArray(raw)) return undefined;
+  const ids: string[] = [];
+  for (const item of raw) {
+    if (typeof item === 'string' && item !== '') {
+      ids.push(item);
+      continue;
+    }
+    if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+      const appId = (item as Record<string, unknown>)['appId'];
+      if (typeof appId === 'string' && appId !== '') ids.push(appId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The skill names a package's skill directory holds.
+ *
+ * The same discovery the worker's plugin-skill loading resolves through, so
+ * the names a client shows are the names a turn can actually invoke. An
+ * absent or unreadable directory is `undefined` — no claim was observed —
+ * while an existing empty directory is an empty list.
+ */
+function readPluginSkillNames(installPath: string): string[] | undefined {
+  const skillsDir = path.join(installPath, 'skills');
+  if (!isInsideDirectory(installPath, skillsDir)) return undefined;
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+    if (!isInsideDirectory(skillsDir, skillFile)) continue;
+    try {
+      if (!fs.existsSync(skillFile)) continue;
+    } catch {
+      continue;
+    }
+    names.push(entry.name);
+  }
+  return names;
 }
 
 /**

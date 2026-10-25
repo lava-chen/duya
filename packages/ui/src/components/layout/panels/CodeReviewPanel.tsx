@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { PatchDiff, type FileDiffOptions } from "@pierre/diffs/react";
 import {
   IconAlertCircle,
-  IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconColumns2,
@@ -27,7 +27,7 @@ import {
 import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import { useCodeComments } from "@/hooks/use-code-comments";
 import { useTheme } from "@/hooks/useTheme";
-import { CodeViewer } from "./code-review-code-viewer";
+import { CodeViewer, hashCodeContent } from "./code-review-code-viewer";
 import { ReviewScopePicker, type ReviewScopeKind } from "@/components/code-review/ReviewScopePicker";
 import { ReviewCommitRail } from "@/components/code-review/ReviewCommitRail";
 import {
@@ -50,14 +50,9 @@ import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import {
-  collapseContextLines,
   countPatchChanges,
   fileLanguageLabel,
   parseReviewPatch,
-  toSplitRows,
-  type ReviewDiffHunk,
-  type ReviewDiffLine,
-  type ReviewDisplayLine,
   type ReviewFilePatch,
 } from "./code-review-diff";
 
@@ -115,119 +110,6 @@ function StatusIcon({ status }: { status: GitReviewFile["status"] }) {
     default:
       return <IconFileDiff {...props} />;
   }
-}
-
-/** Makes whitespace visible (Codex parity): spaces → ·, tabs → →. */
-function visualizeWhitespace(content: string): string {
-  return content.replace(/ /g, "·").replace(/\t/g, "→");
-}
-
-function DiffLineView({ line, wrapped, showWhitespace }: {
-  line: ReviewDiffLine;
-  wrapped: boolean;
-  showWhitespace: boolean;
-}) {
-  const lineNumber = line.type === "remove" ? line.oldLineNumber : line.newLineNumber;
-  const content = line.content ? (showWhitespace ? visualizeWhitespace(line.content) : line.content) : " ";
-  return (
-    <div className={`code-review-line code-review-line-${line.type}${wrapped ? " is-wrapped" : ""}`}>
-      <span className="code-review-line-number">{lineNumber ?? ""}</span>
-      <span className="code-review-line-prefix" aria-hidden="true">
-        {line.type === "add" ? "+" : line.type === "remove" ? "−" : " "}
-      </span>
-      <code className="code-review-line-code">{content}</code>
-    </div>
-  );
-}
-
-function CollapsedLinesButton({ count, onExpand }: { count: number; onExpand: () => void }) {
-  return (
-    <Button type="button" variant="ghost" size="sm" className="code-review-collapsed-lines" onClick={onExpand}>
-      <IconChevronDown size={14} aria-hidden="true" />
-      显示 {count} 行未修改内容
-    </Button>
-  );
-}
-
-function UnifiedHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
-  hunk: ReviewDiffHunk;
-  wrapped: boolean;
-  foldUnchanged: boolean;
-  showWhitespace: boolean;
-}) {
-  const [expandedContext, setExpandedContext] = useState(false);
-  const lines = useMemo(
-    () => collapseContextLines(hunk.lines, foldUnchanged && !expandedContext),
-    [expandedContext, foldUnchanged, hunk.lines],
-  );
-
-  return (
-    <section className="code-review-hunk">
-      <div className="code-review-hunk-header">{hunk.header}</div>
-      {lines.map((line, index) => line.type === "collapsed" ? (
-        <CollapsedLinesButton
-          key={`collapsed-${index}`}
-          count={line.count}
-          onExpand={() => setExpandedContext(true)}
-        />
-      ) : (
-        <DiffLineView key={`${line.type}-${line.oldLineNumber ?? line.newLineNumber ?? index}`} line={line} wrapped={wrapped} showWhitespace={showWhitespace} />
-      ))}
-    </section>
-  );
-}
-
-function SplitHunk({ hunk, wrapped, foldUnchanged, showWhitespace }: {
-  hunk: ReviewDiffHunk;
-  wrapped: boolean;
-  foldUnchanged: boolean;
-  showWhitespace: boolean;
-}) {
-  const [expandedContext, setExpandedContext] = useState(false);
-  const lines = useMemo<ReviewDisplayLine[]>(
-    () => collapseContextLines(hunk.lines, foldUnchanged && !expandedContext),
-    [expandedContext, foldUnchanged, hunk.lines],
-  );
-  const rows = useMemo(() => toSplitRows(lines), [lines]);
-
-  return (
-    <section className="code-review-hunk code-review-hunk-split">
-      <div className="code-review-hunk-header">{hunk.header}</div>
-      {rows.map((row, index) => row.type === "collapsed" ? (
-        <CollapsedLinesButton
-          key={`collapsed-${index}`}
-          count={row.count}
-          onExpand={() => setExpandedContext(true)}
-        />
-      ) : (
-        <div className="code-review-split-row" key={`split-${index}`}>
-          {row.oldLine ? <DiffLineView line={row.oldLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
-          {row.newLine ? <DiffLineView line={row.newLine} wrapped={wrapped} showWhitespace={showWhitespace} /> : <div className="code-review-line code-review-line-empty" />}
-        </div>
-      ))}
-    </section>
-  );
-}
-
-function DiffContents({ hunks, layout, wrapped, foldUnchanged, showWhitespace }: {
-  hunks: ReviewDiffHunk[];
-  layout: DiffLayout;
-  wrapped: boolean;
-  foldUnchanged: boolean;
-  showWhitespace: boolean;
-}) {
-  if (hunks.length === 0) {
-    return <div className="code-review-empty">此文件没有可显示的文本差异。</div>;
-  }
-  return (
-    <div className={`code-review-diff code-review-diff-${layout}`}>
-      {hunks.map((hunk, index) => layout === "split" ? (
-        <SplitHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
-      ) : (
-        <UnifiedHunk key={`${hunk.header}-${index}`} hunk={hunk} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
-      ))}
-    </div>
-  );
 }
 
 interface ContextMenuState {
@@ -360,7 +242,6 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [wrapped, setWrapped] = useState(false);
   const [foldUnchanged, setFoldUnchanged] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
-  const [showWhitespace, setShowWhitespace] = useState(false);
   // ZCode-style file preview with per-line comments. "diff" keeps the
   // historical stacked-patches view; "preview" renders ONE file (the
   // selected one) as a syntax-highlighted read-only surface where the
@@ -393,13 +274,6 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       id: "collapseAllFiles",
       label: "折叠所有文件",
       onSelect: () => setCollapsedFiles(new Set(filePatches.map((patch) => patch.path))),
-    },
-    {
-      kind: "checkbox",
-      id: "showWhitespace",
-      label: "显示空白字符",
-      checked: showWhitespace,
-      onToggle: (checked) => setShowWhitespace(checked),
     },
     {
       kind: "action",
@@ -525,8 +399,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
 
   // A second click on the same round's card (another file row, or the same one
   // after the tab was reused) must re-target the already-open tab — the tab's
-  // params never change, so the event is the only channel. Mirrors the
-  // `duya:preview-focus-lines` contract used by the file preview panel.
+  // params never change, so the event is the only channel. Same pattern as
+  // the workspace panel's `duya:workspace-open-file` contract.
   const filesRef = useRef(files);
   useEffect(() => { filesRef.current = files; }, [files]);
   useEffect(() => {
@@ -679,6 +553,38 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   // windows never share comments; the composer reads the same store.
   const { comments: workspaceComments, addComment, removeComment } = useCodeComments(workingDirectory);
   const { theme } = useTheme();
+  const darkMode = theme === "dark";
+
+  // Shared @pierre/diffs options for the diff view. The library defaults to
+  // a split layout and system theme, so both are always passed explicitly.
+  const diffOptions = useMemo<FileDiffOptions<undefined, undefined>>(
+    () => ({
+      disableFileHeader: true,
+      diffStyle: layout,
+      overflow: wrapped ? "wrap" : "scroll",
+      themeType: darkMode ? "dark" : "light",
+      // Fold toggle: collapsed context runs with the library's expand
+      // affordances, or fully expanded unchanged lines.
+      expandUnchanged: !foldUnchanged,
+      hunkSeparators: "line-info",
+    }),
+    [darkMode, foldUnchanged, layout, wrapped],
+  );
+
+  // The library renders inside a Shadow DOM that inherits these custom
+  // properties from the host tree — the same tokens the preview-mode
+  // CodeViewer sets, applied once for every diff section.
+  const diffSurfaceStyle = useMemo<CSSProperties>(
+    () => ({
+      colorScheme: darkMode ? "dark" : "light",
+      "--diffs-bg": "var(--main-bg)",
+      "--diffs-light-bg": "var(--main-bg)",
+      "--diffs-dark-bg": "var(--main-bg)",
+      "--diffs-font-family": "var(--font-mono)",
+      "--diffs-font-size": "12px",
+    }),
+    [darkMode],
+  );
 
   const fileComments = useMemo(
     () => workspaceComments.filter((comment) => comment.path === selectedPath),
@@ -880,7 +786,7 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       ) : (
         <div className="code-review-workspace">
           <main className="code-review-main">
-            <div className="code-review-diff-scroll" ref={scrollContainerRef}>
+            <div className="code-review-diff-scroll" ref={scrollContainerRef} style={diffSurfaceStyle}>
               {viewMode === "preview" ? (
                 <div className="code-review-preview-wrap">
                   {selectedPath ? (
@@ -999,8 +905,15 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                           </button>
                           {collapsedFiles.has(filePatch.path) ? null : filePatch.status === "binary" ? (
                             <div className="code-review-empty">二进制文件，无法以内联文本显示。</div>
+                          ) : filePatch.hunks.length === 0 ? (
+                            <div className="code-review-empty">此文件没有可显示的文本差异。</div>
                           ) : (
-                            <DiffContents hunks={filePatch.hunks} layout={layout} wrapped={wrapped} foldUnchanged={foldUnchanged} showWhitespace={showWhitespace} />
+                            <PatchDiff
+                              key={`${darkMode ? "dark" : "light"}:${layout}:${filePatch.path}:${hashCodeContent(filePatch.raw)}`}
+                              className="code-review-file-diff"
+                              patch={filePatch.raw}
+                              options={diffOptions}
+                            />
                           )}
                         </div>
                       );

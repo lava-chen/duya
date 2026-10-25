@@ -22,7 +22,16 @@
  * cannot say" never read the same.
  */
 
-/** One plugin, as a client is allowed to see it. */
+/**
+ * One plugin, as a client is allowed to see it.
+ *
+ * The optional component fields are NAMES ONLY — the same projection rule
+ * that keeps the manifest itself off the wire. They say what the plugin can
+ * contribute (which apps it declares, which MCP servers and skills ship in
+ * its package) so a client can render a detail row and build a plugin
+ * mention summary; the declarations behind the names (env, headers, command,
+ * args, url, paths) stay on the Host.
+ */
 export interface HostPluginInventoryEntry {
   /** The plugin id, without the marketplace suffix. */
   readonly id: string;
@@ -36,6 +45,14 @@ export interface HostPluginInventoryEntry {
   readonly installed: boolean;
   /** Whether the plugin's own data directory exists. */
   readonly hasDataPath: boolean;
+  /** The manifest's own description, when the package declares one. */
+  readonly description?: string;
+  /** App connector ids the plugin declares (`components.appConnections`). */
+  readonly appConnections?: readonly string[];
+  /** MCP server names the package's MCP declarations resolve to. */
+  readonly mcpServers?: readonly string[];
+  /** Skill names discovered in the package's skill directory. */
+  readonly skillNames?: readonly string[];
 }
 
 /**

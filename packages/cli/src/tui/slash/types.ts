@@ -16,6 +16,7 @@ import type { HostSessionRecord } from '@duya/agent-protocol';
 import type { CommandLocale } from '@duya/command-catalog';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { TuiChoice, TuiSettingsRow } from '../TUIApp.js';
+import type { WindowItem } from '../window.js';
 import type { ActionDef } from '../actions.js';
 
 /** The slice of `TUIApp` a slash command may touch. */
@@ -36,6 +37,28 @@ export interface TuiSlashHost {
     title: string,
     lines: readonly string[],
     options?: { readonly footer?: string; readonly scrollable?: boolean },
+  ): void;
+  /**
+   * Open a selectable list of view entries that STAYS OPEN: Enter hands the
+   * selected value to `onEnter` (expected to open a detail page via
+   * `showDetailPanel`), Esc closes. `initialSelected` re-opens the list on
+   * the row that opened the detail, so browsing entries keeps the user's
+   * place.
+   */
+  showListPanel?(
+    title: string,
+    items: readonly WindowItem[],
+    options?: {
+      readonly footer?: string;
+      readonly onEnter?: (value: string) => void;
+      readonly initialSelected?: number;
+    },
+  ): void;
+  /** Open a scrollable detail page; closing it calls `onBack` (the list). */
+  showDetailPanel?(
+    title: string,
+    lines: readonly string[],
+    options?: { readonly footer?: string; readonly onBack?: () => void },
   ): void;
   /**
    * Live settings list: Enter cycles a value in place and the effect lands

@@ -57,6 +57,7 @@ import { buildImageAttachmentContext } from '@duya/host/worker-context/image-att
 import type { ProbeConfig } from './worker-context/model-capability-cache.js';
 import type { ToolExecutor } from './worker-tool-registry.js';
 import { estimateMessagesTokens } from './worker-compaction/token-estimate.js';
+import { canReuseAgentForInit, workerInitDifferences, type WorkerInitShape } from './worker-init-fingerprint.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
 import { createWorkerSelfInitMessage } from '@duya/host/worker-config/self-init';
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -204,6 +205,22 @@ function workerCapabilitySet(): WorkerCapabilitySet {
 }
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
+/**
+ * The init payload the CURRENT agent was built from.
+ *
+ * The agent server sends an `init` on every turn. When the payload is the
+ * same, the agent it asks for is the agent this worker is already running in,
+ * and rebuilding it would cost a tool catalog, a skill scan, the whole
+ * transcript read back from the database and a fresh MCP handshake -- none of
+ * which the turn needs.
+ */
+let currentInitShape: WorkerInitShape | null = null;
+/**
+ * Whether the last MCP handshake threw. The reuse path keeps the agent AND
+ * skips a new handshake, so a transient failure must block reuse: the next
+ * init rebuilds the agent, which is also what retries the handshake.
+ */
+let mcpHandshakeFailed = false;
 let pendingCompactCommand: unknown = null;
 let compactedPending = false;
 let liveTotalInput = 0;
@@ -2814,6 +2831,61 @@ async function reloadMCP(): Promise<void> {
         sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
     }
 }
+
+/**
+ * Start the MCP handshake for the session's agent.
+ *
+ * WHY IT IS STARTED BEFORE THE QUEUED CHAT START IS DRAINED
+ *
+ * `handleChatStart` waits for MCP to be ready before it may ask the model
+ * anything (`waitForMcpReady`). When the handshake started AFTER that wait,
+ * the wait had nothing to wait for: it sat out its whole timeout and the turn
+ * began without MCP tools, while the handshake was still running in the
+ * background. The worker's own log said so on every turn:
+ *
+ *   [Agent] MCP ready timeout after 3000ms; proceeding without MCP tools
+ *
+ * Starting the handshake first makes the wait mean something: it either
+ * returns as soon as the servers are connected (and the turn gets their
+ * tools) or it times out on a handshake that was genuinely still running.
+ *
+ * The handshake is fire-and-forget: the caller does not wait for it.
+ */
+function startMcpInitialization(): void {
+    void (async () => {
+        let sessionForMcp: ReturnType<typeof requireWorkerSession> | null = null;
+        try {
+            sessionForMcp = requireWorkerSession();
+        }
+        catch (err) {
+            warn('[Agent-Process] Cannot initialize MCP servers: no agent', err);
+            return;
+        }
+        try {
+            sessionForMcp.setActiveAgentProfileId(undefined);
+            log('[Agent-Process] Initializing MCP servers (applyMCPConfiguration)...');
+            const result = await applyMCPConfiguration({
+                agent: sessionForMcp,
+                reason: 'initialization',
+            });
+            mcpHandshakeFailed = false;
+            log(`[Agent-Process] Initialized MCP servers: ${result.action.clientsConnected} connected, ` +
+                `${result.action.toolsAdded} tools, ${result.action.toolsRemoved} removed ` +
+                `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`);
+            for (const issue of result.loadResult.issues) {
+                log(`[Agent-Process] MCP issue [${issue.phase}] ${issue.serverName ?? '(unknown)'}: ${issue.humanMessage}` +
+                    (issue.suggestedAction ? ` (action: ${issue.suggestedAction})` : ''));
+            }
+        }
+        catch (mcpErr) {
+            mcpHandshakeFailed = true;
+            warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
+        }
+        finally {
+            sessionForMcp.notifyMcpReady();
+        }
+    })();
+}
 function buildSelfInitMessage(msg: ChatStartMessage): InitMessage | null {
     const result = createWorkerSelfInitMessage(msg);
     if (!result.ok) {
@@ -2862,6 +2934,26 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
             const previousSessionId = sessionId;
             sessionId = initMsg.sessionId;
+            // The agent server sends an `init` on EVERY turn. When the payload
+            // asks for the agent this worker is already running in, rebuilding
+            // it costs the tool catalog, the skill scan, the whole transcript
+            // read back out of the database, and a fresh MCP handshake -- and
+            // the handshake is what the turn waits for before it may ask the
+            // model anything. So the agent is kept when nothing about it
+            // changed.
+            if (
+                agent !== null
+                && previousSessionId === sessionId
+                && !mcpHandshakeFailed
+                && canReuseAgentForInit(currentInitShape, initMsg)
+            ) {
+                log('[Agent-Process] Re-init skipped: the agent configuration is unchanged');
+                sendToMain({ type: 'ready', sessionId });
+                // A chat:start that arrived while this init was in flight is
+                // still queued, and the skip must not strand it.
+                void drainQueuedChatStart();
+                break;
+            }
             existingMessageCount = 0;
             if (previousSessionId !== sessionId) {
                 compactedPending = false;
@@ -2873,7 +2965,9 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 lastEmittedUsageKey = null;
             }
             if (agent) {
-                log('[Agent-Process] Re-init: destroying existing agent and creating new one');
+                log('[Agent-Process] Re-init: destroying existing agent and creating new one', {
+                    changed: workerInitDifferences(currentInitShape, initMsg),
+                });
                 try {
                     agent.interrupt();
                 }
@@ -2916,6 +3010,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             try {
                 await initAgent(initMsg.providerConfig, initMsg.workingDirectory, initMsg.defaultWorkspaceDirectory, initMsg.systemPrompt, initMsg.language, initMsg.sandboxEnabled, initMsg.communicationPlatform, initMsg.permissionRules, initMsg.currentProjectId, initMsg.projectHome);
                 const restoredSession = requireWorkerSession();
+                let restoreOk = false;
                 try {
                     currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
                     const [_, __, history] = await Promise.all([
@@ -2992,10 +3087,18 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                             warn('[Agent-Process] Failed to restore/create session goal:', err);
                         }
                     }
+                    restoreOk = true;
                 }
                 catch (err) {
                     warn('[Agent-Process] Failed to load messages from DB:', err);
                 }
+                // The agent exists, was configured from THIS payload, and its
+                // history was restored. A later init that asks for the same
+                // agent may therefore keep it. It is set HERE rather than
+                // right after `initAgent` so that a failed history restore
+                // still leaves the next turn rebuilding -- that failure is
+                // recoverable, and a rebuild is how it recovers.
+                if (restoreOk) currentInitShape = initMsg;
             }
             catch (err) {
                 initError = err instanceof Error ? err.message : String(err);
@@ -3003,6 +3106,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
             finally {
                 initializing = false;
+                // The MCP handshake has to START before the queued chat start
+                // is drained. `handleChatStart` waits for MCP to be ready
+                // before it may ask the model anything, so a drain that runs
+                // first waits out its whole timeout for a handshake that had
+                // not started yet.
+                startMcpInitialization();
                 await drainQueuedChatStart();
             }
             sendToMain({
@@ -3048,30 +3157,8 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                     log('[Agent-Process] Lazy memory-rollout import failed (ignored):', importErr);
                 });
             }
-            (async () => {
-                const sessionForMcp = requireWorkerSession();
-                try {
-                    sessionForMcp.setActiveAgentProfileId(undefined);
-                    log('[Agent-Process] Initializing MCP servers (applyMCPConfiguration)...');
-                    const result = await applyMCPConfiguration({
-                        agent: sessionForMcp,
-                        reason: 'initialization',
-                    });
-                    log(`[Agent-Process] Initialized MCP servers: ${result.action.clientsConnected} connected, ` +
-                        `${result.action.toolsAdded} tools, ${result.action.toolsRemoved} removed ` +
-                        `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`);
-                    for (const issue of result.loadResult.issues) {
-                        log(`[Agent-Process] MCP issue [${issue.phase}] ${issue.serverName ?? '(unknown)'}: ${issue.humanMessage}` +
-                            (issue.suggestedAction ? ` (action: ${issue.suggestedAction})` : ''));
-                    }
-                }
-                catch (mcpErr) {
-                    warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
-                }
-                finally {
-                    sessionForMcp.notifyMcpReady();
-                }
-            })();
+            // The MCP handshake is started by `startMcpInitialization()` above,
+            // BEFORE the queued chat start is drained -- the turn waits for it.
             break;
         }
         case 'plugin-app:describe-tools': {

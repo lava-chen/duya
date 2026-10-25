@@ -43,7 +43,7 @@
  */
 
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
-import { describeError, hostErrorCode, showPanel } from './shared.js';
+import { describeError, hostErrorCode, showEntries, showPanel, type TuiViewEntry } from './shared.js';
 
 const FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
 
@@ -174,6 +174,31 @@ function serverLines(servers: readonly McpServerEntry[]): string[] {
   return lines;
 }
 
+/** The detail page of one server: how it is reached and whether it is on. */
+function serverDetailLines(entry: McpServerEntry): string[] {
+  return [
+    entry.name !== '' ? entry.name : '(unnamed)',
+    '',
+    `  state      ${entry.enabled ? 'on' : 'off'}`,
+    `  transport  ${transportOf(entry)}`,
+    `  target     ${targetOf(entry)}`,
+    '',
+    `  ${SCOPE_LINE}`,
+  ];
+}
+
+/** The interactive list, one selectable entry per server. */
+function serverEntries(servers: readonly McpServerEntry[]): TuiViewEntry[] {
+  return servers.map((entry) => ({
+    label: entry.name !== '' ? entry.name : '(unnamed)',
+    value: entry.name !== '' ? entry.name : '(unnamed)',
+    description: transportOf(entry),
+    valueLabel: entry.enabled ? 'on' : 'off',
+    summary: targetOf(entry),
+    detailLines: serverDetailLines(entry),
+  }));
+}
+
 const MCP_COMMAND: TuiSlashCommandDef = {
   name: 'mcp',
   description: 'List the configured MCP servers',
@@ -208,7 +233,7 @@ const MCP_COMMAND: TuiSlashCommandDef = {
       return { kind: 'handled' };
     }
 
-    showPanel(ctx, 'MCP servers', serverLines(servers), { footer: FOOTER, scrollable: true });
+    showEntries(ctx, 'MCP servers', serverEntries(servers), serverLines(servers));
     return { kind: 'handled' };
   },
 };
