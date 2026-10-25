@@ -48,7 +48,7 @@
 
 已实现：配置项 `hidden` / `removed`、manager 删除墓碑与隐藏、catalog 过滤、IPC `plugin:marketplace:set-hidden`、来源对话框隐藏/取消隐藏/显示已隐藏、i18n。
 已验证：上述 vitest 12 项、typecheck、architecture check。
-已合并：无。PR：[#492](https://github.com/lava-chen/duya/pull/492)（提交 `0020fa77`），待 review 与集成授权。
-下一步：如需真机验收，先 `npm run electron:build` 再手动检查来源对话框；否则等 PR CI 与 review。
+已合并：PR [#492](https://github.com/lava-chen/duya/pull/492)，merge commit `333b025a`（必需检查 architecture / test scope / typecheck / test / build 全部通过）。
+下一步：补真机 Electron 点击验收；`npm run electron:build` 后检查来源对话框的删除、隐藏、重启不恢复三项。
 
-回收：未回收，任务进行中。
+回收：代码已合并；worktree 待真机验收后按 `scripts/remove-worktree.sh` 回收。
