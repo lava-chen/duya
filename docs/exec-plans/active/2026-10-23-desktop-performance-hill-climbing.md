@@ -369,6 +369,77 @@ BFF 每页上限 100，比 Desktop 的 200 更狠 → 同样 1 万条消息，**
 
 `packages/host/bundle/worker-entry.js` 内联了 `@duya/client-core`（`worker-metafile.json` 里 client-core 占 8 个输入），所以改了 `packages/client-core/src/transport/host-api.ts` 就改了产物输入集 → 同一个 PR 里必须重建并提交 `packages/host/bundle/**`，否则 `bundle:verify` 判 STALE。**判定依据是 `bundle:verify` 的输入集，不是「我改没改 host/src」。**
 
+## 第七轮：启动（PR #473）
+
+前六轮里唯一 **0 % 改善**的用户 journey 是启动：第五轮之后 `startup.typeable_ms` 一直停在 1 741 ms。Claude 那篇里收益最大的也正是启动（claude.ai 首屏 5.6×、桌面冷启 1.9×），所以第七轮做启动。
+
+### 先测：把 1 741 ms 拆开
+
+工具是研究脚本 `docs-local/research/perf-startup/probe.mjs`（不入库）：真实 Electron + 生产构建 + `file://` 预览，进程起点取自 OS 进程表；主进程内部用临时打点读出 `whenReady`、每个 `await`、`createWindow()` 的时刻。
+
+**第一版的结论是错的**：读代码时看起来瓶颈是主进程开窗前那串 `await`（ripgrep 导出 → 子代理迁移 → CLI 自动安装 → Host API → DB → 陈旧 run 对账 → 频道迁移），但那 10 个 `await` 加起来只有约 200 ms。测量把结论推翻了：
+
+| 阶段 | 均值 | 占比 |
+| --- | --- | --- |
+| Electron/Node 启动 → `app.whenReady()` | 230 ms | 16 % |
+| 主进程初始化链 → `createWindow()` | 250 ms | 17 % |
+| `createWindow()` → 渲染器开始导航 | ~20 ms | 1 % |
+| **渲染器文档加载（首屏 JS）→ DOMContentLoaded** | **~900 ms** | **63 %** |
+| DCL → 首屏绘制 | ~100 ms | 7 % |
+
+（探针本身也踩了一个坑：`app.windows()` 报出 `file:` URL 的时刻比渲染器自己的 `performance.timeOrigin` 晚约 700 ms——那是 Playwright 的 CDP 挂接延迟，不是产品延迟。量 Electron 启动必须用渲染器自己的时钟。）
+
+### 找到了什么
+
+`packages/ui/src/components/layout/panels/registry.ts` **静态**引入了 `TerminalPanel`，后者静态引入 `@xterm/xterm` + 4 个 addon（fit / web-links / unicode11 / webgl）。终端是「点进去才到」的面板，整包却躺在首屏入口 chunk 里。仓库里早就有正确写法：`CodeReviewPanel` 与 `SessionMessagesPanel` 都是 `React.lazy`。
+
+### 改了什么
+
+`registry.ts` 三行：终端改成 `lazy(() => import("./TerminalPanel").then(...))`，与那两个面板同一写法。`PanelZone` 本来就用 `<Suspense>` 包裹面板组件，落地不需要额外改动。
+
+### 字节（确定，机器无关）
+
+| | before | after |
+| --- | --- | --- |
+| 首屏载荷 | 3 470 634 B | **2 985 017 B**（−485 617 B，**−14.00 %**） |
+| 入口 chunk | 2 570 644 B | **2 085 027 B**（−18.89 %） |
+| chunk 数 | 7 | 7 |
+
+### 墙钟：这一轮最重要的结论是「字节涨得不等于时间赚得多」
+
+共享 harness 的 `startup` 场景（3 样本）**看不到**这个量级的收益：firstPaint 1291 / 1258 / 1339 → 1314 / 1395 / 1435，typeable 1422 / 1428 / 1568 → 1399 / 1805 / 1679。
+
+改用分解探针单独量「渲染器文档加载」这一段（导航开始 → 首屏绘制），A-B-A 三段共 21 样本：
+
+| 段 | n | 中位 | 均值 | 区间 |
+| --- | --- | --- | --- | --- |
+| before | 7 | 844 | 856 | 736–1180 |
+| after（段 1） | 7 | 788 | 781 | 736–796 |
+| after（段 2） | 7 | 824 | 857 | 808–976 |
+
+合并 after（14 样本）中位 **810**、均值 **820**，对比 before 的 844 / 856：**约 −35 ms，落在噪声内**。
+
+**这就是本轮最值钱的一条**：首屏少了 14 %（−486 KB），换来的只有约 35 ms——**约 0.07 ms/KB**。按这个兑换率，剩下的 2.99 MB 首屏**最多**还能换到约 200 ms。**继续砍字节的边际收益很低，下一轮该打的是冷启动本身。**
+
+旁证：同一份代码的 `startup.reload.firstPaint_ms` 只有 **48–96 ms**，而冷启动的首屏是 1 258–1 435 ms。**差的那一秒多不是「字节多」，是冷路径**（`file://` 没有 V8 code cache + 冷文件缓存 + 首次绘制）。
+
+### 门禁
+
+- `packages/ui/src/components/layout/panels/registry.test.tsx`（新增）：导入 registry **不得**求值 xterm；终端 descriptor 必须带 `react.lazy` 标记。**负对照**：把静态引入改回去 → 2 个用例全红。
+- `e2e/perf/baselines/first-screen-payload.json`：首屏预算棘轮从 3 378 253 B 收到 **2 985 017 B**。改回去是 3 470 634 B，超新上限 336 366 B → CI 直接红。
+
+### 真机验证
+
+仓库自己的 `panels` 场景本来就会打开终端并滚动它（`.titlebar-panel-launcher[data-page-id="terminal"]`）。改后跑它：2 个样本都是 `files:opened, terminal:opened, browser:opened`——懒边界没有把面板卡在 Suspense 兜底上。
+
+### 发现与决策（新增）
+
+- **Claude 的「预编译 V8 code cache」在 Duya 的主进程上不成立**：主进程 bundle 4.0 MB 的 V8 解析只要 **48 ms**，省不下什么。**真正的落点在渲染器**：同一份 JS 冷启动要 ~900 ms、reload 只要 48–96 ms。**但这还是假设，不是结论**——下一步必须先证明「冷启动多出来的那一秒是 code cache 缺失」。
+- **字节门禁能抓住的，墙钟门禁抓不住**。这轮首屏少了 14 %，harness 的 `startup` 指标看不出来。**How to apply**：能用字节/次数表达的收益，就用字节/次数做门禁；墙钟只当趋势，而且要先量出「字节 → 时间」的兑换率再决定值不值得继续砍。
+- **读代码得出的瓶颈不成立，测量给出的才成立**。第七轮的第一版结论（主进程 `await` 链）被自己的探针推翻——那 10 个 `await` 一共只有 200 ms。**How to apply**：拿到「慢」的抱怨，先量一遍各阶段的分布，再决定动哪一段。
+- **Electron 启动的测量要用渲染器自己的时钟**。Playwright 的 `app.windows()` 报出 `file:` URL 的时刻比 `performance.timeOrigin` 晚约 700 ms（CDP 挂接延迟），照着它算会得出「窗口创建后有 900 ms 黑洞」的假结论。
+- **面板的懒加载边界要用「真的打开它」来验**。本轮的终端探针一开始误报失败，原因是终端启动器只在**有活跃会话**时渲染（`currentView === "chat" && activeThreadId`），而探针的 profile 没有会话——**是探针错了，不是产品坏了**。最后用仓库自己的 `panels` 场景（它本来就会开终端）验证，结论才可靠。
+
 ## 集成记录
 
 | PR | Agent | 内容 | 状态 |
@@ -465,18 +536,20 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 | # | 机会 | 已测收益 / 证据 | 状态 | 归属 |
 | --- | --- | --- | --- | --- |
-| **0** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
-| 1 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
-| 2 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
-| 3 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
-| 4 | 首屏 entry chunk 里剩下的一方模块 | 首屏 entry chunk 现为 **2478263 B**（#418 之后）；E 已切走 8 个界面树 | **待做**：用 E 的 `module-closure.mjs` 看还剩哪些是「点击才到」的 | E |
-| 5 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
-| 6 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
-| 7 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253）。**#444 再加一条**：投影次数门禁（整读 = 1 次投影），纯计数、机器无关。**#458 再加四条**：Web 侧的整读请求次数门禁（1 次请求 / 0 次分页） | 集成者 + A |
-| 8 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
-| 9 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
+| **0** | **启动的冷路径（渲染器没有 code cache）** | 第七轮：同一份代码，`startup.reload.firstPaint_ms` 只有 **48–96 ms**，冷启动的首屏却是 **1 258–1 435 ms**；同一轮里把首屏砍掉 14 % 只换来约 **35 ms**（≈0.07 ms/KB） | **待做**：先做对照实验证明「多出来的那一秒是 `file://` 没有 V8 code cache + 冷文件缓存」，再决定怎么改（渲染器资源换来源 / 预热 code cache / 别的）。**没有证明之前不要动手** | A |
+| **1** | **整条历史一次性投递的代价** | 第五轮：10 000 条从「50 批摊在 35 s」变成「一次送到、渲染挤在 1.4 s」，于是 `longtask.total_ms` 298 → 527、`cpu.renderer_pct` 4.5 → 36 %、`mem.peakMB` 84 → 117（**渲染量不变**：`dom.nodes` / `commit.count` / `scrollHeight` 三个都一样） | **待做**：分块投递 + 增量渲染，别让主线程被一次性占用 | B / A |
+| 2 | 围栏代码块在流式时的主线程开销 | 第四轮第一次在共享 harness 里量到：`perf/stream-long-reply-fenced` 的 `stream.block_ms_total` **56 / 63 / 0 ms**、`dom.nodes` 797（无围栏的 2.1 倍）、`dom.mutations` 238（9.2 倍）；B 的对照实验里围栏高亮占约 78 % | **待做**：把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分 | B |
+| 3 | 滚动时的虚拟化器挂载开销 | `commit.count` 3 → 42–43，但打开阶段 9/9、切换阶段 2/2 **完全没变**——多出的批次全在滚动阶段。帧 p95 16.8 ms（2/3 样本），另一样本出现 1 Hz 帧节流 | **待做**：滚动时按需挂载是否还能更便宜（批量化 / 预取窗口） | G |
+| 4 | 终端从 WebGL 回退到 DOM 渲染器 | 帧 p95 116.9 → 183.7 ms（+57 %），Long Task 167 → 369 | **待做**。代价在**渲染器选择**而非 GPU 有无：别让终端悄悄掉回 DOM | D |
+| 5 | 首屏 entry chunk 里剩下的一方模块 | 第七轮给了兑换率：砍 14 % 首屏只换约 35 ms（≈0.07 ms/KB）→ 剩下的 2 985 017 B **最多**再值约 200 ms | **待做，但排在冷路径之后**。用 `npx vite build --sourcemap` + `first-screen.mjs` 的 per-chunk sources 归因，找还留在首屏的「点击才到」模块 | E |
+| 6 | 侧栏剩余的宽订阅 | C 已把 `ProjectGroupItem` 的两个 store 订阅收窄到 `useShallow`，props 换成按值比较 | **待做**：`app-sidebar.tsx` 还有 2086 行 | C |
+| 7 | `commit.count` 的代理偏差 | 生产构建拿不到 React Profiler，MutationObserver 批次会**漏计无 DOM 变化的 React 提交**；第四轮又发现它**把滚动阶段的挂载也算进去**，读数时必须分阶段看（open / switch / 滚动） | **待做**：要么找到生产可用的提交计数方式，要么把漏计范围写清楚 | A |
+| 8 | CI 回归门槛缺一个**机器无关**的代理指标 | 壁钟只能在固定机器上做趋势分析，GitHub runner 共享虚拟化 | **已完成**（#408）：首屏 JS 字节预算进 CI 的 build job（单边、5 % 容差、#418 已棘轮到 3378253，**#473 再棘轮到 2 985 017**）。**#444**：投影次数门禁。**#458**：请求次数门禁。**#473**：终端不得回到首屏（`registry.test.tsx`）+ 字节棘轮 | 集成者 + A |
+| 9 | 其它 store 是否有同类「persist 后状态不发布」缺陷 | `onRehydrateStorage` 原地改写只出现在 `conversation-store.ts`；`projects-store` / `sidebar-sections-store` 用 `set()` 设 `hydrated`；`terminal-appearance-store` 无 hydration 标志 | **负结论**，已核实，不必再做 | — |
+| 10 | 懒加载视图的 Suspense 边界收窄 | `currentView` 单一值使聊天分支与视图分支互斥；实测切视图时 `main.app-content` 无空白期（约 26 ms 落地） | **负结论**。若将来出现「加载慢导致可见空白」，再重开——那时要的是 `fallback` 骨架屏 | — |
+| 11 | 启动的分解测量应该进 harness | 第七轮的探针（`docs-local/research/perf-startup/probe.mjs`）能拆出 boot / 主进程初始化链 / 渲染器文档加载 / 首屏绘制四段，但它是研究脚本，不在 `scripts/perf/run.mjs` 里 | **待做**：做成 `e2e/perf/scenarios/startup-phases.mjs`，让以后「启动慢」有分段的数可查，而不是只能看两个端点 | A |
 
-**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。**#458** 把 Web 侧同一条路径也修掉了（真实 Host + 真实 BFF：100 次分页 83 507 ms → 1 次整读 1 006 ms，**83×**），并带上四条请求次数门禁——**同一个根因的第二条路径**。
+**已完成的条目从清单里移到历史**：首屏依赖闭包（#418，模块数 141/69 → 0）、万条消息虚拟化（#421，`dom.nodes` 115354 → **569**、`longtask.total_ms` 93431 → **283**、`mem.peakMB` 828 → **69**、switch 长任务 26676 → **569 ms**）。两者都**没有**缩短墙钟——墙钟由数据路径决定。数据路径 O(n²）本身已在 **#444** 修掉（10k 打开 35.2 s → **1.4 s**、切换 47.7 s → **1.7 s**），并附带一条**机器无关**的投影次数门禁；「切换墙钟 +15 %」这个悬案随之消解——它和打开的分钟级是同一段等待。**#458** 把 Web 侧同一条路径也修掉了（真实 Host + 真实 BFF：100 次分页 83 507 ms → 1 次整读 1 006 ms，**83×**），并带上四条请求次数门禁——**同一个根因的第二条路径**。**#473** 把终端（xterm + 4 个 addon，**485 617 B**）从首屏入口 chunk 里请了出去，首屏 3 470 634 → **2 985 017 B（−14.00 %）**，并棘轮了字节预算——但**墙钟只换来约 35 ms**，这个兑换率本身是本轮最值钱的结论。
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令 | 退出码 / 结果 | 证据 |
@@ -536,13 +609,18 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 | PR #458 本地门禁 | `2d285d45` | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | typecheck 全过（`typecheck-electron-gate: OK — no new type errors`）；架构 `OK — no new boundary violations`；产物 `FRESH 0/948 bundle inputs changed after the bundle commit` |
 | PR #458 产物 | `95fc82af` → `2d285d45` | `npm run bundle:worker` → `git add packages/host/bundle` | 0 | 源码 commit 必须**早于**产物 commit（`bundle:verify` 按 git 历史判定）；产物只有 `worker-entry.js` 与 `worker-metafile.json` 变化（`packages/host/bundle/package.json` 与 `BashWorker.js` 只是行尾差异，git 归一化后不变） |
 | PR #458 CI | `2d285d45` | `gh pr checks 458` | 0 | architecture / build / test / test scope / typecheck **五项全绿**（run `40096489541`） |
+| 第七轮启动分解 | `perf-integration` 检出（临时主进程打点 + `docs-local/research/perf-startup/probe.mjs`） | 真实 Electron + 生产构建 + `file://` 预览，3 样本 | 0 | boot 230 ms / 主进程链 250 ms / **渲染器文档加载 ~900 ms** / 绘制 ~100 ms；主进程 bundle 的 V8 解析 48 ms |
+| 第七轮字节 | `perf-startup`（master `f6120e04`） | `node scripts/perf/first-screen-budget.mjs --dist dist` | 0 | 首屏 3 470 634 → **2 985 017 B**（−485 617 B，−14.00 %）；入口 chunk 2 570 644 → 2 085 027 B；chunk 数 7 → 7 |
+| 第七轮墙钟 A-B-A | 同上，同一台机器，同一天 | 分解探针量「导航开始 → 首屏绘制」，before 7 + after 7 + after 7 样本 | 0 | before 中位 844 / 均值 856；after 合并 14 样本中位 **810** / 均值 **820** ⇒ **约 −35 ms，落在噪声内** |
+| 第七轮门禁 | `perf-startup` | `vitest run packages/ui/src/components/layout/panels/registry.test.tsx` | 0 / 1（**预期**） | 2/2 绿；负对照（改回静态引入）2 个用例全红 |
+| 第七轮真机验证 | `perf-startup`（改后构建） | `node scripts/perf/run.mjs --scenarios panels --samples 2 …` | 0 | 2 个样本都是 `files:opened, terminal:opened, browser:opened`——懒加载的终端在真实 Electron 里正常打开 |
 
 ## 接续 / 结果
 
 第一轮已完成并全部合并。集成者：mavis。合并顺序 A → B/C/D/E，合并后由集成者**串行**重跑 Profile 出权威数字，再出下一轮机会清单。
 
 已合并：#382 `766db972`（计划）、#383 `d9eb7dba`（fixture + 测量锁契约）、#386 `8721dc75`（A harness）、#385 `8492dbd9`（B 流式渲染）、#391 `f617e4c1`（D GPU 观测）、#400 `8d69d81a`（C hydrate + 侧栏）、#401 `7063a47f`（E 懒加载）、#392 `18a144e8`（集成台账 + A 的 8 个 harness 修复 + 权威基线）、#418 `aed0d13c`（首屏依赖闭包）、#421 `7e5f3d5e`（万条消息虚拟化）、#422 `c76ef6e5`（布局缺陷修复）、#429 `dead6e4d`（harness 锁自杀）、#430 `bd20f6aa`（CI 路由）、#431 `b31cd192`（harness 信号预算）、**#444 `d26bec34`（Host 整读，10k 打开 35.2 s → 1.4 s、切换 47.7 s → 1.7 s，含投影次数门禁）**。
-未合并：**#458**（第六轮：Web 侧整读，83×）与本文档 PR，均待集成者 review。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
+未合并：**#458**（第六轮：Web 侧整读，83×）、**#473**（第七轮：终端离开首屏，首屏 −14.00 %）与本文档 PR，均待集成者 review。#389 由 owner 合并，但它只带 622 系列的交接说明，**没有归档本计划**（见「集成记录」）。
 
 回收：`perf-harness` / `perf-streaming` / `perf-state` / `perf-gpu` / `perf-ui-arch` 五个检出的成果已合并，回收后删检出、**保留分支**（A 的原始 8 个提交引用不丢）。`perf-ui-arch` 的测量证据已复制到集成检出的 `docs-local/research/perf-agent-e/`。`perf-integration` 是集成检出，保留。第四轮又删了两个已被 master 覆盖的远端分支（`codex/perf-harness`、`codex/perf-lock-owner-pid`）——逐文件核对过，它们触及的每一个路径在 master 上都存在且更新。
 
@@ -550,12 +628,14 @@ SHA：`8becf37c`（master + #422 + #421；本地另带 #431 的 harness 补丁�
 
 第二轮集成者侧已合并：**#406** 锁（两种实现互相拆台）、**#407** fixture 命名空间、**#408** 首屏字节预算进 CI、**#409** 带围栏契约 fixture、**#410** 第二轮章程、**#412** #391 留下的 IPC 注册回归、**#415** 第二轮集成记录、**#418** 首屏依赖闭包（模块数归零 + 预算棘轮，master `aed0d13c`）、**#421** 万条消息虚拟化、**#422** 布局缺陷修复、**#429 / #430 / #431** harness 的三个 P0。
 
-下一步（第六轮之后，按新的机会清单）：**#0 整条历史一次性投递的代价**——长任务 0.3 → 0.5 s、内存峰值 +33 MB，需要分块投递 / 增量渲染，别让主线程被一次性占用；**#1 围栏代码块在流式时的主线程开销**——把「增长中的整篇重解析」按 chunk 切开，只重解析新增部分。
+下一步（第七轮之后，按新的机会清单）：**#0 启动的冷路径**——先做对照实验，证明「冷启动比 reload 多出来的那一秒」是不是 `file://` 没有 V8 code cache 造成的，别急着改；**#1 整条历史一次性投递的代价**——长任务 0.3 → 0.5 s、内存峰值 +33 MB，需要分块投递 / 增量渲染，别让主线程被一次性占用。
 
 **这一轮最重要的产出不是某个 PR，而是把「万条会话 30–45 秒」的靶子从渲染换到了数据路径**：基线的 `session.open.longtask.total_ms` 只有 0.7 秒，而 open 要 32–37 秒；G 的虚拟化把 switch 的主线程成本压掉 92 %，墙钟一动不动。**下一轮该测的是数据路径（主进程 / DB / IPC），不是继续抠渲染。**
 
 第五轮把这条线索走完了：**根因是 Host 每翻一页就重投影整条历史，50 页 = 50 次全量投影**；修法是 Host 提供一次整读，Desktop 桥接只调一次。10 000 条消息的打开从 **35.2 秒降到 1.4 秒**、切换从 **47.7 秒降到 1.7 秒**，同一份历史、同样的 `dom.nodes`、同样的 `commit.count`——变的只是数据怎么到渲染器。**并且这次不只修了它，还给它装了一道门禁**（数投影次数，纯计数、机器无关），下次谁把每页全量投影改回来，CI 直接红。
 
 第六轮把同一条根因的**第二条路径**也走完了：Web 侧（`UiServices` → BFF → Host）同样在分页读同一个 Host 接口，而 BFF 每页上限 100，所以 1 万条要翻 **100 页**。真实 Host + 真实 BFF 实测：**100 次请求 83 507 ms → 1 次请求 1 006 ms（83×）**。修法和第五轮一样是「一次整读」，同样配了机器无关的门禁——这次数的是**请求次数**（整读 1 次、分页 0 次）。**教训**：找到 O(n²) 的读路径后，先把 Desktop / Web / CLI / TUI 的调用点一次列全；只修最慢的那条，是把同一个坑留给下一个人。
+
+第七轮换了个方向：前面六轮都在做「减法」（少渲染、少请求），这一轮先做**测量**——把唯一 0 % 改善的启动拆成四段，结果**推翻了读代码得出的结论**（主进程那 10 个 `await` 一共只有 200 ms），也**推翻了一个想当然的修法**（Claude 的 V8 code cache 在主进程上只值 48 ms，不值得做）。真正改掉的是「点进去才到」的终端被静态引进首屏：**−485 617 B（−14.00 %）**，字节门禁棘轮到 2 985 017 B。**但墙钟只换来约 35 ms**——于是本轮最值钱的产出不是那个 PR，而是那个**兑换率（≈0.07 ms/KB）**：它说明剩下的 2.99 MB 首屏最多再值 200 ms，**下一轮该打的是冷启动本身，不是字节**。
 
 
