@@ -37,6 +37,7 @@
 
 - **desktop 的 protocol 子路径必须逐个写进 paths**：`apps/desktop/tsconfig.main.json` 用 `moduleResolution: node`，不认 package `exports`，所以 `@duya/agent-protocol/turn-suggestion` 不会解析到 `dist/turn-suggestion.d.ts`（TS2307）。该文件本来就把每个 protocol 子路径显式映射到 `dist/*.d.ts`，新增子路径必须补一行。
 - **删除文件要在 slice census 里逐条登记退休**：`scripts/architecture/slice-census.txt` 是冻结基线，**不能**批量重录；文件删除会让 `slice-classification.test.ts` 的「recorded MINUS current」断言变红，正确做法是在该测试的 `RECORDED_LOSSES` 里逐路径登记 bucket 与原因。
+- **超时必须传到 provider**：`AIClient.streamChat` 的 options 支持 `signal`，Anthropic 侧会把它交给 SDK 与 idle timeout。8 秒超时要真的掐掉请求，`AbortController` 的 signal 必须传进 `streamChat`，否则只是停止等待、请求仍在跑。
 
 - **生成放在 worker，不放 Host HTTP 层**：turn 后派生物已有同构先例——`title-generator.ts`（turn 后单发 LLM）与 `turn-review.ts`（turn 后 git diff）都在 `packages/host/src/worker-session/`，由 `worker-process-entry.ts` 在消息落库后 fire-and-forget 触发。模型客户端用 `agent.readModelClient()`（`worker-session-runtime.ts:188`），因此**不再需要 Electron provider store**，也不再需要自己拼 fetch。
 - **落库而非只走事件**：`chat_turn_reviews` 先例表明三端一致读法 = 落库 + Host 路由。建议存 `chat_turn_suggestions`（main 库，migration id 60，现最大 id 59），worker 经 `sendDbRequest('turn-suggestion:save')` 写入（`worker-db-client.ts:465` 形状），Host db bridge 派发（`worker-db-bridge.ts:1187`），Desktop 侧还有一份 bridge（`apps/desktop/src/main/agents/db-bridge.ts:2342`）要同步加。
@@ -56,7 +57,7 @@
 | 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规（3 条旧指纹随删除失效，未重录） | 见「发现与决策」末条 |
 | 同上 | 同上 | `npx tsc -p packages/ui/tsconfig.json --noEmit` | 0 | 共享渲染层类型通过 |
 | `885e7ff7`（合并 master `77bd7848` 后） | 同上 | `npm run typecheck:all` 分段 | 0：protocol / client-core / core / workflow / runtime / web / electron gate / cli / web-app / voice / evals / eval:agent:core 全过 | electron gate 首次报 1 条新错误（desktop 缺 paths 映射），补映射后为 0 |
-| 同上 | 同上 | `npx vitest run scripts/architecture packages/ui/src/i18n packages/ui/src/hooks packages/ui/src/components/chat packages/cli/src/tui packages/host/tests packages/data/tests` | 0：423 passed / 1 skipped（424 文件，4172 用例） | `$env:TEMP\duya-test-post-merge.log` |
+| 同上 | 同上 | `npx vitest run scripts/architecture packages/ui/src/i18n packages/ui/src/hooks packages/ui/src/components/chat packages/cli/src/tui packages/host/tests packages/data/tests` | 0：423 passed / 1 skipped（424 文件，4177 用例） | `$env:TEMP\duya-test-final.log` |
 | 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规 | 3 条旧指纹失效，未重录 baseline |
 | 同上 | 同上 | `npm run bundle:worker` | 0：worker bundle 重建，产物含 `turn-suggestion:save` 与 `/v1/local/turn-suggestions` | bundle 内符号名被压缩，按字面量与 metafile 输入集核对 |
 
