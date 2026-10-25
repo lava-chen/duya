@@ -1,7 +1,7 @@
 # 消息写路径：appendBatch 的去重检查按批点查，不再全量扫会话索引
 
 状态：active · 负责人：mavis 会话 `mvs_ae3b38275b13437883faa5ef6f4d518c` · 更新：2026-10-25
-分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1`（已合入 `origin/master` `dc6d4ee7`）· owner：mavis
+分支：`codex/data-write-path` · worktree：`E:\Projects\duya\.claude\worktrees\data-write-path` · base：`554f24b1`（已合入 `origin/master` `3b3e6470`）· owner：mavis
 
 ## 目标与边界
 
@@ -79,6 +79,8 @@
 | head `cafcb4d8`（clean） | Windows / Node 24.16 | `npm run bundle:verify` | 0 | FRESH，0/948 bundle inputs 在 bundle commit 后变更 |
 | head `cafcb4d8`（clean） | Windows / Node 24.16 | `vitest run`（message-log / rotation / portability / source-filter / session-archive / session-fork / legacy-import / append-index） | 0 | 8 文件 / 118 断言全过 |
 | head `e1389a8b`（合入 master 后，clean） | Windows / Node 24.16 | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | 无新增类型错误；total 2730 = tolerated 2730，baseline 2530 未变；FRESH 0/950 bundle inputs 变更 |
+| head `ca192654`（合入含 #466 的 master 后，clean） | Windows / Node 24.16 | `npm run typecheck:all` / `npm run architecture:check` / `npm run bundle:verify` | 0 / 0 / 0 | 无新增类型错误；architecture total 2730 = tolerated 2730；FRESH 0/950 bundle inputs 变更 |
+| head `ca192654`（clean） | Windows / Node 24.16 | `vitest run`（message-log 等 7 个 + append-index / rollout-bucket / read-range） | 0 | 10 文件 / 126 断言全过 |
 
 ## 接续 / 结果
 
