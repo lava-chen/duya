@@ -13,6 +13,7 @@ import type { PluginAppInvocationResult, PluginAppResourceRead } from '@duya/age
 import { scopedPluginServerName } from '@duya/plugin-core';
 import { getPluginManager } from './PluginManager';
 import { readPluginManifest } from './manifest';
+import { getMainWindow } from '../core/window-manager';
 import {
   getDesktopHostLocalPluginSetupApi,
   getDesktopHostPluginAppAuthority,
@@ -107,8 +108,8 @@ export async function approveStandaloneApp(app: InstalledApp): Promise<boolean> 
   const scope = missing.map(({ capability, tools }) =>
     `${capability}\n${tools!.map((tool) => `  ${tool.serverName}/${tool.toolName}`).join('\n')}`,
   ).join('\n\n');
-  const { response } = await dialog.showMessageBox({
-    type: 'question',
+  const options = {
+    type: 'question' as const,
     buttons: ['Allow', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
@@ -116,7 +117,14 @@ export async function approveStandaloneApp(app: InstalledApp): Promise<boolean> 
     message: `Allow ${app.name} to use its declared MCP tools?`,
     detail: scope,
     noLink: true,
-  });
+  };
+  // Modal to the main window when it exists: the consent belongs to the duya
+  // window the user launched from, not a floating second window. The
+  // parentless dialog stays as the fallback for headless launches.
+  const parent = getMainWindow();
+  const { response } = parent && !parent.isDestroyed()
+    ? await dialog.showMessageBox(parent, options)
+    : await dialog.showMessageBox(options);
   if (response !== 0) return false;
   for (const { capability, tools } of missing) {
     await grantApi.grantPluginAppCapability({

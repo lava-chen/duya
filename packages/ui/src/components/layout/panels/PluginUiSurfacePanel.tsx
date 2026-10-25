@@ -5,6 +5,15 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { useConversationStore } from "@/stores/conversation-store";
 import type { PageTab } from "./page-tab";
 
+/**
+ * The panel page hosting one Plugin App.
+ *
+ * Two launch shapes share this page: a surface App reads its HTML document
+ * from a declared MCP resource (`surfaceId` + `server` present), while an
+ * entry App loads the package's entry file directly (ids only). The launch
+ * params decide which — the host component treats the missing surface as the
+ * entry flow.
+ */
 export function PluginUiSurfacePanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const { t } = useTranslation();
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
@@ -15,7 +24,10 @@ export function PluginUiSurfacePanel({ tab }: { tab: PageTab; embedded: boolean 
   const title = typeof tab.params?.title === "string" ? tab.params.title : tab.title;
   const availability = tab.params?.availability === "always" ? "always" : "session";
 
-  if (!pluginId || !appId || !surfaceId || !server) {
+  // An entry App legitimately omits the surface pair; a surface App that
+  // lost either half cannot be launched at all.
+  const surfaceLaunch = surfaceId.length > 0 || server.length > 0;
+  if (!pluginId || !appId || (surfaceLaunch && (!surfaceId || !server))) {
     return <div className="plugin-app-host-error" role="alert">{t("apps.launchFailed")}</div>;
   }
   if (availability === "session" && !activeThreadId) {
@@ -26,8 +38,8 @@ export function PluginUiSurfacePanel({ tab }: { tab: PageTab; embedded: boolean 
     <PluginAppHost
       pluginId={pluginId}
       appId={appId}
-      surfaceId={surfaceId}
-      server={server}
+      surfaceId={surfaceId || undefined}
+      server={server || undefined}
       title={title}
       chatSessionId={activeThreadId ?? undefined}
     />
