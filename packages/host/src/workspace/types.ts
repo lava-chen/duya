@@ -96,6 +96,9 @@ export interface CheckoutProvider {
   create(input: {
     sourceCwd: string;
     base?: string;
+    allowDirtySource?: boolean;
+    branchName?: string;
+    operationId?: string;
     /**
      * Session that receives write access at creation time. Empty string
      * creates an unowned checkout (used by the legacy sub-agent isolation

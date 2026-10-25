@@ -174,6 +174,7 @@ export const subagentToolResultSchema = z.strictObject({
   /** Directory the child actually ran in (differs under worktree isolation). */
   workingDirectory: z.string().min(1).optional(),
   isolation: z.literal('worktree').optional(),
+  checkoutCleanup: z.object({ removed: z.boolean(), reason: z.string().optional() }).optional(),
   /** Non-fatal notes (e.g. resume_from fell back to a fresh session). */
   warnings: z.array(z.string().min(1)).optional(),
   error: z.string().min(1).optional(),
@@ -201,6 +202,7 @@ export interface BuildSubagentResultInput {
   usage?: SubagentToolResultPayload['usage'];
   workingDirectory?: string;
   isolation?: 'worktree';
+  checkoutCleanup?: { removed: boolean; reason?: string };
   warnings?: string[];
   error?: string;
 }
@@ -229,6 +231,7 @@ export function buildSubagentResult(input: BuildSubagentResultInput): SubagentTo
     ...(input.usage ? { usage: input.usage } : {}),
     ...(input.workingDirectory ? { workingDirectory: input.workingDirectory } : {}),
     ...(input.isolation ? { isolation: input.isolation } : {}),
+    ...(input.checkoutCleanup ? { checkoutCleanup: input.checkoutCleanup } : {}),
     ...(input.warnings?.length ? { warnings: input.warnings } : {}),
     ...(input.error ? { error: input.error } : {}),
   });

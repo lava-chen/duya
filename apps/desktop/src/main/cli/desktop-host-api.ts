@@ -56,6 +56,7 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  SessionCheckoutCommand,
 } from '@duya/agent-protocol';
 import type { WorkspaceLifecycleReclaimResult } from '../../contracts/workspace-lifecycle';
 import type { HostLocalAttachmentApiV1 } from '@duya/agent-protocol/session-api';
@@ -117,6 +118,7 @@ import {
   createHostWorkspaceLifecycleApis,
   type HostWorkspaceLifecycleApis,
 } from '@duya/host/workspace-lifecycle-api';
+import { SessionCheckoutService } from '@duya/host';
 import { resolveRolloutRoot } from '../config/boot-config';
 import { getCoreStores, type CoreStores } from '../db/core-connection';
 import { getDatabase } from '../db/connection';
@@ -142,6 +144,33 @@ export interface DesktopHostApiHandle {
 }
 
 let sessionApiClient: HostSessionHttpClient | null = null;
+let desktopCheckoutService: SessionCheckoutService | null = null;
+let desktopCheckoutServiceStores: CoreStores | null = null;
+/**
+ * The checkout controls the db bridge, the HTTP surface and the IPC handlers
+ * share. Built from the boot-time core stores — the same singleton every
+ * caller already reads — on first use, so a process that serves db actions
+ * before (or without) the full Host boot cannot observe "not initialized"
+ * for stores it can already see. Rebuilt if the store identity changes,
+ * which is what partially-booted test harnesses do between cases.
+ */
+export function getDesktopCheckoutService(): SessionCheckoutService {
+  const stores = getCoreStores();
+  if (desktopCheckoutService === null || desktopCheckoutServiceStores !== stores) {
+    desktopCheckoutServiceStores = stores;
+    desktopCheckoutService = new SessionCheckoutService({
+      sessions: stores.sessions,
+      runs: stores.runs,
+      validateActor: (actor) => {
+        if (!actor.runId || actor.epoch === undefined || stores.runs.currentEpoch(actor.runId) !== actor.epoch
+          || stores.runs.getRun(actor.runId)?.session_id !== actor.sessionId || stores.runs.getRun(actor.runId)?.status !== 'running') {
+          throw new Error('The checkout control attempt is no longer current.');
+        }
+      },
+    });
+  }
+  return desktopCheckoutService;
+}
 let runningHandle: DesktopHostApiHandle | null = null;
 let startup: Promise<DesktopHostApiHandle> | null = null;
 let pluginAppInvocationInternalApi: HostPluginAppInvocationInternalApi | null = null;
@@ -419,6 +448,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     // a named 404, which says "this Host cannot observe" — not the same
     // fact as "this session has no checkout".
     checkoutApi: workspaceLifecycle.checkoutApi,
+    sessionCheckoutApi: { control: (id: string, command: SessionCheckoutCommand) => getDesktopCheckoutService().control(id, command) },
     integrationApi: workspaceLifecycle.integrationApi,
     integrationSync: workspaceLifecycle.integrationSync,
     host: HOST,
@@ -500,6 +530,7 @@ export function getDesktopHostSessionApi(): HostSessionApiV1 & HostWorkspaceRegi
  * mapping rebuilt here.
  */
 export interface DesktopHostWorkspaceLifecycleApi {
+  controlSessionCheckout(sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand): Promise<import('@duya/agent-protocol').SessionCheckoutResult>;
   observeCheckoutForSession(sessionId: string): Promise<HostSessionCheckoutView>;
   observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved>;
   requestCheckoutReclaim(root: string): Promise<WorkspaceLifecycleReclaimResult>;

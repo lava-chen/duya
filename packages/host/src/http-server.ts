@@ -86,6 +86,7 @@ import type {
   HostLockApiV1,
 } from '@duya/agent-protocol';
 import { HostCheckoutApiError } from './checkout-api.js';
+import { SessionCheckoutError, parseSessionCheckoutCommand } from './workspace/session-checkout-service.js';
 import { HostSkillInventoryError } from './skills/skill-inventory-api.js';
 import { ClientLeaseTracker } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
@@ -452,6 +453,7 @@ export interface HostSessionHttpServerOptions {
    * with a named code instead of pretending every session is checkout-free.
    */
   readonly checkoutApi?: HostCheckoutApiV1;
+  readonly sessionCheckoutApi?: import('@duya/agent-protocol').HostSessionCheckoutApiV1;
   /** Observed PR/CI/review projection (plan 621). Absent answers 404, same reason. */
   readonly integrationApi?: HostIntegrationApiV1;
   /**
@@ -3078,6 +3080,21 @@ export class HostSessionHttpServer {
    * the two are different answers and only one of them is true.
    */
   async #routeCheckouts(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+    if (url.pathname === '/v1/checkouts/control') {
+      if (req.method !== 'POST') { this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } }); return; }
+      const controls = this.#options.sessionCheckoutApi;
+      if (!controls) { this.#sendJson(res, 404, { error: { code: 'checkout_controls_unavailable' } }); return; }
+      const body = await this.#readJson(req, res);
+      if (!body) return;
+      try {
+        if (!isBoundedString(body.sessionId, 1, 256)) throw new SessionCheckoutError('invalid_checkout_command', 'A sessionId is required.');
+        this.#sendJson(res, 200, { result: await controls.control(body.sessionId, parseSessionCheckoutCommand(body.command)) });
+      } catch (error) {
+        if (error instanceof SessionCheckoutError) this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+        else this.#sendApiError(res, error);
+      }
+      return;
+    }
     const api = this.#options.checkoutApi;
     if (!api) {
       this.#sendJson(res, 404, { error: { code: 'checkout_api_unavailable' } });

@@ -36,6 +36,7 @@ export interface ResolvedTurnTools {
     readonly toolInvokeExecutor: ToolInvokeTool;
 }
 export interface TurnPipelineRequest {
+    readonly executionLocation?: import('./workspace/execution-location-fence.js').ExecutionLocationSnapshot;
     readonly turn: number;
     readonly messages: Message[];
     readonly tools: Tool[];
@@ -48,6 +49,7 @@ export interface TurnPipelineRequest {
     readonly bindToolUseContext: (context: ToolUseContext) => void;
 }
 export interface TurnAssemblyRequest {
+    readonly executionLocation?: import('./workspace/execution-location-fence.js').ExecutionLocationSnapshot;
     readonly turn: number;
     readonly systemPrompt: string;
     readonly messages: Message[];
@@ -104,6 +106,7 @@ export interface TurnModelProjection {
     readonly messages: Message[];
 }
 export interface RunTurnAssembly {
+    prepare?(): Promise<void>;
     readonly resolved: ResolvedTurnTools;
     readonly turnContext: TurnContext;
     readonly tools: readonly Tool[];

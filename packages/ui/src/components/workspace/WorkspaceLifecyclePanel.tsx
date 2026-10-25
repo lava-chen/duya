@@ -36,6 +36,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { CheckoutControls } from './CheckoutControls';
 import { useWorkspaceLifecycle } from '@/hooks/useWorkspaceLifecycle';
 import { useTranslation } from '@/hooks/useTranslation';
 import type {
@@ -177,6 +178,7 @@ export function WorkspaceLifecyclePanel({ sessionId }: WorkspaceLifecyclePanelPr
       </header>
 
       {notice !== null ? <p className="wsl-notice">{notice}</p> : null}
+      {port?.checkouts?.control ? <CheckoutControls sessionId={sessionId} control={port.checkouts.control} onChange={load} /> : null}
 
       <section className="wsl-block" aria-label={t('wsl.checkout.section')}>
         <h3 className="wsl-block-title">{t('wsl.checkout.section')}</h3>

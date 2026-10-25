@@ -259,6 +259,7 @@ describe('slash registry', () => {
       'thinking',
       'transcript',
       'workflow',
+      'worktree',
     ]);
   });
 

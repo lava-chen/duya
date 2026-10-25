@@ -63,6 +63,28 @@ entry points. Its shared architecture separates these layers:
   parent wake delivery/restart reconciliation and Desktop delegation migration
   remain separate work (610 T21/T22).
 - **AI Layer**: `@duya/ai` multi-protocol adapter
+- **Managed checkout execution**: Host checks ownership for local Write/Edit/
+  ApplyPatch and shell dispatch, including deferred calls and shell workers,
+  after permission approval. Non-owners retain Read/Grep/Glob; shell commands
+  require ownership because command classification cannot prove read-only
+  execution. File targets are checked through existing path ancestors, and
+  a managed checkout cannot write back into the primary tree through a file
+  tool. These checks do not provide OS-level isolation for arbitrary shell or
+  plugin code. The transferable owner remains `codex-thread.json` in the
+  linked Git directory; immutable creation base lives separately in
+  `duya-checkout.json`. Missing legacy base is reported as unknown rather than
+  current HEAD. Resuming an isolated child restores its verified checkout,
+  independently of the parent's cwd, and refuses missing or occupied checkouts.
+- **Execution location barrier**: Each WorkerSession binds tool contexts to a
+  directory and a monotonically increasing process-local revision. Registry,
+  shell-worker and deferred dispatch synchronously acquire that context after
+  asynchronous approval and ownership checks, and release it when execution
+  settles. A switch closes admission, refuses active executions, and invalidates
+  old contexts even if cancelled or moved back to the same path. Directory-only
+  mutation during an active run is refused until prompt, permission and skill
+  refresh can join the same transition. This barrier covers foreground tool
+  promises; background process leases and durable enter/exit recovery remain
+  prerequisites for exposing the main-session worktree tools.
 - **Database**: SQLite via better-sqlite3; default data root is `~/.duya`,
   with `DUYA_DATA_ROOT` overriding the shared root for databases, rollouts, and
   attachments. The default main database is `duya-main.db` beside
@@ -1874,6 +1896,24 @@ Filterable by component: `LogComponent` constants (AgentProcess, IPC, DB, etc.)
 - Format: CommonJS
 - Entry: `packages/host/bundle/worker-entry.js`
 - Production: `resources/harness-bundle/worker-entry.js`
+
+### Session checkout controls
+
+`SessionCheckoutService` in Host owns enter, exit, recovery and base synchronization.
+Tools, local HTTP, Desktop IPC, TUI and shared UI call this service. SessionStore
+commits the execution directory, checkout attachment and operation journal in one
+revision-checked write; the logical workspace binding remains stable. Run admission
+reserves the session before asynchronous startup, while worker tools hold execution
+leases. A control tool exchanges its own lease for a switch barrier. Subsequent model
+rounds rebuild directory-scoped instructions, skills, permissions and tool catalogs;
+previously assembled calls retain their old revision and are refused.
+
+Shell workers and background subagents write separate process intents before dispatch.
+Checkout switching and reclamation consult these records as well as the run ledger.
+Unknown process state retains the checkout. Exit checkpoints committed HEAD, returns
+the cursor and releases ownership before requesting guarded reclamation. Sync records
+its merge commit identity, reports conflicts, and refuses to abort another merge.
+The immutable run-start manifest is not rewritten when the execution directory changes.
 
 ### Host Worker Bundle (`packages/host/bundle/` — tracked, verified)
 

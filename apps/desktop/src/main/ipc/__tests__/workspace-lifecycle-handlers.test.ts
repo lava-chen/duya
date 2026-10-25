@@ -30,6 +30,11 @@ const mocks = vi.hoisted(() => {
   return {
     captured: { handle },
     api: {
+      controlSessionCheckout: vi.fn(async (sessionId: string, command: unknown) => ({
+        state: { version: 1, revision: 1, cwd: `C:/repo/worktrees/${sessionId}`, checkout: null, pending: null },
+        outcome: 'status',
+        command,
+      })),
       observeCheckoutForSession: vi.fn(async (sessionId: string): Promise<HostSessionCheckoutView> => ({
         sessionId,
         checkout: null,
@@ -107,12 +112,33 @@ beforeEach(() => {
 describe('workspace-lifecycle IPC handlers', () => {
   it('registers one channel per port method', () => {
     expect([...mocks.captured.handle.keys()].sort()).toEqual([
+      'workspace-lifecycle:checkout:control',
       'workspace-lifecycle:checkout:observe',
       'workspace-lifecycle:checkout:observe-for-session',
       'workspace-lifecycle:checkout:reclaim',
       'workspace-lifecycle:integration:observe-for-session',
       'workspace-lifecycle:integration:refresh-for-session',
     ]);
+  });
+
+  it('forwards a parsed control command and returns the Host result unchanged', async () => {
+    const answer = await invoke(
+      'workspace-lifecycle:checkout:control',
+      'session-1',
+      // `bogus` is not a command field: the real parser (imported by the
+      // handler) must strip it before the command reaches the Host API.
+      { action: 'enter', name: 'task-1', branchName: 'feat', bogus: true },
+    );
+    expect(answer).toEqual({
+      state: { version: 1, revision: 1, cwd: 'C:/repo/worktrees/session-1', checkout: null, pending: null },
+      outcome: 'status',
+      command: { action: 'enter', name: 'task-1', branchName: 'feat' },
+    });
+    expect(mocks.api.controlSessionCheckout).toHaveBeenCalledWith('session-1', {
+      action: 'enter',
+      name: 'task-1',
+      branchName: 'feat',
+    });
   });
 
   it('returns the Host checkout view unchanged', async () => {
@@ -159,5 +185,22 @@ describe('workspace-lifecycle IPC handlers', () => {
     await expect(invoke('workspace-lifecycle:integration:refresh-for-session', '')).rejects.toThrow(
       /sessionId/,
     );
+  });
+
+  it('refuses a malformed control command instead of forwarding it', async () => {
+    // The forwarding test above already called the mock; clear its history so
+    // "not called" means "THIS command never reached the Host API".
+    mocks.api.controlSessionCheckout.mockClear();
+    await expect(invoke('workspace-lifecycle:checkout:control', '', { action: 'status' })).rejects.toThrow(
+      /sessionId/,
+    );
+    // The real parser rejects a non-object command before it reaches the Host API.
+    await expect(invoke('workspace-lifecycle:checkout:control', 'session-1', 'not-a-command')).rejects.toThrow(
+      /checkout command object/,
+    );
+    await expect(invoke('workspace-lifecycle:checkout:control', 'session-1', { action: 'teleport' })).rejects.toThrow(
+      /Unknown or invalid checkout action/,
+    );
+    expect(mocks.api.controlSessionCheckout).not.toHaveBeenCalled();
   });
 });

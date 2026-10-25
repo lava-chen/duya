@@ -49,6 +49,7 @@ import * as fs from 'node:fs/promises';
 import * as http from 'node:http';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SessionId } from '@duya/agent-protocol';
 import { HostSessionHttpClient } from '../src/http-client.js';
@@ -114,7 +115,7 @@ async function readRequest(request: http.IncomingMessage): Promise<string> {
  * and never surfaces as a Host-side object, so the request is the only place
  * it can be observed.
  */
-async function startScriptedProvider(): Promise<{
+async function startScriptedProvider(script?: (round: number) => string): Promise<{
   readonly origin: string;
   readonly requests: ScriptedRequest[];
   close(): Promise<void>;
@@ -139,7 +140,7 @@ async function startScriptedProvider(): Promise<{
         raw,
       });
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-      response.end(textStream('SCRIPTED_FINAL_TEXT', String(requests.length)));
+      response.end(script?.(requests.length) ?? textStream('SCRIPTED_FINAL_TEXT', String(requests.length)));
     } catch (error) {
       response.writeHead(500, { 'content-type': 'text/plain' }).end(error instanceof Error ? error.message : String(error));
     }
@@ -190,12 +191,12 @@ interface Harness {
  * bundle is what the product ships, and a worker built from source would test
  * a different artifact than the one that runs.
  */
-async function startHarness(): Promise<Harness> {
+async function startHarness(script?: (round: number) => string): Promise<Harness> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-turn-provider-'));
   roots.push(root);
   const workspace = path.join(root, 'workspace');
   await fs.mkdir(workspace, { recursive: true });
-  const provider = await startScriptedProvider();
+  const provider = await startScriptedProvider(script);
   delete process.env.DUYA_TEST;
   process.env.DUYA_DATA_ROOT = root;
   await fs.writeFile(path.join(root, 'config.toml'),
@@ -242,6 +243,50 @@ function expectedBudget(effort: 'low' | 'medium' | 'high', maxTokens: number | u
 }
 
 describe('Host turn input contract — production worker and provider', () => {
+  // A real worker doing three real git operations (worktree add, write,
+  // worktree remove). 180s keeps slow CI runners out of the picture; the
+  // macos CI hang documented in plan 621 is not a timeout-budget problem
+  // (it outlived 180s) and needs its own investigation.
+  it('enters a worktree, writes there and exits through the production worker', { timeout: 180_000 }, async () => {
+    const toolStream = (round: number, name: string, input: Record<string, unknown>): string => {
+      const events = [
+        { type: 'message_start', message: { id: `msg-${round}`, type: 'message', role: 'assistant', model: 'test-model', content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `call-${round}`, name, input: {} } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 1 } },
+        { type: 'message_stop' },
+      ];
+      return events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+    };
+    const { host, client, provider, sessionId, workspace } = await startHarness((round) =>
+      round === 1 ? toolStream(round, 'enter_worktree', { name: 'real-worker' })
+      : round === 2 ? toolStream(round, 'write', { file_path: 'worker-result.txt', content: 'REAL_WORKER_CHECKOUT_RESULT' })
+      : round === 3 ? toolStream(round, 'exit_worktree', { disposition: 'keep' })
+      : textStream('WORKTREE_ROUNDTRIP_COMPLETE', String(round)));
+    try {
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: workspace, encoding: 'utf8' }).trim();
+      git('init', '-q', '-b', 'main'); git('config', 'user.email', 'test@duya.local'); git('config', 'user.name', 'Duya test');
+      await fs.writeFile(path.join(workspace, 'AGENTS.md'), 'TARGET_COMMITTED_INSTRUCTIONS');
+      git('add', '.'); git('commit', '-qm', 'initial');
+      await fs.writeFile(path.join(workspace, 'AGENTS.md'), 'SOURCE_DIRTY_INSTRUCTIONS');
+      const started = await client.startAgentRun({ sessionId, prompt: 'WORKTREE_REAL_PROCESS_PROBE', model: 'test-model', providerId: 'local-test', apiFormat: 'anthropic', permissionMode: 'bypassPermissions', options: { maxTurns: 6 } });
+      expect(started.accepted).toBe(true);
+      if (!started.accepted) return;
+      await drainRun(client, started.runId);
+      const run = await client.getAgentRun(started.runId);
+      expect(run?.status, JSON.stringify(run)).toBe('completed');
+      const nextRound = provider.requests[1];
+      expect(nextRound?.raw).toContain('TARGET_COMMITTED_INSTRUCTIONS');
+      const entered = git('worktree', 'list', '--porcelain').split('\n').filter((line) => line.startsWith('worktree '))[1]!.slice(9);
+      expect(await fs.readFile(path.join(entered, 'worker-result.txt'), 'utf8')).toBe('REAL_WORKER_CHECKOUT_RESULT');
+      await expect(fs.access(path.join(workspace, 'worker-result.txt'))).rejects.toThrow();
+      expect((await client.controlSessionCheckout(sessionId, { action: 'status' })).state.cwd).toBe(workspace);
+      // Auxiliary provider calls may follow the four main model rounds.
+      expect(provider.requests.length).toBeGreaterThanOrEqual(4);
+    } finally { await provider.close(); await host.close(); }
+  });
+
   it('carries the requested effort into the next real provider request', async () => {
     const { host, client, provider, sessionId } = await startHarness();
     try {

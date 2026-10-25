@@ -29,6 +29,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ userData: '' }));
@@ -85,6 +86,8 @@ interface HostApiRuntime {
 let dataRoot: string;
 let host: HostApiRuntime;
 let stopHost: (() => Promise<void>) | undefined;
+/** Repos (and their managed worktree parents) created by the control test below. */
+const controlRoots: string[] = [];
 
 beforeAll(async () => {
   dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-embedded-host-'));
@@ -117,6 +120,15 @@ beforeAll(async () => {
 afterAll(async () => {
   await stopHost?.();
   delete process.env.DUYA_DATA_ROOT;
+  // The control test leaves real git worktrees behind; Windows refuses to
+  // unlink a directory git still lists, so the retries wait that out instead
+  // of failing teardown for a contract that did not break. The dataRoot
+  // itself is deliberately NOT removed: the embedded Host's SQLite handles
+  // outlive stopHost on Windows and rm-ing them is EPERM noise, which the
+  // file's original teardown boundary already accepted.
+  for (const root of controlRoots.splice(0)) {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 });
 
 function headers(): Record<string, string> {
@@ -160,4 +172,70 @@ describe('the Desktop embedded Host answers the integration routes', () => {
       failed: [],
     });
   });
+});
+
+describe('the Desktop embedded Host answers the checkout control route', () => {
+  /**
+   * The control route is the Desktop's NEW composition for this slice: the
+   * embedded Host carries a `SessionCheckoutService` over the Desktop's real
+   * CoreStores (SQLite) and a real checkout provider over real Git. Driving
+   * it over the authenticated HTTP client — the same transport the TUI uses
+   * to attach to a running Desktop — proves the composition answers, not
+   * just the headless Host's own tests.
+   *
+   * The full cycle pins: `enter` creates a managed worktree and moves the
+   * session cursor, `status` reads the SAME cursor back, and `exit remove`
+   * declines to delete a checkout that holds results — the refusal is the
+   * answer, and the file survives it.
+   */
+  it('switches a session through enter → status → exit without losing work', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-embedded-control-'));
+    controlRoots.push(parent);
+    const repo = path.join(parent, 'repo');
+    fs.mkdirSync(repo);
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@duya.local');
+    git('config', 'user.name', 'duya test');
+    fs.writeFileSync(path.join(repo, 'README.md'), '# fixture\n');
+    git('add', '.');
+    git('commit', '-qm', 'initial');
+
+    const { HostSessionHttpClient } = await import('@duya/host/http-client');
+    const client = new HostSessionHttpClient(origin(), host.token);
+    const workspace = await client.registerLocalDirectory(repo);
+    const session = await client.create({
+      workspaceId: workspace.workspaceId,
+      workspaceRootId: workspace.rootId,
+      workspaceRelativePath: workspace.relativePath,
+      title: 'embedded control',
+    });
+
+    // The initial status pins the session's home directory in the Host's own
+    // path form, so the exit assertion compares like with like on Windows
+    // (the Host normalizes to forward slashes, a raw `path.join` is not).
+    // It must be read BEFORE the enter: `status` reports the CURRENT cursor.
+    const initial = await client.controlSessionCheckout(session.id, { action: 'status' });
+    const entered = await client.controlSessionCheckout(session.id, {
+      action: 'enter',
+      name: 'embedded-checkout',
+      branchName: 'embedded-feature',
+    });
+    expect(entered.outcome).toBe('entered');
+    expect(entered.state.cwd).not.toBe(initial.state.cwd);
+    expect(fs.existsSync(path.join(entered.state.cwd, 'README.md'))).toBe(true);
+
+    const status = await client.controlSessionCheckout(session.id, { action: 'status' });
+    expect(status.state.cwd).toBe(entered.state.cwd);
+
+    fs.writeFileSync(path.join(entered.state.cwd, 'result.txt'), 'retained');
+    const left = await client.controlSessionCheckout(session.id, {
+      action: 'exit',
+      disposition: 'remove',
+    });
+    expect(left.state.cwd).toBe(initial.state.cwd);
+    expect(left.removal).toMatchObject({ removed: false });
+    expect(fs.readFileSync(path.join(entered.state.cwd, 'result.txt'), 'utf8')).toBe('retained');
+  }, 60_000);
 });

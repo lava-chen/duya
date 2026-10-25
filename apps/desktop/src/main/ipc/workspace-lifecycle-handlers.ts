@@ -32,6 +32,10 @@ function requireText(value: unknown, field: string, maxLength: number): string {
 }
 
 export function registerWorkspaceLifecycleHandlers(): void {
+  ipcMain.handle('workspace-lifecycle:checkout:control', async (_event, sessionId: unknown, command: unknown) => {
+    const { parseSessionCheckoutCommand } = await import('@duya/host');
+    return getDesktopHostWorkspaceLifecycleApi().controlSessionCheckout(requireText(sessionId, 'sessionId', MAX_SESSION_ID_LENGTH), parseSessionCheckoutCommand(command));
+  });
   ipcMain.handle(
     'workspace-lifecycle:checkout:observe-for-session',
     async (_event, sessionId: unknown): Promise<unknown> => {

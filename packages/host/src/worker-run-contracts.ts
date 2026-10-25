@@ -172,6 +172,10 @@ export interface ChatRequestBody {
     systemPrompt?: string;
 }
 export interface ToolUseContext {
+    beginExecutionLocationSwitch?: () => import('./workspace/execution-location-fence.js').ExecutionLocationSwitch;
+    checkoutControl?: (command: import('@duya/agent-protocol').SessionCheckoutCommand, beginSwitch: () => import('./workspace/execution-location-fence.js').ExecutionLocationSwitch) => Promise<import('@duya/agent-protocol').SessionCheckoutResult>;
+    /** Host-owned process-local admission capability, captured when the turn is assembled. */
+    executionLocation?: import('./workspace/execution-location-fence.js').ExecutionLocationSnapshot;
     toolUseId: string;
     getAppState: () => AppState;
     setAppState: (f: (prev: AppState) => AppState) => void;

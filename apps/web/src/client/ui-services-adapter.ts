@@ -204,6 +204,7 @@ export function createWebWorkspaceLifecycle(
   const api = new ApiClient({ fetchImpl });
   return {
     checkouts: {
+      control: (sessionId, command) => api.controlSessionCheckout(sessionId, command),
       observeForSession: async (sessionId: SessionId) => await api.observeCheckoutForSession(sessionId),
       observeCheckout: async (root: string) => await api.observeCheckoutByRoot(root),
       requestReclaim: async (root: string) => await api.requestCheckoutReclaim(root),

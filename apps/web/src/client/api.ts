@@ -429,6 +429,15 @@ export class ApiClient {
     return checkout;
   }
 
+  async controlSessionCheckout(sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand): Promise<import('@duya/agent-protocol').SessionCheckoutResult> {
+    const body = await this.#mutate('/api/checkouts/control', { sessionId, command }, {}, 'POST');
+    const result = body.result;
+    if (!isRecord(result) || !isRecord(result.state) || result.state.version !== 1 || typeof result.state.cwd !== 'string' || typeof result.outcome !== 'string') {
+      throw new ApiError(200, 'invalid_checkout_control');
+    }
+    return result as unknown as import('@duya/agent-protocol').SessionCheckoutResult;
+  }
+
   /** One checkout, observed by its root path. */
   async observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved> {
     const query = new URLSearchParams({ root });

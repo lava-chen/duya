@@ -20,6 +20,8 @@ export type { CheckoutErrorCode, CheckoutOwnerErrorCode } from './errors.js';
 
 export { createCheckoutProvider, GitCheckoutProvider } from './checkout-provider.js';
 export type { CheckoutProviderPorts } from './checkout-provider.js';
+export { ExecutionLocationError, ExecutionLocationFence } from './execution-location-fence.js';
+export type { ExecutionLocationDenial, ExecutionLocationErrorCode, ExecutionLocationLease, ExecutionLocationSnapshot, ExecutionLocationSwitch } from './execution-location-fence.js';
 
 export { bindOwner, clearOwner, ownerPath, readOwner } from './checkout-metadata.js';
 export type { BindOwnerOptions, OwnerRead } from './checkout-metadata.js';

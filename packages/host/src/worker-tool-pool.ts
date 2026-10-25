@@ -11,6 +11,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
 import { getBashTaskRegistry } from './managed-shell/task-registry.js';
+import { reserveCheckoutTask, bindCheckoutTaskPid, releaseCheckoutTask } from './workspace/task-leases.js';
 import { killProcessTree } from './managed-shell/process-tree-kill.js';
 import { logger } from './worker-logger.js';
 import { buildTaskNotificationXml } from '@duya/agent-core/task-notifications/buildTaskNotification';
@@ -46,8 +47,7 @@ function resolveDirname(): string {
  * In dev mode: __dirname/tool/BashTool/BashWorker.js
  * In packaged app: need to find agent directory instead of agent-bundle
  */
-function resolveBashWorkerPath(): string {
-  const dirname = resolveDirname();
+export function resolveBashWorkerPath(dirname = resolveDirname()): string {
   // First try the default path (works in dev mode)
   const defaultPath = path.join(dirname, 'BashTool', 'BashWorker.js');
   if (fs.existsSync(defaultPath)) {
@@ -98,6 +98,9 @@ export interface WorkerResult {
 
 // Extended task interface with output callback
 export interface WorkerTaskExtended extends WorkerTask {
+  /** Host-only process intent; never forwarded as model input. */
+  checkoutLeaseId?: string;
+  checkoutDispatched?: boolean;
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
   /** Parent session id, used to route background-task completion
    *  notifications back to the originating conversation via the
@@ -144,6 +147,13 @@ export class WorkerPool {
    * Execute a task on an available worker
    */
   async executeTask(task: WorkerTaskExtended): Promise<WorkerResult> {
+    const checkoutLeaseId = reserveCheckoutTask({ taskId: task.id, cwd: task.workingDirectory ?? process.cwd(), ...(task.sessionId ? { sessionId: task.sessionId } : {}) });
+    const guarded: WorkerTaskExtended = { ...task, checkoutLeaseId, checkoutDispatched: false };
+    try { return await this.executeReservedTask(guarded); }
+    finally { if (!guarded.checkoutDispatched) releaseCheckoutTask(checkoutLeaseId); }
+  }
+
+  private async executeReservedTask(task: WorkerTaskExtended): Promise<WorkerResult> {
     // Find an idle worker or create a new one
     let worker = this.findIdleWorker();
 
@@ -404,6 +414,10 @@ export class WorkerPool {
       task.abortController.signal.addEventListener('abort', abortHandler, { once: true });
 
       const onMessage = (msg: { type: string; [key: string]: unknown }) => {
+        if (task.checkoutLeaseId && (!msg.taskId || msg.taskId === task.id) && typeof msg.pid === 'number' && msg.pid > 0) {
+          try { bindCheckoutTaskPid(task.checkoutLeaseId, msg.pid); }
+          catch (error) { logger.error('could not acknowledge checkout process lease', error instanceof Error ? error : undefined, { taskId: task.id }, COMPONENT); }
+        }
         if (msg.type === 'progress' && !resolved) {
           const msgTaskId = msg.taskId as string | undefined;
           if (msgTaskId && msgTaskId !== task.id) return;
@@ -427,6 +441,9 @@ export class WorkerPool {
 
           const registry = getBashTaskRegistry();
           registry.register({
+            ...(task.checkoutLeaseId ? { checkoutLeaseId: task.checkoutLeaseId } : {}),
+            ...(task.workingDirectory ? { workingDirectory: task.workingDirectory } : {}),
+            ...(task.sessionId ? { sessionId: task.sessionId } : {}),
             id: task.id,
             pid: msg.pid as number,
             outputFile: msg.outputFile as string,
@@ -463,6 +480,9 @@ export class WorkerPool {
 
           const registry = getBashTaskRegistry();
           registry.register({
+            ...(task.checkoutLeaseId ? { checkoutLeaseId: task.checkoutLeaseId } : {}),
+            ...(task.workingDirectory ? { workingDirectory: task.workingDirectory } : {}),
+            ...(task.sessionId ? { sessionId: task.sessionId } : {}),
             id: task.id,
             pid: msg.pid as number,
             outputFile: msg.outputFile as string,
@@ -487,6 +507,7 @@ export class WorkerPool {
         } else if (msg.type === 'bg_complete') {
           const msgTaskId = msg.taskId as string | undefined;
           if (msgTaskId && msgTaskId !== task.id) return;
+          if (task.checkoutLeaseId) releaseCheckoutTask(task.checkoutLeaseId);
 
           const registry = getBashTaskRegistry();
           const exitCode = (msg.exitCode as number) ?? -1;
@@ -549,6 +570,7 @@ export class WorkerPool {
           if (msgTaskId && msgTaskId !== task.id) {
             return;
           }
+          if (task.checkoutLeaseId) releaseCheckoutTask(task.checkoutLeaseId);
           cleanup();
           resolve({
             taskId: task.id,
@@ -628,6 +650,7 @@ export class WorkerPool {
         inputKeys: Object.keys(task.input ?? {}),
       }, COMPONENT);
       try {
+        task.checkoutDispatched = true;
         proc.send(
           {
             type: 'execute',

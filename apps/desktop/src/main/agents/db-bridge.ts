@@ -55,6 +55,7 @@ import {
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
   getDesktopHostPluginAppInvocationApi,
+  getDesktopCheckoutService,
 } from '../cli/desktop-host-api';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { normalizePath } from '@duya/data/path-utils';
@@ -407,13 +408,16 @@ export async function dispatchDbAction(
       if (controlPlane === null) {
         return writeRunReceiptOnWire({ state: 'unavailable', runId, reason: RUN_UNAVAILABLE_REASON });
       }
-      const receipt = await controlPlane.serve(
+      const releaseCheckoutAdmission = action === 'run:create'
+        ? getDesktopCheckoutService().reserveRun(String(p.sessionId ?? ''),
+          p.manifest && typeof p.manifest === 'object' && 'cwd' in p.manifest ? String(p.manifest.cwd) : undefined) : () => {};
+      const receipt = await (async () => { try { return await controlPlane.serve(
         { schema: COMMAND_SCHEMA_VERSION, action, payload: p },
         // A `db:request` is never host-initiated: the agent server is a fork,
         // so a missing sender means the transport did not thread its facts
         // through. `noSender` is refused rather than treated as the host.
         sender ?? UNATTRIBUTED_SENDER,
-      );
+      ); } finally { releaseCheckoutAdmission(); } })();
 
       if (receipt.outcome === 'rejected') {
         // Refused before storage, so there is no producer reply to forward and
@@ -553,6 +557,20 @@ export async function dispatchDbAction(
 
     case 'session:get':
       return readHostSessionRow(p.id as string);
+
+    case 'session:checkoutControl': {
+      const id = String(p.id ?? '');
+      const { parseSessionCheckoutCommand } = await import('@duya/host');
+      const command = parseSessionCheckoutCommand(p.command);
+      const service = getDesktopCheckoutService();
+      if (command.action === 'status') return { state: service.read(id), outcome: 'status' };
+      if (!trustedAttempt || trustedAttempt.sessionId !== id) throw new Error('Checkout mutation requires a trusted worker attempt.');
+      return service.control(id, command, trustedAttempt);
+    }
+    case 'session:checkoutReclaim': {
+      if (typeof p.root !== 'string' || p.root.length > 4096) throw new Error('Invalid checkout root.');
+      return getDesktopCheckoutService().reclaim(p.root);
+    }
 
     case 'session:setExtension': {
       // Plan 621 D: key-level extension write from the worker, served by the
@@ -696,12 +714,22 @@ export async function dispatchDbAction(
     // immediately with the child session id; the child's completion/failure
     // wakes the parent through a background_notification mailbox row.
     case 'session:spawn': {
-      const workingDirectory = p.workingDirectory as string | undefined;
+      let workingDirectory = p.workingDirectory as string | undefined;
       const prompt = p.prompt as string | undefined;
       const parentSessionId = p.parentSessionId as string | undefined;
       if (!workingDirectory || !prompt || !parentSessionId) {
         return { ok: false, reason: 'missing_required_fields' };
       }
+
+      const checkoutService = getDesktopCheckoutService();
+      if (p.use_worktree !== undefined && typeof p.use_worktree !== 'boolean') return { ok: false, reason: 'invalid_use_worktree' };
+      for (const key of ['source_branch', 'branch_name']) if (p[key] !== undefined && (typeof p[key] !== 'string' || !String(p[key]).trim())) return { ok: false, reason: `invalid_${key}` };
+      const parentCursor = checkoutService.read(parentSessionId);
+      const isolated = p.use_worktree === true || (p.use_worktree === undefined && Boolean(parentCursor.checkout));
+      if (!isolated && (p.source_branch !== undefined || p.branch_name !== undefined)) return { ok: false, reason: 'independent_branch_requires_worktree' };
+      if (!trustedAttempt || trustedAttempt.sessionId !== parentSessionId) return { ok: false, reason: 'caller_attempt_not_current' };
+      if (path.resolve(workingDirectory) !== path.resolve(parentCursor.cwd)) return { ok: false, reason: 'working_directory_must_match_parent' };
+      workingDirectory = parentCursor.cwd;
 
       // Resolve the active provider + model for the child run.
       const activeLlm = getProviderStore().getDefaultLlmProvider();
@@ -736,7 +764,8 @@ export async function dispatchDbAction(
         permissionMode,
       );
       const hostApi = getDesktopHostSessionApi();
-      const workspace = await hostApi.registerLocalDirectory(workingDirectory);
+      const parent = await hostApi.get(parentSessionId, { includeAllSessions: true });
+      const workspace = parent?.workspace.state === 'bound' ? parent.workspace : await hostApi.registerLocalDirectory(workingDirectory);
       const hostCreate: Parameters<typeof hostApi.create>[0] = {
         id: childInput.id,
         workspaceId: workspace.workspaceId,
@@ -756,6 +785,15 @@ export async function dispatchDbAction(
         ...(childInput.createdAt !== undefined ? { createdAt: childInput.createdAt } : {}),
       };
       await hostApi.create(hostCreate);
+      let checkoutResult;
+      try {
+        checkoutResult = await checkoutService.createChildCheckout(childId, workingDirectory, trustedAttempt, isolated,
+          p.source_branch as string | undefined, p.branch_name as string | undefined);
+        workingDirectory = checkoutResult.state.cwd;
+      } catch (error) {
+        await hostApi.update(childId, undefined, { status: 'error' });
+        return { ok: false, reason: error instanceof Error ? error.message : String(error), sessionId: childId };
+      }
 
       // Surface in the sidebar without a manual refresh (same as session:ensureBot).
       // `allBrowserWindows` yields none on a headless host (no renderer to
@@ -786,7 +824,9 @@ export async function dispatchDbAction(
           );
       });
 
-      return { ok: true, sessionId: childId, parentId: parentSessionId };
+      return { ok: true, sessionId: childId, parentId: parentSessionId, workingDirectory,
+        ...(isolated ? { isolation: 'worktree', checkout: checkoutResult.state.checkout,
+          branchName: p.branch_name ?? `duya/session/${childId.replace(/[^A-Za-z0-9._-]/g, '-')}` } : {}) };
     }
 
     // Plan 504 Phase 2 — continuous session management. All `session:spawn*`
@@ -853,7 +893,7 @@ export async function dispatchDbAction(
         return { ok: false, reason: 'not_owned' };
       }
       const parentSessionId = callerSessionId;
-      const workingDirectory = session.working_directory as string | null;
+      const workingDirectory = (await getDesktopCheckoutService().verifyCursor(sessionId)).cwd;
       if (!workingDirectory) return { ok: false, reason: 'no_working_directory' };
 
       // Reuse the same provider/model the child was created with.

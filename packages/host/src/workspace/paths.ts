@@ -37,6 +37,12 @@ export function resolveCheckoutDataRoot(): string {
   return process.env.DUYA_APP_DATA_PATH?.trim() || resolveDataRoot();
 }
 
+/** Recognise missing historical managed paths so resume cannot fall back to the parent. */
+export function isManagedCheckoutPath(directory: string): boolean {
+  const relative = path.relative(path.resolve(resolveCheckoutDataRoot(), 'worktrees'), path.resolve(directory));
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
 /** Deterministic per-repository directory so checkouts for one repo stay together. */
 export function managedRootFor(sourceRoot: string): string {
   const repoKey = createHash('sha256').update(path.resolve(sourceRoot)).digest('hex').slice(0, 12);

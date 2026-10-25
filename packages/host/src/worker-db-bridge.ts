@@ -17,6 +17,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { SessionCheckoutService } from './workspace/session-checkout-service.js';
+import { parseSessionCheckoutCommand } from './workspace/session-checkout-service.js';
 import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
 import { ModelCapabilityStore } from '@duya/data/model-capability-store';
 import { createHostLocalModelCapabilityApi } from './local-model-capability-api.js';
@@ -136,6 +138,7 @@ export type WorkerBridgeLocalSessions = Pick<
 >;
 
 export interface HostWorkerDbBridgeOptions {
+  readonly checkoutService?: SessionCheckoutService;
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
   /** Durable run ledger — serves `run:*` exactly like the ledger API. */
   readonly runs: RunRepository;
@@ -469,6 +472,21 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           if (!options.sessionService) throw new WorkerDbBridgeError('unimplemented_domain', 'Session delegation requires the Host session service.');
           if (!caller) throw new WorkerDbBridgeError('invalid_payload', 'Session delegation requires trusted worker context.');
           return options.sessionService.dispatch(action, payload, caller);
+        }
+        case 'session:checkoutControl': {
+          if (!options.checkoutService) throw new WorkerDbBridgeError('unimplemented_domain', 'Checkout controls are unavailable.');
+          const id = requireString(payload, 'id', action);
+          const command = parseSessionCheckoutCommand(payload.command);
+          if (command.action === 'status') {
+            if (caller && caller.sessionId !== id) throw new WorkerDbBridgeError('invalid_payload', 'A worker can inspect only its own execution location.');
+            return { state: options.checkoutService.read(id), outcome: 'status' };
+          }
+          if (!caller || caller.sessionId !== id) throw new WorkerDbBridgeError('invalid_payload', 'Checkout mutation requires trusted worker context.');
+          return options.checkoutService.control(id, command, caller);
+        }
+        case 'session:checkoutReclaim': {
+          if (!options.checkoutService) throw new WorkerDbBridgeError('unimplemented_domain', 'Checkout controls are unavailable.');
+          return options.checkoutService.reclaim(requireString(payload, 'root', action));
         }
         case 'modelCapability:get':
           return modelCapabilities.getModelCapability(requireString(payload, 'modelName', action));

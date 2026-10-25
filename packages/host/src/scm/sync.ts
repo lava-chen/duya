@@ -198,7 +198,7 @@ export function createIntegrationSync(deps: IntegrationSyncDeps): IntegrationSyn
     try {
       checkpointRefs = parseCheckpointRefs(
         await git(
-          ['for-each-ref', '--format=%(objectname) %(refname)', `refs/duya/checkpoint/${sessionId}/`],
+          ['for-each-ref', '--format=%(objectname) %(refname)', `refs/duya/checkpoint/${checkpointSessionComponent(sessionId)}/`],
           workingDirectory,
         ),
       );
@@ -253,3 +253,4 @@ export function createIntegrationSync(deps: IntegrationSyncDeps): IntegrationSyn
 
   return { syncSession };
 }
+import { checkpointSessionComponent } from '../workspace/checkpoint-session.js';

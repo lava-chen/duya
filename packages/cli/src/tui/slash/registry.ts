@@ -40,6 +40,7 @@ import { PLUGIN_COMMANDS } from './plugin.js';
 import { WORKFLOW_COMMANDS } from './workflow.js';
 import { APP_COMMANDS } from './app.js';
 import { CHECKOUT_COMMANDS } from './checkout.js';
+import { WORKTREE_COMMANDS } from './worktree.js';
 import { PR_COMMANDS } from './pr.js';
 import { MODEL_COMMANDS } from './model.js';
 import { EFFORT_COMMANDS } from './effort.js';
@@ -70,6 +71,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...SESSION_OPS_COMMANDS,
   ...APP_COMMANDS,
   ...CHECKOUT_COMMANDS,
+  ...WORKTREE_COMMANDS,
   ...PR_COMMANDS,
   ...EXPORT_COMMANDS,
   ...CAPABILITIES_COMMANDS,

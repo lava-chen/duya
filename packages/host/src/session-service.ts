@@ -33,6 +33,7 @@ export interface SessionServiceCaller {
 }
 
 export interface HostSessionServiceOptions {
+  readonly checkoutService?: import('./workspace/session-checkout-service.js').SessionCheckoutService;
   readonly sessions: Pick<HostSessionApiV1,
     'get' | 'create' | 'list' | 'update' | 'getSessionChangeStats'>;
   readonly runs: Pick<HostRunApiV1, 'getAgentRun' | 'listAgentRunsBySession' | 'readAgentRunEvents'>;
@@ -282,6 +283,11 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           const prompt = requireString(payload, 'prompt');
           const requestedDirectory = requireString(payload, 'workingDirectory');
           const model = requireString(payload, 'model') ?? undefined;
+          if (payload.use_worktree !== undefined && typeof payload.use_worktree !== 'boolean') return { ok: false, reason: 'invalid_use_worktree' };
+          for (const key of ['source_branch', 'branch_name']) if (payload[key] !== undefined && !requireString(payload, key)) return { ok: false, reason: `invalid_${key}` };
+          const isolated = payload.use_worktree === true || (payload.use_worktree === undefined && Boolean(options.checkoutService?.read(caller.sessionId).checkout));
+          if (!isolated && (payload.source_branch !== undefined || payload.branch_name !== undefined)) return { ok: false, reason: 'independent_branch_requires_worktree' };
+          if (isolated && !options.checkoutService) return { ok: false, reason: 'worktree_isolation_unavailable' };
           if (!prompt || !requestedDirectory || !path.isAbsolute(requestedDirectory)) {
             return { ok: false, reason: 'invalid_spawn_input' };
           }
@@ -330,7 +336,21 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             };
           }
 
-          const started = await startRun(child, parent.workingDirectory, prompt, caller, model);
+          let childCwd = parent.workingDirectory;
+          let checkout: import('@duya/agent-protocol').SessionCheckoutAttachment | null = null;
+          if (options.checkoutService) {
+            try {
+              const prepared = await options.checkoutService.createChildCheckout(child.id, parent.workingDirectory, caller, isolated,
+                requireString(payload, 'source_branch') ?? undefined, requireString(payload, 'branch_name') ?? undefined);
+              childCwd = prepared.state.cwd;
+              checkout = prepared.state.checkout;
+              requireCurrentCaller(caller);
+            } catch (error) {
+              await markCreatedChildFailed(child.id, error instanceof Error ? error.message : String(error));
+              return { ok: false, sessionId: child.id, reason: error instanceof Error ? error.message : String(error) };
+            }
+          }
+          const started = await startRun(child, childCwd, prompt, caller, model);
           if ('reason' in started) {
             const failureReason = started.reason;
             const failed = await markCreatedChildFailed(child.id, failureReason);
@@ -348,6 +368,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             runId: started.runId,
             operationId: started.operationId,
             completionNotification: 'query',
+            workingDirectory: childCwd,
+            isolation: isolated ? 'worktree' : 'shared',
+            ...(checkout ? { checkout, branchName: requireString(payload, 'branch_name') ?? `duya/session/${child.id.replace(/[^A-Za-z0-9._-]/g, '-')}` } : {}),
           };
         }
 
@@ -452,7 +475,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             if (!parent || !local?.workingDirectory) return { ok: false, reason: 'session_workspace_unavailable' };
             const childCanonical = await realpath(local.workingDirectory).catch(() => null);
             requireCurrentCaller(caller);
-            if (!childCanonical || !sameCanonicalDirectory(parent.workingDirectory, childCanonical)) {
+            const managedCursor = options.checkoutService && options.checkoutService.read(session.id).revision > 0;
+            if (managedCursor) await options.checkoutService!.verifyCursor(session.id);
+            if (!childCanonical || (!managedCursor && !sameCanonicalDirectory(parent.workingDirectory, childCanonical))) {
               return { ok: false, reason: 'working_directory_must_match_parent' };
             }
             const started = await startRun(session, childCanonical, prompt, caller, model);

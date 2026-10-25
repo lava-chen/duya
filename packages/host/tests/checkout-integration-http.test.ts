@@ -16,6 +16,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startLocalHost, type LocalHostHandle } from '../src/local-host.js';
+import { HostSessionHttpClient } from '../src/http-client.js';
+import { makeRepo } from './workspace/fixtures.js';
 
 const TOKEN = 'checkout-integration-http-test-token';
 const roots: string[] = [];
@@ -39,6 +41,27 @@ function headers(): Record<string, string> {
 }
 
 describe('checkout routes over the real composition', () => {
+  it('controls a durable checkout through the real HTTP client and composition', async () => {
+    const host = await open();
+    const client = new HostSessionHttpClient(host.origin, TOKEN);
+    const repo = makeRepo();
+    const workspace = await client.registerLocalDirectory(repo);
+    const session = await client.create({ workspaceId: workspace.workspaceId, workspaceRootId: workspace.rootId,
+      workspaceRelativePath: workspace.relativePath, title: 'checkout control' });
+    // The session's home directory, in the Host's own path form. Registration
+    // canonicalizes to forward slashes on Windows, so a later "returned home"
+    // assertion must compare against this, not the raw fixture path.
+    const initial = await client.controlSessionCheckout(session.id, { action: 'status' });
+    const entered = await client.controlSessionCheckout(session.id, { action: 'enter', name: 'http-checkout', branchName: 'http-feature' });
+    expect(entered.outcome).toBe('entered');
+    expect((await client.controlSessionCheckout(session.id, { action: 'status' })).state.cwd).toBe(entered.state.cwd);
+    expect((await client.get(session.id))?.workspace).toEqual(session.workspace);
+    await fs.writeFile(path.join(entered.state.cwd, 'result.txt'), 'retained');
+    const left = await client.controlSessionCheckout(session.id, { action: 'exit', disposition: 'remove' });
+    expect(left.state.cwd).toBe(initial.state.cwd);
+    expect(left.removal).toMatchObject({ removed: false });
+    expect(await fs.readFile(path.join(entered.state.cwd, 'result.txt'), 'utf8')).toBe('retained');
+  });
   it('answers "not in a checkout" for a session that has none', async () => {
     const host = await open();
 

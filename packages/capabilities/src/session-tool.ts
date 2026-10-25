@@ -51,7 +51,7 @@ export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: s
 /** Host worker-DB actions used by the session tool. */
 export interface SessionToolPort {
   getCallerSessionId(contextSessionId?: string): string;
-  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string } & SessionCompletionReceipt>>;
+  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string } & SessionCompletionReceipt>>;
   list(parentSessionId: string): Promise<SessionSpawnOperation<{ sessions: SessionSpawnSession[] }>>;
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
   reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
@@ -63,6 +63,9 @@ export interface SessionToolPort {
 const SESSION_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
+    use_worktree: { type: 'boolean', description: 'Give the new session an isolated checkout and branch. Required true for an independent branch or PR. Omitted: isolate when the parent entered a managed checkout, otherwise share. false shares the current directory and may be read-only if another session owns it.' },
+    source_branch: { type: 'string', description: 'Local base ref for an isolated child; defaults to the parent execution HEAD. Requires use_worktree=true.' },
+    branch_name: { type: 'string', description: 'New branch for the isolated child; defaults to duya/session/<session-id>. Requires use_worktree=true.' },
     action: {
       type: 'string',
       enum: ['spawn', 'list', 'get', 'reply', 'cancel', 'rename'],
@@ -177,6 +180,9 @@ export class SessionTool extends BaseTool {
             return err('workingDirectory and prompt are required for spawn.');
           }
           const result = await this.port.spawn({
+            ...(typeof input.use_worktree === 'boolean' ? { use_worktree: input.use_worktree } : {}),
+            ...(typeof input.source_branch === 'string' ? { source_branch: input.source_branch } : {}),
+            ...(typeof input.branch_name === 'string' ? { branch_name: input.branch_name } : {}),
             parentSessionId: callerSessionId,
             workingDirectory,
             prompt,
@@ -187,7 +193,9 @@ export class SessionTool extends BaseTool {
             id: randomUUID(),
             name: this.name,
             result:
-              `Spawned session ${result.sessionId} in ${workingDirectory}. It is running asynchronously ` +
+              `Spawned session ${result.sessionId} in ${result.workingDirectory ?? workingDirectory}. ` +
+              (result.checkout ? `Isolated checkout: ${JSON.stringify(result.checkout)}. Branch: ${result.branchName ?? 'see checkout receipt'}. ` : '') +
+              `It is running asynchronously ` +
               `in its own session (visible in the sidebar). ` +
               (result.completionNotification === 'query'
                 ? `This Host does not send completion notifications yet; use action "get" for its run result.`

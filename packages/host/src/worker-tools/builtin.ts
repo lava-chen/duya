@@ -1,4 +1,5 @@
 import type { BuiltinRegistryServices } from './services.js';
+import { WorktreeControlTool } from './worktree.js';
 import { ToolRegistry } from '@duya/host/worker-tool-registry';
 import type { ToolMetaInput } from '@duya/host/worker-tool-registry';
 import type { ToolUseContext } from '@duya/host/worker-run-contracts';
@@ -46,6 +47,10 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     enabledPluginIds?: Set<string>;
 }): ToolRegistry {
     const registry = new ToolRegistry();
+    for (const action of ['enter', 'exit', 'sync'] as const) {
+        const tool = new WorktreeControlTool(action);
+        registry.register(tool.toTool(), tool, { exposure: 'eager', riskTier: 'write' });
+    }
     registry.register(bashTool.toTool(), bashTool, {
         exposure: 'eager',
     });

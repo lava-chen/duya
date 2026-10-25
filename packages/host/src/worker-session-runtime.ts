@@ -1,5 +1,10 @@
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
 import { definedProperties } from './worker-context/defined-properties.js';
+import { ExecutionLocationError, ExecutionLocationFence, type ExecutionLocationSwitch } from './workspace/execution-location-fence.js';
+import { sessionDb } from './worker-db-client.js';
+import { refreshLocationSkills } from './worker-execution/location-skills.js';
+import { backgroundAgentLifecycle } from './worker-subagents/background-lifecycle.js';
+import type { SessionCheckoutCommand, SessionCheckoutResult } from '@duya/agent-protocol';
 /** Host product session state and assembly; RunEngine owns model/tool scheduling. */
 import type { TurnOutputSink, ResolvedTurnTools, TurnPipelineRequest, TurnAssemblyRequest, TurnAssembly, RunStartRequest, RunHandle, RunAssemblyRequest, PromptUserRowCommit, LegacyTurnDelta, TurnModelProjection, RunTurnAssembly } from './worker-run-session-port.js';
 import type { WorkerSessionAssemblyPorts } from './worker-session-assembly-ports.js';
@@ -46,7 +51,7 @@ import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource
 import type { CommunicationPlatform } from '@duya/host/worker-prompts/types';
 import type { AgentRuntime } from '@duya/agent-runtime/turns/AgentRuntime';
 import { TurnAssembler } from '@duya/agent-runtime/turns/TurnAssembler';
-import type { TurnContext } from '@duya/agent-runtime/turns/TurnContext';
+import { TurnContext } from '@duya/agent-runtime/turns/TurnContext';
 import { permissionModeFromString } from '@duya/capabilities/permissions';
 import { buildPermissions } from '@duya/host/authorization/worker-permission-gate';
 import { normalizeCanUseToolDecision } from '@duya/agent-runtime/authorization/tool-invoke-decision';
@@ -191,6 +196,8 @@ export class WorkerSession implements AgentRuntime {
         }
         let turnAppState: AppState = {};
         const toolUseContext: ToolUseContext = {
+            checkoutControl: (command, beginSwitch) => this.controlCheckout(command, beginSwitch),
+            executionLocation: request.executionLocation ?? this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined),
             toolUseId: crypto.randomUUID(),
             abortController: abortController,
             getAppState: () => turnAppState,
@@ -235,6 +242,7 @@ export class WorkerSession implements AgentRuntime {
         const systemPrompt = this.refreshTurnSystemPrompt(request.systemPrompt);
         request.resolved.catalogView.currentRound = request.turn;
         const pipeline = this.buildTurnPipeline({
+            ...definedProperties({ executionLocation: request.executionLocation }),
             turn: request.turn,
             messages: request.messages,
             tools: request.tools,
@@ -449,6 +457,8 @@ export class WorkerSession implements AgentRuntime {
     }
     async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
         const { options, prompt, appliedProfile, publisher, turnContext } = request;
+        let replacement: RunTurnAssembly | undefined;
+        const executionLocation = this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined);
         const resolvedBase = await this._resolveTools(options, appliedProfile);
         const { registry, catalogView } = resolvedBase;
         let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
@@ -533,12 +543,19 @@ export class WorkerSession implements AgentRuntime {
         const projectTurnMessages = (): Message[] =>
             this._projectModelMessages('', { injectHookContexts: true }).messages;
         return {
-            resolved,
-            turnContext,
-            tools: resolvedTools,
-            canUseTool: guardedCanUseTool,
+            prepare: async () => {
+                if (replacement) { await replacement.prepare?.(); return; }
+                if (executionLocation.revision !== this.executionLocationFence.capture().revision) {
+                    const refreshed = new TurnContext({ ...turnContext, workingDirectory: this.workingDirectory ?? null });
+                    replacement = await this.beginTurnAssembly({ ...request, turnContext: refreshed });
+                }
+            },
+            get resolved() { return replacement?.resolved ?? resolved; },
+            get turnContext() { return replacement?.turnContext ?? turnContext; },
+            get tools() { return replacement?.tools ?? resolvedTools; },
+            canUseTool: (...args) => replacement ? replacement.canUseTool(...args) : guardedCanUseTool(...args),
             progressToolName,
-            systemPrompt,
+            get systemPrompt() { return replacement?.systemPrompt ?? systemPrompt; },
             projection: {
                 // LAZY on the messages half, and EAGER on the system half --
                 // but the system half is now CHEAP, because it no longer walks
@@ -549,7 +566,7 @@ export class WorkerSession implements AgentRuntime {
                 // nothing read it: the measured cost of the duplicate walk was
                 // ~30 ms of the first-token budget on every turn.
                 get systemPrompt(): string {
-                    return projectionSystemPrompt;
+                    return replacement?.projection.systemPrompt ?? projectionSystemPrompt;
                 },
                 get messages(): Message[] {
                     return projectTurnMessages();
@@ -557,12 +574,15 @@ export class WorkerSession implements AgentRuntime {
             },
             projectTurnMessages,
             refreshDeclaredTools: () => {
+                if (replacement) return replacement.refreshDeclaredTools();
                 declaredToolsForRequest = new Set(currentTools.map((t) => t.name));
                 return declaredToolsForRequest;
             },
             assemble: (input) => {
+                if (replacement) return replacement.assemble(input);
                 currentTools = input.tools;
                 const assembly = this.assembleTurn({
+                    executionLocation,
                     turn: input.turn,
                     systemPrompt: input.systemPrompt,
                     messages: input.messages,
@@ -879,6 +899,55 @@ export class WorkerSession implements AgentRuntime {
     private provider: 'anthropic' | 'openai' | 'ollama';
     private sessionId: string | undefined;
     private workingDirectory: string | undefined;
+    private readonly executionLocationFence = new ExecutionLocationFence(() => this.workingDirectory);
+    private pendingExecutionLocationSwitch: ExecutionLocationSwitch | undefined;
+
+    private checkoutRequest(command: SessionCheckoutCommand): Promise<SessionCheckoutResult> {
+        if (!this.sessionId) throw new Error('Checkout controls require a persisted session.');
+        return (this.assembly.checkoutControl ?? sessionDb.checkoutControl)(this.sessionId, command);
+    }
+
+    private async refreshCheckoutContext(cwd: string): Promise<void> {
+        await (this.assembly.refreshExecutionLocation ?? refreshLocationSkills)(cwd, this.sessionId);
+        await getAgentsMdManager().refreshForTask(cwd, this.projectHome);
+    }
+
+    private async controlCheckout(command: SessionCheckoutCommand, beginSwitch: () => ExecutionLocationSwitch): Promise<SessionCheckoutResult> {
+        if (backgroundAgentLifecycle.inFlightCount() > 0 || backgroundAgentLifecycle.hasActiveExecutions()) throw new Error('Finish background subagents before switching this worker execution context.');
+        const transition = beginSwitch();
+        this.pendingExecutionLocationSwitch = transition;
+        try {
+            const result = await this.checkoutRequest(command);
+            await this.refreshCheckoutContext(result.state.cwd);
+            transition.commit(() => { this.workingDirectory = result.state.cwd; });
+            this.pendingExecutionLocationSwitch = undefined;
+            return result;
+        } catch (error) {
+            try {
+                const current = await this.checkoutRequest({ action: 'status' });
+                if (current.state.pending) throw new Error('The checkout transition requires recovery.');
+                await this.refreshCheckoutContext(current.state.cwd);
+                transition.commit(() => { this.workingDirectory = current.state.cwd; });
+                this.pendingExecutionLocationSwitch = undefined;
+            } catch {
+                // An uncertain Host result keeps admission closed. A later
+                // chat start can restore the persisted cursor after recovery.
+                this.abortController?.abort('checkout_location_unconfirmed');
+            }
+            throw error;
+        }
+    }
+
+    async restoreExecutionLocation(): Promise<void> {
+        const result = await this.checkoutRequest({ action: 'status' });
+        if (result.state.pending) throw new Error('Recover the saved checkout transition before starting another run.');
+        if (result.state.revision === 0 && !this.pendingExecutionLocationSwitch) return;
+        await this.refreshCheckoutContext(result.state.cwd);
+        if (this.pendingExecutionLocationSwitch) {
+            this.pendingExecutionLocationSwitch.commit(() => { this.workingDirectory = result.state.cwd; });
+            this.pendingExecutionLocationSwitch = undefined;
+        } else this.setWorkingDirectory(result.state.cwd);
+    }
     private currentProjectId: (string | null) | undefined;
     private projectHome: string | undefined;
     private defaultWorkspaceDirectory: string | undefined;
@@ -2263,7 +2332,15 @@ export class WorkerSession implements AgentRuntime {
         return this.workingDirectory;
     }
     setWorkingDirectory(directory: string): void {
-        this.workingDirectory = directory;
+        if (directory === this.workingDirectory) return;
+        // Until run assembly can rebuild prompt, permissions and skills as one
+        // operation, changing only the directory during a run is unsafe.
+        if (this.abortController) {
+            throw new ExecutionLocationError('execution_context_run_active', 'Finish the current run before changing its execution directory.');
+        }
+        const snapshot = this.executionLocationFence.capture();
+        const transition = this.executionLocationFence.beginSwitch(snapshot.revision);
+        transition.commit(() => { this.workingDirectory = directory; });
     }
     setCurrentProjectId(projectId: string | null | undefined): void {
         this.currentProjectId = projectId ?? null;
