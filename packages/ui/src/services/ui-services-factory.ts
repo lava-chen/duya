@@ -27,6 +27,7 @@ import type {
   AgentRunRecord,
   CancelAgentRunResult,
   HostMessagePage,
+  HostMessageReadAllQuery,
   HostMessageReadQuery,
   HostPermissionRequest,
   HostPermissionRequestResolveInput,
@@ -92,6 +93,8 @@ export function createUiServices(options: CreateUiServicesOptions): UiServices {
         bridge.deleteSession(sessionId, expectedUpdatedAt),
       readMessages: (sessionId: SessionId, query?: HostMessageReadQuery): Promise<HostMessagePage> =>
         bridge.readMessages(sessionId, query),
+      readAllMessages: (sessionId: SessionId, query?: HostMessageReadAllQuery): Promise<HostMessagePage> =>
+        bridge.readAllMessages(sessionId, query),
     },
     runs: {
       listBySession: async (

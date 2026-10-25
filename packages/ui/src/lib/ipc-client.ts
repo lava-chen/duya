@@ -934,27 +934,26 @@ function hostSessionToThread(session: HostSessionRecord): Thread {
   }
 }
 
+/**
+ * The whole transcript of a session, read ONCE.
+ *
+ * The Host's paged read projects the ENTIRE transcript on every page, so a
+ * caller that pages to the end pays for the transcript once per page — on a
+ * 10k-message session that is 100 projections of 10k rows. The Host's whole
+ * read projects it once and hands back every row.
+ */
 async function readAllHostMessages(
   sessionId: string,
   services: NonNullable<ReturnType<typeof peekUiServices>>,
 ): Promise<Message[]> {
+  const page = await services.sessions.readAllMessages(sessionId as HostSessionRecord['id'], {
+    includeSuperseded: true,
+  })
   const messages: Message[] = []
-  let cursor: string | undefined
-  const cursors = new Set<string>()
-  do {
-    const page = await services.sessions.readMessages(sessionId as HostSessionRecord['id'], {
-      limit: 100,
-      includeSuperseded: true,
-      ...(cursor ? { cursor } : {}),
-    })
-    for (const item of page.messages) {
-      const message = hostMessageItemToMessage(item, sessionId)
-      if (message !== null) messages.push(message)
-    }
-    cursor = page.nextCursor ?? undefined
-    if (cursor !== undefined && cursors.has(cursor)) throw new Error('Host message pagination cursor repeated')
-    if (cursor !== undefined) cursors.add(cursor)
-  } while (cursor !== undefined)
+  for (const item of page.messages) {
+    const message = hostMessageItemToMessage(item, sessionId)
+    if (message !== null) messages.push(message)
+  }
   return messages
 }
 
