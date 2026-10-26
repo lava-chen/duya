@@ -56,6 +56,13 @@
   explicitly, forward `dispatchBotTurn`/`enqueueWakeItemForSession`, and reject
   `claimScheduledUserTurn` for migrated Bots. Preserve existing preemption,
   redrive, attachments, turn epochs and renderer event projections in that slice.
+- Delivery: [Draft PR #504](https://github.com/lava-chen/duya/pull/504),
+  implementation `e4c5019c0b83d3ffe1d1f5bfe1cfe1027a18f88a` on
+  `codex/bot-framework-s3b`. Final staged-source `typecheck:all` exit 0,
+  architecture exit 0, Bot boundary PASS and committed bundle FRESH.
+  No user data migrated; no production scheduler switched; no PR merged.
+  PR CI/review and prerequisite integration remain pending. Keep the worktree;
+  ignored `work/` contains local logs and dependency-isolation fixtures only.
 
 
 状态：active，设计已交付（draft PR #483 待 review）；S0 门禁与行为基线切片已实现并验证，待 PR review / CI · 负责人：Codex / root · 更新：2026-10-25
