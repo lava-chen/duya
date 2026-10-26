@@ -211,3 +211,18 @@ describe('forgetTierFact', () => {
     expect(listTierEntries(db, { tier: 'agent', agentProfileId: 'beta' })).toHaveLength(1);
   });
 });
+
+
+it('refuses writes and foreground forgets through a linked canonical file', () => {
+  const written = writeTierFact(db, duyaRoot, baseInput());
+  expect(written.success).toBe(true);
+  const relPath = written.success ? written.filePath! : '';
+  const victim = path.join(duyaRoot, 'unrelated.md');
+  fs.renameSync(path.join(duyaRoot, relPath), victim);
+  fs.symlinkSync(victim, path.join(duyaRoot, relPath));
+  const original = fs.readFileSync(victim, 'utf8');
+  expect(writeTierFact(db, duyaRoot, baseInput({ fact: 'changed' })).success).toBe(false);
+  expect(forgetTierFact(db, duyaRoot, baseInput({ action: 'forget' })).success).toBe(false);
+  expect(fs.readFileSync(victim, 'utf8')).toBe(original);
+  expect(readRecallRevisionSync(path.join(duyaRoot, 'memory'))).toBe(0);
+});

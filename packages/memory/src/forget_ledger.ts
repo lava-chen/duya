@@ -100,7 +100,7 @@ function normalizeLedgerPath(value: string | undefined): string | null {
   if (!trimmed || trimmed.startsWith('/')) return null;
   const segments = trimmed.split('/');
   for (const segment of segments) {
-    if (!segment || segment === '.' || segment === '..') return null;
+    if (!segment || segment === '.' || segment === '..' || /[:\0]/.test(segment)) return null;
   }
   return segments.join('/');
 }

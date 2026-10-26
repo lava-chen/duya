@@ -32,6 +32,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
+import { isCanonicalMemoryPath, resolveUnlinkedMemoryPath } from '@duya/memory/memory_paths';
 import { recordForgetSync } from '@duya/memory/forget_ledger';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
@@ -166,7 +167,8 @@ export function writeTierFact(
 
     const slug = factSlug(input.dedupeKey);
     const relPath = shardRelativePath(input, slug);
-    const absPath = path.join(duyaRoot, relPath);
+    const absPath = isCanonicalMemoryPath(relPath) ? resolveUnlinkedMemoryPath(duyaRoot, relPath) : null;
+    if (!absPath) throw new Error('unsafe canonical memory path');
 
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
@@ -246,7 +248,8 @@ export function forgetTierFact(
       return { success: true, outcome: 'not_found' };
     }
 
-    const absPath = path.join(duyaRoot, target.file_path);
+    const absPath = isCanonicalMemoryPath(target.file_path) ? resolveUnlinkedMemoryPath(duyaRoot, target.file_path) : null;
+    if (!absPath) throw new Error('unsafe canonical memory path');
     // Ledger first: a failure here must abort before the file is retired, so
     // the caller never sees "forgotten" with an unmoved recall revision. The
     // ledger also carries the retired path, which is what makes a crash in

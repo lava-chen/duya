@@ -110,6 +110,26 @@ describe('recoverForgottenMemories', () => {
     expect(parseCanonicalFile(path.join(duyaRoot, relPath))?.status).toBe('retired');
   });
 
+  it('does not retire a symbolic-link target during recovery', () => {
+    const written = writeTierFact(db, duyaRoot, baseInput());
+    const relPath = written.success ? written.filePath! : '';
+    const victim = path.join(duyaRoot, 'unrelated.md');
+    fs.renameSync(path.join(duyaRoot, relPath), victim);
+    fs.symlinkSync(victim, path.join(duyaRoot, relPath));
+    recordForgetSync(path.join(duyaRoot, 'memory'), [{ key: 'prefers concise answers', path: relPath }]);
+    const report = recoverForgottenMemories(db, duyaRoot);
+    expect(report.retired).toBe(0);
+    expect(parseCanonicalFile(victim)?.status).toBe('active');
+  });
+
+  it('ignores unrelated paths from a hand-edited ledger', () => {
+    const victim = path.join(duyaRoot, 'unrelated.md');
+    fs.writeFileSync(victim, 'status: active\n');
+    recordForgetSync(path.join(duyaRoot, 'memory'), [{ key: 'fact', path: 'unrelated.md' }]);
+    recoverForgottenMemories(db, duyaRoot);
+    expect(fs.readFileSync(victim, 'utf8')).toBe('status: active\n');
+  });
+
   it('does nothing when no forget was recorded', () => {
     writeTierFact(db, duyaRoot, baseInput());
     const report = recoverForgottenMemories(db, duyaRoot);

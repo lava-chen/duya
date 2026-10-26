@@ -33,7 +33,7 @@ import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import { parseCanonicalFile } from './canonical_file.js';
-import { withForgottenKeys } from './forget_ledger.js';
+import { readForgottenKeysSync, withForgottenKeys } from './forget_ledger.js';
 import { writeSystemLog } from './system_log.js';
 import {
   TASK_OUTCOMES,
@@ -754,14 +754,20 @@ export class Stage1Extractor {
     // 4b. Resolve existing canonical_keys for cross-session dedup (once —
     // identical across attempts). When existingKeysInput is undefined,
     // query the memory DB; when null, omit the keys section entirely.
+    const forgottenRoot = this.opts?.forgottenKeysRoot ?? this.opts?.memoryRoot;
+    const forgottenKeys = new Set(forgottenRoot ? readForgottenKeysSync(forgottenRoot) : []);
     let existingKeysSection = '';
     if (existingKeysInput !== null) {
-      const keys = existingKeysInput ?? this.queryExistingKeys();
+      const keys = (existingKeysInput ?? this.queryExistingKeys())
+        .filter((key) => !forgottenKeys.has(key.trim().toLowerCase()));
       if (keys.length > 0) {
         existingKeysSection = `Existing canonical keys (reuse if semantically equivalent):\n${keys.map((k) => `- ${k}`).join('\n')}\n\n`;
       }
     }
 
+    if (forgottenKeys.size > 0) {
+      existingKeysSection += `Forgotten canonical keys (never extract or restate these facts):\n${[...forgottenKeys].map((key) => `- ${key}`).join('\n')}\n\n`;
+    }
     const policy = await this.resolvePolicy();
     // The hard contract carries the full envelope + item schema (see
     // STAGE1_HARD_CONTRACT), so a non-empty policy yields a self-sufficient
@@ -908,6 +914,15 @@ export class Stage1Extractor {
       }
 
       return { status: 'succeeded_no_output', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
+    }
+
+    // Re-read AFTER inference: a user may forget while the model is running.
+    // Reject the whole candidate before either the summary or raw memory is
+    // persisted. Prompt instructions and existingKeys overrides are not gates.
+    const revoked = new Set(forgottenRoot ? readForgottenKeysSync(forgottenRoot) : []);
+    if (data.raw_memory.items.some((item) => revoked.has(item.canonical_key.trim().toLowerCase()))) {
+      fail(this.memoryDb, { rolloutId, token, error: 'forgotten-key' });
+      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'forgotten-key' };
     }
 
     // 8. succeeded path — the rollout_summary is a Markdown string produced

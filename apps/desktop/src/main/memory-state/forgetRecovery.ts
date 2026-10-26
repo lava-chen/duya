@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
 import { getLogger, LogComponent } from '../logging/logger';
+import { isCanonicalMemoryPath, resolveUnlinkedMemoryPath } from '@duya/memory/memory_paths';
 import { readForgetLedgerSync } from '@duya/memory/forget_ledger';
 import { removeTierEntryByPath } from './tierIndex';
 import { retireCanonicalFile } from './tierWriter';
@@ -52,7 +53,11 @@ export function recoverForgottenMemories(
   for (const entry of ledger.entries) {
     for (const relPath of entry.paths) {
       report.scanned += 1;
-      const absPath = path.join(duyaRoot, relPath);
+      const absPath = isCanonicalMemoryPath(relPath) ? resolveUnlinkedMemoryPath(duyaRoot, relPath) : null;
+      if (!absPath) {
+        logger.warn('Forget repair: unsafe canonical path skipped', { filePath: relPath }, LogComponent.Main);
+        continue;
+      }
       try {
         if (fs.existsSync(absPath) && retireCanonicalFile(absPath)) {
           report.retired += 1;

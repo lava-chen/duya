@@ -1,5 +1,53 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S5 independent review — 2026-10-26
+
+- Owner: Codex root, linked worktree `/workspace/work/bot-s5-review`, branch
+  `codex/bot-s5-review`, base #515 `9edc7c84`. Managed worktree/context and
+  CodeGraph tools unavailable; Git and versioned plan provide shared state.
+- Review scope: cross-Bot memory isolation, grant revocation/cache refresh,
+  write-ahead forget and startup recovery. No merge or production state change.
+- Plan: record affected baseline; reproduce symbolic-link boundary bypasses;
+  fix recall and repair path handling; test grant revocation and crash windows;
+  run type/architecture/build gates; retain evidence and deliver a draft PR.
+- Exclusive paths: memory path helper/ledger and tests, Host Bot memory readers
+  and tests, Stage 1 extractor, Desktop tier writer/forget recovery and tests,
+  worker bundle and plan docs.
+- Findings reproduced before fixes: three Host cases followed linked
+  files/directories/shard roots or state files; two repair cases modified linked
+  or unrelated files; two Stage 1 cases committed a forgotten canonical key,
+  including with `existingKeys: null` and forget during inference.
+- Fixed: shared path resolution rejects linked ancestors/files and hard links;
+  grant/membership readers and all recall tier scans use it. Foreground writes,
+  forget and recovery enforce canonical memory layouts. Ledger paths also reject
+  Windows drive syntax/NUL on every OS. Recovery leaves unsafe paths untouched.
+- Stage 1 no longer presents forgotten keys as reusable identities. It re-reads
+  tombstones after inference and rejects a matching normalized canonical key
+  before any output/projection write. This is an exact-key guarantee; semantic
+  paraphrases and already-folded summaries remain explicitly out of scope.
+- Validation (Linux / Node 24.19.0, base `9edc7c84` plus this review diff):
+  initial affected baseline 5 files / 46 tests passed, with extractor file-keys
+  blocked at collection by missing AI dist. Host dependency build passed;
+  subsequent defect reproductions failed 3/16 Host, 2/5 repair and 2/6 extractor
+  cases before fixes. Final affected regression: 44 files / 519 tests passed.
+  This uses real temporary files/SQLite and a scripted LLM, not a live account.
+- Architecture gate passed with no new violations and no baseline edits.
+  Worker bundle regenerated. Main/preload build passed. Full desktop build
+  attempted but blocked by unavailable Electron binary download. No live
+  Electron or packaged-app assertion is claimed.
+- Full `npm run typecheck:all` exited 0 on the final review source. The
+  already-declared picomatch types resolve through a private worktree overlay
+  to the prior task's private dependency install; no shared install was changed.
+- Delivery: preserve branch `codex/bot-s5-review` and its linked worktree;
+  publish only as a draft follow-up targeting `codex/bot-framework-s5` (#515).
+  Final bundle freshness is checked on the committed payload before publishing.
+  No merge is authorized. Next: review the follow-up, integrate the prerequisite
+  stack in order, then repeat Electron validation on a prepared runner.
+- Acceptance: ungranted memory cannot be read through file/directory links;
+  recovery cannot modify a linked or unrelated file; legitimate recall and
+  ordinary crash recovery remain intact. Adversarial concurrent filesystem
+  replacement is outside this path-check guarantee.
+
 ## S5 execution — 2026-10-26
 
 - Owner: root agent; isolated linked worktree `.claude/worktrees/bot-framework-s5`,
