@@ -74,6 +74,9 @@ export * from './session-ids.js';
 export * from './agent-dm.js';
 export * from './wake.js';
 export * from './pending-wakes.js';
+// Personal-bot framework S3a — the durable inbox / dispatch-receipt contract
+// that supersedes the pending-wake markers above (design doc §6, §10).
+export * from './bot-inbox-api.js';
 export * from './terminal-history.js';
 export * from './gateway-user-map.js';
 export * from './channel-persistence.js';

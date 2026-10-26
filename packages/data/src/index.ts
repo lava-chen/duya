@@ -6,6 +6,8 @@ export * from './database-host.js';
 export * from './database-owner-lock.js';
 export * from './sqlite-connection.js';
 export * from './run-store.js';
+// Personal-bot framework S3a — durable inbox + dispatch receipts.
+export * from './bot-inbox.js';
 export * from './core-stores.js';
 export * from './session-store.js';
 export * from './mailbox.js';

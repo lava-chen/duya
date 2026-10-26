@@ -186,6 +186,10 @@
     "./task-tool-names": {
       "types": "./dist/task-tool-names.d.ts",
       "import": "./dist/task-tool-names.js"
+    },
+    "./bot-inbox-api": {
+      "types": "./dist/bot-inbox-api.d.ts",
+      "import": "./dist/bot-inbox-api.js"
     }
   },
   "files": [
