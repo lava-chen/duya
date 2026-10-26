@@ -1,5 +1,63 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S3b execution — 2026-10-26
+
+- Owner: Codex root; branch `codex/bot-framework-s3b`; isolated worktree
+  `.claude/worktrees/bot-framework-s3b`; foundation `bf9b62c8` (S2) plus
+  `6c5d6229` (S3a), combined at `0a87a2f8`.
+- Existing PR review belongs to other agents. This branch does not update
+  #500, #502 or #503. Their fixes will be merged before integration.
+- Scope: dispatch-key admission in the existing Run owner, a fenced data
+  adapter over S3a tables, an opt-in Host inbox dispatcher and resident lifetime.
+  Desktop routing remains S3c; legacy scheduling stays unchanged by default.
+- Plan: record targeted baseline; implement admission and claim fencing; wire
+  headless dispatch/reconciliation and shutdown; test lost responses, restart,
+  stale claims and client disconnect; run repository gates and open a PR.
+- Acceptance: one dispatch key never sends a second execution; expired claims
+  cannot dispatch or mutate a new claim; a persisted terminal settles its input;
+  ambiguous reservations/running rows become explicit recovery obligations;
+  resident work survives the last client, then releases the Host when drained.
+- Tools: managed worktree / workspace context / CodeGraph tools unavailable;
+  isolated linked worktree and Git/PR/plan evidence used instead.
+- Environment: Linux, Node 24.19.0. A clean install found S2's missing
+  `@duya/bot` lock entry; independent dependencies are being prepared locally.
+  No existing PR branch was changed.
+- Implemented: opt-in `LocalHostHandle.botInputs`, scoped/fenced claim adapter,
+  dispatch admission in the existing Run owner, restart reconciliation, and
+  resident idle protection. An ambiguous start is a durable `recovery_required`
+  dead letter; it never starts a second executor. Legacy routing is untouched.
+- The isolated clean install also required declaring Host's existing Bot
+  dependency and the two missing workspace lock entries (16 additive lock
+  lines). This branch carries those prerequisites without changing #502.
+- Validation on the S3b dirty tree: `typecheck:all` exit 0;
+  `architecture:check` exit 0 with no new violations; Bot boundary PASS;
+  `electron:build` exit 0; worker bundle rebuilt. Full affected regression:
+  35 files / 239 tests passed, plus dispatcher 12/12 after correcting a test
+  that wrongly assumed ordering between different Bots (priority is per Bot).
+  The combined final coverage is 36 files / 251 tests. New tests: 15.
+  Final Host runtime subset: 4 files / 36 tests, exit 0. A refused start
+  without a reservation is retained once rather than retried forever.
+- Runtime evidence: a real child-process Run survives the last HTTP client
+  lease, reaches its durable terminal and releases the Host; a pending accepted
+  input executes once after a real Host restart. Provider calls are stubbed;
+  this is Host/process/persistence validation, not live-model or UI validation.
+- Test environment: writable isolated `os.homedir()` preload for fixtures;
+  Electron 44.9.1 archive verified against the package checksum after automatic
+  download failed. Build warned that bundled ripgrep could not be downloaded;
+  the build completed with its existing fallback. Raw logs stay in `work/`.
+- Next: publish the S3b draft on the combined S2/S3a foundation (base master
+  so PR CI runs), record its PR here, then integrate
+  the independently reviewed S1/S2/S3a heads before S3c transfers Desktop
+  scheduling ownership. Keep this worktree and all unmerged branches.
+- S3c entry points checked: Desktop owns an embedded `HostSessionHttpServer`
+  in `apps/desktop/src/main/cli/desktop-host-api.ts` and forwards execution via
+  `createDesktopRunExecutionApi`; it does not call `startLocalHost`. Do not open
+  a second database owner to enable this dispatcher. Transfer the Bot owner
+  explicitly, forward `dispatchBotTurn`/`enqueueWakeItemForSession`, and reject
+  `claimScheduledUserTurn` for migrated Bots. Preserve existing preemption,
+  redrive, attachments, turn epochs and renderer event projections in that slice.
+
+
 状态：active，设计已交付（draft PR #483 待 review）；S0 门禁与行为基线切片已实现并验证，待 PR review / CI · 负责人：Codex / root · 更新：2026-10-25
 分支：`plan/bot-framework-foundation` · worktree：`.claude/worktrees/bot-framework-plan` · base：`270ba52869b6414094e553dd7f9abde5a1e429f7` · owner：本会话 root
 

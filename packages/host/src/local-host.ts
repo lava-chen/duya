@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { parse } from '@iarna/toml';
 import {
   ChatTurnReviewStore,
+  BotDispatchStore,
   ChatTurnSuggestionStore,
   DatabaseHost,
   LegacyImport,
@@ -109,6 +110,10 @@ import { HostRunExecutionController } from './run-execution.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
 import { resolveProvider } from './worker-config/file-config.js';
 import type { HostRunExecutionLogger } from './run-execution.js';
+import { BotDispatcher, readBotPrompt } from './bot-dispatcher.js';
+import { isSafeBotId } from './config-agents/bot-id.js';
+import { readAgentsTable, readConfigTomlDocument } from './config-agents/config-file.js';
+import { isSoftDeletedConfigAgent } from './config-agents/agent-config-core.js';
 
 const HOST = '127.0.0.1';
 const DEFAULT_PORT = 0;
@@ -162,6 +167,12 @@ export interface LocalHostRuntime {
 }
 
 export interface StartLocalHostOptions {
+  /** Opt-in S3b inbox only. Desktop/legacy wake routing is migrated in S3c. */
+  readonly botRuntime?: {
+    readonly ownerId: string;
+    readonly pollIntervalMs?: number;
+    readonly leaseMs?: number;
+  };
   readonly dataRoot?: string;
   readonly databasePath?: string;
   readonly rolloutRoot?: string;
@@ -232,6 +243,8 @@ export interface StartLocalHostOptions {
 }
 
 export interface LocalHostHandle {
+  /** Trusted in-process admission for verified inputs; no client-supplied policy. */
+  readonly botInputs?: BotDispatcher;
   readonly origin: string;
   readonly port: number;
   /** Defined when the Host was started with a stable token; undefined in ephemeral mode. */
@@ -424,6 +437,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
    * only the idle path passes one, an explicit close stops right now.
    */
   let shutdownHost: ((drainTimeoutMs?: number) => Promise<void>) | null = null;
+  let botDispatcher: BotDispatcher | undefined;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -657,6 +671,42 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       });
     }
 
+    if (options.botRuntime !== undefined) {
+      if (!runExecution) throw new Error('Bot runtime requires a worker entry');
+      const readBot = async (botId: string) => {
+        if (!isSafeBotId(botId)) throw new Error('Invalid bot id');
+        const agents = readAgentsTable(await readConfigTomlDocument(path.join(dataRoot, 'config.toml')));
+        const bot = agents[botId];
+        if (!bot || isSoftDeletedConfigAgent(bot)) throw new Error('Bot does not exist or is deleted');
+        return bot;
+      };
+      botDispatcher = new BotDispatcher({
+        ...options.botRuntime,
+        store: new BotDispatchStore(core.database.db),
+        runs: core.stores.runs,
+        execution: runExecution,
+        validateBot: async (id) => { await readBot(id); },
+        resolveInput: async (entry) => {
+          const bot = await readBot(entry.botId);
+          const sessionId = `bot:${entry.botId}`;
+          const existing = core.stores.sessions.get(sessionId);
+          if (existing && (existing.agentType !== 'bot' || existing.agentProfileId !== entry.botId)) {
+            throw new Error('Bot session identity mismatch');
+          }
+          if (!existing) core.stores.sessions.create({
+            id: sessionId, title: bot.name ?? entry.botId,
+            workingDirectory: bot.workspace ?? dataRoot,
+            agentType: 'bot', agentProfileId: entry.botId,
+            ...(bot.model ? { model: bot.model } : {}),
+            ...(bot.provider ? { providerId: bot.provider } : {}),
+          });
+          return { sessionId: sessionId as import('@duya/agent-protocol').SessionId,
+            prompt: readBotPrompt(entry.payloadJson) };
+        },
+        logger: executionLogger,
+      });
+    }
+
     // Plan 621: the checkout / integration namespaces, assembled once so the
     // headless Host and the Desktop's embedded Host answer the same way.
     const workspaceLifecycle = createHostWorkspaceLifecycleApis({
@@ -815,6 +865,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       ...(options.clientScoped === true
         ? {
             clientLease: {
+              hasResidentWork: () => botDispatcher?.hasWork() ?? false,
               ...(options.clientLeaseIdleTimeoutMs === undefined
                 ? {}
                 : { idleTimeoutMs: options.clientLeaseIdleTimeoutMs }),
@@ -826,6 +877,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         : {}),
     });
     await server.listen();
+    botDispatcher?.start();
     runtime = {
       apiVersion: 1,
       host: HOST,
@@ -841,7 +893,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       if (closed) return;
       closed = true;
       try {
-        await server?.close();
+        try { await botDispatcher?.close(); }
+        finally { await server?.close(); }
       } finally {
         // Stop supervised workers before the database handles they were
         // writing through the bridge disappear underneath them.
@@ -887,9 +940,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         ? { diagnosticsLogPath: resolveHostDiagnosticsLogPath(dataRoot) }
         : {}),
       close: shutdownHost,
+      ...(botDispatcher ? { botInputs: botDispatcher } : {}),
     };
   } catch (error) {
-    try { await server?.close(); } finally {
+    try { await botDispatcher?.close(); await server?.close(); } finally {
       databaseHost.close();
       if (!options.ephemeral) removeOwnedFile(lockPath, (value) => value.pid === process.pid);
     }

@@ -489,6 +489,8 @@ export interface HostSessionHttpServerOptions {
    * service that runs until somebody stops it — the foreground `duya serve`.
    */
   readonly clientLease?: {
+    /** Resident work delays idle notification; checked again on every poll. */
+    readonly hasResidentWork?: () => boolean;
     readonly idleTimeoutMs?: number;
     readonly onIdle: () => void;
   };
@@ -742,6 +744,7 @@ export class HostSessionHttpServer {
     if (tracker === null || lease === undefined) return;
     if (this.#clientIdleReported) return;
     if (!tracker.isIdle()) return;
+    if (lease.hasResidentWork?.()) return;
     this.#clientIdleReported = true;
     lease.onIdle();
   }
