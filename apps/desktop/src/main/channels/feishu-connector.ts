@@ -36,7 +36,8 @@ function mediaNameFromTempExt(fallbackName: string, localPath: string): string {
 
 export interface FeishuConnectorOptions {
   agentId: string;
-  onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void | Promise<void>;
+  ackAfterHandling?: () => boolean;
   /**
    * Optional inbound gating parsed from connection.json. The deep Feishu
    * adapter already mention-gates groups and filters senders by
@@ -54,7 +55,8 @@ export interface FeishuConnectorOptions {
  */
 export class FeishuChannelConnector {
   private readonly agentId: string;
-  private readonly onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  private readonly onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void | Promise<void>;
+  private readonly ackAfterHandling?: () => boolean;
   private readonly filter: InboundFilterConfig | null;
   private channel: FeishuChannel | null = null;
   private running = false;
@@ -62,6 +64,7 @@ export class FeishuChannelConnector {
   constructor(opts: FeishuConnectorOptions) {
     this.agentId = opts.agentId;
     this.onInbound = opts.onInbound;
+    this.ackAfterHandling = opts.ackAfterHandling;
     this.filter = opts.filter ?? null;
   }
 
@@ -112,7 +115,7 @@ export class FeishuChannelConnector {
       // the adapter's own filtering (sender allowlist; group mention gate is
       // always on unless groupPolicy 'all' frees every chat).
       allowedUsers: this.filter?.allowedUsers,
-      groupPolicy: undefined,
+      groupPolicy: this.filter?.groupPolicy === 'off' ? 'disabled' : undefined,
       webhook: undefined,
       freeResponseChatIds: this.filter?.groupPolicy === 'all' ? ['*'] : undefined,
       verbose: false,
@@ -120,31 +123,37 @@ export class FeishuChannelConnector {
 
     const options: FeishuAdapterOptions = {
       config,
+      ackAfterHandling: this.ackAfterHandling,
       onMessage: async (chatId, userId, text, msgId) => {
-        this.inbound({
+        await this.inbound({
+          sourceEventId: msgId,
           address: { platform: 'feishu', chat: chatId },
           sender: userId,
           text,
           reaction: null,
         });
-        void msgId;
+      },
+      onThreadMessage: async (_threadId, chatId, userId, text, msgId) => {
+        await this.inbound({ sourceEventId: msgId, address: { platform: 'feishu', chat: chatId },
+          sender: userId, text, reaction: null });
       },
       onImageMessage: async (chatId, userId, _imageKey, _messageId, localPath) => {
-        await this.inboundMedia(chatId, userId, localPath, 'image', 'photo.jpg');
+        await this.inboundMedia(chatId, userId, localPath, 'image', 'photo.jpg', _messageId);
       },
       onFileMessage: async (chatId, userId, _fileKey, fileName, _messageId, localPath) => {
-        await this.inboundMedia(chatId, userId, localPath, 'file', fileName);
+        await this.inboundMedia(chatId, userId, localPath, 'file', fileName, _messageId);
       },
       onAudioMessage: async (chatId, userId, _audioKey, _duration, _messageId, localPath) => {
-        await this.inboundMedia(chatId, userId, localPath, 'audio', 'voice.ogg');
+        await this.inboundMedia(chatId, userId, localPath, 'audio', 'voice.ogg', _messageId);
       },
-      onPostMessage: async (chatId, userId, title) => {
-        const text = title?.trim() ? title.trim() : '[rich text]';
-        this.inbound({ address: { platform: 'feishu', chat: chatId }, sender: userId, text, reaction: null });
+      onPostMessage: async (chatId, userId, title, paragraphs, messageId) => {
+        const text = [title?.trim(), ...paragraphs.map((line) => line.map((part) => part.text ?? part.href ?? '').join(''))].filter(Boolean).join('\n') || '[rich text]';
+        await this.inbound({ sourceEventId: messageId, address: { platform: 'feishu', chat: chatId }, sender: userId, text, reaction: null });
       },
       onCardAction: async () => {},
-      onReactionAdded: async (messageId, emojiType, userId, chatId) => {
-        this.inbound({
+      onReactionAdded: async (messageId, emojiType, userId, chatId, eventId) => {
+        await this.inbound({
+          ...(eventId ? { sourceEventId: eventId } : {}),
           address: { platform: 'feishu', chat: chatId },
           sender: userId,
           text: '',
@@ -156,7 +165,7 @@ export class FeishuChannelConnector {
       onMemberAdded: async () => {},
       onMemberRemoved: async () => {},
       onMessageRecalled: async () => {},
-    } as unknown as FeishuAdapterOptions;
+    };
 
     this.channel = createFeishuChannel(options);
     try {
@@ -196,9 +205,11 @@ export class FeishuChannelConnector {
     localPath: string | undefined,
     kind: 'image' | 'file' | 'audio',
     fallbackName: string,
+    sourceEventId: string,
   ): Promise<void> {
     if (!localPath) {
-      this.inbound({
+      await this.inbound({
+        sourceEventId,
         address: { platform: 'feishu', chat: chatId },
         sender: userId,
         text: kind === 'file' ? `[file: ${fallbackName}]` : kind === 'image' ? '[image]' : '[voice]',
@@ -218,7 +229,8 @@ export class FeishuChannelConnector {
     if (result.attachment) {
       // Persisted — drop the placeholder; Feishu media messages carry no
       // caption text of their own, so the attachment is the whole payload.
-      this.inbound({
+      await this.inbound({
+        sourceEventId,
         address: { platform: 'feishu', chat: chatId },
         sender: userId,
         text: '',
@@ -228,7 +240,8 @@ export class FeishuChannelConnector {
       return;
     }
 
-    this.inbound({
+    await this.inbound({
+      sourceEventId,
       address: { platform: 'feishu', chat: chatId },
       sender: userId,
       text: `[attachment skipped: ${result.skippedReason ?? 'persist failed'}]`,
@@ -236,7 +249,7 @@ export class FeishuChannelConnector {
     });
   }
 
-  private inbound(envelope: ChannelInboundEnvelope): void {
+  private async inbound(envelope: ChannelInboundEnvelope): Promise<void> {
     logger.info('Feishu connector: inbound message', {
       agentId: this.agentId,
       chat: envelope.address.chat,
@@ -244,6 +257,6 @@ export class FeishuChannelConnector {
       hasReaction: Boolean(envelope.reaction),
       hasAttachments: Boolean(envelope.attachments?.length),
     }, LogComponent.Gateway);
-    this.onInbound(this.agentId, envelope);
+    await this.onInbound(this.agentId, envelope);
   }
 }

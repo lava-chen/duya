@@ -96,13 +96,17 @@ entry points. Its shared architecture separates these layers:
 Bot channel replies for Host-owned Bots use `BotChannels` and the core-db
 `BotOutboxStore` (migration 48), alongside the existing inbox and Run tables.
 The existing SendMessage execution path submits explicit replies through the
-fenced worker bridge; ordinary assistant text stays private. Input settlement
+fenced worker bridge; ordinary assistant text remains private. Input settlement
 and release of delivery obligations commit atomically after Run terminal persistence. A fenced
 `sending` claim precedes transport I/O. A lost reply or expired send becomes
 `unknown`; only provider evidence can reconcile it, with no automatic resend.
 Vault credentials remain inside platform adapters. Desktop's read-only delivery
 IPC and receipt cards project this store; SSE completion is not delivery evidence.
 Telegram admission awaits its per-update inbox receipt before advancing offset.
+Feishu uses the same inbox/outbox ports and a separate Host transport. Managed
+Feishu WebSocket/webhook consumers acknowledge after asynchronous admission;
+multipart ACKs and signed failure retries preserve the provider recovery window.
+Their per-binding inbox replaces the old global message-ID cache for dedup.
 This path is opt-in through S3c scheduler ownership; legacy channel retirement
 remains S7.
 
