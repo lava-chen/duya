@@ -31291,9 +31291,98 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/config-agents/bot-id.ts": {
-      "bytes": 1792,
+    "packages/bot/src/domain/bot-id.ts": {
+      "bytes": 1914,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/profile.ts": {
+      "bytes": 1901,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/rules.ts": {
+      "bytes": 6311,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/bot-id.ts",
+          "kind": "import-statement",
+          "original": "./bot-id.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/errors.ts": {
+      "bytes": 776,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/journal/journal.ts": {
+      "bytes": 10257,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/application/service.ts": {
+      "bytes": 12943,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/rules.ts",
+          "kind": "import-statement",
+          "original": "../domain/rules.js"
+        },
+        {
+          "path": "packages/bot/src/domain/errors.ts",
+          "kind": "import-statement",
+          "original": "../domain/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/index.ts": {
+      "bytes": 3544,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/bot-id.ts",
+          "kind": "import-statement",
+          "original": "./domain/bot-id.js"
+        },
+        {
+          "path": "packages/bot/src/domain/profile.ts",
+          "kind": "import-statement",
+          "original": "./domain/profile.js"
+        },
+        {
+          "path": "packages/bot/src/domain/rules.ts",
+          "kind": "import-statement",
+          "original": "./domain/rules.js"
+        },
+        {
+          "path": "packages/bot/src/domain/errors.ts",
+          "kind": "import-statement",
+          "original": "./domain/errors.js"
+        },
+        {
+          "path": "packages/bot/src/journal/journal.ts",
+          "kind": "import-statement",
+          "original": "./journal/journal.js"
+        },
+        {
+          "path": "packages/bot/src/application/service.ts",
+          "kind": "import-statement",
+          "original": "./application/service.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/config-agents/bot-id.ts": {
+      "bytes": 608,
+      "imports": [
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/config-agents/bot-paths.ts": {
@@ -31317,8 +31406,29 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/config-agents/config-file.ts": {
+      "bytes": 11569,
+      "imports": [
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "kind": "import-statement",
+          "original": "@iarna/toml"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/config-agents/bot-profile.ts": {
-      "bytes": 4507,
+      "bytes": 4253,
       "imports": [
         {
           "path": "node:fs",
@@ -31329,12 +31439,17 @@
           "path": "node:path",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/config-agents/agent-config-core.ts": {
-      "bytes": 7978,
+      "bytes": 5359,
       "imports": [
         {
           "path": "node:crypto",
@@ -31365,33 +31480,69 @@
           "path": "packages/host/src/config-agents/bot-profile.ts",
           "kind": "import-statement",
           "original": "./bot-profile.js"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
     },
-    "packages/host/src/config-agents/config-file.ts": {
-      "bytes": 11569,
+    "packages/host/src/bot/toml-config-store.ts": {
+      "bytes": 1391,
       "imports": [
         {
-          "path": "node:fs/promises",
+          "path": "node:fs",
           "kind": "import-statement",
           "external": true
         },
         {
-          "path": "node:path",
+          "path": "packages/host/src/config-agents/config-file.ts",
           "kind": "import-statement",
-          "external": true
+          "original": "../config-agents/config-file.js"
         },
         {
-          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "path": "packages/host/src/config-agents/agent-config-core.ts",
           "kind": "import-statement",
-          "original": "@iarna/toml"
+          "original": "../config-agents/agent-config-core.js"
         }
       ],
       "format": "esm"
     },
-    "packages/host/src/bot/journal.ts": {
-      "bytes": 8698,
+    "packages/host/src/bot/fs-profile-store.ts": {
+      "bytes": 1370,
+      "imports": [
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-profile.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-profile.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-paths.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-paths.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/agent-config-core.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/file-journal.ts": {
+      "bytes": 3238,
       "imports": [
         {
           "path": "node:fs",
@@ -31402,15 +31553,20 @@
           "path": "node:path",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/bot/service.ts": {
-      "bytes": 16651,
+      "bytes": 3656,
       "imports": [
         {
-          "path": "node:fs",
+          "path": "node:crypto",
           "kind": "import-statement",
           "external": true
         },
@@ -31425,14 +31581,9 @@
           "original": "@duya/data/data-paths"
         },
         {
-          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "path": "packages/bot/src/index.ts",
           "kind": "import-statement",
-          "original": "../config-agents/agent-config-core.js"
-        },
-        {
-          "path": "packages/host/src/config-agents/bot-profile.ts",
-          "kind": "import-statement",
-          "original": "../config-agents/bot-profile.js"
+          "original": "@duya/bot"
         },
         {
           "path": "packages/host/src/config-agents/bot-paths.ts",
@@ -31440,19 +31591,24 @@
           "original": "../config-agents/bot-paths.js"
         },
         {
-          "path": "packages/host/src/config-agents/bot-id.ts",
+          "path": "packages/host/src/bot/toml-config-store.ts",
           "kind": "import-statement",
-          "original": "../config-agents/bot-id.js"
+          "original": "./toml-config-store.js"
         },
         {
-          "path": "packages/host/src/config-agents/config-file.ts",
+          "path": "packages/host/src/bot/fs-profile-store.ts",
           "kind": "import-statement",
-          "original": "../config-agents/config-file.js"
+          "original": "./fs-profile-store.js"
         },
         {
-          "path": "packages/host/src/bot/journal.ts",
+          "path": "packages/host/src/bot/file-journal.ts",
           "kind": "import-statement",
-          "original": "./journal.js"
+          "original": "./file-journal.js"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
@@ -39815,10 +39971,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -44542,11 +44698,20 @@
         "packages/host/src/bot/service.ts": {
           "bytesInOutput": 5
         },
+        "packages/bot/src/index.ts": {
+          "bytesInOutput": 0
+        },
         "packages/host/src/config-agents/bot-paths.ts": {
           "bytesInOutput": 5
         },
+        "packages/host/src/config-agents/bot-id.ts": {
+          "bytesInOutput": 0
+        },
         "packages/host/src/config-agents/config-file.ts": {
           "bytesInOutput": 19
+        },
+        "packages/host/src/config-agents/agent-config-core.ts": {
+          "bytesInOutput": 0
         },
         "packages/host/src/ipc-message-adapters.ts": {
           "bytesInOutput": 10
@@ -45200,7 +45365,11 @@
           "bytesInOutput": 26
         }
       },
+<<<<<<< HEAD
       "bytes": 4728631
+=======
+      "bytes": 4724804
+>>>>>>> e2996f55 (build(host): rebuild the worker bundle for the bot package)
     }
   }
 }
