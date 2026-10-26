@@ -472,6 +472,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/bot-api.ts": {
+      "bytes": 4127,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/gateway-directory.ts": {
       "bytes": 480,
       "imports": [],
@@ -615,7 +620,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5375,
+      "bytes": 5406,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -851,6 +856,11 @@
           "path": "packages/agent-protocol/src/agent-profiles.ts",
           "kind": "import-statement",
           "original": "./agent-profiles.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/bot-api.ts",
+          "kind": "import-statement",
+          "original": "./bot-api.js"
         },
         {
           "path": "packages/agent-protocol/src/gateway-directory.ts",
@@ -22398,7 +22408,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -31282,7 +31292,7 @@
       "format": "esm"
     },
     "packages/host/src/idle-shutdown.ts": {
-      "bytes": 4288,
+      "bytes": 4404,
       "imports": [],
       "format": "esm"
     },
@@ -31385,9 +31395,30 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/config-agents/config-agents-api.ts": {
-      "bytes": 5570,
+    "packages/host/src/bot/journal.ts": {
+      "bytes": 8698,
       "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/service.ts": {
+      "bytes": 16651,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
         {
           "path": "node:path",
           "kind": "import-statement",
@@ -31401,12 +31432,43 @@
         {
           "path": "packages/host/src/config-agents/agent-config-core.ts",
           "kind": "import-statement",
-          "original": "./agent-config-core.js"
+          "original": "../config-agents/agent-config-core.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-profile.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-profile.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-paths.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-paths.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-id.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-id.js"
         },
         {
           "path": "packages/host/src/config-agents/config-file.ts",
           "kind": "import-statement",
-          "original": "./config-file.js"
+          "original": "../config-agents/config-file.js"
+        },
+        {
+          "path": "packages/host/src/bot/journal.ts",
+          "kind": "import-statement",
+          "original": "./journal.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/bridge-assembly.ts": {
+      "bytes": 1989,
+      "imports": [
+        {
+          "path": "packages/host/src/bot/service.ts",
+          "kind": "import-statement",
+          "original": "./service.js"
         }
       ],
       "format": "esm"
@@ -31438,7 +31500,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 64996,
+      "bytes": 67616,
       "imports": [
         {
           "path": "node:crypto",
@@ -31481,9 +31543,9 @@
           "original": "./local-plugin-registry-api.js"
         },
         {
-          "path": "packages/host/src/config-agents/config-agents-api.ts",
+          "path": "packages/host/src/bot/bridge-assembly.ts",
           "kind": "import-statement",
-          "original": "./config-agents/config-agents-api.js"
+          "original": "./bot/bridge-assembly.js"
         },
         {
           "path": "packages/host/src/ipc-message-adapters.ts",
@@ -39784,9 +39846,12 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1955
+          "bytesInOutput": 1968
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/bot-api.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/gateway-directory.ts": {
@@ -39865,7 +39930,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 451
+          "bytesInOutput": 457
         },
         "packages/data/src/run-store.ts": {
           "bytesInOutput": 7340
@@ -39982,7 +40047,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -41575,7 +41640,7 @@
           "bytesInOutput": 4260
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "packages/agent-core/src/run-outcome.ts": {
           "bytesInOutput": 937
@@ -41758,7 +41823,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -43582,7 +43647,7 @@
           "bytesInOutput": 2783
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 702
+          "bytesInOutput": 708
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -44484,7 +44549,7 @@
         "packages/host/src/worker-db-bridge.ts": {
           "bytesInOutput": 25
         },
-        "packages/host/src/config-agents/config-agents-api.ts": {
+        "packages/host/src/bot/service.ts": {
           "bytesInOutput": 5
         },
         "packages/host/src/config-agents/bot-paths.ts": {
@@ -45145,7 +45210,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4728676
+      "bytes": 4728719
     }
   }
 }

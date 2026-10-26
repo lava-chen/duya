@@ -95,6 +95,14 @@
       "types": "./dist/agent-profiles.d.ts",
       "import": "./dist/agent-profiles.js"
     },
+
+    "./bot-api": {
+
+      "types": "./dist/bot-api.d.ts",
+
+      "import": "./dist/bot-api.js"
+
+    },
     "./gateway-directory": {
       "types": "./dist/gateway-directory.d.ts",
       "import": "./dist/gateway-directory.js"

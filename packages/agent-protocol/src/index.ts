@@ -79,6 +79,7 @@ export * from './gateway-user-map.js';
 export * from './channel-persistence.js';
 export * from './channels.js';
 export * from './agent-profiles.js';
+export * from './bot-api.js';
 export * from './gateway-directory.js';
 export * from './gateway-allowlist.js';
 export * from './gateway-message-mirror.js';

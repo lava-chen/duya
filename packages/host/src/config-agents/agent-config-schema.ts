@@ -83,6 +83,13 @@ export interface CustomAgentConfig {
   /** Bot system-prompt section config. Preserved as-is on upsert. */
   prompt?: CustomAgentPromptConfig | undefined;
   /**
+   * Optimistic-concurrency token of this identity entry (framework plan S1).
+   * 1 on a facade create, +1 per facade update; undefined means the entry was
+   * written by a pre-facade path and reads as revision 0. Not bumped by
+   * non-facade writers — the facade is the only revision authority.
+   */
+  revision?: number | undefined;
+  /**
    * Soft-delete timestamp in Unix ms. When set, the agent is in the
    * soft-deleted state — its tree lives under
    * `<agentsDir>/.deleted/<deletedAt>-<id>/` and it is filtered out of the
