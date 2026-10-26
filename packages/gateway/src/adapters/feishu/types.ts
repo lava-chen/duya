@@ -341,6 +341,8 @@ export interface PairingState {
 
 export interface FeishuAdapterOptions {
   config: FeishuConfig;
+  /** Opt-in durable consumer: callback success precedes transport acknowledgement. */
+  ackAfterHandling?: () => boolean;
   onMessage: (chatId: string, userId: string, text: string, messageId: string, threadId?: string, mentions?: FeishuMention[]) => Promise<void>;
   /**
    * Inbound image message. `localPath` carries the channel's best-effort
@@ -362,7 +364,7 @@ export interface FeishuAdapterOptions {
   onAudioMessage: (chatId: string, userId: string, audioKey: string, duration: number, messageId: string, localPath?: string) => Promise<void>;
   onPostMessage: (chatId: string, userId: string, title: string, paragraphs: FeishuPostParagraph[][], messageId: string) => Promise<void>;
   onCardAction: (action: FeishuCardAction, chatId: string) => Promise<void>;
-  onReactionAdded: (messageId: string, emojiType: string, userId: string, chatId: string) => Promise<void>;
+  onReactionAdded: (messageId: string, emojiType: string, userId: string, chatId: string, eventId?: string) => Promise<void>;
   onReactionRemoved: (messageId: string, emojiType: string, userId: string, chatId: string) => Promise<void>;
   onMemberAdded: (chatId: string, userIds: string[]) => Promise<void>;
   onMemberRemoved: (chatId: string, userId: string) => Promise<void>;

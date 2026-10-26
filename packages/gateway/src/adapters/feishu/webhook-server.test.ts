@@ -32,6 +32,7 @@ async function start(
     path?: string;
     /** Override the event sink, e.g. to make it throw. */
     onEvent?: (event: unknown) => Promise<void>;
+    ackAfterHandling?: () => boolean;
   } = {},
 ): Promise<Harness> {
   const received: unknown[] = [];
@@ -42,6 +43,7 @@ async function start(
     path: opts.path ?? PATH,
     verificationToken: opts.verificationToken,
     encryptKey: opts.encryptKey,
+    ackAfterHandling: opts.ackAfterHandling,
     onEvent: (opts.onEvent ?? (async (event: unknown) => { received.push(event); })) as (
       event: never,
     ) => Promise<void>,
@@ -356,6 +358,26 @@ describe('encryptKey signature verification', () => {
 });
 
 describe('post-ack dispatch failures (ISS-50)', () => {
+  it('returns a retryable failure when an opted-in durable consumer cannot commit', async () => {
+    const accept = vi.fn().mockRejectedValueOnce(new Error('storage_unavailable')).mockResolvedValue(undefined);
+    const h = await start({ verificationToken: TOKEN, ackAfterHandling: () => true, onEvent: accept });
+    const request = { headers: { 'X-Lark-Request-Token': TOKEN }, body: { type: 'event_callback' } };
+    expect((await post(h, request)).status).toBe(500);
+    expect((await post(h, request)).status).toBe(200);
+    expect(accept).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows the identical signed provider retry after durable admission failure', async () => {
+    const accept = vi.fn().mockRejectedValueOnce(new Error('storage_unavailable')).mockResolvedValue(undefined);
+    const h = await start({ verificationToken: TOKEN, encryptKey: ENCRYPT_KEY, ackAfterHandling: () => true, onEvent: accept });
+    const raw = JSON.stringify({ type: 'event_callback' });
+    const request = { raw, headers: signed({ body: raw }, 'retry-nonce', Math.floor(Date.now() / 1000)) };
+    expect((await post(h, request)).status).toBe(500);
+    expect((await post(h, request)).status).toBe(200);
+    expect((await post(h, request)).status).toBe(401);
+    expect(accept).toHaveBeenCalledTimes(2);
+  });
+
   // The ack is sent before onEvent runs, so the request handler's catch is
   // already past its `!res.headersSent` branch by the time the adapter can
   // throw. That made every dispatch failure invisible: Feishu saw 200, the

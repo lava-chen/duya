@@ -230,7 +230,7 @@ async function routeInboundToBot(agentId: string, envelope: ChannelInboundEnvelo
       LogComponent.Gateway,
     );
   }
-  if (envelope.address.platform === 'telegram' && getDesktopBotSchedulerState(agentId).mode === 'host') {
+  if (['telegram', 'feishu'].includes(envelope.address.platform) && getDesktopBotSchedulerState(agentId).mode === 'host') {
     const receipt = await acceptDesktopBotChannel(agentId, envelope);
     if (!receipt.deduplicated) {
       const { appendInboundChannelMarker } = await import('../wake/channels');
@@ -325,6 +325,7 @@ class BotConnectorManager {
       case 'feishu': {
         const connector = new FeishuChannelConnector({
           agentId,
+          ackAfterHandling: () => getDesktopBotSchedulerState(agentId).mode === 'host',
           onInbound: routeInboundToBot,
           filter: readChannelInboundFilter(agentId, 'feishu'),
         });

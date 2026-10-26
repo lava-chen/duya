@@ -9,6 +9,7 @@ interface WebhookServerOptions {
   verificationToken?: string;
   encryptKey?: string;
   onEvent: (event: FeishuEvent) => Promise<void>;
+  ackAfterHandling?: () => boolean;
   /** Rejection diagnostics. Rejections were previously silent. */
   onLog?: (message: string, detail?: Record<string, unknown>) => void;
 }
@@ -264,6 +265,7 @@ export class FeishuWebhookServer {
         });
 
         req.on('end', async () => {
+          let awaitingAdmission = false;
           try {
             const rawBody = Buffer.concat(bodyChunks).toString('utf-8');
 
@@ -302,11 +304,22 @@ export class FeishuWebhookServer {
               return;
             }
 
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ code: 0 }));
-
-            await this._dispatch(body);
+            if (this._options.ackAfterHandling?.()) {
+              awaitingAdmission = true;
+              await this._options.onEvent(body);
+              awaitingAdmission = false;
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ code: 0 }));
+            } else {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ code: 0 }));
+              await this._dispatch(body);
+            }
           } catch (err) {
+            if (awaitingAdmission) {
+              // A failed commit must allow the provider's identical signed retry.
+              this._seenNonces.delete(header(req, 'x-lark-request-nonce'));
+            }
             this._onLog('feishu webhook request failed', {
               path: requestPath,
               error: err instanceof Error ? err.message : String(err),

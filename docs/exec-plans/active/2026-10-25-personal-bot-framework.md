@@ -2,11 +2,6 @@
 
 ## S4 execution — 2026-10-26
 
-- Delivery: draft PR #509; shared follow-up preserves SendMessage semantics,
-  captured attempt fencing and pending-versus-delivered receipts. Host Feishu
-  adapter conformance is exercised here; Desktop Feishu activation and ACK
-  recovery remain the separate platform continuation. No PR is merged.
-
 - Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,
   branch `codex/bot-framework-s4`, base S3c `aaa78d44`. Existing PRs remain unchanged.
 - Plan: establish the affected baseline; add core-db outbox and atomic terminal
@@ -27,9 +22,10 @@
   replacement/revocation invalidates queued targets. Ownership transfer refuses
   unresolved deliveries. Existing legacy scheduling remains the default.
 - Channel replies use explicit SendMessage submissions captured with their Run
-  attempt. They queue durably and are released by atomic terminal settlement.
-  Plain assistant text stays private. Missing replies are blocked obligations,
-  identical submissions reuse a receipt, and distinct replies retain order.
+  attempt. They are queued durably and released by terminal input settlement.
+  Plain assistant text remains private; if no SendMessage was submitted, the Host
+  records a blocked missing-reply obligation. Repeated identical
+  submissions reuse the same receipt, and distinct messages retain their order.
   Legacy non-channel turns keep their existing delivery path (retirement is S7).
   Unsupported/oversized output is a visible blocked obligation, never a partial
   send reported as complete. Telegram text is limited to one 4096-character
@@ -51,9 +47,71 @@
   Electron renderer IPC claim. `electron:build` passed. Architecture gate passed
   with no new boundary violations. `npm run typecheck:all` exit 0 on the final
   Telegram source; generated worker artifacts rebuilt by `electron:build`.
-- Feishu remains the next platform slice: preserve message IDs/media and await
+- At the Telegram checkpoint, Feishu was the next slice: preserve IDs/media and await
   admission before transport ACK; bypass the legacy cross-account dedup file for
   managed admission. Do not treat a live adapter's void send result as a receipt.
+
+### S4 platform delivery and final verification
+
+- Telegram foundation delivered as draft [PR #509](https://github.com/lava-chen/duya/pull/509),
+  foundation `b1f81198` plus explicit-message correction `64f1cf4e`, base
+  `codex/bot-framework-s3c`. This is implemented and locally
+  validated, not merged. The original S3c branch remains unchanged.
+- Feishu continuation uses the same isolated worktree on branch
+  `codex/bot-framework-s4-feishu`, base `64f1cf4e`; exclusive paths extend to the
+  Feishu gateway transport and its tests. No new scheduler, Run loop or database
+  owner. The Host adapter resolves vault credentials and validates the actual
+  provider message receipt; it supplies a stable UUID but does not assume an
+  unlimited provider dedup window or retry unknown sends.
+- Final output-contract review corrected the initial Telegram implementation's
+  use of ordinary assistant text. The shared follow-up keeps SendMessage as the
+  sole explicit external voice, through the existing tool execution and worker
+  bridge. The tool reports queued/pending, never delivered, before a remote
+  receipt exists. Host checks the captured current attempt and exact target;
+  private text and stale/cross-binding submissions cannot become deliveries.
+  Missing replies, failed Runs and recovery-required inputs remain visible
+  blocked obligations. This correction is part of the Telegram foundation PR.
+- Feishu message/media/thread/rich-text IDs are preserved. The connector awaits
+  durable admission. Managed WebSocket consumers acknowledge all reassembled
+  fragments after commit; webhook consumers return failure on a failed commit
+  and permit the identical signed retry. After successful acceptance, nonce
+  replay protection remains active. Managed admission bypasses the legacy global
+  message-ID cache; per-owner/Bot/binding inbox identity owns dedup. Legacy
+  consumers retain their existing ACK timing. Current sender/chat allowlists are
+  checked at admission, and binding/account replacement fences outbound work.
+- Final affected regression: 26 files / 263 tests passed (exit 0), including
+  SQLite rollback/fences, real Host restart/worker execution, both transports,
+  media IDs, delayed/failed/multipart ACKs, signed retries, and UI regression.
+  The final admission subset was rerun after allowlist revalidation: 4 files /
+  32 tests passed. Host dependency build exit 0. Full typecheck and architecture
+  gates passed; final source typecheck and regenerated artifacts are rechecked
+  before the platform commit. Final `typecheck:all`, `architecture:check` and
+  `electron:build` all exited 0; no architecture baseline was increased. The
+  final real-worker proof uses different private text and SendMessage content:
+  only the explicit content was delivered (4 resident tests passed). Committed
+  worker bundle at `64f1cf4e` is FRESH, with 0/1006 changed inputs.
+- Local Playwright verified receipt cards in Chromium. An isolated Xvfb binary
+  was downloaded/extracted under `work/` (no system installation), removing the
+  earlier DISPLAY blocker. Real Electron IPC smoke: 4 existing logger cases
+  passed. New `e2e/ipc/bot-delivery.spec.ts` passed against the actual
+  preload → IPC → Desktop Host → migrated SQLite store: an unknown receipt
+  remains unknown with attempt 1 after repeated queries and is absent for a
+  different Bot. Its first attempt exposed an ESM-only test-fixture loader
+  mistake (`require` unavailable); the fixture now uses `createRequire` and
+  namespaces each run. The test was rerun on the final Electron build and passed
+  (exit 0). No production assertion was relaxed. An E2E-only protocol import
+  exposed a new architecture edge; the test now uses its local wire projection
+  shape instead of increasing the baseline.
+- Evidence: Linux / Node 24.19.0 / Electron 44.9.1; logs, fixture home, extracted
+  display server, UI screenshots and npm dependencies remain local in `work/`,
+  `.e2e-userdata/` and `node_modules/`. Neither platform has used live account
+  credentials or sent to a real remote conversation. Full IPC/turn coverage and
+  prerequisite PR review/CI remain integration work; these are draft PRs.
+- Binding identity is stable across display/policy edits; a separate authorized
+  snapshot revision fences old queued output without defeating event dedup.
+- Next after S4 review/integration: S5 memory/prompt snapshots. Keep the S4
+  worktree and both unmerged branches; do not recycle or switch production
+  scheduler ownership as part of this implementation task.
 
 ## S3c execution — 2026-10-26
 
