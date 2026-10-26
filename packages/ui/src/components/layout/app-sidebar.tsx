@@ -314,11 +314,9 @@ const AppSidebarInner = memo(
       window.addEventListener("duya:new-project", handler);
       return () => window.removeEventListener("duya:new-project", handler);
     }, [onExpand]);
-    // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
-    // list reveals incrementally (20 at a time — user preference, bigger
-    // batch than the 5-per-project-group because it spans ALL projects
-    // and would take too many clicks at 5). Kept in renderer state;
-    // resets when the user toggles the view mode or a section collapse.
+    // Claude parity (2026-10-26): each group reveals its own batch of 20
+    // sessions. The flat "all sessions" mode is gone, so this threshold
+    // only drives the per-group reveal.
     const FLAT_LIST_THRESHOLD = 20;
     // Project-level drag-and-drop. Track the active drag id and any
     // per-section manual override so reordering the visible list stays
@@ -357,14 +355,13 @@ const AppSidebarInner = memo(
         setProjectOrderOverrides((prev) => ({ ...prev, [sectionKey]: reordered }));
       }
     }, [reorderProjectsInSection]);
-    const [flatListVisibleCount, setFlatListVisibleCount] = useState(FLAT_LIST_THRESHOLD);
     // Claude parity (2026-10-26): every date bucket reveals its own batch.
     // A single shared counter made "查看全部" on 今天 also reveal 昨天's
     // hidden rows; in Claude each group is independent too.
     const [dateVisibleCounts, setDateVisibleCounts] = useState<Record<string, number>>({});
     // Plan 549 (Track B): the archived roster only ever grows, so it reveals
     // in batches like the other unbounded sections. 10 per click (smaller
-    // than the flat singleList batch) because the archived section is a
+    // than the 20-row group batch) because the archived section is a
     // "find that one session" surface — dumping hundreds of rows buries the
     // active list above it.
     const ARCHIVED_REVEAL_STEP = 10;
@@ -1017,28 +1014,13 @@ const AppSidebarInner = memo(
       // via the right-click menu. CRON_SIDEBAR_VISIBLE caps high-cardinality
       // runs so one hot cron job doesn't flood the sidebar.
       //
-      // `projectGroupBy === 'singleList'` (⋯ menu → 在一个列表中): the
-      // "项目" section renders as one flat session list (all main-agent
-      // sessions by the chosen sort, no project grouping) and user
-      // sections are hidden because the whole point of single-list mode
-      // is to suppress the project hierarchy.
-      const isSingleList = projectGroupBy === 'singleList';
+      // Claude parity (2026-10-26): the flat "all sessions" mode is gone.
+      // Claude Code's sidebar is ALWAYS a list of groups, so the system
+      // section always renders the project hierarchy and the user sections
+      // are never suppressed.
       const isDateGrouped = projectGroupBy === 'byDate';
-      const projectSectionItems: SectionItem[] = isSingleList
-        // Plan 471 v8: singleList reveals sessions 5 at a time (mirrors
-        // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD behavior). When the
-        // user has collapsed the section or switched back to byProject we
-        // reset the reveal counter in the onToggle handler below.
-        ? threadItems(projectThreads.slice(0, flatListVisibleCount))
-        : projectItems(unassignedGroups);
-      const projectSectionExtra: SectionThreadItem[] = isSingleList
-        ? []
-        : threadItems(noProjectThreads);
-      // Number of sessions still hidden behind the "查看全部" reveal button
-      // in singleList mode (only meaningful there).
-      const flatListHiddenCount = isSingleList
-        ? Math.max(0, projectThreads.length - flatListVisibleCount)
-        : 0;
+      const projectSectionItems: SectionItem[] = projectItems(unassignedGroups);
+      const projectSectionExtra: SectionThreadItem[] = threadItems(noProjectThreads);
 
       const dateBuckets = new Map<ThreadDateBucket, Thread[]>();
       if (isDateGrouped) {
@@ -1055,7 +1037,7 @@ const AppSidebarInner = memo(
       const dateKeys = DATE_BUCKET_ORDER.filter((key) => dateBuckets.has(key));
       // Keep one header even in an empty workspace: it carries the
       // "分组方式" switch, and without it the user could not switch back to
-      // 文件夹 / 不分组.
+      // 文件夹.
       if (isDateGrouped && dateKeys.length === 0) dateKeys.push('today');
       const dateSections = dateKeys.map((key, index) => {
         const dateThreads = dateBuckets.get(key) ?? [];
@@ -1085,7 +1067,6 @@ const AppSidebarInner = memo(
           collapsed: collapsedSystemSections.has('__system__:project'),
           items: projectSectionItems,
           extraNoProjectThreads: projectSectionExtra,
-          flatListHiddenCount,
         }]),
         {
           id: '__system__:cron',
@@ -1138,7 +1119,7 @@ const AppSidebarInner = memo(
           archivedHiddenCount: Math.max(0, archivedThreads.length - archivedVisibleCount),
         },
       ];
-    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount, dateVisibleCounts, archivedVisibleCount, showEmptyGroups, registeredProjects]);
+    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, dateVisibleCounts, archivedVisibleCount, showEmptyGroups, registeredProjects]);
 
     // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
     // Treat every section (user or system) as collapsed only when there is
@@ -1151,13 +1132,10 @@ const AppSidebarInner = memo(
       [sidebarStructure],
     );
 
-    // Plan 471 v8: leaving singleList mode (back to 按项目) resets the flat
-    // list reveal counter so the next time the user switches to 在一个列表中
-    // it starts from the first batch again.
+    // Claude parity (2026-10-26): switching the grouping mode resets the
+    // per-group reveal counters, so the next visit shows the first batch
+    // of every group again.
     useEffect(() => {
-      if (projectGroupBy !== 'singleList') {
-        setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
-      }
       if (projectGroupBy !== 'byDate') {
         setDateVisibleCounts({});
       }
@@ -1753,7 +1731,6 @@ const AppSidebarInner = memo(
                   return 'sidebar.section.archived';
                 case '__system__:project':
                   if (projectGroupBy === 'byDate') return null;
-                  if (projectGroupBy === 'singleList') return 'sidebar.section.sessions';
                   // A user section may already be named "项目" — two headers
                   // with the same name in one sidebar read as a rendering
                   // bug. This section holds everything that is NOT in a user
@@ -1808,14 +1785,9 @@ const AppSidebarInner = memo(
               onToggleCollapsed: isUser
                 ? () => { void toggleUserSectionCollapsed(section.id); }
                 : () => {
-                    // Plan 471 v8: collapsing the "项目" section resets the
-                    // singleList reveal counter so reopening shows the first
-                    // batch again (same behavior as ProjectGroupItem).
-                    if (section.id === '__system__:project') {
-                      setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
-                    }
-                    // Claude parity (2026-10-26): same contract for the date
-                    // buckets — reopening a bucket shows its first batch.
+                    // Claude parity (2026-10-26): the date buckets each keep
+                    // their own reveal counter — reopening a bucket shows its
+                    // first batch again.
                     if (dateKey) {
                       setDateVisibleCounts((prev) => {
                         if (!(dateKey in prev)) return prev;
@@ -1887,7 +1859,6 @@ const AppSidebarInner = memo(
                 filter={sectionHoldsProjects ? {
                   groupBy: isGroupingHeader ? projectGroupBy : undefined,
                   onGroupBy: isGroupingHeader ? (value) => {
-                    setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
                     setDateVisibleCounts({});
                     setCollapsedSystemSections((prev) => {
                       const next = new Set(prev);
@@ -2065,10 +2036,10 @@ const AppSidebarInner = memo(
                 ))}
                 {(() => {
                   // "View all N more" link — for cron (routes to the
-                  // Automation page for full history), for the flat
-                  // singleList session list (reveals 20 more inline, mirroring
-                  // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD reveal), and
-                  // for the archived roster (reveals 10 more inline).
+                  // Automation page for full history), for a date bucket
+                  // (reveals 20 more inline, mirroring ProjectGroupItem's
+                  // THREAD_COLLAPSE_THRESHOLD reveal), and for the archived
+                  // roster (reveals 10 more inline).
                   const cronHidden = (section as { hiddenCount?: number }).hiddenCount;
                   if (cronHidden) {
                     return (
@@ -2085,22 +2056,19 @@ const AppSidebarInner = memo(
                   const flatHidden = (section as { flatListHiddenCount?: number }).flatListHiddenCount;
                   if (flatHidden) {
                     const reveal = Math.min(FLAT_LIST_THRESHOLD, flatHidden);
-                    // Date buckets keep their own counter — revealing 今天 must
-                    // not also reveal 昨天's hidden rows.
+                    // Every date bucket keeps its own counter — revealing
+                    // 今天 must not also reveal 昨天's hidden rows.
                     const dateBucket = (section as { dateBucket?: string }).dateBucket;
                     return (
                       <button
                         type="button"
                         className="sidebar-section-view-all"
                         onClick={() => {
-                          if (dateBucket) {
-                            setDateVisibleCounts((prev) => ({
-                              ...prev,
-                              [dateBucket]: (prev[dateBucket] ?? FLAT_LIST_THRESHOLD) + FLAT_LIST_THRESHOLD,
-                            }));
-                            return;
-                          }
-                          setFlatListVisibleCount((c) => c + FLAT_LIST_THRESHOLD);
+                          if (!dateBucket) return;
+                          setDateVisibleCounts((prev) => ({
+                            ...prev,
+                            [dateBucket]: (prev[dateBucket] ?? FLAT_LIST_THRESHOLD) + FLAT_LIST_THRESHOLD,
+                          }));
                         }}
                       >
                         <CaretRightIcon size={10} />

@@ -13,12 +13,20 @@
    leading icon tint and left padding without affecting children. */
 
 .sidebar-section-item {
-  /* Plan 471 v6: match the row geometry of `.thread-item` (margin 0,
-     same header padding) so a section header and a session row have the
-     same height and footprint — no visual "jump" between a section title
-     and its child sessions. */
+  /* Plan 471 v6: match the row geometry of `.thread-item` (no extra
+     padding, same header footprint) so a section header and a session row
+     have the same footprint — no visual "jump" between a group title and
+     its child sessions. */
   margin: 0;
   border-radius: 0;
+  /* Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+     Claude breaks its groups with ~10 CSS px MORE clearance than the gap
+     between two session rows, so a group boundary is visible at a glance.
+     Measured on the reference window: the ink gap from the last session of
+     a group to the next group caption is 28 CSS px there, versus 11 px
+     here — duya's groups used to touch, which made a long session list
+     read as one undifferentiated block. */
+  margin-top: 16px;
 }
 .sidebar-section-item.sidebar-section-soft {
   /* The "项目" default section uses a slightly dimmer label so it
@@ -153,10 +161,10 @@
   /* Children (ProjectGroupItem / ThreadListItem) manage their own
      padding; we only provide a small drop-shadow cue when open. */
   padding: 0;
-  /* Reference parity (2026-10-22): the flat session list (singleList mode)
-     is a direct child of this container, so the 1px inter-row gap has to
-     live here - without it the rows stack at their bare 26px height and
-     come out tighter than the measured 27.2 CSS px title pitch. */
+  /* Reference parity (2026-10-22): the group's session rows are direct
+     children of this container, so the 1px inter-row gap has to live here -
+     without it the rows stack at their bare height and come out tighter
+     than the measured 27.2 CSS px title pitch. */
   display: flex;
   flex-direction: column;
   gap: 1px;

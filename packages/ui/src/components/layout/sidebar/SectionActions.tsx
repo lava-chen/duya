@@ -79,9 +79,7 @@ export function SectionActions({
                 value:
                   filter.groupBy === "byDate"
                     ? t("project.byDate")
-                    : filter.groupBy === "singleList"
-                      ? t("project.inOneList")
-                      : t("project.byProject"),
+                    : t("project.byProject"),
                 items: [
                   {
                     kind: "action" as const,
@@ -106,18 +104,6 @@ export function SectionActions({
                         <span className="sidebar-project-menu-check" />
                       ),
                     onSelect: () => filter.onGroupBy?.("byProject"),
-                  },
-                  {
-                    kind: "action" as const,
-                    id: "group-by-single-list",
-                    label: t("project.inOneList"),
-                    iconRight:
-                      filter.groupBy === "singleList" ? (
-                        <CheckIcon size={12} />
-                      ) : (
-                        <span className="sidebar-project-menu-check" />
-                      ),
-                    onSelect: () => filter.onGroupBy?.("singleList"),
                   },
                 ],
               },

@@ -68,6 +68,7 @@ const zh: Record<TranslationKey, string> = {
   'apps.pluginDisabled': '启用此插件后即可打开它的视图。',
   'apps.appUnavailable': '此插件应用已不再安装。',
   'apps.instanceUnavailable': '无法准备插件应用，请重试。',
+  'apps.openAll': '全部 Mini Apps',
 
   // Plan 525 — Projects page.
   'projects.title': '项目',
@@ -1341,6 +1342,8 @@ const zh: Record<TranslationKey, string> = {
 
   'panel.files': '文件',
   'panel.launchersAria': '面板',
+  'panel.more': '更多',
+  'panel.backgroundTasks': '后台任务',
   'panel.review': '代码审阅',
   'panel.workflow.title': '工作流',
   'panel.workflow.tabDefinitions': '定义',
@@ -1667,7 +1670,6 @@ const zh: Record<TranslationKey, string> = {
   'project.organize': '整理',
   'project.byDate': '日期',
   'project.byProject': '文件夹',
-  'project.inOneList': '不分组',
   'project.sortBy': '排序方式',
   // Claude parity (2026-10-26): the three sort fields match Claude Code's
   // "Sort by" — 最近更新 / 创建时间 / 名称. The old labels ("优先级" /
@@ -1682,10 +1684,6 @@ const zh: Record<TranslationKey, string> = {
   // NOT in a user section. When a user section is already called "项目",
   // naming this one the same produced two identical headers.
   'sidebar.section.ungrouped': '未分组',
-  // Plan 471 v9: singleList (… menu → 在一个列表中) 模式下
-  // section 内容是平坦的会话列表，没有项目分组，
-  // 标题从「项目」改为「会话」。
-  'sidebar.section.sessions': '会话',
   'sidebar.date.today': '今天',
   'sidebar.date.yesterday': '昨天',
   'sidebar.date.last7days': '最近 7 天',

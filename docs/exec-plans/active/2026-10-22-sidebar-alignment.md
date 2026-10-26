@@ -231,3 +231,58 @@ Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，
 - 与基线逐项吻合：字号 13/13/12、字色 `#DDDCDC` / `#8F8C8C` 与实测值一致。
 - 浅色主题未实测 Claude 对应值，暂沿用 duya 全局色板。
 
+---
+
+## 第五轮：去掉「不分组」+ 组间距对齐 Claude（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `d293eab2` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 触发
+
+用户实机截图两条批注：①「会话」段在 Claude Code 里**没有对应设计**；②组别之间要有间隔，
+组标题颜色要和 session 行不一样。
+
+### 实测（像素采样，非目测）
+
+| 指标 | Claude Code | duya 改前 | duya 改后 |
+| --- | --- | --- | --- |
+| 组标题墨迹峰值色 | `#898781` | `#8F8C8C` | 不变 |
+| 会话标题墨迹峰值色 | `#C3C2B7` | `#DDDCDC` | 不变 |
+| 组内行墨迹间距 | 20 物理 px | 20 | 20 |
+| 导航 → 首个组标题墨迹间距 | 45 | 25 | **45** |
+| 组 → 组标题墨迹间距 | 34 | 14 | **34** |
+| 组间留白（盒模型） | — | **0 px** | **16 px** |
+
+> 颜色在第四轮已对齐（`--sidebar-text` / `--sidebar-muted`），本轮实测确认两者的**相对**差值与 Claude 一致。
+> 用户截图中两者同色，是因为那张图取自**主检出 master** —— master 的 `.app-sidebar .thread-item`
+> 还没有 `color: var(--sidebar-text)`，会话标题回落到 `--muted`。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `stores/conversation-store.ts` | `ProjectGroupBy` 去掉 `'singleList'`，只剩 `'byProject' \| 'byDate'`；持久化的 `singleList` / 未知值迁移到 `'byDate'`；默认分组方式由 `byProject` 改为 `byDate`（Claude 默认就是日期分组） |
+| `layout/app-sidebar.tsx` | 删除 singleList 分支：平铺计数 `flatListVisibleCount`、「会话」标题、「查看全部」的非日期分支 |
+| `sidebar/SectionActions.tsx` | 分组方式子菜单只剩 文件夹 / 日期 |
+| `i18n/{zh,en}.ts` | 删 `project.inOneList`、`sidebar.section.sessions` |
+| `styles/sidebar-sections.css` | `.sidebar-section-item` 加 `margin-top: 16px` —— 组间留白从 0 变成 Claude 的 16 CSS px |
+| `sidebar/SectionActions.test.tsx` / `stores/__tests__/conversation-store.hydration.test.tsx` | 断言改为两选项；新增 `singleList → byDate` 迁移用例 |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `d293eab2` dirty | Node | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净 |
+| `d293eab2` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/layout packages/ui/src/stores` | 0 · **376/376** | 含两个被本轮改动打断的用例（已改断言） |
+| `d293eab2` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `d293eab2` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 全量类型门禁通过 |
+| `d293eab2` dirty | Windows / Electron + CDP | CDP 可信输入事件点组头 ⚙ → hover「分组方式」 | 子菜单文本 = **日期 文件夹** | 两项，不分组已消失 |
+| `d293eab2` dirty | Windows / Electron + CDP | CDP 量 `getBoundingClientRect` | 组间盒模型间距 **16 px** × 3 | 与 Claude 墨迹间距逐项吻合 |
+
+### 接续 / 结果
+
+- 第五轮**已实现、已验证**；提交状态见下方「验证记录」对应 commit。
+- 已知差异：Claude 的 `Group by` 子菜单仍打不开，四桶口径与「Claude 是否有 Date 分组」**未经实测证实**。
+- 副作用：本机 `duya-conversations` 的 `projectGroupBy` 验证期间来回切换，收尾为 `byDate`（与新默认一致）。
+
+

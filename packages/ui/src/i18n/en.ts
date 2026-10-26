@@ -66,6 +66,7 @@ const en = {
   'apps.pluginDisabled': 'Enable this plugin to open its view.',
   'apps.appUnavailable': 'This plugin app is no longer installed.',
   'apps.instanceUnavailable': 'Could not prepare the plugin app. Try again.',
+  'apps.openAll': 'All Mini Apps',
 
   // Plan 525 — Projects page.
   'projects.title': 'Projects',
@@ -1363,6 +1364,8 @@ const en = {
 
   'panel.files': 'Files',
   'panel.launchersAria': 'Panels',
+  'panel.more': 'More',
+  'panel.backgroundTasks': 'Background Tasks',
   'panel.review': 'Code Review',
   'panel.workflow.title': 'Workflows',
   'panel.workflow.tabDefinitions': 'Definitions',
@@ -1690,7 +1693,6 @@ const en = {
   'project.organize': 'Organize',
   'project.byDate': 'Date',
   'project.byProject': 'Folder',
-  'project.inOneList': 'None',
   'project.sortBy': 'Sort by',
   // Claude parity (2026-10-26): the three sort fields match Claude Code's
   // "Sort by" — Last updated / Date created / Name. The old labels
@@ -1705,10 +1707,6 @@ const en = {
   // NOT in a user section. When a user section is already called "Projects",
   // naming this one the same produced two identical headers.
   'sidebar.section.ungrouped': 'Ungrouped',
-  // Plan 471 v9: singleList mode renders the section as a flat session list,
-  // so we relabel the header from 'Projects' to 'Sessions' to match what the
-  // user actually sees (no project grouping, just threads).
-  'sidebar.section.sessions': 'Sessions',
   'sidebar.date.today': 'Today',
   'sidebar.date.yesterday': 'Yesterday',
   'sidebar.date.last7days': 'Previous 7 days',
