@@ -2169,3 +2169,12 @@ forgotten canonical key before writing either the output row or its projection.
 Prompt key hints and caller-supplied existing keys cannot bypass this check.
 Semantic paraphrases and already-folded conversation summaries remain outside
 this exact-key guarantee.
+
+### Bot routine scheduled admission (S6-A)
+
+Desktop's existing automation scheduler persists the exact bounded scheduled
+batch and schedule fingerprint to `cronjob.toml` before wake admission. Only
+accepted fires advance `last_run_at`; restart replays pending instants with the
+same deterministic fire keys. Host-owned Bot inbox deduplication handles lost
+acknowledgements. Legacy wake ownership keeps its existing durability limits.
+Overlapping ticks share one pass; failed admission stops the current batch.

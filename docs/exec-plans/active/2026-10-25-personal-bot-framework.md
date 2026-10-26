@@ -137,6 +137,54 @@
   `codex/bot-framework-s5` (same for the S1–S4 branches). A remote signal only
   appears once the stack reaches master, which is not authorized.
 
+## S6 review follow-up — 2026-10-26
+
+- Owner: Codex root; managed worktree/context/CodeGraph tools unavailable.
+  Git and versioned plan supply context. Exclusive paths: automation scheduler,
+  schedule helpers/tests, cron-file store and the three plan/architecture docs.
+  Linked worktree: `/workspace/work/bot-s6`.
+- Continue S6-A from PR #513 (`b41ab523`), isolated branch
+  `codex/bot-s6-followup`; S5 PR #515 remains independent. Remote S1–S4
+  prerequisites remain unmerged; no integration or production ownership change.
+- Review found admission loss: the old tick advanced `last_run_at` before
+  enqueue. Now atomically write the exact scheduled batch and fingerprint to
+  `cronjob.toml` before admission, then acknowledge each accepted fire in order.
+  Failed admission stops the batch; restart reuses its original fire identities
+  even after the clock advances. Lost acknowledgement replays the same key for
+  Host inbox dedup. Concurrent ticks share one in-flight pass.
+- `skip` now checks the newest due occurrence, preventing a missed old occurrence
+  from permanently starving future on-time fires. Reject zero/overflowing
+  intervals; one-shots respect `endAt`.
+- Guarantee scope: durable wake acceptance/dedup belongs to Host-owned Bots
+  (S3c). Legacy in-memory wake ownership is not upgraded by this change.
+  Schedule edits invalidate a mismatching pending fingerprint; disabled jobs
+  retain pending work without dispatch. Full pause/revocation remains S6-B.
+- Baseline: three affected suites / 72 tests passed before changes.
+  Final targeted regression: three suites / 78 tests passed. Expanded automation
+  and wake run: 10 files / 124 assertions passed, 14 files failed at collection
+  due to missing workspace dist exports (ai/plugin-core) and the Electron
+  binary; no assertion in those files ran.
+- After dependency builds, expanded retry executed 137 passing / 8 skipped
+  assertions; 12 files remained red (Electron collection failures and a
+  sandbox-blocked localhost listener). Retrying the HTTP RunResult suite with
+  localhost permission passed all 8 tests. No product assertion was weakened.
+- Architecture gate passed, no new boundary violations, baseline untouched.
+  Main/preload `npm run build:electron` passed. Full `electron:build` failed
+  in its Electron binary prerequisite (download unavailable); no packaged or
+  live Electron claim.
+- Final `npm run typecheck:all` retry exited 0 on Linux / Node 24.19.0,
+  source commit `e22e8fe0`. Initial run stopped at missing `@types/picomatch`;
+  installed the already-declared 4.0.3 type package under private `work/deps`
+  and added worktree-local capability/Host resolution links. Shared dependency
+  installation untouched. Electron type ratchet reported no new errors.
+- Delivery: [draft PR #519](https://github.com/lava-chen/duya/pull/519), base
+  `codex/bot-framework-s6` (#513), implementation `e22e8fe0`. User explicitly
+  authorized pushing this payload and creating the PR. Remote head verified;
+  no CI checks/reviews reported yet, no merge. Keep branch and worktree.
+- Next: review #519 alongside #513; integrate only after prerequisite stack
+  review/CI, repeat Electron-dependent validation on a prepared runner, then
+  begin S6-B budget/quiet-hours/pause/revocation/approval as a separate slice.
+
 ## S6 execution — 2026-10-26
 
 - Owner: Qoder root; isolated linked worktree `.claude/worktrees/bot-framework-s6`,

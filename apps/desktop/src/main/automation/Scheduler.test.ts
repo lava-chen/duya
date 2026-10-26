@@ -281,8 +281,9 @@ describe('AutomationScheduler', () => {
       agent: 'digest-bot',
       schedule: { kind: 'every', every: '1m' },
       misfirePolicy: 'skip',
+      schedule: { kind: 'every', every: '1d' },
     }));
-    store.markRunResult(cron.id, { lastRunAt: Date.now() - 3 * 86_400_000, error: null, retryCount: 0 });
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 3 * 86_400_000 - 3_600_000, error: null, retryCount: 0 });
     await scheduler.tick();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(mocks.enqueueAutomationWake).not.toHaveBeenCalled();
@@ -390,4 +391,55 @@ describe('AutomationScheduler', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
+});
+
+
+it('replays the persisted batch after failed admission and a real store restart', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 11, 12));
+  try {
+    const cron = scheduler.createCron(makeInput({ agent: 'digest-bot', misfirePolicy: 'bounded', maxCatchUp: 3 }));
+    const anchor = Date.now() - 10 * 60_000;
+    store.markRunResult(cron.id, { lastRunAt: anchor, error: null, retryCount: 0 });
+    mocks.enqueueAutomationWake.mockRejectedValueOnce(new Error('inbox unavailable'));
+    await scheduler.tick();
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
+    expect(store.getCron(cron.id)?.lastRunAt).toBe(anchor);
+    const failedKey = mocks.enqueueAutomationWake.mock.calls[0][0].fireKey;
+    scheduler.shutdown();
+    clock.mockReturnValue(Date.now() + 86_400_000);
+    store = new CronFileStore(path.join(dir, 'cronjob.toml'));
+    scheduler = new AutomationScheduler(store);
+    await scheduler.tick();
+    expect(mocks.enqueueAutomationWake.mock.calls[1][0].fireKey).toBe(failedKey);
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(4);
+    expect(store.getCron(cron.id)?.lastRunAt).toBe(anchor + 10 * 60_000);
+  } finally { clock.mockRestore(); }
+});
+
+it('replays the same identity when admission committed but acknowledgement was lost', async () => {
+  const cron = scheduler.createCron(makeInput({ agent: 'digest-bot', schedule: { kind: 'once', at: new Date(Date.now() - 1000).toISOString() } }));
+  vi.spyOn(store, 'acknowledgeScheduledFire').mockImplementationOnce(() => { throw new Error('crash'); });
+  await scheduler.tick();
+  scheduler.shutdown();
+  store = new CronFileStore(path.join(dir, 'cronjob.toml'));
+  scheduler = new AutomationScheduler(store);
+  mocks.enqueueAutomationWake.mockReturnValue('deduped');
+  await scheduler.tick();
+  expect(mocks.enqueueAutomationWake.mock.calls[0][0].fireKey).toBe(mocks.enqueueAutomationWake.mock.calls[1][0].fireKey);
+  await scheduler.tick();
+  expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(2);
+});
+
+it('coalesces overlapping ticks while admission is in flight', async () => {
+  const cron = scheduler.createCron(makeInput({ agent: 'digest-bot' }));
+  store.markRunResult(cron.id, { lastRunAt: Date.now() - 60_000, error: null, retryCount: 0 });
+  let release!: () => void;
+  mocks.createBotSessionIfMissing.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  const first = scheduler.tick();
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const second = scheduler.tick();
+  expect(second).toBe(first);
+  release();
+  await Promise.all([first, second]);
+  expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
 });

@@ -38,6 +38,7 @@ export class AutomationScheduler {
   private retryTimers = new Map<string, NodeJS.Timeout>();
   private tickTimer: NodeJS.Timeout | null = null;
   private started = false;
+  private tickInFlight: Promise<void> | null = null;
 
   constructor(store?: CronFileStore) {
     this.store = store ?? new CronFileStore();
@@ -210,7 +211,13 @@ export class AutomationScheduler {
   }
 
   /** One polling pass: fire every enabled job whose next run is due. */
-  async tick(): Promise<void> {
+  tick(): Promise<void> {
+    if (this.tickInFlight) return this.tickInFlight;
+    this.tickInFlight = this.runTick().finally(() => { this.tickInFlight = null; });
+    return this.tickInFlight;
+  }
+
+  private async runTick(): Promise<void> {
     this.store.load();
     const now = Date.now();
     for (const job of this.store.listCrons()) {
@@ -219,7 +226,9 @@ export class AutomationScheduler {
       // A one-shot's watermark is "did it ever run"; recurring schedules
       // anchor on the last fire, or on creation when they never ran.
       const anchor = schedule.kind === 'once' ? (job.lastRunAt ?? 0) : (job.lastRunAt ?? job.createdAt);
-      const fires = planDueRoutineFires({
+      const fingerprint = scheduleFingerprint(schedule);
+      const pending = job.agent ? this.store.getPendingScheduledFires(job.id, fingerprint) : [];
+      const fires = pending.length ? pending : planDueRoutineFires({
         schedule,
         afterMs: anchor,
         nowMs: now,
@@ -237,6 +246,7 @@ export class AutomationScheduler {
         });
         continue;
       }
+      if (!pending.length) this.store.stageScheduledFires(job.id, fingerprint, fires);
       // Sequential so the claims land oldest → newest; the deterministic keys
       // make a retried tick collapse into the same obligations.
       for (const scheduledForMs of fires) {
@@ -246,6 +256,8 @@ export class AutomationScheduler {
           getLogger().error('Scheduled routine fire failed', error instanceof Error ? error : new Error(String(error)), {
             cronId: job.id,
           }, LogComponent.Automation);
+          // Never advance past an unaccepted obligation in a bounded batch.
+          break;
         }
       }
     }
@@ -264,38 +276,23 @@ export class AutomationScheduler {
     const scheduledForMs = options?.scheduledForMs ?? null;
     // P2.3b: agent-bound routines fire into the bot's resident session
     // (`bot:<agentId>`) through the wake bus instead of a throwaway cron
-    // session. Claim the fire first (at-least-once, same as standalone);
+    // session. Persist the batch before admission;
     // the wake queue then serialises fires behind user/agent turns. No
-    // retry ladder here — the queue owns redrive, and a failed wake run
+    // execution retry ladder here — the queue owns redrive, and a failed wake run
     // simply waits for the next scheduled fire.
     if (job.agent) {
-      // Claim the scheduled instant, not the wall-clock notice time: the
-      // phase must not drift when a tick lands late (S6).
-      const claimedAt = scheduledForMs ?? Date.now();
-      this.store.markRunResult(job.id, {
-        lastRunAt: claimedAt,
-        error: job.lastError,
-        retryCount: job.retryCount,
-      });
-      try {
-        const outcome = await this.enqueueBotFire(job, 'schedule', scheduledForMs ?? undefined);
-        getLogger().info('Scheduled routine fire enqueued for bot', {
-          cronId: job.id,
-          agent: job.agent,
-          sessionId: getBotSessionId(job.agent),
-          outcome,
-        }, LogComponent.Automation);
-      } catch (error) {
-        getLogger().error('Routine fire: bot wake enqueue failed', error instanceof Error ? error : new Error(String(error)), {
-          cronId: job.id,
-          agent: job.agent,
-        }, LogComponent.Automation);
-        this.store.markRunResult(job.id, {
-          lastRunAt: claimedAt,
-          error: 'bot wake enqueue failed',
-          retryCount: job.retryCount,
-        });
+      // The exact batch is durable already. Advance its watermark only after
+      // the wake owner accepts it; a crash here replays the SAME fire key.
+      const outcome = await this.enqueueBotFire(job, 'schedule', scheduledForMs ?? undefined);
+      if (scheduledForMs !== null && job.schedule) {
+        this.store.acknowledgeScheduledFire(job.id, scheduleFingerprint(job.schedule), scheduledForMs);
       }
+      getLogger().info('Scheduled routine fire enqueued for bot', {
+        cronId: job.id,
+        agent: job.agent,
+        sessionId: getBotSessionId(job.agent),
+        outcome,
+      }, LogComponent.Automation);
       return;
     }
 

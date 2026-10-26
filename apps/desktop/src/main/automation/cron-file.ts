@@ -140,6 +140,9 @@ export interface CronJobFile {
   misfire_policy?: MisfirePolicy;
   /** `bounded` catch-up size, 1..5; absent = 1. */
   max_catch_up?: number;
+  /** Write-ahead scheduled batch; removed only after wake admission. */
+  pending_fire_times?: number[];
+  pending_schedule_fingerprint?: string;
   last_run_at?: number;
   last_error?: string | null;
   retry_count?: number;
@@ -426,6 +429,44 @@ export class CronFileStore {
     const success = this.doc.jobs.length !== before;
     if (success) this.save();
     return { success };
+  }
+
+  /** Reuse a committed batch across ticks/restarts, before consulting the clock. */
+  getPendingScheduledFires(id: string, fingerprint: string): number[] {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (job?.pending_schedule_fingerprint !== fingerprint) return [];
+    const times = job.pending_fire_times;
+    if (!Array.isArray(times) || times.length > MAX_BOUNDED_CATCH_UP ||
+        times.some((time) => !Number.isSafeInteger(time) || time <= 0)) {
+      throw new Error(`invalid pending scheduled batch for cron: ${id}`);
+    }
+    return [...times];
+  }
+
+  /** Persist the exact identities BEFORE admitting the first wake. */
+  stageScheduledFires(id: string, fingerprint: string, fires: number[]): void {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (!job) throw new Error(`cron not found: ${id}`);
+    job.pending_schedule_fingerprint = fingerprint;
+    job.pending_fire_times = [...fires];
+    this.save();
+  }
+
+  /** Admission and watermark are separate stores; replay uses the same key. */
+  acknowledgeScheduledFire(id: string, fingerprint: string, instant: number): void {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (!job || job.pending_schedule_fingerprint !== fingerprint) return;
+    if (job.pending_fire_times?.[0] !== instant) throw new Error('scheduled fire acknowledgement out of order');
+    job.pending_fire_times.shift();
+    if (job.pending_fire_times.length === 0) {
+      delete job.pending_fire_times;
+      delete job.pending_schedule_fingerprint;
+    }
+    job.last_run_at = instant;
+    job.last_error = undefined;
+    job.retry_count = 0;
+    job.updated_at = Date.now();
+    this.save();
   }
 
   /** Persist a run outcome (last_run_at / last_error / retry_count) and write the file. */
