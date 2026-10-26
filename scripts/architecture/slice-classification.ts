@@ -253,6 +253,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'Terminal-state resolution, budget accounting, durability policy, capability negotiation. Data in, decision out. Verified clean: imports only `@duya/agent-protocol`.',
   },
   {
+    prefix: 'packages/bot/src',
+    category: 'pure',
+    why: 'The Bot domain: identity rules, the identity-intent state machine, and the application use cases. The package states its own constraint — no fs, no SQLite, no network, no clock, no provider; the random source and the clock arrive through ports. Data in, a decision out.',
+  },
+  {
     prefix: 'packages/client-core/src',
     category: 'pure',
     why: 'Run and session PROJECTION plus pure event-stream decoding. The package states its own constraint: no network and no other IO, and neither React nor IPC. Data in, a surface model out.',
@@ -690,6 +695,10 @@ export const UNCLASSIFIED_PREFIXES: readonly { prefix: string; why: string }[] =
   {
     prefix: 'packages/agent-runtime/test',
     why: 'Runtime tests. Same reasoning as the agent suite.',
+  },
+  {
+    prefix: 'packages/bot/tests',
+    why: 'Bot domain tests. They test `pure` code but are not `pure` code, and no cut moves them. Same reasoning as the agent-core suite.',
   },
   {
     prefix: 'packages/workflow/tests',
