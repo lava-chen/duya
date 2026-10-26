@@ -1,8 +1,8 @@
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BOT_INBOX_MIGRATIONS, BotDispatchStore, RUN_STORE_MIGRATIONS, RunStore } from '@duya/data';
+import { BOT_INBOX_MIGRATIONS, BOT_SCHEDULER_MIGRATIONS, BotDispatchStore, BotSchedulerStore, RUN_STORE_MIGRATIONS, RunStore } from '@duya/data';
 import type { SessionId, StartAgentRunResult } from '@duya/agent-protocol';
-import { BotDispatcher } from '../src/bot-dispatcher.js';
+import { BotDispatcher, type BotDispatcherOptions } from '../src/bot-dispatcher.js';
 import { RunOrchestrator, createWorkerExecutionChannel } from '../src/run-orchestrator.js';
 import type { ChatStartCommand } from '../src/run-orchestrator.js';
 import { createRunControlPlaneActions } from '../src/run-control-plane.js';
@@ -13,8 +13,9 @@ afterEach(() => { for (const db of databases.splice(0)) db.close(); vi.useRealTi
 function harness() {
   const db = new Database(':memory:');
   databases.push(db);
-  for (const migration of [...RUN_STORE_MIGRATIONS, ...BOT_INBOX_MIGRATIONS]) migration.up(db);
+  for (const migration of [...RUN_STORE_MIGRATIONS, ...BOT_INBOX_MIGRATIONS, ...BOT_SCHEDULER_MIGRATIONS]) migration.up(db);
   const store = new BotDispatchStore(db);
+  const scheduler = new BotSchedulerStore(db);
   const runs = new RunStore(db);
   const control = createRunControlPlaneActions({ runs });
   const dispatch = vi.fn((_command: ChatStartCommand) => true);
@@ -35,16 +36,20 @@ function harness() {
     },
     isRunLive: (id: string) => { const row = runs.getRun(id); return row !== null && orchestrator.ownsRun(id, row.session_id); },
     isSessionBusy: (id: string) => orchestrator.isSessionBusy(id),
+    cancelBotRun: async (id: string) => {
+      runs.settleRun(id, { status: 'cancelled' }, undefined, 0);
+      return true;
+    },
   };
   const resolveInput = vi.fn(async (entry: { botId: string; payloadJson: string | null }) => ({
     sessionId: `bot:${entry.botId}` as SessionId,
     prompt: (JSON.parse(entry.payloadJson!) as { prompt: string }).prompt,
   }));
-  const options = { ownerId: 'owner', store, runs, execution, resolveInput, validateBot: async () => {}, logger };
+  const options: BotDispatcherOptions = { ownerId: 'owner', store, scheduler: undefined, runs, execution, resolveInput, validateBot: async () => {}, logger };
   const dispatcher = new BotDispatcher(options);
   const accept = (sourceEventId = 'event', botId = 'helper', lane: 'user' | 'agent' | 'background' = 'user') =>
     dispatcher.accept({ ownerId: 'owner', botId, source: 'test', sourceEventId, lane, payloadJson: JSON.stringify({ prompt: sourceEventId }) });
-  return { db, store, runs, orchestrator, dispatch, execution, options, dispatcher, accept, resolveInput };
+  return { db, store, scheduler, runs, orchestrator, dispatch, execution, options, dispatcher, accept, resolveInput };
 }
 
 describe('Bot durable dispatch', () => {
@@ -105,6 +110,33 @@ describe('Bot durable dispatch', () => {
     expect(first.accepted).toBe(true);
     expect(replay).toMatchObject({ accepted: false, runId: first.runId, stage: 'run_already_exists' });
     expect(h.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('redrives a background obligation after a durable user preemption', async () => {
+    const h = harness();
+    h.scheduler.switch('helper', 'host', 0);
+    const dispatcher = new BotDispatcher({ ...h.options, ownerId: 'local', scheduler: h.scheduler });
+    const background = await dispatcher.accept({
+      ownerId: 'local', botId: 'helper', source: 'test', sourceEventId: 'background-event',
+      lane: 'background', payloadJson: JSON.stringify({ prompt: 'background-event' }),
+    });
+    await dispatcher.tick();
+    const receipt = h.store.inbox.lookupReceipt(dispatcher.get(background.entry.id)!.dispatchKey!)!;
+    h.store.inbox.accept({
+      ownerId: 'local', botId: 'helper', source: 'user.message', sourceEventId: 'user-event',
+      lane: 'user', payloadJson: JSON.stringify({ prompt: 'new user turn' }),
+    });
+    h.scheduler.requestPreemption({
+      ownerId: 'local', botId: 'helper', sourceInboxId: background.entry.id,
+      sourceRunId: receipt.runId, redriveCount: 0,
+    });
+    await dispatcher.tick();
+    await dispatcher.tick();
+    const redrive = h.store.outstanding('local').find((entry) => entry.sourceEventId === 'background-event:redrive:1');
+    expect(redrive).toMatchObject({ status: 'pending', lane: 'background' });
+    expect(JSON.parse(redrive!.payloadJson!) as { prompt: string }).toEqual({ prompt: 'background-event' });
+    expect(h.store.inbox.lookupReceipt(`bot-inbox:${background.entry.id}`)?.runId).toBe(receipt.runId);
+    expect(h.scheduler.pendingPreemptions('local')).toHaveLength(0);
   });
 
   it('does not reserve a second input while a session is opening', async () => {

@@ -93,7 +93,7 @@ import {
   type RunWriteReceipt,
 } from './run-receipt.js';
 import { eventSpecOf, runInputRevision } from '@duya/agent-protocol';
-import type { DispatchReceipt, DispatchReserveOutcome } from '@duya/agent-protocol/bot-inbox-api';
+import type { DispatchReceipt, DispatchReserveOutcome, BotSchedulerState, BotDispatchTicket } from '@duya/agent-protocol/bot-inbox-api';
 import type { ControlPlaneRequest } from './control-plane-service.js';
 
 export interface RunOrchestratorLogger {
@@ -245,10 +245,12 @@ export interface RunOrchestratorOptions {
 
 /** Trusted Host admission; candidate identity is still minted by this owner. */
 export interface RunDispatchAdmission {
-  lookup(): DispatchReceipt | null;
-  reserve(candidateRunId: string): DispatchReserveOutcome | null;
+  readonly scheduler?: BotSchedulerState;
+  readonly ticket?: BotDispatchTicket;
+  lookup(): DispatchReceipt | null | Promise<DispatchReceipt | null>;
+  reserve(candidateRunId: string): DispatchReserveOutcome | null | Promise<DispatchReserveOutcome | null>;
   /** Rechecked at the actual execution-channel boundary, after async writes. */
-  isCurrent(): boolean;
+  isCurrent(): boolean | Promise<boolean>;
 }
 
 /** What the router resolved for one turn, passed through `openRun`. */
@@ -468,9 +470,9 @@ export class RunOrchestrator {
     };
     this.#controller = new RunController({
       channel: {
-        start: (manifest, input, context) => {
+        start: async (manifest, input, context) => {
           const admission = this.#dispatchAdmissions.get(manifest.runId);
-          if (admission && !admission.isCurrent()) {
+          if (admission && !await admission.isCurrent()) {
             throw new Error('bot dispatch claim expired or was superseded before execution');
           }
           return options.channel.start(manifest, input, context);
@@ -655,7 +657,7 @@ export class RunOrchestrator {
    */
   async openRun(sessionId: string, intent: RunTurnIntent, admission?: RunDispatchAdmission): Promise<RunStartAcceptance> {
     try {
-      const existing = admission?.lookup();
+      const existing = admission ? await admission.lookup() : null;
       if (existing) return {
         accepted: false, runId: existing.runId, stage: 'run_already_exists',
         reason: 'dispatch key already reserved; reconcile the canonical run without a second execution',
@@ -667,7 +669,9 @@ export class RunOrchestrator {
             : `session ${sessionId} already has live run ${active}` };
       }
       const candidate = randomUUID();
-      const reserved = admission?.reserve(candidate);
+      this.#openingSessions.add(sessionId);
+      try {
+      const reserved = admission ? await admission.reserve(candidate) : undefined;
       if (admission && reserved == null) {
         return { accepted: false, runId: null, stage: 'dispatch_refused', reason: 'bot dispatch claim is no longer current' };
       }
@@ -676,7 +680,6 @@ export class RunOrchestrator {
         reason: 'dispatch key already reserved; no second execution was dispatched',
       };
       const runId = reserved?.runId ?? candidate;
-      this.#openingSessions.add(sessionId);
       if (admission) this.#dispatchAdmissions.set(runId, admission);
       try {
         return await this.#openReservedRun(sessionId, intent, runId);
@@ -684,6 +687,7 @@ export class RunOrchestrator {
         this.#openingSessions.delete(sessionId);
         this.#dispatchAdmissions.delete(runId);
       }
+      } finally { this.#openingSessions.delete(sessionId); }
     } catch (error) {
       return { accepted: false, runId: null, stage: 'unknown', reason: describeCause(error) };
     }
@@ -760,6 +764,8 @@ export class RunOrchestrator {
       // one call site that already holds all three inputs.
       const inputHash = runInputRevision({ sessionId, prompt: turnPrompt, options: effectiveTurnOptions });
       const created = await this.#options.dbRequest('run:create', {
+        ...(this.#dispatchAdmissions.get(runId)?.scheduler === undefined ? {} : { botScheduler: this.#dispatchAdmissions.get(runId)!.scheduler }),
+        ...(this.#dispatchAdmissions.get(runId)?.ticket === undefined ? {} : { botDispatchTicket: this.#dispatchAdmissions.get(runId)!.ticket }),
         runId,
         sessionId,
         manifest: built.manifest,

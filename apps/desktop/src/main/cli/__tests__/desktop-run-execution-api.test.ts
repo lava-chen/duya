@@ -18,6 +18,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildAgentServerChatBody, createDesktopRunExecutionApi } from '../desktop-run-execution-api';
+import type { RunDispatchAdmission } from '@duya/host/run-orchestrator';
 
 interface Recorded {
   method: string;
@@ -46,6 +47,7 @@ async function fakeAgentServer(options: {
   chatStatus?: number;
   activeRunId?: string | null;
   cancelApplied?: boolean;
+  headerRunId?: string;
 } = {}): Promise<{ origin: string; requests: Recorded[] }> {
   const requests: Recorded[] = [];
   const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
@@ -54,7 +56,10 @@ async function fakeAgentServer(options: {
 
     if (request.method === 'POST' && /^\/sessions\/[^/]+\/chat$/.test(request.url ?? '')) {
       const status = options.chatStatus ?? 200;
-      response.writeHead(status, { 'Content-Type': status === 200 ? 'text/event-stream' : 'application/json' });
+      response.writeHead(status, {
+        'Content-Type': status === 200 ? 'text/event-stream' : 'application/json',
+        ...(options.headerRunId ? { 'x-duya-run-id': options.headerRunId } : {}),
+      });
       // A short stream: the adapter drains it in the background, and ending it
       // lets the test observe that the drain does not touch the caller.
       response.end(status === 200 ? 'data: {"type":"ready"}\n\n' : '{"error":"busy"}');
@@ -63,6 +68,11 @@ async function fakeAgentServer(options: {
     if (request.method === 'GET' && /^\/sessions\/[^/]+\/active-run$/.test(request.url ?? '')) {
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify({ runId: options.activeRunId === undefined ? 'run-1' : options.activeRunId }));
+      return;
+    }
+    if (request.method === 'POST' && /^\/sessions\/[^/]+\/cancel-run$/.test(request.url ?? '')) {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ applied: true }));
       return;
     }
     if (request.method === 'DELETE' && /^\/sessions\/[^/]+\/chat$/.test(request.url ?? '')) {
@@ -157,7 +167,40 @@ describe('startAgentRun', () => {
   });
 });
 
+describe('startBotRun', () => {
+  it('forwards the Host ticket and uses the Agent Server canonical run id header', async () => {
+    const { origin, requests } = await fakeAgentServer({ headerRunId: 'canonical-run' });
+    const api = adapterFor(origin);
+    const ticket = {
+      inboxId: 'input-1', leaseOwner: 'opaque-lease', leaseEpoch: 3,
+      scheduler: { ownerId: 'local', botId: 'helper', mode: 'host' as const, epoch: 1 },
+    };
+    const admission: RunDispatchAdmission = {
+      scheduler: ticket.scheduler,
+      ticket,
+      lookup: () => null,
+      reserve: () => null,
+      isCurrent: () => true,
+    };
+    await expect(api.startBotRun({ sessionId: 'bot:helper', prompt: 'hello' }, admission)).resolves.toEqual({
+      accepted: true, stage: 'dispatched', runId: 'canonical-run',
+    });
+    const post = requests.find((entry) => entry.method === 'POST')!;
+    expect(JSON.parse(post.body).botDispatchTicket).toEqual(ticket);
+    expect(requests.some((entry) => entry.url.endsWith('/active-run'))).toBe(false);
+  });
+});
+
 describe('cancelAgentRun', () => {
+  it('cancels only the exact current Bot run through the run-bound route', async () => {
+    const { origin, requests } = await fakeAgentServer();
+    const api = adapterFor(origin, { 'run-1': 's1' });
+    await expect(api.cancelBotRun('run-1')).resolves.toBe(true);
+    const request = requests.find((entry) => entry.url === '/sessions/s1/cancel-run');
+    expect(request?.method).toBe('POST');
+    expect(JSON.parse(request!.body)).toEqual({ runId: 'run-1' });
+  });
+
   it('stops the session the ledger says owns the run', async () => {
     const { origin, requests } = await fakeAgentServer();
     const api = adapterFor(origin, { 'run-1': 's1' });

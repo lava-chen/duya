@@ -9,6 +9,7 @@ export * from './run-store.js';
 // Personal-bot framework S3a — durable inbox + dispatch receipts.
 export * from './bot-inbox.js';
 export { BotDispatchStore } from './bot-dispatch-store.js';
+export * from './bot-scheduler-store.js';
 export * from './core-stores.js';
 export * from './session-store.js';
 export * from './mailbox.js';

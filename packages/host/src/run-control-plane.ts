@@ -3,6 +3,7 @@ import { RunEpochFencedError, RunEventConflictError, type RunOrigin } from '@duy
 
 import { classifySqlFailure, fencedReceipt, writeRunReceiptOnWire, type RunWriteReceipt } from './run-receipt.js';
 import type { RunRepository } from './repository-port.js';
+import type { BotDispatchTicket, BotSchedulerState } from '@duya/agent-protocol/bot-inbox-api';
 
 /**
  * The writer this boundary records a refusal against.
@@ -200,6 +201,10 @@ export function createRunControlPlaneActions(options: {
         manifest,
         manifestHash,
         inputHash,
+        ...(payload.botScheduler && typeof payload.botScheduler === 'object'
+          ? { botScheduler: payload.botScheduler as BotSchedulerState } : {}),
+        ...(payload.botDispatchTicket && typeof payload.botDispatchTicket === 'object'
+          ? { botDispatchTicket: payload.botDispatchTicket as BotDispatchTicket } : {}),
         ...(typeof payload.origin === 'string' ? { origin: payload.origin as RunOrigin } : {}),
         ...(typeof payload.parentRunId === 'string' ? { parentRunId: payload.parentRunId } : {}),
       });

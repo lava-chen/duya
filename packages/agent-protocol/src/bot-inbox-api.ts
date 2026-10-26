@@ -55,6 +55,21 @@ export type BotInboxLane = 'user' | 'agent' | 'background';
 /** The persisted state of a dispatch receipt. */
 export type BotDispatchState = 'reserved' | 'opened';
 
+export interface BotSchedulerState {
+  readonly ownerId: string;
+  readonly botId: string;
+  readonly mode: 'legacy' | 'host';
+  readonly epoch: number;
+}
+
+/** Authenticated Host-to-executor claim; never included in client inbox views. */
+export interface BotDispatchTicket {
+  readonly inboxId: string;
+  readonly leaseOwner: string;
+  readonly leaseEpoch: number;
+  readonly scheduler: BotSchedulerState;
+}
+
 /**
  * Client-safe projection of one inbox row.
  *

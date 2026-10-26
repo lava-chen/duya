@@ -56,6 +56,7 @@ import { ResearchStore } from './research-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
 import { RunStore } from './run-store.js';
 import { BotInboxStore } from './bot-inbox.js';
+import { BOT_SCHEDULER_MIGRATIONS } from './bot-scheduler-store.js';
 import { WorkflowRunStore } from './workflow-run-store.js';
 import { WorkspaceStore } from './workspace-store.js';
 import { PluginAppInstanceStore } from './plugin-app-instance-store.js';
@@ -1262,6 +1263,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...ResearchStore.migrations,
     ...RunStore.migrations,
     ...BotInboxStore.migrations,
+    ...BOT_SCHEDULER_MIGRATIONS,
     ...WorkflowRunStore.migrations,
     ...WorkspaceStore.migrations,
     ...IntegrationStore.migrations,

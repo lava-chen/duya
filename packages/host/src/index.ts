@@ -76,6 +76,7 @@ export {
 } from './run-orchestrator.js';
 export * from './control-plane-service.js';
 export * from './channel-prompts.js';
+export * from './bot-dispatcher.js';
 export * from './group-turn.js';
 export * from './local-sidebar-sections-api.js';
 export * from './local-usage-api.js';

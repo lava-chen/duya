@@ -17,6 +17,9 @@ import {
   enqueueBroadcastWake,
   enqueueInboundWake,
   _queuedWakeCount,
+  setManagedBotWakePort,
+  claimScheduledUserTurn,
+  cancelQueuedUserTurn,
   type WakeDispatcherDeps,
 } from '../wake-dispatcher'
 import type { WakeItem } from '@duya/agent-protocol'
@@ -69,6 +72,25 @@ describe('wake-dispatcher (P2.1)', () => {
     _resetWakeDispatcherForTest()
     fake = { lockedSessions: new Set(), runWakeCalls: [], failingTaskIds: new Set() }
     _setWakeDispatcherDeps(makeDeps(fake))
+  })
+
+  it('routes migrated Bot wakes to durable ownership and rejects renderer claims', () => {
+    const accept = vi.fn(() => 'added' as const)
+    const cancel = vi.fn(() => true)
+    setManagedBotWakePort({
+      isHostOwned: (botId) => botId === 'helper',
+      accept,
+      dispatch: async () => ({ output: '', events: [] }),
+      cancel,
+    })
+    const item = completionItem('work', 'bot:helper')
+    expect(enqueueWakeItemForSession('bot:helper', item)).toBe('added')
+    expect(accept).toHaveBeenCalledWith('bot:helper', item)
+    expect(_queuedWakeCount('bot:helper')).toBe(0)
+    expect(claimScheduledUserTurn('bot:helper', 'message-1')).toBe(false)
+    expect(cancelQueuedUserTurn('bot:helper', 'message-1')).toBe(true)
+    expect(cancel).toHaveBeenCalledWith('bot:helper', 'message-1')
+    expect(fake.runWakeCalls).toHaveLength(0)
   })
 
   it('drains an enqueued completion immediately when idle', async () => {
