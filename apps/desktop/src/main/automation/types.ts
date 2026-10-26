@@ -12,6 +12,14 @@ export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
 export type CronScheduleKind = 'once' | 'every' | 'cron';
 
 /**
+ * What to do when the machine was offline across one or more scheduled
+ * instants (framework plan S6). `skip` drops a fire that is later than the
+ * grace window, `latest` compensates with the newest missed instant only,
+ * `bounded` compensates with at most `maxCatchUp` of the newest instants.
+ */
+export type MisfirePolicy = 'skip' | 'latest' | 'bounded';
+
+/**
  * Permission profile applied to a standalone cron run's session (plan 574).
  * Same vocabulary as the session row's `permission_mode`; the worker maps
  * `full_access` → bypassPermissions. Null/undefined = 'auto' (the legacy
@@ -133,6 +141,14 @@ export interface AutomationCron {
   permissionMode?: CronPermissionMode | null;
   /** Reasoning effort for the run; unset = 'off' (legacy default). */
   effort?: string | null;
+  /**
+   * Offline catch-up policy for Bot-bound routines (S6). Standalone cron
+   * jobs keep their single-fire behaviour; the value is still persisted so
+   * binding a bot later does not silently drop the user's choice.
+   */
+  misfirePolicy: MisfirePolicy;
+  /** Upper bound for `bounded`; clamped to 1..5. */
+  maxCatchUp: number;
   /** Computed on read from (schedule, lastRunAt, now); not persisted. */
   nextRunAt: number | null;
   createdAt: number;
@@ -174,6 +190,10 @@ export interface CreateAutomationCronInput {
   permissionMode?: CronPermissionMode;
   /** Reasoning effort for the run (plan 574); omit = 'off'. */
   effort?: string;
+  /** Offline catch-up policy for a Bot-bound routine (S6); omit = 'latest'. */
+  misfirePolicy?: MisfirePolicy;
+  /** `bounded` catch-up size, 1..5; omit = 1 (clamped). */
+  maxCatchUp?: number;
 }
 
 export interface UpdateAutomationCronInput {
@@ -193,6 +213,10 @@ export interface UpdateAutomationCronInput {
   permissionMode?: CronPermissionMode;
   /** Reasoning effort for the run (plan 574); empty string resets to 'off'. */
   effort?: string;
+  /** Offline catch-up policy for a Bot-bound routine (S6). */
+  misfirePolicy?: MisfirePolicy;
+  /** `bounded` catch-up size, 1..5. */
+  maxCatchUp?: number;
 }
 
 export interface AutomationTemplate {
