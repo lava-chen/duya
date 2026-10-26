@@ -109,6 +109,13 @@
   prerequisite PR review/CI remain integration work; these are draft PRs.
 - Binding identity is stable across display/policy edits; a separate authorized
   snapshot revision fences old queued output without defeating event dedup.
+- Delivery: Feishu implementation `73ad69cd` is draft
+  [PR #511](https://github.com/lava-chen/duya/pull/511), base
+  `codex/bot-framework-s4 @ 64f1cf4e` ([PR #509](https://github.com/lava-chen/duya/pull/509)).
+  Both branches are published, unmerged and preserved. The current worktree has
+  only the local `work/` scratch directory outside version control; no production
+  Bot owner was transferred. Review/CI must follow the prerequisite stack before
+  any authorized integration; local green checks do not claim remote CI approval.
 - Next after S4 review/integration: S5 memory/prompt snapshots. Keep the S4
   worktree and both unmerged branches; do not recycle or switch production
   scheduler ownership as part of this implementation task.
