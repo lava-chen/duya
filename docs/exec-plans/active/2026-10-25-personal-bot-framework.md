@@ -40,6 +40,10 @@
   infer channel delivery completion from S3c's Wake dispatch result.
 - S2's classification/rule-file fixes are included; S1/S2/S3a/S3b review and
   CI remain with their existing owners. This branch is not yet integrated.
+- Delivery: implementation commit `1795543e` on
+  `codex/bot-framework-s3c`; draft [PR #506](https://github.com/lava-chen/duya/pull/506)
+  targets `codex/bot-framework-s3b`. S3c is implemented and locally validated,
+  but remains unmerged and the real IPC suite still needs an X-enabled runner.
 - Dependency setup: reused compatible S3b third-party modules with a worktree
   workspace overlay. Managed-worktree/context/CodeGraph tools unavailable;
   Git, current PR heads and versioned plans provided the shared-state evidence.
