@@ -44,13 +44,13 @@
   height: 21px;
   box-sizing: border-box;
   padding: 0 10px;
-  margin-bottom: 2.3px;
-  /* Codex parity (2026-10-22): the group label is a small, quiet caption
-     rather than a headline — 13px, muted. The content below it (session
-     rows) carries the visual weight. */
-  font-size: 13px;
+  margin: 0 0 2.3px;
+  /* Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+     the group caption is a 12px glyph (ink band 15 physical px / 1.25 DPR)
+     and sits one step quieter than the 13px session titles below it. */
+  font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--sidebar-muted, var(--muted));
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
@@ -88,6 +88,9 @@
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.12s ease;
+}
+.sidebar-section-item[data-section-collapsed="true"] .sidebar-section-caret {
+  opacity: 0.65;
 }
 .sidebar-section-item .sidebar-section-icon {
   display: inline-flex;

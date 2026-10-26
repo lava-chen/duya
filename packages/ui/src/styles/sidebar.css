@@ -292,36 +292,35 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-primary-link {
   display: flex;
   align-items: center;
-  gap: 8px;
-  /* Claude parity (2026-10-23): a nav row is a 26.4px line — the height
-     measured off a real Claude Code desktop capture (DPR 1.25, physical px
-     ÷ 1.25) — carrying a 13px label and a 12.8px left inset. The previous
-     14px label on an 18px glyph sat on a 27.6px line, which is one type size
-     above Claude's whole sidebar.
-     4.1px vertical padding + 13px × 1.4 line-height = 26.4px. */
-  padding: 4.1px 12.8px;
-  margin: 0 0.5rem;
+  gap: 6px;
+  /* Align the nav label with the section and project name columns. */
+  padding: 4.5px 9.5px;
+  margin: 0;
   border-radius: 8px;
-  color: var(--muted);
+  color: var(--sidebar-muted);
+  /* Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+     the nav label is a 13px glyph — read off a pixel capture of the live
+     window (ink band 17 physical px / 1.25 DPR = 13.6 CSS px cap height on
+     a 13px font). */
   font-size: 13px;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
-  width: calc(100% - 1rem);
+  width: 100%;
   box-sizing: border-box;
 }
 
 .sidebar-primary-link svg {
-  width: 16px !important;
-  height: 16px !important;
+  width: 15px !important;
+  height: 15px !important;
   flex-shrink: 0;
   display: block;
-  stroke-width: 1.75;
+  stroke-width: 1.65;
 }
 
 /* Icon container for consistent alignment */
 .sidebar-primary-link .nav-icon {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -329,9 +328,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .sidebar-new-chat-btn svg {
-  width: 16px !important;
-  height: 16px !important;
-  stroke-width: 1.75;
+  width: 15px !important;
+  height: 15px !important;
+  stroke-width: 1.65;
 }
 
 .sidebar-primary-link:hover {
@@ -348,18 +347,17 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-new-chat-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  /* Claude parity (2026-10-23): 新对话 is the first row of the same nav list
-     as the rows below it, so it shares their 26.4px line, 13px label and
-     12.8px inset — see `.sidebar-primary-link` for the derivation. */
-  padding: 4.1px 12.8px;
-  margin: 0 0.5rem;
+  gap: 6px;
+  /* The first nav row shares the same inset and type scale as the links below. */
+  padding: 4.5px 9.5px;
+  margin: 0;
   border-radius: 8px;
-  color: var(--muted);
+  color: var(--sidebar-text);
+  /* The first nav row shares the same inset and type scale as the links below. */
   font-size: 13px;
   transition: background-color 0.15s ease, color 0.15s ease;
   line-height: 1.4;
-  width: calc(100% - 1rem);
+  width: 100%;
   box-sizing: border-box;
 }
 
@@ -670,11 +668,11 @@ html[data-glass-repair] .attachment-preview-overlay {
      The previous 28px header was a whole session-row height, which pushed
      every project's first session a full row down. */
   height: 21px;
-  padding: 0 0.625rem;
-  margin: 0 0.5rem 2.3px;
-  width: calc(100% - 1rem);
+  padding: 0 10px;
+  margin: 0 0 2.3px;
+  width: 100%;
   box-sizing: border-box;
-  color: var(--muted);
+  color: var(--sidebar-muted);
   font-size: 13px;
   font-weight: 450;
   cursor: pointer;
@@ -807,6 +805,10 @@ html[data-glass-repair] .attachment-preview-overlay {
   stroke-width: 1.75;
 }
 
+.app-sidebar .project-group-icon {
+  display: none;
+}
+
 .project-group-name {
   flex: 1;
   min-width: 0;
@@ -817,32 +819,32 @@ html[data-glass-repair] .attachment-preview-overlay {
   font-weight: 450;
 }
 
-/* -----------------------------------------------------------------------
- * Sidebar geometry tokens
- *
- * The sidebar's hierarchy has a single vertical line — the "name column" —
- * that should run through every project-name AND every thread-title.
- * Rather than scatter magic numbers (0.5rem / 0.625rem / 16px) across
- * multiple rules, we express every horizontal offset as "distance from
- * the sidebar's outer-left to the name column" and read that single
- * value in every rule that needs alignment.
- *
- * Derivation (do not change without re-deriving everything below):
- *   --sidebar-name-column-x
- *     = project-group-header.margin-left        (0.5rem)
- *     + project-group-header.padding-left       (0.625rem)
- *     + project-group-icon width                (16px)
- *     + project-group-header gap (icon→name)    (0.375rem)
- *     = 1.5rem + 16px = 40px
- *
- * Read by:
- *   - .project-group-threads .thread-item → padding-left after the
- *     container's half-rem inset, keeping thread titles aligned with
- *     project names while row surfaces span the same width as headers.
- *
- * If you change --sidebar-icon-size, .project-group-header padding-left,
- * or .project-group-header gap, update --sidebar-name-column-x too.
- * --------------------------------------------------------------------- */
+.app-sidebar .project-group-name {
+  flex: 0 1 auto;
+}
+
+.app-sidebar .project-group-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  opacity: 0.65;
+  flex-shrink: 0;
+}
+
+.app-sidebar .project-group-caret.expanded {
+  opacity: 0;
+}
+
+.app-sidebar .project-group-header:hover .project-group-caret.expanded {
+  opacity: 0.65;
+}
+
+.app-sidebar .project-group-add-btn {
+  margin-left: auto;
+}
+
+/* Name-column tokens remain available to sidebar layouts outside AppSidebar.
+ * AppSidebar overrides the offset below to align its project and thread text. */
 :root {
   --sidebar-icon-size: 16px;
   --sidebar-header-x-pad: 0.625rem;
@@ -854,13 +856,26 @@ html[data-glass-repair] .attachment-preview-overlay {
   );
 }
 
+.app-sidebar {
+  --sidebar-name-column-x: 18px;
+  /* The sidebar's own text ramp. The dark values are sampled off a pixel
+     capture of the live Claude Code desktop window (2026-10-26, 3.6556.2.0):
+     session titles render at #DDDCDC and group captions at #8F8C8C — both a
+     shade off the global --text / --muted, which read too cold and too
+     bright against the warm sidebar surface. The light theme keeps the
+     global ramp until a light-mode capture gives it its own numbers. */
+  --sidebar-text: var(--text);
+  --sidebar-muted: var(--muted);
+}
+
+:root[data-theme="dark"] .app-sidebar {
+  --sidebar-text: #dddcdc;
+  --sidebar-muted: #8f8c8c;
+}
+
 .project-group-threads {
-  /* Match the project header's side margins so thread hover/active
-   * surfaces span the same width, while row titles keep their alignment.
-   * Claude parity (2026-10-23): the gap under a project row is the header's
-   * own 2.3px margin-bottom, so the thread container adds no top margin —
-   * otherwise the two stack up to 3.9px. */
-  margin: 0 0.5rem 0;
+  /* The project header supplies the gap before its first session row. */
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -920,11 +935,10 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .app-sidebar .project-group-threads .thread-item {
-  /* These rows are already inset by their parent container. Reset the
-   * section-wide thread gutter so their surfaces match the project header. */
+  /* Keep row surfaces full width while titles align with project names. */
   width: 100%;
   margin: 0;
-  padding-left: calc(var(--sidebar-name-column-x) - 0.5rem);
+  padding-left: 10px;
 }
 
 .thread-item {
@@ -1074,25 +1088,20 @@ html[data-glass-repair] .attachment-preview-overlay {
   justify-content: center;
 }
 
-/* Sidebar navigation rows use a consistent, full-width hit target. The
-   shared ThreadListItem also appears outside the sidebar, so keep this
-   geometry and the softer state colors scoped to the navigation surface.
-   Claude parity (2026-10-23): the row is 26.4px tall with a 1px gap, so the
-   title pitch is 27.4px — measured off a real Claude Code desktop capture at
-   devicePixelRatio 1.25 (the selected row's highlight is 26.4 CSS px tall and
-   consecutive titles sit 27.2 CSS px apart). */
+/* Keep session row geometry scoped to the app sidebar; ThreadListItem is shared. */
 .app-sidebar .thread-item {
-  height: 26.4px;
-  min-height: 26.4px;
-  flex: 0 0 26.4px;
+  height: 28.5px;
+  min-height: 28.5px;
+  flex: 0 0 28.5px;
   padding: 0 10px;
   /* Claude parity (2026-10-23): 8px corners, as measured on Claude Code's
      selected session row. */
   border-radius: 8px;
-  /* Claude parity (2026-10-23): 13px session title, matching the nav rows
-     and the group captions above it. */
+  /* Match the nav rows and group captions. */
   font-size: 13px;
   font-weight: 450;
+  /* The title inherits the row's colour, so the sidebar ramp applies here. */
+  color: var(--sidebar-text);
   /* Claude parity (2026-10-23): the trailing slot sits 8px off the title. */
   column-gap: 8px;
   gap: 8px;
@@ -1100,11 +1109,12 @@ html[data-glass-repair] .attachment-preview-overlay {
 
 .app-sidebar .thread-item:hover {
   background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--sidebar-text);
 }
 
 .app-sidebar .thread-item.active {
   background: color-mix(in srgb, var(--text) 8%, transparent);
-  color: var(--text);
+  color: var(--sidebar-text);
   /* Claude parity (2026-10-23): the selected session is set at 600 — the
      weight measured on Claude Code's selected row. */
   font-weight: 600;
@@ -1273,11 +1283,8 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  /* Claude parity (2026-10-23): the segmented control owns a 8px side inset
-     (measured off a real Claude Code capture: `margin: 5.2px 8px 0`). The
-     sidebar's own 0.5rem padding already provides the top offset, so this
-     block must not add a second one. */
-  padding: 0 0.5rem;
+  /* The sidebar container already supplies the main horizontal inset. */
+  padding: 0 0.125rem;
 }
 
 .sidebar-top-tabs {
@@ -1299,11 +1306,12 @@ html[data-glass-repair] .attachment-preview-overlay {
   display: flex;
   align-items: center;
   gap: 0.1rem;
-  flex-shrink: 0;
-  padding: 0.16rem;
-  border-radius: 0.65rem;
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text) 6%, transparent);
+  flex: 1;
+  min-width: 0;
+  padding: 2px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border: 0;
 }
 
 .sidebar-tab {
@@ -1314,12 +1322,14 @@ html[data-glass-repair] .attachment-preview-overlay {
   border: 0;
   background: transparent;
   color: var(--muted);
-  /* Claude parity (2026-10-23): 13px segment label, matching the nav rows
-     and the session titles below. */
-  font-size: 13px;
+  /* Match the nav rows and session titles. */
+  font-size: 13.5px;
   font-weight: 500;
-  padding: 0.26rem 0.6rem;
-  border-radius: 0.45rem;
+  flex: 1;
+  justify-content: center;
+  height: 26px;
+  padding: 0 0.4rem;
+  border-radius: 7px;
   cursor: pointer;
   white-space: nowrap;
   transition: color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
@@ -1333,11 +1343,9 @@ html[data-glass-repair] .attachment-preview-overlay {
 .sidebar-tab.active {
   color: var(--text);
   font-weight: 600;
-  /* 88%-opaque fill over Mica gives a crisper pill than a blur would. */
-  background: color-mix(in srgb, var(--bg-canvas) 88%, transparent);
-  box-shadow:
-    0 1px 2px color-mix(in srgb, var(--text) 14%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+  /* A solid selected segment reads clearly over the sidebar surface. */
+  background: color-mix(in srgb, var(--text) 14%, var(--bg-canvas));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 5%, transparent);
 }
 
 .sidebar-tab-badge {
