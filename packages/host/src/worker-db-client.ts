@@ -704,7 +704,7 @@ export const channelDb = {
     sessionId: string;
     channelAddress: string;
     outbound: { content: string; url?: string; caption?: string };
-  }) => sendDbRequest('channel:deliver', input) as Promise<{ success: boolean; reason?: string }>,
+  }) => sendDbRequest('channel:deliver', input) as Promise<{ success: boolean; reason?: string; queued?: boolean; deliveryId?: string }>,
 };
 
 // ==================== Attachment Operations (parsed_document) ====================

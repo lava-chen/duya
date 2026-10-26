@@ -95,8 +95,9 @@ entry points. Its shared architecture separates these layers:
 
 Bot channel replies for Host-owned Bots use `BotChannels` and the core-db
 `BotOutboxStore` (migration 48), alongside the existing inbox and Run tables.
-The Host reads complete durable assistant blocks after Run terminal persistence;
-input settlement and the delivery obligation commit atomically. A fenced
+The existing SendMessage execution path submits explicit replies through the
+fenced worker bridge; ordinary assistant text stays private. Input settlement
+and release of delivery obligations commit atomically after Run terminal persistence. A fenced
 `sending` claim precedes transport I/O. A lost reply or expired send becomes
 `unknown`; only provider evidence can reconcile it, with no automatic resend.
 Vault credentials remain inside platform adapters. Desktop's read-only delivery

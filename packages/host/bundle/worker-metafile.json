@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 50822,
+      "bytes": 50861,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -1070,8 +1070,13 @@
       "format": "esm"
     },
     "packages/data/src/bot-outbox.ts": {
-      "bytes": 7258,
+      "bytes": 10637,
       "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
         {
           "path": "packages/data/src/bot-inbox.ts",
           "kind": "import-statement",
@@ -31770,7 +31775,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 66222,
+      "bytes": 66641,
       "imports": [
         {
           "path": "node:crypto",
@@ -31842,12 +31847,18 @@
       "format": "esm"
     },
     "packages/host/src/bot-channels.ts": {
-      "bytes": 7178,
-      "imports": [],
+      "bytes": 7838,
+      "imports": [
+        {
+          "path": "packages/agent-protocol/src/channels.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/channels"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 47196,
+      "bytes": 48482,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -37212,7 +37223,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/SendMessageTool/SendMessageTool.ts": {
-      "bytes": 30582,
+      "bytes": 30793,
       "imports": [
         {
           "path": "node:crypto",
@@ -37233,7 +37244,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-services/send-message.ts": {
-      "bytes": 2367,
+      "bytes": 2406,
       "imports": [
         {
           "path": "packages/host/src/worker-db-client.ts",
@@ -40165,7 +40176,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1967
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -40249,7 +40260,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 463
+          "bytesInOutput": 462
         },
         "packages/data/src/bot-scheduler-store.ts": {
           "bytesInOutput": 2958
@@ -40402,7 +40413,7 @@
           "bytesInOutput": 350
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4332
+          "bytesInOutput": 4315
         },
         "node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -42796,10 +42807,10 @@
           "bytesInOutput": 145
         },
         "node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50718
         },
         "node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1879
         },
         "node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -43942,7 +43953,7 @@
           "bytesInOutput": 43
         },
         "packages/host/src/worker-prompts/bot/channels.ts": {
-          "bytesInOutput": 658
+          "bytesInOutput": 657
         },
         "packages/host/src/channel-prompts.ts": {
           "bytesInOutput": 20
@@ -44904,6 +44915,9 @@
         "packages/host/src/ipc-message-adapters.ts": {
           "bytesInOutput": 10
         },
+        "packages/host/src/bot-channels.ts": {
+          "bytesInOutput": 5
+        },
         "packages/cli/src/commands/session.ts": {
           "bytesInOutput": 5086
         },
@@ -45457,7 +45471,7 @@
           "bytesInOutput": 251
         },
         "packages/capabilities/src/SendMessageTool/SendMessageTool.ts": {
-          "bytesInOutput": 17948
+          "bytesInOutput": 18081
         },
         "packages/capabilities/src/SendMessageTool/constants.ts": {
           "bytesInOutput": 22
@@ -45553,7 +45567,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4753005
+      "bytes": 4753127
     }
   }
 }

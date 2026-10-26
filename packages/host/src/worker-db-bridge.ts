@@ -141,6 +141,7 @@ export type WorkerBridgeLocalSessions = Pick<
 >;
 
 export interface HostWorkerDbBridgeOptions {
+  readonly channelDelivery?: (payload: Record<string, unknown>, caller: SessionServiceCaller) => Promise<unknown>;
   readonly checkoutService?: SessionCheckoutService;
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
   /** Durable run ledger — serves `run:*` exactly like the ledger API. */
@@ -470,6 +471,10 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
 
   return {
     async dispatch(action: string, payload: Record<string, unknown>, caller?: SessionServiceCaller): Promise<unknown> {
+      if (action === 'channel:deliver' && options.channelDelivery) {
+        if (!caller || payload.sessionId !== caller.sessionId) throw new WorkerDbBridgeError('invalid_payload', 'Channel delivery requires the current worker attempt.');
+        return options.channelDelivery(payload, caller);
+      }
       const handled = await controlPlane.dispatchControlPlaneAction(action, payload);
       if (handled !== undefined) return handled;
 

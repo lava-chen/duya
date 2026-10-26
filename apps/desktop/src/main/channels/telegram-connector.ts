@@ -448,7 +448,7 @@ export class TelegramChannelConnector {
     const envelope: ChannelInboundEnvelope = {
       sourceEventId: String(update.update_id),
       address: { platform: 'telegram', chat: String(msg.chat.id) },
-      sender: msg.from?.username ?? msg.from?.first_name ?? 'unknown',
+      sender,
       text: routedText,
       reaction: null,
       ...(attachments.length > 0 ? { attachments } : {}),

@@ -528,6 +528,10 @@ async function deliverToChannel(
         error: true,
       };
     }
+    if (result.queued) return {
+      id: messageId, name: SEND_MESSAGE_TOOL_NAME,
+      result: `Message queued for channel ${channel}. Delivery is pending; receipt: ${result.deliveryId ?? 'pending'}.`,
+    };
     // Channel send/receive marker row: the delivered message never touched
     // the transcript (channel sends bypass messageDb.append), so persist a
     // `channel_activity` marker so the bot-direct chat can render the

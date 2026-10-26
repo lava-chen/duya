@@ -2,6 +2,11 @@
 
 ## S4 execution — 2026-10-26
 
+- Delivery: draft PR #509; shared follow-up preserves SendMessage semantics,
+  captured attempt fencing and pending-versus-delivered receipts. Host Feishu
+  adapter conformance is exercised here; Desktop Feishu activation and ACK
+  recovery remain the separate platform continuation. No PR is merged.
+
 - Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,
   branch `codex/bot-framework-s4`, base S3c `aaa78d44`. Existing PRs remain unchanged.
 - Plan: establish the affected baseline; add core-db outbox and atomic terminal
@@ -21,8 +26,10 @@
   resent. Vault credentials are resolved only by the Host transport. Connection
   replacement/revocation invalidates queued targets. Ownership transfer refuses
   unresolved deliveries. Existing legacy scheduling remains the default.
-- Channel replies use the last durable assistant message after terminal commit;
-  SendMessage is refused during a managed channel turn to avoid a second send.
+- Channel replies use explicit SendMessage submissions captured with their Run
+  attempt. They queue durably and are released by atomic terminal settlement.
+  Plain assistant text stays private. Missing replies are blocked obligations,
+  identical submissions reuse a receipt, and distinct replies retain order.
   Legacy non-channel turns keep their existing delivery path (retirement is S7).
   Unsupported/oversized output is a visible blocked obligation, never a partial
   send reported as complete. Telegram text is limited to one 4096-character

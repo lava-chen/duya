@@ -641,6 +641,20 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           };
         },
         bridge: createHostWorkerDbBridge({
+          channelDelivery: async (payload, caller) => {
+            if (!botChannels || !botDispatcher || !runExecution) throw new Error('bot_channel_runtime_unavailable');
+            runExecution.validateSessionCaller(caller);
+            const entry = botDispatcher.options.store.outstanding(options.botRuntime!.ownerId).find((row) =>
+              row.source.startsWith('channel:') && `bot:${row.botId}` === caller.sessionId
+              && botDispatcher!.options.store.inbox.lookupReceipt(`bot-inbox:${row.id}`)?.runId === caller.runId);
+            const outbound = payload.outbound as import('@duya/agent-protocol/channels').ChannelOutboundMessage | undefined;
+            if (!entry || typeof payload.channelAddress !== 'string' || !outbound || typeof outbound.content !== 'string') throw new Error('invalid_channel_delivery');
+            const row = botChannels.queueReply(entry, caller.runId, caller.epoch, payload.channelAddress,
+              { kind: outbound.url ? 'attachment' : 'text', content: outbound.content,
+                ...(outbound.url === undefined ? {} : { url: outbound.url }),
+                ...(outbound.caption === undefined ? {} : { caption: outbound.caption }) });
+            return { success: true, queued: true, deliveryId: row.id };
+          },
           checkoutService,
           sessionService,
           runs: core.stores.runs,

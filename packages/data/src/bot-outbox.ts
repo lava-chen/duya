@@ -1,5 +1,6 @@
 import type { BotChannelTarget, BotDelivery, BotDeliveryResult } from '@duya/agent-protocol/bot-delivery-api';
 import type { ChannelOutboundMessage } from '@duya/agent-protocol/channels';
+import { createHash } from 'node:crypto';
 import type { Migration, SqliteDatabase } from './core-database.js';
 import { BotInboxStore } from './bot-inbox.js';
 
@@ -64,10 +65,19 @@ export class BotOutboxStore {
         || entry.bindingId !== target.bindingId || entry.source !== `channel:${target.platform}`
         || !receipt || receipt.runId !== runId || !run?.terminal
         || !['dispatched', 'settled'].includes(entry.status)) throw new Error('bot_delivery_identity_conflict');
+      const offered = this.db.prepare('SELECT id FROM bot_outbox WHERE inbox_id = ? ORDER BY created_ms, id').all(inboxId) as { id: string }[];
+      if (offered.length) {
+        if (run.terminal !== 'completed') this.db.prepare(`UPDATE bot_outbox SET status = 'blocked', reason = 'run_not_completed'
+          WHERE inbox_id = ? AND status = 'pending'`).run(inboxId);
+        const settled = inbox.settle(inboxId);
+        if (settled.state !== 'applied' && settled.state !== 'replayed') throw new Error('bot_delivery_settlement_conflict');
+        return this.get(offered[0]!.id)!;
+      }
       const id = `bot-reply:${inboxId}`;
       // Explicit columns strip any extra caller properties (especially secrets).
       const safeTarget: BotChannelTarget = { ownerId: target.ownerId, botId: target.botId,
-        bindingId: target.bindingId, platform: target.platform, chatId: target.chatId };
+        bindingId: target.bindingId, platform: target.platform, chatId: target.chatId,
+        ...(target.authorizationRevision === undefined ? {} : { authorizationRevision: target.authorizationRevision }) };
       const safeOutbound: ChannelOutboundMessage = { kind: outbound.kind,
         ...(outbound.content === undefined ? {} : { content: outbound.content }),
         ...(outbound.url === undefined ? {} : { url: outbound.url }),
@@ -84,13 +94,43 @@ export class BotOutboxStore {
     })();
   }
 
+  /** Called only by the existing SendMessage execution path with its captured attempt. */
+  offerReply(inboxId: string, runId: string, epoch: number, target: BotChannelTarget, outbound: ChannelOutboundMessage): BotDelivery {
+    return this.db.transaction(() => {
+      const inbox = new BotInboxStore(this.db);
+      const entry = inbox.getById(inboxId);
+      const receipt = inbox.lookupReceipt(`bot-inbox:${inboxId}`);
+      const run = this.db.prepare('SELECT epoch, terminal FROM runs WHERE id = ?').get(runId) as { epoch: number; terminal: string | null } | undefined;
+      if (!entry || !receipt || receipt.runId !== runId || !run || run.epoch !== epoch || run.terminal !== null
+        || entry.ownerId !== target.ownerId || entry.botId !== target.botId || entry.bindingId !== target.bindingId
+        || entry.source !== `channel:${target.platform}`
+        || !['claimed', 'dispatched'].includes(entry.status)) throw new Error('bot_delivery_attempt_fenced');
+      const safeTarget = { ownerId: target.ownerId, botId: target.botId, bindingId: target.bindingId,
+        platform: target.platform, chatId: target.chatId,
+        ...(target.authorizationRevision === undefined ? {} : { authorizationRevision: target.authorizationRevision }) };
+      const safeOutbound = { kind: outbound.kind, content: outbound.content ?? '',
+        ...(outbound.url === undefined ? {} : { url: outbound.url }),
+        ...(outbound.caption === undefined ? {} : { caption: outbound.caption }) };
+      const encoded = JSON.stringify(safeOutbound);
+      const id = `bot-reply:${inboxId}:${createHash('sha256').update(encoded).digest('hex')}`;
+      const previous = this.db.prepare('SELECT MAX(created_ms) AS latest FROM bot_outbox WHERE inbox_id = ?').get(inboxId) as { latest: number | null };
+      const created = Math.max(Date.now(), (previous.latest ?? 0) + 1);
+      this.db.prepare(`INSERT INTO bot_outbox
+        (id,inbox_id,run_id,owner_id,bot_id,target_json,outbound_json,status,created_ms)
+        VALUES (?,?,?,?,?,?,?,'pending',?) ON CONFLICT(id) DO NOTHING`).run(id, inboxId, runId,
+        target.ownerId, target.botId, JSON.stringify(safeTarget), encoded, created);
+      return this.get(id)!;
+    })();
+  }
+
   /** Commit sending BEFORE touching the network; an expired send is unknown. */
   claim(id: string, deadlineMs: number, now = Date.now()): BotDelivery | null {
     if (!Number.isFinite(deadlineMs) || deadlineMs <= now) throw new Error('invalid_delivery_deadline');
     return this.db.transaction(() => {
       const changed = this.db.prepare(`UPDATE bot_outbox SET status = 'sending',
         lease_epoch = lease_epoch + 1, attempt = attempt + 1, deadline_ms = ?
-        WHERE id = ? AND status = 'pending' AND attempt < 3`).run(deadlineMs, id);
+        WHERE id = ? AND status = 'pending' AND attempt < 3
+        AND EXISTS (SELECT 1 FROM bot_inbox WHERE bot_inbox.id = bot_outbox.inbox_id AND bot_inbox.status = 'settled')`).run(deadlineMs, id);
       return changed.changes ? this.get(id) : null;
     })();
   }
@@ -107,6 +147,9 @@ export class BotOutboxStore {
   }
 
   recoverExpired(ownerId: string, now = Date.now()): void {
+    this.db.prepare(`UPDATE bot_outbox SET status = 'blocked', reason = 'input_recovery_required'
+      WHERE owner_id = ? AND status = 'pending' AND EXISTS
+      (SELECT 1 FROM bot_inbox WHERE bot_inbox.id = bot_outbox.inbox_id AND bot_inbox.status = 'dead_letter')`).run(ownerId);
     this.db.prepare(`UPDATE bot_outbox SET status = 'unknown', reason = 'send_interrupted',
       deadline_ms = NULL WHERE owner_id = ? AND status = 'sending' AND deadline_ms <= ?`).run(ownerId, now);
   }

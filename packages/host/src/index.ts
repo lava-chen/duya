@@ -88,3 +88,4 @@ export { SessionCheckoutService, SessionCheckoutError, parseSessionCheckoutComma
 export { BotChannels } from './bot-channels.js';
 export type { BotChannelAdapter, BotChannelOptions } from './bot-channels.js';
 export { createBotTelegramAdapter } from './bot-telegram-adapter.js';
+export { createBotFeishuAdapter } from './bot-feishu-adapter.js';

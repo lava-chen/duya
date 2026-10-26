@@ -928,7 +928,20 @@ export async function acceptDesktopBotChannel(botId: string, envelope: ChannelIn
 
 export function isDesktopManagedChannelTurn(botId: string): boolean {
   return desktopBotDispatchStore?.outstanding(LOCAL_BOT_OWNER).some((entry) =>
-    entry.botId === botId && entry.source.startsWith('channel:') && entry.status === 'dispatched') ?? false;
+    entry.botId === botId && entry.source.startsWith('channel:') && ['claimed', 'dispatched'].includes(entry.status)
+    && desktopBotDispatchStore!.inbox.lookupReceipt(`bot-inbox:${entry.id}`) !== null) ?? false;
+}
+
+export function queueDesktopBotChannelReply(sessionId: string, address: string,
+  outbound: import('@duya/agent-protocol/channels').ChannelOutboundMessage,
+  caller?: { sessionId: string; runId: string; epoch: number }): BotDelivery | null {
+  const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
+  if (!botId || !isDesktopManagedChannelTurn(botId)) return null;
+  if (!caller || caller.sessionId !== sessionId || !desktopBotChannels || !desktopBotDispatchStore) throw new Error('bot_delivery_attempt_fenced');
+  const entry = desktopBotDispatchStore.outstanding(LOCAL_BOT_OWNER).find((row) => row.botId === botId
+    && row.source.startsWith('channel:') && desktopBotDispatchStore!.inbox.lookupReceipt(`bot-inbox:${row.id}`)?.runId === caller.runId);
+  if (!entry) throw new Error('bot_delivery_attempt_fenced');
+  return desktopBotChannels.queueReply(entry, caller.runId, caller.epoch, address, outbound);
 }
 
 export function listDesktopBotDeliveries(botId: string): BotDelivery[] {

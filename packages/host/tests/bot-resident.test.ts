@@ -10,6 +10,10 @@ import { HostSessionHttpClient } from '../src/http-client.js';
 const WORKER = `
 const fs = require('node:fs');
 let buffer = '';
+let channelQueued = false;
+process.on('message', message => {
+  if (message.type === 'db:response' && message.id === 'channel-reply' && message.success && message.result.queued) channelQueued = true;
+});
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => {
   buffer += chunk;
@@ -26,10 +30,14 @@ process.stdin.on('data', chunk => {
         timestamp: Date.now(), traceId: 'bot-test', payload } });
     emit({ type: 'run.started', manifestHash: command.manifestHash,
       protocol: { major: 1, minor: 0 }, runtime: { name: 'bot-test', version: '1' } });
+    const channelTurn = command.prompt.startsWith('[channel_inbound]');
+    if (channelTurn) process.send({ type: 'db:request', id: 'channel-reply', action: 'channel:deliver',
+      payload: { sessionId: command.sessionId, channelAddress: 'telegram:123', outbound: { content: 'durable channel answer' } } });
     const timer = setInterval(() => {
       if (!fs.existsSync(command.prompt)) return;
+      if (channelTurn && !channelQueued) return;
       clearInterval(timer);
-      emit({ type: 'assistant.text_block', messageId: 'reply', index: 0, text: 'durable channel answer' });
+      emit({ type: 'assistant.text_block', messageId: 'reply', index: 0, text: 'private worker scratchpad' });
       emit({ type: 'run.completed', status: 'completed', stopReason: 'end_turn' });
       process.send({ type: 'chat:done', sessionId: command.sessionId });
     }, 20);

@@ -7,6 +7,7 @@ export interface BotChannelTarget {
   readonly bindingId: string;
   readonly platform: string;
   readonly chatId: string;
+  readonly authorizationRevision?: string;
 }
 
 export type BotDeliveryStatus = 'pending' | 'sending' | 'delivered' | 'unknown' | 'blocked';
