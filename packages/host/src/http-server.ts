@@ -88,7 +88,7 @@ import type {
 import { HostCheckoutApiError } from './checkout-api.js';
 import { SessionCheckoutError, parseSessionCheckoutCommand } from './workspace/session-checkout-service.js';
 import { HostSkillInventoryError } from './skills/skill-inventory-api.js';
-import { ClientLeaseTracker } from './client-lease.js';
+import { ClientLeaseTracker, DEFAULT_CLIENT_LEASE_IDLE_MS } from './client-lease.js';
 import type { IntegrationSync } from './scm/sync.js';
 import type { DurableTimelineEntry } from '@duya/agent-protocol/rollout-events';
 import type { JournalRecord } from '@duya/agent-protocol';
@@ -491,6 +491,14 @@ export interface HostSessionHttpServerOptions {
   readonly clientLease?: {
     readonly idleTimeoutMs?: number;
     readonly onIdle: () => void;
+    /**
+     * A client attached (or came back) after the idle verdict was reported.
+     *
+     * The owner uses this to cancel a shutdown it has not committed to yet.
+     * Without it an idle verdict would be final, and a client that reconnects
+     * during the drain would still be shut down under.
+     */
+    readonly onClientAttached?: () => void;
   };
 }
 
@@ -641,6 +649,7 @@ export class HostSessionHttpServer {
   #clientLeaseTracker: ClientLeaseTracker | null = null;
   #clientLeaseTimer: ReturnType<typeof setInterval> | null = null;
   #clientIdleReported = false;
+  #closing = false;
   #server: Server | null = null;
   #port = 0;
 
@@ -677,6 +686,7 @@ export class HostSessionHttpServer {
 
   async listen(): Promise<void> {
     if (this.#server) return;
+    this.#closing = false;
     const server = createServer((req, res) => {
       void this.#route(req, res).catch(() => {
         if (!res.headersSent) this.#sendJson(res, 500, { error: { code: 'internal_error' } });
@@ -708,6 +718,7 @@ export class HostSessionHttpServer {
     const server = this.#server;
     this.#server = null;
     this.#port = 0;
+    this.#closing = true;
     if (this.#clientLeaseTimer !== null) {
       clearInterval(this.#clientLeaseTimer);
       this.#clientLeaseTimer = null;
@@ -743,6 +754,9 @@ export class HostSessionHttpServer {
     if (this.#clientIdleReported) return;
     if (!tracker.isIdle()) return;
     this.#clientIdleReported = true;
+    logger.info('No client lease left; reporting this Host idle', {
+      idleTimeoutMs: lease.idleTimeoutMs ?? DEFAULT_CLIENT_LEASE_IDLE_MS,
+    });
     lease.onIdle();
   }
 
@@ -754,13 +768,21 @@ export class HostSessionHttpServer {
    * keep-alive reaper: the connection is busy for as long as the lease is
    * held, however long that is.
    */
-  #holdClientLease(res: ServerResponse): void {
+  #holdClientLease(req: IncomingMessage, res: ServerResponse): void {
     const tracker = this.#clientLeaseTracker;
     if (tracker === null) {
       this.#sendJson(res, 404, { error: { code: 'client_lease_unavailable' } });
       return;
     }
     tracker.acquire();
+    // A lease that arrives while the owner is winding down means the verdict
+    // "nobody is attached" was stale. Unlatch it so a later idle period is
+    // still able to stop this Host, and let the owner cancel its shutdown.
+    const wasReportedIdle = this.#clientIdleReported;
+    this.#clientIdleReported = false;
+    const acquiredAt = Date.now();
+    const remote = `${req.socket.remoteAddress ?? 'unknown'}:${req.socket.remotePort ?? 0}`;
+    logger.info('Client lease acquired', { leases: tracker.leaseCount, remote });
     this.#activeClientLeases.add(res);
     res.writeHead(200, {
       'content-type': 'text/plain; charset=utf-8',
@@ -769,15 +791,22 @@ export class HostSessionHttpServer {
     });
     res.flushHeaders();
     let released = false;
-    const release = (): void => {
+    const release = (reason: 'finished' | 'connection_closed' | 'host_shutdown'): void => {
       if (released) return;
       released = true;
       this.#activeClientLeases.delete(res);
       tracker.release();
+      logger.info('Client lease released', {
+        leases: tracker.leaseCount,
+        remote,
+        heldMs: Date.now() - acquiredAt,
+        reason,
+      });
       this.#reportIdleClients();
     };
-    res.once('close', release);
-    res.once('finish', release);
+    res.once('close', () => release(this.#closing ? 'host_shutdown' : 'connection_closed'));
+    res.once('finish', () => release(this.#closing ? 'host_shutdown' : 'finished'));
+    if (wasReportedIdle) this.#options.clientLease?.onClientAttached?.();
   }
 
   #authorise(req: IncomingMessage): { ok: true } | { ok: false; status: number; code: string } {
@@ -835,7 +864,7 @@ export class HostSessionHttpServer {
     if (req.method === 'GET' && url.pathname === '/v1/host/lease') {
       // A lease is a presence signal, not a lock: the response stays open and
       // the Host counts it until the client goes away.
-      this.#holdClientLease(res);
+      this.#holdClientLease(req, res);
       return;
     }
     // The MCP inventory is matched BEFORE every namespaced route below, on
