@@ -56,6 +56,7 @@ import {
   type ChannelActivityChipGroup,
 } from "./bot/channel-activity";
 import { ChannelActivityChip, ChannelActivityOverlay } from "./bot/ChannelActivityChip";
+import { BotDeliveryReceipts } from "./bot/BotDeliveryReceipts";
 import { isRoutineActivityMarker } from "./bot/routine-activity";
 import { RoutineActivityChip } from "./bot/RoutineActivityChip";
 import { ChevronDownIcon } from "@/components/icons";
@@ -1218,6 +1219,7 @@ export function BotDirectChatView({
         ) : (
           transcriptNodes
         )}
+        <BotDeliveryReceipts botId={agentId} />
 
         {/* Plan 494 — pending AskUserQuestion renders as an in-chat card
             (assistant side); generic tool approvals render as a compact

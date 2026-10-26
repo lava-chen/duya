@@ -856,6 +856,7 @@ export interface BotTurnPush {
 }
 
 export interface BotTurnAPI {
+  listDeliveries: (payload: { botId: string }) => Promise<readonly import('@duya/agent-protocol').BotDelivery[]>;
   sendTurn: (payload: { agentId: string; text: string; clientMsgId?: string; attachments?: readonly FileAttachment[] }) => Promise<{ action: 'start' | 'queued' | 'accepted'; messageId: string }>;
   claimScheduledTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
   cancelQueuedTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
@@ -2798,6 +2799,7 @@ const electronAPI: ElectronAPI = {
   },
   // Bot turn scheduling API (Plan 500 P2)
   botTurn: {
+    listDeliveries: (payload) => ipcRenderer.invoke('bot:deliveries:list', payload),
     sendTurn: (payload) => ipcRenderer.invoke('bot:sendTurn', payload),
     claimScheduledTurn: (payload) => ipcRenderer.invoke('bot:claimScheduledTurn', payload),
     cancelQueuedTurn: (payload) => ipcRenderer.invoke('bot:cancelQueuedTurn', payload),

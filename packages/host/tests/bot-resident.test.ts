@@ -29,6 +29,7 @@ process.stdin.on('data', chunk => {
     const timer = setInterval(() => {
       if (!fs.existsSync(command.prompt)) return;
       clearInterval(timer);
+      emit({ type: 'assistant.text_block', messageId: 'reply', index: 0, text: 'durable channel answer' });
       emit({ type: 'run.completed', status: 'completed', stopReason: 'end_turn' });
       process.send({ type: 'chat:done', sessionId: command.sessionId });
     }, 20);
@@ -68,6 +69,42 @@ async function setup() {
 }
 
 describe('headless Bot resident', () => {
+  it('delivers a channel reply from a real child terminal and replays it after Host restart without resending', async () => {
+    const h = await setup();
+    await fs.writeFile(h.workerPath, WORKER.replace('if (!fs.existsSync(command.prompt)) return;',
+      `if (!fs.existsSync(${JSON.stringify(h.marker)})) return;`));
+    const target = { ownerId: 'local-test-owner', botId: 'helper', platform: 'telegram', chatId: '123', bindingId: 'binding' };
+    let sends = 0;
+    const channels = {
+      resolveTarget: () => target,
+      adapters: [{ platform: 'telegram', async send() {
+        sends += 1;
+        return { state: 'delivered' as const, remoteMessageId: 'remote-55' };
+      } }],
+    };
+    const options = { ...h.options, botRuntime: { ...h.options.botRuntime, channels } };
+    const envelope = { sourceEventId: 'event-12', address: { platform: 'telegram', chat: '123' },
+      sender: 'external', text: 'hello', reaction: null };
+    let host: LocalHostHandle | undefined;
+    try {
+      host = await startLocalHost(options);
+      const accepted = await host.botChannels!.acceptInbound('helper', envelope);
+      await fs.writeFile(h.marker, 'finish');
+      await until(() => host!.botChannels!.list('helper')[0]?.status === 'delivered');
+      expect(host.botInputs!.get(accepted.entry.id)?.status).toBe('settled');
+      expect(host.botChannels!.list('helper')[0]?.outbound.content).toBe('durable channel answer');
+      await host.close();
+      host = await startLocalHost(options);
+      expect((await host.botChannels!.acceptInbound('helper', envelope)).entry.id).toBe(accepted.entry.id);
+      await host.botInputs!.tick();
+      expect(sends).toBe(1);
+      expect((await fs.readFile(`${h.workerPath}.starts`, 'utf8')).trim().split('\n')).toHaveLength(1);
+    } finally {
+      await host?.close();
+      await fs.rm(h.root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('finishes a real child run after the last client leaves, then releases the Host', async () => {
     const h = await setup();
     let host: LocalHostHandle | undefined;

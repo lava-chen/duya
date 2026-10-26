@@ -438,7 +438,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/wake.ts": {
-      "bytes": 4049,
+      "bytes": 4202,
       "imports": [],
       "format": "esm"
     },
@@ -448,7 +448,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/bot-inbox-api.ts": {
-      "bytes": 6169,
+      "bytes": 6579,
       "imports": [],
       "format": "esm"
     },
@@ -468,7 +468,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/channels.ts": {
-      "bytes": 12810,
+      "bytes": 12922,
       "imports": [],
       "format": "esm"
     },
@@ -625,7 +625,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5477,
+      "bytes": 5613,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -1010,18 +1010,13 @@
       ],
       "format": "esm"
     },
-    "packages/data/src/run-store.ts": {
-      "bytes": 37131,
+    "packages/data/src/bot-scheduler-store.ts": {
+      "bytes": 5797,
       "imports": [
         {
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
-        },
-        {
-          "path": "packages/agent-protocol/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-protocol"
         }
       ],
       "format": "esm"
@@ -1033,6 +1028,54 @@
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/bot-dispatch-store.ts": {
+      "bytes": 3900,
+      "imports": [
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/run-store.ts": {
+      "bytes": 39461,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/agent-protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-dispatch-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-dispatch-store.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/bot-outbox.ts": {
+      "bytes": 7258,
+      "imports": [
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
         }
       ],
       "format": "esm"
@@ -1082,7 +1125,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 52268,
+      "bytes": 52522,
       "imports": [
         {
           "path": "node:crypto",
@@ -1138,6 +1181,16 @@
           "path": "packages/data/src/bot-inbox.ts",
           "kind": "import-statement",
           "original": "./bot-inbox.js"
+        },
+        {
+          "path": "packages/data/src/bot-outbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-outbox.js"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
         },
         {
           "path": "packages/data/src/workflow-run-store.ts",
@@ -1393,17 +1446,6 @@
       ],
       "format": "esm"
     },
-    "packages/data/src/bot-dispatch-store.ts": {
-      "bytes": 3900,
-      "imports": [
-        {
-          "path": "packages/data/src/bot-inbox.ts",
-          "kind": "import-statement",
-          "original": "./bot-inbox.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/data/src/main-settings-store.ts": {
       "bytes": 1073,
       "imports": [],
@@ -1650,7 +1692,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2472,
+      "bytes": 2587,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1701,6 +1743,11 @@
           "path": "packages/data/src/bot-dispatch-store.ts",
           "kind": "import-statement",
           "original": "./bot-dispatch-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
         },
         {
           "path": "packages/data/src/core-stores.ts",
@@ -1931,6 +1978,11 @@
           "path": "packages/data/src/provider-model-capability-store.ts",
           "kind": "import-statement",
           "original": "./provider-model-capability-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-outbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-outbox.js"
         }
       ],
       "format": "esm"
@@ -31147,7 +31199,7 @@
       "format": "esm"
     },
     "packages/host/src/run-control-plane.ts": {
-      "bytes": 16693,
+      "bytes": 17121,
       "imports": [
         {
           "path": "packages/data/src/run-store.ts",
@@ -31179,7 +31231,7 @@
       "format": "esm"
     },
     "packages/host/src/run-orchestrator.ts": {
-      "bytes": 133373,
+      "bytes": 134017,
       "imports": [
         {
           "path": "node:crypto",
@@ -31779,7 +31831,7 @@
       "format": "esm"
     },
     "packages/host/src/bot-dispatcher.ts": {
-      "bytes": 7453,
+      "bytes": 12039,
       "imports": [
         {
           "path": "node:crypto",
@@ -31789,8 +31841,13 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/bot-channels.ts": {
+      "bytes": 7178,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/local-host.ts": {
-      "bytes": 46149,
+      "bytes": 47196,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -32116,6 +32173,11 @@
           "path": "packages/host/src/bot-dispatcher.ts",
           "kind": "import-statement",
           "original": "./bot-dispatcher.js"
+        },
+        {
+          "path": "packages/host/src/bot-channels.ts",
+          "kind": "import-statement",
+          "original": "./bot-channels.js"
         },
         {
           "path": "packages/host/src/config-agents/bot-id.ts",
@@ -37909,6 +37971,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:module",
           "kind": "require-call",
           "external": true
@@ -40184,11 +40251,20 @@
         "packages/agent-protocol/src/index.ts": {
           "bytesInOutput": 463
         },
-        "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7353
+        "packages/data/src/bot-scheduler-store.ts": {
+          "bytesInOutput": 2958
         },
         "packages/data/src/bot-inbox.ts": {
           "bytesInOutput": 10680
+        },
+        "packages/data/src/bot-dispatch-store.ts": {
+          "bytesInOutput": 2310
+        },
+        "packages/data/src/run-store.ts": {
+          "bytesInOutput": 8508
+        },
+        "packages/data/src/bot-outbox.ts": {
+          "bytesInOutput": 35
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -40203,7 +40279,7 @@
           "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
-          "bytesInOutput": 96
+          "bytesInOutput": 107
         },
         "packages/data/src/rollout-events.ts": {
           "bytesInOutput": 35
@@ -40243,9 +40319,6 @@
         },
         "packages/data/src/database-host.ts": {
           "bytesInOutput": 48
-        },
-        "packages/data/src/bot-dispatch-store.ts": {
-          "bytesInOutput": 35
         },
         "packages/data/src/main-settings-store.ts": {
           "bytesInOutput": 30
@@ -40326,7 +40399,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 339
+          "bytesInOutput": 350
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4332
@@ -42096,7 +42169,7 @@
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 409
+          "bytesInOutput": 422
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -42732,16 +42805,16 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-color/dist/esm/index.js": {
-          "bytesInOutput": 7790
+          "bytesInOutput": 7797
         },
         "node_modules/await-to-js/dist/await-to-js.umd.js": {
-          "bytesInOutput": 379
+          "bytesInOutput": 383
         },
         "node_modules/@jimp/file-ops/dist/esm/index.js": {
           "bytesInOutput": 122
         },
         "node_modules/@jimp/core/node_modules/mime/Mime.js": {
-          "bytesInOutput": 1151
+          "bytesInOutput": 1156
         },
         "node_modules/@jimp/core/node_modules/mime/types/standard.js": {
           "bytesInOutput": 9549
@@ -43146,7 +43219,7 @@
           "bytesInOutput": 205
         },
         "node_modules/@jimp/plugin-hash/dist/esm/phash.js": {
-          "bytesInOutput": 1118
+          "bytesInOutput": 1119
         },
         "node_modules/@jimp/plugin-hash/dist/esm/index.js": {
           "bytesInOutput": 694
@@ -43287,7 +43360,7 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-threshold/dist/esm/index.js": {
-          "bytesInOutput": 422
+          "bytesInOutput": 423
         },
         "node_modules/image-q/dist/esm/image-q.mjs": {
           "bytesInOutput": 46037
@@ -43473,7 +43546,7 @@
           "bytesInOutput": 587
         },
         "node_modules/jimp/dist/esm/index.js": {
-          "bytesInOutput": 879
+          "bytesInOutput": 880
         },
         "packages/capabilities/src/AppConnectionTool/index.ts": {
           "bytesInOutput": 3129
@@ -45480,7 +45553,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4746528
+      "bytes": 4753005
     }
   }
 }

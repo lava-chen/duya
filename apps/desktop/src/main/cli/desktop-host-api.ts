@@ -122,7 +122,10 @@ import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
 import { BotDispatchStore, BotSchedulerStore, LOCAL_BOT_OWNER } from '@duya/data';
-import { BotDispatcher, readBotPrompt } from '@duya/host';
+import { BotChannels, BotDispatcher, readBotPrompt } from '@duya/host';
+import { createDesktopBotChannels } from '../channels/bot-channel-runtime';
+import type { ChannelInboundEnvelope } from '@duya/agent-protocol/channels';
+import type { BotDelivery } from '@duya/agent-protocol';
 import type { BotInboxClaimGrant } from '@duya/data';
 import { listBots } from '../config/agents';
 import { buildManagedWakePrompt, isLegacyWakeSchedulerIdle, setManagedBotWakePort } from '../wake/wake-dispatcher';
@@ -164,6 +167,7 @@ let desktopCheckoutServiceStores: CoreStores | null = null;
 let desktopBotScheduler: BotSchedulerStore | null = null;
 let desktopBotDispatchStore: BotDispatchStore | null = null;
 let desktopBotDispatcher: BotDispatcher | null = null;
+let desktopBotChannels: BotChannels | null = null;
 /**
  * The checkout controls the db bridge, the HTTP surface and the IPC handlers
  * share. Built from the boot-time core stores — the same singleton every
@@ -379,10 +383,18 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   const runExecutionApi = createDesktopRunExecutionApi({
     getSessionForRun: async (runId) => (await runApi.getAgentRun(runId))?.sessionId ?? null,
   });
+  const botChannels = createDesktopBotChannels({
+    outbox: stores.botOutbox,
+    runs: stores.runs,
+    accept: (command) => botDispatcher.accept(command),
+  });
   const botDispatcher = new BotDispatcher({
     ownerId: LOCAL_BOT_OWNER,
     store: botDispatchStore,
     scheduler: botScheduler,
+    settleInput: (entry, runId) => botChannels.complete(entry, runId),
+    pollDeliveries: () => botChannels.poll(),
+    hasDeliveries: () => botChannels.hasWork(),
     runs: stores.runs,
     execution: runExecutionApi,
     resolveInput: async (entry) => {
@@ -410,6 +422,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   desktopBotScheduler = botScheduler;
   desktopBotDispatchStore = botDispatchStore;
   desktopBotDispatcher = botDispatcher;
+  desktopBotChannels = botChannels;
   const acceptManagedWake = (sessionId: string, item: WakeItem): 'added' | 'merged' | 'deduped' => {
     const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
     if (!botId || !listBots().some((bot) => bot.id === botId)) throw new Error('unknown_bot');
@@ -633,6 +646,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
         await server.close();
       } finally {
         if (desktopBotDispatcher === botDispatcher) desktopBotDispatcher = null;
+        if (desktopBotChannels === botChannels) desktopBotChannels = null;
         if (desktopBotScheduler === botScheduler) desktopBotScheduler = null;
         if (desktopBotDispatchStore === botDispatchStore) desktopBotDispatchStore = null;
         setManagedBotWakePort(null);
@@ -906,8 +920,28 @@ export function getDesktopBotSchedulerState(botId: string): BotSchedulerState {
   return desktopBotScheduler.get(botId, LOCAL_BOT_OWNER);
 }
 
+/** Called only from a trusted per-Bot connector after its sender filter. */
+export async function acceptDesktopBotChannel(botId: string, envelope: ChannelInboundEnvelope) {
+  if (!desktopBotChannels) throw new Error('bot_channel_runtime_unavailable');
+  return desktopBotChannels.acceptInbound(botId, envelope);
+}
+
+export function isDesktopManagedChannelTurn(botId: string): boolean {
+  return desktopBotDispatchStore?.outstanding(LOCAL_BOT_OWNER).some((entry) =>
+    entry.botId === botId && entry.source.startsWith('channel:') && entry.status === 'dispatched') ?? false;
+}
+
+export function listDesktopBotDeliveries(botId: string): BotDelivery[] {
+  if (!desktopBotChannels) throw new Error('bot_channel_runtime_unavailable');
+  if (!listBots().some((bot) => bot.id === botId)) throw new Error('unknown_bot');
+  return desktopBotChannels.list(botId);
+}
+
 export function switchDesktopBotScheduler(botId: string, mode: 'legacy' | 'host', expectedEpoch: number): BotSchedulerState {
   if (!desktopBotScheduler || !desktopBotDispatchStore) throw new Error('Desktop Bot scheduler is not running');
+  if (desktopBotChannels?.list(botId).some((row) => ['pending', 'sending', 'unknown'].includes(row.status))) {
+    throw new Error('bot_scheduler_busy: reconcile channel deliveries before ownership transfer');
+  }
   if (mode === 'host') {
     if (!isLegacyWakeSchedulerIdle(`bot:${botId}`)
         || getCoreStores().wakes.listForAgent(botId).length > 0) {

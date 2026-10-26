@@ -109,7 +109,7 @@ export interface TelegramConnectorOptions {
   agentId: string;
   /** The bot's own token (from the per-agent connector-secret store). */
   token: string;
-  onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void;
+  onInbound: (agentId: string, envelope: ChannelInboundEnvelope) => void | Promise<void>;
   /**
    * Optional inbound gating (allowedUsers / allowedChats / groupPolicy),
    * parsed from the channel's connection.json by the connector runtime.
@@ -303,10 +303,9 @@ export class TelegramChannelConnector {
         );
         const { batch, skipTo } = this.capStartupBacklog(updates);
         for (const update of batch) {
-          // Advance the offset before (possibly async) handling so a slow
-          // media download can never cause a re-fetch of the same update.
-          this.offset = update.update_id + 1;
           await this.handleUpdate(update);
+          // A failed durable admission must replay this event on the next poll.
+          this.offset = update.update_id + 1;
         }
         // The cap may have moved the offset past the batch it kept; the loop
         // above then walked it backwards. Re-apply the high-water mark, or
@@ -447,6 +446,7 @@ export class TelegramChannelConnector {
     }
 
     const envelope: ChannelInboundEnvelope = {
+      sourceEventId: String(update.update_id),
       address: { platform: 'telegram', chat: String(msg.chat.id) },
       sender: msg.from?.username ?? msg.from?.first_name ?? 'unknown',
       text: routedText,
@@ -458,7 +458,7 @@ export class TelegramChannelConnector {
       chat: envelope.address.chat,
       sender: envelope.sender,
     }, LogComponent.Gateway);
-    this.opts.onInbound(this.opts.agentId, envelope);
+    await this.opts.onInbound(this.opts.agentId, envelope);
   }
 
   /**

@@ -85,3 +85,6 @@ export * from './agent-profile-config.js';
 export * from './diagnostics/index.js';
 
 export { SessionCheckoutService, SessionCheckoutError, parseSessionCheckoutCommand } from './workspace/session-checkout-service.js';
+export { BotChannels } from './bot-channels.js';
+export type { BotChannelAdapter, BotChannelOptions } from './bot-channels.js';
+export { createBotTelegramAdapter } from './bot-telegram-adapter.js';

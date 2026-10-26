@@ -57,3 +57,4 @@ export * from './import-batch-store.js';
 export * from './sidebar-sections-store.js';
 export * from './provider-model-pricing-store.js';
 export * from './provider-model-capability-store.js';
+export { BotOutboxStore, BOT_OUTBOX_MIGRATIONS } from './bot-outbox.js';

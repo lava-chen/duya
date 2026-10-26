@@ -25,6 +25,7 @@ import { runWakePromptInExistingSession } from '../wake/wake-run';
 import {
   cancelDesktopBotInput,
   getDesktopBotSchedulerState,
+  listDesktopBotDeliveries,
   getDesktopHostLockApi,
   switchDesktopBotScheduler,
 } from '../cli/desktop-host-api';
@@ -55,6 +56,11 @@ const BOT_KICKSTART_PROMPT = [
 ].join('\n');
 
 export function registerBotHandlers(): void {
+  ipcMain.handle('bot:deliveries:list', (_event, data: { botId?: string }) => {
+    const botId = typeof data?.botId === 'string' ? data.botId.trim() : '';
+    if (!botId) throw new Error('botId is required');
+    return listDesktopBotDeliveries(botId);
+  });
   ipcMain.handle(
     'bot:sendTurn',
     async (_event, data: { agentId?: string; text?: string; clientMsgId?: string; attachments?: readonly FileAttachment[] }): Promise<BotSendTurnResult> => {

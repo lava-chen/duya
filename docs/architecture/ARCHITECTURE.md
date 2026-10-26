@@ -93,6 +93,18 @@ entry points. Its shared architecture separates these layers:
 
 ## Tech Stack
 
+Bot channel replies for Host-owned Bots use `BotChannels` and the core-db
+`BotOutboxStore` (migration 48), alongside the existing inbox and Run tables.
+The Host reads complete durable assistant blocks after Run terminal persistence;
+input settlement and the delivery obligation commit atomically. A fenced
+`sending` claim precedes transport I/O. A lost reply or expired send becomes
+`unknown`; only provider evidence can reconcile it, with no automatic resend.
+Vault credentials remain inside platform adapters. Desktop's read-only delivery
+IPC and receipt cards project this store; SSE completion is not delivery evidence.
+Telegram admission awaits its per-update inbox receipt before advancing offset.
+This path is opt-in through S3c scheduler ownership; legacy channel retirement
+remains S7.
+
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vite 6, React 19, Zero Router, Tailwind |
