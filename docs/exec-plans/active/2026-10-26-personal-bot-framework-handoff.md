@@ -12,7 +12,7 @@ S0 已合并进 master；S1、S2、S3a 三个切片已实现并开了 PR，处�
 | --- | --- | --- | --- | --- |
 | S0 | 边界与行为基线：`bot-boundary-gate`（R1/R2/R3）、`--census` 消费者清单、CI 接线、四个行为域具名基线 | **已合并** | #495 → master `f24166ec` | CI 五检查全绿；census 记录退役层是 host bot prompt 最大消费方 |
 | S1 | Host Bot 身份 facade：protocol DTO、revision 语义、身份 journal、应用服务、两 bridge 接线 | 已实现，待 review/CI | #500，`codex/bot-framework-s1`（base=master `f24166ec`） | host 全量 2000 passed、typecheck:all 0、desktop tsc 与 base 持平、门禁全绿 |
-| S2 | 提取 `packages/bot` 纯领域包，Host 变适配器 | 已实现，待 review/CI | #502，`codex/bot-framework-s2`（base=S1 head，栈式） | 43 例绿、typecheck:all 0、R1 门禁由 PENDING 翻 **MEASURED**、desktop 零 diff |
+| S2 | 提取 `packages/bot` 纯领域包，Host 变适配器 | 已实现，待 review/CI | #502，`codex/bot-framework-s2`（base=master，diff 含 S1，**合并顺序 #500 → #502**） | 43 例绿、typecheck:all 0、R1 门禁由 PENDING 翻 **MEASURED**、desktop 零 diff |
 | S3a | Bot inbox 与 dispatch receipt 存储合同（`bot_inbox` + `bot_dispatch_receipts` 两表） | 已实现，待 review/CI | #503，`codex/bot-framework-s3a`（base=master） | data+protocol 568 例绿、typecheck:all 0、architecture 无新增违规 |
 | S3b | `openRun` dispatchKey 幂等受理 + Bot dispatcher + resident | **未开工**（契约已就绪，见下） | — | — |
 | S3c | Desktop bot handler 转发切流 | 未开工 | — | — |
@@ -46,6 +46,9 @@ S0 已合并进 master；S1、S2、S3a 三个切片已实现并开了 PR，处�
 - **C 盘满会让 Bash 全挂**：工具 stdout 落在 `C:%TEMP%`。重活先 `export TEMP=E:/tmp TMP=E:/tmp`；C 盘 0 可用时清 `%TEMP%` 里 6 小时前的条目。
 - **Windows 瞬时文件锁**：`readFileSync` 偶发 UNKNOWN 错误。门禁扫描器重试一次，仍失败计入 `unreadable` 上报——不许静默跳过（那正是假绿的来源）。
 - **路径拼接**：Mimosa 钩子会拦 `path.join(ROOT, 动态片段)` 的写入。测试里的临时路径要显式校验不越出根目录。
+- **新 workspace 包要补两处，否则 CI 必红**：①根 `package-lock.json`（`npm install --package-lock-only`，否则 `npm ci` 报 "Missing: @duya/x from lock file"）；②**消费方 package.json 的 dependencies 声明**（本地能过是因为 worktree 里手工补了 junction，CI 的 `npm ci` 不会建那个链接，症状是 `Cannot find module '@duya/x'`）。
+- **CI 只对 `pull_request: branches: [master]` 触发**：栈式 PR（base 指向另一个特性分支）不跑 CI，会给人"全绿"的错觉。要 CI 信号就把 base 改成 master，并在 PR 正文写明合并顺序；改 base 本身不触发 workflow，需要再推一次（空提交亦可）。
+- **master 自身可能 bundle STALE**：别的 PR 合入后没重建被 track 的 worker bundle，后续所有基于 master 的 PR 都会在 `bundle-verify` 上红。修法是本 PR 内重建并提交 `packages/host/bundle`（`npm run build:packages -- --target @duya/host` + `npm run bundle:worker`）。
 
 ## 协作方式（本轮已验证可行）
 
