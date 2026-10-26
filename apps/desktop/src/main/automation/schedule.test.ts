@@ -324,3 +324,21 @@ describe('planDueRoutineFires (S6)', () => {
     expect(new Set(plan).size).toBe(plan.length);
   });
 });
+
+it('skip resumes at the next on-time occurrence after an offline gap', () => {
+  expect(planDueRoutineFires({ schedule: DAILY_9AM_UTC,
+    afterMs: Date.UTC(2026, 7, 8, 9), nowMs: Date.UTC(2026, 7, 11, 9, 0, 30), policy: 'skip',
+  })).toEqual([Date.UTC(2026, 7, 11, 9)]);
+});
+
+it('rejects zero and overflowing intervals before they can poison catch-up', () => {
+  for (const every of ['0s', '999999999999999999999w']) {
+    expect(() => assertValidSchedule({ kind: 'every', every })).toThrow(/positive safe integer/);
+  }
+});
+
+it('does not fire a one-shot beyond its endAt', () => {
+  expect(planDueRoutineFires({ schedule: { kind: 'once', at: '2026-08-11T09:00:00Z',
+    endAt: '2026-08-11T08:00:00Z' }, afterMs: 0, nowMs: Date.UTC(2026, 7, 11, 12),
+  })).toEqual([]);
+});

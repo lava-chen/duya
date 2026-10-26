@@ -37,7 +37,11 @@ export function parseEveryDuration(input: string): number {
   }
   const n = Number(m[1]);
   const unit = m[2] as keyof typeof UNIT_MS;
-  return n * UNIT_MS[unit];
+  const duration = n * UNIT_MS[unit];
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    throw new Error(`duration must be a positive safe integer in milliseconds: "${input}"`);
+  }
+  return duration;
 }
 
 /** Inverse of `parseEveryDuration`: format ms back to a compact string. */
@@ -262,7 +266,7 @@ function lastOccurrenceAtOrBefore(
  * ran; the job's creation anchor for a recurring schedule that never fired);
  * `nowMs` is the tick clock.
  *
- * - `skip`: fire only when the first overdue instant is inside the grace
+ * - `skip`: fire only when the newest overdue instant is inside the grace
  *   window; a longer gap is dropped instead of replayed.
  * - `latest`: fire the newest missed instant once (today's 09:00 after a
  *   three-day outage, not Monday's).
@@ -286,19 +290,18 @@ export function planDueRoutineFires(input: {
 
   if (input.schedule.kind === 'once') {
     const at = Date.parse(input.schedule.at);
-    if (!Number.isFinite(at) || at > nowMs || at <= input.afterMs) return [];
+    const endAt = endAtMsOf(input.schedule);
+    if (!Number.isFinite(at) || at > nowMs || at <= input.afterMs || (endAt !== null && at > endAt)) return [];
     return [at];
-  }
-
-  if (policy === 'skip') {
-    const first = computeNextRunAt(input.schedule, input.afterMs, nowMs);
-    if (first === null || first > nowMs) return [];
-    return nowMs - first <= (input.graceMs ?? DEFAULT_MISFIRE_GRACE_MS) ? [first] : [];
   }
 
   const nextAfter = input.schedule.kind === 'cron' ? makeCronNextOccurrence(input.schedule) : undefined;
   const newest = lastOccurrenceAtOrBefore(input.schedule, input.afterMs, nowMs, nextAfter);
   if (newest === null) return [];
+  // An old missed occurrence must not hide a newer on-time occurrence forever.
+  if (policy === 'skip') {
+    return nowMs - newest <= (input.graceMs ?? DEFAULT_MISFIRE_GRACE_MS) ? [newest] : [];
+  }
   if (policy === 'latest') return [newest];
 
   const limit = Math.min(
