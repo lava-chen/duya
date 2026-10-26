@@ -1,5 +1,77 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S6 execution — 2026-10-26
+
+- Owner: Qoder root; isolated linked worktree `.claude/worktrees/bot-framework-s6`,
+  branch `codex/bot-framework-s6`, base `600bf624` (S4-Feishu tip on
+  `codex/bot-framework-s4-feishu`; prerequisite stack #500 → #502 → #503 →
+  #504 → #506 → #509 → #511, all unmerged).
+- Base decision (user-selected): S6 stacks on S4 and skips S5. S5
+  (memory/prompt snapshots) is owned by another session in
+  `.claude/worktrees/bot-framework-s5` (branch `codex/bot-framework-s5`,
+  HEAD `600bf624`, unpushed) and this worktree leaves it untouched. The
+  time-trigger half of S6 needs only S3–S4 and asserts no snapshot contract, so
+  it can land ahead of S5.
+- Slice S6-A — 已实现 / 已验证, not merged: deterministic routine fire identity
+  plus offline catch-up inside the existing Desktop automation owner. No new
+  schema, no new Host owner, no desktop → `@duya/bot` import: a Bot-bound fire
+  still enters through the S3c managed wake port, so the Host inbox keeps
+  collapsing replays on `sourceEventId = auto:<routineId>:<fireKey>`.
+  - `routineFireKey(routineId, schedule fingerprint, scheduled instant)` is now
+    the fire identity (`r1:...`), and the tick claims the scheduled instant
+    instead of the wall clock, so a late tick or a restart cannot drift the
+    phase. Manual "run now" keeps a random `manual:<uuid>` key: a second click
+    is a second fire, not a duplicate.
+  - `planDueRoutineFires` implements the policy persisted as `misfire_policy` /
+    `max_catch_up` in `cronjob.toml` (defaults `latest` / 1; `bounded` clamped
+    to 1..5). `latest` fires the newest missed instant once after a multi-day
+    outage, `bounded` fires the newest N ascending, `skip` drops an instant
+    older than the 5-minute grace window. DST needs no special case: instants
+    come from croner's timezone-aware `nextRun`, and the 23 h / 25 h gaps are
+    pinned by tests.
+  - Two first-run defects surfaced while rewriting the tick and are fixed here
+    because the nextFire contract cannot hold otherwise. `once` schedules could
+    never fire through the polling tick (`computeNextRunAt` returns `at` only
+    while it is still future, so `nextRunAt <= now` never matched); a one-shot
+    now fires late exactly once, whatever the policy. A never-run `every` job
+    anchored on `now` on every read, so its first occurrence never became due;
+    it now anchors on `created_at`, as `cron` already did.
+  - A standalone (non-Bot) cron stays single-fire and claims the wall clock: it
+    has no inbox to dedupe a burst, and replaying its backlog would spawn one
+    throwaway session per missed instant. The stored policy applies once the job
+    is bound to a Bot, and the value persists through binding so the user's
+    choice is not lost.
+- Not in this slice (S6-B+): daily schedule summary, budget CAS, quiet hours,
+  pause / revocation of queued responsibility, approval admission, and a UI
+  control for the misfire policy (today it is editable in `cronjob.toml`; the
+  create / update IPC already accepts both fields).
+- Verification — 2026-10-26, Windows 10 x64, Node v24.18.0, base `600bf624`,
+  dirty scope = the seven `apps/desktop/src/main/automation` files below.
+  - `npm run build:packages` — 22 packages, exit 0.
+  - `npm run typecheck:all` — exit 0 (build:packages, protocol / client-core /
+    core / workflow / runtime / web / web-app / electron / cli / voice / evals).
+  - `node scripts/typecheck-electron-gate.mjs` — OK, no new type errors
+    (178 known across 101 keys; 10 keys shrank, baseline not re-recorded).
+  - `node scripts/architecture/architecture-check.mjs` — OK, no new boundary
+    violations, baseline untouched.
+  - `npx vitest run apps/desktop/src/main/automation apps/desktop/src/main/wake`
+    — 24 files / 240 tests passed, exit 0. S6 adds 28 cases (14 `schedule`,
+    8 `Scheduler`, 6 `cron-file`); every pre-existing case stayed green.
+  - `npm run check:encoding` / `check:no-ts-suppress` / `check:test-coverage` —
+    exit 0.
+  - Environment note: this worktree's `node_modules` is a junction to the main
+    checkout that predates `packages/bot`, so `packages/node_modules/@duya/bot`
+    was added as a worktree-local junction; no install ran through the shared
+    link. Before `build:packages`, every `@duya/<pkg>/<subpath>` import in the
+    Electron gate failed with TS2307 (missing `packages/*/dist`); those errors
+    were environmental and cleared after the build.
+- 待验证: no renderer/Electron run (no UI change), and the bounded catch-up is
+  proven against a mocked wake dispatcher — the real `auto:*` `sourceEventId`
+  dedup is the S3c contract and is unchanged here.
+- Delivery: draft [PR #513](https://github.com/lava-chen/duya/pull/513), base
+  `codex/bot-framework-s4-feishu`. Unmerged; keep the worktree and branch until
+  the S1–S4 stack integrates and S5 lands, then rebase S6-B on the merged tree.
+
 ## S4 execution — 2026-10-26
 
 - Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,
