@@ -200,3 +200,51 @@ export function sortThreadsBy(
     return a.title.localeCompare(b.title);
   });
 }
+
+/**
+ * Calendar-day buckets for the Work sidebar. Session activity — not metadata
+ * edits — decides where a conversation appears.
+ *
+ * Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+ * Claude groups its session list into four buckets — 今天 / 昨天 / 最近 7 天 /
+ * 更早 — not one bucket per calendar day. A per-day bucket list turns into a
+ * wall of near-identical headers once a workspace has a few days of history.
+ */
+export type ThreadDateBucket = 'today' | 'yesterday' | 'last7days' | 'older';
+
+/** Bucket order as rendered, top to bottom. */
+export const DATE_BUCKET_ORDER: ThreadDateBucket[] = [
+  'today',
+  'yesterday',
+  'last7days',
+  'older',
+];
+
+/**
+ * Bucket a session by the calendar day of its last activity.
+ *
+ * The day difference is computed between two local midnights, so a session
+ * from 23:30 yesterday stays in "yesterday" no matter the current hour.
+ * `Math.round` (not `floor`) absorbs the ±1h shift a DST boundary introduces
+ * without moving a session into the wrong bucket.
+ */
+export function getThreadDateBucket(
+  thread: Thread,
+  now = Date.now(),
+): ThreadDateBucket {
+  const activityAt = thread.recencyAt ?? thread.updatedAt;
+  const activity = new Date(activityAt);
+  if (Number.isNaN(activity.getTime())) return 'older';
+
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const activityDay = new Date(activity);
+  activityDay.setHours(0, 0, 0, 0);
+  const daysAgo = Math.round(
+    (today.getTime() - activityDay.getTime()) / 86_400_000,
+  );
+  if (daysAgo <= 0) return 'today';
+  if (daysAgo === 1) return 'yesterday';
+  if (daysAgo <= 7) return 'last7days';
+  return 'older';
+}

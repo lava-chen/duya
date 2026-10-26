@@ -93,7 +93,7 @@ export interface ProjectGroup {
 }
 
 export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
-export type ProjectGroupBy = 'byProject' | 'singleList';
+export type ProjectGroupBy = 'byProject' | 'byDate' | 'singleList';
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'apps' | 'extensions' | 'projects' | 'workflow';
@@ -482,7 +482,7 @@ function migratePersistedSort(value: unknown): ProjectSortBy {
 function migratePersistedGroup(value: unknown, state: HydratedConversationInput): ProjectGroupBy {
   const legacyGroup = (state as unknown as Record<string, unknown>).projectFilter as string | undefined;
   if (legacyGroup && !value) return 'byProject';
-  if (value === 'byProject' || value === 'singleList') return value;
+  if (value === 'byProject' || value === 'byDate' || value === 'singleList') return value;
   return 'byProject';
 }
 

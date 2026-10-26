@@ -3,13 +3,17 @@
 /**
  * SectionActions — the trailing action group on a sidebar section header.
  *
- * Claude parity (2026-10-22). Claude Code puts three small buttons on the
- * right of every group header:
+ * Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+ * Claude puts two small controls on the right of every group header — the
+ * tune trigger ("Group and sort") and, at the very edge, the "+" that starts
+ * a new session in that group:
  *
- *     ▾ duya            +  🔍  ⚙
- *                        │   │   └ 过滤器：分组方式 / 排序方式 / 显示空分组
- *                        │   └───── 组内搜索
- *                        └───────── 在本组中新建
+ *     ▾ duya            ⚙  +
+ *                        │   └ 在本组中新建
+ *                        └───── 分组与排序：分组方式 / 排序方式 / 显示
+ *
+ * duya keeps the group-scoped search in between, so the rendered order is
+ * 过滤器 / 组内搜索 / 新建.
  *
  * duya's sections are containers, not repositories, so "new session in this
  * group" is only meaningful where the group holds projects: the built-in
@@ -34,7 +38,7 @@ import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import type { ProjectGroupBy, ProjectSortBy } from "@/stores/conversation-store";
 
 export interface SectionFilterModel {
-  /** "按项目" / "在一个列表中" — only the built-in project section has both. */
+  /** Work-session grouping mode. */
   groupBy?: ProjectGroupBy;
   onGroupBy?: (value: ProjectGroupBy) => void;
   sortBy: ProjectSortBy;
@@ -73,10 +77,24 @@ export function SectionActions({
                 id: "group-by",
                 label: t("sidebar.filter.groupBy"),
                 value:
-                  filter.groupBy === "singleList"
-                    ? t("project.inOneList")
-                    : t("project.byProject"),
+                  filter.groupBy === "byDate"
+                    ? t("project.byDate")
+                    : filter.groupBy === "singleList"
+                      ? t("project.inOneList")
+                      : t("project.byProject"),
                 items: [
+                  {
+                    kind: "action" as const,
+                    id: "group-by-date",
+                    label: t("project.byDate"),
+                    iconRight:
+                      filter.groupBy === "byDate" ? (
+                        <CheckIcon size={12} />
+                      ) : (
+                        <span className="sidebar-project-menu-check" />
+                      ),
+                    onSelect: () => filter.onGroupBy?.("byDate"),
+                  },
                   {
                     kind: "action" as const,
                     id: "group-by-project",
@@ -167,29 +185,9 @@ export function SectionActions({
 
   return (
     <div className="sidebar-section-actions">
-      {onCreate && (
-        <button
-          type="button"
-          className="sidebar-section-action"
-          onClick={onCreate}
-          title={createLabel}
-          aria-label={createLabel}
-        >
-          <PlusIcon size={14} />
-        </button>
-      )}
-      {onToggleSearch && (
-        <button
-          type="button"
-          className={`sidebar-section-action${searchActive ? " active" : ""}`}
-          onClick={onToggleSearch}
-          title={t("sidebar.section.searchInGroup")}
-          aria-label={t("sidebar.section.searchInGroup")}
-          aria-pressed={searchActive}
-        >
-          <MagnifyingGlassIcon size={14} />
-        </button>
-      )}
+      {/* Claude parity (2026-10-26): Claude's group header ends with the
+          tune trigger and then the "+" at the very right edge. duya keeps the
+          group-scoped search in between, so the order is 过滤器 / 搜索 / 新建. */}
       {filter && (
         <DropdownMenu
           align="end"
@@ -206,6 +204,29 @@ export function SectionActions({
             </button>
           }
         />
+      )}
+      {onToggleSearch && (
+        <button
+          type="button"
+          className={`sidebar-section-action${searchActive ? " active" : ""}`}
+          onClick={onToggleSearch}
+          title={t("sidebar.section.searchInGroup")}
+          aria-label={t("sidebar.section.searchInGroup")}
+          aria-pressed={searchActive}
+        >
+          <MagnifyingGlassIcon size={14} />
+        </button>
+      )}
+      {onCreate && (
+        <button
+          type="button"
+          className="sidebar-section-action"
+          onClick={onCreate}
+          title={createLabel}
+          aria-label={createLabel}
+        >
+          <PlusIcon size={14} />
+        </button>
       )}
     </div>
   );

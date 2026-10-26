@@ -1688,19 +1688,31 @@ const en = {
   'project.collapseAll': 'Collapse All',
   'project.expandAll': 'Expand All',
   'project.organize': 'Organize',
-  'project.byProject': 'By project',
-  'project.inOneList': 'In one list',
+  'project.byDate': 'Date',
+  'project.byProject': 'Folder',
+  'project.inOneList': 'None',
   'project.sortBy': 'Sort by',
-  'project.priority': 'Priority',
+  // Claude parity (2026-10-26): the three sort fields match Claude Code's
+  // "Sort by" — Last updated / Date created / Name. The old labels
+  // ("Priority" / "Manual") did not describe what the comparator does.
+  'project.priority': 'Date created',
   'project.lastUpdated': 'Last updated',
-  'project.manualSort': 'Manual',
+  'project.manualSort': 'Name',
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': 'Projects',
+  // Claude parity (2026-10-26): the built-in section holds everything that is
+  // NOT in a user section. When a user section is already called "Projects",
+  // naming this one the same produced two identical headers.
+  'sidebar.section.ungrouped': 'Ungrouped',
   // Plan 471 v9: singleList mode renders the section as a flat session list,
   // so we relabel the header from 'Projects' to 'Sessions' to match what the
   // user actually sees (no project grouping, just threads).
   'sidebar.section.sessions': 'Sessions',
+  'sidebar.date.today': 'Today',
+  'sidebar.date.yesterday': 'Yesterday',
+  'sidebar.date.last7days': 'Previous 7 days',
+  'sidebar.date.older': 'Older',
   'sidebar.section.cron': 'Scheduled',
   'sidebar.section.gateway': 'Gateway',
   'sidebar.section.wakeup': 'Wake',

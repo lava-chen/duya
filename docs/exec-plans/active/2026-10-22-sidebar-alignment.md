@@ -1,9 +1,9 @@
 # 侧栏对齐（桌面端实测基线）
 
-状态：active · 负责人：mavis 会话 `mvs_3a16cab8300945e89691a940d998fbf5` · 更新：2026-10-22
-分支：`codex/sidebar-claude-redo` · worktree：`.claude/worktrees/sidebar-claude-redo` · base：`2e6f265d`（最新 master）· owner：mavis
+状态：active · 负责人：mavis 会话 `mvs_4801746c549f4c79a14713731e351b20` · 更新：2026-10-26
+分支：`codex/sidebar-claude-redo`（前两轮 · PR #366）→ `codex/ui-adjust`（第三轮）· worktree：`.claude/worktrees/ui-adjust` · base：`a62d5415` · owner：mavis
 
-两轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）。
+三轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）；第三轮对齐 **Claude Code 的分组与排序模型**（分组方式 / 日期分桶 / 组头动作）。
 
 ## 目标与边界
 
@@ -137,3 +137,56 @@ Claude 的前置圆环被明确排除。
 
 1. PR #366 待审，**未获授权不合并**。
 2. 未做：把导航从 5 项收敛到 Claude 的 2 项 + 「更多」（属产品决策，本轮不动功能）。
+
+---
+
+## 第三轮：分组与排序模型对齐 Claude Code（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `a62d5415` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 基线（Claude Code 桌面端 3.6556.2.0，Code 模式，实测）
+
+- 组头右侧两个控件：调节图标（AX 名 `Group and sort`）+ 最右缘的 `+`（`New session in <group>`）。
+- `Group and sort` 菜单：`Group by → Folder`（当前值显示在行右侧）、`Sort by → Last updated`、分隔线、
+  `Descending`/`Ascending`、`Show`、`New section`、`Reset to defaults`（禁用）、`View all`。
+- `Sort by` 子菜单实测项：`Last updated`(✓)、`Date created`、`Name`、`Descending`(✓)、`Ascending`。
+- **未能打开 `Group by` 子菜单**（Radix 需真实 hover，合成 pointer 事件不触发），
+  故「Claude 是否提供 `Date` 分组」**未经证实**。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `sidebar/section-system.ts` | 新增 `ThreadDateBucket`（today / yesterday / last7days / older）与 `DATE_BUCKET_ORDER`；`getThreadDateBucket` 按两个本地午夜求天数差，`Math.round` 吸收夏令时 ±1h；`recencyAt` 优先于 `updatedAt`；非法时间戳落 `older` |
+| `layout/app-sidebar.tsx` | 分组方式三选项（文件夹 / 日期 / 不分组）；日期段固定四桶顺序、空桶不渲染、空工作区保留一个「今天」头（否则无处切回）；`dateVisibleCounts` 让每个日期桶的「查看全部」独立计数；`isGroupingHeader` 收敛为仅系统段（分组方式是全局开关，不该两个组头控制同一列表）；系统段在有用户段时改名「未分组」；日期段 tone 统一 `bold`；日期段也带组头动作 |
+| `sidebar/SectionActions.tsx` | 组头按钮顺序 `[新建][搜索][过滤器]` → `[过滤器][搜索][新建]`；分组方式菜单加入「日期」项 |
+| `i18n/{zh,en}.ts` | 新增 `sidebar.date.last7days`、`sidebar.section.ungrouped`；排序字段标签改为 创建时间 / 最近更新 / 名称（原「优先级」「手动排序」与实际比较器不符） |
+| `sidebar/section-system.test.ts` | 新增 `getThreadDateBucket` 7 例；原 17 例完整保留（diff 为纯新增） |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `a62d5415` dirty | Node / jsdom | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净 |
+| `a62d5415` dirty | Node / jsdom | `npx vitest run .../section-system.test.ts .../SectionActions.test.tsx` | 0 · **32/32** | 17 旧 + 7 新 + 8 组头 |
+| `a62d5415` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `a62d5415` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 全量类型门禁通过 |
+| `a62d5415` dirty | Windows / Electron | `npm run electron:dev`（worktree 内） | 应用起来，三种模式实跑 | 见下 |
+
+### 真机实测
+
+- **不分组**：段标题「会话」，平铺会话 + 「展开显示 (20 个)」。
+- **日期**：四段 今天 / 昨天 / 最近 7 天 / 更早，各带组头动作；「查看全部」计数互相独立
+  （最近 7 天 `(2 个)`、更早 `(20 个)`），证明 per-bucket 计数生效。
+- **文件夹**：两个段头不再同名 —— 用户段「项目」+ 系统段「未分组」，各带 过滤器 / 在本组中搜索 / 新项目。
+- 组头按钮顺序实测 过滤器 → 搜索 → 新建；过滤器菜单为「分组方式 / 排序方式 / 显示空分组」，排序当前值「创建时间」。
+
+### 接续 / 结果
+
+- 第三轮改动**已实现、已验证、未提交**（worktree 18 个 modified 文件，本轮占 6 个；
+  `packages/host/bundle/*` 是在途重建产物，非本轮范围）。
+- 已知差异：**未**加 Claude 那种独立升降序开关 —— 判为超出「分组逻辑」范围，留作可选。
+- 阻塞：Claude 的 `Group by` 子菜单打不开，四桶口径按 Claude Code CLI `/resume` 惯例推断，未获实测证实。
+- 副作用：验证期间把本机 `duya-conversations` 的 `projectGroupBy` 从 `singleList` 改为 `byProject`（实测三模式），
+  收尾时已改回 `singleList` 并刷新确认段标题回到「会话」。
+- 下一步（可选，待用户决定）：顶层直接是文件夹分组、取消 section 层。

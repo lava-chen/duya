@@ -6,6 +6,9 @@ import {
   SYSTEM_SECTIONS,
   SESSION_KIND_PREFIXES,
   isPlaceholderThreadId,
+  DATE_BUCKET_ORDER,
+  getThreadDateBucket,
+  type ThreadDateBucket,
 } from './section-system';
 import type { Thread } from '@/stores/conversation-store';
 
@@ -140,5 +143,70 @@ describe('sortThreadsBy (Plan 582 G8)', () => {
     const before = threads.map((t) => t.id);
     sortThreadsBy(threads, 'manual');
     expect(threads.map((t) => t.id)).toEqual(before);
+  });
+});
+
+describe('getThreadDateBucket (Claude parity, 2026-10-26)', () => {
+  /** Local midnight `days` days before `now`, with `hour` inside that day. */
+  function daysAgoAt(now: number, days: number, hour = 12): number {
+    const d = new Date(now);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - days);
+    d.setHours(hour, 0, 0, 0);
+    return d.getTime();
+  }
+
+  const now = new Date(2026, 9, 26, 15, 30, 0).getTime();
+
+  it('buckets by activity time, not by the metadata update time', () => {
+    const thread = makeThread({
+      id: 'a',
+      recencyAt: daysAgoAt(now, 3),
+      updatedAt: now,
+    });
+    expect(getThreadDateBucket(thread, now)).toBe('last7days');
+  });
+
+  it('prefers recencyAt over updatedAt', () => {
+    const thread = makeThread({
+      id: 'a',
+      recencyAt: daysAgoAt(now, 0, 9),
+      updatedAt: daysAgoAt(now, 40),
+    });
+    expect(getThreadDateBucket(thread, now)).toBe('today');
+  });
+
+  it('maps the last week onto the four Claude buckets', () => {
+    const expected: Array<[number, ThreadDateBucket]> = [
+      [0, 'today'],
+      [1, 'yesterday'],
+      [2, 'last7days'],
+      [7, 'last7days'],
+      [8, 'older'],
+      [400, 'older'],
+    ];
+    for (const [days, bucket] of expected) {
+      expect(
+        getThreadDateBucket(makeThread({ id: 'x', recencyAt: daysAgoAt(now, days) }), now),
+      ).toBe(bucket);
+    }
+  });
+
+  it('keeps a late-night session in the day it happened', () => {
+    // 23:30 yesterday must not slide into "today" just because it is late.
+    const late = daysAgoAt(now, 1, 23);
+    expect(getThreadDateBucket(makeThread({ id: 'x', recencyAt: late }), now)).toBe('yesterday');
+  });
+
+  it('treats a future timestamp as today instead of dropping it', () => {
+    expect(getThreadDateBucket(makeThread({ id: 'x', recencyAt: now + 60_000 }), now)).toBe('today');
+  });
+
+  it('falls back to "older" for an unparsable timestamp', () => {
+    expect(getThreadDateBucket(makeThread({ id: 'x', recencyAt: Number.NaN }), now)).toBe('older');
+  });
+
+  it('orders the buckets the way Claude renders them', () => {
+    expect(DATE_BUCKET_ORDER).toEqual(['today', 'yesterday', 'last7days', 'older']);
   });
 });

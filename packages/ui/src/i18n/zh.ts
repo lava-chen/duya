@@ -1665,19 +1665,31 @@ const zh: Record<TranslationKey, string> = {
   'project.collapseAll': '全部收起',
   'project.expandAll': '全部展开',
   'project.organize': '整理',
-  'project.byProject': '按项目',
-  'project.inOneList': '在一个列表中',
+  'project.byDate': '日期',
+  'project.byProject': '文件夹',
+  'project.inOneList': '不分组',
   'project.sortBy': '排序方式',
-  'project.priority': '优先级',
+  // Claude parity (2026-10-26): the three sort fields match Claude Code's
+  // "Sort by" — 最近更新 / 创建时间 / 名称. The old labels ("优先级" /
+  // "手动排序") did not describe what the comparator actually does.
+  'project.priority': '创建时间',
   'project.lastUpdated': '最近更新',
-  'project.manualSort': '手动排序',
+  'project.manualSort': '名称',
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': '项目',
+  // Claude parity (2026-10-26): the built-in section holds everything that is
+  // NOT in a user section. When a user section is already called "项目",
+  // naming this one the same produced two identical headers.
+  'sidebar.section.ungrouped': '未分组',
   // Plan 471 v9: singleList (… menu → 在一个列表中) 模式下
   // section 内容是平坦的会话列表，没有项目分组，
   // 标题从「项目」改为「会话」。
   'sidebar.section.sessions': '会话',
+  'sidebar.date.today': '今天',
+  'sidebar.date.yesterday': '昨天',
+  'sidebar.date.last7days': '最近 7 天',
+  'sidebar.date.older': '更早',
   'sidebar.section.cron': '定时任务',
   'sidebar.section.gateway': '网关',
   'sidebar.section.wakeup': '唤醒',
