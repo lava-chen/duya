@@ -25,6 +25,8 @@ import {
   TUI_INPUT_ROWS_SETTING,
   TUI_SHOW_THINKING_SETTING,
   TUI_STARTUP_BANNER_SETTING,
+  TUI_TOOL_GROUP_MODE_SETTING,
+  describeToolGroupMode,
 } from '../preferences.js';
 
 describe('parseTuiPreferences', () => {
@@ -34,8 +36,21 @@ describe('parseTuiPreferences', () => {
     expect(parsed.expandBlocks).toBe(false);
     expect(parsed.showToolResults).toBe(false);
     expect(parsed.startupBanner).toBe(true);
+    expect(parsed.toolGroupMode).toBe('full');
     expect(parsed.completionRows).toBe(DEFAULT_TUI_PREFERENCES.completionRows);
     expect(parsed.inputRows).toBe(DEFAULT_TUI_PREFERENCES.inputRows);
+  });
+
+  it('reads the three tool-group modes and refuses a fourth', () => {
+    for (const mode of ['full', 'names', 'running'] as const) {
+      expect(parseTuiPreferences({ [TUI_TOOL_GROUP_MODE_SETTING]: mode }).toolGroupMode).toBe(mode);
+    }
+    // A mode the renderer does not implement must not reach it just because a
+    // newer build wrote the key.
+    expect(parseTuiPreferences({ [TUI_TOOL_GROUP_MODE_SETTING]: 'quiet' }).toolGroupMode).toBe('full');
+    expect(describeToolGroupMode('names')).toBe('Names only');
+    expect(describeToolGroupMode('running')).toBe('Running only');
+    expect(describeToolGroupMode('full')).toBe('All calls');
   });
 
   it('reads every spelling of a boolean a settings endpoint can hold', () => {

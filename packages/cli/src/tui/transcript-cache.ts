@@ -34,7 +34,10 @@
  * `renderTranscript` joins blocks with `'\n'` and no standalone separator
  * rows: a stanza gap is the FIRST line of the block below it, so the flattened
  * line count stays exactly `Σ blockHeights` (the join's newline terminates the
- * previous block's last line; it does not open a new one). `heights()` and
+ * previous block's last line; it does not open a new one). A block folded by
+ * `toolGroupMode` adds zero to that sum — its gap row goes with its content
+ * rows, or a hidden call would still take the line it used to own.
+ * `heights()` and
  * `totalLines()` exist so scroll math can run off that sum without building
  * the flattened string, and `visibleWindow()` depends on them agreeing
  * with `paintTranscript`'s window to the line.
@@ -122,6 +125,7 @@ export class TranscriptRenderer {
         planKey(plan),
         blockExpanded(block.id, options) ? 'e' : '-',
         options.showToolResults ? 'r' : '-',
+        options.toolGroupMode ?? 'full',
         String(options.toolResultLines),
         String(options.width ?? 0),
         // plan 615 Phase 0: the renderer decides whether emphasis/strike
@@ -175,7 +179,7 @@ export class TranscriptRenderer {
     for (const [index, block] of visibleBlocks(model.blocks, options).entries()) {
       const blockLines = blocks[index];
       if (blockLines === undefined) continue;
-      if (block.id === options.selectedBlockId) {
+      if (blockLines.length > 0 && block.id === options.selectedBlockId) {
         // Same rule as `renderTranscript`: the caret rides the first non-empty
         // row, because a stanza gap belongs to this block and comes first.
         const target = blockLines.findIndex((line) => line !== '');
@@ -222,6 +226,7 @@ export function renderOptionsKey(options: RenderOptions, width: number): string 
     width,
     expanded: options.expanded,
     showToolResults: options.showToolResults,
+    toolGroupMode: options.toolGroupMode ?? 'full',
     toolResultLines: options.toolResultLines,
     expandedBlockIds: ids(options.expandedBlockIds),
     collapsedBlockIds: ids(options.collapsedBlockIds),

@@ -397,6 +397,19 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
+    name: 'display',
+    label: 'Transcript display',
+    labelZh: '会话显示',
+    description: 'Choose how much of the event stream the transcript shows',
+    descriptionZh: '选择会话记录显示多少事件流内容',
+    argsHint: '[profile]',
+    category: 'config',
+    surfaces: ['cli'],
+    // Reading and moving a transcript switch mid-turn is the point: the reader
+    // wants less noise while the run is the noise.
+    availableWhileBusy: true,
+  },
+  {
     name: 'hotkeys',
     label: 'Keyboard shortcuts',
     labelZh: '键盘快捷键',

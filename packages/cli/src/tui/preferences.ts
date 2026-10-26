@@ -2,6 +2,7 @@
 
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { CommandLocale } from '@duya/command-catalog';
+import type { ToolGroupMode } from './transcript-view.js';
 import { normalizeEffort, resolveThemeName, type EffortLevel, type ThemeName } from './theme.js';
 
 export const TUI_THEME_SETTING = 'cli.tui.theme';
@@ -21,6 +22,15 @@ export const TUI_LOCALE_SETTING = 'locale';
 export const TUI_SHOW_THINKING_SETTING = 'cli.tui.showThinking';
 export const TUI_EXPAND_BLOCKS_SETTING = 'cli.tui.expandBlocks';
 export const TUI_SHOW_TOOL_RESULTS_SETTING = 'cli.tui.showToolResults';
+/**
+ * How much of a tool run the trail lists: `full`, `names` or `running`.
+ *
+ * A fourth axis, not a restatement of the three above: those decide whether
+ * thinking is shown, whether blocks start open and whether a body is drawn —
+ * this one decides how many ROWS the calls themselves take. It is what the
+ * `/display` compact and running profiles move.
+ */
+export const TUI_TOOL_GROUP_MODE_SETTING = 'cli.tui.toolGroupMode';
 /** Printed once at startup; off for people who pipe `duya chat` into something. */
 export const TUI_STARTUP_BANNER_SETTING = 'cli.tui.startupBanner';
 export const TUI_COMPLETION_ROWS_SETTING = 'cli.tui.completionRows';
@@ -71,6 +81,8 @@ export interface TuiPreferences {
   readonly expandBlocks: boolean;
   /** Tool result bodies without per-block expansion. */
   readonly showToolResults: boolean;
+  /** How many rows a tool run takes: every call, their names, or only the one running. */
+  readonly toolGroupMode: ToolGroupMode;
   /** The `session … type a message` line printed on startup. */
   readonly startupBanner: boolean;
   /** Visible rows in the completion popup. */
@@ -109,6 +121,7 @@ export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
   showThinking: true,
   expandBlocks: false,
   showToolResults: false,
+  toolGroupMode: 'full',
   startupBanner: true,
   completionRows: 8,
   inputRows: 8,
@@ -118,6 +131,14 @@ export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
 export const COMPLETION_ROWS_RANGE = { min: 3, max: 12 } as const;
 /** Input box rows: two is a single wrapped line, sixteen is a small editor. */
 export const INPUT_ROWS_RANGE = { min: 2, max: 16 } as const;
+
+/** The tool-group modes, in the order the `/settings` row cycles them. */
+export const TOOL_GROUP_MODES: readonly ToolGroupMode[] = ['full', 'names', 'running'];
+
+/** Unknown values fall back: a mode the renderer does not implement is worse than the one it does. */
+function parseToolGroupMode(value: string | undefined, fallback: ToolGroupMode): ToolGroupMode {
+  return value === 'full' || value === 'names' || value === 'running' ? value : fallback;
+}
 
 /** `'false' | '0' | 'off'` are the ways a setting endpoint can say no. */
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
@@ -211,6 +232,7 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
     showThinking: parseBoolean(values[TUI_SHOW_THINKING_SETTING], DEFAULT_TUI_PREFERENCES.showThinking),
     expandBlocks: parseBoolean(values[TUI_EXPAND_BLOCKS_SETTING], DEFAULT_TUI_PREFERENCES.expandBlocks),
     showToolResults: parseBoolean(values[TUI_SHOW_TOOL_RESULTS_SETTING], DEFAULT_TUI_PREFERENCES.showToolResults),
+    toolGroupMode: parseToolGroupMode(values[TUI_TOOL_GROUP_MODE_SETTING], DEFAULT_TUI_PREFERENCES.toolGroupMode),
     startupBanner: parseBoolean(values[TUI_STARTUP_BANNER_SETTING], DEFAULT_TUI_PREFERENCES.startupBanner),
     completionRows: parseRangedInt(values[TUI_COMPLETION_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.completionRows, COMPLETION_ROWS_RANGE),
     inputRows: parseRangedInt(values[TUI_INPUT_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.inputRows, INPUT_ROWS_RANGE),
@@ -277,4 +299,11 @@ export function describeEnabled(value: boolean): string {
 /** Menu spelling of a row count, e.g. `8 rows`. */
 export function describeRows(value: number): string {
   return `${value} rows`;
+}
+
+/** Menu spelling of the tool-group mode: what the reader will see per batch. */
+export function describeToolGroupMode(mode: ToolGroupMode): string {
+  if (mode === 'names') return 'Names only';
+  if (mode === 'running') return 'Running only';
+  return 'All calls';
 }

@@ -56,7 +56,13 @@ import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
-import { DEFAULT_RENDER_OPTIONS, escapeTags, stylesOf, type RenderOptions } from './transcript-view.js';
+import {
+  DEFAULT_RENDER_OPTIONS,
+  escapeTags,
+  stylesOf,
+  type RenderOptions,
+  type ToolGroupMode,
+} from './transcript-view.js';
 import { TranscriptRenderer } from './transcript-cache.js';
 import type { EscapeSafeWriter } from './bounded-writer.js';
 import { TerminalSession } from './terminal/session.js';
@@ -394,6 +400,8 @@ export interface TUIAppOptions {  /** Window title. */
   readonly showThinking?: boolean;
   /** Show tool result bodies without per-block expansion. */
   readonly showToolResults?: boolean;
+  /** How many rows a tool run takes. `/display` and `/settings` move it live. */
+  readonly toolGroupMode?: ToolGroupMode;
   /** Start with every block expanded — the saved state of the expand key. */
   readonly expandBlocks?: boolean;
   /**
@@ -435,6 +443,7 @@ export interface TuiLivePreferences {
   readonly showThinking?: boolean;
   readonly expandBlocks?: boolean;
   readonly showToolResults?: boolean;
+  readonly toolGroupMode?: ToolGroupMode;
   readonly completionRows?: number;
   readonly inputRows?: number;
 }
@@ -532,6 +541,8 @@ export class TUIApp {
   private showThinking: boolean;
   /** Tool result bodies, independent of `expanded` (which also opens them). */
   private showToolResults: boolean;
+  /** How many rows a tool run takes: every call, their names, or only the running one. */
+  private toolGroupMode: ToolGroupMode;
   /**
    * Rows the input box may GROW to.
    *
@@ -731,6 +742,7 @@ export class TUIApp {
     // Collapsed by default, like the `expanded` flag it shares a keybinding
     // with: the transcript is a conversation, and a tool's JSON is a detail.
     this.showToolResults = options.showToolResults ?? false;
+    this.toolGroupMode = options.toolGroupMode ?? 'full';
     this.maxInputRows = Math.max(1, options.maxInputRows ?? MAX_INPUT_ROWS);
     this.completion = new CompletionController(
       options.completionSources ?? EMPTY_COMPLETION_SOURCES,
@@ -1012,6 +1024,7 @@ export class TUIApp {
     if (patch.showThinking !== undefined) this.showThinking = patch.showThinking;
     if (patch.expandBlocks !== undefined) this.expanded = patch.expandBlocks;
     if (patch.showToolResults !== undefined) this.showToolResults = patch.showToolResults;
+    if (patch.toolGroupMode !== undefined) this.toolGroupMode = patch.toolGroupMode;
     if (patch.completionRows !== undefined) {
       this.completionRows = Math.max(1, patch.completionRows);
     }
@@ -1019,7 +1032,8 @@ export class TUIApp {
     // Expanding or hiding blocks changes which lines exist, not just how they
     // are coloured, so the assembled transcript is stale rather than merely
     // dirty: drop it and let the next paint rebuild it.
-    if (patch.expandBlocks !== undefined || patch.showThinking !== undefined) {
+    if (patch.expandBlocks !== undefined || patch.showThinking !== undefined
+      || patch.toolGroupMode !== undefined) {
       this.noteTranscriptMutation();
     }
     if (this.disposed) return;
@@ -1040,6 +1054,7 @@ export class TUIApp {
     showThinking: boolean;
     expandBlocks: boolean;
     showToolResults: boolean;
+    toolGroupMode: ToolGroupMode;
     completionRows: number;
     inputRows: number;
   } {
@@ -1051,6 +1066,7 @@ export class TUIApp {
       showThinking: this.showThinking,
       expandBlocks: this.expanded,
       showToolResults: this.showToolResults,
+      toolGroupMode: this.toolGroupMode,
       completionRows: this.completionRows,
       inputRows: this.maxInputRows,
     };
@@ -1506,6 +1522,7 @@ export class TUIApp {
       // Either switch opens a result body: `expanded` is the transcript-wide
       // toggle, this one is the standing preference from `/settings`.
       showToolResults: this.expanded || this.showToolResults,
+      toolGroupMode: this.toolGroupMode,
       toolResultLines: 5,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,

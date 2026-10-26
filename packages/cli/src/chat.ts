@@ -1186,6 +1186,7 @@ export async function chatTui(
     showThinking: effectivePreferences.showThinking,
     expandBlocks: effectivePreferences.expandBlocks,
     showToolResults: effectivePreferences.showToolResults,
+    toolGroupMode: effectivePreferences.toolGroupMode,
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
