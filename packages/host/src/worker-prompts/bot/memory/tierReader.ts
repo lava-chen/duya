@@ -30,6 +30,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'node:crypto'
 import { parseCanonicalFile } from '@duya/memory/canonical_file'
+import { resolveUnlinkedMemoryPath } from '@duya/memory/memory_paths'
 import { readForgottenPathsSync } from '@duya/memory/forget_ledger'
 import { isSafeBotId, isSafeMemorySegment } from '@duya/bot'
 import { normalizeKey } from './render.js'
@@ -81,7 +82,8 @@ function parseTierFrontmatter(content: string): { meta: RawTierFrontmatter; body
   return { meta, body: content.slice(consumed.length).trim() }
 }
 
-function walkMdFiles(dir: string, out: string[]): void {
+function walkMdFiles(dir: string, out: string[], duyaRoot: string): void {
+  if (!resolveUnlinkedMemoryPath(duyaRoot, path.relative(duyaRoot, dir))) return
   let entries: string[]
   try {
     entries = fs.readdirSync(dir)
@@ -92,11 +94,12 @@ function walkMdFiles(dir: string, out: string[]): void {
     const full = path.join(dir, entry)
     let stat: fs.Stats
     try {
-      stat = fs.statSync(full)
+      stat = fs.lstatSync(full)
     } catch {
       continue
     }
-    if (stat.isDirectory()) walkMdFiles(full, out)
+    if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1)) continue
+    if (stat.isDirectory()) walkMdFiles(full, out, duyaRoot)
     else if (stat.isFile() && entry.endsWith('.md')) out.push(full)
   }
 }
@@ -195,7 +198,7 @@ export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemor
   if (!isSafeBotId(agentId)) return []
   const dir = path.join(duyaRoot, 'agents', agentId, 'memory')
   const files: string[] = []
-  walkMdFiles(dir, files)
+  walkMdFiles(dir, files, duyaRoot)
   const tombstoned = tombstonedPaths(duyaRoot)
   const entries: TierMemoryEntry[] = []
   for (const file of files) {
@@ -223,7 +226,7 @@ export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[
   for (const root of USER_SCAN_ROOTS) {
     const absRoot = path.join(duyaRoot, root)
     const files: string[] = []
-    walkMdFiles(absRoot, files)
+    walkMdFiles(absRoot, files, duyaRoot)
     for (const file of files) {
       const relPath = toRelPath(file, duyaRoot)
       if (tombstoned.has(relPath)) continue
@@ -264,7 +267,7 @@ export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[
     if (!isSafeBotId(agentId) || seen.has(agentId)) continue
     seen.add(agentId)
     const files: string[] = []
-    walkMdFiles(path.join(duyaRoot, 'agents', agentId, 'user'), files)
+    walkMdFiles(path.join(duyaRoot, 'agents', agentId, 'user'), files, duyaRoot)
     for (const file of files) {
       const entry = readTierFile(file, duyaRoot, 'user', agentId, '', tombstoned)
       if (entry) entries.push(entry)
@@ -301,7 +304,7 @@ export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: strin
     }
     for (const writerId of writerIds) {
       const files: string[] = []
-      walkMdFiles(path.join(shardsRoot, writerId), files)
+      walkMdFiles(path.join(shardsRoot, writerId), files, duyaRoot)
       for (const file of files) {
         const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId, tombstoned)
         if (entry) entries.push(entry)
@@ -317,7 +320,8 @@ export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: strin
  */
 export function readJoinedProjects(duyaRoot: string, agentId: string): string[] {
   if (!isSafeBotId(agentId)) return []
-  const file = path.join(duyaRoot, 'agents', agentId, 'state', 'projects.json')
+  const file = resolveUnlinkedMemoryPath(duyaRoot, `agents/${agentId}/state/projects.json`)
+  if (!file) return []
   let raw: string
   try {
     raw = fs.readFileSync(file, 'utf8')

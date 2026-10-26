@@ -168,6 +168,29 @@ describe('bot memory authorization (S5)', () => {
     expect(entries.map((e) => e.dedupeKey)).toEqual(['fact:web']);
   });
 
+  it('does not follow file or directory links into ungranted shards', () => {
+    fs.symlinkSync(path.join(root, 'agents/beta/user/beta.md'), path.join(root, 'agents/alpha/user/linked.md'));
+    fs.symlinkSync(path.join(root, 'agents/gamma/user'), path.join(root, 'agents/alpha/user/linked-dir'), 'junction');
+    expect(readUserTierEntries(root, ['alpha']).map((e) => e.dedupeKey).sort())
+      .toEqual(['fact:alpha', 'preference:legacy']);
+  });
+
+  it('does not follow an aliased shard root or project membership file', () => {
+    fs.symlinkSync(path.join(root, 'agents/beta'), path.join(root, 'agents/alias'), 'junction');
+    expect(readUserTierEntries(root, ['alias']).map((e) => e.dedupeKey)).toEqual(['preference:legacy']);
+    writeStateFile('agents/beta/state/projects.json', ['secret-project']);
+    fs.mkdirSync(path.join(root, 'agents/alpha/state'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'agents/beta/state/projects.json'), path.join(root, 'agents/alpha/state/projects.json'));
+    expect(readJoinedProjects(root, 'alpha')).toEqual([]);
+  });
+
+  it('fails closed on a linked grant file', async () => {
+    writeStateFile('agents/beta/state/memory-access.json', { userShards: ['gamma'] });
+    fs.mkdirSync(path.join(root, 'agents/alpha/state'), { recursive: true });
+    fs.symlinkSync(path.join(root, 'agents/beta/state/memory-access.json'), path.join(root, 'agents/alpha/state/memory-access.json'));
+    expect(await readMemoryAccessGrant(root, 'alpha')).toEqual({ userShards: [] });
+  });
+
   it('revokes a peer shard on the next turn while an ordinary write stays frozen', async () => {
     writeStateFile('agents/alpha/state/memory-access.json', { userShards: ['beta'] });
     writeStateFile('agents/alpha/state/projects.json', ['web']);

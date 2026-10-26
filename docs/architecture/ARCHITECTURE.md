@@ -2152,3 +2152,20 @@ titles use bounded, allowlisted display data and localized generic labels.
 - `packages/agent/src/utils/attachment-images.ts` loads image bytes by attachment object identity, so repeated clipboard filenames remain separate. Worker chat startup and checkpoint mailbox guidance share this pipeline. The worker passes the detected image-input capability to `ChatOptions`.
 - `packages/agent/src/message/mailbox-attachment-context.ts` projects persisted mailbox attachments into text context and supported image blocks. Image-only followups and queued turns are valid; text-only models receive vision analysis when available. Runtime guidance retains the existing hidden/transient lifecycle.
 - Chat edits restore text and attachments to `MessageInput`; transcript rewind happens on submission. Pending edits require a cancellation receipt before replacement. `MailboxPanel` is the single pending-message view and shows current-run versus next-turn routing with previews. Saved mailbox rows always enter the promotion path, including saves that finish after a run ends.
+
+
+### Bot memory recall and forgetting (S5)
+
+Host builds one authorization snapshot per Bot turn. Peer user shards require an
+explicit grant; revocation and forget revisions invalidate frozen memory sections
+on the next turn. Memory/state paths below the trusted data root reject symbolic
+links, linked ancestors and hard-linked files. Foreground writes/forgets and
+startup forget repair share this path check; repair only touches canonical tier
+or legacy memory paths. These checks do not lock out concurrent external path
+replacement.
+
+Stage 1 re-reads the forget ledger after inference and rejects candidates with a
+forgotten canonical key before writing either the output row or its projection.
+Prompt key hints and caller-supplied existing keys cannot bypass this check.
+Semantic paraphrases and already-folded conversation summaries remain outside
+this exact-key guarantee.

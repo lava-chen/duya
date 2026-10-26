@@ -18,7 +18,7 @@
  */
 
 import { readFile } from 'fs/promises'
-import * as path from 'path'
+import { resolveUnlinkedMemoryPath } from '@duya/memory/memory_paths'
 import {
   parseMemoryAccessGrant,
   type BotMemoryAccessGrant,
@@ -34,7 +34,7 @@ export const EMPTY_MEMORY_ACCESS_GRANT: BotMemoryAccessGrant = { userShards: [] 
  */
 export function memoryAccessPath(duyaRoot: string, botId: string): string | null {
   if (!isSafeBotId(botId)) return null
-  return path.join(duyaRoot, 'agents', botId, 'state', 'memory-access.json')
+  return resolveUnlinkedMemoryPath(duyaRoot, `agents/${botId}/state/memory-access.json`)
 }
 
 /** Read the peer-shard grant for one bot; never throws. */
