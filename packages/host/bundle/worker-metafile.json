@@ -447,6 +447,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/bot-inbox-api.ts": {
+      "bytes": 6321,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/terminal-history.ts": {
       "bytes": 797,
       "imports": [],
@@ -615,7 +620,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5375,
+      "bytes": 5568,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -828,6 +833,11 @@
           "original": "./pending-wakes.js"
         },
         {
+          "path": "packages/agent-protocol/src/bot-inbox-api.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox-api.js"
+        },
+        {
           "path": "packages/agent-protocol/src/terminal-history.ts",
           "kind": "import-statement",
           "original": "./terminal-history.js"
@@ -1006,6 +1016,17 @@
       ],
       "format": "esm"
     },
+    "packages/data/src/bot-inbox.ts": {
+      "bytes": 33397,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/data/src/workflow-run-store.ts": {
       "bytes": 28193,
       "imports": [
@@ -1051,7 +1072,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 53520,
+      "bytes": 53746,
       "imports": [
         {
           "path": "node:crypto",
@@ -1102,6 +1123,11 @@
           "path": "packages/data/src/run-store.ts",
           "kind": "import-statement",
           "original": "./run-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
         },
         {
           "path": "packages/data/src/workflow-run-store.ts",
@@ -1603,7 +1629,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2366,
+      "bytes": 2469,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1644,6 +1670,11 @@
           "path": "packages/data/src/run-store.ts",
           "kind": "import-statement",
           "original": "./run-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
         },
         {
           "path": "packages/data/src/core-stores.ts",
@@ -37588,6 +37619,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:module",
           "kind": "require-call",
           "external": true
@@ -39764,6 +39800,9 @@
         "packages/agent-protocol/src/pending-wakes.ts": {
           "bytesInOutput": 30
         },
+        "packages/agent-protocol/src/bot-inbox-api.ts": {
+          "bytesInOutput": 30
+        },
         "packages/agent-protocol/src/terminal-history.ts": {
           "bytesInOutput": 30
         },
@@ -39855,10 +39894,13 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 451
+          "bytesInOutput": 457
         },
         "packages/data/src/run-store.ts": {
           "bytesInOutput": 7353
+        },
+        "packages/data/src/bot-inbox.ts": {
+          "bytesInOutput": 10683
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -39873,7 +39915,7 @@
           "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
-          "bytesInOutput": 91
+          "bytesInOutput": 97
         },
         "packages/data/src/rollout-events.ts": {
           "bytesInOutput": 35
@@ -39993,7 +40035,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 328
+          "bytesInOutput": 334
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4315
@@ -41715,13 +41757,13 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -41748,7 +41790,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -41760,7 +41802,7 @@
           "bytesInOutput": 1626
         },
         "packages/host/src/worker-context/background-notification.ts": {
-          "bytesInOutput": 422
+          "bytesInOutput": 409
         },
         "packages/capabilities/src/SubagentTool/constants.ts": {
           "bytesInOutput": 45
@@ -43443,7 +43485,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -45135,7 +45177,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4728610
+      "bytes": 4739308
     }
   }
 }
