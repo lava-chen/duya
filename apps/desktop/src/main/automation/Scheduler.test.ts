@@ -279,7 +279,6 @@ describe('AutomationScheduler', () => {
   it('skip misfire policy drops a bot fire that missed its grace window (S6)', async () => {
     const cron = scheduler.createCron(makeInput({
       agent: 'digest-bot',
-      schedule: { kind: 'every', every: '1m' },
       misfirePolicy: 'skip',
       schedule: { kind: 'every', every: '1d' },
     }));

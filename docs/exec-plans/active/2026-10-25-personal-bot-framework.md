@@ -1,5 +1,58 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S1–S6-A integration preview — 2026-10-26
+
+- Owner: Codex root; linked worktree `/workspace/work/bot-integration`, branch
+  `codex/bot-s1-s6-integration`, base `origin/master @ d80ca3c6`. User authorized
+  the first preview step: combine selected branches, not merge to master.
+  Managed-worktree/context/CodeGraph tools unavailable; Git and versioned plans
+  provide the snapshot. Original PR branches are unchanged and retained.
+- Assembled with one merge commit per selected PR head, in the order below.
+  All eleven exact heads are verified ancestors of the preview. Rebased S1–S3a
+  and older stacked ancestry coexist; no original commits were rewritten.
+
+| Slice / PR | Selected head | Preview merge |
+| --- | --- | --- |
+| #500 `codex/bot-framework-s1` | `a04b6d27` | `27674860` |
+| #502 `codex/bot-framework-s2` | `5e06887a` | `b7bb8e45` |
+| #503 `codex/bot-framework-s3a` | `01342b44` | `b6b0b37a` |
+| #504 `codex/bot-framework-s3b` | `a692d74b` | `34bb03e4` |
+| #506 `codex/bot-framework-s3c` | `aaa78d44` | `87f7fb3b` |
+| #509 `codex/bot-framework-s4` | `64f1cf4e` | `bbdaebb9` |
+| #511 `codex/bot-framework-s4-feishu` | `600bf624` | `384bd798` |
+| #515 `codex/bot-framework-s5` | `9edc7c84` | `8eb70873` |
+| #520 `codex/bot-s5-review` | `f3477278` | `6979354b` |
+| #513 `codex/bot-framework-s6` | `b41ab523` | `e05fe0f6` |
+| #519 `codex/bot-s6-followup` | `35cad06a` | `62250c45` |
+
+- Source conflict resolutions: `data/src/index.ts` retains inbox exports and
+  adds BotDispatchStore. `host/src/local-host.ts` keeps master's newer
+  lease-resilience no-argument shutdown and adds Bot dispatcher lifecycle.
+  Independent S5/S6 architecture and execution records are both retained;
+  the handoff keeps newer S1–S3a resync facts. The index points here.
+- Generated worker conflicts were temporarily held at the current artifact in
+  intermediate checkpoints, then rebuilt once from the final combined source.
+  Those checkpoints are assembly history, not individually validated releases.
+- The first final typecheck invocation caught an automatically merged duplicate
+  `@duya/bot` dependency; identical versions were collapsed to one. An inherited
+  duplicate `schedule` test key was removed, preserving its intended daily cadence.
+- Combination checks: all eleven selected heads are ancestors; no unmerged
+  index entries. Eight distinct focused suites / 148 tests passed (the
+  Scheduler suite was rerun after its duplicate-key cleanup). The data inbox
+  suite ran 30 cases; the first smoke command's obsolete inbox filename matched
+  no file and was corrected before this total was recorded.
+- Final worker generated artifacts and Electron main/preload were rebuilt.
+  Architecture gate passed, no new boundary findings; baselines unchanged.
+  Final `npm run typecheck:all` exited 0 on the combined source after the
+  duplicate-key fix. Committed bundle freshness is checked before publication.
+  Remote selected heads were rechecked and all eleven remained unchanged.
+  Dependency overlays point workspace names to this worktree; only compatible
+  third-party modules and private picomatch type declarations are reused.
+- Scope remains an integration preview. No production Bot ownership changed,
+  no main/master update, no PR merged, no live external send. Full-stack
+  regression, real worker/IPC/Electron validation and authorized integration
+  remain subsequent work; the repository's final commit gates are run here.
+
 ## S5 independent review — 2026-10-26
 
 - Owner: Codex root, linked worktree `/workspace/work/bot-s5-review`, branch

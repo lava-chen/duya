@@ -1,5 +1,10 @@
 # Bot 框架 S0–S7 交接报告（2026-10-26）
 
+> Historical S1–S3a handoff snapshot. For the current S1–S6-A integration
+> preview and exact selected heads, read the top section of the
+> [active Bot plan](2026-10-25-personal-bot-framework.md). Statements below
+> about slices being unstarted do not describe that preview.
+
 本文是 [个人长期 Bot 框架](2026-10-25-personal-bot-framework.md) 实施期的交接材料：写到哪、哪些已合并/待合并、每片验证到什么程度、剩下的切片怎么开工、以及不该重犯的坑。计划本体维护目标、边界与切片表；本文只讲交接。
 
 ## 一句话状态
