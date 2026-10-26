@@ -190,3 +190,44 @@ Claude 的前置圆环被明确排除。
 - 副作用：验证期间把本机 `duya-conversations` 的 `projectGroupBy` 从 `singleList` 改为 `byProject`（实测三模式），
   收尾时已改回 `singleList` 并刷新确认段标题回到「会话」。
 - 下一步（可选，待用户决定）：顶层直接是文件夹分组、取消 section 层。
+
+---
+
+## 第四轮：侧栏字体对齐 Claude Code（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · commit `41751230`
+
+### 基线（实测，非目测）
+
+Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，DPR 1.25。
+抓窗口截图后按 ink band 量：字高 = 第一行墨点到最后一行墨点；行距 = 相邻 band 顶边间距；
+字色 = band 内最亮像素（抗锯齿下最接近真字色，模态色是背景不是字色）。
+
+| 元素 | 字号 | 颜色 | 测量依据 |
+| --- | --- | --- | --- |
+| 会话标题 | **13px** | `#DDDCDC` | ink band 17 物理 px |
+| 导航行（新聊天） | **13px** | `#DDDCDD` | ink band 17 物理 px |
+| 分组标题（置顶 / 最近） | **12px** | `#8F8C8C` | ink band 15 物理 px |
+| 行距 | **31.2px** | 侧栏背景 `#20191A` | band 顶边间距 39 物理 px |
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `styles/sidebar.css` | 新增 `--sidebar-text` / `--sidebar-muted` 侧栏专属色板（暗色 `#dddcdc` / `#8f8c8c`，浅色回落到全局 `--text` / `--muted`）；导航行、会话标题 13.5→**13px**；项目分组名 13.5→13px；会话行与导航行改用侧栏色板 |
+| `styles/sidebar-sections.css` | 分组标题 13.5→**12px**，颜色改走 `--sidebar-muted` |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `41751230` 干净 | Node / jsdom | `node .claude/ui-check.mjs`（UI 包 typecheck + 全部 UI 测试并行） | 0 · typecheck 65s / tests 42s | 全绿 |
+| `41751230` 干净 | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `41751230` 干净 | Windows / Electron + CDP | `node .claude/measure-duya-sidebar.mjs` | 0 | 实机计算样式：会话标题 13px `rgb(221,220,220)`；分组标题 12px `rgb(143,140,140)`；`--sidebar-text: #dddcdc` · `--sidebar-muted: #8f8c8c` |
+
+### 接续 / 结果
+
+- 第四轮**已实现、已验证、已提交**（`41751230`）。
+- 与基线逐项吻合：字号 13/13/12、字色 `#DDDCDC` / `#8F8C8C` 与实测值一致。
+- 浅色主题未实测 Claude 对应值，暂沿用 duya 全局色板。
+
