@@ -39,7 +39,7 @@ import { runWakePromptInExistingSession, type WakeRunOutcome } from './wake-run'
 import { normalizeChannelAddress, parseChannelAddress } from '@duya/agent-protocol/channels';
 import type { ChannelAddress, ChannelInboundEnvelope, ChannelOutboundMessage, DeliveryFailure } from '@duya/agent-protocol/channels';
 import { buildChannelInboundWakePrompt, buildChannelDeliveryFailureWakePrompt, buildChannelAckRedrivePrompt, CHANNEL_INBOUND_WAKE_CUE, CHANNEL_DELIVERY_FAILED_WAKE_CUE } from '@duya/host/channel-prompts';
-import { getDesktopHostLocalPendingWakeApi, getDesktopHostSessionApi } from '../cli/desktop-host-api';
+import { getDesktopHostLocalPendingWakeApi, getDesktopHostSessionApi, isDesktopManagedChannelTurn } from '../cli/desktop-host-api';
 import { ipcMessageToNewEvent, newEventToIpcMessage } from '../ipc/core-db-adapters';
 import { getSessionManager } from '../agents/session-manager';
 import { parseAgentIdFromBotSession } from './bot-session-id';
@@ -313,7 +313,7 @@ export function wakeForInbound(
  * rides metadata.channelMsg (PERSISTED_METADATA_KEYS whitelist) so the
  * renderer's chip grouping + detail view survive reload.
  */
-async function appendInboundChannelMarker(
+export async function appendInboundChannelMarker(
   sessionId: string,
   envelope: ChannelInboundEnvelope,
 ): Promise<void> {
@@ -324,7 +324,9 @@ async function appendInboundChannelMarker(
     const address = `${platform}:${chat}`;
     const sender = envelope.sender || platform;
     const message = {
-      id: `channel-marker-in-${randomUUID()}`,
+      id: envelope.sourceEventId
+        ? `channel-marker-in:${sessionId}:${envelope.address.platform}:${envelope.address.chat}:${envelope.sourceEventId}`
+        : `channel-marker-in-${randomUUID()}`,
       session_id: sessionId,
       role: 'user',
       content: `[${platform}] ${sender}: ${text}`,
@@ -490,6 +492,12 @@ export class DefaultChannelBackgroundWakes implements ChannelBackgroundWakes {
     addressToken: string,
     outbound: ChannelOutboundMessage,
   ): Promise<void> {
+    // Managed channel replies are sent once from the durable terminal outbox.
+    // A tool-call event is never delivery evidence and must not bypass it.
+    const botId = parseAgentIdFromBotSession(sessionId);
+    if (botId && isDesktopManagedChannelTurn(botId)) {
+      throw new Error('managed_channel_reply_is_delivered_after_run_terminal');
+    }
     // Dynamically import channelDelivery to avoid circular dependency with electron main
     const { channelDelivery } = await import('../channels/channel-delivery');
 

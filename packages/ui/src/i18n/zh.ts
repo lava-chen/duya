@@ -1,6 +1,15 @@
 import type { TranslationKey } from './en';
 
 const zh: Record<TranslationKey, string> = {
+  'bot.delivery.title': '渠道投递',
+  'bot.delivery.pending': '等待投递',
+  'bot.delivery.sending': '正在发送',
+  'bot.delivery.delivered': '已送达',
+  'bot.delivery.unknown': '送达状态待核对',
+  'bot.delivery.blocked': '投递受阻',
+  'bot.delivery.unknownHelp': '消息可能已发送，请先核对外部会话，再决定是否重新发送。',
+  'bot.delivery.receipt': '回执',
+  'bot.delivery.loadFailed': '无法加载渠道投递状态。',
   'nav.newChat': '新对话',
   'nav.settings': '设置',
   'nav.skills': 'Skills',

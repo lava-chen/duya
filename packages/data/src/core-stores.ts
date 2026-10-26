@@ -56,6 +56,7 @@ import { ResearchStore } from './research-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
 import { RunStore } from './run-store.js';
 import { BotInboxStore } from './bot-inbox.js';
+import { BotOutboxStore } from './bot-outbox.js';
 import { BOT_SCHEDULER_MIGRATIONS } from './bot-scheduler-store.js';
 import { WorkflowRunStore } from './workflow-run-store.js';
 import { WorkspaceStore } from './workspace-store.js';
@@ -1208,6 +1209,7 @@ export interface CoreDataStores {
   runs: RunStore;
   /** Personal-bot framework S3a: durable bot inbox + dispatch receipts. */
   botInbox: BotInboxStore;
+  botOutbox: BotOutboxStore;
   workflowRuns: WorkflowRunStore;
   workspaces: WorkspaceStore;
   /** Plan 621: observed PR/CI/review projection. Cache of GitHub, never identity. */
@@ -1238,6 +1240,7 @@ export function createCoreDataStores(
     research: new ResearchStore(db),
     runs: new RunStore(db),
     botInbox: new BotInboxStore(db),
+    botOutbox: new BotOutboxStore(db),
     workflowRuns: new WorkflowRunStore(db),
     workspaces: new WorkspaceStore(db),
     integrations: new IntegrationStore(db),
@@ -1263,6 +1266,7 @@ export function collectCoreDataMigrations(): Migration[] {
     ...ResearchStore.migrations,
     ...RunStore.migrations,
     ...BotInboxStore.migrations,
+    ...BotOutboxStore.migrations,
     ...BOT_SCHEDULER_MIGRATIONS,
     ...WorkflowRunStore.migrations,
     ...WorkspaceStore.migrations,

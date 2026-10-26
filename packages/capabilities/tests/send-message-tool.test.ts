@@ -11,7 +11,7 @@ const effects = {
   createWidgetPending: vi.fn(async (_input: Parameters<SendMessagePort['createWidgetPending']>[0]) => undefined),
   upsertCursorAgentRun: vi.fn(async (_input: Parameters<SendMessagePort['upsertCursorAgentRun']>[0]) => undefined),
   createSecretPending: vi.fn(async (_input: Parameters<SendMessagePort['createSecretPending']>[0]) => undefined),
-  deliverToChannel: vi.fn(async (_input: Parameters<SendMessagePort['deliverToChannel']>[0]) => ({ success: true })),
+  deliverToChannel: vi.fn(async (_input: Parameters<SendMessagePort['deliverToChannel']>[0]): ReturnType<SendMessagePort['deliverToChannel']> => ({ success: true })),
   appendChannelActivity: vi.fn(async (_input: SendMessageChannelActivity) => undefined),
   logError: vi.fn(),
   logDebug: vi.fn(),
@@ -29,6 +29,14 @@ beforeEach(() => {
 });
 
 describe('SendMessage validation and message persistence', () => {
+  it('reports a durable queued receipt without claiming delivery or writing a delivered marker', async () => {
+    effects.deliverToChannel.mockResolvedValueOnce({ success: true, queued: true, deliveryId: 'receipt-1' });
+    const result = await tool.execute({ type: 'text', content: 'reply', channel: 'telegram:123' }, undefined, context);
+    expect(result.error).not.toBe(true);
+    expect(result.result).toContain('Delivery is pending; receipt: receipt-1');
+    expect(result.result).not.toContain('Message delivered');
+    expect(effects.appendChannelActivity).not.toHaveBeenCalled();
+  });
   it('rejects cross-type fields with recovery instructions', async () => {
     const result = await tool.execute({ type: 'text', content: 'hi', widget: { prompt: 'x' } }, undefined, context);
     expect(result.error).toBe(true);

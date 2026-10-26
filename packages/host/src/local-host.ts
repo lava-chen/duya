@@ -112,6 +112,7 @@ import { createHostWorkerDbBridge } from './worker-db-bridge.js';
 import { resolveProvider } from './worker-config/file-config.js';
 import type { HostRunExecutionLogger } from './run-execution.js';
 import { BotDispatcher, readBotPrompt } from './bot-dispatcher.js';
+import { BotChannels, type BotChannelOptions } from './bot-channels.js';
 import { isSafeBotId } from './config-agents/bot-id.js';
 import { readAgentsTable, readConfigTomlDocument } from './config-agents/config-file.js';
 import { isSoftDeletedConfigAgent } from './config-agents/agent-config-core.js';
@@ -173,6 +174,7 @@ export interface StartLocalHostOptions {
     readonly ownerId: string;
     readonly pollIntervalMs?: number;
     readonly leaseMs?: number;
+    readonly channels?: Pick<BotChannelOptions, 'resolveTarget' | 'adapters' | 'onDelivery'>;
   };
   readonly dataRoot?: string;
   readonly databasePath?: string;
@@ -246,6 +248,7 @@ export interface StartLocalHostOptions {
 export interface LocalHostHandle {
   /** Trusted in-process admission for verified inputs; no client-supplied policy. */
   readonly botInputs?: BotDispatcher;
+  readonly botChannels?: BotChannels;
   readonly origin: string;
   readonly port: number;
   /** Defined when the Host was started with a stable token; undefined in ephemeral mode. */
@@ -440,6 +443,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
    */
   let shutdownHost: (() => Promise<void>) | null = null;
   let botDispatcher: BotDispatcher | undefined;
+  let botChannels: BotChannels | undefined;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -639,6 +643,20 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           };
         },
         bridge: createHostWorkerDbBridge({
+          channelDelivery: async (payload, caller) => {
+            if (!botChannels || !botDispatcher || !runExecution) throw new Error('bot_channel_runtime_unavailable');
+            runExecution.validateSessionCaller(caller);
+            const entry = botDispatcher.options.store.outstanding(options.botRuntime!.ownerId).find((row) =>
+              row.source.startsWith('channel:') && `bot:${row.botId}` === caller.sessionId
+              && botDispatcher!.options.store.inbox.lookupReceipt(`bot-inbox:${row.id}`)?.runId === caller.runId);
+            const outbound = payload.outbound as import('@duya/agent-protocol/channels').ChannelOutboundMessage | undefined;
+            if (!entry || typeof payload.channelAddress !== 'string' || !outbound || typeof outbound.content !== 'string') throw new Error('invalid_channel_delivery');
+            const row = botChannels.queueReply(entry, caller.runId, caller.epoch, payload.channelAddress,
+              { kind: outbound.url ? 'attachment' : 'text', content: outbound.content,
+                ...(outbound.url === undefined ? {} : { url: outbound.url }),
+                ...(outbound.caption === undefined ? {} : { caption: outbound.caption }) });
+            return { success: true, queued: true, deliveryId: row.id };
+          },
           checkoutService,
           sessionService,
           runs: core.stores.runs,
@@ -682,11 +700,26 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         if (!bot || isSoftDeletedConfigAgent(bot)) throw new Error('Bot does not exist or is deleted');
         return bot;
       };
+      if (options.botRuntime.channels) botChannels = new BotChannels({
+        ...options.botRuntime.channels,
+        ownerId: options.botRuntime.ownerId,
+        outbox: core.stores.botOutbox,
+        runs: core.stores.runs,
+        accept: (command) => {
+          if (!botDispatcher) throw new Error('bot_runtime_unavailable');
+          return botDispatcher.accept(command);
+        },
+      });
       botDispatcher = new BotDispatcher({
         ...options.botRuntime,
         store: new BotDispatchStore(core.database.db),
         runs: core.stores.runs,
         execution: runExecution,
+        ...(botChannels ? {
+          settleInput: (entry, runId) => botChannels!.complete(entry, runId),
+          pollDeliveries: () => botChannels!.poll(),
+          hasDeliveries: () => botChannels!.hasWork(),
+        } satisfies Pick<import('./bot-dispatcher.js').BotDispatcherOptions, 'settleInput' | 'pollDeliveries' | 'hasDeliveries'> : {}),
         validateBot: async (id) => { await readBot(id); },
         resolveInput: async (entry) => {
           const bot = await readBot(entry.botId);
@@ -952,6 +985,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         : {}),
       close: shutdownHost,
       ...(botDispatcher ? { botInputs: botDispatcher } : {}),
+      ...(botChannels ? { botChannels } : {}),
     };
   } catch (error) {
     try { await botDispatcher?.close(); await server?.close(); } finally {

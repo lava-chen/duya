@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { queueDesktopBotChannelReply } from '../cli/desktop-host-api';
 import * as path from 'path';
 import type { BrowserWindow } from 'electron';
 import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
@@ -1227,6 +1228,10 @@ export async function dispatchDbAction(
 
       try {
         const kind: 'text' | 'attachment' = outbound.url ? 'attachment' : 'text';
+        const queued = queueDesktopBotChannelReply(sessionId, channelAddress, { kind, content: outbound.content,
+          ...(outbound.url === undefined ? {} : { url: outbound.url }),
+          ...(outbound.caption === undefined ? {} : { caption: outbound.caption }) }, trustedAttempt);
+        if (queued) return { success: true, queued: true, deliveryId: queued.id };
         // Strip the `bot:` prefix: channelDelivery keys the live-outbound
         // registry and the connector secret store by the bare agent id, so
         // passing the full `bot:<agentId>` session id misses both lookups.

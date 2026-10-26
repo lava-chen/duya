@@ -1,5 +1,60 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S4 execution — 2026-10-26
+
+- Delivery: draft PR #509; shared follow-up preserves SendMessage semantics,
+  captured attempt fencing and pending-versus-delivered receipts. Host Feishu
+  adapter conformance is exercised here; Desktop Feishu activation and ACK
+  recovery remain the separate platform continuation. No PR is merged.
+
+- Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,
+  branch `codex/bot-framework-s4`, base S3c `aaa78d44`. Existing PRs remain unchanged.
+- Plan: establish the affected baseline; add core-db outbox and atomic terminal
+  settlement; wire trusted per-event channel admission and fenced delivery in
+  Host; connect Telegram, then Feishu in a separate platform commit/PR; expose
+  durable delivery state through the Desktop bridge and existing channel cards.
+- Acceptance: replay returns the same inbox receipt; identity cannot cross a
+  binding; terminal settlement cannot lose a delivery obligation; an interrupted
+  send is reconciled or marked unknown without blind resend; no credentials in
+  durable payloads, projections or errors. Verify local transport faults, restart,
+  relevant regressions, typecheck, architecture and Electron build.
+- Managed worktree/context/CodeGraph tools unavailable; Git, PR heads and the
+  versioned plan supply shared-state evidence. No merge is authorized.
+- Telegram implemented: core migration 48 adds `bot_outbox`; terminal validation,
+  reply insertion and inbox settlement share one transaction. A committed send
+  claim is fenced; interrupted sends become `unknown`, never automatically
+  resent. Vault credentials are resolved only by the Host transport. Connection
+  replacement/revocation invalidates queued targets. Ownership transfer refuses
+  unresolved deliveries. Existing legacy scheduling remains the default.
+- Channel replies use explicit SendMessage submissions captured with their Run
+  attempt. They queue durably and are released by atomic terminal settlement.
+  Plain assistant text stays private. Missing replies are blocked obligations,
+  identical submissions reuse a receipt, and distinct replies retain order.
+  Legacy non-channel turns keep their existing delivery path (retirement is S7).
+  Unsupported/oversized output is a visible blocked obligation, never a partial
+  send reported as complete. Telegram text is limited to one 4096-character
+  provider message per receipt; no automatic multi-message split is claimed.
+- Desktop admits each Telegram update by its stable provider ID and awaits the
+  durable receipt before advancing the polling offset. Startup replay is not
+  truncated. Read-only IPC and delivery cards show pending/sending/delivered/
+  unknown/blocked independently of Run completion.
+- Baseline at `aaa78d44` (Linux / Node 24.19.0, clean independent npm ci):
+  Host dependency build exit 0; 4 affected suites / 66 tests passed. After changes:
+  13 affected suites / 164 tests passed; the initially blocked Electron-import
+  suite passed all 6 tests after installing the verified Electron 44.9.1 binary.
+  Real Host/SQLite/child-process suite: 4 tests passed, including channel receipt
+  replay after restart with one worker dispatch and one transport send. New
+  outbox/channel fault suites: 10 tests passed (included in the 164 above).
+- Chromium via local Playwright (MCP unavailable): five durable states, unknown
+  guidance, remote receipt, light/dark and 375px layout passed with no page errors.
+  This is component browser verification with a fixture IPC response, not a real
+  Electron renderer IPC claim. `electron:build` passed. Architecture gate passed
+  with no new boundary violations. `npm run typecheck:all` exit 0 on the final
+  Telegram source; generated worker artifacts rebuilt by `electron:build`.
+- Feishu remains the next platform slice: preserve message IDs/media and await
+  admission before transport ACK; bypass the legacy cross-account dedup file for
+  managed admission. Do not treat a live adapter's void send result as a receipt.
+
 ## S3c execution — 2026-10-26
 
 - Owner: Codex root, `codex/bot-framework-s3c`, isolated linked worktree

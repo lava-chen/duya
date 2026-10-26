@@ -18,6 +18,9 @@ export interface BotDispatcherOptions {
   };
   readonly resolveInput: (entry: BotInboxEntry) => Promise<StartAgentRunInput>;
   readonly validateBot: (botId: string) => Promise<void>;
+  readonly settleInput?: (entry: BotInboxEntry, runId: string) => void | Promise<void>;
+  readonly pollDeliveries?: () => Promise<void>;
+  readonly hasDeliveries?: () => boolean;
   readonly pollIntervalMs?: number;
   readonly leaseMs?: number;
   readonly logger: { error(message: string, error?: Error): void };
@@ -65,7 +68,8 @@ export class BotDispatcher {
   }
 
   hasWork(): boolean {
-    return this.#accepting > 0 || this.#ticking !== undefined || this.options.store.hasOutstanding(this.options.ownerId);
+    return this.#accepting > 0 || this.#ticking !== undefined || this.options.store.hasOutstanding(this.options.ownerId)
+      || (this.options.hasDeliveries?.() ?? false);
   }
 
   start(): void {
@@ -102,7 +106,7 @@ export class BotDispatcher {
       if (entry.status !== 'dispatched') continue;
       const receipt = entry.dispatchKey && store.inbox.lookupReceipt(entry.dispatchKey);
       const run = receipt && this.options.runs.getRun(receipt.runId);
-      if (run && run.terminal !== null) store.inbox.settle(entry.id);
+      if (run && run.terminal !== null) await this.#settle(entry, run.id);
       else if (!run || !await execution.isRunLive(run.id)) {
         store.inbox.deadLetter(entry.id, `recovery_required: dispatched run ${receipt ? receipt.runId : 'missing'} has no live executor`);
       }
@@ -117,6 +121,15 @@ export class BotDispatcher {
       const grant = store.claim(ownerId, botId, this.#leaseOwner, Date.now() + (this.options.leaseMs ?? 30_000));
       if (grant) await this.#dispatch(grant);
     }
+    await this.options.pollDeliveries?.();
+  }
+
+  async #settle(entry: BotInboxEntry, runId: string): Promise<void> {
+    if (entry.source.startsWith('channel:')) {
+      // A missing delivery owner must leave the input recoverable.
+      if (!this.options.settleInput) throw new Error('bot_delivery_runtime_unavailable');
+      await this.options.settleInput(entry, runId);
+    } else this.options.store.inbox.settle(entry.id);
   }
 
   async #reconcilePreemptions(): Promise<void> {
@@ -191,7 +204,7 @@ export class BotDispatcher {
       if (!receipt) return false;
       const run = this.options.runs.getRun(receipt.runId);
       if (run && (run.terminal !== null || await execution.isRunLive(run.id))) {
-        if (store.record(grant, key, run.id) && run.terminal !== null) store.inbox.settle(grant.entry.id);
+        if (store.record(grant, key, run.id) && run.terminal !== null) await this.#settle(grant.entry, run.id);
       } else {
         store.deadLetter(grant, `recovery_required: reserved run ${receipt.runId} cannot be safely restarted`);
       }

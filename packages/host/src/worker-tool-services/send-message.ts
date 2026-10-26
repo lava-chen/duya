@@ -30,7 +30,7 @@ export function createWorkerSendMessagePort(): SendMessagePort {
           ...(input.mediaUrl !== undefined ? { url: input.mediaUrl } : {}),
           ...(input.mediaAlt !== undefined ? { caption: input.mediaAlt } : {}),
         },
-      })) as { success?: boolean; reason?: string } | undefined;
+      })) as { success?: boolean; reason?: string; queued?: boolean; deliveryId?: string } | undefined;
     },
     appendChannelActivity(input: SendMessageChannelActivity) {
       const [platform, ...chatParts] = input.channel.split(':');
