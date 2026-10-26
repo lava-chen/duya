@@ -34,7 +34,19 @@
 - Architecture gate passed, no new boundary violations, baseline untouched.
   Main/preload `npm run build:electron` passed. Full `electron:build` failed
   in its Electron binary prerequisite (download unavailable); no packaged or
-  live Electron claim. Full typecheck result is recorded at delivery below.
+  live Electron claim.
+- Final `npm run typecheck:all` retry exited 0 on Linux / Node 24.19.0,
+  source commit `e22e8fe0`. Initial run stopped at missing `@types/picomatch`;
+  installed the already-declared 4.0.3 type package under private `work/deps`
+  and added worktree-local capability/Host resolution links. Shared dependency
+  installation untouched. Electron type ratchet reported no new errors.
+- Delivery: [draft PR #519](https://github.com/lava-chen/duya/pull/519), base
+  `codex/bot-framework-s6` (#513), implementation `e22e8fe0`. User explicitly
+  authorized pushing this payload and creating the PR. Remote head verified;
+  no CI checks/reviews reported yet, no merge. Keep branch and worktree.
+- Next: review #519 alongside #513; integrate only after prerequisite stack
+  review/CI, repeat Electron-dependent validation on a prepared runner, then
+  begin S6-B budget/quiet-hours/pause/revocation/approval as a separate slice.
 
 ## S6 execution — 2026-10-26
 
