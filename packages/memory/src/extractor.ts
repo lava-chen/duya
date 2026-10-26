@@ -33,6 +33,7 @@ import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import { parseCanonicalFile } from './canonical_file.js';
+import { withForgottenKeys } from './forget_ledger.js';
 import { writeSystemLog } from './system_log.js';
 import {
   TASK_OUTCOMES,
@@ -131,6 +132,12 @@ export interface Stage1ExtractorOpts {
   rootDir?: string;
   policyPath?: string;
   memoryRoot?: string;
+  /**
+   * Memory root whose `.forget-ledger.json` tombstone keys are merged into
+   * the dedupe set (framework plan S5). Forgotten facts stay unknown to
+   * extraction so an old summary cannot resurrect them.
+   */
+  forgottenKeysRoot?: string;
   readMessageRows?: (sessionId: string) => Promise<MessageRowShape[]>;
 }
 
@@ -971,6 +978,16 @@ export class Stage1Extractor {
    * Phase C shadow window when `memoryRoot` is unset.
    */
   private queryExistingKeys(): string[] {
+    const base = this.queryActiveKeys();
+    // Framework plan S5: forgotten keys are tombstones. They are no longer
+    // active (so they are not recallable) but must stay "known" to
+    // extraction, or a summary written before the forget would re-create
+    // the same fact.
+    const forgottenRoot = this.opts?.forgottenKeysRoot;
+    return forgottenRoot ? withForgottenKeys(base, forgottenRoot) : base;
+  }
+
+  private queryActiveKeys(): string[] {
     if (this.opts?.memoryRoot) {
       return collectActiveKeysFromFiles(this.opts.memoryRoot);
     }
@@ -1033,19 +1050,24 @@ export class Stage1Extractor {
 }
 
 /**
- * Read active canonical_keys from live memory files (Phase D switch).
+ * Read the dedupe keys from live memory files (Phase D switch).
  *
  * Walks `<memoryRoot>/items/**\/*.md` and `<memoryRoot>/entities/**\/*.md`,
  * parses each file's frontmatter, and returns the `canonical_key` of every
- * file with `status: active`. Returns an empty array when the root or any
- * subdirectory is missing — Stage 1 dedup degrades gracefully.
+ * file with `status: active`, plus every tombstoned key from the forget
+ * ledger (`framework plan S5` — a forgotten fact must not be re-extracted).
+ * Returns an empty array when the root or any subdirectory is missing —
+ * Stage 1 dedup degrades gracefully.
  *
  * This is the Phase D replacement for the DB-backed `queryExistingKeys`.
  * The private `queryExistingKeys` delegates here when the extractor is
  * built with a `memoryRoot`.
  */
-export async function queryExistingKeysFromFiles(memoryRoot: string): Promise<string[]> {
-  return collectActiveKeysFromFiles(memoryRoot);
+export async function queryExistingKeysFromFiles(
+  memoryRoot: string,
+  forgottenKeysRoot: string = memoryRoot,
+): Promise<string[]> {
+  return withForgottenKeys(collectActiveKeysFromFiles(memoryRoot), forgottenKeysRoot);
 }
 
 function collectActiveKeysFromFiles(memoryRoot: string): string[] {

@@ -7,8 +7,10 @@
  *
  *   own    → `<duyaRoot>/agents/<agentId>/memory/**`
  *   user   → `<duyaRoot>/memory/{items,entities,global}/**` (legacy
- *            canonical frontmatter via parseCanonicalFile) plus every
- *            per-writer shard `<duyaRoot>/agents/<agentId>/user/**`
+ *            canonical frontmatter via parseCanonicalFile) plus the
+ *            per-writer shards `<duyaRoot>/agents/<agentId>/user/**` the
+ *            caller authorizes (own + explicit peer grants, framework
+ *            plan S5 — a bot never scans every bot's shard)
  *   project→ `<duyaRoot>/projects/<projectId>/agents/<agentId>/**`
  *            (per-writer project shards; populated from Phase 3 on)
  *
@@ -19,18 +21,33 @@
  * the Plan 485 reservation for bot state); absent file → not joined.
  *
  * Only `status: active` files are recallable; retired/superseded files
- * are history, not memory.
+ * are history, not memory. A path tombstoned in the forget ledger is
+ * skipped as well: the ledger is written before the file is retired, so a
+ * crash in that window must not expose the fact (framework plan S5).
  */
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'node:crypto'
 import { parseCanonicalFile } from '@duya/memory/canonical_file'
+import { readForgottenPathsSync } from '@duya/memory/forget_ledger'
+import { isSafeBotId, isSafeMemorySegment } from '@duya/bot'
 import { normalizeKey } from './render.js'
 import type { TierMemoryEntry } from './types.js'
 
 /** Legacy user-tier scan roots, relative to the duya root. */
 const USER_SCAN_ROOTS = ['memory/items', 'memory/entities', 'memory/global'] as const
+
+/**
+ * Paths tombstoned in the forget ledger (duya-root-relative).
+ *
+ * The ledger is written before the canonical file is retired, so a crash in
+ * that window leaves the file `status: active` on disk. The tombstone is
+ * what keeps it invisible in the meantime.
+ */
+function tombstonedPaths(duyaRoot: string): ReadonlySet<string> {
+  return new Set(readForgottenPathsSync(path.join(duyaRoot, 'memory')))
+}
 
 interface RawTierFrontmatter {
   tier?: string
@@ -132,7 +149,10 @@ function readTierFile(
   tier: MemoryTierPublic,
   fallbackWriter: string,
   fallbackProjectId: string,
+  tombstoned: ReadonlySet<string>,
 ): TierMemoryEntry | null {
+  const relPath = toRelPath(filePath, duyaRoot)
+  if (tombstoned.has(relPath)) return null
   let content: string
   try {
     content = fs.readFileSync(filePath, 'utf8')
@@ -157,7 +177,7 @@ function readTierFile(
     dedupeKey: normalizeKey(dedupeRaw),
     writerId: meta.agent_profile_id ?? fallbackWriter,
     projectId: meta.project_id ?? fallbackProjectId,
-    filePath: toRelPath(filePath, duyaRoot),
+    filePath: relPath,
     title: fileTitle(body, filePath),
     body,
     createdAt: parseTimestamp(meta.created_at, stat.birthtimeMs),
@@ -172,12 +192,14 @@ type MemoryTierPublic = TierMemoryEntry['tier']
  * Empty when the directory does not exist yet (no Phase 3 writes so far).
  */
 export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemoryEntry[] {
+  if (!isSafeBotId(agentId)) return []
   const dir = path.join(duyaRoot, 'agents', agentId, 'memory')
   const files: string[] = []
   walkMdFiles(dir, files)
+  const tombstoned = tombstonedPaths(duyaRoot)
   const entries: TierMemoryEntry[] = []
   for (const file of files) {
-    const entry = readTierFile(file, duyaRoot, 'agent', agentId, '')
+    const entry = readTierFile(file, duyaRoot, 'agent', agentId, '', tombstoned)
     if (entry) entries.push(entry)
   }
   return entries
@@ -186,19 +208,26 @@ export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemor
 /**
  * User tier: the legacy canonical tree (`memory/items`, `entities`,
  * `global`) — canonical frontmatter files index as writerless notes —
- * plus every per-writer shard `agents/<agentId>/user/**` written by the
- * Plan 481 tierWriter (tier-format files only; the shard owner is the
- * writer). Recalling both keeps legacy rows visible while shard writes
- * join the same dedupe/attribution space.
+ * plus the explicitly authorized per-writer shards
+ * `agents/<agentId>/user/**` (tierWriter layout; the shard owner is the
+ * writer).
+ *
+ * Plan S5: `shardIds` is the authorization boundary — the caller passes the
+ * bot's own id plus any peer ids from `state/memory-access.json`. The
+ * reader never enumerates the agents directory, so an ungranted peer shard
+ * is invisible even if it exists on disk.
  */
-export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
+export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[]): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
+  const tombstoned = tombstonedPaths(duyaRoot)
   for (const root of USER_SCAN_ROOTS) {
     const absRoot = path.join(duyaRoot, root)
     const files: string[] = []
     walkMdFiles(absRoot, files)
     for (const file of files) {
-      const tierEntry = readTierFile(file, duyaRoot, 'user', '', '')
+      const relPath = toRelPath(file, duyaRoot)
+      if (tombstoned.has(relPath)) continue
+      const tierEntry = readTierFile(file, duyaRoot, 'user', '', '', tombstoned)
       if (tierEntry) {
         entries.push(tierEntry)
         continue
@@ -221,7 +250,7 @@ export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
         dedupeKey: normalizeKey(canonical.canonical_key),
         writerId: '',
         projectId: canonical.project_id ?? '',
-        filePath: toRelPath(file, duyaRoot),
+        filePath: relPath,
         title: fileTitle(body, file),
         body,
         createdAt: parseTimestamp(undefined, stat.birthtimeMs),
@@ -229,27 +258,15 @@ export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
       })
     }
   }
-  // Per-writer user shards: agents/<agentId>/user/** (tierWriter layout).
-  const agentsDir = path.join(duyaRoot, 'agents')
-  let agentIds: string[]
-  try {
-    agentIds = fs.readdirSync(agentsDir).filter((name) => {
-      if (name.startsWith('.')) return false
-      try {
-        return fs.statSync(path.join(agentsDir, name)).isDirectory()
-      } catch {
-        return false
-      }
-    })
-  } catch {
-    return entries
-  }
-  for (const agentId of agentIds) {
-    const shardDir = path.join(agentsDir, agentId, 'user')
+  // Authorized per-writer user shards: agents/<agentId>/user/**.
+  const seen = new Set<string>()
+  for (const agentId of shardIds) {
+    if (!isSafeBotId(agentId) || seen.has(agentId)) continue
+    seen.add(agentId)
     const files: string[] = []
-    walkMdFiles(shardDir, files)
+    walkMdFiles(path.join(duyaRoot, 'agents', agentId, 'user'), files)
     for (const file of files) {
-      const entry = readTierFile(file, duyaRoot, 'user', agentId, '')
+      const entry = readTierFile(file, duyaRoot, 'user', agentId, '', tombstoned)
       if (entry) entries.push(entry)
     }
   }
@@ -264,12 +281,15 @@ export function readUserTierEntries(duyaRoot: string): TierMemoryEntry[] {
  */
 export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: string[]): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
+  const tombstoned = tombstonedPaths(duyaRoot)
   for (const projectId of joinedProjectIds) {
+    // Membership ids become path segments; drop anything unsafe (S5).
+    if (!isSafeMemorySegment(projectId)) continue
     const shardsRoot = path.join(duyaRoot, 'projects', projectId, 'agents')
     let writerIds: string[]
     try {
       writerIds = fs.readdirSync(shardsRoot).filter((name) => {
-        if (name.startsWith('.')) return false
+        if (name.startsWith('.') || !isSafeMemorySegment(name)) return false
         try {
           return fs.statSync(path.join(shardsRoot, name)).isDirectory()
         } catch {
@@ -283,7 +303,7 @@ export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: strin
       const files: string[] = []
       walkMdFiles(path.join(shardsRoot, writerId), files)
       for (const file of files) {
-        const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId)
+        const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId, tombstoned)
         if (entry) entries.push(entry)
       }
     }
@@ -296,6 +316,7 @@ export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: strin
  * (string array). Missing/corrupt file → not joined to anything.
  */
 export function readJoinedProjects(duyaRoot: string, agentId: string): string[] {
+  if (!isSafeBotId(agentId)) return []
   const file = path.join(duyaRoot, 'agents', agentId, 'state', 'projects.json')
   let raw: string
   try {
@@ -306,7 +327,7 @@ export function readJoinedProjects(duyaRoot: string, agentId: string): string[] 
   try {
     const parsed: unknown = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((x): x is string => typeof x === 'string')
+    return parsed.filter((x): x is string => isSafeMemorySegment(x))
   } catch {
     return []
   }

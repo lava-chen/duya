@@ -20,13 +20,19 @@
  *
  * Forget is soft: the frontmatter status flips to 'retired' (parseCanonicalFile
  * consumers skip it) and the index row is removed. The file stays on disk for
- * auditability, matching the file-truth principle.
+ * auditability, matching the file-truth principle. The forget ledger
+ * (`<duyaRoot>/memory/.forget-ledger.json`) is written BEFORE the file is
+ * retired and names the retired path: it bumps the recall revision (frozen
+ * prompts re-render on the next turn), blocks re-extraction of the fact, and
+ * tombstones the path so a crash before the retirement cannot resurrect it
+ * (the startup repair in `forgetRecovery` finishes the job).
  */
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
+import { recordForgetSync } from '@duya/memory/forget_ledger';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   listTierEntries,
@@ -129,13 +135,16 @@ function canonicalFileContent(input: TierWriteInput, memoryId: string, updatedAt
   return frontmatter.join('\n');
 }
 
-/** Flip an existing canonical file's status to 'retired' (soft delete). */
-function retireFile(absPath: string): void {
+/**
+ * Flip an existing canonical file's status to 'retired' (soft delete).
+ * Returns true when the file was changed.
+ */
+export function retireCanonicalFile(absPath: string): boolean {
   const content = fs.readFileSync(absPath, 'utf8');
   const updated = content.replace(/^status: active$/m, 'status: retired');
-  if (updated !== content) {
-    fs.writeFileSync(absPath, updated, 'utf8');
-  }
+  if (updated === content) return false;
+  fs.writeFileSync(absPath, updated, 'utf8');
+  return true;
 }
 
 /**
@@ -210,6 +219,12 @@ function extractMemoryId(absPath: string): string | null {
  * Forget a fact: locate the writer's index row by dedupe key, retire the
  * canonical file, and drop the index row. Returns not_found when the
  * writer has no matching entry (its own shard only — single-writer rule).
+ *
+ * Write-ahead order: the forget ledger is written FIRST and names the file
+ * being retired. A crash between the ledger write and the retirement leaves
+ * the file readable on disk, but the path is tombstoned — recall readers
+ * skip it, and the startup repair pass (`forgetRecovery`) finishes the job
+ * (retire the file, drop the index row).
  */
 export function forgetTierFact(
   db: Database,
@@ -232,8 +247,15 @@ export function forgetTierFact(
     }
 
     const absPath = path.join(duyaRoot, target.file_path);
+    // Ledger first: a failure here must abort before the file is retired, so
+    // the caller never sees "forgotten" with an unmoved recall revision. The
+    // ledger also carries the retired path, which is what makes a crash in
+    // the next two steps recoverable instead of a silent resurrection.
+    recordForgetSync(path.join(duyaRoot, 'memory'), [
+      { key: target.dedupe_key, path: target.file_path },
+    ]);
     if (fs.existsSync(absPath)) {
-      retireFile(absPath);
+      retireCanonicalFile(absPath);
     }
     removeTierEntryByPath(db, target.file_path);
 

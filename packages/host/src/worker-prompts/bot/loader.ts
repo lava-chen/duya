@@ -16,6 +16,11 @@ import { listResolvedGroups } from './config-groups.js'
 import { readBotProfileIdentity } from './bot-profile-reader.js'
 import type { AgentProfile } from '@duya/agent-core'
 import { getDuyaRoot } from '@duya/memory/memory_paths'
+import { readRecallRevisionSync } from '@duya/memory/forget_ledger'
+import {
+  buildBotContextSnapshot,
+  type BotMemoryRecallScopes,
+} from '@duya/bot'
 import type { BotPromptConfig, BotPromptContext, BotRosterEntry } from './framework.js'
 import {
   readJoinedProjects,
@@ -23,6 +28,7 @@ import {
   readProjectTierEntries,
   readUserTierEntries,
 } from './memory/tierReader.js'
+import { readMemoryAccessGrant } from './memory/access.js'
 import type { BotMemoryContext } from './memory/types.js'
 import type { ChannelSnapshot } from '@duya/agent-protocol/channels'
 
@@ -181,17 +187,36 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
     // groups.toml unreadable — the roster renders without rooms.
   }
 
-  // Plan 479 P2.1: tiered memory from the file manifest. The duya root is
-  // the memory root's parent; DUYA_MEMORY_ROOT overrides only the memory
-  // tree, so derive the root from the memory root to stay override-safe.
+  // Plan S5: one typed snapshot per turn. Authorization facts are read
+  // fresh here (they are cheap file reads) so a grant or membership change
+  // takes effect on the next turn; the assembly folds `recallRevision` into
+  // the frozen memory sections' cache keys.
+  const duyaRoot = duyaRootForMemory()
+  let scopes: BotMemoryRecallScopes | undefined
+  if (duyaRoot) {
+    const joinedProjects = readJoinedProjects(duyaRoot, agentId)
+    const grant = await readMemoryAccessGrant(duyaRoot, agentId)
+    const snapshot = buildBotContextSnapshot({
+      botId: agentId,
+      ...(configSelf?.revision === undefined ? {} : { botRevision: configSelf.revision }),
+      joinedProjects,
+      grant,
+      forgetRevision: readRecallRevisionSync(path.join(duyaRoot, 'memory')),
+    })
+    ctx.snapshot = snapshot
+    scopes = snapshot.memory
+  }
+
+  // Plan 479 P2.1: tiered memory from the file manifest, limited to the
+  // scopes the snapshot just authorized.
   const memory = loadBotMemoryContext(
     agentId,
     new Map([[agentId, botName], ...roster.map((r) => [r.id, r.name] as const)]),
+    scopes,
   )
   if (memory) ctx.memory = memory
   // 479 activation: absolute shard paths for the memoryUsage guidance
   // section, so the bot knows where its tiers live on disk.
-  const duyaRoot = duyaRootForMemory()
   if (duyaRoot) {
     ctx.memoryRoots = {
       own: path.join(duyaRoot, 'agents', agentId, 'memory'),
@@ -208,17 +233,24 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
  * Read the three memory tiers from the file manifest and resolve
  * `[via <name>]` attribution through the roster. Returns null when all
  * tiers are empty — sections then omit themselves.
+ *
+ * Plan S5: `scopes` is the authorization boundary. When omitted the reader
+ * fails closed — own shard and the legacy shared roots only, no peer user
+ * shards and no projects. `loadBotPromptContext` always passes the scopes
+ * from the turn's snapshot.
  */
 export function loadBotMemoryContext(
   agentId: string,
   writerNames: Map<string, string>,
+  scopes?: BotMemoryRecallScopes,
 ): BotMemoryContext | null {
   const duyaRoot = duyaRootForMemory()
   if (!duyaRoot) return null
 
   const own = readOwnTierEntries(duyaRoot, agentId)
-  const user = readUserTierEntries(duyaRoot)
-  const joinedProjects = readJoinedProjects(duyaRoot, agentId)
+  const userShardIds = scopes?.userShards ?? []
+  const user = readUserTierEntries(duyaRoot, [agentId, ...userShardIds])
+  const joinedProjects = scopes?.projects ?? readJoinedProjects(duyaRoot, agentId)
   const project = readProjectTierEntries(duyaRoot, joinedProjects)
 
   const withNames = (entries: BotMemoryContext['own']): BotMemoryContext['own'] =>

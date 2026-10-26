@@ -1,5 +1,94 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S5 execution — 2026-10-26
+
+- Owner: root agent; isolated linked worktree `.claude/worktrees/bot-framework-s5`,
+  branch `codex/bot-framework-s5`, base `codex/bot-framework-s4-feishu` @ `600bf624`
+  (stacked: S1–S4 are still unmerged). No merge is authorized.
+- Decision (user-confirmed): peer user shards require an **explicit grant, fail
+  closed**; revocation/forget lands **next turn via a durable recall revision**
+  folded into the frozen-section key, while ordinary memory writes stay frozen
+  until compaction (keeps Plan 501 L1).
+- Status: implemented and verified locally; the two review defects are fixed in
+  `c5326a69`; published as draft
+  [PR #515](https://github.com/lava-chen/duya/pull/515) (base
+  `codex/bot-framework-s4-feishu`). Unmerged; no merge is authorized.
+- Delivered: `@duya/bot` `context/snapshot.ts` (pure `BotContextSnapshot`:
+  bot revision, recall revision, authorized scopes; `parseMemoryAccessGrant`
+  fail-closed); host `worker-prompts/bot/memory/access.ts` reads
+  `agents/<bot>/state/memory-access.json`; `tierReader.readUserTierEntries` now
+  takes an authorized shard list instead of scanning every agent, and project
+  ids/writer dirs are validated as path segments; `loader` builds one snapshot
+  per turn from config revision + grants + `state/projects.json` + forget ledger
+  and renders memory only from `snapshot.memory`; `framework`/
+  `epoch.botVolatileSectionCacheKey` key volatile sections on
+  `bot:<id>:v:<recallRevision>:<epoch>:<section>`; the runtime passes
+  `recallRevision`.
+- Forget is durable at four layers: file retirement + tier-index removal
+  (existing), `<memoryRoot>/.forget-ledger.json` revision (frozen prompt
+  re-renders next turn), and tombstone keys merged into Stage 1's dedupe set.
+  The curator prompt also receives a bounded `forgotten_facts` block so an old
+  rollout summary cannot write the fact back into an area page.
+- Review follow-up (2026-10-26, fix commit `c5326a69`):
+  - **Grant contract is all-or-nothing.** The old parser filtered invalid
+    entries and kept the valid half, so a mixed file still widened recall past
+    what the user wrote — contradicting the "fail closed" promise. One invalid
+    entry now rejects the whole file, and `buildBotContextSnapshot` re-validates
+    the grant instead of trusting the caller, so a hand-built invalid grant
+    yields no peer shards either.
+  - **Forgetting is crash-recoverable.** The ledger is now the *write-ahead*
+    record: it is written before the canonical file is retired and it names the
+    path being retired. Recall readers (`tierReader`) skip every tombstoned
+    path, so a crash between the ledger write and the retirement cannot expose
+    the fact, and the desktop memory-worker startup repair
+    (`memory-state/forgetRecovery.ts`) finishes the retirement and drops the
+    index row. The repair is idempotent; the ledger file format moved to
+    version 2 (`entries[]` with `paths[]`), and a version-1 file still reads.
+  - The failure window is pinned by tests: the desktop test writes the ledger
+    while the file is still `status: active` and the index row still present,
+    then asserts the repair flips it to `retired` and removes the row; the host
+    test asserts the still-active file is not recalled.
+- Acceptance evidence (all local, win32 / Node 24.18.0; re-measured at the
+  review-fix commit `c5326a69`):
+  - named S5 tests 74 cases green across 7 files:
+    `packages/bot/tests/context-snapshot.test.ts` (11, incl. all-or-nothing
+    grant), `packages/memory/src/__tests__/forget_ledger.test.ts` (9, ledger v2
+    entries + paths), `extractor.file-keys.test.ts` (5, incl. tombstone survives
+    retired file), `apps/desktop/.../tierWriter.test.ts` (10, forget bumps the
+    ledger + tombstones), `apps/desktop/.../forgetRecovery.test.ts` (3, crash
+    window completed / idempotent / no-op),
+    `apps/desktop/.../curation_single_shot.test.ts` (23, incl. forgotten block
+    present/absent), `packages/host/tests/worker-prompts/bot-memory-s5.test.ts`
+    (13: own+legacy only without grant, granted shard visible, revocation moves
+    the gate while an ordinary write does not, unsafe project ids dropped,
+    volatile re-render on gate change but not on content change, a tombstoned
+    but un-retired file is not recalled).
+  - `packages/host/tests` + `packages/bot/tests` + `packages/memory/src`:
+    255 files passed / 1 skipped, 2350 passed / 5 skipped (exit 0).
+  - desktop `memory` + `memory-state`: 29 files, 337 passed (exit 0).
+  - `npm run typecheck:all` exit 0; `npm run architecture:check` exit 0 (no new
+    violations; 2955 total, all baselined, baseline untouched); bot-boundary
+    PASS (R1 MEASURED 10 files / 0 forbidden edges); retirement ratchet PASS
+    (772 current / 772 baseline / 0 new). Desktop `tsconfig.main` 178 errors,
+    all pre-existing (base moved; none in the S5 files).
+  - `npm run bundle:worker` rebuilt `packages/host/bundle` from the final source
+    and committed it with the fix; `npm run bundle:verify` reports FRESH at
+    `c5326a69` (0/1009 inputs changed).
+- Honest deferrals / limits: (1) audience-based memory filtering (design §7
+  "记忆按受众过滤") is not implemented — S4 channel admission already gates
+  allowed senders, and the worker has no per-turn audience field; it stays an
+  open item. (2) The `forgotten_facts` curator guard is prompt-level; the
+  structural guarantees are the Stage 1 dedupe tombstone (re-extraction) and
+  the ledger path tombstone (recall visibility, including the crash window).
+  (3) Conversation summaries already folded into context are not rewritten
+  ("必要时重建受影响
+  摘要" remains a separate slice). (4) Grant authoring is a documented JSON file
+  contract; no Desktop UI/RPC yet. (5) The grant file is user-owned state; the
+  bot itself has no writer for it. (6) Remote CI cannot report on this branch:
+  the repo's `Test` workflow only runs on `master` pushes, so no run exists for
+  `codex/bot-framework-s5` (same for the S1–S4 branches). A remote signal only
+  appears once the stack reaches master, which is not authorized.
+
 ## S4 execution — 2026-10-26
 
 - Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,

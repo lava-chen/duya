@@ -49,6 +49,19 @@ export {
 export { BotServiceError } from './domain/errors.js';
 export type { BotErrorCode } from '@duya/agent-protocol/bot-api';
 
+// ── context: recall snapshot + access grants (S5) ──────────────────────────
+export {
+  buildBotContextSnapshot,
+  isSafeMemorySegment,
+  parseMemoryAccessGrant,
+} from './context/snapshot.js';
+export type {
+  BotContextSnapshot,
+  BotContextSnapshotInput,
+  BotMemoryAccessGrant,
+  BotMemoryRecallScopes,
+} from './context/snapshot.js';
+
 // ── journal: pure state machine + in-memory implementation ─────────────────
 export {
   BOT_IDENTITY_JOURNAL_FILENAME,

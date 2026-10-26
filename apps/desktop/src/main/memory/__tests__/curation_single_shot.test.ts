@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 import { runSingleShotCuration } from '../curation_single_shot';
+import { recordForgetSync } from '@duya/memory/forget_ledger';
 import type { AIClient, Message } from '@duya/ai';
 import type { CurationInputForPrompt } from '../curation_single_shot';
 
@@ -181,6 +182,32 @@ describe('runSingleShotCuration — happy path', () => {
     expect(bySlug.get('taste')?.bucket).toBe('preferences');
     expect(bySlug.get('alice')?.bucket).toBe('people');
     expect(bySlug.get('foo')?.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('3c. forgotten facts ride the payload as tombstones (S5)', async () => {
+    recordForgetSync(root, [{ key: 'preference:dark-mode' }]);
+    let captured: Message[] | undefined;
+    const llm = createMockLLMClient((messages) => {
+      captured = messages;
+      return VALID_REPLY;
+    });
+    await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+
+    const payload = JSON.parse(captured![0].content as string);
+    expect(payload.forgotten_facts.keys).toEqual(['preference:dark-mode']);
+    expect(payload.forgotten_facts.note).toMatch(/never recreate/i);
+  });
+
+  it('3d. omits the forgotten block when nothing was forgotten', async () => {
+    let captured: Message[] | undefined;
+    const llm = createMockLLMClient((messages) => {
+      captured = messages;
+      return VALID_REPLY;
+    });
+    await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+
+    const payload = JSON.parse(captured![0].content as string);
+    expect(payload.forgotten_facts).toBeUndefined();
   });
 });
 
