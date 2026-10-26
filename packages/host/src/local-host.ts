@@ -106,6 +106,7 @@ import { createHostResearchApi } from './research-api.js';
 import { createHostWorkspaceLifecycleApis } from './workspace-lifecycle-api.js';
 import { createDatabaseWorkspaceAccess } from './workspace-access.js';
 import { HostRunExecutionController } from './run-execution.js';
+import { createIdleShutdown } from './idle-shutdown.js';
 import { createHostWorkerDbBridge } from './worker-db-bridge.js';
 import { resolveProvider } from './worker-config/file-config.js';
 import type { HostRunExecutionLogger } from './run-execution.js';
@@ -417,13 +418,14 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   /**
    * The full shutdown, once the handle exists.
    *
-   * The client-lease watcher calls it when the last client leaves, so it has
-   * to be reachable from the server options below — hence the forward
-   * reference rather than a closure over the returned handle. `drainTimeoutMs`
-   * bounds how long mid-turn workers get to finish before they are killed;
-   * only the idle path passes one, an explicit close stops right now.
+   * Reached from two places: the idle controller after its drain, and the
+   * caller's explicit `close()`. Both are stop-now: the drain belongs to the
+   * idle path, because only that path is allowed to spend time on a turn whose
+   * client vanished. That is also why this is a forward reference rather than
+   * a closure over the returned handle — the server options need it before the
+   * handle exists.
    */
-  let shutdownHost: ((drainTimeoutMs?: number) => Promise<void>) | null = null;
+  let shutdownHost: (() => Promise<void>) | null = null;
 
   try {
     const previousPath = explicitDatabasePath ? undefined : previousDefaultPath;
@@ -704,6 +706,25 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // instances of the same store would be two readers of one table.
     const localSettingsApi = createHostLocalSettingsApi(settings);
 
+    // A client-scoped Host stops itself when its last lease is gone — but not
+    // while a turn it was hosting is still running. Closing the HTTP server
+    // first destroys the run event stream that carries the answer, which is
+    // how a healthy turn was reported as `terminated` and its output lost
+    // (2026-10-26). The controller drains first and lets a returning client
+    // cancel the verdict.
+    const idleShutdown = createIdleShutdown({
+      drainTimeoutMs: options.idleShutdownDrainTimeoutMs ?? DEFAULT_IDLE_SHUTDOWN_DRAIN_MS,
+      isMidTurn: () => runExecution?.supervision.workerManager.hasActiveTurn() === true,
+      waitForSettle: async (timeoutMs) =>
+        runExecution === null
+          ? 'settled'
+          : runExecution.supervision.workerManager.waitForWorkersToSettle(timeoutMs),
+      shutdown: async () => {
+        await shutdownHost?.();
+      },
+      log: executionLogger,
+    });
+
     server = new HostSessionHttpServer({
       api,
       localSessionApi,
@@ -818,8 +839,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
               ...(options.clientLeaseIdleTimeoutMs === undefined
                 ? {}
                 : { idleTimeoutMs: options.clientLeaseIdleTimeoutMs }),
-              onIdle: () => {
-                void shutdownHost?.(options.idleShutdownDrainTimeoutMs ?? DEFAULT_IDLE_SHUTDOWN_DRAIN_MS);
+              onIdle: () => idleShutdown.schedule(),
+              onClientAttached: () => {
+                idleShutdown.cancel();
               },
             },
           }
@@ -837,7 +859,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     if (!options.ephemeral) writeRuntimeFile(runtimeFilePath, runtime);
 
     let closed = false;
-    shutdownHost = async (drainTimeoutMs = 0): Promise<void> => {
+    shutdownHost = async (): Promise<void> => {
       if (closed) return;
       closed = true;
       try {
@@ -849,22 +871,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           try {
             await runExecution?.permissionRequests?.closeAll();
           } finally {
-            // An idle shutdown means the clients vanished, not that the turn
-            // they were watching should die mid-flight: give mid-turn workers
-            // a bounded window to settle so their results persist, then kill
-            // whatever remains. The HTTP server is already closed, so no new
-            // client can attach into a Host that is on its way out, and the
-            // window is capped — a restart during the drain meets the
-            // database-lock error naming this process, which then goes away.
-            // An explicit close passes no drain and kills immediately.
+            // The idle path already gave a mid-turn worker its window while
+            // the run event streams were still open; what is left here are
+            // workers that are idle, or that outlived the drain cap. Either
+            // way this is stop-now, exactly like an explicit close.
             const workerManager = runExecution?.supervision.workerManager;
-            if (workerManager !== undefined && drainTimeoutMs > 0 && workerManager.hasActiveTurn()) {
-              executionLogger.info('Idle shutdown: waiting for mid-turn workers to settle', { timeoutMs: drainTimeoutMs });
-              const outcome = await workerManager.waitForWorkersToSettle(drainTimeoutMs);
-              if (outcome === 'timeout') {
-                executionLogger.warn('Idle shutdown: workers still mid-turn after the drain cap, killing', { timeoutMs: drainTimeoutMs });
-              }
-            }
             workerManager?.stopIdleReaper();
             workerManager?.killAll();
           }
