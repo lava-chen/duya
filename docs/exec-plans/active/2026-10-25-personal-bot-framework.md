@@ -9,8 +9,9 @@
   closed**; revocation/forget lands **next turn via a durable recall revision**
   folded into the frozen-section key, while ordinary memory writes stay frozen
   until compaction (keeps Plan 501 L1).
-- Status: implemented and verified locally; published as draft
-  [PR #515](https://github.com/lava-chen/duya/pull/515) (head `5920164b`, base
+- Status: implemented and verified locally; the two review defects are fixed in
+  `c5326a69`; published as draft
+  [PR #515](https://github.com/lava-chen/duya/pull/515) (base
   `codex/bot-framework-s4-feishu`). Unmerged; no merge is authorized.
 - Delivered: `@duya/bot` `context/snapshot.ts` (pure `BotContextSnapshot`:
   bot revision, recall revision, authorized scopes; `parseMemoryAccessGrant`
@@ -28,30 +29,57 @@
   re-renders next turn), and tombstone keys merged into Stage 1's dedupe set.
   The curator prompt also receives a bounded `forgotten_facts` block so an old
   rollout summary cannot write the fact back into an area page.
-- Acceptance evidence (all local, win32 / Node 24.18.0):
-  - named S5 tests 65 cases green: `packages/bot/tests/context-snapshot.test.ts`
-    (9), `packages/memory/src/__tests__/forget_ledger.test.ts` (6),
-    `extractor.file-keys.test.ts` (5, incl. tombstone survives retired file),
-    `apps/desktop/.../tierWriter.test.ts` (10, forget bumps ledger + tombstones),
+- Review follow-up (2026-10-26, fix commit `c5326a69`):
+  - **Grant contract is all-or-nothing.** The old parser filtered invalid
+    entries and kept the valid half, so a mixed file still widened recall past
+    what the user wrote — contradicting the "fail closed" promise. One invalid
+    entry now rejects the whole file, and `buildBotContextSnapshot` re-validates
+    the grant instead of trusting the caller, so a hand-built invalid grant
+    yields no peer shards either.
+  - **Forgetting is crash-recoverable.** The ledger is now the *write-ahead*
+    record: it is written before the canonical file is retired and it names the
+    path being retired. Recall readers (`tierReader`) skip every tombstoned
+    path, so a crash between the ledger write and the retirement cannot expose
+    the fact, and the desktop memory-worker startup repair
+    (`memory-state/forgetRecovery.ts`) finishes the retirement and drops the
+    index row. The repair is idempotent; the ledger file format moved to
+    version 2 (`entries[]` with `paths[]`), and a version-1 file still reads.
+  - The failure window is pinned by tests: the desktop test writes the ledger
+    while the file is still `status: active` and the index row still present,
+    then asserts the repair flips it to `retired` and removes the row; the host
+    test asserts the still-active file is not recalled.
+- Acceptance evidence (all local, win32 / Node 24.18.0; re-measured at the
+  review-fix commit `c5326a69`):
+  - named S5 tests 74 cases green across 7 files:
+    `packages/bot/tests/context-snapshot.test.ts` (11, incl. all-or-nothing
+    grant), `packages/memory/src/__tests__/forget_ledger.test.ts` (9, ledger v2
+    entries + paths), `extractor.file-keys.test.ts` (5, incl. tombstone survives
+    retired file), `apps/desktop/.../tierWriter.test.ts` (10, forget bumps the
+    ledger + tombstones), `apps/desktop/.../forgetRecovery.test.ts` (3, crash
+    window completed / idempotent / no-op),
     `apps/desktop/.../curation_single_shot.test.ts` (23, incl. forgotten block
     present/absent), `packages/host/tests/worker-prompts/bot-memory-s5.test.ts`
-    (12: own+legacy only without grant, granted shard visible, revocation moves
+    (13: own+legacy only without grant, granted shard visible, revocation moves
     the gate while an ordinary write does not, unsafe project ids dropped,
-    volatile re-render on gate change but not on content change).
-  - `packages/host/tests` full: 233 passed / 1 skipped, 2064 passed / 5 skipped.
-  - bot + memory + desktop `memory`/`memory-state` suites: 50 files, 614 passed.
+    volatile re-render on gate change but not on content change, a tombstoned
+    but un-retired file is not recalled).
+  - `packages/host/tests` + `packages/bot/tests` + `packages/memory/src`:
+    255 files passed / 1 skipped, 2350 passed / 5 skipped (exit 0).
+  - desktop `memory` + `memory-state`: 29 files, 337 passed (exit 0).
   - `npm run typecheck:all` exit 0; `npm run architecture:check` exit 0 (no new
-    violations); bot-boundary PASS (R1 MEASURED 10 files / 0 findings);
-    retirement ratchet exit 0. Desktop `tsconfig.main` 178 errors, all
-    pre-existing (base moved; none in the S5 files).
+    violations; 2955 total, all baselined, baseline untouched); bot-boundary
+    PASS (R1 MEASURED 10 files / 0 forbidden edges); retirement ratchet PASS
+    (772 current / 772 baseline / 0 new). Desktop `tsconfig.main` 178 errors,
+    all pre-existing (base moved; none in the S5 files).
   - `npm run bundle:worker` rebuilt `packages/host/bundle` from the final source
-    and committed with the slice; `npm run bundle:verify` reports FRESH at
-    `5920164b` (0/1009 inputs changed).
+    and committed it with the fix; `npm run bundle:verify` reports FRESH at
+    `c5326a69` (0/1009 inputs changed).
 - Honest deferrals / limits: (1) audience-based memory filtering (design §7
   "记忆按受众过滤") is not implemented — S4 channel admission already gates
   allowed senders, and the worker has no per-turn audience field; it stays an
   open item. (2) The `forgotten_facts` curator guard is prompt-level; the
-  structural guarantee is the Stage 1 dedupe tombstone. (3) Conversation
+  structural guarantees are the Stage 1 dedupe tombstone (re-extraction) and
+  the ledger path tombstone (recall visibility, including the crash window). (3) Conversation
   summaries already folded into context are not rewritten ("必要时重建受影响
   摘要" remains a separate slice). (4) Grant authoring is a documented JSON file
   contract; no Desktop UI/RPC yet. (5) The grant file is user-owned state; the
