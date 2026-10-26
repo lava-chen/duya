@@ -45,6 +45,7 @@ import {
 } from './tui/shell-context.js';
 import { isDestructiveRequest, type QuestionAnswers } from './tui/overlay.js';
 import { HostEventStream } from './tui/host-event-stream.js';
+import { watchRunEventsWithResume } from './tui/run-event-resume.js';
 import { RemoteSessionWatch } from './tui/remote-session-watch.js';
 import { createRunSessionView, projectRunSessionView } from './tui/run-session-view.js';
 import { BackgroundTaskPoller } from './tui/background-task-poller.js';
@@ -227,7 +228,7 @@ async function driveRun(
     void client.cancelAgentRun(runId, 'chat interrupt (Ctrl+C)').catch(() => undefined);
   });
   try {
-    for await (const event of client.watchAgentRunEvents(runId)) {
+    for await (const event of watchRunEventsWithResume(client, runId)) {
       renderEvent(event as RunEventEnvelope<RunEvent>);
       if (event.payload.type === 'run.completed') {
         terminal = String(
@@ -1597,7 +1598,15 @@ export async function chatTui(
       // not done, so this is additive, not a replacement.
       const runState = new RunSession({ runId: start.runId, sessionId: runSessionId });
       let viewState = createRunSessionView();
-      for await (const event of client.watchAgentRunEvents(start.runId, { signal: streamAbort.signal })) {
+      for await (const event of watchRunEventsWithResume(client, start.runId, {
+        signal: streamAbort.signal,
+        onRecovering: () => {
+          if (!finished) tui.printNotice('The Host connection dropped; reconnecting…');
+        },
+        onRecovered: () => {
+          if (!finished) tui.printNotice('Reconnected to the Host.');
+        },
+      })) {
         if (finished) return 'cancelled';
         const frame = stream.push(event);
         if (frame !== null) tui.push(frame);
