@@ -187,6 +187,8 @@
 
 ## 接续 / 结果
 
+实施期的状态、已定合同与剩余切片的开工指引另见[交接报告](2026-10-26-personal-bot-framework-handoff.md)。
+
 已完成源码调查、设计与文档验证，生产实现未开始。设计交付 commit：`eaf9d86d`；后续仅补本节的 PR 接续记录。只提交 7 个具名文档；依赖 symlink、私有 work deps / 日志不入 Git，构建未产生需提交的源码差异。外部副作用：任务分支已推送并创建 draft PR；未改用户 DB、未合并或发布产品。
 
 PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI；没有申请或执行合并。当前工具无法读取原 ChatGPT 完整线程；必要时由后续对话补全文，不阻塞有源码支撑的方案。
