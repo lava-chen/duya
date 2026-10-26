@@ -100,6 +100,7 @@ async function run(options: {
     interrupt: () => {},
     adoptSession: async () => {},
     startFreshSession: async () => {},
+    startSessionInDirectory: async () => {},
     reloadTranscript: async (sessionId) => { reloads.push(sessionId); },
   };
 

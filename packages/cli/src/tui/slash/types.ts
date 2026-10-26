@@ -123,6 +123,14 @@ export interface TuiSlashActions {
   /** Leave the current session behind (archive/delete): start a fresh one. */
   startFreshSession: () => Promise<void>;
   /**
+   * Start a fresh session in another directory, and move the surface there.
+   *
+   * `/project` cannot do this alone: the loop owns the session the next run
+   * is sent to, the stream watch, the transcript and the directory its runs
+   * name as their working directory.
+   */
+  startSessionInDirectory: (directory: string) => Promise<void>;
+  /**
    * Re-read the durable transcript and repaint it.
    *
    * Not `adoptSession`: the session did not change, only its contents did
