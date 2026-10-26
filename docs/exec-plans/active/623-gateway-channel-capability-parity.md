@@ -1,6 +1,6 @@
 # 623 — Gateway 通道能力补全（channel capability parity）
 
-> **Status**: Phase 0–2 ✅（2026-10-26）· Phase 3（Host/Desktop 接线）pending · **Priority**: P1 · **Owner**: 本次会话
+> **Status**: Phase 0–2 ✅（2026-10-26）· Phase 3（Host/Desktop 接线）pending · **Priority**: P1 · **Owner**: 本次会话 · **PR**: [#510](https://github.com/lava-chen/duya/pull/510)（分支 `codex/gateway-channel-parity`，base `master@e9391659`，提交 `2fd23a31`）
 >
 > **参考实现**：`E:/cloned-projects/hermes-agent`（`gateway/platforms/*`、`gateway/platforms/base.py`、`gateway/platforms/ADDING_A_PLATFORM.md`）
 > **范围**：`packages/gateway`（网关子进程内的适配器层）。Host/Desktop 侧接线不在本计划已交付范围内，见 Phase 3。
