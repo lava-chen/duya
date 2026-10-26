@@ -32,10 +32,19 @@ describe('parseMemoryAccessGrant', () => {
     }
   });
 
-  it('drops ids that are not safe path segments', () => {
+  it('rejects the whole grant when one entry is invalid (all-or-nothing)', () => {
+    // A partially applied grant is not a grant: the valid half must not ride
+    // along with an entry the user never wrote (or a crafted one).
     expect(
-      parseMemoryAccessGrant({ userShards: ['alpha', '../escape', 'beta/../gamma', 'has space'] }),
-    ).toEqual({ userShards: ['alpha'] });
+      parseMemoryAccessGrant({ userShards: ['alpha', '../escape', 'beta'] }),
+    ).toEqual({ userShards: [] });
+    expect(parseMemoryAccessGrant({ userShards: ['alpha', 'beta/../gamma'] })).toEqual({
+      userShards: [],
+    });
+    expect(parseMemoryAccessGrant({ userShards: ['alpha', 'has space'] })).toEqual({
+      userShards: [],
+    });
+    expect(parseMemoryAccessGrant({ userShards: ['alpha', 7] })).toEqual({ userShards: [] });
   });
 });
 
@@ -92,6 +101,23 @@ describe('buildBotContextSnapshot', () => {
       joinedProjects: ['web', '../escape', 'ok_id', ''],
     });
     expect(snapshot.memory.projects).toEqual(['ok_id', 'web']);
+  });
+
+  it('authorizes no peer shard when the grant carries an invalid id', () => {
+    const snapshot = buildBotContextSnapshot({
+      ...base,
+      grant: { userShards: ['beta', '../escape'] },
+    });
+    expect(snapshot.memory.userShards).toEqual([]);
+    expect(snapshot.recallRevision).toContain('user:-');
+  });
+
+  it('authorizes no peer shard when the grant is absent', () => {
+    const snapshot = buildBotContextSnapshot({
+      botId: 'alpha',
+      joinedProjects: [],
+    });
+    expect(snapshot.memory.userShards).toEqual([]);
   });
 
   it('treats absent or invalid revisions as zero', () => {

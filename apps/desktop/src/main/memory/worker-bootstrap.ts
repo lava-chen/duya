@@ -100,6 +100,24 @@ export async function startMemoryWorkerFromConfig(): Promise<MemoryWorkerStartOu
 
     const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
 
+    // S5: the forget ledger is written before the canonical file is retired,
+    // so a crash in that window leaves a half-applied forget. Repair it
+    // before the worker starts: retire the file, drop the index row.
+    try {
+      const { recoverForgottenMemories } = await import('../memory-state/forgetRecovery');
+      const { resolveDuyaRoot } = await import('../memory-state/duyaRoot');
+      const report = recoverForgottenMemories(memoryDb, resolveDuyaRoot());
+      if (report.retired > 0 || report.indexRowsRemoved > 0) {
+        logger.info('Memory forget repair applied', report, LogComponent.DB);
+      }
+    } catch (repairErr) {
+      logger.warn(
+        'Memory forget repair failed',
+        { error: repairErr instanceof Error ? repairErr.message : String(repairErr) },
+        LogComponent.DB,
+      );
+    }
+
     // The authenticated Host local API supplies complete session snapshots,
     // timeline index metadata, and project path resolution.
     const catalogSource: MemoryCatalogSource = {

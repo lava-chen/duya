@@ -14,6 +14,12 @@
  * Fail closed: a missing, malformed or partially invalid grant yields the
  * own shard only. Legacy shared roots (`memory/items|entities|global`) stay
  * readable because they are the user's pre-tier shared memory.
+ *
+ * The grant contract is all-or-nothing: a grant file is either honored
+ * exactly as written (every entry a legal bot id) or it grants nothing.
+ * A partially applied grant is not a grant — one typo must not silently
+ * narrow the sharing the user asked for, and one crafted entry must not
+ * ride along with the valid ones.
  */
 
 import { isSafeBotId } from '../domain/bot-id.js';
@@ -62,23 +68,34 @@ export interface BotContextSnapshot {
 
 const EMPTY_GRANT: BotMemoryAccessGrant = { userShards: [] };
 
-function sortedUnique(values: readonly unknown[]): string[] {
-  const out = new Set<string>();
+/**
+ * Strictly validate a raw shard id list. Returns null when ANY entry is
+ * invalid — the caller then honors nothing. Valid entries are sorted and
+ * deduped.
+ */
+function strictShardIds(values: readonly unknown[]): string[] | null {
+  const ids: string[] = [];
   for (const value of values) {
-    if (isSafeBotId(value)) out.add(value);
+    if (!isSafeBotId(value)) return null;
+    ids.push(value);
   }
-  return [...out].sort();
+  return [...new Set(ids)].sort();
 }
 
 /**
- * Narrow the raw grants file. Anything other than `{ userShards: string[] }`
- * is an empty grant: a corrupt file must not widen recall.
+ * Narrow the raw grants file.
+ *
+ * All-or-nothing: anything other than `{ userShards: string[] }` with every
+ * entry a legal bot id is an empty grant. One invalid entry rejects the
+ * whole file, so a corrupt grant can never widen recall and never applies
+ * "the valid half" of an intent the user never wrote.
  */
 export function parseMemoryAccessGrant(raw: unknown): BotMemoryAccessGrant {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_GRANT;
   const userShards = (raw as { userShards?: unknown }).userShards;
   if (!Array.isArray(userShards)) return EMPTY_GRANT;
-  return { userShards: sortedUnique(userShards) };
+  const ids = strictShardIds(userShards);
+  return ids === null ? EMPTY_GRANT : { userShards: ids };
 }
 
 export interface BotContextSnapshotInput {
@@ -86,7 +103,8 @@ export interface BotContextSnapshotInput {
   /** Identity revision from the config entry; absent reads as 0. */
   botRevision?: number;
   joinedProjects: readonly unknown[];
-  grant: BotMemoryAccessGrant;
+  /** Peer-shard grant; absent or invalid reads as "no peer shards". */
+  grant?: BotMemoryAccessGrant;
   /** Durable forget counter written by the memory owner. */
   forgetRevision?: number;
 }
@@ -99,12 +117,16 @@ function positiveInt(value: number | undefined): number {
  * Build the snapshot for one turn. Deterministic: the same durable facts
  * always produce the same `recallRevision`, and any change to a recall gate
  * (bot revision, joined projects, grants, forgets) produces a different one.
+ *
+ * The grant is re-validated here, not trusted: a caller that hands over a
+ * grant with an invalid id gets no peer shards at all.
  */
 export function buildBotContextSnapshot(input: BotContextSnapshotInput): BotContextSnapshot {
   const projects = [...new Set(input.joinedProjects)]
     .filter((id): id is string => isSafeMemorySegment(id))
     .sort();
-  const userShards = sortedUnique(input.grant.userShards).filter((id) => id !== input.botId);
+  const granted = strictShardIds(input.grant?.userShards ?? []) ?? [];
+  const userShards = granted.filter((id) => id !== input.botId);
   const botRevision = positiveInt(input.botRevision);
   const forgetRevision = positiveInt(input.forgetRevision);
   return {

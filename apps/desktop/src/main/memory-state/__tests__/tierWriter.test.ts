@@ -17,7 +17,7 @@ import { runMigrations } from '../migrations';
 import { listTierEntries } from '../tierIndex';
 import { forgetTierFact, writeTierFact, type TierWriteInput } from '../tierWriter';
 import { parseCanonicalFile } from '@duya/memory/canonical_file';
-import { readForgottenKeysSync, readRecallRevisionSync } from '@duya/memory/forget_ledger';
+import { readForgottenKeysSync, readForgottenPathsSync, readRecallRevisionSync } from '@duya/memory/forget_ledger';
 
 const mocks = vi.hoisted(() => ({
   logger: {
@@ -179,13 +179,18 @@ describe('forgetTierFact', () => {
   it('bumps the recall revision and tombstones the key (S5)', () => {
     const memoryRoot = path.join(duyaRoot, 'memory');
     expect(readRecallRevisionSync(memoryRoot)).toBe(0);
-    writeTierFact(db, duyaRoot, baseInput());
+    const written = writeTierFact(db, duyaRoot, baseInput());
 
     const forgotten = forgetTierFact(db, duyaRoot, baseInput({ action: 'forget' }));
     expect(forgotten.success).toBe(true);
 
     expect(readRecallRevisionSync(memoryRoot)).toBe(1);
     expect(readForgottenKeysSync(memoryRoot)).toEqual(['prefers concise answers']);
+    // The ledger also names the retired file: that is the write-ahead record
+    // which makes a crash before the retirement recoverable.
+    expect(readForgottenPathsSync(memoryRoot)).toEqual([
+      written.success ? written.filePath : '',
+    ]);
   });
 
   it('returns not_found when the writer has no matching entry', () => {

@@ -96,7 +96,7 @@ describe('queryExistingKeysFromFiles', () => {
       scope: 'global', scope_id: 'null', project_id: 'null', status: 'retired',
       importance: 'normal', updated_at: '2026-01-01T00:00:00Z',
     }, 'Forgotten');
-    recordForgetSync(env.memoryRoot, ['preference:forgotten']);
+    recordForgetSync(env.memoryRoot, [{ key: 'preference:forgotten' }]);
 
     const keys = await queryExistingKeysFromFiles(env.memoryRoot);
     expect(keys).toEqual(['preference:active', 'preference:forgotten']);

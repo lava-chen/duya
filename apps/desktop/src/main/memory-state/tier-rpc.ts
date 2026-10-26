@@ -13,22 +13,13 @@
 import * as os from 'os';
 import * as path from 'path';
 import { bootstrap, getDb } from './db';
+import { resolveDuyaRoot } from './duyaRoot';
 import { forgetTierFact, writeTierFact, type TierWriteInput, type TierWriteResult } from './tierWriter';
 
 export interface MemoryTierRpcRequest {
   action: string;
   payload: Record<string, unknown>;
   sessionId?: string;
-}
-
-/** Resolve the duya root (~/.duya, test-namespace aware). */
-function resolveDuyaRoot(): string {
-  const base = path.join(os.homedir(), '.duya');
-  if (process.env.DUYA_TEST === '1') {
-    const ns = process.env.DUYA_TEST_NAMESPACE;
-    if (ns && /^[a-zA-Z0-9_-]+$/.test(ns)) return path.join(base, 'test-namespaces', ns);
-  }
-  return base;
 }
 
 const VALID_ACTIONS = new Set(['write', 'forget']);

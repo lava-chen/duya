@@ -185,7 +185,7 @@ describe('runSingleShotCuration — happy path', () => {
   });
 
   it('3c. forgotten facts ride the payload as tombstones (S5)', async () => {
-    recordForgetSync(root, ['preference:dark-mode']);
+    recordForgetSync(root, [{ key: 'preference:dark-mode' }]);
     let captured: Message[] | undefined;
     const llm = createMockLLMClient((messages) => {
       captured = messages;

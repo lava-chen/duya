@@ -21,19 +21,33 @@
  * the Plan 485 reservation for bot state); absent file → not joined.
  *
  * Only `status: active` files are recallable; retired/superseded files
- * are history, not memory.
+ * are history, not memory. A path tombstoned in the forget ledger is
+ * skipped as well: the ledger is written before the file is retired, so a
+ * crash in that window must not expose the fact (framework plan S5).
  */
 
 import * as fs from 'fs'
 import * as path from 'path'
 import { createHash } from 'node:crypto'
 import { parseCanonicalFile } from '@duya/memory/canonical_file'
+import { readForgottenPathsSync } from '@duya/memory/forget_ledger'
 import { isSafeBotId, isSafeMemorySegment } from '@duya/bot'
 import { normalizeKey } from './render.js'
 import type { TierMemoryEntry } from './types.js'
 
 /** Legacy user-tier scan roots, relative to the duya root. */
 const USER_SCAN_ROOTS = ['memory/items', 'memory/entities', 'memory/global'] as const
+
+/**
+ * Paths tombstoned in the forget ledger (duya-root-relative).
+ *
+ * The ledger is written before the canonical file is retired, so a crash in
+ * that window leaves the file `status: active` on disk. The tombstone is
+ * what keeps it invisible in the meantime.
+ */
+function tombstonedPaths(duyaRoot: string): ReadonlySet<string> {
+  return new Set(readForgottenPathsSync(path.join(duyaRoot, 'memory')))
+}
 
 interface RawTierFrontmatter {
   tier?: string
@@ -135,7 +149,10 @@ function readTierFile(
   tier: MemoryTierPublic,
   fallbackWriter: string,
   fallbackProjectId: string,
+  tombstoned: ReadonlySet<string>,
 ): TierMemoryEntry | null {
+  const relPath = toRelPath(filePath, duyaRoot)
+  if (tombstoned.has(relPath)) return null
   let content: string
   try {
     content = fs.readFileSync(filePath, 'utf8')
@@ -160,7 +177,7 @@ function readTierFile(
     dedupeKey: normalizeKey(dedupeRaw),
     writerId: meta.agent_profile_id ?? fallbackWriter,
     projectId: meta.project_id ?? fallbackProjectId,
-    filePath: toRelPath(filePath, duyaRoot),
+    filePath: relPath,
     title: fileTitle(body, filePath),
     body,
     createdAt: parseTimestamp(meta.created_at, stat.birthtimeMs),
@@ -179,9 +196,10 @@ export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemor
   const dir = path.join(duyaRoot, 'agents', agentId, 'memory')
   const files: string[] = []
   walkMdFiles(dir, files)
+  const tombstoned = tombstonedPaths(duyaRoot)
   const entries: TierMemoryEntry[] = []
   for (const file of files) {
-    const entry = readTierFile(file, duyaRoot, 'agent', agentId, '')
+    const entry = readTierFile(file, duyaRoot, 'agent', agentId, '', tombstoned)
     if (entry) entries.push(entry)
   }
   return entries
@@ -201,12 +219,15 @@ export function readOwnTierEntries(duyaRoot: string, agentId: string): TierMemor
  */
 export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[]): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
+  const tombstoned = tombstonedPaths(duyaRoot)
   for (const root of USER_SCAN_ROOTS) {
     const absRoot = path.join(duyaRoot, root)
     const files: string[] = []
     walkMdFiles(absRoot, files)
     for (const file of files) {
-      const tierEntry = readTierFile(file, duyaRoot, 'user', '', '')
+      const relPath = toRelPath(file, duyaRoot)
+      if (tombstoned.has(relPath)) continue
+      const tierEntry = readTierFile(file, duyaRoot, 'user', '', '', tombstoned)
       if (tierEntry) {
         entries.push(tierEntry)
         continue
@@ -229,7 +250,7 @@ export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[
         dedupeKey: normalizeKey(canonical.canonical_key),
         writerId: '',
         projectId: canonical.project_id ?? '',
-        filePath: toRelPath(file, duyaRoot),
+        filePath: relPath,
         title: fileTitle(body, file),
         body,
         createdAt: parseTimestamp(undefined, stat.birthtimeMs),
@@ -245,7 +266,7 @@ export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[
     const files: string[] = []
     walkMdFiles(path.join(duyaRoot, 'agents', agentId, 'user'), files)
     for (const file of files) {
-      const entry = readTierFile(file, duyaRoot, 'user', agentId, '')
+      const entry = readTierFile(file, duyaRoot, 'user', agentId, '', tombstoned)
       if (entry) entries.push(entry)
     }
   }
@@ -260,6 +281,7 @@ export function readUserTierEntries(duyaRoot: string, shardIds: readonly string[
  */
 export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: string[]): TierMemoryEntry[] {
   const entries: TierMemoryEntry[] = []
+  const tombstoned = tombstonedPaths(duyaRoot)
   for (const projectId of joinedProjectIds) {
     // Membership ids become path segments; drop anything unsafe (S5).
     if (!isSafeMemorySegment(projectId)) continue
@@ -281,7 +303,7 @@ export function readProjectTierEntries(duyaRoot: string, joinedProjectIds: strin
       const files: string[] = []
       walkMdFiles(path.join(shardsRoot, writerId), files)
       for (const file of files) {
-        const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId)
+        const entry = readTierFile(file, duyaRoot, 'project', writerId, projectId, tombstoned)
         if (entry) entries.push(entry)
       }
     }

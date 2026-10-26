@@ -214,7 +214,8 @@ export {
   readForgetLedgerSync,
   readRecallRevisionSync,
   readForgottenKeysSync,
+  readForgottenPathsSync,
   recordForgetSync,
   withForgottenKeys,
 } from './forget_ledger.js';
-export type { ForgetLedger } from './forget_ledger.js';
+export type { ForgetLedger, ForgetLedgerEntry, ForgetRecord } from './forget_ledger.js';

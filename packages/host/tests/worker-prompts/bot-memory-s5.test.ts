@@ -140,7 +140,11 @@ describe('bot memory authorization (S5)', () => {
     expect(memoryAccessPath(root, '../escape')).toBeNull();
     expect(await readMemoryAccessGrant(root, '../escape')).toEqual({ userShards: [] });
 
+    // All-or-nothing: one invalid entry rejects the whole grant.
     writeStateFile('agents/alpha/state/memory-access.json', { userShards: ['beta', '../escape', 7] });
+    expect(await readMemoryAccessGrant(root, 'alpha')).toEqual({ userShards: [] });
+
+    writeStateFile('agents/alpha/state/memory-access.json', { userShards: ['beta'] });
     expect(await readMemoryAccessGrant(root, 'alpha')).toEqual({ userShards: ['beta'] });
 
     writeStateFile('agents/alpha/state/memory-access.json', { userShards: 'beta' });
@@ -211,7 +215,7 @@ describe('bot memory authorization (S5)', () => {
       grant: parseMemoryAccessGrant({ userShards: [] }),
       forgetRevision: 0,
     });
-    recordForgetSync(path.join(root, 'memory'), ['fact:alpha']);
+    recordForgetSync(path.join(root, 'memory'), [{ key: 'fact:alpha' }]);
     const after = buildBotContextSnapshot({
       botId: 'alpha',
       joinedProjects: [],
@@ -219,6 +223,21 @@ describe('bot memory authorization (S5)', () => {
       forgetRevision: 1,
     });
     expect(after.recallRevision).not.toBe(before.recallRevision);
+  });
+
+  it('hides a tombstoned file that a crash left un-retired', () => {
+    // The crash window: the forget ledger is written (naming the file) but
+    // the process dies before the file is retired, so the file on disk is
+    // still `status: active`.
+    const relPath = 'agents/alpha/user/alpha.md';
+    recordForgetSync(path.join(root, 'memory'), [{ key: 'fact:alpha', path: relPath }]);
+    const onDisk = fs.readFileSync(path.join(root, relPath), 'utf8');
+    expect(onDisk).toContain('status: active');
+
+    // The tombstoned path is not recallable, even though the file is active.
+    const user = readUserTierEntries(root, ['alpha']);
+    expect(user.some((e) => e.dedupeKey === 'fact:alpha')).toBe(false);
+    expect(user.map((e) => e.dedupeKey)).toContain('preference:legacy');
   });
 });
 
