@@ -297,3 +297,63 @@ describe('parseCronJobFile', () => {
     expect(() => parseCronJobFile('version = 1\n\n[[jobs]]\nname = "x"\nenabled = true\nschedule = { kind = "every", every = "1h" }\n')).toThrow(/prompt is required/);
   });
 });
+
+describe('misfire policy (S6)', () => {
+  it('persists misfire_policy / max_catch_up and reads them back', () => {
+    const cron = store.createCron(makeInput({ misfirePolicy: 'bounded', maxCatchUp: 4 }));
+    expect(cron.misfirePolicy).toBe('bounded');
+    expect(cron.maxCatchUp).toBe(4);
+
+    const text = fs.readFileSync(file, 'utf-8');
+    expect(text).toContain('misfire_policy = "bounded"');
+    expect(text).toContain('max_catch_up = 4');
+
+    const read = new CronFileStore(file).getCron(cron.id)!;
+    expect(read.misfirePolicy).toBe('bounded');
+    expect(read.maxCatchUp).toBe(4);
+  });
+
+  it('defaults to latest with a single catch-up', () => {
+    const cron = store.createCron(makeInput());
+    expect(cron.misfirePolicy).toBe('latest');
+    expect(cron.maxCatchUp).toBe(1);
+  });
+
+  it('clamps max_catch_up to 1..5', () => {
+    expect(store.createCron(makeInput({ maxCatchUp: 42 })).maxCatchUp).toBe(5);
+    expect(store.createCron(makeInput({ name: 'b', maxCatchUp: 0 })).maxCatchUp).toBe(1);
+  });
+
+  it('normalizes an unknown policy from a hand-edited file instead of failing the load', () => {
+    const cron = store.createCron(makeInput());
+    fs.writeFileSync(
+      file,
+      fs.readFileSync(file, 'utf-8').replace('misfire_policy = "latest"', 'misfire_policy = "sometimes"'),
+    );
+    const read = new CronFileStore(file).getCron(cron.id)!;
+    expect(read.misfirePolicy).toBe('latest');
+  });
+
+  it('updateCron changes the policy', () => {
+    const cron = store.createCron(makeInput());
+    const updated = store.updateCron(cron.id, { misfirePolicy: 'skip', maxCatchUp: 2 });
+    expect(updated.misfirePolicy).toBe('skip');
+    expect(updated.maxCatchUp).toBe(2);
+    expect(new CronFileStore(file).getCron(cron.id)!.misfirePolicy).toBe('skip');
+  });
+});
+
+describe('first-run anchor (S6)', () => {
+  it('fresh every job anchors nextRunAt on created_at so the first run is reachable', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 11, 8, 0, 0));
+    try {
+      const cron = store.createCron(makeInput({ schedule: { kind: 'every', every: '1h' } }));
+      expect(cron.nextRunAt).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+      // A later read must not push the first occurrence forward again.
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 9, 0, 30));
+      expect(store.getCron(cron.id)!.nextRunAt).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});

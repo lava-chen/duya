@@ -7,16 +7,20 @@
  * session that a system component kicks off by sending it a prompt.
  *
  * This replaces the old per-job setTimeout chains / process-pool copies.
- * Crash-safety: `next_run_at` is derived on each tick from (schedule,
- * lastRunAt, now), and a due job claims its fire (last_run_at = now) before
- * running, so a crash mid-run never re-fires forever and a restart naturally
- * catches up.
+ * Crash-safety: each tick re-derives due instants from (schedule, lastRunAt,
+ * now) and claims a fire before running it — a Bot-bound fire claims the
+ * scheduled instant, a standalone cron the wall clock — so a crash mid-run
+ * never re-fires forever and a restart naturally catches up.
+ *
+ * S6: a Bot-bound fire carries a deterministic key derived from
+ * (routine, schedule fingerprint, scheduled instant), and offline gaps are
+ * compensated per the routine's misfire policy instead of replaying history.
  */
 
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { CronFileStore } from './cron-file.js';
-import { computeNextRunAt } from './schedule.js';
+import { CronFileStore, scheduleFingerprint } from './cron-file.js';
+import { planDueRoutineFires, routineFireKey } from './schedule.js';
 import { createCronSessionRow, interruptCronSession, runCronInSession } from './agent-run.js';
 import { resolveCronProvider } from './provider.js';
 import { prepareAutomationWorkspace } from './workspace.js';
@@ -134,6 +138,7 @@ export class AutomationScheduler {
   private async enqueueBotFire(
     job: AutomationCron,
     trigger: 'schedule' | 'manual',
+    scheduledForMs?: number,
   ): Promise<'added' | 'merged' | 'deduped'> {
     const [{ enqueueAutomationWake }, { createBotSessionIfMissing }] = await Promise.all([
       import('../wake/wake-dispatcher.js'),
@@ -142,9 +147,18 @@ export class AutomationScheduler {
     const agentId = job.agent as string;
     const sessionId = getBotSessionId(agentId);
     await createBotSessionIfMissing(sessionId, agentId);
+    // Scheduled fires name their obligation; "run now" stays a deliberate
+    // new fire, so a second click is not swallowed as a duplicate.
+    const fireKey = trigger === 'schedule' && scheduledForMs !== undefined && job.schedule
+      ? routineFireKey({
+        routineId: job.id,
+        scheduleFingerprint: scheduleFingerprint(job.schedule),
+        scheduledForMs,
+      })
+      : `manual:${randomUUID()}`;
     return enqueueAutomationWake({
       jobKey: job.id,
-      fireKey: randomUUID(),
+      fireKey,
       name: job.name,
       targetSessionId: sessionId,
       trigger,
@@ -186,7 +200,7 @@ export class AutomationScheduler {
       permissionMode: job.permissionMode,
     });
 
-    void this.executeCron(job, true, { runId, sessionId }).catch((error) => {
+    void this.executeCron(job, true, { existing: { runId, sessionId } }).catch((error) => {
       getLogger().error('Manual cron run failed asynchronously', error instanceof Error ? error : new Error(String(error)), {
         cronId: job.id,
         runId,
@@ -199,23 +213,55 @@ export class AutomationScheduler {
   async tick(): Promise<void> {
     this.store.load();
     const now = Date.now();
-    const due = this.store
-      .listCrons()
-      .filter((j) => j.enabled && j.nextRunAt !== null && j.nextRunAt <= now);
-    for (const job of due) {
-      void this.executeCron(job, false).catch((error) => {
-        getLogger().error('Scheduled cron run failed asynchronously', error instanceof Error ? error : new Error(String(error)), {
-          cronId: job.id,
-        }, LogComponent.Automation);
+    for (const job of this.store.listCrons()) {
+      if (!job.enabled || !job.schedule) continue;
+      const schedule = job.schedule;
+      // A one-shot's watermark is "did it ever run"; recurring schedules
+      // anchor on the last fire, or on creation when they never ran.
+      const anchor = schedule.kind === 'once' ? (job.lastRunAt ?? 0) : (job.lastRunAt ?? job.createdAt);
+      const fires = planDueRoutineFires({
+        schedule,
+        afterMs: anchor,
+        nowMs: now,
+        // Standalone crons stay single-fire whatever the stored policy says:
+        // replaying their backlog would spawn a throwaway session per instant.
+        policy: job.agent ? job.misfirePolicy : 'latest',
+        maxCatchUp: job.maxCatchUp,
       });
+      if (fires.length === 0) continue;
+      if (!job.agent) {
+        void this.executeCron(job, false).catch((error) => {
+          getLogger().error('Scheduled cron run failed asynchronously', error instanceof Error ? error : new Error(String(error)), {
+            cronId: job.id,
+          }, LogComponent.Automation);
+        });
+        continue;
+      }
+      // Sequential so the claims land oldest → newest; the deterministic keys
+      // make a retried tick collapse into the same obligations.
+      for (const scheduledForMs of fires) {
+        try {
+          await this.executeCron(job, false, { scheduledForMs });
+        } catch (error) {
+          getLogger().error('Scheduled routine fire failed', error instanceof Error ? error : new Error(String(error)), {
+            cronId: job.id,
+          }, LogComponent.Automation);
+        }
+      }
     }
   }
 
   private async executeCron(
     job: AutomationCron,
     manual: boolean,
-    existing?: { runId: string; sessionId: string },
+    options?: {
+      /** The scheduled instant this fire stands for (S6 deterministic key). */
+      scheduledForMs?: number;
+      existing?: { runId: string; sessionId: string };
+    },
   ): Promise<void> {
+    const existing = options?.existing;
+    const scheduledForMs = options?.scheduledForMs ?? null;
     // P2.3b: agent-bound routines fire into the bot's resident session
     // (`bot:<agentId>`) through the wake bus instead of a throwaway cron
     // session. Claim the fire first (at-least-once, same as standalone);
@@ -223,13 +269,16 @@ export class AutomationScheduler {
     // retry ladder here — the queue owns redrive, and a failed wake run
     // simply waits for the next scheduled fire.
     if (job.agent) {
+      // Claim the scheduled instant, not the wall-clock notice time: the
+      // phase must not drift when a tick lands late (S6).
+      const claimedAt = scheduledForMs ?? Date.now();
       this.store.markRunResult(job.id, {
-        lastRunAt: Date.now(),
+        lastRunAt: claimedAt,
         error: job.lastError,
         retryCount: job.retryCount,
       });
       try {
-        const outcome = await this.enqueueBotFire(job, 'schedule');
+        const outcome = await this.enqueueBotFire(job, 'schedule', scheduledForMs ?? undefined);
         getLogger().info('Scheduled routine fire enqueued for bot', {
           cronId: job.id,
           agent: job.agent,
@@ -242,7 +291,7 @@ export class AutomationScheduler {
           agent: job.agent,
         }, LogComponent.Automation);
         this.store.markRunResult(job.id, {
-          lastRunAt: Date.now(),
+          lastRunAt: claimedAt,
           error: 'bot wake enqueue failed',
           retryCount: job.retryCount,
         });
@@ -267,10 +316,14 @@ export class AutomationScheduler {
 
     // Claim the fire BEFORE executing (at-least-once): advancing last_run_at
     // moves the schedule forward so a crash mid-run does not re-fire forever;
-    // the session history is the run record.
+    // the session history is the run record. A standalone cron claims the
+    // wall clock, not the scheduled instant: its next run is a single
+    // occurrence, so re-anchoring on a stale instant would replay the whole
+    // missed backlog one tick at a time.
+    const claimedAt = Date.now();
     if (!existing) {
       this.store.markRunResult(job.id, {
-        lastRunAt: Date.now(),
+        lastRunAt: claimedAt,
         error: job.lastError,
         retryCount: job.retryCount,
       });
@@ -282,7 +335,11 @@ export class AutomationScheduler {
 
     try {
       await runCronInSession(job, sessionId);
-      this.store.markRunResult(job.id, { lastRunAt: Date.now(), error: null, retryCount: 0 });
+      this.store.markRunResult(job.id, {
+        lastRunAt: claimedAt,
+        error: null,
+        retryCount: 0,
+      });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       const nextRetry = job.retryCount + 1;
