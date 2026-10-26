@@ -581,10 +581,12 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     return resolvePanelWidth({
       workspaceWidth: getWorkspaceWidth(),
       // A user-dragged width wins over the descriptor default so manual
-      // resizes survive opening the same page again.
+      // resizes survive opening the same page again. A remembered width is a
+      // fixed pixel value, so it replaces the descriptor's ratio instead of
+      // competing with it.
       preferredWidth: remembered ?? descriptor.preferredWidth,
       minWidth: descriptor.minWidth,
-      widthRatio: descriptor.widthRatio,
+      widthRatio: remembered === undefined ? descriptor.widthRatio : undefined,
       maxWidthRatio: descriptor.maxWidthRatio,
       maxWidth: descriptor.maxWidth,
     });
@@ -609,12 +611,19 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
    * The wall grows to a second column once a third card is open, and the
    * region widens with it so both columns stay usable.
    */
-  const openPaneInLayout = useCallback((paneId: PaneId) => {
+  const openPaneInLayout = useCallback((paneId: PaneId, pageId: PageId) => {
     const next = placePane(layoutRef.current, paneId);
     const { columns } = wallShapeFor(next.panes.length);
     if (columns > layoutRef.current.columns) {
       const needed = columns * MIN_PANEL_WIDTH;
       if (panelWidthRef.current < needed) setPanelWidth(needed);
+    }
+    // The first card in the wall settles the region's width. Without this
+    // the region keeps whatever width the last session left behind, so a
+    // page that declares a width ratio (the file panel claims a share of
+    // the workspace) would open at the bare minimum.
+    if (next.panes.length === 1) {
+      setPanelWidth(resolveColumnWidth(pageId));
     }
     // Opening a card leaves any card that filled the wall with the region
     // collapse: the new card has to be visible in the wall.
@@ -622,7 +631,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       placePane({ ...prev, expandedPaneId: null }, paneId),
       paneId,
     ));
-  }, []);
+  }, [resolveColumnWidth]);
 
   const togglePanel = useCallback(() => {
     setPanelOpen((prev) => {
@@ -685,7 +694,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       params,
     };
     setTabs((prev) => [...prev, newTab]);
-    openPaneInLayout(id);
+    openPaneInLayout(id, pageId);
     applyPageLayout(pageId);
     return id;
   }, [applyPageLayout, openPaneInLayout, t]);

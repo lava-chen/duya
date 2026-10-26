@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, afterEach, describe, expect, it } from "vitest";
 
-import { clampWidthToBounds, PanelProvider, usePanel } from "../usePanel";
+import { clampWidthToBounds, PanelProvider, usePanel, usePanelGeometry } from "../usePanel";
 import { useConversationStore } from "@/stores/conversation-store";
 
 const PANEL_STORAGE_KEY = "duya:panel:v2:__home__";
@@ -101,6 +101,57 @@ describe("PanelProvider user width memory", () => {
     const second = renderPanel();
     void second;
     expect(JSON.parse(window.localStorage.getItem(USER_WIDTHS_KEY)!)).toEqual({ workspace: 640 });
+  });
+});
+
+describe("PanelProvider opening width", () => {
+  const originalInnerWidth = window.innerWidth;
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useConversationStore.setState({ activeThreadId: null });
+    // A wide viewport: the chat column keeps a protected minimum, so on a
+    // narrow window even a remembered width gets clamped and the two cases
+    // below could not tell "remembered" from "clamped".
+    Object.defineProperty(window, "innerWidth", { value: 1600, writable: true, configurable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "innerWidth", { value: originalInnerWidth, writable: true, configurable: true });
+  });
+
+  function renderPanel() {
+    // The region's width lives in the geometry context, not the panel
+    // context — a drag changes it every frame and must not re-render
+    // every panel consumer.
+    return renderHook(
+      () => ({ panel: usePanel(), geometry: usePanelGeometry() }),
+      { wrapper },
+    );
+  }
+
+  it("settles the region width from the page's width ratio when the first card opens", () => {
+    // The file panel declares a share of the workspace rather than a fixed
+    // pixel width, so opening it must size the region from that share —
+    // otherwise the panel opens at its bare minimum.
+    const { result } = renderPanel();
+    act(() => {
+      result.current.panel.openOrActivatePage("workspace", { workingDirectory: "E:/repo" });
+    });
+
+    const workspaceWidth = window.innerWidth;
+    // The ratio is the contract; the exact pixel value carries a float tail
+    // (1600 * 0.55 = 880.0000000000001), so assert the share, not the pixel.
+    expect(result.current.geometry.panelWidth / workspaceWidth).toBeCloseTo(0.55, 4);
+  });
+
+  it("prefers a remembered width over the page's ratio", () => {
+    window.localStorage.setItem(USER_WIDTHS_KEY, JSON.stringify({ workspace: 700 }));
+    const { result } = renderPanel();
+    act(() => {
+      result.current.panel.openOrActivatePage("workspace", { workingDirectory: "E:/repo" });
+    });
+    expect(result.current.geometry.panelWidth).toBe(700);
   });
 });
 

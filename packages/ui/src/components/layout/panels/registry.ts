@@ -78,7 +78,14 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     multiInstance: false,
     available: true,
     minWidth: 420,
-    preferredWidth: 620,
+    // The file panel is a wide one: it carries a tree beside the preview, so
+    // it claims a share of the workspace instead of a fixed pixel width. The
+    // chat column keeps the rest (see `resolvePanelWidth`). The ratio is the
+    // ceiling, so an absolute pixel cap must not cut it short on a wide
+    // window.
+    widthRatio: 0.55,
+    maxWidthRatio: 0.6,
+    maxWidth: null,
     defaultExpanded: false,
     component: FileWorkspacePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
