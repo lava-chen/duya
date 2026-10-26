@@ -357,6 +357,12 @@ export const HOST_DECLARATION_HEADER = 'x-duya-host-declaration';
  */
 export interface HostClientLease {
   close(): void;
+  /**
+   * Resolves with the reason when the Host ended this lease without the client
+   * asking, so the holder can attach again. Stays pending while the lease is
+   * held and after {@link close}.
+   */
+  readonly lost: Promise<string>;
 }
 
 /** Typed client for the versioned Host session, timeline, and task APIs. */
@@ -451,6 +457,38 @@ export class HostSessionHttpClient implements
     // reachable from the returned object is the whole fix; close then tears
     // the same request down deliberately.
     const held = response;
+    let reportedLost = false;
+    let markLost: (reason: string) => void = () => undefined;
+    const lost = new Promise<string>((resolve) => {
+      markLost = (reason) => {
+        if (closed || reportedLost) return;
+        reportedLost = true;
+        resolve(reason);
+      };
+    });
+    // The lease is a held response, and the ONLY thing keeping it held is this
+    // read: the Host never writes a body, so the read ends exactly when the
+    // connection does. That is the signal a holder needs to attach again —
+    // without it a dropped lease is indistinguishable from a healthy one on
+    // this side, while the Host starts its idle countdown.
+    const watch = async (): Promise<void> => {
+      try {
+        const body = held.body;
+        if (body === null) {
+          markLost('Host sent no lease body');
+          return;
+        }
+        const reader = body.getReader();
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+        }
+        markLost('Host closed the client lease');
+      } catch (error) {
+        markLost(error instanceof Error ? error.message : String(error));
+      }
+    };
+    void watch();
     return {
       close: () => {
         if (closed) return;
@@ -458,6 +496,7 @@ export class HostSessionHttpClient implements
         void held.body?.cancel().catch(() => undefined);
         controller.abort();
       },
+      lost,
     };
   }
 
