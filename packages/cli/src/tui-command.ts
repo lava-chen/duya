@@ -28,13 +28,14 @@
  */
 
 import type { SessionId } from '@duya/agent-protocol';
-import type { HostClientLease, HostHandshakeV1 } from '@duya/host/http-client';
+import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
 import { DatabaseOwnerLockError } from '@duya/data';
 import { resolveHostWorkerPath } from './worker-path.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { startBackgroundHost } from './tui/background-host.js';
+import { holdClientLease } from './tui/client-lease-holder.js';
 import { chatInteractive, createChatSession, write, DIM, RED, RESET } from './chat.js';
 import {
   CLI_HOST_DECLARATION,
@@ -204,8 +205,10 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
 
   // Keep the Host alive for as long as this terminal is open. A Host whose
   // clients all left releases the data directory and goes away; without this
-  // lease it would take the next terminal down with it.
-  const lease = await openClientLease(client);
+  // lease it would take the next terminal down with it. The holder also
+  // re-attaches when the lease drops, so one lost connection does not read as
+  // "this terminal left".
+  const lease = holdClientLease(client);
 
   let sessionId: SessionId;
   const owned = new OwnedSessions();
@@ -214,7 +217,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     const existing = await client.readLocalSession(sessionId, { includeAllSessions: true });
     if (existing === null) {
       write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
-      lease?.close();
+      lease.close();
       return 1;
     }
   } else {
@@ -237,7 +240,7 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
     exitCode = await chatInteractive(client, sessionId, { ...options, origin: host.origin, token: host.token, diagnosticsLogPath: host.diagnosticsLogPath }, owned);
   } finally {
     try {
-      lease?.close();
+      lease.close();
       await host.close();
     } finally {
       consoleCapture?.restore();
@@ -280,20 +283,6 @@ async function acquireHost(options: TuiCommandOptions): Promise<AttachedHost> {
     ...(handle.diagnosticsLogPath === undefined ? {} : { diagnosticsLogPath: handle.diagnosticsLogPath }),
     started: true,
   };
-}
-
-/**
- * Hold a client lease so the Host knows this terminal is still here.
- *
- * A Host that does not offer leases is somebody else's to stop, so there is
- * nothing to hold and nothing to report.
- */
-async function openClientLease(client: HostSessionHttpClient): Promise<HostClientLease | null> {
-  try {
-    return await client.openClientLease();
-  } catch {
-    return null;
-  }
 }
 
 /**
