@@ -1,7 +1,7 @@
 # 633 TUI 项目切换
 
-状态：active（实现完成待集成，PR 见下） · 负责人：Chenfengbai（实现） · 更新：2026-10-26
-分支：`codex/633-tui-project-switch` · worktree：`.claude/worktrees/633-project-switch` · base：`d80ca3c6` · owner：本检出
+状态：active（PR 已提交待集成） · 负责人：codex（本检出） · 更新：2026-10-26
+分支：`codex/633-tui-project-switch` · PR：[#518](https://github.com/lava-chen/duya/pull/518)（`cbe23fc6` + `64a12a51` + `3a1b4882`） · worktree：`.claude/worktrees/633-project-switch` · base：`d80ca3c6` · owner：本 agent
 
 ## 目标与边界
 
@@ -47,10 +47,13 @@
 | `d80ca3c6` + 本切片 9 文件 | win32 / Node 24.18 / worktree 633 | `npx vitest run packages/cli/src/tui/slash/__tests__/project.test.ts` | 0 | 19 passed（分组/排序/大小写折叠/`~`/选择器/无 UI 退化/参数式/忙拒绝/Host 拒绝上报） |
 | 同上 | 同上 | `npm run -w @duya/cli typecheck` | 2 | 仅剩 `src/tui/client-lease-holder.ts:116` 两处 `HostClientLease.lost` 报错，属检出内 `@duya/host` 已构建声明陈旧（该文件未被本切片修改）；本切片文件零报错 |
 | 同上 | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations.`；另报 3 条 baseline 指纹未被触发（未 `--write` 收窄，留给集成后重验） |
-| 待执行 | — | `npm run typecheck:all`、`npm test -- packages/cli packages/command-catalog`、`packages/cli/src/__tests__/chat-tui-project-switch.test.ts`、真机 `duya tui` 切换 | — | **用户本轮明确要求「不用测试直接提交推送开 PR」**，故循环级测试文件已写但未运行过；全量门禁与真机验收留待集成前重验 |
+| `3a1b4882`（head） | GitHub Actions ubuntu-22.x | PR CI `test` / `typecheck` / `architecture` / `build` | 见下 | 首轮（`cbe23fc6`）：typecheck / architecture / build / test scope **pass**，`test` **fail 1 例** —— `chat-tui-project-switch.test.ts > keeps a per-session checkout cursor ahead of the surface directory` 超时；本机未能复现运行（见下） |
+| 待执行 | — | 本机 `packages/cli` 套件 | — | **本检出跑不了任何 `chatTui` 循环级测试**：`@duya/ai/context` 经共享 junction 解析到主检出 `E:/Projects/duya/packages/ai/dist/context.js`，连未改动的 `packages/cli/src/__tests__/chat-empty-session.test.ts` 都以 `Failed to load url` 报错（既有环境缺口，非本切片引入；CI 侧 50 files / 521 tests 正常） |
 
 ## 接续 / 结果
 
-已提交为本 PR，**未集成**（等用户授权）。与 630a（#512）、632（#514）、634（#516）互不依赖，可独立 review。
+已提交为本 PR（https://github.com/lava-chen/duya/pull/518），**未集成**（等用户授权）。与 630a（#512）、632（#514）、634（#516）互不依赖，可独立 review。
 
-下一条动作：集成前在合并后的 master 上补跑 `npx vitest run packages/cli packages/command-catalog` 与 `npm run typecheck:all`，特别是 `chat-tui-project-switch.test.ts`（本检出一次都没跑过；其 fake 的 `watchAgentRunEvents(runId, { signal })` 入参形状已按 `packages/cli/src/tui/remote-session-watch.ts:144` 的调用点核对）；再做真机验收「切换后 Read/Bash 作用域随项目变化」。
+- 首轮 CI 那 1 例失败已定位为测试自身的时序：它在 `startAgentRun` 一被记录就提交 `/project`，此时上一轮 turn 还持有会话，命令回的是忙拒绝，等的那句 notice 当然不来。`3a1b4882` 改成先等 busy 落回，并把同文件里两处固定 sleep 换成「等它断言的那句话」，慢机器上不再可能因为「什么都没处理」而假绿。该修正**只经 CI 验证**，本机跑不了。
+- 下一条动作：等 head `3a1b4882` 的 `test` 转绿再谈集成；集成后在合并后的 master 上补 `npx vitest run packages/cli packages/command-catalog` 与 `npm run typecheck:all`（fake 的 `watchAgentRunEvents(runId, { signal })` 形状已按 `packages/cli/src/tui/remote-session-watch.ts:144` 核对），再做真机验收「切换后 Read/Bash 作用域随项目变化、`/status` 与状态行跟随新目录」。
+
