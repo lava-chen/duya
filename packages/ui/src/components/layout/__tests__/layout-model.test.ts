@@ -18,7 +18,7 @@ import {
 } from "../panels/layout-model";
 
 function identities(...ids: string[]): PaneIdentity[] {
-  return ids.map((id) => ({ id, pageId: "files" }));
+  return ids.map((id) => ({ id, pageId: "workspace" }));
 }
 
 describe("wall shape", () => {

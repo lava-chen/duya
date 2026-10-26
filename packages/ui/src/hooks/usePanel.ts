@@ -233,8 +233,6 @@ function genId(): string {
 
 function dedupKey(pageId: PageId, params?: Record<string, unknown>): string {
   switch (pageId) {
-    case "files":
-      return `files::${(params?.workingDirectory as string | undefined) ?? ""}`;
     case "workspace":
       // A single workspace page owns the open-file tabs.
       return "workspace::__files__";
@@ -1137,5 +1135,7 @@ export function usePanelGeometry(): PanelGeometryValue {
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
 
 function defaultPanelTitle(t: TFunc, pageId: PageId): string {
-  return t(`panel.${pageId}` as TranslationKey);
+  // The label lives in the page registry, not in a `panel.<pageId>` key: the
+  // workspace page reuses the "files" label, so the id-derived key would miss.
+  return t(getPageDescriptor(pageId).labelKey);
 }

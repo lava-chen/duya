@@ -1613,11 +1613,6 @@ const en = {
   'update.downloading': 'Downloading update...',
   'update.ready': '{version} ready — click to restart and install',
 
-  'fileTree.filterFiles': 'Filter files...',
-  'fileTree.refresh': 'Refresh',
-  'fileTree.noFiles': 'No files found',
-  'fileTree.selectFolder': 'Select a project folder to view files',
-
   'filePreview.frontmatterTitle': 'Metadata',
   'filePreview.openFile': 'Open File',
   'filePreview.selectFileHint': 'Select a file from the project tree for read-only preview',

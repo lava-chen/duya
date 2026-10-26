@@ -14,7 +14,6 @@ import {
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
 import type { PageId, PageTab } from "./page-tab";
-import { FileTreePanel } from "./FileTreePanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePanel";
 import { BotSettingsPanel } from "./BotSettingsPanel";
@@ -70,17 +69,6 @@ export interface PageDescriptor {
 }
 
 export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
-  files: {
-    id: "files",
-    labelKey: "panel.files",
-    icon: FolderIcon,
-    multiInstance: true,
-    available: true,
-    minWidth: 300,
-    preferredWidth: 320,
-    defaultExpanded: false,
-    component: FileTreePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
-  },
   workspace: {
     id: "workspace",
     labelKey: "panel.files",

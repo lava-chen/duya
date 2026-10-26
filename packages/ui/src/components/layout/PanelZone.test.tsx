@@ -102,7 +102,7 @@ vi.mock("./panels/registry", () => {
     component: Browser,
   });
   const registry = {
-    files: make("files"),
+    workspace: make("workspace"),
     review: make("review"),
     browser: make("browser"),
     terminal: make("terminal"),
@@ -155,7 +155,7 @@ describe("PanelZone panel wall", () => {
 
   it("renders one card per open page", () => {
     mocks.tabs = [
-      { id: "files", pageId: "files", title: "Files" },
+      { id: "files", pageId: "workspace", title: "Files" },
       { id: "terminal", pageId: "terminal", title: "Terminal" },
     ];
     mocks.activeTabId = "terminal";
@@ -167,7 +167,7 @@ describe("PanelZone panel wall", () => {
   });
 
   it("shows the card title in the card header", () => {
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
@@ -177,7 +177,7 @@ describe("PanelZone panel wall", () => {
 
   it("splits the wall into two columns from the third card on", () => {
     mocks.tabs = [
-      { id: "files", pageId: "files", title: "Files" },
+      { id: "files", pageId: "workspace", title: "Files" },
       { id: "terminal", pageId: "terminal", title: "Terminal" },
       { id: "browser", pageId: "browser", title: "Browser" },
     ];
@@ -193,7 +193,7 @@ describe("PanelZone panel wall", () => {
 
   it("names the separator between two columns after the cards on both sides", () => {
     mocks.tabs = [
-      { id: "files", pageId: "files", title: "Files" },
+      { id: "files", pageId: "workspace", title: "Files" },
       { id: "terminal", pageId: "terminal", title: "Terminal" },
       { id: "browser", pageId: "browser", title: "Browser" },
     ];
@@ -208,7 +208,7 @@ describe("PanelZone panel wall", () => {
 
   it("names the separator between two rows after the cards above and below", () => {
     mocks.tabs = [
-      { id: "files", pageId: "files", title: "Files" },
+      { id: "files", pageId: "workspace", title: "Files" },
       { id: "terminal", pageId: "terminal", title: "Terminal" },
     ];
     mocks.activeTabId = "files";
@@ -222,7 +222,7 @@ describe("PanelZone panel wall", () => {
 
   it("hides the other cards while one card fills the wall", () => {
     mocks.tabs = [
-      { id: "files", pageId: "files", title: "Files" },
+      { id: "files", pageId: "workspace", title: "Files" },
       { id: "terminal", pageId: "terminal", title: "Terminal" },
     ];
     mocks.activeTabId = "files";
@@ -259,19 +259,19 @@ describe("PanelZone panel wall", () => {
 
 describe("PanelZone detached panes", () => {
   it("shows no popout action without the Electron bridge", () => {
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
     const { container } = render(<PanelZone />);
-    expect(screen.queryByTestId("panel-popout-files")).toBeNull();
+    expect(screen.queryByTestId("panel-popout-workspace")).toBeNull();
     expect(container.querySelectorAll(".panel-card")).toHaveLength(1);
   });
 
   it("renders a detached pane as a placeholder that mounts no panel component", async () => {
     const cleanup = installPanelWindowBridge();
     mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: true, alwaysOnTop: false });
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
@@ -281,7 +281,7 @@ describe("PanelZone detached panes", () => {
     });
     // The placeholder keeps the grid slot but mounts no panel surface.
     expect(screen.queryByTestId("browser-files")).toBeNull();
-    expect(screen.getByTestId("panel-return-files")).toBeTruthy();
+    expect(screen.getByTestId("panel-return-workspace")).toBeTruthy();
     cleanup();
     mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
   });
@@ -289,7 +289,7 @@ describe("PanelZone detached panes", () => {
   it("closes the detached window when its tab is closed from the wall", async () => {
     const cleanup = installPanelWindowBridge();
     mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: true, alwaysOnTop: false });
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
@@ -316,22 +316,22 @@ describe("PanelZone detached panes", () => {
     const cleanup = installPanelWindowBridge();
     mocks.panelWindow.getState.mockResolvedValue({ ok: true, detached: false, alwaysOnTop: false });
     mocks.panelWindow.open.mockResolvedValue({ ok: true, paneId: "files", windowId: 2 });
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files", params: { filePath: "E:/demo/AGENTS.md" } }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files", params: { filePath: "E:/demo/AGENTS.md" } }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
     render(<PanelZone />);
-    const popout = await screen.findByTestId("panel-popout-files");
+    const popout = await screen.findByTestId("panel-popout-workspace");
     popout.click();
 
     await waitFor(() => {
       expect(mocks.panelWindow.open).toHaveBeenCalledWith(
         "files",
-        "files",
+        "workspace",
         "Files",
         { filePath: "E:/demo/AGENTS.md" },
       );
-      expect(screen.getByTestId("panel-return-files")).toBeTruthy();
+      expect(screen.getByTestId("panel-return-workspace")).toBeTruthy();
     });
     expect(screen.queryByTestId("browser-files")).toBeNull();
     cleanup();
@@ -347,16 +347,16 @@ describe("PanelZone detached panes", () => {
         return () => {};
       },
     );
-    mocks.tabs = [{ id: "files", pageId: "files", title: "Files" }];
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
     render(<PanelZone />);
     // Wait until the effect has subscribed, so the sink holds the callback.
-    await screen.findByTestId("panel-return-files");
+    await screen.findByTestId("panel-return-workspace");
     expect(eventSink.current).not.toBeNull();
 
-    const returnBtn = screen.getByTestId("panel-return-files");
+    const returnBtn = screen.getByTestId("panel-return-workspace");
     returnBtn.click();
     expect(mocks.panelWindow.close).toHaveBeenCalledWith("files");
 

@@ -376,16 +376,6 @@
 }
 
 /* File tree panel (embedded inside the sidebar panel) */
-.file-tree-panel-embedded {
-  display: flex;
-  height: 100%;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--main-bg);
-}
-
 .file-tree-search-row {
   display: flex;
   align-items: center;
@@ -432,46 +422,6 @@
   opacity: 0.6;
 }
 
-.file-tree-refresh-btn {
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.file-tree-refresh-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.file-tree-refresh-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.file-tree-panel-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 2px 0;
-}
-
-.file-tree-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 0;
-}
-
 .file-tree-empty {
   padding: 16px;
   text-align: center;
@@ -480,116 +430,6 @@
 }
 
 /* File Tree Component Styles */
-.file-tree {
-  font-size: 13px;
-  user-select: none;
-}
-
-.file-tree-folder {
-  margin: 0;
-}
-
-.file-tree-folder-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 12px;
-  cursor: pointer;
-  color: var(--text);
-  transition: background-color 0.12s ease, color 0.12s ease;
-}
-
-.file-tree-folder-header:hover {
-  background: var(--surface-hover);
-}
-
-.file-tree-caret {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-
-.file-tree-caret svg {
-  transition: transform 0.15s ease;
-}
-
-.file-tree-caret-expanded svg {
-  transform: rotate(90deg);
-}
-
-.file-tree-folder-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--muted);
-}
-
-.file-tree-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-tree-folder-children {
-  margin-left: 16px;
-  padding-left: 4px;
-  border-left: 1px solid var(--border);
-}
-
-.file-tree-file {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 12px;
-  cursor: pointer;
-  color: var(--muted);
-  transition: background-color 0.12s ease, color 0.12s ease;
-}
-
-.file-tree-file:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.file-tree-file-selected {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.file-tree-file-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--muted);
-}
-
-/* Inline rename input */
-.file-tree-file-renaming,
-.file-tree-folder-renaming {
-  background: var(--surface);
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-}
-
-.file-tree-rename-input {
-  flex: 1;
-  min-width: 0;
-  height: 20px;
-  padding: 0 4px;
-  font-size: 13px;
-  color: var(--text);
-  background: var(--main-bg);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  outline: none;
-}
 
 /* Resize Handle.
    One visual language for every resize affordance (panel wall separators,
@@ -1034,11 +874,6 @@ html.compact .skills-title {
 
 html.compact .skills-section-wrapper {
   gap: 1.5rem;
-}
-
-html.compact .file-tree-folder-header,
-html.compact .file-tree-file {
-  padding: 2px 12px;
 }
 
 html.compact .panel-zone {

@@ -1590,11 +1590,6 @@ const zh: Record<TranslationKey, string> = {
   'update.downloading': '下载更新中',
   'update.ready': '{version} 已就绪，点击重启安装',
 
-  'fileTree.filterFiles': '筛选文件...',
-  'fileTree.refresh': '刷新',
-  'fileTree.noFiles': '未找到文件',
-  'fileTree.selectFolder': '选择项目文件夹以查看文件',
-
   'filePreview.frontmatterTitle': '文档信息',
   'filePreview.openFile': '打开文件',
   'filePreview.selectFileHint': '从右侧项目树中选择一个文件进行只读预览',
