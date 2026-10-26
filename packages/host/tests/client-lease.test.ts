@@ -228,4 +228,45 @@ describe('client-scoped Host', () => {
       await fs.rm(temporaryRoot, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it('tells the holder when the Host ends the lease, and stays quiet on a deliberate close', async () => {
+    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-lease-lost-'));
+    const dataRoot = path.join(temporaryRoot, 'data');
+    let host: LocalHostHandle | undefined;
+
+    try {
+      host = await startLocalHost({
+        dataRoot,
+        databasePath: path.join(dataRoot, 'databases', 'duya-main.db'),
+        rolloutRoot: path.join(dataRoot, 'sessions'),
+        attachmentsRoot: path.join(dataRoot, 'attachments'),
+        runtimeFilePath: path.join(dataRoot, 'runtime', 'host-api.json'),
+        port: 0,
+        token: 'lease-lost-token',
+        clientScoped: true,
+        // Long enough that nothing the test does by itself triggers idle.
+        clientLeaseIdleTimeoutMs: 60_000,
+      });
+      const client = new HostSessionHttpClient(host.origin, 'lease-lost-token');
+
+      const deliberate = await client.openClientLease();
+      expect(deliberate).not.toBeNull();
+      deliberate!.close();
+      expect(await Promise.race([
+        deliberate!.lost,
+        new Promise((resolve) => setTimeout(() => resolve('still held'), 500)),
+      ])).toBe('still held');
+
+      // A lease the Host tears down is a loss: the holder has to know, because
+      // the Host's idle countdown started the moment it happened.
+      const held = await client.openClientLease();
+      expect(held).not.toBeNull();
+      await host.close();
+      host = undefined;
+      await expect(held!.lost).resolves.toEqual(expect.any(String));
+    } finally {
+      await host?.close();
+      await fs.rm(temporaryRoot, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
