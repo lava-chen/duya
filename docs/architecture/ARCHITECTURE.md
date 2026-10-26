@@ -1580,6 +1580,20 @@ For `bot:<agentId>` sessions the wake dispatcher is the **authoritative run queu
 
 ### Bot Identity & Avatar (Plans 483/485, 481 amendment)
 
+The personal Bot framework's S3b composition is opt-in through
+`startLocalHost({ botRuntime: { ownerId }, workerPath })`. Its trusted
+`handle.botInputs.accept()` commits verified inputs to the S3a inbox; the Host
+dispatcher claims by owner and lane, uses the existing Run execution controller,
+and settles inputs only from durable Run terminals. `BotDispatchStore` fences
+reservation and inbox writes with the current claim. `RunOrchestrator.openRun`
+reserves its own candidate identity before startup and checks the claim again
+at the execution channel; replay returns the canonical Run without dispatch.
+After restart, ambiguous reservations and orphaned running rows are retained as
+`dead_letter` with `recovery_required`, rather than rerun. Client-scoped Hosts
+remain resident while their Bot inbox has work and shut down after it drains.
+The default remains legacy scheduling; public/ Desktop routing and scheduler
+ownership transfer belong to S3c. No existing pending-wake table is consumed.
+
 A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`apps/desktop/src/main/config/bot-profile.ts`): `name` / `description` (model-updatable via `update_state`), `title` (host-managed only), `avatarColor` (color token for the initial-circle avatar) and `avatarImage` (filename of an image inside the agent dir). `config.toml [agents.<id>]` name/description only seed the profile on first creation and act as fallback (485 §2.4). Avatars were (shape, color) tokens until 2026-09-05 — shape tokens are removed; legacy files' `avatarShape` is ignored on read.
 
 Plan 502: `title` is fully wired for the host side — create/edit dialogs and `BotSettingsPanel` expose a role-title input, creation seeds it via `AgentUpsertInput.title` → `seedBotProfileIfMissing`, and the sidebar renders it as the contact subtitle (`BotContactListItem`: `title || description`). The model still cannot set it. Bot ids are minted at a SINGLE point in the main process (grok `agent-session.ts` parity: ids are never user-authored): `config:agents:create` accepts an empty id and slugs it from the display name via `slugifyBotIdFromName`, then `allocateBotId` allocates a collision-free id against config keys, on-disk trees, and `.deleted` tombstones; the old renderer-side `deriveBotIdFromName` duplicate is removed. Ids stay readable slugs (unlike grok's opaque uuids) because they double as config keys and `send_to_agent` addresses.

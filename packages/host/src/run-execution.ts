@@ -59,6 +59,7 @@ import {
   type NativeRunEventWriter,
   type RunOrchestratorLogger,
   type RunTurnIntent,
+  type RunDispatchAdmission,
 } from './run-orchestrator.js';
 import { WorkerManager } from './worker-manager.js';
 import { resolveTurnOverrides } from './run-turn-overrides.js';
@@ -295,6 +296,13 @@ export class HostRunExecutionController {
       onRunSettled: (runId) => {
         this.#liveRunEvents.close(runId as RunId);
         this.#nativeRunIds.delete(runId);
+        const row = options.runs.getRun(runId);
+        if (row !== null && row.terminal !== null && !this.#orchestrator.isSessionBusy(row.session_id)) {
+          const state = this.#registry.getSession(row.session_id)?.state;
+          if (state === SessionState.STREAMING || state === SessionState.COMPLETING) {
+            this.#registry.transitionState(row.session_id, SessionState.COMPLETED);
+          }
+        }
       },
       channel: createWorkerExecutionChannel({
         dispatch: (command) => {
@@ -302,6 +310,10 @@ export class HostRunExecutionController {
           if (parent) this.validateSessionCaller(parent);
           // Select the canonical stream before startup status frames can arrive.
           this.#nativeRunIds.add(command.runId);
+          const state = this.#registry.getSession(command.sessionId)?.state;
+          if (state === SessionState.IDLE || state === SessionState.COMPLETED) {
+            this.#registry.transitionState(command.sessionId, SessionState.STREAMING);
+          }
           const sent = this.#workerManager.sendCommand(command.sessionId, { ...command });
           if (!sent) this.#nativeRunIds.delete(command.runId);
           return sent;
@@ -335,7 +347,31 @@ export class HostRunExecutionController {
     } finally { release?.(); }
   }
 
-  async #startAgentRunReserved(input: StartAgentRunInput, caller?: SessionServiceCaller): Promise<StartAgentRunResult> {
+  /** Internal Bot admission uses the same policy, supervisor and Run owner. */
+  async startBotRun(input: StartAgentRunInput, admission: RunDispatchAdmission): Promise<StartAgentRunResult> {
+    const release = this.#options.checkoutService?.reserveRun(input.sessionId);
+    try { return await this.#startAgentRunReserved(input, undefined, admission); }
+    finally {
+      release?.();
+      // A refused start may have spawned a worker without dispatching a Run.
+      // That idle worker must not keep the resident shutdown in its drain cap.
+      const state = this.#registry.getSession(input.sessionId)?.state;
+      if (!this.isSessionBusy(input.sessionId) && state === SessionState.STREAMING) {
+        this.#registry.transitionState(input.sessionId, SessionState.IDLE);
+      }
+    }
+  }
+
+  isRunLive(runId: string): boolean {
+    const row = this.#options.runs.getRun(runId);
+    return row !== null && this.#orchestrator.ownsRun(runId, row.session_id);
+  }
+
+  isSessionBusy(sessionId: string): boolean {
+    return this.#orchestrator.isSessionBusy(sessionId);
+  }
+
+  async #startAgentRunReserved(input: StartAgentRunInput, caller?: SessionServiceCaller, admission?: RunDispatchAdmission): Promise<StartAgentRunResult> {
     if (caller) this.validateSessionCaller(caller);
     const sessionId = input.sessionId;
     const defaults = await this.#options.sessionDefaults(sessionId);
@@ -496,7 +532,7 @@ export class HostRunExecutionController {
     if (caller) this.#delegationBySession.set(sessionId, caller);
     let acceptance;
     try {
-      acceptance = await this.#orchestrator.openRun(sessionId, intent);
+      acceptance = await this.#orchestrator.openRun(sessionId, intent, admission);
     } finally {
       if (caller && this.#delegationBySession.get(sessionId) === caller) {
         this.#delegationBySession.delete(sessionId);
