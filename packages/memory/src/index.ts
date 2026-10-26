@@ -207,3 +207,14 @@ export type {
   SendWakeupFn,
   SendMemoryWakeupOptions,
 } from './wakeup.js';
+
+export {
+  FORGET_LEDGER_FILENAME,
+  forgetLedgerPath,
+  readForgetLedgerSync,
+  readRecallRevisionSync,
+  readForgottenKeysSync,
+  recordForgetSync,
+  withForgottenKeys,
+} from './forget_ledger.js';
+export type { ForgetLedger } from './forget_ledger.js';

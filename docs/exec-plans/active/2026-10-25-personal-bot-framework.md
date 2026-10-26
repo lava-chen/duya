@@ -1,5 +1,59 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S5 execution — 2026-10-26
+
+- Owner: root agent; isolated linked worktree `.claude/worktrees/bot-framework-s5`,
+  branch `codex/bot-framework-s5`, base `codex/bot-framework-s4-feishu` @ `600bf624`
+  (stacked: S1–S4 are still unmerged). No merge is authorized.
+- Decision (user-confirmed): peer user shards require an **explicit grant, fail
+  closed**; revocation/forget lands **next turn via a durable recall revision**
+  folded into the frozen-section key, while ordinary memory writes stay frozen
+  until compaction (keeps Plan 501 L1).
+- Delivered: `@duya/bot` `context/snapshot.ts` (pure `BotContextSnapshot`:
+  bot revision, recall revision, authorized scopes; `parseMemoryAccessGrant`
+  fail-closed); host `worker-prompts/bot/memory/access.ts` reads
+  `agents/<bot>/state/memory-access.json`; `tierReader.readUserTierEntries` now
+  takes an authorized shard list instead of scanning every agent, and project
+  ids/writer dirs are validated as path segments; `loader` builds one snapshot
+  per turn from config revision + grants + `state/projects.json` + forget ledger
+  and renders memory only from `snapshot.memory`; `framework`/
+  `epoch.botVolatileSectionCacheKey` key volatile sections on
+  `bot:<id>:v:<recallRevision>:<epoch>:<section>`; the runtime passes
+  `recallRevision`.
+- Forget is durable at four layers: file retirement + tier-index removal
+  (existing), `<memoryRoot>/.forget-ledger.json` revision (frozen prompt
+  re-renders next turn), and tombstone keys merged into Stage 1's dedupe set.
+  The curator prompt also receives a bounded `forgotten_facts` block so an old
+  rollout summary cannot write the fact back into an area page.
+- Acceptance evidence (all local, win32 / Node 24.18.0):
+  - named S5 tests 65 cases green: `packages/bot/tests/context-snapshot.test.ts`
+    (9), `packages/memory/src/__tests__/forget_ledger.test.ts` (6),
+    `extractor.file-keys.test.ts` (5, incl. tombstone survives retired file),
+    `apps/desktop/.../tierWriter.test.ts` (10, forget bumps ledger + tombstones),
+    `apps/desktop/.../curation_single_shot.test.ts` (23, incl. forgotten block
+    present/absent), `packages/host/tests/worker-prompts/bot-memory-s5.test.ts`
+    (12: own+legacy only without grant, granted shard visible, revocation moves
+    the gate while an ordinary write does not, unsafe project ids dropped,
+    volatile re-render on gate change but not on content change).
+  - `packages/host/tests` full: 233 passed / 1 skipped, 2064 passed / 5 skipped.
+  - bot + memory + desktop `memory`/`memory-state` suites: 50 files, 614 passed.
+  - `npm run typecheck:all` exit 0; `npm run architecture:check` exit 0 (no new
+    violations); bot-boundary PASS (R1 MEASURED 10 files / 0 findings);
+    retirement ratchet exit 0. Desktop `tsconfig.main` 178 errors, all
+    pre-existing (base moved; none in the S5 files).
+  - `npm run bundle:worker` rebuilt `packages/host/bundle` from the final source
+    (`bundle:verify` reports STALE only because the rebuild is not committed
+    yet).
+- Honest deferrals / limits: (1) audience-based memory filtering (design §7
+  "记忆按受众过滤") is not implemented — S4 channel admission already gates
+  allowed senders, and the worker has no per-turn audience field; it stays an
+  open item. (2) The `forgotten_facts` curator guard is prompt-level; the
+  structural guarantee is the Stage 1 dedupe tombstone. (3) Conversation
+  summaries already folded into context are not rewritten ("必要时重建受影响
+  摘要" remains a separate slice). (4) Grant authoring is a documented JSON file
+  contract; no Desktop UI/RPC yet. (5) The grant file is user-owned state; the
+  bot itself has no writer for it.
+
 ## S4 execution — 2026-10-26
 
 - Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,

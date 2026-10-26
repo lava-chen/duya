@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { queryExistingKeysFromFiles } from '../extractor.js';
+import { recordForgetSync } from '../forget_ledger.js';
 
 interface FileKeyEnv {
   memoryRoot: string;
@@ -82,5 +83,22 @@ describe('queryExistingKeysFromFiles', () => {
     fs.mkdirSync(path.join(env.memoryRoot, 'items', 'preference'), { recursive: true });
     const keys = await queryExistingKeysFromFiles(env.memoryRoot);
     expect(keys).toEqual([]);
+  });
+
+  it('keeps forgotten keys in the dedupe set so summaries cannot resurrect them (S5)', async () => {
+    writeCanonical(env.memoryRoot, 'items/preference/active.md', {
+      memory_id: 'mem_a', canonical_key: 'preference:active', claim_type: 'preference',
+      scope: 'global', scope_id: 'null', project_id: 'null', status: 'active',
+      importance: 'normal', updated_at: '2026-08-03T12:00:00Z',
+    }, 'Active');
+    writeCanonical(env.memoryRoot, 'items/preference/forgotten.md', {
+      memory_id: 'mem_b', canonical_key: 'Preference:Forgotten', claim_type: 'preference',
+      scope: 'global', scope_id: 'null', project_id: 'null', status: 'retired',
+      importance: 'normal', updated_at: '2026-01-01T00:00:00Z',
+    }, 'Forgotten');
+    recordForgetSync(env.memoryRoot, ['preference:forgotten']);
+
+    const keys = await queryExistingKeysFromFiles(env.memoryRoot);
+    expect(keys).toEqual(['preference:active', 'preference:forgotten']);
   });
 });

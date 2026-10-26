@@ -16,9 +16,11 @@
  *
  * Either key changing invalidates the snapshot; both unchanged means the
  * cached per-section render is reused verbatim. Cache keys use the shape
- * `bot:<id>:<contentHash>:<summaryEpoch>:<section>` and live in the bot
- * assembly's own map (Plan 474 §6.1) — deliberately NOT in the global
- * PromptCache, which has no epoch concept.
+ * `bot:<id>:<contentHash>:<summaryEpoch>:<section>` for stable sections and
+ * `bot:<id>:v:<recallRevision>:<summaryEpoch>:<section>` for volatile ones
+ * (framework plan S5) — both live in the bot assembly's own map (Plan 474
+ * §6.1), deliberately NOT in the global PromptCache, which has no epoch
+ * concept.
  */
 
 import { createHash } from 'node:crypto'
@@ -101,6 +103,24 @@ export function botSectionCacheKey(
   section: string,
 ): string {
   return `bot:${botId}:${contentHash}:${summaryEpoch}:${section}`
+}
+
+/**
+ * Cache key for a volatile section (Plan 501 L1 + framework plan S5).
+ *
+ * The content hash is deliberately absent — volatile data changes every
+ * turn — but the recall gate is present. A revocation, membership change or
+ * forget moves `recallRevision`, so the section re-renders on the next turn
+ * even mid-epoch. An ordinary memory write leaves both `recallRevision` and
+ * `summaryEpoch` untouched and stays frozen until the next compaction.
+ */
+export function botVolatileSectionCacheKey(
+  botId: string,
+  recallRevision: string | undefined,
+  summaryEpoch: number,
+  section: string,
+): string {
+  return `bot:${botId}:v:${recallRevision ?? '-'}:${summaryEpoch}:${section}`
 }
 
 /**

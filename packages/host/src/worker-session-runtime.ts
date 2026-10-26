@@ -1729,6 +1729,12 @@ export class WorkerSession implements AgentRuntime {
                         botId: appliedProfile.id,
                         contentHash: computeBotContentHash(botContext),
                         summaryEpoch,
+                        // Framework plan S5: recall gate — volatile memory
+                        // sections re-render when authorization, membership
+                        // or the forget ledger changes mid-epoch.
+                        ...(botContext.snapshot
+                            ? { recallRevision: botContext.snapshot.recallRevision }
+                            : {}),
                     },
                 });
                 this._syncBotProfileBaseline(appliedProfile.id, botContext, summaryEpoch);

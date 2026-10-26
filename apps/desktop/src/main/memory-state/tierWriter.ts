@@ -20,13 +20,17 @@
  *
  * Forget is soft: the frontmatter status flips to 'retired' (parseCanonicalFile
  * consumers skip it) and the index row is removed. The file stays on disk for
- * auditability, matching the file-truth principle.
+ * auditability, matching the file-truth principle. The forget ledger
+ * (`<duyaRoot>/memory/.forget-ledger.json`) additionally bumps the recall
+ * revision and tombstones the dedupe key, so frozen prompts re-render on the
+ * next turn and extraction cannot recreate the fact from an old summary.
  */
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
+import { recordForgetSync } from '@duya/memory/forget_ledger';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   listTierEntries,
@@ -232,6 +236,10 @@ export function forgetTierFact(
     }
 
     const absPath = path.join(duyaRoot, target.file_path);
+    // Gate first: a failure here must abort before the file is retired, so
+    // the caller never sees "forgotten" with an unmoved recall revision.
+    // Every later step is idempotent for the same dedupe key.
+    recordForgetSync(path.join(duyaRoot, 'memory'), [target.dedupe_key]);
     if (fs.existsSync(absPath)) {
       retireFile(absPath);
     }
