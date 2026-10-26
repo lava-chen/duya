@@ -1,5 +1,57 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S3c execution — 2026-10-26
+
+- Owner: Codex root, `codex/bot-framework-s3c`, isolated linked worktree
+  `.claude/worktrees/bot-framework-s3c`, base S3b `a692d74b` plus S2
+  `3a35e047` integrated at `3bfaca2a`. Existing PR branches are not edited.
+- Goal: complete the S3 acceptance matrix before declaring S4 ready. Persist
+  per-Bot scheduler ownership and fence Run admission; forward Desktop input
+  and revoke renderer execution for migrated Bots; preserve wake payloads,
+  preemption/redrive, terminal reconciliation, restart and rollback evidence.
+- Desktop keeps its current database owner and Agent Server executor. The
+  shared Host scheduler is assembled over those existing ports; no second
+  database connection owner or Run orchestrator is introduced.
+- Implemented: migrations 46–47 persist owner epochs and preemption intents;
+  Run creation atomically validates ownership, inbox lease and dispatch
+  reservation; Host admissions carry fenced dispatch tickets; Desktop routes
+  `sendTurn`, kickstart, claim and cancel through the Host-owned inbox only for
+  opted-in Bots, preserving the legacy scheduler as the default. Accepted user
+  input and its preemption intent commit in one SQLite epoch transaction.
+  Cancellation names the exact Run ID; restart reconciliation redrives a
+  cancelled background obligation from its stored WakeItem, retains user
+  attachments, and sends malformed or exhausted work to recovery/dead-letter
+  state. Ownership transfer requires drained Runs, inbox entries, wakes and
+  preemption intents.
+- Validation on final source: `npm run typecheck:all` exit 0;
+  `npm run architecture:check` exit 0 with no new boundaries; four focused
+  Vitest files, 59 tests, exit 0; `npm run electron:build` exit 0. The IPC
+  E2E command attempted 50 cases but could not create a window in this runtime:
+  Electron reports `Missing X server or $DISPLAY`; its default `/home/agent`
+  test home is also not writable here. No IPC E2E assertion ran. The real
+  Agent Server HTTP adapter's dispatch-ticket/canonical-Run-ID/specific-cancel
+  tests passed (12/12) alongside the Host dispatcher and Wake routing tests;
+  repeat the full IPC suite in CI or an X-enabled runner.
+- S4 entry: S3 now supplies durable Bot input ownership and a fenced Run
+  executor seam. S4 can start the data outbox and channel adapters. Its first
+  work must define per-message channel event identity and acknowledgement
+  recovery: the current legacy channel Wake envelope is not yet a durable
+  per-event inbox/outbox receipt. Preserve this as an explicit S4 scope; do not
+  infer channel delivery completion from S3c's Wake dispatch result.
+- S2's classification/rule-file fixes are included; S1/S2/S3a/S3b review and
+  CI remain with their existing owners. This branch is not yet integrated.
+- Delivery: implementation commit `1795543e` on
+  `codex/bot-framework-s3c`; draft [PR #506](https://github.com/lava-chen/duya/pull/506)
+  targets `codex/bot-framework-s3b`. S3c is implemented and locally validated,
+  but remains unmerged and the real IPC suite still needs an X-enabled runner.
+- Worktree residue: the root/package `node_modules` workspace symlink overlay
+  remains untracked and unstaged; `.e2e-userdata/` and `test-results/` are kept
+  as evidence from the failed Electron launch attempt.
+- Dependency setup: reused compatible S3b third-party modules with a worktree
+  workspace overlay. Managed-worktree/context/CodeGraph tools unavailable;
+  Git, current PR heads and versioned plans provided the shared-state evidence.
+
+
 ## S3b execution — 2026-10-26
 
 - Owner: Codex root; branch `codex/bot-framework-s3b`; isolated worktree

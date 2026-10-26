@@ -59,6 +59,12 @@ import type {
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
   SessionCheckoutCommand,
+  AcceptInputCommand,
+  BotDispatchTicket,
+  BotSchedulerState,
+  DispatchReceipt,
+  DispatchReserveOutcome,
+  WakeItem,
 } from '@duya/agent-protocol';
 import type { WorkspaceLifecycleReclaimResult } from '../../contracts/workspace-lifecycle';
 import type { HostLocalAttachmentApiV1 } from '@duya/agent-protocol/session-api';
@@ -115,6 +121,12 @@ import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
+import { BotDispatchStore, BotSchedulerStore, LOCAL_BOT_OWNER } from '@duya/data';
+import { BotDispatcher, readBotPrompt } from '@duya/host';
+import type { BotInboxClaimGrant } from '@duya/data';
+import { listBots } from '../config/agents';
+import { buildManagedWakePrompt, isLegacyWakeSchedulerIdle, setManagedBotWakePort } from '../wake/wake-dispatcher';
+import type { WakeRunOutcome } from '../wake/wake-run';
 import { createHostResearchApi } from '@duya/host/research-api';
 import { createDatabaseWorkspaceAccess } from '@duya/host/workspace-access';
 import {
@@ -149,6 +161,9 @@ export interface DesktopHostApiHandle {
 let sessionApiClient: HostSessionHttpClient | null = null;
 let desktopCheckoutService: SessionCheckoutService | null = null;
 let desktopCheckoutServiceStores: CoreStores | null = null;
+let desktopBotScheduler: BotSchedulerStore | null = null;
+let desktopBotDispatchStore: BotDispatchStore | null = null;
+let desktopBotDispatcher: BotDispatcher | null = null;
 /**
  * The checkout controls the db bridge, the HTTP surface and the IPC handlers
  * share. Built from the boot-time core stores — the same singleton every
@@ -359,6 +374,116 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
   };
   pluginAppInvocationInternalApi = pluginAppInvocationApi;
   const runApi = createHostRunApi(stores);
+  const botScheduler = new BotSchedulerStore(stores.coreDb.db);
+  const botDispatchStore = new BotDispatchStore(stores.coreDb.db);
+  const runExecutionApi = createDesktopRunExecutionApi({
+    getSessionForRun: async (runId) => (await runApi.getAgentRun(runId))?.sessionId ?? null,
+  });
+  const botDispatcher = new BotDispatcher({
+    ownerId: LOCAL_BOT_OWNER,
+    store: botDispatchStore,
+    scheduler: botScheduler,
+    runs: stores.runs,
+    execution: runExecutionApi,
+    resolveInput: async (entry) => {
+      const payload = entry.payloadJson === null ? null : JSON.parse(entry.payloadJson) as { prompt?: unknown; wakeItem?: WakeItem };
+      const item = payload?.wakeItem;
+      const prompt = typeof payload?.prompt === 'string' ? readBotPrompt(entry.payloadJson)
+        : item ? buildManagedWakePrompt(item) : '';
+      if (!prompt.trim()) throw new Error('unreconstructable_bot_input');
+      const userLane = entry.lane === 'user';
+      const attachments = item?.payload.kind === 'user' ? item.payload.attachments : undefined;
+      return {
+        sessionId: `bot:${entry.botId}`,
+        prompt,
+        agentProfileId: entry.botId,
+        origin: userLane ? 'user' : entry.lane === 'agent' ? 'agent' : 'background',
+        options: { agentProfileId: entry.botId, ...(!userLane ? { wakeRun: true } : {}) },
+        ...(attachments === undefined ? {} : { attachments }),
+      };
+    },
+    validateBot: async (botId) => {
+      if (!listBots().some((bot) => bot.id === botId)) throw new Error('unknown_bot');
+    },
+    logger: { error: (message, error) => getLogger().error(message, error, undefined, LogComponent.AgentProcess) },
+  });
+  desktopBotScheduler = botScheduler;
+  desktopBotDispatchStore = botDispatchStore;
+  desktopBotDispatcher = botDispatcher;
+  const acceptManagedWake = (sessionId: string, item: WakeItem): 'added' | 'merged' | 'deduped' => {
+    const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
+    if (!botId || !listBots().some((bot) => bot.id === botId)) throw new Error('unknown_bot');
+    const eventId = item.payload.kind === 'user' ? item.payload.messageId ?? item.id.replace(/^user:/, '') : item.id;
+    const result = botScheduler.withEpoch(botScheduler.get(botId, LOCAL_BOT_OWNER), () => {
+      const accepted = botDispatchStore.inbox.accept({
+        ownerId: LOCAL_BOT_OWNER,
+        botId,
+        source: item.source,
+        sourceEventId: eventId,
+        lane: item.lane,
+        title: item.payload.kind === 'user' ? item.payload.text?.slice(0, 120) ?? null : item.id,
+        payloadJson: JSON.stringify({ wakeItem: item }),
+      });
+      if (item.lane === 'user') {
+        const active = stores.runs.listRunsBySession(sessionId).find((run) =>
+          run.terminal === null && (run.origin === 'background' || run.origin === 'agent'));
+        if (active) {
+          const source = botDispatchStore.outstanding(LOCAL_BOT_OWNER).find((entry) => {
+            if (entry.botId !== botId || entry.status !== 'dispatched' || entry.id === accepted.entry.id || !entry.dispatchKey) return false;
+            return botDispatchStore.inbox.lookupReceipt(entry.dispatchKey)?.runId === active.id;
+          });
+          if (source) {
+            let redriveCount = 0;
+            try {
+              const sourcePayload = source.payloadJson ? JSON.parse(source.payloadJson) as { wakeItem?: { redriveCount?: unknown } } : null;
+              if (typeof sourcePayload?.wakeItem?.redriveCount === 'number') redriveCount = sourcePayload.wakeItem.redriveCount;
+            } catch { /* malformed payload becomes an explicit recovery obligation during reconciliation */ }
+            botScheduler.requestPreemption({
+              ownerId: LOCAL_BOT_OWNER, botId, sourceInboxId: source.id,
+              sourceRunId: active.id, redriveCount: Math.min(3, Math.max(0, redriveCount)),
+            });
+          }
+        }
+      }
+      return accepted;
+    });
+    return result.deduplicated ? 'deduped' : 'added';
+  };
+  setManagedBotWakePort({
+    isHostOwned: (botId) => botScheduler.get(botId, LOCAL_BOT_OWNER).mode === 'host',
+    accept: acceptManagedWake,
+    dispatch: async (sessionId, item): Promise<WakeRunOutcome> => {
+      acceptManagedWake(sessionId, item);
+      const botId = sessionId.slice(4);
+      const eventId = item.payload.kind === 'user' ? item.payload.messageId ?? item.id.replace(/^user:/, '') : item.id;
+      while (true) {
+        const entry = botDispatchStore.inbox.listByBot(botId).find((row) =>
+          row.ownerId === LOCAL_BOT_OWNER && row.source === item.source && row.sourceEventId === eventId);
+        if (!entry || entry.status === 'dead_letter') return { output: '', events: [] };
+        const receipt = entry.dispatchKey ? botDispatchStore.inbox.lookupReceipt(entry.dispatchKey) : null;
+        const run = receipt ? stores.runs.getRun(receipt.runId) : null;
+        if (run?.terminal !== null && run !== null) {
+          const events = stores.runs.listEvents(run.id).map((row) => {
+            const envelope = JSON.parse(row.envelope_json) as { payload?: { type?: string; text?: string } };
+            const payload = envelope.payload ?? {};
+            return { type: typeof payload.type === 'string' ? payload.type : 'unknown', data: payload };
+          });
+          return { output: events.filter((event) => event.type === 'assistant.text_block')
+            .map((event) => typeof event.data?.text === 'string' ? event.data.text : '').join(''), events };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    },
+    cancel: (sessionId, messageId) => {
+      const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
+      if (!botId) return false;
+      const entry = botDispatchStore.inbox.listByBot(botId).find((row) =>
+        row.ownerId === LOCAL_BOT_OWNER && row.source === 'user.message' && row.sourceEventId === messageId);
+      return entry?.status === 'pending'
+        ? botDispatchStore.inbox.deadLetter(entry.id, 'cancelled_by_user').state === 'applied'
+        : false;
+    },
+  });
   // Loaded lazily on purpose: the session handoff needs the main window, and
   // the window manager drags `electron` into this module's import graph. This
   // file is imported by every Desktop module that talks to the Host, and unit
@@ -436,9 +561,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     // to, because this process owns the database. Execution itself stays where
     // it already lives — the Agent Server — so this forwards instead of
     // starting a second orchestrator in Electron main.
-    runExecutionApi: createDesktopRunExecutionApi({
-      getSessionForRun: async (runId) => (await runApi.getAgentRun(runId))?.sessionId ?? null,
-    }),
+    runExecutionApi,
     goalApi: createHostGoalApi(stores),
     modeStateApi: createHostModeStateApi(stores),
     taskApi: createHostTaskApi(stores),
@@ -483,6 +606,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
 
   const client = new HostSessionHttpClient(`http://${HOST}:${server.port}`, token);
   sessionApiClient = client;
+  botDispatcher.start();
 
   // `PluginManager.listInstalled()` is a synchronous read model consumed by
   // MCP and capability discovery. Warm its setup-state projection only after
@@ -505,8 +629,13 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       if (stopped) return;
       stopped = true;
       try {
+        await botDispatcher.close();
         await server.close();
       } finally {
+        if (desktopBotDispatcher === botDispatcher) desktopBotDispatcher = null;
+        if (desktopBotScheduler === botScheduler) desktopBotScheduler = null;
+        if (desktopBotDispatchStore === botDispatchStore) desktopBotDispatchStore = null;
+        setManagedBotWakePort(null);
         if (sessionApiClient === client) sessionApiClient = null;
         if (runningHandle === handle) runningHandle = null;
         if (pluginAppInvocationInternalApi === pluginAppInvocationApi) pluginAppInvocationInternalApi = null;
@@ -764,6 +893,75 @@ export function getDesktopHostHealthApi(): HostHealthApiV1 {
 export function getDesktopHostRunApi(): HostRunApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host run API is not running');
   return sessionApiClient;
+}
+
+export async function acceptDesktopBotInput(command: AcceptInputCommand) {
+  if (!desktopBotDispatcher) throw new Error('Desktop Bot scheduler is not running');
+  return desktopBotDispatcher.accept(command);
+}
+
+export function getDesktopBotSchedulerState(botId: string): BotSchedulerState {
+  if (!desktopBotScheduler) throw new Error('Desktop Bot scheduler is not running');
+  if (!listBots().some((bot) => bot.id === botId)) throw new Error('unknown_bot');
+  return desktopBotScheduler.get(botId, LOCAL_BOT_OWNER);
+}
+
+export function switchDesktopBotScheduler(botId: string, mode: 'legacy' | 'host', expectedEpoch: number): BotSchedulerState {
+  if (!desktopBotScheduler || !desktopBotDispatchStore) throw new Error('Desktop Bot scheduler is not running');
+  if (mode === 'host') {
+    if (!isLegacyWakeSchedulerIdle(`bot:${botId}`)
+        || getCoreStores().wakes.listForAgent(botId).length > 0) {
+      throw new Error('bot_scheduler_busy: drain legacy wake work before migration');
+    }
+    const existing = desktopBotDispatchStore.inbox.listByBot(botId);
+    if (existing.some((entry) => entry.ownerId === LOCAL_BOT_OWNER && ['pending', 'claimed', 'dispatched'].includes(entry.status))) {
+      throw new Error('bot_scheduler_busy: settle or review existing inbox work before migration');
+    }
+  }
+  return desktopBotScheduler.switch(botId, mode, expectedEpoch, LOCAL_BOT_OWNER);
+}
+
+export function cancelDesktopBotInput(botId: string, sourceEventId: string): boolean {
+  if (!desktopBotDispatchStore) return false;
+  const entry = desktopBotDispatchStore.inbox.listByBot(botId).find((item) =>
+    item.ownerId === LOCAL_BOT_OWNER && item.source === 'user.message' && item.sourceEventId === sourceEventId);
+  if (!entry || entry.status !== 'pending') return false;
+  return desktopBotDispatchStore.inbox.deadLetter(entry.id, 'cancelled_by_user').state === 'applied';
+}
+
+function currentDesktopBotGrant(ticket: BotDispatchTicket): BotInboxClaimGrant | null {
+  if (!desktopBotScheduler || !desktopBotDispatchStore || !ticket || typeof ticket !== 'object') return null;
+  const scheduler = ticket.scheduler;
+  if (!scheduler || scheduler.ownerId !== LOCAL_BOT_OWNER || scheduler.mode !== 'host'
+      || typeof scheduler.botId !== 'string' || !Number.isSafeInteger(scheduler.epoch)
+      || typeof ticket.inboxId !== 'string' || typeof ticket.leaseOwner !== 'string'
+      || !Number.isSafeInteger(ticket.leaseEpoch)) return null;
+  if (!desktopBotScheduler.current(scheduler)) return null;
+  const entry = desktopBotDispatchStore.inbox.getById(ticket.inboxId);
+  if (!entry || entry.ownerId !== LOCAL_BOT_OWNER || entry.botId !== scheduler.botId
+      || entry.status !== 'claimed' || entry.leaseOwner !== ticket.leaseOwner
+      || entry.leaseEpoch !== ticket.leaseEpoch || entry.deadlineMs === null || entry.deadlineMs <= Date.now()) return null;
+  return { entry, leaseOwner: ticket.leaseOwner, leaseEpoch: ticket.leaseEpoch, deadlineMs: entry.deadlineMs };
+}
+
+export function lookupDesktopBotDispatch(ticket: BotDispatchTicket): DispatchReceipt | null {
+  const grant = currentDesktopBotGrant(ticket);
+  if (!grant || !desktopBotDispatchStore) return null;
+  const row = desktopBotDispatchStore.inbox.lookupReceipt(`bot-inbox:${grant.entry.id}`);
+  if (!row || row.botInboxId !== grant.entry.id) return null;
+  return { dispatchKey: row.dispatchKey, runId: row.runId, botInboxId: grant.entry.id, state: row.state, acceptedAtMs: row.acceptedAtMs };
+}
+
+export function reserveDesktopBotDispatch(ticket: BotDispatchTicket, candidateRunId: string): DispatchReserveOutcome | null {
+  const grant = currentDesktopBotGrant(ticket);
+  if (!grant || !desktopBotDispatchStore || !desktopBotScheduler || typeof candidateRunId !== 'string' || !candidateRunId) return null;
+  return desktopBotScheduler.withEpoch(ticket.scheduler, () =>
+    desktopBotDispatchStore!.reserve(grant, `bot-inbox:${grant.entry.id}`, candidateRunId));
+}
+
+export function isDesktopBotDispatchCurrent(ticket: BotDispatchTicket): boolean {
+  const grant = currentDesktopBotGrant(ticket);
+  return grant !== null && desktopBotDispatchStore!.isCurrent(grant);
 }
 
 export function getDesktopHostResearchApi(): HostResearchApiV1 {

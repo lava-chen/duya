@@ -24,6 +24,7 @@ import type {
   HostMessageItem,
   TurnReviewFile,
   TurnReviewWriteInput,
+  BotDispatchTicket,
 } from '@duya/agent-protocol';
 import type { TurnSuggestionWriteInput } from '@duya/agent-protocol/turn-suggestion';
 import { isHostResearchAction } from '@duya/agent-protocol/research-api';
@@ -59,6 +60,9 @@ import {
   getDesktopHostProjectApi,
   getDesktopHostPluginAppInvocationApi,
   getDesktopCheckoutService,
+  lookupDesktopBotDispatch,
+  reserveDesktopBotDispatch,
+  isDesktopBotDispatchCurrent,
 } from '../cli/desktop-host-api';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { normalizePath } from '@duya/data/path-utils';
@@ -388,6 +392,15 @@ export async function dispatchDbAction(
   const now = Date.now();
 
   switch (action) {
+    case 'bot:dispatch:lookup': {
+      return lookupDesktopBotDispatch(p.ticket as BotDispatchTicket);
+    }
+    case 'bot:dispatch:reserve': {
+      return reserveDesktopBotDispatch(p.ticket as BotDispatchTicket, String(p.candidateRunId ?? ''));
+    }
+    case 'bot:dispatch:isCurrent': {
+      return isDesktopBotDispatchCurrent(p.ticket as BotDispatchTicket);
+    }
     // ==================== Control Plane / run actions (plan 586) ====================
     // Handled by the Control Plane rather than inline. It authenticates this
     // child-process sender before its injected request adapts the command to
