@@ -61,6 +61,16 @@ S0 已合并进 master；S1、S2、S3a 三个切片已实现并开了 PR，处�
 
 subagent 报告必须**独立复核**再采信：本次 S2 子 agent 报告全绿，协调者重跑门禁（bot-boundary R1 MEASURED、retirement 772/772、`git diff apps/desktop` 为空、43 例绿）后确认无虚报。S3a 子 agent 曾用 Bash `sed` 改源码（违反 Write/Edit 规则）并自报，最终文件已自检干净——派工时要重申写文件只用 Write/Edit。
 
+## CI 现状与一条已归因的 flaky
+
+| PR | 内容 | CI |
+| --- | --- | --- |
+| #500 | S1 Host Bot 身份 facade | architecture / build / typecheck / test scope 通过；test 首跑因 `packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` 失败——错误是 `ENOTEMPTY: rmdir '/tmp/duya-tui-stop-*/logs'`（测试清理临时目录时 Host 仍在写日志的竞态）。同一测试在 master 与 S1 分支本地均通过，判定为环境 flaky，已 rerun。 |
+| #502 | S2 `packages/bot` 提取 | 五检查全绿 |
+| #503 | S3a inbox 存储合同 | 五检查全绿 |
+
+若 rerun 后 #500 的 test 仍红在同一用例：它与 Bot 身份路径无关（该用例走 CLI TUI + 真实 Host 的 stop/continue 流程），先用 `git stash` 无关改动后在 master 上复跑同一用例做基线对照，再决定是否按 pre-existing 记录交由集成者评估。
+
 ## 接手的第一步
 
 1. 看 #500 / #502 / #503 的 review 与 CI；用户已授权合并后再集成（合并顺序：#500 → #502 → #503，它们是栈式依赖）。
