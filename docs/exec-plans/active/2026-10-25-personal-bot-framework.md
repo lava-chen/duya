@@ -79,11 +79,15 @@
   allowed senders, and the worker has no per-turn audience field; it stays an
   open item. (2) The `forgotten_facts` curator guard is prompt-level; the
   structural guarantees are the Stage 1 dedupe tombstone (re-extraction) and
-  the ledger path tombstone (recall visibility, including the crash window). (3) Conversation
-  summaries already folded into context are not rewritten ("必要时重建受影响
+  the ledger path tombstone (recall visibility, including the crash window).
+  (3) Conversation summaries already folded into context are not rewritten
+  ("必要时重建受影响
   摘要" remains a separate slice). (4) Grant authoring is a documented JSON file
   contract; no Desktop UI/RPC yet. (5) The grant file is user-owned state; the
-  bot itself has no writer for it.
+  bot itself has no writer for it. (6) Remote CI cannot report on this branch:
+  the repo's `Test` workflow only runs on `master` pushes, so no run exists for
+  `codex/bot-framework-s5` (same for the S1–S4 branches). A remote signal only
+  appears once the stack reaches master, which is not authorized.
 
 ## S4 execution — 2026-10-26
 
