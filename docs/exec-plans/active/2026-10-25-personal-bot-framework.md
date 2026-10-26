@@ -44,6 +44,9 @@
   `codex/bot-framework-s3c`; draft [PR #506](https://github.com/lava-chen/duya/pull/506)
   targets `codex/bot-framework-s3b`. S3c is implemented and locally validated,
   but remains unmerged and the real IPC suite still needs an X-enabled runner.
+- Worktree residue: the root/package `node_modules` workspace symlink overlay
+  remains untracked and unstaged; `.e2e-userdata/` and `test-results/` are kept
+  as evidence from the failed Electron launch attempt.
 - Dependency setup: reused compatible S3b third-party modules with a worktree
   workspace overlay. Managed-worktree/context/CodeGraph tools unavailable;
   Git, current PR heads and versioned plans provided the shared-state evidence.
