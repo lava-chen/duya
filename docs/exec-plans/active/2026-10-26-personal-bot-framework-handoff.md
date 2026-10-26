@@ -47,6 +47,7 @@ S0 已合并进 master；S1、S2、S3a 三个切片已实现并开了 PR，处�
 - **Windows 瞬时文件锁**：`readFileSync` 偶发 UNKNOWN 错误。门禁扫描器重试一次，仍失败计入 `unreadable` 上报——不许静默跳过（那正是假绿的来源）。
 - **路径拼接**：Mimosa 钩子会拦 `path.join(ROOT, 动态片段)` 的写入。测试里的临时路径要显式校验不越出根目录。
 - **新 workspace 包要补两处，否则 CI 必红**：①根 `package-lock.json`（`npm install --package-lock-only`，否则 `npm ci` 报 "Missing: @duya/x from lock file"）；②**消费方 package.json 的 dependencies 声明**（本地能过是因为 worktree 里手工补了 junction，CI 的 `npm ci` 不会建那个链接，症状是 `Cannot find module '@duya/x'`）。
+- **新增 workspace 包还要过三道 CI 专属门禁**：①每包必须有 `AGENTS.md` 规则文件（≥200 字节，且其引用的路径必须真实存在，否则 rules-compliance 门禁红）；②`scripts/architecture/slice-classification.ts` 的分类表必须覆盖新包（`packages/<x>/src` 归类 + `packages/<x>/tests` 列入 UNCLASSIFIED，否则 partition 断言红）；③改动分类规则后要**重录 `RULE_TABLE_FINGERPRINT`**（`scripts/architecture/slice-classification.test.ts:1972`）——这是唯一允许的 map 变更路径，但 commit 里要写明哪个前缀移动了及原因。slice-census.txt **不要**动（新文件不需要重录，只有删除/改名才需要）。
 - **CI 只对 `pull_request: branches: [master]` 触发**：栈式 PR（base 指向另一个特性分支）不跑 CI，会给人"全绿"的错觉。要 CI 信号就把 base 改成 master，并在 PR 正文写明合并顺序；改 base 本身不触发 workflow，需要再推一次（空提交亦可）。
 - **master 自身可能 bundle STALE**：别的 PR 合入后没重建被 track 的 worker bundle，后续所有基于 master 的 PR 都会在 `bundle-verify` 上红。修法是本 PR 内重建并提交 `packages/host/bundle`（`npm run build:packages -- --target @duya/host` + `npm run bundle:worker`）。
 
