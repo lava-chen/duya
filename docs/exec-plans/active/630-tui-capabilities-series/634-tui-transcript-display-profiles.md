@@ -1,7 +1,7 @@
 # 634 事件流显示档（TUI 与 Desktop 共享 key）
 
-状态：active（PR A 已交付，PR B 待开工） · 负责人：codex（本检出） · 更新：2026-10-26
-分支：`codex/634-tui-display-profiles` · worktree：`.claude/worktrees/634-display-profiles` · base：`d80ca3c6` · owner：本 agent
+状态：active（PR A 已提交待集成，PR B 待开工） · 负责人：codex（本检出） · 更新：2026-10-26
+分支：`codex/634-tui-display-profiles` · PR：[#516](https://github.com/lava-chen/duya/pull/516)（`6a07a3ab` + `980856be`） · worktree：`.claude/worktrees/634-display-profiles` · base：`d80ca3c6` · owner：本 agent
 
 ## 目标与边界
 
@@ -35,7 +35,7 @@
 
 ## 发现与决策
 
-- 共享载体定为 settings 表 `cli.tui.*` 组（用户拍板「共享同一组配置 key」）：已有双进程读写先例，无需新存储；key 命名保持 `cli.tui.` 前缀以维持单源，即使 Desktop 也消费——前缀含义在 local-settings-api 注释里改述为「转录显示偏好」。
+- 共享载体定为 settings 表 `cli.tui.*` 组（用户拍板「共享同一组配置 key」）：已有双进程读写先例，无需新存储；key 命名保持 `cli.tui.` 前缀以维持单源，即使 Desktop 也消费。PR A 未改 `local-settings-api.ts`（它只是一层薄薄的 settings 表桥，无 per-key 语义）；前缀含义的注释留给 PR B 接 Desktop 消费时在同处补，避免无消费者的文档改动。
 - **「只显示运行中工具」最终落在渲染层而非 `buildUnits` 过滤**（推翻本文件前一条草案）。理由：批处理头 `Read 3 files` 是对同族连续调用的计数，把已结算调用从块数组里删掉会让剩余调用重新分组、头计数说谎，且要在 `visibleBlocks` 复制一份 `buildUnits` 的同族规则。折叠按 `BlockPlan.role` 决定：`running` 下已结算调用渲染零行（连它的 gap 行一起，隐藏内容不占行），但保住槽位；group head 只出摘要行。
 - 不做 `thinkingMode` 字段：`showThinking` × `expandBlocks` 已能表达「完整 / 折叠一行 / 隐藏」三态，再加一个字段就是同一事实的第二来源。
 - **不存 `cli.tui.displayProfile` key**：档位从四个正交 key 派生。存了就会有档位与开关两处真相——`/settings` 改一行后二者立刻打架，而 Desktop/TUI 共享同一张表会把冲突放大到两个进程。手调过任何一键就报 `custom`，并且不标记任何档位。
@@ -58,5 +58,5 @@
 
 ## 接续 / 结果
 
-PR A：TUI 侧档位、`/display`、`/settings` 行、缓存与偏好全链路，已交付（见上表）。
+PR A：TUI 侧档位、`/display`、`/settings` 行、缓存与偏好全链路，已提交为 [#516](https://github.com/lava-chen/duya/pull/516)（见上表），未集成——等用户授权。与 630a（#512）无依赖关系，可独立 review。
 PR B 下一步：Host settings 变更订阅（TUI 侧失效重读 + Desktop 消费 `cli.tui.*`），Desktop 转录渲染与设置面板开关；完成判据是验收第二段 Desktop 条目与「同一 Host 数据目录下改 TUI 档位，Desktop 免重启生效」。
