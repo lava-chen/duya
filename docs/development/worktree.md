@@ -29,6 +29,7 @@ node scripts/junction-worktree.mjs .
 
 只有包管理器、锁文件和平台兼容时才共享第三方 node_modules；脚本应建立 worktree 自己的 workspace overlay。共享 junction 只用于复用依赖，禁止穿过它安装或改写依赖。
 需要不同依赖版本时使用真正独立的依赖目录。按[构建](build.md)准备本检出的产物，TUI 先 `build:cli-dev` 再 `dev:tui`。
+分支里新增 workspace 包时 overlay 不会自动补该包的链接：链接集合按 primary 检出的包目录枚举（`junction-worktree.mjs` 的 `workspacePackageDirs(primaryRoot)`），primary 里还没有该目录就不建链接。症状是消费方 `tsc -b` 报 `Cannot find module '@duya/<pkg>'`，并连带一批由类型解析失败引出的 TS7006 隐式 any。把本检出的 `packages/node_modules/@duya/<pkg>` 与 `apps/node_modules/@duya/<pkg>` 指向本检出的该包目录后重新 `build:packages`；这些链接属 ignored，不入 Git，CI 侧仍由 lock 与消费方 `dependencies` 声明兜住。该包合入 primary 后枚举自动恢复。
 
 ## 3. 修改、验证与 PR
 
