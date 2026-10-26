@@ -14,7 +14,7 @@ S0 已合并进 master；S1、S2、S3a 三个切片已实现并开了 PR，处�
 | S1 | Host Bot 身份 facade：protocol DTO、revision 语义、身份 journal、应用服务、两 bridge 接线 | 已实现，待 review/CI | #500，`codex/bot-framework-s1`（base=master `f24166ec`） | host 全量 2000 passed、typecheck:all 0、desktop tsc 与 base 持平、门禁全绿 |
 | S2 | 提取 `packages/bot` 纯领域包，Host 变适配器 | 已实现，待 review/CI | #502，`codex/bot-framework-s2`（base=master，diff 含 S1，**合并顺序 #500 → #502**） | 43 例绿、typecheck:all 0、R1 门禁由 PENDING 翻 **MEASURED**、desktop 零 diff |
 | S3a | Bot inbox 与 dispatch receipt 存储合同（`bot_inbox` + `bot_dispatch_receipts` 两表） | 已实现，待 review/CI | #503，`codex/bot-framework-s3a`（base=master） | data+protocol 568 例绿、typecheck:all 0、architecture 无新增违规 |
-| S3b | `openRun` dispatchKey 幂等受理 + Bot dispatcher + resident | **未开工**（契约已就绪，见下） | — | — |
+| S3b | `openRun` dispatchKey 幂等受理 + Bot dispatcher + resident | **已由并行会话实现，draft PR 待 review** | #504，`codex/bot-framework-s3b`（draft，base 含 S2+S3a 基础） | 提交 `e4c5019c`「dispatch durable inputs through the host run owner」+ `a692d74b` 交接记录；**本文下方的 S3b 契约是本会话的调研稿，落地以 #504 为准** |
 | S3c | Desktop bot handler 转发切流 | 未开工 | — | — |
 | S4 | 投递与渠道：outbox + Telegram + Feishu | 未开工 | — | — |
 | S5 | 记忆与 prompt 快照 | 未开工 | — | — |
@@ -65,11 +65,17 @@ subagent 报告必须**独立复核**再采信：本次 S2 子 agent 报告全�
 
 | PR | 内容 | CI |
 | --- | --- | --- |
-| #500 | S1 Host Bot 身份 facade | architecture / build / typecheck / test scope 通过；test 首跑因 `packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` 失败——错误是 `ENOTEMPTY: rmdir '/tmp/duya-tui-stop-*/logs'`（测试清理临时目录时 Host 仍在写日志的竞态）。同一测试在 master 与 S1 分支本地均通过，判定为环境 flaky，已 rerun。 |
+| #500 | S1 Host Bot 身份 facade | **全绿**。test 首跑因 `packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` 失败——`ENOTEMPTY: rmdir '/tmp/duya-tui-stop-*/logs'`（测试清理临时目录时 Host 仍在写日志的竞态）；同一测试在 master 与 S1 分支本地均通过，rerun 后通过，判定为环境 flaky。 |
 | #502 | S2 `packages/bot` 提取 | 五检查全绿 |
 | #503 | S3a inbox 存储合同 | 五检查全绿 |
 
 若 rerun 后 #500 的 test 仍红在同一用例：它与 Bot 身份路径无关（该用例走 CLI TUI + 真实 Host 的 stop/continue 流程），先用 `git stash` 无关改动后在 master 上复跑同一用例做基线对照，再决定是否按 pre-existing 记录交由集成者评估。
+
+## 检出与工作树现状（交接待办）
+
+- 三个 worktree 保留在 `.claude/worktrees/bot-framework-s0`（分支 `codex/bot-framework-s1`）、`-s2`（`codex/bot-framework-s2`）、`-s3a`（`codex/bot-framework-s3a`）。**PR 未合并前不要删**；合并后按 worktree 指南用 `scripts/remove-worktree.sh` 回收。
+- **主检出（`E:/Projects/duya`）有未提交的 bundle 重建残留**：`packages/host/bundle/{worker-entry.js,worker-metafile.json,BashTool/BashWorker.js}`（内容为一次真实重建，非换行符差异）。归属未确认——疑为并行的 S3b 会话所留。**接手方先确认归属再动**：若属并行会话在用，保留；若无主，按 `git checkout -- packages/host/bundle` 还原。
+- 主检出另有三个未跟踪文件（`.e2e-diff.ps1`、`.vitest-diff.ps1`、`.wt-sim/`），是本会话之前就存在的他人产物，未动。
 
 ## 接手的第一步
 
