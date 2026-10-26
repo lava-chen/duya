@@ -223,6 +223,9 @@ describe('chatTui /project switch', () => {
 
     app.options.onSubmit('first turn');
     await waitUntil(() => runInputs.length === 1);
+    // The switch needs the turn to settle first: a live run owns the session,
+    // and `/project` asked during it is refused rather than queued.
+    await waitUntil(() => !app.options.isBusy());
     expect(runInputs[0]?.workingDirectory).toBe(cursor);
 
     app.options.onSubmit(`/project ${target}`);
@@ -238,11 +241,10 @@ describe('chatTui /project switch', () => {
     const { app, created, registered } = await startHarness({ currentDirectory: here });
 
     app.options.onSubmit(`/project ${here}`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await waitUntil(() => app.notices.join('\n').includes('Already working in'));
 
     expect(created).toHaveLength(0);
     expect(registered).toHaveLength(0);
-    expect(app.notices.join('\n')).toContain('Already working in');
   });
 
   it('refuses mid-turn, because the live run owns the session it would replace', async () => {
@@ -255,10 +257,9 @@ describe('chatTui /project switch', () => {
     app.options.onSubmit('a turn that is still going');
     await waitUntil(() => app.options.isBusy());
     app.options.onSubmit(`/project ${target}`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    await waitUntil(() => app.errors.join('\n').includes('while a turn is running'));
 
     expect(created).toHaveLength(0);
-    expect(app.errors.join('\n')).toContain('while a turn is running');
     app.options.onInterrupt();
     await waitUntil(() => !app.options.isBusy());
   });
