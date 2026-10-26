@@ -9,6 +9,9 @@
   closed**; revocation/forget lands **next turn via a durable recall revision**
   folded into the frozen-section key, while ordinary memory writes stay frozen
   until compaction (keeps Plan 501 L1).
+- Status: implemented and verified locally; published as draft
+  [PR #515](https://github.com/lava-chen/duya/pull/515) (head `5920164b`, base
+  `codex/bot-framework-s4-feishu`). Unmerged; no merge is authorized.
 - Delivered: `@duya/bot` `context/snapshot.ts` (pure `BotContextSnapshot`:
   bot revision, recall revision, authorized scopes; `parseMemoryAccessGrant`
   fail-closed); host `worker-prompts/bot/memory/access.ts` reads
@@ -42,8 +45,8 @@
     retirement ratchet exit 0. Desktop `tsconfig.main` 178 errors, all
     pre-existing (base moved; none in the S5 files).
   - `npm run bundle:worker` rebuilt `packages/host/bundle` from the final source
-    (`bundle:verify` reports STALE only because the rebuild is not committed
-    yet).
+    and committed with the slice; `npm run bundle:verify` reports FRESH at
+    `5920164b` (0/1009 inputs changed).
 - Honest deferrals / limits: (1) audience-based memory filtering (design §7
   "记忆按受众过滤") is not implemented — S4 channel admission already gates
   allowed senders, and the worker has no per-turn audience field; it stays an
