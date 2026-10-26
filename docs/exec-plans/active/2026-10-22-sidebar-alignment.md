@@ -281,8 +281,10 @@ Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，
 
 ### 接续 / 结果
 
-- 第五轮**已实现、已验证**；提交状态见下方「验证记录」对应 commit。
+- 第五轮**已实现、已验证、已提交**（`34bffd74`，10 个文件：store / app-sidebar / SectionActions / i18n / CSS / 测试 / 本计划与路由表）。
 - 已知差异：Claude 的 `Group by` 子菜单仍打不开，四桶口径与「Claude 是否有 Date 分组」**未经实测证实**。
 - 副作用：本机 `duya-conversations` 的 `projectGroupBy` 验证期间来回切换，收尾为 `byDate`（与新默认一致）。
+- 并行会话提示：同一 worktree `codex/ui-adjust` 上有另一个会话在并发提交（第四轮字体、面板等）；
+  本轮只提交了上表 10 个文件，其余未提交改动属对方。
 
 
