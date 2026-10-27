@@ -92,6 +92,24 @@
   逐条关闭 #500 / #502 / #503 / #504 / #506 / #509 / #511 / #513 / #515 / #519 / #520
   （它们的提交已随组合分支进入 master），并回收本次检出；S7 旧路径退役另立切片。
 
+### 合并结果（2026-10-27）
+
+- master 在第一次 CI 期间又前进到 `e9209cc9`（#508 / #516 / #522 / #526 / #527，
+  其中含一次 host runtime 拆分并重建了 worker 产物）。分支第二次合并 master，
+  只有两个生成产物冲突，重生成后提交 `5830b9a3`。
+- head `5830b9a3` 的五检查全绿：architecture / build / typecheck / test / test scope
+  全部 success。上一轮 head `c54a902d` 的 `test` job 曾红一次，唯一失败是
+  `packages/ui/src/components/layout/panels/PanelMoreMenu.test.tsx` 的
+  「Test timed out in 30000ms」——该用例本机单跑 11 s，master 自身 CI 同用例绿，
+  属慢 UI 用例超时抖动，不是 bot 回归；第二轮未复现。
+- #521 已用 merge commit 合并：`ffa32fc3`。合并后核对 `origin/master`：11 个
+  切片 head 全部是 master 的祖先（`git merge-base --is-ancestor` 逐条为真），
+  #500 / #502 / #503 / #504 / #506 / #509 / #511 / #513 / #515 / #519 / #520
+  由 GitHub 自动标记为 MERGED，无需手工关闭。
+- 合并后的落地范围：S0（#495，先前已合并）、S1、S2、S3a、S3b、S3c、S4
+  （Telegram 与 Feishu）、S5、S6 及其 review / follow-up 修复，全部进入 master。
+  仍不在本次范围：S7 旧路径退役，以及真机 Electron / 渠道端到端验收。
+
 ## S5 independent review — 2026-10-26
 
 - Owner: Codex root, linked worktree `/workspace/work/bot-s5-review`, branch
