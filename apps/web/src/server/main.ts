@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readLocalHostRuntime } from '@duya/host/local-host';
+import { readLocalHostRuntimeFrom } from '@duya/host/host-runtime';
 import { createWebBff } from './web-bff.js';
 
 interface HostConnection {
@@ -20,9 +20,9 @@ export async function resolveHostConnection(env: NodeJS.ProcessEnv = process.env
   }
 
   const dataRoot = env.DUYA_DATA_ROOT?.trim() || path.join(os.homedir(), '.duya');
-  let runtime: Awaited<ReturnType<typeof readLocalHostRuntime>>;
+  let runtime: Awaited<ReturnType<typeof readLocalHostRuntimeFrom>>;
   try {
-    runtime = await readLocalHostRuntime(dataRoot);
+    runtime = await readLocalHostRuntimeFrom(dataRoot);
   } catch {
     throw new Error('Duya Host runtime descriptor is invalid or unreadable');
   }
