@@ -100,7 +100,9 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
 - **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
-- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
+- **切片 D 的 9 桶映射**：`system[]` → 系统提示词；非 MCP 的 `toolDefinitions/toolResults` → 系统工具；`mcp:`、`connector:`、`plugin:` 来源 → MCP 工具；`conversation[] + attachments[]` → 对话消息；`skills[]` → 技能；`memory[]` → 记忆文件；`injectedContext[]` → 运行时注入；`providerOverhead[] + unattributed` → 其他开销；`contextWindow - usedTokens` → 空闲空间。估算只向下缩放到 headline 的 `usedTokens`；差额留在「其他开销」的未归属余量里。
+- **切片 D 的配色**：浅色沿用 Claude 采样值，深色使用同色相提亮值，以保证深色面板上的可读性；两套都走 `globals.css` 中的 `--usage-bucket-*` 变量。
+- **切片 D 的挂载点**：hover 内容与 composer 展开面板都留在 `ContextUsageRing.tsx`，不改 `MessageInput.tsx` / `BotDirectChatView.tsx` 调用点；保留 `.context-composition-popover` class 以维持既有测试契约。- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
 - **CI 只对 base=master 的 PR 触发**（`.github/workflows/test.yml:19-20` 是 `pull_request: branches: [master]`）。切片 A/B/D 的 PR 因此一律 base=master，计划文件随之进入各 PR（单独的"计划 PR"随之关闭）。堆叠到非默认分支会拿不到"必需检查通过"的证据。
 - **`ResizeHandle.tsx` 归切片 A 而不是 C**：列内堆叠需要纵向分隔条，而现有实现只有横向（`ResizeHandle.tsx:6` 的 `side: "left" | "right"`、`:143` 写死 `aria-orientation="vertical"`）。C 不碰它，改为新建 `PaneDragHandle.tsx`。
@@ -281,3 +283,9 @@ PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `co
 未完成 / 阻塞：**渲染侧仍缺**——脱窗窗口目前渲染的是完整 app 外壳，「只渲染这一个面板」要靠切片 A 读 `panelWindow.context.paneId` 后自己收敛；本切片不碰 `packages/ui/**`。B 不依赖 A 即可合入，A 的接线契约见 PR 正文。
 
 外部副作用：本次只在 worktree 内跑真实 Electron，产物落在 `.e2e-userdata/panel-detach-check/`（未跟踪）；`packages/host/bundle/*` 等被构建改写的已跟踪文件已按「只保留本任务成果」还原。
+
+### D 切片交付状态（2026-10-27）
+
+- 已实现：上下文用量环展开为按来源分桶的面板，含 9 桶映射及浅色/深色色板；现有挂载点保持不变。
+- 验证：`npm exec -- vitest run packages/ui/src --reporter=dot` 退出码 0（233 suites / 2367 tests，2 skipped）；新组件 10/10；`npm run typecheck:all` 退出码 0；`npm run architecture:check` 退出码 0，无新增违规。
+- 分支 `codex/panel-context-usage`，base `d80ca3c6`；Electron 双主题实机证据尚未完成。
