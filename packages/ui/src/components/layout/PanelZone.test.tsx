@@ -6,14 +6,15 @@ import type { PageTab } from "./panels/registry";
 import type { WorkspaceLayout } from "./panels/layout-model";
 
 const mocks = vi.hoisted(() => ({
-  activeTabId: "agent-one",
+  activeTabId: "agent-one" as string | null,
   panelOpen: true,
   tabs: [] as PageTab[],
   layout: {
     panes: [],
+    paneColumns: [],
     columns: 1,
     columnRatios: [1],
-    rowRatios: [1],
+    columnRowRatios: [[]],
     expandedPaneId: null,
     activePaneId: null,
   } as WorkspaceLayout,
@@ -82,8 +83,8 @@ vi.mock("@/stores/conversation-store", () => ({
 // The real handle carries the accessible name of the separator, so the mock
 // keeps the same attributes: the naming of the wall is what is under test.
 vi.mock("./ResizeHandle", () => ({
-  ResizeHandle: ({ label, side }: { label?: string; side?: string }) => (
-    <div data-testid={`resize-handle-${side}`} role="separator" aria-label={label} />
+  ResizeHandle: ({ label, side, width }: { label?: string; side?: string; width?: number }) => (
+    <div data-testid={`resize-handle-${side}`} role="separator" aria-label={label} aria-valuenow={width} />
   ),
 }));
 vi.mock("./task-drawer-store", () => ({
@@ -121,12 +122,15 @@ import { PanelZone } from "./PanelZone";
 
 function wall(panes: string[], overrides: Partial<WorkspaceLayout> = {}): WorkspaceLayout {
   const columns = panes.length <= 2 ? 1 : 2;
-  const rows = panes.length === 0 ? 0 : Math.ceil(panes.length / columns);
+  const paneColumns = panes.map((_, index) => columns === 1 || index < 2 ? 0 : 1);
+  const counts = new Array(columns).fill(0);
+  paneColumns.forEach((column) => { counts[column] += 1; });
   return {
     panes,
+    paneColumns,
     columns,
     columnRatios: new Array(columns).fill(1 / columns),
-    rowRatios: new Array(rows).fill(1 / Math.max(1, rows)),
+    columnRowRatios: counts.map((count) => count > 0 ? new Array(count).fill(1 / count) : []),
     expandedPaneId: null,
     activePaneId: panes[0] ?? null,
     ...overrides,
@@ -134,6 +138,36 @@ function wall(panes: string[], overrides: Partial<WorkspaceLayout> = {}): Worksp
 }
 
 describe("PanelZone panel wall", () => {
+  it("measures the wall when panes are opened after the zone mounts", async () => {
+    mocks.tabs = [];
+    mocks.activeTabId = null;
+    mocks.layout = wall([]);
+    const wallRect = {
+      x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600,
+      toJSON: () => ({}),
+    } as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("panel-wall") ? wallRect : { ...wallRect, width: 0, height: 0 } as DOMRect;
+    });
+
+    const { container, rerender } = render(<PanelZone />);
+    mocks.tabs = [
+      { id: "files-1", pageId: "workspace", title: "Files 1" },
+      { id: "files-2", pageId: "workspace", title: "Files 2" },
+      { id: "files-3", pageId: "workspace", title: "Files 3" },
+      { id: "files-4", pageId: "workspace", title: "Files 4" },
+    ];
+    mocks.activeTabId = "files-4";
+    mocks.layout = wall(["files-1", "files-2", "files-3", "files-4"]);
+    rerender(<PanelZone />);
+
+    const rightRowHandle = container.querySelector(
+      '[data-column-index="1"] [data-testid="resize-handle-top"]',
+    );
+    await waitFor(() => expect(rightRowHandle?.getAttribute("aria-valuenow")).toBe("290"));
+    vi.restoreAllMocks();
+  });
+
   it("keeps every open card mounted", () => {
     mocks.tabs = [
       { id: "agent-one", pageId: "browser", title: "First agent tab", params: { kind: "agent", sessionId: "one" } },
@@ -186,9 +220,27 @@ describe("PanelZone panel wall", () => {
 
     const { container } = render(<PanelZone />);
     expect(container.querySelector(".panel-zone")?.getAttribute("data-wall-columns")).toBe("2");
-    // Three cards plus the empty cell that offers another panel.
-    expect(container.querySelectorAll(".panel-wall-cell")).toHaveLength(4);
+    expect(container.querySelectorAll(".panel-wall-column")).toHaveLength(2);
+    expect(container.querySelectorAll(".panel-wall-cell")).toHaveLength(3);
     expect(container.querySelectorAll(".panel-card")).toHaveLength(3);
+  });
+
+  it("stacks the third and fourth cards in separate columns", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "workspace", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+      { id: "browser", pageId: "browser", title: "Browser" },
+      { id: "review", pageId: "review", title: "Review" },
+    ];
+    mocks.activeTabId = "review";
+    mocks.layout = wall(["files", "terminal", "browser", "review"]);
+
+    const { container } = render(<PanelZone />);
+    const columns = Array.from(container.querySelectorAll<HTMLElement>(".panel-wall-column"));
+    expect(columns).toHaveLength(2);
+    expect(columns[0]?.querySelectorAll(".panel-wall-cell")).toHaveLength(2);
+    expect(columns[1]?.querySelectorAll(".panel-wall-cell")).toHaveLength(2);
+    expect(container.querySelectorAll(".panel-wall-separator-row")).toHaveLength(2);
   });
 
   it("names the separator between two columns after the cards on both sides", () => {

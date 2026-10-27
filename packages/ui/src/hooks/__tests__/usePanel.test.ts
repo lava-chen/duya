@@ -153,6 +153,16 @@ describe("PanelProvider opening width", () => {
     });
     expect(result.current.geometry.panelWidth).toBe(700);
   });
+
+  it("restores a wide remembered width after an intentional overlay resize", () => {
+    Object.defineProperty(window, "innerWidth", { value: 2400, writable: true, configurable: true });
+    window.localStorage.setItem(USER_WIDTHS_KEY, JSON.stringify({ workspace: 1800 }));
+    const { result } = renderPanel();
+    act(() => {
+      result.current.panel.openOrActivatePage("workspace", { workingDirectory: "E:/repo" });
+    });
+    expect(result.current.geometry.panelWidth).toBe(1800);
+  });
 });
 
 describe("clampWidthToBounds", () => {
@@ -166,27 +176,22 @@ describe("clampWidthToBounds", () => {
     expect(clampWidthToBounds(100, { minWidth: 360 }, WORKSPACE)).toBe(360);
   });
 
-  it("clamps above the absolute default ceiling (ratio cap is tighter here)", () => {
-    // Default MAX_PANEL_RATIO 0.6 of a 1600px workspace = 960, which is
-    // tighter than the 1120 absolute ceiling.
-    expect(clampWidthToBounds(5000, { minWidth: 360 }, WORKSPACE)).toBe(960);
-    // On a wider workspace the absolute ceiling becomes the binding cap.
-    expect(clampWidthToBounds(5000, { minWidth: 360 }, 4000)).toBe(1120);
+  it("allows an intentional drag to overlap the chat while preserving a peek", () => {
+    expect(clampWidthToBounds(5000, { minWidth: 360 }, WORKSPACE)).toBe(WORKSPACE - 160);
+    expect(clampWidthToBounds(5000, { minWidth: 360 }, 4000)).toBe(3840);
   });
 
-  it("honors a custom maxWidthRatio over the shared one", () => {
-    expect(clampWidthToBounds(1400, { minWidth: 460, maxWidthRatio: 2 / 3 }, 1500)).toBe(1000);
+  it("uses the page ratio only for its initial width, not for a deliberate drag", () => {
+    expect(clampWidthToBounds(1400, { minWidth: 460, maxWidthRatio: 2 / 3 }, 1500)).toBe(1340);
   });
 
-  it("protects the chat column minimum on narrow workspaces", () => {
-    // Workspace 700 - MIN_CHAT_WIDTH (420) = 280 upper bound, which is
-    // below even MIN_PANEL_WIDTH; the upper bound must win.
+  it("preserves the visible chat strip on narrow workspaces", () => {
     const result = clampWidthToBounds(600, { minWidth: 360 }, 700);
-    expect(result).toBeLessThanOrEqual(700 - 420);
+    expect(result).toBeLessThanOrEqual(700 - 160);
   });
 
-  it("treats maxWidth null as unbounded (ratio still applies)", () => {
-    expect(clampWidthToBounds(2000, { minWidth: 300, maxWidth: null }, 1200)).toBe(720);
+  it("treats maxWidth null as unbounded up to the chat peek", () => {
+    expect(clampWidthToBounds(2000, { minWidth: 300, maxWidth: null }, 1200)).toBe(1040);
   });
 
   it("honors a page-specific maxWidth ceiling", () => {

@@ -20,6 +20,7 @@
    ============================================ */
 
 .app-workspace-row {
+  --panel-chat-min-width: 420px;
   position: relative;
   display: flex;
   min-width: 0;
@@ -39,6 +40,27 @@
   flex-basis: auto;
   border-left: 0;
   background: var(--main-bg);
+}
+
+/* Once the panel crosses the normal chat split, it floats over the transcript
+   while the transcript keeps its original wrapping width underneath. */
+.app-workspace-row:has(> .panel-zone-overlapped) > .app-main-wrapper {
+  flex: 0 0 min(var(--panel-chat-min-width), 100%);
+  width: min(var(--panel-chat-min-width), 100%);
+  min-width: min(var(--panel-chat-min-width), 100%);
+}
+
+.panel-zone-open.panel-zone-overlapped {
+  position: absolute;
+  z-index: 41;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  height: 100%;
+  flex-basis: auto;
+  border-left: 1px solid var(--border);
+  box-shadow: -16px 0 34px rgba(0, 0, 0, 0.2);
 }
 
 .panel-zone-expanded .sidebar-panel-inner {
@@ -110,6 +132,15 @@
   padding: 8px;
   overflow: hidden;
   background: var(--main-bg);
+}
+
+.panel-wall-column {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 
 .panel-wall-cell {
@@ -350,17 +381,26 @@
   cursor: row-resize;
 }
 
-/* The wall's separators follow the unified pill language; only their hit
-   area is special (full seam, wider than the pill). The column separator's
-   pill runs horizontally along the seam, the row separator's vertically. */
+/* The wall's separators follow the unified pill language: the pill follows
+   the seam's direction while its transparent hit area spans the gap. */
 .panel-zone .panel-wall-separator .resize-handle-bar {
+  width: 4px;
+  height: 36px;
+}
+
+.panel-zone .panel-wall-separator-column .resize-handle[data-resizing] .resize-handle-bar {
+  width: 4px;
+  height: 56px;
+}
+
+.panel-zone .panel-wall-separator-row .resize-handle-bar {
   width: 36px;
   height: 4px;
 }
 
-.panel-zone .panel-wall-separator-row .resize-handle-bar {
-  width: 4px;
-  height: 36px;
+.panel-zone .panel-wall-separator-row .resize-handle[data-resizing] .resize-handle-bar {
+  width: 56px;
+  height: 4px;
 }
 
 /* Browser guests are stateful. Keep every browser tab mounted so switching

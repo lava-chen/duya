@@ -14,7 +14,7 @@ import {
   setColumnRatios,
   setRowRatios,
   toggleExpandedPane,
-  wallShapeFor,
+  wallShape,
   type PaneId,
   type WorkspaceLayout,
 } from "@/components/layout/panels/layout-model";
@@ -53,7 +53,7 @@ export interface PanelContextValue {
   /** Set the pixel width of every column; the wall keeps its own width. */
   setColumnWidths: (widths: number[]) => void;
   /** Set the pixel height of every row; the wall keeps its own height. */
-  setRowHeights: (heights: number[]) => void;
+  setRowHeights: (heights: number[], columnIndex?: number) => void;
   /** Expand a card so it fills the wall, or collapse it back into its cell. */
   togglePaneExpanded: (paneId: string) => void;
 }
@@ -89,6 +89,9 @@ const DEFAULT_PANEL_WIDTH = 340;
 // 680px floor made the minimum window width too large when a side panel
 // was open; 420px keeps input readable while freeing horizontal space.
 const MIN_CHAT_WIDTH = 420;
+// During a deliberate panel resize, leave a narrow strip of the conversation
+// visible so the panel can float over it without covering it completely.
+const MIN_CHAT_PEEK_WIDTH = 160;
 // The panel must not exceed this share of the workspace. Keeps the
 // chat column readable on both 1280px and 4K windows.
 const MAX_PANEL_RATIO = 0.6;
@@ -102,7 +105,7 @@ const MAX_PANEL_RATIO = 0.6;
 const PERSIST_DEBOUNCE_MS = 250;
 // Re-export the layout constants for siblings (e.g. PanelZone) that need
 // the same caps when computing drag-resize bounds.
-export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH };
+export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH, MIN_CHAT_PEEK_WIDTH };
 
 const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
 // Remembers the last width the user explicitly dragged a page to, keyed by
@@ -296,17 +299,18 @@ interface WidthBoundsOptions {
 }
 
 /**
- * Clamp an arbitrary width against the shared panel caps plus a page
- * descriptor's own bounds. The upper bound is the tightest of: absolute
- * ceiling, ratio cap, and chat-column protection; when the lower bound
- * exceeds it on narrow workspaces the upper bound wins so the chat column
- * never shrinks below its protected minimum.
+ * Clamp a user resize against the page descriptor and visible chat peek.
+ * Initial widths still use `resolvePanelWidth`'s conservative defaults; a
+ * deliberate drag may grow past those defaults and overlap the chat.
  */
 export function clampWidthToBounds(width: number, options: WidthBoundsOptions, workspaceWidth: number): number {
-  const maxWidth = panelMaxWidth(options.maxWidth);
-  const maxByRatio = workspaceWidth * (options.maxWidthRatio ?? MAX_PANEL_RATIO);
-  const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
-  const upperBound = Math.min(maxWidth, maxByRatio, maxWithChat);
+  const maxWidth = options.maxWidth === null
+    ? Number.POSITIVE_INFINITY
+    : typeof options.maxWidth === "number" && Number.isFinite(options.maxWidth)
+      ? options.maxWidth
+      : Number.POSITIVE_INFINITY;
+  const maxWithChat = Math.max(0, workspaceWidth - MIN_CHAT_PEEK_WIDTH);
+  const upperBound = Math.max(0, Math.min(maxWidth, maxWithChat));
   const lowerBound = Math.max(MIN_PANEL_WIDTH, options.minWidth ?? MIN_PANEL_WIDTH);
   return Math.max(Math.min(lowerBound, upperBound), Math.min(width, upperBound));
 }
@@ -350,6 +354,7 @@ export interface PanelWidthOptions {
   widthRatio?: number;
   maxWidthRatio?: number;
   maxWidth?: number | null;
+  allowOverlay?: boolean;
 }
 
 export function resolvePanelWidth({
@@ -359,10 +364,13 @@ export function resolvePanelWidth({
   widthRatio,
   maxWidthRatio,
   maxWidth,
+  allowOverlay = false,
 }: PanelWidthOptions): number {
   // Undefined preferred width falls back to the page's minimum, so we never
   // propagate NaN into setPanelWidth (CSS would silently drop `NaNpx`).
-  const maximumWidth = panelMaxWidth(maxWidth);
+  const maximumWidth = allowOverlay
+    ? (typeof maxWidth === "number" && Number.isFinite(maxWidth) ? maxWidth : Number.POSITIVE_INFINITY)
+    : panelMaxWidth(maxWidth);
   const fallback = clampPanelWidth(minWidth, maxWidth);
 
   let desired: number;
@@ -382,11 +390,11 @@ export function resolvePanelWidth({
     typeof maxWidthRatio === "number" && Number.isFinite(maxWidthRatio) && maxWidthRatio > 0
       ? maxWidthRatio
       : MAX_PANEL_RATIO;
-  const maxByRatio = workspaceWidth * ratioCap;
+  const maxByRatio = allowOverlay ? Number.POSITIVE_INFINITY : workspaceWidth * ratioCap;
   // The chat column is always protected. When the two minimum widths cannot
   // coexist, the responsive layout overlays the panel instead of squeezing
   // the chat below this minimum.
-  const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
+  const maxWithChat = workspaceWidth - (allowOverlay ? MIN_CHAT_PEEK_WIDTH : MIN_CHAT_WIDTH);
 
   // The tightest of: page ceiling, ratio cap, and chat-minimum cap.
   const upperBound = Math.min(maximumWidth, maxByRatio, maxWithChat);
@@ -482,8 +490,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     activeTabIdRef.current = activeTabId;
   }, [activeTabId]);
 
-  // Keep the region inside the workspace. The chat column keeps its
-  // protected minimum, so the panel may not grow past it — a window resize
+  // Keep the region inside the workspace. A narrow strip of chat remains
+  // visible when the panel grows past the normal split — a window resize
   // (or a collapsing sidebar) has to pull the region back in.
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return;
@@ -491,10 +499,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     if (!workspace) return;
     const observer = new ResizeObserver(() => {
       const width = workspace.getBoundingClientRect().width;
-      const max = Math.max(
-        MIN_PANEL_WIDTH,
-        Math.min(width - MIN_CHAT_WIDTH, width * MAX_PANEL_RATIO),
-      );
+      const max = Math.max(0, width - MIN_CHAT_PEEK_WIDTH);
       if (panelWidthRef.current > max) setPanelWidth(max);
     });
     observer.observe(workspace);
@@ -589,6 +594,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       widthRatio: remembered === undefined ? descriptor.widthRatio : undefined,
       maxWidthRatio: descriptor.maxWidthRatio,
       maxWidth: descriptor.maxWidth,
+      allowOverlay: remembered !== undefined,
     });
   }, []);
 
@@ -613,7 +619,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
    */
   const openPaneInLayout = useCallback((paneId: PaneId, pageId: PageId) => {
     const next = placePane(layoutRef.current, paneId);
-    const { columns } = wallShapeFor(next.panes.length);
+    const { columns } = wallShape(next);
     if (columns > layoutRef.current.columns) {
       const needed = columns * MIN_PANEL_WIDTH;
       if (panelWidthRef.current < needed) setPanelWidth(needed);
@@ -648,7 +654,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
    * region, so the region's width is the only thing its edge drag changes.
    */
   const handleSetWidth = useCallback((width: number) => {
-    setPanelWidth(clampPanelWidth(width));
+    setPanelWidth(clampWidthToBounds(width, { maxWidth: null }, getWorkspaceWidth()));
   }, []);
 
   /** Persist a user-initiated width (drag end) for the given page type. */
@@ -1034,10 +1040,10 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }, [applyColumnWidths]);
 
   /** Set the pixel height of every row; the wall keeps its own height. */
-  const setRowHeights = useCallback((heights: number[]) => {
+  const setRowHeights = useCallback((heights: number[], columnIndex = 0) => {
     const total = heights.reduce((sum, height) => sum + height, 0);
     if (total <= 0) return;
-    setLayout((prev) => setRowRatios(prev, heights.map((height) => height / total)));
+    setLayout((prev) => setRowRatios(prev, heights.map((height) => height / total), columnIndex));
   }, []);
 
   /** Expand a card so it fills the wall, or collapse it back into its cell. */

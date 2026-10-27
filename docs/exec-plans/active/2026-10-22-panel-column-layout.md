@@ -281,3 +281,17 @@ PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `co
 未完成 / 阻塞：**渲染侧仍缺**——脱窗窗口目前渲染的是完整 app 外壳，「只渲染这一个面板」要靠切片 A 读 `panelWindow.context.paneId` 后自己收敛；本切片不碰 `packages/ui/**`。B 不依赖 A 即可合入，A 的接线契约见 PR 正文。
 
 外部副作用：本次只在 worktree 内跑真实 Electron，产物落在 `.e2e-userdata/panel-detach-check/`（未跟踪）；`packages/host/bundle/*` 等被构建改写的已跟踪文件已按「只保留本任务成果」还原。
+
+## 2026-10-27 截图对齐：面板边界与列内比例
+
+接续分支 `codex/ui-adjust`，指定检出 `E:\Projects\duya\.claude\worktrees\ui-adjust`，基线 `f338d77d`。用户给出 Claude Code 桌面端截图，要求深入参考面板宽度、拖拽条、三/四面板布局与列内上下拖拽。
+
+验收：宽度拖动越过会话最小宽度后面板浮在会话上层，并保留约 160px 可见会话区；垂直边界显示竖向圆角短条、水平边界显示横向圆角短条，命中区大于视觉条；三面板默认左列两个、右列一个，第四面板落在右列下方；每列的上下比例可独立拖动；旧持久化布局加载后位置与比例不跳变。
+
+路径范围：`packages/ui/src/components/layout/panels/layout-model.ts`、`PanelZone.tsx`、`hooks/usePanel.ts`、`styles/workspace.css`、`styles/preview-drawer.css`、对应测试及本计划。保留检出中已有未提交的 PanelLaunchers、背景任务、Mini App 与本地化改动，不触碰它们。
+
+进度：已完成布局与拖拽改造。`layout-model.ts` 记录每列面板和独立行比例，并迁移旧布局；新面板按左列 2 个、右列 2 个填充。`PanelZone.tsx` 改为逐列网格，分隔条用短圆角 pill 和更大的命中区；拖宽后覆盖会话，保留 160px 可见区，重新打开时保留拖动宽度。
+
+验证（当前 `HEAD=f338d77d400647dbfaaf68658bfb5f6dee428593`，分支 `codex/ui-adjust`，base `d80ca3c6`）：`vitest packages/ui/src/components/layout` 26 文件 / 254 例通过；`npm run typecheck:all` 0；`npm run architecture:check` 0（无新增边界违规）；`git diff --check` 0（仅已有生成文件换行提示）。Playwright 浏览器实测 4 面板 2×2、深浅主题、左列比例不受右列拖动影响（右列 440/440 → 340/540），以及工作区宽 1600 时面板扩至 1440、会话仍露出 160px（底层聊天列 420px），页面无异常。截图保存在 `C:\Users\lavachen\.codex\visualizations\2026\10\27\01a17b19-fb4f-7592-a504-86d25c4a1e9f\`。Claude 桌面端未能实时操作，交互参照用户提供的 8 张截图。
+
+接续：PR #522 仍开放，远端 head 为 `d293eab2`；本检出比远端已有两个提交，当前改动仍未提交。仅暂存本计划和本轮面板实现 / 测试文件；保留既有未提交的图标、启动器、Mini App、后台任务、本地化和生成文件。提交后更新 PR #522；不合并。外部副作用仅为上述可视化目录中的验证截图，临时预览入口已删除。
