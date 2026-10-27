@@ -13,12 +13,20 @@
    leading icon tint and left padding without affecting children. */
 
 .sidebar-section-item {
-  /* Plan 471 v6: match the row geometry of `.thread-item` (margin 0,
-     same header padding) so a section header and a session row have the
-     same height and footprint — no visual "jump" between a section title
-     and its child sessions. */
+  /* Plan 471 v6: match the row geometry of `.thread-item` (no extra
+     padding, same header footprint) so a section header and a session row
+     have the same footprint — no visual "jump" between a group title and
+     its child sessions. */
   margin: 0;
   border-radius: 0;
+  /* Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+     Claude breaks its groups with ~10 CSS px MORE clearance than the gap
+     between two session rows, so a group boundary is visible at a glance.
+     Measured on the reference window: the ink gap from the last session of
+     a group to the next group caption is 28 CSS px there, versus 11 px
+     here — duya's groups used to touch, which made a long session list
+     read as one undifferentiated block. */
+  margin-top: 16px;
 }
 .sidebar-section-item.sidebar-section-soft {
   /* The "项目" default section uses a slightly dimmer label so it
@@ -44,29 +52,31 @@
   height: 21px;
   box-sizing: border-box;
   padding: 0 10px;
-  margin-bottom: 2.3px;
-  /* Codex parity (2026-10-22): the group label is a small, quiet caption
-     rather than a headline — 13px, muted. The content below it (session
-     rows) carries the visual weight. */
-  font-size: 13px;
+  margin: 0 0 2.3px;
+  /* Claude parity (2026-10-26, measured on Claude Code desktop 3.6556.2.0):
+     the group caption is a 12px glyph (ink band 15 physical px / 1.25 DPR)
+     and sits one step quieter than the 13px session titles below it. */
+  font-size: 12px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--sidebar-muted, var(--muted));
   cursor: pointer;
   user-select: none;
   border-radius: 6px;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .sidebar-section-item .sidebar-section-header:hover {
-  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  /* Claude parity (2026-10-27): Claude Code's group caption does NOT take a
+     background wash on hover — the caption simply brightens a step. The old
+     `color-mix(in srgb, var(--text) 4.5%, transparent)` wash made the caption
+     read as a button, and the three system-section exemptions below could
+     never cover the date groups the user actually hovered. */
+  color: var(--sidebar-text-hover);
 }
-/* Plan 471 v10 / 549: "项目", "定时任务" and "已归档" keep a flat resting
-   look — no hover background wash (user feedback). The chevron + trailing
-   buttons still fade in on hover; only the header's background highlight is
-   suppressed so these system sections read as static titles. */
-.sidebar-section-item[data-section-id="__system__:project"] .sidebar-section-header:hover,
-.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover,
-.sidebar-section-item[data-section-id="__system__:archived"] .sidebar-section-header:hover {
-  background: transparent;
+/* The user-section label carries its own accent tint, so it would keep the
+   resting colour on hover. Let it follow the header so the hover brightening
+   applies to every caption. */
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-name {
+  color: inherit;
 }
 .sidebar-section-item .sidebar-section-header:focus-visible {
   outline: 2px solid var(--focus, var(--accent));
@@ -88,6 +98,9 @@
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.12s ease;
+}
+.sidebar-section-item[data-section-collapsed="true"] .sidebar-section-caret {
+  opacity: 0.65;
 }
 .sidebar-section-item .sidebar-section-icon {
   display: inline-flex;
@@ -150,10 +163,10 @@
   /* Children (ProjectGroupItem / ThreadListItem) manage their own
      padding; we only provide a small drop-shadow cue when open. */
   padding: 0;
-  /* Reference parity (2026-10-22): the flat session list (singleList mode)
-     is a direct child of this container, so the 1px inter-row gap has to
-     live here - without it the rows stack at their bare 26px height and
-     come out tighter than the measured 27.2 CSS px title pitch. */
+  /* Reference parity (2026-10-22): the group's session rows are direct
+     children of this container, so the 1px inter-row gap has to live here -
+     without it the rows stack at their bare height and come out tighter
+     than the measured 27.2 CSS px title pitch. */
   display: flex;
   flex-direction: column;
   gap: 1px;

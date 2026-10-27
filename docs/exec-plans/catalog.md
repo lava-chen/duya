@@ -8,6 +8,7 @@
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
 | [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | P0 | 设计与 S0–S7 迁移：窄 Bot 领域、Host 装配、持久唤醒与跨渠道对账；不重建 Harness |
+| [630 TUI 四能力系列](active/630-tui-capabilities-series/README.md) | P1 | 630a 模态原语 → 631 plugin 市场 / 632 provider 管理；633 项目切换与 634 显示档可并行；集成顺序见系列 README |
 | [插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | — | S1 契约先提交并报告，再按 S2–S6 迁移资源面与兼容入口 |
 | [2026-10-22-panel-column-layout](active/2026-10-22-panel-column-layout.md) | — | 侧面板从单列 tab 改为多列 + 列内堆叠 + 可脱窗；切片 A/B 并行，C/D 第二波 |
 | [2026-10-21-public-tree-cleanup](active/2026-10-21-public-tree-cleanup.md) | — | 清理公开根目录，迁移文档入口和打包配置，核对链接与产物 |
@@ -18,6 +19,7 @@
 | [2026-10-25-data-rollout-bucket](active/2026-10-25-data-rollout-bucket.md) | — | 写路径：rollout 按日期桶落地，不再每批重命名文件（毫秒戳导致判定恒成立），写路径耗时降 59%–68%；PR #462 已合并 |
 | [2026-10-25-data-read-range-fd](active/2026-10-25-data-read-range-fd.md) | — | 读路径：投影会话时复用同一个文件句柄，不再逐行 open/close（8000 条投影 656ms → 68ms）；PR #466 已合并 |
 | [2026-10-25-data-append-index-lookup](active/2026-10-25-data-append-index-lookup.md) | — | 消息写路径：`appendBatch` 去重检查按批内 id 点查，不再全量扫会话索引（去掉 O(N²)） |
+| [623 网关通道能力补全](active/623-gateway-channel-capability-parity.md) | P1 | 适配器层已交付（能力表 + 5 个新通道 + 既有通道缺口）；下一步按计划 Phase 3 接线 Host/Desktop 的 10 处硬编码平台枚举 |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |

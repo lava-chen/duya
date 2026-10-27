@@ -15,8 +15,8 @@
 import type { HostSessionRecord } from '@duya/agent-protocol';
 import type { CommandLocale } from '@duya/command-catalog';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
-import type { TuiChoice, TuiSettingsRow } from '../TUIApp.js';
-import type { WindowItem } from '../window.js';
+import type { TuiChoice, TuiSettingsRow, RichPanelHandle } from '../TUIApp.js';
+import type { RichPanelTab, WindowItem } from '../window.js';
 import type { ActionDef } from '../actions.js';
 
 /** The slice of `TUIApp` a slash command may touch. */
@@ -70,6 +70,24 @@ export interface TuiSlashHost {
     readonly footer: string;
     readonly onActivate: (id: string) => readonly TuiSettingsRow[] | void;
   }): Promise<void>;
+  /**
+   * Open a tabbed panel in the dock (630a) — the shape `/plugin` and
+   * `/provider` need and no other primitive gives: a tab strip with one
+   * searchable list per tab, header/content focus, and single-letter row
+   * actions that only fire while the strip, not the list, holds the cursor.
+   *
+   * Resolves when the user LEAVES, which is what makes the deferred-write
+   * model work: a command marks rows dirty inside its actions and performs
+   * the writes after this promise settles. `onOpen` hands back the live handle
+   * because the dock holds exactly one panel and the return value is taken.
+   */
+  showRichPanel?(options: {
+    readonly title: string;
+    readonly tabs: readonly RichPanelTab[];
+    readonly initialTab?: string;
+    readonly onClose?: () => void;
+    readonly onOpen?: (panel: RichPanelHandle) => void;
+  }): Promise<void>;
   /** Move the preferences the running TUI can move, and repaint. */
   applyTuiPreferences?(patch: {
     readonly effort?: string | null;
@@ -122,6 +140,14 @@ export interface TuiSlashActions {
   adoptSession: (sessionId: string) => Promise<void>;
   /** Leave the current session behind (archive/delete): start a fresh one. */
   startFreshSession: () => Promise<void>;
+  /**
+   * Start a fresh session in another directory, and move the surface there.
+   *
+   * `/project` cannot do this alone: the loop owns the session the next run
+   * is sent to, the stream watch, the transcript and the directory its runs
+   * name as their working directory.
+   */
+  startSessionInDirectory: (directory: string) => Promise<void>;
   /**
    * Re-read the durable transcript and repaint it.
    *

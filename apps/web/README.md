@@ -23,6 +23,14 @@ npm run build:web
 npm run web-app
 ```
 
+`npm run build:web` emits two halves: the browser bundle (Vite, into
+`dist/client/`) and the BFF server (`scripts/build-web-server-bundle.mjs`, into
+`dist/server/main.js`). The server is a self-contained ESM bundle rather than
+a `tsc` emit, so `npm run web-app` runs it with plain Node — no resolver shim,
+no `--import` flag. It reaches the Host only through `@duya/host/http-client`
+and reads the runtime descriptor through `@duya/host/host-runtime`, so its
+module graph holds no package whose emit plain Node cannot resolve.
+
 The BFF discovers the standard Host runtime descriptor beneath
 `DUYA_DATA_ROOT` (default `~/.duya`). `DUYA_HOST_ORIGIN` plus `DUYA_HOST_TOKEN`
 can override discovery for another local Host. Neither is a browser setting.

@@ -81,7 +81,7 @@ export function ChatHeaderActions() {
           id: "openSideChat",
           label: t("chat.header.openSideChat"),
           onSelect: () => {
-            openOrActivatePage("files");
+            openOrActivatePage("workspace", { workingDirectory: thread.workingDirectory });
           },
         },
         ...(resolveChatMode(thread.id) === "workspace"

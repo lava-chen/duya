@@ -2,8 +2,9 @@
  * config-file.ts — the `config.toml` document primitives.
  *
  * The file is the shared product configuration: the Desktop config store
- * writes it, the Host reads it, and (since the config-agents write side moved
- * here) the Host writes the `[agents]` namespace too.
+ * writes it, the Host reads it, and the Host writes back the namespaces it
+ * owns through {@link writeConfigNamespace} — `agents`, and since plan 632
+ * moved the provider write side here, also `providers` and `model`.
  *
  * ## Why the write is a surgical edit
  *
@@ -13,10 +14,10 @@
  * Desktop config store already normalizes the file that way, but the Host has
  * no reason to.
  *
- * So the agents write replaces **only the `[agents]` namespace in the raw
+ * So a namespace write replaces **only that namespace in the raw
  * text** and copies every other byte through. The result is re-parsed and
- * compared against the intended agent map before it is written: if the edit
- * does not produce exactly the intended map, the write falls back to a full
+ * compared against the intended table before it is written: if the edit
+ * does not produce exactly the intended table, the write falls back to a full
  * document rewrite rather than landing something wrong.
  *
  * ## Atomicity
@@ -70,6 +71,26 @@ export function readAgentsTable(doc: ConfigTomlDocument): Record<string, CustomA
   return raw as Record<string, CustomAgentConfig>;
 }
 
+/**
+ * One root namespace of a parsed document, as a mutable shallow copy.
+ *
+ * Throws rather than returning `{}` when the namespace exists in a form that
+ * cannot be replaced table by table (`[[model]]`, a scalar): an empty map
+ * would read as "no providers configured", and the caller's write would then
+ * delete what the file actually holds.
+ */
+export function readConfigNamespace(
+  doc: ConfigTomlDocument,
+  namespace: string,
+): Record<string, unknown> {
+  const raw = doc[namespace];
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`config.toml \`${namespace}\` is not a table`);
+  }
+  return { ...(raw as Record<string, unknown>) };
+}
+
 /** Serialize a document and write it over `configPath` atomically. */
 export async function writeConfigTomlDocument(
   configPath: string,
@@ -77,6 +98,49 @@ export async function writeConfigTomlDocument(
 ): Promise<void> {
   const content = stringify(doc as unknown as Parameters<typeof stringify>[0]);
   await writeFileAtomic(configPath, content);
+}
+
+/**
+ * Replace one root namespace of `config.toml`, keeping every other byte as it
+ * is, and return the edited text without touching the file.
+ *
+ * `expected` is what the caller believes it wrote; when the edit does not
+ * re-parse to exactly that table, `verifyConfigNamespace` reports it and the
+ * caller falls back to a full rewrite.
+ */
+export function editConfigNamespace(
+  raw: string,
+  namespace: string,
+  table: Record<string, unknown>,
+): string | null {
+  return replaceNamespace(raw, namespace, serializeNamespaceBlock(namespace, table));
+}
+
+/**
+ * True when `text` carries exactly the intended `namespace` table.
+ *
+ * The comparison is on the parsed table, not on the text: the editor is free
+ * to lay the namespace out differently (expanded tables instead of inline
+ * ones) as long as the values are the same.
+ */
+export function verifyConfigNamespace(
+  text: string,
+  namespace: string,
+  table: Record<string, unknown>,
+): boolean {
+  let parsed: ConfigTomlDocument;
+  try {
+    parsed = parse(text) as ConfigTomlDocument;
+  } catch {
+    return false;
+  }
+  try {
+    return canonicalTable(readConfigNamespace(parsed, namespace)) === canonicalTable(table);
+  } catch {
+    // The namespace came back in a form that is not a table — the edit did not
+    // produce what was asked, whatever the reason.
+    return false;
+  }
 }
 
 /**
@@ -93,41 +157,57 @@ export async function writeConfigAgentsTable(
   configPath: string,
   agents: Record<string, CustomAgentConfig>,
 ): Promise<void> {
+  await writeConfigNamespace(configPath, 'agents', agents);
+}
+
+/**
+ * Replace one root namespace (`agents`, `providers`, `model`, …) in place.
+ *
+ * Same contract as {@link writeConfigAgentsTable}: surgical edit, verified by
+ * re-parse, full-document rewrite as the fallback. The verification is what
+ * makes this safe to point at a namespace the caller cares about — a provider
+ * table that came back wrong would take every configured model with it.
+ */
+export async function writeConfigNamespace(
+  configPath: string,
+  namespace: string,
+  table: Record<string, unknown>,
+): Promise<void> {
   const raw = (await readRawConfig(configPath)) ?? '';
-  const edited = replaceAgentsNamespace(raw, serializeAgentsBlock(agents));
-  if (edited !== null && agentsMatch(edited, agents)) {
+  const edited = editConfigNamespace(raw, namespace, table);
+  if (edited !== null && verifyConfigNamespace(edited, namespace, table)) {
     await writeFileAtomic(configPath, edited);
     return;
   }
   const doc = await readConfigTomlDocument(configPath);
-  await writeConfigTomlDocument(configPath, { ...doc, agents });
+  await writeConfigTomlDocument(configPath, { ...doc, [namespace]: table });
 }
 
 // ==== the surgical namespace edit ====
 
 /**
- * The TOML lines for the agent map, or an empty list when there are no
- * agents (an empty map would serialize as an inline `agents = { }` root key,
- * which is not what the rest of the product expects).
+ * The TOML lines for a namespace table, or an empty list when it is empty (an
+ * empty map would serialize as an inline `agents = { }` root key, which is not
+ * what the rest of the product expects).
  */
-function serializeAgentsBlock(agents: Record<string, CustomAgentConfig>): string[] {
-  if (Object.keys(agents).length === 0) return [];
-  return stringify({ agents } as unknown as Parameters<typeof stringify>[0]).split('\n');
+function serializeNamespaceBlock(namespace: string, table: Record<string, unknown>): string[] {
+  if (Object.keys(table).length === 0) return [];
+  return stringify({ [namespace]: table } as unknown as Parameters<typeof stringify>[0]).split('\n');
 }
 
 /**
- * Replace every `[agents…]` table in `raw` with `block`, keeping the rest of
- * the text byte for byte.
+ * Replace every `[namespace…]` table in `raw` with `block`, keeping the rest
+ * of the text byte for byte.
  *
- * Returns null when the document stores the agent map as a root-level key
+ * Returns null when the document stores the table as a root-level key
  * (`agents = { … }`) — that form cannot be replaced table by table, and the
  * caller falls back to a full rewrite.
  */
-function replaceAgentsNamespace(raw: string, block: string[]): string | null {
+function replaceNamespace(raw: string, namespace: string, block: string[]): string | null {
   const lines = raw.split('\n');
-  if (hasRootLevelAgentsKey(lines)) return null;
+  if (hasRootLevelNamespaceKey(lines, namespace)) return null;
 
-  const regions = findAgentsRegions(lines);
+  const regions = findNamespaceRegions(lines, namespace);
   if (regions.length === 0) {
     if (block.length === 0) return raw;
     const tail = lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines.slice();
@@ -151,24 +231,24 @@ function replaceAgentsNamespace(raw: string, block: string[]): string | null {
 }
 
 /** A half-open line range `[start, end)` of the file. */
-interface AgentsRegion {
+interface NamespaceRegion {
   start: number;
   end: number;
 }
 
 /**
- * The line ranges of every `[agents…]` table.
+ * The line ranges of every `[namespace…]` table.
  *
  * A table owns the lines from its header up to the next table header, so the
- * region of an agents table ends where the next non-agents table begins.
+ * region of a namespace table ends where the next foreign table begins.
  */
-function findAgentsRegions(lines: string[]): AgentsRegion[] {
-  const regions: AgentsRegion[] = [];
-  let current: AgentsRegion | null = null;
+function findNamespaceRegions(lines: string[], namespace: string): NamespaceRegion[] {
+  const regions: NamespaceRegion[] = [];
+  let current: NamespaceRegion | null = null;
   for (let index = 0; index < lines.length; index += 1) {
     const path = tablePath(lines[index]!);
     if (path === null) continue;
-    if (path[0] === 'agents') {
+    if (path[0] === namespace) {
       if (current === null) current = { start: index, end: index + 1 };
       else current.end = index + 1;
       continue;
@@ -200,44 +280,22 @@ function tablePath(line: string): string[] | null {
 }
 
 /**
- * True when the root table carries an `agents` key.
+ * True when the root table carries a `namespace` key.
  *
  * Root keys must appear before the first table header, so only the preamble
  * is scanned.
  */
-function hasRootLevelAgentsKey(lines: string[]): boolean {
+function hasRootLevelNamespaceKey(lines: string[], namespace: string): boolean {
+  const pattern = new RegExp(`^\\s*(?:"${namespace}"|'${namespace}'|${namespace})\\s*=`);
   for (const line of lines) {
     if (tablePath(line) !== null) return false;
-    if (/^\s*(?:agents|"agents"|'agents')\s*=/.test(line)) return true;
+    if (pattern.test(line)) return true;
   }
   return false;
 }
 
-/**
- * True when the parsed text carries exactly the intended agent map.
- *
- * The comparison is on the parsed map, not on the text: the editor is free
- * to lay the namespace out differently (expanded tables instead of inline
- * ones) as long as the values are the same.
- */
-function agentsMatch(text: string, agents: Record<string, CustomAgentConfig>): boolean {
-  let parsed: ConfigTomlDocument;
-  try {
-    parsed = parse(text) as ConfigTomlDocument;
-  } catch {
-    return false;
-  }
-  let table: Record<string, CustomAgentConfig>;
-  try {
-    table = readAgentsTable(parsed);
-  } catch {
-    return false;
-  }
-  return canonicalAgents(table) === canonicalAgents(agents);
-}
-
-/** A stable, undefined-free rendering of an agent map. */
-function canonicalAgents(agents: Record<string, CustomAgentConfig>): string {
+/** A stable, undefined-free rendering of a namespace table. */
+function canonicalTable(table: Record<string, unknown>): string {
   const normalize = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(normalize);
     if (value !== null && typeof value === 'object') {
@@ -252,13 +310,14 @@ function canonicalAgents(agents: Record<string, CustomAgentConfig>): string {
     return value;
   };
   const sorted: Record<string, unknown> = {};
-  for (const id of Object.keys(agents).sort()) sorted[id] = normalize(agents[id]);
+  for (const id of Object.keys(table).sort()) sorted[id] = normalize(table[id]!);
   return JSON.stringify(sorted);
 }
 
 // ==== file primitives ====
 
-async function readRawConfig(configPath: string): Promise<string | null> {
+/** Read the raw text of `config.toml`, or null when it does not exist. */
+export async function readRawConfig(configPath: string): Promise<string | null> {
   try {
     return await fs.readFile(configPath, 'utf8');
   } catch (error) {
@@ -267,7 +326,8 @@ async function readRawConfig(configPath: string): Promise<string | null> {
   }
 }
 
-async function writeFileAtomic(target: string, content: string): Promise<void> {
+/** Write `content` over `target` through a sibling tmp file. */
+export async function writeFileAtomic(target: string, content: string): Promise<void> {
   const dir = path.dirname(target);
   await fs.mkdir(dir, { recursive: true });
   const tmpPath = path.join(dir, `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);

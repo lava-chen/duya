@@ -4,12 +4,14 @@ import {
   formatWallSeparatorLabel,
   layoutFromPanes,
   normalizeShares,
+  paneIdsInColumn,
   placePane,
   removePane,
   rowPixelHeights,
   sanitizeLayout,
   setActivePane,
   setColumnRatios,
+  setColumnRowRatios,
   setRowRatios,
   toggleExpandedPane,
   wallColumnsFor,
@@ -18,7 +20,7 @@ import {
 } from "../panels/layout-model";
 
 function identities(...ids: string[]): PaneIdentity[] {
-  return ids.map((id) => ({ id, pageId: "files" }));
+  return ids.map((id) => ({ id, pageId: "workspace" }));
 }
 
 describe("wall shape", () => {
@@ -47,9 +49,10 @@ describe("layoutFromPanes", () => {
   it("keeps the card order and splits the wall evenly", () => {
     const layout = layoutFromPanes(identities("a", "b", "c"));
     expect(layout.panes).toEqual(["a", "b", "c"]);
+    expect(layout.paneColumns).toEqual([0, 0, 1]);
     expect(layout.columns).toBe(2);
     expect(layout.columnRatios).toEqual([0.5, 0.5]);
-    expect(layout.rowRatios).toEqual([0.5, 0.5]);
+    expect(layout.columnRowRatios).toEqual([[0.5, 0.5], [1]]);
     expect(layout.expandedPaneId).toBeNull();
     expect(layout.activePaneId).toBe("a");
   });
@@ -58,16 +61,22 @@ describe("layoutFromPanes", () => {
     const layout = layoutFromPanes(identities("a"));
     expect(layout.columns).toBe(1);
     expect(layout.columnRatios).toEqual([1]);
-    expect(layout.rowRatios).toEqual([1]);
+    expect(layout.columnRowRatios).toEqual([[1]]);
   });
 });
 
 describe("placePane", () => {
-  it("appends the card and re-shapes the grid", () => {
+  it("stacks two cards in each column before extending a stack", () => {
     const layout = placePane(layoutFromPanes(identities("a", "b")), "c");
     expect(layout.panes).toEqual(["a", "b", "c"]);
+    expect(layout.paneColumns).toEqual([0, 0, 1]);
     expect(layout.columns).toBe(2);
-    expect(layout.rowRatios).toHaveLength(2);
+    expect(layout.columnRowRatios).toEqual([[0.5, 0.5], [1]]);
+
+    const four = placePane(layout, "d");
+    expect(four.paneColumns).toEqual([0, 0, 1, 1]);
+    expect(paneIdsInColumn(four, 0)).toEqual(["a", "b"]);
+    expect(paneIdsInColumn(four, 1)).toEqual(["c", "d"]);
   });
 
   it("keeps the card where it is when it is already in the wall", () => {
@@ -77,11 +86,21 @@ describe("placePane", () => {
 });
 
 describe("removePane", () => {
-  it("closes the gap the card leaves behind", () => {
+  it("keeps remaining cards in their columns and closes the local gap", () => {
     const layout = removePane(layoutFromPanes(identities("a", "b", "c")), "b");
     expect(layout.panes).toEqual(["a", "c"]);
-    expect(layout.columns).toBe(1);
-    expect(layout.rowRatios).toHaveLength(2);
+    expect(layout.paneColumns).toEqual([0, 1]);
+    expect(layout.columns).toBe(2);
+    expect(layout.columnRowRatios).toEqual([[1], [1]]);
+  });
+
+  it("removes an empty column without moving the surviving stack", () => {
+    const layout = removePane(layoutFromPanes(identities("a", "b", "c", "d")), "a");
+    expect(layout.paneColumns).toEqual([0, 1, 1]);
+    expect(layout.columns).toBe(2);
+    const oneColumn = removePane(layout, "b");
+    expect(oneColumn.paneColumns).toEqual([0, 0]);
+    expect(oneColumn.columns).toBe(1);
   });
 
   it("drops an expanded card that leaves the wall", () => {
@@ -119,10 +138,20 @@ describe("shares", () => {
     expect(layout.columnRatios[1]).toBeCloseTo(0.75, 5);
   });
 
-  it("sets the row shares of a wall", () => {
+  it("sets the row shares independently for each column", () => {
+    const initial = layoutFromPanes(identities("a", "b", "c", "d"));
+    const left = setColumnRowRatios(initial, 0, [1, 2]);
+    const layout = setColumnRowRatios(left, 1, [3, 1]);
+    expect(layout.columnRowRatios[0]?.[0]).toBeCloseTo(1 / 3, 5);
+    expect(layout.columnRowRatios[0]?.[1]).toBeCloseTo(2 / 3, 5);
+    expect(layout.columnRowRatios[1]?.[0]).toBeCloseTo(3 / 4, 5);
+    expect(layout.columnRowRatios[1]?.[1]).toBeCloseTo(1 / 4, 5);
+  });
+
+  it("sets the first column row shares through the compatibility helper", () => {
     const layout = setRowRatios(layoutFromPanes(identities("a", "b")), [1, 2]);
-    expect(layout.rowRatios[0]).toBeCloseTo(1 / 3, 5);
-    expect(layout.rowRatios[1]).toBeCloseTo(2 / 3, 5);
+    expect(layout.columnRowRatios[0]?.[0]).toBeCloseTo(1 / 3, 5);
+    expect(layout.columnRowRatios[0]?.[1]).toBeCloseTo(2 / 3, 5);
   });
 });
 
@@ -152,8 +181,14 @@ describe("pixel geometry", () => {
 
   it("splits the wall between the rows and leaves the gaps out", () => {
     const layout = layoutFromPanes(identities("a", "b"));
-    const heights = rowPixelHeights(layout, 204, 4);
+    const heights = rowPixelHeights(layout, 204, 4, 0);
     expect(heights).toEqual([100, 100]);
+  });
+
+  it("uses a separate row split for the right column", () => {
+    const layout = setColumnRowRatios(layoutFromPanes(identities("a", "b", "c", "d")), 1, [3, 1]);
+    expect(rowPixelHeights(layout, 204, 4, 0)).toEqual([100, 100]);
+    expect(rowPixelHeights(layout, 204, 4, 1)).toEqual([150, 50]);
   });
 
   it("returns nothing when the wall has no size yet", () => {
@@ -175,6 +210,41 @@ describe("sanitizeLayout", () => {
     };
     const layout = sanitizeLayout(stored, identities("a", "b"));
     expect(layout?.panes).toEqual(["a"]);
+    expect(layout?.columnRowRatios).toEqual([[1]]);
+  });
+
+  it("migrates a persisted row-major grid without moving its cards", () => {
+    const stored = {
+      panes: ["a", "b", "c", "d"],
+      columns: 2,
+      columnRatios: [0.4, 0.6],
+      rowRatios: [0.25, 0.75],
+      expandedPaneId: null,
+      activePaneId: "d",
+    };
+    const layout = sanitizeLayout(stored, identities("a", "b", "c", "d"));
+    expect(layout?.paneColumns).toEqual([0, 1, 0, 1]);
+    expect(layout?.columnRowRatios[0]).toEqual([0.25, 0.75]);
+    expect(layout?.columnRowRatios[1]).toEqual([0.25, 0.75]);
+    expect(layout?.columnRatios[0]).toBeCloseTo(0.4, 5);
+    expect(layout?.columnRatios[1]).toBeCloseTo(0.6, 5);
+  });
+
+  it("compacts a persisted column after its only pane was removed", () => {
+    const stored = {
+      panes: ["gone", "b"],
+      columns: 2,
+      columnRatios: [0.35, 0.65],
+      rowRatios: [0.4],
+      expandedPaneId: null,
+      activePaneId: "b",
+    };
+    const layout = sanitizeLayout(stored, identities("b"));
+    expect(layout?.panes).toEqual(["b"]);
+    expect(layout?.paneColumns).toEqual([0]);
+    expect(layout?.columns).toBe(1);
+    expect(layout?.columnRowRatios).toEqual([[1]]);
+    expect(layout?.columnRatios).toEqual([1]);
   });
 
   it("drops an expanded card that no longer exists", () => {

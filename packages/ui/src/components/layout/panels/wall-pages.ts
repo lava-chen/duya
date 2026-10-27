@@ -3,8 +3,8 @@
 // The wall shows one card per open page. These are the kinds the user can
 // add from the wall's empty cell:
 //
-//   files     — the project file tree
-//   workspace — the file viewer (opened by clicking a file; not added by hand)
+//   workspace — the file viewer: a project tree on the left, the open file
+//              on the right
 //   review    — the code review diff
 //   browser   — the embedded browser
 //   terminal  — a shell
@@ -16,7 +16,7 @@ import type { PageId } from "./page-tab";
 
 /** The pages the wall's add-panel menu offers, in menu order. */
 export const WALL_PAGE_IDS: readonly PageId[] = [
-  "files",
+  "workspace",
   "review",
   "browser",
   "terminal",

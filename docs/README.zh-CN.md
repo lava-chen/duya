@@ -84,7 +84,7 @@ node packages/cli/bundle/cli.cjs serve
 再在另一个终端构建并启动 Web 客户端：
 
 ```bash
-npm run build:web-app
+npm run build:web
 npm run web-app
 ```
 
@@ -134,7 +134,7 @@ npm install
 npm run electron:dev       # Desktop 开发
 npm run build:cli-dev      # 构建终端客户端依赖和 bundle
 npm run dev:tui            # TUI
-npm run build:web-app      # 本地 Web 构建
+npm run build:web          # 本地 Web 构建
 npm run web-app            # 本地 Web 启动
 npm run typecheck:all      # 全仓类型检查
 npm run architecture:check # 架构边界检查

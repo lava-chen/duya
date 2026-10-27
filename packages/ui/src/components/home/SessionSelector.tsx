@@ -21,15 +21,12 @@ interface SessionSelectorProps {
   onUseExistingFolder: () => void;
   /** Optional: create a no-project session (shared ~/.duya/workspace). */
   onNewNoProjectSession?: () => void;
-  onSelectThread: (threadId: string) => void;
   workspaceSelectionEnabled?: boolean;
   /**
    * When provided, replaces the "build in X" header with this greeting line
    * and moves the project selector to a row below the input area.
    */
   greeting?: string;
-  showRecentThreads?: boolean;
-  maxRecentThreads?: number;
   children?: React.ReactNode;
 }
 
@@ -39,21 +36,17 @@ export function SessionSelector({
   onNewBlankProject,
   onUseExistingFolder,
   onNewNoProjectSession,
-  onSelectThread,
   workspaceSelectionEnabled = true,
   greeting,
-  showRecentThreads = true,
-  maxRecentThreads = 5,
   children,
 }: SessionSelectorProps) {
-  const { threads, projects, isHydrated } = useConversationStore(
+  const { projects, isHydrated } = useConversationStore(
     useShallow((s) => ({
-      threads: s.threads,
       projects: s.projects,
       isHydrated: s.isHydrated,
     }))
   );
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
 
@@ -82,7 +75,6 @@ export function SessionSelector({
     onNewNoProjectSession?.();
   };
 
-  const recentThreads = threads.slice(0, maxRecentThreads);
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLocaleLowerCase();
     if (!q) return projects;
@@ -90,19 +82,6 @@ export function SessionSelector({
       `${p.projectName} ${p.workingDirectory}`.toLocaleLowerCase().includes(q)
     );
   }, [projects, projectSearch]);
-
-  const formatDate = (timestamp: number): string => {
-    const now = Date.now();
-    const diff = now - timestamp;
-    const days = Math.floor(diff / 86400000);
-    const date = new Date(timestamp);
-    const localeStr = locale === 'zh' ? 'zh-CN' : 'en-US';
-
-    if (days < 7) {
-      return date.toLocaleDateString(localeStr, { weekday: "short" });
-    }
-    return date.toLocaleDateString(localeStr, { month: "short", day: "numeric" });
-  };
 
   // Build the menu items: one entry per matching project (with a
   // description for the working directory), then a divider + the three
@@ -252,27 +231,6 @@ export function SessionSelector({
       {/* Project selector below the input (greeting layout only) */}
       {greeting && (
         <div className="welcome-project-row">{projectSelector}</div>
-      )}
-
-      {showRecentThreads && recentThreads.length > 0 && (
-        <div className="welcome-recent">
-          <h2>{t('chat.recentThreads')}</h2>
-          <div className="recent-list">
-            {recentThreads.map((thread) => (
-              <button
-                key={thread.id}
-                className="recent-item"
-                onClick={() => onSelectThread(thread.id)}
-              >
-                <div className="recent-item-left">
-                  <span className="recent-title">{thread.title}</span>
-                  <span className="recent-project">{thread.projectName || thread.workingDirectory}</span>
-                </div>
-                <span className="recent-date">{formatDate(thread.updatedAt)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
       )}
     </>
   );

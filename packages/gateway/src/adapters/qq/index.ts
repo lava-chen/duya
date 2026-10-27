@@ -44,6 +44,7 @@ import {
   buildMultipartBody,
 } from './media-handler.js';
 import { QQWebSocketManager } from './websocket.js';
+import { parseGatingOptions, evaluateGating, type GatingOptions } from '../shared/gating.js';
 
 const QQ_API_BASE = 'https://api.sgroup.qq.com';
 const QQ_SANDBOX_API_BASE = 'https://sandbox.api.sgroup.qq.com';
@@ -69,6 +70,9 @@ export class QQAdapter extends BaseAdapter {
   // Deduplication
   private recentMessageIds = new Set<string>();
 
+  /** DM / group / mention policies (shared gating module). */
+  private gating: GatingOptions = parseGatingOptions();
+
   constructor() {
     super({ rateLimitMs: CHAT_RATE_LIMIT_MS });
 
@@ -90,6 +94,7 @@ export class QQAdapter extends BaseAdapter {
     this.appSecret = appSecret;
     this.config = config;
     this.useSandbox = config.options?.['sandbox'] === true;
+    this.gating = parseGatingOptions(config.options);
 
     await this.refreshAccessToken();
 
@@ -454,6 +459,21 @@ export class QQAdapter extends BaseAdapter {
   }
 
   private dispatchMessage(normalized: NormalizedMessage): void {
+    // Gating runs here rather than in each of the four event handlers: chat IDs
+    // already carry their scope (`c2c:` / `group:` / `channel:` / `dm:`), so one
+    // check covers bot DMs, group @-messages, guild channels and legacy DMs.
+    const chat = parseChatType(normalized.platformChatId);
+    const isGroup = chat?.chatType === 'group' || chat?.chatType === 'channel';
+    const verdict = evaluateGating(this.gating, {
+      senderId: normalized.platformUserId,
+      chatId: normalized.platformChatId,
+      isGroup,
+      text: normalized.text,
+      // QQ only delivers group messages that @-mention the bot.
+      botMentioned: chat?.chatType === 'group',
+    });
+    if (verdict === 'deny') return;
+
     const text = normalized.text ?? '';
     if (text.startsWith('/') && this.commandHandler) {
       this.commandHandler(normalized).then((handled) => {

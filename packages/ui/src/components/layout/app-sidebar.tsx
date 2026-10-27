@@ -63,8 +63,11 @@ import { restoreAllArchivedSessions } from "@/lib/project-actions";
 import { toast } from "@/components/ui/toast";
 import {
   bucketThreadsByKind,
+  DATE_BUCKET_ORDER,
+  getThreadDateBucket,
   sortThreadsBy,
   SYSTEM_SECTIONS,
+  type ThreadDateBucket,
 } from "./sidebar/section-system";
 import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { useProjectsStore } from "@/stores/projects-store";
@@ -311,11 +314,9 @@ const AppSidebarInner = memo(
       window.addEventListener("duya:new-project", handler);
       return () => window.removeEventListener("duya:new-project", handler);
     }, [onExpand]);
-    // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
-    // list reveals incrementally (20 at a time — user preference, bigger
-    // batch than the 5-per-project-group because it spans ALL projects
-    // and would take too many clicks at 5). Kept in renderer state;
-    // resets when the user toggles the view mode or a section collapse.
+    // Claude parity (2026-10-26): each group reveals its own batch of 20
+    // sessions. The flat "all sessions" mode is gone, so this threshold
+    // only drives the per-group reveal.
     const FLAT_LIST_THRESHOLD = 20;
     // Project-level drag-and-drop. Track the active drag id and any
     // per-section manual override so reordering the visible list stays
@@ -354,10 +355,13 @@ const AppSidebarInner = memo(
         setProjectOrderOverrides((prev) => ({ ...prev, [sectionKey]: reordered }));
       }
     }, [reorderProjectsInSection]);
-    const [flatListVisibleCount, setFlatListVisibleCount] = useState(FLAT_LIST_THRESHOLD);
+    // Claude parity (2026-10-26): every date bucket reveals its own batch.
+    // A single shared counter made "查看全部" on 今天 also reveal 昨天's
+    // hidden rows; in Claude each group is independent too.
+    const [dateVisibleCounts, setDateVisibleCounts] = useState<Record<string, number>>({});
     // Plan 549 (Track B): the archived roster only ever grows, so it reveals
     // in batches like the other unbounded sections. 10 per click (smaller
-    // than the flat singleList batch) because the archived section is a
+    // than the 20-row group batch) because the archived section is a
     // "find that one session" surface — dumping hundreds of rows buries the
     // active list above it.
     const ARCHIVED_REVEAL_STEP = 10;
@@ -1010,41 +1014,60 @@ const AppSidebarInner = memo(
       // via the right-click menu. CRON_SIDEBAR_VISIBLE caps high-cardinality
       // runs so one hot cron job doesn't flood the sidebar.
       //
-      // `projectGroupBy === 'singleList'` (⋯ menu → 在一个列表中): the
-      // "项目" section renders as one flat session list (all main-agent
-      // sessions by the chosen sort, no project grouping) and user
-      // sections are hidden because the whole point of single-list mode
-      // is to suppress the project hierarchy.
-      const isSingleList = projectGroupBy === 'singleList';
-      const projectSectionItems: SectionItem[] = isSingleList
-        // Plan 471 v8: singleList reveals sessions 5 at a time (mirrors
-        // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD behavior). When the
-        // user has collapsed the section or switched back to byProject we
-        // reset the reveal counter in the onToggle handler below.
-        ? threadItems(projectThreads.slice(0, flatListVisibleCount))
-        : projectItems(unassignedGroups);
-      const projectSectionExtra: SectionThreadItem[] = isSingleList
-        ? []
-        : threadItems(noProjectThreads);
-      // Number of sessions still hidden behind the "查看全部" reveal button
-      // in singleList mode (only meaningful there).
-      const flatListHiddenCount = isSingleList
-        ? Math.max(0, projectThreads.length - flatListVisibleCount)
-        : 0;
+      // Claude parity (2026-10-26): the flat "all sessions" mode is gone.
+      // Claude Code's sidebar is ALWAYS a list of groups, so the system
+      // section always renders the project hierarchy and the user sections
+      // are never suppressed.
+      const isDateGrouped = projectGroupBy === 'byDate';
+      const projectSectionItems: SectionItem[] = projectItems(unassignedGroups);
+      const projectSectionExtra: SectionThreadItem[] = threadItems(noProjectThreads);
+
+      const dateBuckets = new Map<ThreadDateBucket, Thread[]>();
+      if (isDateGrouped) {
+        for (const thread of projectThreads) {
+          const key = getThreadDateBucket(thread);
+          const bucket = dateBuckets.get(key) ?? [];
+          bucket.push(thread);
+          dateBuckets.set(key, bucket);
+        }
+      }
+      // Claude renders four buckets in a fixed order and skips the empty
+      // ones — one header per calendar day turned the sidebar into a wall of
+      // near-identical rows.
+      const dateKeys = DATE_BUCKET_ORDER.filter((key) => dateBuckets.has(key));
+      // Keep one header even in an empty workspace: it carries the
+      // "分组方式" switch, and without it the user could not switch back to
+      // 文件夹.
+      if (isDateGrouped && dateKeys.length === 0) dateKeys.push('today');
+      const dateSections = dateKeys.map((key, index) => {
+        const dateThreads = dateBuckets.get(key) ?? [];
+        const visible = dateVisibleCounts[key] ?? FLAT_LIST_THRESHOLD;
+        const id = index === 0 ? '__system__:project' : `__system__:date:${key}`;
+        return {
+          id,
+          kind: 'project' as SectionKind,
+          name: `__DATE__:${key}`,
+          // Carried into the render so "查看全部" can grow THIS bucket
+          // instead of the shared flat-list counter.
+          dateBucket: key,
+          collapsed: collapsedSystemSections.has(id),
+          items: threadItems(dateThreads.slice(0, visible)),
+          flatListHiddenCount: Math.max(0, dateThreads.length - visible),
+        };
+      });
       return [
-        ...(isSingleList ? [] : userSectionDescriptors.map((us) => ({
+        ...(projectGroupBy === 'byProject' ? userSectionDescriptors.map((us) => ({
           ...us,
           items: projectItems(us.items as ProjectGroup[]),
-        }))),
-        {
+        })) : []),
+        ...(isDateGrouped ? dateSections : [{
           id: '__system__:project',
           kind: 'project' as SectionKind,
           name: '__PROJECT_SECTION__',
           collapsed: collapsedSystemSections.has('__system__:project'),
           items: projectSectionItems,
           extraNoProjectThreads: projectSectionExtra,
-          flatListHiddenCount,
-        },
+        }]),
         {
           id: '__system__:cron',
           kind: 'cron' as SectionKind,
@@ -1096,7 +1119,7 @@ const AppSidebarInner = memo(
           archivedHiddenCount: Math.max(0, archivedThreads.length - archivedVisibleCount),
         },
       ];
-    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount, archivedVisibleCount, showEmptyGroups, registeredProjects]);
+    }, [threads, archivedThreads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, dateVisibleCounts, archivedVisibleCount, showEmptyGroups, registeredProjects]);
 
     // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
     // Treat every section (user or system) as collapsed only when there is
@@ -1109,12 +1132,12 @@ const AppSidebarInner = memo(
       [sidebarStructure],
     );
 
-    // Plan 471 v8: leaving singleList mode (back to 按项目) resets the flat
-    // list reveal counter so the next time the user switches to 在一个列表中
-    // it starts from the first batch again.
+    // Claude parity (2026-10-26): switching the grouping mode resets the
+    // per-group reveal counters, so the next visit shows the first batch
+    // of every group again.
     useEffect(() => {
-      if (projectGroupBy !== 'singleList') {
-        setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
+      if (projectGroupBy !== 'byDate') {
+        setDateVisibleCounts({});
       }
     }, [projectGroupBy]);
 
@@ -1332,37 +1355,36 @@ const AppSidebarInner = memo(
             extensions) only renders on the Work tab — the Bots view is a flat
             contact list. */}
         <div className="sidebar-top">
-          <div className="sidebar-top-tabs" role="tablist" aria-label={t("sidebar.tab.bots")}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sidebarTab === "work"}
-              data-testid="sidebar-tab-work"
-              className={`sidebar-tab${sidebarTab === "work" ? " active" : ""}`}
-              onClick={() => setSidebarTab("work")}
-            >
-              {t("sidebar.tab.work")}
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={sidebarTab === "bots"}
-              disabled={isUnavailable('bots')}
-              className={`sidebar-tab${sidebarTab === "bots" ? " active" : ""}${isUnavailable('bots') ? " opacity-50 cursor-not-allowed" : ""}`}
-              title={isUnavailable('bots') ? unavailableTitle(t("sidebar.tab.bots")) : undefined}
-              onClick={() => { if (!isUnavailable('bots')) setSidebarTab("bots"); }}
-            >
-              {t("sidebar.tab.bots")}
-              {unseenFinishedCount > 0 && (
-                <span className="sidebar-tab-badge">
-                  {unseenFinishedCount > 99 ? "99+" : unseenFinishedCount}
-                </span>
-              )}
-            </button>
-            {/* Right-aligned action group: create "+" + search. Lives inside
-                the tab row but visually pins to the far right. The
-                `sidebar-top-actions` class applies `margin-left: auto` so
-                both tabs render flush-left and the icons stay flush-right. */}
+          <div className="sidebar-top-tabs">
+            <div className="sidebar-tab-group" role="tablist" aria-label={t("sidebar.tab.bots")}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarTab === "work"}
+                data-testid="sidebar-tab-work"
+                className={`sidebar-tab${sidebarTab === "work" ? " active" : ""}`}
+                onClick={() => setSidebarTab("work")}
+              >
+                {t("sidebar.tab.work")}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidebarTab === "bots"}
+                disabled={isUnavailable('bots')}
+                className={`sidebar-tab${sidebarTab === "bots" ? " active" : ""}${isUnavailable('bots') ? " opacity-50 cursor-not-allowed" : ""}`}
+                title={isUnavailable('bots') ? unavailableTitle(t("sidebar.tab.bots")) : undefined}
+                onClick={() => { if (!isUnavailable('bots')) setSidebarTab("bots"); }}
+              >
+                {t("sidebar.tab.bots")}
+                {unseenFinishedCount > 0 && (
+                  <span className="sidebar-tab-badge">
+                    {unseenFinishedCount > 99 ? "99+" : unseenFinishedCount}
+                  </span>
+                )}
+              </button>
+            </div>
+            {/* Keep create and search at the end of the row beside the tab group. */}
             <div className="sidebar-top-actions">
             {sidebarTab === "bots" ? (
               <DropdownMenu
@@ -1708,20 +1730,39 @@ const AppSidebarInner = memo(
                   // import the section-name string at the store layer.
                   return 'sidebar.section.archived';
                 case '__system__:project':
-                  // Plan 471 v9: in singleList (… menu → 在一个列表中) mode the project hierarchy
-                  // is suppressed and the section is rendered as a flat session list.
-                  // "项目" no longer fits because there are no project groups to group by,
-                  // so we rename it to "会话" to match what the user actually sees.
-                  return projectGroupBy === 'singleList'
-                    ? 'sidebar.section.sessions'
+                  if (projectGroupBy === 'byDate') return null;
+                  // A user section may already be named "项目" — two headers
+                  // with the same name in one sidebar read as a rendering
+                  // bug. This section holds everything that is NOT in a user
+                  // section, so name it for that role instead.
+                  return userSections.length > 0
+                    ? 'sidebar.section.ungrouped'
                     : 'sidebar.section.project';
                 default:
                   return null;
               }
             })();
-            const sectionName = sectionLabelKey
-              ? t(sectionLabelKey as never)
-              : section.name;
+            const dateKey = section.name.startsWith('__DATE__:')
+              ? section.name.slice('__DATE__:'.length)
+              : null;
+            const dateBucketLabel = (() => {
+              switch (dateKey) {
+                case 'today':
+                  return t('sidebar.date.today');
+                case 'yesterday':
+                  return t('sidebar.date.yesterday');
+                case 'last7days':
+                  return t('sidebar.date.last7days');
+                case 'older':
+                  return t('sidebar.date.older');
+                default:
+                  return null;
+              }
+            })();
+            const sectionName = dateBucketLabel
+              ?? (sectionLabelKey
+                ? t(sectionLabelKey as never)
+                : section.name);
             // Empty sections are hidden except: user sections always show (so users
             // can right-click to delete or add), and the project section
             // always shows (so the user has a place for new projects). The
@@ -1744,11 +1785,16 @@ const AppSidebarInner = memo(
               onToggleCollapsed: isUser
                 ? () => { void toggleUserSectionCollapsed(section.id); }
                 : () => {
-                    // Plan 471 v8: collapsing the "项目" section resets the
-                    // singleList reveal counter so reopening shows the first
-                    // batch again (same behavior as ProjectGroupItem).
-                    if (section.id === '__system__:project') {
-                      setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
+                    // Claude parity (2026-10-26): the date buckets each keep
+                    // their own reveal counter — reopening a bucket shows its
+                    // first batch again.
+                    if (dateKey) {
+                      setDateVisibleCounts((prev) => {
+                        if (!(dateKey in prev)) return prev;
+                        const next = { ...prev };
+                        delete next[dateKey];
+                        return next;
+                      });
                     }
                     // Plan 549 (Track B): same contract for the archived
                     // roster — reopening the section shows the newest batch.
@@ -1757,7 +1803,9 @@ const AppSidebarInner = memo(
                     }
                     toggleSystemSectionCollapsed(section.id);
                   },
-              tone: section.id === '__system__:project' ? 'soft' as const : 'bold' as const,
+              // Every date bucket is an ordinary group and must look like one.
+              // Only the byProject fallback section ("项目" / "未分组") dims.
+              tone: section.id === '__system__:project' && !dateKey ? 'soft' as const : 'bold' as const,
             };
             // Claude parity (2026-10-22): every section header carries the
             // same three-button group — 新建 / 组内搜索 / 过滤器 — and the
@@ -1767,39 +1815,58 @@ const AppSidebarInner = memo(
             // The old "⋯ +" pair is gone: 整理 / 排序方式 moved into the
             // filter popover, where each row shows its current value.
             const isProjectSection = section.id === '__system__:project';
+            // Claude parity (2026-10-26): "分组方式" is one global switch, so
+            // exactly ONE header carries it — the section that holds the work
+            // sessions. Duplicating it on every header (as the previous code
+            // did for the first user section) made two headers change the
+            // same list.
+            const isGroupingHeader = isProjectSection;
+            const isDateSection = dateKey !== null;
             const sectionQuery = sectionQueries[section.id] ?? "";
             const searchActive = sectionQueries[section.id] !== undefined;
             const trimmedQuery = sectionQuery.trim().toLowerCase();
-            // Only project-bearing sections can be created in / filtered.
-            const sectionHoldsProjects = isProjectSection || isUser;
+            // Sections that can be created in / filtered.
+            const sectionHoldsProjects = isProjectSection || isUser || isDateSection;
             const sectionTrailing = (
               <SectionActions
                 onCreate={
-                  isProjectSection
-                    ? projectGroupBy === 'singleList'
-                      ? () => startNewChat()
-                      : handleNewBlankProject
-                    : isUser
-                      ? () => {
-                          setCreateProjectTargetSection(section.id);
-                          setIsCreateProjectDialogOpen(true);
-                        }
-                      : undefined
+                  isDateSection
+                    ? () => startNewChat()
+                    : isProjectSection
+                      ? projectGroupBy === 'byProject'
+                        ? handleNewBlankProject
+                        : () => startNewChat()
+                      : isUser
+                        ? () => {
+                            setCreateProjectTargetSection(section.id);
+                            setIsCreateProjectDialogOpen(true);
+                          }
+                        : undefined
                 }
                 createLabel={
-                  isProjectSection
-                    ? projectGroupBy === 'singleList'
-                      ? t('nav.newChat')
-                      : t('project.newProject')
-                    : isUser
-                      ? t('project.newProject')
-                      : undefined
+                  isDateSection
+                    ? t('nav.newChat')
+                    : isProjectSection
+                      ? projectGroupBy === 'byProject'
+                        ? t('project.newProject')
+                        : t('nav.newChat')
+                      : isUser
+                        ? t('project.newProject')
+                        : undefined
                 }
                 onToggleSearch={() => toggleSectionSearch(section.id)}
                 searchActive={searchActive}
                 filter={sectionHoldsProjects ? {
-                  groupBy: isProjectSection ? projectGroupBy : undefined,
-                  onGroupBy: isProjectSection ? setProjectGroupBy : undefined,
+                  groupBy: isGroupingHeader ? projectGroupBy : undefined,
+                  onGroupBy: isGroupingHeader ? (value) => {
+                    setDateVisibleCounts({});
+                    setCollapsedSystemSections((prev) => {
+                      const next = new Set(prev);
+                      next.delete('__system__:project');
+                      return next;
+                    });
+                    setProjectGroupBy(value);
+                  } : undefined,
                   sortBy: projectSortBy,
                   onSortBy: setProjectSortBy,
                   showEmptyGroups,
@@ -1969,10 +2036,10 @@ const AppSidebarInner = memo(
                 ))}
                 {(() => {
                   // "View all N more" link — for cron (routes to the
-                  // Automation page for full history), for the flat
-                  // singleList session list (reveals 20 more inline, mirroring
-                  // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD reveal), and
-                  // for the archived roster (reveals 10 more inline).
+                  // Automation page for full history), for a date bucket
+                  // (reveals 20 more inline, mirroring ProjectGroupItem's
+                  // THREAD_COLLAPSE_THRESHOLD reveal), and for the archived
+                  // roster (reveals 10 more inline).
                   const cronHidden = (section as { hiddenCount?: number }).hiddenCount;
                   if (cronHidden) {
                     return (
@@ -1989,11 +2056,20 @@ const AppSidebarInner = memo(
                   const flatHidden = (section as { flatListHiddenCount?: number }).flatListHiddenCount;
                   if (flatHidden) {
                     const reveal = Math.min(FLAT_LIST_THRESHOLD, flatHidden);
+                    // Every date bucket keeps its own counter — revealing
+                    // 今天 must not also reveal 昨天's hidden rows.
+                    const dateBucket = (section as { dateBucket?: string }).dateBucket;
                     return (
                       <button
                         type="button"
                         className="sidebar-section-view-all"
-                        onClick={() => setFlatListVisibleCount((c) => c + FLAT_LIST_THRESHOLD)}
+                        onClick={() => {
+                          if (!dateBucket) return;
+                          setDateVisibleCounts((prev) => ({
+                            ...prev,
+                            [dateBucket]: (prev[dateBucket] ?? FLAT_LIST_THRESHOLD) + FLAT_LIST_THRESHOLD,
+                          }));
+                        }}
                       >
                         <CaretRightIcon size={10} />
                         <span>{t('common.showAll', { count: reveal })}</span>

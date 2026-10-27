@@ -5,7 +5,7 @@ import type { ComposerEditDraft } from '@/lib/chat-edit-draft';
 'use client';
 
 import React, { useMemo, useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
-import { ArrowUpIcon,
+import {
   SearchIcon,
   XIcon,
   XCircleIcon,
@@ -149,6 +149,25 @@ function StopIcon({ size = 16, className }: { size?: number; className?: string 
     >
       <rect x="6" y="4" width="4" height="16" rx="1" />
       <rect x="14" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
+function SendKeyIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20 5v6a4 4 0 0 1-4 4H5" />
+      <path d="m9 11-4 4 4 4" />
     </svg>
   );
 }
@@ -404,6 +423,7 @@ export type PermissionModeUi = 'ask' | 'auto' | 'bypass';
 interface PermissionModeSelectorProps {
   value: PermissionModeUi;
   onChange: (mode: PermissionModeUi) => void;
+  compact?: boolean;
 }
 
 const PERMISSION_MODES: Array<{
@@ -421,7 +441,7 @@ const PERMISSION_MODES: Array<{
  * current mode's icon + localized label; clicking cycles to the next mode.
  * Exported for reuse outside the composer (cron editor bottom bar).
  */
-export function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps) {
+export function PermissionModeSelector({ value, onChange, compact = false }: PermissionModeSelectorProps) {
   const { t } = useTranslation();
   const current = PERMISSION_MODES.find((m) => m.id === value) ?? PERMISSION_MODES[1];
   const Icon = current.icon;
@@ -434,12 +454,14 @@ export function PermissionModeSelector({ value, onChange }: PermissionModeSelect
     <button
       type="button"
       onClick={handleClick}
-      className={`permission-mode-toggle flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent/50 hover:text-foreground transition-colors ${
-        isBypass ? 'text-[var(--warning)]' : 'text-muted-foreground'
+      className={`permission-mode-toggle flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] transition-colors ${
+        isBypass ? 'text-[var(--warning)]' : compact ? 'text-[var(--accent)]' : 'text-muted-foreground'
+      } ${
+        compact ? 'hover:text-foreground' : 'hover:bg-accent/50 hover:text-foreground'
       }`}
       title={PERMISSION_MODES.map((m) => t(m.labelKey)).join(' / ')}
     >
-      <Icon size={14} />
+      {!compact && <Icon size={14} />}
       <span>{t(current.labelKey)}</span>
     </button>
   );
@@ -2253,7 +2275,7 @@ export function MessageInput({
         />
 
         <div
-          className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''} ${planModeActive ? 'message-input-plan-mode-active' : ''}`}
+          className={`message-input-surface relative z-[1] rounded-[14px] p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''} ${planModeActive ? 'message-input-plan-mode-active' : ''}`}
           style={{ backgroundColor: 'var(--composer-bg)', boxShadow: planModeActive
             ? 'inset 0 0 0 1px var(--accent), 0 0 0 1px rgba(125, 180, 255, 0.35), 0 0 14px rgba(125, 180, 255, 0.45)'
             : 'inset 0 0 0 1px var(--border-color)' }}
@@ -2310,23 +2332,84 @@ export function MessageInput({
             />
           )}
 
-          {/* Textarea */}
-          <RichTextInput
-            ref={textareaRef}
-            value={inputValue}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePasteEvent}
-            placeholder={
-              suggestion
-                ? t('chat.turnSuggestionHint', { text: suggestion })
-                : cliBadge
-                  ? t('messageInput.describeWhat')
-                  : (placeholder || t('chat.placeholder'))
-            }
-            disabled={disabled}
-            mentionTargets={pluginMentionTargets}
-          />
+          <div className="flex min-w-0 items-center gap-1">
+            {/* Plus Button — opens the `@` context popup (attachments / mode / MCP). */}
+            <IconButton
+              variant="ghost"
+              shape="square"
+              size="md"
+              aria-label={t('common.settings') || 'Settings'}
+              data-plus-trigger
+              onClick={() => {
+                if (popoverMode === 'context') {
+                  closePopover();
+                } else {
+                  openContextPopover();
+                }
+              }}
+              className={`shrink-0 border ${
+                popoverMode === 'context'
+                  ? 'text-foreground bg-chip border-border'
+                  : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
+              }`}
+              title={t('common.settings') || 'Settings'}
+            >
+              <PlusIcon size={16} />
+            </IconButton>
+            <RichTextInput
+              ref={textareaRef}
+              value={inputValue}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePasteEvent}
+              placeholder={
+                suggestion
+                  ? t('chat.turnSuggestionHint', { text: suggestion })
+                  : cliBadge
+                    ? t('messageInput.describeWhat')
+                    : (placeholder || t('chat.placeholder'))
+              }
+              disabled={disabled}
+              mentionTargets={pluginMentionTargets}
+            />
+            <div className="flex shrink-0 items-center">
+              {/* Keep the empty composer clear; show an action only when it can be used. */}
+              {!dictating && isStreaming && onStop ? (
+                <IconButton
+                  variant="danger"
+                  shape="round"
+                  size="md"
+                  aria-label="Stop"
+                  onClick={handleStop}
+                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                  title="Stop"
+                >
+                  <StopIcon size={16} />
+                </IconButton>
+              ) : !dictating && hasTypedContent ? (
+                <IconButton
+                  type="submit"
+                  variant="ghost"
+                  shape="square"
+                  size="sm"
+                  aria-label="Send"
+                  title="Send"
+                  disabled={disabled || !hasTypedContent}
+                  className="text-muted-foreground hover:bg-[var(--surface-hover)] hover:text-foreground"
+                >
+                  <SendKeyIcon size={16} />
+                </IconButton>
+              ) : dictating || voiceConfigured ? (
+                <VoiceButton
+                  disabled={disabled || isStreaming}
+                  onTranscription={handleVoiceTranscription}
+                  onNeedsSetup={handleVoiceNeedsSetup}
+                  onSessionStart={handleVoiceSessionStart}
+                  onSessionEnd={handleVoiceSessionEnd}
+                />
+              ) : null}
+            </div>
+          </div>
 
           {/* CLI Badge */}
           {cliBadge && (
@@ -2347,38 +2430,17 @@ export function MessageInput({
             </div>
           )}
 
-          {/* Bottom Toolbar */}
-          <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
+        </div>
+
+        {/* Bottom Toolbar */}
+        <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
-              {/* Plus Button — opens the `@` context popup (添加附件 / mode / MCP). The
-                  `/` commands are only reachable by typing `/` in the input. */}
-              <IconButton
-                variant="ghost"
-                shape="square"
-                size="md"
-                aria-label={t('common.settings') || 'Settings'}
-                data-plus-trigger
-                onClick={() => {
-                  if (popoverMode === 'context') {
-                    closePopover();
-                  } else {
-                    openContextPopover();
-                  }
-                }}
-                className={`border ${
-                  popoverMode === 'context'
-                    ? 'text-foreground bg-chip border-border'
-                    : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
-                }`}
-                title={t('common.settings') || 'Settings'}
-              >
-                <PlusIcon size={16} />
-              </IconButton>
-              {/* Permission mode toggle — right of the attachment button. */}
+              {/* Permission mode toggle. */}
               {permissionMode && onPermissionModeChange && (
                 <PermissionModeSelector
                   value={permissionMode}
                   onChange={onPermissionModeChange}
+                  compact
                 />
               )}
               <input
@@ -2438,21 +2500,27 @@ export function MessageInput({
               <BackgroundTasksIndicator sessionId={sessionId} />
             </div>
 
-            {/* Right: one button slot, three states. While streaming with
-                nothing typed, show Stop. Once there is typed content (or
-                attachments), show Send — a Send during streaming queues the
-                message instead of interrupting. With an empty composer and
-                the STT module configured, the mic takes the slot; when voice
-                is not configured, Send keeps it (disabled while empty). */}
             <div className="flex shrink-0 items-center gap-1">
               {hasQueuedMessages && !isStreaming && (
                 <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
                   +{1}
                 </span>
               )}
-              {/* Context-usage ring — trigger only (variant="panel"): the
-                  stats expand in a panel below the input box. Hidden on
-                  brand-new sessions where there is nothing to measure. */}
+              {hasProvider && providerGroups.length > 0 && (
+                <ModelProviderSelector
+                  ref={modelSelectorRef}
+                  providerGroups={providerGroups}
+                  selectedModelId={selectedModel}
+                  onSelectModel={handleModelChange}
+                  effortValue={selectedEffort}
+                  effortOptions={modelEffortOptions}
+                  onSelectEffort={handleEffortChange}
+                  disabled={isStreaming}
+                  loading={modelsLoading}
+                  composerTrigger
+                />
+              )}
+              {/* Usage ring follows the model label, as in Claude's composer. */}
               {messages.length > 0 && (
                 <ContextUsageRing
                   variant="panel"
@@ -2467,59 +2535,7 @@ export function MessageInput({
                   isCompacting={isCompacting}
                 />
               )}
-              {/* Model / Provider / Effort selector — next to the send button */}
-              {hasProvider && providerGroups.length > 0 && (
-                <ModelProviderSelector
-                  ref={modelSelectorRef}
-                  providerGroups={providerGroups}
-                  selectedModelId={selectedModel}
-                  onSelectModel={handleModelChange}
-                  effortValue={selectedEffort}
-                  effortOptions={modelEffortOptions}
-                  onSelectEffort={handleEffortChange}
-                  disabled={isStreaming}
-                  loading={modelsLoading}
-                />
-              )}
-              {/* While dictating, the mic keeps the slot no matter what —
-                  swapping it for Stop/Send mid-recording would unmount the
-                  capture chain. Stop and Send only contend once it ends. */}
-              {!dictating && isStreaming && onStop ? (
-                <IconButton
-                  variant="danger"
-                  shape="round"
-                  size="md"
-                  aria-label="Stop"
-                  onClick={handleStop}
-                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30 ml-1"
-                  title="Stop"
-                >
-                  <StopIcon size={16} />
-                </IconButton>
-              ) : !dictating && (hasTypedContent || !voiceConfigured) ? (
-                <IconButton
-                  type="submit"
-                  variant="primary"
-                  shape="round"
-                  size="md"
-                  aria-label="Send"
-                  title="Send"
-                  disabled={disabled || !hasTypedContent}
-                  className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
-                >
-                  <ArrowUpIcon size={16} />
-                </IconButton>
-              ) : (
-                <VoiceButton
-                  disabled={disabled || isStreaming}
-                  onTranscription={handleVoiceTranscription}
-                  onNeedsSetup={handleVoiceNeedsSetup}
-                  onSessionStart={handleVoiceSessionStart}
-                  onSessionEnd={handleVoiceSessionEnd}
-                />
-              )}
             </div>
-          </div>
         </div>
 
       </form>

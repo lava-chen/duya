@@ -197,7 +197,7 @@ export default {
     const samples = [];
     const notes = {};
     const digest = fixtureDigest(FIXTURE_ID);
-    const panelIds = (ctx.options.panelIds ?? 'files,terminal').split(',');
+    const panelIds = (ctx.options.panelIds ?? 'workspace,terminal').split(',');
 
     for (let index = 0; index < ctx.options.samples; index += 1) {
       const namespace = `panel-drag-${ctx.runId}-${index}`;

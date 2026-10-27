@@ -9,9 +9,60 @@
 // PLATFORM TYPES
 // =============================================================================
 
-export type PlatformType = 'telegram' | 'feishu' | 'weixin' | 'qq' | 'whatsapp' | 'discord';
+export type PlatformType =
+  | 'telegram'
+  | 'feishu'
+  | 'weixin'
+  | 'qq'
+  | 'whatsapp'
+  | 'discord'
+  | 'whatsapp_cloud'
+  | 'signal'
+  | 'bluebubbles'
+  | 'webhook'
+  | 'msgraph';
 
-export const PLATFORM_TYPES: PlatformType[] = ['telegram', 'feishu', 'weixin', 'qq', 'whatsapp', 'discord'];
+export const PLATFORM_TYPES: PlatformType[] = [
+  'telegram',
+  'feishu',
+  'weixin',
+  'qq',
+  'whatsapp',
+  'discord',
+  'whatsapp_cloud',
+  'signal',
+  'bluebubbles',
+  'webhook',
+  'msgraph',
+];
+
+/**
+ * Declarative capability flags.
+ *
+ * Adapters used to expose their feature set only implicitly (which optional
+ * methods they happened to implement), which forced callers to special-case
+ * platforms. `platform-capabilities.ts` is now the single source of truth and
+ * the gateway consults it before issuing best-effort calls (typing, reactions)
+ * and when reporting adapter status to the host.
+ */
+export type PlatformCapability =
+  | 'text'
+  | 'markdown'
+  | 'message-edit'
+  | 'message-delete'
+  | 'typing'
+  | 'typing-stop'
+  | 'reaction'
+  | 'read-receipt'
+  | 'inline-keyboard'
+  | 'interactive-list'
+  | 'inbound-media'
+  | 'outbound-media'
+  | 'voice-note'
+  | 'quoting'
+  | 'threads'
+  | 'group-chat'
+  | 'inbound-callback';
 
 // =============================================================================
 // PLATFORM CONFIG
@@ -204,6 +255,8 @@ export interface AdapterStatus {
   error?: string;
   /** Detailed health information */
   health?: AdapterHealth;
+  /** Declared capability flags (see platform-capabilities.ts). */
+  capabilities?: PlatformCapability[];
   /** Display configuration tier info */
   displayConfig?: {
     streaming: boolean | null;

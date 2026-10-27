@@ -41,7 +41,7 @@ vi.mock("./panels/registry", () => {
   const icon = () => null;
   return {
     PAGE_REGISTRY: {
-      files: { id: "files", labelKey: "panel.files", icon },
+      workspace: { id: "workspace", labelKey: "panel.files", icon },
       review: { id: "review", labelKey: "panel.review", icon },
       terminal: { id: "terminal", labelKey: "panel.terminal", icon },
       browser: { id: "browser", labelKey: "panel.browser", icon },
@@ -59,7 +59,7 @@ import { PanelHeader } from "./PanelHeader";
 describe("PanelHeader tab strip", () => {
   it("renders the add button and menu outside the scrolling tab strip", () => {
     mocks.tabs = [
-      { id: "tab-one", pageId: "files", title: "src" },
+      { id: "tab-one", pageId: "workspace", title: "src" },
       { id: "tab-two", pageId: "terminal", title: "bash" },
     ];
 
