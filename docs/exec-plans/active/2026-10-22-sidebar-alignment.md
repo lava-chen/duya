@@ -365,3 +365,9 @@ Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，
   `git apply --cached` **只暂存我方 hunk**，其余 16 个文件留在工作区。
 
 
+
+### PR #522 与最新 master 集成（2026-10-27）
+
+- PR head `7491821b` 原 base 为 `d80ca3c6`；合并期间 master 前进到 `a99e1444`（含已合入的 PR #524、#525）。在独立 managed worktree 合入该 master，仅 `docs/exec-plans/README.md` 有冲突，保留 master 最新索引；UI 代码无冲突。
+- 合并后复验：`npm exec -- vitest run packages/ui/src --reporter=dot` 通过（235 文件 / 2406 用例，2 skipped）；`npm run architecture:check` 通过（无新增违规）；`npm run typecheck:all` 通过。
+- 下一步：提交 master 集成记录、推送 PR #522、等待新 head CI 后再合并。

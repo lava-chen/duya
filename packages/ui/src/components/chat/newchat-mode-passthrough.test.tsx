@@ -59,8 +59,8 @@ vi.mock('@/lib/ipc-client', () => ({
   listOutputStylesIPC: vi.fn(async () => []),
 }));
 
-vi.mock('@/components/home/SessionSelector', () => ({
-  SessionSelector: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+vi.mock('@/components/home/EnvironmentCard', () => ({
+  EnvironmentCard: () => null,
 }));
 
 vi.mock('@/components/ui/InputDialog', () => ({

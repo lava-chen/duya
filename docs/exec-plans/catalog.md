@@ -19,6 +19,7 @@
 | [2026-10-25-data-rollout-bucket](active/2026-10-25-data-rollout-bucket.md) | — | 写路径：rollout 按日期桶落地，不再每批重命名文件（毫秒戳导致判定恒成立），写路径耗时降 59%–68%；PR #462 已合并 |
 | [2026-10-25-data-read-range-fd](active/2026-10-25-data-read-range-fd.md) | — | 读路径：投影会话时复用同一个文件句柄，不再逐行 open/close（8000 条投影 656ms → 68ms）；PR #466 已合并 |
 | [2026-10-25-data-append-index-lookup](active/2026-10-25-data-append-index-lookup.md) | — | 消息写路径：`appendBatch` 去重检查按批内 id 点查，不再全量扫会话索引（去掉 O(N²)） |
+| [623 网关通道能力补全](active/623-gateway-channel-capability-parity.md) | P1 | 适配器层已交付（能力表 + 5 个新通道 + 既有通道缺口）；下一步按计划 Phase 3 接线 Host/Desktop 的 10 处硬编码平台枚举 |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
 | [08-31-multi-agent-profile-design](active/2026-08-31-multi-agent-profile-design.md) | P1 | Implement plan 7.2 memory partition by profile (migration + `[memory] partition` toggle) |

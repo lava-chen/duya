@@ -173,8 +173,11 @@ const en = {
   'chat.whatToBuildInSuffix': '',
   'chat.selectProject': 'Select project',
   'chat.openNewProject': 'Open New Project...',
-  'chat.recentThreads': 'Recent Threads',
   'chat.describeWhatToBuild': 'Describe what you want to build...',
+  // Claude parity (2026-10-27): the environment card on the new-chat page.
+  'chat.chooseEnvironment': 'Choose environment',
+  'chat.workingDirectory': 'Working directory',
+  'chat.workspaceInherited': 'Inherits the workspace of the authorized session',
   'chat.greeting.morning': 'Good morning! What would you like to do?',
   'chat.greeting.afternoon': 'Good afternoon! Need a break?',
   'chat.greeting.evening': 'Good evening! What are we building today?',
