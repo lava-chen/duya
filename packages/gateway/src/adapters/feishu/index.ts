@@ -706,8 +706,35 @@ export class FeishuChannel extends EventEmitter {
             return { ok: false, error: String(err) };
           }
         }
+        case 'stream_start':
+        case 'stream_chunk':
+          // Feishu has no draft-streaming surface here; the final text is sent
+          // once on `stream_end`.
+          return { ok: true };
+        case 'stream_end': {
+          const result = await this.sendPostMessage(chatId, '', [
+            { tag: 'text', text: reply.finalText },
+          ], reply.replyToMsgId);
+          return { ok: result.length > 0, platformMsgId: result[0] };
+        }
+        case 'permission_request': {
+          // No approval card yet: deliver the prompt as text so the decision is
+          // never silently swallowed, and list the choices.
+          const lines = [reply.text, '', ...reply.buttons.map((b) => `• ${b.text}`)];
+          const result = await this.sendPostMessage(chatId, '', [
+            { tag: 'text', text: lines.join('\n') },
+          ], reply.replyToMsgId);
+          return { ok: result.length > 0, platformMsgId: result[0] };
+        }
+        case 'inline_keyboard': {
+          const lines = [reply.text, '', ...reply.rows.flat().map((b) => `• ${b.text}`)];
+          const result = await this.sendPostMessage(chatId, '', [
+            { tag: 'text', text: lines.join('\n') },
+          ], reply.replyToMsgId);
+          return { ok: result.length > 0, platformMsgId: result[0] };
+        }
         default:
-          return { ok: false, error: `Unsupported reply type: ${reply.type}` };
+          return { ok: false, error: `Unsupported reply type: ${String((reply as { type?: string }).type)}` };
       }
     } catch (err) {
       return { ok: false, error: String(err) };
@@ -1216,6 +1243,19 @@ class FeishuCardClient implements CardStreamClient {
 }
 
 // Wrapper that implements PlatformAdapter interface
+/**
+ * Gateway bot-status emoji → Feishu `emoji_type`. Feishu rejects unicode
+ * glyphs on the reaction API, so an unmapped emoji must degrade to a valid one.
+ */
+const FEISHU_REACTION_EMOJI: Record<string, string> = {
+  '🤔': 'THINKING',
+  '👍': 'THUMBSUP',
+  '👎': 'THUMBSDOWN',
+  '✅': 'DONE',
+  '❌': 'ERROR',
+  '👀': 'SMART',
+};
+
 class FeishuAdapterWrapper implements PlatformAdapter {
   readonly platform: PlatformType = 'feishu';
   private _messageHandler: ((msg: NormalizedMessage) => void) | null = null;
@@ -1260,10 +1300,68 @@ class FeishuAdapterWrapper implements PlatformAdapter {
             });
           }
         },
-        onImageMessage: async () => {},
-        onFileMessage: async () => {},
-        onAudioMessage: async () => {},
-        onPostMessage: async () => {},
+        onImageMessage: async (chatId: string, userId: string, _imageKey: string, msgId: string, localPath?: string) => {
+          this.emitInbound({
+            platform: 'feishu',
+            platformUserId: userId,
+            platformChatId: chatId,
+            platformMsgId: msgId,
+            ...(localPath ? { imagePaths: [localPath] } : { text: '[image]' }),
+            ts: Date.now(),
+          });
+        },
+        onFileMessage: async (chatId: string, userId: string, _fileKey: string, fileName: string, msgId: string, localPath?: string) => {
+          this.emitInbound({
+            platform: 'feishu',
+            platformUserId: userId,
+            platformChatId: chatId,
+            platformMsgId: msgId,
+            ...(localPath
+              ? { filePaths: [{ name: fileName, path: localPath }] }
+              : { text: `[file] ${fileName}` }),
+            ts: Date.now(),
+          });
+        },
+        onAudioMessage: async (chatId: string, userId: string, _audioKey: string, duration: number, msgId: string, localPath?: string) => {
+          this.emitInbound({
+            platform: 'feishu',
+            platformUserId: userId,
+            platformChatId: chatId,
+            platformMsgId: msgId,
+            ...(localPath
+              ? { voicePaths: [localPath] }
+              : { text: `[voice ${Math.round(duration / 1000)}s]` }),
+            ts: Date.now(),
+          });
+        },
+        onPostMessage: async (chatId: string, userId: string, title: string, paragraphs: Array<Array<{ text?: string }>>, msgId: string) => {
+          // Rich-text posts are flattened: the agent reads text, not layout.
+          const body = paragraphs
+            .map((line) => line.map((segment) => (segment as { text?: string }).text ?? '').join(''))
+            .join('\n');
+          const text = [title, body].filter(Boolean).join('\n').trim();
+          if (!text) return;
+          this.emitInbound({
+            platform: 'feishu',
+            platformUserId: userId,
+            platformChatId: chatId,
+            platformMsgId: msgId,
+            text,
+            ts: Date.now(),
+          });
+        },
+        onThreadMessage: async (_parentMessageId: string, chatId: string, userId: string, text: string, msgId: string) => {
+          if (!text) return;
+          this.emitInbound({
+            platform: 'feishu',
+            platformUserId: userId,
+            platformChatId: chatId,
+            platformMsgId: msgId,
+            text,
+            threadId: _parentMessageId,
+            ts: Date.now(),
+          });
+        },
         onCardAction: async () => {},
         onReactionAdded: async (messageId: string, emojiType: string, userId: string, chatId: string) => {
           // 488 P3.2: forward reaction to main process via IPC
@@ -1347,6 +1445,11 @@ class FeishuAdapterWrapper implements PlatformAdapter {
     this._messageHandler = handler;
   }
 
+  /** Shared entry for the inbound callbacks below (media/post/thread). */
+  private emitInbound(msg: NormalizedMessage): void {
+    this._messageHandler?.(msg);
+  }
+
   setCommandHandler(handler: (msg: NormalizedMessage) => Promise<boolean>): void {
     this._commandHandler = handler;
   }
@@ -1359,6 +1462,27 @@ class FeishuAdapterWrapper implements PlatformAdapter {
 
   sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {
     return this._channel?.sendReply(chatId, reply) ?? Promise.resolve({ ok: false, error: 'No channel' });
+  }
+
+  /**
+   * Bot-status reaction. Feishu takes a named emoji type, not a unicode glyph,
+   * so the gateway's 🤔/👍/👎 are mapped onto Feishu's own vocabulary.
+   */
+  async setMessageReaction(_chatId: string, messageId: string, emoji: string): Promise<void> {
+    const emojiType = FEISHU_REACTION_EMOJI[emoji] ?? 'THUMBSUP';
+    await this._channel?.sendReaction(messageId, emojiType);
+  }
+
+  async removeMessageReaction(_chatId: string, _messageId: string): Promise<void> {
+    // Feishu has no "remove reaction" API; reactions are cleared by the user.
+  }
+
+  async deleteMessage(_chatId: string, messageId: string): Promise<void> {
+    await this._channel?.recallMessage(messageId);
+  }
+
+  async sendTyping(_chatId: string): Promise<void> {
+    // Feishu exposes no typing indicator.
   }
 }
 

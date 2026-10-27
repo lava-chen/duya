@@ -118,13 +118,21 @@ function makeActions() {
   const interrupt = vi.fn();
   const adoptSession = vi.fn(async () => {});
   const startFreshSession = vi.fn(async () => {});
+  const startSessionInDirectory = vi.fn(async () => {});
   const reloadTranscript = vi.fn(async () => {});
   return {
     interrupt,
     adoptSession,
     startFreshSession,
+    startSessionInDirectory,
     reloadTranscript,
-    actions: { interrupt, adoptSession, startFreshSession, reloadTranscript } satisfies TuiSlashActions,
+    actions: {
+      interrupt,
+      adoptSession,
+      startFreshSession,
+      startSessionInDirectory,
+      reloadTranscript,
+    } satisfies TuiSlashActions,
   };
 }
 
@@ -249,6 +257,7 @@ describe('slash registry', () => {
       'permission',
       'plugin',
       'pr',
+      'project',
       'read-file',
       'rename',
       'settings',

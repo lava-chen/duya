@@ -22,7 +22,7 @@
  *
  * ## No JSON accumulator
  *
- * step 3 deletes router.ts:1334-1386, a 64 KB-capped buffer that
+ * step 3 deletes router.ts:1335-1387, a 64 KB-capped buffer that
  * existed only because `sendEvent` could emit a multi-line JSON body. The
  * protocol mandates exactly one `JSON.stringify` per line, so a bare newline
  * inside a frame is a protocol violation, not something to accumulate around.

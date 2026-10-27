@@ -158,7 +158,12 @@ import type {
   HostLocalProviderModelCapabilityApiV1,
   ProviderModelCapabilityRecord,
 } from '@duya/agent-protocol/model-capabilities';
-import type { HostLocalProviderCatalogApiV1 } from '@duya/agent-protocol/provider-catalog';
+import type {
+  HostLocalProviderCatalogApiV1,
+  HostLocalProviderManagementApiV1,
+  HostProviderWriteInput,
+} from '@duya/agent-protocol/provider-catalog';
+import { HostProviderApiError } from './provider-management/index.js';
 import type {
   HostAppConnectionStatus,
   HostAppConnectionWriteInput,
@@ -361,6 +366,15 @@ export interface HostSessionHttpServerOptions {
   readonly localProviderModelCapabilityApi?: HostLocalProviderModelCapabilityApiV1;
   /** Local-only read of the configured provider/model catalog. */
   readonly localProviderCatalogApi?: HostLocalProviderCatalogApiV1;
+  /**
+   * Local-only read AND write of `[providers.*]` and `secrets.json`.
+   *
+   * Separate from the catalog because the catalog is what a picker reads and
+   * this is what a settings screen changes: a Host composed without a writable
+   * configuration answers 404 `provider_management_api_unavailable` rather
+   * than accepting a POST that would be silently dropped.
+   */
+  readonly localProviderManagementApi?: HostLocalProviderManagementApiV1;
   /** Local-only persisted App Connection metadata; never includes credentials. */
   readonly localAppConnectionApi?: HostLocalAppConnectionApiV1;
   /** Local-only access to plugin setup values, which may contain credentials. */
@@ -636,6 +650,38 @@ function isAppConnectionWriteInput(
     (value.expiresAt === null || isAppConnectionTime(value.expiresAt)) &&
     (value.lastError === null || isBoundedString(value.lastError, 0, 4000)) &&
     isAppConnectionTime(value.createdAt);
+}
+
+/** `{providerId, expectedRevision?}` as the provider routes receive it. */
+interface ProviderTargetRequest {
+  readonly providerId: string;
+  readonly expectedRevision?: string;
+}
+
+/** Null is a 400: a body that cannot name the provider row has no meaning. */
+function readProviderTarget(body: unknown): ProviderTargetRequest | null {
+  if (!isRecord(body) || !isBoundedString(body.providerId, 1, 200)) return null;
+  const revision = readProviderRevision(body);
+  if (revision === false) return null;
+  return {
+    providerId: body.providerId,
+    ...(revision === undefined ? {} : { expectedRevision: revision }),
+  };
+}
+
+/**
+ * The optional `expectedRevision`.
+ *
+ * `undefined` is "the caller chose not to guard"; `false` is "it sent a
+ * revision that is not a string", which is a 400 rather than a quietly dropped
+ * guard — a writer that believes it is protected and is not is worse than one
+ * that is told it cannot ask.
+ */
+function readProviderRevision(body: Record<string, unknown>): string | undefined | false {
+  const value = body.expectedRevision;
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') return false;
+  return value.trim() === '' ? undefined : value.trim();
 }
 
 /**
@@ -1390,6 +1436,122 @@ export class HostSessionHttpServer {
       }
       try {
         this.#sendJson(res, 200, { catalog: await api.getProviderCatalog() });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/providers' && req.method === 'GET') {
+      const api = this.#options.localProviderManagementApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_management_api_unavailable' } });
+        return;
+      }
+      try {
+        // Bare body: the payload is already a record with its own `providers`
+        // list, and wrapping it would read `providers.providers`.
+        this.#sendJson(res, 200, await api.listProviders());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/providers/upsert' && req.method === 'POST') {
+      const api = this.#options.localProviderManagementApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_management_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isRecord(body)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider' } });
+        return;
+      }
+      try {
+        // The API validates the fields; a name that is empty and a key that is
+        // really a mask are the same mistake wherever they came from, and the
+        // rule belongs next to the file it protects, not in the router.
+        this.#sendJson(res, 200, await api.upsertProvider(body as unknown as HostProviderWriteInput));
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/providers/delete' && req.method === 'POST') {
+      const api = this.#options.localProviderManagementApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_management_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const target = readProviderTarget(body);
+      if (target === null) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider_id' } });
+        return;
+      }
+      try {
+        this.#sendJson(
+          res,
+          200,
+          await api.deleteProvider(target.providerId, target.expectedRevision),
+        );
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/providers/set-default' && req.method === 'POST') {
+      const api = this.#options.localProviderManagementApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_management_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (!isRecord(body)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider_id' } });
+        return;
+      }
+      const providerId = body.providerId;
+      if (providerId !== null && !isBoundedString(providerId, 1, 200)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider_id' } });
+        return;
+      }
+      const expectedRevision = readProviderRevision(body);
+      if (expectedRevision === false) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider_revision' } });
+        return;
+      }
+      try {
+        this.#sendJson(
+          res,
+          200,
+          await api.setDefaultProvider(providerId, expectedRevision),
+        );
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/providers/test' && req.method === 'POST') {
+      const api = this.#options.localProviderManagementApi;
+      if (!api) {
+        this.#sendJson(res, 404, { error: { code: 'provider_management_api_unavailable' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      const target = readProviderTarget(body);
+      if (target === null) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_provider_id' } });
+        return;
+      }
+      try {
+        // A probe that fails is still a 200: `ok: false` with a code is the
+        // answer, and a 500 for "that key is wrong" reads like the Host broke.
+        this.#sendJson(res, 200, await api.testProvider(target.providerId));
       } catch (error) {
         this.#sendApiError(res, error);
       }
@@ -5321,6 +5483,14 @@ export class HostSessionHttpServer {
     }
     if (error instanceof HostProjectApiError) {
       this.#sendJson(res, 409, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    if (error instanceof HostProviderApiError) {
+      // The status is the API's, not a guess made here: a masked key pasted
+      // into a form (400), a row another surface deleted (404), a stale
+      // revision (409) and a config.toml that cannot be parsed (409) need
+      // different remedies, and a 500 for any of them is a lie about the Host.
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
       return;
     }
     if (error instanceof HostRunApiError) {

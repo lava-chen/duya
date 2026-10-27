@@ -341,7 +341,6 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           onNewBlankProject={handleNewBlankProject}
           onUseExistingFolder={handleUseExistingFolder}
           onNewNoProjectSession={handleNewNoProjectSession}
-          onSelectThread={onSelectThread}
         >
           {/* Message Input rendered between greeting and project selector */}
           <div className="welcome-message-input">

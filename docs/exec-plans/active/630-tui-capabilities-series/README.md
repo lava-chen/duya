@@ -14,17 +14,17 @@
 | --- | --- | --- |
 | [630a 富面板模态原语](630a-tui-rich-panel-modal.md) | slash 触发的全屏模态面板通道 + Tabs/分页/搜索原语 | 无 |
 | [631 plugin 市场管理界面](631-tui-plugin-market-ui.md) | Host plugin/marketplace 写路由 + `/plugin` 多 tab 界面 | 630a |
-| [632 provider 与模型管理](632-tui-provider-management.md) | Host provider 写路由 + `/provider` 列表/向导/编辑 | 630a |
+| [632 provider 与模型管理](632-tui-provider-management.md) | Host provider 写路由 + `/provider` 列表/向导/编辑 | A 无 · B 630a |
 | [633 项目切换](633-tui-project-switch.md) | `/project` 切换 TUI 会话所在项目 | 无，可穿插 |
 | [634 事件流显示档](634-tui-transcript-display-profiles.md) | `/display` 显示组合切换 + Desktop 接共享 key | 无 |
 
-630a 先行合入；集成顺序（2026-10-26 用户拍板）：630a → 632 → 631 → 634 → 633。631 与 632 技术上都只依赖 630a，先后是排期选择。
+630a 先行合入；集成顺序（2026-10-26 用户拍板）：630a → 632 → 631 → 634 → 633。631 与 632 技术上都只依赖 630a 的面板部分，先后是排期选择。632 的实现拆成两片：PR A（Host 写面）不需要面板原语，已直接以 master 为 base 开工；PR B（`/provider` 面板）才依赖 630a。
 
 ## 参考实现
 
 - 插件界面交互形态：claude-code-haha 仓库 `src/commands/plugin/`（React Compiler 构建产物，原始 TS 在各文件 sourceMappingURL 的 `sourcesContent` 内）。
 - provider 管理链路：minimax-code 仓库 `packages/tui/src/features/provider/`、`packages/config/src/config.ts`。
-- 两仓库均为本机 `E:\cloned-projects\` 下的克隆，只对照行为，不搬代码。
+- 两仓库是本机的参考克隆，只对照行为，不搬代码；本地存放路径随机器而变，故不写进版本库文档。
 
 ## 验收
 
@@ -32,5 +32,6 @@
 
 ## 接续 / 结果
 
-计划检出：`.claude/worktrees/tui-capabilities-plan` · 分支：`codex/630-634-tui-capabilities-plans` · base：`e9391659`。
-下一步：按 630a 计划开工实现 worktree；其余切片在 630a 合入前保持 pending。
+计划检出：`.claude/worktrees/tui-capabilities-plan` · 分支：`codex/630-634-tui-capabilities-plans` · base：`e9391659`（已合入 master `d80ca3c6`）。
+实现检出（630a）：`.claude/worktrees/630a-rich-panel` · 分支：`codex/630a-tui-rich-panel-modal` · base：`d80ca3c6`。
+下一步：630a 过 PR 集成后开工 632；其余切片在 630a 合入前保持 pending。

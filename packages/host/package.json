@@ -319,13 +319,13 @@
       "types": "./dist/config-agents/index.d.ts",
       "import": "./dist/config-agents/index.js"
     },
-
     "./bot": {
-
       "types": "./dist/bot/index.d.ts",
-
       "import": "./dist/bot/index.js"
-
+    },
+    "./provider-management": {
+      "types": "./dist/provider-management/index.d.ts",
+      "import": "./dist/provider-management/index.js"
     },
     "./authorization/connector-approval-cache": {
       "types": "./dist/authorization/connector-approval-cache.d.ts",

@@ -7,13 +7,13 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host 记录 lease 生命周期、idle 停机先等回合 settle；CLI 重申请 lease 并从游标续订事件流 |
-| TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a–634 计划已过事实核对；下一步按 630a 建实现 worktree 开写模态原语 |
+| TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a 与 632 的 Host 写面已实现待合并；面板两片等 630a 合入后开工 |
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
 | 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 已合并，e2e 已补，真机冒烟待用户 |
 | 下一步建议下沉 | [2026-10-25 下一步建议下沉到 worker/Host](active/2026-10-25-next-step-suggestion-host.md) | S0 摸底完成；S1 起做 protocol + data 契约与表；PR #496 已合并 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
-| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S1–S6-A（含 #520/#519）已在独立组合分支汇合；核对组合基线、评审/CI，再按依赖顺序授权集成 |
+| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0 已合并（#495）；S1–S6-A 已在组合 PR #521 汇合并随本轮集成进 master |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
@@ -22,6 +22,7 @@
 | 插件 UI MCP 资源 | [2026-10-24 插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | 完成 S1 契约后先报告 schema diff 与受影响调用方，再推进 S2 |
 | 输出速度 tok/s | [2026-10-23 输出速度](active/2026-10-23-output-token-rate.md) | provider 校准路径：ai 测时长 → 协议契约 → 帧携带 → TUI 展示 |
 | 面板列树布局 | [2026-10-22 面板列树](active/2026-10-22-panel-column-layout.md) | 切片 A（列树渲染）与 B（脱窗 Electron 侧）并行开工；C/D 待 A 落地 |
+| 本次新建对话页对齐 | [2026-10-27 新建对话页布局](active/2026-10-27-new-chat-layout.md) | 最近会话列表已删、环境卡与三段式布局已过门禁并真机量测；待全量门禁后提交 |
 | 本次侧栏对齐 | [2026-10-22 侧栏对齐](active/2026-10-22-sidebar-alignment.md) | 已在最新 master 重建分支，实现行级状态图标、分组头三按钮与组内搜索 |
 | 本次公开树整理 | [2026-10-21 仓库树整理](active/2026-10-21-public-tree-cleanup.md) | 清理公开根目录、移动中文入口/架构文档并验证打包路径 |
 | 本次文档整理 | [2026-10-20 文档体系](active/2026-10-20-documentation-system.md) | 文档已整理；待处理文档范围外的两处门禁失败，见接续记录 |
@@ -41,6 +42,7 @@
 | rollout 换桶判定 | [2026-10-25 rollout 换桶](active/2026-10-25-data-rollout-bucket.md) | `appendBatch` 不再每批重命名 rollout 文件（路径带毫秒戳导致判定恒成立）；写路径耗时降 59%–68%；PR #462 已合并（`55cd1b97`） |
 | 读路径 fd 复用 | [2026-10-25 读路径 fd 复用](active/2026-10-25-data-read-range-fd.md) | 投影会话时一次打开 rollout 文件复用句柄，不再逐行 open/close；8000 条投影 656ms → 68ms；PR #466 已合并（`3b3e6470`） |
 | 消息写路径点查 | [2026-10-25 写路径点查](active/2026-10-25-data-append-index-lookup.md) | `appendBatch` 去重检查按批内 id 走主键点查，去掉长会话上的 O(N²)；待开 PR |
+| 网关通道能力补全 | [623 通道能力补全](active/623-gateway-channel-capability-parity.md) | 适配器层已交付并过类型/架构/单测（177 项）；下一步 Phase 3 接线 Host/Desktop 平台枚举 |
 | 其他产品任务 | [完整目录](catalog.md) | 定位用户指定主题，核对实际进度与依赖后认领 |
 | TUI 滚动语义 | [2026-10-23 TUI 滚动锚定](active/2026-10-23-tui-scroll-anchor.md) | 视窗改为绝对偏移 + 独立 follow，PR #388 已合并（`aec08d75`） |
 | TUI inline 滚动 | [2026-10-24 TUI inline 滚动](active/2026-10-24-tui-inline-scroll.md) | inline 不再接管滚轮，滚动交还终端 scrollback；修 `viewEnd` → `viewTop`，并拦住会让流式画面冻结的上滚入口 |
@@ -48,6 +50,7 @@
 | TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
 | TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
 | 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 已合并（PR #492，`333b025a`）；仅剩真机 Electron 点击验收未跑 |
+| 插件 App 主题通道 | [2026-10-27 插件 App 主题通道](active/2026-10-27-plugin-app-theme-channel.md) | 宿主向沙箱 iframe 推 `data-theme`；插件侧 token 层在 marketplace PR，两者需成对生效 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 

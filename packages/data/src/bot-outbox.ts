@@ -8,7 +8,7 @@ export const BOT_OUTBOX_MIGRATIONS: Migration[] = [{
   id: 48,
   name: 'create_bot_outbox',
   up(db) {
-    db.exec(`CREATE TABLE bot_outbox (
+    db.exec(`CREATE TABLE IF NOT EXISTS bot_outbox (
       id TEXT PRIMARY KEY, inbox_id TEXT NOT NULL, run_id TEXT NOT NULL,
       owner_id TEXT NOT NULL, bot_id TEXT NOT NULL, target_json TEXT NOT NULL,
       outbound_json TEXT NOT NULL, status TEXT NOT NULL
@@ -16,8 +16,8 @@ export const BOT_OUTBOX_MIGRATIONS: Migration[] = [{
       attempt INTEGER NOT NULL DEFAULT 0, lease_epoch INTEGER NOT NULL DEFAULT 0,
       deadline_ms INTEGER, remote_message_id TEXT, reason TEXT, created_ms INTEGER NOT NULL
     );
-    CREATE INDEX idx_bot_outbox_owner ON bot_outbox(owner_id, status);
-    CREATE INDEX idx_bot_outbox_bot ON bot_outbox(owner_id, bot_id, created_ms);`);
+    CREATE INDEX IF NOT EXISTS idx_bot_outbox_owner ON bot_outbox(owner_id, status);
+    CREATE INDEX IF NOT EXISTS idx_bot_outbox_bot ON bot_outbox(owner_id, bot_id, created_ms);`);
   },
 }];
 

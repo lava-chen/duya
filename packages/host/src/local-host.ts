@@ -67,6 +67,7 @@ import { createHostLocalSendMessageStateApi } from './local-send-message-state-a
 import { createHostLocalModelCapabilityApi } from './local-model-capability-api.js';
 import { createHostLocalProviderModelCapabilityApi } from './local-provider-model-capability-api.js';
 import { createHostLocalProviderCatalogApi } from './local-provider-catalog-api.js';
+import { createHostLocalProviderManagementApi } from './provider-management/index.js';
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
 import { createHostLocalPluginInventoryApi } from './local-plugin-inventory-api.js';
@@ -831,6 +832,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         new ProviderModelCapabilityStore(mainDatabase.db),
       ),
       localProviderCatalogApi: createHostLocalProviderCatalogApi(),
+      // The write side of the same tables: a CLI on this Host can add, edit,
+      // remove and probe a provider without an Electron process anywhere.
+      localProviderManagementApi: createHostLocalProviderManagementApi(),
       localAppConnectionApi: createHostLocalAppConnectionApi(
         new AppConnectionStore(mainDatabase.db, deriveConnectionSlug),
       ),

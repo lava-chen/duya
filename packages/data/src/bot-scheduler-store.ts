@@ -4,14 +4,14 @@ import type { Migration, SqliteDatabase } from './core-database.js';
 
 export const BOT_SCHEDULER_MIGRATIONS: readonly Migration[] = [{
   id: 46, name: 'bot_scheduler_ownership',
-  up: (db) => db.exec(`CREATE TABLE bot_scheduler_owners (
+  up: (db) => db.exec(`CREATE TABLE IF NOT EXISTS bot_scheduler_owners (
     owner_id TEXT NOT NULL, bot_id TEXT NOT NULL,
     mode TEXT NOT NULL CHECK (mode IN ('legacy','host')),
     epoch INTEGER NOT NULL, PRIMARY KEY (owner_id, bot_id)
   )`),
 }, {
   id: 47, name: 'bot_dispatch_preemptions',
-  up: (db) => db.exec(`CREATE TABLE bot_dispatch_preemptions (
+  up: (db) => db.exec(`CREATE TABLE IF NOT EXISTS bot_dispatch_preemptions (
     id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, bot_id TEXT NOT NULL,
     source_inbox_id TEXT NOT NULL, source_run_id TEXT NOT NULL,
     redrive_count INTEGER NOT NULL CHECK (redrive_count BETWEEN 0 AND 3),

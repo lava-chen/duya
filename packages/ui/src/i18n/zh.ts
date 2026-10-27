@@ -183,8 +183,11 @@ const zh: Record<TranslationKey, string> = {
   'chat.whatToBuildInSuffix': '里做什么',
   'chat.selectProject': '选择项目',
   'chat.openNewProject': '打开新项目...',
-  'chat.recentThreads': '最近对话',
   'chat.describeWhatToBuild': '描述你想构建什么...',
+  // Claude parity (2026-10-27)：新建对话页的环境选择卡。
+  'chat.chooseEnvironment': '选择环境',
+  'chat.workingDirectory': '工作目录',
+  'chat.workspaceInherited': '将沿用当前已授权会话的工作区',
   'chat.greeting.morning': '上午好，有什么想做的？',
   'chat.greeting.afternoon': '下午好，要不要休息一下？',
   'chat.greeting.evening': '晚上好，今天想做什么？',

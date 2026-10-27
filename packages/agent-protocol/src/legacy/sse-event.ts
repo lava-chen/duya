@@ -71,7 +71,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   Record<LegacySseEventType, readonly EventType[]>
 > = {
   // Today the declared type says `data: string` while the router actually sends
-  // `data.content` (apps/desktop/src/main/agents/server/router.ts:598-600)
+  // `data.content` (apps/desktop/src/main/agents/server/router.ts:599-601)
   // and the renderer forwards `event.data` (packages/ui/src/lib/agent-http-client.ts:577).
   // The declared type was a lie.
   text: ['assistant.text_block'],
@@ -81,7 +81,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   thinking_delta: ['assistant.thinking_delta'],
 
   // `tool_use` and `tool_use_started` carry IDENTICAL data
-  // (router.ts:587-598 vs :612-623) and the same on the worker side
+  // (router.ts:588-599 vs :613-624) and the same on the worker side
   // (packages/agent-protocol/src/worker-protocol.ts:319-333, two interfaces
   // that differ only in the `type` discriminant). The difference is ORDER, not
   // shape: `tool_use_started` is the provisional announcement while arguments
@@ -101,7 +101,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   tool_group_progress: ['tool.group_progress'],
 
   // The router actually emits `permission`, not `permission_request`
-  // (router.ts:634-638). drift test #9 exists to catch exactly that drift.
+  // (router.ts:635-639). drift test #9 exists to catch exactly that drift.
   permission_request: ['permission.requested'],
 
   turn_start: ['turn.started'],
@@ -131,7 +131,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
 /**
  * Event types the router emits that were NEVER in the `SSEEvent` union.
  * Listed so drift test #9 can assert the registry covers them — today
- * `normalizeWorkerEvent` (router.ts:571-778) produces at least ten types the
+ * `normalizeWorkerEvent` (router.ts:572-779) produces at least ten types the
  * union never declared.
  */
 export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventType[]>> = {
@@ -139,7 +139,7 @@ export const UNDECLARED_ROUTER_EVENTS: Readonly<Record<string, readonly EventTyp
   token_usage: ['assistant.usage'],
   // `checkpoint` is absorbed by compaction.completed + run.started{resumedFrom};
   // its {messages, generation} payload is a STORAGE shape and must not cross
-  // the protocol boundary (router.ts:1880-1888,
+  // the protocol boundary (router.ts:1890-1898,
   // packages/agent-protocol/src/worker-protocol.ts:286-293).
   checkpoint: [],
   // Control frame, not an event.

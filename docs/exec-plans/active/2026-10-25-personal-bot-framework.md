@@ -712,6 +712,21 @@
 **验证**（协调者独立复核）：build:packages 0（bot 先于 host）；vitest 5 文件 43 例全绿；typecheck:all 0；architecture:check 新增违规 0（3 条既有 fingerprint 失效未 --write）；retirement ratchet 772/772；host 全量 2000 passed / 5 skipped；desktop diff 空；packages/bot/src 零 `node:*` 导入。
 
 **裁量记录**（子 agent 报告，协调者认可）：randomSuffix 为可选注入（bot 内 Math.random 兜底，host 注入 crypto——保 desktop 零 diff）；worktree 内手工补 @duya/bot junction（junction-worktree.mjs 从主检出枚举包，看不见本 worktree 新包）；boundary-gates LAYERS 未动（host 本不在 LAYERS scope，bot 仅 import protocol 无 finding）。
+## S1–S3a 集成前重 base（2026-10-26）
+
+三条 PR 在 `d80ca3c6` 上全部 DIRTY。冲突只落在被跟踪的生成产物 `packages/host/bundle/{worker-entry.js,worker-metafile.json,BashTool/BashWorker.js}`，源码零冲突；处理方式与「S0 执行记录」同一条：重放源码提交后 `npm run bundle:worker` 重生成并提交产物，不手工合并生成内容，细则见[构建](../../development/build.md)。
+
+| 分支 / PR | base | 新 head | 历史处理 |
+| --- | --- | --- | --- |
+| `codex/bot-framework-s1` / #500 | `d80ca3c6` | `a04b6d27` | 8 个提交原样重放，末尾补 1 个产物提交 |
+| `codex/bot-framework-s2` / #502 | 新 S1 head | `5e06887a` | 只重放 5 个真实提交；丢弃 2 个纯产物提交与 1 个空 CI retrigger 提交，末尾统一重生成一次产物 |
+| `codex/bot-framework-s3a` / #503 | `d80ca3c6` | `01342b44` | 1 个源码提交 + 1 个产物提交 |
+
+净评审面不变（22 / 47 / 10 文件）。三条最新 head 的五检查 architecture / build / test / test scope / typecheck 全部 pass，`mergeable=MERGEABLE`、`mergeStateStatus=CLEAN`。
+
+合并顺序仍是 #500 → #502 → #503（见交接文档「接手的第一步」）。因为 `packages/host/bundle/` 是被跟踪产物且每条分支各自重生成过一次，**每合并一条，剩余分支都会重新变 DIRTY**；一次重同步只需 `git rebase origin/master` + `npm run bundle:worker` + 提交产物，本次实测单条约 5 分钟本机验证（不含 CI 等待）。
+
+重 base 用的检出：`.claude/worktrees/bot-rebase`（本切片独占）。三个来源检出 `.claude/worktrees/bot-framework-s0 / -s2 / -s3a` 仍停在被替换掉的旧 head（`e20e5ccc` / `3a35e047` / `6c5d6229`），PR 未合并前保留，但**从这些检出再次强推会把冲突态历史推回去**，接手方先确认 owner 已退出。
 
 ## 关键决策
 
@@ -743,6 +758,19 @@
 | 同上 | Git | 暂存具名文件（gate 三件套、package.json、test.yml、wiring 测试、本计划、README 行） | — | 不入 Git：junction 链接、/e/tmp 日志 |
 | `24590d10` 首推 | ubuntu 22.x CI | architecture job | 1；agent-retirement reference ratchet FAIL：773/772，测试断言字符串字面量新增 1 条退役层引用（`bot-boundary-gate.test.ts:333`） | ratchet 只减不增，禁 bump baseline；修法=断言去退役路径字面量，改钉结构性事实（成员/消费方数下限+desktop 接线），退役层身份由 census 输出与计划文档承载 |
 | `c8946122`（ratchet 修复后 head） | win32 本地 | `node scripts/architecture/agent-retirement-gate.mjs`（pipefail 取真实退出码） | 0；ratchet PASS 772/772 / 0 new | 本地与门禁+retirement 测试 24 例全绿 |
+| `d80ca3c6` + S1 重放 8 提交＋产物重生成 | win32 / Node 24.16.0 / TypeScript 5.9.3（检出 `.claude/worktrees/bot-rebase`，junction 依赖） | `npm run architecture:check` | 0；无新增违规 | 2883 findings 全为既有 tolerated；3 条 baseline 指纹失效未 `--write` |
+| 同上 | 同上 | `npm run bundle:verify` | 0；FRESH 0/991 | 产物先取 base 版本占位，末尾一次重生成后转 FRESH |
+| 同上 | 同上 | `node scripts/architecture/bot-boundary-gate.mjs` | 0；R1 pending / R2 OK(336) / R3 OK(651) | 与 S0 记录同判定 |
+| 同上 | 同上 | `npm run typecheck:all` | 0；含全部 workspace 构建 | 首跑前需先 `build:packages`，否则 host 测试加载期报 `@duya/plugin-core` 子路径解析失败 |
+| 同上 | 同上 | host bot facade 2 文件＋身份 3 文件 | 0；22 例（首轮另 39 例含 1 文件加载失败） | 失败归因新检出缺 dist，构建后复跑全绿；未跳过用例 |
+| 新 S1 head + S2 重放 5 提交 | 同上 | architecture / `bundle:verify` / bot-boundary / retirement | 0；FRESH 0/1000 | R1 转 MEASURED：9 个 bot 源文件 0 禁止边；ratchet 不增 |
+| 同上 | 同上 | `packages/bot` + host bot + 身份 8 文件 | 0；68 例 | S2 为纯移动切片，行为夹具不变 |
+| 同上 | 同上 | `npx vitest run scripts/architecture/ --no-file-parallelism` | 1；19 文件 335 用例全过 | 退出码来自 `[vitest-worker]: Timeout calling "onTaskUpdate"` 未处理错误，与 S0 记录同签名，无用例失败 |
+| 同上 | 同上 | `npm run typecheck:all` | 0 | 前置：手工补 `@duya/bot` 的 overlay 链接，见[worktree](../../development/worktree.md) |
+| `d80ca3c6` + S3a 重放 1 提交＋产物重生成 | 同上 | `packages/data` 全套 17 文件 | 0；115 例（含 `bot-inbox-store` 30 例） | S3a 只改 data / protocol，不触 host 源码 |
+| 同上 | 同上 | `bundle:verify` / `architecture:check` / `typecheck:all` | 0；FRESH 0/990 | 清理本切片构建残留（ignored `packages/bot/`）后 bot-boundary 回到 R1 pending PASS——残留会让 R1 报 BLIND 并 FAIL |
+| 三条最新 head `a04b6d27` / `5e06887a` / `01342b44` | ubuntu 22.x CI（PR #500 / #502 / #503） | architecture / build / test / test scope / typecheck | 全 pass | #500 test 8m2s、#502 test 8m0s、#503 test 9m51s；CI 结论覆盖本机验证 |
+| 同上 | Git | 三条远端分支 `--force-with-lease` 重推 | 0 | 外部副作用仅远端分支与 PR head；未合并、未发布、未回收任何检出 |
 | `c8946122` | ubuntu 22.x CI（PR #495） | architecture / build / typecheck / test / test scope 五检查 | 全 pass；test 8m33s 含新测试文件在 Linux 首跑 | CI 结论覆盖本机验证；PR 待 review 与集成授权 |
 | S1 全量（host src/bot + protocol bot-api + 两 bridge + schema revision） | win32 / Node 24.16.0 / Vitest 3.2.4 | `npx vitest run packages/host/tests/ --no-file-parallelism` | 0；1984 passed / 5 skipped（含 S1 新增 22 例与既有 identity/prompt 基线） | host 全域回归 |
 | 同上 | 同上 | `npm run build:packages` / `npm run typecheck:all` | 0 / 0 | workspace 全构建与类型门禁 |
@@ -757,6 +785,8 @@
 
 PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI；没有申请或执行合并。当前工具无法读取原 ChatGPT 完整线程；必要时由后续对话补全文，不阻塞有源码支撑的方案。
 回收：保留 worktree 与分支，等待设计 review / PR 集成，不执行删除。
+
+**S1–S3a 重 base 接续（2026-10-26 第三会话）**：三条 PR 已重 base 到 `d80ca3c6` 并推最新 head，冲突归零、五检查全绿（详见上方「S1–S3a 集成前重 base」与其验证行）。外部副作用：三条远端分支被 `--force-with-lease` 覆盖，来源检出保留在旧 head 未回收；未合并任何 PR，未发布。已实现的记录落点：本次重 base 的历史收紧只发生在 #502（丢弃 2 个纯产物提交与 1 个空提交），源码 diff 未变。**下一步**：等集成授权按 #500 → #502 → #503 逐条合并；每合一条，对下一条重复 `git rebase origin/master` + `npm run bundle:worker` + 提交产物并重跑门禁。S3b（#504）当前 CI 有 2 处失败且仍 CONFLICTING，排在 S3a 集成之后再处理。
 
 **S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
 

@@ -14,23 +14,23 @@
  * ## `seq` ownership moved from the host to the runtime
  *
  * The id space is PER-SESSION but the counter is PER-TURN. Every POST reopens
- * the stream with `let seqNum = 0` (apps/desktop/src/main/agents/server/router.ts:1731)
+ * the stream with `let seqNum = 0` (apps/desktop/src/main/agents/server/router.ts:1741)
  * and increments from
- * there (apps/desktop/src/main/agents/server/router.ts:1869), writing that
+ * there (apps/desktop/src/main/agents/server/router.ts:1879), writing that
  * value as the SSE `id:` and pushing it into the session-wide ring via
- * `updateLastEventId` / `recordEvent` (apps/desktop/src/main/agents/server/router.ts:1869-1871).
+ * `updateLastEventId` / `recordEvent` (apps/desktop/src/main/agents/server/router.ts:1879-1881).
  *
  * `session.lastEventId` and the ring are never reset between turns, so **turn
  * two re-mints ids 1..M that turn one already used.**
  *
  * The reconnect path is NOT the broken part — it was already fixed. Replay
- * writes each record's original `eventId` (apps/desktop/src/main/agents/server/router.ts:3134-3149)
+ * writes each record's original `eventId` (apps/desktop/src/main/agents/server/router.ts:3144-3159)
  * and the live
- * counter resumes from `session.lastEventId` (apps/desktop/src/main/agents/server/router.ts:3160),
+ * counter resumes from `session.lastEventId` (apps/desktop/src/main/agents/server/router.ts:3170),
  * with the regression note
- * at apps/desktop/src/main/agents/server/router.ts:3157-3159 recording the
+ * at apps/desktop/src/main/agents/server/router.ts:3167-3169 recording the
  * `let seqNum = 0` bug that preceded it). What
- * breaks is the collision above: `getEventsSince(sessionId, lastEventId)` (apps/desktop/src/main/agents/server/router.ts:3134)
+ * breaks is the collision above: `getEventsSince(sessionId, lastEventId)` (apps/desktop/src/main/agents/server/router.ts:3144)
  * filters on
  * `eventId > lastEventId`, so after a second turn a
  * reconnecting client can be handed turn-one events, or be handed nothing at
@@ -73,9 +73,9 @@ export interface RunEventEnvelope<T extends RunEvent = RunEvent> {
    * and that is not a collision.
    *
    * The current implementation gets this wrong in the opposite direction. The
-   * SSE counter is re-initialised to 0 on every POST (router.ts:1694) while
+   * SSE counter is re-initialised to 0 on every POST (router.ts:1741) while
    * `session.lastEventId` and the replay ring are per-session and never reset
-   * (router.ts:3114, packages/host/src/worker-session-registry.ts:18), so turn two re-issues ids turn
+   * (router.ts:3127, packages/host/src/worker-session-registry.ts:18), so turn two re-issues ids turn
    * one already used and `getEventsSince`'s `eventId > lastEventId` filter stops
    * meaning anything (packages/host/src/worker-session-registry.ts:195). Collapsing the two scopes into one
    * session-wide counter is what makes that unrecoverable: there is no way to
