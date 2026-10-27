@@ -21,6 +21,7 @@ import type { TuiSlashCommandDef, TuiSlashContext, TuiSlashOutcome } from './typ
 import type { TuiSettingsRow } from '../TUIApp.js';
 import type { CommandLocale } from '@duya/command-catalog';
 import { EFFORT_LABELS, normalizeEffort, type EffortLevel, type ThemeName } from '../theme.js';
+import type { ToolGroupMode } from '../transcript-view.js';
 import {
   COMPLETION_ROWS_RANGE,
   describeEnabled,
@@ -28,10 +29,12 @@ import {
   describeRows,
   describeTuiDisplayMode,
   describeTuiTheme,
+  describeToolGroupMode,
   effortForModel,
   INPUT_ROWS_RANGE,
   parseTuiPreferences,
   serializeEffortByModel,
+  TOOL_GROUP_MODES,
   TUI_COMPLETION_ROWS_SETTING,
   TUI_DISPLAY_MODE_SETTING,
   TUI_EFFORT_BY_MODEL_SETTING,
@@ -43,6 +46,7 @@ import {
   TUI_SHOW_TOOL_RESULTS_SETTING,
   TUI_STARTUP_BANNER_SETTING,
   TUI_THEME_SETTING,
+  TUI_TOOL_GROUP_MODE_SETTING,
   type TuiDisplayMode,
   type TuiPreferences,
   type TuiThemePreference,
@@ -55,7 +59,7 @@ const INPUT_ROW_CHOICES: readonly number[] = [4, 6, 8, 12, 16];
 /** Effort levels offered when the model does not declare any. */
 const DEFAULT_EFFORT_LEVELS: readonly EffortLevel[] = ['auto', 'low', 'medium', 'high', 'max'];
 
-type SettingId =
+export type SettingId =
   | 'language'
   | 'theme'
   | 'display-mode'
@@ -64,22 +68,32 @@ type SettingId =
   | 'show-thinking'
   | 'expand-blocks'
   | 'tool-results'
+  | 'tool-groups'
   | 'startup-banner'
   | 'completion-rows'
   | 'input-rows';
 
-interface LivePreferences {
+/** The rows `/display` shows alongside its profiles: the transcript switches. */
+export const TRANSCRIPT_SETTING_IDS: readonly SettingId[] = [
+  'show-thinking',
+  'expand-blocks',
+  'tool-results',
+  'tool-groups',
+];
+
+export interface LivePreferences {
   /** What the screen is actually painted with, after the terminal's fallback. */
   readonly theme: string;
   readonly showThinking: boolean;
   readonly expandBlocks: boolean;
   readonly showToolResults: boolean;
+  readonly toolGroupMode: ToolGroupMode;
   readonly completionRows: number;
   readonly inputRows: number;
 }
 
 /** What the running TUI can be told to change right now. */
-interface LivePatch {
+export interface LivePatch {
   readonly effort?: string | null;
   readonly locale?: CommandLocale;
   /** `null` = follow the environment, which is what the `system` row means. */
@@ -87,12 +101,13 @@ interface LivePatch {
   readonly showThinking?: boolean;
   readonly expandBlocks?: boolean;
   readonly showToolResults?: boolean;
+  readonly toolGroupMode?: ToolGroupMode;
   readonly completionRows?: number;
   readonly inputRows?: number;
 }
 
 /** The two halves of one change: what the TUI applies, what the Host saves. */
-interface SettingsChange {
+export interface SettingsChange {
   readonly patch: LivePatch;
   readonly settings: Readonly<Record<string, string>>;
 }
@@ -116,7 +131,7 @@ function nextIn<T>(list: readonly T[], current: T): T {
   return list[(index + 1) % list.length] as T;
 }
 
-class SettingsState {
+export class SettingsState {
   preferences: TuiPreferences;
   live: LivePreferences;
   effortLevels: readonly EffortLevel[] = DEFAULT_EFFORT_LEVELS;
@@ -220,6 +235,12 @@ class SettingsState {
         detail: "Show a tool's output underneath its call without expanding anything else.",
       },
       {
+        id: 'tool-groups',
+        label: 'Tool groups',
+        valueLabel: describeToolGroupMode(live.toolGroupMode),
+        detail: 'How much of a batch of tool calls the trail lists: every call, one line each, or only the one running.',
+      },
+      {
         id: 'startup-banner',
         label: 'Startup banner',
         valueLabel: describeEnabled(prefs.startupBanner),
@@ -318,6 +339,12 @@ class SettingsState {
         this.preferences = { ...this.preferences, showToolResults };
         return { patch: { showToolResults }, settings: { [TUI_SHOW_TOOL_RESULTS_SETTING]: String(showToolResults) } };
       }
+      case 'tool-groups': {
+        const toolGroupMode = nextIn(TOOL_GROUP_MODES, this.live.toolGroupMode);
+        this.live = { ...this.live, toolGroupMode };
+        this.preferences = { ...this.preferences, toolGroupMode };
+        return { patch: { toolGroupMode }, settings: { [TUI_TOOL_GROUP_MODE_SETTING]: toolGroupMode } };
+      }
       case 'startup-banner': {
         const startupBanner = !this.preferences.startupBanner;
         this.preferences = { ...this.preferences, startupBanner };
@@ -340,7 +367,7 @@ class SettingsState {
 }
 
 /** Persist and apply. A failed write is reported, never swallowed silently. */
-function commit(ctx: TuiSlashContext, change: SettingsChange): void {
+export function commitSettings(ctx: TuiSlashContext, change: SettingsChange): void {
   ctx.tui.applyTuiPreferences?.(change.patch);
   ctx.tui.refresh?.();
   for (const [key, value] of Object.entries(change.settings)) {
@@ -384,6 +411,7 @@ const SETTINGS_COMMAND: TuiSlashCommandDef = {
       showThinking: saved.showThinking,
       expandBlocks: saved.expandBlocks,
       showToolResults: saved.showToolResults,
+      toolGroupMode: saved.toolGroupMode,
       completionRows: saved.completionRows,
       inputRows: saved.inputRows,
     }, ctx.session.model ?? '');
@@ -405,7 +433,7 @@ const SETTINGS_COMMAND: TuiSlashCommandDef = {
         label: `${row.label} · ${row.valueLabel}`,
         value: row.id,
       })));
-      if (picked !== null) commit(ctx, state.cycle(picked as SettingId));
+      if (picked !== null) commitSettings(ctx, state.cycle(picked as SettingId));
       return { kind: 'handled' };
     }
 
@@ -414,7 +442,7 @@ const SETTINGS_COMMAND: TuiSlashCommandDef = {
       rows: state.rows(),
       footer: 'type to filter · Enter/Space change · Esc close',
       onActivate: (id) => {
-        commit(ctx, state.cycle(id as SettingId));
+        commitSettings(ctx, state.cycle(id as SettingId));
         return state.rows();
       },
     });
@@ -434,6 +462,7 @@ export const SETTINGS_ROW_IDS: readonly SettingId[] = [
   'show-thinking',
   'expand-blocks',
   'tool-results',
+  'tool-groups',
   'startup-banner',
   'completion-rows',
   'input-rows',

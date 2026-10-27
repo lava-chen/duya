@@ -130,6 +130,23 @@ describe('TranscriptRenderer', () => {
     );
   });
 
+  it('re-renders when the tool-group mode changes', () => {
+    const model = seedModel();
+    const renderer = new TranscriptRenderer();
+    const full = renderer.lines(model, OPTIONS).join('\n');
+    expect(strip(full)).toContain('a.ts');
+
+    // A facet the cache does not know about serves the old bytes forever, and a
+    // cache that misses forever is indistinguishable from one that works.
+    const running = renderer.lines(model, { ...OPTIONS, toolGroupMode: 'running' });
+    expect(strip(running.join('\n'))).not.toContain('a.ts');
+    expect(running.join('\n')).toBe(renderTranscript(model, { ...OPTIONS, toolGroupMode: 'running' }));
+    // Heights come from the same folded rows, or the scroll window would count
+    // lines the paint never draws.
+    expect(renderer.totalLines(model, { ...OPTIONS, toolGroupMode: 'running' }))
+      .toBe(renderTranscript(model, { ...OPTIONS, toolGroupMode: 'running' }).split('\n').length);
+  });
+
   it('survives clear and keeps producing correct output for new blocks', () => {
     const model = seedModel();
     const renderer = new TranscriptRenderer();

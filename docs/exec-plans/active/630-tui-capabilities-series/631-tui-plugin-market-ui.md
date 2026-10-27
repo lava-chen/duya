@@ -1,7 +1,7 @@
 # 631 TUI 插件市场管理界面
 
-状态：active · 负责人：未认领 · 更新：2026-10-26
-分支：未建 · worktree：未建 · base：master（需含 630a） · owner：无
+状态：active（Host 写路由项被 #514 阻塞） · 负责人：未认领 · 更新：2026-10-26
+分支：`codex/631-plugin-write-routes`（已建、无提交） · worktree：`.claude/worktrees/631-plugin-host`（依赖已接，空置） · base：`d80ca3c6`（需含 630a） · owner：无
 
 ## 目标与边界
 
@@ -37,13 +37,17 @@
 
 - 「安装目录在 Electron userData」是独立 Host 的历史妥协（registry-api 头注释）；本切片把缓存目录参数化到 Host data root，保持对既有 `%APPDATA%/duya` 布局的读取兼容，避免 Desktop/TUI 各装一份。
 - enabled 与 install 分离的既有模型正好对应参考实现的「installed 记录 + settings 级联 enabled」，不需要新配置文件。
+- **上收成本实测比计划预估低**：Desktop 侧 `apps/desktop/src/main/plugins/marketplace/git-source.ts` 只有 `getMarketplacesCacheRoot()` 一处 `import { app } from 'electron'`，其余每个函数都已带 `rootOverride?: string` 形参（`:30/:35/:195/:250/:275/:300/:358`）；`manifest.ts` 与 `manager.ts` 不引 electron。也就是说搬动主要是换 root getter，不是重写调用链。
+- **Host `[plugins]` / `[marketplaces]` 写路由被 PR #514 阻塞**（2026-10-26 核对，推翻「只被 630a 阻塞」的原假设）：master 的 `packages/host/src/config-agents/config-file.ts` 外科手术 TOML 编辑器对 `[agents]` 硬编码；通用化的 `readConfigNamespace` / `editConfigNamespace` / `verifyConfigNamespace` / `writeConfigNamespace` 目前只存在于未合并分支 `codex/632-provider-write-routes`（#514）。631 不把分支叠在 632 上——那会把 631 的提交带进 #514 的 diff，评审面失控。
+- 因此第一项（安装执行上收 `plugin-core`）与第三项（TUI 面板）都不受该阻塞，可先行；只有第二项「Host 写路由」等 #514 合入。
 
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| 待执行 | win32 / Node 24 | 验收清单全部命令 | — | 基线在开工检出重记 |
+| `d80ca3c6`（只读核对，未改动） | win32 / Node 24 | grep `electron` / `rootOverride` 于 `apps/desktop/src/main/plugins/marketplace/*`；读 `packages/host/src/config-agents/config-file.ts` 与 #514 diff | — | 「现状事实」与「发现与决策」第 3、4 条的证据来源 |
 
 ## 接续 / 结果
 
-下一步：等 630a 合入后建实现 worktree，从「安装执行上收」开始；完成判据是该项单测 + Desktop 回归不变。阻塞：630a 未合入前不得动 TUI 面板部分。
+下一步：不等的部分先做——从「安装执行上收 `plugin-core`」起（clone/缓存目录/装卸纯函数化，Desktop 改调用、行为不变），完成判据是该项单测 + Desktop 回归不变。
+阻塞：630a（PR #512）未合入前不动 TUI 面板部分；#514 未合入前不写 Host `[plugins]`/`[marketplaces]` 路由。检出 `.claude/worktrees/631-plugin-host` 已分配并保持空置，等其中之一解除。

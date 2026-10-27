@@ -87,6 +87,19 @@ import { spanText, tokensToSpans, PLAIN_STYLE, type SpanStyle, type StyledSpan }
 
 export { escapeTags } from './markdown/escape.js';
 
+/**
+ * Which rows of a tool run the trail lists.
+ *
+ * The three questions a reader asks of a batch are different ones: `full`
+ * shows every call with its output, `names` shows the calls without their
+ * content, `running` shows only what is in flight and folds the settled calls
+ * behind the batch header. This is the axis `/display`'s tool-group row moves.
+ * It is deliberately NOT folded into `showToolResults`: that one answers "draw
+ * bodies or not" and stays orthogonal, because a reader can want every call
+ * listed and none of their JSON, or only the running call and its output.
+ */
+export type ToolGroupMode = 'full' | 'names' | 'running';
+
 /** How a transcript is currently being drawn. */
 export interface RenderOptions {
   /** Show full thinking text rather than the collapsed one-line summary. */
@@ -109,6 +122,14 @@ export interface RenderOptions {
    * plan — which is what someone who does not want to read reasoning wants.
    */
   readonly showThinking?: boolean;
+  /**
+   * Which tool calls of the transcript get a row. Omitted means `full`.
+   *
+   * `running` folds a settled call to zero rows and leaves its slot in the plan
+   * alone — see `renderPlannedBlock`. `names` is the opposite case: every row
+   * stays, only the bodies under them go.
+   */
+  readonly toolGroupMode?: ToolGroupMode;
   /** Theme token → blessed tag body. Defaults to the dark palette. */
   readonly theme?: ThemeTags;
   /**
@@ -1023,6 +1044,19 @@ function groupChildRow(
   return `${plan.rowPrefix}${styles.muted(escapeTags(target))}${toolDisclosureOf(block, options, styles)}`;
 }
 
+/**
+ * Whether this tool's result body is drawn at all.
+ *
+ * `names` folds a call to its row: no body, and no `[+ N lines]` marker to
+ * hint at one. It is a default rather than a lock — the transcript-wide expand
+ * and an individually expanded block both win, because a reader who explicitly
+ * asked for content has to get it without leaving the mode.
+ */
+function toolBodyAllowed(options: RenderOptions, id: string): boolean {
+  if (options.toolGroupMode !== 'names') return true;
+  return options.expanded || options.expandedBlockIds?.has(id) === true;
+}
+
 /** `[-]` / `[+ N lines]` for one tool call. */
 function toolDisclosureOf(
   block: Extract<Block, { kind: 'tool' }>,
@@ -1031,6 +1065,7 @@ function toolDisclosureOf(
 ): string {
   const result = block.result?.trimEnd() ?? '';
   if (result.trim() === '') return '';
+  if (!toolBodyAllowed(options, block.id)) return '';
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
@@ -1185,6 +1220,9 @@ function nodeBody(
     return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
+  // `names` folds every tool body, a todo list included: the row above already
+  // says `Todo list 2/4`, which is the same fact in fewer lines.
+  if (!toolBodyAllowed(options, block.id)) return [];
 
   // A todo write draws its list whether or not tool results are shown: the list
   // IS the result of the call, and a disclosure that hid it would hide the only
@@ -1210,6 +1248,17 @@ export function renderPlannedBlock(
   options: RenderOptions,
   styles: Styles,
 ): string[] {
+  // A settled call under `running` draws nothing. The decision is made from the
+  // PLAN rather than by dropping the block from the list because the batch
+  // header counts its own run and every connector is geometry: a filtered block
+  // would print `Read 2 files` over a batch of three and repaint the trail. A
+  // folded call costs no rows — its gap row goes with it, since a blank that
+  // belongs to hidden content is hidden content — but it keeps its slot.
+  const folded = options.toolGroupMode === 'running' &&
+    block.kind === 'tool' &&
+    block.status !== 'running';
+  if (folded && plan.role !== 'group-head') return [];
+
   const rows: string[] = [];
   if (plan.gap) rows.push('');
 
@@ -1222,8 +1271,9 @@ export function renderPlannedBlock(
     rows.push(`${plan.connector ?? '└'} ${groupHeadRow(plan.group ?? summarizeGroup([]), styles)}`);
     // The head block IS the batch's first call, so its own target row follows
     // the summary — the batch reads as `Read 3 files` then three targets, not
-    // as two of three targets.
-    if (block.kind === 'tool') {
+    // as two of three targets. When it is the only thing the batch shows, the
+    // header alone is the answer: `Read 3 files` is the whole sentence.
+    if (block.kind === 'tool' && !folded) {
       rows.push(groupChildRow(block, plan, options, styles));
       rows.push(...nodeBody(block, plan, options, styles));
     }
@@ -1582,7 +1632,9 @@ export function renderTranscript(
     const plan = plans[index];
     if (plan === undefined) return;
     const rows = renderPlannedBlock(block, plan, options, styles);
-    if (block.id === options.selectedBlockId) {
+    // A fold can empty a block, and a block with no row has nothing to mark:
+    // indexing a zero-length array would mint a `❯ undefined` row.
+    if (rows.length > 0 && block.id === options.selectedBlockId) {
       // The selection caret goes on the block's first NON-EMPTY row: a stanza
       // gap would otherwise swallow it and the reader would see nothing.
       const target = rows.findIndex((row) => row !== '');
