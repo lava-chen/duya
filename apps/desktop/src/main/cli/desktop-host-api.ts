@@ -82,6 +82,7 @@ import { createHostLocalSendMessageStateApi } from '@duya/host/local-send-messag
 import { createHostLocalModelCapabilityApi } from '@duya/host/local-model-capability-api';
 import { createHostLocalProviderModelCapabilityApi } from '@duya/host/local-provider-model-capability-api';
 import { createHostLocalProviderCatalogApi } from '@duya/host/local-provider-catalog-api';
+import { createHostLocalProviderManagementApi } from '@duya/host/provider-management';
 import { createHostLocalAppConnectionApi } from '@duya/host/local-app-connection-api';
 import { createHostLocalPluginInventoryApi } from '@duya/host/local-plugin-inventory-api';
 import { createHostLocalPluginSetupApi } from '@duya/host/local-plugin-setup-api';
@@ -410,6 +411,9 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
       new ProviderModelCapabilityStore(mainDatabase),
     ),
     localProviderCatalogApi: createHostLocalProviderCatalogApi(),
+    // Same write side the standalone Host serves, so a CLI attached to the
+    // Desktop's Host manages providers exactly as it manages its own.
+    localProviderManagementApi: createHostLocalProviderManagementApi(),
     localAppConnectionApi: createHostLocalAppConnectionApi(
       new AppConnectionStore(mainDatabase, deriveConnectionSlug),
     ),

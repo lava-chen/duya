@@ -14,11 +14,11 @@
 | --- | --- | --- |
 | [630a 富面板模态原语](630a-tui-rich-panel-modal.md) | slash 触发的全屏模态面板通道 + Tabs/分页/搜索原语 | 无 |
 | [631 plugin 市场管理界面](631-tui-plugin-market-ui.md) | Host plugin/marketplace 写路由 + `/plugin` 多 tab 界面 | 630a |
-| [632 provider 与模型管理](632-tui-provider-management.md) | Host provider 写路由 + `/provider` 列表/向导/编辑 | 630a |
+| [632 provider 与模型管理](632-tui-provider-management.md) | Host provider 写路由 + `/provider` 列表/向导/编辑 | A 无 · B 630a |
 | [633 项目切换](633-tui-project-switch.md) | `/project` 切换 TUI 会话所在项目 | 无，可穿插 |
 | [634 事件流显示档](634-tui-transcript-display-profiles.md) | `/display` 显示组合切换 + Desktop 接共享 key | 无 |
 
-630a 先行合入；集成顺序（2026-10-26 用户拍板）：630a → 632 → 631 → 634 → 633。631 与 632 技术上都只依赖 630a，先后是排期选择。
+630a 先行合入；集成顺序（2026-10-26 用户拍板）：630a → 632 → 631 → 634 → 633。631 与 632 技术上都只依赖 630a 的面板部分，先后是排期选择。632 的实现拆成两片：PR A（Host 写面）不需要面板原语，已直接以 master 为 base 开工；PR B（`/provider` 面板）才依赖 630a。
 
 ## 参考实现
 
