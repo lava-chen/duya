@@ -1,7 +1,7 @@
 # TUI 租约丢失与事件流中断的韧性修复
 
-状态：active · 负责人：本会话 (2026-10-26) · 更新：2026-10-26
-分支：codex/tui-lease-resilience · worktree：E:/Projects/duya/.claude/worktrees/lease-resilience · base：e9391659 (origin/master) · owner：本会话
+状态：merged · 负责人：本会话 (2026-10-26) · 更新：2026-10-26
+分支：codex/tui-lease-resilience（已合并）· PR #505 · merge commit eaa33d80 · base：e9391659 (origin/master) · owner：本会话
 
 ## 目标与边界
 
@@ -63,7 +63,7 @@
 - [x] Host：idle 停机改为 turn-aware（先 settle 再关服务，可取消）
 - [x] CLI：lease 丢失检测与重新申请
 - [x] CLI：run 事件流游标续订
-- [ ] 测试、门禁、PR（测试与门禁已完成，PR 待建）
+- [x] 测试、门禁、PR（PR #505，merge commit eaa33d80）
 
 ## 发现与决策
 
@@ -97,6 +97,8 @@
 | e9391659 + 本切片未提交改动 | win32 / node v24.16.0 | `npx vitest run`（上列 5 套件 + idle-shutdown / client-lease-holder / run-event-resume / chat-tui-lease-loss / host-event-stream） | 0，10 suites / 57 tests passed | 新增 17 个单测 + 1 个真机 Host e2e |
 | 同上 | 同上 | `npm run typecheck:all` | 0 | 全仓 strict 通过 |
 | 同上 | 同上 | `npm run architecture:check` | 0，`OK — no new boundary violations` | 另有 3 条既有 fingerprint 不再触发的提示，与本次无关 |
+| eaa33d80（已合并 master，detached） | win32 / node v24.16.0 | `npm run build:packages` → 上列 10 套件 → `npm run typecheck:all` → `npm run architecture:check` | 全部 0；10 suites / 57 tests passed | 合并后重验 |
+| eaa33d80 | 同上 | `npm run bundle:verify` | 1（仅本地） | 唯一命中是检出级 EOL 幻影 `inline-content.ts`：`git hash-object` 与 `HEAD:` 同为 `6c4ca613`，内容未变；同一 commit 的 CI `architecture` job 为 success |
 
 新增 e2e `chat-tui-lease-loss.test.ts` 用真实 ephemeral client-scoped Host（`clientLeaseIdleTimeoutMs: 100`、
 `idleShutdownDrainTimeoutMs: 15_000`）复现事故：回合中途关闭 lease，1.5 s 后重新附着，断言
@@ -106,14 +108,11 @@ Host 在宽限后自行退出。这覆盖了「lease 丢失 → idle → 先 set
 
 ## 接续 / 结果
 
-- 已完成：Host lease 生命周期日志（acquired / released + `heldMs` / `reason` / `leases`）与 idle
-  判定日志；`createIdleShutdown` 把 drain 移到 `server.close()` 之前，等待期间可被重附着取消；
-  `HostClientLease.lost` 让客户端知道租约被 Host 结束；`holdClientLease` 退避重申请；
-  `watchRunEventsWithResume` 从 `afterSeq` 续订并在 run 已终结时用 durable 事件补齐。
-- 已实现、已验证：上表全部命令在本检出退出码 0。
-- 未验证：合并后的真机冒烟（`npm run build:cli-dev` + `dev:tui`）。
+- 已合并：PR #505 → merge commit `eaa33d80`（CI 五项全绿：architecture / test / typecheck / build / test scope）。
+- 已在合并后 master 重验：`build:packages`、10 套件 / 57 tests、`typecheck:all`、`architecture:check` 全部 0。
+- 未验证：真机冒烟（`npm run build:cli-dev` + `dev:tui`，人为杀掉 lease 确认答案不丢；退出后 background Host 在宽限后自行退出）。
 - 未处理：TUI 先起后台 Host 再开 Desktop 的 DB owner 顺序问题（归
-  [TUI 多 Host](2026-10-23-tui-multi-host.md)）。
-- 下一条动作：提交并开 PR，等 CI 与 review；合并授权后做真机冒烟。
+  [TUI 多 Host](2026-10-23-tui-multi-host.md)）；Desktop Host 侧 lease 行为未改。
+- 下一条动作：真机冒烟；通过后回收 `codex/tui-lease-resilience` 对应的 worktree。
 - 注意：`packages/capabilities/src/ModuleTool/inline-content.ts` 是检出级 EOL 幻影
-  （`git diff --ignore-cr-at-eol` 为空），不得提交。
+  （`git diff --ignore-cr-at-eol` 为空，blob 与 HEAD 相同），不得提交。
