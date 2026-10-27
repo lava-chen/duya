@@ -23,8 +23,8 @@
 | 输出速度 tok/s | [2026-10-23 输出速度](active/2026-10-23-output-token-rate.md) | provider 校准路径：ai 测时长 → 协议契约 → 帧携带 → TUI 展示 |
 | 面板列树布局 | [2026-10-22 面板列树](active/2026-10-22-panel-column-layout.md) | 切片 A（列树渲染）与 B（脱窗 Electron 侧）并行开工；C/D 待 A 落地 |
 | 本次新建对话页对齐 | [2026-10-27 新建对话页布局](active/2026-10-27-new-chat-layout.md) | 最近会话列表已删、环境卡与三段式布局已过门禁并真机量测；待全量门禁后提交 |
-| Web 浏览器端到端验收 | [2026-10-27 Web 浏览器验收](active/2026-10-27-web-browser-acceptance.md) | 真 Host + 生产 worker + 受控 provider + 真浏览器跑通发送/工具/审批/取消/刷新重放，6/6 通过；待 PR |
-| Web BFF 可运行入口 | [2026-10-27 Web BFF 入口](active/2026-10-27-web-bff-runnable-entry.md) | web server 打成自包含 ESM，`node apps/web/dist/server/main.js` 免 `--import`；PR #527 待授权集成 |
+| Web 浏览器端到端验收 | [2026-10-27 Web 浏览器验收](active/2026-10-27-web-browser-acceptance.md) | 真 Host + 生产 worker + 受控 provider + 真浏览器跑通发送/工具/审批/取消/刷新重放，6/6 通过；PR #529 已合并（`dcec5c15`） |
+| Web BFF 可运行入口 | [2026-10-27 Web BFF 入口](active/2026-10-27-web-bff-runnable-entry.md) | web server 打成自包含 ESM，`node apps/web/dist/server/main.js` 免 `--import`；PR #527 已合并（`ed473722`） |
 | 本次侧栏对齐 | [2026-10-22 侧栏对齐](active/2026-10-22-sidebar-alignment.md) | 已在最新 master 重建分支，实现行级状态图标、分组头三按钮与组内搜索 |
 | 本次公开树整理 | [2026-10-21 仓库树整理](active/2026-10-21-public-tree-cleanup.md) | 清理公开根目录、移动中文入口/架构文档并验证打包路径 |
 | 本次文档整理 | [2026-10-20 文档体系](active/2026-10-20-documentation-system.md) | 文档已整理；待处理文档范围外的两处门禁失败，见接续记录 |
