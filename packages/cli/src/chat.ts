@@ -487,16 +487,25 @@ export async function chatInteractive(
   return 0;
 }
 
-/** Exported for `tui-command.ts`; see the note on `chatInteractive`. */
+/**
+ * Create a session in `workingDirectory` through the active local Host.
+ * Exported for `tui-command.ts`; see the note on `chatInteractive`.
+ *
+ * The directory is a parameter, not `process.cwd()`, because `/project` moves
+ * the surface away from the launch directory: a session the user asked to
+ * start "in the other project" must be bound to that root, and the launch cwd
+ * has nothing to do with it by then.
+ */
 export async function createChatSession(
   client: HostSessionHttpClient,
   options: ChatCommandOptions,
+  workingDirectory = path.resolve(process.cwd()),
 ): Promise<HostSessionRecord> {
-  const workingDirectory = path.resolve(process.cwd());
-  const workspace = await client.registerLocalDirectory(workingDirectory);
+  const directory = path.resolve(workingDirectory);
+  const workspace = await client.registerLocalDirectory(directory);
   return client.create({
     title: 'duya chat',
-    projectName: path.basename(workingDirectory),
+    projectName: path.basename(directory),
     workspaceId: workspace.workspaceId,
     workspaceRootId: workspace.rootId,
     workspaceRelativePath: workspace.relativePath,
@@ -657,10 +666,21 @@ export async function chatTui(
   if (initialSession === null) throw new Error(`session ${sessionId} does not exist on this Host`);
 
   let activeSession = initialSession;
+  /**
+   * The directory this surface works in.
+   *
+   * It opens as the launch cwd and `/project` moves it. Sessions are created
+   * in it, runs name it as their working directory, and the file completion
+   * source follows it — so "which project is this" has one answer in this
+   * process instead of one in the session row and another in `process.cwd()`.
+   * A session's own execution-location cursor still wins over it: that is the
+   * `/worktree` checkout, which is a per-session fact, not a surface one.
+   */
+  let projectDirectory = path.resolve(process.cwd());
   const executionCwd = (): string => {
     const cursor = activeSession.extensions?.executionLocation;
     return cursor !== null && typeof cursor === 'object' && 'cwd' in cursor && typeof cursor.cwd === 'string'
-      ? cursor.cwd : process.cwd();
+      ? cursor.cwd : projectDirectory;
   };
   /**
    * Reasoning effort for subsequent runs, or null for "let the model decide".
@@ -1376,16 +1396,28 @@ export async function chatTui(
     tui.printNotice(`Resumed "${selected.title || 'Untitled session'}".`);
   }
 
-  async function startNewSession(): Promise<void> {
-    if (busy || queue.snapshot.pending.length > 0) {
-      tui.printError('Wait for the current turn to finish before starting a new session.');
-      return;
-    }
+  /** Refuse a session boundary while a turn owns the session. */
+  function refuseSessionSwitch(what: string): boolean {
+    if (!busy && queue.snapshot.pending.length === 0) return false;
+    tui.printError(`Wait for the current turn to finish before ${what}.`);
+    return true;
+  }
+
+  /**
+   * Create a session bound to `directory`, make it the loop's, and repaint.
+   * Shared by `/new` (this project) and `/project` (another one), so a session
+   * boundary is the same sequence of steps whichever command crossed it.
+   */
+  async function beginSessionInDirectory(
+    directory: string,
+    notice: (session: HostSessionRecord) => string,
+  ): Promise<void> {
     const previousModel = activeSession.model;
-    activeSession = await createChatSession(client, options);
-    // This surface created it, so this surface cleans it up: a `/new` that
-    // is never typed into is a ghost of the same kind as the opening one.
+    activeSession = await createChatSession(client, options, directory);
+    // This surface created it, so this surface cleans it up: a session opened
+    // and never typed into is a ghost of the same kind as the opening one.
     owned?.own(activeSession.id);
+    projectDirectory = directory;
     await resyncEffortForModelChange(previousModel);
     watchSession(activeSession.id);
     // A plugin installed in Settings while this TUI ran is invisible until
@@ -1394,7 +1426,34 @@ export async function chatTui(
     void pluginCandidates.refresh();
     sessionRows = (await listWorkspaceSessions(client, activeSession)).map(sessionCompletionItem);
     tui.clearTranscript();
-    tui.printNotice(`Started a new session (${activeSession.id.slice(0, 8)}).`);
+    tui.printNotice(notice(activeSession));
+  }
+
+  async function startNewSession(): Promise<void> {
+    if (refuseSessionSwitch('starting a new session')) return;
+    await beginSessionInDirectory(
+      projectDirectory,
+      (session) => `Started a new session (${session.id.slice(0, 8)}).`,
+    );
+  }
+
+  /**
+   * `/project`: move this surface to another directory and open a session
+   * there.
+   *
+   * A new session rather than a re-bind of the current one: a session's
+   * workspace is what its rollout, its permission cursor and the checkout
+   * fence are keyed on, so moving it underneath a conversation that already
+   * happened would leave those three disagreeing about where the work was
+   * done. Picking the old project's conversation back up is `/resume`.
+   */
+  async function startSessionInDirectory(directory: string): Promise<void> {
+    if (refuseSessionSwitch('switching project')) return;
+    const next = path.resolve(directory);
+    await beginSessionInDirectory(
+      next,
+      (session) => `Started a session in ${next} (${session.id.slice(0, 8)}).`,
+    );
   }
 
   /**
@@ -1725,6 +1784,9 @@ export async function chatTui(
                 interrupt,
                 adoptSession: adoptSession,
                 startFreshSession: startNewSession,
+                // `/project` crosses a session boundary in a directory this
+                // loop was not launched in, which only the loop can do.
+                startSessionInDirectory: startSessionInDirectory,
                 // `/compact` rewrote the timeline behind the conversation;
                 // the transcript on screen has to be re-read for it to
                 // show that.

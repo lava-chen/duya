@@ -3,10 +3,10 @@
 // The side panel is a wall of panel cards (the "panel wall"), not a tree of
 // columns. The model below describes that wall:
 //
-//   - `panes`   — the open cards, in grid order (row-major).
-//   - `columns` — how many grid columns the wall uses.
-//   - `columnRatios` / `rowRatios` — how the wall's width / height is split
-//     between the columns / rows.
+//   - `panes` — the open cards, in creation order.
+//   - `paneColumns` — the column that owns each card.
+//   - `columnRatios` / `columnRowRatios` — column widths and each column's
+//     independent row heights.
 //   - `expandedPaneId` — the card that fills the whole wall instead of one
 //     grid cell.
 //
@@ -31,14 +31,16 @@ export interface WallShape {
 }
 
 export interface WorkspaceLayout {
-  /** Open cards in grid order (row-major). */
+  /** Open cards in creation order. */
   panes: PaneId[];
-  /** Number of grid columns. */
+  /** Column that owns each card, indexed like `panes`. */
+  paneColumns: number[];
+  /** Number of columns in the wall. */
   columns: number;
   /** Column widths as a share of the wall's width. */
   columnRatios: number[];
-  /** Row heights as a share of the wall's height. */
-  rowRatios: number[];
+  /** Row heights as shares of their own column's height. */
+  columnRowRatios: number[][];
   /** The card that fills the whole wall instead of one grid cell. */
   expandedPaneId: PaneId | null;
   /** The card the panel is focused on. */
@@ -95,7 +97,12 @@ export function normalizeShares(shares: readonly number[] | undefined, count: nu
 
 /** The wall's shape for a given set of cards. */
 export function wallShape(layout: WorkspaceLayout): WallShape {
-  return wallShapeFor(layout.panes.length);
+  const columnCounts = new Array(Math.max(1, layout.columns)).fill(0);
+  layout.panes.forEach((_, index) => {
+    const column = layout.paneColumns[index] ?? index % columnCounts.length;
+    if (column >= 0 && column < columnCounts.length) columnCounts[column] += 1;
+  });
+  return { columns: columnCounts.length, rows: Math.max(0, ...columnCounts) };
 }
 
 /** The number of grid cells the wall has. */
@@ -104,18 +111,35 @@ export function wallCellCount(layout: WorkspaceLayout): number {
   return columns * rows;
 }
 
+/** The cards in a column, kept in their original open order. */
+export function paneIdsInColumn(layout: WorkspaceLayout, columnIndex: number): PaneId[] {
+  return layout.panes.filter((_, index) => (layout.paneColumns[index] ?? 0) === columnIndex);
+}
+
+function paneColumnCounts(layout: WorkspaceLayout): number[] {
+  const counts = new Array(Math.max(1, layout.columns)).fill(0);
+  layout.panes.forEach((_, index) => {
+    const column = layout.paneColumns[index] ?? index % counts.length;
+    if (column >= 0 && column < counts.length) counts[column] += 1;
+  });
+  return counts;
+}
+
 /** A layout with the given cards and an even split. */
 export function layoutFromPanes(identities: readonly PaneIdentity[]): WorkspaceLayout {
-  const panes = identities.map((identity) => identity.id);
-  const { columns, rows } = wallShapeFor(panes.length);
-  return {
-    panes,
-    columns,
-    columnRatios: equalShares(columns),
-    rowRatios: equalShares(rows),
+  let layout: WorkspaceLayout = {
+    panes: [],
+    paneColumns: [],
+    columns: 1,
+    columnRatios: [1],
+    columnRowRatios: [[]],
     expandedPaneId: null,
-    activePaneId: panes[0] ?? null,
+    activePaneId: null,
   };
+  for (const identity of identities) {
+    layout = setActivePane(placePane(layout, identity.id), identity.id);
+  }
+  return { ...layout, activePaneId: layout.panes[0] ?? null };
 }
 
 /**
@@ -123,12 +147,21 @@ export function layoutFromPanes(identities: readonly PaneIdentity[]): WorkspaceL
  * shape follows the card count, and the ratios are re-fitted to it.
  */
 function resyncShape(layout: WorkspaceLayout): WorkspaceLayout {
-  const { columns, rows } = wallShapeFor(layout.panes.length);
+  const usedColumns = Array.from(new Set(layout.paneColumns)).sort((a, b) => a - b);
+  const sourceColumns = usedColumns.length > 0 ? usedColumns : [0];
+  const columnMap = new Map(sourceColumns.map((column, index) => [column, index]));
+  const paneColumns = layout.paneColumns.map((column) => columnMap.get(column) ?? 0);
+  const columns = sourceColumns.length;
+  const columnCounts = new Array(columns).fill(0);
+  paneColumns.forEach((column) => { columnCounts[column] += 1; });
   return {
     ...layout,
+    paneColumns,
     columns,
     columnRatios: normalizeShares(layout.columnRatios, columns),
-    rowRatios: normalizeShares(layout.rowRatios, rows),
+    columnRowRatios: sourceColumns.map((column, index) =>
+      normalizeShares(layout.columnRowRatios[column], columnCounts[index]),
+    ),
   };
 }
 
@@ -150,13 +183,15 @@ export function sanitizeLayout(
 ): WorkspaceLayout | null {
   if (!layout || typeof layout !== "object") return null;
   const record = layout as Record<string, unknown>;
-  const panes = Array.isArray(record.panes)
+  const storedPanes = Array.isArray(record.panes)
     ? record.panes.filter((pane): pane is string => typeof pane === "string")
     : null;
-  if (!panes) return null;
-
+  if (!storedPanes) return null;
   const known = new Set(identities.filter(isPaneIdentity).map((identity) => identity.id));
-  const kept = panes.filter((pane) => known.has(pane));
+  const keptWithIndex = storedPanes
+    .map((pane, index) => ({ pane, index }))
+    .filter(({ pane }) => known.has(pane));
+  const kept = keptWithIndex.map(({ pane }) => pane);
   const expanded = typeof record.expandedPaneId === "string" && known.has(record.expandedPaneId)
     ? record.expandedPaneId
     : null;
@@ -164,37 +199,106 @@ export function sanitizeLayout(
     ? record.activePaneId
     : null;
 
-  const shape = wallShapeFor(kept.length);
-  const columnRatios = Array.isArray(record.columnRatios)
+  const storedColumnRatios = Array.isArray(record.columnRatios)
     ? record.columnRatios.filter((value): value is number => typeof value === "number")
     : [];
-  const rowRatios = Array.isArray(record.rowRatios)
+  const storedRowRatios = Array.isArray(record.rowRatios)
     ? record.rowRatios.filter((value): value is number => typeof value === "number")
     : [];
+  const oldColumnCount = Number.isInteger(record.columns) && (record.columns as number) > 0
+    ? Math.min(2, record.columns as number)
+    : wallShapeFor(storedPanes.length).columns;
+  const storedPaneColumns = Array.isArray(record.paneColumns) ? record.paneColumns : null;
+  const assignOldColumn = (index: number): number => {
+    const storedColumn = storedPaneColumns?.[index];
+    if (typeof storedColumn === "number" && Number.isInteger(storedColumn) && storedColumn >= 0) {
+      return Math.min(oldColumnCount - 1, storedColumn);
+    }
+    // v2 layouts used one row-major grid. Preserve those positions as they
+    // migrate so existing users do not see their cards jump on load.
+    return index % oldColumnCount;
+  };
+  const allOldAssignments = storedPanes.map((_, index) => assignOldColumn(index));
+  const oldAssignments = keptWithIndex.map(({ index }) => allOldAssignments[index] ?? 0);
+  const sourceColumns = Array.from(new Set(oldAssignments)).sort((a, b) => a - b);
+  const columnMap = new Map(sourceColumns.map((column, index) => [column, index]));
+  const paneColumns = oldAssignments.map((column) => columnMap.get(column) ?? 0);
+  const storedColumnRowRatios = Array.isArray(record.columnRowRatios)
+    ? record.columnRowRatios
+    : null;
+  const columnRowRatios = sourceColumns.map((sourceColumn) => {
+    const entries = keptWithIndex
+      .map(({ index }, keptIndex) => ({ index, keptIndex, column: oldAssignments[keptIndex] }))
+      .filter((entry) => entry.column === sourceColumn);
+    const ratios = entries.map(({ index }) => {
+      const localIndex = allOldAssignments
+        .slice(0, index)
+        .filter((column) => column === sourceColumn).length;
+      const nested = storedColumnRowRatios?.[sourceColumn];
+      const value = Array.isArray(nested)
+        ? nested[localIndex]
+        : storedRowRatios[Math.floor(index / oldColumnCount)];
+      return typeof value === "number" ? value : 1;
+    });
+    return normalizeShares(ratios, entries.length);
+  });
 
   return {
     panes: kept,
-    columns: shape.columns,
-    columnRatios: normalizeShares(columnRatios, shape.columns),
-    rowRatios: normalizeShares(rowRatios, shape.rows),
+    paneColumns,
+    columns: Math.max(1, sourceColumns.length),
+    columnRatios: normalizeShares(sourceColumns.map((column) => storedColumnRatios[column] ?? 1), Math.max(1, sourceColumns.length)),
+    columnRowRatios: sourceColumns.length > 0 ? columnRowRatios : [[]],
     expandedPaneId: expanded,
     activePaneId: active ?? kept[0] ?? null,
   };
 }
 
-/** Add a card to the wall (appended to the last cell). */
+/** Add a card beside the active column until that stack has two cards. */
 export function placePane(layout: WorkspaceLayout, paneId: PaneId): WorkspaceLayout {
   if (layout.panes.includes(paneId)) return layout;
-  return resyncShape({ ...layout, panes: [...layout.panes, paneId] });
+  const counts = paneColumnCounts(layout);
+  const activeIndex = layout.panes.indexOf(layout.activePaneId ?? "");
+  const activeColumn = activeIndex >= 0 ? layout.paneColumns[activeIndex] ?? 0 : 0;
+  const otherColumn = activeColumn === 0 ? 1 : 0;
+  let targetColumn = activeColumn;
+  if ((counts[activeColumn] ?? 0) >= 2) {
+    if (layout.columns < 2) targetColumn = otherColumn;
+    else if ((counts[otherColumn] ?? 0) < 2) targetColumn = otherColumn;
+  }
+  return resyncShape({
+    ...layout,
+    panes: [...layout.panes, paneId],
+    paneColumns: [...layout.paneColumns, targetColumn],
+  });
 }
 
-/** Remove a card from the wall; the remaining cards close the gap. */
+/** Remove a card; its column closes the gap and other columns keep their slots. */
 export function removePane(layout: WorkspaceLayout, paneId: PaneId): WorkspaceLayout {
-  if (!layout.panes.includes(paneId)) return layout;
+  const paneIndex = layout.panes.indexOf(paneId);
+  if (paneIndex < 0) return layout;
+  const removedColumn = layout.paneColumns[paneIndex] ?? 0;
+  const localIndex = layout.paneColumns
+    .slice(0, paneIndex)
+    .filter((column) => column === removedColumn).length;
   const panes = layout.panes.filter((pane) => pane !== paneId);
+  const paneColumns = layout.paneColumns.filter((_, index) => index !== paneIndex);
+  const sourceColumns = Array.from(new Set(paneColumns)).sort((a, b) => a - b);
+  const columnMap = new Map(sourceColumns.map((column, index) => [column, index]));
+  const compactPaneColumns = paneColumns.map((column) => columnMap.get(column) ?? 0);
+  const compactedColumnRatios = sourceColumns.map((column) => layout.columnRatios[column] ?? 1);
+  const compactedRowRatios = sourceColumns.map((column) => {
+    const ratios = [...(layout.columnRowRatios[column] ?? [])];
+    if (column === removedColumn) ratios.splice(localIndex, 1);
+    return ratios;
+  });
   const next = resyncShape({
     ...layout,
     panes,
+    paneColumns: compactPaneColumns,
+    columns: Math.max(1, sourceColumns.length),
+    columnRatios: compactedColumnRatios,
+    columnRowRatios: sourceColumns.length > 0 ? compactedRowRatios : [[]],
     expandedPaneId: layout.expandedPaneId === paneId ? null : layout.expandedPaneId,
     activePaneId: layout.activePaneId === paneId ? null : layout.activePaneId,
   });
@@ -214,9 +318,26 @@ export function setColumnRatios(layout: WorkspaceLayout, ratios: readonly number
 }
 
 /** Set the row heights (as shares of the wall's height). */
-export function setRowRatios(layout: WorkspaceLayout, ratios: readonly number[]): WorkspaceLayout {
-  const { rows } = wallShape(layout);
-  return { ...layout, rowRatios: normalizeShares(ratios, rows) };
+export function setRowRatios(
+  layout: WorkspaceLayout,
+  ratios: readonly number[],
+  columnIndex = 0,
+): WorkspaceLayout {
+  return setColumnRowRatios(layout, columnIndex, ratios);
+}
+
+/** Set the row heights for one column, independent of the other columns. */
+export function setColumnRowRatios(
+  layout: WorkspaceLayout,
+  columnIndex: number,
+  ratios: readonly number[],
+): WorkspaceLayout {
+  const count = paneColumnCounts(layout)[columnIndex] ?? 0;
+  if (count === 0) return layout;
+  const columnRowRatios = layout.columnRowRatios.map((values, index) =>
+    index === columnIndex ? normalizeShares(ratios, count) : values,
+  );
+  return { ...layout, columnRowRatios };
 }
 
 /**
@@ -242,16 +363,18 @@ export function columnPixelWidths(
   return layout.columnRatios.map((ratio) => Math.round(ratio * usable));
 }
 
-/** The pixel height of every row, gaps excluded. */
+/** The pixel height of every row in one column, gaps excluded. */
 export function rowPixelHeights(
   layout: WorkspaceLayout,
   wallHeight: number,
   gap = 0,
+  columnIndex = 0,
 ): number[] {
-  const { rows } = wallShape(layout);
+  const rows = paneColumnCounts(layout)[columnIndex] ?? 0;
   if (rows <= 0 || wallHeight <= 0) return [];
   const usable = Math.max(0, wallHeight - gap * (rows - 1));
-  return layout.rowRatios.map((ratio) => Math.round(ratio * usable));
+  const ratios = normalizeShares(layout.columnRowRatios[columnIndex], rows);
+  return ratios.map((ratio) => Math.round(ratio * usable));
 }
 
 /**

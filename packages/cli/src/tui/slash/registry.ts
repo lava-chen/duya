@@ -35,6 +35,7 @@ import {
 import type { TuiSlashCommandDef, TuiSlashGroup } from './types.js';
 import { SESSION_INFO_COMMANDS } from './session-info.js';
 import { SESSION_OPS_COMMANDS } from './session-ops.js';
+import { PROJECT_COMMANDS } from './project.js';
 import { APPS_COMMANDS } from './apps.js';
 import { PLUGIN_COMMANDS } from './plugin.js';
 import { WORKFLOW_COMMANDS } from './workflow.js';
@@ -71,6 +72,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...PLUGIN_COMMANDS,
   ...WORKFLOW_COMMANDS,
   ...SESSION_OPS_COMMANDS,
+  ...PROJECT_COMMANDS,
   ...APP_COMMANDS,
   ...CHECKOUT_COMMANDS,
   ...WORKTREE_COMMANDS,

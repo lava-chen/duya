@@ -6,8 +6,11 @@
 // attachments are kept in a global draft (conversation-store) that survives
 // navigation and app restarts, so the user can resume an unsent draft.
 //
-// Layout mirrors WelcomeView (SessionSelector + project picker + recent
-// threads) so the composer is not a bare, unconstrained input box.
+// Layout (Claude parity, 2026-10-27): the page is a three-band column — the
+// greeting as the title, the working-directory / environment card in the
+// middle, and the composer pinned to the bottom. The recent-threads list that
+// used to sit under the composer is gone; the sidebar already lists the
+// sessions, so a second list on this page was redundant.
 
 'use client';
 
@@ -20,7 +23,7 @@ import { useSettings } from '@/hooks/useSettings';
 import { isKeylessLocalProvider } from '@/lib/providers';
 import { MessageInput } from './MessageInput';
 import { getProfileIdForMode } from './AgentModeSelector';
-import { SessionSelector } from '@/components/home/SessionSelector';
+import { EnvironmentCard } from '@/components/home/EnvironmentCard';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { updateThreadIPC } from '@/lib/ipc-client';
 import type { FileAttachment } from '@/types/message';
@@ -357,7 +360,7 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
         }
         const { modelName: actualModel } = parseModelName(effectiveModel || '');
 
-        // Prefer the project picked in the SessionSelector; otherwise resolve
+        // Prefer the project picked in the environment card; otherwise resolve
         // a working directory so the new session is grouped under a project when
         // possible (most recent folder, then default workspace, then no-project).
         let workingDirectory = selectedProject?.workingDirectory;
@@ -452,38 +455,46 @@ export function NewChatView({ onSendMessage, workspaceSelectionEnabled = true }:
   );
 
   return (
-    <div className="welcome-view">
-      <div className="welcome-content">
-        <SessionSelector
-          greeting={greeting}
-          selectedProject={selectedProject}
-          workspaceSelectionEnabled={workspaceSelectionEnabled}
-          onSelectProject={handleSelectProject}
-          onNewBlankProject={handleNewBlankProject}
-          onUseExistingFolder={handleUseExistingFolder}
-          onNewNoProjectSession={handleNewNoProjectSession}
-          onSelectThread={setActiveThread}
-        >
-          {/* Message Input rendered between selector and recent threads */}
-          <div className="welcome-message-input">
-            <MessageInput
-              onSend={handleSend}
-              disabled={!isHydrated || isSending}
-              isStreaming={false}
-              modelName={sessionModel}
-              onModelChange={handleModelChange}
-              effort={effort}
-              onEffortChange={setEffort}
-              permissionMode={permissionMode}
-              onPermissionModeChange={setPermissionMode}
-              placeholder={t('chat.describeWhatToBuild')}
-              popoverPlacement="bottom"
-              draftMode
-              initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
-              onDraftChange={handleDraftChange}
-            />
-          </div>
-        </SessionSelector>
+    <div className="new-chat-view">
+      <div className="new-chat-layout">
+        {/* Title — duya's greeting stands in for Claude Code's "New session". */}
+        <header className="new-chat-title">
+          <span className="new-chat-title-label">{greeting}</span>
+        </header>
+
+        {/* The working directory is the first decision of a new session, so it
+            is stated plainly in the middle of the page instead of hiding
+            behind a button. */}
+        <div className="new-chat-environment">
+          <EnvironmentCard
+            selectedProject={selectedProject}
+            onSelectProject={handleSelectProject}
+            onNewBlankProject={handleNewBlankProject}
+            onUseExistingFolder={handleUseExistingFolder}
+            onNewNoProjectSession={handleNewNoProjectSession}
+            workspaceSelectionEnabled={workspaceSelectionEnabled}
+          />
+        </div>
+
+        {/* Composer pinned to the bottom. */}
+        <div className="new-chat-composer">
+          <MessageInput
+            onSend={handleSend}
+            disabled={!isHydrated || isSending}
+            isStreaming={false}
+            modelName={sessionModel}
+            onModelChange={handleModelChange}
+            effort={effort}
+            onEffortChange={setEffort}
+            permissionMode={permissionMode}
+            onPermissionModeChange={setPermissionMode}
+            placeholder={t('chat.describeWhatToBuild')}
+            popoverPlacement="bottom"
+            draftMode
+            initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
+            onDraftChange={handleDraftChange}
+          />
+        </div>
       </div>
 
       <InputDialog

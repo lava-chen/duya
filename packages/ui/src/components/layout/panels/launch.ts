@@ -12,7 +12,7 @@ export function shortcutFor(id: PageId): string | null {
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
     case "review": return "Ctrl+Shift+G";
-    case "files": return "Ctrl+P";
+    case "workspace": return "Ctrl+P";
     default: return null;
   }
 }
@@ -29,7 +29,7 @@ export function panelParamsFor(
   const { workingDirectory: cwd, sessionId } = context;
   if (!cwd) return undefined;
   if (id === "terminal") return { cwd };
-  if (id === "files") return { workingDirectory: cwd };
+  if (id === "workspace") return { workingDirectory: cwd };
   if (id === "review") return { workingDirectory: cwd, sessionId: sessionId ?? undefined };
   return undefined;
 }

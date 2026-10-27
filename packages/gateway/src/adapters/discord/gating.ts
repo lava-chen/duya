@@ -9,6 +9,7 @@ export interface GatingConfig {
   allowedChannels: string[];
   dmPolicy: 'open' | 'allowlist' | 'disabled';
   allowFrom: Set<string>;
+  groupPolicy: 'open' | 'allowlist' | 'disabled';
   requireMention: boolean;
   mentionPatterns: string[];
   freeResponseChats: Set<string>;
@@ -20,6 +21,7 @@ export function parseGatingConfig(options?: DiscordConfigOptions): GatingConfig 
     allowedChannels: options?.allowed_channels ?? [],
     dmPolicy: options?.dm_policy ?? 'open',
     allowFrom: new Set(options?.allow_from ?? []),
+    groupPolicy: options?.group_policy ?? 'open',
     requireMention: options?.require_mention ?? true,
     mentionPatterns: options?.mention_patterns ?? [],
     freeResponseChats: new Set(options?.free_response_chats ?? []),
@@ -30,7 +32,8 @@ export function shouldProcessMessage(
   guildId: string | undefined,
   channelId: string,
   isDm: boolean,
-  config: GatingConfig
+  config: GatingConfig,
+  senderId?: string,
 ): boolean {
   // Check guild allowlist
   if (guildId && config.allowedGuilds.length > 0 && !config.allowedGuilds.includes(guildId)) {
@@ -45,9 +48,15 @@ export function shouldProcessMessage(
   // DM policy
   if (isDm) {
     if (config.dmPolicy === 'disabled') return false;
-    if (config.dmPolicy === 'allowlist') return false; // DMs not in allowlist
+    // An allowlist that always denies is a policy that can never be satisfied;
+    // the sender must actually be looked up.
+    if (config.dmPolicy === 'allowlist') {
+      return senderId !== undefined && config.allowFrom.has(senderId);
+    }
     return true;
   }
+
+  if (config.groupPolicy === 'disabled') return false;
 
   // Free response chats bypass mention requirement
   if (config.freeResponseChats.has(channelId)) {

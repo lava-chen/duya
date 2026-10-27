@@ -145,8 +145,12 @@ export function ResizeHandle({
       if (!onWidthRequest || typeof width !== "number") return;
       // The arrow that moves the boundary edge AWAY from the resized pane
       // grows that pane.
-      const growKey = horizontal ? "ArrowLeft" : side === "top" ? "ArrowUp" : "ArrowDown";
-      const shrinkKey = horizontal ? "ArrowRight" : side === "top" ? "ArrowDown" : "ArrowUp";
+      const growKey = horizontal
+        ? side === "right" ? "ArrowRight" : "ArrowLeft"
+        : side === "top" ? "ArrowUp" : "ArrowDown";
+      const shrinkKey = horizontal
+        ? side === "right" ? "ArrowLeft" : "ArrowRight"
+        : side === "top" ? "ArrowDown" : "ArrowUp";
       switch (e.key) {
         case growKey:
           e.preventDefault();

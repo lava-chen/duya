@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Local-only Duya Web client and BFF for the shared agent Host",
   "scripts": {
-    "build": "tsc -p tsconfig.json && vite build --config vite.config.ts",
+    "build": "tsc -p tsconfig.json --noEmit && node ../../scripts/build-web-server-bundle.mjs && vite build --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
     "dev": "vite --config vite.config.ts",
     "start": "node dist/server/main.js"

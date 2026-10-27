@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon, TrashIcon, DownloadSimpleIcon, WarningIcon, FolderOpenIcon } from "@/components/icons";
+import { SessionWorktreeBadges } from "@/components/shared/SessionWorktreeBadges";
+import { useSessionUnreadBadge } from "@/hooks/useSessionUnreadBadge";
 import { exportRolloutIPC } from "@/lib/ipc-client";
 import { showNotification } from "@/lib/notification";
 import {
@@ -28,17 +30,23 @@ interface ThreadListItemProps {
 const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permission", "persisting"];
 
 /**
- * Claude parity: one leading status glyph per session row.
+ * Claude parity (2026-10-27): the trailing state dot carries one of three
+ * meanings, all of them taken from a live Claude Code desktop window:
  *
- *   idle     — hollow ring (the session is not doing anything)
- *   running  — spinner (an agent turn is in flight)
- *   awaiting — amber dot (the session is blocked on the user)
- *   error    — red warning triangle (the last turn failed)
+ *   amber   — the session stopped and needs the user (a question, an
+ *             approval, a connector auth).
+ *   blue    — the session finished but the user has not looked at it yet.
+ *   red     — the last turn failed.
  *
- * `Thread` has no `status` column, so the state is derived from the stream
- * phase the renderer already subscribes to — no new persistence, no IPC.
+ * `running` keeps its spinner, and `idle` renders nothing at all — the
+ * resting state is not news.
+ *
+ * `Thread` has no `status` column, so the running / awaiting / error states
+ * are derived from the stream phase the renderer already subscribes to. The
+ * "finished but unseen" state has no phase to read: it is the unread stamp
+ * in `useSessionSeenStore` — no new persistence, no IPC.
  */
-type SessionStatus = "idle" | "running" | "awaiting" | "error";
+type SessionStatus = "idle" | "running" | "awaiting" | "error" | "unread";
 
 
 function formatTimeAgo(t: TFunc, timestamp: number): string {
@@ -120,6 +128,11 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   }, [thread.id]);
 
   const isRunning = ACTIVE_PHASES.includes(phase);
+  // "Finished, but the user has not looked at it yet" — the blue dot. The
+  // hook asks the agent server whether the session is still running, because
+  // a session that ran in the background leaves the renderer with no stream
+  // state and would otherwise read as idle.
+  const unread = useSessionUnreadBadge(thread.id, isRunning || awaitingInput != null);
   // A blocked session is the most actionable state on the row, and
   // `awaiting_permission` is itself an active phase — so "awaiting" has to
   // win over "running" or the amber dot would never show.
@@ -130,12 +143,15 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
         ? "awaiting"
         : isRunning
           ? "running"
-          : "idle";
+          : unread
+            ? "unread"
+            : "idle";
   const statusLabel = {
     idle: t("thread.status.idle"),
     running: t("thread.status.running"),
     awaiting: t("thread.status.awaitingInput"),
     error: t("thread.status.error"),
+    unread: t("thread.status.unread"),
   }[sessionStatus];
   // Codex parity (2026-10-22): the row carries NO leading glyph. Codex
   // renders the title flush with the group header's left edge and signals
@@ -415,6 +431,10 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
             group header's left edge. */}
         <div className="thread-item-actions">
           <div className="thread-item-actions-default">
+            {/* Claude parity (2026-10-27): the branch / pull-request / merge
+                glyphs sit between the title and the state dot, exactly where
+                Claude Code puts them. */}
+            <SessionWorktreeBadges sessionId={thread.id} workingDirectory={thread.workingDirectory} />
             {/* Codex parity: the trailing state mark. Only non-idle sessions
                 get one; `idle` renders nothing so resting rows stay quiet. */}
             {showTrailingStatus && (

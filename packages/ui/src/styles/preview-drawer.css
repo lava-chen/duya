@@ -1207,11 +1207,11 @@
 
 .panel-zone .resize-handle {
   position: absolute;
-  left: -3px;
+  left: -7px;
   top: 0;
   bottom: 0;
   z-index: 5;
-  width: 7px;
+  width: 14px;
 }
 
 /* The zone's edge handle uses the unified pill language: invisible seam, a
@@ -1222,8 +1222,13 @@
 }
 
 .panel-zone .resize-handle-bar {
-  width: 36px;
-  height: 4px;
+  width: 4px;
+  height: 36px;
+}
+
+.panel-zone .resize-handle[data-resizing] .resize-handle-bar {
+  width: 4px;
+  height: 56px;
 }
 
 .panel-zone-resizing,

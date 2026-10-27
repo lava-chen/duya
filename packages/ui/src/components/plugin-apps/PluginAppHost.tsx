@@ -16,6 +16,7 @@ import {
   parsePluginAppCallResult,
   parsePluginAppGuestRequest,
   toPluginAppHostMessage,
+  type PluginAppHostThemeMessage,
   type PluginAppLaunch,
 } from "@/lib/plugin-app-ipc";
 import "./plugin-app.css";
@@ -45,6 +46,17 @@ function launchErrorMessage(error: unknown, t: ReturnType<typeof useTranslation>
     case "instance_unavailable": return t("apps.instanceUnavailable");
     default: return t("apps.launchFailed");
   }
+}
+
+/**
+ * The theme duya is rendering with.
+ *
+ * `data-theme` on <html> is the source of truth at runtime (see
+ * hooks/useTheme.ts), so the host reads it from there instead of keeping a
+ * second copy of the setting.
+ */
+function readHostTheme(): "light" | "dark" {
+  return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
 }
 
 /**
@@ -104,6 +116,27 @@ export function PluginAppHost({ pluginId, appId, surfaceId, server, title, chatS
     },
     [onError],
   );
+
+  /**
+   * Tell the App which theme duya is rendering with.
+   *
+   * The App runs in an opaque-origin sandboxed iframe: it cannot read
+   * duya's `data-theme` and cannot inherit duya's CSS variables, so a
+   * plugin that ships its own token layer has no way to know which one to
+   * use. The host pushes it instead.
+   */
+  const postTheme = useCallback(() => {
+    const launchNow = launchRef.current;
+    const frame = guestFrameRef.current;
+    if (!launchNow || !frame?.isConnected || !frame.contentWindow) return;
+    const message: PluginAppHostThemeMessage = {
+      channel: PLUGIN_APP_CHANNEL,
+      type: "theme",
+      documentToken: launchNow.documentToken,
+      theme: readHostTheme(),
+    };
+    frame.contentWindow.postMessage(message, "*");
+  }, []);
 
   // Launch the App. The Main process resolves the App's entry file inside
   // the installed package and mints the session; nothing here is trusted
@@ -214,6 +247,16 @@ export function PluginAppHost({ pluginId, appId, surfaceId, server, title, chatS
     });
   }, [pluginId]);
 
+  // Keep the App's theme in sync with duya's. The first push covers the App
+  // that is already running; the observer covers every later switch.
+  useEffect(() => {
+    if (!launch || !guestFrame) return;
+    postTheme();
+    const observer = new MutationObserver(() => postTheme());
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [launch, guestFrame, postTheme]);
+
   // Relay guest messages into the Main process. A sandbox without
   // `allow-same-origin` gives the App an opaque origin; that is why the host
   // checks both frame identity and the browser's `null` origin.
@@ -290,6 +333,10 @@ export function PluginAppHost({ pluginId, appId, surfaceId, server, title, chatS
         sandbox="allow-scripts allow-forms allow-downloads allow-popups"
         onLoad={() => {
           guestReadyRef.current = false;
+          // The guest installs its theme listener while its module script
+          // runs, which is before the load event — so the App is listening by
+          // the time this push arrives.
+          postTheme();
         }}
       />
     </div>

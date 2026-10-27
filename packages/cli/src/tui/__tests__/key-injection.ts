@@ -34,6 +34,9 @@ const KEY_BYTES: Readonly<Record<string, string>> = {
   escape: '\x1b',
   tab: '\t',
   'S-tab': '\x1b[Z',
+  // A terminal sends the bare space; blessed and the own parser both name it
+  // `space`, which is the name the panel's strip answers with ("go deeper").
+  space: ' ',
   backspace: '\x7f',
   delete: '\x1b[3~',
   up: '\x1b[A',

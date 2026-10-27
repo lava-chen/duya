@@ -77,7 +77,14 @@ import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.j
 import { buildComposerLayout } from './composer-layout.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
-import { WindowManager, type WindowItem } from './window.js';
+import {
+  RichPanelController,
+  WindowManager,
+  type ListSection,
+  type RichPanelSpec,
+  type RichPanelTab,
+  type WindowItem,
+} from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
@@ -224,6 +231,25 @@ export interface TuiSettingsRow {
 type InteractivePrompt =
   | { kind: 'select'; title: string; choices: readonly TuiChoice[]; selectedIndex: number }
   | { kind: 'text'; title: string; value: string; cursor: number; secret: boolean; placeholder: string };
+
+/**
+ * The live handle on a rich panel a command opened.
+ *
+ * A panel's row actions mutate state outside the TUI — installing a plugin,
+ * adding a provider — so the command has to push re-read rows back in, and
+ * the dock holds exactly one panel, so the handle is passed to `onOpen` rather
+ * than returned. Only the parts a command needs are exposed; navigation stays
+ * the controller's.
+ */
+export interface RichPanelHandle {
+  /** Replace one tab's rows, keeping the cursor on the row with the same value. */
+  syncTab(tabId: string, section: ListSection): void;
+  activeTabId(): string | undefined;
+  /** The selected row of the active tab, for a detail page or a confirmation. */
+  activeSelectedValue(): string | undefined;
+  /** Leave the panel — fires its `onClose` like Esc from the tab strip does. */
+  close(): void;
+}
 
 const PROMPT_VISIBLE_CHOICES = 9;
 
@@ -514,6 +540,8 @@ export class TUIApp {
   /** Login/provider wizard prompt. Values never pass through the chat editor. */
   private interactivePrompt: InteractivePrompt | null = null;
   private interactivePromptResolver: ((value: string | null) => void) | null = null;
+  /** The tabbed panel currently owning the dock, if any (630a). */
+  private activeRichPanel: RichPanelController | null = null;
   private readonly scheduler: RenderScheduler;
 
   /** Per stream: assistant text and thinking text get their own buffers. */
@@ -631,7 +659,7 @@ export class TUIApp {
   private spinnerTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Modal windows (F1 help, Ctrl+R history, Ctrl+P usage). */
-  private readonly windowMgr = new WindowManager();
+  private readonly windowMgr = new WindowManager(() => this.scheduler.requestImmediate());
   /** Palette for the transcript and the windows. Assigned in the constructor. */
   /**
    * Mutable because `/settings` changes it in place.
@@ -1211,6 +1239,55 @@ export class TUIApp {
         this.scheduler.requestImmediate();
       },
       onCancel: () => settle(),
+    });
+    this.scheduler.requestImmediate();
+    return closed;
+  }
+
+  /**
+   * Open a tabbed rich panel in the dock (630a): a tab strip with per-tab
+   * lists, header/content focus, single-letter row actions. Resolves when the
+   * user leaves it.
+   *
+   * The command gets its live handle through `onOpen`, not the return value —
+   * the promise is reserved for "the user left", which is the moment a panel
+   * that marked rows dirty until now performs its writes.
+   */
+  showRichPanel(options: {
+    readonly title: string;
+    readonly tabs: readonly RichPanelTab[];
+    readonly initialTab?: string;
+    readonly onClose?: () => void;
+    readonly onOpen?: (panel: RichPanelHandle) => void;
+  }): Promise<void> {
+    if (this.windowOpenBlocked()) return Promise.resolve();
+    this.completion.close();
+    const spec: RichPanelSpec = {
+      title: options.title,
+      tabs: options.tabs,
+      ...(options.initialTab === undefined ? {} : { initialTab: options.initialTab }),
+      ...(options.onClose === undefined ? {} : { onClose: options.onClose }),
+    };
+    const controller = new RichPanelController(spec);
+    this.activeRichPanel = controller;
+    let settle: () => void = () => {};
+    const closed = new Promise<void>((resolve) => { settle = resolve; });
+    this.windowMgr.open({
+      title: options.title,
+      controller,
+      onCancel: () => {
+        if (this.activeRichPanel === controller) this.activeRichPanel = null;
+        settle();
+      },
+    });
+    options.onOpen?.({
+      syncTab: (tabId, section) => { controller.syncTab(tabId, section); },
+      activeTabId: () => controller.activeTabId(),
+      activeSelectedValue: () => controller.activeSelectedValue(),
+      // Closing through the dock, not through the controller: the window host
+      // is what fires the panel's flush and releases `activeRichPanel`, so a
+      // command leaving the panel looks exactly like the user leaving it.
+      close: () => this.windowMgr.close(),
     });
     this.scheduler.requestImmediate();
     return closed;
@@ -2697,6 +2774,43 @@ export class TUIApp {
   }
 
   /**
+   * Offer a control chord to the open window before the editor claims it.
+   *
+   * Only the rich panel has a vocabulary for chords (`C-d` = delete the
+   * selected row, a letter = a row action); a plain window has none and just
+   * needs the key kept away from the hidden composer. Either way, while a
+   * window is on screen the chord is consumed.
+   */
+  private routeWindowControl(name: string): boolean {
+    if (this.activeRichPanel === null) return this.swallowForWindow();
+    if (this.windowMgr.handleKey(name, {})) {
+      this.scheduler.requestImmediate();
+      return true;
+    }
+    // The panel is modal, so a chord it does not claim is still not the
+    // editor's: the draft under the dock is invisible, and a chord that
+    // quietly killed half of it would be submitted on the next Enter.
+    return this.swallowForWindow();
+  }
+
+  /**
+   * An arrow key under an open window.
+   *
+   * In the panel's tab strip `←/→` move between tabs; everywhere else they
+   * must still be swallowed. The editor's cursor is invisible under the dock,
+   * so letting an unconsumed arrow fall through would silently rewrite the
+   * draft the user cannot see — and a draft is what gets submitted on Enter.
+   */
+  private routeWindowArrow(name: 'left' | 'right'): boolean {
+    if (!this.windowMgr.isActive) return false;
+    if (this.activeRichPanel !== null && this.windowMgr.handleKey(name, {})) {
+      this.scheduler.requestImmediate();
+      return true;
+    }
+    return this.swallowForWindow();
+  }
+
+  /**
    * Bind one rebindable action from the effective action table.
    *
    * A display form that does not map to a blessed key name (e.g. `Wheel`)
@@ -3004,7 +3118,7 @@ exportHistory(): string[] {
     // Ctrl+D exits — but ONLY on an empty input, and never from under a modal.
     // See the `exit` row in `actions.ts` for why it is not delete-forward.
     this.bindKey(['C-d'], () => {
-      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
+      if (this.interactivePrompt !== null || this.routeWindowControl('C-d')) return;
       if (this.overlay.isActive || this.focus !== 'input') return;
       if (!this.editor.isEmpty) return;
       this.options.onExit?.();
@@ -3014,7 +3128,7 @@ exportHistory(): string[] {
     // action table, so an override rewires them in one place.
     this.bindKey(['C-a'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(0);
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowControl('C-a')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.moveHome();
         this.refreshInputCompletion();
@@ -3022,7 +3136,7 @@ exportHistory(): string[] {
     });
     this.bindKey(['C-e'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.value.length);
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowControl('C-e')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.moveEnd();
         this.refreshInputCompletion();
@@ -3030,7 +3144,7 @@ exportHistory(): string[] {
     });
     this.bindKey(['C-u'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: 0 });
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowControl('C-u')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.killToStart();
         this.refreshInputCompletion();
@@ -3038,7 +3152,7 @@ exportHistory(): string[] {
     });
     this.bindKey(['C-k'], () => {
       if (this.interactivePrompt?.kind === 'text') this.updateTextPrompt({ value: this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor) });
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowControl('C-k')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.killToEnd();
         this.refreshInputCompletion();
@@ -3048,7 +3162,7 @@ exportHistory(): string[] {
       if (this.interactivePrompt?.kind === 'text') {
         const before = this.interactivePrompt.value.slice(0, this.interactivePrompt.cursor).replace(/\s+$/u, '').replace(/\S+$/u, '');
         this.updateTextPrompt({ value: before + this.interactivePrompt.value.slice(this.interactivePrompt.cursor), cursor: before.length });
-      } else if (this.swallowForWindow()) return;
+      } else if (this.routeWindowControl('C-w')) return;
       else if (this.interactivePrompt === null && this.focus === 'input') {
         this.editor.killWordBackward();
         this.refreshInputCompletion();
@@ -3139,7 +3253,7 @@ exportHistory(): string[] {
     }
     this.bindKey(['left'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor - 1);
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowArrow('left')) return;
       else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(true);
       else if (this.interactivePrompt === null) {
         this.editor.moveLeft();
@@ -3148,7 +3262,7 @@ exportHistory(): string[] {
     });
     this.bindKey(['right'], () => {
       if (this.interactivePrompt?.kind === 'text') this.movePromptCursor(this.interactivePrompt.cursor + 1);
-      else if (this.swallowForWindow()) return;
+      else if (this.routeWindowArrow('right')) return;
       else if (this.interactivePrompt === null && this.focus === 'tasks') this.setTaskGroupAtSelection(false);
       else if (this.interactivePrompt === null) {
         this.editor.moveRight();
@@ -3238,6 +3352,18 @@ exportHistory(): string[] {
       });
     }
 
+    // Shift+Tab is the panel's step-back chord (630a), so it is NOT one of the
+    // CONTENDED names the popup contends with: plain `tab` is, and blessed
+    // reports the shifted form under its own full name (`S-tab`, from
+    // `keys.js:302`), which nothing else binds. Outside a panel the handler
+    // does nothing and the text path still swallows the key by name length, so
+    // the editor is left exactly where it was.
+    this.bindKey(['S-tab'], () => {
+      if (!this.windowMgr.isActive) return;
+      this.windowMgr.handleKey('S-tab', { shift: true });
+      this.scheduler.requestImmediate();
+    });
+
     // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
     // no app-owned viewport to page: the rows above the live area are already
     // in the terminal's scrollback, and the terminal's own PgUp is the thing
@@ -3302,6 +3428,26 @@ exportHistory(): string[] {
         return;
       }
       if (this.windowMgr.isActive) {
+        const panel = this.activeRichPanel;
+        // Space is the panel's "go one level deeper / toggle this row", so it
+        // is answered before the filter sees it — and only when the panel has
+        // a use for it. A list with nothing to toggle reports the key back
+        // unconsumed, and the space goes into the query, because `deep seek`
+        // has to stay searchable.
+        if (panel !== null && (name ?? ch) === 'space' && this.windowMgr.handleKey('space')) {
+          this.scheduler.requestImmediate();
+          return;
+        }
+        // In the tab strip a bound letter is a ROW ACTION, not filter text;
+        // in the list the filter keeps every letter, or `install` could never
+        // be typed. The strip's own keybindings are not touched by this.
+        if (panel !== null
+          && !panel.contentFocused()
+          && panel.hasRowAction(name ?? ch)
+          && panel.runRowAction(name ?? ch)) {
+          this.scheduler.requestImmediate();
+          return;
+        }
         // Filterable windows take typing; static ones swallow it so it cannot
         // land in the prompt underneath the modal.
         this.windowMgr.feedCharacter(ch);

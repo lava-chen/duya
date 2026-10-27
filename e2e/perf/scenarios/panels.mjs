@@ -98,7 +98,7 @@ export default {
     const samples = [];
     const digest = fixtureDigest(FIXTURE_ID);
     const panelTarget = ctx.options.panels ?? 3;
-    const panelIds = (ctx.options.panelIds ?? 'files,terminal,browser').split(',');
+    const panelIds = (ctx.options.panelIds ?? 'workspace,terminal,browser').split(',');
 
     for (let index = 0; index < ctx.options.samples; index += 1) {
       const namespace = `panels-${ctx.runId}-${index}`;
