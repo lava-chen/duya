@@ -48,6 +48,7 @@
 | TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
 | TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
 | 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 已合并（PR #492，`333b025a`）；仅剩真机 Electron 点击验收未跑 |
+| 插件 App 主题通道 | [2026-10-27 插件 App 主题通道](active/2026-10-27-plugin-app-theme-channel.md) | 宿主向沙箱 iframe 推 `data-theme`；插件侧 token 层在 marketplace PR，两者需成对生效 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 
