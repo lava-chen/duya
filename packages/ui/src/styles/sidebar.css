@@ -866,11 +866,30 @@ html[data-glass-repair] .attachment-preview-overlay {
      global ramp until a light-mode capture gives it its own numbers. */
   --sidebar-text: var(--text);
   --sidebar-muted: var(--muted);
+  /* Claude parity (2026-10-27): a hovered group caption brightens one step
+     without a background wash. The step is taken from the two MEASURED
+     sidebar values above (caption #8F8C8C → session title #DDDCDC) and
+     lands at 55% of the way, i.e. ~#B2B0B0 — a visible lift that still
+     reads as a caption rather than a session title. */
+  --sidebar-text-hover: color-mix(in srgb, var(--sidebar-muted) 55%, var(--sidebar-text));
+  /* Claude parity (2026-10-27): the trailing state dot and the row badges.
+     The dark values are the ones measured off a live Claude Code desktop
+     window (3.6556.2.0) — amber `#FAB219` for "waiting on the user", blue
+     `#2A78D6` for "finished, not viewed", green `#32D64B` for a live pull
+     request, purple `#B796FF` for a merged one. */
+  --sidebar-status-awaiting: var(--warning);
+  --sidebar-status-unread: #2a78d6;
+  --sidebar-badge-pr: #32d64b;
+  --sidebar-badge-merge: #b796ff;
 }
 
 :root[data-theme="dark"] .app-sidebar {
   --sidebar-text: #dddcdc;
   --sidebar-muted: #8f8c8c;
+  --sidebar-status-awaiting: #fab219;
+  --sidebar-status-unread: #2a78d6;
+  --sidebar-badge-pr: #32d64b;
+  --sidebar-badge-merge: #b796ff;
 }
 
 .project-group-threads {
@@ -1003,18 +1022,70 @@ html[data-glass-repair] .attachment-preview-overlay {
 }
 
 .thread-item-status-awaiting {
-  color: var(--warning);
+  color: var(--sidebar-status-awaiting, var(--warning));
 }
 
 .thread-item-status-awaiting .thread-item-status-dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--warning);
+  background: var(--sidebar-status-awaiting, var(--warning));
+}
+
+/* Claude parity (2026-10-27): the blue dot means "the session finished and
+ * the user has not looked at it yet". The amber / blue / red trio was read
+ * off a live Claude Code desktop window (3.6556.2.0): amber `#FAB219` for
+ * "waiting on the user", blue `#2A78D6` for "finished, unseen", red for a
+ * failed turn. */
+.thread-item-status-unread {
+  color: var(--sidebar-status-unread, #2a78d6);
+}
+
+.thread-item-status-unread .thread-item-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sidebar-status-unread, #2a78d6);
 }
 
 .thread-item-status-error {
   color: var(--error);
+}
+
+/* Claude parity (2026-10-27): the branch / pull-request / merge glyphs sit
+ * between the title and the state dot, exactly where Claude Code puts them.
+ * A count is drawn only when there is more than one — a single pull request
+ * is the common case and the digit would be noise. */
+.thread-item-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+}
+
+.thread-item-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  font-size: 10px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-item-badge-count {
+  font-weight: 500;
+}
+
+.thread-item-badge-branch {
+  color: var(--sidebar-muted);
+}
+
+.thread-item-badge-pr {
+  color: var(--sidebar-badge-pr, #32d64b);
+}
+
+.thread-item-badge-merge {
+  color: var(--sidebar-badge-merge, #b796ff);
 }
 
 .thread-item-title {

@@ -22,7 +22,7 @@
 | 插件 UI MCP 资源 | [2026-10-24 插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | 完成 S1 契约后先报告 schema diff 与受影响调用方，再推进 S2 |
 | 输出速度 tok/s | [2026-10-23 输出速度](active/2026-10-23-output-token-rate.md) | provider 校准路径：ai 测时长 → 协议契约 → 帧携带 → TUI 展示 |
 | 面板列树布局 | [2026-10-22 面板列树](active/2026-10-22-panel-column-layout.md) | 按 Claude Code 截图补齐面板覆盖会话、分隔条与逐列行高；兼容迁移旧布局 |
-| 本次侧栏对齐 | [2026-10-22 侧栏对齐](active/2026-10-22-sidebar-alignment.md) | 第五轮去掉「不分组」只剩 文件夹/日期，组间距 16px 对齐 Claude；已过 typecheck/架构门禁与真机实测 |
+| 本次侧栏对齐 | [2026-10-22 侧栏对齐](active/2026-10-22-sidebar-alignment.md) | 第六轮：组头 hover 去背景只亮字、三色状态点（黄=等用户/蓝=结束未查看/红=报错）、worktree branch/PR/merge 徽标带计数；已过 typecheck/架构门禁与真机实测 |
 | 本次公开树整理 | [2026-10-21 仓库树整理](active/2026-10-21-public-tree-cleanup.md) | 清理公开根目录、移动中文入口/架构文档并验证打包路径 |
 | 本次文档整理 | [2026-10-20 文档体系](active/2026-10-20-documentation-system.md) | 文档已整理；待处理文档范围外的两处门禁失败，见接续记录 |
 | 单 Host 多客户端 | [2026-10-22 Desktop 与 TUI 共用 Host](active/2026-10-22-single-host-multiclient.md) | 先做 health 能力字段与 TUI 自动 attach |

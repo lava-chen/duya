@@ -1,9 +1,9 @@
 # 侧栏对齐（桌面端实测基线）
 
-状态：active · 负责人：mavis 会话 `mvs_4801746c549f4c79a14713731e351b20` · 更新：2026-10-26
-分支：`codex/sidebar-claude-redo`（前两轮 · PR #366）→ `codex/ui-adjust`（第三轮）· worktree：`.claude/worktrees/ui-adjust` · base：`a62d5415` · owner：mavis
+状态：active · 负责人：mavis 会话 `mvs_4801746c549f4c79a14713731e351b20` · 更新：2026-10-27
+分支：`codex/sidebar-claude-redo`（前两轮 · PR #366）→ `codex/ui-adjust`（第三轮起）· worktree：`.claude/worktrees/ui-adjust` · base：`a62d5415` · owner：mavis
 
-三轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）；第三轮对齐 **Claude Code 的分组与排序模型**（分组方式 / 日期分桶 / 组头动作）。
+六轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）；第三轮对齐 **Claude Code 的分组与排序模型**（分组方式 / 日期分桶 / 组头动作）；第四轮对齐字号与字色；第五轮去掉「不分组」并对齐组间距；第六轮做组头 hover、三色状态点与 worktree 徽标。
 
 ## 目标与边界
 
@@ -286,5 +286,82 @@ Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，
 - 副作用：本机 `duya-conversations` 的 `projectGroupBy` 验证期间来回切换，收尾为 `byDate`（与新默认一致）。
 - 并行会话提示：同一 worktree `codex/ui-adjust` 上有另一个会话在并发提交（第四轮字体、面板等）；
   本轮只提交了上表 10 个文件，其余未提交改动属对方。
+
+---
+
+## 第六轮：组头 hover、三色状态点、worktree 徽标（2026-10-27）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `f2b0dc3e` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 触发
+
+用户三条批注：
+
+1. 组头（最近 7 天）hover 不要有阴影/背景高亮 —— Claude 只是**字体亮一点**。
+2. session 行尾小圆点三色语义：**黄 = 等用户**（最后问了问题 / 要批准 / 要回答）、
+   **蓝 = 已结束但用户还没查看**、**红 = 报错**。
+3. worktree 图标：**创建 branch / 提交 PR / merge 各一个图标**，不止一次就在图标后加数字，样式同 Claude 截图；
+   用户提示「worktree 的基础 duya 已经有实现」。
+
+### 实测（Claude Code 桌面端 3.6556.2.0，PrintWindow 像素采样 + AX 树）
+
+| 元素 | 坐标(X,Y,W,H) | 颜色 | 语义（AX 树） |
+| --- | --- | --- | --- |
+| 绿色图标 | 304,354,12,11 | `#32D64B` | 标题带 **Open** → PR Open |
+| 绿色图标 | 304,556,12,11 | `#32D64B` | 「项目概览 **Open**」 |
+| 黄色圆点 | 336,476,8,7 | `#FAB219` | 黄=等用户 |
+| 蓝色圆点 | 336,558,8,8 | `#2A78D6` | 蓝=已结束未查看 |
+| 紫色图标 | 292,594,12,11 | `#B796FF` | 标题带 **Merged · 3 pull requests** → 紫色 + 数字「3」 |
+| 紫色图标 | 304,631,12,11 | `#B796FF` | 「大型项目 scripts 目录管理 **Merged**」 |
+| 紫色图标 | 304,706,12,11 | `#B796FF` | 「本地 TUI 的 Agent 链路 **Merged**」 |
+
+8× 放大确认：**绿色 = 双竖条 + 上下节点 = lucide `git-pull-request`**；
+**紫色 = 一竖条 + 侧分支 + 节点 = lucide `git-merge`**（两者形状不同，不是同图标换色）。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `styles/sidebar-sections.css` | 组头 hover **删掉 `background: color-mix(...)`**，只留 `color: var(--sidebar-text-hover)`；三个系统段的 `background: transparent` 特判收敛为通用规则；组名继承 hover 色 |
+| `styles/sidebar.css` | `.app-sidebar` 新增 `--sidebar-text-hover`（`--sidebar-muted` 55% ↔ `--sidebar-text`）；新增 `--sidebar-status-awaiting:#fab219`、`--sidebar-status-unread:#2a78d6`、`--sidebar-badge-pr:#32d64b`、`--sidebar-badge-merge:#b796ff`；新增 `.thread-item-badges` / `.thread-item-badge*` 规则 |
+| `stores/session-seen-store.ts`（新） | zustand + localStorage（`sidebar.sessionUnreadAt`）：`notifyOutput(sessionId)` / `markSeen(sessionId)` |
+| `hooks/useSessionUnreadBadge.ts`（新） | 结合 store + `subscribeToPhase` + `getSessionStatus` 探针（4s 缓存 / 8s 重查），抑制「还在跑却显示蓝点」 |
+| `hooks/useSessionWorktreeBadges.ts`（新） | `observeIntegrationsForSession` → live PR 计数（`unknown` **不**计 open）+ merged 计数；`observeCheckoutForSession` → branch 计数；30s 缓存 + 并发上限 4 + **本地路径预筛**（仅路径含 `worktrees` 段才问 checkout） |
+| `components/shared/SessionWorktreeBadges.tsx`（新） | branch（`--sidebar-muted`）/ PR（`#32d64b`）/ merge（`#b796ff`）三个 12px 图标，**计数 >1 才显示数字** |
+| `components/icons.tsx` | 新增 lucide `GitPullRequest` / `GitMerge` 导入与 `GitPullRequestIcon` / `GitMergeIcon` 导出 |
+| `components/shared/ThreadListItem.tsx` | `SessionStatus` 加 `"unread"`；状态推导链加 unread 分支；徽标插在状态点之前 |
+| `App.tsx` | `onMessageNew` 广播中非 active session → `notifyOutput(sessionId)`；`activeThreadId` 变化 → `markSeen(activeThreadId)` |
+| `i18n/{zh,en}.ts` | 新增 `thread.status.unread` / `thread.badge.branch` / `thread.badge.pullRequest` / `thread.badge.merged` |
+| `components/shared/ThreadListItem.test.tsx` | 新增 7 例：蓝点出现 / 运行时无蓝点 / markSeen 后消失 / PR 计数 >1 才显示数字 / `unknown` 不计 open / branch 徽标 / 普通目录不向 Host 问 checkout |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `f2b0dc3e` dirty | Node | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净（跑了两次） |
+| `f2b0dc3e` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/shared/ThreadListItem.test.tsx` | 0 · **31/31** | 含本轮新增 7 例 |
+| `f2b0dc3e` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/shared packages/ui/src/stores packages/ui/src/hooks` | 0 · **33 文件 / 303 用例** | 无回归 |
+| `f2b0dc3e` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `f2b0dc3e` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 19 个阶段全绿（build:packages 21 包） |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | 量组头计算样式 | 静息 `rgb(143,140,140)` = `#8F8C8C`；hover 解析 `#B2B0B0`；**背景 `rgba(0,0,0,0)`** | 43 行会话，组名「昨天 / 最近 7 天 / 更早」 |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | localStorage 写入 unread → reload | 渲染 1 个 `.thread-item-status-unread`，色与底均 **#2A78D6** | 端到端走通 store → hook → 组件 → CSS |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | `window.electronAPI.workspaceLifecycle.integrations.observeForSession(id)` | 桥真实存在；该 profile 0 条 integration、checkout 返回 `null` | 徽标**正确地不渲染**（本机无 PR/托管 checkout 数据） |
+
+### 接续 / 结果
+
+- 第六轮**已实现、已验证**（三条批注的代码落地全部完成）。
+- **hover 目标色是推导值**：Claude 真窗口在另一虚拟桌面且 foreground 被锁，取不到官方 hover 色；
+  用已实测的两个色值（静息 `#8F8C8C` ↔ 会话标题 `#DDDCDC`）取 55% ⇒ `#B2B0B0`。
+  若后续能激活 Claude 窗口，应重新采样校正这个比值。
+- **branch 次数无法实现**：不存在 session→branch 历史表，`HostSessionCheckoutView` 只有单值、
+  `HostCheckoutObserved` 无 branch 名 —— 本轮只渲染 branch 图标（计数恒为 1，不显示数字）。
+  要支持计数需新增持久化表 + 协议字段 + Host 实现。
+- **蓝色「已结束未查看」依赖 renderer 侧信号**：`unreadAt` 由全局 `message:new` 广播写入，
+  后台 session 的「是否仍在跑」靠 `getSessionStatus` 探针（4s 缓存 / 8s 重查）。
+  跨进程重启后 `completedAt` 语义仍不可用；要权威判定需把 `runs.finished_at` 经 preload 暴露给 renderer。
+- **并行会话提示**：同一 worktree `codex/ui-adjust` 上并行会话仍在提交（面板布局 / BackgroundTasksPanel）。
+  `icons.tsx` / `i18n/{en,zh}.ts` 三处双方都有改动，本轮用
+  `docs-local/research/sidebar-group-parity/stage-own-hunks.mjs` 按标记过滤 hunk 后
+  `git apply --cached` **只暂存我方 hunk**，其余 16 个文件留在工作区。
 
 

@@ -65,16 +65,18 @@
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .sidebar-section-item .sidebar-section-header:hover {
-  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  /* Claude parity (2026-10-27): Claude Code's group caption does NOT take a
+     background wash on hover — the caption simply brightens a step. The old
+     `color-mix(in srgb, var(--text) 4.5%, transparent)` wash made the caption
+     read as a button, and the three system-section exemptions below could
+     never cover the date groups the user actually hovered. */
+  color: var(--sidebar-text-hover);
 }
-/* Plan 471 v10 / 549: "项目", "定时任务" and "已归档" keep a flat resting
-   look — no hover background wash (user feedback). The chevron + trailing
-   buttons still fade in on hover; only the header's background highlight is
-   suppressed so these system sections read as static titles. */
-.sidebar-section-item[data-section-id="__system__:project"] .sidebar-section-header:hover,
-.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover,
-.sidebar-section-item[data-section-id="__system__:archived"] .sidebar-section-header:hover {
-  background: transparent;
+/* The user-section label carries its own accent tint, so it would keep the
+   resting colour on hover. Let it follow the header so the hover brightening
+   applies to every caption. */
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-name {
+  color: inherit;
 }
 .sidebar-section-item .sidebar-section-header:focus-visible {
   outline: 2px solid var(--focus, var(--accent));

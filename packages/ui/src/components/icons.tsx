@@ -80,6 +80,8 @@ import {
   Folder,
   FolderOpen,
   GitBranch,
+  GitPullRequest,
+  GitMerge,
   Archive,
   Eye,
   EyeOff,
@@ -434,6 +436,17 @@ export const XCircleIcon = wrapLucide(XCircle);
 export const FolderIcon = wrapLucide(Folder);
 export const FolderOpenIcon = wrapLucide(FolderOpen);
 export const GitBranchIcon = wrapLucide(GitBranch);
+/**
+ * The pull-request glyph Claude Code paints green on a session row.
+ * `git-pull-request` is the two-vertical-strokes-with-node-caps shape that
+ * was measured on the live Claude Code desktop window (2026-10-27).
+ */
+export const GitPullRequestIcon = wrapLucide(GitPullRequest);
+/**
+ * The merge glyph Claude Code paints purple on a session row — one vertical
+ * stroke with a side branch and a node, matching `git-merge`.
+ */
+export const GitMergeIcon = wrapLucide(GitMerge);
 export const ArchiveIcon = wrapLucide(Archive);
 export const EyeIcon = wrapLucide(Eye);
 export const EyeSlashIcon = wrapLucide(EyeOff);

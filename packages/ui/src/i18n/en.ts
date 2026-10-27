@@ -1306,6 +1306,11 @@ const en = {
   'thread.status.running': 'Running',
   'thread.status.awaitingInput': 'Waiting for input',
   'thread.status.error': 'Failed',
+  // Claude parity (2026-10-27): trailing state dot + the row badges.
+  'thread.status.unread': 'Finished, not viewed',
+  'thread.badge.branch': 'Branch',
+  'thread.badge.pullRequest': 'Pull request',
+  'thread.badge.merged': 'Merged',
   'thread.archiveThread': 'Archive Thread',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': 'Unarchive',

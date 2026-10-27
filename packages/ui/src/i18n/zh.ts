@@ -1291,6 +1291,11 @@ const zh: Record<TranslationKey, string> = {
   'thread.status.running': '运行中',
   'thread.status.awaitingInput': '等待输入',
   'thread.status.error': '出错',
+  // Claude parity (2026-10-27)：行尾状态点 + 会话行徽标。
+  'thread.status.unread': '已结束，未查看',
+  'thread.badge.branch': '分支',
+  'thread.badge.pullRequest': 'Pull Request',
+  'thread.badge.merged': '已合并',
   'thread.archiveThread': '归档对话',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': '取消归档',
