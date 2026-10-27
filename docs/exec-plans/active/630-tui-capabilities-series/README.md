@@ -24,7 +24,7 @@
 
 - 插件界面交互形态：claude-code-haha 仓库 `src/commands/plugin/`（React Compiler 构建产物，原始 TS 在各文件 sourceMappingURL 的 `sourcesContent` 内）。
 - provider 管理链路：minimax-code 仓库 `packages/tui/src/features/provider/`、`packages/config/src/config.ts`。
-- 两仓库均为本机 `E:\cloned-projects\` 下的克隆，只对照行为，不搬代码。
+- 两仓库是本机的参考克隆，只对照行为，不搬代码；本地存放路径随机器而变，故不写进版本库文档。
 
 ## 验收
 
@@ -32,5 +32,6 @@
 
 ## 接续 / 结果
 
-计划检出：`.claude/worktrees/tui-capabilities-plan` · 分支：`codex/630-634-tui-capabilities-plans` · base：`e9391659`。
-下一步：按 630a 计划开工实现 worktree；其余切片在 630a 合入前保持 pending。
+计划检出：`.claude/worktrees/tui-capabilities-plan` · 分支：`codex/630-634-tui-capabilities-plans` · base：`e9391659`（已合入 master `d80ca3c6`）。
+实现检出（630a）：`.claude/worktrees/630a-rich-panel` · 分支：`codex/630a-tui-rich-panel-modal` · base：`d80ca3c6`。
+下一步：630a 过 PR 集成后开工 632；其余切片在 630a 合入前保持 pending。
