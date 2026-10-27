@@ -53,6 +53,45 @@
   regression, real worker/IPC/Electron validation and authorized integration
   remain subsequent work; the repository's final commit gates are run here.
 
+## S1–S6 集成落地 — 2026-10-27
+
+- Owner: 本会话 root；worktree `.claude/worktrees/bot-s1-s6-merge`；分支
+  `codex/bot-s1-s6-integration`（PR #521，base `origin/master`）；独占路径：PR #521
+  分支与本计划文件。合并前的来源检出 `.claude/worktrees/bot-framework-*` 保持原位。
+- 授权与方式：用户选择「以 #521 集成分支单一落地」，而不是把 11 条堆叠 PR 逐条
+  rebase 后分别合并。理由：11 条分支各自持有一份被跟踪的 `packages/host/bundle/`
+  产物，逐条合并会把「产物重生成」重复 11 次；组合分支已保留每个切片的独立 merge
+  提交，提交粒度不丢，且 CI 只跑一遍。落地用 merge commit，不 squash。
+- 合并 `origin/master @ a99e1444`（自 `d80ca3c6` 起 master 又并入 #510/#512/#514/
+  #518/#525/#517）：6 处冲突。三个生成产物 `bundle/worker-entry.js`、
+  `bundle/worker-metafile.json`、`bundle/BashTool/BashWorker.js` 按[构建](../../development/build.md)
+  的规矩重生成而不手工合并；`packages/host/package.json` 同时保留 `./bot` 与
+  `./provider-management` 两个导出映射；两份计划文档两侧内容都保留。
+- 修掉组合分支上仍红的三处（CI 上 #521 的 `test` job 为此失败）：
+  - `packages/data/src/bot-scheduler-store.ts` 与 `bot-outbox.ts` 的迁移改用
+    `CREATE TABLE IF NOT EXISTS`，与核心库既有迁移写法一致。原先用裸
+    `CREATE TABLE`，重试一次启动就会在 `bot_scheduler_owners already exists`
+    上失败——桌面迁移测试「整表应用两次」直接红。
+  - `packages/agent-protocol/src/` 里指向 desktop router 的行号引用按本次 bot
+    切片造成的位移逐条重算（router.ts 在 import 与两处 hunk 共 +10 行），否则
+    citation drift 测试报 4 处「引用区间不含所命名的符号」。
+- 验证（本检出，win32 / Node 24.16.0 / Vitest 3.2.4）：
+  `npm run typecheck:all` 退出 0；`npm run architecture:check` 新增违规 0（3 条既有
+  baseline 指纹失效未 `--write`）；`npm run bundle:verify` FRESH 0/1014；bot 相关
+  套件 37 文件 416 例全绿（packages/bot、data bot 三套、host bot 与 worker-prompts、
+  memory `__tests__`）；architecture 脚本 + UI bot 32 文件 480 例全绿（退出码来自
+  `[vitest-worker]: Timeout calling "onTaskUpdate"`，与 S0 记录同签名，无用例失败）；
+  desktop bot 五文件 46 例全绿。
+- Windows 检出注意：`scripts/inline-modules.mjs` 在 Windows 上把
+  `packages/capabilities/src/ModuleTool/inline-content.ts` 生成成 CRLF，与入库的 LF
+  版本字节不同，会让 `bundle:verify` 报 STALE 且不产生真实 diff。用
+  `git -c core.eol=lf checkout -- <file>` 复位后再重建产物即可。
+- 外部副作用：仅 `origin/codex/bot-s1-s6-integration` 远端分支与 PR #521 更新。
+  未改生产 Bot 归属，未发任何外部消息，未动用户数据。
+- 下一步：#521 最新 head 的五检查全绿后转 ready 并用 merge commit 合并；合并后
+  逐条关闭 #500 / #502 / #503 / #504 / #506 / #509 / #511 / #513 / #515 / #519 / #520
+  （它们的提交已随组合分支进入 master），并回收本次检出；S7 旧路径退役另立切片。
+
 ## S5 independent review — 2026-10-26
 
 - Owner: Codex root, linked worktree `/workspace/work/bot-s5-review`, branch
