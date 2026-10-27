@@ -935,12 +935,13 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
       };
 
       void (async () => {
-        let action: 'start' | 'queued' = 'start';
+        let action: 'start' | 'queued' | 'accepted' = 'start';
         try {
           const gate = await window.electronAPI?.botTurn?.sendTurn({
             agentId,
             text: content,
             clientMsgId: messageId,
+            attachments: files,
           });
           if (gate?.action) action = gate.action;
         } catch {
@@ -950,6 +951,13 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
         }
         if (action === 'start') {
           startTurn();
+          return;
+        }
+        if (action === 'accepted') {
+          // The durable Host inbox owns this turn from acceptance onward.
+          // Keep the optimistic bubble queued, without registering the legacy
+          // renderer-claim callback that would start a second executor.
+          setMessageDelivery(activeThreadId, messageId, 'queued');
           return;
         }
         // Queued on the user lane. Keep the captured start params so the

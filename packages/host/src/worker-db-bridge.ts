@@ -88,9 +88,8 @@ import {
   type HostLocalPluginRegistryApiV1,
 } from './local-plugin-registry-api.js';
 import {
-  createConfigAgent,
-  updateConfigAgentIdentity,
-} from './config-agents/config-agents-api.js';
+  createHostWorkerBotService,
+} from './bot/bridge-assembly.js';
 import {
   hostMessageItemsToIpcMessages,
   ipcMessageToNewEvent,
@@ -142,6 +141,7 @@ export type WorkerBridgeLocalSessions = Pick<
 >;
 
 export interface HostWorkerDbBridgeOptions {
+  readonly channelDelivery?: (payload: Record<string, unknown>, caller: SessionServiceCaller) => Promise<unknown>;
   readonly checkoutService?: SessionCheckoutService;
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
   /** Durable run ledger — serves `run:*` exactly like the ledger API. */
@@ -330,6 +330,10 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
     runs: options.runs,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
+  const botService = createHostWorkerBotService({
+    ...(options.configRoot === undefined ? {} : { configRoot: options.configRoot }),
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
+  });
   const toolApprovals = (): HostToolApprovalApiV1 => createHostToolApprovalApi(options.mainDatabase.db);
   const modelCapabilities = createHostLocalModelCapabilityApi(new ModelCapabilityStore(options.mainDatabase.db));
   const timeline = options.timeline;
@@ -467,6 +471,10 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
 
   return {
     async dispatch(action: string, payload: Record<string, unknown>, caller?: SessionServiceCaller): Promise<unknown> {
+      if (action === 'channel:deliver' && options.channelDelivery) {
+        if (!caller || payload.sessionId !== caller.sessionId) throw new WorkerDbBridgeError('invalid_payload', 'Channel delivery requires the current worker attempt.');
+        return options.channelDelivery(payload, caller);
+      }
       const handled = await controlPlane.dispatchControlPlaneAction(action, payload);
       if (handled !== undefined) return handled;
 
@@ -1313,27 +1321,70 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
           if (typeof name !== 'string' || !name.trim()) {
             throw new WorkerDbBridgeError('invalid_payload', 'agent name is required');
           }
-          return createConfigAgent(name, optionalString(payload.description), {
-            ...(options.configRoot === undefined ? {} : { root: options.configRoot }),
-            ...(options.logger === undefined ? {} : { logger: options.logger }),
+          // S1: the legacy identity tools go through the Bot application
+          // service (one writer over config.toml + profile.json), answering
+          // the legacy `{ id, name }` shape the tools already consume.
+          const service = await botService.service();
+          const receipt = await service.createBot({
+            name,
+            ...(optionalString(payload.description) === undefined ? {} : { description: optionalString(payload.description) }),
           });
+          return { id: receipt.id, name: receipt.name };
         }
         case 'config:agents:update': {
           const agentId = payload.agentId;
           if (typeof agentId !== 'string' || !agentId.trim()) {
             throw new WorkerDbBridgeError('invalid_payload', 'agentId is required');
           }
-          return updateConfigAgentIdentity(
-            agentId,
-            {
-              name: optionalString(payload.name),
-              description: optionalString(payload.description),
-            },
-            {
-              ...(options.configRoot === undefined ? {} : { root: options.configRoot }),
-              ...(options.logger === undefined ? {} : { logger: options.logger }),
-            },
-          );
+          const service = await botService.service();
+          const receipt = await service.updateBot({
+            id: agentId,
+            ...(optionalString(payload.name) === undefined ? {} : { name: optionalString(payload.name) }),
+            ...(optionalString(payload.description) === undefined ? {} : { description: optionalString(payload.description) }),
+          });
+          return { id: receipt.id, name: receipt.name };
+        }
+
+        // ==================== Bot application (S1) ====================
+        // The typed Bot surface: same service as the legacy actions above,
+        // full receipts and structured errors. `bot:get` / `bot:list` are
+        // the read side every client can converge on.
+        case 'bot:create': {
+          const name = payload.name;
+          if (typeof name !== 'string' || !name.trim()) {
+            throw new WorkerDbBridgeError('invalid_payload', 'bot name is required');
+          }
+          const service = await botService.service();
+          return service.createBot({
+            name,
+            ...(optionalString(payload.description) === undefined ? {} : { description: optionalString(payload.description) }),
+            ...(optionalString(payload.requestId) === undefined ? {} : { requestId: optionalString(payload.requestId) }),
+          });
+        }
+        case 'bot:update': {
+          const botId = payload.botId ?? payload.agentId;
+          if (typeof botId !== 'string' || !botId.trim()) {
+            throw new WorkerDbBridgeError('invalid_payload', 'botId is required');
+          }
+          const service = await botService.service();
+          return service.updateBot({
+            id: botId,
+            ...(optionalString(payload.name) === undefined ? {} : { name: optionalString(payload.name) }),
+            ...(optionalString(payload.description) === undefined ? {} : { description: optionalString(payload.description) }),
+            ...(payload.expectedRevision === undefined ? {} : { expectedRevision: payload.expectedRevision as number }),
+          });
+        }
+        case 'bot:get': {
+          const botId = payload.botId ?? payload.agentId;
+          if (typeof botId !== 'string' || !botId.trim()) {
+            throw new WorkerDbBridgeError('invalid_payload', 'botId is required');
+          }
+          const service = await botService.service();
+          return service.getBot(botId);
+        }
+        case 'bot:list': {
+          const service = await botService.service();
+          return service.listBots();
         }
 
         default:

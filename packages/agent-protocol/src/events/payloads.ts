@@ -163,7 +163,7 @@ export interface ToolUse {
  * The legacy wire carries the failure bit in three places and all three are
  * optional: `error?: boolean` on the worker's `chat:tool_result`
  * (packages/agent-protocol/src/worker-protocol.ts:349-355, relayed verbatim by
- * router.ts:624), `is_error?: boolean` on `@duya/ai`'s `ToolResultContent`
+ * router.ts:625), `is_error?: boolean` on `@duya/ai`'s `ToolResultContent`
  * (packages/ai/src/types.ts:75-80), and nothing at all on the stored rows. An
  * absent bit is indistinguishable from a successful call, so a failed tool and
  * a silent one are the same value on the wire and in the transcript.

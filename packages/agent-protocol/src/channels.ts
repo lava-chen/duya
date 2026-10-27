@@ -222,6 +222,8 @@ export interface ChannelInboundAttachment {
  * This is what gets passed to `BackgroundWakes.wakeForInbound()`.
  */
 export interface ChannelInboundEnvelope {
+  /** Stable provider event identity; required by durable Host admission. */
+  readonly sourceEventId?: string;
   readonly address: ChannelAddress;
   /** Display name or username of the sender. */
   readonly sender: string;

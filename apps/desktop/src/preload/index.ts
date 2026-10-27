@@ -3,6 +3,7 @@ import type {
   PluginAppDefinition,
   PluginUiSurfaceDirectory,
 } from '@duya/plugin-core/apps/declarations'
+import type { FileAttachment } from '@duya/agent-protocol'
 
 // Sandboxed preloads can only require electron/events/timers/vm — node:crypto
 // is unavailable here. The preload runs in a Chromium context, so Web Crypto's
@@ -855,9 +856,12 @@ export interface BotTurnPush {
 }
 
 export interface BotTurnAPI {
-  sendTurn: (payload: { agentId: string; text: string; clientMsgId?: string }) => Promise<{ action: 'start' | 'queued'; messageId: string }>;
+  listDeliveries: (payload: { botId: string }) => Promise<readonly import('@duya/agent-protocol').BotDelivery[]>;
+  sendTurn: (payload: { agentId: string; text: string; clientMsgId?: string; attachments?: readonly FileAttachment[] }) => Promise<{ action: 'start' | 'queued' | 'accepted'; messageId: string }>;
   claimScheduledTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
   cancelQueuedTurn: (payload: { sessionId: string; messageId: string }) => Promise<boolean>;
+  getScheduler: (payload: { botId: string }) => Promise<{ ownerId: string; botId: string; mode: 'legacy' | 'host'; epoch: number }>;
+  switchScheduler: (payload: { botId: string; mode: 'legacy' | 'host'; expectedEpoch: number }) => Promise<{ ownerId: string; botId: string; mode: 'legacy' | 'host'; epoch: number }>;
   /** Kickstart a freshly created bot: hidden first-turn wake that makes the
    *  bot open the conversation with a greeting. Resolves true when the run
    *  produced a reply. */
@@ -2795,9 +2799,12 @@ const electronAPI: ElectronAPI = {
   },
   // Bot turn scheduling API (Plan 500 P2)
   botTurn: {
+    listDeliveries: (payload) => ipcRenderer.invoke('bot:deliveries:list', payload),
     sendTurn: (payload) => ipcRenderer.invoke('bot:sendTurn', payload),
     claimScheduledTurn: (payload) => ipcRenderer.invoke('bot:claimScheduledTurn', payload),
     cancelQueuedTurn: (payload) => ipcRenderer.invoke('bot:cancelQueuedTurn', payload),
+    getScheduler: (payload) => ipcRenderer.invoke('bot:scheduler:get', payload),
+    switchScheduler: (payload) => ipcRenderer.invoke('bot:scheduler:switch', payload),
     kickstart: (payload) => ipcRenderer.invoke('bot:kickstart', payload),
     onScheduledTurn: (callback: (payload: BotTurnPush) => void) => {
       const wrappedHandler = (_event: Electron.IpcRendererEvent, data: BotTurnPush) => callback(data);

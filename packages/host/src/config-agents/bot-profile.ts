@@ -1,5 +1,5 @@
 /**
- * bot-profile.ts — Bot identity source read/write.
+ * bot-profile.ts — Bot identity source read/write (Host fs half).
  *
  * `profile.json` under `<duyaRoot>/agents/<id>/` is the *runtime* identity
  * source: model self-edits (`update_state`) and UI changes land here, NOT in
@@ -7,7 +7,13 @@
  * first creation and act only as a display fallback when the profile is
  * missing.
  *
- * Semantics:
+ * The profile SHAPES and the schema-version constant moved to `@duya/bot`
+ * (framework plan S2); this module keeps the fs half — atomic writes (tmp +
+ * rename in the same directory, so a fs.watch consumer never observes a
+ * half-written file) — and re-exports the shapes for the config-agents
+ * barrel.
+ *
+ * Field semantics:
  *   - name         — display identity; the model may change it
  *   - title        — display subtitle / role line (UI/host-managed only)
  *   - description  — one-line role; the model may change it
@@ -16,32 +22,17 @@
  *                    simply dropped on the next write.
  *   - schemaVersion — reserved for migrations; `migrate` hook fires when a
  *                     file with a newer/older version is read
- *
- * Writes are atomic: tmp file + rename in the same directory, so a
- * fs.watch consumer never observes a half-written file.
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { BOT_PROFILE_SCHEMA_VERSION } from '@duya/bot';
+import type { BotProfile, BotProfileInput } from '@duya/bot';
 
-export const BOT_PROFILE_SCHEMA_VERSION = 1;
+export { BOT_PROFILE_SCHEMA_VERSION };
+export type { BotProfile, BotProfileInput };
+
 export const BOT_PROFILE_FILENAME = 'profile.json';
-
-export interface BotProfile {
-  schemaVersion: number;
-  /** Display identity name (model-updatable via update_state). */
-  name: string;
-  /** Display subtitle / role title (UI/host-managed only). */
-  title: string;
-  /** One-line role description (model-updatable via update_state). */
-  description: string;
-  /** Optional color token for the animated agent face body. */
-  avatarColor?: string | undefined;
-}
-
-/** Input accepted from callers (update_state / UI); defaults applied on write. */
-export type BotProfileInput = Omit<BotProfile, 'schemaVersion'> &
-  Partial<Pick<BotProfile, 'schemaVersion'>>;
 
 /** Hook invoked when an existing file declares a different schemaVersion. */
 export type ProfileMigrationHook = (

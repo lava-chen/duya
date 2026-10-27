@@ -288,6 +288,32 @@ describe('startup backlog cap', () => {
   });
 });
 
+it('replays a failed durable admission before advancing the Telegram acknowledgement offset', async () => {
+  const calls: string[] = [];
+  let committed = false;
+  let attempts = 0;
+  const { store, saved } = memoryStore(44);
+  const receive = vi.fn(async (_bot: string, _envelope: unknown) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('storage_unavailable');
+    committed = true;
+  });
+  const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    const offset = Number(new URL(String(input)).searchParams.get('offset') ?? '0');
+    return new Response(JSON.stringify({ ok: true, result: offset <= 44 ? [update(44, 'hello')] : [] }));
+  });
+  const connector = new TelegramChannelConnector({ agentId: 'bot-a', token: TOKEN, onInbound: receive,
+    fetchFn: fetchFn as typeof fetch, errorBackoffMs: 1, startupBacklogLimit: Infinity,
+    offsetStore: { load: () => store.load(), save: (offset) => { expect(committed).toBe(true); return store.save(offset); } } });
+  connector.start();
+  await waitFor(() => saved.includes(45));
+  await connector.stop();
+  expect(receive).toHaveBeenCalledTimes(2);
+  expect(receive.mock.calls[0]?.[1]).toMatchObject({ sourceEventId: '44' });
+  expect(calls.slice(0, 2).every((url) => url.includes('offset=44'))).toBe(true);
+});
+
 describe('createChannelOffsetStore against a real table', () => {
   let db: Database.Database;
   let persistence: ChannelPersistenceStore;

@@ -62,7 +62,8 @@ vi.mock('./workspace', () => ({
 }));
 
 import { AutomationScheduler } from './Scheduler';
-import { CronFileStore } from './cron-file';
+import { CronFileStore, scheduleFingerprint } from './cron-file';
+import { routineFireKey } from './schedule';
 import type { CreateAutomationCronInput } from './types';
 
 let dir: string;
@@ -231,6 +232,139 @@ describe('AutomationScheduler', () => {
     expect(read.lastRunAt).toBeGreaterThan(0);
   }, 20_000);
 
+  it('scheduled bot fire carries a deterministic fire key and claims the scheduled instant (S6)', async () => {
+    const cron = scheduler.createCron(
+      makeInput({ agent: 'digest-bot', schedule: { kind: 'every', every: '1m' } }),
+    );
+    // Machine was up but the job sat overdue for five minutes.
+    const lastRunAt = Date.now() - 5 * 60_000;
+    store.markRunResult(cron.id, { lastRunAt, error: null, retryCount: 0 });
+    const expectedInstant = lastRunAt + 5 * 60_000;
+
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledWith(expect.objectContaining({
+      jobKey: cron.id,
+      trigger: 'schedule',
+      fireKey: routineFireKey({
+        routineId: cron.id,
+        scheduleFingerprint: scheduleFingerprint({ kind: 'every', every: '1m' }),
+        scheduledForMs: expectedInstant,
+      }),
+    }));
+    // The claim names the scheduled instant, so the phase cannot drift.
+    const read = new CronFileStore(path.join(dir, 'cronjob.toml')).getCron(cron.id)!;
+    expect(read.lastRunAt).toBe(expectedInstant);
+  });
+
+  it('bounded misfire policy fires the newest N scheduled instants into the bot (S6)', async () => {
+    const cron = scheduler.createCron(makeInput({
+      agent: 'digest-bot',
+      schedule: { kind: 'every', every: '1m' },
+      misfirePolicy: 'bounded',
+      maxCatchUp: 3,
+    }));
+    const lastRunAt = Date.now() - 10 * 60_000;
+    store.markRunResult(cron.id, { lastRunAt, error: null, retryCount: 0 });
+
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(3));
+    const keys = mocks.enqueueAutomationWake.mock.calls.map((call) => call[0].fireKey as string);
+    expect(new Set(keys).size).toBe(3);
+    expect(keys.every((key) => key.startsWith(`r1:${cron.id}:`))).toBe(true);
+    const read = new CronFileStore(path.join(dir, 'cronjob.toml')).getCron(cron.id)!;
+    expect(read.lastRunAt).toBe(lastRunAt + 10 * 60_000);
+  });
+
+  it('skip misfire policy drops a bot fire that missed its grace window (S6)', async () => {
+    const cron = scheduler.createCron(makeInput({
+      agent: 'digest-bot',
+      misfirePolicy: 'skip',
+      schedule: { kind: 'every', every: '1d' },
+    }));
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 3 * 86_400_000 - 3_600_000, error: null, retryCount: 0 });
+    await scheduler.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.enqueueAutomationWake).not.toHaveBeenCalled();
+  });
+
+  it('manual runs keep unique fire keys so a second click is not deduped (S6)', async () => {
+    const cron = scheduler.createCron(makeInput({ agent: 'weekly-reporter' }));
+    await scheduler.runCronNow(cron.id);
+    await scheduler.runCronNow(cron.id);
+    const keys = mocks.enqueueAutomationWake.mock.calls.map((call) => call[0].fireKey as string);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys.every((key) => key.startsWith('manual:'))).toBe(true);
+  });
+
+  it('fires a missed one-shot bot routine once, after the machine comes back (S6)', async () => {
+    const at = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const cron = scheduler.createCron(makeInput({
+      agent: 'reminder-bot',
+      schedule: { kind: 'once', at },
+    }));
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1));
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledWith(expect.objectContaining({
+      fireKey: routineFireKey({
+        routineId: cron.id,
+        scheduleFingerprint: scheduleFingerprint({ kind: 'once', at }),
+        scheduledForMs: Date.parse(at),
+      }),
+    }));
+    await scheduler.tick();
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires a freshly-created every-cron on its first due tick (regression: first run was unreachable)', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 8, 0, 0));
+      scheduler.createCron(makeInput({ name: 'fresh hourly', schedule: { kind: 'every', every: '1h' } }));
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 9, 0, 30));
+      await scheduler.tick();
+      await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalledTimes(1));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('fires a freshly-created every routine into the bot on its first due tick (S6)', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 8, 0, 0));
+      const cron = scheduler.createCron(makeInput({
+        agent: 'digest-bot',
+        schedule: { kind: 'every', every: '1h' },
+      }));
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 9, 0, 30));
+      await scheduler.tick();
+      await vi.waitFor(() => expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1));
+      expect(mocks.enqueueAutomationWake).toHaveBeenCalledWith(expect.objectContaining({
+        fireKey: routineFireKey({
+          routineId: cron.id,
+          scheduleFingerprint: scheduleFingerprint({ kind: 'every', every: '1h' }),
+          scheduledForMs: Date.UTC(2026, 7, 11, 9, 0, 0),
+        }),
+      }));
+      const read = new CronFileStore(path.join(dir, 'cronjob.toml')).getCron(cron.id)!;
+      expect(read.lastRunAt).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('fires a missed one-shot standalone cron once (regression: once schedules never fired)', async () => {
+    const at = new Date(Date.now() - 86_400_000).toISOString();
+    scheduler.createCron(makeInput({ schedule: { kind: 'once', at } }));
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalledTimes(1));
+    await scheduler.tick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(mocks.runCronInSession).toHaveBeenCalledTimes(1);
+  });
+
   it('records last_error and pauses the job after retries are exhausted', async () => {
     const cron = scheduler.createCron(makeInput({ maxRetries: 1 }));
     mocks.runCronInSession.mockRejectedValue(new Error('boom'));
@@ -256,4 +390,55 @@ describe('AutomationScheduler', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
+});
+
+
+it('replays the persisted batch after failed admission and a real store restart', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 7, 11, 12));
+  try {
+    const cron = scheduler.createCron(makeInput({ agent: 'digest-bot', misfirePolicy: 'bounded', maxCatchUp: 3 }));
+    const anchor = Date.now() - 10 * 60_000;
+    store.markRunResult(cron.id, { lastRunAt: anchor, error: null, retryCount: 0 });
+    mocks.enqueueAutomationWake.mockRejectedValueOnce(new Error('inbox unavailable'));
+    await scheduler.tick();
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
+    expect(store.getCron(cron.id)?.lastRunAt).toBe(anchor);
+    const failedKey = mocks.enqueueAutomationWake.mock.calls[0][0].fireKey;
+    scheduler.shutdown();
+    clock.mockReturnValue(Date.now() + 86_400_000);
+    store = new CronFileStore(path.join(dir, 'cronjob.toml'));
+    scheduler = new AutomationScheduler(store);
+    await scheduler.tick();
+    expect(mocks.enqueueAutomationWake.mock.calls[1][0].fireKey).toBe(failedKey);
+    expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(4);
+    expect(store.getCron(cron.id)?.lastRunAt).toBe(anchor + 10 * 60_000);
+  } finally { clock.mockRestore(); }
+});
+
+it('replays the same identity when admission committed but acknowledgement was lost', async () => {
+  const cron = scheduler.createCron(makeInput({ agent: 'digest-bot', schedule: { kind: 'once', at: new Date(Date.now() - 1000).toISOString() } }));
+  vi.spyOn(store, 'acknowledgeScheduledFire').mockImplementationOnce(() => { throw new Error('crash'); });
+  await scheduler.tick();
+  scheduler.shutdown();
+  store = new CronFileStore(path.join(dir, 'cronjob.toml'));
+  scheduler = new AutomationScheduler(store);
+  mocks.enqueueAutomationWake.mockReturnValue('deduped');
+  await scheduler.tick();
+  expect(mocks.enqueueAutomationWake.mock.calls[0][0].fireKey).toBe(mocks.enqueueAutomationWake.mock.calls[1][0].fireKey);
+  await scheduler.tick();
+  expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(2);
+});
+
+it('coalesces overlapping ticks while admission is in flight', async () => {
+  const cron = scheduler.createCron(makeInput({ agent: 'digest-bot' }));
+  store.markRunResult(cron.id, { lastRunAt: Date.now() - 60_000, error: null, retryCount: 0 });
+  let release!: () => void;
+  mocks.createBotSessionIfMissing.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  const first = scheduler.tick();
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  const second = scheduler.tick();
+  expect(second).toBe(first);
+  release();
+  await Promise.all([first, second]);
+  expect(mocks.enqueueAutomationWake).toHaveBeenCalledTimes(1);
 });

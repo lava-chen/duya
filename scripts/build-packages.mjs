@@ -138,6 +138,14 @@ const BUILD_ORDER = [
 
   // Level 3 — depend only on level 2.
   '@duya/agent-core', //   -> @duya/agent-protocol
+  // Personal Bot framework S2: the pure Bot domain (identity shapes, id
+  // rules, journal state machine, application service). Level 3 because it
+  // imports only `@duya/agent-protocol` — the same edge `@duya/agent-core`
+  // declares, zero IO by construction (the S0 bot-boundary gate measures the
+  // package's whole import closure). It must build before `@duya/host`, whose
+  // `src/bot/` adapters assemble the domain package's service over the Host's
+  // TOML / fs file backends.
+  '@duya/bot', //          -> @duya/agent-protocol
   '@duya/client-core', // -> @duya/agent-protocol
   '@duya/workflow', //     -> @duya/agent-core, @duya/agent-protocol
 

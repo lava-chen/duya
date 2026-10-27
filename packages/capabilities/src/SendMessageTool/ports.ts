@@ -61,7 +61,7 @@ export interface SendMessagePort {
     content: string;
     mediaUrl?: string;
     mediaAlt?: string;
-  }): Promise<{ success?: boolean; reason?: string } | undefined>;
+  }): Promise<{ success?: boolean; reason?: string; queued?: boolean; deliveryId?: string } | undefined>;
   appendChannelActivity(input: SendMessageChannelActivity): Promise<unknown>;
   logError(message: string, error: Error, context: Record<string, unknown>, component: string): void;
   logDebug(message: string, context: Record<string, unknown>): void;

@@ -23,12 +23,13 @@
  */
 
 import { BOT_BASIC_SYSTEM_PROMPT } from './basicPrompt.js'
-import { botSectionCacheKey } from './epoch.js'
+import { botSectionCacheKey, botVolatileSectionCacheKey } from './epoch.js'
 import { HbsPromptSystem } from '../hbs/HbsPromptSystem.js'
 import type { HbsPromptSystemOptions } from '../hbs/HbsPromptSystem.js'
 import type { PromptContext } from '../types.js'
 import { TOOL_NAMES } from '../types.js'
 import type { ChannelSnapshot } from '@duya/agent-protocol/channels'
+import type { BotContextSnapshot } from '@duya/bot'
 import type { BotMemoryContext } from './memory/types.js'
 
 /** One row of the bot roster (agent directory). */
@@ -131,6 +132,12 @@ export interface BotPromptContext {
   voice?: string
   /** Structured prompt config from `[agents.<id>.prompt]` (Plan 474 P3.2). */
   promptConfig?: BotPromptConfig
+  /**
+   * Typed per-turn context snapshot (framework plan S5). The loader fills
+   * it from durable facts; `recallRevision` gates the frozen memory
+   * sections so authorization changes land on the next turn.
+   */
+  snapshot?: BotContextSnapshot
 }
 
 /**
@@ -210,6 +217,13 @@ export interface BotSnapshotKey {
   contentHash: string
   /** Compaction epoch: number of compaction entries in the timeline. */
   summaryEpoch: number
+  /**
+   * Recall gate (framework plan S5). Volatile sections include it in their
+   * cache key, so a revocation, membership change or forget re-renders them
+   * on the next turn instead of waiting for the next compaction. Ordinary
+   * memory writes still freeze until compaction.
+   */
+  recallRevision?: string
 }
 
 /** Optional render modifiers. */
@@ -375,9 +389,16 @@ export class BotPromptAssembly {
     // Plan 501 L1: volatile sections freeze per compaction epoch only —
     // their underlying data churns mid-epoch, so the content hash must not
     // participate in their cache key (or the freeze would be void).
+    // Plan S5: the recall gate DOES participate — revocation and forgetting
+    // must not be delayed by the freeze.
     const cacheKey = snapshot
       ? def.volatile === true
-        ? `bot:${snapshot.botId}:v:${snapshot.summaryEpoch}:${def.name}`
+        ? botVolatileSectionCacheKey(
+            snapshot.botId,
+            snapshot.recallRevision,
+            snapshot.summaryEpoch,
+            def.name,
+          )
         : botSectionCacheKey(snapshot.botId, snapshot.contentHash, snapshot.summaryEpoch, def.name)
       : undefined
     if (cacheKey !== undefined && this.snapshotCache.has(cacheKey)) {

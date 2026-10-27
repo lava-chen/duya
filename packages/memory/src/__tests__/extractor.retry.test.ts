@@ -25,7 +25,8 @@ import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 // owns the real schema; `apps/desktop/src/main/memory-state/__tests__/
 // agent-fixture-drift.test.ts` pins the two together.
 import { MEMORY_STATE_FIXTURE_DDL } from '../testing/schema-ddl.js';
-import { Stage1Extractor, type MessageRowShape } from '../extractor.js';
+import { recordForgetSync } from '../forget_ledger.js';
+import { Stage1Extractor, parseAndValidate, type MessageRowShape } from '../extractor.js';
 import type { AIClient } from '@duya/ai';
 
 const ROLLOUT_ID = '11111111-1111-4111-8111-111111111111';
@@ -117,6 +118,32 @@ describe('Stage1Extractor budget-degrading retry', () => {
 
   afterEach(() => {
     f.cleanup();
+  });
+
+  it.each([undefined, null])('rejects forgotten output even when existingKeys=%s and forget happens during inference', async (existingKeys) => {
+    const memoryRoot = path.join(f.rootDir, 'memory');
+    const response = JSON.stringify({ job_status: 'succeeded', content_outcome: 'success',
+      rollout_slug: 'forgotten', rollout_summary: 'A summary containing an old fact.',
+      raw_memory: { items: [{ claim: 'Prefers short replies', claim_type: 'preference',
+        scope: 'global', scope_id: null, canonical_key: 'preference:Forgotten',
+        evidence: [{ source_type: 'user_message', source_id: 'm1' }], confidence: 'high',
+        status: 'active', valid_from: null, valid_until: null, relation_to_existing: null,
+        supersedes: [], why_future_agent_needs_this: 'Personal preference', retrieval_cues: [] }] },
+    });
+    expect(parseAndValidate(response).valid).toBe(true);
+    const streamChat = vi.fn(async function* () {
+      recordForgetSync(memoryRoot, [{ key: 'preference:forgotten' }]);
+      yield { type: 'text', data: response };
+      yield { type: 'done' };
+    });
+    const ex = new Stage1Extractor(f.db, { streamChat } as unknown as AIClient, {
+      rootDir: f.rootDir, forgottenKeysRoot: memoryRoot, readMessageRows: async () => FAKE_ROWS,
+    });
+    const result = await ex.extract({ rolloutId: ROLLOUT_ID, claimedBy: 'test', existingKeys });
+    expect(result.status).toBe('failed');
+    expect(result.errorMessage).toBe('forgotten-key');
+    expect(f.db.prepare('SELECT COUNT(*) n FROM stage1_outputs').get()).toEqual({ n: 0 });
+    expect(f.db.prepare('SELECT COUNT(*) n FROM projection_outbox').get()).toEqual({ n: 0 });
   });
 
   it('retries once on the halved budget after a parse failure and commits', async () => {

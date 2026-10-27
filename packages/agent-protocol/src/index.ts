@@ -74,11 +74,15 @@ export * from './session-ids.js';
 export * from './agent-dm.js';
 export * from './wake.js';
 export * from './pending-wakes.js';
+// Personal-bot framework S3a — the durable inbox / dispatch-receipt contract
+// that supersedes the pending-wake markers above (design doc §6, §10).
+export * from './bot-inbox-api.js';
 export * from './terminal-history.js';
 export * from './gateway-user-map.js';
 export * from './channel-persistence.js';
 export * from './channels.js';
 export * from './agent-profiles.js';
+export * from './bot-api.js';
 export * from './gateway-directory.js';
 export * from './gateway-allowlist.js';
 export * from './gateway-message-mirror.js';
@@ -116,3 +120,4 @@ export type { LifecycleViolationCode } from './run-ledger.js';
 export type { FileAttachment } from './file-attachment.js';
 export type { CommunicationPlatform } from './communication-platform.js';
 export type { SessionCheckoutAttachment, SessionCheckoutCommand, SessionCheckoutJournal, SessionCheckoutState, SessionCheckoutResult, HostSessionCheckoutApiV1 } from './session-checkout.js';
+export type { BotChannelTarget, BotDelivery, BotDeliveryStatus, BotDeliveryResult, HostBotDeliveryApiV1 } from './bot-delivery-api.js';

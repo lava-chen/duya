@@ -38,6 +38,7 @@ import type { AIClient } from '@duya/ai';
 import { parseCurationResponse, CurationParseError } from './curation_response_parser';
 import { applyCurationActions, resolveAreaPath, type ApplyResult } from './curation_file_writer';
 import { listEntityDirs, isValidEntityDirName } from '@duya/memory/entity_dirs';
+import { readForgottenKeysSync } from '@duya/memory/forget_ledger';
 import type { CurationResponse } from './curation_response_parser';
 import {
   applyPolicyEdits,
@@ -143,6 +144,12 @@ export interface RunResult {
 const DEFAULT_TIMEOUT_MS = 4 * 60_000;
 /** Default minimum interval between policy writes (ms). */
 const DEFAULT_POLICY_MIN_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * How many forget-ledger tombstones the curator prompt carries. The ledger
+ * keeps the full set for extraction dedupe; the prompt only needs a bound.
+ */
+const FORGOTTEN_KEYS_PROMPT_LIMIT = 200;
 
 const CURATOR_SYSTEM_PROMPT = `\
 You are the Memory Curator agent for the DUYA desktop client.
@@ -352,6 +359,9 @@ still emit the decision.
   to absolute dates (YYYY-MM-DD).
 - If two rollouts cover the same claim, prefer the most recent and
   drop the older one (or merge them into one section).
+- "forgotten_facts.keys" lists canonical keys the user explicitly
+  forgot. Never recreate, restate, or merge those facts back into an
+  area page, even when an input summary still mentions them.
 - Output ONE JSON object. No prose before or after. No markdown
   code-fence unless the host wraps it for you.
 
@@ -573,6 +583,11 @@ async function assembleUserPrompt(
     currentPolicy = await readPolicyForPrompt(policyPath);
   }
 
+  // Tombstones from the forget ledger (framework plan S5). Cap what reaches
+  // the prompt: the ledger is the durable set, the prompt only needs enough
+  // to keep the curator from re-creating recent forgets.
+  const forgottenKeys = readForgottenKeysSync(memoryRoot).slice(0, FORGOTTEN_KEYS_PROMPT_LIMIT);
+
   const payload = {
     inputs: rolloutBlock,
     existing_areas: existingAreas,
@@ -582,6 +597,17 @@ async function assembleUserPrompt(
       files: panorama,
     },
     current_stage1_policy: currentPolicy,
+    // Framework plan S5: a forgotten fact stays forgotten. The ledger is
+    // the durable tombstone; summaries written before the forget may still
+    // mention it, so the curator must not write it back.
+    ...(forgottenKeys.length > 0
+      ? {
+          forgotten_facts: {
+            note: 'Canonical keys the user explicitly forgot. Never recreate or restate these facts, even if an input summary mentions them.',
+            keys: forgottenKeys,
+          },
+        }
+      : {}),
   };
   return JSON.stringify(payload, null, 2);
 }

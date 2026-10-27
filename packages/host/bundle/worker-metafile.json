@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 52236,
+      "bytes": 52275,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -438,12 +438,17 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/wake.ts": {
-      "bytes": 4181,
+      "bytes": 4337,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-protocol/src/pending-wakes.ts": {
       "bytes": 1398,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-protocol/src/bot-inbox-api.ts": {
+      "bytes": 6746,
       "imports": [],
       "format": "esm"
     },
@@ -463,12 +468,17 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/channels.ts": {
-      "bytes": 13145,
+      "bytes": 13259,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-protocol/src/agent-profiles.ts": {
       "bytes": 2364,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-protocol/src/bot-api.ts": {
+      "bytes": 4127,
       "imports": [],
       "format": "esm"
     },
@@ -615,7 +625,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5375,
+      "bytes": 5736,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -828,6 +838,11 @@
           "original": "./pending-wakes.js"
         },
         {
+          "path": "packages/agent-protocol/src/bot-inbox-api.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox-api.js"
+        },
+        {
           "path": "packages/agent-protocol/src/terminal-history.ts",
           "kind": "import-statement",
           "original": "./terminal-history.js"
@@ -851,6 +866,11 @@
           "path": "packages/agent-protocol/src/agent-profiles.ts",
           "kind": "import-statement",
           "original": "./agent-profiles.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/bot-api.ts",
+          "kind": "import-statement",
+          "original": "./bot-api.js"
         },
         {
           "path": "packages/agent-protocol/src/gateway-directory.ts",
@@ -990,8 +1010,41 @@
       ],
       "format": "esm"
     },
+    "packages/data/src/bot-scheduler-store.ts": {
+      "bytes": 5929,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/bot-inbox.ts": {
+      "bytes": 33397,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/bot-dispatch-store.ts": {
+      "bytes": 3988,
+      "imports": [
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/data/src/run-store.ts": {
-      "bytes": 37979,
+      "bytes": 40343,
       "imports": [
         {
           "path": "node:crypto",
@@ -1002,6 +1055,32 @@
           "path": "packages/agent-protocol/src/index.ts",
           "kind": "import-statement",
           "original": "@duya/agent-protocol"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-dispatch-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-dispatch-store.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/data/src/bot-outbox.ts": {
+      "bytes": 10849,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
         }
       ],
       "format": "esm"
@@ -1051,7 +1130,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 53520,
+      "bytes": 54006,
       "imports": [
         {
           "path": "node:crypto",
@@ -1102,6 +1181,21 @@
           "path": "packages/data/src/run-store.ts",
           "kind": "import-statement",
           "original": "./run-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
+        },
+        {
+          "path": "packages/data/src/bot-outbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-outbox.js"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
         },
         {
           "path": "packages/data/src/workflow-run-store.ts",
@@ -1603,7 +1697,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2366,
+      "bytes": 2647,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1644,6 +1738,21 @@
           "path": "packages/data/src/run-store.ts",
           "kind": "import-statement",
           "original": "./run-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-inbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-inbox.js"
+        },
+        {
+          "path": "packages/data/src/bot-dispatch-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-dispatch-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-scheduler-store.ts",
+          "kind": "import-statement",
+          "original": "./bot-scheduler-store.js"
         },
         {
           "path": "packages/data/src/core-stores.ts",
@@ -1874,6 +1983,11 @@
           "path": "packages/data/src/provider-model-capability-store.ts",
           "kind": "import-statement",
           "original": "./provider-model-capability-store.js"
+        },
+        {
+          "path": "packages/data/src/bot-outbox.ts",
+          "kind": "import-statement",
+          "original": "./bot-outbox.js"
         }
       ],
       "format": "esm"
@@ -13180,8 +13294,13 @@
       "format": "esm"
     },
     "packages/memory/src/memory_paths.ts": {
-      "bytes": 989,
+      "bytes": 2862,
       "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
         {
           "path": "os",
           "kind": "import-statement",
@@ -13399,7 +13518,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/bot/epoch.ts": {
-      "bytes": 5010,
+      "bytes": 5852,
       "imports": [
         {
           "path": "node:crypto",
@@ -13410,7 +13529,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/bot/framework.ts": {
-      "bytes": 19232,
+      "bytes": 20119,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/bot/basicPrompt.ts",
@@ -13739,6 +13858,121 @@
       ],
       "format": "esm"
     },
+    "packages/memory/src/forget_ledger.ts": {
+      "bytes": 10373,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/bot-id.ts": {
+      "bytes": 1914,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/profile.ts": {
+      "bytes": 1901,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/rules.ts": {
+      "bytes": 6311,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/bot-id.ts",
+          "kind": "import-statement",
+          "original": "./bot-id.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/domain/errors.ts": {
+      "bytes": 776,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/context/snapshot.ts": {
+      "bytes": 5781,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/bot-id.ts",
+          "kind": "import-statement",
+          "original": "../domain/bot-id.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/journal/journal.ts": {
+      "bytes": 10257,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/bot/src/application/service.ts": {
+      "bytes": 12943,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/rules.ts",
+          "kind": "import-statement",
+          "original": "../domain/rules.js"
+        },
+        {
+          "path": "packages/bot/src/domain/errors.ts",
+          "kind": "import-statement",
+          "original": "../domain/errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/bot/src/index.ts": {
+      "bytes": 3954,
+      "imports": [
+        {
+          "path": "packages/bot/src/domain/bot-id.ts",
+          "kind": "import-statement",
+          "original": "./domain/bot-id.js"
+        },
+        {
+          "path": "packages/bot/src/domain/profile.ts",
+          "kind": "import-statement",
+          "original": "./domain/profile.js"
+        },
+        {
+          "path": "packages/bot/src/domain/rules.ts",
+          "kind": "import-statement",
+          "original": "./domain/rules.js"
+        },
+        {
+          "path": "packages/bot/src/domain/errors.ts",
+          "kind": "import-statement",
+          "original": "./domain/errors.js"
+        },
+        {
+          "path": "packages/bot/src/context/snapshot.ts",
+          "kind": "import-statement",
+          "original": "./context/snapshot.js"
+        },
+        {
+          "path": "packages/bot/src/journal/journal.ts",
+          "kind": "import-statement",
+          "original": "./journal/journal.js"
+        },
+        {
+          "path": "packages/bot/src/application/service.ts",
+          "kind": "import-statement",
+          "original": "./application/service.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/memory/src/canonical_file.ts": {
       "bytes": 2918,
       "imports": [
@@ -13751,7 +13985,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/bot/memory/tierReader.ts": {
-      "bytes": 10691,
+      "bytes": 12417,
       "imports": [
         {
           "path": "fs",
@@ -13774,6 +14008,21 @@
           "original": "@duya/memory/canonical_file"
         },
         {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory/memory_paths"
+        },
+        {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory/forget_ledger"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
           "path": "packages/host/src/worker-prompts/bot/memory/render.ts",
           "kind": "import-statement",
           "original": "./render.js"
@@ -13781,8 +14030,34 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-prompts/bot/memory/access.ts": {
+      "bytes": 1941,
+      "imports": [
+        {
+          "path": "fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory/memory_paths"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/bot/bot-profile-reader.ts",
+          "kind": "import-statement",
+          "original": "../bot-profile-reader.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/worker-prompts/bot/loader.ts": {
-      "bytes": 11793,
+      "bytes": 13138,
       "imports": [
         {
           "path": "path",
@@ -13815,9 +14090,24 @@
           "original": "@duya/memory/memory_paths"
         },
         {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory/forget_ledger"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
           "path": "packages/host/src/worker-prompts/bot/memory/tierReader.ts",
           "kind": "import-statement",
           "original": "./memory/tierReader.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/bot/memory/access.ts",
+          "kind": "import-statement",
+          "original": "./memory/access.js"
         }
       ],
       "format": "esm"
@@ -13839,7 +14129,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/bot/index.ts": {
-      "bytes": 2639,
+      "bytes": 2786,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/bot/basicPrompt.ts",
@@ -13900,6 +14190,11 @@
           "path": "packages/host/src/worker-prompts/bot/memory/tierReader.ts",
           "kind": "import-statement",
           "original": "./memory/tierReader.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/bot/memory/access.ts",
+          "kind": "import-statement",
+          "original": "./memory/access.js"
         },
         {
           "path": "packages/host/src/worker-prompts/bot/memory/sections.ts",
@@ -22398,7 +22693,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 30763,
       "imports": [],
       "format": "esm"
     },
@@ -30043,7 +30338,7 @@
       "format": "esm"
     },
     "packages/host/src/host-runtime.ts": {
-      "bytes": 4008,
+      "bytes": 4107,
       "imports": [
         {
           "path": "node:fs",
@@ -30568,7 +30863,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 267009,
+      "bytes": 267181,
       "imports": [
         {
           "path": "node:crypto",
@@ -31216,7 +31511,7 @@
       "format": "esm"
     },
     "packages/host/src/run-control-plane.ts": {
-      "bytes": 17089,
+      "bytes": 17522,
       "imports": [
         {
           "path": "packages/data/src/run-store.ts",
@@ -31248,7 +31543,7 @@
       "format": "esm"
     },
     "packages/host/src/run-orchestrator.ts": {
-      "bytes": 132928,
+      "bytes": 136772,
       "imports": [
         {
           "path": "node:crypto",
@@ -31357,7 +31652,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 43859,
+      "bytes": 45723,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -31433,8 +31728,14 @@
       "format": "esm"
     },
     "packages/host/src/config-agents/bot-id.ts": {
-      "bytes": 1792,
-      "imports": [],
+      "bytes": 608,
+      "imports": [
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/config-agents/bot-paths.ts": {
@@ -31459,7 +31760,7 @@
       "format": "esm"
     },
     "packages/host/src/config-agents/bot-profile.ts": {
-      "bytes": 4507,
+      "bytes": 4253,
       "imports": [
         {
           "path": "node:fs",
@@ -31470,12 +31771,17 @@
           "path": "node:path",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/config-agents/agent-config-core.ts": {
-      "bytes": 7978,
+      "bytes": 5359,
       "imports": [
         {
           "path": "node:crypto",
@@ -31506,13 +31812,96 @@
           "path": "packages/host/src/config-agents/bot-profile.ts",
           "kind": "import-statement",
           "original": "./bot-profile.js"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
         }
       ],
       "format": "esm"
     },
-    "packages/host/src/config-agents/config-agents-api.ts": {
-      "bytes": 5570,
+    "packages/host/src/bot/toml-config-store.ts": {
+      "bytes": 1391,
       "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/config-agents/config-file.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/config-file.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/agent-config-core.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/fs-profile-store.ts": {
+      "bytes": 1370,
+      "imports": [
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-profile.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-profile.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-paths.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/bot-paths.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/agent-config-core.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/file-journal.ts": {
+      "bytes": 3238,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/service.ts": {
+      "bytes": 3656,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
         {
           "path": "node:path",
           "kind": "import-statement",
@@ -31524,14 +31913,45 @@
           "original": "@duya/data/data-paths"
         },
         {
-          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "path": "packages/bot/src/index.ts",
           "kind": "import-statement",
-          "original": "./agent-config-core.js"
+          "original": "@duya/bot"
         },
         {
-          "path": "packages/host/src/config-agents/config-file.ts",
+          "path": "packages/host/src/config-agents/bot-paths.ts",
           "kind": "import-statement",
-          "original": "./config-file.js"
+          "original": "../config-agents/bot-paths.js"
+        },
+        {
+          "path": "packages/host/src/bot/toml-config-store.ts",
+          "kind": "import-statement",
+          "original": "./toml-config-store.js"
+        },
+        {
+          "path": "packages/host/src/bot/fs-profile-store.ts",
+          "kind": "import-statement",
+          "original": "./fs-profile-store.js"
+        },
+        {
+          "path": "packages/host/src/bot/file-journal.ts",
+          "kind": "import-statement",
+          "original": "./file-journal.js"
+        },
+        {
+          "path": "packages/bot/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/bot"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot/bridge-assembly.ts": {
+      "bytes": 1989,
+      "imports": [
+        {
+          "path": "packages/host/src/bot/service.ts",
+          "kind": "import-statement",
+          "original": "./service.js"
         }
       ],
       "format": "esm"
@@ -31563,7 +31983,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 64996,
+      "bytes": 68040,
       "imports": [
         {
           "path": "node:crypto",
@@ -31606,9 +32026,9 @@
           "original": "./local-plugin-registry-api.js"
         },
         {
-          "path": "packages/host/src/config-agents/config-agents-api.ts",
+          "path": "packages/host/src/bot/bridge-assembly.ts",
           "kind": "import-statement",
-          "original": "./config-agents/config-agents-api.js"
+          "original": "./bot/bridge-assembly.js"
         },
         {
           "path": "packages/host/src/ipc-message-adapters.ts",
@@ -31623,8 +32043,30 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/bot-dispatcher.ts": {
+      "bytes": 12292,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/bot-channels.ts": {
+      "bytes": 7972,
+      "imports": [
+        {
+          "path": "packages/agent-protocol/src/channels.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/channels"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/local-host.ts": {
-      "bytes": 44483,
+      "bytes": 49571,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -31960,6 +32402,31 @@
           "path": "packages/host/src/worker-config/file-config.ts",
           "kind": "import-statement",
           "original": "./worker-config/file-config.js"
+        },
+        {
+          "path": "packages/host/src/bot-dispatcher.ts",
+          "kind": "import-statement",
+          "original": "./bot-dispatcher.js"
+        },
+        {
+          "path": "packages/host/src/bot-channels.ts",
+          "kind": "import-statement",
+          "original": "./bot-channels.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/bot-id.ts",
+          "kind": "import-statement",
+          "original": "./config-agents/bot-id.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/config-file.ts",
+          "kind": "import-statement",
+          "original": "./config-agents/config-file.js"
+        },
+        {
+          "path": "packages/host/src/config-agents/agent-config-core.ts",
+          "kind": "import-statement",
+          "original": "./config-agents/agent-config-core.js"
         },
         {
           "path": "packages/host/src/host-runtime.ts",
@@ -35698,7 +36165,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 138594,
+      "bytes": 138990,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -36984,7 +37451,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/SendMessageTool/SendMessageTool.ts": {
-      "bytes": 31245,
+      "bytes": 31460,
       "imports": [
         {
           "path": "node:crypto",
@@ -37005,7 +37472,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-services/send-message.ts": {
-      "bytes": 2434,
+      "bytes": 2473,
       "imports": [
         {
           "path": "packages/host/src/worker-db-client.ts",
@@ -37729,6 +38196,16 @@
         },
         {
           "path": "node:module",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
           "kind": "require-call",
           "external": true
         },
@@ -38528,6 +39005,11 @@
           "external": true
         },
         {
+          "path": "fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "os",
           "kind": "require-call",
           "external": true
@@ -38634,6 +39116,21 @@
         },
         {
           "path": "fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "fs/promises",
           "kind": "require-call",
           "external": true
         },
@@ -39900,18 +40397,21 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/pending-wakes.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/bot-inbox-api.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/terminal-history.ts": {
@@ -39924,9 +40424,12 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1968
+          "bytesInOutput": 1954
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
+          "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/bot-api.ts": {
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/gateway-directory.ts": {
@@ -40005,10 +40508,22 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 451
+          "bytesInOutput": 462
+        },
+        "packages/data/src/bot-scheduler-store.ts": {
+          "bytesInOutput": 2958
+        },
+        "packages/data/src/bot-inbox.ts": {
+          "bytesInOutput": 10680
+        },
+        "packages/data/src/bot-dispatch-store.ts": {
+          "bytesInOutput": 2310
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 7340
+          "bytesInOutput": 8495
+        },
+        "packages/data/src/bot-outbox.ts": {
+          "bytesInOutput": 35
         },
         "packages/data/src/workflow-run-store.ts": {
           "bytesInOutput": 30
@@ -40023,7 +40538,7 @@
           "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
-          "bytesInOutput": 91
+          "bytesInOutput": 107
         },
         "packages/data/src/rollout-events.ts": {
           "bytesInOutput": 35
@@ -40143,7 +40658,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 328
+          "bytesInOutput": 350
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4332
@@ -41865,7 +42380,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -42237,7 +42752,7 @@
           "bytesInOutput": 105
         },
         "../../../node_modules/tinycolor2/esm/tinycolor.js": {
-          "bytesInOutput": 15554
+          "bytesInOutput": 15556
         },
         "../../../node_modules/@jimp/utils/dist/esm/index.js": {
           "bytesInOutput": 2056
@@ -42546,16 +43061,16 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-color/dist/esm/index.js": {
-          "bytesInOutput": 7790
+          "bytesInOutput": 7797
         },
         "../../../node_modules/await-to-js/dist/await-to-js.umd.js": {
-          "bytesInOutput": 379
+          "bytesInOutput": 383
         },
         "../../../node_modules/@jimp/file-ops/dist/esm/index.js": {
           "bytesInOutput": 122
         },
         "../../../node_modules/@jimp/core/node_modules/mime/Mime.js": {
-          "bytesInOutput": 1151
+          "bytesInOutput": 1156
         },
         "../../../node_modules/@jimp/core/node_modules/mime/types/standard.js": {
           "bytesInOutput": 9549
@@ -42591,37 +43106,37 @@
           "bytesInOutput": 2727
         },
         "../../../node_modules/exif-parser/lib/dom-bufferstream.js": {
-          "bytesInOutput": 2031
+          "bytesInOutput": 2036
         },
         "../../../node_modules/exif-parser/lib/bufferstream.js": {
-          "bytesInOutput": 1913
+          "bytesInOutput": 1918
         },
         "../../../node_modules/exif-parser/index.js": {
           "bytesInOutput": 268
         },
         "../../../node_modules/@jimp/core/dist/esm/utils/image-bitmap.js": {
-          "bytesInOutput": 1040
+          "bytesInOutput": 1044
         },
         "../../../node_modules/strtok3/lib/stream/Errors.js": {
           "bytesInOutput": 225
         },
         "../../../node_modules/strtok3/lib/stream/Deferred.js": {
-          "bytesInOutput": 152
+          "bytesInOutput": 154
         },
         "../../../node_modules/strtok3/lib/stream/AbstractStreamReader.js": {
-          "bytesInOutput": 882
+          "bytesInOutput": 883
         },
         "../../../node_modules/strtok3/lib/stream/StreamReader.js": {
-          "bytesInOutput": 934
+          "bytesInOutput": 936
         },
         "../../../node_modules/strtok3/lib/stream/WebStreamReader.js": {
-          "bytesInOutput": 158
+          "bytesInOutput": 161
         },
         "../../../node_modules/strtok3/lib/stream/WebStreamByobReader.js": {
-          "bytesInOutput": 261
+          "bytesInOutput": 262
         },
         "../../../node_modules/strtok3/lib/stream/WebStreamDefaultReader.js": {
-          "bytesInOutput": 675
+          "bytesInOutput": 676
         },
         "../../../node_modules/strtok3/lib/stream/WebStreamReaderFactory.js": {
           "bytesInOutput": 223
@@ -42636,25 +43151,25 @@
           "bytesInOutput": 1393
         },
         "../../../node_modules/strtok3/lib/BufferTokenizer.js": {
-          "bytesInOutput": 575
+          "bytesInOutput": 577
         },
         "../../../node_modules/strtok3/lib/BlobTokenizer.js": {
-          "bytesInOutput": 610
+          "bytesInOutput": 612
         },
         "../../../node_modules/strtok3/lib/core.js": {
-          "bytesInOutput": 372
+          "bytesInOutput": 375
         },
         "../../../node_modules/strtok3/lib/FileTokenizer.js": {
           "bytesInOutput": 853
         },
         "../../../node_modules/strtok3/lib/index.js": {
-          "bytesInOutput": 232
+          "bytesInOutput": 234
         },
         "../../../node_modules/ieee754/index.js": {
           "bytesInOutput": 897
         },
         "../../../node_modules/@borewit/text-codec/lib/index.js": {
-          "bytesInOutput": 2913
+          "bytesInOutput": 2916
         },
         "../../../node_modules/token-types/lib/index.js": {
           "bytesInOutput": 914
@@ -42702,7 +43217,7 @@
           "bytesInOutput": 5489
         },
         "../../../node_modules/file-type/core.js": {
-          "bytesInOutput": 33837
+          "bytesInOutput": 33838
         },
         "../../../node_modules/file-type/index.js": {
           "bytesInOutput": 2119
@@ -42960,7 +43475,7 @@
           "bytesInOutput": 205
         },
         "../../../node_modules/@jimp/plugin-hash/dist/esm/phash.js": {
-          "bytesInOutput": 1118
+          "bytesInOutput": 1119
         },
         "../../../node_modules/@jimp/plugin-hash/dist/esm/index.js": {
           "bytesInOutput": 694
@@ -43101,7 +43616,7 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-threshold/dist/esm/index.js": {
-          "bytesInOutput": 422
+          "bytesInOutput": 423
         },
         "../../../node_modules/image-q/dist/esm/image-q.mjs": {
           "bytesInOutput": 46037
@@ -43287,7 +43802,7 @@
           "bytesInOutput": 587
         },
         "../../../node_modules/jimp/dist/esm/index.js": {
-          "bytesInOutput": 879
+          "bytesInOutput": 880
         },
         "packages/capabilities/src/AppConnectionTool/index.ts": {
           "bytesInOutput": 3129
@@ -43593,7 +44108,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -43632,7 +44147,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 263
+          "bytesInOutput": 613
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -43665,10 +44180,10 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-prompts/bot/epoch.ts": {
-          "bytesInOutput": 1112
+          "bytesInOutput": 1173
         },
         "packages/host/src/worker-prompts/bot/framework.ts": {
-          "bytesInOutput": 2809
+          "bytesInOutput": 2814
         },
         "packages/host/src/worker-prompts/bot/profileUpdate.ts": {
           "bytesInOutput": 763
@@ -43683,7 +44198,7 @@
           "bytesInOutput": 43
         },
         "packages/host/src/worker-prompts/bot/channels.ts": {
-          "bytesInOutput": 658
+          "bytesInOutput": 657
         },
         "packages/host/src/channel-prompts.ts": {
           "bytesInOutput": 20
@@ -43719,7 +44234,7 @@
           "bytesInOutput": 1522
         },
         "packages/host/src/worker-prompts/bot/loader.ts": {
-          "bytesInOutput": 2783
+          "bytesInOutput": 3025
         },
         "packages/host/src/agent-profile-config.ts": {
           "bytesInOutput": 702
@@ -43730,11 +44245,26 @@
         "packages/host/src/worker-prompts/bot/bot-profile-reader.ts": {
           "bytesInOutput": 661
         },
+        "packages/memory/src/forget_ledger.ts": {
+          "bytesInOutput": 1549
+        },
+        "packages/bot/src/domain/bot-id.ts": {
+          "bytesInOutput": 90
+        },
+        "packages/bot/src/index.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/bot/src/context/snapshot.ts": {
+          "bytesInOutput": 855
+        },
         "packages/host/src/worker-prompts/bot/memory/tierReader.ts": {
-          "bytesInOutput": 3061
+          "bytesInOutput": 3254
         },
         "packages/memory/src/canonical_file.ts": {
           "bytesInOutput": 668
+        },
+        "packages/host/src/worker-prompts/bot/memory/access.ts": {
+          "bytesInOutput": 279
         },
         "packages/host/src/worker-prompts/bot/factory.ts": {
           "bytesInOutput": 42
@@ -44373,7 +44903,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -44639,14 +45169,23 @@
         "packages/host/src/worker-db-bridge.ts": {
           "bytesInOutput": 25
         },
-        "packages/host/src/config-agents/config-agents-api.ts": {
+        "packages/host/src/bot/service.ts": {
           "bytesInOutput": 5
         },
         "packages/host/src/config-agents/bot-paths.ts": {
           "bytesInOutput": 5
         },
+        "packages/host/src/config-agents/bot-id.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/host/src/config-agents/agent-config-core.ts": {
+          "bytesInOutput": 0
+        },
         "packages/host/src/ipc-message-adapters.ts": {
           "bytesInOutput": 10
+        },
+        "packages/host/src/bot-channels.ts": {
+          "bytesInOutput": 5
         },
         "packages/cli/src/commands/session.ts": {
           "bytesInOutput": 5086
@@ -44778,7 +45317,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 53489
+          "bytesInOutput": 53549
         },
         "packages/host/src/worker-execution/location-skills.ts": {
           "bytesInOutput": 575
@@ -45201,7 +45740,7 @@
           "bytesInOutput": 251
         },
         "packages/capabilities/src/SendMessageTool/SendMessageTool.ts": {
-          "bytesInOutput": 17948
+          "bytesInOutput": 18081
         },
         "packages/capabilities/src/SendMessageTool/constants.ts": {
           "bytesInOutput": 22
@@ -45297,7 +45836,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4729321
+      "bytes": 4750471
     }
   }
 }

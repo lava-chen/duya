@@ -17,6 +17,7 @@ import { runMigrations } from '../migrations';
 import { listTierEntries } from '../tierIndex';
 import { forgetTierFact, writeTierFact, type TierWriteInput } from '../tierWriter';
 import { parseCanonicalFile } from '@duya/memory/canonical_file';
+import { readForgottenKeysSync, readForgottenPathsSync, readRecallRevisionSync } from '@duya/memory/forget_ledger';
 
 const mocks = vi.hoisted(() => ({
   logger: {
@@ -175,11 +176,30 @@ describe('forgetTierFact', () => {
     expect(rows).toHaveLength(0);
   });
 
+  it('bumps the recall revision and tombstones the key (S5)', () => {
+    const memoryRoot = path.join(duyaRoot, 'memory');
+    expect(readRecallRevisionSync(memoryRoot)).toBe(0);
+    const written = writeTierFact(db, duyaRoot, baseInput());
+
+    const forgotten = forgetTierFact(db, duyaRoot, baseInput({ action: 'forget' }));
+    expect(forgotten.success).toBe(true);
+
+    expect(readRecallRevisionSync(memoryRoot)).toBe(1);
+    expect(readForgottenKeysSync(memoryRoot)).toEqual(['prefers concise answers']);
+    // The ledger also names the retired file: that is the write-ahead record
+    // which makes a crash before the retirement recoverable.
+    expect(readForgottenPathsSync(memoryRoot)).toEqual([
+      written.success ? written.filePath : '',
+    ]);
+  });
+
   it('returns not_found when the writer has no matching entry', () => {
     const result = forgetTierFact(db, duyaRoot, baseInput({ action: 'forget' }));
     expect(result.success).toBe(true);
     if (!result.success) return;
     expect(result.outcome).toBe('not_found');
+    // Nothing was revoked, so the recall gate must not move.
+    expect(readRecallRevisionSync(path.join(duyaRoot, 'memory'))).toBe(0);
   });
 
   it('respects the single-writer rule — one bot cannot forget another bot fact', () => {
@@ -190,4 +210,19 @@ describe('forgetTierFact', () => {
     expect(result.outcome).toBe('not_found');
     expect(listTierEntries(db, { tier: 'agent', agentProfileId: 'beta' })).toHaveLength(1);
   });
+});
+
+
+it('refuses writes and foreground forgets through a linked canonical file', () => {
+  const written = writeTierFact(db, duyaRoot, baseInput());
+  expect(written.success).toBe(true);
+  const relPath = written.success ? written.filePath! : '';
+  const victim = path.join(duyaRoot, 'unrelated.md');
+  fs.renameSync(path.join(duyaRoot, relPath), victim);
+  fs.symlinkSync(victim, path.join(duyaRoot, relPath));
+  const original = fs.readFileSync(victim, 'utf8');
+  expect(writeTierFact(db, duyaRoot, baseInput({ fact: 'changed' })).success).toBe(false);
+  expect(forgetTierFact(db, duyaRoot, baseInput({ action: 'forget' })).success).toBe(false);
+  expect(fs.readFileSync(victim, 'utf8')).toBe(original);
+  expect(readRecallRevisionSync(path.join(duyaRoot, 'memory'))).toBe(0);
 });

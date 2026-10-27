@@ -22,13 +22,21 @@ import {
   enqueueWakeItemForSession,
 } from '../wake/wake-dispatcher';
 import { runWakePromptInExistingSession } from '../wake/wake-run';
-import { getDesktopHostLockApi } from '../cli/desktop-host-api';
+import {
+  cancelDesktopBotInput,
+  getDesktopBotSchedulerState,
+  listDesktopBotDeliveries,
+  getDesktopHostLockApi,
+  switchDesktopBotScheduler,
+} from '../cli/desktop-host-api';
 import { getLogger, LogComponent } from '../logging/logger';
+import type { FileAttachment } from '@duya/agent-protocol';
 
 export interface BotSendTurnResult {
   /** 'start' — session idle, renderer runs its normal streaming path. */
   /** 'queued' — parked in the wake queue (preemption already attempted). */
-  action: 'start' | 'queued';
+  /** 'accepted' — durable Host inbox owns dispatch; renderer never claims it. */
+  action: 'start' | 'queued' | 'accepted';
   messageId: string;
 }
 
@@ -48,9 +56,14 @@ const BOT_KICKSTART_PROMPT = [
 ].join('\n');
 
 export function registerBotHandlers(): void {
+  ipcMain.handle('bot:deliveries:list', (_event, data: { botId?: string }) => {
+    const botId = typeof data?.botId === 'string' ? data.botId.trim() : '';
+    if (!botId) throw new Error('botId is required');
+    return listDesktopBotDeliveries(botId);
+  });
   ipcMain.handle(
     'bot:sendTurn',
-    async (_event, data: { agentId?: string; text?: string; clientMsgId?: string }): Promise<BotSendTurnResult> => {
+    async (_event, data: { agentId?: string; text?: string; clientMsgId?: string; attachments?: readonly FileAttachment[] }): Promise<BotSendTurnResult> => {
       const agentId = typeof data?.agentId === 'string' ? data.agentId.trim() : '';
       const text = typeof data?.text === 'string' ? data.text.trim() : '';
       if (!agentId) throw new Error('agentId is required');
@@ -62,14 +75,27 @@ export function registerBotHandlers(): void {
 
       const sessionId = getBotSessionId(agentId);
       try {
-        // Same get-or-create contract as the DM dispatcher: the bot's
-        // persistent session must exist before any run targets it.
         await defaultBotSessionCreator.createIfMissing(sessionId, agentId);
       } catch (err) {
         getLogger().warn('bot:sendTurn session ensure failed', {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
         }, LogComponent.AgentProcess);
+      }
+      const scheduler = getDesktopBotSchedulerState(agentId);
+      if (scheduler.mode === 'host') {
+        enqueueWakeItemForSession(sessionId, {
+          id: `user:${messageId}`,
+          source: 'user.message',
+          lane: 'user',
+          agentId,
+          enqueuedAtMs: Date.now(),
+          payload: { kind: 'user', text, messageId, ...(data.attachments ? { attachments: data.attachments } : {}) },
+        });
+        getLogger().info('bot:sendTurn accepted by Host scheduler', {
+          sessionId, messageId,
+        }, LogComponent.AgentProcess);
+        return { action: 'accepted', messageId };
       }
 
       const busy = await getDesktopHostLockApi().isSessionLocked(sessionId);
@@ -91,7 +117,7 @@ export function registerBotHandlers(): void {
         lane: 'user',
         agentId,
         enqueuedAtMs: Date.now(),
-        payload: { kind: 'user', text, messageId },
+        payload: { kind: 'user', text, messageId, ...(data.attachments ? { attachments: data.attachments } : {}) },
       });
       getLogger().info('bot:sendTurn busy → queued', {
         sessionId,
@@ -118,6 +144,17 @@ export function registerBotHandlers(): void {
           error: err instanceof Error ? err.message : String(err),
         }, LogComponent.AgentProcess);
       }
+      if (getDesktopBotSchedulerState(agentId).mode === 'host') {
+        enqueueWakeItemForSession(sessionId, {
+          id: `kickstart:${agentId}`,
+          source: 'bot.kickstart',
+          lane: 'background',
+          agentId,
+          enqueuedAtMs: Date.now(),
+          payload: { kind: 'user', text: BOT_KICKSTART_PROMPT, messageId: `kickstart:${agentId}` },
+        });
+        return true;
+      }
       // Hidden first-turn wake: the bot opens the conversation with a
       // greeting. The prompt persists as source 'system' (invisible to the
       // bot-direct chat), so the user only sees the bot's SendMessage reply.
@@ -135,6 +172,8 @@ export function registerBotHandlers(): void {
       const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : '';
       const messageId = typeof data?.messageId === 'string' ? data.messageId : '';
       if (!sessionId || !messageId) return false;
+      const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
+      if (botId && getDesktopBotSchedulerState(botId).mode === 'host') return false;
       return claimScheduledUserTurn(sessionId, messageId);
     },
   );
@@ -145,7 +184,23 @@ export function registerBotHandlers(): void {
       const sessionId = typeof data?.sessionId === 'string' ? data.sessionId : '';
       const messageId = typeof data?.messageId === 'string' ? data.messageId : '';
       if (!sessionId || !messageId) return false;
+      const botId = sessionId.startsWith('bot:') ? sessionId.slice(4) : '';
+      if (botId && getDesktopBotSchedulerState(botId).mode === 'host') return cancelDesktopBotInput(botId, messageId);
       return cancelQueuedUserTurn(sessionId, messageId);
     },
   );
+
+  ipcMain.handle('bot:scheduler:get', (_event, data: { botId?: string }) => {
+    const botId = typeof data?.botId === 'string' ? data.botId.trim() : '';
+    if (!botId) throw new Error('botId is required');
+    return getDesktopBotSchedulerState(botId);
+  });
+
+  ipcMain.handle('bot:scheduler:switch', (_event, data: { botId?: string; mode?: 'legacy' | 'host'; expectedEpoch?: number }) => {
+    const botId = typeof data?.botId === 'string' ? data.botId.trim() : '';
+    if (!botId || (data?.mode !== 'legacy' && data?.mode !== 'host') || !Number.isSafeInteger(data.expectedEpoch)) {
+      throw new Error('botId, mode and expectedEpoch are required');
+    }
+    return switchDesktopBotScheduler(botId, data.mode, data.expectedEpoch as number);
+  });
 }

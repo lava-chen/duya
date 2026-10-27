@@ -6,6 +6,10 @@ export * from './database-host.js';
 export * from './database-owner-lock.js';
 export * from './sqlite-connection.js';
 export * from './run-store.js';
+// Personal-bot framework S3a — durable inbox + dispatch receipts.
+export * from './bot-inbox.js';
+export { BotDispatchStore } from './bot-dispatch-store.js';
+export * from './bot-scheduler-store.js';
 export * from './core-stores.js';
 export * from './session-store.js';
 export * from './mailbox.js';
@@ -53,3 +57,4 @@ export * from './import-batch-store.js';
 export * from './sidebar-sections-store.js';
 export * from './provider-model-pricing-store.js';
 export * from './provider-model-capability-store.js';
+export { BotOutboxStore, BOT_OUTBOX_MIGRATIONS } from './bot-outbox.js';

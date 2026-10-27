@@ -25,6 +25,7 @@ export type {
 export {
   computeBotContentHash,
   botSectionCacheKey,
+  botVolatileSectionCacheKey,
   countTimelineCompactions,
 } from './epoch.js'
 export {
@@ -74,6 +75,11 @@ export {
   readProjectTierEntries,
   readJoinedProjects,
 } from './memory/tierReader.js'
+export {
+  EMPTY_MEMORY_ACCESS_GRANT,
+  memoryAccessPath,
+  readMemoryAccessGrant,
+} from './memory/access.js'
 export {
   BOT_MEMORY_USAGE_SECTION,
   BOT_MEMORY_OWN_SECTION,

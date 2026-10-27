@@ -47,6 +47,9 @@
 import { randomUUID } from 'node:crypto';
 import { manifestFingerprint, type ProtocolErrorInfo, type RunEventEnvelope, type RunManifest, type RunTerminalState } from '@duya/agent-protocol';
 import type { Migration, SqliteDatabase } from './core-database.js';
+import { BotSchedulerStore, LOCAL_BOT_OWNER } from './bot-scheduler-store.js';
+import { BotDispatchStore } from './bot-dispatch-store.js';
+import type { BotDispatchTicket, BotSchedulerState } from '@duya/agent-protocol/bot-inbox-api';
 
 /** Live, or one of the four terminal arms. Deliberately NOT workflow statuses. */
 export type RunStatus = 'running' | 'completed' | 'cancelled' | 'budget_exhausted' | 'failed';
@@ -104,6 +107,8 @@ export interface RunEventRow {
 }
 
 export interface CreateRunInput {
+  readonly botScheduler?: BotSchedulerState;
+  readonly botDispatchTicket?: BotDispatchTicket;
   readonly runId?: string;
   readonly sessionId: string;
   /** The frozen manifest, stored verbatim. */
@@ -389,36 +394,65 @@ export class RunStore {
   createRun(input: CreateRunInput): RunOpenOutcome {
     const id = input.runId ?? randomUUID();
     const now = Date.now();
-    try {
-      this.db
-        .prepare(
-          `INSERT INTO runs (
-             id, session_id, manifest_hash, manifest_json, status,
-             input_hash, origin, parent_run_id, created_at, started_at
-           ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          id,
-          input.sessionId,
-          input.manifestHash,
-          JSON.stringify(input.manifest),
-          input.inputHash ?? null,
-          input.origin ?? null,
-          input.parentRunId ?? null,
-          now,
-          now,
-        );
-      return { state: 'created', runId: id };
-    } catch (error) {
-      if (!isUniqueViolation(error)) throw error;
-      const row = this.getRun(id);
-      // The row was there a moment ago and is not now. Re-reading threw nothing
-      // and found nothing, so the original violation is the honest thing to
-      // report; a `reused` verdict on a row that does not exist would be a
-      // claim about a record nobody can find.
-      if (row === null) throw error;
-      return classifyReuse(id, row, input);
-    }
+    return this.db.transaction((): RunOpenOutcome => {
+      if (input.sessionId.startsWith('bot:') && this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bot_scheduler_owners'").get()) {
+        const scheduler = new BotSchedulerStore(this.db);
+        const botId = input.sessionId.slice(4);
+        const expected = input.botScheduler;
+        const current = scheduler.get(botId);
+        if (expected ? expected.ownerId !== LOCAL_BOT_OWNER || expected.botId !== botId || !scheduler.current(expected) : current.mode === 'host') {
+          throw new Error('bot_scheduler_fenced: legacy or stale owner may not create this Run');
+        }
+        if (current.mode === 'host') {
+          const ticket = input.botDispatchTicket;
+          if (!ticket || ticket.scheduler.ownerId !== LOCAL_BOT_OWNER || ticket.scheduler.botId !== botId
+              || ticket.scheduler.mode !== 'host' || ticket.scheduler.epoch !== current.epoch
+              || ticket.inboxId.trim() === '' || ticket.leaseOwner.trim() === ''
+              || !Number.isSafeInteger(ticket.leaseEpoch) || ticket.leaseEpoch < 1) {
+            throw new Error('bot_dispatch_ticket_required: Host-owned Bot Runs require a current inbox ticket');
+          }
+          const inbox = new BotDispatchStore(this.db);
+          const entry = inbox.inbox.getById(ticket.inboxId);
+          const receipt = inbox.inbox.lookupReceipt(`bot-inbox:${ticket.inboxId}`);
+          if (!entry || entry.ownerId !== LOCAL_BOT_OWNER || entry.botId !== botId
+              || entry.status !== 'claimed' || entry.leaseOwner !== ticket.leaseOwner
+              || entry.leaseEpoch !== ticket.leaseEpoch || receipt?.runId !== id
+              || (receipt.botInboxId !== null && receipt.botInboxId !== ticket.inboxId)) {
+            throw new Error('bot_dispatch_ticket_fenced: inbox claim is stale or not reserved for this Run');
+          }
+        }
+      }
+      try {
+        this.db
+          .prepare(
+            `INSERT INTO runs (
+               id, session_id, manifest_hash, manifest_json, status,
+               input_hash, origin, parent_run_id, created_at, started_at
+             ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            id,
+            input.sessionId,
+            input.manifestHash,
+            JSON.stringify(input.manifest),
+            input.inputHash ?? null,
+            input.origin ?? null,
+            input.parentRunId ?? null,
+            now,
+            now,
+          );
+        return { state: 'created', runId: id };
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+        const row = this.getRun(id);
+        // The row was there a moment ago and is not now. Re-reading threw nothing
+        // and found nothing, so the original violation is the honest thing to
+        // report; a `reused` verdict on a row that does not exist would be a
+        // claim about a record nobody can find.
+        if (row === null) throw error;
+        return classifyReuse(id, row, input);
+      }
+    })();
   }
 
   /**

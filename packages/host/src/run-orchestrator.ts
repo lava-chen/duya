@@ -93,6 +93,7 @@ import {
   type RunWriteReceipt,
 } from './run-receipt.js';
 import { eventSpecOf, runInputRevision } from '@duya/agent-protocol';
+import type { DispatchReceipt, DispatchReserveOutcome, BotSchedulerState, BotDispatchTicket } from '@duya/agent-protocol/bot-inbox-api';
 import type { ControlPlaneRequest } from './control-plane-service.js';
 
 export interface RunOrchestratorLogger {
@@ -242,6 +243,16 @@ export interface RunOrchestratorOptions {
   readonly channel: ExecutionChannel;
 }
 
+/** Trusted Host admission; candidate identity is still minted by this owner. */
+export interface RunDispatchAdmission {
+  readonly scheduler?: BotSchedulerState;
+  readonly ticket?: BotDispatchTicket;
+  lookup(): DispatchReceipt | null | Promise<DispatchReceipt | null>;
+  reserve(candidateRunId: string): DispatchReserveOutcome | null | Promise<DispatchReserveOutcome | null>;
+  /** Rechecked at the actual execution-channel boundary, after async writes. */
+  isCurrent(): boolean | Promise<boolean>;
+}
+
 /** What the router resolved for one turn, passed through `openRun`. */
 export interface RunModelIdentity {
   readonly model: string;
@@ -299,6 +310,8 @@ export class RunOrchestrator {
   /** sessionId -> the run currently executing for it. One live run per
    *  session, which the router's own STREAMING 409 already guarantees. */
   readonly #bySession = new Map<string, string>();
+  readonly #openingSessions = new Set<string>();
+  readonly #dispatchAdmissions = new Map<string, RunDispatchAdmission>();
   /**
    * runId -> the model identity the router resolved for that turn.
    *
@@ -456,7 +469,15 @@ export class RunOrchestrator {
       }
     };
     this.#controller = new RunController({
-      channel: options.channel,
+      channel: {
+        start: async (manifest, input, context) => {
+          const admission = this.#dispatchAdmissions.get(manifest.runId);
+          if (admission && !await admission.isCurrent()) {
+            throw new Error('bot dispatch claim expired or was superseded before execution');
+          }
+          return options.channel.start(manifest, input, context);
+        },
+      },
       identity: { name: 'duya-agent-server', version: RUNTIME_VERSION },
       protocol: { major: 1, minor: 0 },
       contextFor: (manifest) => this.#contextFor(manifest.runId, manifest.permissionPolicy.defaultTimeoutMs),
@@ -634,8 +655,45 @@ export class RunOrchestrator {
    * the start, so there is no path where the executor was told to work while the
    * run layer reported that the run did not open.
    */
-  async openRun(sessionId: string, intent: RunTurnIntent): Promise<RunStartAcceptance> {
-    const runId = randomUUID();
+  async openRun(sessionId: string, intent: RunTurnIntent, admission?: RunDispatchAdmission): Promise<RunStartAcceptance> {
+    try {
+      const existing = admission ? await admission.lookup() : null;
+      if (existing) return {
+        accepted: false, runId: existing.runId, stage: 'run_already_exists',
+        reason: 'dispatch key already reserved; reconcile the canonical run without a second execution',
+      };
+      if (this.isSessionBusy(sessionId)) {
+        const active = this.#bySession.get(sessionId);
+        return { accepted: false, runId: null, stage: 'run_active',
+          reason: active === undefined ? `session ${sessionId} already has an opening or settling run`
+            : `session ${sessionId} already has live run ${active}` };
+      }
+      const candidate = randomUUID();
+      this.#openingSessions.add(sessionId);
+      try {
+      const reserved = admission ? await admission.reserve(candidate) : undefined;
+      if (admission && reserved == null) {
+        return { accepted: false, runId: null, stage: 'dispatch_refused', reason: 'bot dispatch claim is no longer current' };
+      }
+      if (reserved && reserved.state !== 'fresh') return {
+        accepted: false, runId: reserved.runId, stage: 'run_already_exists',
+        reason: 'dispatch key already reserved; no second execution was dispatched',
+      };
+      const runId = reserved?.runId ?? candidate;
+      if (admission) this.#dispatchAdmissions.set(runId, admission);
+      try {
+        return await this.#openReservedRun(sessionId, intent, runId);
+      } finally {
+        this.#openingSessions.delete(sessionId);
+        this.#dispatchAdmissions.delete(runId);
+      }
+      } finally { this.#openingSessions.delete(sessionId); }
+    } catch (error) {
+      return { accepted: false, runId: null, stage: 'unknown', reason: describeCause(error) };
+    }
+  }
+
+  async #openReservedRun(sessionId: string, intent: RunTurnIntent, runId: string): Promise<RunStartAcceptance> {
     // An active binding is NEVER overwritten. The router's STREAMING 409 is what
     // normally guarantees one live run per session, and that guarantee lives in
     // a different process from this map — so two turns that pass it (a retry of
@@ -706,6 +764,8 @@ export class RunOrchestrator {
       // one call site that already holds all three inputs.
       const inputHash = runInputRevision({ sessionId, prompt: turnPrompt, options: effectiveTurnOptions });
       const created = await this.#options.dbRequest('run:create', {
+        ...(this.#dispatchAdmissions.get(runId)?.scheduler === undefined ? {} : { botScheduler: this.#dispatchAdmissions.get(runId)!.scheduler }),
+        ...(this.#dispatchAdmissions.get(runId)?.ticket === undefined ? {} : { botDispatchTicket: this.#dispatchAdmissions.get(runId)!.ticket }),
         runId,
         sessionId,
         manifest: built.manifest,
@@ -1481,6 +1541,16 @@ export class RunOrchestrator {
   /** The live run for a session, for the cancel path. */
   runForSession(sessionId: string): string | null {
     return this.#bySession.get(sessionId) ?? null;
+  }
+
+  isSessionBusy(sessionId: string): boolean {
+    return this.#openingSessions.has(sessionId) || this.#bySession.has(sessionId) || this.#finishing.has(sessionId);
+  }
+
+  /** Includes the settlement barrier after the live session binding retires. */
+  ownsRun(runId: string, sessionId: string): boolean {
+    return this.#pendingSessionByRun.has(runId) || this.#bySession.get(sessionId) === runId
+      || (this.#finishing.has(sessionId) && this.#endedBySession.get(sessionId) === runId);
   }
 
   /**

@@ -1,48 +1,17 @@
 /**
- * bot-id.ts — Bot agent id validation.
+ * bot-id.ts — Bot agent id validation (Host re-export).
  *
- * Bot ids are human-readable kebab-case slugs (`frontend-expert`) that are
- * ALSO used as directory names under `<duyaRoot>/agents/<id>`. Validation is
- * therefore a security boundary: an id with separators, dots, `..`, or
- * surrounding whitespace could escape the agents root when joined into a
- * path.
- *
- * Format: `^[a-z0-9][a-z0-9-]{0,62}$`
- *   - starts with lowercase letter or digit
- *   - followed by up to 62 lowercase letters / digits / dashes
- *   - no uppercase, underscore, dot, slash, backslash, whitespace, or `..`
- *
- * Single source of truth for both the Desktop config store and the Host.
+ * The rules moved to `@duya/bot` (framework plan S2) so the Desktop config
+ * store and the standalone Host keep agreeing on what a legal bot id is from
+ * ONE definition. A bot id is also a directory name under
+ * `<duyaRoot>/agents/<id>`, so the check is a path-safety boundary, not a
+ * naming preference. This module keeps the Host's internal import path
+ * (`bot-paths.ts` and the config-agents barrel) stable.
  */
 
-/** Regex is the single source of truth for a legal bot id. */
-export const BOT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-
-/** Type guard: true when `id` is a legal bot id. */
-export function isSafeBotId(id: unknown): id is string {
-  return typeof id === 'string' && BOT_ID_PATTERN.test(id);
-}
-
-/** Throws when `id` is not a legal bot id (path-safety boundary). */
-export function assertValidBotId(id: string): void {
-  if (!isSafeBotId(id)) {
-    throw new Error(
-      `Invalid bot id '${id}': must match ${BOT_ID_PATTERN} (kebab-case, starts with a lowercase letter or digit, max 63 chars)`,
-    );
-  }
-}
-
-/**
- * Existing-config id scanner: report (do not throw) when a config.toml
- * `[agents.<id>]` key is not a legal bot id. Plan 485 Phase 1 only warns —
- * migration tooling (Phase 4) handles renaming. Returns the offending keys.
- */
-export function findInvalidBotIds(ids: Iterable<unknown>): string[] {
-  const bad: string[] = [];
-  for (const id of ids) {
-    if (typeof id !== 'string' || !isSafeBotId(id)) {
-      bad.push(String(id));
-    }
-  }
-  return bad;
-}
+export {
+  BOT_ID_PATTERN,
+  assertValidBotId,
+  findInvalidBotIds,
+  isSafeBotId,
+} from '@duya/bot';

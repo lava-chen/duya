@@ -1,4 +1,13 @@
 const en = {
+  'bot.delivery.title': 'Channel deliveries',
+  'bot.delivery.pending': 'Queued for delivery',
+  'bot.delivery.sending': 'Sending',
+  'bot.delivery.delivered': 'Delivered',
+  'bot.delivery.unknown': 'Delivery needs review',
+  'bot.delivery.blocked': 'Delivery blocked',
+  'bot.delivery.unknownHelp': 'The message may have been sent. Check the conversation before sending again.',
+  'bot.delivery.receipt': 'Receipt',
+  'bot.delivery.loadFailed': 'Could not load channel deliveries.',
   'nav.newChat': 'New Chat',
   'nav.settings': 'Settings',
   'nav.skills': 'Skills',

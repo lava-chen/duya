@@ -32,7 +32,9 @@ import type {
   RunId,
   StartAgentRunInput,
   StartAgentRunResult,
+  BotDispatchTicket,
 } from '@duya/agent-protocol';
+import type { RunDispatchAdmission } from '@duya/host/run-orchestrator';
 import { getLogger } from '../logging/logger';
 import { getAgentServerUrl } from '../services/agent-server-url';
 
@@ -43,6 +45,13 @@ export interface DesktopRunExecutionApiDeps {
   getSessionForRun: (runId: RunId) => Promise<string | null>;
   /** Structured logger; the main-process one is used unless a caller injects its own. */
   log?: { debug(message: string, meta?: Record<string, unknown>): void };
+}
+
+export interface DesktopRunExecutionApi extends HostRunExecutionApiV1 {
+  startBotRun(input: StartAgentRunInput, admission: RunDispatchAdmission): Promise<StartAgentRunResult>;
+  isRunLive(runId: RunId): Promise<boolean>;
+  isSessionBusy(sessionId: string): Promise<boolean>;
+  cancelBotRun(runId: RunId): Promise<boolean>;
 }
 
 const ACTIVE_RUN_ATTEMPTS = 20;
@@ -78,7 +87,7 @@ export function buildAgentServerChatBody(input: StartAgentRunInput): Record<stri
 
 export function createDesktopRunExecutionApi(
   deps: DesktopRunExecutionApiDeps,
-): HostRunExecutionApiV1 {
+): DesktopRunExecutionApi {
   const logger = deps.log ?? getLogger();
   const resolveOrigin = deps.resolveAgentServerOrigin ?? getAgentServerUrl;
   /** Sockets this process opened, so a cancel can close the one it owns. */
@@ -134,7 +143,8 @@ export function createDesktopRunExecutionApi(
         return refuse(stage, `the agent server answered ${response.status}${suffix}`);
       }
 
-      const runId = await readActiveRun(origin, input.sessionId);
+      const runId = response.headers.get('x-duya-run-id') as RunId | null
+        ?? await readActiveRun(origin, input.sessionId);
       if (runId === null) {
         // Nothing to drain: a turn was dispatched but nobody can name its run,
         // so the caller must not be told it started.
@@ -145,6 +155,74 @@ export function createDesktopRunExecutionApi(
       liveRuns.set(runId, controller);
       void drainInBackground(response, runId, liveRuns, logger);
       return { accepted: true, stage: 'dispatched', runId };
+    },
+
+    async startBotRun(input, admission) {
+      const ticket = admission.ticket as BotDispatchTicket | undefined;
+      if (!ticket || !admission.scheduler) {
+        return refuse('refused_dispatch_failed', 'Bot dispatch requires a Host ownership ticket');
+      }
+      const origin = await resolveOrigin();
+      if (origin === null) return refuse('refused_dispatch_failed', 'the agent server is not running');
+      const controller = new AbortController();
+      let response: Response;
+      try {
+        response = await fetch(`${origin}/sessions/${encodeURIComponent(input.sessionId)}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify({ ...buildAgentServerChatBody(input), botDispatchTicket: ticket }),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        return refuse('refused_dispatch_failed', `the agent server is unreachable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!response.ok || response.body === null) {
+        const detail = await response.text().catch(() => '');
+        if (response.status === 409) return refuse('refused_dispatch_failed', 'this Bot session is already running a turn');
+        return refuse(response.status === 404 ? 'refused_no_session' : 'refused_dispatch_failed',
+          `the agent server answered ${response.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+      }
+      const runId = response.headers.get('x-duya-run-id') as RunId | null
+        ?? await readActiveRun(origin, input.sessionId);
+      if (runId === null) {
+        controller.abort();
+        return refuse('refused_run_open_failed', 'the turn was dispatched but its run id could not be read');
+      }
+      liveRuns.set(runId, controller);
+      void drainInBackground(response, runId, liveRuns, logger);
+      return { accepted: true, stage: 'dispatched', runId };
+    },
+
+    async isRunLive(runId) {
+      const sessionId = await deps.getSessionForRun(runId);
+      if (sessionId === null) return false;
+      const origin = await resolveOrigin();
+      if (origin === null) return false;
+      return await readActiveRun(origin, sessionId) === runId;
+    },
+
+    async isSessionBusy(sessionId) {
+      const origin = await resolveOrigin();
+      if (origin === null) return false;
+      return await readActiveRun(origin, sessionId) !== null;
+    },
+
+    async cancelBotRun(runId) {
+      const sessionId = await deps.getSessionForRun(runId);
+      if (sessionId === null) return false;
+      const origin = await resolveOrigin();
+      if (origin === null) return false;
+      try {
+        const response = await fetch(`${origin}/sessions/${encodeURIComponent(sessionId)}/cancel-run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId }),
+        });
+        const payload = await response.json().catch(() => null) as { applied?: boolean } | null;
+        return response.ok && payload?.applied === true;
+      } catch {
+        return false;
+      }
     },
 
     async cancelAgentRun(runId) {

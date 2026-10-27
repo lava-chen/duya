@@ -321,9 +321,10 @@ export class FeishuChannel extends EventEmitter {
       domain: this.domain,
       appId: this._config.appId,
       appSecret: this._config.appSecret,
-      onEvent: (wsEvent) => {
+      ackAfterHandling: this._options.ackAfterHandling,
+      onEvent: async (wsEvent) => {
         const event = wsEvent.data as FeishuEvent;
-        this._handleEvent(event).catch(() => {});
+        await this._handleEvent(event);
       },
       onStatusChange: (status) => {
         console.log(`[Feishu] WebSocket status changed: ${status}`);
@@ -366,9 +367,8 @@ export class FeishuChannel extends EventEmitter {
       port, host, path: wp,
       verificationToken: this._config.webhook?.verificationToken,
       encryptKey: this._config.webhook?.encryptKey,
-      onEvent: async (event) => {
-        try { await this._handleEvent(event); } catch {}
-      },
+      ackAfterHandling: this._options.ackAfterHandling,
+      onEvent: (event) => this._handleEvent(event),
       // Rejections are security-relevant and were previously invisible:
       // an unauthorised request just fell through to { code: 0 }.
       // console.warn matches the rest of this adapter; ISS-47 covers
@@ -400,8 +400,9 @@ export class FeishuChannel extends EventEmitter {
     const message = event.event?.message;
     const messageId = message?.message_id || '';
 
-    if (messageId && this._dedupPersistence.isDuplicate(messageId)) return;
-    if (messageId) {
+    const durable = this._options.ackAfterHandling?.() ?? false;
+    if (!durable && messageId && this._dedupPersistence.isDuplicate(messageId)) return;
+    if (!durable && messageId) {
       this._dedupPersistence.markSeen(messageId);
       this._totalMessages++;
     }
@@ -440,6 +441,7 @@ export class FeishuChannel extends EventEmitter {
           break;
       }
     } catch (err) {
+      if (durable) throw err;
       console.warn(`[Feishu] Event handling failed for ${eventType}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -469,6 +471,7 @@ export class FeishuChannel extends EventEmitter {
 
     const userAllowed = checkUserAllowed(userId, this._config.allowedUsers);
     const isGroup = isGroupChat(message.chat_type || '');
+    if (isGroup && this._config.groupPolicy === 'disabled') return;
     const isFree = isFreeResponseChat(chatId, this._config.freeResponseChatIds);
 
     if (isGroup) {
@@ -571,7 +574,7 @@ export class FeishuChannel extends EventEmitter {
       ? (() => { try { const c = JSON.parse(event.event!.message!.content); return c.reaction_type?.emoji_type || ''; } catch { return ''; } })()
       : '';
     const userId = sender?.sender_id?.open_id || '';
-    if (emojiType && userId) await this._options.onReactionAdded(messageId, emojiType, userId, chatId);
+    if (emojiType && userId) await this._options.onReactionAdded(messageId, emojiType, userId, chatId, event.header?.event_id);
   }
 
   private async _handleReactionRemoved(

@@ -399,11 +399,15 @@ function createWorker(
 ): MemoryWorkerHandle {
   const logger = getLogger();
   const workerId = `memory-worker-${crypto.randomUUID()}`;
+  const memoryRoot = deps.rootDir ?? path.join(os.homedir(), '.duya', 'memory');
   const extractor = new Stage1Extractor(deps.memoryDb, deps.llmClient, {
     rootDir: deps.rootDir,
     // Live policy file managed by the curation loop (missing file = default
     // empty policy, so unwired deployments behave exactly as before).
     policyPath: deps.curation ? path.join(deps.curation.configRoot, 'stage1_policy.md') : undefined,
+    // Framework plan S5: keep forgotten facts out of extraction, so a
+    // summary written before the forget cannot re-create them.
+    forgottenKeysRoot: memoryRoot,
     // Main process has no `process.send` IPC — read messages from the core
     // store MessageLog directly instead of the agent db-client bridge.
     readMessageRows: deps.readMessageRows,
@@ -446,7 +450,6 @@ function createWorker(
     state.consolidatorInFlight = true;
     const start = Date.now();
     try {
-      const memoryRoot = deps.rootDir ?? path.join(os.homedir(), '.duya', 'memory');
       const quorum = await curationQuorum(deps.memoryDb, memoryRoot);
       const shouldFire =
         options.force ||

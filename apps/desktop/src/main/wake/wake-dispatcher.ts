@@ -208,6 +208,8 @@ function userTurnClaimKey(sessionId: string, messageId: string): string {
  * was accepted — only the claiming window starts the turn.
  */
 export function claimScheduledUserTurn(sessionId: string, messageId: string): boolean {
+  const botId = parseAgentIdFromBotSession(sessionId)
+  if (botId && managedBotWakePort?.isHostOwned(botId)) return false
   const key = userTurnClaimKey(sessionId, messageId)
   const resolve = pendingUserTurnClaims.get(key)
   if (!resolve) return false
@@ -221,6 +223,8 @@ export function claimScheduledUserTurn(sessionId: string, messageId: string): bo
  * when an item was removed.
  */
 export function cancelQueuedUserTurn(sessionId: string, messageId: string): boolean {
+  const botId = parseAgentIdFromBotSession(sessionId)
+  if (botId && managedBotWakePort?.isHostOwned(botId)) return managedBotWakePort.cancel(sessionId, messageId)
   const state = getState(sessionId)
   const removed = removeWakeWhere(state.queue, (item) => item.id === `user:${messageId}`)
   state.queue = removed.queue
@@ -239,6 +243,8 @@ export function dispatchBotTurn(
   sessionId: string,
   item: WakeItem,
 ): Promise<WakeRunOutcome> {
+  const botId = parseAgentIdFromBotSession(sessionId)
+  if (botId && managedBotWakePort?.isHostOwned(botId)) return managedBotWakePort.dispatch(sessionId, item)
   const state = getState(sessionId)
   const existing = state.turnWaiters.get(item.id)
   if (existing) {
@@ -330,6 +336,27 @@ async function dispatchUserLaneTurn(sessionId: string, item: WakeItem): Promise<
 }
 
 const sessions = new Map<string, SessionWakeState>()
+
+export interface ManagedBotWakePort {
+  isHostOwned(botId: string): boolean
+  accept(sessionId: string, item: WakeItem): 'added' | 'merged' | 'deduped'
+  dispatch(sessionId: string, item: WakeItem): Promise<WakeRunOutcome>
+  cancel(sessionId: string, messageId: string): boolean
+}
+
+let managedBotWakePort: ManagedBotWakePort | null = null
+
+export function setManagedBotWakePort(port: ManagedBotWakePort | null): void {
+  managedBotWakePort = port
+}
+
+/** Migration gate: every legacy in-memory obligation must be drained first. */
+export function isLegacyWakeSchedulerIdle(sessionId: string): boolean {
+  const state = sessions.get(sessionId)
+  return state === undefined || (state.queue.isEmpty && !state.draining
+    && state.runningItem === undefined && state.redrivePending === undefined
+    && state.turnWaiters.size === 0)
+}
 
 /**
  * Turn epoch (476 §2.6, E3): per-session counter advanced only when a
@@ -427,6 +454,10 @@ export function enqueueWakeItemForSession(
   sessionId: string,
   item: WakeItem,
 ): 'added' | 'merged' | 'deduped' {
+  const botId = parseAgentIdFromBotSession(sessionId)
+  if (botId && managedBotWakePort?.isHostOwned(botId)) {
+    return managedBotWakePort.accept(sessionId, item)
+  }
   const now = Date.now()
 
   const state = getState(sessionId)
@@ -1481,6 +1512,12 @@ export function _resetWakeDispatcherForTest(): void {
   redriveBatches.clear()
   turnEpochs = createTurnEpochState()
   activeDeps = null
+  managedBotWakePort = null
+}
+
+/** Reuses the legacy wake prompt contract for durable Host dispatch. */
+export function buildManagedWakePrompt(item: WakeItem): string {
+  return promptForItem(item)
 }
 
 /** Test seam: read how many items are queued for a session. */

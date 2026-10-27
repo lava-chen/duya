@@ -1,5 +1,591 @@
 # 个人长期 Bot：统一领域边界与可靠迁移
 
+## S1–S6-A integration preview — 2026-10-26
+
+- Owner: Codex root; linked worktree `/workspace/work/bot-integration`, branch
+  `codex/bot-s1-s6-integration`, base `origin/master @ d80ca3c6`. User authorized
+  the first preview step: combine selected branches, not merge to master.
+  Managed-worktree/context/CodeGraph tools unavailable; Git and versioned plans
+  provide the snapshot. Original PR branches are unchanged and retained.
+- Assembled with one merge commit per selected PR head, in the order below.
+  All eleven exact heads are verified ancestors of the preview. Rebased S1–S3a
+  and older stacked ancestry coexist; no original commits were rewritten.
+
+| Slice / PR | Selected head | Preview merge |
+| --- | --- | --- |
+| #500 `codex/bot-framework-s1` | `a04b6d27` | `27674860` |
+| #502 `codex/bot-framework-s2` | `5e06887a` | `b7bb8e45` |
+| #503 `codex/bot-framework-s3a` | `01342b44` | `b6b0b37a` |
+| #504 `codex/bot-framework-s3b` | `a692d74b` | `34bb03e4` |
+| #506 `codex/bot-framework-s3c` | `aaa78d44` | `87f7fb3b` |
+| #509 `codex/bot-framework-s4` | `64f1cf4e` | `bbdaebb9` |
+| #511 `codex/bot-framework-s4-feishu` | `600bf624` | `384bd798` |
+| #515 `codex/bot-framework-s5` | `9edc7c84` | `8eb70873` |
+| #520 `codex/bot-s5-review` | `f3477278` | `6979354b` |
+| #513 `codex/bot-framework-s6` | `b41ab523` | `e05fe0f6` |
+| #519 `codex/bot-s6-followup` | `35cad06a` | `62250c45` |
+
+- Source conflict resolutions: `data/src/index.ts` retains inbox exports and
+  adds BotDispatchStore. `host/src/local-host.ts` keeps master's newer
+  lease-resilience no-argument shutdown and adds Bot dispatcher lifecycle.
+  Independent S5/S6 architecture and execution records are both retained;
+  the handoff keeps newer S1–S3a resync facts. The index points here.
+- Generated worker conflicts were temporarily held at the current artifact in
+  intermediate checkpoints, then rebuilt once from the final combined source.
+  Those checkpoints are assembly history, not individually validated releases.
+- The first final typecheck invocation caught an automatically merged duplicate
+  `@duya/bot` dependency; identical versions were collapsed to one. An inherited
+  duplicate `schedule` test key was removed, preserving its intended daily cadence.
+- Combination checks: all eleven selected heads are ancestors; no unmerged
+  index entries. Eight distinct focused suites / 148 tests passed (the
+  Scheduler suite was rerun after its duplicate-key cleanup). The data inbox
+  suite ran 30 cases; the first smoke command's obsolete inbox filename matched
+  no file and was corrected before this total was recorded.
+- Final worker generated artifacts and Electron main/preload were rebuilt.
+  Architecture gate passed, no new boundary findings; baselines unchanged.
+  Final `npm run typecheck:all` exited 0 on the combined source after the
+  duplicate-key fix. Committed bundle freshness is checked before publication.
+  Remote selected heads were rechecked and all eleven remained unchanged.
+  Dependency overlays point workspace names to this worktree; only compatible
+  third-party modules and private picomatch type declarations are reused.
+- Scope remains an integration preview. No production Bot ownership changed,
+  no main/master update, no PR merged, no live external send. Full-stack
+  regression, real worker/IPC/Electron validation and authorized integration
+  remain subsequent work; the repository's final commit gates are run here.
+
+## S1–S6 集成落地 — 2026-10-27
+
+- Owner: 本会话 root；worktree `.claude/worktrees/bot-s1-s6-merge`；分支
+  `codex/bot-s1-s6-integration`（PR #521，base `origin/master`）；独占路径：PR #521
+  分支与本计划文件。合并前的来源检出 `.claude/worktrees/bot-framework-*` 保持原位。
+- 授权与方式：用户选择「以 #521 集成分支单一落地」，而不是把 11 条堆叠 PR 逐条
+  rebase 后分别合并。理由：11 条分支各自持有一份被跟踪的 `packages/host/bundle/`
+  产物，逐条合并会把「产物重生成」重复 11 次；组合分支已保留每个切片的独立 merge
+  提交，提交粒度不丢，且 CI 只跑一遍。落地用 merge commit，不 squash。
+- 合并 `origin/master @ a99e1444`（自 `d80ca3c6` 起 master 又并入 #510/#512/#514/
+  #518/#525/#517）：6 处冲突。三个生成产物 `bundle/worker-entry.js`、
+  `bundle/worker-metafile.json`、`bundle/BashTool/BashWorker.js` 按[构建](../../development/build.md)
+  的规矩重生成而不手工合并；`packages/host/package.json` 同时保留 `./bot` 与
+  `./provider-management` 两个导出映射；两份计划文档两侧内容都保留。
+- 修掉组合分支上仍红的三处（CI 上 #521 的 `test` job 为此失败）：
+  - `packages/data/src/bot-scheduler-store.ts` 与 `bot-outbox.ts` 的迁移改用
+    `CREATE TABLE IF NOT EXISTS`，与核心库既有迁移写法一致。原先用裸
+    `CREATE TABLE`，重试一次启动就会在 `bot_scheduler_owners already exists`
+    上失败——桌面迁移测试「整表应用两次」直接红。
+  - `packages/agent-protocol/src/` 里指向 desktop router 的行号引用按本次 bot
+    切片造成的位移逐条重算（router.ts 在 import 与两处 hunk 共 +10 行），否则
+    citation drift 测试报 4 处「引用区间不含所命名的符号」。
+- 验证（本检出，win32 / Node 24.16.0 / Vitest 3.2.4）：
+  `npm run typecheck:all` 退出 0；`npm run architecture:check` 新增违规 0（3 条既有
+  baseline 指纹失效未 `--write`）；`npm run bundle:verify` FRESH 0/1014；bot 相关
+  套件 37 文件 416 例全绿（packages/bot、data bot 三套、host bot 与 worker-prompts、
+  memory `__tests__`）；architecture 脚本 + UI bot 32 文件 480 例全绿（退出码来自
+  `[vitest-worker]: Timeout calling "onTaskUpdate"`，与 S0 记录同签名，无用例失败）；
+  desktop bot 五文件 46 例全绿。
+- Windows 检出注意：`scripts/inline-modules.mjs` 在 Windows 上把
+  `packages/capabilities/src/ModuleTool/inline-content.ts` 生成成 CRLF，与入库的 LF
+  版本字节不同，会让 `bundle:verify` 报 STALE 且不产生真实 diff。用
+  `git -c core.eol=lf checkout -- <file>` 复位后再重建产物即可。
+- 外部副作用：仅 `origin/codex/bot-s1-s6-integration` 远端分支与 PR #521 更新。
+  未改生产 Bot 归属，未发任何外部消息，未动用户数据。
+- 下一步：#521 最新 head 的五检查全绿后转 ready 并用 merge commit 合并；合并后
+  逐条关闭 #500 / #502 / #503 / #504 / #506 / #509 / #511 / #513 / #515 / #519 / #520
+  （它们的提交已随组合分支进入 master），并回收本次检出；S7 旧路径退役另立切片。
+
+## S5 independent review — 2026-10-26
+
+- Owner: Codex root, linked worktree `/workspace/work/bot-s5-review`, branch
+  `codex/bot-s5-review`, base #515 `9edc7c84`. Managed worktree/context and
+  CodeGraph tools unavailable; Git and versioned plan provide shared state.
+- Review scope: cross-Bot memory isolation, grant revocation/cache refresh,
+  write-ahead forget and startup recovery. No merge or production state change.
+- Plan: record affected baseline; reproduce symbolic-link boundary bypasses;
+  fix recall and repair path handling; test grant revocation and crash windows;
+  run type/architecture/build gates; retain evidence and deliver a draft PR.
+- Exclusive paths: memory path helper/ledger and tests, Host Bot memory readers
+  and tests, Stage 1 extractor, Desktop tier writer/forget recovery and tests,
+  worker bundle and plan docs.
+- Findings reproduced before fixes: three Host cases followed linked
+  files/directories/shard roots or state files; two repair cases modified linked
+  or unrelated files; two Stage 1 cases committed a forgotten canonical key,
+  including with `existingKeys: null` and forget during inference.
+- Fixed: shared path resolution rejects linked ancestors/files and hard links;
+  grant/membership readers and all recall tier scans use it. Foreground writes,
+  forget and recovery enforce canonical memory layouts. Ledger paths also reject
+  Windows drive syntax/NUL on every OS. Recovery leaves unsafe paths untouched.
+- Stage 1 no longer presents forgotten keys as reusable identities. It re-reads
+  tombstones after inference and rejects a matching normalized canonical key
+  before any output/projection write. This is an exact-key guarantee; semantic
+  paraphrases and already-folded summaries remain explicitly out of scope.
+- Validation (Linux / Node 24.19.0, base `9edc7c84` plus this review diff):
+  initial affected baseline 5 files / 46 tests passed, with extractor file-keys
+  blocked at collection by missing AI dist. Host dependency build passed;
+  subsequent defect reproductions failed 3/16 Host, 2/5 repair and 2/6 extractor
+  cases before fixes. Final affected regression: 44 files / 519 tests passed.
+  This uses real temporary files/SQLite and a scripted LLM, not a live account.
+- Architecture gate passed with no new violations and no baseline edits.
+  Worker bundle regenerated. Main/preload build passed. Full desktop build
+  attempted but blocked by unavailable Electron binary download. No live
+  Electron or packaged-app assertion is claimed.
+- Full `npm run typecheck:all` exited 0 on the final review source. The
+  already-declared picomatch types resolve through a private worktree overlay
+  to the prior task's private dependency install; no shared install was changed.
+- Delivery: preserve branch `codex/bot-s5-review` and its linked worktree;
+  publish only as a draft follow-up targeting `codex/bot-framework-s5` (#515).
+  Final bundle freshness is checked on the committed payload before publishing.
+  No merge is authorized. Next: review the follow-up, integrate the prerequisite
+  stack in order, then repeat Electron validation on a prepared runner.
+- Acceptance: ungranted memory cannot be read through file/directory links;
+  recovery cannot modify a linked or unrelated file; legitimate recall and
+  ordinary crash recovery remain intact. Adversarial concurrent filesystem
+  replacement is outside this path-check guarantee.
+
+## S5 execution — 2026-10-26
+
+- Owner: root agent; isolated linked worktree `.claude/worktrees/bot-framework-s5`,
+  branch `codex/bot-framework-s5`, base `codex/bot-framework-s4-feishu` @ `600bf624`
+  (stacked: S1–S4 are still unmerged). No merge is authorized.
+- Decision (user-confirmed): peer user shards require an **explicit grant, fail
+  closed**; revocation/forget lands **next turn via a durable recall revision**
+  folded into the frozen-section key, while ordinary memory writes stay frozen
+  until compaction (keeps Plan 501 L1).
+- Status: implemented and verified locally; the two review defects are fixed in
+  `c5326a69`; published as draft
+  [PR #515](https://github.com/lava-chen/duya/pull/515) (base
+  `codex/bot-framework-s4-feishu`). Unmerged; no merge is authorized.
+- Delivered: `@duya/bot` `context/snapshot.ts` (pure `BotContextSnapshot`:
+  bot revision, recall revision, authorized scopes; `parseMemoryAccessGrant`
+  fail-closed); host `worker-prompts/bot/memory/access.ts` reads
+  `agents/<bot>/state/memory-access.json`; `tierReader.readUserTierEntries` now
+  takes an authorized shard list instead of scanning every agent, and project
+  ids/writer dirs are validated as path segments; `loader` builds one snapshot
+  per turn from config revision + grants + `state/projects.json` + forget ledger
+  and renders memory only from `snapshot.memory`; `framework`/
+  `epoch.botVolatileSectionCacheKey` key volatile sections on
+  `bot:<id>:v:<recallRevision>:<epoch>:<section>`; the runtime passes
+  `recallRevision`.
+- Forget is durable at four layers: file retirement + tier-index removal
+  (existing), `<memoryRoot>/.forget-ledger.json` revision (frozen prompt
+  re-renders next turn), and tombstone keys merged into Stage 1's dedupe set.
+  The curator prompt also receives a bounded `forgotten_facts` block so an old
+  rollout summary cannot write the fact back into an area page.
+- Review follow-up (2026-10-26, fix commit `c5326a69`):
+  - **Grant contract is all-or-nothing.** The old parser filtered invalid
+    entries and kept the valid half, so a mixed file still widened recall past
+    what the user wrote — contradicting the "fail closed" promise. One invalid
+    entry now rejects the whole file, and `buildBotContextSnapshot` re-validates
+    the grant instead of trusting the caller, so a hand-built invalid grant
+    yields no peer shards either.
+  - **Forgetting is crash-recoverable.** The ledger is now the *write-ahead*
+    record: it is written before the canonical file is retired and it names the
+    path being retired. Recall readers (`tierReader`) skip every tombstoned
+    path, so a crash between the ledger write and the retirement cannot expose
+    the fact, and the desktop memory-worker startup repair
+    (`memory-state/forgetRecovery.ts`) finishes the retirement and drops the
+    index row. The repair is idempotent; the ledger file format moved to
+    version 2 (`entries[]` with `paths[]`), and a version-1 file still reads.
+  - The failure window is pinned by tests: the desktop test writes the ledger
+    while the file is still `status: active` and the index row still present,
+    then asserts the repair flips it to `retired` and removes the row; the host
+    test asserts the still-active file is not recalled.
+- Acceptance evidence (all local, win32 / Node 24.18.0; re-measured at the
+  review-fix commit `c5326a69`):
+  - named S5 tests 74 cases green across 7 files:
+    `packages/bot/tests/context-snapshot.test.ts` (11, incl. all-or-nothing
+    grant), `packages/memory/src/__tests__/forget_ledger.test.ts` (9, ledger v2
+    entries + paths), `extractor.file-keys.test.ts` (5, incl. tombstone survives
+    retired file), `apps/desktop/.../tierWriter.test.ts` (10, forget bumps the
+    ledger + tombstones), `apps/desktop/.../forgetRecovery.test.ts` (3, crash
+    window completed / idempotent / no-op),
+    `apps/desktop/.../curation_single_shot.test.ts` (23, incl. forgotten block
+    present/absent), `packages/host/tests/worker-prompts/bot-memory-s5.test.ts`
+    (13: own+legacy only without grant, granted shard visible, revocation moves
+    the gate while an ordinary write does not, unsafe project ids dropped,
+    volatile re-render on gate change but not on content change, a tombstoned
+    but un-retired file is not recalled).
+  - `packages/host/tests` + `packages/bot/tests` + `packages/memory/src`:
+    255 files passed / 1 skipped, 2350 passed / 5 skipped (exit 0).
+  - desktop `memory` + `memory-state`: 29 files, 337 passed (exit 0).
+  - `npm run typecheck:all` exit 0; `npm run architecture:check` exit 0 (no new
+    violations; 2955 total, all baselined, baseline untouched); bot-boundary
+    PASS (R1 MEASURED 10 files / 0 forbidden edges); retirement ratchet PASS
+    (772 current / 772 baseline / 0 new). Desktop `tsconfig.main` 178 errors,
+    all pre-existing (base moved; none in the S5 files).
+  - `npm run bundle:worker` rebuilt `packages/host/bundle` from the final source
+    and committed it with the fix; `npm run bundle:verify` reports FRESH at
+    `c5326a69` (0/1009 inputs changed).
+- Honest deferrals / limits: (1) audience-based memory filtering (design §7
+  "记忆按受众过滤") is not implemented — S4 channel admission already gates
+  allowed senders, and the worker has no per-turn audience field; it stays an
+  open item. (2) The `forgotten_facts` curator guard is prompt-level; the
+  structural guarantees are the Stage 1 dedupe tombstone (re-extraction) and
+  the ledger path tombstone (recall visibility, including the crash window).
+  (3) Conversation summaries already folded into context are not rewritten
+  ("必要时重建受影响
+  摘要" remains a separate slice). (4) Grant authoring is a documented JSON file
+  contract; no Desktop UI/RPC yet. (5) The grant file is user-owned state; the
+  bot itself has no writer for it. (6) Remote CI cannot report on this branch:
+  the repo's `Test` workflow only runs on `master` pushes, so no run exists for
+  `codex/bot-framework-s5` (same for the S1–S4 branches). A remote signal only
+  appears once the stack reaches master, which is not authorized.
+
+## S6 review follow-up — 2026-10-26
+
+- Owner: Codex root; managed worktree/context/CodeGraph tools unavailable.
+  Git and versioned plan supply context. Exclusive paths: automation scheduler,
+  schedule helpers/tests, cron-file store and the three plan/architecture docs.
+  Linked worktree: `/workspace/work/bot-s6`.
+- Continue S6-A from PR #513 (`b41ab523`), isolated branch
+  `codex/bot-s6-followup`; S5 PR #515 remains independent. Remote S1–S4
+  prerequisites remain unmerged; no integration or production ownership change.
+- Review found admission loss: the old tick advanced `last_run_at` before
+  enqueue. Now atomically write the exact scheduled batch and fingerprint to
+  `cronjob.toml` before admission, then acknowledge each accepted fire in order.
+  Failed admission stops the batch; restart reuses its original fire identities
+  even after the clock advances. Lost acknowledgement replays the same key for
+  Host inbox dedup. Concurrent ticks share one in-flight pass.
+- `skip` now checks the newest due occurrence, preventing a missed old occurrence
+  from permanently starving future on-time fires. Reject zero/overflowing
+  intervals; one-shots respect `endAt`.
+- Guarantee scope: durable wake acceptance/dedup belongs to Host-owned Bots
+  (S3c). Legacy in-memory wake ownership is not upgraded by this change.
+  Schedule edits invalidate a mismatching pending fingerprint; disabled jobs
+  retain pending work without dispatch. Full pause/revocation remains S6-B.
+- Baseline: three affected suites / 72 tests passed before changes.
+  Final targeted regression: three suites / 78 tests passed. Expanded automation
+  and wake run: 10 files / 124 assertions passed, 14 files failed at collection
+  due to missing workspace dist exports (ai/plugin-core) and the Electron
+  binary; no assertion in those files ran.
+- After dependency builds, expanded retry executed 137 passing / 8 skipped
+  assertions; 12 files remained red (Electron collection failures and a
+  sandbox-blocked localhost listener). Retrying the HTTP RunResult suite with
+  localhost permission passed all 8 tests. No product assertion was weakened.
+- Architecture gate passed, no new boundary violations, baseline untouched.
+  Main/preload `npm run build:electron` passed. Full `electron:build` failed
+  in its Electron binary prerequisite (download unavailable); no packaged or
+  live Electron claim.
+- Final `npm run typecheck:all` retry exited 0 on Linux / Node 24.19.0,
+  source commit `e22e8fe0`. Initial run stopped at missing `@types/picomatch`;
+  installed the already-declared 4.0.3 type package under private `work/deps`
+  and added worktree-local capability/Host resolution links. Shared dependency
+  installation untouched. Electron type ratchet reported no new errors.
+- Delivery: [draft PR #519](https://github.com/lava-chen/duya/pull/519), base
+  `codex/bot-framework-s6` (#513), implementation `e22e8fe0`. User explicitly
+  authorized pushing this payload and creating the PR. Remote head verified;
+  no CI checks/reviews reported yet, no merge. Keep branch and worktree.
+- Next: review #519 alongside #513; integrate only after prerequisite stack
+  review/CI, repeat Electron-dependent validation on a prepared runner, then
+  begin S6-B budget/quiet-hours/pause/revocation/approval as a separate slice.
+
+## S6 execution — 2026-10-26
+
+- Owner: Qoder root; isolated linked worktree `.claude/worktrees/bot-framework-s6`,
+  branch `codex/bot-framework-s6`, base `600bf624` (S4-Feishu tip on
+  `codex/bot-framework-s4-feishu`; prerequisite stack #500 → #502 → #503 →
+  #504 → #506 → #509 → #511, all unmerged).
+- Base decision (user-selected): S6 stacks on S4 and skips S5. S5
+  (memory/prompt snapshots) is owned by another session in
+  `.claude/worktrees/bot-framework-s5` (branch `codex/bot-framework-s5`,
+  HEAD `600bf624`, unpushed) and this worktree leaves it untouched. The
+  time-trigger half of S6 needs only S3–S4 and asserts no snapshot contract, so
+  it can land ahead of S5.
+- Slice S6-A — 已实现 / 已验证, not merged: deterministic routine fire identity
+  plus offline catch-up inside the existing Desktop automation owner. No new
+  schema, no new Host owner, no desktop → `@duya/bot` import: a Bot-bound fire
+  still enters through the S3c managed wake port, so the Host inbox keeps
+  collapsing replays on `sourceEventId = auto:<routineId>:<fireKey>`.
+  - `routineFireKey(routineId, schedule fingerprint, scheduled instant)` is now
+    the fire identity (`r1:...`), and the tick claims the scheduled instant
+    instead of the wall clock, so a late tick or a restart cannot drift the
+    phase. Manual "run now" keeps a random `manual:<uuid>` key: a second click
+    is a second fire, not a duplicate.
+  - `planDueRoutineFires` implements the policy persisted as `misfire_policy` /
+    `max_catch_up` in `cronjob.toml` (defaults `latest` / 1; `bounded` clamped
+    to 1..5). `latest` fires the newest missed instant once after a multi-day
+    outage, `bounded` fires the newest N ascending, `skip` drops an instant
+    older than the 5-minute grace window. DST needs no special case: instants
+    come from croner's timezone-aware `nextRun`, and the 23 h / 25 h gaps are
+    pinned by tests.
+  - Two first-run defects surfaced while rewriting the tick and are fixed here
+    because the nextFire contract cannot hold otherwise. `once` schedules could
+    never fire through the polling tick (`computeNextRunAt` returns `at` only
+    while it is still future, so `nextRunAt <= now` never matched); a one-shot
+    now fires late exactly once, whatever the policy. A never-run `every` job
+    anchored on `now` on every read, so its first occurrence never became due;
+    it now anchors on `created_at`, as `cron` already did.
+  - A standalone (non-Bot) cron stays single-fire and claims the wall clock: it
+    has no inbox to dedupe a burst, and replaying its backlog would spawn one
+    throwaway session per missed instant. The stored policy applies once the job
+    is bound to a Bot, and the value persists through binding so the user's
+    choice is not lost.
+- Not in this slice (S6-B+): daily schedule summary, budget CAS, quiet hours,
+  pause / revocation of queued responsibility, approval admission, and a UI
+  control for the misfire policy (today it is editable in `cronjob.toml`; the
+  create / update IPC already accepts both fields).
+- Verification — 2026-10-26, Windows 10 x64, Node v24.18.0, base `600bf624`,
+  dirty scope = the seven `apps/desktop/src/main/automation` files below.
+  - `npm run build:packages` — 22 packages, exit 0.
+  - `npm run typecheck:all` — exit 0 (build:packages, protocol / client-core /
+    core / workflow / runtime / web / web-app / electron / cli / voice / evals).
+  - `node scripts/typecheck-electron-gate.mjs` — OK, no new type errors
+    (178 known across 101 keys; 10 keys shrank, baseline not re-recorded).
+  - `node scripts/architecture/architecture-check.mjs` — OK, no new boundary
+    violations, baseline untouched.
+  - `npx vitest run apps/desktop/src/main/automation apps/desktop/src/main/wake`
+    — 24 files / 240 tests passed, exit 0. S6 adds 28 cases (14 `schedule`,
+    8 `Scheduler`, 6 `cron-file`); every pre-existing case stayed green.
+  - `npm run check:encoding` / `check:no-ts-suppress` / `check:test-coverage` —
+    exit 0.
+  - Environment note: this worktree's `node_modules` is a junction to the main
+    checkout that predates `packages/bot`, so `packages/node_modules/@duya/bot`
+    was added as a worktree-local junction; no install ran through the shared
+    link. Before `build:packages`, every `@duya/<pkg>/<subpath>` import in the
+    Electron gate failed with TS2307 (missing `packages/*/dist`); those errors
+    were environmental and cleared after the build.
+- 待验证: no renderer/Electron run (no UI change), and the bounded catch-up is
+  proven against a mocked wake dispatcher — the real `auto:*` `sourceEventId`
+  dedup is the S3c contract and is unchanged here.
+- Delivery: draft [PR #513](https://github.com/lava-chen/duya/pull/513), base
+  `codex/bot-framework-s4-feishu`. Unmerged; keep the worktree and branch until
+  the S1–S4 stack integrates and S5 lands, then rebase S6-B on the merged tree.
+
+## S4 execution — 2026-10-26
+
+- Owner: Codex root; isolated linked worktree `.claude/worktrees/bot-framework-s4`,
+  branch `codex/bot-framework-s4`, base S3c `aaa78d44`. Existing PRs remain unchanged.
+- Plan: establish the affected baseline; add core-db outbox and atomic terminal
+  settlement; wire trusted per-event channel admission and fenced delivery in
+  Host; connect Telegram, then Feishu in a separate platform commit/PR; expose
+  durable delivery state through the Desktop bridge and existing channel cards.
+- Acceptance: replay returns the same inbox receipt; identity cannot cross a
+  binding; terminal settlement cannot lose a delivery obligation; an interrupted
+  send is reconciled or marked unknown without blind resend; no credentials in
+  durable payloads, projections or errors. Verify local transport faults, restart,
+  relevant regressions, typecheck, architecture and Electron build.
+- Managed worktree/context/CodeGraph tools unavailable; Git, PR heads and the
+  versioned plan supply shared-state evidence. No merge is authorized.
+- Telegram implemented: core migration 48 adds `bot_outbox`; terminal validation,
+  reply insertion and inbox settlement share one transaction. A committed send
+  claim is fenced; interrupted sends become `unknown`, never automatically
+  resent. Vault credentials are resolved only by the Host transport. Connection
+  replacement/revocation invalidates queued targets. Ownership transfer refuses
+  unresolved deliveries. Existing legacy scheduling remains the default.
+- Channel replies use explicit SendMessage submissions captured with their Run
+  attempt. They are queued durably and released by terminal input settlement.
+  Plain assistant text remains private; if no SendMessage was submitted, the Host
+  records a blocked missing-reply obligation. Repeated identical
+  submissions reuse the same receipt, and distinct messages retain their order.
+  Legacy non-channel turns keep their existing delivery path (retirement is S7).
+  Unsupported/oversized output is a visible blocked obligation, never a partial
+  send reported as complete. Telegram text is limited to one 4096-character
+  provider message per receipt; no automatic multi-message split is claimed.
+- Desktop admits each Telegram update by its stable provider ID and awaits the
+  durable receipt before advancing the polling offset. Startup replay is not
+  truncated. Read-only IPC and delivery cards show pending/sending/delivered/
+  unknown/blocked independently of Run completion.
+- Baseline at `aaa78d44` (Linux / Node 24.19.0, clean independent npm ci):
+  Host dependency build exit 0; 4 affected suites / 66 tests passed. After changes:
+  13 affected suites / 164 tests passed; the initially blocked Electron-import
+  suite passed all 6 tests after installing the verified Electron 44.9.1 binary.
+  Real Host/SQLite/child-process suite: 4 tests passed, including channel receipt
+  replay after restart with one worker dispatch and one transport send. New
+  outbox/channel fault suites: 10 tests passed (included in the 164 above).
+- Chromium via local Playwright (MCP unavailable): five durable states, unknown
+  guidance, remote receipt, light/dark and 375px layout passed with no page errors.
+  This is component browser verification with a fixture IPC response, not a real
+  Electron renderer IPC claim. `electron:build` passed. Architecture gate passed
+  with no new boundary violations. `npm run typecheck:all` exit 0 on the final
+  Telegram source; generated worker artifacts rebuilt by `electron:build`.
+- At the Telegram checkpoint, Feishu was the next slice: preserve IDs/media and await
+  admission before transport ACK; bypass the legacy cross-account dedup file for
+  managed admission. Do not treat a live adapter's void send result as a receipt.
+
+### S4 platform delivery and final verification
+
+- Telegram foundation delivered as draft [PR #509](https://github.com/lava-chen/duya/pull/509),
+  foundation `b1f81198` plus explicit-message correction `64f1cf4e`, base
+  `codex/bot-framework-s3c`. This is implemented and locally
+  validated, not merged. The original S3c branch remains unchanged.
+- Feishu continuation uses the same isolated worktree on branch
+  `codex/bot-framework-s4-feishu`, base `64f1cf4e`; exclusive paths extend to the
+  Feishu gateway transport and its tests. No new scheduler, Run loop or database
+  owner. The Host adapter resolves vault credentials and validates the actual
+  provider message receipt; it supplies a stable UUID but does not assume an
+  unlimited provider dedup window or retry unknown sends.
+- Final output-contract review corrected the initial Telegram implementation's
+  use of ordinary assistant text. The shared follow-up keeps SendMessage as the
+  sole explicit external voice, through the existing tool execution and worker
+  bridge. The tool reports queued/pending, never delivered, before a remote
+  receipt exists. Host checks the captured current attempt and exact target;
+  private text and stale/cross-binding submissions cannot become deliveries.
+  Missing replies, failed Runs and recovery-required inputs remain visible
+  blocked obligations. This correction is part of the Telegram foundation PR.
+- Feishu message/media/thread/rich-text IDs are preserved. The connector awaits
+  durable admission. Managed WebSocket consumers acknowledge all reassembled
+  fragments after commit; webhook consumers return failure on a failed commit
+  and permit the identical signed retry. After successful acceptance, nonce
+  replay protection remains active. Managed admission bypasses the legacy global
+  message-ID cache; per-owner/Bot/binding inbox identity owns dedup. Legacy
+  consumers retain their existing ACK timing. Current sender/chat allowlists are
+  checked at admission, and binding/account replacement fences outbound work.
+- Final affected regression: 26 files / 263 tests passed (exit 0), including
+  SQLite rollback/fences, real Host restart/worker execution, both transports,
+  media IDs, delayed/failed/multipart ACKs, signed retries, and UI regression.
+  The final admission subset was rerun after allowlist revalidation: 4 files /
+  32 tests passed. Host dependency build exit 0. Full typecheck and architecture
+  gates passed; final source typecheck and regenerated artifacts are rechecked
+  before the platform commit. Final `typecheck:all`, `architecture:check` and
+  `electron:build` all exited 0; no architecture baseline was increased. The
+  final real-worker proof uses different private text and SendMessage content:
+  only the explicit content was delivered (4 resident tests passed). Committed
+  worker bundle at `64f1cf4e` is FRESH, with 0/1006 changed inputs.
+- Local Playwright verified receipt cards in Chromium. An isolated Xvfb binary
+  was downloaded/extracted under `work/` (no system installation), removing the
+  earlier DISPLAY blocker. Real Electron IPC smoke: 4 existing logger cases
+  passed. New `e2e/ipc/bot-delivery.spec.ts` passed against the actual
+  preload → IPC → Desktop Host → migrated SQLite store: an unknown receipt
+  remains unknown with attempt 1 after repeated queries and is absent for a
+  different Bot. Its first attempt exposed an ESM-only test-fixture loader
+  mistake (`require` unavailable); the fixture now uses `createRequire` and
+  namespaces each run. The test was rerun on the final Electron build and passed
+  (exit 0). No production assertion was relaxed. An E2E-only protocol import
+  exposed a new architecture edge; the test now uses its local wire projection
+  shape instead of increasing the baseline.
+- Evidence: Linux / Node 24.19.0 / Electron 44.9.1; logs, fixture home, extracted
+  display server, UI screenshots and npm dependencies remain local in `work/`,
+  `.e2e-userdata/` and `node_modules/`. Neither platform has used live account
+  credentials or sent to a real remote conversation. Full IPC/turn coverage and
+  prerequisite PR review/CI remain integration work; these are draft PRs.
+- Binding identity is stable across display/policy edits; a separate authorized
+  snapshot revision fences old queued output without defeating event dedup.
+- Delivery: Feishu implementation `73ad69cd` is draft
+  [PR #511](https://github.com/lava-chen/duya/pull/511), base
+  `codex/bot-framework-s4 @ 64f1cf4e` ([PR #509](https://github.com/lava-chen/duya/pull/509)).
+  Both branches are published, unmerged and preserved. The current worktree has
+  only the local `work/` scratch directory outside version control; no production
+  Bot owner was transferred. Review/CI must follow the prerequisite stack before
+  any authorized integration; local green checks do not claim remote CI approval.
+- Next after S4 review/integration: S5 memory/prompt snapshots. Keep the S4
+  worktree and both unmerged branches; do not recycle or switch production
+  scheduler ownership as part of this implementation task.
+
+## S3c execution — 2026-10-26
+
+- Owner: Codex root, `codex/bot-framework-s3c`, isolated linked worktree
+  `.claude/worktrees/bot-framework-s3c`, base S3b `a692d74b` plus S2
+  `3a35e047` integrated at `3bfaca2a`. Existing PR branches are not edited.
+- Goal: complete the S3 acceptance matrix before declaring S4 ready. Persist
+  per-Bot scheduler ownership and fence Run admission; forward Desktop input
+  and revoke renderer execution for migrated Bots; preserve wake payloads,
+  preemption/redrive, terminal reconciliation, restart and rollback evidence.
+- Desktop keeps its current database owner and Agent Server executor. The
+  shared Host scheduler is assembled over those existing ports; no second
+  database connection owner or Run orchestrator is introduced.
+- Implemented: migrations 46–47 persist owner epochs and preemption intents;
+  Run creation atomically validates ownership, inbox lease and dispatch
+  reservation; Host admissions carry fenced dispatch tickets; Desktop routes
+  `sendTurn`, kickstart, claim and cancel through the Host-owned inbox only for
+  opted-in Bots, preserving the legacy scheduler as the default. Accepted user
+  input and its preemption intent commit in one SQLite epoch transaction.
+  Cancellation names the exact Run ID; restart reconciliation redrives a
+  cancelled background obligation from its stored WakeItem, retains user
+  attachments, and sends malformed or exhausted work to recovery/dead-letter
+  state. Ownership transfer requires drained Runs, inbox entries, wakes and
+  preemption intents.
+- Validation on final source: `npm run typecheck:all` exit 0;
+  `npm run architecture:check` exit 0 with no new boundaries; four focused
+  Vitest files, 59 tests, exit 0; `npm run electron:build` exit 0. The IPC
+  E2E command attempted 50 cases but could not create a window in this runtime:
+  Electron reports `Missing X server or $DISPLAY`; its default `/home/agent`
+  test home is also not writable here. No IPC E2E assertion ran. The real
+  Agent Server HTTP adapter's dispatch-ticket/canonical-Run-ID/specific-cancel
+  tests passed (12/12) alongside the Host dispatcher and Wake routing tests;
+  repeat the full IPC suite in CI or an X-enabled runner.
+- S4 entry: S3 now supplies durable Bot input ownership and a fenced Run
+  executor seam. S4 can start the data outbox and channel adapters. Its first
+  work must define per-message channel event identity and acknowledgement
+  recovery: the current legacy channel Wake envelope is not yet a durable
+  per-event inbox/outbox receipt. Preserve this as an explicit S4 scope; do not
+  infer channel delivery completion from S3c's Wake dispatch result.
+- S2's classification/rule-file fixes are included; S1/S2/S3a/S3b review and
+  CI remain with their existing owners. This branch is not yet integrated.
+- Delivery: implementation commit `1795543e` on
+  `codex/bot-framework-s3c`; draft [PR #506](https://github.com/lava-chen/duya/pull/506)
+  targets `codex/bot-framework-s3b`. S3c is implemented and locally validated,
+  but remains unmerged and the real IPC suite still needs an X-enabled runner.
+- Worktree residue: the root/package `node_modules` workspace symlink overlay
+  remains untracked and unstaged; `.e2e-userdata/` and `test-results/` are kept
+  as evidence from the failed Electron launch attempt.
+- Dependency setup: reused compatible S3b third-party modules with a worktree
+  workspace overlay. Managed-worktree/context/CodeGraph tools unavailable;
+  Git, current PR heads and versioned plans provided the shared-state evidence.
+
+
+## S3b execution — 2026-10-26
+
+- Owner: Codex root; branch `codex/bot-framework-s3b`; isolated worktree
+  `.claude/worktrees/bot-framework-s3b`; foundation `bf9b62c8` (S2) plus
+  `6c5d6229` (S3a), combined at `0a87a2f8`.
+- Existing PR review belongs to other agents. This branch does not update
+  #500, #502 or #503. Their fixes will be merged before integration.
+- Scope: dispatch-key admission in the existing Run owner, a fenced data
+  adapter over S3a tables, an opt-in Host inbox dispatcher and resident lifetime.
+  Desktop routing remains S3c; legacy scheduling stays unchanged by default.
+- Plan: record targeted baseline; implement admission and claim fencing; wire
+  headless dispatch/reconciliation and shutdown; test lost responses, restart,
+  stale claims and client disconnect; run repository gates and open a PR.
+- Acceptance: one dispatch key never sends a second execution; expired claims
+  cannot dispatch or mutate a new claim; a persisted terminal settles its input;
+  ambiguous reservations/running rows become explicit recovery obligations;
+  resident work survives the last client, then releases the Host when drained.
+- Tools: managed worktree / workspace context / CodeGraph tools unavailable;
+  isolated linked worktree and Git/PR/plan evidence used instead.
+- Environment: Linux, Node 24.19.0. A clean install found S2's missing
+  `@duya/bot` lock entry; independent dependencies are being prepared locally.
+  No existing PR branch was changed.
+- Implemented: opt-in `LocalHostHandle.botInputs`, scoped/fenced claim adapter,
+  dispatch admission in the existing Run owner, restart reconciliation, and
+  resident idle protection. An ambiguous start is a durable `recovery_required`
+  dead letter; it never starts a second executor. Legacy routing is untouched.
+- The isolated clean install also required declaring Host's existing Bot
+  dependency and the two missing workspace lock entries (16 additive lock
+  lines). This branch carries those prerequisites without changing #502.
+- Validation on the S3b dirty tree: `typecheck:all` exit 0;
+  `architecture:check` exit 0 with no new violations; Bot boundary PASS;
+  `electron:build` exit 0; worker bundle rebuilt. Full affected regression:
+  35 files / 239 tests passed, plus dispatcher 12/12 after correcting a test
+  that wrongly assumed ordering between different Bots (priority is per Bot).
+  The combined final coverage is 36 files / 251 tests. New tests: 15.
+  Final Host runtime subset: 4 files / 36 tests, exit 0. A refused start
+  without a reservation is retained once rather than retried forever.
+- Runtime evidence: a real child-process Run survives the last HTTP client
+  lease, reaches its durable terminal and releases the Host; a pending accepted
+  input executes once after a real Host restart. Provider calls are stubbed;
+  this is Host/process/persistence validation, not live-model or UI validation.
+- Test environment: writable isolated `os.homedir()` preload for fixtures;
+  Electron 44.9.1 archive verified against the package checksum after automatic
+  download failed. Build warned that bundled ripgrep could not be downloaded;
+  the build completed with its existing fallback. Raw logs stay in `work/`.
+- Next: publish the S3b draft on the combined S2/S3a foundation (base master
+  so PR CI runs), record its PR here, then integrate
+  the independently reviewed S1/S2/S3a heads before S3c transfers Desktop
+  scheduling ownership. Keep this worktree and all unmerged branches.
+- S3c entry points checked: Desktop owns an embedded `HostSessionHttpServer`
+  in `apps/desktop/src/main/cli/desktop-host-api.ts` and forwards execution via
+  `createDesktopRunExecutionApi`; it does not call `startLocalHost`. Do not open
+  a second database owner to enable this dispatcher. Transfer the Bot owner
+  explicitly, forward `dispatchBotTurn`/`enqueueWakeItemForSession`, and reject
+  `claimScheduledUserTurn` for migrated Bots. Preserve existing preemption,
+  redrive, attachments, turn epochs and renderer event projections in that slice.
+- Delivery: [Draft PR #504](https://github.com/lava-chen/duya/pull/504),
+  implementation `e4c5019c0b83d3ffe1d1f5bfe1cfe1027a18f88a` on
+  `codex/bot-framework-s3b`. Final staged-source `typecheck:all` exit 0,
+  architecture exit 0, Bot boundary PASS and committed bundle FRESH.
+  No user data migrated; no production scheduler switched; no PR merged.
+  PR CI/review and prerequisite integration remain pending. Keep the worktree;
+  ignored `work/` contains local logs and dependency-isolation fixtures only.
+
+
 状态：active，设计已交付（draft PR #483 待 review）；S0 门禁与行为基线切片已实现并验证，待 PR review / CI · 负责人：Codex / root · 更新：2026-10-25
 分支：`plan/bot-framework-foundation` · worktree：`.claude/worktrees/bot-framework-plan` · base：`270ba52869b6414094e553dd7f9abde5a1e429f7` · owner：本会话 root
 
@@ -133,6 +719,38 @@
 | 投递 | desktop `channels/__tests__/`（delivery / telegram connector+offset / inbound-filter / secret-store 等） | 9 文件 117 用例 |
 | bot 专属桌面面 | ipc `bot-channel-handlers` / config `bot-profile`+`bot-identity-rpc` / cli `bot-channels` / agents router `provider-fallback` | 5 文件 46 用例 |
 
+## S1 执行记录（2026-10-25）
+
+已实现、已验证、未合并。分支 `codex/bot-framework-s1`（base＝master `f24166ec`——S0 已由用户合入 #495，S1 提交 rebase 至其上，PR 目标 master）。
+
+**交付（S1 = Host Bot 接口，1 个窄 PR）**
+
+- `@duya/agent-protocol/bot-api`：Bot 身份的 wire DTO——`BotRecord`（canonical 视图：profile.json 优先、config 兜底、id 最后）、`CreateBotCommand`（带 `requestId` 幂等）、`UpdateBotCommand`（带 `expectedRevision`）、`BotCommandReceipt`（形状兼容 legacy `{id,name}`）、`BotErrorCode` 四值联合。只放身份：调度 / inbox / 投递的 DTO 属于 S3/S4，wire 不承诺未实现的行为。
+- `config.toml` schema 增加 `revision` 字段：facade 创建=1、每次 facade 更新 +1；0=前 facade 时代条目。facade 是唯一 revision 权威。
+- `host/src/bot/`：`ports.ts`（ConfigStore/Profile 两个端口，Host 文件后端与 Desktop store 后端各一套适配器）、`journal.ts`（`<agentsRoot>/.identity-journal.jsonl` 追加式意图账本：create/update 意图先行，applied 标记收尾，requestId→receipt 去重跨进程存活，损坏尾行计数不炸加载）、`service.ts`（应用服务：create/update/get/list/repair；revision 冲突以 `bot_revision_conflict` 结构化拒绝并携带 stored/expected；update 一个意图覆盖 config + profile 两处身份写入，repair 同步补齐）、`bridge-assembly.ts`（bridge 惰性单例，首分发执行 repair）。
+- 接线：`worker-db-bridge` 的 legacy `config:agents:create/update` 改走 service（响应形状不变），新增 `bot:create/update/get/list` 四动作；Desktop `db-bridge` 同构（store 后端适配器 `bot-application.ts`）。Desktop 与 TUI 从此共用同一套 create/update/read 语义。
+- 未新增第二调度器：Desktop wake dispatcher 仍是唯一调度 owner（S3 前置合同）。
+
+**测试（22 例新增，全绿）**：service 14（canonical 视图合并、revision 冲突结构化拒绝、requestId 去重同进程+跨进程、崩溃窗口 repair 四态：create 补齐/确认已应用/冲突保留/torn tail 计数、软删过滤、内存端口同用例）+ bridge 8（legacy 形状回归 + bot:* 全契约）。
+
+**过程中的实证教训**（已写进代码）：journal 意图行初版漏写 `v` 字段，被自己的加载守卫判为 corrupt，dedup/repair 全部静默失效——由测试暴露后修复 writer 而非放松 guard。Windows 瞬时文件锁的处理延续 S0 的 readImports 重试约定。
+
+## S2 执行记录（2026-10-26）
+
+已实现、已验证、未合并。分支 `codex/bot-framework-s2`（base＝S1 分支 `codex/bot-framework-s1` @ `9fdf40fe`，栈式 PR）。实现由子 agent 在专用 worktree 执行、协调者独立复核全部门禁。
+
+**交付（S2 = packages/bot 领域包提取，纯移动）**
+
+- `packages/bot`（name `@duya/bot`，managed）：`src/domain/`（BotIdentityEntry 及子形状、BotProfile 纯类型、applyIdentityPatch/buildUpsertedAgent/canonical 合并/bot-id 纯规则、BotServiceError；allocateBotId 的随机后缀改为注入 `randomSuffix`）；`src/journal/`（BotIdentityJournalState 纯状态机 + InMemoryBotIdentityJournal，文件格式与文件名不变）；`src/ports/`（IdentityStorePort/ProfilePort/JournalPort）；`src/application/`（createBotService，repair/revision/requestId 语义一字未改）。
+- Host 侧 `host/src/bot/` 变薄为适配器：toml-config-store / fs-profile-store / file-journal + 组装；index.ts re-export S1 全部导出名——`apps/desktop` 零 diff（git diff 为空），`worker-db-bridge.ts` 一行未改。
+- 接线：`architecture-policy.yaml` 声明 bot 模块（managed、requires [agent-protocol]、host.requires + bot）；`scripts/build-packages.mjs` BUILD_ORDER 插入 @duya/bot；vitest.config WORKSPACE_SOURCE_ALIASES + bot。三个 baseline JSON 一字未动。
+- 测试：S1 的 22 例语义原样保留（host 文件后端 13 + bridge 8 + 内存 1），新增 21 例纯测试（注入式后缀、状态机接缝、100 次耗尽/截断/corrupt/seq 续号/dedup 仅对 applied 生效）。
+
+**门禁翻转**：bot-boundary gate R1 由 PENDING 翻为 **MEASURED，9 个 bot 源文件 0 findings**（import 闭包仅 agent-protocol）——S0 预言的"包出现即受测"成立。R2 OK(336)、R3 OK(654)。
+
+**验证**（协调者独立复核）：build:packages 0（bot 先于 host）；vitest 5 文件 43 例全绿；typecheck:all 0；architecture:check 新增违规 0（3 条既有 fingerprint 失效未 --write）；retirement ratchet 772/772；host 全量 2000 passed / 5 skipped；desktop diff 空；packages/bot/src 零 `node:*` 导入。
+
+**裁量记录**（子 agent 报告，协调者认可）：randomSuffix 为可选注入（bot 内 Math.random 兜底，host 注入 crypto——保 desktop 零 diff）；worktree 内手工补 @duya/bot junction（junction-worktree.mjs 从主检出枚举包，看不见本 worktree 新包）；boundary-gates LAYERS 未动（host 本不在 LAYERS scope，bot 仅 import protocol 无 finding）。
 ## S1–S3a 集成前重 base（2026-10-26）
 
 三条 PR 在 `d80ca3c6` 上全部 DIRTY。冲突只落在被跟踪的生成产物 `packages/host/bundle/{worker-entry.js,worker-metafile.json,BashTool/BashWorker.js}`，源码零冲突；处理方式与「S0 执行记录」同一条：重放源码提交后 `npm run bundle:worker` 重生成并提交产物，不手工合并生成内容，细则见[构建](../../development/build.md)。
@@ -193,8 +811,14 @@
 | 三条最新 head `a04b6d27` / `5e06887a` / `01342b44` | ubuntu 22.x CI（PR #500 / #502 / #503） | architecture / build / test / test scope / typecheck | 全 pass | #500 test 8m2s、#502 test 8m0s、#503 test 9m51s；CI 结论覆盖本机验证 |
 | 同上 | Git | 三条远端分支 `--force-with-lease` 重推 | 0 | 外部副作用仅远端分支与 PR head；未合并、未发布、未回收任何检出 |
 | `c8946122` | ubuntu 22.x CI（PR #495） | architecture / build / typecheck / test / test scope 五检查 | 全 pass；test 8m33s 含新测试文件在 Linux 首跑 | CI 结论覆盖本机验证；PR 待 review 与集成授权 |
+| S1 全量（host src/bot + protocol bot-api + 两 bridge + schema revision） | win32 / Node 24.16.0 / Vitest 3.2.4 | `npx vitest run packages/host/tests/ --no-file-parallelism` | 0；1984 passed / 5 skipped（含 S1 新增 22 例与既有 identity/prompt 基线） | host 全域回归 |
+| 同上 | 同上 | `npm run build:packages` / `npm run typecheck:all` | 0 / 0 | workspace 全构建与类型门禁 |
+| 同上 | 同上 | apps/desktop tsconfig.main tsc --noEmit | 206 errors＝base 基线逐条持平，本次 0 新增 | desktop main 预存错误按文件归因（base 对照） |
+| 同上 | 同上 | `npm run architecture:check` / bot-boundary gate / agent-retirement ratchet | 0 / PASS（R3 652） / PASS 772/772 | 三门禁全绿；2 条既有 fingerprint 失效未顺手 shrink |
 
 ## 接续 / 结果
+
+实施期的状态、已定合同与剩余切片的开工指引另见[交接报告](2026-10-26-personal-bot-framework-handoff.md)。
 
 已完成源码调查、设计与文档验证，生产实现未开始。设计交付 commit：`eaf9d86d`；后续仅补本节的 PR 接续记录。只提交 7 个具名文档；依赖 symlink、私有 work deps / 日志不入 Git，构建未产生需提交的源码差异。外部副作用：任务分支已推送并创建 draft PR；未改用户 DB、未合并或发布产品。
 
@@ -204,3 +828,7 @@ PR：[draft #483](https://github.com/lava-chen/duya/pull/483)，待 review / CI�
 **S1–S3a 重 base 接续（2026-10-26 第三会话）**：三条 PR 已重 base 到 `d80ca3c6` 并推最新 head，冲突归零、五检查全绿（详见上方「S1–S3a 集成前重 base」与其验证行）。外部副作用：三条远端分支被 `--force-with-lease` 覆盖，来源检出保留在旧 head 未回收；未合并任何 PR，未发布。已实现的记录落点：本次重 base 的历史收紧只发生在 #502（丢弃 2 个纯产物提交与 1 个空提交），源码 diff 未变。**下一步**：等集成授权按 #500 → #502 → #503 逐条合并；每合一条，对下一条重复 `git rebase origin/master` + `npm run bundle:worker` + 提交产物并重跑门禁。S3b（#504）当前 CI 有 2 处失败且仍 CONFLICTING，排在 S3a 集成之后再处理。
 
 **S0 切片接续（2026-10-25 第二会话）**：`bot-boundary-gate` 三件套＋CI 接线＋census＋四域行为基线已在本节上方「S0 执行记录」落地并全量验证；PR：[#495](https://github.com/lava-chen/duya/pull/495)（base＝`1618a909`，目标 master；diff 含 #483 的 7 个文档祖先提交，review 面只有 S0 commit `24590d10`）。S0 的验收——Bot→Host / UI→Host 反向边变异红→绿、具名行为基线——已满足：门禁 13 例（3 规则变异＋live 树绿＋census）＋ 既有行为测试五组全绿。外部副作用：仅远端分支与 PR，未合并；worktree 保留待 review。**下一步**：S1 Host Bot 接口（`host/src/bot` facade / ports、protocol 最小 DTO、profile 写入接缝，旧 Desktop 调度作过渡 adapter）；进入前先核对 #483 与本 PR 的 review 状态，S1 的 facade 在 S3 durable 受理落地前只能委托旧调度器。
+
+**S1 切片接续（2026-10-25 第三会话）**：Host Bot 接口已落地（见「S1 执行记录」），分支 `codex/bot-framework-s1`（base＝master `f24166ec`，S0 已合并后 rebase）。S1 验收——Desktop/TUI 同一 Bot 语义、revision 冲突结构化拒绝、requestId 跨进程去重、身份 journal 崩溃修复——已由 22 例具名测试满足；两 bridge legacy 形状回归全绿。**下一步**：S2 提取 `packages/bot` 领域包（domain/application/ports 下沉、host adapter、workspace/build/gates 接线、bot-boundary gate R1 由 pending 翻为 measured），前置＝S1 PR 集成或与 S0 同栈评审。
+
+**S2 切片接续（2026-10-26 第四会话）**：packages/bot 提取已落地（见「S2 执行记录」），R1 门禁已翻 MEASURED。**下一步**：S3 持久唤醒与 resident——S3a 存储合同（bot_inbox + bot_dispatch_receipts + reserve/confirm receipt 操作）已派发；S3b 为 openRun 加 dispatchKey 幂等受理接缝（receipt 预留 runId，复用 Control Plane 的 reused 拒绝重派语义）+ Bot dispatcher + resident lease；S3c Desktop bot handler 转发切流。

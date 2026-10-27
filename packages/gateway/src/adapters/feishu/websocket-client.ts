@@ -59,13 +59,14 @@ interface WSEvent {
   data: unknown;
 }
 
-type WSEventHandler = (event: WSEvent) => void;
+type WSEventHandler = (event: WSEvent) => void | Promise<void>;
 
 interface FeishuWSClientOptions {
   domain: FeishuDomain;
   appId: string;
   appSecret: string;
   onEvent: WSEventHandler;
+  ackAfterHandling?: () => boolean;
   onStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'reconnecting') => void;
 }
 
@@ -236,8 +237,9 @@ export class FeishuWSClient {
   private _serviceId = 0n;
   private _pingIntervalMs = PING_INTERVAL_MS;
   /** In-flight multi-part messages keyed by message_id (sum/seq reassembly). */
-  private _partials = new Map<string, { total: number; parts: Map<number, Buffer> }>();
+  private _partials = new Map<string, { total: number; parts: Map<number, Buffer>; frames: Map<number, Frame> }>();
   private _onEvent: WSEventHandler;
+  private _ackAfterHandling?: () => boolean;
   private _onStatusChange?: (status: 'connecting' | 'connected' | 'disconnected' | 'reconnecting') => void;
   private _appLockAcquired = false;
 
@@ -246,6 +248,7 @@ export class FeishuWSClient {
     this._appId = options.appId;
     this._appSecret = options.appSecret;
     this._onEvent = options.onEvent;
+    this._ackAfterHandling = options.ackAfterHandling;
     this._onStatusChange = options.onStatusChange;
   }
 
@@ -421,24 +424,28 @@ export class FeishuWSClient {
   }
 
   /** Reassemble multi-part DATA frames (sum/seq), then deliver. */
-  private _handleEventData(frame: Frame, msgId: string, sum: number, seq: number): void {
+  private async _handleEventData(frame: Frame, msgId: string, sum: number, seq: number, durable = false): Promise<void> {
     let payload = frame.payload;
+    let frames = [frame];
     if (sum > 1) {
       let entry = this._partials.get(msgId);
       if (!entry) {
-        entry = { total: sum, parts: new Map() };
+        entry = { total: sum, parts: new Map(), frames: new Map() };
         this._partials.set(msgId, entry);
       }
       entry.parts.set(seq, frame.payload);
+      entry.frames.set(seq, frame);
       if (entry.parts.size < entry.total) return;
       this._partials.delete(msgId);
+      frames = [...entry.frames.values()];
       payload = Buffer.concat(
         Array.from({ length: entry.total }, (_, i) => entry.parts.get(i) ?? Buffer.alloc(0)),
       );
     }
     try {
       const event = JSON.parse(payload.toString('utf-8'));
-      this._onEvent({ type: 'event', data: event });
+      await this._onEvent({ type: 'event', data: event });
+      if (durable) for (const acknowledged of frames) this._ackDataFrame(acknowledged);
     } catch (err) {
       console.error('[Feishu WS] Failed to parse event payload:', err instanceof Error ? err.message : String(err));
     }
@@ -466,11 +473,12 @@ export class FeishuWSClient {
 
     const type = headerValue(frame.headers, HEADER_TYPE);
     if (type === MSG_TYPE_EVENT) {
-      this._ackDataFrame(frame);
+      const durable = this._ackAfterHandling?.() ?? false;
+      if (!durable) this._ackDataFrame(frame);
       const msgId = headerValue(frame.headers, HEADER_MESSAGE_ID) ?? '';
       const sum = Number(headerValue(frame.headers, HEADER_SUM) ?? '1');
       const seq = Number(headerValue(frame.headers, HEADER_SEQ) ?? '0');
-      this._handleEventData(frame, msgId, sum, seq);
+      void this._handleEventData(frame, msgId, sum, seq, durable);
     } else if (type === MSG_TYPE_CARD) {
       // Card callbacks are handled via the HTTP webhook path; nothing to do.
     } else {

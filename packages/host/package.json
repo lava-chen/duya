@@ -323,6 +323,10 @@
       "types": "./dist/config-agents/index.d.ts",
       "import": "./dist/config-agents/index.js"
     },
+    "./bot": {
+      "types": "./dist/bot/index.d.ts",
+      "import": "./dist/bot/index.js"
+    },
     "./provider-management": {
       "types": "./dist/provider-management/index.d.ts",
       "import": "./dist/provider-management/index.js"
@@ -640,6 +644,7 @@
     "@duya/agent-runtime": "0.1.0",
     "@duya/agent-protocol": "0.1.0",
     "@duya/ai": "0.1.0",
+    "@duya/bot": "0.1.0",
     "@duya/data": "0.1.0",
     "@iarna/toml": "^2.2.5",
     "chokidar": "^3.6.0",

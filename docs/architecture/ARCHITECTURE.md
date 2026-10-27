@@ -93,6 +93,23 @@ entry points. Its shared architecture separates these layers:
 
 ## Tech Stack
 
+Bot channel replies for Host-owned Bots use `BotChannels` and the core-db
+`BotOutboxStore` (migration 48), alongside the existing inbox and Run tables.
+The existing SendMessage execution path submits explicit replies through the
+fenced worker bridge; ordinary assistant text remains private. Input settlement
+and release of delivery obligations commit atomically after Run terminal persistence. A fenced
+`sending` claim precedes transport I/O. A lost reply or expired send becomes
+`unknown`; only provider evidence can reconcile it, with no automatic resend.
+Vault credentials remain inside platform adapters. Desktop's read-only delivery
+IPC and receipt cards project this store; SSE completion is not delivery evidence.
+Telegram admission awaits its per-update inbox receipt before advancing offset.
+Feishu uses the same inbox/outbox ports and a separate Host transport. Managed
+Feishu WebSocket/webhook consumers acknowledge after asynchronous admission;
+multipart ACKs and signed failure retries preserve the provider recovery window.
+Their per-binding inbox replaces the old global message-ID cache for dedup.
+This path is opt-in through S3c scheduler ownership; legacy channel retirement
+remains S7.
+
 | Layer | Technology |
 |-------|------------|
 | Frontend | Vite 6, React 19, Zero Router, Tailwind |
@@ -1593,6 +1610,20 @@ For `bot:<agentId>` sessions the wake dispatcher is the **authoritative run queu
 
 ### Bot Identity & Avatar (Plans 483/485, 481 amendment)
 
+The personal Bot framework's S3b composition is opt-in through
+`startLocalHost({ botRuntime: { ownerId }, workerPath })`. Its trusted
+`handle.botInputs.accept()` commits verified inputs to the S3a inbox; the Host
+dispatcher claims by owner and lane, uses the existing Run execution controller,
+and settles inputs only from durable Run terminals. `BotDispatchStore` fences
+reservation and inbox writes with the current claim. `RunOrchestrator.openRun`
+reserves its own candidate identity before startup and checks the claim again
+at the execution channel; replay returns the canonical Run without dispatch.
+After restart, ambiguous reservations and orphaned running rows are retained as
+`dead_letter` with `recovery_required`, rather than rerun. Client-scoped Hosts
+remain resident while their Bot inbox has work and shut down after it drains.
+The default remains legacy scheduling; public/ Desktop routing and scheduler
+ownership transfer belong to S3c. No existing pending-wake table is consumed.
+
 A bot's runtime identity lives in `<duyaRoot>/agents/<id>/profile.json` (`apps/desktop/src/main/config/bot-profile.ts`): `name` / `description` (model-updatable via `update_state`), `title` (host-managed only), `avatarColor` (color token for the initial-circle avatar) and `avatarImage` (filename of an image inside the agent dir). `config.toml [agents.<id>]` name/description only seed the profile on first creation and act as fallback (485 §2.4). Avatars were (shape, color) tokens until 2026-09-05 — shape tokens are removed; legacy files' `avatarShape` is ignored on read.
 
 Plan 502: `title` is fully wired for the host side — create/edit dialogs and `BotSettingsPanel` expose a role-title input, creation seeds it via `AgentUpsertInput.title` → `seedBotProfileIfMissing`, and the sidebar renders it as the contact subtitle (`BotContactListItem`: `title || description`). The model still cannot set it. Bot ids are minted at a SINGLE point in the main process (grok `agent-session.ts` parity: ids are never user-authored): `config:agents:create` accepts an empty id and slugs it from the display name via `slugifyBotIdFromName`, then `allocateBotId` allocates a collision-free id against config keys, on-disk trees, and `.deleted` tombstones; the old renderer-side `deriveBotIdFromName` duplicate is removed. Ids stay readable slugs (unlike grok's opaque uuids) because they double as config keys and `send_to_agent` addresses.
@@ -2134,3 +2165,29 @@ titles use bounded, allowlisted display data and localized generic labels.
 - `packages/agent/src/utils/attachment-images.ts` loads image bytes by attachment object identity, so repeated clipboard filenames remain separate. Worker chat startup and checkpoint mailbox guidance share this pipeline. The worker passes the detected image-input capability to `ChatOptions`.
 - `packages/agent/src/message/mailbox-attachment-context.ts` projects persisted mailbox attachments into text context and supported image blocks. Image-only followups and queued turns are valid; text-only models receive vision analysis when available. Runtime guidance retains the existing hidden/transient lifecycle.
 - Chat edits restore text and attachments to `MessageInput`; transcript rewind happens on submission. Pending edits require a cancellation receipt before replacement. `MailboxPanel` is the single pending-message view and shows current-run versus next-turn routing with previews. Saved mailbox rows always enter the promotion path, including saves that finish after a run ends.
+
+
+### Bot memory recall and forgetting (S5)
+
+Host builds one authorization snapshot per Bot turn. Peer user shards require an
+explicit grant; revocation and forget revisions invalidate frozen memory sections
+on the next turn. Memory/state paths below the trusted data root reject symbolic
+links, linked ancestors and hard-linked files. Foreground writes/forgets and
+startup forget repair share this path check; repair only touches canonical tier
+or legacy memory paths. These checks do not lock out concurrent external path
+replacement.
+
+Stage 1 re-reads the forget ledger after inference and rejects candidates with a
+forgotten canonical key before writing either the output row or its projection.
+Prompt key hints and caller-supplied existing keys cannot bypass this check.
+Semantic paraphrases and already-folded conversation summaries remain outside
+this exact-key guarantee.
+
+### Bot routine scheduled admission (S6-A)
+
+Desktop's existing automation scheduler persists the exact bounded scheduled
+batch and schedule fingerprint to `cronjob.toml` before wake admission. Only
+accepted fires advance `last_run_at`; restart replays pending instants with the
+same deterministic fire keys. Host-owned Bot inbox deduplication handles lost
+acknowledgements. Legacy wake ownership keeps its existing durability limits.
+Overlapping ticks share one pass; failed admission stops the current batch.

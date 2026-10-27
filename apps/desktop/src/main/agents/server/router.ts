@@ -20,6 +20,7 @@ import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-ru
 import { acceptedVerbs } from '../../control-plane/permission-vocabulary';
 import { recordPermissionDecision } from '../../control-plane/permission-decision-record';
 import type { RunOrchestrator } from '@duya/host/run-orchestrator';
+import type { BotDispatchTicket } from '@duya/agent-protocol';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
 import { readConfigAgents } from '@duya/host/agent-profile-config';
@@ -1012,7 +1013,7 @@ async function handlePostChat(
   });
 
   req.on('end', async () => {
-    let parsed: { prompt?: string; options?: Record<string, unknown>; providerConfig?: Record<string, unknown>; workingDirectory?: string; systemPrompt?: string; defaultWorkspaceDirectory?: string };
+    let parsed: { prompt?: string; options?: Record<string, unknown>; providerConfig?: Record<string, unknown>; workingDirectory?: string; systemPrompt?: string; defaultWorkspaceDirectory?: string; botDispatchTicket?: BotDispatchTicket };
     try {
       parsed = body ? JSON.parse(body) : {};
     } catch {
@@ -1427,6 +1428,14 @@ async function handlePostChat(
         // attribution is now on the manifest and inside the fingerprint
         // instead of being computed and thrown away.
         if (deps.runOrchestrator) {
+          const ticket = parsed.botDispatchTicket;
+          const dispatchAdmission = ticket ? {
+            scheduler: ticket.scheduler,
+            ticket,
+            lookup: async () => await deps.dbRequest('bot:dispatch:lookup', { ticket }) as never,
+            reserve: async (candidateRunId: string) => await deps.dbRequest('bot:dispatch:reserve', { ticket, candidateRunId }) as never,
+            isCurrent: async () => await deps.dbRequest('bot:dispatch:isCurrent', { ticket }) === true,
+          } : undefined;
           const start = await deps.runOrchestrator.openRun(sessionId, {
             prompt,
             options: parsed.options || {},
@@ -1487,7 +1496,7 @@ async function handlePostChat(
             // worker that cannot stream a refusal rather than a silent
             // degradation — see `requiredCapabilities` in the manifest.
             requiredCapabilities: ['streaming'],
-          });
+          }, dispatchAdmission);
           if (!start.accepted) {
             // The refusal is ANSWERED, not logged.
             //
@@ -1520,6 +1529,7 @@ async function handlePostChat(
             });
             return;
           }
+          res.setHeader('x-duya-run-id', start.runId);
         }
 
         // The run is open and the turn is dispatched, so the response can be
@@ -3393,6 +3403,12 @@ function handleSessionsRoute(
       handlePostChat(sessionId, req, res, deps, workerDbRequests);
       return;
     }
+    if (pathParts.length === 3 && pathParts[2] === 'cancel-run') {
+      void handlePostCancelSpecificRun(sessionId, req, res, deps).catch(() => {
+        if (!res.writableEnded) sendJson(res, 500, { error: 'Run cancellation failed' });
+      });
+      return;
+    }
     if (pathParts.length === 3 && pathParts[2] === 'compact') {
       handlePostCompact(sessionId, req, res, deps, workerDbRequests);
       return;
@@ -3414,6 +3430,56 @@ function handleSessionsRoute(
       return;
     }
   }
+
+async function handlePostCancelSpecificRun(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): Promise<void> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 8 * 1024) {
+      sendJson(res, 413, { error: 'Payload too large' });
+      return;
+    }
+    chunks.push(buffer);
+  }
+  let runId: string;
+  try {
+    const parsed: unknown = Buffer.concat(chunks).toString('utf8') ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : null;
+    if (!parsed || typeof parsed !== 'object' || !('runId' in parsed)
+        || typeof parsed.runId !== 'string' || parsed.runId.trim() === '') {
+      sendJson(res, 400, { error: 'runId is required' });
+      return;
+    }
+    runId = parsed.runId;
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON body' });
+    return;
+  }
+  const orchestrator = deps.runOrchestrator;
+  if (!orchestrator || orchestrator.runForSession(sessionId) !== runId) {
+    sendJson(res, 409, { applied: false, runId, reason: 'run is no longer current for this session' });
+    return;
+  }
+  const outcome = await orchestrator.cancelRun(sessionId, runId, 'bot_preemption');
+  if (!outcome?.requested) {
+    sendJson(res, 200, { applied: false, runId });
+    return;
+  }
+  if (orchestrator.runForSession(sessionId) === null) {
+    const session = deps.sessionManager.getSession(sessionId);
+    if (session?.state === SessionState.STREAMING || session?.state === SessionState.COMPLETING) {
+      deps.sessionManager.transitionState(sessionId, SessionState.COMPLETED);
+    }
+    await releaseChatLock(deps.dbRequest, sessionId).catch(() => undefined);
+  }
+  sendJson(res, 200, { applied: outcome.applied, runId, terminal: outcome.terminal });
+}
 
   if (method === 'DELETE') {
     if (pathParts.length === 2) {

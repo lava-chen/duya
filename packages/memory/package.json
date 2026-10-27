@@ -38,6 +38,10 @@
       "types": "./dist/entity_dirs.d.ts",
       "default": "./dist/entity_dirs.js"
     },
+    "./forget_ledger": {
+      "types": "./dist/forget_ledger.d.ts",
+      "default": "./dist/forget_ledger.js"
+    },
     "./extractor": {
       "types": "./dist/extractor.d.ts",
       "default": "./dist/extractor.js"

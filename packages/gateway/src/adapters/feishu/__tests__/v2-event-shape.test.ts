@@ -13,10 +13,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { FeishuChannel } from '../index';
 import type { FeishuAdapterOptions, FeishuEvent } from '../types';
 
-function makeChannel(): { channel: FeishuChannel; onMessage: ReturnType<typeof vi.fn> } {
+function makeChannel(durable = false): { channel: FeishuChannel; onMessage: ReturnType<typeof vi.fn> } {
   const noop = async () => {};
   const onMessage = vi.fn(async () => {});
   const options: FeishuAdapterOptions = {
+    ackAfterHandling: () => durable,
     config: {
       platform: 'feishu',
       credentials: {},
@@ -76,6 +77,24 @@ async function dispatch(channel: FeishuChannel, event: FeishuEvent): Promise<voi
 }
 
 describe('FeishuChannel inbound event field mapping', () => {
+  it('lets the durable per-binding inbox own replay instead of the global message-id cache', async () => {
+    const a = makeChannel(true);
+    const b = makeChannel(true);
+    await dispatch(a.channel, v2TextEvent('same-provider-id'));
+    await dispatch(a.channel, v2TextEvent('same-provider-id'));
+    await dispatch(b.channel, v2TextEvent('same-provider-id'));
+    expect(a.onMessage).toHaveBeenCalledTimes(2);
+    expect(b.onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates durable admission failure without consuming the provider event', async () => {
+    const h = makeChannel(true);
+    h.onMessage.mockRejectedValueOnce(new Error('storage_unavailable'));
+    await expect(dispatch(h.channel, v2TextEvent('retry-me'))).rejects.toThrow('storage_unavailable');
+    await dispatch(h.channel, v2TextEvent('retry-me'));
+    expect(h.onMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('routes a v2 im.message.receive_v1 text message (message_type) to onMessage', async () => {
     const { channel, onMessage } = makeChannel();
     await dispatch(channel, v2TextEvent('om_v2_1'));

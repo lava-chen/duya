@@ -39,7 +39,7 @@ import { defaultBotSessionCreator } from '../wake/agent-dm-dispatcher';
 import { getBotSessionId } from '../wake/bot-session-id';
 import { readChannelInboundFilter } from './channel-store';
 import { getSharedAgentsRoot } from '../config/agent-paths';
-import { getDesktopHostLocalChannelPersistenceApi } from '../cli/desktop-host-api';
+import { getDesktopHostLocalChannelPersistenceApi, getDesktopBotSchedulerState, acceptDesktopBotChannel } from '../cli/desktop-host-api';
 
 const logger = getLogger();
 
@@ -230,6 +230,14 @@ async function routeInboundToBot(agentId: string, envelope: ChannelInboundEnvelo
       LogComponent.Gateway,
     );
   }
+  if (['telegram', 'feishu'].includes(envelope.address.platform) && getDesktopBotSchedulerState(agentId).mode === 'host') {
+    const receipt = await acceptDesktopBotChannel(agentId, envelope);
+    if (!receipt.deduplicated) {
+      const { appendInboundChannelMarker } = await import('../wake/channels');
+      await appendInboundChannelMarker(sessionId, envelope);
+    }
+    return;
+  }
   getChannelBackgroundWakes().wakeForInbound(sessionId, agentId, envelope);
 }
 
@@ -296,6 +304,8 @@ class BotConnectorManager {
         return new TelegramChannelConnector({
           agentId,
           token,
+          // Durable inbox handles replay; never discard the startup backlog.
+          startupBacklogLimit: Infinity,
           onInbound: routeInboundToBot,
           filter: readChannelInboundFilter(agentId, 'telegram'),
           // ISS-23: without this the update offset lived only in memory, so
@@ -315,6 +325,7 @@ class BotConnectorManager {
       case 'feishu': {
         const connector = new FeishuChannelConnector({
           agentId,
+          ackAfterHandling: () => getDesktopBotSchedulerState(agentId).mode === 'host',
           onInbound: routeInboundToBot,
           filter: readChannelInboundFilter(agentId, 'feishu'),
         });

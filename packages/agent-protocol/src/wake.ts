@@ -18,6 +18,7 @@ export type WakeSourceKind =
   | 'user.message'
   | 'approval.resume'
   | 'group.turn'
+  | 'bot.kickstart'
 
 /** Default queue lane for each wake source. */
 export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
@@ -29,6 +30,7 @@ export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
   'user.message': 'user',
   'approval.resume': 'agent',
   'group.turn': 'agent',
+  'bot.kickstart': 'background',
 }
 
 /** Whether this source may preempt a non-user run. */
@@ -66,7 +68,7 @@ export type WakePayload =
       intent?: string
       hops?: number
     }
-  | { kind: 'user'; text: string; messageId?: string }
+  | { kind: 'user'; text: string; messageId?: string; attachments?: readonly FileAttachment[] }
   | {
       kind: 'approval'
       approvalId: string
@@ -130,3 +132,4 @@ export const LANE_RANK: Readonly<Record<WakeLane, number>> = {
   agent: 1,
   background: 2,
 }
+import type { FileAttachment } from './file-attachment.js'

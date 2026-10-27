@@ -27,12 +27,15 @@ import type {
   ConcurrencyPolicy,
   CreateAutomationCronInput,
   CronSchedule,
+  MisfirePolicy,
   UpdateAutomationCronInput,
 } from './types.js';
 import {
   assertValidSchedule,
   computeNextRunAt,
   formatEveryDuration,
+  MAX_BOUNDED_CATCH_UP,
+  DEFAULT_MISFIRE_POLICY,
   parseEveryDuration,
 } from './schedule.js';
 import { resolveAutomationWorkspace } from './workspace.js';
@@ -53,6 +56,20 @@ function normalizeCronPermissionMode(value: string | null | undefined): string |
 
 function normalizeCronEffort(value: string | null | undefined): string | undefined {
   return typeof value === 'string' && CRON_EFFORTS.has(value) ? value : undefined;
+}
+
+/** Unknown policies fall back to the default instead of failing the file load. */
+function normalizeMisfirePolicy(value: unknown): MisfirePolicy {
+  return value === 'skip' || value === 'latest' || value === 'bounded'
+    ? value
+    : DEFAULT_MISFIRE_POLICY;
+}
+
+/** Clamp `bounded` to 1..MAX; invalid input falls back to a single catch-up. */
+function normalizeMaxCatchUp(value: unknown): number {
+  const parsed = typeof value === 'number' ? Math.trunc(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(MAX_BOUNDED_CATCH_UP, Math.max(1, parsed));
 }
 
 /**
@@ -97,16 +114,6 @@ export function scheduleFingerprint(schedule: CronSchedule | null): string {
   return `cron:${(schedule.expr ?? '').trim()}|${(schedule.tz ?? '').trim()}`;
 }
 
-/**
- * `cron` schedules need a pre-creation anchor for `computeNextRunAt`,
- * because croner's `nextRun` is strictly-after its argument and
- * `every`/`once` already produce sensible first-run results when anchored
- * on `now`. See the comment in `jobToCron` for the full rationale.
- */
-function scheduleNeedsCreatedAtAnchor(schedule: CronSchedule | null | undefined): boolean {
-  return schedule?.kind === 'cron';
-}
-
 /** On-disk TOML shape (snake_case); the public API is camelCase `AutomationCron`. */
 export interface CronJobFile {
   id?: string;
@@ -129,6 +136,13 @@ export interface CronJobFile {
   listener_state?: ListenerStateFile[];
   concurrency?: ConcurrencyPolicy;
   max_retries?: number;
+  /** Offline catch-up policy (S6); absent = 'latest'. */
+  misfire_policy?: MisfirePolicy;
+  /** `bounded` catch-up size, 1..5; absent = 1. */
+  max_catch_up?: number;
+  /** Write-ahead scheduled batch; removed only after wake admission. */
+  pending_fire_times?: number[];
+  pending_schedule_fingerprint?: string;
   last_run_at?: number;
   last_error?: string | null;
   retry_count?: number;
@@ -183,6 +197,9 @@ export function parseCronJobFile(text: string): CronJobFileDoc {
       }
       job.agent = job.agent.trim();
     }
+    // S6: hand-edited or pre-S6 files normalize here rather than failing.
+    job.misfire_policy = normalizeMisfirePolicy(job.misfire_policy);
+    job.max_catch_up = normalizeMaxCatchUp(job.max_catch_up);
     jobs.push(job);
   }
   return { version: 1, jobs };
@@ -305,6 +322,8 @@ export class CronFileStore {
       ...(eventTriggers && eventTriggers.length ? { event_triggers: eventTriggers } : {}),
       concurrency: input.concurrencyPolicy ?? 'skip',
       max_retries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
+      misfire_policy: normalizeMisfirePolicy(input.misfirePolicy),
+      max_catch_up: normalizeMaxCatchUp(input.maxCatchUp),
       last_run_at: 0,
       last_error: null,
       retry_count: 0,
@@ -389,6 +408,8 @@ export class CronFileStore {
     }
     if (patch.concurrencyPolicy !== undefined) job.concurrency = patch.concurrencyPolicy;
     if (patch.maxRetries !== undefined) job.max_retries = patch.maxRetries;
+    if (patch.misfirePolicy !== undefined) job.misfire_policy = normalizeMisfirePolicy(patch.misfirePolicy);
+    if (patch.maxCatchUp !== undefined) job.max_catch_up = normalizeMaxCatchUp(patch.maxCatchUp);
     if (patch.enabled !== undefined) job.enabled = patch.enabled;
     if (patch.agent !== undefined) {
       if (patch.agent === null) {
@@ -408,6 +429,44 @@ export class CronFileStore {
     const success = this.doc.jobs.length !== before;
     if (success) this.save();
     return { success };
+  }
+
+  /** Reuse a committed batch across ticks/restarts, before consulting the clock. */
+  getPendingScheduledFires(id: string, fingerprint: string): number[] {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (job?.pending_schedule_fingerprint !== fingerprint) return [];
+    const times = job.pending_fire_times;
+    if (!Array.isArray(times) || times.length > MAX_BOUNDED_CATCH_UP ||
+        times.some((time) => !Number.isSafeInteger(time) || time <= 0)) {
+      throw new Error(`invalid pending scheduled batch for cron: ${id}`);
+    }
+    return [...times];
+  }
+
+  /** Persist the exact identities BEFORE admitting the first wake. */
+  stageScheduledFires(id: string, fingerprint: string, fires: number[]): void {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (!job) throw new Error(`cron not found: ${id}`);
+    job.pending_schedule_fingerprint = fingerprint;
+    job.pending_fire_times = [...fires];
+    this.save();
+  }
+
+  /** Admission and watermark are separate stores; replay uses the same key. */
+  acknowledgeScheduledFire(id: string, fingerprint: string, instant: number): void {
+    const job = this.doc.jobs.find((j) => j.id === id);
+    if (!job || job.pending_schedule_fingerprint !== fingerprint) return;
+    if (job.pending_fire_times?.[0] !== instant) throw new Error('scheduled fire acknowledgement out of order');
+    job.pending_fire_times.shift();
+    if (job.pending_fire_times.length === 0) {
+      delete job.pending_fire_times;
+      delete job.pending_schedule_fingerprint;
+    }
+    job.last_run_at = instant;
+    job.last_error = undefined;
+    job.retry_count = 0;
+    job.updated_at = Date.now();
+    this.save();
   }
 
   /** Persist a run outcome (last_run_at / last_error / retry_count) and write the file. */
@@ -448,20 +507,14 @@ export class CronFileStore {
   private jobToCron(job: CronJobFile): AutomationCron {
     const now = Date.now();
     const lastRunAt = job.last_run_at ?? 0;
-    // Anchor `cron` schedules on `created_at` for jobs that have never run.
-    // croner.nextRun is strictly-after its argument, so anchoring on `now`
-    // would always return a future time and the tick filter
-    // `nextRunAt <= now` could never match — making daily/hourly cron
-    // jobs silently never fire (the first fire would always be the next
-    // scheduled minute after creation, which 60s ticks usually skip past).
-    // Using `created_at` puts the anchor BEFORE the first scheduled
-    // occurrence, so the very next tick on or after that occurrence fires
-    // the job. `every` schedules use `now` as the first-run anchor — they
-    // already work because `every` nextRunAt = anchor + everyMs is in the
-    // near future, not strictly-after the anchor. Event-only routines
+    // Anchor a schedule that has never run on `created_at`, not `now`.
+    // `nextRunAt = anchor + cadence` is recomputed on every read, so a
+    // `now` anchor can never become due: `every` jobs silently never fired
+    // their first run, and `cron` schedules lost their first occurrence
+    // because croner's `nextRun` is strictly-after its argument. Anchoring
+    // on creation makes the first occurrence reachable. Event-only routines
     // (no schedule) derive no nextRunAt — the listener hub owns them.
-    const nextRunAnchor =
-      lastRunAt > 0 ? lastRunAt : scheduleNeedsCreatedAtAnchor(job.schedule) ? (job.created_at ?? now) : now;
+    const nextRunAnchor = lastRunAt > 0 ? lastRunAt : (job.created_at ?? now);
     // Re-validate stored listeners on read; malformed entries degrade to
     // dropped listeners instead of failing the whole store.
     const eventTriggers = (job.event_triggers ?? [])
@@ -479,6 +532,8 @@ export class CronFileStore {
       enabled: job.enabled !== false,
       concurrencyPolicy: job.concurrency ?? 'skip',
       maxRetries: job.max_retries ?? DEFAULT_MAX_RETRIES,
+      misfirePolicy: normalizeMisfirePolicy(job.misfire_policy),
+      maxCatchUp: normalizeMaxCatchUp(job.max_catch_up),
       lastRunAt: lastRunAt > 0 ? lastRunAt : null,
       lastError: job.last_error ?? null,
       retryCount: job.retry_count ?? 0,
