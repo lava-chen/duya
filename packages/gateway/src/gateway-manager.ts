@@ -33,6 +33,7 @@ import { setProxyUrl, initProxy } from './proxy-fetch.js';
 import { EXT_MIME_MAP, MIME_EXT_MAP } from './utils/mime.js';
 import { readFile } from 'node:fs/promises';
 import { detectCommand } from './commands/dispatcher.js';
+import { getPlatformCapabilities, supportsCapability } from './platform-capabilities.js';
 
 const ADAPTER_START_TIMEOUT_MS = 30_000;
 const ADAPTER_STOP_TIMEOUT_MS = 10_000;
@@ -397,6 +398,7 @@ export class GatewayManager {
         platform,
         running: adapter.isRunning(),
         health,
+        capabilities: [...getPlatformCapabilities(platform)],
       });
     }
 
@@ -406,6 +408,7 @@ export class GatewayManager {
         adapters.push({
           platform,
           running: false,
+          capabilities: [...getPlatformCapabilities(platform)],
         });
       }
     }
@@ -559,8 +562,10 @@ export class GatewayManager {
     if (!adapter) return;
 
     if (state === 'typing_start') {
+      if (!supportsCapability(platform as PlatformType, 'typing')) return;
       adapter.sendTyping?.(platformChatId);
     } else if (state === 'typing_stop') {
+      if (!supportsCapability(platform as PlatformType, 'typing-stop')) return;
       adapter.stopTyping?.(platformChatId);
     }
   }
@@ -615,9 +620,11 @@ export class GatewayManager {
       // Bot-status signal: show "working" on the user's message (hermes-style
       // reaction) plus a typing indicator; both clear when Main reports idle.
       this.trackWorkingReaction(msg);
-      adapter?.sendTyping?.(msg.platformChatId)?.catch(() => {
-        // Typing is best-effort.
-      });
+      if (supportsCapability(msg.platform, 'typing')) {
+        adapter?.sendTyping?.(msg.platformChatId)?.catch(() => {
+          // Typing is best-effort.
+        });
+      }
     } catch (err) {
       console.error('[GatewayManager] Error handling inbound message:', err);
       this.ipc.send({
@@ -650,7 +657,7 @@ export class GatewayManager {
       { reactions?: { enabled?: boolean; working?: string } };
     const reactionsEnabled = reactionOpts.reactions?.enabled ?? true;
     const workingEmoji = reactionOpts.reactions?.working ?? '🤔';
-    if (reactionsEnabled && msg.platformMsgId) {
+    if (reactionsEnabled && msg.platformMsgId && supportsCapability(msg.platform, 'reaction')) {
       try {
         adapter?.setMessageReaction?.(msg.platformChatId, msg.platformMsgId, workingEmoji);
       } catch {
@@ -673,7 +680,9 @@ export class GatewayManager {
     }
 
     const adapter = this.adapters.get(platform as PlatformType);
-    adapter?.stopTyping?.(platformChatId);
+    if (supportsCapability(platform as PlatformType, 'typing-stop')) {
+      adapter?.stopTyping?.(platformChatId);
+    }
     if (!pending?.lastMsgId) return;
 
     const opts = (this.adapterConfigs.get(platform as PlatformType)?.options ?? {}) as {

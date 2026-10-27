@@ -31,12 +31,27 @@ import {
   getMimeType,
 } from './message-utils.js';
 import { parseGatingConfig, shouldProcessMessage, checkMention } from './gating.js';
+import { fetchMediaToCache } from '../shared/media-cache.js';
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const MAX_MESSAGE_LENGTH = 2000;
 const CHAT_RATE_LIMIT_MS = 1000;
-const TYPING_INDICATOR_INTERVAL_MS = 8000;
 const DEDUP_MAX = 500;
+
+/**
+ * Gateway intents: GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES |
+ * MESSAGE_CONTENT.
+ *
+ * Without MESSAGE_CONTENT Discord blanks `content`/`attachments` for every
+ * message that does not mention the bot, and without DIRECT_MESSAGES DMs never
+ * arrive at all — both are privileged intents that must also be enabled in the
+ * Developer Portal.
+ */
+const INTENTS =
+  (1 << 0) | // GUILDS
+  (1 << 9) | // GUILD_MESSAGES
+  (1 << 12) | // DIRECT_MESSAGES
+  (1 << 15); // MESSAGE_CONTENT
 
 export class DiscordAdapter extends BaseAdapter {
   readonly platform = 'discord' as const;
@@ -77,10 +92,12 @@ export class DiscordAdapter extends BaseAdapter {
 
     const me = await this.fetchApi<{ id: string; username: string }>('/users/@me');
     this.setBotUsername(me.username);
-    this.setBotUsername(me.username);
     this.updateHealthConnected();
 
     const gateway = await this.fetchApi<{ url: string }>('/gateway/bot');
+    // Mark running before the socket opens so `isRunning()` reflects intent and
+    // a close during the handshake still triggers the reconnect path.
+    this.running = true;
     this.connectWebSocket(gateway.url);
   }
 
@@ -113,6 +130,13 @@ export class DiscordAdapter extends BaseAdapter {
     try {
       switch (reply.type) {
         case 'text': {
+          // Edit-in-place when the host is updating a streaming placeholder.
+          if (reply.editTargetMsgId) {
+            const edited = await this.editMessage(chatId, reply.editTargetMsgId, reply.text);
+            if (edited) return { ok: true, platformMsgId: reply.editTargetMsgId };
+            if (!reply.freshOnEditFail) return { ok: false, error: 'edit failed' };
+          }
+
           const chunks = splitMessage(reply.text, MAX_MESSAGE_LENGTH);
           let lastMsgId = '';
 
@@ -172,6 +196,22 @@ export class DiscordAdapter extends BaseAdapter {
           return result;
         }
 
+        case 'inline_keyboard': {
+          const rows = reply.rows.map((row) => ({
+            type: 1,
+            components: row.map((button) => ({
+              type: 2,
+              style: button.url ? 5 : 1,
+              label: button.text.slice(0, 80),
+              ...(button.url ? { url: button.url } : { custom_id: button.callbackData.slice(0, 100) }),
+            })),
+          }));
+          await this.waitForRateLimit(chatId);
+          const result = await this.postMessage(chatId, reply.text, rows);
+          this.recordSendTime(chatId);
+          return { ok: true, platformMsgId: result.id };
+        }
+
         default:
           return { ok: false, error: 'Unknown reply type' };
       }
@@ -180,12 +220,48 @@ export class DiscordAdapter extends BaseAdapter {
     }
   }
 
+  /** Real typing endpoint — Discord expires the indicator after ~10s. */
   async sendTyping(chatId: string): Promise<void> {
     try {
-      await this.fetchApi(`/channels/${chatId}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({ content: '​' }),
+      await this.fetchApi(`/channels/${chatId}/typing`, { method: 'POST' });
+    } catch { /* ignore */ }
+  }
+
+  async editMessage(chatId: string, messageId: string, content: string): Promise<boolean> {
+    try {
+      await this.fetchApi(`/channels/${chatId}/messages/${messageId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ content: content.slice(0, MAX_MESSAGE_LENGTH) }),
       });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async deleteMessage(chatId: string, messageId: string): Promise<void> {
+    try {
+      await this.fetchApi(`/channels/${chatId}/messages/${messageId}`, { method: 'DELETE' });
+    } catch { /* ignore */ }
+  }
+
+  /** React on the user's inbound message (bot-status signal). `emoji` is unicode. */
+  async setMessageReaction(chatId: string, messageId: string, emoji: string): Promise<void> {
+    try {
+      await this.fetchApi(
+        `/channels/${chatId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+        { method: 'PUT' },
+      );
+    } catch { /* ignore */ }
+  }
+
+  /** Clear all of the bot's reactions on a message. */
+  async removeMessageReaction(chatId: string, messageId: string): Promise<void> {
+    try {
+      await this.fetchApi(
+        `/channels/${chatId}/messages/${messageId}/reactions/@me`,
+        { method: 'DELETE' },
+      );
     } catch { /* ignore */ }
   }
 
@@ -225,35 +301,38 @@ export class DiscordAdapter extends BaseAdapter {
     chatId: string,
     reply: { mediaType: 'photo' | 'voice' | 'video' | 'document'; filePath: string; caption?: string }
   ): Promise<SendResult> {
-    const isUrl = reply.filePath.startsWith('http');
+    let source = reply.filePath;
 
-    if (isUrl) {
-      return this.sendMediaByUrl(chatId, reply);
+    // Discord has no "send this URL as an attachment" API: a remote source has
+    // to be fetched and re-uploaded, otherwise the image is silently dropped.
+    if (/^https?:/i.test(source)) {
+      const cached = await fetchMediaToCache('discord', source, { maxBytes: 25 * 1024 * 1024 });
+      if (!cached) return { ok: false, error: 'media download failed' };
+      source = cached.path;
     }
 
-    return this.sendMediaByUpload(chatId, reply);
-  }
-
-  private async sendMediaByUrl(
-    chatId: string,
-    reply: { mediaType: 'photo' | 'voice' | 'video' | 'document'; filePath: string; caption?: string }
-  ): Promise<SendResult> {
-    const result = await this.postMessage(chatId, reply.caption || '');
-    return { ok: true, platformMsgId: result.id };
+    return this.sendMediaByUpload(chatId, { ...reply, filePath: source });
   }
 
   private async sendMediaByUpload(
     chatId: string,
     reply: { mediaType: 'photo' | 'voice' | 'video' | 'document'; filePath: string; caption?: string }
   ): Promise<SendResult> {
-    const { createReadStream } = await import('node:fs');
+    const { readFile } = await import('node:fs/promises');
     const { basename } = await import('node:path');
 
     const fileName = basename(reply.filePath);
-    const mimeType = getMimeType(reply.filePath);
+    let data: Buffer;
+    try {
+      data = await readFile(reply.filePath);
+    } catch {
+      return { ok: false, error: `cannot read ${fileName}` };
+    }
 
     const formData = new FormData();
-    formData.append('file', new Blob([await import('node:fs').then(m => m.readFileSync(reply.filePath))]), fileName);
+    // `payload_json` carries the caption alongside the upload.
+    formData.append('payload_json', JSON.stringify({ content: reply.caption ?? '' }));
+    formData.append('files[0]', new Blob([new Uint8Array(data)]), fileName);
 
     const response = await proxyFetch(`${DISCORD_API_BASE}/channels/${chatId}/messages`, {
       method: 'POST',
@@ -339,7 +418,7 @@ export class DiscordAdapter extends BaseAdapter {
       op: 2,
       d: {
         token: this.botToken,
-        intents: 1 << 9, // GUILD_MESSAGES
+        intents: INTENTS,
         properties: {
           os: 'linux',
           browser: 'duya-gateway',
@@ -405,14 +484,18 @@ export class DiscordAdapter extends BaseAdapter {
     const channel = await this.fetchApi<DiscordChannel>(`/channels/${msg.channel_id}`);
     const isDm = isDirectMessage(channel.type);
 
-    if (!shouldProcessMessage(channel.guild_id, msg.channel_id, isDm, this.gatingConfig)) {
+    if (!shouldProcessMessage(channel.guild_id, msg.channel_id, isDm, this.gatingConfig, msg.author.id)) {
       return;
     }
 
     const requireMention = this.gatingConfig.requireMention;
     const mentionPatterns = this.gatingConfig.mentionPatterns;
 
-    if (isGuildChannel(channel.type) && !checkMention(msg.content, this.botId, requireMention, mentionPatterns)) {
+    // Free-response channels also waive the mention requirement.
+    const mentionRequired = isGuildChannel(channel.type)
+      && requireMention
+      && !this.gatingConfig.freeResponseChats.has(msg.channel_id);
+    if (isGuildChannel(channel.type) && !checkMention(msg.content, this.botId, mentionRequired, mentionPatterns)) {
       return;
     }
 
@@ -424,12 +507,18 @@ export class DiscordAdapter extends BaseAdapter {
       replyToText = msg.referenced_message.content;
     }
 
+    const attachments = await this.downloadAttachments(msg);
+
     const normalized: NormalizedMessage = {
       platform: 'discord',
       platformUserId: msg.author.id,
       platformChatId: msg.channel_id,
       platformMsgId: msg.id,
-      text: cleanContent(msg.content),
+      text: cleanContent(msg.content) || (attachments.count > 0 ? undefined : (msg.sticker_items?.length ? `[sticker] ${msg.sticker_items[0].name}` : undefined)),
+      ...(attachments.imagePaths.length ? { imagePaths: attachments.imagePaths } : {}),
+      ...(attachments.voicePaths.length ? { voicePaths: attachments.voicePaths } : {}),
+      ...(attachments.videoPaths.length ? { videoPaths: attachments.videoPaths } : {}),
+      ...(attachments.filePaths.length ? { filePaths: attachments.filePaths } : {}),
       replyToMsgId,
       replyToText,
       ts: new Date(msg.timestamp).getTime(),
@@ -448,6 +537,47 @@ export class DiscordAdapter extends BaseAdapter {
     }
 
     this.messageHandler?.(normalized);
+  }
+
+  /**
+   * Download inbound attachments into the shared cache. Requires the
+   * MESSAGE_CONTENT intent; without it `attachments` is empty and only the
+   * message text arrives.
+   */
+  private async downloadAttachments(msg: DiscordMessage): Promise<{
+    imagePaths: string[];
+    voicePaths: string[];
+    videoPaths: string[];
+    filePaths: Array<{ name: string; path: string }>;
+    count: number;
+  }> {
+    const result = {
+      imagePaths: [] as string[],
+      voicePaths: [] as string[],
+      videoPaths: [] as string[],
+      filePaths: [] as Array<{ name: string; path: string }>,
+      count: 0,
+    };
+
+    for (const attachment of msg.attachments ?? []) {
+      const cached = await fetchMediaToCache('discord', attachment.url, {
+        maxBytes: 25 * 1024 * 1024,
+        ...(attachment.content_type ? { mimeHint: attachment.content_type } : {}),
+        nameHint: attachment.filename,
+        idHint: `${msg.id}-${attachment.id}`,
+      });
+      if (!cached) continue;
+      result.count += 1;
+
+      switch (cached.category) {
+        case 'image': result.imagePaths.push(cached.path); break;
+        case 'voice': result.voicePaths.push(cached.path); break;
+        case 'video': result.videoPaths.push(cached.path); break;
+        default: result.filePaths.push({ name: cached.name, path: cached.path }); break;
+      }
+    }
+
+    return result;
   }
 
   private async handleInteraction(interaction: DiscordInteraction): Promise<void> {

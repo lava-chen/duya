@@ -2,6 +2,14 @@
  * Discord Adapter Types
  */
 
+export interface DiscordAttachment {
+  id: string;
+  url: string;
+  filename: string;
+  content_type?: string;
+  size?: number;
+}
+
 export interface DiscordMessage {
   id: string;
   channel_id: string;
@@ -13,6 +21,10 @@ export interface DiscordMessage {
   content: string;
   timestamp: string;
   referenced_message?: DiscordMessage;
+  /** Uploaded files. Requires the MESSAGE_CONTENT intent to be populated. */
+  attachments?: DiscordAttachment[];
+  /** Sticker items (rendered as a text marker, not downloaded). */
+  sticker_items?: Array<{ id: string; name: string }>;
   thread?: {
     id: string;
     type: number;
