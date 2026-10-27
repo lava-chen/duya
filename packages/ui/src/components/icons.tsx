@@ -25,6 +25,7 @@ import {
   Wand,
   Sparkles,
   History,
+  Clock,
   Play,
   CirclePlay,
   RotateCcw,
@@ -673,6 +674,8 @@ export const PowerOffIcon = wrapLucide(Power);
 export const SpinnerIcon = wrapLucide(Loader);
 export const DocumentTextIcon = wrapLucide(FileText);
 export const ClockIcon = wrapLucide(History);
+/** A real clock face — the "elapsed / background task" glyph. */
+export const ClockFaceIcon = wrapLucide(Clock);
 export const SidebarRightIcon = wrapTabler(TablerIconLayoutSidebarRight);
 // Mirror ZCode's `WorkspaceSidebarCollapsedRail` semantics: the toggle
 // points one way when the panel is open (click to collapse) and the

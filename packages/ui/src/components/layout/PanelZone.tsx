@@ -48,8 +48,8 @@ export function PanelZone() {
     setRowHeights,
     togglePaneExpanded,
   } = usePanel();
-  // The geometry lives in its own context: it changes on every frame of a
-  // drag, and only this component draws it.
+  // Keep layout geometry out of shared panel state so only this surface
+  // reacts when a resize gesture commits its final dimensions.
   const { panelWidth, layout } = usePanelGeometry();
   const { t } = useTranslation();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
@@ -64,9 +64,14 @@ export function PanelZone() {
   // started. The drag reports the offset from that point, not a step.
   const columnResizeStartRef = useRef<number[]>([]);
   const rowResizeStartRef = useRef<number[][]>([]);
+  const columnResizeCurrentRef = useRef<number[] | null>(null);
+  const rowResizeCurrentRef = useRef<number[][]>([]);
+  const regionResizeActiveRef = useRef(false);
   // The wall's own size: the separators sit in the gaps between the cards,
   // so their positions need the pixel geometry of the wall.
   const wallRef = useRef<HTMLDivElement | null>(null);
+  const panelZoneRef = useRef<HTMLDivElement | null>(null);
+  const panelInnerRef = useRef<HTMLDivElement | null>(null);
   const [wallSize, setWallSize] = useState({ width: 0, height: 0 });
   const [workspaceWidth, setWorkspaceWidth] = useState(0);
   const taskDrawerOpen = useTaskDrawerOpen();
@@ -172,6 +177,36 @@ export function PanelZone() {
     return workspace?.getBoundingClientRect().width ?? window.innerWidth;
   }, []);
 
+  const measureWallSize = useCallback(() => {
+    const wall = wallRef.current;
+    if (!wall) return;
+    const rect = wall.getBoundingClientRect();
+    setWallSize((previous) => (
+      Math.abs(previous.width - rect.width) < 0.5 && Math.abs(previous.height - rect.height) < 0.5
+        ? previous
+        : { width: rect.width, height: rect.height }
+    ));
+  }, []);
+
+  const updateColumnBoundariesForWidth = useCallback((nextWallWidth: number) => {
+    const wall = wallRef.current;
+    if (!wall || columns < 2) return;
+    const usable = Math.max(
+      0,
+      nextWallWidth - WALL_PADDING * 2 - WALL_GAP * (columns - 1),
+    );
+    let sharedRatio = 0;
+    for (let index = 1; index < columns; index += 1) {
+      sharedRatio += layout.columnRatios[index - 1] ?? 0;
+      const separator = wall.querySelector<HTMLElement>(
+        `[data-column-separator-index="${index}"]`,
+      );
+      if (separator) {
+        separator.style.left = `${WALL_PADDING + sharedRatio * usable + index * WALL_GAP - WALL_GAP / 2}px`;
+      }
+    }
+  }, [columns, layout.columnRatios]);
+
   // Sync the detached set with the main process: panes that were detached in
   // a previous session of this renderer (or by another surface) are spotted
   // through getState, and every later transition arrives as an event.
@@ -272,9 +307,23 @@ export function PanelZone() {
       // column's protected minimum width.
       const nextWidth = clampActiveWidth(resizeStartWidthRef.current - delta);
       lastDragWidthRef.current = nextWidth;
-      setPanelWidth(nextWidth);
+      const zone = panelZoneRef.current;
+      zone?.style.setProperty("--panel-zone-width", `${nextWidth}px`);
+      zone?.style.setProperty("--panel-content-width", `${nextWidth}px`);
+      if (panelInnerRef.current) panelInnerRef.current.style.width = `${nextWidth}px`;
+
+      const workspace = dragWorkspaceWidthRef.current ?? workspaceWidth;
+      const overlaps = !workspaceExpanded && workspace > 0 && nextWidth > workspace - MIN_CHAT_WIDTH;
+      if (zone) {
+        zone.classList.toggle("panel-zone-overlapped", overlaps);
+        if (overlaps) zone.dataset.overlapsChat = "true";
+        else delete zone.dataset.overlapsChat;
+        zone.querySelector<HTMLElement>(".resize-handle-left")
+          ?.setAttribute("aria-valuenow", String(Math.round(nextWidth)));
+      }
+      updateColumnBoundariesForWidth(nextWidth);
     },
-    [clampActiveWidth, setPanelWidth]
+    [clampActiveWidth, updateColumnBoundariesForWidth, workspaceExpanded, workspaceWidth]
   );
 
   /** Absolute width request from keyboard interaction; persists as user width. */
@@ -304,15 +353,18 @@ export function PanelZone() {
     const element = wallRef.current;
     if (!element) return;
     const measure = () => {
-      const rect = element.getBoundingClientRect();
-      setWallSize({ width: rect.width, height: rect.height });
+      // Resizing the outer edge changes the wall's width every frame. Its
+      // grid already follows that width in CSS; publishing each measurement
+      // to React would render every mounted panel again during the drag.
+      if (regionResizeActiveRef.current) return;
+      measureWallSize();
     };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [layout.panes.length, panelOpen, workspaceExpanded]);
+  }, [layout.panes.length, measureWallSize, panelOpen, workspaceExpanded]);
 
   /** The card titles on each side of a column boundary. */
   const columnSeparatorLabel = useCallback(
@@ -345,12 +397,46 @@ export function PanelZone() {
       const start = columnResizeStartRef.current;
       if (start.length !== columnWidths.length) return;
       const next = [...start];
-      next[columnIndex - 1] += delta;
-      next[columnIndex] -= delta;
-      setColumnWidths(next);
+      const pairTotal = start[columnIndex - 1] + start[columnIndex];
+      const minimum = Math.min(MIN_PANEL_WIDTH, pairTotal / 2);
+      // A right-edge handle reports positive deltas when the pane on its left
+      // shrinks, so subtract the delta to keep the boundary under the pointer.
+      next[columnIndex - 1] = Math.max(
+        minimum,
+        Math.min(pairTotal - minimum, start[columnIndex - 1] - delta),
+      );
+      next[columnIndex] = pairTotal - next[columnIndex - 1];
+      columnResizeCurrentRef.current = next;
+
+      const wall = wallRef.current;
+      if (!wall) return;
+      wall.style.gridTemplateColumns = next
+        .map((width) => `minmax(0, ${Math.max(0, width)}px)`)
+        .join(" ");
+      const separator = wall.querySelector<HTMLElement>(
+        `[data-column-separator-index="${columnIndex}"]`,
+      );
+      if (separator) {
+        const left = WALL_PADDING
+          + next.slice(0, columnIndex).reduce((sum, width) => sum + width, 0)
+          + columnIndex * WALL_GAP
+          - WALL_GAP / 2;
+        separator.style.left = `${left}px`;
+        separator.querySelector<HTMLElement>(".resize-handle")
+          ?.setAttribute("aria-valuenow", String(Math.round(next[columnIndex - 1])));
+      }
     },
-    [columnWidths.length, setColumnWidths]
+    [columnWidths.length]
   );
+
+  const finishColumnResize = useCallback(() => {
+    const next = columnResizeCurrentRef.current;
+    const start = columnResizeStartRef.current;
+    if (next && next.some((width, index) => Math.abs(width - (start[index] ?? width)) >= 0.5)) {
+      setColumnWidths(next);
+    }
+    columnResizeCurrentRef.current = null;
+  }, [setColumnWidths]);
 
   /** Absolute width request for the column left of the separator. */
   const handleColumnWidthRequest = useCallback(
@@ -373,21 +459,50 @@ export function PanelZone() {
       const start = rowResizeStartRef.current[columnIndex];
       if (!start || start.length !== rowHeights[columnIndex]?.length) return;
       const next = [...start];
-      next[rowIndex - 1] -= delta;
-      next[rowIndex] += delta;
-      setRowHeights(next, columnIndex);
+      // The handle is the top edge of the lower pane: moving it down grows
+      // the upper pane, and moving it up shrinks the upper pane.
+      next[rowIndex - 1] += delta;
+      next[rowIndex] -= delta;
+      rowResizeCurrentRef.current[columnIndex] = next;
+
+      const wall = wallRef.current;
+      const column = wall?.querySelector<HTMLElement>(`[data-column-index="${columnIndex}"]`);
+      if (!wall || !column) return;
+      column.style.gridTemplateRows = next
+        .map((height) => `minmax(0, ${Math.max(0, height)}px)`)
+        .join(" ");
+      const separator = wall.querySelector<HTMLElement>(
+        `[data-row-separator-column="${columnIndex}"][data-row-separator-index="${rowIndex}"]`,
+      );
+      if (separator) {
+        const top = next.slice(0, rowIndex).reduce((sum, height) => sum + height, 0)
+          + rowIndex * WALL_GAP
+          - WALL_GAP / 2;
+        separator.style.top = `${top}px`;
+        separator.querySelector<HTMLElement>(".resize-handle")
+          ?.setAttribute("aria-valuenow", String(Math.round(next[rowIndex])));
+      }
     },
-    [rowHeights, setRowHeights]
+    [rowHeights]
   );
+
+  const finishRowResize = useCallback((columnIndex: number) => {
+    const next = rowResizeCurrentRef.current[columnIndex];
+    const start = rowResizeStartRef.current[columnIndex];
+    if (next && start && next.some((height, index) => Math.abs(height - (start[index] ?? height)) >= 0.5)) {
+      setRowHeights(next, columnIndex);
+    }
+    rowResizeCurrentRef.current[columnIndex] = [];
+  }, [setRowHeights]);
 
   /** Absolute height request for the row above the separator. */
   const handleRowHeightRequest = useCallback(
     (columnIndex: number, rowIndex: number, height: number) => {
       const start = rowHeights[columnIndex] ?? [];
       const next = [...start];
-      const delta = next[rowIndex - 1] - height;
-      next[rowIndex - 1] = height;
-      next[rowIndex] += delta;
+      const delta = next[rowIndex] - height;
+      next[rowIndex - 1] += delta;
+      next[rowIndex] = height;
       setRowHeights(next, columnIndex);
     },
     [rowHeights, setRowHeights]
@@ -464,7 +579,6 @@ export function PanelZone() {
         >
           <PanelCard
             tab={tab}
-            icon={Icon}
             expanded={controlsWorkspace ? workspaceExpanded : isExpanded}
             expandable={controlsWorkspace ? isSessionView : true}
             onActivate={() => activateTab(paneId)}
@@ -563,6 +677,7 @@ export function PanelZone() {
 
   return (
     <div
+      ref={panelZoneRef}
       className={`panel-zone ${panelOpen ? "panel-zone-open" : "panel-zone-closed"}${workspaceExpanded ? " panel-zone-expanded" : ""}${resizing ? " panel-zone-resizing" : ""}${overlapsChat ? " panel-zone-overlapped" : ""}`}
       data-page-id={activeTab?.pageId ?? "none"}
       data-wall-columns={columns}
@@ -574,14 +689,19 @@ export function PanelZone() {
         <ResizeHandle
           side="left"
           onResizeStart={() => {
+            regionResizeActiveRef.current = true;
             resizeStartWidthRef.current = panelWidth;
+            lastDragWidthRef.current = panelWidth;
             dragWorkspaceWidthRef.current = measureWorkspaceWidth();
             setResizing(true);
           }}
           onResize={handleResize}
           onResizeEnd={() => {
+            regionResizeActiveRef.current = false;
             dragWorkspaceWidthRef.current = null;
             setResizing(false);
+            setPanelWidth(lastDragWidthRef.current);
+            measureWallSize();
             if (activeTab) {
               rememberUserWidth(activeTab.pageId, lastDragWidthRef.current);
             }
@@ -596,6 +716,7 @@ export function PanelZone() {
       )}
 
       <div
+        ref={panelInnerRef}
         className="sidebar-panel-inner"
         style={{ width: workspaceExpanded ? "100%" : panelWidth }}
         aria-hidden={!panelOpen}
@@ -620,15 +741,19 @@ export function PanelZone() {
                     <div
                       key={`row-separator-${columnIndex}-${index}`}
                       className="panel-wall-separator panel-wall-separator-row"
+                      data-row-separator-column={columnIndex}
+                      data-row-separator-index={index + 1}
                       style={{ top: rowBoundaryTop(columnIndex, index + 1) }}
                     >
                       <ResizeHandle
                         side="top"
                         onResizeStart={() => {
-                          rowResizeStartRef.current = rowHeights;
+                          rowResizeStartRef.current = rowHeights.map((heights) => [...heights]);
+                          rowResizeCurrentRef.current = rowHeights.map((heights) => [...heights]);
                         }}
                         onResize={(delta) => handleRowResize(columnIndex, index + 1, delta)}
-                        width={rowHeights[columnIndex]?.[index]}
+                        onResizeEnd={() => finishRowResize(columnIndex)}
+                        width={rowHeights[columnIndex]?.[index + 1]}
                         minWidth={0}
                         onWidthRequest={(height) => handleRowHeightRequest(columnIndex, index + 1, height)}
                         label={rowSeparatorLabel(columnIndex, index + 1)}
@@ -641,14 +766,17 @@ export function PanelZone() {
             <div
               key={`column-separator-${index}`}
               className="panel-wall-separator panel-wall-separator-column"
+              data-column-separator-index={index + 1}
               style={{ left: columnBoundaryLeft(index + 1) }}
             >
               <ResizeHandle
                 side="right"
                 onResizeStart={() => {
-                  columnResizeStartRef.current = columnWidths;
+                  columnResizeStartRef.current = [...columnWidths];
+                  columnResizeCurrentRef.current = [...columnWidths];
                 }}
                 onResize={(delta) => handleColumnResize(index + 1, delta)}
+                onResizeEnd={finishColumnResize}
                 width={columnWidths[index]}
                 minWidth={MIN_PANEL_WIDTH}
                 onWidthRequest={(width) => handleColumnWidthRequest(index + 1, width)}

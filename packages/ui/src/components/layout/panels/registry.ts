@@ -10,6 +10,7 @@ import {
   GearSixIcon,
   ChatCircleIcon,
   PlugIcon,
+  ClockFaceIcon,
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
@@ -19,6 +20,7 @@ import { FileWorkspacePanel } from "@/components/file-workspace/FileWorkspacePan
 import { BotSettingsPanel } from "./BotSettingsPanel";
 import { RoomSettingsPanel } from "./RoomSettingsPanel";
 import { PluginUiSurfacePanel } from "./PluginUiSurfacePanel";
+import { BackgroundTasksPanel } from "./BackgroundTasksPanel";
 
 // Heavy, low-frequency panels stay out of the entry chunk (plan 426 Phase 5.2).
 // Rendered inside <Suspense> in PanelZone; chunks load from local disk in Electron.
@@ -168,6 +170,21 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 360,
     defaultExpanded: false,
     component: RoomSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  "background-tasks": {
+    id: "background-tasks",
+    labelKey: "panel.backgroundTasks",
+    icon: ClockFaceIcon,
+    // One panel for the whole session: the tasks are read from the active
+    // thread, so a second instance would show the same list. Not in
+    // WALL_PAGE_IDS — the panel opens from the launcher row's more menu,
+    // the way the reference product opens it from its own options menu.
+    multiInstance: false,
+    available: true,
+    minWidth: 320,
+    preferredWidth: 380,
+    defaultExpanded: false,
+    component: BackgroundTasksPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
   "plugin-app": {
     id: "plugin-app",

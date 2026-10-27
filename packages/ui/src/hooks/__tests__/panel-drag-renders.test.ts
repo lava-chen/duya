@@ -76,13 +76,13 @@ describe('panel drag — the state is written once, not once per frame', () => {
     useConversationStore.setState({ activeThreadId: null });
   });
 
-  it('does not write the panel state while the layout keeps changing', async () => {
+  it('debounces rapid layout state updates into one persistence write', async () => {
     const spy = vi.spyOn(Storage.prototype, 'setItem');
     const { result } = renderHook(() => usePanel(), { wrapper });
 
     act(() => {
-      // Every call changes the wall's layout, which is what a separator
-      // drag does on every frame.
+      // Model several quick layout changes without coupling persistence to
+      // a particular interaction implementation.
       result.current.setColumnWidths([400, 400]);
       result.current.setColumnWidths([380, 420]);
       result.current.setColumnWidths([360, 440]);

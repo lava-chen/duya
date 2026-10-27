@@ -1,8 +1,7 @@
 // One card of the side panel's wall.
 //
-// Every card owns its header (icon + title + actions) and its body, the way
-// the reference product's panels do. There is no global tab strip above the
-// wall: the card header is the only chrome.
+// Every card owns its actions and body. Page content supplies its own title
+// or toolbar, so the shared card chrome does not repeat that label.
 
 "use client";
 
@@ -21,8 +20,6 @@ import type { PageTab } from "./page-tab";
 
 interface PanelCardProps {
   tab: PageTab;
-  /** The page's icon, used when the card is not backed by a file. */
-  icon: ComponentType<IconProps>;
   /** Whether this card currently fills the whole wall. */
   expanded: boolean;
   /** Whether the card may be expanded (a lone card has nothing to expand to). */
@@ -43,7 +40,6 @@ interface PanelCardProps {
 
 export function PanelCard({
   tab,
-  icon: Icon,
   expanded,
   expandable,
   onActivate,
@@ -58,13 +54,7 @@ export function PanelCard({
 
   return (
     <section className="panel-card" data-pane-id={tab.id} aria-label={tab.title}>
-      <header className="panel-card-header">
-        <span className="panel-card-icon">
-          <CardIcon tab={tab} fallback={<Icon size={14} stroke={1.5} />} />
-        </span>
-        <span className="panel-card-title" title={tab.title} onClick={onActivate}>
-          {tab.title}
-        </span>
+      <header className="panel-card-header panel-card-header-compact" onMouseDown={onActivate}>
         <span className="panel-card-actions">
           {onPopout && (
             <button

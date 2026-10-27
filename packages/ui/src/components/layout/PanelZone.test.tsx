@@ -1,13 +1,23 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageTab } from "./panels/registry";
 import type { WorkspaceLayout } from "./panels/layout-model";
 
 const mocks = vi.hoisted(() => ({
   activeTabId: "agent-one" as string | null,
   panelOpen: true,
+  panelRenders: 0,
+  resizeHandles: {} as Record<string, {
+    side?: string;
+    onResizeStart?: () => void;
+    onResize?: (delta: number) => void;
+    onResizeEnd?: () => void;
+  }>,
+  setColumnWidths: vi.fn(),
+  setRowHeights: vi.fn(),
+  setPanelWidth: vi.fn(),
   tabs: [] as PageTab[],
   layout: {
     panes: [],
@@ -40,12 +50,13 @@ function installPanelWindowBridge() {
 vi.mock("@/hooks/usePanel", () => ({
   MAX_PANEL_RATIO: 0.6,
   MAX_PANEL_WIDTH: 1120,
+  clampWidthToBounds: (width: number) => width,
   MIN_CHAT_WIDTH: 680,
   MIN_PANEL_WIDTH: 300,
   usePanel: () => ({
     panelOpen: mocks.panelOpen,
     setPanelOpen: vi.fn(),
-    setPanelWidth: vi.fn(),
+    setPanelWidth: mocks.setPanelWidth,
     togglePanel: vi.fn(),
     openOrActivatePage: vi.fn(),
     activateTab: vi.fn(),
@@ -56,8 +67,8 @@ vi.mock("@/hooks/usePanel", () => ({
     activeTabId: mocks.activeTabId,
     workspaceExpanded: false,
     setWorkspaceExpanded: vi.fn(),
-    setColumnWidths: vi.fn(),
-    setRowHeights: vi.fn(),
+    setColumnWidths: mocks.setColumnWidths,
+    setRowHeights: mocks.setRowHeights,
     togglePaneExpanded: vi.fn(),
   }),
   // The geometry has its own context: it changes on every frame of a drag,
@@ -83,16 +94,34 @@ vi.mock("@/stores/conversation-store", () => ({
 // The real handle carries the accessible name of the separator, so the mock
 // keeps the same attributes: the naming of the wall is what is under test.
 vi.mock("./ResizeHandle", () => ({
-  ResizeHandle: ({ label, side, width }: { label?: string; side?: string; width?: number }) => (
-    <div data-testid={`resize-handle-${side}`} role="separator" aria-label={label} aria-valuenow={width} />
-  ),
+  ResizeHandle: (props: {
+    label?: string;
+    side?: string;
+    width?: number;
+    onResizeStart?: () => void;
+    onResize?: (delta: number) => void;
+    onResizeEnd?: () => void;
+  }) => {
+    mocks.resizeHandles[`${props.side ?? "left"}:${props.label ?? ""}`] = props;
+    return (
+      <div
+        data-testid={`resize-handle-${props.side}`}
+        role="separator"
+        aria-label={props.label}
+        aria-valuenow={props.width}
+      />
+    );
+  },
 }));
 vi.mock("./task-drawer-store", () => ({
   setTaskDrawerOpen: vi.fn(),
   useTaskDrawerOpen: () => false,
 }));
 vi.mock("./panels/registry", () => {
-  const Browser = ({ tab }: { tab: PageTab }) => <div data-testid={`browser-${tab.id}`}>{tab.title}</div>;
+  const Browser = ({ tab }: { tab: PageTab }) => {
+    mocks.panelRenders += 1;
+    return <div data-testid={`browser-${tab.id}`}>{tab.title}</div>;
+  };
   const Icon = () => <span data-testid="page-icon" />;
   const make = (id: string) => ({
     id,
@@ -138,6 +167,14 @@ function wall(panes: string[], overrides: Partial<WorkspaceLayout> = {}): Worksp
 }
 
 describe("PanelZone panel wall", () => {
+  beforeEach(() => {
+    mocks.panelRenders = 0;
+    mocks.resizeHandles = {};
+    mocks.setColumnWidths.mockClear();
+    mocks.setRowHeights.mockClear();
+    mocks.setPanelWidth.mockClear();
+  });
+
   it("measures the wall when panes are opened after the zone mounts", async () => {
     mocks.tabs = [];
     mocks.activeTabId = null;
@@ -200,13 +237,14 @@ describe("PanelZone panel wall", () => {
     expect(container.querySelectorAll(".panel-card")).toHaveLength(2);
   });
 
-  it("shows the card title in the card header", () => {
+  it("keeps card actions without repeating the page title in the card chrome", () => {
     mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
     mocks.activeTabId = "files";
     mocks.layout = wall(["files"]);
 
     const { container } = render(<PanelZone />);
-    expect(container.querySelector(".panel-card-title")?.textContent).toBe("Files");
+    expect(container.querySelector(".panel-card-title")).toBeNull();
+    expect(container.querySelector(".panel-card-header-compact .panel-card-actions")).toBeTruthy();
   });
 
   it("splits the wall into two columns from the third card on", () => {
@@ -241,6 +279,102 @@ describe("PanelZone panel wall", () => {
     expect(columns[0]?.querySelectorAll(".panel-wall-cell")).toHaveLength(2);
     expect(columns[1]?.querySelectorAll(".panel-wall-cell")).toHaveLength(2);
     expect(container.querySelectorAll(".panel-wall-separator-row")).toHaveLength(2);
+  });
+
+  it("previews column resizing without re-rendering panel bodies and commits once", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "workspace", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+      { id: "browser", pageId: "browser", title: "Browser" },
+    ];
+    mocks.activeTabId = "browser";
+    mocks.layout = wall(["files", "terminal", "browser"]);
+
+    const { container } = render(<PanelZone />);
+    const renderedBeforeDrag = mocks.panelRenders;
+    const columnHandle = Object.values(mocks.resizeHandles).find((handle) => handle.side === "right");
+    expect(columnHandle).toBeTruthy();
+
+    act(() => {
+      columnHandle?.onResizeStart?.();
+      // The right-side handle reports a negative delta when dragged right.
+      columnHandle?.onResize?.(-40);
+    });
+
+    expect(mocks.panelRenders).toBe(renderedBeforeDrag);
+    expect(container.querySelector(".panel-wall")?.getAttribute("style")).toContain("410px");
+    expect(container.querySelector("[data-column-separator-index='1']")?.getAttribute("style")).toContain("420px");
+
+    act(() => columnHandle?.onResizeEnd?.());
+    expect(mocks.setColumnWidths).toHaveBeenCalledTimes(1);
+    expect(mocks.setColumnWidths).toHaveBeenCalledWith([410, 330]);
+    expect(mocks.panelRenders).toBe(renderedBeforeDrag);
+  });
+
+  it("previews row resizing without re-rendering panel bodies and commits once", () => {
+    mocks.tabs = [
+      { id: "files", pageId: "workspace", title: "Files" },
+      { id: "terminal", pageId: "terminal", title: "Terminal" },
+    ];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files", "terminal"]);
+    const wallRect = {
+      x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 600, width: 800, height: 600,
+      toJSON: () => ({}),
+    } as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("panel-wall")
+        ? wallRect
+        : { ...wallRect, width: 0, height: 0 } as DOMRect;
+    });
+
+    const { container } = render(<PanelZone />);
+    const renderedBeforeDrag = mocks.panelRenders;
+    const rowHandle = Object.values(mocks.resizeHandles).find((handle) => handle.side === "top");
+    expect(rowHandle).toBeTruthy();
+
+    act(() => {
+      rowHandle?.onResizeStart?.();
+      rowHandle?.onResize?.(-50);
+    });
+
+    expect(mocks.panelRenders).toBe(renderedBeforeDrag);
+    expect(container.querySelector("[data-column-index='0']")?.getAttribute("style")).toContain("240px");
+    expect(container.querySelector("[data-row-separator-column='0']")?.getAttribute("style")).toContain("242px");
+
+    act(() => rowHandle?.onResizeEnd?.());
+    expect(mocks.setRowHeights).toHaveBeenCalledTimes(1);
+    expect(mocks.setRowHeights).toHaveBeenCalledWith([240, 340], 0);
+    expect(mocks.panelRenders).toBe(renderedBeforeDrag);
+    vi.restoreAllMocks();
+  });
+
+  it("previews the panel edge without re-rendering panel bodies and commits on release", () => {
+    mocks.tabs = [{ id: "files", pageId: "workspace", title: "Files" }];
+    mocks.activeTabId = "files";
+    mocks.layout = wall(["files"]);
+
+    const { container } = render(<PanelZone />);
+    const edgeHandle = Object.values(mocks.resizeHandles).find((handle) => handle.side === "left");
+    expect(edgeHandle).toBeTruthy();
+
+    act(() => edgeHandle?.onResizeStart?.());
+    const renderedAfterStart = mocks.panelRenders;
+
+    act(() => {
+      edgeHandle?.onResize?.(20);
+      edgeHandle?.onResize?.(36);
+    });
+
+    expect(mocks.panelRenders).toBe(renderedAfterStart);
+    expect(container.querySelector(".panel-zone")?.getAttribute("style")).toContain("724px");
+    expect(container.querySelector(".sidebar-panel-inner")?.getAttribute("style")).toContain("724px");
+    expect(mocks.setPanelWidth).not.toHaveBeenCalled();
+
+    act(() => edgeHandle?.onResizeEnd?.());
+    expect(mocks.setPanelWidth).toHaveBeenCalledTimes(1);
+    expect(mocks.setPanelWidth).toHaveBeenCalledWith(724);
+    vi.restoreAllMocks();
   });
 
   it("names the separator between two columns after the cards on both sides", () => {

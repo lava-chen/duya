@@ -515,11 +515,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   // `panelWidth` is intentionally excluded — it's a transient UI
   // affordance, not part of the panel "contents".
   //
-  // The write is DEBOUNCED. The wall's layout changes on every frame of a
-  // separator drag, and a localStorage write is a synchronous, disk-backed
-  // write: doing it per frame put a blocking write on the drag's critical
-  // path. Now a drag writes nothing and the state is written once, when the
-  // gesture settles.
+  // The write is DEBOUNCED. Layout changes can arrive in quick succession,
+  // and a localStorage write is synchronous and disk-backed. Keep persistence
+  // off the interaction path and save once the state settles.
   useEffect(() => {
     const timer = setTimeout(() => {
       savePersistedState(currentSessionKeyRef.current, { tabs, activeTabId, panelOpen, panelView, workspaceExpanded, layout });
@@ -1100,9 +1098,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     ],
   );
 
-  // The geometry has its own context: it changes on every frame of a drag,
-  // and only the panel zone reads it. Keeping it out of the shared context
-  // is what stops a drag from re-rendering the whole app shell.
+  // The geometry has its own context, and only the panel zone reads it.
+  // Keeping it out of shared panel state stops layout changes from re-rendering
+  // the whole app shell.
   const geometry = useMemo<PanelGeometryValue>(
     () => ({ panelWidth, layout }),
     [panelWidth, layout],
@@ -1137,7 +1135,7 @@ export function useOptionalPanel(): PanelContextValue | null {
  * The geometry of the panel region: its width and the wall's column tree.
  *
  * Read it only where the geometry is actually drawn. A component that reads
- * it re-renders on every frame of a drag.
+ * it re-renders whenever committed geometry changes.
  */
 export function usePanelGeometry(): PanelGeometryValue {
   const ctx = useContext(PanelGeometryContext);

@@ -201,6 +201,13 @@
   border-bottom: 1px solid var(--border);
 }
 
+.panel-card-header-compact {
+  justify-content: flex-end;
+  height: 24px;
+  padding: 0 4px;
+  border-bottom: none;
+}
+
 .panel-card-icon {
   display: inline-flex;
   align-items: center;
