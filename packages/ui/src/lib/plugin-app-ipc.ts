@@ -14,6 +14,7 @@
  * Host → guest:
  *   { channel: 'duya.plugin-app', id, ok, result?, error? }
  *   { channel: 'duya.plugin-app', type: 'event', documentToken, surfaceId, eventName, payload }
+ *   { channel: 'duya.plugin-app', type: 'theme', documentToken, theme }
  *
  * The guest sends `ready` after loading its document before it can receive
  * host events. Events are launched only to that frame and the current surface.
@@ -21,6 +22,12 @@
  * The guest never names the plugin, the App, the instance or the chat
  * session: the host owns those, and the Main process re-derives them from
  * the session record.
+ *
+ * `theme` is the one thing the guest cannot work out on its own. It renders
+ * in an opaque-origin sandboxed iframe, so duya's `data-theme` attribute and
+ * duya's CSS variables never cross the frame boundary. The host reads the
+ * theme it is rendering with and pushes it, and the guest selects the
+ * matching token set.
  */
 
 export const PLUGIN_APP_CHANNEL = "duya.plugin-app";
@@ -43,6 +50,14 @@ export interface PluginAppHostResponse {
   ok: boolean;
   result?: unknown;
   error?: string;
+}
+
+/** The theme the host is rendering with, pushed to the guest App. */
+export interface PluginAppHostThemeMessage {
+  channel: typeof PLUGIN_APP_CHANNEL;
+  type: "theme";
+  documentToken: string;
+  theme: "light" | "dark";
 }
 
 export interface PluginAppLaunch {

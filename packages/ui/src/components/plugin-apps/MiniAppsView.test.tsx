@@ -72,11 +72,11 @@ import { getPluginAppDocumentToken, isPluginAppEntryUrl } from "@/lib/plugin-app
 
 const alwaysSurface = {
   id: "overview", pluginId: "com.duya.viewer", pluginName: "Viewer", appId: "reports",
-  title: { en: "Overview", zh: "概览" }, icon: "chart-bar", server: "reports",
+  title: { en: "Overview", zh: "姒傝" }, icon: "chart-bar", server: "reports",
   resourceUri: "ui://reports/overview", availability: "always" as const,
 };
 const sessionSurface = {
-  ...alwaysSurface, id: "activity", title: { en: "Activity", zh: "活动" }, availability: "session" as const,
+  ...alwaysSurface, id: "activity", title: { en: "Activity", zh: "娲诲姩" }, availability: "session" as const,
 };
 
 beforeEach(() => {
@@ -90,6 +90,8 @@ beforeEach(() => {
   });
   mocks.onChanged = undefined;
   mocks.streamListener = undefined;
+  // The host reads the theme from <html data-theme>; keep it deterministic.
+  document.documentElement.setAttribute("data-theme", "dark");
 });
 
 describe("Mini Apps Plugin UI surface directory", () => {
@@ -145,6 +147,11 @@ describe("Mini Apps Plugin UI surface directory", () => {
     const guest = frame.contentWindow;
     expect(guest).toBeTruthy();
     const postMessage = vi.spyOn(guest!, "postMessage");
+    // The host also pushes the theme into the frame; this test is about the
+    // tool-driven event relay, so count only the event messages.
+    const eventMessages = () => postMessage.mock.calls
+      .map(([data]) => data as { type?: string })
+      .filter((data) => data?.type === "event");
     await waitFor(() => expect(mocks.streamListener).toBeTypeOf("function"));
 
     const sendMessage = (data: unknown, source: MessageEventSource | null, origin = "null") => {
@@ -161,12 +168,12 @@ describe("Mini Apps Plugin UI surface directory", () => {
         input: { surfaceId: "overview" },
       },
     }]);
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(eventMessages()).toHaveLength(0);
 
     sendMessage(ready, guest, "https://remote.example");
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(eventMessages()).toHaveLength(0);
     sendMessage(ready, guest);
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(eventMessages()).toHaveLength(0);
 
     mocks.streamListener?.([{
       type: "tool_use",
@@ -176,7 +183,7 @@ describe("Mini Apps Plugin UI surface directory", () => {
         input: { surfaceId: "overview", payload: { recordId: "r-17" } },
       },
     }]);
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(eventMessages()).toHaveLength(0);
     mocks.streamListener?.([{
       type: "tool_use",
       toolUse: {
@@ -188,7 +195,7 @@ describe("Mini Apps Plugin UI surface directory", () => {
       type: "tool_result",
       toolResult: { tool_use_id: "event-1", is_error: false },
     }]);
-    expect(postMessage).toHaveBeenCalledTimes(1);
+    expect(eventMessages()).toHaveLength(1);
 
     mocks.streamListener?.([{
       type: "tool_use",
@@ -232,7 +239,7 @@ describe("Mini Apps Plugin UI surface directory", () => {
       toolResult: { tool_use_id: "event-4", is_error: true },
     }]);
 
-    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(eventMessages()).toHaveLength(2);
     expect(postMessage).toHaveBeenCalledWith({
       channel: "duya.plugin-app",
       type: "event",
@@ -241,6 +248,41 @@ describe("Mini Apps Plugin UI surface directory", () => {
       eventName: "select",
       payload: { recordId: "r-17" },
     }, "*");
+  });
+
+  it("pushes duya's theme into the App and follows later theme switches", async () => {
+    const token = "B".repeat(43);
+    const entryUrl = `http://127.0.0.1:43128/${token}/index.html`;
+    mocks.openApp.mockResolvedValue({
+      ok: true,
+      sessionId: "launch-2",
+      launchNonce: "nonce-2",
+      entryUrl,
+    });
+    // The App cannot read `data-theme` across the sandbox boundary, so the
+    // host has to tell it which token set to use.
+    document.documentElement.setAttribute("data-theme", "dark");
+    render(<PluginAppHost pluginId="com.duya.viewer" appId="canvas" surfaceId="overview" />);
+
+    const frame = await screen.findByTitle("com.duya.viewer app") as HTMLIFrameElement;
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+    const themeMessages = () => postMessage.mock.calls
+      .map(([data]) => data as { type?: string; theme?: string })
+      .filter((data) => data?.type === "theme");
+
+    // The host pushes the theme once the document has loaded, and again
+    // whenever duya's own theme changes.
+    fireEvent.load(frame);
+    expect(postMessage).toHaveBeenCalledWith({
+      channel: "duya.plugin-app",
+      type: "theme",
+      documentToken: token,
+      theme: "dark",
+    }, "*");
+
+    document.documentElement.setAttribute("data-theme", "light");
+    await waitFor(() => expect(themeMessages().some((data) => data.theme === "light")).toBe(true));
+    postMessage.mockRestore();
   });
 
   it("keeps static entry launchers available if the surface directory API is unavailable", async () => {
