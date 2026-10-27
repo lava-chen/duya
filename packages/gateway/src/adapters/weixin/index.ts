@@ -112,6 +112,13 @@ export class WeixinAdapter extends BaseAdapter {
   // Group policy
   private groupPolicy: 'disabled' | 'allowlist' | 'pairing' = 'disabled';
   private groupAllowFrom: Set<string> = new Set();
+  /**
+   * Opt-in mention requirement for groups. Default off: iLink bot identities
+   * are usually not @-mentionable in a normal group, so requiring a mention
+   * would silently drop every group message.
+   */
+  private requireMention = false;
+  private mentionPatterns: RegExp[] = [];
 
   // Deduplication (timestamp-based for WeChat)
   private recentMsgIds = new Set<string>();
@@ -225,6 +232,17 @@ export class WeixinAdapter extends BaseAdapter {
     if (groupAllowFromRaw) {
       this.groupAllowFrom = new Set(groupAllowFromRaw);
     }
+
+    this.requireMention = weixinOptions?.require_mention === true;
+    this.mentionPatterns = ((weixinOptions?.mention_patterns as string[] | undefined) ?? [])
+      .map((pattern) => {
+        try {
+          return new RegExp(pattern, 'i');
+        } catch {
+          return null;
+        }
+      })
+      .filter((pattern): pattern is RegExp => pattern !== null);
 
     this.running = true;
     this.consecutiveFailures = 0;
@@ -641,6 +659,16 @@ export class WeixinAdapter extends BaseAdapter {
       videoPaths.length === 0
     ) {
       return;
+    }
+
+    // Mention requirement (opt-in, see `requireMention`). Slash commands always
+    // pass so an operator can drive the bot from a quiet group.
+    if (isGroup && this.requireMention) {
+      const mentioned = this.mentionPatterns.some((pattern) => pattern.test(text ?? ''));
+      if (!mentioned && !(text ?? '').startsWith('/')) {
+        console.log('[Weixin] Group message skipped (mention required):', chatId);
+        return;
+      }
     }
 
     // Content-fingerprint dedup (supplements message_id dedup, which is

@@ -20,13 +20,188 @@
    New Chat View Styles (lazy draft composer)
    ======================================== */
 
+/*
+ * Claude Code parity (2026-10-27): the new-chat page is a three-band column —
+ * title on top, the environment card in the middle, the composer pinned to the
+ * bottom. The geometry below was measured off a Claude Code 3.6556.2.0 capture
+ * (1920x1141 image pixels, ~1.385 image px per CSS px):
+ *
+ *   title band        10.8 CSS px, ink #949492
+ *   environment card  311x112 CSS px, transparent interior, 1 px #2C2C2C border
+ *   card top offset   307 CSS px from the content top
+ *   card centre       44% of the content height (slightly above centre)
+ *   path field pill   28 CSS px high, 12 CSS px text
+ *   footer row        10.8 CSS px
+ */
 .new-chat-view {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.new-chat-layout {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Title — Claude's "New session", duya's greeting. */
+.new-chat-title {
+  padding: 0.75rem 1.5rem 0;
+  flex-shrink: 0;
+}
+
+.new-chat-title-label {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* The environment card sits above the vertical centre, as in the reference.
+   Centring it in the band keeps that proportion on any window height; a fixed
+   offset would drift as soon as the window grows. */
+.new-chat-environment {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 0;
+}
+
+.new-chat-composer {
+  flex-shrink: 0;
+  width: 100%;
+  padding: 0 1.5rem 1rem;
+}
+
+.new-chat-composer > * {
+  max-width: 56rem;
+  margin: 0 auto;
+}
+
+/* ========================================
+   Environment Card (project / working directory)
+   ======================================== */
+
+.environment-card {
+  width: 19.5rem;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
   overflow: hidden;
+  background: transparent;
+}
+
+/* The editable path field — the pill on top of the reference card. */
+.environment-card-path {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem;
+  padding: 0 0.375rem 0 0.5rem;
+  height: 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.3125rem;
+}
+
+.environment-card-path-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: inherit;
+}
+
+.environment-card-path-input:disabled {
+  opacity: 0.5;
+}
+
+.environment-card-path-check {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* The project that owns the directory. */
+.environment-card-project {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.625rem 0.5rem;
+  min-width: 0;
+}
+
+.environment-card-project-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.environment-card-project-name {
+  font-size: 0.75rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-card-divider {
+  height: 1px;
+  background: var(--border);
+}
+
+/* The disclosure that opens the project list. */
+.environment-card-choose {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 0.75rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.environment-card-choose:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.environment-card-choose:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.environment-card-choose-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-card-menu {
+  min-width: 320px;
+  max-width: 400px;
+}
+
+.environment-card-notice {
+  padding: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  text-align: center;
 }
 
 .new-chat-content {
@@ -270,7 +445,6 @@
   width: 100%;
   max-width: 800px;
   margin-bottom: 2rem;
-  /* Composer never gets squeezed — the recent list absorbs the shortfall. */
   flex-shrink: 0;
 }
 
@@ -297,88 +471,5 @@
 .welcome-project-row .welcome-project-dropdown {
   left: 0;
   transform: none;
-}
-
-.welcome-recent {
-  width: 100%;
-  max-width: 700px;
-  /* The only flexible region: shrinks on short windows and scrolls
-     internally instead of pushing the composer out of position. */
-  flex: 0 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.welcome-recent h2 {
-  font-size: 0.65rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  margin: 0 0 0.5rem;
-  font-family: var(--font-mono);
-}
-
-.recent-list {
-  display: flex;
-  flex-direction: column;
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.recent-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.35rem 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-align: left;
-  width: 100%;
-}
-
-.recent-item:hover {
-  background: transparent;
-}
-
-.recent-item:hover .recent-title {
-  color: var(--accent);
-}
-
-.recent-item-left {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.recent-title {
-  font-size: 0.85rem;
-  font-weight: 400;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transition: color 0.15s ease;
-}
-
-.recent-project {
-  font-size: 0.75rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.recent-date {
-  font-size: 0.75rem;
-  color: var(--muted);
-  flex-shrink: 0;
-  margin-left: 1rem;
 }
 

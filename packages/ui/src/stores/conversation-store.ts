@@ -93,7 +93,15 @@ export interface ProjectGroup {
 }
 
 export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
-export type ProjectGroupBy = 'byProject' | 'singleList';
+/**
+ * Sidebar grouping modes.
+ *
+ * Claude parity (2026-10-26): Claude Code's sidebar is ALWAYS a list of
+ * groups — there is no flat "all sessions" view. duya's old third mode
+ * (`singleList`, labelled 「不分组」/「会话」) had no counterpart in the
+ * reference product, so it is gone: two modes only, folder and date.
+ */
+export type ProjectGroupBy = 'byProject' | 'byDate';
 
 // View types for state-driven UI
 export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'apps' | 'extensions' | 'projects' | 'workflow';
@@ -481,9 +489,12 @@ function migratePersistedSort(value: unknown): ProjectSortBy {
 /** Migrate old group state to the new model. */
 function migratePersistedGroup(value: unknown, state: HydratedConversationInput): ProjectGroupBy {
   const legacyGroup = (state as unknown as Record<string, unknown>).projectFilter as string | undefined;
-  if (legacyGroup && !value) return 'byProject';
-  if (value === 'byProject' || value === 'singleList') return value;
-  return 'byProject';
+  if (legacyGroup && !value) return 'byDate';
+  if (value === 'byProject' || value === 'byDate') return value;
+  // 'singleList' was removed on 2026-10-26 (Claude Code has no flat session
+  // list). Existing saves land on date groups, which is what Claude shows
+  // by default.
+  return 'byDate';
 }
 
 /**
@@ -729,7 +740,10 @@ export const useConversationStore = create<ConversationState>()(
       expandedThreads: new Set<string>(),
       parentSessionId: null,
       projectSortBy: 'lastActivity',
-      projectGroupBy: 'byProject',
+      // Claude parity (2026-10-26): Claude Code's sidebar opens on date
+      // groups (Today / Yesterday / Previous 7 days / Older), so duya does
+      // the same for fresh installs.
+      projectGroupBy: 'byDate',
       noProjectWorkspace: '',
       newChatDraft: EMPTY_NEW_CHAT_DRAFT,
       isNewChatDrafting: false,

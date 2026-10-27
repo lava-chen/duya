@@ -160,6 +160,18 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['cli'],
   },
   {
+    name: 'project',
+    label: 'Switch project',
+    labelZh: '切换项目',
+    // Not `add-dir`: that attaches another root to the session you are in,
+    // this one leaves the directory the surface works in.
+    description: 'Start a session in another project directory',
+    descriptionZh: '在另一个项目目录里开启一个新会话',
+    argsHint: '[path]',
+    category: 'session',
+    surfaces: ['cli'],
+  },
+  {
     name: 'rename',
     label: 'Rename session',
     labelZh: '重命名会话',

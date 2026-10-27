@@ -15,6 +15,7 @@ import {
   CopyIcon,
   PlusIcon,
   CaretRightIcon,
+  CaretDownIcon,
   TrashIcon,
   XIcon,
 } from "@/components/icons";
@@ -377,6 +378,9 @@ export function ProjectGroupItem({
             <FolderIcon size={14} className="project-group-icon" />
           )}
           <span className="project-group-name">{project.projectName}</span>
+          <span className={`project-group-caret${isExpanded ? " expanded" : ""}`} aria-hidden="true">
+            {isExpanded ? <CaretDownIcon size={12} /> : <CaretRightIcon size={12} />}
+          </span>
 
           {/* Plus button - visible on hover, for creating new thread */}
           <button

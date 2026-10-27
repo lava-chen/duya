@@ -473,6 +473,23 @@ html[data-backdrop] .app-content-column .app-main-inner {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
+/* The more menu closes the launcher row. A hairline separates it from the
+   panel icons so it does not read as one more panel. */
+.titlebar-panel-launcher-more {
+  margin-left: 8px;
+  position: relative;
+}
+
+.titlebar-panel-launcher-more::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 7px;
+  bottom: 7px;
+  width: 1px;
+  background: var(--border);
+}
+
 /* Windows: reserve space for window controls (min/max/close) on the right */
 .titlebar.is-win .titlebar-actions {
   padding-right: 140px;

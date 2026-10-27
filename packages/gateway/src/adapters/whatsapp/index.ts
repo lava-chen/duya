@@ -71,6 +71,9 @@ export class WhatsAppAdapter extends BaseAdapter {
 
   private botNumber = '';
   private seenMessageIds = new Set<string>();
+  /** Reconnect bookkeeping: WhatsApp Web drops the socket on sleep/network change. */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
 
   constructor() {
     super({ rateLimitMs: CHAT_RATE_LIMIT_MS });
@@ -123,6 +126,7 @@ export class WhatsAppAdapter extends BaseAdapter {
     client.on('ready', () => {
       console.log('[WhatsApp] Client is ready');
       this.clientReady = true;
+      this.reconnectAttempts = 0;
       this.updateHealthConnected();
       this.botNumber = client.info?.wid?._serialized ?? '';
       this.health.botUsername = this.botNumber;
@@ -137,6 +141,9 @@ export class WhatsAppAdapter extends BaseAdapter {
       this.clientReady = false;
       this.health.connected = false;
       this.updateHealthError(reason);
+      // Without this the adapter stays "running" but deaf forever after a
+      // laptop sleep or a network switch.
+      this.scheduleReconnect();
     });
 
     client.on('message_create', async (msg: unknown) => {
@@ -154,6 +161,11 @@ export class WhatsAppAdapter extends BaseAdapter {
     this.running = false;
     this.clientReady = false;
     this.health.connected = false;
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
 
     if (this.client) {
       const client = this.client as { destroy: () => Promise<void> };
@@ -269,6 +281,52 @@ export class WhatsAppAdapter extends BaseAdapter {
     } catch {
       // Ignore
     }
+  }
+
+  /** Clear the "typing…" state (whatsapp-web.js `clearState`). */
+  async stopTyping(chatId: string): Promise<void> {
+    if (!this.clientReady || !this.client) return;
+    try {
+      const client = this.client as {
+        getChatById: (chatId: string) => Promise<{ clearState?: () => Promise<void> }>;
+      };
+      const chat = await client.getChatById(chatId);
+      await chat.clearState?.();
+    } catch {
+      // Ignore
+    }
+  }
+
+  /**
+   * Re-initialise the WhatsApp Web client after a disconnect, with exponential
+   * backoff. The puppeteer page is dead by then, so the client must be rebuilt
+   * rather than simply re-`initialize()`d.
+   */
+  private scheduleReconnect(): void {
+    if (!this.running || this.reconnectTimer) return;
+    this.reconnectAttempts += 1;
+    const delay = Math.min(5000 * 2 ** (this.reconnectAttempts - 1), 60_000);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.restartClient().catch(() => this.scheduleReconnect());
+    }, delay);
+  }
+
+  private async restartClient(): Promise<void> {
+    const config = this.config;
+    if (!config || !this.running) return;
+
+    const client = this.client as { destroy: () => Promise<void> } | null;
+    try {
+      await client?.destroy();
+    } catch {
+      // The old page is usually already gone.
+    }
+    this.client = null;
+    this.clientReady = false;
+    this.running = false;
+
+    await this.start(config);
   }
 
   // ---------------------------------------------------------------------------

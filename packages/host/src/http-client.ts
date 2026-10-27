@@ -222,7 +222,16 @@ import type {
   HostLocalProviderModelCapabilityApiV1,
   ProviderModelCapabilityRecord,
 } from '@duya/agent-protocol/model-capabilities';
-import type { HostProviderCatalog } from '@duya/agent-protocol/provider-catalog';
+import type {
+  HostLocalProviderManagementApiV1,
+  HostProviderCatalog,
+  HostProviderDefaultResult,
+  HostProviderDeleteResult,
+  HostProviderList,
+  HostProviderMutationResult,
+  HostProviderTestResult,
+  HostProviderWriteInput,
+} from '@duya/agent-protocol/provider-catalog';
 import type {
   HostAppConnectionRecord,
   HostAppConnectionStatus,
@@ -407,7 +416,8 @@ export class HostSessionHttpClient implements
   HostRunApiV1,
   HostProjectApiV1,
   HostResearchApiV1,
-  HostHealthApiV1 {
+  HostHealthApiV1,
+  HostLocalProviderManagementApiV1 {
   constructor(
     private readonly origin: string,
     private readonly token: string,
@@ -1537,6 +1547,54 @@ export class HostSessionHttpClient implements
       '/v1/local/provider-catalog',
     );
     return result.catalog;
+  }
+
+  /**
+   * The provider table as writable: every row, no key.
+   *
+   * Separate from the catalog because the two answer different questions —
+   * "what can I pick" versus "what is configured" — and because a response
+   * shaped for a settings screen has to carry `maskedApiKey` and `revision`,
+   * neither of which belongs in a picker's payload.
+   */
+  async listProviders(): Promise<HostProviderList> {
+    return this.request<HostProviderList>('GET', '/v1/local/providers');
+  }
+
+  /** Create or replace one provider; the returned row never carries the key. */
+  async upsertProvider(input: HostProviderWriteInput): Promise<HostProviderMutationResult> {
+    return this.request<HostProviderMutationResult>('POST', '/v1/local/providers/upsert', input);
+  }
+
+  async deleteProvider(
+    providerId: string,
+    expectedRevision?: string,
+  ): Promise<HostProviderDeleteResult> {
+    return this.request<HostProviderDeleteResult>('POST', '/v1/local/providers/delete', {
+      providerId,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    });
+  }
+
+  /** Point the configuration's default at `providerId`, or clear it with null. */
+  async setDefaultProvider(
+    providerId: string | null,
+    expectedRevision?: string,
+  ): Promise<HostProviderDefaultResult> {
+    return this.request<HostProviderDefaultResult>('POST', '/v1/local/providers/set-default', {
+      providerId,
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+    });
+  }
+
+  /**
+   * Ask one stored provider for its model list.
+   *
+   * The key stays in the Host: this is the only way a client can find out
+   * whether a saved provider answers without ever holding its credential.
+   */
+  async testProvider(providerId: string): Promise<HostProviderTestResult> {
+    return this.request<HostProviderTestResult>('POST', '/v1/local/providers/test', { providerId });
   }
 
   async listProviderModelCapabilities(providerId: string): Promise<readonly ProviderModelCapabilityRecord[]> {

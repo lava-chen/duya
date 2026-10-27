@@ -23,6 +23,13 @@ export interface SubAgentRowInfo {
    * the row now surfaces it as a "read full transcript" affordance.
    */
   outputFilePath?: string;
+  /**
+   * First and last progress event of this run, in epoch milliseconds.
+   * They bracket the run, so their difference is its duration — the
+   * background-tasks panel shows it the way the reference product does.
+   */
+  startedAt?: number;
+  endedAt?: number;
 }
 
 function groupEventsByAgent(events: AgentProgressEventWithMeta[]): Map<string, AgentProgressEventWithMeta[]> {
@@ -112,6 +119,8 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
         eventCount: agentEvents.length,
         sessionId: dbSessionId,
         outputFilePath: getOutputFilePathFromEvents(agentEvents),
+        startedAt: agentEvents[0]?.receivedAt,
+        endedAt: agentEvents[agentEvents.length - 1]?.receivedAt,
       });
     }
 

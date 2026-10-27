@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
+import { useSessionSeenStore } from "@/stores/session-seen-store";
 import { ChatView } from "@/components/chat/ChatView";
 import { BotDirectChatView } from "@/components/chat/BotDirectChatView";
 import { AgentDmPairView } from "@/components/chat/bot/AgentDmPairView";
@@ -213,6 +214,14 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
     selectedThreadRef.current = activeThreadId;
     selectionLeaseRef.current += 1;
   }
+
+  // Claude parity (2026-10-27): opening a session clears its "finished but
+  // not viewed" blue dot. This is the only place the flag is cleared — the
+  // user looking at the session IS the definition of having seen it.
+  useEffect(() => {
+    if (!activeThreadId) return;
+    useSessionSeenStore.getState().markSeen(activeThreadId);
+  }, [activeThreadId]);
 
   const [workflowRunRequest, setWorkflowRunRequest] = useState<WorkflowRunNavigationRequest | null>(null);
   const consumeWorkflowRunRequest = useCallback(() => setWorkflowRunRequest(null), []);
@@ -563,7 +572,13 @@ function AppShellInner({ onReady, uiServices }: { onReady?: () => void; uiServic
 
       // Only add messages if this session is the active thread
       const activeThreadId = useConversationStore.getState().activeThreadId;
-      if (sessionId !== activeThreadId) return;
+      if (sessionId !== activeThreadId) {
+        // Claude parity (2026-10-27): output the user has not looked at yet
+        // is what turns the row's state dot blue. The session on screen is
+        // seen by definition, so only the other rows are stamped.
+        useSessionSeenStore.getState().notifyOutput(sessionId);
+        return;
+      }
 
       // Convert IPC messages to store Message format (same as mapIpcMessagesToStore).
       // The broadcast rows are snake_case MessageRow — convert them through
