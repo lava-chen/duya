@@ -1,9 +1,9 @@
 # 侧栏对齐（桌面端实测基线）
 
-状态：active · 负责人：mavis 会话 `mvs_3a16cab8300945e89691a940d998fbf5` · 更新：2026-10-22
-分支：`codex/sidebar-claude-redo` · worktree：`.claude/worktrees/sidebar-claude-redo` · base：`2e6f265d`（最新 master）· owner：mavis
+状态：active · 负责人：mavis 会话 `mvs_4801746c549f4c79a14713731e351b20` · 更新：2026-10-27
+分支：`codex/sidebar-claude-redo`（前两轮 · PR #366）→ `codex/ui-adjust`（第三轮起）· worktree：`.claude/worktrees/ui-adjust` · base：`a62d5415` · owner：mavis
 
-两轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）。
+六轮：第一轮对齐 **Codex 桌面端**；第二轮按用户实机截图对齐 **Claude Code 桌面端**（行距 / 默认宽度 / 行内按钮收纳）；第三轮对齐 **Claude Code 的分组与排序模型**（分组方式 / 日期分桶 / 组头动作）；第四轮对齐字号与字色；第五轮去掉「不分组」并对齐组间距；第六轮做组头 hover、三色状态点与 worktree 徽标。
 
 ## 目标与边界
 
@@ -137,3 +137,237 @@ Claude 的前置圆环被明确排除。
 
 1. PR #366 待审，**未获授权不合并**。
 2. 未做：把导航从 5 项收敛到 Claude 的 2 项 + 「更多」（属产品决策，本轮不动功能）。
+
+---
+
+## 第三轮：分组与排序模型对齐 Claude Code（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `a62d5415` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 基线（Claude Code 桌面端 3.6556.2.0，Code 模式，实测）
+
+- 组头右侧两个控件：调节图标（AX 名 `Group and sort`）+ 最右缘的 `+`（`New session in <group>`）。
+- `Group and sort` 菜单：`Group by → Folder`（当前值显示在行右侧）、`Sort by → Last updated`、分隔线、
+  `Descending`/`Ascending`、`Show`、`New section`、`Reset to defaults`（禁用）、`View all`。
+- `Sort by` 子菜单实测项：`Last updated`(✓)、`Date created`、`Name`、`Descending`(✓)、`Ascending`。
+- **未能打开 `Group by` 子菜单**（Radix 需真实 hover，合成 pointer 事件不触发），
+  故「Claude 是否提供 `Date` 分组」**未经证实**。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `sidebar/section-system.ts` | 新增 `ThreadDateBucket`（today / yesterday / last7days / older）与 `DATE_BUCKET_ORDER`；`getThreadDateBucket` 按两个本地午夜求天数差，`Math.round` 吸收夏令时 ±1h；`recencyAt` 优先于 `updatedAt`；非法时间戳落 `older` |
+| `layout/app-sidebar.tsx` | 分组方式三选项（文件夹 / 日期 / 不分组）；日期段固定四桶顺序、空桶不渲染、空工作区保留一个「今天」头（否则无处切回）；`dateVisibleCounts` 让每个日期桶的「查看全部」独立计数；`isGroupingHeader` 收敛为仅系统段（分组方式是全局开关，不该两个组头控制同一列表）；系统段在有用户段时改名「未分组」；日期段 tone 统一 `bold`；日期段也带组头动作 |
+| `sidebar/SectionActions.tsx` | 组头按钮顺序 `[新建][搜索][过滤器]` → `[过滤器][搜索][新建]`；分组方式菜单加入「日期」项 |
+| `i18n/{zh,en}.ts` | 新增 `sidebar.date.last7days`、`sidebar.section.ungrouped`；排序字段标签改为 创建时间 / 最近更新 / 名称（原「优先级」「手动排序」与实际比较器不符） |
+| `sidebar/section-system.test.ts` | 新增 `getThreadDateBucket` 7 例；原 17 例完整保留（diff 为纯新增） |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `a62d5415` dirty | Node / jsdom | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净 |
+| `a62d5415` dirty | Node / jsdom | `npx vitest run .../section-system.test.ts .../SectionActions.test.tsx` | 0 · **32/32** | 17 旧 + 7 新 + 8 组头 |
+| `a62d5415` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `a62d5415` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 全量类型门禁通过 |
+| `a62d5415` dirty | Windows / Electron | `npm run electron:dev`（worktree 内） | 应用起来，三种模式实跑 | 见下 |
+
+### 真机实测
+
+- **不分组**：段标题「会话」，平铺会话 + 「展开显示 (20 个)」。
+- **日期**：四段 今天 / 昨天 / 最近 7 天 / 更早，各带组头动作；「查看全部」计数互相独立
+  （最近 7 天 `(2 个)`、更早 `(20 个)`），证明 per-bucket 计数生效。
+- **文件夹**：两个段头不再同名 —— 用户段「项目」+ 系统段「未分组」，各带 过滤器 / 在本组中搜索 / 新项目。
+- 组头按钮顺序实测 过滤器 → 搜索 → 新建；过滤器菜单为「分组方式 / 排序方式 / 显示空分组」，排序当前值「创建时间」。
+
+### 接续 / 结果
+
+- 第三轮改动**已实现、已验证、未提交**（worktree 18 个 modified 文件，本轮占 6 个；
+  `packages/host/bundle/*` 是在途重建产物，非本轮范围）。
+- 已知差异：**未**加 Claude 那种独立升降序开关 —— 判为超出「分组逻辑」范围，留作可选。
+- 阻塞：Claude 的 `Group by` 子菜单打不开，四桶口径按 Claude Code CLI `/resume` 惯例推断，未获实测证实。
+- 副作用：验证期间把本机 `duya-conversations` 的 `projectGroupBy` 从 `singleList` 改为 `byProject`（实测三模式），
+  收尾时已改回 `singleList` 并刷新确认段标题回到「会话」。
+- 下一步（可选，待用户决定）：顶层直接是文件夹分组、取消 section 层。
+
+---
+
+## 第四轮：侧栏字体对齐 Claude Code（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · commit `41751230`
+
+### 基线（实测，非目测）
+
+Claude Code 桌面端 3.6556.2.0 正在运行，窗口 1490×858 物理像素，DPR 1.25。
+抓窗口截图后按 ink band 量：字高 = 第一行墨点到最后一行墨点；行距 = 相邻 band 顶边间距；
+字色 = band 内最亮像素（抗锯齿下最接近真字色，模态色是背景不是字色）。
+
+| 元素 | 字号 | 颜色 | 测量依据 |
+| --- | --- | --- | --- |
+| 会话标题 | **13px** | `#DDDCDC` | ink band 17 物理 px |
+| 导航行（新聊天） | **13px** | `#DDDCDD` | ink band 17 物理 px |
+| 分组标题（置顶 / 最近） | **12px** | `#8F8C8C` | ink band 15 物理 px |
+| 行距 | **31.2px** | 侧栏背景 `#20191A` | band 顶边间距 39 物理 px |
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `styles/sidebar.css` | 新增 `--sidebar-text` / `--sidebar-muted` 侧栏专属色板（暗色 `#dddcdc` / `#8f8c8c`，浅色回落到全局 `--text` / `--muted`）；导航行、会话标题 13.5→**13px**；项目分组名 13.5→13px；会话行与导航行改用侧栏色板 |
+| `styles/sidebar-sections.css` | 分组标题 13.5→**12px**，颜色改走 `--sidebar-muted` |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `41751230` 干净 | Node / jsdom | `node .claude/ui-check.mjs`（UI 包 typecheck + 全部 UI 测试并行） | 0 · typecheck 65s / tests 42s | 全绿 |
+| `41751230` 干净 | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `41751230` 干净 | Windows / Electron + CDP | `node .claude/measure-duya-sidebar.mjs` | 0 | 实机计算样式：会话标题 13px `rgb(221,220,220)`；分组标题 12px `rgb(143,140,140)`；`--sidebar-text: #dddcdc` · `--sidebar-muted: #8f8c8c` |
+
+### 接续 / 结果
+
+- 第四轮**已实现、已验证、已提交**（`41751230`）。
+- 与基线逐项吻合：字号 13/13/12、字色 `#DDDCDC` / `#8F8C8C` 与实测值一致。
+- 浅色主题未实测 Claude 对应值，暂沿用 duya 全局色板。
+
+---
+
+## 第五轮：去掉「不分组」+ 组间距对齐 Claude（2026-10-26）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `d293eab2` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 触发
+
+用户实机截图两条批注：①「会话」段在 Claude Code 里**没有对应设计**；②组别之间要有间隔，
+组标题颜色要和 session 行不一样。
+
+### 实测（像素采样，非目测）
+
+| 指标 | Claude Code | duya 改前 | duya 改后 |
+| --- | --- | --- | --- |
+| 组标题墨迹峰值色 | `#898781` | `#8F8C8C` | 不变 |
+| 会话标题墨迹峰值色 | `#C3C2B7` | `#DDDCDC` | 不变 |
+| 组内行墨迹间距 | 20 物理 px | 20 | 20 |
+| 导航 → 首个组标题墨迹间距 | 45 | 25 | **45** |
+| 组 → 组标题墨迹间距 | 34 | 14 | **34** |
+| 组间留白（盒模型） | — | **0 px** | **16 px** |
+
+> 颜色在第四轮已对齐（`--sidebar-text` / `--sidebar-muted`），本轮实测确认两者的**相对**差值与 Claude 一致。
+> 用户截图中两者同色，是因为那张图取自**主检出 master** —— master 的 `.app-sidebar .thread-item`
+> 还没有 `color: var(--sidebar-text)`，会话标题回落到 `--muted`。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `stores/conversation-store.ts` | `ProjectGroupBy` 去掉 `'singleList'`，只剩 `'byProject' \| 'byDate'`；持久化的 `singleList` / 未知值迁移到 `'byDate'`；默认分组方式由 `byProject` 改为 `byDate`（Claude 默认就是日期分组） |
+| `layout/app-sidebar.tsx` | 删除 singleList 分支：平铺计数 `flatListVisibleCount`、「会话」标题、「查看全部」的非日期分支 |
+| `sidebar/SectionActions.tsx` | 分组方式子菜单只剩 文件夹 / 日期 |
+| `i18n/{zh,en}.ts` | 删 `project.inOneList`、`sidebar.section.sessions` |
+| `styles/sidebar-sections.css` | `.sidebar-section-item` 加 `margin-top: 16px` —— 组间留白从 0 变成 Claude 的 16 CSS px |
+| `sidebar/SectionActions.test.tsx` / `stores/__tests__/conversation-store.hydration.test.tsx` | 断言改为两选项；新增 `singleList → byDate` 迁移用例 |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `d293eab2` dirty | Node | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净 |
+| `d293eab2` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/layout packages/ui/src/stores` | 0 · **376/376** | 含两个被本轮改动打断的用例（已改断言） |
+| `d293eab2` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `d293eab2` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 全量类型门禁通过 |
+| `d293eab2` dirty | Windows / Electron + CDP | CDP 可信输入事件点组头 ⚙ → hover「分组方式」 | 子菜单文本 = **日期 文件夹** | 两项，不分组已消失 |
+| `d293eab2` dirty | Windows / Electron + CDP | CDP 量 `getBoundingClientRect` | 组间盒模型间距 **16 px** × 3 | 与 Claude 墨迹间距逐项吻合 |
+
+### 接续 / 结果
+
+- 第五轮**已实现、已验证、已提交**（`34bffd74`，10 个文件：store / app-sidebar / SectionActions / i18n / CSS / 测试 / 本计划与路由表）。
+- 已知差异：Claude 的 `Group by` 子菜单仍打不开，四桶口径与「Claude 是否有 Date 分组」**未经实测证实**。
+- 副作用：本机 `duya-conversations` 的 `projectGroupBy` 验证期间来回切换，收尾为 `byDate`（与新默认一致）。
+- 并行会话提示：同一 worktree `codex/ui-adjust` 上有另一个会话在并发提交（第四轮字体、面板等）；
+  本轮只提交了上表 10 个文件，其余未提交改动属对方。
+
+---
+
+## 第六轮：组头 hover、三色状态点、worktree 徽标（2026-10-27）
+
+分支 `codex/ui-adjust` · worktree `.claude/worktrees/ui-adjust` · base `f2b0dc3e` · 会话 `mvs_4801746c549f4c79a14713731e351b20`
+
+### 触发
+
+用户三条批注：
+
+1. 组头（最近 7 天）hover 不要有阴影/背景高亮 —— Claude 只是**字体亮一点**。
+2. session 行尾小圆点三色语义：**黄 = 等用户**（最后问了问题 / 要批准 / 要回答）、
+   **蓝 = 已结束但用户还没查看**、**红 = 报错**。
+3. worktree 图标：**创建 branch / 提交 PR / merge 各一个图标**，不止一次就在图标后加数字，样式同 Claude 截图；
+   用户提示「worktree 的基础 duya 已经有实现」。
+
+### 实测（Claude Code 桌面端 3.6556.2.0，PrintWindow 像素采样 + AX 树）
+
+| 元素 | 坐标(X,Y,W,H) | 颜色 | 语义（AX 树） |
+| --- | --- | --- | --- |
+| 绿色图标 | 304,354,12,11 | `#32D64B` | 标题带 **Open** → PR Open |
+| 绿色图标 | 304,556,12,11 | `#32D64B` | 「项目概览 **Open**」 |
+| 黄色圆点 | 336,476,8,7 | `#FAB219` | 黄=等用户 |
+| 蓝色圆点 | 336,558,8,8 | `#2A78D6` | 蓝=已结束未查看 |
+| 紫色图标 | 292,594,12,11 | `#B796FF` | 标题带 **Merged · 3 pull requests** → 紫色 + 数字「3」 |
+| 紫色图标 | 304,631,12,11 | `#B796FF` | 「大型项目 scripts 目录管理 **Merged**」 |
+| 紫色图标 | 304,706,12,11 | `#B796FF` | 「本地 TUI 的 Agent 链路 **Merged**」 |
+
+8× 放大确认：**绿色 = 双竖条 + 上下节点 = lucide `git-pull-request`**；
+**紫色 = 一竖条 + 侧分支 + 节点 = lucide `git-merge`**（两者形状不同，不是同图标换色）。
+
+### 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| `styles/sidebar-sections.css` | 组头 hover **删掉 `background: color-mix(...)`**，只留 `color: var(--sidebar-text-hover)`；三个系统段的 `background: transparent` 特判收敛为通用规则；组名继承 hover 色 |
+| `styles/sidebar.css` | `.app-sidebar` 新增 `--sidebar-text-hover`（`--sidebar-muted` 55% ↔ `--sidebar-text`）；新增 `--sidebar-status-awaiting:#fab219`、`--sidebar-status-unread:#2a78d6`、`--sidebar-badge-pr:#32d64b`、`--sidebar-badge-merge:#b796ff`；新增 `.thread-item-badges` / `.thread-item-badge*` 规则 |
+| `stores/session-seen-store.ts`（新） | zustand + localStorage（`sidebar.sessionUnreadAt`）：`notifyOutput(sessionId)` / `markSeen(sessionId)` |
+| `hooks/useSessionUnreadBadge.ts`（新） | 结合 store + `subscribeToPhase` + `getSessionStatus` 探针（4s 缓存 / 8s 重查），抑制「还在跑却显示蓝点」 |
+| `hooks/useSessionWorktreeBadges.ts`（新） | `observeIntegrationsForSession` → live PR 计数（`unknown` **不**计 open）+ merged 计数；`observeCheckoutForSession` → branch 计数；30s 缓存 + 并发上限 4 + **本地路径预筛**（仅路径含 `worktrees` 段才问 checkout） |
+| `components/shared/SessionWorktreeBadges.tsx`（新） | branch（`--sidebar-muted`）/ PR（`#32d64b`）/ merge（`#b796ff`）三个 12px 图标，**计数 >1 才显示数字** |
+| `components/icons.tsx` | 新增 lucide `GitPullRequest` / `GitMerge` 导入与 `GitPullRequestIcon` / `GitMergeIcon` 导出 |
+| `components/shared/ThreadListItem.tsx` | `SessionStatus` 加 `"unread"`；状态推导链加 unread 分支；徽标插在状态点之前 |
+| `App.tsx` | `onMessageNew` 广播中非 active session → `notifyOutput(sessionId)`；`activeThreadId` 变化 → `markSeen(activeThreadId)` |
+| `i18n/{zh,en}.ts` | 新增 `thread.status.unread` / `thread.badge.branch` / `thread.badge.pullRequest` / `thread.badge.merged` |
+| `components/shared/ThreadListItem.test.tsx` | 新增 7 例：蓝点出现 / 运行时无蓝点 / markSeen 后消失 / PR 计数 >1 才显示数字 / `unknown` 不计 open / branch 徽标 / 普通目录不向 Host 问 checkout |
+
+### 验证记录
+
+| SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
+| --- | --- | --- | --- | --- |
+| `f2b0dc3e` dirty | Node | `npx tsc --noEmit -p packages/ui/tsconfig.json` | 0 | UI 包类型干净（跑了两次） |
+| `f2b0dc3e` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/shared/ThreadListItem.test.tsx` | 0 · **31/31** | 含本轮新增 7 例 |
+| `f2b0dc3e` dirty | Node / jsdom | `npx vitest run packages/ui/src/components/shared packages/ui/src/stores packages/ui/src/hooks` | 0 · **33 文件 / 303 用例** | 无回归 |
+| `f2b0dc3e` dirty | Windows | `npm run architecture:check` | 0 · no new boundary violations | 3 个 baseline 指纹未再触发（既有情况） |
+| `f2b0dc3e` dirty | Windows / Node | `npm run typecheck:all` | **0**（`TYPECHECK_EXIT=0`） | 19 个阶段全绿（build:packages 21 包） |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | 量组头计算样式 | 静息 `rgb(143,140,140)` = `#8F8C8C`；hover 解析 `#B2B0B0`；**背景 `rgba(0,0,0,0)`** | 43 行会话，组名「昨天 / 最近 7 天 / 更早」 |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | localStorage 写入 unread → reload | 渲染 1 个 `.thread-item-status-unread`，色与底均 **#2A78D6** | 端到端走通 store → hook → 组件 → CSS |
+| `f2b0dc3e` dirty | Windows / Electron + DevTools | `window.electronAPI.workspaceLifecycle.integrations.observeForSession(id)` | 桥真实存在；该 profile 0 条 integration、checkout 返回 `null` | 徽标**正确地不渲染**（本机无 PR/托管 checkout 数据） |
+
+### 接续 / 结果
+
+- 第六轮**已实现、已验证**（三条批注的代码落地全部完成）。
+- **hover 目标色是推导值**：Claude 真窗口在另一虚拟桌面且 foreground 被锁，取不到官方 hover 色；
+  用已实测的两个色值（静息 `#8F8C8C` ↔ 会话标题 `#DDDCDC`）取 55% ⇒ `#B2B0B0`。
+  若后续能激活 Claude 窗口，应重新采样校正这个比值。
+- **branch 次数无法实现**：不存在 session→branch 历史表，`HostSessionCheckoutView` 只有单值、
+  `HostCheckoutObserved` 无 branch 名 —— 本轮只渲染 branch 图标（计数恒为 1，不显示数字）。
+  要支持计数需新增持久化表 + 协议字段 + Host 实现。
+- **蓝色「已结束未查看」依赖 renderer 侧信号**：`unreadAt` 由全局 `message:new` 广播写入，
+  后台 session 的「是否仍在跑」靠 `getSessionStatus` 探针（4s 缓存 / 8s 重查）。
+  跨进程重启后 `completedAt` 语义仍不可用；要权威判定需把 `runs.finished_at` 经 preload 暴露给 renderer。
+- **并行会话提示**：同一 worktree `codex/ui-adjust` 上并行会话仍在提交（面板布局 / BackgroundTasksPanel）。
+  `icons.tsx` / `i18n/{en,zh}.ts` 三处双方都有改动，本轮用
+  `docs-local/research/sidebar-group-parity/stage-own-hunks.mjs` 按标记过滤 hunk 后
+  `git apply --cached` **只暂存我方 hunk**，其余 16 个文件留在工作区。
+
+
+
+### PR #522 与最新 master 集成（2026-10-27）
+
+- PR head `7491821b` 原 base 为 `d80ca3c6`；合并期间 master 前进到 `a99e1444`（含已合入的 PR #524、#525）。在独立 managed worktree 合入该 master，仅 `docs/exec-plans/README.md` 有冲突，保留 master 最新索引；UI 代码无冲突。
+- 合并后复验：`npm exec -- vitest run packages/ui/src --reporter=dot` 通过（235 文件 / 2406 用例，2 skipped）；`npm run architecture:check` 通过（无新增违规）；`npm run typecheck:all` 通过。
+- 下一步：提交 master 集成记录、推送 PR #522、等待新 head CI 后再合并。

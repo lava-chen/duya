@@ -9,7 +9,6 @@
 // the registry can both depend on it without depending on each other.
 
 export type PageId =
-  | "files"
   | "workspace"
   | "review"
   | "terminal"
@@ -17,6 +16,7 @@ export type PageId =
   | "bot-settings"
   | "room-settings"
   | "session-messages"
+  | "background-tasks"
   | "plugin-app";
 
 export interface PageTab {

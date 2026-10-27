@@ -7,6 +7,7 @@ import type { PageId } from "./page-tab";
 import { PAGE_REGISTRY } from "./registry";
 import { WALL_PAGE_IDS } from "./wall-pages";
 import { panelParamsFor, shortcutFor } from "./launch";
+import { PanelMoreMenu } from "./PanelMoreMenu";
 
 /**
  * One icon per panel type, sitting in the session's top bar next to the
@@ -16,6 +17,9 @@ import { panelParamsFor, shortcutFor } from "./launch";
  * (several can be on at once). Clicking an open, focused type closes that
  * tab; clicking an open but unfocused type focuses it; clicking a closed
  * type opens it.
+ *
+ * The row ends with the more menu, which carries the panels that have to be
+ * picked from a list before they can open.
  */
 export function PanelLaunchers() {
   const { t } = useTranslation();
@@ -72,6 +76,9 @@ export function PanelLaunchers() {
           </button>
         );
       })}
+      {/* Panels that need a pick before they open (the apps, the background
+          tasks) live behind the more menu instead of taking an icon. */}
+      <PanelMoreMenu />
     </div>
   );
 }

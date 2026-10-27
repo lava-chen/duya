@@ -16,6 +16,7 @@ import type { HostSessionRecord } from '@duya/agent-protocol';
 import type { CommandLocale } from '@duya/command-catalog';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { TuiChoice, TuiSettingsRow, RichPanelHandle } from '../TUIApp.js';
+import type { ToolGroupMode } from '../transcript-view.js';
 import type { RichPanelTab, WindowItem } from '../window.js';
 import type { ActionDef } from '../actions.js';
 
@@ -97,6 +98,7 @@ export interface TuiSlashHost {
     readonly showThinking?: boolean;
     readonly expandBlocks?: boolean;
     readonly showToolResults?: boolean;
+    readonly toolGroupMode?: ToolGroupMode;
     readonly completionRows?: number;
     readonly inputRows?: number;
   }): void;
@@ -106,6 +108,7 @@ export interface TuiSlashHost {
     readonly showThinking: boolean;
     readonly expandBlocks: boolean;
     readonly showToolResults: boolean;
+    readonly toolGroupMode: ToolGroupMode;
     readonly completionRows: number;
     readonly inputRows: number;
   };

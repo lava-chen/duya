@@ -1,65 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageFrame, PageHeader } from "@/components/ui/page";
 import { PluginAppLauncher } from "./PluginAppLauncher";
 import { useTranslation } from "@/hooks/useTranslation";
-import { getPluginAPI } from "@/lib/plugin-ipc";
-import { getPluginAppAPI } from "@/lib/plugin-app-ipc";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { Button } from "@/components/ui/Button";
 import { getPluginUiSurfaceIcon } from "./plugin-ui-surface-icons";
-import type { PluginRegistryEntry, PluginUiSurfaceDirectoryResponse } from "@/lib/plugin-types";
+import { useMiniAppCatalog } from "./useMiniAppCatalog";
 
 /** Desktop launcher for Mini Apps declared by installed plugins. */
 export function MiniAppsView() {
   const { t, locale } = useTranslation();
-  const [plugins, setPlugins] = useState<PluginRegistryEntry[]>([]);
-  const [surfaces, setSurfaces] = useState<PluginUiSurfaceDirectoryResponse["data"]["surfaces"]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const pluginAPI = useMemo(() => getPluginAPI(), []);
+  const { plugins, surfaces, loading, error } = useMiniAppCatalog();
   const panel = useOptionalPanel();
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
-
-  const reload = useCallback(async () => {
-    if (!pluginAPI) {
-      setPlugins([]);
-      setSurfaces([]);
-      setError(t("apps.unavailable"));
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const registryResponse = await pluginAPI.registry.list();
-      if (!registryResponse.success) throw new Error(registryResponse.error || t("apps.loadError"));
-      setPlugins(registryResponse.data);
-      try {
-        const surfaceResponse = await pluginAPI.uiSurfaces.list();
-        if (!surfaceResponse.success) throw new Error(surfaceResponse.error || t("apps.loadError"));
-        setSurfaces(surfaceResponse.data.surfaces);
-      } catch (cause) {
-        // A renderer paired with an older preload can still launch static
-        // entry Apps when the newer surface directory API is unavailable.
-        setSurfaces([]);
-        setError(cause instanceof Error ? cause.message : t("apps.loadError"));
-      }
-    } catch (cause) {
-      setPlugins([]);
-      setSurfaces([]);
-      setError(cause instanceof Error ? cause.message : t("apps.loadError"));
-    } finally {
-      setLoading(false);
-    }
-  }, [pluginAPI, t]);
-
-  useEffect(() => {
-    void reload();
-    return getPluginAppAPI()?.onChanged(() => void reload());
-  }, [reload]);
 
   const visibleSurfaces = surfaces.filter((surface) =>
     surface.availability !== "session" || Boolean(activeThreadId));

@@ -21,6 +21,7 @@
 @import "./file-workspace.css";
 @import "./sidebar-sections.css";
 @import "./workspace-lifecycle.css";
+@import "./background-tasks.css";
 
 @plugin "@tailwindcss/typography";
 
@@ -41,6 +42,31 @@
   --font-sans: 'Styrene', ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "PingFang TC", "Hiragino Sans", "Microsoft YaHei", sans-serif;
   --font-mono: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   --font-serif: 'Copernicus', ui-serif, Georgia, Cambria, "Times New Roman", "Noto Serif CJK SC", "Source Han Serif SC", "PingFang SC", serif;
+}
+
+/* Context usage breakdown palette (slice D).
+   The light values are Claude Desktop's SAMPLED panel colours - do not
+   eyeball-adjust them. The dark set is a hand-picked twin: same hues,
+   lifted for the #1e1e1e surface, because the sampled ambers/greys drop
+   below 3:1 on a dark panel. */
+:root {
+  --usage-bucket-system: #eda100;
+  --usage-bucket-tools: #eb6834;
+  --usage-bucket-mcp: #2a78d6;
+  --usage-bucket-messages: #1baf7a;
+  --usage-bucket-files: #898781;
+  --usage-bucket-other: #c3c2b7;
+  --usage-bucket-free: #eeedec;
+}
+
+:root[data-theme="dark"] {
+  --usage-bucket-system: #f5b942;
+  --usage-bucket-tools: #ff8a5c;
+  --usage-bucket-mcp: #5aa2f0;
+  --usage-bucket-messages: #3fd39b;
+  --usage-bucket-files: #a8a6a0;
+  --usage-bucket-other: #7d7b73;
+  --usage-bucket-free: #45443f;
 }
 
 /* ProjectsView: row hover-reveal checkbox + inline action buttons */

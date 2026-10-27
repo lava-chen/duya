@@ -1,4 +1,8 @@
 import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
+import {
+  readLocalHostRuntimeFrom,
+  type LocalHostRuntime,
+} from './host-runtime.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -160,14 +164,16 @@ function deriveConnectionSlug(connectionId: string, takenSlugs: ReadonlySet<stri
   }
 }
 
-export interface LocalHostRuntime {
-  readonly apiVersion: 1;
-  readonly host: typeof HOST;
-  readonly port: number;
-  readonly token: string;
-  readonly pid: number;
-  readonly startedAt: number;
-}
+/**
+ * The descriptor's shape and its reader live in `host-runtime.ts`.
+ *
+ * They are re-exported here so every existing consumer of
+ * `@duya/host/local-host` keeps working unchanged, while a client that only
+ * needs to READ the descriptor can import the light module instead of
+ * pulling this one — and the whole Host — into its module graph.
+ */
+export type { LocalHostRuntime } from './host-runtime.js';
+export { readLocalHostRuntimeFrom } from './host-runtime.js';
 
 export interface StartLocalHostOptions {
   /** Opt-in S3b inbox only. Desktop/legacy wake routing is migrated in S3c. */
@@ -1000,28 +1006,15 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
   }
 }
 
+/**
+ * Read the descriptor of a running local Host.
+ *
+ * The contract itself lives in `host-runtime.ts`, because a client that only
+ * reads the descriptor must not have to import this module — which composes
+ * the whole Host — to do it. The default data root is applied HERE, since
+ * resolving it pulls in the data layer this module already owns.
+ */
 export async function readLocalHostRuntime(dataRoot = resolveDataRoot()): Promise<LocalHostRuntime | null> {
-  const filePath = path.join(dataRoot, 'runtime', 'host-api.json');
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw new Error(`Could not read Duya Host runtime descriptor: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Duya Host runtime descriptor is malformed');
-  }
-  const value = parsed as Record<string, unknown>;
-  if (
-    value.apiVersion !== 1 || value.host !== HOST ||
-    typeof value.port !== 'number' || !Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
-    typeof value.token !== 'string' || value.token.length === 0 ||
-    typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid < 1 ||
-    typeof value.startedAt !== 'number' || !Number.isSafeInteger(value.startedAt)
-  ) {
-    throw new Error('Duya Host runtime descriptor has invalid fields');
-  }
-  return isPidAlive(value.pid) ? value as unknown as LocalHostRuntime : null;
+  return await readLocalHostRuntimeFrom(dataRoot);
 }
 import { SessionCheckoutService } from './workspace/session-checkout-service.js';

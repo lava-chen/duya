@@ -303,3 +303,92 @@ describe('/thinking is /effort under pi’s name', () => {
     expect(outcome).toEqual({ kind: 'effort_changed', effort: 'high' });
   });
 });
+
+describe('/display in the TUI', () => {
+  /**
+   * Open `/display` on the live app.
+   *
+   * Row order is the assertion: the four profiles come first, then the same
+   * switch rows `/settings` owns. A row inserted above these silently moves a
+   * `down` count onto the wrong switch, so the counts are written out rather
+   * than derived.
+   */
+  async function openDisplay(saved: Readonly<Record<string, string>> = {}) {
+    const { app, input } = makeApp();
+    app.start();
+    await settle();
+    const command = resolveTuiSlashCommand('display');
+    if (command === undefined) throw new Error('/display is not registered');
+    const fake = client(saved);
+    const running = command.run({ client: fake as never, session: SESSION as never, tui: app, busy: false }, '');
+    await settle();
+    return {
+      app,
+      fake,
+      input,
+      panel: () => (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n'),
+      close: async () => {
+        press(input, 'escape');
+        await running;
+        app.stop();
+      },
+    };
+  }
+
+  it('names the profiles and shows the switches they are made of', async () => {
+    const open = await openDisplay();
+    const panel = open.panel();
+    for (const label of ['Detailed', 'Standard', 'Compact', 'Live only']) expect(panel).toContain(label);
+    // The switches are the settings menu's own rows, not a second description.
+    expect(panel).toContain('Tool groups');
+    expect(panel).toContain('All calls');
+    await open.close();
+  });
+
+  it('labels the rows with what the screen does, not what the table says', async () => {
+    const open = await openDisplay();
+    // The saved defaults are `standard`, and nothing was tuned.
+    expect(open.panel()).toContain('Current');
+    await open.close();
+
+    // A key written elsewhere (the Desktop, an older session) does not relabel
+    // this TUI's rows: the row answers "what is this screen doing", and the
+    // screen has not been told. Closing that gap is the settings-subscription
+    // half of plan 634, not a fact this list invents.
+    const tuned = await openDisplay({ 'cli.tui.toolGroupMode': 'names' });
+    expect(tuned.app.liveTuiPreferences().toolGroupMode).toBe('full');
+    expect(tuned.panel()).toContain('All calls');
+    await tuned.close();
+  });
+
+  it('applies a profile as four keys and moves the live renderer', async () => {
+    const open = await openDisplay();
+    for (let step = 0; step < 3; step += 1) press(open.input, 'down');
+    await settle();
+    press(open.input, 'return');
+    await settle();
+
+    expect(Object.fromEntries(open.fake.calls)).toEqual({
+      'cli.tui.showThinking': 'false',
+      'cli.tui.expandBlocks': 'false',
+      'cli.tui.showToolResults': 'false',
+      'cli.tui.toolGroupMode': 'running',
+    });
+    // Reached the app, not only the row: this is what `renderOptions` reads.
+    expect(open.app.liveTuiPreferences().toolGroupMode).toBe('running');
+    expect(open.panel()).toContain('Live only');
+    await open.close();
+  });
+
+  it('cycles one switch from the same list', async () => {
+    const open = await openDisplay();
+    for (let step = 0; step < 7; step += 1) press(open.input, 'down');
+    await settle();
+    press(open.input, 'return');
+    await settle();
+
+    expect(open.fake.calls).toEqual([['cli.tui.toolGroupMode', 'names']]);
+    expect(open.panel()).toContain('Names only');
+    await open.close();
+  });
+});

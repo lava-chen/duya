@@ -100,7 +100,9 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
 - **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
-- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
+- **切片 D 的 9 桶映射**：`system[]` → 系统提示词；非 MCP 的 `toolDefinitions/toolResults` → 系统工具；`mcp:`、`connector:`、`plugin:` 来源 → MCP 工具；`conversation[] + attachments[]` → 对话消息；`skills[]` → 技能；`memory[]` → 记忆文件；`injectedContext[]` → 运行时注入；`providerOverhead[] + unattributed` → 其他开销；`contextWindow - usedTokens` → 空闲空间。估算只向下缩放到 headline 的 `usedTokens`；差额留在「其他开销」的未归属余量里。
+- **切片 D 的配色**：浅色沿用 Claude 采样值，深色使用同色相提亮值，以保证深色面板上的可读性；两套都走 `globals.css` 中的 `--usage-bucket-*` 变量。
+- **切片 D 的挂载点**：hover 内容与 composer 展开面板都留在 `ContextUsageRing.tsx`，不改 `MessageInput.tsx` / `BotDirectChatView.tsx` 调用点；保留 `.context-composition-popover` class 以维持既有测试契约。- **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
 - **CI 只对 base=master 的 PR 触发**（`.github/workflows/test.yml:19-20` 是 `pull_request: branches: [master]`）。切片 A/B/D 的 PR 因此一律 base=master，计划文件随之进入各 PR（单独的"计划 PR"随之关闭）。堆叠到非默认分支会拿不到"必需检查通过"的证据。
 - **`ResizeHandle.tsx` 归切片 A 而不是 C**：列内堆叠需要纵向分隔条，而现有实现只有横向（`ResizeHandle.tsx:6` 的 `side: "left" | "right"`、`:143` 写死 `aria-orientation="vertical"`）。C 不碰它，改为新建 `PaneDragHandle.tsx`。
@@ -281,3 +283,43 @@ PR：`https://github.com/lava-chen/duya/pull/354`（base = `master`，head = `co
 未完成 / 阻塞：**渲染侧仍缺**——脱窗窗口目前渲染的是完整 app 外壳，「只渲染这一个面板」要靠切片 A 读 `panelWindow.context.paneId` 后自己收敛；本切片不碰 `packages/ui/**`。B 不依赖 A 即可合入，A 的接线契约见 PR 正文。
 
 外部副作用：本次只在 worktree 内跑真实 Electron，产物落在 `.e2e-userdata/panel-detach-check/`（未跟踪）；`packages/host/bundle/*` 等被构建改写的已跟踪文件已按「只保留本任务成果」还原。
+
+### D 切片交付状态（2026-10-27）
+
+- 已实现：上下文用量环展开为按来源分桶的面板，含 9 桶映射及浅色/深色色板；现有挂载点保持不变。
+- 验证：`npm exec -- vitest run packages/ui/src --reporter=dot` 退出码 0（233 suites / 2367 tests，2 skipped）；新组件 10/10；`npm run typecheck:all` 退出码 0；`npm run architecture:check` 退出码 0，无新增违规。
+- 分支 `codex/panel-context-usage`，base `d80ca3c6`；Electron 双主题实机证据尚未完成。
+
+## 2026-10-27 截图对齐：面板边界与列内比例
+
+接续分支 `codex/ui-adjust`，指定检出 `E:\Projects\duya\.claude\worktrees\ui-adjust`，基线 `f338d77d`。用户给出 Claude Code 桌面端截图，要求深入参考面板宽度、拖拽条、三/四面板布局与列内上下拖拽。
+
+验收：宽度拖动越过会话最小宽度后面板浮在会话上层，并保留约 160px 可见会话区；垂直边界显示竖向圆角短条、水平边界显示横向圆角短条，命中区大于视觉条；三面板默认左列两个、右列一个，第四面板落在右列下方；每列的上下比例可独立拖动；旧持久化布局加载后位置与比例不跳变。
+
+路径范围：`packages/ui/src/components/layout/panels/layout-model.ts`、`PanelZone.tsx`、`hooks/usePanel.ts`、`styles/workspace.css`、`styles/preview-drawer.css`、对应测试及本计划。保留检出中已有未提交的 PanelLaunchers、背景任务、Mini App 与本地化改动，不触碰它们。
+
+进度：已完成布局与拖拽改造。`layout-model.ts` 记录每列面板和独立行比例，并迁移旧布局；新面板按左列 2 个、右列 2 个填充。`PanelZone.tsx` 改为逐列网格，分隔条用短圆角 pill 和更大的命中区；拖宽后覆盖会话，保留 160px 可见区，重新打开时保留拖动宽度。
+
+验证（面板实现提交 `8def88f75a2bafd3a25114b7eed8caa215a92925`，分支 `codex/ui-adjust`，base `d80ca3c6`）：`vitest packages/ui/src/components/layout` 26 文件 / 254 例通过；`npm run typecheck:all` 0；`npm run architecture:check` 0（无新增边界违规）；`git diff --check` 0（仅已有生成文件换行提示）。Playwright 浏览器实测 4 面板 2×2、深浅主题、左列比例不受右列拖动影响（右列 440/440 → 340/540），以及工作区宽 1600 时面板扩至 1440、会话仍露出 160px（底层聊天列 420px），页面无异常。截图保存在 `C:\Users\lavachen\.codex\visualizations\2026\10\27\01a17b19-fb4f-7592-a504-86d25c4a1e9f\`。Claude 桌面端未能实时操作，交互参照用户提供的 8 张截图。
+
+交付：PR #522（`https://github.com/lava-chen/duya/pull/522`）标题与正文已更新；面板实现提交 `8def88f75a2bafd3a25114b7eed8caa215a92925` 已推送。GitHub head 上 typecheck、test、architecture 正运行，test scope 已通过。未合并。
+
+接续：当前分支 `codex/ui-adjust`，implementation SHA `8def88f75a2bafd3a25114b7eed8caa215a92925`，base `d80ca3c6`。保留的既有未提交路径：`packages/capabilities/src/ModuleTool/inline-content.ts`、`packages/ui/src/components/icons.tsx`、`packages/ui/src/components/layout/panels/PanelLaunchers.tsx`、`packages/ui/src/components/layout/panels/page-tab.ts`、`packages/ui/src/components/layout/panels/registry.ts`、`packages/ui/src/components/plugin-apps/MiniAppsView.tsx`、`packages/ui/src/hooks/useSubAgentProgress.ts`、`packages/ui/src/i18n/en.ts`、`packages/ui/src/i18n/zh.ts`、`packages/ui/src/styles/globals.css`、`packages/ui/src/styles/titlebar.css`，以及未跟踪的 `BackgroundTasksPanel.{tsx,test.tsx}`、`PanelMoreMenu.{tsx,test.tsx}`、`useMiniAppCatalog.ts`、`background-tasks.css`。这些路径未暂存；仅暂存本轮 10 个面板实现、测试与计划文件。外部副作用：创建可视化目录截图、推送分支并更新 PR #522；临时预览入口已删除。下一步等待 PR 检查并按失败结果处理；合并需授权。
+
+## 2026-10-27 拖拽渲染性能与行高方向
+
+用户实机查看后反馈拖拽渲染不够流畅，并发现行高拖动方向相反。`PanelZone` 原先每个动画帧都更新 React 布局状态，使已挂载面板正文重复渲染；行分隔条把上方面板当成调整对象，向上拖动时上方面板反而增高。
+
+实现：外沿宽度、列宽和行高在拖动中只更新 DOM/CSS 预览，松手时提交一次 React 状态；外沿拖动期间跳过逐帧 `ResizeObserver` 状态发布。行分隔条现在报告下方面板高度，向上拖动缩小上方面板，向下拖动增大上方面板，键盘调整与鼠标保持一致。
+
+验证：`PanelZone.test.tsx` 18 例通过（包含上拉方向和拖动期间面板正文不重渲染）；`panel-drag-renders.test.ts` 3 例通过；`npm run -w @duya/ui typecheck` 退出码 0；`npm run typecheck:all` 与 `npm run architecture:check` 退出码 0。真实 Electron 的上拉手感仍待用户复验。
+
+接续：分支 `codex/ui-adjust` 当前 HEAD `5f134a4a`，较远端 `f2b0dc3e` 领先一个已有本地提交。此次未提交的面板切片为 `PanelZone.tsx`、`PanelZone.test.tsx`、`usePanel.ts` 与 `panel-drag-renders.test.ts`；保留工作区其他已有 dirty 文件及 Host bundle 生成物。桌面复验待用户继续操作，改动尚未提交或推送。
+
+## 2026-10-27 两列横向拖拽方向
+
+用户实机反馈两列之间的列宽拖动方向也与鼠标相反。右侧边缘句柄上报的 delta 与左列宽度增减符号相反，列宽预览现按 `startWidth - delta` 更新；键盘左右键按分隔条所在侧选择增减方向。已有列拖动用例改为模拟向右拖的负 delta。
+
+验证：`git diff --check` 通过；本次未运行自动化测试。Electron dev 仍运行在 `ui-adjust` worktree，等待用户复验热更新后的拖拽方向。
+
+接续：分支 `codex/ui-adjust`，HEAD `5f134a4a`；本次继续修改 `PanelZone.tsx`、`ResizeHandle.tsx`、`PanelZone.test.tsx`。改动未提交，保留工作区其他已有 dirty 文件及生成物。

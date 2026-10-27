@@ -75,6 +75,8 @@ interface ModelProviderSelectorProps {
   /** Show the "Manage providers" footer row (default true — dialogs pass
    *  false because the navigation would land behind the modal overlay). */
   showManageProviders?: boolean;
+  /** Compact trigger treatment used by the chat composer footer. */
+  composerTrigger?: boolean;
   /**
    * Preferred side of the trigger to open the menu. The hook auto-flips
    * when there is not enough room on the preferred side (see Plan 237).
@@ -124,6 +126,7 @@ export const ModelProviderSelector = React.forwardRef<ModelProviderSelectorHandl
   portal = false,
   clearOption,
   showManageProviders = true,
+  composerTrigger = false,
   placement = 'top',
 }, ref) {
   const { t } = useTranslation();
@@ -540,11 +543,22 @@ export const ModelProviderSelector = React.forwardRef<ModelProviderSelectorHandl
         type="button"
         onClick={handleToggle}
         disabled={disabled || loading}
-        className="flex min-w-0 max-w-full items-center gap-1.5 px-2 py-1.5 rounded-lg transition-colors text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--surface-hover)]"
+        className={composerTrigger
+          ? 'group flex min-w-0 max-w-full items-center rounded-md text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-1 focus-visible:outline-[var(--accent)]'
+          : 'flex min-w-0 max-w-full items-center gap-1.5 px-2 py-1.5 rounded-lg transition-colors text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--surface-hover)]'}
         style={{ color: 'var(--text)', justifyContent: 'flex-start' }}
       >
         {loading ? (
           <SpinnerGapIcon size={12} className="animate-spin" style={{ color: 'var(--muted)' }} />
+        ) : composerTrigger ? (
+          <span className="inline-flex min-w-0 max-w-full items-baseline gap-2 rounded-md px-1.5 py-1 transition-colors group-hover:bg-[var(--surface-hover)]">
+            <span className="min-w-0 max-w-[220px] shrink truncate" style={{ color: 'var(--text)' }}>
+              {modelLabel}
+            </span>
+            {hasEffortOptions && (
+              <span className="shrink-0" style={{ color: 'var(--muted)' }}>{effortLabel}</span>
+            )}
+          </span>
         ) : (
           <>
             <span className="min-w-0 max-w-[110px] shrink truncate" style={{ color: 'var(--text)' }}>
@@ -558,7 +572,9 @@ export const ModelProviderSelector = React.forwardRef<ModelProviderSelectorHandl
             )}
           </>
         )}
-        <CaretDownIcon size={12} className="shrink-0" style={{ color: 'var(--muted)' }} />
+        {!composerTrigger && (
+          <CaretDownIcon size={12} className="shrink-0" style={{ color: 'var(--muted)' }} />
+        )}
       </button>
 
       {open && !portal && (

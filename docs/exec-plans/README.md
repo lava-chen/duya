@@ -6,7 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host 记录 lease 生命周期、idle 停机先等回合 settle；CLI 重申请 lease 并从游标续订事件流 |
+| TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host lease 生命周期日志 + idle 停机先等回合 settle、可被重附着取消；CLI 重申请 lease 并从游标续订事件流；PR #505 已合并（`eaa33d80`），真机冒烟待用户 |
 | TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a 与 632 的 Host 写面已实现待合并；面板两片等 630a 合入后开工 |
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
 | 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 已合并，e2e 已补，真机冒烟待用户 |

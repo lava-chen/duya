@@ -46,6 +46,7 @@ import { PR_COMMANDS } from './pr.js';
 import { MODEL_COMMANDS } from './model.js';
 import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
+import { DISPLAY_COMMANDS } from './display.js';
 import { EXPORT_COMMANDS } from './export.js';
 import { CAPABILITIES_COMMANDS } from './capabilities.js';
 import { DOCTOR_COMMANDS } from './doctor.js';
@@ -64,6 +65,7 @@ export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...MODEL_COMMANDS,
   ...EFFORT_COMMANDS,
   ...SETTINGS_COMMANDS,
+  ...DISPLAY_COMMANDS,
   ...HOTKEYS_COMMANDS,
   ...SESSION_INFO_COMMANDS,
   ...APPS_COMMANDS,

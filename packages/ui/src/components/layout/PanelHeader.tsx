@@ -67,7 +67,7 @@ export function PanelHeader() {
     (pageId: PageId): Record<string, unknown> | undefined => {
       if (!cwd) return undefined;
       if (pageId === "terminal") return { cwd };
-      if (pageId === "files") return { workingDirectory: cwd };
+      if (pageId === "workspace") return { workingDirectory: cwd };
       return undefined;
     },
     [cwd]
@@ -214,7 +214,7 @@ function shortcutFor(id: PageId): string | null {
   switch (id) {
     case "terminal": return "Ctrl+`";
     case "browser": return "Ctrl+T";
-    case "files": return "Ctrl+P";
+    case "workspace": return "Ctrl+P";
     default: return null;
   }
 }

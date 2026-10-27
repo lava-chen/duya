@@ -215,6 +215,10 @@
       "types": "./dist/local-host.d.ts",
       "import": "./dist/local-host.js"
     },
+    "./host-runtime": {
+      "types": "./dist/host-runtime.d.ts",
+      "import": "./dist/host-runtime.js"
+    },
     "./manifest-factory": {
       "types": "./dist/manifest-factory.d.ts",
       "import": "./dist/manifest-factory.js"

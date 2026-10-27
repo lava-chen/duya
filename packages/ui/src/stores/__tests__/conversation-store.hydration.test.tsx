@@ -209,6 +209,16 @@ describe('normalizeHydratedConversationState', () => {
       projectGroupBy: 'somethingElse',
     } as never);
     expect(next.projectSortBy).toBe('priority');
-    expect(next.projectGroupBy).toBe('byProject');
+    // Claude parity (2026-10-26): the flat "all sessions" mode was removed,
+    // so an unknown/legacy grouping lands on date groups.
+    expect(next.projectGroupBy).toBe('byDate');
+  });
+
+  it('migrates the removed flat-list grouping to date groups', () => {
+    const next = normalizeHydratedConversationState({
+      ...base,
+      projectGroupBy: 'singleList',
+    } as never);
+    expect(next.projectGroupBy).toBe('byDate');
   });
 });

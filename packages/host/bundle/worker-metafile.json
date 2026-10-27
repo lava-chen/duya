@@ -30337,6 +30337,22 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/host/src/host-runtime.ts": {
+      "bytes": 4107,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/workspace-access.ts": {
       "bytes": 4035,
       "imports": [
@@ -32050,12 +32066,17 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 49957,
+      "bytes": 49571,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
           "kind": "import-statement",
           "original": "./workspace/task-leases.js"
+        },
+        {
+          "path": "packages/host/src/host-runtime.ts",
+          "kind": "import-statement",
+          "original": "./host-runtime.js"
         },
         {
           "path": "node:crypto",
@@ -32406,6 +32427,11 @@
           "path": "packages/host/src/config-agents/agent-config-core.ts",
           "kind": "import-statement",
           "original": "./config-agents/agent-config-core.js"
+        },
+        {
+          "path": "packages/host/src/host-runtime.ts",
+          "kind": "import-statement",
+          "original": "./host-runtime.js"
         },
         {
           "path": "packages/host/src/workspace/session-checkout-service.ts",
@@ -40275,7 +40301,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -43026,10 +43052,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50718
+          "bytesInOutput": 50715
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1879
+          "bytesInOutput": 1878
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -45021,7 +45047,10 @@
           "bytesInOutput": 37502
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 961
+          "bytesInOutput": 81
+        },
+        "packages/host/src/host-runtime.ts": {
+          "bytesInOutput": 954
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 11
@@ -45807,7 +45836,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4750414
+      "bytes": 4750471
     }
   }
 }
