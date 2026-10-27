@@ -96,6 +96,7 @@ node apps/web/dist/server/main.js
   的 cwd 是 `apps/web`。脚本改用自身位置推导仓库根。
 - `packages/capabilities/src/ModuleTool/inline-content.ts` 在构建后显示为 modified，
   但 `git diff --raw` / `--numstat` 均无输出——只是行尾归一化，非本任务成果，不提交。
+  它**是** worker bundle 的输入，所以留着会让 `bundle:verify` 一直红，必须还原。
 
 ## 验证记录
 
@@ -113,8 +114,17 @@ node apps/web/dist/server/main.js
 | 同上 | Windows / Node 24.16.0 | `npx vitest run apps/web` | 0，12 文件 / 107 用例通过 | 验收 4 |
 | 同上 | Windows / Node 24.16.0 | `npx vitest run packages/host/tests/host-runtime.test.ts` | 0，5 用例通过 | 新模块单测 |
 | 同上 | Windows / Node 24.16.0 | `npm run check:encoding` / `check:no-ts-suppress` / `check:manifest-keys` | 均 0 | 其余门禁 |
+| `3ab822e3`（PR #527 首次 push） | GitHub Actions / ubuntu 22.x | CI `architecture` job | **失败**：步骤 18 `Worker bundle freshness (bundle:verify)` | 改了 `packages/host/src/` 但没重建已跟踪的 worker bundle |
+| `3ab822e3`（本地复现） | Windows / Node 24.16.0 | `npm run bundle:verify` | 1，`STALE 2/992 bundle inputs changed after the bundle commit` | 确认是同一原因 |
+| `3907cc78`（重建并提交 bundle 后） | Windows / Node 24.16.0 | `npm run bundle:worker` → `npm run bundle:verify` | 0 / 0，`FRESH 0/993 bundle inputs changed` | 门禁恢复 |
+| `3907cc78` | Windows / Node 24.16.0 | `architecture:slice-graph` / `boundaries` / `client-closure` / `browser-closure` / `bot-boundary` | 均 0 | 其余架构子门禁 |
 
 ## 接续 / 结果
 
-实现完成，验收 1–4 全过。待 commit + PR。
-回收：未回收（PR 未开）。
+实现完成，验收 1–4 全过。PR #527 已开（https://github.com/lava-chen/duya/pull/527）。
+
+CI 首轮失败于 `bundle:verify`（改 `packages/host/src/` 后已跟踪的 worker bundle 过期），
+已重建并提交（`3907cc78`），本地复验 FRESH。
+
+未授权集成，不合并。回收：未回收（PR 未集成，成果需可达）。
+下一步：等 PR #527 的 CI 在 `3907cc78` 上全绿，再交获授权的集成者。
