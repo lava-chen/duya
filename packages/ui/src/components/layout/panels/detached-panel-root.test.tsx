@@ -20,7 +20,7 @@ vi.mock("@/hooks/useTranslation", () => ({
 vi.mock("./registry", () => ({
   PAGE_REGISTRY: {
     terminal: {},
-    files: {},
+    workspace: {},
   },
   getPageDescriptor: (id: string) => ({
     id,

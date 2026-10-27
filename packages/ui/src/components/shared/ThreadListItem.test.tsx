@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import { ThreadListItem } from './ThreadListItem';
+import { useSessionSeenStore } from '@/stores/session-seen-store';
 import type { Thread } from '@/stores/conversation-store';
 
 // Translation returns the key so assertions match i18n keys directly.
@@ -58,6 +59,25 @@ const notifMocks = vi.hoisted(() => ({ show: vi.fn() }));
 
 vi.mock('@/lib/notification', () => ({
   showNotification: notifMocks.show,
+}));
+
+// The blue dot asks the agent server whether the session is still running
+// before it claims "finished". The stub answers IDLE, i.e. "it is done".
+vi.mock('@/lib/agent-http-client', () => ({
+  getAgentServerClient: () => ({
+    getSessionStatus: async () => ({ status: 'IDLE', lastEventId: 0 }),
+  }),
+}));
+
+// The row badges read the Host's checkout / integration observations.
+const lifecycleMocks = vi.hoisted(() => ({
+  observeIntegrationsForSession: vi.fn(async (): Promise<unknown[]> => []),
+  observeCheckoutForSession: vi.fn(async (): Promise<unknown> => null),
+}));
+
+vi.mock('@/lib/workspace-lifecycle-ipc', () => ({
+  observeIntegrationsForSession: lifecycleMocks.observeIntegrationsForSession,
+  observeCheckoutForSession: lifecycleMocks.observeCheckoutForSession,
 }));
 
 // Plan 516 — registry of permission / auth listeners captured by the
@@ -322,6 +342,110 @@ describe('ThreadListItem status mark (Codex parity)', () => {
     expect(
       screen.getByRole('img', { name: 'thread.status.awaitingInput' }),
     ).toBeTruthy();
+  });
+});
+
+describe('ThreadListItem Claude parity: state dot + row badges', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    streamMocks.permissionListeners.length = 0;
+    streamMocks.authListeners.length = 0;
+    streamMocks.phaseListeners.length = 0;
+    lifecycleMocks.observeIntegrationsForSession.mockResolvedValue([]);
+    lifecycleMocks.observeCheckoutForSession.mockResolvedValue(null);
+    useSessionSeenStore.setState({ unreadAt: {} });
+  });
+
+  it('marks a finished session the user has not opened with the blue dot', async () => {
+    useSessionSeenStore.getState().notifyOutput('s-unread-1');
+    render(<ThreadListItem thread={makeThread({ id: 's-unread-1' })} isActive={false} />);
+    const glyph = await screen.findByRole('img', { name: 'thread.status.unread' });
+    expect(glyph.className).toContain('thread-item-status-unread');
+  });
+
+  it('keeps the blue dot away while the session is still running', async () => {
+    useSessionSeenStore.getState().notifyOutput('s-unread-2');
+    await act(async () => {
+      render(<ThreadListItem thread={makeThread({ id: 's-unread-2' })} isActive={false} />);
+    });
+    act(() => {
+      streamMocks.phaseListeners[0]('streaming');
+    });
+    expect(screen.queryByRole('img', { name: 'thread.status.unread' })).toBeNull();
+    expect(screen.getByRole('img', { name: 'thread.status.running' })).toBeTruthy();
+  });
+
+  it('drops the blue dot once the user opens the session', async () => {
+    useSessionSeenStore.getState().notifyOutput('s-unread-3');
+    useSessionSeenStore.getState().markSeen('s-unread-3');
+    await act(async () => {
+      render(<ThreadListItem thread={makeThread({ id: 's-unread-3' })} isActive={false} />);
+    });
+    expect(screen.queryByRole('img', { name: 'thread.status.unread' })).toBeNull();
+  });
+
+  it('draws a pull-request count only when there is more than one', async () => {
+    lifecycleMocks.observeIntegrationsForSession.mockResolvedValue([
+      { repo: 'a/b', prNumber: 1, state: 'open' },
+      { repo: 'a/b', prNumber: 2, state: 'open' },
+      { repo: 'a/b', prNumber: 3, state: 'merged' },
+    ]);
+    render(<ThreadListItem thread={makeThread({ id: 's-pr-3' })} isActive={false} />);
+    await waitFor(() => {
+      expect(document.querySelector('.thread-item-badge-pr')).toBeTruthy();
+    });
+    expect(
+      document.querySelector('.thread-item-badge-pr .thread-item-badge-count')?.textContent,
+    ).toBe('2');
+    // One merged pull request is the common case — no digit for it.
+    expect(document.querySelector('.thread-item-badge-merge')).toBeTruthy();
+    expect(document.querySelector('.thread-item-badge-merge .thread-item-badge-count')).toBeNull();
+  });
+
+  it('does not count an unobserved pull request as open', async () => {
+    lifecycleMocks.observeIntegrationsForSession.mockResolvedValue([
+      { repo: 'a/b', prNumber: 1, state: 'unknown' },
+    ]);
+    render(<ThreadListItem thread={makeThread({ id: 's-pr-unknown' })} isActive={false} />);
+    await waitFor(() => {
+      expect(lifecycleMocks.observeIntegrationsForSession).toHaveBeenCalled();
+    });
+    expect(document.querySelector('.thread-item-badge-pr')).toBeNull();
+  });
+
+  it('shows the branch badge for a session that owns a managed checkout', async () => {
+    lifecycleMocks.observeCheckoutForSession.mockResolvedValue({
+      sessionId: 's-branch-1',
+      checkout: { root: 'D:/data/worktrees/repo-abc/task-1' },
+      isOwner: true,
+    });
+    render(
+      <ThreadListItem
+        thread={makeThread({
+          id: 's-branch-1',
+          workingDirectory: 'D:/data/worktrees/repo-abc/task-1',
+        })}
+        isActive={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(document.querySelector('.thread-item-badge-branch')).toBeTruthy();
+    });
+  });
+
+  it('never asks the Host about a checkout a plain working directory cannot own', async () => {
+    lifecycleMocks.observeCheckoutForSession.mockClear();
+    render(
+      <ThreadListItem
+        thread={makeThread({ id: 's-plain-1', workingDirectory: 'E:/Projects/duya' })}
+        isActive={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(lifecycleMocks.observeIntegrationsForSession).toHaveBeenCalled();
+    });
+    expect(lifecycleMocks.observeCheckoutForSession).not.toHaveBeenCalled();
+    expect(document.querySelector('.thread-item-badge-branch')).toBeNull();
   });
 });
 

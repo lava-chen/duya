@@ -68,6 +68,7 @@ const zh: Record<TranslationKey, string> = {
   'apps.pluginDisabled': '启用此插件后即可打开它的视图。',
   'apps.appUnavailable': '此插件应用已不再安装。',
   'apps.instanceUnavailable': '无法准备插件应用，请重试。',
+  'apps.openAll': '全部 Mini Apps',
 
   // Plan 525 — Projects page.
   'projects.title': '项目',
@@ -1293,6 +1294,11 @@ const zh: Record<TranslationKey, string> = {
   'thread.status.running': '运行中',
   'thread.status.awaitingInput': '等待输入',
   'thread.status.error': '出错',
+  // Claude parity (2026-10-27)：行尾状态点 + 会话行徽标。
+  'thread.status.unread': '已结束，未查看',
+  'thread.badge.branch': '分支',
+  'thread.badge.pullRequest': 'Pull Request',
+  'thread.badge.merged': '已合并',
   'thread.archiveThread': '归档对话',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': '取消归档',
@@ -1344,6 +1350,19 @@ const zh: Record<TranslationKey, string> = {
 
   'panel.files': '文件',
   'panel.launchersAria': '面板',
+  'panel.more': '更多',
+  'panel.backgroundTasks': '后台任务',
+  'panel.backgroundTasks.empty': '本会话没有后台任务。',
+  'panel.backgroundTasks.completed': '已完成 {count}',
+  'panel.backgroundTasks.kindCommand': '命令',
+  'panel.backgroundTasks.kindAgent': '智能体',
+  'panel.backgroundTasks.viewOutput': '查看输出',
+  'panel.backgroundTasks.bashRunning': '运行中',
+  'panel.backgroundTasks.bashCompleted': '已完成',
+  'panel.backgroundTasks.bashKilled': '已终止',
+  'panel.backgroundTasks.bashFailed': '失败',
+  'panel.backgroundTasks.bashDiskLimit': '磁盘限额',
+  'panel.backgroundTasks.bashLost': '已丢失',
   'panel.review': '代码审阅',
   'panel.workflow.title': '工作流',
   'panel.workflow.tabDefinitions': '定义',
@@ -1593,11 +1612,6 @@ const zh: Record<TranslationKey, string> = {
   'update.downloading': '下载更新中',
   'update.ready': '{version} 已就绪，点击重启安装',
 
-  'fileTree.filterFiles': '筛选文件...',
-  'fileTree.refresh': '刷新',
-  'fileTree.noFiles': '未找到文件',
-  'fileTree.selectFolder': '选择项目文件夹以查看文件',
-
   'filePreview.frontmatterTitle': '文档信息',
   'filePreview.openFile': '打开文件',
   'filePreview.selectFileHint': '从右侧项目树中选择一个文件进行只读预览',
@@ -1673,19 +1687,26 @@ const zh: Record<TranslationKey, string> = {
   'project.collapseAll': '全部收起',
   'project.expandAll': '全部展开',
   'project.organize': '整理',
-  'project.byProject': '按项目',
-  'project.inOneList': '在一个列表中',
+  'project.byDate': '日期',
+  'project.byProject': '文件夹',
   'project.sortBy': '排序方式',
-  'project.priority': '优先级',
+  // Claude parity (2026-10-26): the three sort fields match Claude Code's
+  // "Sort by" — 最近更新 / 创建时间 / 名称. The old labels ("优先级" /
+  // "手动排序") did not describe what the comparator actually does.
+  'project.priority': '创建时间',
   'project.lastUpdated': '最近更新',
-  'project.manualSort': '手动排序',
+  'project.manualSort': '名称',
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': '项目',
-  // Plan 471 v9: singleList (… menu → 在一个列表中) 模式下
-  // section 内容是平坦的会话列表，没有项目分组，
-  // 标题从「项目」改为「会话」。
-  'sidebar.section.sessions': '会话',
+  // Claude parity (2026-10-26): the built-in section holds everything that is
+  // NOT in a user section. When a user section is already called "项目",
+  // naming this one the same produced two identical headers.
+  'sidebar.section.ungrouped': '未分组',
+  'sidebar.date.today': '今天',
+  'sidebar.date.yesterday': '昨天',
+  'sidebar.date.last7days': '最近 7 天',
+  'sidebar.date.older': '更早',
   'sidebar.section.cron': '定时任务',
   'sidebar.section.gateway': '网关',
   'sidebar.section.wakeup': '唤醒',

@@ -66,6 +66,7 @@ const en = {
   'apps.pluginDisabled': 'Enable this plugin to open its view.',
   'apps.appUnavailable': 'This plugin app is no longer installed.',
   'apps.instanceUnavailable': 'Could not prepare the plugin app. Try again.',
+  'apps.openAll': 'All Mini Apps',
 
   // Plan 525 — Projects page.
   'projects.title': 'Projects',
@@ -1308,6 +1309,11 @@ const en = {
   'thread.status.running': 'Running',
   'thread.status.awaitingInput': 'Waiting for input',
   'thread.status.error': 'Failed',
+  // Claude parity (2026-10-27): trailing state dot + the row badges.
+  'thread.status.unread': 'Finished, not viewed',
+  'thread.badge.branch': 'Branch',
+  'thread.badge.pullRequest': 'Pull request',
+  'thread.badge.merged': 'Merged',
   'thread.archiveThread': 'Archive Thread',
   // Plan 549 (Track B): unarchive + archive-time sub-line.
   'thread.unarchiveThread': 'Unarchive',
@@ -1366,6 +1372,19 @@ const en = {
 
   'panel.files': 'Files',
   'panel.launchersAria': 'Panels',
+  'panel.more': 'More',
+  'panel.backgroundTasks': 'Background Tasks',
+  'panel.backgroundTasks.empty': 'No background tasks in this session.',
+  'panel.backgroundTasks.completed': 'Completed {count}',
+  'panel.backgroundTasks.kindCommand': 'Command',
+  'panel.backgroundTasks.kindAgent': 'Agent',
+  'panel.backgroundTasks.viewOutput': 'View output',
+  'panel.backgroundTasks.bashRunning': 'Running',
+  'panel.backgroundTasks.bashCompleted': 'Completed',
+  'panel.backgroundTasks.bashKilled': 'Stopped',
+  'panel.backgroundTasks.bashFailed': 'Failed',
+  'panel.backgroundTasks.bashDiskLimit': 'Disk limit',
+  'panel.backgroundTasks.bashLost': 'Lost',
   'panel.review': 'Code Review',
   'panel.workflow.title': 'Workflows',
   'panel.workflow.tabDefinitions': 'Definitions',
@@ -1616,11 +1635,6 @@ const en = {
   'update.downloading': 'Downloading update...',
   'update.ready': '{version} ready — click to restart and install',
 
-  'fileTree.filterFiles': 'Filter files...',
-  'fileTree.refresh': 'Refresh',
-  'fileTree.noFiles': 'No files found',
-  'fileTree.selectFolder': 'Select a project folder to view files',
-
   'filePreview.frontmatterTitle': 'Metadata',
   'filePreview.openFile': 'Open File',
   'filePreview.selectFileHint': 'Select a file from the project tree for read-only preview',
@@ -1696,19 +1710,26 @@ const en = {
   'project.collapseAll': 'Collapse All',
   'project.expandAll': 'Expand All',
   'project.organize': 'Organize',
-  'project.byProject': 'By project',
-  'project.inOneList': 'In one list',
+  'project.byDate': 'Date',
+  'project.byProject': 'Folder',
   'project.sortBy': 'Sort by',
-  'project.priority': 'Priority',
+  // Claude parity (2026-10-26): the three sort fields match Claude Code's
+  // "Sort by" — Last updated / Date created / Name. The old labels
+  // ("Priority" / "Manual") did not describe what the comparator does.
+  'project.priority': 'Date created',
   'project.lastUpdated': 'Last updated',
-  'project.manualSort': 'Manual',
+  'project.manualSort': 'Name',
 
   // Plan 471 — sidebar sections
   'sidebar.section.project': 'Projects',
-  // Plan 471 v9: singleList mode renders the section as a flat session list,
-  // so we relabel the header from 'Projects' to 'Sessions' to match what the
-  // user actually sees (no project grouping, just threads).
-  'sidebar.section.sessions': 'Sessions',
+  // Claude parity (2026-10-26): the built-in section holds everything that is
+  // NOT in a user section. When a user section is already called "Projects",
+  // naming this one the same produced two identical headers.
+  'sidebar.section.ungrouped': 'Ungrouped',
+  'sidebar.date.today': 'Today',
+  'sidebar.date.yesterday': 'Yesterday',
+  'sidebar.date.last7days': 'Previous 7 days',
+  'sidebar.date.older': 'Older',
   'sidebar.section.cron': 'Scheduled',
   'sidebar.section.gateway': 'Gateway',
   'sidebar.section.wakeup': 'Wake',

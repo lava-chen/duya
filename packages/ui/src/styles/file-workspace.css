@@ -16,7 +16,10 @@
   --fw-syn-type: #267f99;
   --fw-syn-prop: #0070c1;
   --fw-guide: rgba(0, 0, 0, 0.09);
-  --fw-tree-w: 240px;
+  /* The tree shares the panel's width instead of claiming a fixed slice, so
+     a wide panel gives the file list a generous column and the preview the
+     rest. The clamp keeps the tree usable at both ends of the range. */
+  --fw-tree-w: clamp(190px, 24%, 340px);
   --fw-code-row: 18px;
 }
 

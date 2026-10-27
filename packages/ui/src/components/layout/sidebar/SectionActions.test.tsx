@@ -81,14 +81,19 @@ describe('SectionActions', () => {
     render(
       <SectionActions
         filter={filterModel({
-          groupBy: 'singleList',
+          groupBy: 'byDate',
           onGroupBy: vi.fn(),
         })}
       />,
     );
     openFilter();
     expect(screen.getByText('sidebar.filter.groupBy')).toBeTruthy();
-    expect(screen.getByText('project.inOneList')).toBeTruthy();
+    // Claude parity (2026-10-26): two grouping modes only — the flat
+    // "all sessions" mode was removed.
+    fireEvent.mouseEnter(screen.getByText('sidebar.filter.groupBy'));
+    expect(screen.getAllByText('project.byDate').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('project.byProject').length).toBeGreaterThan(0);
+    expect(screen.queryByText('project.inOneList')).toBeNull();
   });
 
   it('reports the "显示空分组" switch as an inverted toggle', () => {
