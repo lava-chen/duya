@@ -449,10 +449,6 @@ export function ChatView({
     }
   }, [sessionId, addProjectFolder, setThreadWorkingDirectory]);
 
-  const handleSelectThread = useCallback((threadId: string) => {
-    setActiveThread(threadId);
-  }, [setActiveThread]);
-
   // Use fine-grained hooks for streaming state
   const phase = useStreamPhase(sessionId);
   const streamingError = useStreamingError(sessionId);
@@ -1230,7 +1226,6 @@ export function ChatView({
                 onSelectProject={handleSelectProject}
                 onNewBlankProject={handleNewBlankProject}
                 onUseExistingFolder={handleUseExistingFolder}
-                onSelectThread={handleSelectThread}
               >
                 {/* Input between selector and recent threads */}
                 <WorkspaceComposerLayer expanded={workspaceExpanded}>
