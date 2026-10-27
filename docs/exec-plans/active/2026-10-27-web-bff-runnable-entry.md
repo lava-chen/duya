@@ -12,8 +12,11 @@
 `docs/development/build.md`、`docs/architecture/ARCHITECTURE.md`、`apps/web/README.md`、
 `docs/README.zh-CN.md`（`build:web-app` → `build:web` 的脚本名滞后）。
 
-本次**不**处理：T40b 的浏览器端到端验收（发送→工具→审批→取消→刷新重放）；
-`packages/plugin-core` 的 `moduleResolution` 语义（见下）；任何 Host / worker / UI 行为改动。
+本次**不**处理：`packages/plugin-core` 的 `moduleResolution` 语义（见下）；任何 Host / worker / UI 行为改动。
+
+T40b 的浏览器端到端验收（发送→工具→审批→取消→刷新重放）原不在本计划范围内，
+后由 [2026-10-27 Web 浏览器验收](2026-10-27-web-browser-acceptance.md) 接手，
+并**依赖**本计划的 BFF 入口修复：验收正是以产品方式（无 shim）启动 BFF 来验证它。
 
 关联：610 架构系列 T40a/T40b（`docs/exec-plans/active/610-architecture-series/`）。
 

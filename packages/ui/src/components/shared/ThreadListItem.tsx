@@ -364,6 +364,12 @@ export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
     <>
       <div
         className={`thread-item${isActive ? " active" : ""}${isArchived ? " archived" : ""}`}
+        // The session id is the row's stable identity. The TITLE is not: a
+        // session's title is derived from its first message, so it changes
+        // under the user — and anything that addresses a row by its title
+        // breaks the moment a turn lands. A test that wants "that session"
+        // needs an attribute that does not move.
+        data-session-id={thread.id}
         onClick={handleClick}
         title={thread.title}
         role="button"
