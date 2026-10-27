@@ -185,9 +185,22 @@ descriptor, and keeps the Host bearer in the server process. A finite same-origi
 API validates Host/Origin/fetch-site and CSRF on mutations; approvals use the
 worker permission-request ledger. SSE forwards Host envelopes and cursors
 without renumbering and aborts its upstream reader on disconnect. Build it with
-`npm run build:web-app`, then run `npm run web-app` against an existing Host.
-This slice serves no browser UI; RunSession consumption and full browser/worker
-chat, cancellation and refresh-recovery acceptance remain outstanding.
+`npm run build:web`, then run `npm run web-app` against an existing Host.
+
+The browser half mounts the shared `@duya/ui` renderer and drives the Host
+through the BFF's API, so the Web surface and the Desktop surface share one
+renderer rather than two.
+
+The server is BUNDLED (`scripts/build-web-server-bundle.mjs`), not `tsc`-emitted.
+It reaches the Host only through `@duya/host/http-client` (all type-only
+imports) and reads the runtime descriptor through `@duya/host/host-runtime` (no
+runtime dependency at all), so its module graph holds no package whose emit
+plain Node cannot resolve. The Host's `dist` chain reaches `@duya/plugin-core`,
+whose `moduleResolution: bundler` emit carries extensionless relative
+specifiers — resolvable by a bundler, not by plain Node.
+
+Full browser/worker chat, cancellation and refresh-recovery acceptance remain
+outstanding.
 
 ### 3. MessagePort
 
