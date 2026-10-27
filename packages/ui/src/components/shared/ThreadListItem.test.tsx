@@ -599,5 +599,16 @@ describe('ThreadListItem archive lifecycle (Plan 549)', () => {
     expect(item).toBeTruthy();
     expect(item!.className).not.toContain('archived');
   });
+
+  it('carries the session id, because the title moves under the user', () => {
+    const { container } = render(
+      <ThreadListItem thread={makeThread({ title: 'first message' })} isActive={false} />,
+    );
+    const item = container.querySelector('.thread-item');
+    // A session's title is derived from its first message, so it changes
+    // when the first turn lands. Anything that addresses a row by title
+    // breaks at that moment; the id does not move.
+    expect(item!.getAttribute('data-session-id')).toBe('s-1');
+  });
 });
 
