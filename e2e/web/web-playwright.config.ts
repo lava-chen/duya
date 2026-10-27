@@ -31,6 +31,22 @@
  * with no resolver shim and no `--import` flag — because that is exactly
  * the thing the Web acceptance is about. A test that mounted the shim would
  * pass while the documented command stayed broken.
+ *
+ * ## Why the suite is NOT named `*.spec.ts`
+ *
+ * `npm run test:e2e` drives the Electron track with `e2e/playwright.config.ts`,
+ * whose projects match by directory segment (`smoke/`, `ipc/`, `turn/`,
+ * `ui-states/`). This suite matches none of them: it needs its own config,
+ * its own runner and a Host-backed environment. So it lives here, under its
+ * own config, and the file is named `*.playwright.ts` rather than `*.spec.ts`
+ * on purpose:
+ *
+ * `scripts/ci/test-scope.mjs` classifies a `.spec.` file under `e2e/` as a
+ * spec that CI can run on its own (`npm run test:e2e -- <file>`). This suite
+ * is not such a spec — selecting it that way makes Playwright report "no
+ * tests found" and fail the job. A non-`.spec.` file under `e2e/` is
+ * classified as E2E INFRASTRUCTURE instead, which is the truthful
+ * classification: touching this suite means the whole E2E suite runs.
  */
 
 import { defineConfig } from '@playwright/test';
@@ -57,7 +73,7 @@ export default defineConfig({
   projects: [
     {
       name: 'web',
-      testMatch: /web-.*\.spec\.ts/,
+      testMatch: /web-.*\.playwright\.ts/,
     },
   ],
 });

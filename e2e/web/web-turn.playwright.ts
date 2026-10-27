@@ -1,8 +1,13 @@
 /**
- * e2e/web/web-turn.spec.ts — the Web surface's browser acceptance.
+ * e2e/web/web-turn.playwright.ts — the Web surface's browser acceptance.
  *
  * Plan 610 T40b: "真 Host + 生产 worker + 受控 provider + 实际浏览器" for the
  * Web client — 发送/工具/审批/取消/刷新重放, with no second reducer.
+ *
+ * The file is named `*.playwright.ts`, not `*.spec.ts`, on purpose: it runs
+ * under its own Playwright config and its own runner, not under
+ * `npm run test:e2e`. See `web-playwright.config.ts` for why that matters to
+ * CI's scope resolver.
  *
  * ## What each test proves, and to which layer
  *

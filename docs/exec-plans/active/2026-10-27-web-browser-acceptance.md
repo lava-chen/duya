@@ -24,7 +24,14 @@ PR #527）。
 | `apps/web/tests/fixtures/web-acceptance-env.mjs` | 回环 Anthropic provider（脚本化模型）+ 真 standalone Host（生产 worker bundle）+ **按产品方式启动的 BFF** | 不是 mock executor：provider 只决定一次 HTTP 请求的字节 |
 | `e2e/web/run-web-acceptance.mjs` | 起环境 → 读 data root → 跑 Playwright → 收尾 | 不是 `webServer`：环境必须随运行而死，且要把它选的端口传给 spec |
 | `e2e/web/web-playwright.config.ts` | 纯浏览器 Chromium 项目（与 Electron 轨道分离） | 不是 `_electron` |
-| `e2e/web/web-turn.spec.ts` | 6 个场景 | 不直接调 `/api/runs/start`——那样只证明传输层 |
+| `e2e/web/web-turn.playwright.ts` | 6 个场景 | 不直接调 `/api/runs/start`——那样只证明传输层 |
+
+**为什么这个 suite 不叫 `*.spec.ts`**：`npm run test:e2e` 用 `e2e/playwright.config.ts`，
+它的 project 按**目录段**匹配（`smoke/`、`ipc/`、`turn/`、`ui-states/`），本 suite 一个都不匹配——
+它要自己的 config、自己的 runner 和一个 Host 环境。而 `scripts/ci/test-scope.mjs` 会把
+`e2e/` 下的 `.spec.` 文件当作"CI 可以单跑的 spec"；真让它单跑，Playwright 会报
+"no tests found" 并让作业失败。`e2e/` 下的**非** `.spec.` 文件则被归类为 e2e 基础设施
+（改动即触发全量 e2e）——这对本 suite 才是如实的分类，所以文件名是 `*.playwright.ts`。
 
 **环境夹具为什么在 `apps/web/tests/fixtures/` 而不在 `e2e/`**：它要 compose Host，
 所以 import `@duya/host`。`architecture-policy.yaml` 把 `apps/web/tests/fixtures`
