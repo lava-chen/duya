@@ -29,8 +29,12 @@ TUI 的 `/project` 从「会话投影派生的目录列表」改为「Host 已�
 - [x] 用户决策：projects 表为唯一真值；未登记目录不进列表；TUI 至少要能 `add`；本次只做 TUI 侧
 - [x] 独立 worktree 与依赖（根 `node_modules` 复用主检出，`@duya/*` 指向本 worktree）
 - [x] commit 1：TUI `/project` 改读 `GET /v1/projects`，新增 `/project add`
-- [ ] commit 2：**取消**（见「发现与决策」里 project home 播种那条）
-- [ ] 门禁 + 真机冒烟 + PR
+- [x] commit 2：**取消**（见「发现与决策」里 project home 播种那条）
+- [x] commit 3：Host 侧 `/v1/projects` 契约测试（此前该路由零覆盖）
+- [x] commit 4：命令 + 真实 client + 真实 local Host 的集成测试
+- [x] 门禁（typecheck / architecture / 相关 vitest / bundle:verify）
+- [ ] 真机 ink 交互（选择器渲染与按键）——**待用户在终端里手工跑**
+- [x] PR #531 已开
 
 ## 发现与决策
 
@@ -64,8 +68,21 @@ TUI 的 `/project` 从「会话投影派生的目录列表」改为「Host 已�
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
 | `220a63ff` 干净 | Windows 11 / Node 24.16.0 | `node scripts/architecture/bundle-verify.mjs` | 0 · FRESH 0/1015 | base 上已提交的产物与源码一致，无需重建 |
+| `45c32d77`…`7afbdfe1` | 同上 | `npm run typecheck:all` | 0 | 含 build:packages 与各包 `tsc --noEmit` |
+| 同上 | 同上 | `npm run architecture:check` | 0 · 2985 条全在 baseline | 无新增违规；未用 `--write` |
+| 同上 | 同上 | `npx vitest run packages/cli/src/tui/slash` | 0 · 250 passed（18 files） | 含 75 项命令名与 catalog 一致性契约 |
+| 同上 | 同上 | `npx vitest run packages/command-catalog` | 0 · 30 passed | catalog 双语描述与 surface 完整性 |
+| 同上 | 同上 | `npx vitest run packages/host/tests/project-api-http.test.ts` | 0 · 8 passed（新增） | 含真实 local Host 的组合根用例 |
+| 同上 | 同上 | `npx vitest run packages/cli/src/tui/slash/__tests__/project-host.test.ts` | 0 · 1 passed（新增） | 命令 + 真实 client + 真实 Host 串通 |
+| 同上 | 同上 | `npm run bundle:verify` | 0 · FRESH 0/1015 | 改动全在 bundle 输入闭包外，无需重建 |
+| 同上 | 同上 | 管道喂 stdin 驱动 TUI | 失败 | ink 把管道内容当粘贴，命令被当普通消息发给模型，不走 slash 派发；ink 交互需真终端手跑 |
 
 ## 接续 / 结果
 
-未实现。下一个动作：在本 worktree 写 commit 1（`packages/cli/src/tui/slash/project.ts` 改读 `listProjects()` + 新增 `registerProject()`）。
-回收：未回收（成果未集成）。
+已实现：TUI `/project` 改读 `projects` 表 + `/project add`；PR #531（4 个 commit：docs(plans) / feat(cli) / test(host) / test(cli)）。
+
+未完成：真机 ink 交互未跑 —— 在 worktree 的 TUI（临时数据目录）里手工执行 `/project add E:\cloned-projects\codex` 与 `/project`，确认选择器渲染与 `(current)` 标记。
+
+未提交路径：无。副作用：worktree 的 `packages/cli/bundle/cli.cjs`（gitignored）已重建为含新命令的版本。
+
+回收：未回收（PR 未集成）。下一步：在终端里跑一次 `/project add` 与 `/project`；通过后把结果补进 PR #531，并按授权流程集成。
