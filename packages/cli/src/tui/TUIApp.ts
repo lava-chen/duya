@@ -980,6 +980,26 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
+  /**
+   * Put the predicted next prompt into the composer.
+   *
+   * The prediction is a hint until the user takes it: it lands as ordinary
+   * text — visible and editable — and nothing is sent until the user presses
+   * Enter again.
+   */
+  adoptTurnSuggestion(): boolean {
+    const suggestion = this.options.turnSuggestion?.() ?? null;
+    if (suggestion === null || suggestion.length === 0) return false;
+    this.recallIntoComposer(suggestion);
+    return true;
+  }
+
+  /** True while a predicted next prompt is waiting to be taken. */
+  private hasTurnSuggestion(): boolean {
+    const suggestion = this.options.turnSuggestion?.() ?? null;
+    return suggestion !== null && suggestion.length > 0;
+  }
+
   private isBusyNow(): boolean {
     return this.options.isBusy?.() ?? this.busy;
   }
@@ -2046,6 +2066,8 @@ export class TUIApp {
         ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'tasks'
         ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        : this.editor.isEmpty && this.hasTurnSuggestion()
+        ? 'Enter adopt / Tab history / F6 tasks'
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
@@ -2068,7 +2090,10 @@ export class TUIApp {
       const hint = this.options.queuePaused?.() && queued > 0
         ? '/queue resume · Esc recall'
         : this.completion.isOpen ? context
-        : busy ? 'Enter steer · Tab queue · Esc stop' : '/ commands · F1 help';
+        : busy ? 'Enter steer · Tab queue · Esc stop'
+        : this.editor.isEmpty && this.hasTurnSuggestion()
+        ? 'Enter adopt · / commands · F1 help'
+        : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
@@ -3549,8 +3574,7 @@ exportHistory(): string[] {
           else {
             // Nothing queued and an empty composer: adopt the predicted next
             // prompt, which then sits in the editor for the user to edit.
-            const suggestion = this.options.turnSuggestion?.() ?? null;
-            if (suggestion != null && suggestion.length > 0) this.recallIntoComposer(suggestion);
+            this.adoptTurnSuggestion();
           }
         }
         else this.closeOverlay();
@@ -3859,6 +3883,11 @@ exportHistory(): string[] {
     this.paste.clear(at);
     const text = this.editor.submitIfPresent();
     if (text === null) {
+      // An empty composer with a predicted next prompt adopts it instead of
+      // sending: the text lands in the editor, visible and editable, and the
+      // user still presses Enter to send it. Same shape as the desktop
+      // composer, so the three surfaces answer the same way.
+      if (this.editor.isEmpty) this.adoptTurnSuggestion();
       this.scheduler.requestImmediate();
       return;
     }

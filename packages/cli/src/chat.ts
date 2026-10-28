@@ -1160,6 +1160,22 @@ export async function chatTui(
     }
   }
 
+  /**
+   * Drop the predicted next prompt.
+   *
+   * A prediction belongs to the session that produced it. After a session
+   * boundary the old suggestion would sit in the composer's placeholder and be
+   * sent to a conversation it has nothing to do with. Bumping the sequence
+   * also retires the read still in flight for it, so a poll that lands after
+   * the switch cannot put it back.
+   */
+  function clearTurnSuggestion(): void {
+    turnSuggestionSeq += 1;
+    if (turnSuggestion === null) return;
+    turnSuggestion = null;
+    tui.refresh();
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -1414,6 +1430,9 @@ export async function chatTui(
   ): Promise<void> {
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options, directory);
+    // The new session has no turn to predict from, and the old session's
+    // prediction would be sent to this one if it stayed in the composer.
+    clearTurnSuggestion();
     // This surface created it, so this surface cleans it up: a session opened
     // and never typed into is a ghost of the same kind as the opening one.
     owned?.own(activeSession.id);
@@ -1469,6 +1488,9 @@ export async function chatTui(
     }
     const previousModel = activeSession.model;
     activeSession = adopted;
+    // The adopted session has its own turns; the prediction on screen belongs
+    // to the session this surface just left.
+    clearTurnSuggestion();
     await resyncEffortForModelChange(previousModel);
     watchSession(adopted.id);
     // Same reason as `/new`: the adopted session may be the first moment this
@@ -1540,8 +1562,7 @@ export async function chatTui(
     cancellationRequested = false;
     // A new turn retires the previous turn's suggestion, and the read still
     // in flight for it is stopped with it.
-    turnSuggestionSeq += 1;
-    turnSuggestion = null;
+    clearTurnSuggestion();
     const streamAbort = new AbortController();
     activeStream = streamAbort;
     const runSessionId = activeSession.id;
