@@ -61,9 +61,9 @@
 - 已实现：S0–S3 完成；S4 的门禁已跑完并通过。
 - 已验证：新增用例 8 条全过且**反向验证确认修复前会红**；`packages/cli/src` 全量 1389 条无回归；typecheck:all 与 architecture:check 退出码 0。
 - 未验证：真机（TUI 实跑一轮对话看灰字建议 → Enter 采纳 → `/new` 后不残留）未跑，需用户确认。
-- PR：待建（分支 `worktree-tui-turn-suggestion-fix`，base `220a63ff`）。
+- PR：[#532 fix(cli): make the TUI turn suggestion adoptable and session-scoped](https://github.com/lava-chen/duya/pull/532)（目标 master，head `e52598e9`）。
 - 阻塞：无。
-- 下一步：推分支并开 PR（目标 master），把上面的验证记录贴进 PR 正文；真机冒烟由用户补。
+- 下一步：等 review 与 CI；真机冒烟由用户补（TUI 实跑一轮对话看灰字建议 → Enter 采纳 → `/new` 后不残留）。**未经用户授权不合并。**
 
 回收：未回收（PR 未集成）。
 
