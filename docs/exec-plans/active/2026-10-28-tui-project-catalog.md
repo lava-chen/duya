@@ -78,6 +78,7 @@ TUI 的 `/project` 从「会话投影派生的目录列表」改为「Host 已�
 | 同上 | 同上 | 管道喂 stdin 驱动 TUI | 失败 | ink 把管道内容当粘贴，命令被当普通消息发给模型，不走 slash 派发；ink 交互需真终端手跑 |
 | `7250fdcd` | GitHub Actions · ubuntu-22.x | CI `test`（PR #531 首轮） | 1 · `packages/cli/src/tui/slash/__tests__/project-host.test.ts` 挂：`AssertionError: expected [ Array(1) ] to deeply equal []`（51 files / 541 tests 中 540 过） | **本 PR 引入**：测试硬编码了 `E:\cloned-projects\codex`，Linux runner 上不存在，命令报 "No such directory"。同轮的 `project.test.ts`（35）与 `project-api-http.test.ts`（8）均过。 |
 | `1d8754eb` | 同上 | `npx vitest run packages/cli/src/tui/slash/__tests__/project-host.test.ts packages/host/tests/project-api-http.test.ts` | 0 · 9 passed | 改用真实临时目录 + 显式项目名，断言不再依赖 basename |
+| `4a467eb` | GitHub Actions · ubuntu-22.x | CI `test` / `typecheck` / `architecture` / `build`（PR #531 第二轮） | 全部 pass | 首轮挂的那一个用例已绿；PR MERGEABLE / CLEAN |
 
 ## 接续 / 结果
 
