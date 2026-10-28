@@ -1,7 +1,7 @@
 # Web BFF 可运行入口：把 web server 打包成可被纯 Node 加载的产物
 
-状态：active · 负责人：mavis（会话 mvs_2387fca26eb84e6ba038bb6962b10891） · 更新：2026-10-27
-分支：`codex/web-bff-esm` · worktree：`E:\Projects\duya\.claude\worktrees\web-bff-esm` · base：`a99e1444` · owner：mavis
+状态：merged · PR #527 已合并（`ed473722`）· 负责人：mavis（会话 mvs_2387fca26eb84e6ba038bb6962b10891） · 更新：2026-10-27
+base：`a99e1444` · owner：mavis
 
 ## 目标与边界
 
@@ -82,7 +82,7 @@ node apps/web/dist/server/main.js
 - [x] 接入 `apps/web` 的 `build` 脚本与根 `build:web`
 - [x] 验收 1–4
 - [x] 文档同步（build.md / ARCHITECTURE.md / apps/web/README.md / README.zh-CN.md）
-- [ ] commit + PR
+- [x] commit + PR（#527 已合并）
 
 ## 发现与决策
 
@@ -124,10 +124,12 @@ node apps/web/dist/server/main.js
 
 ## 接续 / 结果
 
-实现完成，验收 1–4 全过。PR #527 已开（https://github.com/lava-chen/duya/pull/527）。
+实现完成，验收 1–4 全过。PR #527 已合并（merge commit `ed473722`）。
 
 CI 首轮失败于 `bundle:verify`（改 `packages/host/src/` 后已跟踪的 worker bundle 过期），
 已重建并提交（`3907cc78`），本地复验 FRESH。
 
-未授权集成，不合并。回收：未回收（PR 未集成，成果需可达）。
-下一步：等 PR #527 的 CI 在 `3907cc78` 上全绿，再交获授权的集成者。
+合并后复验（master `dcec5c15`，含 #527）：`npm run build:web` 通过；
+`node apps/web/dist/server/main.js`（无 `--import`）正常启动——由
+[浏览器验收](2026-10-27-web-browser-acceptance.md) 夹具以产品方式拉起 BFF 覆盖。
+分支 `codex/web-bff-esm` 与 worktree 均已回收。
