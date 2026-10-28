@@ -58,10 +58,12 @@
 
 ## 接续 / 结果
 
-实现已落在 worktree：`E:\Projects\duya\.claude\worktrees\tui-bang-shell-ui`，分支 `worktree-tui-bang-shell-ui`，base `220a63ff`。
+已实现：`994c03ab`（16 个文件）。已验证：`typecheck:all`、`architecture:check`、TUI 套件 905 用例、CLI 全量 1525 用例、inline 与 full-screen 的真终端字节（红色 `!`）与 "You ran" 卡片。未合并。
 
-未完成：门禁未跑（会话内沙箱安全分类器持续不可用，`node scripts/junction-worktree.mjs .` 未能执行，worktree 还没有依赖链接），因此单测、`typecheck:all`、`architecture:check` 全部待跑；commit 与 PR 尚未做。已做的替代验证是静态推演：把 4 个测试文件的每条期望在实现里逐行手算并对齐（不含执行）。
+PR：<https://github.com/lava-chen/duya/pull/533>（base `master`，head `worktree-tui-bang-shell-ui`）。等 review、CI 与授权集成；未获授权不合并。
 
-回收：未回收。成果留在 worktree 的未提交改动里（`git status` 可见 8 个改动文件 + 4 个新文件），本会话仍是 owner。
+未提交路径：无（除构建副作用 `packages/capabilities/src/ModuleTool/inline-content.ts` 的 CRLF 重写，内容语义不变、未暂存、未进提交；由 `scripts/inline-modules.mjs` 在 `build:packages` 时产生）。
 
-下一步：依赖链接可用后跑上述 vitest 与两个门禁命令，通过后按 Conventional Commits 提交并开 PR。
+回收：未回收。worktree `E:\Projects\duya\.claude\worktrees\tui-bang-shell-ui` 保留，owner 是本会话，直到 PR 集成并重验。
+
+下一步：看 PR #533 的 CI 与 review；必需检查全绿且拿到集成授权后，用 merge commit 合并，再同步、重验与回收。真机冒烟（`npm run dev:tui` 手工敲 `!echo hi`）仍由用户执行。
