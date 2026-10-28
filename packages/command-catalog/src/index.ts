@@ -165,9 +165,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     labelZh: '切换项目',
     // Not `add-dir`: that attaches another root to the session you are in,
     // this one leaves the directory the surface works in.
-    description: 'Start a session in another project directory',
-    descriptionZh: '在另一个项目目录里开启一个新会话',
-    argsHint: '[path]',
+    //
+    // `add` registers a directory as a project before switching to it. The
+    // projects of every surface are the same rows in the Host's project
+    // table, so a project registered here is the one the Desktop lists.
+    description: 'Switch to a registered project, or register a directory as one',
+    descriptionZh: '切换到已登记的项目，或把一个目录登记为项目',
+    argsHint: '[add <path>] | [path]',
+    subcommands: ['add'],
     category: 'session',
     surfaces: ['cli'],
   },

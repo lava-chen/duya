@@ -1,10 +1,11 @@
 /**
- * `/project` — the picker, the argument form, and the refusals.
+ * `/project` — the picker, the argument form, the register form, and the refusals.
  *
  * The switch itself is the loop's (`actions.startSessionInDirectory`), so most
  * of these cases are about what the command decides BEFORE crossing that
- * boundary: which directories it offers, what it does with a typed path, and
- * when it says no. The loop side is covered in `chat-tui-project-switch.test.ts`.
+ * boundary: which projects it offers, what it does with a typed path, what it
+ * writes when it registers one, and when it says no. The loop side is covered
+ * in `chat-tui-project-switch.test.ts`.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -12,16 +13,35 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { HostSessionHttpClient } from '@duya/host/http-client';
 import type { HostSessionRecord } from '@duya/agent-protocol';
+import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { TuiChoice } from '../../TUIApp.js';
 import type { TuiSlashActions, TuiSlashContext, TuiSlashHost } from '../types.js';
-import { PROJECT_COMMANDS, expandHome, projectEntries } from '../project.js';
+import {
+  PROJECT_COMMANDS,
+  expandHome,
+  findByDirectory,
+  projectRows,
+  splitPathAndName,
+} from '../project.js';
 
 const COMMAND = PROJECT_COMMANDS[0];
 if (COMMAND === undefined) throw new Error('project.ts exports no command');
 
-/** One session row, only as far as the grouping reads it. */
-function row(workingDirectory: string, recencyAt: number | null = null): object {
-  return { workingDirectory, recencyAt, updatedAt: recencyAt ?? 0 };
+/** One registered project, only as far as the picker reads it. */
+function project(
+  overrides: Partial<HostProjectRecord> & { readonly canonical_root: string },
+): HostProjectRecord {
+  return {
+    project_id: 'project-1',
+    name: '',
+    description: null,
+    paths: [{ path: overrides.canonical_root, description: null }],
+    icon: null,
+    color: null,
+    created_at: 0,
+    last_seen_at: 0,
+    ...overrides,
+  };
 }
 
 /**
@@ -32,39 +52,89 @@ function row(workingDirectory: string, recencyAt: number | null = null): object 
 const FIRST = path.resolve(os.tmpdir());
 const SECOND = path.resolve(os.homedir());
 
-describe('projectEntries grouping', () => {
-  it('counts the sessions of one directory and orders by last use', () => {
-    const entries = projectEntries([
-      row('/old/project', 100),
-      row('/fresh/project', 300),
-      row('/old/project', 200),
+describe('projectRows', () => {
+  it('leaves out the rows the catalog sync wrote — they have no name', () => {
+    const entries = projectRows([
+      project({ canonical_root: '/auto/one', name: '' }),
+      project({ canonical_root: '/named/one', name: 'named', last_seen_at: 10 }),
     ]);
-    expect(entries.map((entry) => entry.directory)).toEqual(['/fresh/project', '/old/project']);
-    expect(entries[1]?.sessionCount).toBe(2);
+    expect(entries.map((entry) => entry.directory)).toEqual(['/named/one']);
   });
 
-  it('sorts by recency, not by the row count that would bury a busy old project', () => {
-    const entries = projectEntries([
-      row('/quiet/new', 500),
-      row('/loud/old', 400),
-      row('/loud/old', 300),
-      row('/loud/old', 200),
+  it('orders by when the Host last saw the project, then by name', () => {
+    const entries = projectRows([
+      project({ project_id: 'a', canonical_root: '/old', name: 'old', last_seen_at: 100 }),
+      project({ project_id: 'b', canonical_root: 'fresh', name: 'fresh', last_seen_at: 300 }),
+      project({ project_id: 'c', canonical_root: 'same', name: 'bravo', last_seen_at: 300 }),
+      project({ project_id: 'd', canonical_root: 'same2', name: 'alpha', last_seen_at: 300 }),
     ]);
-    expect(entries.map((entry) => entry.directory)).toEqual(['/quiet/new', '/loud/old']);
+    expect(entries.map((entry) => entry.name)).toEqual(['alpha', 'bravo', 'fresh', 'old']);
   });
 
-  it('skips rows with no directory instead of offering an empty one', () => {
-    expect(projectEntries([row('   '), row('/real', 1)])).toHaveLength(1);
+  it('skips rows with no root instead of offering an empty one', () => {
+    expect(projectRows([project({ canonical_root: '   ', name: 'nameless' })])).toHaveLength(0);
   });
 
-  it('uses updatedAt when a session was never turned into', () => {
-    const entries = projectEntries([{ workingDirectory: '/a', recencyAt: null, updatedAt: 42 }]);
-    expect(entries[0]?.lastUsedAt).toBe(42);
+  it('counts the paths of a multi-root project', () => {
+    const entries = projectRows([
+      project({
+        canonical_root: '/root',
+        name: 'multi',
+        paths: [{ path: '/root', description: null }, { path: '/extra', description: null }],
+      }),
+    ]);
+    expect(entries[0]?.pathCount).toBe(2);
+  });
+});
+
+describe('findByDirectory', () => {
+  it('finds a project by its canonical root', () => {
+    const found = findByDirectory([project({ canonical_root: '/root', name: 'one' })], '/root');
+    expect(found?.name).toBe('one');
+  });
+
+  it('finds a project by one of its extra paths', () => {
+    const found = findByDirectory(
+      [project({ canonical_root: '/root', name: 'one', paths: [{ path: '/extra', description: null }] })],
+      '/extra',
+    );
+    expect(found?.name).toBe('one');
+  });
+
+  it('answers null for a directory no project owns', () => {
+    expect(findByDirectory([project({ canonical_root: '/root', name: 'one' })], '/other')).toBeNull();
   });
 
   it('collapses one Windows folder spelled two ways, and does not on a case-sensitive fs', () => {
-    const entries = projectEntries([row('E:\\Projects\\duya', 2), row('e:\\projects\\DUYA', 1)]);
-    expect(entries).toHaveLength(process.platform === 'win32' ? 1 : 2);
+    const found = findByDirectory(
+      [project({ canonical_root: 'E:\\Projects\\duya', name: 'one' })],
+      'e:\\projects\\DUYA',
+    );
+    expect(found === null).toBe(process.platform !== 'win32');
+  });
+});
+
+describe('splitPathAndName', () => {
+  it('takes one token as the path and leaves the name empty', () => {
+    expect(splitPathAndName('/srv/app')).toEqual({ path: '/srv/app', name: '' });
+  });
+
+  it('takes the first token as the path and the rest as the name', () => {
+    expect(splitPathAndName('/srv/app My App')).toEqual({ path: '/srv/app', name: 'My App' });
+  });
+
+  it('keeps a quoted path whole', () => {
+    expect(splitPathAndName('"C:\\My Projects\\app"')).toEqual({
+      path: 'C:\\My Projects\\app',
+      name: '',
+    });
+  });
+
+  it('keeps a quoted path whole and still takes the name after it', () => {
+    expect(splitPathAndName('"C:\\My Projects\\app" codex')).toEqual({
+      path: 'C:\\My Projects\\app',
+      name: 'codex',
+    });
   });
 });
 
@@ -77,10 +147,13 @@ describe('expandHome', () => {
 });
 
 function makeContext(options: {
-  readonly rows?: readonly object[];
+  readonly projects?: readonly HostProjectRecord[];
+  /** A different answer per call, for the paths that read the list twice. */
+  readonly listProjectsImpl?: (call: number) => readonly HostProjectRecord[];
   readonly chooseResult?: (choices: readonly TuiChoice[]) => string | null;
   readonly promptResult?: string | null;
   readonly listThrows?: boolean;
+  readonly createThrows?: Error;
   readonly currentDirectory?: string | null;
   readonly busy?: boolean;
   readonly actions?: TuiSlashActions | null;
@@ -106,10 +179,18 @@ function makeContext(options: {
       : { promptText: async () => options.promptResult }),
   } as unknown as TuiSlashHost;
 
-  const listLocalSessions = vi.fn(async () => {
-    if (options.listThrows === true) throw new Error('local_session_projection_unavailable');
-    return { sessions: options.rows ?? [], nextCursor: null };
+  let listCall = 0;
+  const listProjects = vi.fn(async () => {
+    if (options.listThrows === true) throw new Error('project_api_unavailable');
+    listCall += 1;
+    if (options.listProjectsImpl !== undefined) return options.listProjectsImpl(listCall);
+    return options.projects ?? [];
   });
+  const createProject = vi.fn(async () => {
+    if (options.createThrows !== undefined) throw options.createThrows;
+    return project({ canonical_root: FIRST, name: 'created' });
+  });
+  const updateProject = vi.fn(async () => project({ canonical_root: FIRST, name: 'updated' }));
   // Absent, present-but-blank, and present are three different Host answers,
   // and the command treats them differently.
   const readLocalSession = vi.fn(async () => {
@@ -117,7 +198,9 @@ function makeContext(options: {
     return { workingDirectory: options.currentDirectory };
   });
   const client = {
-    listLocalSessions,
+    listProjects,
+    createProject,
+    updateProject,
     readLocalSession,
   } as unknown as HostSessionHttpClient;
 
@@ -140,13 +223,25 @@ function makeContext(options: {
     ...(actions === undefined ? {} : { actions }),
   } as TuiSlashContext;
 
-  return { ctx, notices, errors, choicesSeen, listLocalSessions, startSessionInDirectory };
+  return {
+    ctx,
+    notices,
+    errors,
+    choicesSeen,
+    listProjects,
+    createProject,
+    updateProject,
+    startSessionInDirectory,
+  };
 }
 
 describe('/project picker', () => {
-  it('offers each known directory plus the add row, current one marked', async () => {
+  it('offers each registered project plus the register row, current one marked', async () => {
     const { ctx, choicesSeen, startSessionInDirectory } = makeContext({
-      rows: [row(FIRST, 300), row(SECOND, 200)],
+      projects: [
+        project({ project_id: 'a', canonical_root: FIRST, name: 'first', last_seen_at: 300 }),
+        project({ project_id: 'b', canonical_root: SECOND, name: 'second', last_seen_at: 200 }),
+      ],
       currentDirectory: FIRST,
       chooseResult: (choices) => choices[1]?.value ?? null,
     });
@@ -155,20 +250,31 @@ describe('/project picker', () => {
     const choices = choicesSeen[0];
     expect(choices?.map((choice) => choice.value)).toEqual([FIRST, SECOND, 'add-directory']);
     expect(choices?.[0]?.label).toContain('(current)');
+    expect(choices?.[0]?.label).toContain('first');
     expect(choices?.[1]?.description).toContain(SECOND);
     expect(startSessionInDirectory).toHaveBeenCalledWith(SECOND);
   });
 
+  it('does not offer the rows no human registered', async () => {
+    const { ctx, choicesSeen } = makeContext({
+      projects: [project({ canonical_root: FIRST, name: '' })],
+    });
+    await COMMAND.run(ctx, '');
+    expect(choicesSeen[0]?.map((choice) => choice.value)).toEqual(['add-directory']);
+  });
+
   it('says so and stays put when the user cancels the list', async () => {
-    const { ctx, startSessionInDirectory, notices } = makeContext({ rows: [row(FIRST, 1)] });
+    const { ctx, startSessionInDirectory, notices } = makeContext({
+      projects: [project({ canonical_root: FIRST, name: 'first' })],
+    });
     await COMMAND.run(ctx, '');
     expect(startSessionInDirectory).not.toHaveBeenCalled();
     expect(notices).toEqual([]);
   });
 
-  it('does not churn a session when the pick is the directory already in', async () => {
+  it('does not churn a session when the pick is the project already in', async () => {
     const { ctx, notices, startSessionInDirectory } = makeContext({
-      rows: [row(FIRST, 1)],
+      projects: [project({ canonical_root: FIRST, name: 'first' })],
       currentDirectory: FIRST,
       chooseResult: (choices) => choices[0]?.value ?? null,
     });
@@ -179,23 +285,28 @@ describe('/project picker', () => {
 
   it('keeps the no-UI host useful by printing what it would have offered', async () => {
     const { ctx, notices, startSessionInDirectory } = makeContext({
-      rows: [row(FIRST, 1)],
+      projects: [project({ canonical_root: FIRST, name: 'first' })],
       chooseFiltered: false,
     });
     await COMMAND.run(ctx, '');
     const printed = notices.join('\n');
+    expect(printed).toContain('first');
     expect(printed).toContain(FIRST);
-    expect(printed).toContain('Usage: /project <path>');
+    expect(printed).toContain('/project add <path>');
     expect(startSessionInDirectory).not.toHaveBeenCalled();
   });
 
-  it('takes a directory typed into the add row', async () => {
-    const { ctx, startSessionInDirectory } = makeContext({
-      rows: [row(FIRST, 1)],
+  it('registers the directory typed into the register row', async () => {
+    const { ctx, createProject, startSessionInDirectory } = makeContext({
+      projects: [],
       chooseResult: (choices) => choices[choices.length - 1]?.value ?? null,
       promptResult: SECOND,
     });
     await COMMAND.run(ctx, '');
+    expect(createProject).toHaveBeenCalledWith({
+      name: path.basename(SECOND),
+      paths: [{ path: SECOND, description: null }],
+    });
     expect(startSessionInDirectory).toHaveBeenCalledWith(SECOND);
   });
 
@@ -207,15 +318,15 @@ describe('/project picker', () => {
   });
 
   it('refuses mid-turn before reading anything, because a live run owns the session', async () => {
-    const { ctx, errors, listLocalSessions, startSessionInDirectory } = makeContext({ busy: true });
+    const { ctx, errors, listProjects, startSessionInDirectory } = makeContext({ busy: true });
     await COMMAND.run(ctx, '');
     expect(errors.join('\n')).toContain('while a turn is running');
-    expect(listLocalSessions).not.toHaveBeenCalled();
+    expect(listProjects).not.toHaveBeenCalled();
     expect(startSessionInDirectory).not.toHaveBeenCalled();
   });
 
   it('says what it needs when there is no loop to cross the boundary', async () => {
-    const { ctx, errors } = makeContext({ actions: null, rows: [row('/work/api', 1)] });
+    const { ctx, errors } = makeContext({ actions: null, projects: [] });
     await COMMAND.run(ctx, '');
     expect(errors.join('\n')).toContain('needs the running chat loop');
   });
@@ -224,10 +335,10 @@ describe('/project picker', () => {
 describe('/project <path>', () => {
   it('switches to a directory given as an argument without listing', async () => {
     const target = path.resolve(os.tmpdir());
-    const { ctx, startSessionInDirectory, listLocalSessions } = makeContext();
+    const { ctx, startSessionInDirectory, listProjects } = makeContext();
     await COMMAND.run(ctx, target);
     expect(startSessionInDirectory).toHaveBeenCalledWith(target);
-    expect(listLocalSessions).not.toHaveBeenCalled();
+    expect(listProjects).not.toHaveBeenCalled();
   });
 
   it('refuses a path that is not there instead of starting a session in it', async () => {
@@ -265,5 +376,87 @@ describe('/project <path>', () => {
     await COMMAND.run(ctx, path.resolve(os.tmpdir()));
     expect(errors.join('\n')).toContain('Could not start a session in');
     expect(errors.join('\n')).toContain('accessible local directory');
+  });
+});
+
+describe('/project add <path>', () => {
+  it('registers the directory under its own name and moves to it', async () => {
+    const { ctx, createProject, startSessionInDirectory } = makeContext({ projects: [] });
+    await COMMAND.run(ctx, `add ${FIRST}`);
+    expect(createProject).toHaveBeenCalledWith({
+      name: path.basename(FIRST),
+      paths: [{ path: FIRST, description: null }],
+    });
+    expect(startSessionInDirectory).toHaveBeenCalledWith(FIRST);
+  });
+
+  it('registers it under the name the user gave', async () => {
+    const { ctx, createProject } = makeContext({ projects: [] });
+    await COMMAND.run(ctx, `add ${FIRST} codex`);
+    expect(createProject).toHaveBeenCalledWith({
+      name: 'codex',
+      paths: [{ path: FIRST, description: null }],
+    });
+  });
+
+  it('names the row that is already there instead of registering a second one', async () => {
+    const { ctx, createProject, updateProject, startSessionInDirectory } = makeContext({
+      projects: [project({ project_id: 'p1', canonical_root: FIRST, name: '' })],
+    });
+    await COMMAND.run(ctx, `add ${FIRST} codex`);
+    expect(createProject).not.toHaveBeenCalled();
+    expect(updateProject).toHaveBeenCalledWith('p1', { name: 'codex' });
+    expect(startSessionInDirectory).toHaveBeenCalledWith(FIRST);
+  });
+
+  it('leaves a project that already carries the wanted name alone', async () => {
+    const { ctx, createProject, updateProject, notices } = makeContext({
+      projects: [project({ project_id: 'p1', canonical_root: FIRST, name: 'codex' })],
+    });
+    await COMMAND.run(ctx, `add ${FIRST} codex`);
+    expect(createProject).not.toHaveBeenCalled();
+    expect(updateProject).not.toHaveBeenCalled();
+    expect(notices.join('\n')).toContain('already registered');
+  });
+
+  it('falls back to naming when another client registered the same root first', async () => {
+    const conflict = Object.assign(new Error('A project already uses this canonical path'), {
+      code: 'project_conflict',
+    });
+    const { ctx, createProject, updateProject } = makeContext({
+      createThrows: conflict,
+      listProjectsImpl: (call) => (call === 1
+        ? []
+        : [project({ project_id: 'raced', canonical_root: FIRST, name: '' })]),
+    });
+    await COMMAND.run(ctx, `add ${FIRST} codex`);
+    expect(createProject).toHaveBeenCalled();
+    expect(updateProject).toHaveBeenCalledWith('raced', { name: 'codex' });
+  });
+
+  it('reports a registration the Host refused, without moving', async () => {
+    const { ctx, errors, startSessionInDirectory } = makeContext({
+      projects: [],
+      createThrows: new Error('project store is unavailable'),
+    });
+    await COMMAND.run(ctx, `add ${FIRST}`);
+    expect(errors.join('\n')).toContain('Could not register');
+    expect(startSessionInDirectory).not.toHaveBeenCalled();
+  });
+
+  it('refuses a directory that is not there before writing anything', async () => {
+    const missing = path.join(os.tmpdir(), 'duya-project-add-no-such-dir');
+    const { ctx, errors, createProject, startSessionInDirectory } = makeContext({ projects: [] });
+    await COMMAND.run(ctx, `add ${missing}`);
+    expect(errors.join('\n')).toContain('No such directory');
+    expect(createProject).not.toHaveBeenCalled();
+    expect(startSessionInDirectory).not.toHaveBeenCalled();
+  });
+
+  it('says how to use it when the path is missing', async () => {
+    const { ctx, errors, createProject } = makeContext({ projects: [] });
+    await COMMAND.run(ctx, 'add');
+    expect(errors.join('\n')).toContain('/project add <path>');
+    expect(createProject).not.toHaveBeenCalled();
   });
 });
