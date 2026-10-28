@@ -57,6 +57,7 @@ import { createPluginCompletionSource } from './tui/plugin-candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
+import { shellDraftOf } from './tui/shell-command.js';
 import {
   DEFAULT_TUI_PREFERENCES,
   effortForModel,
@@ -1843,10 +1844,11 @@ export async function chatTui(
     // implements). `!!cmd` opts the run OUT of the context the next message
     // carries. Checked after the slash branch because `!/usr/bin/...` is a
     // path, not a command.
-    if (text.startsWith('!')) {
+    const bangDraft = shellDraftOf(text);
+    if (bangDraft !== null) {
       if (attachments.length > 0) tui.printNotice('Attachments are ignored with shell commands.');
-      const excludeFromContext = text.startsWith('!!');
-      const shellLine = text.slice(excludeFromContext ? 2 : 1).trim();
+      const excludeFromContext = bangDraft.prefix === '!!';
+      const shellLine = bangDraft.command;
       if (shellLine === '') {
         tui.printError('Usage: !<shell command>');
         return;

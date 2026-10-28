@@ -41,8 +41,36 @@ const EXPLORE_TOOLS: ReadonlySet<string> = new Set([
   'search_files',
 ]);
 
+/**
+ * The tool name a command the USER ran carries.
+ *
+ * A name of its own, so the reader can tell whose command produced the output:
+ * the agent's `bash` and the user's `!` command share a body renderer but
+ * never a grouping family, never a wording and never a cache key.
+ *
+ * Deliberately not `shell`: a plugin or MCP tool could carry that name, and a
+ * card that says "You ran" must mean the command the USER ran.
+ */
+export const LOCAL_SHELL_TOOL = 'local_shell';
+
+/**
+ * The grouping family of the commands the user ran themselves.
+ *
+ * Its own family, so a local command never folds into the agent's shell batch
+ * — "Ran 2 commands" must mean two commands the AGENT ran.
+ */
+export const LOCAL_SHELL_FAMILY = 'user-shell';
+
+/**
+ * The output lines a command the user ran may show.
+ *
+ * Far more than an agent call gets: the output is what the user asked for, and
+ * codex gives its user-shell cells the same headroom.
+ */
+export const LOCAL_SHELL_RESULT_LINES = 50;
+
 /** Tools that run a shell command. */
-const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell', 'terminal']);
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell', 'terminal', LOCAL_SHELL_TOOL]);
 
 /**
  * The key two adjacent tool blocks must share to render as a group.
@@ -53,6 +81,7 @@ const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'powershell', 'termina
  * `bash`). Everything else only groups with its own name.
  */
 export function toolGroupKey(name: string): string {
+  if (name === LOCAL_SHELL_TOOL) return LOCAL_SHELL_FAMILY;
   if (EXPLORE_TOOLS.has(name)) return 'explore';
   if (SHELL_TOOLS.has(name)) return 'shell';
   return name;
@@ -61,6 +90,11 @@ export function toolGroupKey(name: string): string {
 /** True when the tool runs a shell command. */
 export function isShellTool(name: string): boolean {
   return SHELL_TOOLS.has(name);
+}
+
+/** True when the command was run by the user, not by the agent. */
+export function isLocalShellTool(name: string): boolean {
+  return name === LOCAL_SHELL_TOOL;
 }
 
 /**

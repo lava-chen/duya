@@ -104,4 +104,41 @@ describe('buildComposerLayout', () => {
     expect(result.hasPlaceholder).toBe(false);
     expect(result.lines[1]).toBe('❯ hello');
   });
+
+  it('draws a shell prefix in the prompt column instead of the text', () => {
+    const result = buildComposerLayout('!ls -la', 7, {
+      columns: 20,
+      terminalRows: 16,
+      shellPrefix: { glyph: '!', prompt: '! ', stripped: 1 },
+    });
+
+    // The bang is the prompt now: the body starts after it, so the draft is
+    // not printed twice.
+    expect(result.lines[1]).toBe('! ls -la');
+    // The caret follows the text it belongs to: the prompt shifted it left by
+    // one column.
+    expect(result.cursorColumn).toBe(9);
+  });
+
+  it('keeps the double bang visible in the prompt column', () => {
+    const result = buildComposerLayout('!!git status', 12, {
+      columns: 20,
+      terminalRows: 16,
+      shellPrefix: { glyph: '!!', prompt: '!!', stripped: 2 },
+    });
+
+    expect(result.lines[1]).toBe('!!git status');
+    expect(result.cursorColumn).toBe(13);
+  });
+
+  it('wraps a shell command like any other body', () => {
+    const result = buildComposerLayout('!echo one two three', 18, {
+      columns: 12,
+      terminalRows: 16,
+      shellPrefix: { glyph: '!', prompt: '! ', stripped: 1 },
+    });
+
+    expect(result.lines[1]).toBe('! echo one');
+    expect(result.lines[2]).toBe('  two three');
+  });
 });

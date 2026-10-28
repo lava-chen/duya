@@ -265,6 +265,8 @@ const TOOL_PREVIEW_KEYS: Readonly<Record<string, readonly string[]>> = {
   apply_patch: ['path'],
   bash: ['command'],
   powershell: ['command'],
+  // A command the user ran themselves.
+  local_shell: ['command'],
   // Legacy aliases, same shapes.
   read_file: ['path'],
   write_file: ['path'],
