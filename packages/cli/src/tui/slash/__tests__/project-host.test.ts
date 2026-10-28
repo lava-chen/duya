@@ -38,6 +38,10 @@ describe('/project against a running Host', () => {
   it('registers a directory, then offers it in the picker', async () => {
     const dataRoot = mkdtempSync(path.join(os.tmpdir(), 'duya-project-host-'));
     roots.push(dataRoot);
+    // A directory that exists wherever the test runs: the command refuses a
+    // path it cannot stat, and the runner is not always this machine.
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'duya-project-codex-'));
+    roots.push(directory);
     const host = await startLocalHost({ dataRoot, port: 0, token: TOKEN, ephemeral: true });
     hosts.push(host);
     const client = new HostSessionHttpClient(host.origin, TOKEN);
@@ -77,15 +81,15 @@ describe('/project against a running Host', () => {
     await COMMAND.run(ctx, '');
     expect(choiceSets.at(-1)).toEqual(['Register a directory… | add-directory']);
 
-    await COMMAND.run(ctx, 'add E:\\cloned-projects\\codex');
+    await COMMAND.run(ctx, `add ${directory} codex`);
     expect(errors).toEqual([]);
-    expect(notices).toContain('Registered codex at E:\\cloned-projects\\codex.');
-    expect(switches).toEqual(['E:\\cloned-projects\\codex']);
+    expect(notices).toContain(`Registered codex at ${directory}.`);
+    expect(switches).toEqual([directory]);
 
     choiceSets.length = 0;
     await COMMAND.run(ctx, '');
     expect(choiceSets.at(-1)).toEqual([
-      'codex | E:\\cloned-projects\\codex',
+      `codex | ${directory}`,
       'Register a directory… | add-directory',
     ]);
 
@@ -93,7 +97,7 @@ describe('/project against a running Host', () => {
     const rows = await client.listProjects();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.name).toBe('codex');
-    expect(rows[0]?.canonical_root).toBe('E:\\cloned-projects\\codex');
-    expect(rows[0]?.paths).toEqual([{ path: 'E:\\cloned-projects\\codex', description: null }]);
+    expect(rows[0]?.canonical_root).toBe(directory);
+    expect(rows[0]?.paths).toEqual([{ path: directory, description: null }]);
   });
 });
