@@ -1,8 +1,8 @@
 # TUI 权限 banner 与 Shift+Tab 快速切换
 
-状态：implemented · 负责人：claude-desktop-code · 更新：2026-10-29
+状态：complete · 负责人：claude-desktop-code · 更新：2026-10-29
 分支：codex/tui-permission-banner · worktree：E:\Projects\duya\.claude\worktrees\tui-permission-banner · base：49800ec5 · owner：claude-desktop-code
-集成：Draft PR #538（`codex/tui-permission-banner` → `master`）。真机冒烟未跑，故保持 draft；未获集成授权，不合并。
+集成：PR #538 由 `lava-chen` 以 merge commit `73710504` 合入 master（2026-10-29T05:46:56Z）。真机冒烟待用户。
 
 ## 目标与边界
 
@@ -34,7 +34,7 @@
 - [x] `chat.ts` 接线（读会话模式、写会话模式）
 - [x] 补单测
 - [x] 门禁（typecheck:all / architecture:check / vitest）
-- [x] commit（PR 待用户验收后开）
+- [x] commit + PR（PR #538，merge commit `73710504`）
 
 ## 发现与决策
 
@@ -60,3 +60,6 @@
 | 同上 | 同上 | `npm run typecheck:all` | 0 | 各包 tsc、electron gate、eval 4 用例全过；electron gate 报"10 个 baseline key 收缩"，属既有状态，与本任务无关 |
 | 同上 | 同上 | `npm run build:cli-bundle` | 0 | 产出 `packages/cli/bundle/cli.cjs`（3.97 MB，gitignored）；**副作用**：`scripts/inline-modules.mjs` 把 `packages/capabilities/src/ModuleTool/inline-content.ts` 重写成 LF（内容语义不变，`git diff` 为空），已按"只撤销本次命令产生且不属于本任务成果"的规则还原 |
 | 同上 | 同上 | 直接渲染 footer（宽度 100 / 80 / 60 / 45） | 0 | 100：`[bypass] · Shift+Tab  (deepseek) deepseek-flash • high`；80：模型截到 `deepseek`；60：丢提示、模型截到 `(deepseek) `；45：右端整组让位（与改动前一致） |
+| PR #538 head `9c36493b` | GitHub Actions（ubuntu-latest 22.x） | 必需检查 | 全绿 | architecture / build / test / test scope / typecheck 五项在最新 head 上通过 |
+| master `73710504`（合并后） | Windows 11 / Node 24.16 | `npx vitest run packages/cli` | 2 失败 / 1568 通过 | `packages/cli/test/tui-pty.test.ts` 的 2 个用例：`expected ' ❯ /r │ /clear Clear the conversation…' to contain '/export'` |
+| 合并前的 master `4f198043`（A/B 基线） | 同上 | `git checkout 4f198043 && npx vitest run packages/cli/test/tui-pty.test.ts` | 同样 2 个失败、同样错误签名 | **不带本任务改动**时同样失败，故是 #531/#536 带进 master 的既有问题，不是本次改动引起；本次改动不负责修，但接手者应知道 master 上这个用例是红的 |
