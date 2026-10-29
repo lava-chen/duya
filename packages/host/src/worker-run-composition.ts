@@ -7,6 +7,7 @@ import type { Tool } from '@duya/host/worker-run-contracts';
 import type { RunHandle, RunTurnAssembly, TurnOutputSink, EngineProductSession } from '@duya/host/worker-run-session-port';
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { createClientModelPort } from '@duya/host/run-engine-model';
+import { readProgressUpdateCall, PROGRESS_UPDATE_TOOL } from '@duya/agent-runtime/turns/tool-group-progress';
 import { createLegacyCommandPort } from '@duya/host/worker-command-port';
 import { renderSystemReminder } from '@duya/agent-core/context/reminders';
 import { normalizeCanUseToolDecision } from '@duya/agent-runtime/authorization/tool-invoke-decision';
@@ -76,6 +77,7 @@ function restoreRunOwnRows(agent: EngineProductSession, marker: {
     return merged;
 }
 export interface LegacyRunHost {
+    readonly progressToolName?: () => string;
     readonly turnPipelines: TurnPipelinePublisher;
     readonly assembleTurn: (input: TurnAssemblyInput) => Promise<AssembledTurn>;
     readonly refreshDeclaredTools: () => Set<string>;
@@ -116,6 +118,7 @@ export interface LegacyRunHost {
 export function composeLegacyRunSources(agent: EngineProductSession, host: LegacyRunHost): LegacyEngineSources {
     const pipelines = host.turnPipelines;
     const runFork = host.runFork;
+    const controlResults: ToolOutcome[] = [];
     return {
         openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> => createClientModelPort(agent.readModelClient(), {
             refreshDeclaredTools: host.refreshDeclaredTools,
@@ -124,19 +127,30 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
                 : { onPerCallUsage: host.onPerCallUsage }),
             ...(host.effort === undefined ? {} : { effort: host.effort }),
         }).stream(request, signal),
-        queueTool: (call: ToolCallRequest) => pipelines.queue({ id: call.callId, name: call.name, input: call.input }),
+        queueTool: (call: ToolCallRequest) => {
+            const name = host.progressToolName?.();
+            const progress = name === undefined ? null : readProgressUpdateCall(call.name, name, call.input);
+            if (progress === null) {
+                pipelines.queue({ id: call.callId, name: call.name, input: call.input });
+                return;
+            }
+            if (progress.title !== undefined) host.emitter.emit({ type: 'tool.group_progress', title: progress.title, source: 'model_progress_tool' });
+            controlResults.push({ kind: 'tool_result', callId: call.callId, content: progress.title === undefined ? 'Invalid progress title' : 'Progress updated', isError: progress.title === undefined, durationMs: 0 });
+        },
         async *drainTools(): AsyncIterable<ToolDrainItem> {
+            yield* controlResults.splice(0);
             for await (const update of pipelines.drain()) {
                 const item = toDrainItem(update);
                 if (item !== null)
                     yield item;
             }
         },
-        discardTools: () => pipelines.discard(),
+        discardTools: () => { controlResults.length = 0; pipelines.discard(); },
         lookup: {
-            sideEffectOf: () => null,
+            sideEffectOf: (name) => name === host.progressToolName?.() ? 'read_only' : null,
             toolNames: () => agent.activeMCPRegistry.getAllTools().map((tool: Tool) => tool.name),
             describe: (toolName: string): ToolDescriptor | null => {
+                if (toolName === host.progressToolName?.()) return { name: toolName, description: PROGRESS_UPDATE_TOOL.description, inputSchema: PROGRESS_UPDATE_TOOL.input_schema };
                 const tool = agent.activeMCPRegistry.getTool(toolName);
                 if (tool === undefined)
                     return null;

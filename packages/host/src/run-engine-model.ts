@@ -95,6 +95,7 @@
  */
 
 import type { AIClient, SSEEvent, TokenUsage, ToolUse } from '@duya/ai';
+import { normalizeUsage } from '@duya/ai';
 import type {
   ModelFrame,
   ModelMessage,
@@ -160,15 +161,17 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
       return { type: 'tool_use', call: toToolCall(event.data) };
 
     // ── Accounting ────────────────────────────────────────────────────────
-    case 'result':
+    case 'result': {
+      const usage = normalizeUsage(event.data);
+      const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
       return {
         type: 'usage',
-        inputTokens: event.data.input_tokens,
-        outputTokens: event.data.output_tokens,
+        inputTokens,
+        outputTokens: usage.output,
         // Only when the provider sent one. `run-engine.ts:561` falls back to
         // `input + output` when absent, so inventing `0` here would REPLACE a
         // correct fallback with a wrong number.
-        ...(event.data.total_tokens === undefined ? {} : { totalTokens: event.data.total_tokens }),
+        ...(event.data.total_tokens === undefined ? {} : { totalTokens: Math.max(usage.total, inputTokens + usage.output) }),
         // The physical request duration, measured at the provider call. It is
         // what turns this usage into a throughput, and it cannot be
         // reconstructed downstream — chunk timestamps may be buffered. Only
@@ -177,6 +180,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
           ? {}
           : { requestDurationMs: event.data.request_duration_ms }),
       };
+    }
 
     // ── The two decisions ─────────────────────────────────────────────────
     case 'done':
