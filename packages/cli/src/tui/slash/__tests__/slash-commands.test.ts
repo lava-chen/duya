@@ -259,6 +259,7 @@ describe('slash registry', () => {
       'plugin',
       'pr',
       'project',
+      'provider',
       'read-file',
       'rename',
       'settings',

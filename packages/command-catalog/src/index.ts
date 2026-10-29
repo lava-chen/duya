@@ -374,6 +374,23 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['desktop', 'cli'],
   },
   {
+    // The write half of the provider story: `/model` picks among what is
+    // already configured, this one changes what is configured. CLI-only
+    // because the Desktop has a settings screen for the same tables and no
+    // renderer route reads this command.
+    name: 'provider',
+    label: 'Model providers',
+    labelZh: '模型提供商',
+    description: 'Add a model provider, or change one',
+    descriptionZh: '添加模型提供商，或修改已有提供商',
+    argsHint: '[add|<id>]',
+    subcommands: ['add'],
+    category: 'config',
+    surfaces: ['cli'],
+    // Deliberately absent: a write swaps the row the running turn already
+    // resolved its client against.
+  },
+  {
     // pi's name for the same ladder. duya calls it effort because that is what
     // the Desktop control and the wire field call it; this is the spelling a
     // pi user types without thinking about it.
