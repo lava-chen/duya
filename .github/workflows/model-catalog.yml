@@ -230,6 +230,15 @@ jobs:
             ? readFileSync(reportPath, 'utf8').trim()
             : '（本次刷新未生成发现报告。）';
 
+          // The report lists every discovered id, so it grows with the
+          // catalogue. GitHub rejects a pull request body over 65,536
+          // characters; the job summary keeps the full report.
+          const MAX_BODY = 60000;
+          const body =
+            report.length > MAX_BODY
+              ? `${report.slice(0, MAX_BODY)}\n\n…（报告已截断，完整清单见本次 job 的 Summary。）`
+              : report;
+
           const stat = execFileSync(
             'git',
             ['diff', '--stat', 'origin/master...HEAD', '--', 'packages/ai/src/providers', 'packages/host/bundle'],
@@ -241,7 +250,7 @@ jobs:
             '**自动合并**：模型数据自检、Host 构建和 Worker Bundle 一致性校验通过后合入；异常保留 PR。',
             '发现结果里的「未收录」候选不会写入目录，需要人工判断是否加入准入规则。',
             '',
-            report,
+            body,
             '',
             '### 其余差异',
             '',

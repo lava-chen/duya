@@ -39,6 +39,7 @@
  *   - `modalities.output` contains `text` and no audio/image/video
  *   - `modalities.input` contains `text`
  *   - not matched by the section's `exclude`
+ *   - upstream does not mark it `status: "deprecated"`
  *   - `release_date` within RECENT_DAYS (default 45)
  *   - section `admitFamilies` (regex list) matches models.dev `family`
  *   - section `autoAdd: false` keeps the section report-only
@@ -54,6 +55,7 @@
  *
  * Test injection:
  *   SYNC_MODELS_FIXTURE_DIR  read modelsdev.json / openrouter.json from a dir
+ *   SYNC_MODELS_PROVIDERS_DIR  read/write a copied shard tree instead of src/providers
  *   SYNC_MODELS_TODAY        override "today" (ISO date)
  *   SYNC_MODELS_RECENT_DAYS  override the admission window (default 45)
  *
@@ -69,6 +71,11 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const providersDir = join(__dirname, '..', 'src', 'providers');
+// Test hook: point the read/write root at a copied shard tree so write-mode
+// tests never touch the checked-in catalogue.
+const PROVIDERS_DIR = process.env.SYNC_MODELS_PROVIDERS_DIR
+  ? resolve(process.env.SYNC_MODELS_PROVIDERS_DIR)
+  : providersDir;
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/models';
@@ -693,6 +700,7 @@ function excludedBySection(id, section) {
 
 /** Human-readable labels for the discovery report. */
 const HELD_REASON_LABELS = {
+  deprecated_upstream: '上游已标记 deprecated',
   no_tool_call: '不支持 tool_call',
   non_chat_output: '输出不是纯文本',
   no_text_input: '输入不含文本',
@@ -700,7 +708,6 @@ const HELD_REASON_LABELS = {
   outside_recency_window: '早于准入窗口',
   unknown_release_date: '缺发布日期',
   auto_add_disabled: '该 shard 只维护离线种子，运行时动态获取完整目录（不自动写入）',
-  excluded_by_policy: '被排除规则过滤',
 };
 
 /** models.dev publishes `release_date` as YYYY-MM-DD. */
@@ -734,6 +741,10 @@ function isWithinRecencyWindow(date, today = TODAY, recentDays = RECENT_DAYS) {
  * `undefined` when the model may be written.
  */
 function modelsDevHoldReason(section, m, releaseDate) {
+  // models.dev keeps retired ids listed with `status: "deprecated"` (e.g.
+  // deepseek-v4-flash, replaced by deepseek-flash). Those must never be
+  // resurrected into the catalogue.
+  if (m.status === 'deprecated') return 'deprecated_upstream';
   if (m.tool_call !== true) return 'no_tool_call';
   const output = m.modalities?.output ?? [];
   if (
@@ -885,7 +896,7 @@ async function collectUpstream(section, sources, context) {
   const admitted = [];
   const held = [];
   let candidateCount = 0;
-  const isRecent = (date) => isWithinRecencyWindow(date, today, recentDays);
+  let excludedCount = 0;
 
   if (section.source === 'modelsdev') {
     // A shard may read several groups: the CN and the global catalogue of the
@@ -960,7 +971,7 @@ async function collectUpstream(section, sources, context) {
         continue;
       }
       if (excluded) {
-        held.push({ id, releaseDate, reason: 'excluded_by_policy' });
+        excludedCount++;
         continue;
       }
       const reason = modelsDevHoldReason(section, m, releaseDate);
@@ -983,7 +994,7 @@ async function collectUpstream(section, sources, context) {
         continue;
       }
       if (excluded) {
-        held.push({ id, releaseDate, reason: 'excluded_by_policy' });
+        excludedCount++;
         continue;
       }
       const reason = openRouterHoldReason(section, entry, releaseDate);
@@ -996,17 +1007,16 @@ async function collectUpstream(section, sources, context) {
     }
   }
 
-  // Keep the report readable: list only held ids that are recent or have an
-  // unknown release date, and count the older ones per section.
-  const listedHeld = held.filter((item) => !item.releaseDate || isRecent(item.releaseDate));
-  const olderHeldCount = held.length - listedHeld.length;
-
+  // The report lists every held candidate: a model can be added to models.dev
+  // long after release, so filtering older ids out would hide a late entry.
+  // The renderer splits recent from older items to keep the actionable ones on
+  // top, but nothing is dropped.
   return {
     models,
     missing,
     admitted,
-    held: listedHeld,
-    olderHeldCount,
+    held,
+    excludedCount,
     upstreamCount: candidateCount,
   };
 }
@@ -1079,7 +1089,7 @@ function modelBlock(m, { thinking, compat }) {
 /** Read a checked-in shard: its line ending and, per exported array, its blocks. */
 function readShard(file) {
   try {
-    const src = readFileSync(join(providersDir, file), 'utf8');
+    const src = readFileSync(join(PROVIDERS_DIR, file), 'utf8');
     const eol = src.includes('\r\n') ? '\r\n' : '\n';
     const sections = new Map();
     const re = /export const (\w+): Model<'[^']+'>\[\] = \[/g;
@@ -1180,8 +1190,10 @@ function renderReport(entries) {
   const lines = [
     `# 模型目录发现报告（${TODAY}）`,
     '',
-    `上游目录每天全量扫描；新模型需满足准入规则（tool_call、纯文本输出、文本输入、最近 ${RECENT_DAYS} 天发布）才会写入 shard。` +
-      '已签入的 id 只要上游仍提供就保留。自动收录仍走夜间 PR，需人工评审后合并。',
+    '上游目录每天全量扫描；新模型需满足准入规则（上游未标记 deprecated、支持 tool_call、' +
+      `输出纯文本、输入含文本、最近 ${RECENT_DAYS} 天发布）才会写入 shard。` +
+      '已签入的 id 只要上游仍提供就保留。更早的未收录候选也会列出（上游可能在发布很久后补录），' +
+      '是否加入由人工决定。自动收录仍走夜间 PR，需人工评审后合并。',
     '',
   ];
 
@@ -1189,9 +1201,15 @@ function renderReport(entries) {
     const admittedItems = entry.admitted.map(
       (item) => `- \`${item.id}\` — ${item.releaseDate ?? '发布日期未知'}`,
     );
-    const heldItems = entry.held.map(
-      (item) =>
-        `- \`${item.id}\` — ${item.releaseDate ?? '发布日期未知'} — 原因：${heldReasonText(item)}`,
+    const formatHeld = (item) =>
+      `- \`${item.id}\` — ${item.releaseDate ?? '发布日期未知'} — 原因：${heldReasonText(item)}`;
+    // Recent candidates are the ones the nightly run may admit tomorrow;
+    // older ones stay visible so a late catalogue addition is never hidden.
+    const recentHeld = entry.held.filter(
+      (item) => !item.releaseDate || isWithinRecencyWindow(item.releaseDate),
+    );
+    const olderHeld = entry.held.filter(
+      (item) => item.releaseDate && !isWithinRecencyWindow(item.releaseDate),
     );
     const removedItems = entry.removed.map((id) => `- \`${id}\``);
     const changedItems = entry.changed.map(
@@ -1200,11 +1218,16 @@ function renderReport(entries) {
 
     lines.push(`## ${entry.shardKey} / ${entry.exportName}`, '');
     lines.push(`上游候选 ${entry.upstreamCount} 个，目录已签入 ${entry.checkedInCount} 个。`, '');
-    lines.push(...detailsBlock(`自动收录（${admittedItems.length}）`, admittedItems));
-    lines.push(...detailsBlock(`发现但未收录（${heldItems.length}）`, heldItems));
-    if (entry.olderHeldCount > 0) {
-      lines.push(`另有 ${entry.olderHeldCount} 个更早的未收录模型。`, '');
+    if (entry.excludedCount > 0) {
+      lines.push(`另有 ${entry.excludedCount} 个 id 按该 shard 的排除规则过滤（区域别名等）。`, '');
     }
+    lines.push(...detailsBlock(`自动收录（${admittedItems.length}）`, admittedItems));
+    lines.push(
+      ...detailsBlock(`近期未收录（${recentHeld.length}）`, recentHeld.map(formatHeld)),
+    );
+    lines.push(
+      ...detailsBlock(`更早未收录（${olderHeld.length}）`, olderHeld.map(formatHeld)),
+    );
     lines.push(...detailsBlock(`上游下架（${removedItems.length}）`, removedItems));
     lines.push(...detailsBlock(`参数变化（${changedItems.length}）`, changedItems));
   }
@@ -1244,7 +1267,7 @@ async function main() {
         today: TODAY,
         recentDays: RECENT_DAYS,
       });
-      const { models: upstream, missing, admitted, held, olderHeldCount, upstreamCount } =
+      const { models: upstream, missing, admitted, held, excludedCount, upstreamCount } =
         discovery;
       const upstreamIds = new Set(upstream.keys());
       const removed = [...existing.keys()].filter((id) => !upstreamIds.has(id));
@@ -1257,14 +1280,20 @@ async function main() {
         console.log(`   +${admitted.length}: ${admitted.map((item) => item.id).join(', ')}`);
       }
       if (removed.length) console.log(`   -${removed.length}: ${removed.join(', ')}`);
-      if (held.length) {
+      const recentHeld = held.filter(
+        (item) => !item.releaseDate || isWithinRecencyWindow(item.releaseDate),
+      );
+      if (recentHeld.length) {
         console.log(
-          `   ? ${held.length} held: ${held
+          `   ? ${recentHeld.length} held: ${recentHeld
             .map((item) => `${item.id} (${item.reason})`)
             .join(', ')}`,
         );
       }
-      if (olderHeldCount) console.log(`   ? ${olderHeldCount} older held, not listed`);
+      if (held.length - recentHeld.length) {
+        console.log(`   ? ${held.length - recentHeld.length} older held, listed in the report`);
+      }
+      if (excludedCount) console.log(`   ? ${excludedCount} excluded by this shard's rules`);
       if (missing.length) {
         console.log(`   ! pinned but not upstream: ${missing.join(', ')}`);
       }
@@ -1312,7 +1341,7 @@ async function main() {
         checkedInCount: existing.size,
         admitted,
         held,
-        olderHeldCount,
+        excludedCount,
         removed,
         changed,
       });
@@ -1322,7 +1351,7 @@ async function main() {
     if (MODE === 'write' || MODE === 'merge') {
       const text = renderShard(shard, rendered);
       writeFileSync(
-        join(providersDir, shard.file),
+        join(PROVIDERS_DIR, shard.file),
         eol === '\r\n' ? text.replace(/\n/g, '\r\n') : text,
       );
       console.log(`   wrote src/providers/${shard.file}`);

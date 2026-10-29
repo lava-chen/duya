@@ -35,6 +35,7 @@
 - [x] 新增夜间刷新 workflow：只开 PR，不自动合并。
 - [x] 提交后续改动、提 PR（#442）。
 - [x] 发现与准入分离：每 shard 全量扫描上游、准入规则、中文 Markdown 发现报告（`--report` / `--discover`）、离线 fixture 用例。
+- [x] 复核补强：上游 `status: "deprecated"` 不自动上架；未收录候选全部列出（近期 / 更早两栏）；`--write` 用例写到复制的 shard 目录，不碰真实目录。
 - [ ] 等人工复核、PR 与 CI（本分支尚未推送）。
 
 ## 夜间自动刷新
@@ -80,12 +81,16 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
   取不到就不写 `cost` 字段——「没有价格」和「免费」是两回事。
 - **Anthropic 目录已无非推理模型**：claude-3-haiku 退役，思考档位用例改用合成模型覆盖非推理分支。
 - **发现与准入分离**：每晚扫描每个 shard 目标分组的**完整上游目录**，报告新增、下架与参数变化；
-  只有同时满足 `tool_call === true`、输出纯文本（不含 audio / image / video）、输入含 text、
-  未被该 section `exclude` 排除、且发布日期在最近 45 天（`SYNC_MODELS_RECENT_DAYS` 可覆盖）的新 id
+  只有同时满足上游未标记 `status: "deprecated"`、`tool_call === true`、输出纯文本（不含 audio / image / video）、
+  输入含 text、未被该 section `exclude` 排除、且发布日期在最近 45 天（`SYNC_MODELS_RECENT_DAYS` 可覆盖）的新 id
   才写入 shard。Google 只准入 `^gemini`、百炼只准入 `^qwen` 的 family；OpenRouter 设置
   `autoAdd: false`，继续只作离线种子（运行时从 `/models` 动态获取），只报告不写入；
   Bedrock 排除 `us.*` / `eu.*` / `global.*` 等区域前缀别名。
   已签入 id 只要上游仍提供且未被排除就保留，`--write` 不因超出发布窗口而删除历史模型。
+  报告分「近期未收录」与「更早未收录」两栏，**所有**未收录候选都列出：上游可能在发布很久后才补录，
+  只按发布时间丢弃会把这类模型永久藏起来；自动准入仍只看近期，历史候选由人工决定是否加入。
+  上游把退役模型继续列在目录里（例如已被 `deepseek-flash` 取代的 `deepseek-v4-flash`），
+  `deprecated_upstream` 规则阻止它们被自动复活。
 
 ## 验证记录
 
@@ -104,6 +109,11 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 | e40357ad + 本次改动 | Windows / Node 24.16 | `npx vitest run --root . packages/ai/test` | 0，56 文件 / 559 通过 | 含新增发现/准入 fixture 用例 |
 | e40357ad + 本次改动 | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 全仓类型检查通过（178 个已基线错误，无新增） |
 | e40357ad + 本次改动 | Windows / Node 24.16 | `npm run architecture:check` | 0 | 无新增边界违规（2999 均为 baseline） |
+| 2d2dc7d1 + 复核改动 | Windows / Node 24.16 | `npx vitest run --root . packages/ai/test` | 0，56 文件 / 560 通过 | 含 deprecated 与 `--write` 用例 |
+| 2d2dc7d1 + 复核改动 | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 全仓类型检查通过 |
+| 2d2dc7d1 + 复核改动 | Windows / Node 24.16 | `npm run architecture:check` | 0 | 无新增边界违规 |
+| 2d2dc7d1 + 复核改动 | Windows / Node 24.16 | `npm run plan:sync` | 0 | 计划表与仓库一致 |
+| 2d2dc7d1 + 复核改动 | Windows / Node 24.16 | `node packages/ai/scripts/sync-models.mjs --report=<tmp>`（真实上游，只读） | 0 | 报告 47,117 字节；OpenAI 仅自动准入 `gpt-6.1-terra`；`deepseek-v4-flash` 等 deprecated id 不再上架 |
 
 ## 接续 / 结果
 
