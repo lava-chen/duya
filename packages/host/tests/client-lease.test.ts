@@ -270,3 +270,22 @@ describe('client-scoped Host', () => {
     }
   }, 30_000);
 });
+
+it('writes lease heartbeats before an in-flight response can go idle', async () => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-lease-heartbeat-'));
+  const host = await startLocalHost({ dataRoot: temporaryRoot, databasePath: path.join(temporaryRoot, 'core.db'), rolloutRoot: path.join(temporaryRoot, 'sessions'), attachmentsRoot: path.join(temporaryRoot, 'attachments'), runtimeFilePath: path.join(temporaryRoot, 'runtime', 'host-api.json'), port: 0, token: 'heartbeat-test', clientScoped: true, clientLeaseIdleTimeoutMs: 60000 });
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`${host.origin}/v1/host/lease`, { headers: { authorization: 'Bearer heartbeat-test' }, signal: controller.signal });
+    expect(response.status).toBe(200);
+    const reader = response.body!.getReader();
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(new TextDecoder().decode(first.value)).toBe('\n');
+    await reader.cancel();
+  } finally {
+    controller.abort();
+    await host.close();
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  }
+}, 25000);

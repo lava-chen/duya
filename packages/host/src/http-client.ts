@@ -477,7 +477,7 @@ export class HostSessionHttpClient implements
       };
     });
     // The lease is a held response, and the ONLY thing keeping it held is this
-    // read: the Host never writes a body, so the read ends exactly when the
+    // read: heartbeat bytes are ignored, and the read ends when the
     // connection does. That is the signal a holder needs to attach again —
     // without it a dropped lease is indistinguishable from a healthy one on
     // this side, while the Host starts its idle countdown.
@@ -495,7 +495,9 @@ export class HostSessionHttpClient implements
         }
         markLost('Host closed the client lease');
       } catch (error) {
-        markLost(error instanceof Error ? error.message : String(error));
+        const cause = error instanceof Error ? error.cause : undefined;
+        const code = cause !== null && typeof cause === 'object' && 'code' in cause ? String(cause.code) : undefined;
+        markLost(`${error instanceof Error ? error.message : String(error)}${code === undefined ? '' : ` (${code})`}`);
       }
     };
     void watch();

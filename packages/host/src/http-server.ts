@@ -813,7 +813,7 @@ export class HostSessionHttpServer {
    * Hold a client lease open for as long as the client wants this Host alive.
    *
    * The headers go out immediately so the client knows the lease was granted.
-   * The body is never written, which keeps the socket out of the server's
+   * The response stays in flight, keeping the socket out of the server's
    * keep-alive reaper: the connection is busy for as long as the lease is
    * held, however long that is.
    */
@@ -840,9 +840,15 @@ export class HostSessionHttpServer {
     });
     res.flushHeaders();
     let released = false;
+    // Keep the in-flight response alive through HTTP client body timeouts.
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write('\n');
+    }, 15_000);
+    heartbeat.unref();
     const release = (reason: 'finished' | 'connection_closed' | 'host_shutdown'): void => {
       if (released) return;
       released = true;
+      clearInterval(heartbeat);
       this.#activeClientLeases.delete(res);
       tracker.release();
       logger.info('Client lease released', {
