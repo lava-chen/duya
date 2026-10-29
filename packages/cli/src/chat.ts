@@ -220,6 +220,26 @@ function summarizeArguments(args: Readonly<Record<string, unknown>>): string {
 }
 
 /**
+ * The message an HTTP failure should print, including WHY the transport gave
+ * up. A dropped keep-alive socket surfaces as undici's bare `fetch failed`
+ * TypeError whose `cause` carries the actual verdict (`ECONNRESET`,
+ * `UND_ERR_SOCKET`); printing the cause is the difference between a mystery
+ * and a diagnosis for a reader staring at a poller error line.
+ */
+function errorText(error: unknown): string {
+  const base = error instanceof Error ? error.message : String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message !== '') {
+    const code = (cause as { code?: unknown }).code;
+    const detail = typeof code === 'string' && code !== ''
+      ? `${code}: ${cause.message}`
+      : cause.message;
+    if (!base.includes(detail)) return `${base} (${detail})`;
+  }
+  return base;
+}
+
+/**
  * Drive one run to its terminal: follow the durable event stream, render,
  * and return when the iterable closes (the watch contract ends at settle).
  */
@@ -1294,10 +1314,7 @@ export async function chatTui(
     },
     onError: (error) => {
       if (!finished) {
-        tui.printError(
-          'Could not read background tasks: '
-          + (error instanceof Error ? error.message : String(error)),
-        );
+        tui.printError('Could not read background tasks: ' + errorText(error));
       }
     },
   });
@@ -1315,10 +1332,7 @@ export async function chatTui(
         output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
       } catch (error) {
         if (!finished) {
-          tui.printError(
-            'Could not read task output: '
-            + (error instanceof Error ? error.message : String(error)),
-          );
+          tui.printError('Could not read task output: ' + errorText(error));
         }
       }
     }
@@ -1691,10 +1705,7 @@ export async function chatTui(
         } catch (error) {
           if (!permissionPollErrorReported && !finished) {
             permissionPollErrorReported = true;
-            tui.printError(
-              'Could not check pending permissions: '
-              + (error instanceof Error ? error.message : String(error)),
-            );
+            tui.printError('Could not check pending permissions: ' + errorText(error));
           }
         } finally {
           permissionPollInFlight = false;

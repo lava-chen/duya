@@ -741,6 +741,13 @@ export class HostSessionHttpServer {
         else res.destroy();
       });
     });
+    // The TUI drives 1s pollers over keep-alive connections. Node's default
+    // keepAliveTimeout (5s) closes an idle socket while the client's event
+    // loop is stalled, and the poller's next request then dies on the closed
+    // socket as an undici `fetch failed`. Give idle connections headroom
+    // beyond any plausible stall; headersTimeout must exceed keepAliveTimeout.
+    server.keepAliveTimeout = 65_000;
+    server.headersTimeout = 70_000;
     this.#server = server;
     try {
       await new Promise<void>((resolve, reject) => {
