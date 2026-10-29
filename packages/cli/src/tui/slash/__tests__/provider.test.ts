@@ -43,6 +43,7 @@ interface Probe {
 function makeContext(options: {
   readonly providers?: readonly HostProviderDetail[];
   readonly listError?: string;
+  readonly candidateValidation?: boolean;
   readonly busy?: boolean;
   /** Answers for successive `promptText` calls; `null` cancels. */
   readonly answers?: readonly (string | null)[];
@@ -79,10 +80,12 @@ function makeContext(options: {
       if (options.listError !== undefined) {
         return { providers: [], configRoot: 'C:/cfg', revision: 'rev-1', error: options.listError };
       }
-      return { providers: options.providers ?? [], configRoot: 'C:/cfg', revision: 'rev-1' };
+      return { supportsCandidateValidation: options.candidateValidation ?? true, providers: options.providers ?? [], configRoot: 'C:/cfg', revision: 'rev-1' };
     },
     upsertProvider: async (input: Record<string, unknown>) => {
       upserted.push(input);
+      const answer = probes === 0 ? options.probe : (options.restoreProbe ?? options.probe);
+      if (input.validateConnection === true && answer?.ok === false) throw new Error(answer.message ?? 'probe failed');
       const providerId = (input.providerId as string | undefined) ?? 'created-id';
       return {
         provider: provider({ providerId, name: input.name as string }),
@@ -217,7 +220,7 @@ describe('/provider add', () => {
     expect(upserted).toHaveLength(0);
   });
 
-  it('removes the row it just created when the probe fails', async () => {
+  it('asks Host to validate before creating a row', async () => {
     const { ctx, errors, deleted, upserted } = makeContext({
       pick: ['openai-compatible'],
       answers: ['fresh', 'Fresh', 'https://x.test/v1', 'm1', 'sk-1'],
@@ -226,7 +229,8 @@ describe('/provider add', () => {
     await COMMAND.run(ctx, 'add');
 
     expect(upserted).toHaveLength(1);
-    expect(deleted).toEqual(['fresh']);
+    expect(deleted).toEqual([]);
+    expect(upserted[0]).toMatchObject({ validateConnection: true });
     expect(errors[0]).toContain('401 unauthorized');
   });
 
@@ -310,27 +314,12 @@ describe('/provider <id> — the edit form', () => {
     expect(upserted).toHaveLength(1);
   });
 
-  it('restores the previous row when the probe fails after the save', async () => {
-    const detail = provider();
-    const { ctx, errors, upserted } = makeContext({
-      providers: [detail],
-      pick: ['baseUrl'],
-      answers: ['https://broken.test/v1'],
-      probe: { ok: false, message: 'dns failure' },
-    });
+  it('leaves rollback to Host validation and never claims restoration', async () => {
+    const { ctx, errors, upserted } = makeContext({ providers: [provider()], pick: ['apiKey'], answers: ['bad-key'], probe: { ok: false, message: 'invalid key' } });
     await COMMAND.run(ctx, 'deepseek');
-
-    expect(upserted).toHaveLength(2);
-    expect(upserted[0]).toMatchObject({ baseUrl: 'https://broken.test/v1' });
-    // The restore rewrites the row as it was read, against the revision the
-    // failed write produced — not the stale one the form started from.
-    expect(upserted[1]).toMatchObject({
-      baseUrl: 'https://api.deepseek.com/v1',
-      models: ['deepseek-chat'],
-      expectedRevision: 'rev-2',
-    });
-    expect(errors[0]).toContain('dns failure');
-    expect(errors[0]).toContain('Restored');
+    expect(upserted).toHaveLength(1);
+    expect(upserted[0]).toMatchObject({ apiKey: 'bad-key', validateConnection: true });
+    expect(errors).toEqual(['invalid key']);
   });
 
   it('replaces the key when one is typed, and keeps the mask out of the write', async () => {
@@ -395,4 +384,13 @@ describe('/provider — the picker', () => {
     expect(notices[0]).toContain('No providers');
     expect(prompts[0]?.title).toContain('Provider id');
   });
+});
+
+
+it('refuses edits against a Host that cannot validate candidates', async () => {
+  const { ctx, errors, upserted, prompts } = makeContext({ candidateValidation: false });
+  await COMMAND.run(ctx, 'add');
+  expect(upserted).toHaveLength(0);
+  expect(prompts).toHaveLength(0);
+  expect(errors[0]).toContain('restart the Host');
 });

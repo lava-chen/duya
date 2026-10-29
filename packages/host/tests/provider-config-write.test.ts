@@ -741,3 +741,38 @@ describe('mutual exclusion', () => {
     });
   });
 });
+
+describe('candidate connection validation before persistence', () => {
+  it.each(['reject', 'throw', 'accept'] as const)('preserves credentials on %s', async mode => {
+    const root = tmpRoot();
+    const initial = createHostLocalProviderManagementApi({ root });
+    await initial.upsertProvider({ providerId: 'candidate', name: 'Candidate', providerType: 'openai-compatible', baseUrl: 'https://example.test/v1', models: ['m'], apiKey: 'old-working-key' });
+    const beforeConfig = readConfig(root);
+    const beforeSecrets = fs.readFileSync(secretsPath(root), 'utf8');
+    const api = createHostLocalProviderManagementApi({ root, fetchImpl: async (_url, init) => {
+      expect(init.headers.Authorization).toBe('Bearer new-key');
+      if (mode === 'throw') throw new Error('offline');
+      return { ok: mode === 'accept', status: mode === 'accept' ? 200 : 401, json: async () => ({ data: [{ id: 'm' }] }) };
+    } });
+    const operation = api.upsertProvider({ providerId: 'candidate', name: 'Candidate', providerType: 'openai-compatible', baseUrl: 'https://example.test/v1', models: ['m'], apiKey: 'new-key', validateConnection: true });
+    if (mode === 'accept') {
+      await operation;
+      expect(JSON.stringify(readSecrets(root))).toContain('new-key');
+    } else {
+      await expect(operation).rejects.toMatchObject({ code: 'provider_probe_failed' });
+      expect(readConfig(root)).toBe(beforeConfig);
+      expect(fs.readFileSync(secretsPath(root), 'utf8')).toBe(beforeSecrets);
+    }
+  });
+
+  it('refuses to overwrite an external edit made during validation', async () => {
+    const root = tmpRoot();
+    const api = createHostLocalProviderManagementApi({ root, fetchImpl: async () => {
+      fs.writeFileSync(configPath(root), '# external edit\n');
+      return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm' }] }) };
+    } });
+    await expect(api.upsertProvider({ providerId: 'new', name: 'New', providerType: 'openai-compatible', baseUrl: 'https://example.test/v1', models: ['m'], apiKey: 'new-key', validateConnection: true })).rejects.toMatchObject({ status: 409 });
+    expect(readConfig(root)).toBe('# external edit\n');
+    expect(readSecrets(root)).toEqual({});
+  });
+});
