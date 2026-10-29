@@ -416,9 +416,37 @@ export class TranscriptModel {
   /** Characters in the transcript a model request would carry. See `contextChars`. */
   private contextCharCount = 0;
 
+  /**
+   * Content revisions, one entry per block id.
+   *
+   * Every mutator below bumps the revision of the block it touched, and the
+   * render cache keys on `id + revision` instead of re-deriving a content
+   * hash each frame — hashing every block's full text per frame was
+   * O(document chars) and what made long-session streaming lag. Sound because
+   * every block is created and mutated here and nowhere else, and ids never
+   * repeat within a process (`nextId` is module-monotonic).
+   */
+  private readonly revisions = new Map<string, number>();
+
   /** The blocks, in order. */
   get blocks(): readonly Block[] {
     return this.items;
+  }
+
+  /** Content revision of a block — cheap, monotone cache-key material. */
+  revisionOf(block: Block): number {
+    return this.revisions.get(block.id) ?? 0;
+  }
+
+  /** Record that a block's rendered form is about to change. */
+  private bump(block: Block): void {
+    this.revisions.set(block.id, (this.revisions.get(block.id) ?? 0) + 1);
+  }
+
+  /** Mark a content block final — a rendering fact, so it counts as a mutation. */
+  private seal(block: AssistantBlock | ThinkingBlock): void {
+    block.finalized = true;
+    this.bump(block);
   }
 
   /** Add a block the user typed. */
@@ -481,17 +509,19 @@ export class TranscriptModel {
       const existing = this.assistantsByKey.get(key);
       if (existing !== undefined) {
         existing.text += text;
+        this.bump(existing);
         this.contextCharCount += text.length;
         return existing;
       }
     }
     if (this.assistant === null || key !== null) {
-      if (this.assistant !== null) this.assistant.finalized = true;
+      if (this.assistant !== null) this.seal(this.assistant);
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
       if (key !== null) this.assistantsByKey.set(key, this.assistant);
     }
     this.assistant.text += text;
+    this.bump(this.assistant);
     this.contextCharCount += text.length;
     return this.assistant;
   }
@@ -506,7 +536,7 @@ export class TranscriptModel {
     const block = key === null ? this.assistant : this.assistantsByKey.get(key) ?? null;
     if (block === null) {
       if (content.length === 0) return null;
-      if (this.assistant !== null) this.assistant.finalized = true;
+      if (this.assistant !== null) this.seal(this.assistant);
       this.assistant = { kind: 'assistant', id: nextId('assistant'), text: '', finalized: false };
       this.items.push(this.assistant);
       if (key !== null) this.assistantsByKey.set(key, this.assistant);
@@ -517,7 +547,7 @@ export class TranscriptModel {
     // counter follows the replacement instead of adding to it.
     this.contextCharCount += content.length - target.text.length;
     target.text = content;
-    target.finalized = true;
+    this.seal(target);
     return target;
   }
 
@@ -528,13 +558,14 @@ export class TranscriptModel {
       const existing = this.thinkingByKey.get(key);
       if (existing !== undefined) {
         existing.text += text;
+        this.bump(existing);
         this.contextCharCount += text.length;
         return existing;
       }
     }
     if (this.thinking === null || key !== null) {
       if (this.thinking !== null) {
-        this.thinking.finalized = true;
+        this.seal(this.thinking);
         sealThinkingDuration(this.thinking, at);
       }
       this.thinking = {
@@ -548,6 +579,7 @@ export class TranscriptModel {
       if (key !== null) this.thinkingByKey.set(key, this.thinking);
     }
     this.thinking.text += text;
+    this.bump(this.thinking);
     this.contextCharCount += text.length;
     return this.thinking;
   }
@@ -558,7 +590,7 @@ export class TranscriptModel {
     if (block === null) {
       if (content.length === 0) return null;
       if (this.thinking !== null) {
-        this.thinking.finalized = true;
+        this.seal(this.thinking);
         sealThinkingDuration(this.thinking, at);
       }
       this.thinking = {
@@ -576,7 +608,7 @@ export class TranscriptModel {
     // The whole-block frame replaces the deltas already counted.
     this.contextCharCount += content.length - target.text.length;
     target.text = content;
-    target.finalized = true;
+    this.seal(target);
     sealThinkingDuration(target, at);
     return target;
   }
@@ -591,9 +623,9 @@ export class TranscriptModel {
    * growing, so it may be laid out in full.
    */
   closeOpenContent(at = Date.now()): void {
-    if (this.assistant !== null) this.assistant.finalized = true;
+    if (this.assistant !== null) this.seal(this.assistant);
     if (this.thinking !== null) {
-      this.thinking.finalized = true;
+      this.seal(this.thinking);
       sealThinkingDuration(this.thinking, at);
     }
     this.assistant = null;
@@ -607,6 +639,7 @@ export class TranscriptModel {
     for (const block of this.toolsByCallId.values()) {
       if (block.status !== 'running') continue;
       block.status = 'unknown';
+      this.bump(block);
       if (block.result === undefined) {
         block.result = 'Run ended before a tool result was received.';
         this.contextCharCount += block.result.length;
@@ -630,6 +663,7 @@ export class TranscriptModel {
       if (preview !== '') existing.preview = preview;
       const command = shellCommandOf(input);
       if (command !== undefined) existing.command = command;
+      this.bump(existing);
       return existing;
     }
     // Announcing a tool is what ENDS the content block before it. Only a NEW
@@ -669,6 +703,7 @@ export class TranscriptModel {
     // The result goes back to the model with the next request as well.
     this.contextCharCount += result.length;
     block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
+    this.bump(block);
     // A todo write returns the WHOLE list (the tool is merge-semantic), so the
     // result the transcript was about to print as JSON becomes the list it
     // draws instead. A failed write keeps its error and shows no list.
@@ -696,6 +731,7 @@ export class TranscriptModel {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
     block.timedOut = true;
+    this.bump(block);
     return block;
   }
 
@@ -920,6 +956,10 @@ export class TranscriptModel {
     this.assistant = null;
     this.thinking = null;
     this.contextCharCount = 0;
+    // Safe to reset: ids never repeat, and the only blocks that survive a
+    // clear (`replayRunSegment`'s kept user prefix) are never mutated after
+    // creation, so their revision of 0 still matches their content.
+    this.revisions.clear();
   }
 
   /**
