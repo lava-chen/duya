@@ -2171,11 +2171,19 @@ export class TUIApp {
     // corner is where the session's standing state is shown. It is a separate
     // segment rather than part of the activity text, because it carries its
     // own colour — red for the mode that gives the agent everything.
+    //
+    // A badge wider than the row is left out rather than clipped: the status
+    // row is one line of a fixed region, and a line that overflows it wraps
+    // and pushes the composer off the screen.
     const badge = this.permissionBadge();
     const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
-    const badgeWidth = badge === null ? 0 : visibleWidth(badgePlain) + 1;
-    const activity = '{gray-fg}' + escapeTags(compactActivity(fixed, Math.max(1, width - badgeWidth))) + '{/gray-fg}';
-    const badgeTagged = badge === null
+    const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
+    const showBadge = badge !== null && badgeWidth < width;
+    const activity = '{gray-fg}' + escapeTags(compactActivity(
+      fixed,
+      Math.max(1, width - (showBadge ? badgeWidth : 0)),
+    )) + '{/gray-fg}';
+    const badgeTagged = badge === null || !showBadge
       ? ''
       : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {

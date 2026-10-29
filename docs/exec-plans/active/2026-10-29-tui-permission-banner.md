@@ -2,7 +2,7 @@
 
 状态：implemented · 负责人：claude-desktop-code · 更新：2026-10-29
 分支：codex/tui-permission-banner · worktree：E:\Projects\duya\.claude\worktrees\tui-permission-banner · base：49800ec5 · owner：claude-desktop-code
-集成：未开 PR（等用户验收后再决定是否开）
+集成：未开 PR（等用户验收后再决定是否开）。2026-10-29 推送时本机到 `github.com` 的 TLS 握手失败（schannel，`git push` 与 `gh api` 同时不通），分支与提交都在本检出里，网络恢复后再推。
 
 ## 目标与边界
 
