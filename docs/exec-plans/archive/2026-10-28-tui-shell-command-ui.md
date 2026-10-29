@@ -1,7 +1,8 @@
 # TUI 本地 shell 命令的专属 UI：红色 `!` 提示与独立的 "You ran" 卡片
 
-状态：active · 负责人：claude-desktop-code · 更新：2026-10-28
+状态：complete · 负责人：claude-desktop-code · 更新：2026-10-29
 分支：worktree-tui-bang-shell-ui · worktree：E:\Projects\duya\.claude\worktrees\tui-bang-shell-ui · base：220a63ff · owner：claude-desktop-code
+集成：PR #533 由 `lava-chen` 以 merge commit `bd526d3b` 合入 master（2026-10-29T00:21:54Z）
 
 ## 目标与边界
 
@@ -29,7 +30,7 @@
 - [x] 本地 shell 独立卡片："You ran" + 独立分组 + 更大输出预算
 - [x] 补单测
 - [x] 门禁（typecheck / architecture / vitest）
-- [ ] commit + PR
+- [x] commit + PR（PR #533，merge commit `bd526d3b`）
 
 ## 发现与决策
 
@@ -54,16 +55,15 @@
 | 同上 | 同上 | `npx vitest run packages/cli` | 0 | 128 文件 / 1525 用例全过（`tui-pty.test.ts` 的 node-pty 子进程在无 TTY 环境 AttachConsole 失败，既有问题，与本任务无关） |
 | 同上 | 同上 | `npm run architecture:check` | 0 | no new boundary violations |
 | 同上 | 同上 | 端到端（inline + full-screen，真终端字节） | 0 | inline 输出 `\x1b[91m!\x1b[m echo hi`；`!!` 为 `\x1b[91m!!\x1b[m`；full-screen 同样含红色 `!`；`beginLocalShell` 卡片渲染出 "You ran" |
-| 同上 | 同上 | `npm run typecheck:all` | 见下 | — |
+| 同上 | 同上 | `npm run typecheck:all` | 0 | 各包 tsc、electron gate、eval 4 用例全过 |
+| 同上（master `bd526d3b` 合并后） | 同上 | `npx vitest run packages/cli` | 0 | 130 文件 / 1535 用例全过（较合并前多的是 PR #534 的用例） |
 
 ## 接续 / 结果
 
-已实现：`994c03ab`（16 个文件）。已验证：`typecheck:all`、`architecture:check`、TUI 套件 905 用例、CLI 全量 1525 用例、inline 与 full-screen 的真终端字节（红色 `!`）与 "You ran" 卡片。未合并。
+已实现：`994c03ab`（16 个文件），计划接续 `e059e001`。已验证：`typecheck:all`、`architecture:check`、TUI 套件 905 用例、CLI 全量 1525 用例、inline 与 full-screen 的真终端字节（红色 `!`）与 "You ran" 卡片。已合并：PR #533，merge commit `bd526d3b`（2026-10-29T00:21:54Z）。
 
-PR：<https://github.com/lava-chen/duya/pull/533>（base `master`，head `worktree-tui-bang-shell-ui`）。等 review、CI 与授权集成；未获授权不合并。
+未提交路径：无（合并时未暂存的 `packages/capabilities/src/ModuleTool/inline-content.ts` 是 `build:packages` 的 CRLF 副作用，内容语义不变、未进提交）。
 
-未提交路径：无（除构建副作用 `packages/capabilities/src/ModuleTool/inline-content.ts` 的 CRLF 重写，内容语义不变、未暂存、未进提交；由 `scripts/inline-modules.mjs` 在 `build:packages` 时产生）。
+回收：worktree `E:\Projects\duya\.claude\worktrees\tui-bang-shell-ui` 与分支 `worktree-tui-bang-shell-ui` 保留，未移除。
 
-回收：未回收。worktree `E:\Projects\duya\.claude\worktrees\tui-bang-shell-ui` 保留，owner 是本会话，直到 PR 集成并重验。
-
-下一步：看 PR #533 的 CI 与 review；必需检查全绿且拿到集成授权后，用 merge commit 合并，再同步、重验与回收。真机冒烟（`npm run dev:tui` 手工敲 `!echo hi`）仍由用户执行。
+下一步：真机冒烟（`npm run build:cli-dev` 后 `npm run dev:tui`，手工敲 `!echo hi` 看红色提示符与 "You ran" 卡片）仍待用户执行；确认后再回收 worktree。
