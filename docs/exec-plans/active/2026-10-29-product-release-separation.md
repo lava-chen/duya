@@ -32,7 +32,8 @@ Desktop 与 CLI/TUI 在同一仓库独立管理版本和发布流水线。Deskto
 | --- | --- | --- | --- | --- |
 | base `7371050`; 尚无改动 | Linux / Node 22 | 只读检查 workflow、CLI bundle 与 Electron 发布配置 | 0 | `release.yml`、`packages/cli/package.json`、两个 bundle 脚本 |
 | `645e407e` | Linux / Node 24.19 | `sh -n install.sh`; `node --check scripts/package-cli-release.mjs`; YAML 解析三个 workflow 与 electron-builder 配置；`git diff --check` | 0 | shell 与 JS 语法、YAML 结构通过；未跑构建或测试套件 |
+| PR head `22bfaebf` | GitHub Actions, run `40827862044` | Test、typecheck、architecture、Electron build | success | https://github.com/lava-chen/duya/actions/runs/40827862044 |
 
 ## 接续 / 结果
 
-实现已提交：`645e407e`（`codex/product-release-split`，base `7371050`）。CLI 包构建、macOS/Linux 原生依赖和真机安装尚未执行；需要 PR CI 验证构建，再由首次 CLI 发布进行实机验收。未创建 tag 或 Release。推送被自动审查拒绝：审查认为用户授权了实现，但未授权向 GitHub 外部推送代码。遵守拒绝，不通过其他工具或路径重试。待用户明确授权推送后创建 draft PR。
+实现提交：`645e407e`；接续记录提交：`22bfaebf`；分支：`codex/product-release-split`，base `7371050`。已按用户授权推送并创建 draft PR #541（https://github.com/lava-chen/duya/pull/541）。截至 `22bfaebf`，GitHub Actions run `40827862044` 的 test、typecheck、architecture 与 Electron build 均通过；尚无 review。此次 PR 接续记录变更后，必须以最新 head 重验 CI，再转 ready 并确认 merge state。CLI 专用 release package 未在 CI 中实际构建；首次 CLI 发布前仍需验证四个平台包和真机安装。未创建 tag 或 Release。
