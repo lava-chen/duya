@@ -165,9 +165,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     labelZh: '切换项目',
     // Not `add-dir`: that attaches another root to the session you are in,
     // this one leaves the directory the surface works in.
-    description: 'Start a session in another project directory',
-    descriptionZh: '在另一个项目目录里开启一个新会话',
-    argsHint: '[path]',
+    //
+    // `add` registers a directory as a project before switching to it. The
+    // projects of every surface are the same rows in the Host's project
+    // table, so a project registered here is the one the Desktop lists.
+    description: 'Switch to a registered project, or register a directory as one',
+    descriptionZh: '切换到已登记的项目，或把一个目录登记为项目',
+    argsHint: '[add <path>] | [path]',
+    subcommands: ['add'],
     category: 'session',
     surfaces: ['cli'],
   },
@@ -367,6 +372,23 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     argsHint: '[model]',
     category: 'config',
     surfaces: ['desktop', 'cli'],
+  },
+  {
+    // The write half of the provider story: `/model` picks among what is
+    // already configured, this one changes what is configured. CLI-only
+    // because the Desktop has a settings screen for the same tables and no
+    // renderer route reads this command.
+    name: 'provider',
+    label: 'Model providers',
+    labelZh: '模型提供商',
+    description: 'Add a model provider, or change one',
+    descriptionZh: '添加模型提供商，或修改已有提供商',
+    argsHint: '[add|<id>]',
+    subcommands: ['add'],
+    category: 'config',
+    surfaces: ['cli'],
+    // Deliberately absent: a write swaps the row the running turn already
+    // resolved its client against.
   },
   {
     // pi's name for the same ladder. duya calls it effort because that is what

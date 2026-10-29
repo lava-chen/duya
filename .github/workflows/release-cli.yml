@@ -1,0 +1,117 @@
+name: Release CLI
+
+on:
+  push:
+    tags:
+      - 'cli/v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+          - os: ubuntu-22.04-arm
+            platform: linux
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify CLI release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#cli/v}"
+          node -e 'const fs=require("node:fs"); const expected=process.argv[1]; const actual=JSON.parse(fs.readFileSync("packages/cli/package.json","utf8")).version; if (actual !== expected) { console.error(`Release tag ${expected} must match packages/cli/package.json (${actual})`); process.exit(1); }' "$version"
+          if [ ! -f "docs/release-notes/cli-v${version}.md" ]; then
+            echo "::error::Missing CLI release notes: docs/release-notes/cli-v${version}.md"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build the CLI and Host worker
+        run: npm run build:cli-dev
+
+      - name: Build Node runtime native dependencies
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '12.0'
+        run: npm rebuild better-sqlite3 --build-from-source --runtime=node
+
+      - name: Package CLI runtime
+        shell: bash
+        env:
+          PACKAGE_PLATFORM: ${{ matrix.platform }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          version="${GITHUB_REF_NAME#cli/v}"
+          export DUYA_CLI_VERSION="$version"
+          node scripts/package-cli-release.mjs --output "$RUNNER_TEMP/duya-cli"
+          if [ "$(node -p 'process.platform')" != "$PACKAGE_PLATFORM" ] || [ "$(node -p 'process.arch')" != "$PACKAGE_ARCH" ]; then
+            echo "::error::Runner architecture does not match the release matrix entry"
+            exit 1
+          fi
+          asset="duya-cli-${version}-${PACKAGE_PLATFORM}-${PACKAGE_ARCH}.tar.gz"
+          tar -czf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP" duya-cli
+          echo "ASSET_PATH=$RUNNER_TEMP/$asset" >> "$GITHUB_ENV"
+          echo "ASSET_NAME=$asset" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ env.ASSET_PATH }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create checksums and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum duya-cli-*.tar.gz > SHA256SUMS
+          version="${GITHUB_REF_NAME#cli/v}"
+          release_flags=(--notes-file "../docs/release-notes/cli-v${version}.md" --latest=false)
+          if [[ "$version" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Duya CLI $version" \
+            "${release_flags[@]}" \
+            duya-cli-*.tar.gz SHA256SUMS

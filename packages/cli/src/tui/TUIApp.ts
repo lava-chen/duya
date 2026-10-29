@@ -75,7 +75,10 @@ import {
 } from './terminal/input-driver.js';
 import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
 import { buildComposerLayout } from './composer-layout.js';
-import { wrapWithCursor, type WrappedText } from './width.js';
+import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
+import { shellDraftOf } from './shell-command.js';
+import { LOCAL_SHELL_TOOL } from './tool-render.js';
+import { truncateToWidth, visibleWidth, wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import {
   RichPanelController,
@@ -87,9 +90,15 @@ import {
 } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
+import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
 import { compactActivity } from './text.js';
 import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer.js';
+import {
+  nextPermissionMode,
+  permissionBadge,
+  type PermissionBadge,
+  type TuiPermissionMode,
+} from './permission-mode.js';
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
@@ -170,10 +179,12 @@ const QUEUE_PREVIEW_ROWS = 3;
  * `/queue` must open its panel and `!git status` must run here even while a run
  * is live, so the busy-time keys route these through the ordinary submit path
  * instead of turning them into steering guidance.
+ *
+ * The bang is asked of the same rule the composer paints with, so the line the
+ * composer shows as a command is the line that runs here.
  */
 function isControllerLine(text: string): boolean {
-  const head = text.trimStart();
-  return head.startsWith('/') || head.startsWith('!');
+  return text.trimStart().startsWith('/') || shellDraftOf(text) !== null;
 }
 
 /**
@@ -449,6 +460,26 @@ export interface TUIAppOptions {  /** Window title. */
    * and calls `showPanel`; the TUI only knows what it has already seen.
    */
   readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
+  /**
+   * The permission mode in force, read fresh on every repaint.
+   *
+   * A callback, not a value, for the same reason the effort level is one: the
+   * mode changes while the app runs — through `/permission`, through the
+   * Desktop, or through the cycling key below — and the badge has to show
+   * what is in force now rather than what was in force at startup.
+   *
+   * Null means "this surface does not track a permission mode", and the badge
+   * is then not drawn at all.
+   */
+  readonly permissionMode?: () => TuiPermissionMode | null;
+  /**
+   * Apply the next permission mode.
+   *
+   * The TUI knows WHICH mode comes next; the loop knows how to make it so,
+   * because the mode is a property of the session the Host stores. So the
+   * cycling key asks for a mode and the loop writes it.
+   */
+  readonly onPermissionCycle?: (mode: TuiPermissionMode) => void;
 }
 
 /**
@@ -720,6 +751,16 @@ export class TUIApp {
    */
   private runEffort: string | null = null;
 
+  /**
+   * A permission mode that was asked for but not confirmed.
+   *
+   * `bypass` gives the agent everything, so it takes a second press of the
+   * cycling key — the same staged answer a destructive allow takes. `from` is
+   * the mode the request was made from: if the mode changed since then the
+   * request is stale, and the badge stops claiming a confirmation is pending.
+   */
+  private permissionPending: { readonly mode: TuiPermissionMode; readonly from: TuiPermissionMode } | null = null;
+
   /** Rows currently visible in the input box, for cursor clamping. */
   private inputRows = 1;
   private readonly composerBorder = { type: 'line' as const, left: false, right: false };
@@ -978,6 +1019,26 @@ export class TUIApp {
     this.editor.setText(text, Array.from(text).length);
     this.refreshCompletion();
     this.scheduler.requestImmediate();
+  }
+
+  /**
+   * Put the predicted next prompt into the composer.
+   *
+   * The prediction is a hint until the user takes it: it lands as ordinary
+   * text — visible and editable — and nothing is sent until the user presses
+   * Enter again.
+   */
+  adoptTurnSuggestion(): boolean {
+    const suggestion = this.options.turnSuggestion?.() ?? null;
+    if (suggestion === null || suggestion.length === 0) return false;
+    this.recallIntoComposer(suggestion);
+    return true;
+  }
+
+  /** True while a predicted next prompt is waiting to be taken. */
+  private hasTurnSuggestion(): boolean {
+    const suggestion = this.options.turnSuggestion?.() ?? null;
+    return suggestion !== null && suggestion.length > 0;
   }
 
   private isBusyNow(): boolean {
@@ -1777,14 +1838,19 @@ export class TUIApp {
       return;
     }
 
+    // A draft that opens with a bang runs a command instead of reaching the
+    // model, and says so in the prompt column before it is sent.
+    const draft = shellDraftOf(this.editor.text);
     const layout = buildComposerLayout(this.editor.text, this.editor.cursor, {
       columns: inline ? Math.max(1, size.columns - 1) : this.composerWidth(),
       terminalRows: availableRows,
       maxRows: this.maxInputRows,
       unicode: this.terminalEnv.unicodeBox,
+      ...(draft === null ? {} : { shellPrefix: draft }),
       ...(this.options.turnSuggestion?.() ? { placeholder: this.options.turnSuggestion!() ?? undefined } : {}),
     });
     const borderRows = layout.lines.length - layout.bodyRows;
+    const shellGlyph = draft?.glyph ?? '';
     if (!inline) {
       const height = layout.bodyRows + this.inputChromeRows();
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
@@ -1794,7 +1860,7 @@ export class TUIApp {
         borderColor: effortBorderColor(this.effortLevel()),
         height,
         bottom: this.composerBottom(size),
-        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder),
+        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
       });
       this.fullScreen.update('transcript', {
         bottom: height + STATUS_ROWS + this.popupRows(),
@@ -1804,6 +1870,7 @@ export class TUIApp {
         layout.lines,
         borderRows > 0,
         layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
+        { row: borderRows > 0 ? 1 : 0, glyph: shellGlyph },
       );
     }
     this.inputRows = layout.bodyRows;
@@ -1891,10 +1958,18 @@ export class TUIApp {
    * because a border that tints the thing you are typing is a filter, not an
    * indicator — pi colours the frame for the same reason.
    */
-  private colorComposerRules(lines: readonly string[], hasRules: boolean, placeholderRow = -1): string[] {
+  private colorComposerRules(
+    lines: readonly string[],
+    hasRules: boolean,
+    placeholderRow = -1,
+    shellPrompt: ShellPrompt = NO_SHELL_PROMPT,
+  ): string[] {
     const mutedTag = this.theme.tags.muted;
     const paint = (line: string, index: number): string => {
-      const escaped = escapeTags(line);
+      const escaped = paintComposerRow(line, index, {
+        errorTag: this.theme.tags.error,
+        shellPrompt,
+      });
       return index === placeholderRow ? `{${mutedTag}}${escaped}{/${mutedTag}}` : escaped;
     };
     if (!hasRules || lines.length < 2) return lines.map(paint);
@@ -1916,10 +1991,18 @@ export class TUIApp {
    * It is drawn muted so it reads as a hint rather than as text the user
    * typed.
    */
-  private colorComposerBody(lines: readonly string[], placeholderRow: number, hasPlaceholder: boolean): string[] {
+  private colorComposerBody(
+    lines: readonly string[],
+    placeholderRow: number,
+    hasPlaceholder: boolean,
+    shellPrompt: ShellPrompt = NO_SHELL_PROMPT,
+  ): string[] {
     const mutedTag = this.theme.tags.muted;
     return lines.map((line, index) => {
-      const escaped = escapeTags(line);
+      const escaped = paintComposerRow(line, index, {
+        errorTag: this.theme.tags.error,
+        shellPrompt,
+      });
       return hasPlaceholder && index === placeholderRow
         ? `{${mutedTag}}${escaped}{/${mutedTag}}`
         : escaped;
@@ -1990,13 +2073,28 @@ export class TUIApp {
     );
 
     const rows: string[] = [];
+    const width = this.completionRowWidth();
     for (let i = first; i < first + visible; i += 1) {
       const entry = state.items[i];
       if (entry === undefined) continue;
       const selected = i === state.selectedIndex;
       const marker = selected ? '❯' : ' ';
-      const description = entry.description === '' ? '' : `  {gray-fg}${entry.description}{/gray-fg}`;
-      const line = `${marker} ${entry.label}${description}`;
+      const head = `${marker} ${entry.label}`;
+      // The description is TRUNCATED, never wrapped.
+      //
+      // A chrome line is ONE terminal row: the inline surface writes the chrome
+      // as it is and counts the array's length as the frame's height, so a line
+      // wider than the terminal is wrapped by the TERMINAL — the frame grows
+      // past the space it reserved, the popup's border lands on the footer and
+      // its last candidates fall off the bottom of the screen.
+      //
+      // Every other piece of chrome already clips to the width for the same
+      // reason (see `footer.ts`); the popup was the one that did not.
+      const room = width - visibleWidth(head) - 2;
+      const description = entry.description === undefined || entry.description === '' || room <= 0
+        ? ''
+        : truncateToWidth(entry.description, room);
+      const line = description === '' ? head : `${head}  {gray-fg}${description}{/gray-fg}`;
       rows.push(selected ? `{cyan-fg}${line}{/cyan-fg}` : line);
     }
 
@@ -2018,6 +2116,27 @@ export class TUIApp {
       lines: rows,
       hidden: false,
     });
+  }
+
+  /**
+   * The columns one completion row may use.
+   *
+   * The full-screen popup is a box, so the width it can use is the box's inner
+   * width. The inline popup is chrome written straight to the terminal, where
+   * one column is left spare: a line that exactly fills the width is the case
+   * that wraps (see the footer, which clips to the same width for the same
+   * reason).
+   */
+  private completionRowWidth(): number {
+    if (this.inlineSurface === null) {
+      const measured = this.fullScreen.measure('completion');
+      // `innerWidth` is what the BORDER costs (blessed's `iwidth`), so the
+      // content width is the outer width minus it.
+      if (measured !== null && measured.width > measured.innerWidth) {
+        return measured.width - measured.innerWidth;
+      }
+    }
+    return Math.max(1, this.terminalSize().columns - 1);
   }
 
   /** Total rows the input box occupies, borders included. */
@@ -2046,6 +2165,8 @@ export class TUIApp {
         ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'tasks'
         ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        : this.editor.isEmpty && this.hasTurnSuggestion()
+        ? 'Enter adopt / Tab history / F6 tasks'
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
     // The status line is chrome, so in inline mode it is a row inside the live
     // area — and a row that wraps moves every row below it, which is how an
@@ -2068,7 +2189,10 @@ export class TUIApp {
       const hint = this.options.queuePaused?.() && queued > 0
         ? '/queue resume · Esc recall'
         : this.completion.isOpen ? context
-        : busy ? 'Enter steer · Tab queue · Esc stop' : '/ commands · F1 help';
+        : busy ? 'Enter steer · Tab queue · Esc stop'
+        : this.editor.isEmpty && this.hasTurnSuggestion()
+        ? 'Enter adopt · / commands · F1 help'
+        : '/ commands · F1 help';
       this.inlineStatusLines = this.footerLines(width, hint + queueSegment);
       return;
     }
@@ -2078,8 +2202,28 @@ export class TUIApp {
       subagentRunning: counts.subagentRunning,
       totalTasks: counts.backgroundSummaryTotal,
     }) + tail + usage + queueSegment + ' · ' + context;
+    // The permission badge rides the END of the status row, the way the
+    // inline footer puts it at the end of its second row: the bottom-right
+    // corner is where the session's standing state is shown. It is a separate
+    // segment rather than part of the activity text, because it carries its
+    // own colour — red for the mode that gives the agent everything.
+    //
+    // A badge wider than the row is left out rather than clipped: the status
+    // row is one line of a fixed region, and a line that overflows it wraps
+    // and pushes the composer off the screen.
+    const badge = this.permissionBadge();
+    const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
+    const badgeWidth = badgePlain === '' ? 0 : visibleWidth(badgePlain) + 1;
+    const showBadge = badge !== null && badgeWidth < width;
+    const activity = '{gray-fg}' + escapeTags(compactActivity(
+      fixed,
+      Math.max(1, width - (showBadge ? badgeWidth : 0)),
+    )) + '{/gray-fg}';
+    const badgeTagged = badge === null || !showBadge
+      ? ''
+      : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {
-      lines: ['{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}'],
+      lines: [activity + badgeTagged],
     });
   }
 
@@ -2122,7 +2266,54 @@ export class TUIApp {
       model: this.options.modelLabel?.() ?? null,
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
+      permission: this.permissionBadge(),
     });
+  }
+
+  /**
+   * The permission badge, or null when this surface does not track a mode.
+   *
+   * A pending `bypass` shows what the second press will do rather than
+   * claiming a mode that is not in force yet.
+   */
+  private permissionBadge(): PermissionBadge | null {
+    const mode = this.options.permissionMode?.() ?? null;
+    if (mode === null) return null;
+    const pending = this.permissionPending;
+    const staged = pending !== null && pending.from === mode && pending.mode === 'bypass';
+    return permissionBadge(mode, staged);
+  }
+
+  /**
+   * Move to the next permission mode.
+   *
+   * `bypass` gives the agent the whole machine, so it takes two presses: the
+   * first stages it and the badge says so, the second confirms it. Every
+   * other mode takes one press, because a mode that asks more of the user than
+   * the one already in force cannot be reached by accident.
+   */
+  private cyclePermissionMode(): void {
+    if (this.options.onPermissionCycle === undefined) return;
+    if (this.interactivePrompt !== null || this.overlay.isActive) return;
+    const current = this.options.permissionMode?.() ?? null;
+    if (current === null) return;
+
+    const next = nextPermissionMode(current);
+    const pending = this.permissionPending;
+    if (next === 'bypass') {
+      if (pending !== null && pending.from === current && pending.mode === 'bypass') {
+        this.permissionPending = null;
+        this.options.onPermissionCycle('bypass');
+        this.scheduler.requestImmediate();
+        return;
+      }
+      this.permissionPending = { mode: 'bypass', from: current };
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.permissionPending = null;
+    this.options.onPermissionCycle(next);
+    this.scheduler.requestImmediate();
   }
 
   /** The branch for `cwd`, cached for `GIT_BRANCH_TTL_MS`. */
@@ -3355,13 +3546,19 @@ exportHistory(): string[] {
     // Shift+Tab is the panel's step-back chord (630a), so it is NOT one of the
     // CONTENDED names the popup contends with: plain `tab` is, and blessed
     // reports the shifted form under its own full name (`S-tab`, from
-    // `keys.js:302`), which nothing else binds. Outside a panel the handler
-    // does nothing and the text path still swallows the key by name length, so
-    // the editor is left exactly where it was.
+    // `keys.js:302`), which nothing else binds.
+    //
+    // Outside a panel the same chord cycles the permission mode, which is
+    // where a user expects to find it: the badge that names the mode sits
+    // under the composer and names this key. A window still owns the screen
+    // while it is open, so the cycle waits for it to close.
     this.bindKey(['S-tab'], () => {
-      if (!this.windowMgr.isActive) return;
-      this.windowMgr.handleKey('S-tab', { shift: true });
-      this.scheduler.requestImmediate();
+      if (this.windowMgr.isActive) {
+        this.windowMgr.handleKey('S-tab', { shift: true });
+        this.scheduler.requestImmediate();
+        return;
+      }
+      this.cyclePermissionMode();
     });
 
     // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
@@ -3549,8 +3746,7 @@ exportHistory(): string[] {
           else {
             // Nothing queued and an empty composer: adopt the predicted next
             // prompt, which then sits in the editor for the user to edit.
-            const suggestion = this.options.turnSuggestion?.() ?? null;
-            if (suggestion != null && suggestion.length > 0) this.recallIntoComposer(suggestion);
+            this.adoptTurnSuggestion();
           }
         }
         else this.closeOverlay();
@@ -3710,15 +3906,15 @@ exportHistory(): string[] {
   /**
    * Open a local `!` shell card and return the callId to complete it with.
    *
-   * Rendered through the ordinary bash tool card (`upsertTool` with a
-   * `{ command }` input): the running spinner, the output disclosure and the
-   * failure styling already exist there, and a locally-run command is visually
-   * the same animal as an agent-run one.
+   * The card carries the local shell tool name, not the agent's `bash`: the
+   * reader must be able to tell whose command produced the output, so the two
+   * never share a grouping family, a wording or a cache key. The body is the
+   * ordinary shell body — spinner, output disclosure, failure styling.
    */
   beginLocalShell(command: string): string {
     this.localShellSeq += 1;
     const callId = `local-shell:${this.localShellSeq}`;
-    this.model.upsertTool(callId, 'bash', { command });
+    this.model.upsertTool(callId, LOCAL_SHELL_TOOL, { command });
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
     return callId;
@@ -3859,6 +4055,11 @@ exportHistory(): string[] {
     this.paste.clear(at);
     const text = this.editor.submitIfPresent();
     if (text === null) {
+      // An empty composer with a predicted next prompt adopts it instead of
+      // sending: the text lands in the editor, visible and editable, and the
+      // user still presses Enter to send it. Same shape as the desktop
+      // composer, so the three surfaces answer the same way.
+      if (this.editor.isEmpty) this.adoptTurnSuggestion();
       this.scheduler.requestImmediate();
       return;
     }

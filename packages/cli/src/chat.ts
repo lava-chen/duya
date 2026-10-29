@@ -57,6 +57,7 @@ import { createPluginCompletionSource } from './tui/plugin-candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
+import { shellDraftOf } from './tui/shell-command.js';
 import {
   DEFAULT_TUI_PREFERENCES,
   effortForModel,
@@ -71,6 +72,12 @@ import {
   hasTuiSlashCommand,
   resolveTuiSlashCommand,
 } from './tui/slash/index.js';
+import { updateSession } from './tui/slash/shared.js';
+import {
+  permissionModeFromProfile,
+  profileForPermissionMode,
+  type TuiPermissionMode,
+} from './tui/permission-mode.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -1160,6 +1167,51 @@ export async function chatTui(
     }
   }
 
+  /**
+   * Drop the predicted next prompt.
+   *
+   * A prediction belongs to the session that produced it. After a session
+   * boundary the old suggestion would sit in the composer's placeholder and be
+   * sent to a conversation it has nothing to do with. Bumping the sequence
+   * also retires the read still in flight for it, so a poll that lands after
+   * the switch cannot put it back.
+   */
+  function clearTurnSuggestion(): void {
+    turnSuggestionSeq += 1;
+    if (turnSuggestion === null) return;
+    turnSuggestion = null;
+    tui.refresh();
+  }
+
+  /**
+   * Put the session into a permission mode.
+   *
+   * The mode is a property of the session the Host stores, so the write goes
+   * through the Host's session endpoint — the same one `/permission` uses and
+   * the same one the Desktop's composer uses. That is what makes the badge
+   * true on both surfaces: there is one mode, and it lives in one row.
+   *
+   * The change lands for the NEXT turn. A run already in flight keeps the
+   * mode it started with, which is what the user expects: the approval they
+   * gave was for that turn.
+   */
+  async function applyPermissionMode(mode: TuiPermissionMode): Promise<void> {
+    const profile = profileForPermissionMode(mode);
+    if (profile === activeSession.permissionMode) return;
+    try {
+      const session = await updateSession(client, activeSession, { permissionMode: profile });
+      activeSession = session;
+      if (!finished) tui.refresh();
+    } catch (error) {
+      if (!finished) {
+        tui.printError(
+          'Permission change failed: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -1195,6 +1247,12 @@ export async function chatTui(
     // The composer's border colour: pi's tell for how much thinking the next
     // message will buy. Read through a callback so /effort repaints immediately.
     effort: () => effort,
+    // The permission mode in force, and the key that cycles it. The badge is
+    // drawn from the session record and the cycle writes back to it, so the
+    // two surfaces — this TUI and the Desktop — can never show different
+    // modes for the same session.
+    permissionMode: () => permissionModeFromProfile(activeSession.permissionMode),
+    onPermissionCycle: (mode) => { void applyPermissionMode(mode); },
     // `/settings` moves effort through the TUI; this is how the value reaches
     // the variable the next run is started with. The border is the TUI's, the
     // run's effort is this loop's, and they must not drift apart.
@@ -1414,6 +1472,9 @@ export async function chatTui(
   ): Promise<void> {
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options, directory);
+    // The new session has no turn to predict from, and the old session's
+    // prediction would be sent to this one if it stayed in the composer.
+    clearTurnSuggestion();
     // This surface created it, so this surface cleans it up: a session opened
     // and never typed into is a ghost of the same kind as the opening one.
     owned?.own(activeSession.id);
@@ -1469,6 +1530,9 @@ export async function chatTui(
     }
     const previousModel = activeSession.model;
     activeSession = adopted;
+    // The adopted session has its own turns; the prediction on screen belongs
+    // to the session this surface just left.
+    clearTurnSuggestion();
     await resyncEffortForModelChange(previousModel);
     watchSession(adopted.id);
     // Same reason as `/new`: the adopted session may be the first moment this
@@ -1540,8 +1604,7 @@ export async function chatTui(
     cancellationRequested = false;
     // A new turn retires the previous turn's suggestion, and the read still
     // in flight for it is stopped with it.
-    turnSuggestionSeq += 1;
-    turnSuggestion = null;
+    clearTurnSuggestion();
     const streamAbort = new AbortController();
     activeStream = streamAbort;
     const runSessionId = activeSession.id;
@@ -1843,10 +1906,11 @@ export async function chatTui(
     // implements). `!!cmd` opts the run OUT of the context the next message
     // carries. Checked after the slash branch because `!/usr/bin/...` is a
     // path, not a command.
-    if (text.startsWith('!')) {
+    const bangDraft = shellDraftOf(text);
+    if (bangDraft !== null) {
       if (attachments.length > 0) tui.printNotice('Attachments are ignored with shell commands.');
-      const excludeFromContext = text.startsWith('!!');
-      const shellLine = text.slice(excludeFromContext ? 2 : 1).trim();
+      const excludeFromContext = bangDraft.prefix === '!!';
+      const shellLine = bangDraft.command;
       if (shellLine === '') {
         tui.printError('Usage: !<shell command>');
         return;

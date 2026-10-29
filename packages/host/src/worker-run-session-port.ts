@@ -121,6 +121,7 @@ export interface RunTurnAssembly {
 /** Product session effects consumed by the Host engine driver. */
 export interface EngineProductSession {
 readModelClient(): AIClient;
+readModelOutputTokens(options?: ChatOptions): number;
 runModeExitHooks(): Promise<void>;
 beginRun(request: RunStartRequest): Promise<RunHandle>;
 beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly>;

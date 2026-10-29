@@ -128,7 +128,17 @@ Choose the folder Duya should work in. This folder becomes the task's project co
 
 Use the end-to-end research prompt above. A successful first run should show browser activity in the conversation and produce a Markdown note inside the selected project.
 
-### TUI: run from source
+### CLI/TUI: install or run from source
+
+After the first CLI release is published, install the latest macOS or Linux CLI/TUI release without preinstalling Node.js:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lava-chen/duya/master/install.sh | sh
+```
+
+The installer verifies the release checksum, installs under `~/.duya`, and switches versions atomically. Use `duya upgrade` to update or `sh ~/.duya/install.sh --version 0.1.0` to select a version. Windows packages are not part of the initial CLI release matrix.
+
+To run the TUI from a source checkout instead:
 
 ```bash
 npm install
@@ -136,7 +146,7 @@ npm run build:cli-dev
 npm run dev:tui
 ```
 
-The TUI starts an ephemeral local Host by default. For other CLI commands, see [`packages/cli`](./packages/cli) and the [development guide](./docs/development/README.md). This is a development workflow, not a promise of a separately published CLI package.
+The TUI starts an ephemeral local Host by default. For other CLI commands, see [`packages/cli`](./packages/cli) and the [development guide](./docs/development/README.md). CLI releases use their own `cli/v*` tags and release workflow; Desktop remains on its independent release line.
 
 ### Web: connect to a local Host
 
@@ -155,7 +165,7 @@ npm run build:web
 npm run web-app
 ```
 
-The CLI and Web workspaces are not separately published installable packages. See [apps/web/README.md](./apps/web/README.md) for Host discovery, configuration, and current acceptance-test limitations.
+The Web workspace is not a separately published installable package. See [apps/web/README.md](./apps/web/README.md) for Host discovery, configuration, and current acceptance-test limitations.
 
 ---
 

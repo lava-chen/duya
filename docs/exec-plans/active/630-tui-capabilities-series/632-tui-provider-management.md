@@ -37,7 +37,11 @@
   `http-client` 五个方法；`local-host.ts` 与 `desktop-host-api.ts` 组装；
   新测试 `provider-config-write.test.ts`（33）+ `provider-management-http.test.ts`（16）；
   worker bundle 同提交重建。
-- [ ] PR B · TUI 面（依赖 630a 合入）：`/provider` 列表 / 向导 / 编辑三界面接 630a 面板原语；`command-catalog` 新 `/provider` spec 与桌面平价、可用性测试；`/model` 按 provider 分组并与 `/provider` 互跳。
+- [x] PR B · TUI 面 · 第一片（本次）：`/provider` 的**增/改**，走 Host API；`command-catalog` 新 `/provider` spec（`surfaces: ['cli']`、`subcommands: ['add']`、不可在流式中执行）；`registry` 注册；新测试 `provider.test.ts`（22）。
+  - `/provider` 无参 → 选择器（已配置 provider + "Add a provider…"，空表直接进向导）；
+  - `/provider add` → 分步向导：id → 格式 → 名称 → Base URL → 模型 → 遮罩密钥；
+  - `/provider <id>` → 编辑菜单：Model list / Base URL / API key / Alias / Test connection。
+- [ ] PR B 余下（下一片）：接 630a 面板原语做列表页（行内的设默认 / 删除 / 逐行动作）；`/model` 按 provider 分组并与 `/provider` 互跳。
 - [x] 计划里的 syncModels 独立路由取消：与连通测试合并成一次探测（见下）。
 
 ## 发现与决策
@@ -83,3 +87,13 @@
 PR A 已实现并验证，未合并（等待 review/CI 与用户集成授权）。下一步：PR B 的 TUI 面需要 630a 的面板原语，两种走法任选——等 #512 合入后以 master 为 base，或以 `222f7e2f` 为 base 叠加 630a 分支；后者要求 630a 与 PR A 都合入时才成立，堆叠顺序记在 [系列 README](README.md)。
 
 PR B 开工时要接住的三件事：`/provider` 编辑表单的"测连"只能对已保存的 provider 发起（`/test` 只接 providerId，密钥不下发到客户端），所以流程是保存→测试→失败可回滚；列表要显示 `HostProviderList.error`，它比空列表更有解释力；写操作要带 `expectedRevision`，面板里正在编辑时 Desktop 可能同时在改同一行。
+
+## PR B 第一片（增/改）· 发现与决策
+
+- 用 `ctx.client`（Host API）而不是 `packages/cli/src/providers.ts` 的 `CliApiClient`：后者打的是 `/v1/config/providers`，服务方是 **Desktop 的** CLI API server，只在桌面应用运行时有；TUI 其余 slash command 全部走 `HostSessionHttpClient`，`duya tui` 自带的 Host 就提供 `/v1/local/providers/*`，且那条路直接写 `config.toml` + `secrets.json` —— 正是 CLI 自己解析 provider 时读的两个文件。旧的 `packages/cli/src/tui/provider-login.ts` 因此仍是孤儿：它只被退役层 `packages/agent/src/cli/tui-session.ts` 调用，不在 CLI bundle 里。
+- providerType 只给 `anthropic` / `openai-compatible` / `openrouter`：`mapProviderType`（`worker-config/file-config.ts:124`）只认这三个（`openai` 也映射到 openai，但同一个协议两个拼法只会让配置难读），其余值能让行落盘、能让探测通过，却会在真正建客户端时拿到 `undefined`。向导给的是选择器而不是自由输入。
+- 向导的默认值从 `@duya/ai` 的 `BUILTIN_CATALOG` 取（按所选格式匹配 `protocol`），不另建一份厂商表：模型目录本来就在 ai package 里定期刷新，重复维护会分叉。
+- 编辑时"模型列表"的候选是三方并集：已配置的 `models` ∪ `testProvider` 刚探测到的 `modelIds` ∪ 该厂商在 catalog 里的 `defaultModels`。探测失败不算失败——它只降级表单（从预设编辑），用户仍可保存自己敲的列表；真正的校验是保存后那一次探测。
+- 写操作一律从读到的行出发、只覆盖用户改的那一个字段，再带 `expectedRevision`。`HostProviderWriteInput` 的字段是**替换**而非合并，只发改动字段会把 alias / defaultModel 全部清空。
+- 保存后探测失败的处理分两种：新建时删掉刚建的行；编辑时把上一行原样写回（对着失败写入产生的新 revision）。这是"测连只能对已保存的 provider 发起"逼出来的顺序，代价是网络抖动时一次回滚。
+- 编辑完模型列表后 `defaultModel` 若已不在新列表里就顺延到第一个，否则会留下一个指向不存在模型的默认值。

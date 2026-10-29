@@ -9,12 +9,37 @@ export const COMPOSER_BORDER_ROWS = 2;
 /** Keep two terminal rows available for status and activity indicators. */
 export const COMPOSER_RESERVED_STATUS_ROWS = 2;
 
+/**
+ * A draft prefix drawn in the composer's prompt column.
+ *
+ * The prefix is part of the draft the user typed, so the layout takes the
+ * text and the caret the editor holds and draws the prefix where a prompt
+ * belongs: the text that follows it starts after the prompt column, and the
+ * caret shifts left by the code points the prefix covers.
+ */
+export interface ComposerPrefix {
+  /** The glyph the prompt column holds: `!` or `!!`. */
+  readonly glyph: string;
+  /** The prompt column's text: the glyph, padded to the column's width. */
+  readonly prompt: string;
+  /** Code points of the draft the prompt stands for. */
+  readonly stripped: number;
+}
+
 export interface ComposerLayoutOptions {
   readonly columns: number;
   readonly terminalRows: number;
   readonly maxRows?: number;
   /** Use the Unicode prompt and border glyphs when supported by the caller. */
   readonly unicode?: boolean;
+  /**
+   * The shell prefix the draft opens with, when it has one.
+   *
+   * The prefix replaces the chevron in the prompt column, so a draft that
+   * runs a command says so before it is sent — the way codex draws its shell
+   * prompt.
+   */
+  readonly shellPrefix?: ComposerPrefix;
   /**
    * The next prompt predicted for the last turn.
    *
@@ -61,13 +86,17 @@ export function buildComposerLayout(
   const maxRows = positiveDimension(options.maxRows ?? DEFAULT_COMPOSER_MAX_ROWS);
   const unicode = options.unicode ?? true;
   const unicodePrompt = '❯ ';
-  const prompt = unicode && visibleWidth(unicodePrompt) <= columns
-    ? unicodePrompt
-    : '> ';
+  const prefix = options.shellPrefix;
+  // The prefix belongs to the prompt column, not to the text: the body is the
+  // draft after it, and the caret moves left by the code points it covered.
+  const body = prefix === undefined ? text : stripCodePoints(text, prefix.stripped);
+  const caret = prefix === undefined ? cursor : cursor - prefix.stripped;
+  const prompt = prefix?.prompt
+    ?? (unicode && visibleWidth(unicodePrompt) <= columns ? unicodePrompt : '> ');
   const continuation = '  ';
   const contentWidth = Math.max(1, columns - visibleWidth(prompt));
 
-  const wrapped = wrapTextWithCursor(text, contentWidth, cursor);
+  const wrapped = wrapTextWithCursor(body, contentWidth, caret);
   const hasBorders = terminalRows >= 3;
   const bodyBudget = hasBorders
     ? Math.max(
@@ -89,8 +118,8 @@ export function buildComposerLayout(
   const visibleBody = wrapped.rows.slice(firstVisibleRow, firstVisibleRow + bodyRows);
 
   const bodyLines = visibleBody.map((line, index) => {
-    const prefix = index === 0 && firstVisibleRow === 0 ? prompt : continuation;
-    return clipToColumns(`${prefix}${line}`, columns);
+    const rowPrompt = index === 0 && firstVisibleRow === 0 ? prompt : continuation;
+    return clipToColumns(`${rowPrompt}${line}`, columns);
   });
 
   // The placeholder takes the first body row only while the editor is empty:
@@ -116,6 +145,12 @@ export function buildComposerLayout(
   const cursorRow = (hasBorders ? 1 : 0) + cursorVisibleRow;
 
   return { lines, cursorRow, cursorColumn, bodyRows, firstVisibleRow, hasPlaceholder };
+}
+
+/** Drop the first `count` code points of a draft. */
+function stripCodePoints(text: string, count: number): string {
+  if (count <= 0) return text;
+  return Array.from(text).slice(count).join('');
 }
 
 /** Split on hard newlines and keep the editor's code-point cursor index global. */

@@ -552,6 +552,8 @@ export interface AttachmentInput {
 
 /** The assembled payload for one model call. */
 export interface AssembledTurn {
+  /** Host-resolved per-call output budget, separate from the context window. */
+  readonly maxOutputTokens?: number;
   readonly systemPrompt: string;
   readonly messages: readonly ModelMessage[];
   readonly tools: readonly ToolDescriptor[];
@@ -1496,6 +1498,8 @@ export interface RunExecutionRequest {
    * shape cannot return quietly.
    */
   readonly modelRequestTimeoutMs?: number;
+  /** Automatic continuations after output truncation; absent means fail visibly. */
+  readonly maxOutputRecoveries?: number;
   /**
    * The anti-dead-loop HARD STOP for this run. See `RepeatedCallStopPolicy`.
    *

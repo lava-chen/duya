@@ -10,6 +10,7 @@ publish:
   - provider: github
     owner: lava-chen
     repo: duya
+    tagNamePrefix: desktop/v
     releaseType: release
   - provider: generic
     url: https://update.duya.dev

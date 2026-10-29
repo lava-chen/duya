@@ -3,50 +3,47 @@
  *
  * `/project` — move this TUI to another project directory.
  *
- * The TUI has always worked in the directory it was launched from: that is
- * where its session was registered, where its runs say the work happens, and
- * where tab-completion looks for files. `/project` changes all three at once,
- * which only the chat loop can do — hence `actions.startSessionInDirectory`
- * rather than a PATCH on the session record. A session's workspace is what its
- * rollout, its permission cursor and the checkout fence are keyed on, so the
- * conversation you leave behind stays honest about where it happened, and
- * `/resume` is how you get back to it.
+ * A project here is the same thing the Desktop's project page calls a
+ * project: a row in the Host's `projects` table. The TUI used to derive its
+ * list from the sessions it could see, which made "project" mean "a directory
+ * someone once ran a session in" — the throwaway worktrees, the scratch
+ * folders and the half-typed paths all showed up, while the directory you
+ * actually meant to go to (the one nobody had run in yet) never did. One
+ * table, one meaning: the Desktop registers a project and the TUI sees it;
+ * the TUI registers one and the Desktop sees it.
  *
- * What counts as a project here is derived, not registered: the directories
- * this Host already has sessions in, taken from the local session projection
- * (`/diff` reads the same rows for the same reason — the public record carries
- * no path). A folder that has never had a session is reachable by typing its
- * path, in the picker or as an argument.
+ * The table also holds rows no human registered. The Desktop's catalog sync
+ * writes one per session directory it has seen, with an empty name, so that
+ * the memory layer can attribute a rollout to a project. Those rows are the
+ * machine's bookkeeping, not the user's list of projects, so `/project`
+ * leaves them out and `/project add` names one when the user means it.
+ *
+ * The switch itself is unchanged and still crosses a session boundary: the
+ * TUI opens a new session in the target directory rather than re-binding the
+ * current one, because a session's workspace is what its rollout, its
+ * permission cursor and the checkout fence are keyed on. `/resume` is how
+ * you get back to the old conversation.
  */
 
 import { existsSync, statSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { HostProjectRecord } from '@duya/agent-protocol/projects';
 import type { TuiSlashActions, TuiSlashCommandDef, TuiSlashContext, TuiSlashOutcome } from './types.js';
 
-/** Picking this row asks for a folder instead of switching to one. */
+/** Picking this row asks for a directory to register instead of switching to one. */
 const ADD_ROW_VALUE = 'add-directory';
 
-/**
- * How many session rows the listing reads. This is a picker, not an index:
- * past this many rows the oldest projects are simply not offered, and the
- * argument form still reaches them.
- */
-const SCANNED_SESSIONS = 200;
-
-/** One directory offered by `/project`, with what this Host knows about it. */
+/** One registered project, as the picker needs it. */
 export interface ProjectEntry {
+  readonly projectId: string;
+  readonly name: string;
+  /** The project's canonical root — where a session in this project starts. */
   readonly directory: string;
-  readonly sessionCount: number;
+  /** How many paths the project carries; more than one means a multi-root project. */
+  readonly pathCount: number;
   readonly lastUsedAt: number;
 }
-
-/** The row fields the grouping needs, kept structural so callers stay narrow. */
-type SessionRow = {
-  readonly workingDirectory: string;
-  readonly recencyAt: number | null;
-  readonly updatedAt: number;
-};
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -76,30 +73,55 @@ export function expandHome(input: string): string {
 }
 
 /**
- * Group session rows by the directory they ran in, most recently used first.
+ * The registered projects, most recently used first.
  *
- * The sort key is `recencyAt` — the last time a turn actually started — and
- * not `updatedAt`, which renaming or archiving bumps. A project the user only
- * tidied up must not climb to the top of the picker.
+ * A row with no name was written by the Desktop's catalog sync, not by a
+ * person, so it is not a project the user chose to work in — it is the
+ * machine's record of where sessions happened. Naming it is what makes it a
+ * project, and `/project add` is how that happens.
+ *
+ * The sort key is `last_seen_at` — the last time the Host saw this project —
+ * and not `created_at`, so the project someone is working in today is the
+ * one at the top.
  */
-export function projectEntries(sessions: readonly SessionRow[]): ProjectEntry[] {
-  const byKey = new Map<string, ProjectEntry>();
-  for (const session of sessions) {
-    const directory = session.workingDirectory.trim();
+export function projectRows(records: readonly HostProjectRecord[]): ProjectEntry[] {
+  const entries: ProjectEntry[] = [];
+  for (const record of records) {
+    const name = record.name.trim();
+    if (name === '') continue;
+    const directory = record.canonical_root.trim();
     if (directory === '') continue;
-    const key = dedupeKey(directory);
-    const usedAt = session.recencyAt ?? session.updatedAt;
-    const existing = byKey.get(key);
-    byKey.set(key, existing === undefined
-      ? { directory, sessionCount: 1, lastUsedAt: usedAt }
-      : {
-          directory: existing.directory,
-          sessionCount: existing.sessionCount + 1,
-          lastUsedAt: Math.max(existing.lastUsedAt, usedAt),
-        });
+    entries.push({
+      projectId: record.project_id,
+      name,
+      directory,
+      pathCount: record.paths.length,
+      lastUsedAt: record.last_seen_at,
+    });
   }
-  return [...byKey.values()].sort((left, right) =>
-    right.lastUsedAt - left.lastUsedAt || left.directory.localeCompare(right.directory));
+  return entries.sort(
+    (left, right) => right.lastUsedAt - left.lastUsedAt || left.name.localeCompare(right.name),
+  );
+}
+
+/**
+ * The registered project that owns this directory, if any.
+ *
+ * `canonical_root` is UNIQUE but `paths` is not, so a project can carry a
+ * directory that is not its root. Matching both is what keeps two projects
+ * from claiming the same folder.
+ */
+export function findByDirectory(
+  records: readonly HostProjectRecord[],
+  directory: string,
+): HostProjectRecord | null {
+  for (const record of records) {
+    if (record.canonical_root.trim() !== '' && sameDirectory(record.canonical_root, directory)) {
+      return record;
+    }
+    if (record.paths.some((entry) => sameDirectory(entry.path, directory))) return record;
+  }
+  return null;
 }
 
 /**
@@ -149,22 +171,112 @@ async function switchTo(
   }
 }
 
+/** The name a project gets when the user does not give one. */
+function defaultProjectName(directory: string): string {
+  return path.basename(directory) || directory;
+}
+
+/**
+ * Register a directory as a project, then move to it.
+ *
+ * A directory that already has a project row is not registered twice: the
+ * existing row is named instead. That is the only way to promote one of the
+ * catalog sync's unnamed rows — it is already there, and `canonical_root` is
+ * UNIQUE, so a second row for the same folder cannot be created.
+ */
+async function registerProject(
+  ctx: TuiSlashContext,
+  actions: TuiSlashActions,
+  raw: string,
+  name: string,
+): Promise<void> {
+  const directory = path.resolve(expandHome(raw));
+  if (!existsSync(directory)) {
+    ctx.tui.printError(`No such directory: ${directory}`);
+    return;
+  }
+  if (!statSync(directory).isDirectory()) {
+    ctx.tui.printError(`Not a directory: ${directory}`);
+    return;
+  }
+
+  const wanted = name.trim() === '' ? defaultProjectName(directory) : name.trim();
+  let records: readonly HostProjectRecord[];
+  try {
+    records = await ctx.client.listProjects();
+  } catch (error) {
+    ctx.tui.printError(`Cannot reach this Host's project list: ${describeError(error)}`);
+    return;
+  }
+
+  const existing = findByDirectory(records, directory);
+  if (existing !== null) {
+    if (existing.name.trim() === wanted) {
+      ctx.tui.printNotice(`${wanted} is already registered at ${existing.canonical_root}.`);
+    } else {
+      try {
+        await ctx.client.updateProject(existing.project_id, { name: wanted });
+        ctx.tui.printNotice(`Named ${existing.canonical_root} as ${wanted}.`);
+      } catch (error) {
+        ctx.tui.printError(`Could not name ${existing.canonical_root}: ${describeError(error)}`);
+        return;
+      }
+    }
+    await switchTo(ctx, actions, directory);
+    return;
+  }
+
+  try {
+    await ctx.client.createProject({
+      name: wanted,
+      paths: [{ path: directory, description: null }],
+    });
+    ctx.tui.printNotice(`Registered ${wanted} at ${directory}.`);
+  } catch (error) {
+    // Another client registered the same root between the read and the write.
+    // The row exists either way, so name it and carry on.
+    const code = typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+    if (code !== 'project_conflict') {
+      ctx.tui.printError(`Could not register ${directory}: ${describeError(error)}`);
+      return;
+    }
+    try {
+      const fresh = await ctx.client.listProjects();
+      const raced = findByDirectory(fresh, directory);
+      if (raced === null) {
+        ctx.tui.printError(`Could not register ${directory}: ${describeError(error)}`);
+        return;
+      }
+      await ctx.client.updateProject(raced.project_id, { name: wanted });
+      ctx.tui.printNotice(`Named ${raced.canonical_root} as ${wanted}.`);
+    } catch (retryError) {
+      ctx.tui.printError(`Could not register ${directory}: ${describeError(retryError)}`);
+      return;
+    }
+  }
+  await switchTo(ctx, actions, directory);
+}
+
 /** What the picker shows when this host has no filterable list at all. */
 function printEntries(ctx: TuiSlashContext, entries: readonly ProjectEntry[], here: string | null): void {
-  ctx.tui.printNotice('Projects this Host has sessions in:');
+  ctx.tui.printNotice('Projects registered on this Host:');
   ctx.tui.printNotice('');
   for (const entry of entries) {
     const marker = here !== null && sameDirectory(here, entry.directory) ? '   (current)' : '';
-    ctx.tui.printNotice(`  ${entry.sessionCount}  ${entry.directory}${marker}`);
+    ctx.tui.printNotice(`  ${entry.name}  ${entry.directory}${marker}`);
   }
-  if (entries.length === 0) ctx.tui.printNotice('  (none yet)');
+  if (entries.length === 0) {
+    ctx.tui.printNotice('  (none yet — register one with /project add <path>)');
+  }
   ctx.tui.printNotice('');
-  ctx.tui.printNotice('Usage: /project <path>');
+  ctx.tui.printNotice('Usage: /project <path> · /project add <path> [name]');
 }
 
 const PROJECT_COMMAND: TuiSlashCommandDef = {
   name: 'project',
-  argsHint: '[path]',
+  argsHint: '[add <path>] | [path]',
   description: 'Switch the project directory new sessions run in',
   group: 'Session ops',
   async run(ctx, args): Promise<TuiSlashOutcome> {
@@ -186,20 +298,25 @@ const PROJECT_COMMAND: TuiSlashCommandDef = {
 
     const typed = args.trim();
     if (typed !== '') {
+      const head = typed.split(/\s+/, 1)[0] ?? '';
+      if (head.toLowerCase() === 'add') {
+        const parts = splitPathAndName(typed.slice(head.length).trim());
+        if (parts.path === '') {
+          ctx.tui.printError('Usage: /project add <path> [name]');
+          return { kind: 'handled' };
+        }
+        await registerProject(ctx, actions, parts.path, parts.name);
+        return { kind: 'handled' };
+      }
       await switchTo(ctx, actions, typed);
       return { kind: 'handled' };
     }
 
     let entries: ProjectEntry[];
     try {
-      const page = await ctx.client.listLocalSessions({
-        limit: SCANNED_SESSIONS,
-        includeArchived: false,
-        includeDeleted: false,
-      });
-      entries = projectEntries(page.sessions);
+      entries = projectRows(await ctx.client.listProjects());
     } catch (error) {
-      // No local projection, so no list — but a typed path needs none of it.
+      // No project list, so no picker — but a typed path needs none of it.
       ctx.tui.printError(`Cannot list projects here: ${describeError(error)}`);
       ctx.tui.printNotice('Use /project <path> to switch to a directory directly.');
       return { kind: 'handled' };
@@ -215,16 +332,18 @@ const PROJECT_COMMAND: TuiSlashCommandDef = {
       'Switch project',
       [
         ...entries.map((entry) => ({
-          label: `${path.basename(entry.directory)}${
+          label: `${entry.name}${
             here !== null && sameDirectory(here, entry.directory) ? '  (current)' : ''
           }`,
           value: entry.directory,
-          description: `${entry.sessionCount} session${entry.sessionCount === 1 ? '' : 's'} · ${entry.directory}`,
+          description: entry.pathCount > 1
+            ? `${entry.directory} · ${entry.pathCount} paths`
+            : entry.directory,
         })),
         {
-          label: 'Add a directory…',
+          label: 'Register a directory…',
           value: ADD_ROW_VALUE,
-          description: 'A folder with no sessions on this Host yet',
+          description: 'Add a folder to this Host as a project',
         },
       ],
       { footer: 'type to filter · ↑↓ choose · Enter switch · Esc cancel' },
@@ -238,11 +357,11 @@ const PROJECT_COMMAND: TuiSlashCommandDef = {
       const raw = asked?.trim() ?? '';
       if (raw === '') {
         if (ctx.tui.promptText === undefined) {
-          ctx.tui.printError('This host cannot ask for a path — use /project <path>.');
+          ctx.tui.printError('This host cannot ask for a path — use /project add <path>.');
         }
         return { kind: 'handled' };
       }
-      await switchTo(ctx, actions, raw);
+      await registerProject(ctx, actions, raw, '');
       return { kind: 'handled' };
     }
 
@@ -250,5 +369,23 @@ const PROJECT_COMMAND: TuiSlashCommandDef = {
     return { kind: 'handled' };
   },
 };
+
+/**
+ * Split the argument of `/project add` into a path and an optional name.
+ *
+ * The path is the first whitespace-separated token and the name is the rest,
+ * so a path with a space in it has to be quoted. The picker row does not have
+ * this problem — it asks for the path in its own field.
+ */
+export function splitPathAndName(input: string): { readonly path: string; readonly name: string } {
+  const quoted = /^"([^"]+)"(?:\s+(.*))?$/.exec(input);
+  if (quoted !== null) {
+    return { path: quoted[1] ?? '', name: (quoted[2] ?? '').trim() };
+  }
+  const tokens = input.split(/\s+/).filter((token) => token !== '');
+  const first = tokens[0] ?? '';
+  if (tokens.length <= 1) return { path: first, name: '' };
+  return { path: first, name: tokens.slice(1).join(' ') };
+}
 
 export const PROJECT_COMMANDS: readonly TuiSlashCommandDef[] = [PROJECT_COMMAND];

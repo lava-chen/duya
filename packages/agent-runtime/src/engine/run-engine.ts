@@ -422,6 +422,12 @@ export class RunEngineImpl implements RunEngine {
      * the state that outlives one turn -- not on the engine, which is shared.
      */
     const lastMessage: RunScoped<{ current: TurnMessage | null }> = { current: null };
+    const recoveryLimit = request.maxOutputRecoveries ?? 0;
+    // Run-scoped: a new turn must not reset the recovery allowance.
+    const outputRecovery = {
+      attempts: 0,
+      limit: Number.isSafeInteger(recoveryLimit) && recoveryLimit > 0 ? recoveryLimit : 0,
+    };
     /**
      * The next block index per KIND, for the whole run.
      *
@@ -617,6 +623,7 @@ export class RunEngineImpl implements RunEngine {
           runId,
           turn,
           signal,
+          outputRecovery,
           // The conditional spread, not a plain assignment, because this package
           // compiles with `exactOptionalPropertyTypes`: naming the field with an
           // `undefined` value is not the same as omitting it, and a request that
@@ -1129,6 +1136,10 @@ export class RunEngineImpl implements RunEngine {
    */
   async #streamModel(ctx: RunContext, request: ModelRequest, epoch: number): Promise<EngineExit | null> {
     const { ports, signal, spend } = ctx;
+    if (isAborted(signal)) {
+      ports.tools.discard('abandoned');
+      return { reason: 'cancelled' };
+    }
 
     // The per-request cap, opened here because THIS is the request, and released
     // in the `finally` below rather than at each exit.
@@ -1891,7 +1902,30 @@ export class RunEngineImpl implements RunEngine {
    * and taking the loop over.
    */
   async #shouldStop(ctx: RunContext, turnWork: TurnWork): Promise<EngineExit | null> {
-    // The ceiling FIRST, and not negotiable: a binding veto that reopens a run
+    if (ctx.lastMessage.current?.eventStopReason === 'length') {
+      const recovery = ctx.outputRecovery;
+      if (recovery.attempts >= recovery.limit || ctx.spend.turns >= this.#maxTurns(ctx.ports)) {
+        return {
+          reason: 'failed',
+          message: `Model output token limit reached; automatic continuation exhausted after ${recovery.attempts} attempts.`,
+        };
+      }
+      recovery.attempts += 1;
+      const text = 'The previous response reached its output token limit. Continue directly from the unfinished work without a recap. Use smaller steps and make the next tool call or give the remaining answer.';
+      ctx.injected.current = [...ctx.injected.current, {
+        role: 'user', id: `output-recovery:${ctx.runId}:${recovery.attempts}`, content: text,
+      }];
+      const status = `Output token limit reached; continuing automatically (${recovery.attempts}/${recovery.limit}).`;
+      ctx.ports.events.publish({ type: 'assistant.status', message: status });
+      ctx.ports.events.publish({
+        type: 'diagnostic', level: 'warn',
+        message: status,
+        data: { recoveryAttempt: recovery.attempts, recoveryLimit: recovery.limit },
+      });
+      return null;
+    }
+
+    // The ceiling is not negotiable: a binding veto that reopens a run
     // already at its ceiling would spin forever, and an engine that let a
     // contributor override its own ceiling is not enforcing one.
     if (ctx.spend.turns >= this.#maxTurns(ctx.ports)) return { reason: 'max_turns' };
@@ -2873,6 +2907,7 @@ export class RunEngineImpl implements RunEngine {
     const selection = manifest.agent;
     return {
       systemPrompt: assembled.systemPrompt,
+      ...(assembled.maxOutputTokens === undefined ? {} : { maxOutputTokens: assembled.maxOutputTokens }),
       messages,
       tools: assembled.tools,
       ...(selection?.model === undefined ? {} : { model: selection.model }),
@@ -3229,6 +3264,7 @@ class RepeatedCallStreak {
 
 /** Everything one run needs. Built per `execute`, never shared. */
 interface RunContext {
+  readonly outputRecovery: { attempts: number; readonly limit: number };
   readonly runId: RunId;
   readonly turn: number;
   readonly signal: AbortSignal;

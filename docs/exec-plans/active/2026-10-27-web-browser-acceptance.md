@@ -1,7 +1,7 @@
 # Web 浏览器端到端验收（T40b）：真 Host + 生产 worker + 受控 provider + 实际浏览器
 
-状态：active · 负责人：mavis（会话 mvs_2387fca26eb84e6ba038bb6962b10891） · 更新：2026-10-27
-分支：`codex/web-bff-esm` · worktree：`E:\Projects\duya\.claude\worktrees\web-bff-esm` · base：`a99e1444` · owner：mavis
+状态：merged · PR #529 已合并（`dcec5c15`）· 负责人：mavis（会话 mvs_2387fca26eb84e6ba038bb6962b10891） · 更新：2026-10-27
+base：`b121de39` · owner：mavis
 
 ## 目标与边界
 
@@ -72,7 +72,7 @@ BFF 以 `node apps/web/dist/server/main.js` 启动，**不带 resolver shim、�
 - [x] 定位 provider 请求形状与 `tool_use` 帧格式（工具/审批不执行的根因）
 - [x] Playwright 跑通 6 个场景
 - [x] 记录验证证据
-- [ ] commit + PR
+- [x] commit + PR（#529 已合并）
 
 ## 场景与断言
 
@@ -118,6 +118,10 @@ BFF 以 `node apps/web/dist/server/main.js` 启动，**不带 resolver shim、�
 | 同上 | 同上 | `npm run check:encoding` / `check:no-ts-suppress` / `check:manifest-keys` | 均 0 | 其余门禁 |
 | 同上 | 同上 | `npm run bundle:verify` | 0，`FRESH 0/993` | worker bundle 未过期 |
 | 同上 | 同上 | `node e2e/web/run-web-acceptance.mjs`（夹具搬到 `apps/web/tests/fixtures/` 之后） | **6 passed（15.4s）** | 搬移后复跑仍全绿 |
+| `dcec5c15`（合并后 master，worktree detached） | Windows / Node 24.16.0 | `node e2e/web/run-web-acceptance.mjs` | **6 passed（14.1s）** | 合并后复验 |
+| 同上 | 同上 | `npm run typecheck:all` / `architecture:check` / `bundle:verify` | 均 0（`OK — no new boundary violations`、`FRESH 0/1015`） | 合并后门禁 |
+| 同上 | 同上 | `npx vitest run apps/web packages/ui/src/components/shared` | 0，14 文件 / 144 用例 | 合并后单测 |
+| `dcec5c15`（GitHub Actions / ubuntu 22.x） | GitHub Actions | master CI | success（typecheck / test / build 按 scope skip） | 合并后 CI |
 
 ## 留明（未覆盖）
 
@@ -132,6 +136,11 @@ BFF 以 `node apps/web/dist/server/main.js` 启动，**不带 resolver shim、�
 
 ## 接续
 
-验收 6/6 通过（两轮）。未授权集成，不合并。
-worktree：`E:\Projects\duya\.claude\worktrees\web-bff-esm`，分支 `codex/web-bff-esm`。
-下一步：commit + PR；PR #527 与本 PR 合并后同步 master 并重验。
+验收 6/6 通过（合并前 5 轮、合并后 1 轮）。PR #529 已合并（merge commit `dcec5c15`）。
+合并后在 master 上重跑：验收 6/6（14.1s）、`typecheck:all` / `architecture:check` /
+`bundle:verify` / 相关 vitest 均 0、master CI success。
+
+分支 `codex/web-browser-acceptance`（本地与远程）与 worktree `web-bff-esm` 均已回收；
+`docs-local/` 下的 PR body 与 inventory 报告已备份到主检出。
+
+未覆盖项见上"留明"（审批 deny、截图留证、取消终态语义、边界路径）。

@@ -60,6 +60,7 @@ export const RESERVED_KEYS: Readonly<Record<string, string>> = {
   'Enter': 'the only way to submit a prompt or confirm a window selection',
   'Esc': 'the universal dismissal for windows, overlays and the completion popup',
   'Tab': 'indent in the editor and accept in the completion popup, both at once',
+  'Shift+Tab': 'the permission mode cycle, and the rich panel\'s step-back',
 };
 
 /** The config file consulted for `[tui.keys]`. */
@@ -80,6 +81,7 @@ export function normalizeChord(value: string): string | null {
   if (/[\s\x00-\x1f]/.test(rest)) return null;
   let ctrl = false;
   let alt = false;
+  let shift = false;
   for (;;) {
     const before = rest;
     if (/^ctrl[-+]/i.test(rest)) {
@@ -94,6 +96,9 @@ export function normalizeChord(value: string): string | null {
     } else if (/^m[-+]/i.test(rest)) {
       alt = true;
       rest = rest.replace(/^m[-+]/i, '');
+    } else if (/^shift[-+]/i.test(rest)) {
+      shift = true;
+      rest = rest.replace(/^shift[-+]/i, '');
     }
     if (rest === before) break;
   }
@@ -106,12 +111,18 @@ export function normalizeChord(value: string): string | null {
   if (!single && !fkey && !nav) return null;
 
   if (!ctrl && !alt) {
-    if (single) return key.toUpperCase();
-    if (fkey) return key.toUpperCase();
-    return NAV_CANON[namedOf(key)] ?? null;
+    // A shifted chord is a chord of its own: `Shift+Tab` is a different key
+    // from `Tab`, and the display form has to say so — the help window shows
+    // this string, and a help window that said `Tab` for a chord that is not
+    // `Tab` would send the user to the wrong key.
+    const suffix = single || fkey ? key.toUpperCase() : (NAV_CANON[namedOf(key)] ?? null);
+    if (suffix === null) return null;
+    return shift ? `Shift+${suffix}` : suffix;
   }
+  // A shifted CONTROL chord is not a chord this TUI can express.
+  if (shift) return null;
   if (ctrl && !single && !fkey && !/^(?:end|home|left|right|up|down)$/i.test(key)) return null;
-  const suffix = single ? key.toUpperCase() : key.toUpperCase();
+  const suffix = key.toUpperCase();
   return `${ctrl ? 'Ctrl+' : ''}${alt ? 'Alt+' : ''}${suffix}`;
 }
 
@@ -349,8 +360,17 @@ function toBlessedKey(display: string): string | null {
   const text = display.trim();
   const ctrl = /^Ctrl\+/i.test(text);
   const alt = /^Alt\+/i.test(text);
-  const key = text.replace(/^(Ctrl|Alt)\+/i, '');
+  const shift = /^Shift\+/i.test(text);
+  const key = text.replace(/^(?:Ctrl|Alt|Shift)\+/i, '');
   const named = key.toLowerCase();
+  if (shift) {
+    // blessed names a shifted key `S-<name>`; a shifted CONTROL chord is not
+    // expressible and binds nothing.
+    if (ctrl || alt) return null;
+    if (/^[a-z]$/.test(named)) return `S-${named}`;
+    if (named === 'tab') return 'S-tab';
+    return null;
+  }
   if (ctrl) {
     if (alt) return null; // blessed cannot express C-M-x portably
     if (/^[a-z]$/.test(named)) return `C-${named}`;
