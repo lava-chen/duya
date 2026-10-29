@@ -46,16 +46,19 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 | 旋钮 | 位置 | 默认 |
 | --- | --- | --- |
 | 时间 | workflow `schedule.cron` | `30 13 * * *`（UTC） |
-| 纳入哪些上游模型 | 同步脚本各 shard 的白名单 / 排除规则 | 见 `packages/ai/scripts/sync-models.mjs` |
-| 是否合并 | — | 永不合并，等人评审 |
+| 纳入哪些上游模型 | 同步脚本的发现/准入规则 | 见 `packages/ai/scripts/sync-models.mjs` |
+| 是否合并 | workflow「Merge validated catalog PR」 | 目录-only 校验通过后自动合入；异常保留 PR |
 
-- **只开 PR 不自动合并**：仓库规则要求未经授权不集成；无人值守合并等于把上游目录原样塞进产品。
+- **自动合并有前置闸门**：只有提交里全部是 `packages/ai/src/providers/*.models.ts` 与 `packages/host/bundle`、
+  目录自检、Host 构建与 bundle 校验都通过，且分支保护要求的检查全绿时才合入；否则 workflow 保留 PR 并标红。
 - **滚动分支**：每天新开一个 PR 会攒出一堆过期评审对象，所以固定一个分支 force-push。
 - **排序不能依赖 locale**：`localeCompare` 走 ICU 排序，结果随机器 locale 变。夜间任务跑在 Linux runner、
   目录却是在开发机上写的，本地化排序会让「上游没变」每晚都被判成「有变化」。改成码位序后两边一致。
 - **开 PR 需要有权限的 token**：仓库已于 2026-10-24 开启 "Allow GitHub Actions to create and approve pull requests"，
   `GITHUB_TOKEN` 可以建 PR。workflow 仍优先用 `NIGHTLY_PR_TOKEN` secret（没有则回退 `GITHUB_TOKEN`），
   建不出来时打印可直接点开的 compare 链接并把任务标红，不会静默跳过。
+- **发现报告不随早退消失**：目录无 diff 时 workflow 会早退，但发现报告写入 job summary，能看到「上游有新模型
+  但未准入」；PR 正文也以报告为主体，不再用 `+N/-N` 行解析。
 - **「只有价格变了」的 PR 是常态**：OpenRouter 部分模型给的是换算价，会持续微漂
   （实测 `deepseek/deepseek-v4-pro` 二十分钟内漂 ~2.6%）。夜间任务因此几乎每晚都有差异可报，
   但模型增删列表会是空的。价格按上游原样写入，不做四舍五入掩盖。
@@ -122,12 +125,13 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - 已实现（后续 PR）：模型 id 排序去本地化、openrouter 价格随上游漂移刷新 + bundle 重建、夜间刷新 workflow。
 - 已验证：见上表（本地全绿）。
 - PR：#441 https://github.com/lava-chen/duya/pull/441 （已合并，merge commit c426d029）；
-  夜间刷新：#442 https://github.com/lava-chen/duya/pull/442 （base=master，未合并）。
+  夜间刷新 #442 已合并；目录自动合并 #537 已合并（`1ebe97d0`，merge `07341c28`）。
 - 已实现（本次分支，未推送、未建 PR）：发现与准入分离（同步脚本）、`--report` / `--discover`、
-  `.github/workflows/model-catalog.yml` 的发现报告与 job summary、离线 fixture 用例。
-- 未提交路径：无（提交后见 Git）。
+  `.github/workflows/model-catalog.yml` 的发现报告与 job summary、离线 fixture 用例；分支已 rebase 到
+  `1653a238`，与 #537 的自动合并步骤共存（保留目录-only 校验与自动 merge，报告只加不改合并语义）。
+- 未提交路径：见工作树 `git status`。
 - 副作用：worker bundle 产物变化（`packages/host/bundle/**`），属本次改动的应有产物。
-- 阻塞：无技术阻塞；开 PR 一步需要仓库开启 GitHub Actions 建 PR 权限或配置 `NIGHTLY_PR_TOKEN`。
+- 阻塞：无技术阻塞。
 - 回收：未回收——后续 PR 尚未集成，需保留分支与检出。
 
 下一步：由人工复核本次提交后建 PR；合并仍由获授权的集成者处理，本 agent 不自行合并。
