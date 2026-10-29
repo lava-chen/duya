@@ -137,6 +137,9 @@ async function startHarness(options: HarnessOptions): Promise<Harness> {
       return { workingDirectory: options.currentDirectory };
     }),
     listLocalSessions: vi.fn(async () => ({ sessions: [], nextCursor: null })),
+    // The registered projects. The typed-path form of `/project` never reads
+    // them, but the picker does, and the harness mirrors the Host's surface.
+    listProjects: vi.fn(async () => []),
     registerLocalDirectory: vi.fn(async (directory: string) => {
       registered.push(directory);
       return { workspaceId: `ws-${registered.length}`, rootId: `root-${registered.length}`, relativePath: '' };
