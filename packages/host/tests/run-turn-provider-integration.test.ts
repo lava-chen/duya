@@ -403,3 +403,66 @@ describe('Host turn input contract — production worker and provider', () => {
     }
   }, 60_000);
 });
+
+
+function truncatedStream(includeTool = false): string {
+  const events: Record<string, unknown>[] = [
+    { type: 'message_start', message: { id: 'truncated', type: 'message', role: 'assistant', content: [], model: 'test-model', usage: { input_tokens: 1, output_tokens: 0 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'unfinished reasoning' } },
+    { type: 'content_block_stop', index: 0 },
+  ];
+  if (includeTool) events.push(
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'clipped-tool', name: 'write', input: {} } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"must-not-exist.txt","content":"partial"}' } },
+    { type: 'content_block_stop', index: 1 },
+  );
+  events.push(
+    { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 4096 } },
+    { type: 'message_stop' },
+  );
+  return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
+}
+
+describe('output truncation through the production Host and worker', () => {
+  it.each([false, true])('continues without user input and drops clipped tools (tool=%s)', async includeTool => {
+    const { host, client, provider, sessionId, workspace } = await startHarness(round => round === 1 ? truncatedStream(includeTool) : textStream('RECOVERED_FINAL_ANSWER', String(round)));
+    try {
+      const started = await client.startAgentRun({ sessionId, prompt: 'CONTRACT_TRUNCATION: finish the task', model: 'test-model', providerId: 'local-test', apiFormat: 'anthropic' });
+      expect(started.accepted).toBe(true);
+      if (!started.accepted) throw new Error('run refused');
+      const events = [];
+      for await (const event of client.watchAgentRunEvents(started.runId)) events.push(event);
+      expect((await client.getAgentRun(started.runId))?.status).toBe('completed');
+      // Title and next-step suggestion requests use their own smaller budgets.
+      const turnRequests = provider.requests.filter(request => request.maxTokens === 32_768);
+      expect(turnRequests).toHaveLength(2);
+      expect(turnRequests[0]?.raw).toContain('CONTRACT_TRUNCATION');
+      expect(turnRequests[1]?.raw).toContain('previous response reached its output token limit');
+      const eventText = JSON.stringify(events);
+      expect(eventText).toContain('RECOVERED_FINAL_ANSWER');
+      expect(eventText).toContain('continuing automatically');
+      expect(eventText).not.toContain('"type":"tool.call_started"');
+      await expect(fs.access(path.join(workspace, 'must-not-exist.txt'))).rejects.toThrow();
+    } finally {
+      await host.close();
+      await provider.close();
+    }
+  }, 60_000);
+
+  it('makes exhaustion visible instead of marking a thinking-only run completed', async () => {
+    const { host, client, provider, sessionId } = await startHarness(() => truncatedStream());
+    try {
+      const started = await client.startAgentRun({ sessionId, prompt: 'CONTRACT_TRUNCATION_EXHAUST: finish', model: 'test-model', providerId: 'local-test', apiFormat: 'anthropic' });
+      if (!started.accepted) throw new Error('run refused');
+      await drainRun(client, started.runId);
+      const run = await client.getAgentRun(started.runId);
+      expect(run?.status).toBe('failed');
+      expect(JSON.stringify(run)).toContain('output token limit');
+      expect(provider.requests).toHaveLength(4);
+    } finally {
+      await host.close();
+      await provider.close();
+    }
+  }, 60_000);
+});

@@ -229,7 +229,7 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             // The turn's attachments reach the model through the assembly, and
             // the effort reaches it through the model port. Both are the
             // Host's own values, carried from the adjudicated turn options.
-            assembleTurn: createLegacyAssembleTurn(assembly, request.options.attachments),
+            assembleTurn: createLegacyAssembleTurn(assembly, request.options.attachments, agent.readModelOutputTokens(request.options)),
             ...(request.options.effort === undefined ? {} : { effort: request.options.effort }),
             refreshDeclaredTools: () => assembly.refreshDeclaredTools(),
             askApproval: gateRunApproval(assembly, request.askApproval),

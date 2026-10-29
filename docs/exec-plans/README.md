@@ -6,6 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| 模型输出截断恢复 | [2026-10-29 输出截断恢复](active/2026-10-29-output-truncation-recovery.md) | 输出预算传递与有界续写已实现；282 项回归及类型/架构门禁通过，Draft PR #536 等 CI/review |
 | TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host lease 生命周期日志 + idle 停机先等回合 settle、可被重附着取消；CLI 重申请 lease 并从游标续订事件流；PR #505 已合并（`eaa33d80`），真机冒烟待用户 |
 | TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a 与 632 的 Host 写面已实现待合并；面板两片等 630a 合入后开工 |
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
