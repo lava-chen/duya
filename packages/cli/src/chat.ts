@@ -72,6 +72,12 @@ import {
   hasTuiSlashCommand,
   resolveTuiSlashCommand,
 } from './tui/slash/index.js';
+import { updateSession } from './tui/slash/shared.js';
+import {
+  permissionModeFromProfile,
+  profileForPermissionMode,
+  type TuiPermissionMode,
+} from './tui/permission-mode.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -1177,6 +1183,35 @@ export async function chatTui(
     tui.refresh();
   }
 
+  /**
+   * Put the session into a permission mode.
+   *
+   * The mode is a property of the session the Host stores, so the write goes
+   * through the Host's session endpoint — the same one `/permission` uses and
+   * the same one the Desktop's composer uses. That is what makes the badge
+   * true on both surfaces: there is one mode, and it lives in one row.
+   *
+   * The change lands for the NEXT turn. A run already in flight keeps the
+   * mode it started with, which is what the user expects: the approval they
+   * gave was for that turn.
+   */
+  async function applyPermissionMode(mode: TuiPermissionMode): Promise<void> {
+    const profile = profileForPermissionMode(mode);
+    if (profile === activeSession.permissionMode) return;
+    try {
+      const session = await updateSession(client, activeSession, { permissionMode: profile });
+      activeSession = session;
+      if (!finished) tui.refresh();
+    } catch (error) {
+      if (!finished) {
+        tui.printError(
+          'Permission change failed: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -1212,6 +1247,12 @@ export async function chatTui(
     // The composer's border colour: pi's tell for how much thinking the next
     // message will buy. Read through a callback so /effort repaints immediately.
     effort: () => effort,
+    // The permission mode in force, and the key that cycles it. The badge is
+    // drawn from the session record and the cycle writes back to it, so the
+    // two surfaces — this TUI and the Desktop — can never show different
+    // modes for the same session.
+    permissionMode: () => permissionModeFromProfile(activeSession.permissionMode),
+    onPermissionCycle: (mode) => { void applyPermissionMode(mode); },
     // `/settings` moves effort through the TUI; this is how the value reaches
     // the variable the next run is started with. The border is the TUI's, the
     // run's effort is this loop's, and they must not drift apart.

@@ -42,6 +42,7 @@ export const ACTION_DEFS: readonly ActionDef[] = [
   { id: 'scroll', keys: ['PgUp', 'PgDn'], label: 'Scroll the transcript (page)', context: 'global' },
   { id: 'wheel-scroll', keys: ['Wheel'], label: 'Scroll the transcript / window (3 lines per tick)', context: 'global' },
   { id: 'follow-tail', keys: ['Ctrl+End'], label: 'Jump back to the newest output', context: 'global' },
+  { id: 'permission-cycle', keys: ['Shift+Tab'], label: 'Cycle the permission mode (ask / auto / bypass)', context: 'global' },
   { id: 'submit', keys: ['Enter'], label: 'Submit the prompt', context: 'editor' },
   { id: 'history-recall', keys: ['↑', '↓'], label: 'Walk input history (draft is kept)', context: 'editor' },
   { id: 'line-home-end', keys: ['Ctrl+A', 'Ctrl+E'], label: 'Move to line start / end', context: 'editor' },
