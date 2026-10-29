@@ -44,6 +44,7 @@ import { CHECKOUT_COMMANDS } from './checkout.js';
 import { WORKTREE_COMMANDS } from './worktree.js';
 import { PR_COMMANDS } from './pr.js';
 import { MODEL_COMMANDS } from './model.js';
+import { PROVIDER_COMMANDS } from './provider.js';
 import { EFFORT_COMMANDS } from './effort.js';
 import { SETTINGS_COMMANDS } from './settings.js';
 import { DISPLAY_COMMANDS } from './display.js';
@@ -63,6 +64,7 @@ import { TASKS_COMMANDS } from './tasks.js';
 /** Every command this surface can actually run. */
 export const TUI_SLASH_COMMANDS: readonly TuiSlashCommandDef[] = [
   ...MODEL_COMMANDS,
+  ...PROVIDER_COMMANDS,
   ...EFFORT_COMMANDS,
   ...SETTINGS_COMMANDS,
   ...DISPLAY_COMMANDS,
