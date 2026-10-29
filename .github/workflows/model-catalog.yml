@@ -4,11 +4,8 @@ name: Model catalog refresh
 # out of date within weeks: vendors rotate model names, retire ids and reprice
 # the same model. This workflow refreshes it from the two public catalogues
 # the sync script reads (models.dev for vendor-direct ids, OpenRouter for the
-# proxy-side ones) and hands the result to a human as a pull request.
-#
-# It never merges. AGENTS.md forbids integrating without authorization, and an
-# unattended merge would put whatever the upstream catalogue said that night
-# into the product without anyone deciding whether those models belong.
+# proxy-side ones). Scheduled model-data-only updates may merge unattended
+# after the targeted validation below. Other changes still use normal PRs.
 #
 # Knobs:
 #   * when   — `schedule.cron` below (21:30 Beijing time). GitHub delays
@@ -18,7 +15,7 @@ name: Model catalog refresh
 #               decide which upstream models are eligible. A model that is not
 #               on a list is never added; edit the lists and the next night
 #               follows them.
-#   * merge  — never. The pull request is the deliverable.
+#   * merge  — automatic after targeted validation; protection still applies.
 #
 # A pull request with no added and no removed model id is normal. OpenRouter
 # quotes some models with a converted price that drifts continuously (observed:
@@ -151,7 +148,7 @@ jobs:
             done <<< "$stray"
           fi
 
-      - name: Commit and push the refreshed directory
+      - name: Commit the refreshed directory
         if: steps.detect.outputs.changed == 'true'
         run: |
           set -euo pipefail
@@ -160,21 +157,31 @@ jobs:
           git checkout -B chore/ai-model-catalog-nightly
           git add packages/ai/src/providers packages/host/bundle
           git commit -m "chore(ai): refresh model catalog from upstream"
-          git push --force origin chore/ai-model-catalog-nightly
 
       # The freshness gate is a git judgement: it compares the committed bundle
       # against the first-party inputs that changed after the bundle commit.
-      # Run it AFTER the commit — that is the state the pull request will be
-      # reviewed in — and before the push, so a stale bundle never reaches the
-      # branch.
+      # Validate the committed bundle BEFORE publishing the automation branch.
       - name: Worker bundle freshness (bundle:verify)
         if: steps.detect.outputs.changed == 'true'
         run: npm run bundle:verify
 
-      # The pull request body names the models that appeared and disappeared,
-      # because that is the part of a refresh a human has to judge: a new id
-      # means a new model is now offered in the settings, and a removed id
-      # means it is not.
+      # Record model additions and removals in the PR for auditability.
+      # Prevent the scheduled job from slipping in source-code or workflow edits.
+      - name: Verify catalog-only change scope
+        if: steps.detect.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          unexpected="$(git diff-tree --no-commit-id --name-only -r HEAD | grep -Ev '^(packages/ai/src/providers/[^/]+\.models\.ts|packages/host/bundle/[^/]+)$' || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected files in automated update:"
+            echo "$unexpected"
+            exit 1
+          fi
+
+      - name: Push validated catalog branch
+        if: steps.detect.outputs.changed == 'true'
+        run: git push --force origin chore/ai-model-catalog-nightly
+
       - name: Open or update the pull request
         if: steps.detect.outputs.changed == 'true'
         env:
@@ -227,7 +234,7 @@ jobs:
             `模型目录自动刷新（${date}）`,
             '',
             '由 `.github/workflows/model-catalog.yml` 定时刷新，来源是 models.dev 与 OpenRouter 两个公开目录。',
-            '**本 PR 需要人工评审后合并**，自动刷新只负责把差异摆出来。',
+            '**自动合并**：模型数据自检、Host 构建和 Worker Bundle 一致性校验通过后合入；异常保留 PR。',
             '',
             '### 新增模型（会出现在设置里）',
             '',
@@ -271,3 +278,16 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Merge validated catalog PR
+        if: steps.detect.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NIGHTLY_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: chore/ai-model-catalog-nightly
+        run: |
+          set -euo pipefail
+          PR_NUMBER="$(gh pr view --repo "$GITHUB_REPOSITORY" --base master --head "$BRANCH" --json number --jq '.number')"
+          [ -n "$PR_NUMBER" ] || { echo "::error::Model catalog PR not found"; exit 1; }
+          # No --admin: GitHub's required checks and branch protection are binding.
+          # A protected bot PR may need approval: fail visibly and leave it open.
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --merge --match-head-commit "$(git rev-parse HEAD)"
