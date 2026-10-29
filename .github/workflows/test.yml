@@ -686,7 +686,7 @@ jobs:
         # runner under the default ~2 GB V8 heap — runner memory, not a build
         # error; ubuntu and windows pass this identical step at the default
         # heap. Same value and same reasoning as the release workflow's
-        # identical step (release.yml), and as this job's typecheck step
+        # identical step (release-desktop.yml), and as this job's typecheck step
         # above (5bf3220a). Raise it for all platforms so one value works
         # across the matrix.
         env:
@@ -801,11 +801,11 @@ jobs:
         #
         # A verification run has no business publishing, so publishing is
         # removed from the run rather than tolerated in it: no GH_TOKEN is
-        # added, and the exit code stays the packaging exit code. release.yml
+        # added, and the exit code stays the packaging exit code. release-desktop.yml
         # passes the symmetric `--publish always` alongside GH_TOKEN for the
         # real release, so the release path is untouched.
         #
-        # electron-builder is invoked directly, the same shape release.yml uses
+        # electron-builder is invoked directly, the same shape release-desktop.yml uses
         # after its own `Build application` step. That drops the second
         # `npm run electron:build` that `npm run electron:pack:mac` re-ran on
         # top of the `Build application` step above: same build output, same
