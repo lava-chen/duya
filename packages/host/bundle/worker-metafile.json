@@ -30863,7 +30863,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 267181,
+      "bytes": 267647,
       "imports": [
         {
           "path": "node:crypto",
@@ -40332,7 +40332,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -40506,7 +40506,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42246,7 +42246,7 @@
           "bytesInOutput": 4260
         },
         "packages/capabilities/src/utils/path.ts": {
-          "bytesInOutput": 1121
+          "bytesInOutput": 1134
         },
         "packages/agent-core/src/run-outcome.ts": {
           "bytesInOutput": 937
@@ -42396,7 +42396,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -42429,7 +42429,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -44253,7 +44253,7 @@
           "bytesInOutput": 3025
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -45855,7 +45855,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4752626
+      "bytes": 4752658
     }
   }
 }
