@@ -55,6 +55,7 @@ function makeContext(options: {
   const errors: string[] = [];
   const choices: TuiChoice[][] = [];
   const prompts: Array<{ title: string; options?: { initialValue?: string; secret?: boolean } }> = [];
+  const promptReceivers: unknown[] = [];
   const upserted: Array<Record<string, unknown>> = [];
   const deleted: string[] = [];
   const answerQueue = [...(options.answers ?? [])];
@@ -68,7 +69,14 @@ function makeContext(options: {
       choices.push([...items]);
       return pickQueue.length > 0 ? (pickQueue.shift() as string | null) : null;
     },
-    promptText: async (title: string, opts?: { initialValue?: string; secret?: boolean }) => {
+    promptText: async function (
+      this: unknown,
+      title: string,
+      opts?: { initialValue?: string; secret?: boolean },
+    ) {
+      // Record the receiver so tests catch unbound extractions like
+      // `const promptText = ctx.tui.promptText`, which lose `this`.
+      promptReceivers.push(this);
       prompts.push({ title, options: opts });
       return answerQueue.length > 0 ? (answerQueue.shift() as string | null) : null;
     },
@@ -115,7 +123,7 @@ function makeContext(options: {
     busy: options.busy ?? false,
   } as unknown as TuiSlashContext;
 
-  return { ctx, notices, errors, choices, prompts, upserted, deleted };
+  return { ctx, tui, notices, errors, choices, prompts, promptReceivers, upserted, deleted };
 }
 
 describe('/provider — guards', () => {
@@ -394,5 +402,26 @@ describe('/provider — the picker', () => {
     await COMMAND.run(ctx, '');
     expect(notices[0]).toContain('No providers');
     expect(prompts[0]?.title).toContain('Provider id');
+  });
+});
+
+describe('/provider — prompt binding', () => {
+  it('invokes promptText with the tui app as its receiver in both flows', async () => {
+    const add = makeContext({
+      pick: ['openai-compatible'],
+      answers: ['deepseek', 'DeepSeek', 'https://api.deepseek.com/v1', 'm', 'sk-1'],
+    });
+    await COMMAND.run(add.ctx, 'add');
+    expect(add.promptReceivers.length).toBeGreaterThan(0);
+    for (const receiver of add.promptReceivers) expect(receiver).toBe(add.tui);
+
+    const edit = makeContext({
+      providers: [provider()],
+      pick: ['models'],
+      answers: ['kept'],
+    });
+    await COMMAND.run(edit.ctx, 'deepseek');
+    expect(edit.promptReceivers.length).toBeGreaterThan(0);
+    for (const receiver of edit.promptReceivers) expect(receiver).toBe(edit.tui);
   });
 });
