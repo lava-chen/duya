@@ -6,7 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，等 PR review 与授权 |
+| TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，PR #547 等 review 与授权 |
 | 产品独立发布 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | Desktop / CLI 独立 tag 与 workflow；CLI 自包含包、校验和 Codex 风格安装器 |
 | 模型输出截断恢复 | [2026-10-29 输出截断恢复](active/2026-10-29-output-truncation-recovery.md) | 输出预算传递与有界续写已实现；282 项回归及类型/架构门禁通过，Draft PR #536 等 CI/review |
 | TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host lease 生命周期日志 + idle 停机先等回合 settle、可被重附着取消；CLI 重申请 lease 并从游标续订事件流；PR #505 已合并（`eaa33d80`），真机冒烟待用户 |

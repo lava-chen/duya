@@ -55,6 +55,6 @@
 
 ## 接续 / 结果
 
-已实现 + 已验证（typecheck / architecture / cli-tui 1297 + host 2146 全绿），待 PR review 与集成授权。未提交路径：无（全部已提交后此行更新为 PR 链接）。
+已实现 + 已验证（typecheck / architecture / cli-tui 1297 + host 2146 全绿），PR #547（https://github.com/lava-chen/duya/pull/547）等 review 与集成授权。commit：fc13bb26（fix keep-alive+cause）、b5f0f5df（perf revision cache）、44c7006a（docs）。未提交路径：无。
 附带发现（不在本任务处理）：`~/.duya/logs/agent/agent-unknown.log` 401MB 无轮转且命名 unknown；worker MCP stderr 每秒重连刷屏（BlenderMCPServer）；TUI 会话多日复用累积 transcript。
 下一步：review/CI 通过后由用户授权集成；真机冒烟 = 长会话 write 落盘观察流畅度、闲置 >5s 后轮询不再报 fetch failed。
