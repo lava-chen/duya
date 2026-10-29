@@ -75,6 +75,9 @@ import {
 } from './terminal/input-driver.js';
 import { popKittyKeyboardFlags, pushKittyKeyboardFlags } from './terminal/ansi.js';
 import { buildComposerLayout } from './composer-layout.js';
+import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
+import { shellDraftOf } from './shell-command.js';
+import { LOCAL_SHELL_TOOL } from './tool-render.js';
 import { wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import {
@@ -170,10 +173,12 @@ const QUEUE_PREVIEW_ROWS = 3;
  * `/queue` must open its panel and `!git status` must run here even while a run
  * is live, so the busy-time keys route these through the ordinary submit path
  * instead of turning them into steering guidance.
+ *
+ * The bang is asked of the same rule the composer paints with, so the line the
+ * composer shows as a command is the line that runs here.
  */
 function isControllerLine(text: string): boolean {
-  const head = text.trimStart();
-  return head.startsWith('/') || head.startsWith('!');
+  return text.trimStart().startsWith('/') || shellDraftOf(text) !== null;
 }
 
 /**
@@ -1797,14 +1802,19 @@ export class TUIApp {
       return;
     }
 
+    // A draft that opens with a bang runs a command instead of reaching the
+    // model, and says so in the prompt column before it is sent.
+    const draft = shellDraftOf(this.editor.text);
     const layout = buildComposerLayout(this.editor.text, this.editor.cursor, {
       columns: inline ? Math.max(1, size.columns - 1) : this.composerWidth(),
       terminalRows: availableRows,
       maxRows: this.maxInputRows,
       unicode: this.terminalEnv.unicodeBox,
+      ...(draft === null ? {} : { shellPrefix: draft }),
       ...(this.options.turnSuggestion?.() ? { placeholder: this.options.turnSuggestion!() ?? undefined } : {}),
     });
     const borderRows = layout.lines.length - layout.bodyRows;
+    const shellGlyph = draft?.glyph ?? '';
     if (!inline) {
       const height = layout.bodyRows + this.inputChromeRows();
       const body = borderRows > 0 ? layout.lines.slice(1, -1) : layout.lines;
@@ -1814,7 +1824,7 @@ export class TUIApp {
         borderColor: effortBorderColor(this.effortLevel()),
         height,
         bottom: this.composerBottom(size),
-        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder),
+        lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
       });
       this.fullScreen.update('transcript', {
         bottom: height + STATUS_ROWS + this.popupRows(),
@@ -1824,6 +1834,7 @@ export class TUIApp {
         layout.lines,
         borderRows > 0,
         layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
+        { row: borderRows > 0 ? 1 : 0, glyph: shellGlyph },
       );
     }
     this.inputRows = layout.bodyRows;
@@ -1911,10 +1922,18 @@ export class TUIApp {
    * because a border that tints the thing you are typing is a filter, not an
    * indicator — pi colours the frame for the same reason.
    */
-  private colorComposerRules(lines: readonly string[], hasRules: boolean, placeholderRow = -1): string[] {
+  private colorComposerRules(
+    lines: readonly string[],
+    hasRules: boolean,
+    placeholderRow = -1,
+    shellPrompt: ShellPrompt = NO_SHELL_PROMPT,
+  ): string[] {
     const mutedTag = this.theme.tags.muted;
     const paint = (line: string, index: number): string => {
-      const escaped = escapeTags(line);
+      const escaped = paintComposerRow(line, index, {
+        errorTag: this.theme.tags.error,
+        shellPrompt,
+      });
       return index === placeholderRow ? `{${mutedTag}}${escaped}{/${mutedTag}}` : escaped;
     };
     if (!hasRules || lines.length < 2) return lines.map(paint);
@@ -1936,10 +1955,18 @@ export class TUIApp {
    * It is drawn muted so it reads as a hint rather than as text the user
    * typed.
    */
-  private colorComposerBody(lines: readonly string[], placeholderRow: number, hasPlaceholder: boolean): string[] {
+  private colorComposerBody(
+    lines: readonly string[],
+    placeholderRow: number,
+    hasPlaceholder: boolean,
+    shellPrompt: ShellPrompt = NO_SHELL_PROMPT,
+  ): string[] {
     const mutedTag = this.theme.tags.muted;
     return lines.map((line, index) => {
-      const escaped = escapeTags(line);
+      const escaped = paintComposerRow(line, index, {
+        errorTag: this.theme.tags.error,
+        shellPrompt,
+      });
       return hasPlaceholder && index === placeholderRow
         ? `{${mutedTag}}${escaped}{/${mutedTag}}`
         : escaped;
@@ -3734,15 +3761,15 @@ exportHistory(): string[] {
   /**
    * Open a local `!` shell card and return the callId to complete it with.
    *
-   * Rendered through the ordinary bash tool card (`upsertTool` with a
-   * `{ command }` input): the running spinner, the output disclosure and the
-   * failure styling already exist there, and a locally-run command is visually
-   * the same animal as an agent-run one.
+   * The card carries the local shell tool name, not the agent's `bash`: the
+   * reader must be able to tell whose command produced the output, so the two
+   * never share a grouping family, a wording or a cache key. The body is the
+   * ordinary shell body — spinner, output disclosure, failure styling.
    */
   beginLocalShell(command: string): string {
     this.localShellSeq += 1;
     const callId = `local-shell:${this.localShellSeq}`;
-    this.model.upsertTool(callId, 'bash', { command });
+    this.model.upsertTool(callId, LOCAL_SHELL_TOOL, { command });
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
     return callId;

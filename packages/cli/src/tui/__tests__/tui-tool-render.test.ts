@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { TranscriptModel } from '../blocks.js';
 import {
   formatToolResult,
+  isLocalShellTool,
   isShellTool,
   selectShellOutput,
   shellCommandOf,
@@ -52,6 +53,13 @@ describe('toolGroupKey', () => {
     expect(toolGroupKey('write')).toBe('write');
     expect(toolGroupKey('task')).toBe('task');
   });
+
+  it('keeps the commands the user ran in a family of their own', () => {
+    // A local command never folds into the agent's shell batch: "Ran 2
+    // commands" must mean two commands the AGENT ran.
+    expect(toolGroupKey('local_shell')).toBe('user-shell');
+    expect(toolGroupKey('bash')).toBe('shell');
+  });
 });
 
 describe('isShellTool / shellCommandOf', () => {
@@ -59,6 +67,13 @@ describe('isShellTool / shellCommandOf', () => {
     expect(isShellTool('bash')).toBe(true);
     expect(isShellTool('powershell')).toBe(true);
     expect(isShellTool('read')).toBe(false);
+  });
+
+  it('tells the user\'s own commands apart from the agent\'s', () => {
+    expect(isLocalShellTool('local_shell')).toBe(true);
+    expect(isLocalShellTool('bash')).toBe(false);
+    // The body renderer is shared: a local command is a shell command too.
+    expect(isShellTool('local_shell')).toBe(true);
   });
 
   it('extracts an unclipped command', () => {
@@ -282,5 +297,41 @@ describe('rendered transcript', () => {
     expect(rendered).not.toContain('err 0\n');
     expect(strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false })))
       .toContain('[+ 13 output lines]');
+  });
+
+  it('gives the command the user ran a card of its own', () => {
+    const model = new TranscriptModel();
+    model.upsertTool('local-shell:1', 'local_shell', { command: 'git status' });
+    model.completeTool('local-shell:1', 'on branch main', false);
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    // "You ran", not "Ran": the reader must not have to guess whose command
+    // produced the output.
+    expect(rendered).toContain('You ran git status');
+    expect(rendered).not.toContain('local_shell(');
+  });
+
+  it('keeps the user\'s command out of the agent\'s shell batch', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 's1', name: 'bash', input: { command: 'a' } } });
+    model.apply({ type: 'tool_result', data: { id: 's1', result: 'ok' } });
+    model.apply({ type: 'tool_use', data: { id: 's2', name: 'bash', input: { command: 'b' } } });
+    model.apply({ type: 'tool_result', data: { id: 's2', result: 'ok' } });
+    model.upsertTool('local-shell:1', 'local_shell', { command: 'git status' });
+    model.completeTool('local-shell:1', 'on branch main', false);
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    expect(rendered).toContain('Ran 2 commands');
+    expect(rendered).toContain('You ran git status');
+  });
+
+  it('gives the command the user ran a far bigger output budget', () => {
+    const model = new TranscriptModel();
+    model.upsertTool('local-shell:1', 'local_shell', { command: 'ls' });
+    model.completeTool('local-shell:1', Array.from({ length: 60 }, (_, i) => `line ${i}`).join('\n'), false);
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    // Fifty lines, where an agent call gets five: the output is what the user
+    // asked for.
+    expect(rendered).toContain('line 48');
+    expect(rendered).toContain('… 10 lines hidden');
+    expect(rendered).not.toContain('line 50');
   });
 });

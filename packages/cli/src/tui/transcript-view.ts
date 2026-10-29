@@ -66,7 +66,10 @@ import { splitStreamCommit } from './stream-commit.js';
 import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
   formatToolResult,
+  isLocalShellTool,
   isShellTool,
+  LOCAL_SHELL_FAMILY,
+  LOCAL_SHELL_RESULT_LINES,
   selectShellOutput,
   toolGroupKey,
 } from './tool-render.js';
@@ -785,11 +788,16 @@ function shellBody(
   styles: Styles,
   indent: string,
 ): string[] {
+  // A command the user ran themselves gets a far bigger budget than an agent
+  // call: its output is what the user asked for, and codex gives its user
+  // shell cells the same headroom.
   // A failure gets double the budget: the message the reader needs is usually
   // at the end, and minimax-code's preview budget does the same.
-  const budget = block.status === 'error'
-    ? options.toolResultLines * 2
-    : options.toolResultLines;
+  const budget = isLocalShellTool(block.name)
+    ? LOCAL_SHELL_RESULT_LINES
+    : block.status === 'error'
+      ? options.toolResultLines * 2
+      : options.toolResultLines;
   const selected = selectShellOutput(result, block.status, Math.max(1, budget));
   const lines: string[] = [];
   const command = block.command;
@@ -892,6 +900,11 @@ function summarizeGroup(run: readonly Extract<Block, { kind: 'tool' }>[]): Group
   if (family === 'shell') {
     return { action: pick('Ran', 'Running'), noun: 'commands', size, failed, running };
   }
+  if (family === LOCAL_SHELL_FAMILY) {
+    // The user's own commands, not the agent's: "You ran" is the only thing
+    // that tells the two apart.
+    return { action: pick('You ran', 'Running'), noun: 'commands', size, failed, running };
+  }
   if (family === 'explore') {
     const categories = new Set(run.map((block) => exploreCategory(block.name)));
     // A mixed pass is `Explored`, never the verb of whichever call happened to
@@ -935,6 +948,14 @@ function toolNodeRow(
   // says how far the list got.
   if (isTodoTool(block.name)) {
     return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
+  }
+  // A command the USER ran is not the agent's tool call, and it says so: the
+  // reader must never have to guess whose command produced the output. The
+  // wording is codex's ("You ran"), the body is the ordinary shell body.
+  if (isLocalShellTool(block.name)) {
+    const target = block.preview === '' ? '' : ` ${escapeTags(block.preview)}`;
+    const label = `${styles.bold('You ran')}${target}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
   }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;

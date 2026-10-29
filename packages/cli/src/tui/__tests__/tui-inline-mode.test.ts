@@ -163,6 +163,36 @@ describe('inline mode', () => {
     expect(out.text()).not.toContain('┌');
   });
 
+  it('paints the shell prompt red when the draft runs a command', async () => {
+    const { app, out, input } = makeApp({ inline: true });
+    app.start();
+    await settleRendered();
+    // Raw bytes, the way a terminal sends them.
+    input.write('!');
+    await settleRendered();
+    input.write('echo hi');
+    await settleRendered();
+    app.stop();
+    // The bang is the prompt now, and it is RED: the reader must see that the
+    // draft runs on their machine instead of going to the model. The colour
+    // is asserted as terminal bytes, because that is what reaches the screen.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!\x1b\[m echo hi/u);
+  });
+
+  it('keeps the double bang visible as a red prompt', async () => {
+    const { app, out, input } = makeApp({ inline: true });
+    app.start();
+    await settleRendered();
+    input.write('!');
+    await settleRendered();
+    input.write('!');
+    await settleRendered();
+    app.stop();
+    // `!!` opts the run out of the next message's context, and the prompt says
+    // so: both bangs are drawn, in red.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!!\x1b\[m/u);
+  });
+
   it('lists pending drafts above the composer, one row each and three at most', async () => {
     const out = sink();
     const drafts = [

@@ -212,6 +212,40 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
+  it('gives the command the user ran a card of its own', async () => {
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({ output: out.stream, input: stdin, onSubmit: () => {} });
+    app.start();
+    await settle();
+    // The same call the `!` submit path makes.
+    const callId = app.beginLocalShell('git status');
+    app.finishLocalShell(callId, 'on branch main', false);
+    await settleRendered();
+    // "You ran", not the agent's `bash(...)`: the reader must see whose
+    // command produced the output.
+    expect(out.text()).toContain('You ran');
+    expect(out.text()).toContain('git status');
+    app.stop();
+  });
+
+  it('paints the shell prompt red in full-screen mode too', async () => {
+    const out = sink();
+    const stdin = input();
+    const app = new TUIApp({ output: out.stream, input: stdin, onSubmit: () => {} });
+    app.start();
+    await settle();
+    stdin.write('!');
+    await settleRendered();
+    stdin.write('echo hi');
+    await settleRendered();
+    app.stop();
+    // The full-screen composer paints its body without the rules, so the
+    // prompt row is a different row than in inline mode. The colour is the
+    // same fact either way.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!/u);
+  });
+
   // The user-visible half of the keymap validator. `interrupt` is dispatched
   // by fixed routing, so this override reaches the help window and nowhere
   // else: the panel would claim Ctrl+X while Ctrl+C still interrupts. The
