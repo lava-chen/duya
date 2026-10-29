@@ -27,6 +27,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { createAIClient } from '@duya/ai';
+import type { ModelFrame } from '@duya/agent-runtime';
 import { createClientModelPort, toModelFrame } from '../src/run-engine-model.js';
 
 const servers: Server[] = [];
@@ -117,5 +118,44 @@ describe('the model port: a real provider call carries its own duration', () => 
     // The endpoint waited before answering, and the duration covers that
     // wait: this is the provider's time, not the consumer's.
     expect(usages[0]?.requestDurationMs).toBeGreaterThanOrEqual(70);
+  });
+});
+
+
+describe('model port tool calls wait for a non-truncated response', () => {
+  it.each(['max_tokens', 'tool_use', 'missing'])('handles stop_reason=%s before dispatching a parsed call', async (stopReason) => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        const events = [
+          { type: 'message_start', message: { id: 'tool-message', usage: { input_tokens: 1, output_tokens: 0 } } },
+          { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'clipped-call', name: 'write', input: {} } },
+          { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"path":"file.txt"}' } },
+          { type: 'content_block_stop', index: 0 },
+          { type: 'message_delta', delta: { stop_reason: stopReason }, usage: { output_tokens: 4096 } },
+          { type: 'message_stop' },
+        ];
+        for (const event of stopReason === 'missing' ? events.slice(0, -2) : events) {
+          res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        res.end();
+      });
+    });
+    servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const client = createAIClient({ apiKey: 'test', baseURL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, model: 'test', apiFormat: 'anthropic', providerId: 'test' });
+    const frames: ModelFrame[] = [];
+    const collect = async () => {
+      for await (const frame of createClientModelPort(client).stream({ systemPrompt: '', messages: [{ role: 'user', content: 'write' }], tools: [] }, new AbortController().signal)) frames.push(frame);
+    };
+    if (stopReason === 'missing') {
+      await expect(collect()).rejects.toThrow('before confirming tool-call completion');
+      expect(frames.some(frame => frame.type === 'tool_use')).toBe(false);
+      return;
+    }
+    await collect();
+    expect(frames.filter(frame => frame.type === 'tool_use')).toHaveLength(stopReason === 'max_tokens' ? 0 : 1);
+    expect(frames.at(-1)).toMatchObject({ type: 'turn_stopped', reason: stopReason });
   });
 });

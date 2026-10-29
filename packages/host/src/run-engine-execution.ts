@@ -34,6 +34,7 @@ export async function executeRunEngine(
     manifest: options.manifest,
     input: options.input,
     signal: options.signal,
+    maxOutputRecoveries: 3,
     ports: options.ports,
   });
 

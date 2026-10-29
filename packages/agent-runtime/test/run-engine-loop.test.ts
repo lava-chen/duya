@@ -368,7 +368,7 @@ function engineWith(clock: { now: () => number }, maxTurns?: number): RunEngineI
 async function run(
   engine: RunEngineImpl,
   h: Harness,
-  options: { signal?: AbortSignal; manifest?: RunManifest; input?: RunInputSnapshot } = {},
+  options: { signal?: AbortSignal; manifest?: RunManifest; input?: RunInputSnapshot; maxOutputRecoveries?: number } = {},
 ): Promise<void> {
   const controller = new AbortController();
   const handle = engine.execute({
@@ -376,6 +376,7 @@ async function run(
     input: options.input ?? inputFor(),
     signal: options.signal ?? controller.signal,
     ports: h.ports,
+    ...(options.maxOutputRecoveries === undefined ? {} : { maxOutputRecoveries: options.maxOutputRecoveries }),
   });
   await handle.completed();
 }
@@ -693,6 +694,8 @@ describe('cancellation reaches the engine', () => {
     const controller = new AbortController();
     /** Signals the PORTS received, observed from inside the port itself. */
     const portSignals: AbortSignal[] = [];
+    let markOpened!: () => void;
+    const opened = new Promise<void>(resolve => { markOpened = resolve; });
     const h = harness({ turns: [{ frames: [{ type: 'text', text: 'hi' }] }] });
     const clock = fakeClock();
 
@@ -702,6 +705,7 @@ describe('cancellation reaches the engine', () => {
     // abort issued afterwards would prove nothing about propagation.
     h.ports.model.stream = (async function* (_request: ModelRequest, signal: AbortSignal) {
       portSignals.push(signal);
+      markOpened();
       await new Promise<void>((resolve) => {
         if (signal.aborted) resolve();
         else signal.addEventListener('abort', () => resolve(), { once: true });
@@ -715,8 +719,8 @@ describe('cancellation reaches the engine', () => {
       signal: controller.signal,
       ports: h.ports,
     });
-    // Give the stream a turn of the event loop to register its listener.
-    await Promise.resolve();
+    // Synchronize with the port, not a guessed number of assembly microtasks.
+    await opened;
     controller.abort(new Error('caller stopped the run'));
     await handle.completed();
 
@@ -1132,5 +1136,57 @@ describe('the prompt reaches the model exactly once', () => {
     // engine still has to carry the question itself -- at the end of the
     // conversation, which is where the host's own copy would have been.
     expect(sent.map((m) => m.id)).toEqual(['other-row', 'p1']);
+  });
+});
+
+
+describe('output truncation is unfinished work', () => {
+  const truncated: ScriptedTurn = {
+    endsOpen: true,
+    frames: [{ type: 'thinking', text: 'unfinished reasoning' }, { type: 'turn_stopped', reason: 'max_tokens' }],
+  };
+
+  it('continues a thinking-only truncation without another user submission', async () => {
+    const h = harness({ turns: [truncated, { frames: [{ type: 'text', text: 'finished answer' }] }] });
+    await run(engineWith(fakeClock()), h, { maxOutputRecoveries: 3 });
+    expect(h.sentMessages).toHaveLength(2);
+    expect(h.sentMessages[1]).toContainEqual(expect.objectContaining({ role: 'user', content: expect.stringContaining('previous response reached its output token limit') }));
+    expect(h.events.filter(e => e.type === 'turn.completed').map(e => e.stopReason)).toEqual(['length', 'end_turn']);
+    expect(h.terminals.at(-1)?.state.status).toBe('completed');
+  });
+
+  it('bounds repeated truncation and reports failure instead of silent success', async () => {
+    const h = harness({ turns: [truncated, truncated, truncated, truncated] });
+    await run(engineWith(fakeClock()), h, { maxOutputRecoveries: 3 });
+    expect(h.sentMessages).toHaveLength(4);
+    expect(h.terminals.at(-1)).toMatchObject({ state: { status: 'failed', error: { message: expect.stringContaining('output token limit') } } });
+  });
+
+  it('fails visibly when no recovery policy was supplied or the turn ceiling is reached', async () => {
+    for (const maxOutputRecoveries of [undefined, 3]) {
+      const h = harness({ turns: [truncated] });
+      await run(engineWith(fakeClock(), maxOutputRecoveries === undefined ? undefined : 1), h, maxOutputRecoveries === undefined ? {} : { maxOutputRecoveries });
+      expect(h.sentMessages).toHaveLength(1);
+      expect(h.terminals.at(-1)?.state.status).toBe('failed');
+    }
+  });
+
+  it('also continues a partially visible answer but never continues a normal end_turn', async () => {
+    const h = harness({ turns: [
+      { endsOpen: true, frames: [{ type: 'text', text: 'part one' }, { type: 'turn_stopped', reason: 'max_tokens' }] },
+      { frames: [{ type: 'text', text: 'part two' }] },
+    ] });
+    await run(engineWith(fakeClock()), h, { maxOutputRecoveries: 3 });
+    expect(h.sentMessages).toHaveLength(2);
+    expect(h.terminals.at(-1)?.state.status).toBe('completed');
+  });
+
+  it('honors cancellation before opening the recovery request', async () => {
+    const controller = new AbortController();
+    let assemblies = 0;
+    const h = harness({ turns: [truncated], onAssemble: () => { if (++assemblies === 2) controller.abort(); } });
+    await run(engineWith(fakeClock()), h, { signal: controller.signal, maxOutputRecoveries: 3 });
+    expect(h.sentMessages).toHaveLength(1);
+    expect(h.terminals.at(-1)?.state.status).toBe('cancelled');
   });
 });
