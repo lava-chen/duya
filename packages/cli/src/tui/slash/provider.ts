@@ -223,7 +223,7 @@ async function writeProvider(
 
 /** Walk the questions a new provider needs, then save and probe it. */
 async function addProvider(ctx: TuiSlashContext, list: HostProviderList): Promise<void> {
-  const promptText = ctx.tui.promptText;
+  const promptText = ctx.tui.promptText?.bind(ctx.tui);
   if (promptText === undefined) {
     ctx.tui.printError('This terminal cannot prompt for provider details.');
     return;
@@ -302,7 +302,7 @@ async function changeProvider(
   list: HostProviderList,
   detail: HostProviderDetail,
 ): Promise<void> {
-  const promptText = ctx.tui.promptText;
+  const promptText = ctx.tui.promptText?.bind(ctx.tui);
   if (promptText === undefined) {
     ctx.tui.printError('This terminal cannot prompt for provider details.');
     return;
