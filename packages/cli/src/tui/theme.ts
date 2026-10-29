@@ -224,6 +224,19 @@ export function effortBorderTag(level: EffortLevel, theme: ThemeName): string {
   return EFFORT_BORDER_TAGS[theme][level];
 }
 
+/**
+ * Wrap text in a theme token's colour.
+ *
+ * The renderer vocabulary is the same blessed-style tag pair everywhere, so a
+ * token can be applied from anywhere that holds a palette — the footer, the
+ * composer border, the status line — without each call site rebuilding the
+ * braces.
+ */
+export function taggedWith(tags: ThemeTags, token: ThemeToken, text: string): string {
+  const tag = tags[token];
+  return `{${tag}}${text}{/${tag}}`;
+}
+
 /** Blessed border colour name for the full-screen composer at this effort. */
 export function effortBorderColor(level: EffortLevel): string {
   return EFFORT_BORDER_NAMES[level];

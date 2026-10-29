@@ -78,7 +78,7 @@ import { buildComposerLayout } from './composer-layout.js';
 import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
 import { shellDraftOf } from './shell-command.js';
 import { LOCAL_SHELL_TOOL } from './tool-render.js';
-import { wrapWithCursor, type WrappedText } from './width.js';
+import { visibleWidth, wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import {
   RichPanelController,
@@ -90,9 +90,15 @@ import {
 } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, type EffortLevel } from './theme.js';
+import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
 import { compactActivity } from './text.js';
 import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer.js';
+import {
+  nextPermissionMode,
+  permissionBadge,
+  type PermissionBadge,
+  type TuiPermissionMode,
+} from './permission-mode.js';
 import { resolveStatusLabel } from './status-label.js';
 import { detectTerminalEnvironment, type TerminalEnvironment } from './terminal-env.js';
 import {
@@ -454,6 +460,26 @@ export interface TUIAppOptions {  /** Window title. */
    * and calls `showPanel`; the TUI only knows what it has already seen.
    */
   readonly onBackgroundTaskOpen?: (task: BackgroundTaskView) => void;
+  /**
+   * The permission mode in force, read fresh on every repaint.
+   *
+   * A callback, not a value, for the same reason the effort level is one: the
+   * mode changes while the app runs — through `/permission`, through the
+   * Desktop, or through the cycling key below — and the badge has to show
+   * what is in force now rather than what was in force at startup.
+   *
+   * Null means "this surface does not track a permission mode", and the badge
+   * is then not drawn at all.
+   */
+  readonly permissionMode?: () => TuiPermissionMode | null;
+  /**
+   * Apply the next permission mode.
+   *
+   * The TUI knows WHICH mode comes next; the loop knows how to make it so,
+   * because the mode is a property of the session the Host stores. So the
+   * cycling key asks for a mode and the loop writes it.
+   */
+  readonly onPermissionCycle?: (mode: TuiPermissionMode) => void;
 }
 
 /**
@@ -724,6 +750,16 @@ export class TUIApp {
    * decided elsewhere (a Desktop-scheduled run, a default in the worker).
    */
   private runEffort: string | null = null;
+
+  /**
+   * A permission mode that was asked for but not confirmed.
+   *
+   * `bypass` gives the agent everything, so it takes a second press of the
+   * cycling key — the same staged answer a destructive allow takes. `from` is
+   * the mode the request was made from: if the mode changed since then the
+   * request is stale, and the badge stops claiming a confirmation is pending.
+   */
+  private permissionPending: { readonly mode: TuiPermissionMode; readonly from: TuiPermissionMode } | null = null;
 
   /** Rows currently visible in the input box, for cursor clamping. */
   private inputRows = 1;
@@ -2130,8 +2166,20 @@ export class TUIApp {
       subagentRunning: counts.subagentRunning,
       totalTasks: counts.backgroundSummaryTotal,
     }) + tail + usage + queueSegment + ' · ' + context;
+    // The permission badge rides the END of the status row, the way the
+    // inline footer puts it at the end of its second row: the bottom-right
+    // corner is where the session's standing state is shown. It is a separate
+    // segment rather than part of the activity text, because it carries its
+    // own colour — red for the mode that gives the agent everything.
+    const badge = this.permissionBadge();
+    const badgePlain = badge === null ? '' : `${badge.plain}${badge.hint}`;
+    const badgeWidth = badge === null ? 0 : visibleWidth(badgePlain) + 1;
+    const activity = '{gray-fg}' + escapeTags(compactActivity(fixed, Math.max(1, width - badgeWidth))) + '{/gray-fg}';
+    const badgeTagged = badge === null
+      ? ''
+      : ' ' + taggedWith(this.theme.tags, badge.token, escapeTags(badgePlain));
     this.fullScreen.update('status', {
-      lines: ['{gray-fg}' + escapeTags(compactActivity(fixed, width)) + '{/gray-fg}'],
+      lines: [activity + badgeTagged],
     });
   }
 
@@ -2174,7 +2222,54 @@ export class TUIApp {
       model: this.options.modelLabel?.() ?? null,
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
+      permission: this.permissionBadge(),
     });
+  }
+
+  /**
+   * The permission badge, or null when this surface does not track a mode.
+   *
+   * A pending `bypass` shows what the second press will do rather than
+   * claiming a mode that is not in force yet.
+   */
+  private permissionBadge(): PermissionBadge | null {
+    const mode = this.options.permissionMode?.() ?? null;
+    if (mode === null) return null;
+    const pending = this.permissionPending;
+    const staged = pending !== null && pending.from === mode && pending.mode === 'bypass';
+    return permissionBadge(mode, staged);
+  }
+
+  /**
+   * Move to the next permission mode.
+   *
+   * `bypass` gives the agent the whole machine, so it takes two presses: the
+   * first stages it and the badge says so, the second confirms it. Every
+   * other mode takes one press, because a mode that asks more of the user than
+   * the one already in force cannot be reached by accident.
+   */
+  private cyclePermissionMode(): void {
+    if (this.options.onPermissionCycle === undefined) return;
+    if (this.interactivePrompt !== null || this.overlay.isActive) return;
+    const current = this.options.permissionMode?.() ?? null;
+    if (current === null) return;
+
+    const next = nextPermissionMode(current);
+    const pending = this.permissionPending;
+    if (next === 'bypass') {
+      if (pending !== null && pending.from === current && pending.mode === 'bypass') {
+        this.permissionPending = null;
+        this.options.onPermissionCycle('bypass');
+        this.scheduler.requestImmediate();
+        return;
+      }
+      this.permissionPending = { mode: 'bypass', from: current };
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.permissionPending = null;
+    this.options.onPermissionCycle(next);
+    this.scheduler.requestImmediate();
   }
 
   /** The branch for `cwd`, cached for `GIT_BRANCH_TTL_MS`. */
@@ -3407,13 +3502,19 @@ exportHistory(): string[] {
     // Shift+Tab is the panel's step-back chord (630a), so it is NOT one of the
     // CONTENDED names the popup contends with: plain `tab` is, and blessed
     // reports the shifted form under its own full name (`S-tab`, from
-    // `keys.js:302`), which nothing else binds. Outside a panel the handler
-    // does nothing and the text path still swallows the key by name length, so
-    // the editor is left exactly where it was.
+    // `keys.js:302`), which nothing else binds.
+    //
+    // Outside a panel the same chord cycles the permission mode, which is
+    // where a user expects to find it: the badge that names the mode sits
+    // under the composer and names this key. A window still owns the screen
+    // while it is open, so the cycle waits for it to close.
     this.bindKey(['S-tab'], () => {
-      if (!this.windowMgr.isActive) return;
-      this.windowMgr.handleKey('S-tab', { shift: true });
-      this.scheduler.requestImmediate();
+      if (this.windowMgr.isActive) {
+        this.windowMgr.handleKey('S-tab', { shift: true });
+        this.scheduler.requestImmediate();
+        return;
+      }
+      this.cyclePermissionMode();
     });
 
     // PgUp/PgDn page the transcript in full-screen mode only. Inline mode has
