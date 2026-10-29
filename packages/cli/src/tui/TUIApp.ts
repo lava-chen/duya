@@ -78,7 +78,7 @@ import { buildComposerLayout } from './composer-layout.js';
 import { paintComposerRow, NO_SHELL_PROMPT, type ShellPrompt } from './composer-paint.js';
 import { shellDraftOf } from './shell-command.js';
 import { LOCAL_SHELL_TOOL } from './tool-render.js';
-import { visibleWidth, wrapWithCursor, type WrappedText } from './width.js';
+import { truncateToWidth, visibleWidth, wrapWithCursor, type WrappedText } from './width.js';
 import { CompletionController, type CompletionKey, type CompletionSources } from './completion.js';
 import {
   RichPanelController,
@@ -2073,13 +2073,28 @@ export class TUIApp {
     );
 
     const rows: string[] = [];
+    const width = this.completionRowWidth();
     for (let i = first; i < first + visible; i += 1) {
       const entry = state.items[i];
       if (entry === undefined) continue;
       const selected = i === state.selectedIndex;
       const marker = selected ? '❯' : ' ';
-      const description = entry.description === '' ? '' : `  {gray-fg}${entry.description}{/gray-fg}`;
-      const line = `${marker} ${entry.label}${description}`;
+      const head = `${marker} ${entry.label}`;
+      // The description is TRUNCATED, never wrapped.
+      //
+      // A chrome line is ONE terminal row: the inline surface writes the chrome
+      // as it is and counts the array's length as the frame's height, so a line
+      // wider than the terminal is wrapped by the TERMINAL — the frame grows
+      // past the space it reserved, the popup's border lands on the footer and
+      // its last candidates fall off the bottom of the screen.
+      //
+      // Every other piece of chrome already clips to the width for the same
+      // reason (see `footer.ts`); the popup was the one that did not.
+      const room = width - visibleWidth(head) - 2;
+      const description = entry.description === undefined || entry.description === '' || room <= 0
+        ? ''
+        : truncateToWidth(entry.description, room);
+      const line = description === '' ? head : `${head}  {gray-fg}${description}{/gray-fg}`;
       rows.push(selected ? `{cyan-fg}${line}{/cyan-fg}` : line);
     }
 
@@ -2101,6 +2116,27 @@ export class TUIApp {
       lines: rows,
       hidden: false,
     });
+  }
+
+  /**
+   * The columns one completion row may use.
+   *
+   * The full-screen popup is a box, so the width it can use is the box's inner
+   * width. The inline popup is chrome written straight to the terminal, where
+   * one column is left spare: a line that exactly fills the width is the case
+   * that wraps (see the footer, which clips to the same width for the same
+   * reason).
+   */
+  private completionRowWidth(): number {
+    if (this.inlineSurface === null) {
+      const measured = this.fullScreen.measure('completion');
+      // `innerWidth` is what the BORDER costs (blessed's `iwidth`), so the
+      // content width is the outer width minus it.
+      if (measured !== null && measured.width > measured.innerWidth) {
+        return measured.width - measured.innerWidth;
+      }
+    }
+    return Math.max(1, this.terminalSize().columns - 1);
   }
 
   /** Total rows the input box occupies, borders included. */

@@ -58,6 +58,7 @@
 | 插件 App 主题通道 | [2026-10-27 插件 App 主题通道](active/2026-10-27-plugin-app-theme-channel.md) | 宿主向沙箱 iframe 推 `data-theme`；插件侧 token 层在 marketplace PR，两者需成对生效 |
 | TUI 本地 shell UI | [2026-10-28 TUI 本地 shell 命令的专属 UI](archive/2026-10-28-tui-shell-command-ui.md) | composer 红色 `!` 提示符 + 本地命令 "You ran" 独立卡片；PR #533 已合并（`bd526d3b`），真机冒烟待用户 |
 | TUI 权限 banner | [2026-10-29 TUI 权限 banner 与 Shift+Tab 快速切换](archive/2026-10-29-tui-permission-banner.md) | footer 右下角权限徽标 + Shift+Tab 循环（bypass 二次确认）；PR #538 已合并（`73710504`），真机冒烟待用户 |
+| TUI 补全弹窗行宽 | [2026-10-29 TUI 补全弹窗的行宽](active/2026-10-29-tui-popup-row-width.md) | 候选描述截断而非折行，弹窗不再比预留高、最后一个候选重新可见；修 #531 带进 master 的既有红用例 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 
