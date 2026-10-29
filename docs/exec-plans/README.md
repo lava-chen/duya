@@ -11,7 +11,7 @@
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
 | 面板实现统一 | [2026-10-25 面板实现统一](active/2026-10-25-panel-implementation-unification.md) | preview 页与手写 hunk 渲染已删（净 −2099 行）；PR #486 已合并，e2e 已补，真机冒烟待用户 |
 | 下一步建议下沉 | [2026-10-25 下一步建议下沉到 worker/Host](active/2026-10-25-next-step-suggestion-host.md) | S0 摸底完成；S1 起做 protocol + data 契约与表；PR #496 已合并 |
-| TUI 下一步建议采纳 | [2026-10-28 TUI 建议采纳与会话边界](active/2026-10-28-tui-turn-suggestion-adopt-and-reset.md) | 空输入按 Enter 采纳建议填入输入框；换会话清空旧建议；门禁与 PR 待做 |
+| TUI 下一步建议采纳 | [2026-10-28 TUI 建议采纳与会话边界](active/2026-10-28-tui-turn-suggestion-adopt-and-reset.md) | 空输入按 Enter 采纳建议填入输入框；换会话清空旧建议；PR #532 已合并（`356d0370`），真机冒烟待用户 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
 | 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0–S6-A 已合并（#495、#521）；S7 旧路径退役另立切片 |

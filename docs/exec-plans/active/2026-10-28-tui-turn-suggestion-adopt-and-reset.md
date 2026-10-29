@@ -1,8 +1,8 @@
 # TUI 下一步建议：能真正填入输入框，且换会话不留旧建议
 
-状态：active · 负责人：claude-code 会话 · 更新：2026-10-28
-分支：`worktree-tui-turn-suggestion-fix` · worktree：`E:/Projects/duya/.claude/worktrees/tui-turn-suggestion-fix` · base：`220a63ff`（master） · owner：claude-code 会话 · PR：待建
-提交：`9fd12f60` fix(cli): adopt the turn suggestion on enter · `a5a100b2` fix(cli): retire the turn suggestion at a session boundary
+状态：active（功能已合并 master；剩真机冒烟待用户） · 负责人：claude-code 会话 · 更新：2026-10-28
+分支：`codex/tui-turn-suggestion-landing`（落地记录） · worktree：`E:/Projects/duya/.claude/worktrees/tui-turn-suggestion-fix` · base：`356d0370`（已合并 master） · owner：claude-code 会话 · PR：#532 已合并
+提交：`9fd12f60` fix(cli): adopt the turn suggestion on enter · `a5a100b2` fix(cli): retire the turn suggestion at a session boundary · `e52598e9` / `474f513a` 计划记录
 
 ## 目标与边界
 
@@ -53,18 +53,22 @@
 | `9fd12f60` + `a5a100b2` | 同上 | `npx vitest run packages/cli/src` | 0：119 files / 1389 tests passed，无回归 | — |
 | 同上 | 同上 | `npm run typecheck:all` | 0：typecheck-electron-gate 无新增类型错误；末位 `eval:agent:core:check` 4 pass | — |
 | 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规（2985 条均为既有 baseline） | — |
+| `356d0370`（合并后的 master tree） | 同上 | `git diff --stat 474f513a 356d0370` | 0：两棵树 blob 哈希同为 `8aef3ec2`，合并结果与上面验证过的 tree 逐字节相同 | — |
+| 同上 | 同上 | `npx vitest run packages/cli/src` | 0：119 files / 1389 tests passed（合并后重验） | — |
+| 同上 | 同上 | `npm run typecheck:all` | 0 | — |
+| 同上 | 同上 | `npm run architecture:check` | 0：无新增边界违规 | — |
 
 已知副作用：`npm run build:packages` 触碰了 `packages/capabilities/src/ModuleTool/inline-content.ts` 的 mtime，git 报 `M`，但 `git diff --exit-code` 为 0、blob 哈希与 HEAD 相同（LF/CRLF 检出噪声），未纳入任何提交。
 
 ## 接续 / 结果
 
-- 已实现：S0–S3 完成；S4 的门禁已跑完并通过。
-- 已验证：新增用例 8 条全过且**反向验证确认修复前会红**；`packages/cli/src` 全量 1389 条无回归；typecheck:all 与 architecture:check 退出码 0。
+- 已实现：S0–S4 完成（实现 + 门禁 + 提交 + 集成）。
+- 已验证：新增用例 8 条全过且**反向验证确认修复前会红**；`packages/cli/src` 全量 1389 条无回归；typecheck:all 与 architecture:check 退出码 0；合并后重验同样全过，且合并 tree 与被验证 tree 逐字节相同（`8aef3ec2`）。
 - 未验证：真机（TUI 实跑一轮对话看灰字建议 → Enter 采纳 → `/new` 后不残留）未跑，需用户确认。
-- PR：[#532 fix(cli): make the TUI turn suggestion adoptable and session-scoped](https://github.com/lava-chen/duya/pull/532)（目标 master，head `e52598e9`）。
+- PR：[#532 fix(cli): make the TUI turn suggestion adoptable and session-scoped](https://github.com/lava-chen/duya/pull/532) —— **已合并**（用户授权，2026-10-28），merge commit `356d0370`，CI 5 job 全绿。
 - 阻塞：无。
-- 下一步：等 review 与 CI；真机冒烟由用户补（TUI 实跑一轮对话看灰字建议 → Enter 采纳 → `/new` 后不残留）。**未经用户授权不合并。**
+- 下一步：真机冒烟由用户补（TUI 实跑一轮对话看灰字建议 → Enter 采纳 → `/new` 后不残留）。功能本身已集成 master，无待办。
 
-回收：未回收（PR 未集成）。
+回收：worktree `tui-turn-suggestion-fix` 的成果已由 `356d0370` 到达 master；分支保留（`origin/worktree-tui-turn-suggestion-fix`），worktree 待 owner 会话退出后回收。
 
 
