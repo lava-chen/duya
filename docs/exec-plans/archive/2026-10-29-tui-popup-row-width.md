@@ -1,8 +1,8 @@
 # TUI 补全弹窗的行宽：描述截断而不是让终端折行
 
-状态：implemented · 负责人：claude-desktop-code · 更新：2026-10-29
+状态：complete · 负责人：claude-desktop-code · 更新：2026-10-29
 分支：fix/tui-popup-row-width · worktree：E:\Projects\duya\.claude\worktrees\tui-permission-banner · base：d609bec3 · owner：claude-desktop-code
-集成：未开 PR（等 CI 通过后开）。
+集成：PR #542 由 `lava-chen` 以 merge commit `c8b47c3f` 合入 master（2026-10-29T06:23:22Z）。真 PTY 用例在 CI 上不跑（需要真 TTY），合并后由本地 `npx vitest run packages/cli` 复验。
 
 ## 目标与边界
 
@@ -32,7 +32,7 @@ expected ' ❯ /r │ /clear Clear the conversation…' to contain '/export'
 - [x] 修复：弹窗行按宽度截断描述
 - [x] 补单测 + 变异验证
 - [x] 门禁（typecheck:all / architecture:check / vitest）
-- [ ] PR + 合并
+- [x] PR + 合并（PR #542，merge commit `c8b47c3f`）
 
 ## 发现与决策
 
