@@ -24,7 +24,8 @@ The initial local audit is in docs-local/research/tui-stall-2026-10-29. Three Mi
 - [x] Compare locally cloned harness implementations and record source provenance.
 - [x] Record test baseline; implement budget propagation and bounded truncation handling.
 - [x] Validate production chain and repository gates.
-- [ ] Commit, draft PR, review/CI and handoff.
+- [x] Commit, publish draft PR and record handoff.
+- [ ] Required PR review and CI at the latest head; integration remains unauthorized.
 
 ## Decisions and evidence
 
@@ -64,4 +65,11 @@ No UI component changed: existing assistant.status and run.failed channels carry
 
 Bundle freshness checks are Git-history-based: before committing, the check correctly reports edited inputs after the old bundle commit even though the bundle has just been rebuilt. Re-run after committing source and generated output together. Build-only EOL changes in inline-content.ts, BashWorker.js and bundle/package.json have identical normalized Git blobs; restore only these known generated changes before commit. The generated minified bundle has inherited template-literal trailing spaces; no source whitespace errors were introduced.
 
-Remaining steps: commit source+bundle, verify freshness at that SHA, publish draft PR and inspect its CI. Keep the managed worktree until integration and post-merge verification; no merge authorized.
+Implementation commit: eef4743a37d0750cee72839f3f9747d15bd77266.
+PR: [#536](https://github.com/lava-chen/duya/pull/536), draft, branch codex/tui-output-truncation-recovery.
+
+Post-commit verification at eef4743a: bundle:verify exit 0 (FRESH, 0/1016 first-party inputs changed); the 4 core/runtime/provider/budget suites pass again, 44 tests, exit 0. Working tree was clean before this documentation handoff update. Final typecheck:all and architecture:check both exited 0; broad regression was 41 suites / 282 tests.
+
+CI began on eef4743a (architecture and test scope running); required review has not been recorded. No merge or live deployment performed. The Host already running from the user's main checkout still uses its loaded code; using the fix requires integration, updating the runnable build, and starting a new Host/worker.
+
+Next action: inspect the latest PR head's review/CI; resolve any failures, then wait for integration authorization. Keep the managed worktree and local audit materials until integration and post-merge verification. The workspace tool cannot archive this chat's primary checkout; do not manually remove it.
