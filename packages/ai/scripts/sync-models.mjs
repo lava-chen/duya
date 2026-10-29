@@ -27,20 +27,44 @@
  * model and survive every refresh. A refresh may add, drop or re-price
  * models; it never edits a thinking ladder or a wire-compat flag.
  *
+ * Discovery vs. admission: every section scans its FULL upstream catalogue,
+ * not just the ids already checked in. A new id is written only when it
+ * passes the admission rules below (chat/tool-capable, recent, allowed
+ * family); everything else upstream offers is reported as "held" with a
+ * reason. Checked-in ids are never dropped for age — only when upstream stops
+ * serving them (or an `exclude` rule matches).
+ *
+ * Admission rules for a new model (defaults for every section):
+ *   - `tool_call === true`
+ *   - `modalities.output` contains `text` and no audio/image/video
+ *   - `modalities.input` contains `text`
+ *   - not matched by the section's `exclude`
+ *   - `release_date` within RECENT_DAYS (default 45)
+ *   - section `admitFamilies` (regex list) matches models.dev `family`
+ *   - section `autoAdd: false` keeps the section report-only
+ *
  * Modes:
  *   (default)   report — print upstream vs. checked-in deltas (no writes)
+ *   --discover  explicit report-only mode (no writes)
  *   --diff      report + field-level changes for ids present on both sides
- *   --write     write: replace each shard with the upstream selection
+ *   --write     write: admitted new ids + checked-in ids upstream still serves
  *   --merge     write: refresh known ids, keep checked-in ids upstream dropped
  *   --only=a,b  restrict to a comma-separated shard subset
+ *   --report=p  write a Chinese Markdown discovery report to `p`
+ *
+ * Test injection:
+ *   SYNC_MODELS_FIXTURE_DIR  read modelsdev.json / openrouter.json from a dir
+ *   SYNC_MODELS_TODAY        override "today" (ISO date)
+ *   SYNC_MODELS_RECENT_DAYS  override the admission window (default 45)
  *
  * Run:
  *   node packages/ai/scripts/sync-models.mjs
  *   node packages/ai/scripts/sync-models.mjs --diff --only=anthropic
+ *   node packages/ai/scripts/sync-models.mjs --write --report=/tmp/report.md
  *   npm run sync:models -w @duya/ai -- --write
  */
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -272,6 +296,9 @@ const SHARDS = [
         source: 'modelsdev',
         group: 'google',
         include: GOOGLE_IDS,
+        // The Google group also lists non-Gemini entries; only the Gemini
+        // family is a chat model duya offers.
+        admitFamilies: [/^gemini/],
         thinking: THINKING_ANTHROPIC,
       },
     ],
@@ -505,6 +532,9 @@ const SHARDS = [
         group: 'alibaba-coding-plan',
         include: BAILIAN_IDS,
         fallbackGroup: ['alibaba-cn', 'alibaba'],
+        // The plan also resells GLM / Kimi / MiniMax; those are described by
+        // their own shards, so only the Qwen family is admitted here.
+        admitFamilies: [/^qwen/],
         thinking: THINKING_ANTHROPIC_MAX,
       },
     ],
@@ -548,6 +578,9 @@ const SHARDS = [
         source: 'modelsdev',
         group: 'amazon-bedrock',
         include: BEDROCK_IDS,
+        // Region-routed aliases (us.*, eu.*, global.*, ...) are the same model
+        // as the unprefixed id; only the unprefixed ids belong in the shard.
+        exclude: [/^(?:us|eu|apac|jp|ca|in|au|global|us-gov)\./],
         thinking: THINKING_ANTHROPIC_MAX,
       },
     ],
@@ -572,6 +605,9 @@ const SHARDS = [
         baseUrl: 'https://openrouter.ai/api/v1',
         source: 'openrouter',
         include: OPENROUTER_IDS,
+        // The runtime fetches the full OpenRouter catalogue, so this shard is
+        // an offline seed only: discovery reports new ids but never writes them.
+        autoAdd: false,
       },
     ],
   },
@@ -581,13 +617,31 @@ const args = process.argv.slice(2);
 const has = (flag) => args.includes(flag);
 const valueOf = (flag) => args.find((a) => a.startsWith(`${flag}=`))?.slice(flag.length + 1);
 
-const MODE = has('--write') ? 'write' : has('--merge') ? 'merge' : has('--diff') ? 'diff' : 'report';
+const MODE = has('--discover')
+  ? 'report'
+  : has('--write')
+    ? 'write'
+    : has('--merge')
+      ? 'merge'
+      : has('--diff')
+        ? 'diff'
+        : 'report';
 const only = new Set(
   (valueOf('--only') ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean),
 );
+const reportPath = valueOf('--report');
+
+// Test / offline knobs. The fixture directory replaces both network fetches;
+// TODAY and RECENT_DAYS make the admission window deterministic.
+const FIXTURE_DIR = process.env.SYNC_MODELS_FIXTURE_DIR || undefined;
+const TODAY = process.env.SYNC_MODELS_TODAY || new Date().toISOString().slice(0, 10);
+const RECENT_DAYS =
+  Number(process.env.SYNC_MODELS_RECENT_DAYS) > 0
+    ? Number(process.env.SYNC_MODELS_RECENT_DAYS)
+    : 45;
 
 const round6 = (value) => Number(Number(value || 0).toFixed(6));
 
@@ -623,12 +677,99 @@ function compareIds(a, b) {
   return a < b ? -1 : 1;
 }
 
-function matchesFilters(id, section) {
-  if (section.include && !section.include.includes(id)) return false;
+/**
+ * Whether the section's exclude rules drop this id.
+ *
+ * `include` is no longer a selection gate: discovery scans the whole upstream
+ * group, and an include entry only pins an id for the "missing upstream"
+ * report (and, for plan shards, lets it resolve through a fallback group).
+ */
+function excludedBySection(id, section) {
   for (const pattern of section.exclude ?? []) {
-    if (typeof pattern === 'string' ? id === pattern : pattern.test(id)) return false;
+    if (typeof pattern === 'string' ? id === pattern : pattern.test(id)) return true;
   }
-  return true;
+  return false;
+}
+
+/** Human-readable labels for the discovery report. */
+const HELD_REASON_LABELS = {
+  no_tool_call: '不支持 tool_call',
+  non_chat_output: '输出不是纯文本',
+  no_text_input: '输入不含文本',
+  family_not_admitted: '不在该 shard 准入的模型家族',
+  outside_recency_window: '早于准入窗口',
+  unknown_release_date: '缺发布日期',
+  auto_add_disabled: '该 shard 只维护离线种子，运行时动态获取完整目录（不自动写入）',
+  excluded_by_policy: '被排除规则过滤',
+};
+
+/** models.dev publishes `release_date` as YYYY-MM-DD. */
+function modelsDevReleaseDate(m) {
+  return typeof m?.release_date === 'string' ? m.release_date : undefined;
+}
+
+/** OpenRouter publishes `created` as Unix seconds. */
+function openRouterReleaseDate(entry) {
+  if (typeof entry?.created === 'number' && Number.isFinite(entry.created)) {
+    return new Date(entry.created * 1000).toISOString().slice(0, 10);
+  }
+  return undefined;
+}
+
+/** Whole days from `date` to `today`; NaN when either is unparseable. */
+function daysSince(date, today) {
+  const released = Date.parse(`${date}T00:00:00Z`);
+  const now = Date.parse(`${today}T00:00:00Z`);
+  if (!Number.isFinite(released) || !Number.isFinite(now)) return NaN;
+  return Math.floor((now - released) / 86400000);
+}
+
+function isWithinRecencyWindow(date, today = TODAY, recentDays = RECENT_DAYS) {
+  const days = daysSince(date, today);
+  return Number.isFinite(days) && days <= recentDays;
+}
+
+/**
+ * Admission decision for a new models.dev model. Returns the hold reason, or
+ * `undefined` when the model may be written.
+ */
+function modelsDevHoldReason(section, m, releaseDate) {
+  if (m.tool_call !== true) return 'no_tool_call';
+  const output = m.modalities?.output ?? [];
+  if (
+    !output.includes('text') ||
+    output.some((modality) => ['audio', 'image', 'video'].includes(modality))
+  ) {
+    return 'non_chat_output';
+  }
+  const input = m.modalities?.input ?? [];
+  if (!input.includes('text')) return 'no_text_input';
+  if (section.admitFamilies && !section.admitFamilies.some((re) => re.test(m.family ?? ''))) {
+    return 'family_not_admitted';
+  }
+  if (!releaseDate) return 'unknown_release_date';
+  if (!isWithinRecencyWindow(releaseDate)) return 'outside_recency_window';
+  if (section.autoAdd === false) return 'auto_add_disabled';
+  return undefined;
+}
+
+/** Admission decision for a new OpenRouter entry. */
+function openRouterHoldReason(section, entry, releaseDate) {
+  const params = entry.supported_parameters ?? [];
+  if (!params.includes('tools')) return 'no_tool_call';
+  const output = entry.architecture?.output_modalities ?? ['text'];
+  if (
+    !output.includes('text') ||
+    output.some((modality) => ['audio', 'image', 'video'].includes(modality))
+  ) {
+    return 'non_chat_output';
+  }
+  const input = entry.architecture?.input_modalities ?? ['text'];
+  if (!input.includes('text')) return 'no_text_input';
+  if (!releaseDate) return 'unknown_release_date';
+  if (!isWithinRecencyWindow(releaseDate)) return 'outside_recency_window';
+  if (section.autoAdd === false) return 'auto_add_disabled';
+  return undefined;
 }
 
 function buildCost(rates) {
@@ -707,21 +848,45 @@ function mapOpenRouter(section, entry) {
   };
 }
 
-async function fetchModelsDev() {
+async function loadModelsDev() {
+  if (FIXTURE_DIR) {
+    return JSON.parse(readFileSync(join(FIXTURE_DIR, 'modelsdev.json'), 'utf8'));
+  }
   const res = await fetch(MODELS_DEV_URL);
   if (!res.ok) throw new Error(`models.dev returned HTTP ${res.status}`);
   return res.json();
 }
 
-async function fetchOpenRouter() {
+async function loadOpenRouter() {
+  if (FIXTURE_DIR) {
+    const raw = JSON.parse(readFileSync(join(FIXTURE_DIR, 'openrouter.json'), 'utf8'));
+    return Array.isArray(raw) ? raw : raw.data;
+  }
   const res = await fetch(OPENROUTER_URL);
   if (!res.ok) throw new Error(`OpenRouter returned HTTP ${res.status}`);
   return (await res.json()).data;
 }
 
-async function collectUpstream(section, sources) {
+/**
+ * Collect one section's upstream catalogue together with the admission
+ * decision for every id.
+ *
+ * Returns:
+ *   models   — ids to keep/write (checked-in ids upstream still serves, plus
+ *              admitted new ids)
+ *   missing  — pinned include ids upstream no longer provides
+ *   admitted — new ids that passed the admission rules
+ *   held     — new ids that did not, each with a reason and release date
+ */
+async function collectUpstream(section, sources, context) {
+  const { checkedIn, today, recentDays } = context;
   const models = new Map();
   const missing = [];
+  const admitted = [];
+  const held = [];
+  let candidateCount = 0;
+  const isRecent = (date) => isWithinRecencyWindow(date, today, recentDays);
+
   if (section.source === 'modelsdev') {
     // A shard may read several groups: the CN and the global catalogue of the
     // same vendor carry the same model line under slightly different ids, and
@@ -753,7 +918,23 @@ async function collectUpstream(section, sources) {
       }
     }
 
-    const pick = (id) => primary.get(id) ?? fallback.get(id);
+    // Discovery covers every id the primary groups list. An include entry the
+    // primary groups do not list resolves through a fallback group (plan
+    // shards); when neither lists it, it is reported as missing.
+    const raw = new Map(primary);
+    candidateCount = raw.size;
+    if (section.include) {
+      for (const id of section.include) {
+        if (raw.has(id)) continue;
+        const m = fallback.get(id);
+        if (!m) {
+          missing.push(id);
+          continue;
+        }
+        raw.set(id, m);
+        candidateCount++;
+      }
+    }
 
     const select = (id, m) => {
       let pricing = hasPrice(m.cost) ? m.cost : undefined;
@@ -769,33 +950,65 @@ async function collectUpstream(section, sources) {
       models.set(id, mapModelsDev(section, id, m, pricing));
     };
 
-    if (section.include) {
-      // An explicit selection: every pinned id must resolve, and ids the
-      // upstream dropped are reported rather than silently kept.
-      for (const id of section.include) {
-        const m = pick(id);
-        if (!m) {
-          missing.push(id);
-          continue;
-        }
-        select(id, m);
+    for (const [id, m] of raw) {
+      const releaseDate = modelsDevReleaseDate(m);
+      const excluded = excludedBySection(id, section);
+      if (checkedIn.has(id)) {
+        // A checked-in id is kept for as long as upstream still serves it —
+        // never dropped merely because it is older than the admission window.
+        if (!excluded) select(id, m);
+        continue;
       }
-    } else {
-      for (const [id, m] of primary) {
-        if (m.tool_call !== true) continue;
-        if (!matchesFilters(id, section)) continue;
-        select(id, m);
+      if (excluded) {
+        held.push({ id, releaseDate, reason: 'excluded_by_policy' });
+        continue;
       }
+      const reason = modelsDevHoldReason(section, m, releaseDate);
+      if (reason) {
+        held.push({ id, releaseDate, reason });
+        continue;
+      }
+      select(id, m);
+      admitted.push({ id, releaseDate });
     }
   } else {
     for (const entry of sources.openrouter) {
-      const id = entry.id;
-      if (id.includes(':') || id.includes('~')) continue;
-      if (!matchesFilters(id, section)) continue;
+      const id = entry?.id;
+      if (!id || id.includes(':') || id.includes('~')) continue;
+      candidateCount++;
+      const releaseDate = openRouterReleaseDate(entry);
+      const excluded = excludedBySection(id, section);
+      if (checkedIn.has(id)) {
+        if (!excluded) models.set(id, mapOpenRouter(section, entry));
+        continue;
+      }
+      if (excluded) {
+        held.push({ id, releaseDate, reason: 'excluded_by_policy' });
+        continue;
+      }
+      const reason = openRouterHoldReason(section, entry, releaseDate);
+      if (reason) {
+        held.push({ id, releaseDate, reason });
+        continue;
+      }
       models.set(id, mapOpenRouter(section, entry));
+      admitted.push({ id, releaseDate });
     }
   }
-  return { models, missing };
+
+  // Keep the report readable: list only held ids that are recent or have an
+  // unknown release date, and count the older ones per section.
+  const listedHeld = held.filter((item) => !item.releaseDate || isRecent(item.releaseDate));
+  const olderHeldCount = held.length - listedHeld.length;
+
+  return {
+    models,
+    missing,
+    admitted,
+    held: listedHeld,
+    olderHeldCount,
+    upstreamCount: candidateCount,
+  };
 }
 
 /**
@@ -898,7 +1111,12 @@ function renderShard(shard, rendered) {
   return parts.join('');
 }
 
-function fieldChanges(before, after) {
+/**
+ * Field-level differences between a checked-in block and the refreshed one.
+ * Costs are compared per field so a re-price is readable; a tier change is
+ * reported without recomputing every tier value.
+ */
+function describeChanges(before, after) {
   const changes = [];
   const pick = (block, key) => block.match(new RegExp(`\\n    ${key}: ([^\\n]+),`))?.[1];
   for (const key of ['contextWindow', 'maxTokens', 'reasoning']) {
@@ -906,12 +1124,92 @@ function fieldChanges(before, after) {
     const b = pick(after, key);
     if (a !== undefined && b !== undefined && a !== b) changes.push(`${key} ${a}→${b}`);
   }
-  const costBefore = before.match(/cost: \{([\s\S]*?)\n    \}/)?.[1];
-  const costAfter = after.match(/cost: \{([\s\S]*?)\n    \}/)?.[1];
-  if (costBefore !== undefined && costAfter !== undefined && costBefore !== costAfter) {
-    changes.push('cost');
+
+  const inputOf = (block) => {
+    const match = block.match(/\n    input: \[([^\]]+)\],/);
+    return match ? match[1].replace(/'/g, '').replace(/\s+/g, ' ').trim() : undefined;
+  };
+  const inputBefore = inputOf(before);
+  const inputAfter = inputOf(after);
+  if (inputBefore !== undefined && inputAfter !== undefined && inputBefore !== inputAfter) {
+    changes.push(`input ${inputBefore}→${inputAfter}`);
   }
+
+  const costBlock = (block) => block.match(/cost: \{([\s\S]*?)\n    \}/)?.[1];
+  const costBefore = costBlock(before);
+  const costAfter = costBlock(after);
+  if ((costBefore === undefined) !== (costAfter === undefined)) {
+    changes.push(costBefore === undefined ? 'cost 无→有' : 'cost 有→无');
+  } else if (costBefore !== undefined) {
+    const costField = (block, key) => block.match(new RegExp(`\\n      ${key}: (\\S+),`))?.[1];
+    for (const key of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+      const a = costField(before, key);
+      const b = costField(after, key);
+      if (a !== undefined && b !== undefined && a !== b) changes.push(`cost.${key} ${a}→${b}`);
+    }
+  }
+
+  const tiersOf = (block) => block.match(/\n      tiers: \[([\s\S]*?)\n      \],/)?.[1];
+  const tiersBefore = tiersOf(before);
+  const tiersAfter = tiersOf(after);
+  if (tiersBefore !== undefined && tiersAfter !== undefined && tiersBefore !== tiersAfter) {
+    changes.push('cost.tiers');
+  }
+
   return changes;
+}
+
+function heldReasonText(item) {
+  return `${HELD_REASON_LABELS[item.reason] ?? item.reason}（${item.reason}）`;
+}
+
+function detailsBlock(summary, items) {
+  return [
+    '<details>',
+    `<summary>${summary}</summary>`,
+    '',
+    ...(items.length ? items : ['无']),
+    '',
+    '</details>',
+    '',
+  ];
+}
+
+/** Chinese Markdown report: one section per shard export, full lists folded. */
+function renderReport(entries) {
+  const lines = [
+    `# 模型目录发现报告（${TODAY}）`,
+    '',
+    `上游目录每天全量扫描；新模型需满足准入规则（tool_call、纯文本输出、文本输入、最近 ${RECENT_DAYS} 天发布）才会写入 shard。` +
+      '已签入的 id 只要上游仍提供就保留。自动收录仍走夜间 PR，需人工评审后合并。',
+    '',
+  ];
+
+  for (const entry of entries) {
+    const admittedItems = entry.admitted.map(
+      (item) => `- \`${item.id}\` — ${item.releaseDate ?? '发布日期未知'}`,
+    );
+    const heldItems = entry.held.map(
+      (item) =>
+        `- \`${item.id}\` — ${item.releaseDate ?? '发布日期未知'} — 原因：${heldReasonText(item)}`,
+    );
+    const removedItems = entry.removed.map((id) => `- \`${id}\``);
+    const changedItems = entry.changed.map(
+      (item) => `- \`${item.id}\`：${item.changes.join('；')}`,
+    );
+
+    lines.push(`## ${entry.shardKey} / ${entry.exportName}`, '');
+    lines.push(`上游候选 ${entry.upstreamCount} 个，目录已签入 ${entry.checkedInCount} 个。`, '');
+    lines.push(...detailsBlock(`自动收录（${admittedItems.length}）`, admittedItems));
+    lines.push(...detailsBlock(`发现但未收录（${heldItems.length}）`, heldItems));
+    if (entry.olderHeldCount > 0) {
+      lines.push(`另有 ${entry.olderHeldCount} 个更早的未收录模型。`, '');
+    }
+    lines.push(...detailsBlock(`上游下架（${removedItems.length}）`, removedItems));
+    lines.push(...detailsBlock(`参数变化（${changedItems.length}）`, changedItems));
+  }
+
+  return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
 }
 
 async function main() {
@@ -928,28 +1226,45 @@ async function main() {
   );
 
   const sources = {
-    modelsdev: needsModelsDev ? await fetchModelsDev() : {},
-    openrouter: needsOpenRouter ? await fetchOpenRouter() : [],
+    modelsdev: needsModelsDev ? await loadModelsDev() : {},
+    openrouter: needsOpenRouter ? await loadOpenRouter() : [],
   };
 
   let changeCount = 0;
+  const reportEntries = [];
 
   for (const shard of shards) {
     const { eol, sections: checkedIn } = readShard(shard.file);
     const rendered = [];
 
     for (const section of shard.sections) {
-      const { models: upstream, missing } = await collectUpstream(section, sources);
       const existing = checkedIn.get(section.exportName) ?? new Map();
+      const discovery = await collectUpstream(section, sources, {
+        checkedIn: new Set(existing.keys()),
+        today: TODAY,
+        recentDays: RECENT_DAYS,
+      });
+      const { models: upstream, missing, admitted, held, olderHeldCount, upstreamCount } =
+        discovery;
       const upstreamIds = new Set(upstream.keys());
-      const added = [...upstream.keys()].filter((id) => !existing.has(id));
       const removed = [...existing.keys()].filter((id) => !upstreamIds.has(id));
+      const changed = [];
 
       console.log(
-        `\n== ${shard.key}/${section.exportName}  (${upstream.size} upstream, ${existing.size} checked in)`,
+        `\n== ${shard.key}/${section.exportName}  (${upstreamCount} upstream candidates, ${existing.size} checked in)`,
       );
-      if (added.length) console.log(`   +${added.length}: ${added.join(', ')}`);
+      if (admitted.length) {
+        console.log(`   +${admitted.length}: ${admitted.map((item) => item.id).join(', ')}`);
+      }
       if (removed.length) console.log(`   -${removed.length}: ${removed.join(', ')}`);
+      if (held.length) {
+        console.log(
+          `   ? ${held.length} held: ${held
+            .map((item) => `${item.id} (${item.reason})`)
+            .join(', ')}`,
+        );
+      }
+      if (olderHeldCount) console.log(`   ? ${olderHeldCount} older held, not listed`);
       if (missing.length) {
         console.log(`   ! pinned but not upstream: ${missing.join(', ')}`);
       }
@@ -966,9 +1281,12 @@ async function main() {
             ? section.compat(id)
             : section.compat;
         const block = modelBlock(model, { thinking, compat });
-        if (MODE === 'diff' && previous) {
-          const changes = fieldChanges(previous, block);
-          if (changes.length) console.log(`   ~ ${id}: ${changes.join(', ')}`);
+        if (previous) {
+          const changes = describeChanges(previous, block);
+          if (changes.length) {
+            changed.push({ id, changes });
+            if (MODE === 'diff') console.log(`   ~ ${id}: ${changes.join(', ')}`);
+          }
         }
         blocks.push(block);
       }
@@ -986,7 +1304,18 @@ async function main() {
         }
       }
 
-      changeCount += added.length + removed.length;
+      changeCount += admitted.length + removed.length;
+      reportEntries.push({
+        shardKey: shard.key,
+        exportName: section.exportName,
+        upstreamCount,
+        checkedInCount: existing.size,
+        admitted,
+        held,
+        olderHeldCount,
+        removed,
+        changed,
+      });
       rendered.push({ section, blocks });
     }
 
@@ -998,6 +1327,13 @@ async function main() {
       );
       console.log(`   wrote src/providers/${shard.file}`);
     }
+  }
+
+  if (reportPath) {
+    const target = resolve(reportPath);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, renderReport(reportEntries));
+    console.log(`   report written to ${target}`);
   }
 
   if (MODE !== 'report') console.log(`\n${changeCount} id-level change(s) detected.`);

@@ -1,7 +1,7 @@
 # 刷新 @duya/ai 各 provider 模型目录
 
-状态：active · 负责人：mavis（会话 mvs_35672764d34e4ec2800223e322efa928） · 更新：2026-10-24
-分支：codex/ai-model-catalog-automation（#441 已合并，后续改动在此分支） · worktree：E:\Projects\duya\.claude\worktrees\ai-model-catalog · base：c426d029 · owner：mavis
+状态：active · 负责人：mavis（会话 mvs_35672764d34e4ec2800223e322efa928） · 更新：2026-10-29
+分支：codex/model-catalog-discovery（发现/准入分离） · worktree：E:\Projects\duya\.claude\worktrees\model-discovery · base：origin/master · owner：mavis
 
 ## 目标与边界
 
@@ -34,7 +34,8 @@
 - [x] 重跑同步脚本，吸收 openrouter 价格漂移并重建 worker bundle。
 - [x] 新增夜间刷新 workflow：只开 PR，不自动合并。
 - [x] 提交后续改动、提 PR（#442）。
-- [ ] 等 CI 与 review。
+- [x] 发现与准入分离：每 shard 全量扫描上游、准入规则、中文 Markdown 发现报告（`--report` / `--discover`）、离线 fixture 用例。
+- [ ] 等人工复核、PR 与 CI（本分支尚未推送）。
 
 ## 夜间自动刷新
 
@@ -78,6 +79,13 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - **套餐分组没有单价**：token plan / coding plan 分组给的是 0（订阅制），价格要从同厂商按量分组取；
   取不到就不写 `cost` 字段——「没有价格」和「免费」是两回事。
 - **Anthropic 目录已无非推理模型**：claude-3-haiku 退役，思考档位用例改用合成模型覆盖非推理分支。
+- **发现与准入分离**：每晚扫描每个 shard 目标分组的**完整上游目录**，报告新增、下架与参数变化；
+  只有同时满足 `tool_call === true`、输出纯文本（不含 audio / image / video）、输入含 text、
+  未被该 section `exclude` 排除、且发布日期在最近 45 天（`SYNC_MODELS_RECENT_DAYS` 可覆盖）的新 id
+  才写入 shard。Google 只准入 `^gemini`、百炼只准入 `^qwen` 的 family；OpenRouter 设置
+  `autoAdd: false`，继续只作离线种子（运行时从 `/models` 动态获取），只报告不写入；
+  Bedrock 排除 `us.*` / `eu.*` / `global.*` 等区域前缀别名。
+  已签入 id 只要上游仍提供且未被排除就保留，`--write` 不因超出发布窗口而删除历史模型。
 
 ## 验证记录
 
@@ -93,6 +101,9 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 | c426d029 + 本次改动 | Windows / Node 24 | `npm run plan:sync` | 0 | 计划表与仓库一致 |
 | c426d029 + 本次改动 | Windows / Node 24 | `npx vitest run --root . packages/ai/test` | 0，550 通过 | 含目录一致性与治理用例 |
 | c426d029 + 本次改动 | Windows / Node 24 | `node scripts/build-packages.mjs --target @duya/host` + `npm run bundle:worker` | 0 | worker bundle 随 openrouter 价格重建 |
+| e40357ad + 本次改动 | Windows / Node 24.16 | `npx vitest run --root . packages/ai/test` | 0，56 文件 / 559 通过 | 含新增发现/准入 fixture 用例 |
+| e40357ad + 本次改动 | Windows / Node 24.16 | `npm run typecheck:all` | 0 | 全仓类型检查通过（178 个已基线错误，无新增） |
+| e40357ad + 本次改动 | Windows / Node 24.16 | `npm run architecture:check` | 0 | 无新增边界违规（2999 均为 baseline） |
 
 ## 接续 / 结果
 
@@ -102,10 +113,12 @@ worker bundle、跑 `packages/ai` 自检、推到滚动分支 `chore/ai-model-ca
 - 已验证：见上表（本地全绿）。
 - PR：#441 https://github.com/lava-chen/duya/pull/441 （已合并，merge commit c426d029）；
   夜间刷新：#442 https://github.com/lava-chen/duya/pull/442 （base=master，未合并）。
+- 已实现（本次分支，未推送、未建 PR）：发现与准入分离（同步脚本）、`--report` / `--discover`、
+  `.github/workflows/model-catalog.yml` 的发现报告与 job summary、离线 fixture 用例。
 - 未提交路径：无（提交后见 Git）。
 - 副作用：worker bundle 产物变化（`packages/host/bundle/**`），属本次改动的应有产物。
 - 阻塞：无技术阻塞；开 PR 一步需要仓库开启 GitHub Actions 建 PR 权限或配置 `NIGHTLY_PR_TOKEN`。
 - 回收：未回收——后续 PR 尚未集成，需保留分支与检出。
 
-下一步：由获授权的集成者合并夜间刷新 PR；本 agent 不自行合并。
+下一步：由人工复核本次提交后建 PR；合并仍由获授权的集成者处理，本 agent 不自行合并。
 
