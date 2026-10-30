@@ -225,6 +225,7 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             fence,
         });
         const host: LegacyRunHost = {
+            progressToolName: () => assembly.progressToolName,
             turnPipelines,
             // The turn's attachments reach the model through the assembly, and
             // the effort reaches it through the model port. Both are the

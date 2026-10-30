@@ -16947,7 +16947,18 @@
       "format": "esm"
     },
     "packages/host/src/run-engine-model.ts": {
-      "bytes": 45244,
+      "bytes": 45412,
+      "imports": [
+        {
+          "path": "packages/ai/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/ai"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/turns/tool-group-progress.ts": {
+      "bytes": 4250,
       "imports": [],
       "format": "esm"
     },
@@ -17094,7 +17105,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
-      "bytes": 23360,
+      "bytes": 24528,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -17105,6 +17116,11 @@
           "path": "packages/host/src/run-engine-model.ts",
           "kind": "import-statement",
           "original": "@duya/host/run-engine-model"
+        },
+        {
+          "path": "packages/agent-runtime/src/turns/tool-group-progress.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-runtime/turns/tool-group-progress"
         },
         {
           "path": "packages/host/src/worker-command-port.ts",
@@ -17188,7 +17204,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-engine-driver.ts": {
-      "bytes": 15293,
+      "bytes": 15357,
       "imports": [
         {
           "path": "packages/agent-runtime/src/index.ts",
@@ -22693,7 +22709,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -36102,11 +36118,6 @@
       ],
       "format": "esm"
     },
-    "packages/agent-runtime/src/turns/tool-group-progress.ts": {
-      "bytes": 4250,
-      "imports": [],
-      "format": "esm"
-    },
     "packages/host/src/worker-compaction/bound-controller.ts": {
       "bytes": 1013,
       "imports": [
@@ -40317,7 +40328,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
@@ -40416,10 +40427,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -42429,7 +42440,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 236
+          "bytesInOutput": 223
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -42735,7 +42746,7 @@
           "bytesInOutput": 1002
         },
         "packages/plugin-core/src/mcp/core/alias.ts": {
-          "bytesInOutput": 82
+          "bytesInOutput": 69
         },
         "packages/capabilities/src/MCP/result-blocks.ts": {
           "bytesInOutput": 1119
@@ -43068,10 +43079,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50718
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1879
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -43824,7 +43835,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43833,7 +43844,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9969
@@ -44469,13 +44480,16 @@
           "bytesInOutput": 5051
         },
         "packages/host/src/worker-engine-driver.ts": {
-          "bytesInOutput": 4102
+          "bytesInOutput": 4142
         },
         "packages/host/src/worker-run-composition.ts": {
-          "bytesInOutput": 5830
+          "bytesInOutput": 6353
         },
         "packages/host/src/run-engine-model.ts": {
-          "bytesInOutput": 3619
+          "bytesInOutput": 3656
+        },
+        "packages/agent-runtime/src/turns/tool-group-progress.ts": {
+          "bytesInOutput": 559
         },
         "packages/host/src/worker-session/transcript-commands.ts": {
           "bytesInOutput": 1789
@@ -45333,7 +45347,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 53797
+          "bytesInOutput": 53796
         },
         "packages/host/src/worker-execution/location-skills.ts": {
           "bytesInOutput": 575
@@ -45620,9 +45634,6 @@
         "packages/host/src/worker-compaction/context-window.ts": {
           "bytesInOutput": 30
         },
-        "packages/agent-runtime/src/turns/tool-group-progress.ts": {
-          "bytesInOutput": 307
-        },
         "packages/host/src/worker-compaction/bound-controller.ts": {
           "bytesInOutput": 147
         },
@@ -45855,7 +45866,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4752724
+      "bytes": 4753540
     }
   }
 }

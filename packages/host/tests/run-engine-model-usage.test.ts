@@ -159,3 +159,14 @@ describe('model port tool calls wait for a non-truncated response', () => {
     expect(frames.at(-1)).toMatchObject({ type: 'turn_stopped', reason: stopReason });
   });
 });
+
+it.each([
+  [{ input_tokens: 0, output_tokens: 5, cache_hit_tokens: 161698 }, 161698, 161703],
+  [{ input_tokens: 10, output_tokens: 5, cache_hit_tokens: 30, cache_creation_tokens: 20 }, 60, 65],
+  [{ input_tokens: 100, output_tokens: 5, input_tokens_details: { cached_tokens: 80 }, total_tokens: 105 }, 100, 105],
+])('counts full prompt input without double counting cache: %j', (data, input, total) => {
+  const frame = toModelFrame({ type: 'result', data });
+  expect(frame).toMatchObject({ type: 'usage', inputTokens: input, outputTokens: 5 });
+  if (frame?.type !== 'usage') throw new Error('usage missing');
+  expect(frame.totalTokens ?? frame.inputTokens + frame.outputTokens).toBe(total);
+});
