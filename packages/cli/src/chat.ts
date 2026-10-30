@@ -72,6 +72,12 @@ import {
   hasTuiSlashCommand,
   resolveTuiSlashCommand,
 } from './tui/slash/index.js';
+import { updateSession } from './tui/slash/shared.js';
+import {
+  permissionModeFromProfile,
+  profileForPermissionMode,
+  type TuiPermissionMode,
+} from './tui/permission-mode.js';
 
 interface RuntimeDescriptor {
   readonly apiVersion: number;
@@ -211,6 +217,26 @@ function summarizeArguments(args: Readonly<Record<string, unknown>>): string {
       return `${key}: ${text.slice(0, 40)}`;
     })
     .join(', ');
+}
+
+/**
+ * The message an HTTP failure should print, including WHY the transport gave
+ * up. A dropped keep-alive socket surfaces as undici's bare `fetch failed`
+ * TypeError whose `cause` carries the actual verdict (`ECONNRESET`,
+ * `UND_ERR_SOCKET`); printing the cause is the difference between a mystery
+ * and a diagnosis for a reader staring at a poller error line.
+ */
+function errorText(error: unknown): string {
+  const base = error instanceof Error ? error.message : String(error);
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message !== '') {
+    const code = (cause as { code?: unknown }).code;
+    const detail = typeof code === 'string' && code !== ''
+      ? `${code}: ${cause.message}`
+      : cause.message;
+    if (!base.includes(detail)) return `${base} (${detail})`;
+  }
+  return base;
 }
 
 /**
@@ -1177,6 +1203,35 @@ export async function chatTui(
     tui.refresh();
   }
 
+  /**
+   * Put the session into a permission mode.
+   *
+   * The mode is a property of the session the Host stores, so the write goes
+   * through the Host's session endpoint — the same one `/permission` uses and
+   * the same one the Desktop's composer uses. That is what makes the badge
+   * true on both surfaces: there is one mode, and it lives in one row.
+   *
+   * The change lands for the NEXT turn. A run already in flight keeps the
+   * mode it started with, which is what the user expects: the approval they
+   * gave was for that turn.
+   */
+  async function applyPermissionMode(mode: TuiPermissionMode): Promise<void> {
+    const profile = profileForPermissionMode(mode);
+    if (profile === activeSession.permissionMode) return;
+    try {
+      const session = await updateSession(client, activeSession, { permissionMode: profile });
+      activeSession = session;
+      if (!finished) tui.refresh();
+    } catch (error) {
+      if (!finished) {
+        tui.printError(
+          'Permission change failed: '
+          + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  }
+
   const tui = new TUIApp({
     title: 'duya chat',
     theme: effectivePreferences.theme,
@@ -1212,6 +1267,12 @@ export async function chatTui(
     // The composer's border colour: pi's tell for how much thinking the next
     // message will buy. Read through a callback so /effort repaints immediately.
     effort: () => effort,
+    // The permission mode in force, and the key that cycles it. The badge is
+    // drawn from the session record and the cycle writes back to it, so the
+    // two surfaces — this TUI and the Desktop — can never show different
+    // modes for the same session.
+    permissionMode: () => permissionModeFromProfile(activeSession.permissionMode),
+    onPermissionCycle: (mode) => { void applyPermissionMode(mode); },
     // `/settings` moves effort through the TUI; this is how the value reaches
     // the variable the next run is started with. The border is the TUI's, the
     // run's effort is this loop's, and they must not drift apart.
@@ -1253,10 +1314,7 @@ export async function chatTui(
     },
     onError: (error) => {
       if (!finished) {
-        tui.printError(
-          'Could not read background tasks: '
-          + (error instanceof Error ? error.message : String(error)),
-        );
+        tui.printError('Could not read background tasks: ' + errorText(error));
       }
     },
   });
@@ -1274,10 +1332,7 @@ export async function chatTui(
         output = await client.readBackgroundTaskOutput(activeSession.id, task.id);
       } catch (error) {
         if (!finished) {
-          tui.printError(
-            'Could not read task output: '
-            + (error instanceof Error ? error.message : String(error)),
-          );
+          tui.printError('Could not read task output: ' + errorText(error));
         }
       }
     }
@@ -1650,10 +1705,7 @@ export async function chatTui(
         } catch (error) {
           if (!permissionPollErrorReported && !finished) {
             permissionPollErrorReported = true;
-            tui.printError(
-              'Could not check pending permissions: '
-              + (error instanceof Error ? error.message : String(error)),
-            );
+            tui.printError('Could not check pending permissions: ' + errorText(error));
           }
         } finally {
           permissionPollInFlight = false;

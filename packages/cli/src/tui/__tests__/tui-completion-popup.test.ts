@@ -70,7 +70,12 @@ const MODEL_OPTIONS: PopoverItem[] = [
   item('MiniMax-M2.7', 'MiniMax-M2.7'),
 ];
 
-function makeApp(submitted: string[] = [], withEffortOptions = false, withModelOptions = false) {
+function makeApp(
+  submitted: string[] = [],
+  withEffortOptions = false,
+  withModelOptions = false,
+  slashItems: readonly PopoverItem[] = SLASH,
+) {
   const out = sink();
   const input = new PassThrough();
   const app = new TUIApp({
@@ -80,7 +85,7 @@ function makeApp(submitted: string[] = [], withEffortOptions = false, withModelO
       slash: () => [
         ...(withEffortOptions ? [item('/effort', '/effort', 'Reasoning effort')] : []),
         ...(withModelOptions ? [item('/model', '/model', 'Switch model')] : []),
-        ...(!withEffortOptions && !withModelOptions ? SLASH : []),
+        ...(!withEffortOptions && !withModelOptions ? slashItems : []),
       ],
       slashOptions: (command) => command === '/effort' ? EFFORT_OPTIONS : command === '/model' ? MODEL_OPTIONS : [],
       slashOptionsOnBare: (command) => command === '/model',
@@ -118,6 +123,29 @@ describe('TUIApp completion popup', () => {
     await settle();
 
     expect(out.text()).not.toContain('/doctor');
+    app.stop();
+  });
+
+  it('keeps a long description on one row instead of letting the terminal wrap it', async () => {
+    // A popup row is ONE terminal row: the chrome is written as it is and its
+    // length is the frame's height, so a row the TERMINAL wraps grows the
+    // frame past the space it reserved — the popup's border lands on the
+    // footer and its last candidates fall off the bottom.
+    const description = 'Switch to a registered project, or register a directory as one, and then some more words to make it wrap';
+    const { app, out, input } = makeApp([], false, false, [
+      item('/project', '/project', description),
+    ]);
+    app.start();
+    await settle();
+
+    input.write('/');
+    await settle();
+
+    const row = out.text().split('\n').find((line) => line.includes('/project'));
+    expect(row).toBeDefined();
+    // The description starts on the SAME row and is cut with an ellipsis.
+    expect(row).toContain('registered');
+    expect(row).toContain('…');
     app.stop();
   });
 

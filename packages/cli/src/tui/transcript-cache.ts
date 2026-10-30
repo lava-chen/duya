@@ -13,13 +13,14 @@
  *
  * ## Key design
  *
- * One cache entry per block id. The key is the block's kind-specific content
- * FNV-1a-hashed, plus every render-option facet that can change this block's
- * output: its TRAIL SLOT (the plan — connector, batch header, rail, whether a
- * separator row precedes it), expansion state, tool-result visibility, the
- * result-line cap, and the theme. Hashing (not re-rendering) is the cheap part
- * — roughly two orders of magnitude — so correctness does not depend on any
- * mutation site remembering to bump a revision counter.
+ * One cache entry per block id. The key is the block's CONTENT REVISION — a
+ * counter `TranscriptModel` bumps on every mutation — plus every render-option
+ * facet that can change this block's output: its TRAIL SLOT (the plan —
+ * connector, batch header, rail, whether a separator row precedes it),
+ * expansion state, tool-result visibility, the result-line cap, and the theme.
+ * Comparing a revision (not re-hashing the block's full text each frame) is
+ * what keeps a warm frame O(blocks) regardless of how much text the
+ * transcript carries.
  *
  * The trail slot is in the key because the plan depends on NEIGHBOURS: the
  * last execution unit of a turn draws `└` and the moment another tool arrives
@@ -43,8 +44,7 @@
  * with `paintTranscript`'s window to the line.
  */
 
-import type { Block, TranscriptModel } from './blocks.js';
-import { todoKey } from './todo.js';
+import type { TranscriptModel } from './blocks.js';
 import {
   blockExpanded,
   planKey,
@@ -63,24 +63,6 @@ function fnv1a(text: string): string {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
-}
-
-/** The content that, plus the option facets, fully determines a block's rendering. */
-function blockContent(block: Block): string {
-  switch (block.kind) {
-    case 'user': return `u:${block.text}`;
-    case 'assistant': return `a:${block.finalized ? 1 : 0}:${block.text}`;
-    // The duration is part of the key: the head text changes from `Thinking…`
-    // to `Thought for 1.2s` the moment the block seals, and the seal mutates
-    // the duration without touching the text.
-    case 'thinking': return `t:${block.finalized ? 1 : 0}:${block.durationMs ?? ''}:${block.text}`;
-    // The todo list is part of the key: it is read out of the RESULT, so a
-    // list whose items changed status would otherwise keep rendering the
-    // version the reader first saw.
-    case 'tool': return `k:${block.status}:${block.name}:${block.preview}:${block.command ?? ''}:${block.result ?? ''}:${todoKey(block.todos)}`;
-    case 'error': return `e:${block.message}`;
-    case 'notice': return `n:${block.text}`;
-  }
 }
 
 interface CacheEntry {
@@ -136,7 +118,9 @@ export class TranscriptRenderer {
         // changing its content, so its revision has to be part of the key or
         // the cached lines would report the old height for new layout.
         String(options.componentRevisions?.get(block.id) ?? 0),
-        fnv1a(blockContent(block)),
+        // The content revision: bumped by the model on every mutation, so the
+        // key never has to read the block's bytes.
+        String(model.revisionOf(block)),
       ].join('|');
 
       seen.add(block.id);

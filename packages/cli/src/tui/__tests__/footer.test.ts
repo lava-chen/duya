@@ -22,6 +22,7 @@ import {
   type FooterInput,
 } from '../footer.js';
 import { DARK_THEME_TAGS } from '../theme.js';
+import { permissionBadge } from '../permission-mode.js';
 import { stylesOf } from '../transcript-view.js';
 import { visibleWidth } from '../width.js';
 
@@ -303,5 +304,41 @@ describe('buildFooterLines', () => {
     expect(warm).toContain('{yellow-fg}80%/1.0M{/yellow-fg}');
     // Below the warning threshold it is plain muted, not coloured.
     expect(footer()[1]).not.toContain('bright-red-fg');
+  });
+});
+
+describe('the permission badge', () => {
+  it('sits at the right of the stats row, before the model', () => {
+    const row = plain(footer({ permission: permissionBadge('ask', false) })[1] ?? '');
+    expect(row).toContain('[ask]');
+    expect(row).toContain('Shift+Tab');
+    // The badge is to the LEFT of the model: the model is what the row is
+    // flush against, and the badge is what it says about the session.
+    expect(row.indexOf('[ask]')).toBeLessThan(row.indexOf('deepseek-flash'));
+  });
+
+  it('colours the mode that grants everything as an error', () => {
+    expect(footer({ permission: permissionBadge('bypass', false) })[1] ?? '')
+      .toContain('{bright-red-fg}[bypass]{/bright-red-fg}');
+  });
+
+  it('keeps the badge when the row is too narrow for the hint', () => {
+    const row = plain(footer({
+      width: 40,
+      permission: permissionBadge('ask', false),
+    })[1] ?? '');
+    expect(row).toContain('[ask]');
+    expect(row).not.toContain('Shift+Tab');
+  });
+
+  it('never lets a row exceed the terminal width', () => {
+    for (const width of [20, 30, 40, 60, 80, 120]) {
+      for (const mode of ['ask', 'auto', 'bypass'] as const) {
+        const rows = footer({ width, permission: permissionBadge(mode, false) });
+        for (const row of rows) {
+          expect(visibleWidth(plain(row))).toBeLessThanOrEqual(width);
+        }
+      }
+    }
   });
 });

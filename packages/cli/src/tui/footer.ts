@@ -35,6 +35,8 @@
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import type { PermissionBadge } from './permission-mode.js';
+import { taggedWith } from './theme.js';
 import type { Styles } from './transcript-view.js';
 import { visibleWidth } from './width.js';
 
@@ -77,6 +79,13 @@ export interface FooterInput {
   readonly styles: Styles;
   /** `HOME`/`USERPROFILE`, for `~` substitution. */
   readonly home?: string;
+  /**
+   * The permission mode in force, as the badge the footer draws.
+   *
+   * Null when the caller does not track one: a footer that showed a mode it
+   * could not keep true would be worse than no footer.
+   */
+  readonly permission?: PermissionBadge | null;
 }
 
 /** Between the groups on the stats row: one column each side, like the hints. */
@@ -266,18 +275,97 @@ export function buildFooterLines(input: FooterInput): string[] {
     return styles.muted(group);
   }).join(styles.muted(SEPARATOR));
 
-  const row1 = composeRow(withSession, input.hint ?? '', width, styles);
-  const row2 = composeRow(statsPlain, modelPlain, width, styles, statsTagged);
+  const row1 = composeRow(withSession, [
+    { plain: input.hint ?? '', tagged: (text) => styles.muted(text) },
+  ], width, styles);
+  const row2 = composeRow(statsPlain, rightSegments(input, styles, modelPlain), width, styles, statsTagged);
   return [row1, row2];
 }
 
 /**
- * Place `right` against the right edge, truncating the right side first.
+ * The right-hand group of the stats row: the permission badge, the key that
+ * cycles it, and the model paying for the turn.
+ *
+ * The badge is a hint about the session and the model name is its identity, so
+ * the badge's HINT is the first thing to go when the row runs out of room and
+ * the badge itself is the second. The model name is never dropped: a row that
+ * says which model is running and nothing else still identifies the run.
+ */
+function rightSegments(
+  input: FooterInput,
+  styles: Styles,
+  modelPlain: string,
+): RowSegment[] {
+  const segments: RowSegment[] = [];
+  const badge = input.permission ?? null;
+  if (badge !== null) {
+    segments.push({
+      plain: badge.plain,
+      tagged: (text) => taggedWith(styles.tags, badge.token, text),
+      separator: '',
+    });
+    if (badge.hint !== '') {
+      segments.push({
+        plain: badge.hint,
+        tagged: (text) => styles.muted(text),
+        separator: ' ',
+        optional: true,
+      });
+    }
+  }
+  segments.push({
+    plain: modelPlain,
+    tagged: (text) => styles.muted(text),
+    separator: '  ',
+  });
+  return segments;
+}
+
+/**
+ * One piece of a row's right-hand group.
+ *
+ * `optional` marks the piece that may be dropped when the row runs out of
+ * room. `separator` is the text that precedes this piece; the first piece of
+ * a group carries none, because the group as a whole is what sits against the
+ * right edge.
+ */
+interface RowSegment {
+  /** The text as the terminal measures it. */
+  readonly plain: string;
+  /**
+   * The coloured rendering of a piece.
+   *
+   * A function, not a string, because the piece may be CLIPPED and the
+   * colour has to survive the clip: a truncated model name is still a model
+   * name, and it is still muted.
+   */
+  readonly tagged: (plain: string) => string;
+  /** May be dropped when the row is too narrow for everything. */
+  readonly optional?: boolean;
+  /** The text before this piece. Defaults to two spaces. */
+  readonly separator?: string;
+}
+
+/** The space between two pieces of a right-hand group. */
+const SEGMENT_GAP = '  ';
+
+/**
+ * Place the right-hand group against the right edge, truncating it first.
  *
  * Two columns of padding are kept whenever both sides fit, because a path that
  * runs straight into a token count reads as one string. When they do not fit,
- * the right side is dropped only if it cannot keep `MIN_RIGHT` columns: a
- * `dee...` model name identifies nothing, and a bare path is more useful.
+ * the group gives way in a fixed order, and the order is the order of what
+ * each piece is worth:
+ *
+ *   1. the TAIL is clipped — the last piece identifies the least, and a
+ *      truncated model name still names the model;
+ *   2. the OPTIONAL piece goes — the hint that repeats a key the badge
+ *      already implies is the first thing a narrow row can lose;
+ *   3. the tail goes entirely — a model name that cannot keep `MIN_RIGHT`
+ *      columns identifies nothing;
+ *   4. the badge goes last, because a row that does not say which permission
+ *      mode is in force is the one failure this whole feature exists to
+ *      prevent.
  *
  * `leftTagged` lets the caller supply a coloured rendering of the left side
  * that must not itself be truncated — the stats row, whose numbers are short
@@ -286,36 +374,103 @@ export function buildFooterLines(input: FooterInput): string[] {
 const MIN_RIGHT = 8;
 function composeRow(
   leftPlain: string,
-  rightPlain: string,
+  right: readonly RowSegment[],
   width: number,
   styles: Styles,
   leftTagged?: string,
 ): string {
   const leftWidth = visibleWidth(leftPlain);
-  const rightWidth = visibleWidth(rightPlain);
+  const left = (): string => (leftTagged !== undefined && leftWidth <= width
+    ? leftTagged
+    : styles.muted(clipPlain(leftPlain, width)));
 
-  if (rightPlain === '') {
-    return leftTagged !== undefined && leftWidth <= width
-      ? leftTagged
-      : styles.muted(clipPlain(leftPlain, width));
-  }
+  const segments = normalizeSegments(right);
+  if (segments.length === 0) return left();
 
-  const gap = width - leftWidth - rightWidth;
-  if (gap >= 2) {
-    return (leftTagged ?? styles.muted(leftPlain)) + ' '.repeat(gap) + styles.muted(rightPlain);
-  }
-
-  const availableForRight = width - leftWidth - 2;
-  if (availableForRight >= MIN_RIGHT) {
-    const clipped = clipPlain(rightPlain, availableForRight);
-    const padding = Math.max(0, width - leftWidth - visibleWidth(clipped));
-    return (leftTagged ?? styles.muted(leftPlain)) + ' '.repeat(padding) + styles.muted(clipped);
+  const available = width - leftWidth;
+  const head = segments.slice(0, -1);
+  const tail = segments[segments.length - 1];
+  const mandatoryHead = head.filter((segment) => segment.optional !== true);
+  // The order the group gives way in. Each entry is a group that is still
+  // worth drawing; the first one that fits wins.
+  const candidates: ReadonlyArray<readonly [readonly RowSegment[], RowSegment | null]> = [
+    [head, tail],
+    [mandatoryHead, tail],
+    [head, null],
+    [mandatoryHead, null],
+    [[], tail],
+  ];
+  for (const [candidateHead, candidateTail] of candidates) {
+    const fit = fitGroup(candidateHead, candidateTail, available);
+    if (fit !== null) return left() + ' '.repeat(fit.padding) + fit.text;
   }
   // Not enough room for the right side at all. The left side still has to fit:
   // a wrapped footer row lands below the screen and takes the input with it.
-  return leftWidth <= width
-    ? (leftTagged ?? styles.muted(leftPlain))
-    : styles.muted(clipPlain(leftPlain, width));
+  return leftWidth <= width ? left() : styles.muted(clipPlain(leftPlain, width));
+}
+
+/**
+ * Fit a head and a tail into the columns that are left.
+ *
+ * The tail is clipped rather than dropped when it can keep `MIN_RIGHT`
+ * columns; null means this shape does not fit at all.
+ */
+function fitGroup(
+  head: readonly RowSegment[],
+  tail: RowSegment | null,
+  available: number,
+): { readonly text: string; readonly padding: number } | null {
+  const headWidth = measureSegments(head);
+  const separator = tail !== null && head.length > 0 ? (tail.separator ?? SEGMENT_GAP) : '';
+  const tailWidth = tail === null ? 0 : visibleWidth(tail.plain);
+  const total = headWidth + visibleWidth(separator) + tailWidth;
+
+  if (total <= available - 2) {
+    return {
+      text: renderSegments(head) + (tail === null ? '' : separator + tail.tagged(tail.plain)),
+      padding: Math.max(0, available - total),
+    };
+  }
+  if (tail === null) return null;
+  const room = available - 2 - headWidth - visibleWidth(separator);
+  if (room < MIN_RIGHT) return null;
+  const clipped = clipPlain(tail.plain, room);
+  const used = headWidth + visibleWidth(separator) + visibleWidth(clipped);
+  return {
+    text: renderSegments(head) + separator + tail.tagged(clipped),
+    padding: Math.max(0, available - used),
+  };
+}
+
+/**
+ * Drop the empty pieces and un-indent the first one.
+ *
+ * The first piece of a group sits against the right edge, so it carries no
+ * separator — otherwise a group of one would be indented by the gap that
+ * separates two.
+ */
+function normalizeSegments(segments: readonly RowSegment[]): RowSegment[] {
+  const kept = segments.filter((segment) => segment.plain !== '');
+  const first = kept[0];
+  if (first === undefined) return [];
+  return [{ ...first, separator: '' }, ...kept.slice(1)];
+}
+
+/** The columns a group of pieces occupies. */
+function measureSegments(segments: readonly RowSegment[]): number {
+  let width = 0;
+  for (const segment of segments) {
+    width += visibleWidth(segment.separator ?? SEGMENT_GAP);
+    width += visibleWidth(segment.plain);
+  }
+  return width;
+}
+
+/** The coloured rendering of a group. */
+function renderSegments(segments: readonly RowSegment[]): string {
+  return segments
+    .map((segment) => `${segment.separator ?? SEGMENT_GAP}${segment.tagged(segment.plain)}`)
+    .join('');
 }
 
 /** Clip plain text to `maxWidth` visible columns, counting code points. */

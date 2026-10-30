@@ -20,9 +20,13 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import type { SessionPermissionProfile } from '@duya/agent-protocol';
 import type { TuiSlashCommandDef, TuiSlashContext, TuiSlashOutcome } from './types.js';
 import { loadSessionMessages, mintSessionId, updateSession } from './shared.js';
+import {
+  permissionModeFromProfile,
+  profileForPermissionMode,
+  type TuiPermissionMode,
+} from '../permission-mode.js';
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -98,24 +102,16 @@ const RENAME_COMMAND: TuiSlashCommandDef = {
 /**
  * Composer permission mode ↔ the `permission_profile` the session row stores.
  * Mirrors ChatView's mapping so the two surfaces show the same three modes.
+ *
+ * The mapping itself lives in `tui/permission-mode.ts`, because the composer's
+ * badge and the cycling key use the same vocabulary — a second copy of it here
+ * is a second thing that can drift from the badge the user reads.
  */
-type PermissionUi = 'ask' | 'auto' | 'bypass';
-
-const PERMISSION_LABELS: Record<PermissionUi, string> = {
+const PERMISSION_LABELS: Record<TuiPermissionMode, string> = {
   ask: 'ask (ask before each action)',
   auto: 'auto (review automatically, block when unsure)',
   bypass: 'bypass (accept everything — full access)',
 };
-
-function permissionToUi(profile: SessionPermissionProfile): PermissionUi {
-  if (profile === 'default') return 'ask';
-  if (profile === 'full_access') return 'bypass';
-  return 'auto';
-}
-
-function uiToPermission(mode: PermissionUi): SessionPermissionProfile {
-  return mode === 'bypass' ? 'full_access' : mode === 'ask' ? 'default' : 'auto';
-}
 
 const PERMISSION_COMMAND: TuiSlashCommandDef = {
   name: 'permission',
@@ -124,8 +120,8 @@ const PERMISSION_COMMAND: TuiSlashCommandDef = {
   description: 'Show or set the permission mode',
   group: 'Session ops',
   async run(ctx, args): Promise<TuiSlashOutcome> {
-    const modes: PermissionUi[] = ['ask', 'auto', 'bypass'];
-    const current = permissionToUi(ctx.session.permissionMode);
+    const modes: TuiPermissionMode[] = ['ask', 'auto', 'bypass'];
+    const current = permissionModeFromProfile(ctx.session.permissionMode);
     let arg = args.trim().toLowerCase();
 
     if (arg === '') {
@@ -154,14 +150,14 @@ const PERMISSION_COMMAND: TuiSlashCommandDef = {
       arg = picked;
     }
 
-    if (!modes.includes(arg as PermissionUi)) {
+    if (!modes.includes(arg as TuiPermissionMode)) {
       ctx.tui.printError(
         `Invalid permission mode "${args.trim()}". Use one of: ${modes.join(' | ')}`,
       );
       return { kind: 'handled' };
     }
 
-    const profile = uiToPermission(arg as PermissionUi);
+    const profile = profileForPermissionMode(arg as TuiPermissionMode);
     if (profile === ctx.session.permissionMode) {
       ctx.tui.printNotice(`Permission mode is already ${arg}.`);
       return { kind: 'handled' };

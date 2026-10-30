@@ -7,6 +7,8 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
+| TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，PR #547 等 review 与授权 |
+| 产品独立发布 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | Desktop / CLI 独立 tag 与 workflow；CLI 自包含包、校验和 Codex 风格安装器 |
 | 模型输出截断恢复 | [2026-10-29 输出截断恢复](active/2026-10-29-output-truncation-recovery.md) | 输出预算传递与有界续写已实现；282 项回归及类型/架构门禁通过，Draft PR #536 等 CI/review |
 | TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host lease 生命周期日志 + idle 停机先等回合 settle、可被重附着取消；CLI 重申请 lease 并从游标续订事件流；PR #505 已合并（`eaa33d80`），真机冒烟待用户 |
 | TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a 与 632 的 Host 写面已实现待合并；面板两片等 630a 合入后开工 |
@@ -58,6 +60,8 @@
 | 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 已合并（PR #492，`333b025a`）；仅剩真机 Electron 点击验收未跑 |
 | 插件 App 主题通道 | [2026-10-27 插件 App 主题通道](active/2026-10-27-plugin-app-theme-channel.md) | 宿主向沙箱 iframe 推 `data-theme`；插件侧 token 层在 marketplace PR，两者需成对生效 |
 | TUI 本地 shell UI | [2026-10-28 TUI 本地 shell 命令的专属 UI](archive/2026-10-28-tui-shell-command-ui.md) | composer 红色 `!` 提示符 + 本地命令 "You ran" 独立卡片；PR #533 已合并（`bd526d3b`），真机冒烟待用户 |
+| TUI 权限 banner | [2026-10-29 TUI 权限 banner 与 Shift+Tab 快速切换](archive/2026-10-29-tui-permission-banner.md) | footer 右下角权限徽标 + Shift+Tab 循环（bypass 二次确认）；PR #538 已合并（`73710504`），真机冒烟待用户 |
+| TUI 补全弹窗行宽 | [2026-10-29 TUI 补全弹窗的行宽](archive/2026-10-29-tui-popup-row-width.md) | 候选描述截断而非折行，弹窗不再比预留高、最后一个候选重新可见；修 #531 带进 master 的既有红用例；PR #542 已合并（`c8b47c3f`） |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 
