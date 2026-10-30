@@ -7,6 +7,7 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
+| Provider 校验与运行收尾 | [2026-10-29 校验与收尾修复](active/2026-10-29-provider-validation-finalization.md) | 本地门禁通过，后续 PR #548 依赖 #546，待 review/集成 |
 | TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，PR #547 等 review 与授权 |
 | 产品独立发布 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | Desktop / CLI 独立 tag 与 workflow；CLI 自包含包、校验和 Codex 风格安装器 |
 | 模型输出截断恢复 | [2026-10-29 输出截断恢复](active/2026-10-29-output-truncation-recovery.md) | 输出预算传递与有界续写已实现；282 项回归及类型/架构门禁通过，Draft PR #536 等 CI/review |

@@ -126,6 +126,20 @@ export function createHostLocalProviderManagementApi(
         // a different provider resolves inconsistently depending on which
         // reader trusts which.
         next.id = id;
+        if (input.validateConnection !== undefined && typeof input.validateConnection !== 'boolean') {
+          throw new HostProviderApiError(400, 'invalid_provider', 'validateConnection must be a boolean');
+        }
+        if (input.validateConnection === true) {
+          const outcome = await probeProvider({
+            providerId: id,
+            providerType: write.providerType,
+            baseUrl: write.baseUrl,
+            apiKey: secretsKey(secrets, id) ?? '',
+          }, options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl });
+          if (!outcome.ok) throw new HostProviderApiError(400, 'provider_probe_failed', outcome.message ?? `Connection test failed (${outcome.code})`);
+          // An external writer may have changed the files while the probe ran.
+          await openForWrite(files, snapshot.revision);
+        }
         snapshot.providers[id] = next;
 
         await persist(files, snapshot, secrets, { providers: true });
@@ -231,6 +245,7 @@ async function listFromFiles(files: ProviderFiles): Promise<HostProviderList> {
     );
     return {
       providers,
+      supportsCandidateValidation: true,
       ...(activeProviderId === '' ? {} : { activeProviderId }),
       ...(activeModel === '' ? {} : { activeModel }),
       configRoot,

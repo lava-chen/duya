@@ -9,14 +9,8 @@
  * write-only) or outward (only `hasApiKey` and a mask), so the terminal never
  * holds a credential it could leak into a scrollback or a log line.
  *
- * ## Why the flow is save-then-test, not test-then-save
- *
- * The probe route takes a provider *id*, not a URL plus a key — that is what
- * keeps the key inside the Host process. An unsaved provider therefore cannot be
- * probed, and the plan's "test before saving" has to become: save, test, and put
- * the previous row back when the test fails. {@link addProvider} deletes the row
- * it just created and {@link changeProvider} rewrites the row it replaced, so a
- * failed test leaves the configuration exactly as it was.
+ * Host validates the candidate before writing. Failed probes preserve both
+ * configuration and credentials without returning old keys to the CLI.
  *
  * ## Why every write echoes the whole row
  *
@@ -170,49 +164,20 @@ async function promptModels(
   return models;
 }
 
-/**
- * Save one provider row and keep it usable.
- *
- * `previous` is the row this write replaces, if any. A failed probe restores it,
- * which is the only thing standing between "the connection I had" and "a row
- * that points somewhere broken" — the write already landed by the time the
- * probe runs.
- */
+/** Validate the candidate in Host memory, then commit it without client rollback. */
 async function writeProvider(
   ctx: TuiSlashContext,
   input: HostProviderWriteInput,
   previous: HostProviderDetail | undefined,
 ): Promise<boolean> {
   try {
-    const saved = await ctx.client.upsertProvider(input);
+    const saved = await ctx.client.upsertProvider({ ...input, validateConnection: true });
     const providerId = saved.provider.providerId;
-    const probe = await ctx.client.testProvider(providerId);
-    if (!probe.ok) {
-      if (previous === undefined) {
-        await ctx.client.deleteProvider(providerId, saved.revision).catch(() => undefined);
-        ctx.tui.printError(`Saved and removed again: the connection test failed — ${describeProbe(probe)}`);
-        return false;
-      }
-      await ctx.client
-        .upsertProvider({
-          providerId: previous.providerId,
-          name: previous.name,
-          alias: previous.alias ?? '',
-          providerType: previous.providerType,
-          baseUrl: previous.baseUrl,
-          models: previous.models,
-          defaultModel: previous.defaultModel ?? '',
-          expectedRevision: saved.revision,
-        })
-        .catch(() => undefined);
-      ctx.tui.printError(`Restored the previous settings: the connection test failed — ${describeProbe(probe)}`);
-      return false;
-    }
     ctx.tui.printNotice(
       // Keyed on whether a row was replaced, not on whether the input carried
       // an id: the wizard names the id it is about to create, so an absent
       // `providerId` would report every new provider as an update.
-      `${previous === undefined ? 'Added' : 'Updated'} ${saved.provider.name} (${providerId}) · ${describeProbe(probe)}`,
+      `${previous === undefined ? 'Added' : 'Updated'} ${saved.provider.name} (${providerId})`,
     );
     return true;
   } catch (error) {
@@ -421,6 +386,10 @@ async function runProvider(ctx: TuiSlashContext, args: string): Promise<TuiSlash
     return { kind: 'handled' };
   }
 
+  if (list.supportsCandidateValidation !== true) {
+    ctx.tui.printError('Update and restart the Host before editing providers.');
+    return { kind: 'handled' };
+  }
   const requested = args.trim();
   if (requested === 'add') {
     await addProvider(ctx, list);

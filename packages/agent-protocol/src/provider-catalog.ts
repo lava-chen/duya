@@ -148,6 +148,8 @@ export interface HostProviderDetail {
 
 /** The whole provider table, as writable. */
 export interface HostProviderList {
+  /** True only when upsert supports probing candidates before persistence. */
+  readonly supportsCandidateValidation?: boolean;
   readonly providers: readonly HostProviderDetail[];
   readonly activeProviderId?: string;
   readonly activeModel?: string;
@@ -182,6 +184,8 @@ export interface HostProviderWriteInput {
    * mask back is how a client turns a working provider into a 401.
    */
   readonly apiKey?: string;
+  /** Probe the candidate in Host memory before writing any configuration. */
+  readonly validateConnection?: boolean;
   readonly expectedRevision?: string;
 }
 

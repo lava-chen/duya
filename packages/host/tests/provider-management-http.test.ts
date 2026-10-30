@@ -426,3 +426,15 @@ describe('the Host provider routes', () => {
     expect((error as { message: string }).message).toContain('name is required');
   });
 });
+
+it('carries candidate validation over HTTP and preserves the old key on refusal', async () => {
+  const root = tmpRoot();
+  fs.writeFileSync(path.join(root, 'config.toml'), CONFIG);
+  fs.writeFileSync(path.join(root, 'secrets.json'), JSON.stringify({ 'providers.openai.apiKey': SECRET }));
+  const beforeConfig = configOf(root);
+  const beforeSecrets = fs.readFileSync(path.join(root, 'secrets.json'), 'utf8');
+  const { client } = await startProviderServer(root);
+  await expect(client.upsertProvider({ providerId: 'openai', name: 'OpenAI', providerType: 'openai-compatible', baseUrl: 'https://example.test/v1', models: ['m'], apiKey: '', validateConnection: true })).rejects.toThrow();
+  expect(configOf(root)).toBe(beforeConfig);
+  expect(fs.readFileSync(path.join(root, 'secrets.json'), 'utf8')).toBe(beforeSecrets);
+});
