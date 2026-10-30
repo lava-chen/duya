@@ -45,6 +45,12 @@
 *.mjs        text eol=lf
 *.cjs        text eol=lf
 
+# POSIX shell scripts must keep LF for the same reason, and one step harder:
+# `/bin/sh` rejects a CRLF `set -eu` with "set: Illegal option -", so the
+# script dies before it can do anything. install.sh shipped that way to every
+# Windows contributor because `* text=auto` handed them a CRLF checkout.
+*.sh         text eol=lf
+
 # The one tracked .ts file that carries a shebang, for the same reason.
 scripts/migrate-projects-paths.ts   text eol=lf
 
