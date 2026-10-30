@@ -1533,6 +1533,7 @@ async function persistTurnSuggestion(
     turnSuggestionAbortBySession.set(currentSessionId, controller);
     try {
         const { suggestion } = await generateTurnSuggestion(messages, llmClient, controller.signal, currentSessionId);
+        if (suggestion === null) return;
         await turnSuggestionDb.save({
             id: randomUUID(),
             sessionId: currentSessionId,
