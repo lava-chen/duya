@@ -5,6 +5,9 @@ REPOSITORY=${DUYA_GITHUB_REPOSITORY:-lava-chen/duya}
 DUYA_HOME=${DUYA_HOME:-${HOME}/.duya}
 BIN_DIR=${DUYA_BIN_DIR:-${HOME}/.local/bin}
 REQUESTED_VERSION=${DUYA_VERSION:-latest}
+# Written into the generated launcher so a later run can tell an installer-managed
+# shim apart from a foreign file that happens to sit at the same path.
+SHIM_MARKER=DUYA_INSTALLER_SHIM_V1
 
 usage() {
   cat <<'EOF'
@@ -138,7 +141,11 @@ package=$temporary/extracted/duya-cli
 [ "$(cat "$package/VERSION")" = "$version" ] || fail 'release package version does not match its tag'
 
 if [ -e "$BIN_DIR/duya" ] && [ ! -L "$BIN_DIR/duya" ]; then
-  fail "$BIN_DIR/duya already exists and is not a Duya installer symlink; move it before installing"
+  # The launcher is a generated script, not a symlink, so recognising it by its
+  # marker keeps reinstalls and `duya upgrade` working.
+  if ! grep -q "$SHIM_MARKER" "$BIN_DIR/duya" 2>/dev/null; then
+    fail "$BIN_DIR/duya already exists and was not created by the Duya installer; move it before installing"
+  fi
 fi
 
 release_dir=$DUYA_HOME/releases/$version
@@ -155,6 +162,7 @@ shim_tmp=$BIN_DIR/.duya.$$
 duya_home_quoted=$(printf '%s' "$DUYA_HOME" | sed "s/'/'\\\\''/g")
 {
   printf '%s\n' '#!/bin/sh' 'set -eu'
+  printf '# %s\n' "$SHIM_MARKER"
   printf 'DUYA_HOME=${DUYA_HOME:-%s}\n' "'$duya_home_quoted'"
   cat <<'EOF'
 if [ "${1-}" = upgrade ]; then
