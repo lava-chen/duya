@@ -36,6 +36,7 @@ import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '@duya/host/
 import { compressProjectedToolMessages } from '@duya/agent-runtime/context/compact/projectionCompress';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
+import { resolveWorkerOutputBudget } from './worker-model-output-budget.js';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
 import type { TurnOutputSummary } from '@duya/agent-runtime';
 import { shouldReplayStreamAfterError, streamReplayDelayMs, STREAM_REPLAY_MAX_ATTEMPTS, } from '@duya/host/worker-execution/stream-retry';
@@ -184,6 +185,12 @@ export class WorkerSession implements AgentRuntime {
     }
     assembleTurnContext(options: ChatOptions | undefined, prompt: string | MessageContent[]): TurnContext {
         return TurnAssembler.build(this, options, prompt);
+    }
+    readModelOutputTokens(options?: ChatOptions): number {
+        return resolveWorkerOutputBudget({
+            ...this.outputBudgetSource,
+            ...definedProperties({ maxTokens: options?.maxTokens ?? this.outputBudgetSource.maxTokens }),
+        });
     }
     readModelClient(): AIClient {
         return this.llmClient;
@@ -1017,6 +1024,7 @@ export class WorkerSession implements AgentRuntime {
     private modeCtx: ModeModifierContext | undefined;
     private subagentDeps!: SubagentRunDeps;
     private modeCoordinator: ModeCoordinator | undefined;
+    private readonly outputBudgetSource: Parameters<typeof resolveWorkerOutputBudget>[0];
     readonly runtimeConfig: AgentOptions['runtimeConfig'] | undefined;
     private readonly modelAttribution: {
         providerId: string;
@@ -1099,6 +1107,7 @@ export class WorkerSession implements AgentRuntime {
         };
         this.model = options.model;
         this.runtimeConfig = options.runtimeConfig;
+        this.outputBudgetSource = definedProperties({ model: options.model, runtimeConfig: options.runtimeConfig, maxTokens: options.maxTokens });
         this.communicationPlatform = options.communicationPlatform;
         this.language = options.language;
         this.visualAnalysis = new VisualAnalysisService(options.visionConfig, resolveDefaultBaseURL);

@@ -111,9 +111,12 @@ export class TranscriptPane implements UIComponent<TranscriptPaneProps> {
 
   paint(scene: SceneCanvas, viewport: Viewport): void {
     const options = this.optionsFor(viewport.width);
-    const heights = this.props.renderer.heights(this.props.model, options);
-    const window = visibleWindow(heights, viewport.height, this.props.scrollTop, this.props.following);
+    // One walk of the document: heights derive from the same block arrays the
+    // paint loop consumes, instead of a second `heights()` pass re-deriving
+    // the identical numbers.
     const blocks = this.props.renderer.blocks(this.props.model, options);
+    const heights = blocks.map((blockLines) => blockLines.length);
+    const window = visibleWindow(heights, viewport.height, this.props.scrollTop, this.props.following);
 
     let line = 0;
     let painted = 0;

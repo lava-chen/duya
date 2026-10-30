@@ -7,6 +7,9 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | Provider 校验与运行收尾 | [2026-10-29 校验与收尾修复](active/2026-10-29-provider-validation-finalization.md) | 本地门禁通过，后续 PR #548 依赖 #546，待 review/集成 |
+| TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，PR #547 等 review 与授权 |
+| 产品独立发布 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | Desktop / CLI 独立 tag 与 workflow；CLI 自包含包、校验和 Codex 风格安装器 |
+| 模型输出截断恢复 | [2026-10-29 输出截断恢复](active/2026-10-29-output-truncation-recovery.md) | 输出预算传递与有界续写已实现；282 项回归及类型/架构门禁通过，Draft PR #536 等 CI/review |
 | TUI 租约韧性 | [2026-10-26 TUI 租约丢失与事件流中断](active/2026-10-26-tui-lease-loss-resilience.md) | Host lease 生命周期日志 + idle 停机先等回合 settle、可被重附着取消；CLI 重申请 lease 并从游标续订事件流；PR #505 已合并（`eaa33d80`），真机冒烟待用户 |
 | TUI 四能力系列 | [630 系列](active/630-tui-capabilities-series/README.md) | 630a 与 632 的 Host 写面已实现待合并；面板两片等 630a 合入后开工 |
 | TUI 插件查看与 mention | [2026-10-25 TUI 插件查看与 mention](active/2026-10-25-tui-plugin-view-and-mention.md) | 四查看命令交互化 + `@` 插件 mention 已过门禁；steer 改写已补，PR #497 已合并（`3213e6e0`），真机冒烟待用户 |
@@ -53,9 +56,12 @@
 | TUI 上下文占用 | [2026-10-23 TUI 上下文占用](active/2026-10-23-tui-context-usage.md) | 占用率与会话花费拆开，已过用例与变异验证，待门禁与 PR |
 | TUI 后台任务视图 | [2026-10-24 TUI 后台任务视图](active/2026-10-24-tui-background-tasks.md) | Host 只读路由、subagent 投影、摘要行与任务视图已落地并过门禁；已合并 master（`8449a39b`），PR #464 等 CI 重跑与授权集成 |
 | TUI 忙碌期消息 | [2026-10-24 TUI steer 与排队](active/2026-10-24-tui-busy-message-steer.md) | Enter=steer / Tab=排队 / Esc=打断发送与 `/queue` 逐条管理已落地并过门禁；PR #454 待 review |
+| TUI 项目概念统一 | [2026-10-28 TUI 项目概念统一](active/2026-10-28-tui-project-catalog.md) | TUI `/project` 从会话派生目录改为读 `projects` 表，新增 `/project add`；推翻 633「不取 `/v1/projects`」的决定 |
 | 市场来源删除与隐藏 | [2026-10-25 市场来源可见性](active/2026-10-25-marketplace-source-visibility.md) | 已合并（PR #492，`333b025a`）；仅剩真机 Electron 点击验收未跑 |
 | 插件 App 主题通道 | [2026-10-27 插件 App 主题通道](active/2026-10-27-plugin-app-theme-channel.md) | 宿主向沙箱 iframe 推 `data-theme`；插件侧 token 层在 marketplace PR，两者需成对生效 |
 | TUI 本地 shell UI | [2026-10-28 TUI 本地 shell 命令的专属 UI](archive/2026-10-28-tui-shell-command-ui.md) | composer 红色 `!` 提示符 + 本地命令 "You ran" 独立卡片；PR #533 已合并（`bd526d3b`），真机冒烟待用户 |
+| TUI 权限 banner | [2026-10-29 TUI 权限 banner 与 Shift+Tab 快速切换](archive/2026-10-29-tui-permission-banner.md) | footer 右下角权限徽标 + Shift+Tab 循环（bypass 二次确认）；PR #538 已合并（`73710504`），真机冒烟待用户 |
+| TUI 补全弹窗行宽 | [2026-10-29 TUI 补全弹窗的行宽](archive/2026-10-29-tui-popup-row-width.md) | 候选描述截断而非折行，弹窗不再比预留高、最后一个候选重新可见；修 #531 带进 master 的既有红用例；PR #542 已合并（`c8b47c3f`） |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 

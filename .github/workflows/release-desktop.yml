@@ -1,9 +1,9 @@
-name: Release
+name: Release Desktop
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'desktop/v*'
 
 permissions:
   contents: write
@@ -35,6 +35,12 @@ jobs:
           repository: lava-chen/duya-marketplace
           ref: main
           path: .duya-marketplace
+
+      - name: Verify Desktop release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#desktop/v}"
+          node -e 'const fs=require("node:fs"); const expected=process.argv[1]; const root=JSON.parse(fs.readFileSync("package.json","utf8")).version; const desktop=JSON.parse(fs.readFileSync("apps/desktop/package.json","utf8")).version; if (root !== expected || desktop !== expected) { console.error(`Release tag ${expected} must match root (${root}) and Desktop (${desktop}) versions`); process.exit(1); }' "$version"
 
       - uses: actions/setup-node@v4
         with:

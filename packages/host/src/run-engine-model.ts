@@ -593,6 +593,7 @@ export function createClientModelPort(
         ...(request.provider === undefined ? {} : { provider: request.provider }),
       });
 
+      const pendingCalls: ModelFrame[] = [];
       for await (const event of stream) {
         // Plan 610 D3. The PER-CALL usage tap, taken BEFORE `toModelFrame`
         // narrows the event, because this is the last point on the path where
@@ -603,7 +604,22 @@ export function createClientModelPort(
           options.onPerCallUsage(event.data);
         }
         const frame = toModelFrame(event);
+        if (frame?.type === 'tool_use') {
+          pendingCalls.push(frame);
+          continue;
+        }
+        if (frame?.type === 'turn_stopped') {
+          // Partial JSON may already look parseable. Never execute calls from
+          // a response the provider says was cut off or rejected.
+          if (frame.reason === 'tool_use' || frame.reason === 'end_turn' || frame.reason === 'stop_sequence') {
+            for (const call of pendingCalls) yield call;
+          }
+          pendingCalls.length = 0;
+        }
         if (frame !== null) yield frame;
+      }
+      if (pendingCalls.length > 0) {
+        throw new Error('The model stream ended before confirming tool-call completion.');
       }
     },
   };

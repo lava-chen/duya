@@ -260,6 +260,7 @@ export function selectRunDriverLeg(agent: EngineProductSession, run: RunHandle):
 export function createLegacyAssembleTurn(
     handle: RunTurnAssembly,
     attachments?: readonly FileAttachment[],
+    maxOutputTokens?: number,
 ): (input: TurnAssemblyInput) => Promise<AssembledTurn> {
     return async (input: TurnAssemblyInput): Promise<AssembledTurn> => {
         await handle.prepare?.();
@@ -273,6 +274,7 @@ export function createLegacyAssembleTurn(
         const withAttachments = await appendAttachmentContext(messages, attachments);
         return {
             systemPrompt: assembly.systemPrompt,
+            ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
             messages: toModelMessages(withAttachments),
             tools: assembly.tools.map(toToolDescriptor),
             catalogRevision: String(handle.resolved.registry.getCatalogRevision()),

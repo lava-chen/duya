@@ -56,7 +56,7 @@ export function buildProgram(): Command {
   program
     .name('duya')
     .description('DUYA Host control plane (serve, status, plugins, sessions, crons, channels, ...)')
-    .version('0.1.0');
+    .version(process.env.DUYA_CLI_VERSION ?? '0.1.0');
   buildControlPlane(program);
 
   // The Host is a long-running process command, so it is intentionally kept
