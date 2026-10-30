@@ -11,10 +11,12 @@ name: Model catalog refresh
 #   * when   — `schedule.cron` below (21:30 Beijing time). GitHub delays
 #               scheduled runs under load, so read it as "some time that
 #               night", not as a deadline.
-#   * how    — the per-shard allow lists in packages/ai/scripts/sync-models.mjs
-#               decide which upstream models are eligible. A model that is not
-#               on a list is never added; edit the lists and the next night
-#               follows them.
+#   * how    — packages/ai/scripts/sync-models.mjs scans each shard's full
+#               upstream catalogue and separates discovery from admission:
+#               every new id is reported, but only ids that pass the admission
+#               rules (not deprecated upstream, tool-capable, text-in/text-out,
+#               released within the recency window) are written. Checked-in ids
+#               are kept for as long as upstream still serves them.
 #   * merge  — automatic after targeted validation; protection still applies.
 #
 # A pull request with no added and no removed model id is normal. OpenRouter
@@ -79,12 +81,29 @@ jobs:
       # a red job and no pull request — the directory is never rewritten from a
       # half-read catalogue.
       #
-      # The output is kept: it is the record of which ids appeared and which
-      # disappeared, and the pull request body quotes it.
+      # The console output and the Markdown report are both kept: the report is
+      # the discovery record (admitted, held with reasons, removed, changed)
+      # and becomes the pull request body, whether or not the directory changed.
       - name: Refresh the model directory from upstream
         run: |
           set -euo pipefail
-          node packages/ai/scripts/sync-models.mjs --write | tee "$RUNNER_TEMP/sync-output.txt"
+          node packages/ai/scripts/sync-models.mjs --write \
+            --report="$RUNNER_TEMP/model-report.md" \
+            | tee "$RUNNER_TEMP/sync-output.txt"
+
+      # A night with no directory diff still has a discovery report — a new
+      # upstream model may be held rather than admitted — so the summary is
+      # written regardless of the next step's outcome. The file is absent when
+      # the upstream fetch failed, in which case the job is already red.
+      - name: Add the discovery report to the job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/model-report.md" ]; then
+            cat "$RUNNER_TEMP/model-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '上游抓取失败，本次没有生成发现报告。' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Detect whether the directory changed
         id: detect
@@ -182,6 +201,9 @@ jobs:
         if: steps.detect.outputs.changed == 'true'
         run: git push --force origin chore/ai-model-catalog-nightly
 
+      # The discovery report is the decision-relevant part of a refresh: a new
+      # id means a new model is now offered in the settings, a held id is one a
+      # human may choose to admit, and a removed id is one that is gone.
       - name: Open or update the pull request
         if: steps.detect.outputs.changed == 'true'
         env:
@@ -197,31 +219,25 @@ jobs:
           set -euo pipefail
           node <<'EOF' > "$RUNNER_TEMP/pr-body.md"
           const { execFileSync } = require('node:child_process');
-          const { readFileSync } = require('node:fs');
+          const { existsSync, readFileSync } = require('node:fs');
 
-          // The sync script prints, per shard, the ids upstream added and the
-          // ids it dropped. That list is the decision-relevant part of the
-          // refresh; the rest of the diff is context windows and prices.
-          const sync = readFileSync(`${process.env.RUNNER_TEMP}/sync-output.txt`, 'utf8');
-          const added = [];
-          const removed = [];
-          let shard = '';
-          for (const line of sync.split('\n')) {
-            const header = line.match(/^== (\S+)/);
-            if (header) {
-              shard = header[1];
-              continue;
-            }
-            const plus = line.match(/^\s+\+\d+: (.+)$/);
-            if (plus) {
-              for (const id of plus[1].split(', ')) added.push(`\`${id}\` — ${shard}`);
-              continue;
-            }
-            const minus = line.match(/^\s+-\d+: (.+)$/);
-            if (minus) {
-              for (const id of minus[1].split(', ')) removed.push(`\`${id}\` — ${shard}`);
-            }
-          }
+          // The sync script writes the discovery report. It is the body:
+          // admitted ids, held ids with reasons, removed ids and field changes,
+          // per shard. The file is absent only when the upstream fetch failed,
+          // in which case this step never runs.
+          const reportPath = `${process.env.RUNNER_TEMP}/model-report.md`;
+          const report = existsSync(reportPath)
+            ? readFileSync(reportPath, 'utf8').trim()
+            : '（本次刷新未生成发现报告。）';
+
+          // The report lists every discovered id, so it grows with the
+          // catalogue. GitHub rejects a pull request body over 65,536
+          // characters; the job summary keeps the full report.
+          const MAX_BODY = 60000;
+          const body =
+            report.length > MAX_BODY
+              ? `${report.slice(0, MAX_BODY)}\n\n…（报告已截断，完整清单见本次 job 的 Summary。）`
+              : report;
 
           const stat = execFileSync(
             'git',
@@ -229,24 +245,16 @@ jobs:
             { encoding: 'utf8' },
           ).trim();
 
-          const date = new Date().toISOString().slice(0, 10);
           const lines = [
-            `模型目录自动刷新（${date}）`,
-            '',
             '由 `.github/workflows/model-catalog.yml` 定时刷新，来源是 models.dev 与 OpenRouter 两个公开目录。',
             '**自动合并**：模型数据自检、Host 构建和 Worker Bundle 一致性校验通过后合入；异常保留 PR。',
+            '发现结果里的「未收录」候选不会写入目录，需要人工判断是否加入准入规则。',
             '',
-            '### 新增模型（会出现在设置里）',
-            '',
-            ...(added.length ? added : ['无']),
-            '',
-            '### 移除模型（不再出现在设置里）',
-            '',
-            ...(removed.length ? removed : ['无']),
+            body,
             '',
             '### 其余差异',
             '',
-            '上下文窗口、输出上限与价格的变化，以及随源码重建的 worker bundle。',
+            '文件级 diff 与随源码重建的 worker bundle：',
             '',
             '```',
             stat,
