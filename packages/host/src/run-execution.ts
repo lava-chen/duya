@@ -47,6 +47,7 @@ import type {
   PluginAppInvocationResult,
 } from '@duya/agent-protocol';
 import { isPermissionPolicyMode, lessPermissivePermissionMode, type PermissionPolicyMode } from '@duya/agent-protocol';
+import { profileToAgentMode } from '@duya/agent-runtime/authorization/profile-bridge';
 import { randomUUID } from 'node:crypto';
 import type { RunRepository } from './repository-port.js';
 import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
@@ -595,6 +596,34 @@ export class HostRunExecutionController {
   /** The supervision pieces, exposed so the owning process can shut them down. */
   get supervision(): { workerManager: WorkerManager; registry: WorkerSessionRegistry } {
     return { workerManager: this.#workerManager, registry: this.#registry };
+  }
+
+  /**
+   * Push a session's permission profile to its RUNNING worker.
+   *
+   * ## Why the row alone is not enough
+   *
+   * The permission gate asks for the mode on EVERY decision -- it reads a
+   * per-call accessor and never snapshots one -- so a worker that is told the
+   * new mode answers the next decision under it, even mid-turn. The row only
+   * reaches the NEXT turn.
+   *
+   * ## Why the profile is translated here
+   *
+   * The row speaks `default` / `auto` / `full_access` and the agent speaks
+   * `default` / `auto` / `bypassPermissions`. The agent does not recognise
+   * `full_access` and would fall back to `default`, so the translation goes
+   * through the repository's own bridge instead of a second mapping here.
+   *
+   * Returns false when no worker is alive for the session. The row stays the
+   * durable fallback for the next turn.
+   */
+  setSessionPermissionMode(sessionId: string, profile: string): boolean {
+    return this.#workerManager.sendCommand(sessionId, {
+      type: 'permission:set',
+      sessionId,
+      mode: profileToAgentMode(profile),
+    });
   }
 
   /** A worker cannot lend its previous attempt the authority of a later run. */
