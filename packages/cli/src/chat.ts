@@ -1110,11 +1110,11 @@ export async function chatTui(
         label: `${index + 1}. ${draft.mode === 'steer' ? '↳ ' : ''}${oneLine(draft.text)}`,
         value: draft.key,
         description: draft.mode === 'steer'
-          ? 'steer · the running turn reads it at its next step'
+          ? 'sent · the running turn reads it at its next step'
           : 'queued · starts after the running turn',
       })),
     ];
-    const selected = await tui.choose('Pending drafts', choices);
+    const selected = await tui.choose('Drafts', choices);
     if (selected === null) return;
     if (selected === RESUME_QUEUE) {
       queue.resume();
@@ -1211,9 +1211,10 @@ export async function chatTui(
    * the same one the Desktop's composer uses. That is what makes the badge
    * true on both surfaces: there is one mode, and it lives in one row.
    *
-   * The change lands for the NEXT turn. A run already in flight keeps the
-   * mode it started with, which is what the user expects: the approval they
-   * gave was for that turn.
+   * The change lands for the turn that is running NOW: the Host pushes the
+   * new mode to the live worker, and the permission gate reads the mode on
+   * every decision, so the next tool call is judged under it. The row stays
+   * the durable record, so a turn that starts later reads the same mode.
    */
   async function applyPermissionMode(mode: TuiPermissionMode): Promise<void> {
     const profile = profileForPermissionMode(mode);

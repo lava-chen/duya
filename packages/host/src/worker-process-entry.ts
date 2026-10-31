@@ -16,6 +16,7 @@ import { parseUsageCall, createTurnUsageLedger, foldUsageCall } from '@duya/agen
 import { seedTokenUsageFromHistory, parsePersistedTokenUsage } from '@duya/agent-core/usage/seed-token-usage';
 import { messageDb, attachmentDb, pluginDb, settingDb, sessionDb, toolApprovalDb, turnReviewDb, turnSuggestionDb, goalDb, pluginAppBindingDb, } from '@duya/host/worker-db-client';
 import { createSurfaceAwarePermissionHandler } from '@duya/host/authorization/worker-approval-card';
+import { readSessionPermissionProfile } from './authorization/session-permission-profile.js';
 import { enqueue, dequeue, hasCommandsInQueue, clearCommandQueue, getCommandQueueLength, } from '@duya/host/worker-command-queue';
 import type { QueuedCommand } from '@duya/host/worker-command-queue';
 import { generateSessionTitle } from '@duya/host/worker-session/title-generator';
@@ -1847,15 +1848,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         const systemPromptTokensEstimate = effectiveSystemPrompt
             ? estimateMessagesTokens([{ role: 'assistant', content: effectiveSystemPrompt }])
             : 0;
-        let rowProfile: string | null = null;
-        try {
-            const sessionRow = sessionDb.get(msg.sessionId);
-            rowProfile = (sessionRow as {
-                permission_profile?: string | null;
-            } | null)?.permission_profile ?? null;
-        }
-        catch {
-        }
+        // The session row owns the permission profile, and the row is reached
+        // over IPC -- so the read has to be awaited. Reading the field off the
+        // pending request instead answered `undefined` every time, and the
+        // agent started every session as `default` whatever the row said.
+        const rowProfile = await readSessionPermissionProfile(msg.sessionId);
         const resolved = resolveChatStartAgentMode({
             rowProfile,
             optionOverride: msg.options?.permissionModeOverride,
