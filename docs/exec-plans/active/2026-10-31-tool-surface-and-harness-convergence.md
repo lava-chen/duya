@@ -73,7 +73,7 @@
 | F21 待复现风险 | 工具命名/归属变化会影响历史调用、compact、resume、缓存、审批卡与 UI renderer | W8/W10 覆盖兼容，保留原始历史，不用简单全局替换 |
 | F22 设计差异 | Codex 支持 direct/deferred 与 code-mode 两轴，按模型能力选 patch/search；Duya 主链是三档暴露和通用 invoke | W2/W3 先做可解释策略和 provider fallback；code mode 作为后置候选，不先照搬六个 enum |
 | F23 已确认 | deferred dispatcher 的 outcome 显式转发 result/error/blocks/structured，未通用透传底层 metadata | W8 核对 fileSnapshots、partial 和其他 metadata 的端到端消费者；不凭局部丢字段直接宣称所有恢复均已损坏 |
-| F24 已确认 | BOT_TOOLSET（agent-core）写 `SendMessage`，工具注册名是 `send_message`（capabilities SendMessageTool/constants.ts）；精确 allowlist 提升不生效，bot 的发声工具首轮不可见，仅余 catalog/invoke 路径（[PR #555](https://github.com/lava-chen/duya/pull/555) census 钉住） | W4 修名单与注册名对齐（或建立别名解析）；修复前不得收敛 bot 的 catalog 依赖 |
+| F24 已修复待集成 | BOT_TOOLSET（agent-core）写 `SendMessage`，工具注册名是 `send_message`（capabilities SendMessageTool/constants.ts）；精确 allowlist 提升不生效，bot 的发声工具首轮不可见，仅余 catalog/invoke 路径（[PR #555](https://github.com/lava-chen/duya/pull/555) census 钉住）。修复见 [PR #557](https://github.com/lava-chen/duya/pull/557)（BOT_TOOLSET 对齐注册名 + plan 501 delivery 判定双名兼容 replay；permissions GLOBAL_ALWAYS_ALLOWED_TOOLS 的同名漂移属权限语义，留 W4 裁决） | 集成后 bot 首轮直呼 `send_message`；W4 收敛 catalog 依赖前先确认本修复已合并 |
 | F25 已确认 | 最终请求出现 `progress_update`，不在 `builtin.ts` 静态注册清单内（装配期动态注入）；census worker-hint 终列 23 个工具与静态 20 eager 不一致即由此而来 | W0 台账给 `progress_update` 记 owner/来源；W9 诊断输出须能解释动态注入 |
 | F26 已确认 | 调度分类按外层名：`mcp_*` 直连 READ（并发 5），`tool_invoke` fail-closed SYSTEM（独占串行）——同一目标 hint 下可并发、search 下必串行，方向保守但存在模式悬崖（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分钉住）；取消传播经 wrapper context 到达目标，与直连等价，不合作目标在两条路径同样孤儿化 | W1 差分维持既有结论范围；W3/W4 评估 invoke 串行对 search 模式发现吞吐的影响 |
 
@@ -347,6 +347,7 @@ npm run electron:build
 - [x] 编制 W0–W11 顺序、I01–I16 不变量、工具去留方向、跨端/provider/角色验收和退役条件。
 - [x] W0 首增量：请求级 census（worker/bot × hint/search/mention，8 场景 JSON 落 `docs-local/research/tool-surface-w0/`，本地保留）与 direct/invoke 三轴差分（调度/审批绑定/取消）；以 [Draft PR #555](https://github.com/lava-chen/duya/pull/555) 交付（base `a33bbb05`，head `80a07bf4`，2 个测试文件，零生产代码改动）。F10 修订、F18 升级为已复现、新增 F24–F26。
 - [x] W0 台账：[工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31）。待决 7 项各带核对动作：`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession` action 归类、`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 状态源去重、`vision_analyze` 常驻成本、`ReactToMessage` 490 意图核对。
+- [x] F24 修复：[Draft PR #557](https://github.com/lava-chen/duya/pull/557)（叠在 #555 上；受影响 5 套件 55/55 绿，typecheck/architecture 过）。
 - [ ] W0 其余项：617 census 脚本核对与复用（已核对 `scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 - [ ] W1–W10 运行时实施；W11 为可延期裁决项。
 
@@ -373,6 +374,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：台账待决项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充。实施侧 W1 优先消化 F18（审批后重解析/冻结 args）与 F24（bot 发声工具名单对齐），两个修复都已有可失败测试锚定。
+下一动作：W1 优先消化 F18（审批后重解析/冻结 args，差分测试已锚定）；台账待决 7 项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充。#555→#557 按栈序集成。
 
 回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。

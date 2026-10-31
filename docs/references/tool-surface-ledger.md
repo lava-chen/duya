@@ -44,7 +44,7 @@
 
 | 工具 | 注册 | worker/bot | 字节 | 裁定 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| `send_message` | deferred | worker 无 / bot 应见（F24 漂移，现不可见） | 5062 | 产品 MCP | 616 T610d bot 簇；F24 修复前 bot 发声仅 catalog/invoke |
+| `send_message` | deferred | worker 无 / bot 见（F24 修复，[PR #557](https://github.com/lava-chen/duya/pull/557) 待集成） | 5062 | 产品 MCP | 616 T610d bot 簇；修复前 bot 发声仅 catalog/invoke |
 | `send_to_agent` | deferred | bot 见 | 1236 | 产品 MCP | 477 |
 | `post_to_room` | deferred | bot 见 | 318 | 产品 MCP | 478 |
 | `ReactToMessage` | deferred | 均无 | 359 | 产品 MCP | 490 P1 意图 always-exposed 未落地（已核对 builtin.ts:117 仍 deferred）；核对动作：490 是否仍要求提升 |
