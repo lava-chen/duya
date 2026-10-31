@@ -1,7 +1,8 @@
 # TUI 权限切换实时生效 + 已发 steer 的渲染
 
-状态：active · 负责人：mavis · 更新：2026-10-31
+状态：complete · 负责人：mavis · 更新：2026-10-31
 分支：fix/tui-permission-mode-live · worktree：E:\Projects\duya\.claude\worktrees\permission-live · base：a33bbb05 · owner：mavis
+集成：PR #554 由 `lava-chen` 以 merge commit `59cd3e3d` 合入 master（2026-10-31T10:25:52Z）。真机冒烟待用户。
 
 ## 目标与边界
 
@@ -29,7 +30,7 @@
 - [x] steer 预览行文案：`↳ steer` → `↳ sent`
 - [x] 回归测试（读侧单测 + 真 Host 跑 stub worker 的端到端 + 队列预览）
 - [x] 门禁（typecheck:all / architecture:check / host 与 cli 全量）
-- [ ] 推分支 + PR + 集成
+- [x] 推分支 + PR #554 + CI 全绿 + merge commit 合入 master
 
 ## 发现与决策
 
@@ -55,10 +56,11 @@
 | 工作区改动 | 同上 | `npm run architecture:check` | 0 | OK — no new boundary violations；「5 条基线指纹不再触发」在 master 上同样出现，非本次引入 |
 | 工作区改动 | 同上 | `npm run typecheck:all` | 0 | no new type errors（178 known across 101 keys）；electron gate 的「10 条基线 key 收缩」是既有状态 |
 | 工作区改动 | 同上 | `npm run bundle:worker` | 0 | worker bundle 重建；metafile 的输入差异 = 4 个改动的 host 源文件 + 1 个新模块，无关输入未变（bundle 产物 0 个 `\r`，内容与 master 一致） |
+| PR #554 head `a40720bc` | GitHub Actions（ubuntu-latest 22.x） | 必需检查 | 全绿 | architecture / build / test / test scope / typecheck 五项在最新 head 上通过 |
 
 ## 接续 / 结果
 
-已实现、已验证、待集成。两个提交：`7bf54e9b`（权限实时生效）与第二个提交（steer 渲染）。
-下一步：推分支 → 开 PR → 必需检查与 review 通过后，按授权用 merge commit 合入 master。
+已实现、已验证、已合并：PR #554，merge commit `59cd3e3d`。
+两个提交：`7bf54e9b`（权限实时生效）、`a40720bc`（steer 渲染）。
 真机冒烟待用户：TUI 里 `Shift+Tab` 切 `bypass` 后同一轮不再弹审批；steer 发出后预览行显示 `↳ sent`。
-回收：worktree 未回收（PR 未集成）。
+回收：worktree `permission-live` 已按 `scripts/remove-worktree.sh` 回收，分支 `fix/tui-permission-mode-live` 已删除。
