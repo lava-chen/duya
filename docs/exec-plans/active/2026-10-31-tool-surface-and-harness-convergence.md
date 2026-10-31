@@ -1,6 +1,6 @@
 # 工具暴露与 Harness 调用链收敛
 
-状态：active（计划编制，运行时实施未开始） · 负责人：Codex chat `01a19109-6a8c-7e00-b8b6-90b42e4de19e` · 更新：2026-10-31
+状态：active（W0 交付 + F18/F24 修复在 PR 待集成；W1–W10 实施未开始） · 负责人：Codex chat `01a19109-6a8c-7e00-b8b6-90b42e4de19e` · 更新：2026-10-31
 分支：`codex/tool-surface-audit` · managed worktree：`D:/codex/worktrees/tool-surface-audit/duya` · 计划起点：`7de85308e4936ea149ead56f51919f9252fb23cd` · 源码审计基线：`a33bbb0542f5effeb8484a64f8ca2cf217272e87`
 
 ## 1. 目标与边界
@@ -346,9 +346,11 @@ npm run electron:build
 - [x] 核对当前 pipeline、deferred dispatcher、Host 写门/执行位置、contributor 接缝；将确认问题与待复现风险分开。
 - [x] 编制 W0–W11 顺序、I01–I16 不变量、工具去留方向、跨端/provider/角色验收和退役条件。
 - [x] W0 首增量：请求级 census（worker/bot × hint/search/mention，8 场景 JSON 落 `docs-local/research/tool-surface-w0/`，本地保留）与 direct/invoke 三轴差分（调度/审批绑定/取消）；以 [Draft PR #555](https://github.com/lava-chen/duya/pull/555) 交付（base `a33bbb05`，head `80a07bf4`，2 个测试文件，零生产代码改动）。F10 修订、F18 升级为已复现、新增 F24–F26。
-- [x] W0 台账：[工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31）。待决 7 项各带核对动作：`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession` action 归类、`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 状态源去重、`vision_analyze` 常驻成本、`ReactToMessage` 490 意图核对。
+- [x] W0 台账：[工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31）。待决 7 项当日二轮核对完成（三项并行只读调查，裁定回写台账各行，证据带 file:line）：`wait_tasks` 不注册（legacy 非阻塞别名，转调 `get_task_output`）；worktree 三工具=W4 候选 bot 隐藏（bot 可见来源是 base profile `'*'` 通配，非 BOT_TOOLSET）；`MessageSession` 保持 typed（更正：无 action 枚举，是单发同步问答，与 `session` 非重复）；`plan`/`todo` 维持现状（非同源：文件工件 vs 会话 tasks 表）；`memory_write`/`write_stage1_policy`/`read_module` 保留或按需（前两者写入路径与读取根未强制对齐的坑入 W9）；`vision_analyze`=W4 候选降 deferred（schema 仅 0.7KB，按能力门控机制不存在）；`ReactToMessage` 维持 deferred（490 承诺 always-exposed 未落地且记录宣称已交付，漂移交 490 owner 更正）。
 - [x] F24 修复：[Draft PR #557](https://github.com/lava-chen/duya/pull/557)（叠在 #555 上；受影响 5 套件 55/55 绿，typecheck/architecture 过）。
 - [x] W1 F18 修复：[Draft PR #558](https://github.com/lava-chen/duya/pull/558)（叠在 #555 上；审批后重解析 + 参数绑定，新 2 例 + 差分翻转，19/19 + 回归 30/30 绿，typecheck/architecture 过）。
+- [x] CI 首轮核对与 bundle 门修复（2026-10-31）：#555 五项 CI 全绿；#557/#558 的 architecture job 失败根因是 `bundle:verify`（G8，CI step "Worker bundle freshness"）——两 PR 改了 agent-core/agent-runtime 源码但未重建已提交的 worker bundle，非边界违规。各自 `npm run bundle:worker` 重建并提交（#557 `a3f0b966`、#558 `b5e13518`）。随后两 PR 与 master CONFLICTING：#554（`7bf54e9b`）也重建过已提交 bundle，base 已陈旧——merge origin/master 进两分支（#557 `e92d0845`、#558 `86c99404`），bundle 冲突一律以合并后重建解决，`bundle:verify` FRESH 0/1017，受影响套件在合并树上重跑绿（F24 3 文件 33/33；F18 discovery 6 文件 33/33）。注意：本地 `npm run architecture:check` 不含 bundle 门，后续验证表补跑 `npm run bundle:verify`。
+- [x] #553 同步 master：merge `0e12c887` 解 docs/exec-plans/README.md 冲突（保留权限计划归档行与工具面行）。
 - [ ] W0 其余项：617 census 脚本核对与复用（已核对 `scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 - [ ] W1–W10 运行时实施；W11 为可延期裁决项。
 
@@ -368,6 +370,10 @@ npm run electron:build
 | `80a07bf4`（构建重生成 `ModuleTool/inline-content.ts` 换行） | 同上 | `npm run typecheck:all` | 0；fail 0 | 生成文件经规范化 hash 核对与 HEAD 一致后仅恢复该文件，未撤销手写改动 |
 | `80a07bf4` | 同上 | `npm run architecture:check` | 0；3001 条已容忍，无新增违规 | 未修改 baseline；5 个旧 fingerprint 不再触发的既有提示保持原样 |
 | `80a07bf4` 推送，Draft PR #555 开立 | 同上 | `git push -u origin` + `gh pr create --draft` | 0 | [PR #555](https://github.com/lava-chen/duya/pull/555)；未授权合并，review/CI 待跑 |
+| head `11c0dde8`/`f1f5ef64` | Windows / Git Bash | `gh pr checks` + `gh run view`（CI 首轮核对） | 1（CI 红） | #555 五项 SUCCESS；#557/#558 architecture FAILURE（run 41194593683），失败 step=Worker bundle freshness (bundle:verify)，非边界违规；build 被 skip |
+| F24 worktree `a3f0b966`、F18 worktree `b5e13518` | Windows / Git Bash / Node v24.16.0 | 各 worktree：`npm run bundle:worker` → commit `packages/host/bundle` → `npm run bundle:verify` | 0；修前 STALE 3/1016（F24 精确点名 bot-toolset.ts + 两个 send-message hooks）、修后 FRESH 0/1016 | F24 提交仅 worker-entry.js ±18 行 + metafile；F18 ±491 行；BashWorker/package.json 规范化后无 diff；推送后两 PR 与 master CONFLICTING |
+| F24 `e92d0845`、F18 `86c99404`（合 master 后） | 同上 | `git merge origin/master`（#554 的 bundle 重建致冲突）→ bundle 冲突以 `npm run bundle:worker` 重建解决 → merge commit → `bundle:verify` + 受影响套件 | 0；FRESH 0/1017；F24 3 文件 33/33、F18 discovery 6 文件 33/33 | 合并树上重验；已推送触发 CI 重跑 |
+| `0e12c887`（计划 worktree） | 同上 | `git merge origin/master` → 解 docs/exec-plans/README.md 冲突 → push | 0 | #553 CONFLICTING 解除；merge 带入 #554/#556 |
 
 类型检查构建重生成了 `ModuleTool/inline-content.ts` 的工作区换行；已证明 Git 规范化内容 hash 与 HEAD 同为 `6c4ca613a6aa629754cc50806689310cd7331ece`，仅恢复该生成文件，未撤销任何手写改动。ignored 构建产物留在本检出，不计入文档交付。
 
@@ -375,6 +381,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：集成序 #555 → #557/#558（两者互相独立，均叠在 #555 上）；集成后重验 F18/F24 场景。台账待决 7 项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充（超时/重连/compact/resume）。
+下一动作：确认 #557/#558 在新 head（`e92d0845`/`86c99404`，均已合 master）CI 全绿后向用户请求集成授权（集成序 #555 → #557/#558；两分支各自重建过 worker bundle，第二个 PR 合并时 bundle 必冲突，届时按集成后的树重出 bundle 再合并）。集成后重验 F18/F24 场景与 census 断言。随后：490 计划记录漂移交其 owner 更正；617 census 脚本复用（`scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）与失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 
 回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。
