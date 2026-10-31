@@ -485,3 +485,23 @@ registry 双拼写查找），另外 5 例是「不给无条件放行」的反�
   `duya_app` 走同一套 `[tools] exposure` 开关。
 - **与 580 的关系**：580 建的 catalog / exposure / tool_invoke / 稳定 tool_id 是本期的地基，
   本期不改 580 的任何机制形状。
+
+## 8. 2026-10-31 工具精简审计接续
+
+状态：评估完成，迁移未实施。owner：Codex chat `01a19109-6a8c-7e00-b8b6-90b42e4de19e`。
+分支：`codex/tool-surface-audit`；managed worktree：`D:/codex/worktrees/tool-surface-audit/duya`；base：`a33bbb0542f5effeb8484a64f8ca2cf217272e87`。
+独占路径：本节与 [工具面精简评估](../../references/tool-surface-audit.md)。workspace 工具未提供 `workspace_get_context`，本轮以版本化计划、当前 Git 和生产源码对账。
+
+- [x] 核对本机 session 结构、本地 Codex 源码、Duya 注册与 discovery、CLI 和 SessionSearch 能力差异。
+- [x] 提出工具去留、MCP/CLI/skill 边界和分期验收；没有修改工具实现或运行配置。
+- [ ] 后续实现：先取 provider/profile 实际工具基线，再补 CLI 检索与 worker 版本/身份/权限传递，最后撤销重复专用入口。
+
+建议调整 §3.1 的后续实施方向：`duya_cli` 不必再多迁一次 MCP，可在等价验收后改为 CLI skill；`SessionSearch` 补齐 CLI 能力后移除独立暴露。两项仍是建议，旧能力在验收前保留。基础编辑工具暂不删除；`apply_patch` 的部分失败反馈应先改善，再以模型评测选择默认暴露。
+
+验证环境：Windows / PowerShell / Node v24.16.0；验证 SHA 为上述 base，dirty 范围仅本计划与评估文档。`git diff --check` 与 Python Markdown 本地目标存在性检查均退出 0。按 testing.md 的纯文档检查范围未运行类型、架构、runtime/E2E 测试；不将文档检查描述成运行链通过。当前源码基线与本地 Codex SHA 见评估证据范围。
+
+交付：评估提交 `8ed652d6`，Draft PR [#553](https://github.com/lava-chen/duya/pull/553)。未合并；没有工具删除、运行配置变更或迁移验收。外部副作用仅任务分支 push 与创建 Draft PR。PR 未集成，保留检出与分支。
+
+接续入口：[工具暴露与 Harness 调用链收敛计划](2026-10-31-tool-surface-and-harness-convergence.md)。本次用户要求的跨工具面、provider、CLI/skill、运行调用链与恢复兼容统一在该计划维护；616 继续负责产品 MCP 的专题实现，不将旧目标清单视为全部完成。
+
+下一步：执行新计划 W0，请求级基线与 direct/invoke 差分；验收必须包含 CLI 与 SessionSearch 语义差异，不自动接手无关的 616 迁移卡。
