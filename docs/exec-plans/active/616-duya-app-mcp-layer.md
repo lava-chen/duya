@@ -500,4 +500,6 @@ registry 双拼写查找），另外 5 例是「不给无条件放行」的反�
 
 验证环境：Windows / PowerShell / Node v24.16.0；验证 SHA 为上述 base，dirty 范围仅本计划与评估文档。`git diff --check` 与 Python Markdown 本地目标存在性检查均退出 0。按 testing.md 的纯文档检查范围未运行类型、架构、runtime/E2E 测试；不将文档检查描述成运行链通过。当前源码基线与本地 Codex SHA 见评估证据范围。
 
-下一步：按评估的第 1 步建立最终请求工具面基线，验收必须包含 CLI 与 SessionSearch 语义差异；不自动接手无关的 616 迁移卡。PR 未集成前保留此检出与分支。
+交付：评估提交 `8ed652d6`，Draft PR [#553](https://github.com/lava-chen/duya/pull/553)。未合并；没有工具删除、运行配置变更或迁移验收。外部副作用仅任务分支 push 与创建 Draft PR。PR 未集成，保留检出与分支。
+
+下一步：按评估的第 1 步建立最终请求工具面基线，验收必须包含 CLI 与 SessionSearch 语义差异；不自动接手无关的 616 迁移卡。
