@@ -178,7 +178,7 @@ flowchart TD
 - [ ] 使用 config MCP + App Connector + 产品 builtin 各一组样本，覆盖显式 full/hint/search、默认值、mention、精确 allowlist/通配符、hidden、disabled、连接不可用和大 schema。
 - [ ] 复用 617 census/benchmark 入口；先核对脚本是否已经存在，再决定补齐。原始基线输出放本地研究目录，版本化仅存去敏 fixture、方法和摘要。
 - [ ] 建立成功操作基准与失败场景：发现命中、schema 失败、审批拒绝/暂停、超时、取消、重连/目录更新、compact/resume；保留文件/用例/错误签名。
-- [ ] 台账逐项注明“保留/按需/CLI/产品 MCP/外部/待决”、消费者、兼容映射和 owner，不留下“其他工具以后再说”的盲区。
+- [x] 台账逐项注明"保留/按需/CLI/产品 MCP/外部/待决"、消费者、兼容映射和 owner，不留下"其他工具以后再说"的盲区 → [工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31，基于 PR #555 census；待决项均带核对动作）。
 
 ### W1 — 真实目标解析与执行契约
 
@@ -346,7 +346,8 @@ npm run electron:build
 - [x] 核对当前 pipeline、deferred dispatcher、Host 写门/执行位置、contributor 接缝；将确认问题与待复现风险分开。
 - [x] 编制 W0–W11 顺序、I01–I16 不变量、工具去留方向、跨端/provider/角色验收和退役条件。
 - [x] W0 首增量：请求级 census（worker/bot × hint/search/mention，8 场景 JSON 落 `docs-local/research/tool-surface-w0/`，本地保留）与 direct/invoke 三轴差分（调度/审批绑定/取消）；以 [Draft PR #555](https://github.com/lava-chen/duya/pull/555) 交付（base `a33bbb05`，head `80a07bf4`，2 个测试文件，零生产代码改动）。F10 修订、F18 升级为已复现、新增 F24–F26。
-- [ ] W0 其余项：能力台账逐项裁定（保留/按需/CLI/产品 MCP/外部/待决）、617 census 脚本核对与复用、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
+- [x] W0 台账：[工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31）。待决 7 项各带核对动作：`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession` action 归类、`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 状态源去重、`vision_analyze` 常驻成本、`ReactToMessage` 490 意图核对。
+- [ ] W0 其余项：617 census 脚本核对与复用（已核对 `scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 - [ ] W1–W10 运行时实施；W11 为可延期裁决项。
 
 本轮没有可用 `workspace_get_context`/activity 工具；已以 Git、Draft PR、版本化计划和当前源码对账，未创建共享任务或记忆。沿用本会话独占 managed worktree，未触碰共享检出的未提交文件。
@@ -372,6 +373,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：W0 台账——按 census 的 49 注册 / 23 终列逐项登记"保留/按需/CLI/产品 MCP/外部/待决"、消费者与兼容映射（§4.1 清单为起点）；随后核对 617 census 脚本复用与失败场景矩阵扩充。实施侧 W1 优先消化 F18（审批后重解析/冻结 args）与 F24（bot 发声工具名单对齐），两个修复都已有可失败测试锚定。
+下一动作：台账待决项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充。实施侧 W1 优先消化 F18（审批后重解析/冻结 args）与 F24（bot 发声工具名单对齐），两个修复都已有可失败测试锚定。
 
 回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。
