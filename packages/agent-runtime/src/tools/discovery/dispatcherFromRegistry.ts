@@ -231,15 +231,54 @@ export function createToolInvokeDispatcherFromRegistry(
         }
       }
 
+      // Plan 580 D8 / tool-surface F18: the permission decision may wait on
+      // a human for minutes. Re-resolve the LIVE entry and re-validate the
+      // approved args against it, so a replace-set landing mid-approval
+      // cannot execute the pre-approval executor against the pre-approval
+      // schema. Re-resolution itself performs no side effects; anything the
+      // live check rejects surfaces as a named error, never as a silent
+      // downgrade.
+      const live = deps.registry.getCatalogEntryById(toolId);
+      if (!live) {
+        return errorResult('TOOL_NOT_FOUND', 'Tool no longer available', `Tool \`${toolId}\` was removed from the live registry while approval was pending.`);
+      }
+      if (live.exposure === 'hidden') {
+        return errorResult('TOOL_HIDDEN', 'Tool unavailable', `Tool \`${toolId}\` became hidden while approval was pending.`);
+      }
+      if (live.exposure !== 'deferred') {
+        return errorResult('TOOL_IS_EAGER', 'Tool exposure changed', `Tool \`${toolId}\` is no longer deferred. Call \`${live.definition.name}\` directly.`);
+      }
+      if (deps.isEligibleTool && !deps.isEligibleTool(toolId)) {
+        return errorResult('TOOL_OUT_OF_SCOPE', 'Tool unavailable', `Tool \`${toolId}\` left the active profile or mode scope while approval was pending.`);
+      }
+      if (live !== current) {
+        try {
+          const validate = getCatalogValidator(live);
+          if (!validate(args)) {
+            const issues = (validate.errors ?? [])
+              .slice(0, 8)
+              .map((issue) => `${issue.instancePath || '/'} ${issue.message ?? 'is invalid'}`);
+            return errorResult('SCHEMA_CHANGED_MID_APPROVAL', 'Tool schema changed during approval', issues.join('\n') || 'The approved arguments no longer match the live tool schema. Re-read the tool and call again.');
+          }
+        } catch (error) {
+          return errorResult('INVALID_SCHEMA', 'Tool schema cannot be validated', error instanceof Error ? error.message : String(error));
+        }
+      }
+      // Bind execution to the state the decision approved: a private copy
+      // taken at decision completion. Anything holding the permission-layer
+      // reference after this point cannot change what executes (I05).
+      const approvedArgs = structuredClone(args);
+      const executionEntry = live;
+
       try {
-        const refusal = await deps.beforeExecute?.(current.definition.name, args, context);
+        const refusal = await deps.beforeExecute?.(executionEntry.definition.name, approvedArgs, context);
         if (refusal) return refusal;
         const lease = deps.acquireExecutionLease?.(context);
         if (lease && !('release' in lease)) return lease;
-        const executor = current.executor;
+        const executor = executionEntry.executor;
         let result: unknown;
         try {
-          result = await executor.execute(args, deps.workingDirectory, context);
+          result = await executor.execute(approvedArgs, deps.workingDirectory, context);
         } finally {
           lease?.release();
         }
@@ -253,15 +292,15 @@ export function createToolInvokeDispatcherFromRegistry(
         const blocks = (result as { blocks?: unknown[] } | null)?.blocks;
         const structured = (result as { structured?: unknown } | null)?.structured;
         return {
-          result: resultText ?? `Tool \`${current.definition.name}\` returned no result.`,
-          toolName: current.definition.name,
+          result: resultText ?? `Tool \`${executionEntry.definition.name}\` returned no result.`,
+          toolName: executionEntry.definition.name,
           ...(isError ? { error: true } : {}),
           ...(blocks ? { blocks } : {}),
           ...(structured !== undefined ? { structured } : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return errorResult('TOOL_EXECUTION_FAILED', 'Tool Invoke Failed', `Invoking \`${current.definition.name}\` failed:\n\n${message}`);
+        return errorResult('TOOL_EXECUTION_FAILED', 'Tool Invoke Failed', `Invoking \`${executionEntry.definition.name}\` failed:\n\n${message}`);
       }
     },
   };

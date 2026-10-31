@@ -159,6 +159,17 @@ function makeProbe(name: string, delayMs: number): {
 
 const canUseTool = async () => true as const;
 
+/** Minimal one-field text-argument schema for replace-set fixtures. */
+function textArgSchema(field: string): Record<string, unknown> {
+  const prop: Record<string, unknown> = { type: 'string' };
+  return {
+    type: 'object',
+    properties: { [field]: prop },
+    required: [field],
+    additionalProperties: false,
+  };
+}
+
 interface DrainOutcome {
   toolResults: string[];
   sawError: boolean;
@@ -345,12 +356,14 @@ describe('W0 direct vs invoke differential', () => {
       turnContext as unknown as DiscoveryToolContext,
     );
 
-    // F18 signature: the pre-approval executor ran; the mid-approval
-    // replacement never did, and its stricter schema was never consulted.
-    expect(oldProbe.state.results).toEqual(['mcp__w0__swap']);
+    // F18 fixed: the approved args (13 chars) no longer match the stricter
+    // live schema, so the dispatch fails with a NAMED error. Neither the
+    // pre-approval executor nor the replacement runs; no stale execution.
+    expect(oldProbe.state.results).toEqual([]);
     expect(newProbe.state.results).toEqual([]);
     expect(liveSnapshotAtApproval).toBe('new');
-    expect(result.error).toBeUndefined();
+    expect(result.error).toBe(true);
+    expect(result.metadata?.errorCode).toBe('SCHEMA_CHANGED_MID_APPROVAL');
   });
 
   it('approval binding control: arguments are structuredClone-bound before approval', async () => {
