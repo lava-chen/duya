@@ -1211,9 +1211,10 @@ export async function chatTui(
    * the same one the Desktop's composer uses. That is what makes the badge
    * true on both surfaces: there is one mode, and it lives in one row.
    *
-   * The change lands for the NEXT turn. A run already in flight keeps the
-   * mode it started with, which is what the user expects: the approval they
-   * gave was for that turn.
+   * The change lands for the turn that is running NOW: the Host pushes the
+   * new mode to the live worker, and the permission gate reads the mode on
+   * every decision, so the next tool call is judged under it. The row stays
+   * the durable record, so a turn that starts later reads the same mode.
    */
   async function applyPermissionMode(mode: TuiPermissionMode): Promise<void> {
     const profile = profileForPermissionMode(mode);
