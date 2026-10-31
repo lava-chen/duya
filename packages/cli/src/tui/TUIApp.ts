@@ -225,6 +225,17 @@ export interface TuiChoice {
 /** One pending draft as the queue preview paints it. */
 export interface QueuedDraftView {
   readonly text: string;
+  /**
+   * How the draft reaches the agent.
+   *
+   * `steer` means the draft was ALREADY handed over: the Host holds the row
+   * and the running turn reads it at its next step. `queue` means it is still
+   * waiting for a turn to carry it.
+   *
+   * The preview paints the two differently, because a steer that is painted
+   * like a queued draft reads as "not sent yet" — and the user has already
+   * seen their own text echoed into the transcript.
+   */
   readonly mode: 'steer' | 'queue';
 }
 
@@ -311,7 +322,8 @@ export interface TUIAppOptions {  /** Window title. */
   readonly canSubmit?: () => boolean;
   /**
    * Pending drafts with their intended delivery, so the preview can tell a
-   * steer (consumed by the running turn) from a fresh turn.
+   * steer (already handed to the running turn, and painted as sent) from a
+   * fresh turn (still waiting).
    */
   readonly queuedDrafts?: () => readonly QueuedDraftView[];
   readonly queuePaused?: () => boolean;
@@ -2016,7 +2028,10 @@ export class TUIApp {
     const shown = pending.slice(-QUEUE_PREVIEW_ROWS);
     const hidden = pending.length - shown.length;
     const lines = shown.map((draft) => escapeTags(compactActivity(
-      (draft.mode === 'steer' ? '↳ steer' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
+      // A steer is ON ITS WAY — the running turn reads it at its next step —
+      // so it is painted as sent. Painting it like a queued draft made a
+      // message the user had already sent look like one that never left.
+      (draft.mode === 'steer' ? '↳ sent' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
       width,
     )));
     if (hidden > 0) lines.unshift(`… ${hidden} earlier`);

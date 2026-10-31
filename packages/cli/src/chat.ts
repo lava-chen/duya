@@ -1110,11 +1110,11 @@ export async function chatTui(
         label: `${index + 1}. ${draft.mode === 'steer' ? '↳ ' : ''}${oneLine(draft.text)}`,
         value: draft.key,
         description: draft.mode === 'steer'
-          ? 'steer · the running turn reads it at its next step'
+          ? 'sent · the running turn reads it at its next step'
           : 'queued · starts after the running turn',
       })),
     ];
-    const selected = await tui.choose('Pending drafts', choices);
+    const selected = await tui.choose('Drafts', choices);
     if (selected === null) return;
     if (selected === RESUME_QUEUE) {
       queue.resume();
