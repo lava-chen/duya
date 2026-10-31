@@ -2218,6 +2218,17 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/authorization/session-permission-profile.ts": {
+      "bytes": 1532,
+      "imports": [
+        {
+          "path": "packages/host/src/worker-db-client.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-db-client"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/worker-command-queue.ts": {
       "bytes": 2268,
       "imports": [],
@@ -29599,7 +29610,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 176235,
+      "bytes": 176412,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -29670,6 +29681,11 @@
           "path": "packages/host/src/authorization/worker-approval-card.ts",
           "kind": "import-statement",
           "original": "@duya/host/authorization/worker-approval-card"
+        },
+        {
+          "path": "packages/host/src/authorization/session-permission-profile.ts",
+          "kind": "import-statement",
+          "original": "./authorization/session-permission-profile.js"
         },
         {
           "path": "packages/host/src/worker-command-queue.ts",
@@ -30407,7 +30423,7 @@
       "format": "esm"
     },
     "packages/host/src/session-api.ts": {
-      "bytes": 34858,
+      "bytes": 35900,
       "imports": [
         {
           "path": "node:crypto",
@@ -31668,12 +31684,17 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 45723,
+      "bytes": 46937,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
           "kind": "import-statement",
           "original": "@duya/agent-protocol"
+        },
+        {
+          "path": "packages/agent-runtime/src/authorization/profile-bridge.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-runtime/authorization/profile-bridge"
         },
         {
           "path": "node:crypto",
@@ -32082,7 +32103,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 49571,
+      "bytes": 50265,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -40343,7 +40364,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -40451,7 +40472,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1967
+          "bytesInOutput": 1954
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -40688,7 +40709,7 @@
           "bytesInOutput": 350
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -42440,7 +42461,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -43847,7 +43868,7 @@
           "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9952
+          "bytesInOutput": 9969
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -43997,7 +44018,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 62805
+          "bytesInOutput": 62760
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -44043,6 +44064,9 @@
         },
         "packages/host/src/authorization/worker-approval-card.ts": {
           "bytesInOutput": 1295
+        },
+        "packages/host/src/authorization/session-permission-profile.ts": {
+          "bytesInOutput": 100
         },
         "packages/host/src/worker-command-queue.ts": {
           "bytesInOutput": 461
@@ -45866,7 +45890,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4753608
+      "bytes": 4753684
     }
   }
 }
