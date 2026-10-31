@@ -374,6 +374,7 @@ npm run electron:build
 | F24 worktree `a3f0b966`、F18 worktree `b5e13518` | Windows / Git Bash / Node v24.16.0 | 各 worktree：`npm run bundle:worker` → commit `packages/host/bundle` → `npm run bundle:verify` | 0；修前 STALE 3/1016（F24 精确点名 bot-toolset.ts + 两个 send-message hooks）、修后 FRESH 0/1016 | F24 提交仅 worker-entry.js ±18 行 + metafile；F18 ±491 行；BashWorker/package.json 规范化后无 diff；推送后两 PR 与 master CONFLICTING |
 | F24 `e92d0845`、F18 `86c99404`（合 master 后） | 同上 | `git merge origin/master`（#554 的 bundle 重建致冲突）→ bundle 冲突以 `npm run bundle:worker` 重建解决 → merge commit → `bundle:verify` + 受影响套件 | 0；FRESH 0/1017；F24 3 文件 33/33、F18 discovery 6 文件 33/33 | 合并树上重验；已推送触发 CI 重跑 |
 | `0e12c887`（计划 worktree） | 同上 | `git merge origin/master` → 解 docs/exec-plans/README.md 冲突 → push | 0 | #553 CONFLICTING 解除；merge 带入 #554/#556 |
+| #557 `e92d0845`、#558 `86c99404`、#553 `29c39d30`（CI 复核） | Windows / Git Bash | `gh pr view`（checks + mergeable） | 0 | #557/#558 五项全 SUCCESS 且 MERGEABLE（architecture 的 bundle 门已过）；#553 architecture/test scope SUCCESS、其余 docs 跳过、MERGEABLE |
 
 类型检查构建重生成了 `ModuleTool/inline-content.ts` 的工作区换行；已证明 Git 规范化内容 hash 与 HEAD 同为 `6c4ca613a6aa629754cc50806689310cd7331ece`，仅恢复该生成文件，未撤销任何手写改动。ignored 构建产物留在本检出，不计入文档交付。
 
@@ -381,6 +382,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：确认 #557/#558 在新 head（`e92d0845`/`86c99404`，均已合 master）CI 全绿后向用户请求集成授权（集成序 #555 → #557/#558；两分支各自重建过 worker bundle，第二个 PR 合并时 bundle 必冲突，届时按集成后的树重出 bundle 再合并）。集成后重验 F18/F24 场景与 census 断言。随后：490 计划记录漂移交其 owner 更正；617 census 脚本复用（`scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）与失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
+下一动作：等待用户集成授权（集成序 #555 → #557/#558，CI 均已全绿 MERGEABLE；两分支各自重建过 worker bundle，第二个 PR 合并时 bundle 必冲突，届时按集成后的树重出 bundle 再合并）。集成后重验 F18/F24 场景与 census 断言，并更新本节。随后：490 计划记录漂移交其 owner 更正；617 census 脚本复用（`scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）与失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 
 回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。
