@@ -1,6 +1,6 @@
 # 工具暴露与 Harness 调用链收敛
 
-状态：active（W0 交付 + F18/F24 修复在 PR 待集成；W1–W10 实施未开始） · 负责人：Codex chat `01a19109-6a8c-7e00-b8b6-90b42e4de19e` · 更新：2026-10-31
+状态：active（W0 已集成 master：census/差分 + F18/F24 修复，merge commits `eae073b5`/`b79e3521`/`5839064a`；W1–W10 实施未开始） · 负责人：Codex chat `01a19109-6a8c-7e00-b8b6-90b42e4de19e` · 更新：2026-10-31
 分支：`codex/tool-surface-audit` · managed worktree：`D:/codex/worktrees/tool-surface-audit/duya` · 计划起点：`7de85308e4936ea149ead56f51919f9252fb23cd` · 源码审计基线：`a33bbb0542f5effeb8484a64f8ca2cf217272e87`
 
 ## 1. 目标与边界
@@ -67,13 +67,13 @@
 | F15 已确认 | 普通 worker 同时 eager 提供 write/edit/patch；Codex patch 用 freeform grammar，Duya 为 JSON patch | W7 模型能力配置和 A/B，保留 fallback，不直接删除 patch |
 | F16 已确认 | [patch 实现](../../../packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts) 部分成功时 error 可为 false；description 同时称 unified diff / Codex patch | W7 显式 partial 和逐文件结果；明确格式，不宣称跨文件事务 |
 | F17 已确认 | [pipeline](../../../packages/agent-runtime/src/tools/execution/ToolExecutionPipeline.ts) 以外层 tool.name 查询依赖/读写路径；deferred dispatcher 再解析目标并 execute | W1 必须审计 wrapper 与真实目标的调度一致性；不能仅凭这段代码宣称已确认并发漏洞 |
-| F18 已修复待集成 | 审批等待期间 registry/schema/connection/profile/cwd 可能变化；dispatcher 在审批前取得 current，后续有 Host guard/lease。W0 已复现审批窗口绑定缺口（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分套件钉住）；修复见 [PR #558](https://github.com/lava-chen/duya/pull/558)：审批后重解析 live entry（移除→TOOL_NOT_FOUND、exposure/eligibility 变化→具名错误、变更→按 live schema 重校验后以 live executor 执行）+ 决策完成时 structuredClone 绑定执行参数。cwd/执行位置中途变化仍由 Host fence/lease 层负责，MCP executor 自身的 source-approval 为另一路径 | 集成后 I05 审批窗口缺口闭合；W1 剩余：将同等绑定核查推广到直连路径的审批缓存场景（如有），并核对 Host lease 与新错误码的 UI 呈现 |
+| F18 已合并 | 审批等待期间 registry/schema/connection/profile/cwd 可能变化；dispatcher 在审批前取得 current，后续有 Host guard/lease。W0 已复现审批窗口绑定缺口（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分套件钉住）；修复见 [PR #558](https://github.com/lava-chen/duya/pull/558)（已合并 `5839064a`）：审批后重解析 live entry（移除→TOOL_NOT_FOUND、exposure/eligibility 变化→具名错误、变更→按 live schema 重校验后以 live executor 执行）+ 决策完成时 structuredClone 绑定执行参数。cwd/执行位置中途变化仍由 Host fence/lease 层负责，MCP executor 自身的 source-approval 为另一路径 | I05 审批窗口缺口已闭合；W1 剩余：将同等绑定核查推广到直连路径的审批缓存场景（如有），并核对 Host lease 与新错误码的 UI 呈现 |
 | F19 待复现风险 | wrapper、MCP、CLI 路径可能丢失真实名称对应的 timeout、hook、取消、快照 metadata 或结果状态 | W1/W8 做差分测试；查明每个字段现有传播情况，不把所有风险写成现存缺陷 |
 | F20 已确认 | [文件 contributors](../../../packages/capabilities/src/fs-contributors.ts) 提供描述投影，Host 另建执行实例；已有 [13 槽接口](../../../packages/tooling/src/contributors.ts) | W5/W9 统一描述来源与一致性验证，避免再创建平行扩展框架 |
 | F21 待复现风险 | 工具命名/归属变化会影响历史调用、compact、resume、缓存、审批卡与 UI renderer | W8/W10 覆盖兼容，保留原始历史，不用简单全局替换 |
 | F22 设计差异 | Codex 支持 direct/deferred 与 code-mode 两轴，按模型能力选 patch/search；Duya 主链是三档暴露和通用 invoke | W2/W3 先做可解释策略和 provider fallback；code mode 作为后置候选，不先照搬六个 enum |
 | F23 已确认 | deferred dispatcher 的 outcome 显式转发 result/error/blocks/structured，未通用透传底层 metadata | W8 核对 fileSnapshots、partial 和其他 metadata 的端到端消费者；不凭局部丢字段直接宣称所有恢复均已损坏 |
-| F24 已修复待集成 | BOT_TOOLSET（agent-core）写 `SendMessage`，工具注册名是 `send_message`（capabilities SendMessageTool/constants.ts）；精确 allowlist 提升不生效，bot 的发声工具首轮不可见，仅余 catalog/invoke 路径（[PR #555](https://github.com/lava-chen/duya/pull/555) census 钉住）。修复见 [PR #557](https://github.com/lava-chen/duya/pull/557)（BOT_TOOLSET 对齐注册名 + plan 501 delivery 判定双名兼容 replay；permissions GLOBAL_ALWAYS_ALLOWED_TOOLS 的同名漂移属权限语义，留 W4 裁决） | 集成后 bot 首轮直呼 `send_message`；W4 收敛 catalog 依赖前先确认本修复已合并 |
+| F24 已合并 | BOT_TOOLSET（agent-core）写 `SendMessage`，工具注册名是 `send_message`（capabilities SendMessageTool/constants.ts）；精确 allowlist 提升不生效，bot 的发声工具首轮不可见，仅余 catalog/invoke 路径（[PR #555](https://github.com/lava-chen/duya/pull/555) census 钉住）。修复见 [PR #557](https://github.com/lava-chen/duya/pull/557)（已合并 `b79e3521`；BOT_TOOLSET 对齐注册名 + plan 501 delivery 判定双名兼容 replay；permissions GLOBAL_ALWAYS_ALLOWED_TOOLS 的同名漂移属权限语义，留 W4 裁决） | bot 首轮直呼 `send_message` 已生效（合并后 census 场景重验过）；W4 收敛 catalog 依赖前无需再等本修复 |
 | F25 已确认 | 最终请求出现 `progress_update`，不在 `builtin.ts` 静态注册清单内（装配期动态注入）；census worker-hint 终列 23 个工具与静态 20 eager 不一致即由此而来 | W0 台账给 `progress_update` 记 owner/来源；W9 诊断输出须能解释动态注入 |
 | F26 已确认 | 调度分类按外层名：`mcp_*` 直连 READ（并发 5），`tool_invoke` fail-closed SYSTEM（独占串行）——同一目标 hint 下可并发、search 下必串行，方向保守但存在模式悬崖（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分钉住）；取消传播经 wrapper context 到达目标，与直连等价，不合作目标在两条路径同样孤儿化 | W1 差分维持既有结论范围；W3/W4 评估 invoke 串行对 search 模式发现吞吐的影响 |
 
@@ -351,6 +351,7 @@ npm run electron:build
 - [x] W1 F18 修复：[Draft PR #558](https://github.com/lava-chen/duya/pull/558)（叠在 #555 上；审批后重解析 + 参数绑定，新 2 例 + 差分翻转，19/19 + 回归 30/30 绿，typecheck/architecture 过）。
 - [x] CI 首轮核对与 bundle 门修复（2026-10-31）：#555 五项 CI 全绿；#557/#558 的 architecture job 失败根因是 `bundle:verify`（G8，CI step "Worker bundle freshness"）——两 PR 改了 agent-core/agent-runtime 源码但未重建已提交的 worker bundle，非边界违规。各自 `npm run bundle:worker` 重建并提交（#557 `a3f0b966`、#558 `b5e13518`）。随后两 PR 与 master CONFLICTING：#554（`7bf54e9b`）也重建过已提交 bundle，base 已陈旧——merge origin/master 进两分支（#557 `e92d0845`、#558 `86c99404`），bundle 冲突一律以合并后重建解决，`bundle:verify` FRESH 0/1017，受影响套件在合并树上重跑绿（F24 3 文件 33/33；F18 discovery 6 文件 33/33）。注意：本地 `npm run architecture:check` 不含 bundle 门，后续验证表补跑 `npm run bundle:verify`。
 - [x] #553 同步 master：merge `0e12c887` 解 docs/exec-plans/README.md 冲突（保留权限计划归档行与工具面行）。
+- [x] 集成（2026-10-31，用户授权）：按栈序 merge commit 合并 #555 `eae073b5` → #557 `b79e3521` → #558 `5839064a`。过程：#557 首次合并被 GitHub 报冲突但本地 merge-tree 干净（mergeable 缓存滞后于 #555 合并），合 master 刷新 head（`a9fabfd4`）后 CI 重跑全绿、CLEAN 合并；#558 按预判与集成后 master 的 bundle 冲突，合 master 重建解决（head `085bc3c2`，FRESH 0/1017，五项 CI 全绿）。合并后重验（F18 worktree detached 于 `5839064a`）：`bundle:verify` FRESH 0/1017 + census/差分/F18 绑定/bot-toolset/reminder 五套件 39/39；集成树与 `085bc3c2` 树一致（`27301ee7`），CI 证据直接适用。F24/F18 worktree 与分支已具备回收条件（已合并+重验），留待用管理工具或 `scripts/remove-worktree.sh` 核对 ignored 文件后回收。
 - [ ] W0 其余项：617 census 脚本核对与复用（已核对 `scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 - [ ] W1–W10 运行时实施；W11 为可延期裁决项。
 
@@ -375,6 +376,8 @@ npm run electron:build
 | F24 `e92d0845`、F18 `86c99404`（合 master 后） | 同上 | `git merge origin/master`（#554 的 bundle 重建致冲突）→ bundle 冲突以 `npm run bundle:worker` 重建解决 → merge commit → `bundle:verify` + 受影响套件 | 0；FRESH 0/1017；F24 3 文件 33/33、F18 discovery 6 文件 33/33 | 合并树上重验；已推送触发 CI 重跑 |
 | `0e12c887`（计划 worktree） | 同上 | `git merge origin/master` → 解 docs/exec-plans/README.md 冲突 → push | 0 | #553 CONFLICTING 解除；merge 带入 #554/#556 |
 | #557 `e92d0845`、#558 `86c99404`、#553 `29c39d30`（CI 复核） | Windows / Git Bash | `gh pr view`（checks + mergeable） | 0 | #557/#558 五项全 SUCCESS 且 MERGEABLE（architecture 的 bundle 门已过）；#553 architecture/test scope SUCCESS、其余 docs 跳过、MERGEABLE |
+| 集成：#555 `eae073b5` → #557 `b79e3521` → #558 `5839064a` | Windows / Git Bash | `gh pr ready` + `gh pr merge --merge` 按栈序；#557 先合 master 刷 head `a9fabfd4` 等 CI；#558 合 master `b79e3521` 重建 bundle（`085bc3c2`，FRESH 0/1017）等五项 CI | 0；三 PR MERGED | GitHub 对 #557 的 mergeable 缓存滞后报 CONFLICTING，本地 merge-tree 干净、head 刷新后 CLEAN；#558 与集成后 master 的 bundle 冲突按重建解决 |
+| `5839064a`（F18 worktree detached） | Windows / Git Bash / Node v24.16.0 | `npm run bundle:verify` + census/差分/f18 绑定/bot-toolset/reminder 五套件 vitest（`--no-file-parallelism`） | 0；FRESH 0/1017、39/39 | 集成树与 `085bc3c2` 树同一（`27301ee7`），其五项 CI 证据直接适用；重验在集成 ref 上复跑确认 |
 
 类型检查构建重生成了 `ModuleTool/inline-content.ts` 的工作区换行；已证明 Git 规范化内容 hash 与 HEAD 同为 `6c4ca613a6aa629754cc50806689310cd7331ece`，仅恢复该生成文件，未撤销任何手写改动。ignored 构建产物留在本检出，不计入文档交付。
 
@@ -382,6 +385,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：等待用户集成授权（集成序 #555 → #557/#558，CI 均已全绿 MERGEABLE；两分支各自重建过 worker bundle，第二个 PR 合并时 bundle 必冲突，届时按集成后的树重出 bundle 再合并）。集成后重验 F18/F24 场景与 census 断言，并更新本节。随后：490 计划记录漂移交其 owner 更正；617 census 脚本复用（`scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）与失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
+下一动作：W0 已集成收口，W1（真实目标解析与执行契约）实施未开始，开工前按 §1.1 核对相关计划 head/owner 并登记新切片。待办：490 计划记录漂移交其 owner 更正；617 census 脚本复用（`scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）；失败场景矩阵扩充（超时/重连/compact/resume）；bot/wake/headless 真 worker census；F24/F18 worktree 回收（管理工具或 `scripts/remove-worktree.sh`，先核对 ignored 文件）。
 
-回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。
+回收：W0 与 F18/F24 修复已集成 master 并重验；`codex/tool-surface-w0-baseline`/`codex/tool-surface-f24-bot-voice`/`codex/tool-surface-f18-approval-binding` 三分支及对应 worktree 可回收（先核对 ignored 文件，managed 走管理工具）。计划 PR [#553](https://github.com/lava-chen/duya/pull/553) 仍开放承载本计划与台账。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。

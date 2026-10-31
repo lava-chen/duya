@@ -44,7 +44,7 @@
 
 | 工具 | 注册 | worker/bot | 字节 | 裁定 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| `send_message` | deferred | worker 无 / bot 见（F24 修复，[PR #557](https://github.com/lava-chen/duya/pull/557) 待集成） | 5062 | 产品 MCP | 616 T610d bot 簇；修复前 bot 发声仅 catalog/invoke |
+| `send_message` | deferred | worker 无 / bot 见（F24 修复已合并 [PR #557](https://github.com/lava-chen/duya/pull/557)，`b79e3521`） | 5062 | 产品 MCP | 616 T610d bot 簇 |
 | `send_to_agent` | deferred | bot 见 | 1236 | 产品 MCP | 477 |
 | `post_to_room` | deferred | bot 见 | 318 | 产品 MCP | 478 |
 | `ReactToMessage` | deferred | 均无 | 359 | 维持 deferred | 490 承诺 always-exposed（对标 grok SAND_FORCED_STATIC）且执行日志宣称已交付，但代码自引入即 deferred（8f7f5032，builtin.ts:117）——承诺未落地；UI pill 归 491 P2 也未落地；无消费方依赖首轮可见。490 计划的 `[x]` 记录需其 owner 更正（对无人值守 bot，emoji 反应属社交手势，deferred 更稳） |
@@ -85,6 +85,6 @@
 
 - F10 已修订、F18 已复现、F24–F26 新增——见计划 §2。
 - 2026-10-31 二轮：待决 7 项（9 行）全部核对完毕回写裁定，仅 `AskUserQuestion` bot 可见性仍留 W4（死 bot 注册表曾拟 hidden）；490 计划记录漂移交其 owner 更正。
-- W4 决策输入：`AskUserQuestion` bot 可见性；worktree 三工具 bot 隐藏候选（`'*'` 通配来源已核）；`vision_analyze` 降 deferred 候选（按能力门控机制不存在）；bot `send_message` 修复（#557 待集成）。
+- W4 决策输入：`AskUserQuestion` bot 可见性；worktree 三工具 bot 隐藏候选（`'*'` 通配来源已核）；`vision_analyze` 降 deferred 候选（按能力门控机制不存在）；bot `send_message` 修复已合并（#557，`b79e3521`）。
 - W6 决策输入：`duya_cli`/`SessionSearch`/`session` 只读面（`list`/`get`/`rename`）的 CLI 能力清单。
 - W9 决策输入：`progress_update` 注入的解释；`todo`/`plan` description 分工澄清（状态源维持现状）；`memory_write`/`write_stage1_policy` 写入路径与读取根未对齐两处坑。
