@@ -2219,7 +2219,7 @@
       "format": "esm"
     },
     "packages/host/src/authorization/session-permission-profile.ts": {
-      "bytes": 1489,
+      "bytes": 1532,
       "imports": [
         {
           "path": "packages/host/src/worker-db-client.ts",
@@ -22720,7 +22720,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -32103,7 +32103,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 49234,
+      "bytes": 50265,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -34402,7 +34402,7 @@
       "format": "esm"
     },
     "packages/agent-core/src/profiles/bot-toolset.ts": {
-      "bytes": 3715,
+      "bytes": 4064,
       "imports": [],
       "format": "esm"
     },
@@ -34605,12 +34605,12 @@
       "format": "esm"
     },
     "packages/host/src/worker-hooks/send-message-names.ts": {
-      "bytes": 102,
+      "bytes": 473,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-hooks/send-message-reminder.ts": {
-      "bytes": 10115,
+      "bytes": 10317,
       "imports": [
         {
           "path": "packages/host/src/worker-hooks/send-message-names.ts",
@@ -40349,10 +40349,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 48
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-compaction.ts": {
           "bytesInOutput": 30
@@ -40499,7 +40499,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/provider-catalog.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/agent-protocol/src/app-connections.ts": {
           "bytesInOutput": 30
@@ -40595,7 +40595,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 115
+          "bytesInOutput": 128
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -40643,7 +40643,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -42434,7 +42434,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -43868,7 +43868,7 @@
           "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9952
+          "bytesInOutput": 9969
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -45509,7 +45509,7 @@
           "bytesInOutput": 914
         },
         "packages/agent-core/src/profiles/bot-toolset.ts": {
-          "bytesInOutput": 315
+          "bytesInOutput": 316
         },
         "packages/agent-core/src/message/agent-mentions.ts": {
           "bytesInOutput": 717
@@ -45890,7 +45890,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4753641
+      "bytes": 4753684
     }
   }
 }

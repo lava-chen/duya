@@ -476,6 +476,7 @@ describe('W0 request-level tool census', () => {
     const names = new Set(record.finalToolNames);
     // BOT_TOOLSET exact names promote their deferred registrations (plan 496).
     for (const toolName of [
+      'send_message',
       'send_to_agent',
       'update_state',
       'image_generate',
@@ -487,13 +488,9 @@ describe('W0 request-level tool census', () => {
     ]) {
       expect(names.has(toolName), `bot turn-one tool: ${toolName}`).toBe(true);
     }
-    // W0 FINDING (naming drift, F21 signature): BOT_TOOLSET hardcodes
-    // 'SendMessage' (agent-core bot-toolset.ts) but the tool registers as
-    // 'send_message' (capabilities SendMessageTool/constants.ts), so the
-    // bot's voice tool is NOT promoted from turn one despite plan 481/496
-    // intent. Pinned here as the current behavior; W4 owns the fix.
+    // F24 fixed: the voice tool registers as `send_message`; the retired
+    // `SendMessage` spelling names no tool and stays out of the request.
     expect(names.has('SendMessage')).toBe(false);
-    expect(names.has('send_message')).toBe(false);
     // W0 finding pinned: the divergent bot registry (bot-builtin.ts) is dead
     // code, so the bot profile does NOT hide these the way F10 described.
     expect(names.has('AskUserQuestion')).toBe(true);
@@ -507,9 +504,10 @@ describe('W0 request-level tool census', () => {
 
     const names = new Set(record.finalToolNames);
     expect(names.has('w0_fixture_small')).toBe(false);
-    // Same naming-drift finding as bot-hint: the voice tool stays deferred.
+    // F24 fixed: the voice tool promotes under search too; the retired
+    // `SendMessage` spelling stays out.
+    expect(names.has('send_message')).toBe(true);
     expect(names.has('SendMessage')).toBe(false);
-    expect(names.has('send_message')).toBe(false);
     // Other BOT_TOOLSET names promote under search too.
     expect(names.has('send_to_agent')).toBe(true);
     expect(names.has('tool_catalog')).toBe(true);
