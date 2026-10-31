@@ -6,6 +6,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | 先做请求级 census 与 direct/invoke 差分，按阶段推进 MCP 暴露、CLI/skill、产品能力和恢复兼容 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
 | Provider 校验与运行收尾 | [2026-10-29 校验与收尾修复](active/2026-10-29-provider-validation-finalization.md) | 本地门禁通过，后续 PR #548 依赖 #546，待 review/集成 |
 | TUI fetch failed 与渲染卡顿 | [2026-10-29 TUI fetch failed 与 write 渲染卡顿](active/2026-10-29-tui-fetch-failed-and-write-render-lag.md) | Host keep-alive 超时 + 轮询错误附 cause + 渲染缓存按 block revision 键控；门禁与 cli-tui/host 测试全绿，PR #547 等 review 与授权 |

@@ -502,4 +502,6 @@ registry 双拼写查找），另外 5 例是「不给无条件放行」的反�
 
 交付：评估提交 `8ed652d6`，Draft PR [#553](https://github.com/lava-chen/duya/pull/553)。未合并；没有工具删除、运行配置变更或迁移验收。外部副作用仅任务分支 push 与创建 Draft PR。PR 未集成，保留检出与分支。
 
-下一步：按评估的第 1 步建立最终请求工具面基线，验收必须包含 CLI 与 SessionSearch 语义差异；不自动接手无关的 616 迁移卡。
+接续入口：[工具暴露与 Harness 调用链收敛计划](2026-10-31-tool-surface-and-harness-convergence.md)。本次用户要求的跨工具面、provider、CLI/skill、运行调用链与恢复兼容统一在该计划维护；616 继续负责产品 MCP 的专题实现，不将旧目标清单视为全部完成。
+
+下一步：执行新计划 W0，请求级基线与 direct/invoke 差分；验收必须包含 CLI 与 SessionSearch 语义差异，不自动接手无关的 616 迁移卡。

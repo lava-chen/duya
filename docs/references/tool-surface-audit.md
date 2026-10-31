@@ -4,6 +4,8 @@
 
 关联：[616 产品能力 MCP](../exec-plans/active/616-duya-app-mcp-layer.md)、[617 基础工具接口](../exec-plans/active/617-basic-tool-interface-v2.md)。本评估修订的是迁移建议，不宣称旧计划全部落地。
 
+执行入口：[工具暴露与 Harness 调用链收敛计划](../exec-plans/active/2026-10-31-tool-surface-and-harness-convergence.md)。后续核对补充了 MCP 默认 hint 实际 eager、普通/bot 策略差异、provider reference 支持与 Harness 差分风险，均在该计划区分已确认和待复现；实施顺序及验收以该计划为准。
+
 ## 证据范围
 
 - Duya：`a33bbb0542f5effeb8484a64f8ca2cf217272e87`，生产注册表及实现由 CodeGraph 返回当前源代码。
