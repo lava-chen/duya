@@ -44,7 +44,12 @@ import type { AgentProfile } from '../agent-profile.js';
 export const BOT_TOOLSET: readonly string[] = [
   'send_to_agent',
   'update_state',
-  'SendMessage',
+  // Plan 483 P2: the bot's voice to the user. The tool registers as
+  // `send_message` (capabilities SendMessageTool/constants.ts); it briefly
+  // shipped as `SendMessage` and the old spelling silently stopped
+  // promoting (plan 496 promotion is exact-name) — see the tool-surface
+  // plan's F24. This list must use REGISTERED names.
+  'send_message',
   'create_agent',
   'update_agent',
   'image_generate',
@@ -60,7 +65,7 @@ export const BOT_TOOLSET: readonly string[] = [
  * `'*'` allowlist keeps the wildcard AND gains the explicit bot tool names:
  * plan 496 exposure promotion only surfaces a deferred tool when its
  * name appears EXACTLY in the allowlist, so a bare `'*'` bot (the default
- * `full` base profile) previously never saw `SendMessage` — the bot's only
+ * `full` base profile) previously never saw `send_message` — the bot's only
  * voice — without a tool_catalog lookup the model cannot know to make.
  * An undefined allowlist stays a no-op (no explicit tool decisions to
  * amend). Deny entries are never touched.

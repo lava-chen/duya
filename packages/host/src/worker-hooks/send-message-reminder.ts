@@ -21,7 +21,7 @@
  */
 
 import type { LoopHookRegistration } from './loop.js';
-import { SEND_MESSAGE_TOOL_NAME } from './send-message-names.js';
+import { LEGACY_SEND_MESSAGE_TOOL_NAME, SEND_MESSAGE_TOOL_NAME } from './send-message-names.js';
 
 export const SEND_MESSAGE_REMINDER_HOOK_ID = 'builtin.send-message-reminder';
 
@@ -132,12 +132,17 @@ export function countNonSendMessageToolCalls(message: unknown): number {
 
 /**
  * Plan 501 L2: a delivery is any tool that puts words in front of an
- * audience — SendMessage (the user voice) and post_to_room (a group
+ * audience — send_message (the user voice) and post_to_room (a group
  * member's voice, plan 478). Without the latter the delivery-owed check
- * reads a room turn that already spoke as silent.
+ * reads a room turn that already spoke as silent. The retired `SendMessage`
+ * spelling still appears in replayed transcripts and must keep counting.
  */
 function isDeliveryCall(part: ToolUsePart): boolean {
-  return part.name === SEND_MESSAGE_TOOL_NAME || part.name === 'post_to_room';
+  return (
+    part.name === SEND_MESSAGE_TOOL_NAME ||
+    part.name === LEGACY_SEND_MESSAGE_TOOL_NAME ||
+    part.name === 'post_to_room'
+  );
 }
 
 /**
