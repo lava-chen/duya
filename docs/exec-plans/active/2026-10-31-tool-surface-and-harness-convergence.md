@@ -67,7 +67,7 @@
 | F15 已确认 | 普通 worker 同时 eager 提供 write/edit/patch；Codex patch 用 freeform grammar，Duya 为 JSON patch | W7 模型能力配置和 A/B，保留 fallback，不直接删除 patch |
 | F16 已确认 | [patch 实现](../../../packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts) 部分成功时 error 可为 false；description 同时称 unified diff / Codex patch | W7 显式 partial 和逐文件结果；明确格式，不宣称跨文件事务 |
 | F17 已确认 | [pipeline](../../../packages/agent-runtime/src/tools/execution/ToolExecutionPipeline.ts) 以外层 tool.name 查询依赖/读写路径；deferred dispatcher 再解析目标并 execute | W1 必须审计 wrapper 与真实目标的调度一致性；不能仅凭这段代码宣称已确认并发漏洞 |
-| F18 已复现 | 审批等待期间 registry/schema/connection/profile/cwd 可能变化；dispatcher 在审批前取得 current，后续有 Host guard/lease。W0 已复现审批窗口绑定缺口：checkPermission 挂起期间 `replaceByOwner` 同名替换后，仍执行审批前 executor、按审批前 schema 校验（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分套件钉住）；同套件另钉住 args 对调用方 clone 隔离，但权限层与 executor 共享同一可变对象，审批后无冻结 | W1 验证审批参数绑定、revision 和执行位置：审批后重解析或冻结 args；复现后决定修复点，不删除现有 fence |
+| F18 已修复待集成 | 审批等待期间 registry/schema/connection/profile/cwd 可能变化；dispatcher 在审批前取得 current，后续有 Host guard/lease。W0 已复现审批窗口绑定缺口（[PR #555](https://github.com/lava-chen/duya/pull/555) 差分套件钉住）；修复见 [PR #558](https://github.com/lava-chen/duya/pull/558)：审批后重解析 live entry（移除→TOOL_NOT_FOUND、exposure/eligibility 变化→具名错误、变更→按 live schema 重校验后以 live executor 执行）+ 决策完成时 structuredClone 绑定执行参数。cwd/执行位置中途变化仍由 Host fence/lease 层负责，MCP executor 自身的 source-approval 为另一路径 | 集成后 I05 审批窗口缺口闭合；W1 剩余：将同等绑定核查推广到直连路径的审批缓存场景（如有），并核对 Host lease 与新错误码的 UI 呈现 |
 | F19 待复现风险 | wrapper、MCP、CLI 路径可能丢失真实名称对应的 timeout、hook、取消、快照 metadata 或结果状态 | W1/W8 做差分测试；查明每个字段现有传播情况，不把所有风险写成现存缺陷 |
 | F20 已确认 | [文件 contributors](../../../packages/capabilities/src/fs-contributors.ts) 提供描述投影，Host 另建执行实例；已有 [13 槽接口](../../../packages/tooling/src/contributors.ts) | W5/W9 统一描述来源与一致性验证，避免再创建平行扩展框架 |
 | F21 待复现风险 | 工具命名/归属变化会影响历史调用、compact、resume、缓存、审批卡与 UI renderer | W8/W10 覆盖兼容，保留原始历史，不用简单全局替换 |
@@ -348,6 +348,7 @@ npm run electron:build
 - [x] W0 首增量：请求级 census（worker/bot × hint/search/mention，8 场景 JSON 落 `docs-local/research/tool-surface-w0/`，本地保留）与 direct/invoke 三轴差分（调度/审批绑定/取消）；以 [Draft PR #555](https://github.com/lava-chen/duya/pull/555) 交付（base `a33bbb05`，head `80a07bf4`，2 个测试文件，零生产代码改动）。F10 修订、F18 升级为已复现、新增 F24–F26。
 - [x] W0 台账：[工具面能力台账](../../references/tool-surface-ledger.md)（2026-10-31）。待决 7 项各带核对动作：`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession` action 归类、`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 状态源去重、`vision_analyze` 常驻成本、`ReactToMessage` 490 意图核对。
 - [x] F24 修复：[Draft PR #557](https://github.com/lava-chen/duya/pull/557)（叠在 #555 上；受影响 5 套件 55/55 绿，typecheck/architecture 过）。
+- [x] W1 F18 修复：[Draft PR #558](https://github.com/lava-chen/duya/pull/558)（叠在 #555 上；审批后重解析 + 参数绑定，新 2 例 + 差分翻转，19/19 + 回归 30/30 绿，typecheck/architecture 过）。
 - [ ] W0 其余项：617 census 脚本核对与复用（已核对 `scripts/architecture/` 无 census 脚本，P0-1/P0-2 未做）、失败场景矩阵扩充（超时/重连/compact/resume）、bot/wake/headless 真 worker census。
 - [ ] W1–W10 运行时实施；W11 为可延期裁决项。
 
@@ -374,6 +375,6 @@ npm run electron:build
 
 W0 切片登记（2026-10-31）：owner 为本会话；worktree `E:/Projects/duya/.claude/worktrees/tool-surface-w0`，分支 `codex/tool-surface-w0-baseline`，base `a33bbb0542f5effeb8484a64f8ca2cf217272e87`（origin/master）。独占路径：`packages/host/tests/worker-product-runtime/tool-surface-w0-*.test.ts`、`packages/agent-runtime/test/discovery/tool-surface-w0-*.test.ts` 与 `docs-local/research/tool-surface-w0/`；共享文件只读。交付 [Draft PR #555](https://github.com/lava-chen/duya/pull/555)（head `80a07bf4`）。W0 首增量审计发现：`packages/host/src/worker-tools/bot-builtin.ts` 的 `createBotRegistry`/`registerBotTools` 在生产代码零调用点（仅 legacy shim 转发，shim 也无调用方）；bot 会话与普通 worker 共用 `createBuiltinRegistry`，bot 差异实际来自 `toAgentProfile` + `applyBotToolset` 的精确 allowlist 提升；BOT_TOOLSET 的 `SendMessage` 与注册名 `send_message` 漂移（F24）。F10 已按此修订。
 
-下一动作：W1 优先消化 F18（审批后重解析/冻结 args，差分测试已锚定）；台账待决 7 项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充。#555→#557 按栈序集成。
+下一动作：集成序 #555 → #557/#558（两者互相独立，均叠在 #555 上）；集成后重验 F18/F24 场景。台账待决 7 项的核对动作逐项消化（`wait_tasks` 注册二选一、worktree 三工具 bot 可见性、`MessageSession`/`memory_write`/`write_stage1_policy`/`read_module` 消费者、`plan` 去重、`vision_analyze`、`ReactToMessage`）；随后 617 census 脚本复用与失败场景矩阵扩充（超时/重连/compact/resume）。
 
 回收：PR 未集成且运行时实施未开始，保留分支、managed worktree 和接续；ignored overlay 不是已提交交付物。后续每个实施 PR 持续更新本节的 head、dirty 路径、检查、外部副作用、阻塞与下一动作。
