@@ -485,6 +485,11 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const settings = new MainSettingsStore(mainDatabase.db);
     const turnReviews = new ChatTurnReviewStore(mainDatabase.db);
     const turnSuggestions = new ChatTurnSuggestionStore(mainDatabase.db);
+    // Declared before the session API because that API's permission hook
+    // reaches the run execution controller, and the controller is composed
+    // further down. The hook only runs on a later request, but the binding
+    // has to exist before the closure that reads it is written.
+    let runExecution: HostRunExecutionController | null = null;
     const api = createHostSessionApi({
       stores: core.stores,
       rolloutRoot,
@@ -492,6 +497,13 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       permissionSettings: settings,
       workspaceDatabase: core.database.db,
       workspaces: workspaceAccess,
+      // A permission change reaches the turn that is running RIGHT NOW, not
+      // only the next one. The row is the durable record of the mode; the
+      // worker holds the mode actually in force, and the permission gate
+      // reads it per decision.
+      onPermissionModeChanged: (sessionId, profile) => {
+        runExecution?.setSessionPermissionMode(sessionId, profile);
+      },
       // A session created without a provider/model records the ones
       // config.toml actually selects, instead of the schema placeholders
       // (`''` and `'env'`) that a client would then render as "env · default".
@@ -553,7 +565,6 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           store: core.stores.appGrants,
           resolveApp: options.pluginAppManifestResolver,
         }));
-    let runExecution: HostRunExecutionController | null = null;
     const pluginAppGrantApi = createHostPluginAppGrantApi({
       store: core.stores.appGrants,
       ...(pluginAppAuthority === undefined ? {} : { authority: pluginAppAuthority }),

@@ -20,6 +20,7 @@ const STUB_WORKER_SOURCE = `
 const MODE = (__filename.includes('-hang-hard') && 'hang-hard')
   || (__filename.includes('-array-action') && 'array-action')
   || (__filename.includes('-stdout-pressure') && 'stdout-pressure')
+  || (__filename.includes('-permission-live') && 'permission-live')
   || (__filename.includes('-permission') && 'permission')
   || (__filename.includes('-plugin-app') && 'plugin-app')
   || (__filename.includes('-bash-task') && 'bash-task')
@@ -198,6 +199,16 @@ process.stdin.on('data', (chunk) => {
       process.send({ type: 'chat:done', sessionId: command.sessionId });
       continue;
     }
+    if (command.type === 'permission:set') {
+      // The live switch: the Host pushed the new mode to the worker that is
+      // running THIS turn. The mode is reported back as the turn's text, so
+      // the test sees what the worker was actually told.
+      emitTextBlock('mode=' + command.mode);
+      emitTurnCompleted('end_turn');
+      emitTerminal('completed');
+      process.send({ type: 'chat:done', sessionId: command.sessionId });
+      continue;
+    }
     // A production worker honours chat:interrupt: it stops the turn and
     // reports its own terminal frame — the CLEAN cancel path. ('hang-hard'
     // deliberately ignores the interrupt to exercise escalation.)
@@ -242,6 +253,31 @@ process.stdin.on('data', (chunk) => {
       });
       process.send({ type: 'chat:tool_use', id: 'tool-approval', name: 'bash', input: { command: 'echo approved' } });
       const request = { id: 'approval-1', toolName: 'bash', toolInput: { command: 'echo approved' }, mode: 'exit_plan_mode', reason: 'The command writes outside the workspace', expiresAt: Date.now() + 300000 };
+      emitNative({
+        type: 'permission.requested',
+        requestId: request.id,
+        kind: 'tool_use',
+        toolCallId: 'tool-approval',
+        toolName: request.toolName,
+        toolInput: request.toolInput,
+        mode: request.mode,
+        reason: request.reason,
+        startedAt: Date.now(),
+        expiresAt: request.expiresAt,
+      });
+      process.send({ type: 'chat:permission', sessionId: command.sessionId, request });
+    } else if (MODE === 'permission-live') {
+      // Asks for an approval and then waits for the live permission switch
+      // rather than for an approval decision: the point of this mode is the
+      // turn that is ALREADY running.
+      emitNative({
+        type: 'tool.call_started',
+        toolCallId: 'tool-approval',
+        toolName: 'bash',
+        arguments: { command: 'echo approved' },
+        attempt: 1,
+      });
+      const request = { id: 'approval-live', toolName: 'bash', toolInput: { command: 'echo approved' }, mode: 'exit_plan_mode', reason: 'The command writes outside the workspace', expiresAt: Date.now() + 300000 };
       emitNative({
         type: 'permission.requested',
         requestId: request.id,
@@ -340,7 +376,7 @@ process.on('disconnect', () => process.exit(0));
 
 async function writeStubWorker(
   directory: string,
-  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'bash-task' | 'array-action' | 'permission' | 'plugin-app' | 'stdout-pressure',
+  mode: 'complete' | 'hang' | 'hang-hard' | 'db' | 'bash-task' | 'array-action' | 'permission' | 'permission-live' | 'plugin-app' | 'stdout-pressure',
 ): Promise<string> {
   const workerPath = path.join(directory, `stub-worker-${mode}.cjs`);
   await fs.writeFile(workerPath, STUB_WORKER_SOURCE, 'utf8');
@@ -479,6 +515,46 @@ describe('Host-owned run execution', () => {
       expect(text).toEqual(['decision=' + (status === 'allow' ? 'allow_once' : 'deny')]);
       expect((await client.getAgentRun(start.runId))?.status).toBe('completed');
       expect(await client.listPendingPermissionRequests(sessionId)).toEqual([]);
+    } finally {
+      await host?.close();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('pushes a permission-mode change to the worker that is running the turn', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-run-permission-live-'));
+    let host: LocalHostHandle | undefined;
+    try {
+      const started = await startHostWithSession(root, await writeStubWorker(root, 'permission-live'));
+      host = started.host;
+      const { client, sessionId } = started;
+      const start = await client.startAgentRun({ sessionId, prompt: 'ask before tool execution' });
+      expect(start.accepted).toBe(true);
+      if (!start.accepted) return;
+
+      const events = [];
+      let patched = false;
+      for await (const event of client.watchAgentRunEvents(start.runId)) {
+        events.push(event);
+        // The turn is in flight and waiting. This is the moment a person
+        // presses Shift+Tab in the TUI.
+        if (!patched && event.payload.type === 'permission.requested') {
+          patched = true;
+          const response = await fetch(`${started.host.origin}/v1/sessions/${encodeURIComponent(sessionId)}`, {
+            method: 'PATCH',
+            headers: { authorization: 'Bearer run-execution-test-token', 'content-type': 'application/json' },
+            body: JSON.stringify({ patch: { permissionMode: 'full_access' } }),
+          });
+          expect(response.status).toBe(200);
+        }
+      }
+      // The worker that was running the turn was told the new mode, and it
+      // was told it in the AGENT's vocabulary: the row's `full_access` is the
+      // agent's `bypassPermissions`. Sending the profile as-is would have
+      // landed as `default`, because the agent does not know that name.
+      const text = events.filter((e) => e.payload.type === 'assistant.text_block').map((e) => e.payload.text);
+      expect(text).toEqual(['mode=bypassPermissions']);
+      expect((await client.getAgentRun(start.runId))?.status).toBe('completed');
     } finally {
       await host?.close();
       await fs.rm(root, { recursive: true, force: true });

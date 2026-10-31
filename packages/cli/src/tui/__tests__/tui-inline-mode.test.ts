@@ -216,9 +216,12 @@ describe('inline mode', () => {
     // The budget is fixed: this block is chrome, and a queue that grows would
     // push the composer down a row per draft until the terminal ran out.
     expect(text).toContain('… 2 earlier');
-    expect(text).toContain('↳ steer · third');
+    // A steer is already with the running turn, so the row says so. Painting
+    // it as a queued draft made a message the user had sent look like one
+    // that never left.
+    expect(text).toContain('↳ sent · third');
     expect(text).toContain('⧗ queued · fourth');
-    expect(text).toContain('↳ steer · fifth');
+    expect(text).toContain('↳ sent · fifth');
     // The two oldest drafts are behind the summary row, not in it.
     expect(text).not.toContain('· first');
     expect(text).not.toContain('· second');

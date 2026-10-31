@@ -147,6 +147,20 @@ export interface HostSessionApiOptions {
    * defaults rather than inventing a provider.
    */
   readonly defaultModelProvider?: () => DefaultSessionModelProvider | null;
+  /**
+   * Called when a patch actually CHANGES the session's permission profile.
+   *
+   * ## Why the Host has to be told
+   *
+   * The row is the durable mode, but a turn already in flight is governed by
+   * the mode the worker holds in memory. Without this hook the mode a person
+   * picks mid-turn only reaches the NEXT turn: the badge changes and the
+   * behaviour does not.
+   *
+   * It fires only on a real change, so a patch that repeats the current
+   * profile does not push a redundant command to the worker.
+   */
+  readonly onPermissionModeChanged?: (sessionId: string, profile: SessionPermissionProfile) => void;
 }
 
 interface PageCursor {
@@ -593,6 +607,12 @@ export function createHostSessionApi(options: HostSessionApiOptions): HostSessio
     }
     const updated = sessions.get(sessionId);
     if (!updated) return { updated: false, reason: 'not_found' };
+    if (patch.permissionMode !== undefined && updated.permissionMode !== current.permissionMode) {
+      // The mode in force just changed, so a turn that is running RIGHT NOW
+      // is still answering under the old one. Tell the Host, which owns the
+      // worker, so the change reaches the turn in flight.
+      options.onPermissionModeChanged?.(sessionId, patch.permissionMode);
+    }
     return { updated: true, session: await toRecord(updated) };
   }
 
