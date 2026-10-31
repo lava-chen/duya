@@ -30,6 +30,15 @@ describe('BOT_TOOLSET', () => {
     expect(BOT_TOOLSET).toContain('update_state');
   });
 
+  it('names the bot voice tool by its REGISTERED name (F24)', () => {
+    // The tool registers as `send_message` (capabilities
+    // SendMessageTool/constants.ts). The retired `SendMessage` spelling
+    // silently stopped the plan 496 exact-name promotion, leaving the bot's
+    // only voice unreachable from turn one.
+    expect(BOT_TOOLSET).toContain('send_message');
+    expect(BOT_TOOLSET).not.toContain('SendMessage');
+  });
+
   it('contains the plan 492 self-management tools', () => {
     expect(BOT_TOOLSET).toContain('create_agent');
     expect(BOT_TOOLSET).toContain('update_agent');
@@ -73,7 +82,7 @@ describe('applyBotToolset', () => {
   it('appends the bot toolset to a "*" allowlist (plan 496 exposure promotion)', () => {
     // The default `full` base profile resolves to ['*']. The exact names must
     // still be appended: ToolFilter only promotes a deferred tool on an
-    // exact allowlist entry, so a bare '*' bot never saw SendMessage.
+    // exact allowlist entry, so a bare '*' bot never saw send_message.
     const merged = applyBotToolset(makeProfile(['*']));
     expect(merged.allowedTools).toContain('*');
     for (const tool of BOT_TOOLSET) {

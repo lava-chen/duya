@@ -79,6 +79,15 @@ describe('SendMessage reminder predicates', () => {
     expect(countNonSendMessageToolCalls(userTurn())).toBe(0);
   });
 
+  it('counts the REGISTERED send_message spelling as a delivery (F24)', () => {
+    // The tool registers as `send_message`; the retired `SendMessage`
+    // spelling survives in replayed transcripts. Both must count.
+    expect(hasSendMessageCall(assistantWithTools('send_message'))).toBe(true);
+    expect(countNonSendMessageToolCalls(assistantWithTools('send_message'))).toBe(0);
+    expect(hasSendMessageCall(assistantWithTools('SendMessage'))).toBe(true);
+    expect(hasSendMessageCall(assistantWithTools('Read', 'Bash'))).toBe(false);
+  });
+
   it('counts tool calls since the last SendMessage, stopping at user turns', () => {
     const messages = [
       userTurn('go'),
