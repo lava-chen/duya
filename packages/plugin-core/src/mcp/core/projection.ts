@@ -9,9 +9,13 @@
 //     `{ type: 'object', anyOf: [canonical] }` (provider APIs reject
 //     typeless roots; we never overwrite a declared root);
 //   - root already has `type` → pass through byte-identical;
-//   - 8 KB spec budget trimming happens HERE and nowhere else — over-
-//     budget schemas degrade to an empty object schema (the executor
-//     still receives the raw args JSON the model produced).
+//   - spec budget trimming happens HERE and nowhere else — over-budget
+//     schemas degrade to an explicit permissive object schema
+//     (`additionalProperties: true`), so the projected shape never
+//     *demands* zero arguments while the executor still receives the
+//     raw args JSON the model produced. The caller annotates the tool
+//     description via `downgradedSchemaDescription` (plan tool-surface
+//     W2/F08: the annotation is wired at the last-mile call sites).
 
 export const DEFAULT_PROVIDER_SPEC_BUDGET = 8192;
 
@@ -20,13 +24,21 @@ export interface SchemaProjection {
   schema: Record<string, unknown>;
   /** True when the budget trimmed the schema (description annotation is the caller's job). */
   downgraded: boolean;
-  /** Serialized size of the canonical schema (bytes, JSON.stringify length). */
+  /** Serialized size of the canonical schema in UTF-8 bytes. */
   size: number;
+}
+
+/** UTF-8 byte length of the canonical JSON serialization. */
+function utf8ByteLength(json: string): number {
+  return new TextEncoder().encode(json).length;
 }
 
 /**
  * Project a canonical input schema for a provider request. Pure
  * JSON→JSON transform; deterministic for a given (canonical, budget).
+ * `size` is measured in UTF-8 bytes — CJK descriptions cost ~3 bytes per
+ * code unit, so a string-length measure under-counts and would let
+ * over-budget schemas slip through to the provider (plan W2).
  */
 export function projectForProvider(
   canonical: Record<string, unknown> | undefined,
@@ -38,12 +50,16 @@ export function projectForProvider(
 
   let size: number;
   try {
-    size = JSON.stringify(canonical).length;
+    size = utf8ByteLength(JSON.stringify(canonical));
   } catch {
     size = budget + 1;
   }
   if (size > budget) {
-    return { schema: { type: 'object', properties: {} }, downgraded: true, size };
+    return {
+      schema: { type: 'object', properties: {}, additionalProperties: true },
+      downgraded: true,
+      size,
+    };
   }
 
   const rootType = (canonical as { type?: unknown }).type;

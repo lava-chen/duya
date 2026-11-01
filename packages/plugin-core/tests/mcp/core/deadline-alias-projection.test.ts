@@ -134,12 +134,27 @@ describe('projectForProvider (plan 580 D4)', () => {
     expect(size).toBe(JSON.stringify(canonical).length);
   });
 
-  it('downgrades over-budget schemas to an empty object schema', () => {
+  it('downgrades over-budget schemas to an explicitly permissive object schema', () => {
     const big = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(10_000) } } };
     const { schema, downgraded, size } = projectForProvider(big);
     expect(downgraded).toBe(true);
-    expect(schema).toEqual({ type: 'object', properties: {} });
+    // additionalProperties: true keeps the degraded shape honest: it never
+    // *demands* zero arguments while the executor still receives raw args.
+    expect(schema).toEqual({ type: 'object', properties: {}, additionalProperties: true });
     expect(size).toBeGreaterThan(8192);
+  });
+
+  it('measures size in UTF-8 bytes, not UTF-16 code units (plan W2)', () => {
+    // Every CJK code point serializes to 1 JSON char but encodes to 3 UTF-8
+    // bytes; a string-length measure would under-count by 2/3 and let
+    // over-budget schemas slip through.
+    const cjk = { type: 'object', properties: { blob: { type: 'string', description: '汉'.repeat(4000) } } };
+    const { downgraded, size } = projectForProvider(cjk);
+    const jsonByteLength = new TextEncoder().encode(JSON.stringify(cjk)).length;
+    expect(size).toBe(jsonByteLength);
+    expect(size).toBeGreaterThan(JSON.stringify(cjk).length);
+    // Just over the ASCII-only budget when measured in bytes alone.
+    expect(downgraded).toBe(true);
   });
 
   it('handles undefined / malformed canonical safely', () => {
