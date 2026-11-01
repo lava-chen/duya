@@ -30,7 +30,7 @@ import { getAgentsMdManager } from '@duya/host/worker-agents-md/index';
 import { extractTriggerPaths } from '@duya/host/worker-agents-md/nested-loader';
 import { isNestedAgentsMdEnabled } from '@duya/host/worker-config/feature-flags';
 import { getCachedAppConnectionDescriptors } from '@duya/host/worker-tool-bindings/app-connection-tools';
-import { projectForProvider } from '@duya/plugin-core/mcp/core/projection';
+import { projectForProvider, downgradedSchemaDescription } from '@duya/plugin-core/mcp/core/projection';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '@duya/host/worker-mentions';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '@duya/host/skills';
 import { compressProjectedToolMessages } from '@duya/agent-runtime/context/compact/projectionCompress';
@@ -1638,7 +1638,18 @@ export class WorkerSession implements AgentRuntime {
             if (!isToolVisible(t.name, exposure, discoveredSeed, constraints))
                 continue;
             const projection = projectForProvider(t.input_schema);
-            tools.push(projection.downgraded ? { ...t, input_schema: projection.schema } : t);
+            // Plan tool-surface W2 (F08): a downgraded tool must stay
+            // callable — the projected schema is explicitly permissive and
+            // the description carries the degradation annotation (size,
+            // budget, how to call). The canonical registry entry is
+            // untouched; this is the provider-request last mile only.
+            tools.push(projection.downgraded
+                ? {
+                    ...t,
+                    description: downgradedSchemaDescription(t.description, projection.size),
+                    input_schema: projection.schema,
+                }
+                : t);
         }
         logger.info(`[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`);
         if (appliedProfile?.allowedTools?.length && tools.length === 0) {
