@@ -221,6 +221,71 @@ describe('ApplyPatchTool execute', () => {
     expect(readFileSync(join(root, 'src', 'b.ts'), 'utf-8')).toContain('const q = 9;');
   });
 
+  it('reports partial success with explicit status and per-operation results (plan W7 / F16)', async () => {
+    const tool = new ApplyPatchTool();
+    writeFileSync(join(root, 'src', 'b.ts'), 'const p = 1;\nconst q = 2;\n');
+    const patch = `*** Begin Patch
+*** Update File: src/a.ts
+@@
+ const x = 1;
+-const y = 2;
++const y = 3;
+ const z = 4;
+*** Update File: src/b.ts
+@@
+ const p = 1;
+-WRONG-LINE
++const q = 9;
+*** End Patch`;
+    const result = await tool.execute({ patch }, root);
+    // Partial: one operation landed, one failed — NOT a clean success, and
+    // NOT a total error either.
+    expect(result.error).toBeFalsy();
+    expect(result.metadata?.patchStatus).toBe('partial');
+    expect(result.metadata?.applied).toEqual(['updated src/a.ts']);
+    expect(result.metadata?.failures).toHaveLength(1);
+    expect(String(result.metadata?.failures?.[0])).toContain('src/b.ts');
+    // The good half landed and stays (no rollback pretense).
+    expect(readFileSync(join(root, 'src', 'a.ts'), 'utf-8')).toContain('const y = 3;');
+    expect(readFileSync(join(root, 'src', 'b.ts'), 'utf-8')).toContain('const q = 2;');
+    // The result text lists both halves so the model sees the split.
+    expect(String(result.result)).toContain('Applied 1 operation(s)');
+    expect(String(result.result)).toContain('Failed 1 operation(s)');
+  });
+
+  it('reports success status when every operation lands', async () => {
+    const tool = new ApplyPatchTool();
+    const patch = `*** Begin Patch
+*** Add File: src/ok.ts
++const k = 1;
+*** End Patch`;
+    const result = await tool.execute({ patch }, root);
+    expect(result.error).toBeFalsy();
+    expect(result.metadata?.patchStatus).toBe('success');
+    expect(result.metadata?.applied).toEqual(['added src/ok.ts']);
+    expect(result.metadata?.failures).toBeUndefined();
+  });
+
+  it('reports failed status when every operation fails', async () => {
+    const tool = new ApplyPatchTool();
+    writeFileSync(join(root, 'src', 'b.ts'), 'const p = 1;\nconst q = 2;\n');
+    const patch = `*** Begin Patch
+*** Update File: src/b.ts
+@@
+-WRONG-A
++const q = 9;
+*** Update File: src/missing.ts
+@@
+-WRONG-B
++x
+*** End Patch`;
+    const result = await tool.execute({ patch }, root);
+    expect(result.error).toBe(true);
+    expect(result.metadata?.patchStatus).toBe('failed');
+    expect(result.metadata?.applied).toBeUndefined();
+    expect(result.metadata?.failures).toHaveLength(2);
+  });
+
   it('handles CRLF files', async () => {
     const tool = new ApplyPatchTool();
     writeFileSync(join(root, 'src', 'crlf.ts'), 'a\r\nb\r\nc\r\n');
