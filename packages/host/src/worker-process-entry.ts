@@ -45,7 +45,7 @@ import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { launchSavedWorkflow } from './worker-workflows/runner.js';
 import { runWorkflowRuntimeChild } from './worker-workflows/runtime-child.js';
 import { resolveChatStartAgentMode, manifestPermissionMode } from '@duya/agent-runtime/authorization/profile-bridge';
-import { hydrateWorkerSessionHistory } from '@duya/host/worker-session-history';
+import { hydrateSessionHistory } from '@duya/agent-runtime/session';
 import type { ModelContentBlock } from '@duya/agent-runtime';
 import { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { applyMCPConfiguration, type MCPApplyResult } from './connector-services/worker-permission-binding.js';
@@ -3014,7 +3014,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                     const [_, __, history] = await Promise.all([
                         restoredSession.initToolCatalog(),
                         loadAgentSkills(initMsg.workingDirectory, initMsg.skillPaths, initMsg.securityScanEnabled),
-                        hydrateWorkerSessionHistory(sessionId!, {
+                        hydrateSessionHistory(sessionId!, {
                             load: async (id) => await messageDb.loadMessages(id) as {
                                 messages: MessageRow[];
                                 parsedDocuments?: ParsedDocumentAttachment[];

@@ -292,6 +292,10 @@ modules:
     publicEntrypoints:
       - packages/agent-runtime/src/index.ts
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
+      # R1.1: the Runtime Session service and its ports. The subpath is the
+      # surface the Host injects into; the Host's own compatibility layer
+      # (`packages/host/src/worker-session-history.ts`) forwards to it.
+      - packages/agent-runtime/src/session/index.ts
     owner: agent
 
   - id: workflow
