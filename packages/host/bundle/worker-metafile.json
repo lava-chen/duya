@@ -33161,7 +33161,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/DuyaCliTool/DuyaCliTool.ts": {
-      "bytes": 21496,
+      "bytes": 22702,
       "imports": [
         {
           "path": "../../../node_modules/zod/v4/index.js",
@@ -40375,7 +40375,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -40474,10 +40474,10 @@
           "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -40624,10 +40624,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40711,7 +40711,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -44395,7 +44395,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45340,7 +45340,7 @@
           "bytesInOutput": 1566
         },
         "packages/capabilities/src/DuyaCliTool/DuyaCliTool.ts": {
-          "bytesInOutput": 9873
+          "bytesInOutput": 10176
         },
         "packages/capabilities/src/DuyaCliTool/index.ts": {
           "bytesInOutput": 0
@@ -45919,7 +45919,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757391
+      "bytes": 4757646
     }
   }
 }
