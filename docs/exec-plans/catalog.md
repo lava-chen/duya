@@ -105,5 +105,6 @@
 | [model-call-trace](backlog/561-model-call-trace.md) | 0/40, unstarted |
 | [tab-shell-workbench](backlog/571-tab-shell-workbench.md) | 0/28, unstarted |
 | [chain-ab-runtime-merge-evaluation](backlog/581-chain-ab-runtime-merge-evaluation.md) | decision doc only; execution deferred to plan 582+ |
+| [Bot-first Desktop / Project / Session Agent 协调](backlog/2026-11-01-bot-session-coordination.md) | 架构决策与研究草稿完成；实施仍在 backlog，尚无代码切片 |
 
 完整迁移前记录与历史列表见[索引快照](archive/2026-10-20-index-snapshot.md)。

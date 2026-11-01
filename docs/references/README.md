@@ -4,5 +4,6 @@
 
 - [Codex thread / worktree](codex-thread-and-worktree-management.md)：2026-09-30 的源码调查，使用前核对版本。
 - [个人智能体产品](personal-agent-products.md)：2026-10-25 四产品官方机制、未公开范围与 DUYA 源码核实入口。
+- [多 Session Agent 协调架构](agent-coordination-models.md)：Claude Code Projects、Claude Managed Agents 与 DeepSeek 原型的公开机制，以及 Duya Bot / Session 接缝，核对至 2026-11-01。
 
 只把任务所需的结论提升为设计或计划；原始摘录、下载资料和未核实笔记留在 `docs-local/`。
