@@ -42,14 +42,18 @@ fs.cpSync(workerBundle, path.join(output, 'harness-bundle'), {
   filter: (source) => !source.endsWith('worker-metafile.json'),
 });
 const runtimeExecutable = fs.realpathSync(process.execPath);
-const runtimeRoot = path.dirname(path.dirname(runtimeExecutable));
+const runtimeRoot = process.platform === 'win32'
+  ? path.dirname(runtimeExecutable)
+  : path.dirname(path.dirname(runtimeExecutable));
 const runtimeLicense = path.join(runtimeRoot, 'LICENSE');
 if (!fs.existsSync(runtimeLicense)) {
   throw new Error(`Node.js runtime license was not found beside ${runtimeExecutable}`);
 }
-fs.copyFileSync(runtimeExecutable, path.join(output, 'runtime/node'));
+const runtimeName = process.platform === 'win32' ? 'node.exe' : 'node';
+const packagedRuntime = path.join(output, 'runtime', runtimeName);
+fs.copyFileSync(runtimeExecutable, packagedRuntime);
 fs.copyFileSync(runtimeLicense, path.join(output, 'runtime/LICENSE'));
-fs.chmodSync(path.join(output, 'runtime/node'), 0o755);
+if (process.platform !== 'win32') fs.chmodSync(packagedRuntime, 0o755);
 fs.writeFileSync(path.join(output, 'VERSION'), `${version}\n`);
 
 const dependencyRoots = ['better-sqlite3', 'blessed', 'esbuild', 'playwright', 'fsevents'];
@@ -94,13 +98,20 @@ for (const dependency of dependencyRoots) {
   copyPackage(dependency, root, dependency !== 'fsevents');
 }
 
-const launcher = `#!/bin/sh
+const launcher = process.platform === 'win32'
+  ? `@echo off
+set DUYA_CLI_VERSION=${version}
+"%~dp0..\\runtime\\node.exe" "%~dp0..\\app\\cli.cjs" %*
+`
+  : `#!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 export DUYA_CLI_VERSION=$(cat "$ROOT/VERSION")
 exec "$ROOT/runtime/node" "$ROOT/app/cli.cjs" "$@"
 `;
-fs.writeFileSync(path.join(output, 'bin/duya'), launcher, { mode: 0o755 });
-fs.chmodSync(path.join(output, 'bin/duya'), 0o755);
+const launcherName = process.platform === 'win32' ? 'duya.cmd' : 'duya';
+const launcherPath = path.join(output, 'bin', launcherName);
+fs.writeFileSync(launcherPath, launcher, process.platform === 'win32' ? undefined : { mode: 0o755 });
+if (process.platform !== 'win32') fs.chmodSync(launcherPath, 0o755);
 
 process.stdout.write(`Packaged Duya CLI ${version} for ${process.platform}-${process.arch} at ${output}\n`);
