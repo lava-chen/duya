@@ -75,9 +75,17 @@ codex 对齐项。
 ## 接续 / 结果
 
 已实现：背景槽（词表 + 三个解析器 + span 序列化）、主题表面色、composer 纯色
-背景（全屏 + inline）、已发命令背景带。已验证：TUI 套件 1334 例全绿、CLI 包
-typecheck 通过。未提交路径：全部改动仍在 worktree 未提交。
+背景（全屏 + inline）、已发命令背景带。
 
-回收：owner 是本会话，未回收（等 PR 集成后再走 `scripts/remove-worktree.sh`）。
-下一步：跑 `npm run typecheck:all` 与 `npm run architecture:check`，提交并开 PR
-（不合并，等授权）。
+已验证：`npm run typecheck:all` exit 0；架构门禁 OK 且与 master 基线逐行一致；
+`vitest run packages/cli` 135 files / 1609 例全绿；全量 `vitest run` 14577 例中
+14546 passed，唯一失败是 `packages/ui` 的 `PanelMoreMenu.test.tsx` 30s 超时，
+单独复跑 6 例全过（本文件自身需 46s，并行负载型 flake，与本次改动无关）。
+
+PR：<https://github.com/lava-chen/duya/pull/567>（分支 `codex/tui-codex-surface`，
+base `master`，未合并）。提交：`e14ee917` 功能，`8435eb9f` 测试基建别名。
+未合并前保留分支与 worktree。
+
+回收：owner 是本会话，未回收（等集成后走 `scripts/remove-worktree.sh`）。
+下一步：等 PR #567 的 CI（architecture / test scope / typecheck / test）与
+review；获授权后再合并并把本计划移入 archive、更新 plans README。
