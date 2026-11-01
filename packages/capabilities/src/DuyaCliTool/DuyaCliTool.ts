@@ -292,8 +292,12 @@ function parseArgv(argv: string[]): DuyaCliInvocation {
     if (tok === '--agent' && i + 1 < argv.length) { (out.configAgents ??= []).push(argv[++i]); continue; }
     if (tok.startsWith('--agent=')) { (out.configAgents ??= []).push(tok.slice('--agent='.length)); continue; }
     if (tok.startsWith('--')) {
-      // Unknown long flag — skip value if next token is not a flag
-      if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) i++;
+      // Plan tool-surface W6 (F12): unknown long flags used to be skipped
+      // silently (optionally swallowing the next token as their value), so
+      // a typo'd flag vanished and the model believed it applied an option
+      // it did not. Record them; execute() fails the call naming them.
+      out.unknownFlags ??= [];
+      out.unknownFlags.push(tok);
       continue;
     }
     // Positional arg
@@ -394,6 +398,13 @@ export class DuyaCliTool extends BaseTool {
         );
       }
       invocation = parseArgv(data.argv);
+      // F12: an unrecognized flag is an explicit failure, not a silent skip.
+      if (invocation.unknownFlags && invocation.unknownFlags.length > 0) {
+        return toolError(
+          `unknown flag(s) ${invocation.unknownFlags.map((f) => `'${f}'`).join(', ')} — not part of the duya CLI surface; re-check the flag spelling`,
+          { unknownFlags: [...invocation.unknownFlags] },
+        );
+      }
       if (data.format !== undefined) invocation.format = data.format;
       if (data.yes !== undefined) invocation.yes = data.yes;
     } else {
@@ -455,15 +466,22 @@ export class DuyaCliTool extends BaseTool {
       }
     }
 
+    // Plan tool-surface W6 (F12): stdout and the parsed payload used to be
+    // projected side by side, doubling the context the model reads for every
+    // JSON response. Project the body ONCE: `data` when the stdout parsed as
+    // JSON, the raw `stdout` string when it did not (or for text format).
+    // stderr, exitCode and ok are always carried.
+    const bodyProjectedAsData = fmt !== 'text' && parsedStdout !== result.stdout;
     return toolSuccess({
       command: invocation.command,
       subcommand: invocation.subcommand ?? null,
       argv: invocation.extraArgs,
       exitCode: result.exitCode,
       ok: result.exitCode === 0,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      data: parsedStdout,
+      ...(bodyProjectedAsData
+        ? { data: parsedStdout }
+        : { stdout: result.stdout }),
+      ...(result.stderr !== undefined && result.stderr !== '' ? { stderr: result.stderr } : {}),
     });
   }
 }

@@ -22720,7 +22720,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -33161,7 +33161,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/DuyaCliTool/DuyaCliTool.ts": {
-      "bytes": 21496,
+      "bytes": 22702,
       "imports": [
         {
           "path": "../../../node_modules/zod/v4/index.js",
@@ -34972,7 +34972,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/discovery/real-target.ts": {
-      "bytes": 4725,
+      "bytes": 4817,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/execution/orchestration/classify.ts",
@@ -40594,7 +40594,7 @@
           "bytesInOutput": 2310
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 8508
+          "bytesInOutput": 8495
         },
         "packages/data/src/bot-outbox.ts": {
           "bytesInOutput": 35
@@ -40624,10 +40624,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40711,7 +40711,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -42454,7 +42454,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43882,7 +43882,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43891,7 +43891,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9969
@@ -45340,7 +45340,7 @@
           "bytesInOutput": 1566
         },
         "packages/capabilities/src/DuyaCliTool/DuyaCliTool.ts": {
-          "bytesInOutput": 9873
+          "bytesInOutput": 10176
         },
         "packages/capabilities/src/DuyaCliTool/index.ts": {
           "bytesInOutput": 0
@@ -45919,7 +45919,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4756468
+      "bytes": 4756683
     }
   }
 }
