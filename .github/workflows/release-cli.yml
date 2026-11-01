@@ -26,6 +26,9 @@ jobs:
           - os: ubuntu-22.04-arm
             platform: linux
             arch: arm64
+          - os: windows-2022
+            platform: win
+            arch: x64
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -39,6 +42,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Setup MSVC toolchain (Windows native modules)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Verify CLI release version
         shell: bash
@@ -70,7 +77,9 @@ jobs:
           version="${GITHUB_REF_NAME#cli/v}"
           export DUYA_CLI_VERSION="$version"
           node scripts/package-cli-release.mjs --output "$RUNNER_TEMP/duya-cli"
-          if [ "$(node -p 'process.platform')" != "$PACKAGE_PLATFORM" ] || [ "$(node -p 'process.arch')" != "$PACKAGE_ARCH" ]; then
+          actual_platform="$(node -p 'process.platform')"
+          [ "$actual_platform" = "win32" ] && actual_platform=win
+          if [ "$actual_platform" != "$PACKAGE_PLATFORM" ] || [ "$(node -p 'process.arch')" != "$PACKAGE_ARCH" ]; then
             echo "::error::Runner architecture does not match the release matrix entry"
             exit 1
           fi

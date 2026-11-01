@@ -71,6 +71,23 @@ npm run dev:tui
 
 `duya tui` 默认启动一个临时的本地 Host，也可以按开发配置连接已有 Host。这是仓库内的开发使用路径，不代表 CLI 已作为独立公共软件包发布。
 
+Windows x64 用户可在首个稳定版 Windows CLI release 发布后，通过 PowerShell 安装独立 CLI：
+
+```powershell
+irm https://raw.githubusercontent.com/lava-chen/duya/master/install.ps1 | iex
+```
+
+安装器会下载随 CLI 打包的 Node.js 运行时和 `duya` 命令，校验 release 提供的 SHA-256，并仅修改当前用户的安装目录和 `PATH`，不需要单独安装 Node.js 或管理员权限。安装后请打开新终端。再次运行安装器可升级；卸载时下载脚本并加上 `-Uninstall`：
+
+```powershell
+$installer = Join-Path $env:TEMP 'install-duya.ps1'
+Invoke-WebRequest https://raw.githubusercontent.com/lava-chen/duya/master/install.ps1 -OutFile $installer
+powershell.exe -ExecutionPolicy Bypass -File $installer -Uninstall
+Remove-Item $installer
+```
+
+POSIX `install.sh` 仅适用于 macOS 和 Linux，不能直接在 `cmd.exe` 或 PowerShell 中运行。首个稳定版 Windows CLI release 发布前，PowerShell 安装器会提示暂无可用版本。
+
 ### Web：连接本地 Host
 
 Web 仍是早期的本地开发入口：BFF 只监听 `127.0.0.1` 并连接独立 Host，不提供公网访问认证或托管部署。全新检出时，先在一个终端构建并启动 Host：
