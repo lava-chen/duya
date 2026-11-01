@@ -33750,7 +33750,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/discovery/dispatcherFromRegistry.ts": {
-      "bytes": 15428,
+      "bytes": 16500,
       "imports": [
         {
           "path": "node:crypto",
@@ -33982,7 +33982,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-      "bytes": 87572,
+      "bytes": 88055,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -34080,7 +34080,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/ToolExecutionPipeline.ts": {
-      "bytes": 13693,
+      "bytes": 15926,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts",
@@ -34101,7 +34101,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/index.ts": {
-      "bytes": 2166,
+      "bytes": 2282,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts",
@@ -34223,7 +34223,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-execution/tool-execution-pipeline.ts": {
-      "bytes": 1852,
+      "bytes": 2041,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/execution/index.ts",
@@ -34967,8 +34967,24 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/discovery/ToolInvokeTool.ts": {
-      "bytes": 6417,
+      "bytes": 7837,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/tools/discovery/real-target.ts": {
+      "bytes": 4725,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/tools/execution/orchestration/classify.ts",
+          "kind": "import-statement",
+          "original": "../execution/orchestration/classify.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/discovery/ToolInvokeTool.ts",
+          "kind": "import-statement",
+          "original": "./ToolInvokeTool.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/discovery/context.ts": {
@@ -34977,7 +34993,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/discovery/index.ts": {
-      "bytes": 154,
+      "bytes": 216,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/discovery/context.ts",
@@ -34998,6 +35014,11 @@
           "path": "packages/agent-runtime/src/tools/discovery/dispatcherFromRegistry.ts",
           "kind": "import-statement",
           "original": "./dispatcherFromRegistry.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/discovery/real-target.ts",
+          "kind": "import-statement",
+          "original": "./real-target.js"
         }
       ],
       "format": "esm"
@@ -36208,7 +36229,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 139579,
+      "bytes": 140173,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -36599,6 +36620,11 @@
           "path": "packages/agent-runtime/src/tools/discovery/ToolInvokeTool.ts",
           "kind": "import-statement",
           "original": "@duya/agent-runtime/tools/discovery/ToolInvokeTool"
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/discovery/real-target.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-runtime/tools/discovery/real-target"
         },
         {
           "path": "packages/host/src/worker-execution/deferred-dispatcher.ts",
@@ -40568,7 +40594,7 @@
           "bytesInOutput": 2310
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 8495
+          "bytesInOutput": 8508
         },
         "packages/data/src/bot-outbox.ts": {
           "bytesInOutput": 35
@@ -40598,10 +40624,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 21
+          "bytesInOutput": 34
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40685,7 +40711,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -42428,7 +42454,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43100,10 +43126,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50718
+          "bytesInOutput": 50721
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1879
+          "bytesInOutput": 1880
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -45371,7 +45397,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 53796
+          "bytesInOutput": 53845
         },
         "packages/host/src/worker-execution/location-skills.ts": {
           "bytesInOutput": 575
@@ -45380,7 +45406,7 @@
           "bytesInOutput": 800
         },
         "packages/agent-runtime/src/tools/discovery/dispatcherFromRegistry.ts": {
-          "bytesInOutput": 5593
+          "bytesInOutput": 5773
         },
         "packages/host/src/worker-modes/goal/goal-commands.ts": {
           "bytesInOutput": 3026
@@ -45416,7 +45442,7 @@
           "bytesInOutput": 967
         },
         "packages/agent-runtime/src/tools/execution/StreamingToolExecutor.ts": {
-          "bytesInOutput": 29936
+          "bytesInOutput": 29947
         },
         "packages/agent-runtime/src/tools/execution/retry/types.ts": {
           "bytesInOutput": 271
@@ -45440,7 +45466,7 @@
           "bytesInOutput": 121
         },
         "packages/agent-runtime/src/tools/execution/orchestration/classify.ts": {
-          "bytesInOutput": 777
+          "bytesInOutput": 776
         },
         "packages/agent-runtime/src/abort/index.ts": {
           "bytesInOutput": 568
@@ -45455,7 +45481,7 @@
           "bytesInOutput": 1832
         },
         "packages/agent-runtime/src/tools/execution/ToolExecutionPipeline.ts": {
-          "bytesInOutput": 2133
+          "bytesInOutput": 2684
         },
         "packages/host/src/worker-execution/streaming-tool-executor.ts": {
           "bytesInOutput": 2319
@@ -45581,7 +45607,10 @@
           "bytesInOutput": 7656
         },
         "packages/agent-runtime/src/tools/discovery/ToolInvokeTool.ts": {
-          "bytesInOutput": 2589
+          "bytesInOutput": 2830
+        },
+        "packages/agent-runtime/src/tools/discovery/real-target.ts": {
+          "bytesInOutput": 715
         },
         "packages/agent-runtime/src/tools/discovery/index.ts": {
           "bytesInOutput": 0
@@ -45890,7 +45919,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4754656
+      "bytes": 4756468
     }
   }
 }

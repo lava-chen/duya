@@ -59,6 +59,8 @@ import {
   createRealpathCanonicaliser,
   type PathCanonicaliser,
 } from './orchestration/canonical-path.js';
+import type { SchedulingTargetResolver, SchedulingCall } from './real-target.js';
+import type { ToolBatch } from './orchestration/types.js';
 
 export type {
   ExecutorConfig,
@@ -147,9 +149,11 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
   private readonly dependencyResolver: DependencyResolver | undefined;
   private readonly writePathResolver: PathExtractorResolver | undefined;
   private readonly readPathResolver: PathExtractorResolver | undefined;
+  private readonly resolveSchedulingTarget: SchedulingTargetResolver | undefined;
   private readonly canonicaliser: PathCanonicaliser;
   private plan: ExecutionPlan | null = null;
   private planEmittedUnresolved = false;
+  private schedulingBatches = new Map<string, ToolBatch>();
 
   constructor(
     toolRegistry: ToolExecutionRegistry,
@@ -161,6 +165,16 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
       dependencyResolver?: DependencyResolver;
       extractWritePaths?: PathExtractorResolver;
       extractReadPaths?: PathExtractorResolver;
+      /**
+       * Read-only resolver for the real target behind an outer call (W1
+       * seam). When it recognizes a routed call (e.g. `tool_invoke`) it
+       * returns the target's scheduling view; the pipeline then wave-plans
+       * with the TARGET's dependency/path declarations and forwards the
+       * TARGET's direct-call batch to the executor, so a routed call is
+       * scheduled like the direct call of the same target (I06 parity).
+       * Unresolved calls keep the legacy outer-name behavior exactly.
+       */
+      resolveSchedulingTarget?: SchedulingTargetResolver;
       /**
        * Path canonicalisation for the dependency planner. Defaults to
        * the realpath-backed canonicaliser so that two spellings of one
@@ -175,6 +189,7 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
     this.dependencyResolver = options?.dependencyResolver;
     this.writePathResolver = options?.extractWritePaths;
     this.readPathResolver = options?.extractReadPaths;
+    this.resolveSchedulingTarget = options?.resolveSchedulingTarget;
     this.canonicaliser = options?.canonicaliser ?? createRealpathCanonicaliser();
   }
 
@@ -186,7 +201,7 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
   }
 
   async *getRemainingResults(): AsyncGenerator<MessageUpdate<TContext>, void, unknown> {
-    const plan = this.ensurePlan();
+    const { plan, schedulingBatches } = this.ensurePlan();
 
     // First drain: surface every tool the planner could not schedule
     // as a synthetic error. Mirrors the executor's own error envelope
@@ -204,7 +219,11 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
       // same shape as the legacy "submit all tools in a batch" path,
       // just with the wave boundary imposed by the planner.
       for (const tu of wave.toolUses) {
-        this.executor.addTool({ id: tu.toolUseId, name: tu.toolName, input: tu.input });
+        const batch = schedulingBatches.get(tu.toolUseId);
+        this.executor.addTool(
+          { id: tu.toolUseId, name: tu.toolName, input: tu.input },
+          batch !== undefined ? { batch } : undefined,
+        );
       }
 
       // Track which tool-use ids in this wave still need to complete.
@@ -268,6 +287,7 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
     this.pendingTools.length = 0;
     this.plan = null;
     this.planEmittedUnresolved = false;
+    this.schedulingBatches = new Map();
     this.executor.discard();
   }
 
@@ -275,6 +295,7 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
     this.pendingTools.length = 0;
     this.plan = null;
     this.planEmittedUnresolved = false;
+    this.schedulingBatches = new Map();
     this.executor.dispose();
   }
 
@@ -286,16 +307,35 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
    * a single wave containing every buffered tool in arrival order —
    * identical to the pre-2b batched `addTool` flow.
    */
-  private ensurePlan(): ExecutionPlan {
-    if (this.plan !== null) return this.plan;
+  private ensurePlan(): { plan: ExecutionPlan; schedulingBatches: Map<string, ToolBatch> } {
+    if (this.plan !== null) {
+      return { plan: this.plan, schedulingBatches: this.schedulingBatches };
+    }
 
+    const schedulingBatches = new Map<string, ToolBatch>();
     const orchestrationInputs: OrchestrationToolUse[] = this.pendingTools.map((tool) => {
+      // W1 seam: a routed call (tool_invoke) is planned and batched like a
+      // direct call of its resolved real target. The view is read-only;
+      // execution still re-resolves and re-validates in the dispatcher.
+      const target = this.resolveSchedulingTarget?.({
+        id: tool.id,
+        name: tool.name,
+        input: tool.input,
+      } satisfies SchedulingCall);
+      if (target?.batch !== undefined) {
+        schedulingBatches.set(tool.id, target.batch);
+      }
+      // Path extractors receive the outer input; the resolver wraps
+      // target extractors to unwrap the routed `arguments` envelope.
+      const input = (tool.input ?? {}) as Record<string, unknown>;
       const dependencies =
+        target?.dependencies ??
         this.dependencyResolver?.(tool.name) ??
         (this.toolRegistry.getExecutor(tool.name) as
           | (ToolExecutor & { dependencies?: ToolDependencyDeclaration })
           | undefined)?.dependencies;
       const writeResolver =
+        target?.extractWritePaths ??
         this.writePathResolver?.(tool.name) ??
         (this.toolRegistry.getExecutor(tool.name) as
           | (ToolExecutor & {
@@ -303,13 +343,13 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
             })
           | undefined)?.extractWritePaths;
       const readResolver =
+        target?.extractReadPaths ??
         this.readPathResolver?.(tool.name) ??
         (this.toolRegistry.getExecutor(tool.name) as
           | (ToolExecutor & {
               extractReadPaths?: (input: Record<string, unknown>) => readonly string[];
             })
           | undefined)?.extractReadPaths;
-      const input = (tool.input ?? {}) as Record<string, unknown>;
       return {
         toolUseId: tool.id,
         toolName: tool.name,
@@ -323,9 +363,10 @@ export class ToolExecutionPipeline<TContext extends object = object> implements 
     this.plan = planExecution(orchestrationInputs, undefined, {
       canonicaliser: this.canonicaliser,
     });
+    this.schedulingBatches = schedulingBatches;
     // Keep the buffer around only long enough for the planner to read
     // it; the executor's own queue owns scheduling from here on.
     this.pendingTools.length = 0;
-    return this.plan;
+    return { plan: this.plan, schedulingBatches: this.schedulingBatches };
   }
 }

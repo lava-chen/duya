@@ -50,6 +50,9 @@ export class ToolExecutionPipeline
       dependencyResolver?: DependencyResolver;
       extractWritePaths?: PathExtractorResolver;
       extractReadPaths?: PathExtractorResolver;
+      resolveSchedulingTarget?: (
+        call: { id: string; name: string; input?: unknown },
+      ) => import('@duya/agent-runtime/tools/execution').SchedulingTargetView | undefined;
       canonicaliser?: PathCanonicaliser;
     },
   ) {
