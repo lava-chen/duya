@@ -68,6 +68,10 @@ export * from './transport.js';
 export * from './framing.js';
 export * from './codecs.js';
 export * from './mailbox.js';
+// R1.0 — the structured Session input vocabulary and the per-session control
+// lease. Additive: no production path uses these types yet, and the file
+// carries the reasons the three existing input paths could not be merged.
+export * from './session-input.js';
 export * from './research-api.js';
 export * from './agent-dm.js';
 export * from './session-ids.js';
