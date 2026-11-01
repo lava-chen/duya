@@ -105,6 +105,6 @@
 | [model-call-trace](backlog/561-model-call-trace.md) | 0/40, unstarted |
 | [tab-shell-workbench](backlog/571-tab-shell-workbench.md) | 0/28, unstarted |
 | [chain-ab-runtime-merge-evaluation](backlog/581-chain-ab-runtime-merge-evaluation.md) | decision doc only; execution deferred to plan 582+ |
-| [Bot-first Desktop / Project / Session Agent 协调](backlog/2026-11-01-bot-session-coordination.md) | 架构决策与研究草稿完成；含 TUI 职责审计、Project 执行绑定和对 621 现有 PR 生命周期能力的扩展；实施仍在 backlog |
+| [Bot-first Desktop / Project / Session Agent 协调](backlog/2026-11-01-bot-session-coordination.md) | 架构研究 / backlog 草稿；含 Bot 与用户双通道 Session Attach、扩展现有 per-Run RunManifest、并行 checkout、Project PR / merge 监督；实施仍在 backlog |
 
 完整迁移前记录与历史列表见[索引快照](archive/2026-10-20-index-snapshot.md)。
