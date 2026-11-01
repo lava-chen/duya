@@ -128,15 +128,23 @@ Choose the folder Duya should work in. This folder becomes the task's project co
 
 Use the end-to-end research prompt above. A successful first run should show browser activity in the conversation and produce a Markdown note inside the selected project.
 
-### CLI/TUI: install or run from source
+### CLI/TUI: official installation
 
-After the first CLI release is published, install the latest macOS or Linux CLI/TUI release without preinstalling Node.js:
+Use the official GitHub installer to download the latest stable CLI/TUI release. No separate Node.js installation is required.
+
+macOS or Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lava-chen/duya/master/install.sh | sh
 ```
 
-The installer verifies the release checksum, installs under `~/.duya`, and switches versions atomically. Use `duya upgrade` to update or `sh ~/.duya/install.sh --version 0.1.0` to select a version. POSIX `install.sh` supports macOS and Linux; use the PowerShell installer below on Windows.
+Windows x64, from PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/lava-chen/duya/master/install.ps1 | iex
+```
+
+The installers verify the release checksum and install for the current user. Run `duya upgrade` on macOS/Linux, or rerun the PowerShell installer on Windows, to update. The Windows installer becomes available with the first stable Windows CLI release.
 
 To run the TUI from a source checkout instead:
 
@@ -147,23 +155,6 @@ npm run dev:tui
 ```
 
 The TUI starts an ephemeral local Host by default. For other CLI commands, see [`packages/cli`](./packages/cli) and the [development guide](./docs/development/README.md). CLI releases use their own `cli/v*` tags and release workflow; Desktop remains on its independent release line.
-
-On Windows x64, install the standalone CLI from PowerShell after a stable Windows CLI release is published:
-
-```powershell
-irm https://raw.githubusercontent.com/lava-chen/duya/master/install.ps1 | iex
-```
-
-This installs the bundled Node.js runtime and `duya` command for the current user, verifies the downloaded archive against the release SHA-256 checksum, and does not require administrator rights or a separate Node.js installation. Open a new terminal after installation. Run the installer again to upgrade; to uninstall, download it and pass `-Uninstall`:
-
-```powershell
-$installer = Join-Path $env:TEMP 'install-duya.ps1'
-Invoke-WebRequest https://raw.githubusercontent.com/lava-chen/duya/master/install.ps1 -OutFile $installer
-powershell.exe -ExecutionPolicy Bypass -File $installer -Uninstall
-Remove-Item $installer
-```
-
-Before the first stable Windows CLI release, the PowerShell installer reports that no release is available.
 
 ### Web: connect to a local Host
 
