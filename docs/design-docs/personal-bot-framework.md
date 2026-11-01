@@ -85,7 +85,7 @@ Session 是独立的协作与执行实体，不属于 Bot 私有；用户和 Bot
 
 Bot Process 负责选择 Project 和 execution binding，按权限与预算为当前 Run 组装 typed ContextEnvelope，再调用 Session Agent。Envelope 可包括当前任务与验收标准、Bot 角色策略、Project 摘要、按作用域检索出的记忆、必要历史引用和可用工具权限；Session Agent 不直接读取 Bot 私有记忆数据库，也不假定多个 Session 自动共享上下文。注入内容应有来源、scope 和预算，避免把 Bot 全量记忆无筛选地复制到每次 Run。
 
-目标形态是让 Session Agent 通用、可移植：它接受一次明确的 Run 配置，运行工具并返回事件、结果、终态及可验证的 Git / PR 引用；Bot 负责长期身份、记忆检索、授权、Project 路由、任务状态和结果整合。当前已有不可变、带 provenance / fingerprint 的 RunManifest，但所覆盖的 capability 与上下文来源仍不完整，能力还分散于 Host 默认值、Session 字段、Agent Profile、Prompt System、全局连接器和自由格式 Run options 中，详见 §3.1.2。Session API 当前尚未成熟，因此 Bot 领域只依赖 Host 定义的窄 SessionAgentPort / adapter；当前实现可先适配本机 Host，远端 endpoint 作为后续兼容实现，避免 Bot 业务绑定现有 Session API 的临时细节。
+目标形态是让 Session Agent 通用、可移植：它接受一次明确的 Run 配置，运行工具并返回事件、结果、终态及可验证的 Git / PR 引用；Bot 负责长期身份、记忆检索、授权、Project 路由、任务状态和结果整合。当前已有不可变、带 provenance / fingerprint 的 RunManifest，但所覆盖的 capability 与上下文来源仍不完整，能力还分散于 Host 默认值、Session 字段、Agent Profile、Prompt System、全局连接器和自由格式 Run options 中，详见 §3.1.2。完整 Session 行为在现有 agent-runtime 内实现；Bot 通过 protocol 定义的窄 Session 调用合同工作，由 Host 装配本机 Runtime 或后续远端适配，详见 §3.1.3。Session Agent 是能力名称，不另建 package。
 
 TUI 应是同一 Session Agent 能力的完整专业工作台，不混入 Bot 的长期记忆、跨 Project 规划、责任调度、Thread 路由或跨 Session 状态。当前已确认 `/project` 用于选择本机 Session 工作目录，`/pr` 用于读取 / 显式刷新当前 Session 关联的 PR；前者是执行输入，后者是 Session 级诊断，本身并不能证明 TUI 混入了 Bot 控制面。实施前仍需把 CLI/TUI 所有页面与 command 按所有权审计；若存在 Bot 长期规划 / 状态 / 路由职责，就移至 Bot。模型 / provider 选择、工具执行、权限提示、Session 上下文、工作目录和直接控制当前 Run 仍是 Session 工作台所需功能。Bot 调用稳定的 headless SessionAgentPort / Host API，不驱动交互式 TUI UI。Bot Project Activity 覆盖 PR lifecycle 后，再决定 TUI `/pr` 收敛为只读诊断或移除重复的项目级管理呈现。
 
@@ -129,7 +129,8 @@ Bot Activity 汇总 Project / Responsibility、当前 Run、待审批、外部�
 | Bot / Project | 长期目标、责任、项目记忆索引、规划与任务依赖、并发和 merge policy | Session transcript、Runner 状态、工具实现 |
 | Session | 稳定身份、对话 / 参与者输入、Host 与 workspace 绑定、Run / artifact 关联 | Bot 的长期目标、跨 Project 记忆、随 Host 漂移的工具集合 |
 | RunManifest（现有，待扩展） | 本次模型 / Harness、Prompt layers、Skill / Plugin / MCP / 工具授权、上下文引用与 token budget、权限上限、任务验收标准及来源；保留既有不可变 fingerprint / provenance | 隐式读取整个 Host 的用户能力或 Bot 全量记忆 |
-| Host / Agent Runtime | 解析版本化的 capability references、校验授权、连接本机工具与凭据、执行和回报事件 | 让 prompt 本身充当授权边界 |
+| Agent Runtime | 通用 Session 服务、按显式配置装配本轮输入、模型/工具循环和事件 | 直接读取 Bot 私有状态或导入 Host 的具体 IO 实现 |
+| Host | 解析和授权 capability references、冻结 manifest、注入模型/存储/工具/工作区/进程适配 | 另写一套通用 Session 调度、让 prompt 充当授权边界 |
 
 建议直接增量扩展现有 `RunManifest`，不新建 `SessionInvocationManifest` 或 Profile registry。Bot 通过 `StartAgentRunInput` 显式提交已有 Project / Task / AgentProfile / model / permission / tool 字段，再逐步为缺失项添加 typed references：context source refs / budget、prompt profile/version、skills、plugin / MCP / App connector bindings、验收与输出约定。能力来源沿用 manifest provenance，新增 schema 时遵循现有 hash 与旧版本兼容规则。Host 解析这些 references 到本机已有实现，使用 `requested ∩ installed ∩ authorized ∩ project policy` 校验；凭据保留在 Host vault / provider 配置，不在 manifest 中传输。缺少 scope 维度的连接器存储先补最小 scope binding，不能用 `options` bag 假装权限可审计。
 
@@ -139,7 +140,17 @@ Bot Activity 汇总 Project / Responsibility、当前 Run、待审批、外部�
 
 这与成熟 SDK 的常见分层一致：OpenAI Agents SDK 将 Agent 的 instructions / model / tools、每次 Runner 调用的 dependency-injection context、以及单独持久化对话历史的 Session 分开；Anthropic Managed Agents 将 Agent 配置（model、system、tools、MCP servers、skills）与承载环境和对话历史的 Session 分开，允许创建 Session 时做 session-specific override，并支持部分工具配置在 Session 内更新。后者目前标为 Beta，适合作为边界参考，不应直接照搬其 API 或假定其生命周期保证适用于 Duya。[OpenAI Agents / Context](https://openai.github.io/openai-agents-js/guides/agents/) [OpenAI Sessions](https://openai.github.io/openai-agents-js/guides/sessions/) [Anthropic Agent setup](https://platform.claude.com/docs/en/managed-agents/agent-setup) [Anthropic Session operations](https://platform.claude.com/docs/en/managed-agents/session-operations)
 
-因此结论是：相对“Bot 组合能力、Session 被调用”的形态，Duya 当前 Session 还有偏厚的 Host 默认装配，但 RunManifest / fingerprint / provenance 这条重要基础已经存在。接下来不应另造第二套 manifest；改为将 Plugin / Skill / MCP / context refs 增量纳入现有 RunManifest，让 Bot 对每个 Task 明确传入配置，再逐步收紧隐式 Host defaults。保留 Session transcript、Run 恢复、TUI 用户工作台和安全执行边界；既有本地 Session 走兼容的默认配置。
+因此结论是：相对“Bot 组合能力、Session 被调用”的形态，Duya 当前 Session 还有偏厚的 Host 默认装配，但 RunManifest / fingerprint / provenance 这条基础已经存在。Plugin / Skill / MCP / context refs 增量纳入现有 RunManifest；通用 Session 管理与装配行为迁入现有 agent-runtime，Host 注入 IO 与可信准入。Bot 对每个 Task 明确传入配置，既有本地 TUI 保留有来源的默认配置。
+
+### 3.1.3 包边界与实施次序（已采纳，尚未实现）
+
+完整 Session 能力使用现有 agent-runtime，在包内建立 session / assembly / engine 边界。session 负责跨 Run 的历史恢复、输入次序、控制权与通用调用协调；assembly 组合显式配置与已准入资源；engine 沿用现有 RunEngine、工具流水线、预算、取消、压缩和事件语义。现有 RunSession 是每 Run ledger/settlement 实体，不能直接替代持久对话 Session。
+
+Host 注入存储、模型、工具/插件解析、工作区、进程和网络适配，继续负责认证授权、runId、manifest 冻结与既有 durable barrier 的可信入口。Runtime 通过窄端口使用这些机制，不反向导入 Host/data/ai/bot/Electron。将 WorkerSession 全文件搬进 Runtime 会带入 Bot prompt、memory 和配置依赖；应逐依赖拆开、逐调用方迁移。
+
+Bot 可建模为长期身份/项目任务状态、一个协调 Session 和多个工作 Session。协调与工作复用同一 Runtime；协调 Session 可重建，Bot 身份与任务关系独立持久化。bot 包保持纯领域/应用规则，只依赖 protocol，通过端口请求执行；Host 装配 Bot 与 Runtime，不要求 bot 包直接 import Runtime。
+
+实施合同与逐包地图维护在[计划系列 00](../exec-plans/backlog/bot-session-runtime/00-package-and-protocol-contracts.md)。四个本机交付模块为 R1 Session Runtime → R2 能力/上下文 → R3 项目并行协调 → R4 PR 交付与任务 Attach；R5 后台常驻/多机在本机交付后推进。既有模型循环、Run ledger、transcript 和 PR store 复用原权威，迁移引入的缺口使用 additive contract。
 
 ### 3.2 产品、Bot Process 与 Session Agent 的边界（2026-11-01 架构决策）
 
@@ -182,11 +193,11 @@ Desktop UI、Bot Process、CLI/TUI 与 Session Agent 共用版本化 agent-proto
 
 **复用当前 PR lifecycle 实现：** 621 计划已提供 HostIntegrationApiV1、Session ↔ PR 多对多关联、显式 GitHub sync、SQLite 最新观察与状态迁移历史，以及基于 checkpoint commit 的 PR 匹配。新 Bot 层从这些能力构建 Project Activity 和 binding；不再写一个第二套 PR observer / PR 状态库。当前 projection 只有 PR head SHA 和 `merged` 状态，没有 merge commit SHA、时间、方式，也没有 Bot / Project / Responsibility / Run 归属或评论事件回路由。`unknown` 与观察错误继续作为正式状态，禁止推测合并成功。
 
-**Session TUI 的职责核查：** 当前 CLI/TUI 含 `/project` 本机工作目录选择和 `/pr` Session 关联 PR 读取 / 刷新。前者是运行 Session 所需的 cwd 输入，不等同于长期 Bot Project 管理；后者可作为 Session 诊断，但长期 PR / review / merge 状态与评论回路由应由 Bot Project Activity 持有。S0 需把现有 TUI command / 页面逐项归类：保留执行必需的 provider / model、工具、权限、cwd、Session / Run 控制；将 Bot 长期记忆、跨 Project 规划、责任调度、订阅路由和项目级状态管理迁至 Bot。Bot Activity 补齐后再决定 `/pr` 只保留诊断或移除重复呈现，不让 TUI 另建状态源。
+**Session TUI 的职责核查：** 当前 CLI/TUI 含 `/project` 本机工作目录选择和 `/pr` Session 关联 PR 读取 / 刷新。前者是运行 Session 所需的 cwd 输入，不等同于长期 Bot Project 管理；后者可作为 Session 诊断，但长期 PR / review / merge 状态与评论回路由应由 Bot Project Activity 持有。R1.0 需把现有 TUI command / 页面逐项归类：保留执行必需的 provider / model、工具、权限、cwd、Session / Run 控制；将 Bot 长期记忆、跨 Project 规划、责任调度、订阅路由和项目级状态管理迁至 Bot。Bot Activity 补齐后再决定 `/pr` 只保留诊断或移除重复呈现，不让 TUI 另建状态源。
 
 多环境接入阶段通过短时一次性配对凭证注册 Session Agent Host，随后节点建立持久双向认证加密连接。Tailscale / WireGuard 可先提供网络可达性；应用层仍需验证 Host 身份、Bot / Project 授权范围、协议兼容、ContextEnvelope scope 和 Run mandate / fencing。节点离线时 Bot Process 保留任务与事实，按策略等待或重新分配；未知的外部副作用结果不能标记为成功。首版不承诺活动 Session 跨机器透明迁移、多写者 Bot Process 或 HA。
 
-落地顺序：① Desktop 建立 Bot / Project / Task 主视图与任务内 Session Attach，完成“Bot 管理 Project → 选择执行位置 → Bot 注入上下文并调用 Session Agent → 用户可直接 Attach 同一 Session → Bot 监督并汇报”。② 补齐 Session Attach 的输入协议与 Bot 调度让权，再将 Bot Process 从 Electron UI 生命周期抽开，支持本机常驻和云端部署。③ 扩展 Session Agent 到不同系统、机器和目录，完成一次经配对授权的远程 Run。已有 Session 能力先经 Adapter 使用；若接口缺能力，只增加窄的 Host / protocol 合同，不重写执行 Runtime。
+落地顺序：① 在现有 agent-runtime 建立统一 Session 服务与输入/控制合同，Host 注入适配。② 扩展既有 RunManifest，完成任务能力/上下文隔离。③ Bot 建立 Project/Task/Session 绑定并在隔离工作区受限并行。④ Desktop 接入任务 Attach，同时补 PR/CI/review/merge 交付闭环。⑤ 将 Bot Process 从 UI 生命周期抽开，再接多机配对和远程 Run。详细依赖、迁移与验收以计划系列为准。
 
 不同 Session 只有在工作目录或 checkout 已隔离时才允许并行写同一仓库；不同上下文本身不构成文件隔离。没有隔离环境时 Host 按共享 workspace 串行调度。
 

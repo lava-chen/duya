@@ -2,6 +2,8 @@
 
 先定位用户本次任务，再读取对应计划的验收与接续点。这里维护路由，不复制各计划的实时状态。
 
+Bot / Session 包边界和后续实施从[Bot / Session Runtime 计划系列](backlog/2026-11-01-bot-session-coordination.md)进入：包含逐包合同、四个本机交付模块和后台/多机后续模块，代码实施仍在 backlog。
+
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |

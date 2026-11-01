@@ -91,6 +91,17 @@ entry points. Its shared architecture separates these layers:
   `duya-core.db` and `memory-state.db`; `storage.database_path` remains an
   explicit main-database override.
 
+## Accepted Session migration target
+
+The [Bot / Session Runtime plan series](../exec-plans/backlog/2026-11-01-bot-session-coordination.md)
+records the accepted target, which is not implemented yet: extend the existing
+agent-runtime package with Session services and explicit assembly, while Host
+injects storage, models, capabilities, workspace, process and network adapters.
+Bot coordinates durable project/task state and multiple Sessions through protocol
+ports. Session Agent names the callable capability; no new package is planned.
+The current implementation described above remains the code baseline until the
+individual migration modules pass their gates.
+
 ## Tech Stack
 
 Bot channel replies for Host-owned Bots use `BotChannels` and the core-db

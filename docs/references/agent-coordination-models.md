@@ -23,7 +23,7 @@
                   └── ProjectExecutionBinding*（Agent endpoint + 机器目录）
                         └── Session Agent → Session → Run / attempt
 
-对 Duya 最合适的落点是两种产品 + 一个共享执行层：Desktop 是 Bot / Project / Task 工作台，由可在本机或云端运行的 Bot Process 持有长期状态；任务详情可 Attach 到具体 Session；CLI/TUI 是 Session-first 的专业终端；Bot 按 ProjectExecutionBinding 调用不同环境里的 Session Agent。Bot Process 为每个子任务选择 Project、机器和目录，并将授权范围内的能力与上下文打包传入 Session。Session 不是 Desktop 的顶层导航对象，却是用户始终可直达的执行实体。不需要改造 agent-runtime，也不应复制一套 Goal、Run、审批或调度引擎。
+对 Duya 最合适的落点是两种产品 + 一个共享执行层：Desktop 是 Bot / Project / Task 工作台，由可在本机或云端运行的 Bot Process 持有长期状态；任务详情可 Attach 到具体 Session；CLI/TUI 是 Session-first 的专业终端；Bot 按 ProjectExecutionBinding 调用不同环境里的 Session Agent。Bot Process 为每个子任务选择 Project、机器和目录，并将授权范围内的能力与上下文打包传入 Session。Session 不是 Desktop 的顶层导航对象，却是用户始终可直达的执行实体。已采纳的包边界是扩展现有 agent-runtime 承接通用 Session 服务与装配，Host 注入资源适配；复用既有引擎、Goal/Run、审批和存储，不新增 session-agent package。
 
 ## 范围与证据等级
 
@@ -95,7 +95,7 @@ Duya 现有可靠执行基础也足以避免重造：Durable Run 记录 attempt 
 
 Run 级配置已经有重要的持久化底座，不能再另造一套 Session manifest：`RunManifest` 是不可变的配置快照，包含 Project / Task、roots / cwd、permission policy、profiles / modes / tools 能力清单、connector bindings、agent selection、budget 与 provenance；Control Plane 对它 fingerprint，Run store 将 JSON 与 hash 一并保存，恢复时可校验。[RunManifest](../../packages/agent-protocol/src/manifest.ts#L139) [Manifest factory](../../packages/host/src/manifest-factory.ts#L171) [Run store](../../packages/data/src/run-store.ts#L61) `StartAgentRunInput` 已有每 Run model / provider / effort / permission / AgentProfile / modes / tools typed overrides。[Run API](../../packages/agent-protocol/src/run-api.ts#L164) 注意，manifest 中的 capability list 是可用能力快照，不等于授权本身；具体授权仍由 permission policy、profile 与 Host policy 共同决定。
 
-仍缺的是任务级插件 / Skill / MCP / App 能力和 ContextEnvelope references / budget 的统一描述；目前 `connectorBindings` 在 manifest factory 中固定为空，因为 connector store 没有 scope 维度。文件附件已有 typed Run input / attachment reference；mentions、display content 等仍有字段通过自由格式 options 传递，Bot 的结构化页面上下文引用也未统一纳入 manifest。[Connector bindings](../../packages/host/src/manifest-factory.ts#L228) [Run API attachments](../../packages/agent-protocol/src/run-api.ts#L213) 旧 Worker 执行路径也存在 synthesized / unsupported 的占位 manifest，Bot dispatch 是否走 canonical factory 要在 S0 证实。[Legacy manifest](../../packages/host/src/worker-run-composition.ts#L372) 因此计划应增量扩展现有 RunManifest（必要时按 protocol 兼容规则升级 manifest schema），用它记录 per-Task 能力和上下文来源，而不是增加 `SessionInvocationManifestV1` 平行类型；完整 prompt 与历史仍走现有 RunInput / Session transcript 路径，secret 保留在 Host。
+仍缺的是任务级插件 / Skill / MCP / App 能力和 ContextEnvelope references / budget 的统一描述；目前 `connectorBindings` 在 manifest factory 中固定为空，因为 connector store 没有 scope 维度。文件附件已有 typed Run input / attachment reference；mentions、display content 等仍有字段通过自由格式 options 传递，Bot 的结构化页面上下文引用也未统一纳入 manifest。[Connector bindings](../../packages/host/src/manifest-factory.ts#L228) [Run API attachments](../../packages/agent-protocol/src/run-api.ts#L213) 旧 Worker 执行路径也存在 synthesized / unsupported 的占位 manifest，Bot dispatch 是否走 canonical factory 要在 R1.0 证实。[Legacy manifest](../../packages/host/src/worker-run-composition.ts#L372) 因此计划应增量扩展现有 RunManifest（必要时按 protocol 兼容规则升级 manifest schema），用它记录 per-Task 能力和上下文来源，而不是增加 `SessionInvocationManifestV1` 平行类型；完整 prompt 与历史仍走现有 RunInput / Session transcript 路径，secret 保留在 Host。
 
 | 实体 | 建议边界 |
 | --- | --- |
@@ -184,7 +184,7 @@ Desktop 保持 Bot-first，但不能把用户隔离在 Session 之外：任务�
 
 用户 Attach 获取的是短时、可恢复的指令调度权。正在运行的工具调用继续执行；Bot 暂停向该 Session 发新指令，但仍可观察进度。Detach 后 Host / Bot 先重读 Run 和 Session 事件，核对用户改动与待处理工作，再恢复自动协调。Session Attach 使用经过认证的 Host / session capability；裸 `sessionId` 不是访问凭证。插件只能提交授权范围内的输入、附件和 UI context reference，不能因此读取完整 transcript 或取得任意工具权限。
 
-**分阶段执行：** 第一阶段交付“Bot 管理 Project → Bot 创建 Session → 用户从任务进入 Session Attach → 用户可直接协作，Bot 订阅进度并汇报”；并定义清晰的 Bot / Session 输入目标。第二阶段补齐 attach lease、输入排序、Bot 调度让权与退出后对账，再把 Bot Process 从 Desktop UI / Electron 生命周期抽出。第三阶段才支持不同环境 Session Agent endpoint 注册、一次性配对与远程 Run。
+**分阶段执行：** 先在现有 agent-runtime 建立统一 Session 服务、输入次序与控制权，再做任务级显式能力装配和 Bot 多 Session 绑定；随后交付任务 Attach 与 PR/merge 闭环。后台常驻与多环境 endpoint、一次性配对、远程 Run 属于后续阶段。逐模块合同维护在计划系列。
 
 **发行策略：** 已有 `desktop/v*` 和 `cli/v*` 发布线继续各自独立。云端 / headless Bot Process 可能需要 `duya-bot` 部署入口和 `bot/v*` 服务发行包；它属于 Desktop Bot 产品的部署形态，而非第三种用户工作流。CLI / TUI 的 Session Agent 能力则支持本机和未来远程 endpoint。是否新增服务包和独立版本线，在 Bot Process 生命周期与 Agent protocol 稳定后决定。协议兼容版本单独于二进制版本协商。多环境 Agent 注册与配对不纳入首个 UI / Bot 工作流切片。
 
@@ -222,16 +222,13 @@ Bot 是长期身份、默认策略、记忆范围和协调入口，不是 Sessio
 
 避免把这些状态压成 Session 上一个大 enum。用户看到的“工作中、等人、等外部反馈、完成”应由 Bot Activity 查询聚合，不再写一份同义状态表。
 
-## 最小改动顺序
+## 已采纳的实施分层
 
-1. 核对 Bot / Project、Session Agent、CLI/TUI、Desktop stream attach、插件上下文与 VCS 的当前合同；审计 TUI 功能归属，并盘点直接输入与观察已具备的路径。
-2. 建立 Bot → Project → execution binding → Session / Run 持久关联，包括 Agent endpoint、hostId、repository 与 machine-local workingDirectory；调用前按 scope 传入 ContextEnvelope。
-3. Desktop 保持 Bot / Project / Task 主导航，并在 task detail 允许查看和 Attach 对应 Session；TUI 成为完整 Session 工作台。
-4. 建立跨端 Session Attach input protocol 与控制门：分清 Bot / Session recipient，user takeover 暂缓 Bot 指令但不停止现有工具；Detach 后对账再恢复。
-5. 按 Project execution binding 路由外部输入；保持同一 Session 输入有序；workspace / checkout 隔离后才并行；Thread 订阅关联到原工作。
-6. 复用并扩展 621 的 integration 能力，追踪 branch / commit / PR thread / review / exact merge；Project Activity 可指明 merge method 与 merge commit。
-7. 将 Bot Process 生命周期从 Desktop UI / Electron 分离，支持本机后台和云端部署，可靠恢复 Inbox、Run、VCS event receipt 与 Outbox。
-8. 最后接入不同环境的 Session Agent Host 配对和远程 Run；首个多机验收同时验证两个目录中的 branch / PR / merge 对账。
+2026-11-01 确认使用原 agent-runtime 提供完整 Session 能力，不建立 session-agent package。当前 Runtime 已有模型/工具循环；通用 Session/history/input/assembly 仍有大量实现在 Host，需要逐依赖拆开并迁入 Runtime。模型 SDK、SQLite、凭据、进程/网络和可信 manifest admission 由 Host 适配注入。
+
+Bot 是长期身份与项目任务状态、协调 Session、工作 Session 管理层。协调和工作复用同一 Runtime；Bot 状态独立于协调 transcript 持久化。bot 包继续只依赖 protocol，经 Host 装配调用 Session，避免反向依赖。
+
+实施顺序与包级合同统一维护在[计划总入口](../exec-plans/backlog/2026-11-01-bot-session-coordination.md)及其系列模块：R1 Session Runtime、R2 能力/上下文、R3 Bot 并行协调、R4 PR/任务 Attach、R5 常驻/多机。历史调查结果仍按代码基线阅读，以上分层是目标而非当前实现证明。
 
 实现边界与[Bot 框架设计提案](../design-docs/personal-bot-framework.md)、[Bot-first Desktop / Project / Session Agent 协调计划](../exec-plans/backlog/2026-11-01-bot-session-coordination.md)配套。实施前还需核对 inbox claim 事务、Project / workspace binding、Session Agent API adapter 和已有 Goal / Routine 跨 Session 约束。
 
