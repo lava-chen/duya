@@ -83,9 +83,9 @@ codex 对齐项。
 单独复跑 6 例全过（本文件自身需 46s，并行负载型 flake，与本次改动无关）。
 
 PR：<https://github.com/lava-chen/duya/pull/567>（分支 `codex/tui-codex-surface`，
-base `master`，未合并）。提交：`e14ee917` 功能，`8435eb9f` 测试基建别名。
-未合并前保留分支与 worktree。
+base `master`，未合并）。提交：`e14ee917` 功能，`8435eb9f` 测试基建别名，
+`0f393fbc` 本计划接续记录。CI（run 41275245425）全绿：architecture / build /
+test / test scope / typecheck。未合并前保留分支与 worktree。
 
 回收：owner 是本会话，未回收（等集成后走 `scripts/remove-worktree.sh`）。
-下一步：等 PR #567 的 CI（architecture / test scope / typecheck / test）与
-review；获授权后再合并并把本计划移入 archive、更新 plans README。
+下一步：等 review；获授权后再合并并把本计划移入 archive、更新 plans README。
