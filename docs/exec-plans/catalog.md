@@ -7,6 +7,7 @@
 
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
+| [工具暴露与 Harness 调用链收敛](active/2026-10-31-tool-surface-and-harness-convergence.md) | P0 | W0 请求级 census 与 W1 执行契约；跨 616/617 的实施顺序、MCP/CLI/skill、provider、恢复与退役验收 |
 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | — | Desktop / CLI 独立 tag、release workflow、自包含 CLI 分发和安装器 |
 | [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | P0 | 设计与 S0–S7 迁移：窄 Bot 领域、Host 装配、持久唤醒与跨渠道对账；不重建 Harness |
 | [630 TUI 四能力系列](active/630-tui-capabilities-series/README.md) | P1 | 630a 模态原语 → 631 plugin 市场 / 632 provider 管理；633 项目切换与 634 显示档可并行；集成顺序见系列 README |
