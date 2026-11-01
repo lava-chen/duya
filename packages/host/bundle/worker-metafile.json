@@ -21413,7 +21413,7 @@
       "format": "esm"
     },
     "packages/plugin-core/src/mcp/core/projection.ts": {
-      "bytes": 3084,
+      "bytes": 3795,
       "imports": [],
       "format": "esm"
     },
@@ -22272,7 +22272,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-      "bytes": 22934,
+      "bytes": 23797,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22720,7 +22720,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -23073,7 +23073,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/mcp-executor.ts": {
-      "bytes": 8707,
+      "bytes": 10431,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/permissions.ts",
@@ -23558,7 +23558,7 @@
       "format": "esm"
     },
     "packages/host/src/connector-services/worker-permission-binding.ts": {
-      "bytes": 3054,
+      "bytes": 3618,
       "imports": [
         {
           "path": "packages/host/src/connector-services/worker-session-binding.ts",
@@ -36229,7 +36229,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 140173,
+      "bytes": 140968,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -42454,7 +42454,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43405,7 +43405,7 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1971
+          "bytesInOutput": 1969
         },
         "../../../node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -43882,7 +43882,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43891,7 +43891,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9969
@@ -44791,7 +44791,7 @@
           "bytesInOutput": 1348
         },
         "packages/plugin-core/src/mcp/core/projection.ts": {
-          "bytesInOutput": 390
+          "bytesInOutput": 643
         },
         "packages/capabilities/src/MCP/MCPManager.ts": {
           "bytesInOutput": 11980
@@ -44872,7 +44872,7 @@
           "bytesInOutput": 11415
         },
         "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-          "bytesInOutput": 7236
+          "bytesInOutput": 7415
         },
         "packages/capabilities/src/AppServer/app-tool-context.ts": {
           "bytesInOutput": 104
@@ -44950,7 +44950,7 @@
           "bytesInOutput": 601
         },
         "packages/agent-runtime/src/tools/mcp-executor.ts": {
-          "bytesInOutput": 2217
+          "bytesInOutput": 2528
         },
         "packages/host/src/connector-services/apply.ts": {
           "bytesInOutput": 3995
@@ -45019,7 +45019,7 @@
           "bytesInOutput": 412
         },
         "packages/host/src/connector-services/worker-permission-binding.ts": {
-          "bytesInOutput": 735
+          "bytesInOutput": 828
         },
         "packages/host/src/worker-context/model-capability-probe.ts": {
           "bytesInOutput": 2096
@@ -45397,7 +45397,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 53845
+          "bytesInOutput": 53936
         },
         "packages/host/src/worker-execution/location-skills.ts": {
           "bytesInOutput": 575
@@ -45919,7 +45919,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4756683
+      "bytes": 4757646
     }
   }
 }

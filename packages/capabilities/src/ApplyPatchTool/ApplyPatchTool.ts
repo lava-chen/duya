@@ -1,5 +1,5 @@
 /**
- * ApplyPatchTool - apply a unified diff to one or more files
+ * ApplyPatchTool - apply a Codex patch envelope to one or more files
  *
  * Uses the Codex `*** Begin Patch` envelope format (the model has a strong
  * prior for it) with three file operations:
@@ -353,7 +353,7 @@ function swapBlock(fileLines: string[], start: number, len: number, replacement:
 export class ApplyPatchTool extends BaseTool {
   readonly name = 'apply_patch';
   readonly description =
-    'Apply a unified diff to one or more files in one call. Use the Codex patch format: wrap the patch in `*** Begin Patch` and `*** End Patch`, and use `*** Add File: <path>`, `*** Update File: <path>`, or `*** Delete File: <path>` followed by `@@` hunks with context lines and `-`/`+` prefixed lines. Matching is by hunk context, so it tolerates whitespace / line-ending differences better than edit. Prefer this over edit for multi-line or multi-file changes.';
+    'Apply a Codex patch to one or more files in one call. Wrap the patch in `*** Begin Patch` and `*** End Patch`, and use `*** Add File: <path>`, `*** Update File: <path>`, or `*** Delete File: <path>` followed by `@@` hunks with context lines and `-`/`+` prefixed lines. Matching is by hunk context, so it tolerates whitespace / line-ending differences better than edit. Prefer this over edit for multi-line or multi-file changes. Partial success is reported: per-file applied/failed results land in metadata.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -563,7 +563,19 @@ export class ApplyPatchTool extends BaseTool {
       summary.push(`Failed ${failures.length} operation(s):\n${failures.map((f) => `  - ${f}`).join('\n')}`);
     }
 
-    const metadata: ToolResult['metadata'] = {};
+    // Plan tool-surface W7 (F16): partial success used to report
+    // `error: false` with no explicit partial marker — a multi-file patch
+    // with one bad hunk looked like a clean success to the model and the
+    // UI. Surface the overall status and the per-operation results as
+    // additive metadata (historical `error` semantics unchanged: true only
+    // when EVERYTHING failed). The applied operations are NOT rolled back;
+    // the result text lists them so the caller can see what landed.
+    const patchStatus: 'success' | 'partial' | 'failed' =
+      failures.length === 0 ? 'success' : applied.length === 0 ? 'failed' : 'partial';
+
+    const metadata: ToolResult['metadata'] = { patchStatus };
+    if (applied.length > 0) metadata.applied = [...applied];
+    if (failures.length > 0) metadata.failures = [...failures];
     if (fileSnapshots.length > 0) metadata.fileSnapshots = fileSnapshots;
     return {
       id,
