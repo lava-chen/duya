@@ -40,12 +40,12 @@ Bot、TUI 和 Desktop 使用同一 Session 服务进行创建、历史恢复、R
 
 ### R1.1：Session 服务与依赖注入
 
-- [ ] 在 agent-runtime/src/session 建立服务与公开 subpath，优先组合已有 Session/Run DTO、RunPersistence 和引擎端口。
-- [ ] 将通用历史恢复、Session 操作次序和 Engine 桥接迁入 Runtime；Bot prompt/memory、全局 profile loader、DB、模型客户端改由 Host 提供。
-- [ ] 服务通过 admission 端口请求启动；Host 冻结 manifest、保存 receipt 并创建 Run 身份，Runtime 不自行重复准入。
+- [x] 在 agent-runtime/src/session 建立服务与公开 subpath，优先组合已有 Session/Run DTO、RunPersistence 和引擎端口。（PR #574）
+- [ ] 将通用历史恢复、Session 操作次序和 Engine 桥接迁入 Runtime；Bot prompt/memory、全局 profile loader、DB、模型客户端改由 Host 提供。（历史恢复与操作次序已迁入 PR #574；Engine 桥接未迁）
+- [ ] 服务通过 admission 端口请求启动；Host 冻结 manifest、保存 receipt 并创建 Run 身份，Runtime 不自行重复准入。（三态端口已定义于 PR #574；Host 适配器未接线）
 - [ ] admission adapter 调用现有控制面原子操作，不能回调已经转发 Runtime 的公开 start 入口形成递归；Worker handler 与客户端服务各自的调用方向有测试证明。
-- [ ] Host 原入口先转发新服务，迁一个调用方验一个；已迁调用方关闭旧独立调度路径。
-- [ ] 导出、依赖声明和 Worker bundle 引用同步更新，保持 Runtime 不反向导入 Host/data/ai/bot/Electron。
+- [ ] Host 原入口先转发新服务，迁一个调用方验一个；已迁调用方关闭旧独立调度路径。（`worker-process-entry` 已迁，PR #574；`run-execution.ts` 与 Desktop 的 `openRun` 直调未收敛）
+- [x] 导出、依赖声明和 Worker bundle 引用同步更新，保持 Runtime 不反向导入 Host/data/ai/bot/Electron。（PR #574）
 
 ### R1.2：统一输入与用户控制
 
@@ -92,4 +92,6 @@ Bot、TUI 和 Desktop 使用同一 Session 服务进行创建、历史恢复、R
 
 审计已执行：基线 master `95c30f58`，五条只读代码调查（CLI/TUI、Desktop、Bot、Host 控制面、data/protocol），产出见 [R1.0 审计](r1-0-audit.md)。本片未改产品代码，未运行产品测试。
 
-R1.1 尚未实施。R1.1 开工前先落 C1（`packages/host/src/run-execution.ts:547-556` 的 wire stage 降维），否则三态准入端口无法在 wire 上验证；最小 additive DTO 以独立 PR 交付。
+R1.1 第一个切片已实施：分支 `codex/bot-session-runtime-r1-1`（base `codex/bot-session-runtime-r1-0`，堆叠 PR #574），新增 `packages/agent-runtime/src/session/`（ports / history / service / index）与公开 subpath，Host 侧改为转发层并迁 `worker-process-entry` 一个调用方。验证：agent-runtime 115 文件 / 1221 用例、host 243 文件 / 2179 用例，均 0 失败；`typecheck:runtime`、`typecheck:cli`、`architecture:check`、`bundle:verify` 全绿。
+
+R1.1 剩余：Host 原入口（`run-execution.ts`）与 Desktop 的 `openRun` 直调收敛到新服务、Host 侧 admission 适配器接线（含 C1 wire stage 降维修复）、Engine 桥接迁移。
