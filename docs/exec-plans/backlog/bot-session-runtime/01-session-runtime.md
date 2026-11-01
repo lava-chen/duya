@@ -28,13 +28,15 @@ Bot、TUI 和 Desktop 使用同一 Session 服务进行创建、历史恢复、R
 
 ### R1.0：调用链、权威与合同审计
 
-- [ ] 追踪 TUI、Desktop、Bot、child Session 各自 create/start/steer/cancel/history/replay 的真实生产调用链。
-- [ ] 标注 RunController/RunSession、Host orchestrator、WorkerSessionRegistry 各自状态；为每个身份、receipt、seq、终态和执行 owner 指定单写者。
-- [ ] 查明 canonical buildRunManifest 与 synthesized legacy 路径是否被 Bot/Worker 使用，列出迁移调用者，不用旧注释替代证据。
-- [ ] 盘点 mailbox/input/Session handoff/客户端租约的真实语义，确定哪些可复用、哪些需要补合同；区分用户调度权与 Worker execution fence。
-- [ ] 提交 additive protocol/端口草案、调用者矩阵和必要数据迁移；未执行 Runtime 迁移的条目保持未完成。
+- [x] 追踪 TUI、Desktop、Bot、child Session 各自 create/start/steer/cancel/history/replay 的真实生产调用链。
+- [x] 标注 RunController/RunSession、Host orchestrator、WorkerSessionRegistry 各自状态；为每个身份、receipt、seq、终态和执行 owner 指定单写者。
+- [x] 查明 canonical buildRunManifest 与 synthesized legacy 路径是否被 Bot/Worker 使用，列出迁移调用者，不用旧注释替代证据。
+- [x] 盘点 mailbox/input/Session handoff/客户端租约的真实语义，确定哪些可复用、哪些需要补合同；区分用户调度权与 Worker execution fence。
+- [x] 提交 additive protocol/端口草案、调用者矩阵和必要数据迁移；未执行 Runtime 迁移的条目保持未完成。
 
 完成判据：能从具体客户端入口走到 Engine 和 durable terminal，并证明迁移后每个事实只有一个 authority。R2 可基于该合同开始配置设计。
+
+审计产出：[R1.0 审计](r1-0-audit.md)。已登记的五条待裁决项 C1–C6（wire stage 降维、`steerAgentRun` 声明无实现、客户端直写 timeline、CLI 与 Desktop 历史投影不一致、Desktop 直调 `openRun`、协议重复声明）与四处双写/旁路，是 R1.1 与 R1.3 的收敛清单。R2 可基于本审计的配置结论开始。
 
 ### R1.1：Session 服务与依赖注入
 
@@ -88,6 +90,6 @@ Bot、TUI 和 Desktop 使用同一 Session 服务进行创建、历史恢复、R
 
 ## 验证记录与接续
 
-本模块未实施，未运行产品测试。规划的源码接缝来自总入口代码基线。
+审计已执行：基线 master `95c30f58`，五条只读代码调查（CLI/TUI、Desktop、Bot、Host 控制面、data/protocol），产出见 [R1.0 审计](r1-0-audit.md)。本片未改产品代码，未运行产品测试。
 
-下一步：执行 R1.0 并提交生产调用者/单写者矩阵与最小协议 diff；完成该片后登记 SHA、命令、结果和 PR。
+R1.1 尚未实施。R1.1 开工前先落 C1（`packages/host/src/run-execution.ts:547-556` 的 wire stage 降维），否则三态准入端口无法在 wire 上验证；最小 additive DTO 以独立 PR 交付。

@@ -1,8 +1,9 @@
 # Bot / Session Runtime 实施计划总入口
 
-状态：backlog（计划体系已建立，产品代码尚未实施）· 负责人：Codex / root · 更新：2026-11-01
+状态：backlog（R1.0 审计已实施，产品代码待开工）· 负责人：Codex / root · 更新：2026-11-01
 规划分支：codex/bot-session-coordination · worktree：/workspace/work/bot-session-coordination
 代码基线：4f0738bae34777cce45308291f3207f90e6705a1 · 规划起点：f5986ace · owner：当前会话
+R1.0 执行：分支 `codex/bot-session-runtime-r1-0`（base master `95c30f58`）· worktree `.claude/worktrees/bot-session-r1-0` · 产出 [R1.0 审计](bot-session-runtime/r1-0-audit.md)
 交付：[Draft PR #562](https://github.com/lava-chen/duya/pull/562)
 
 ## 目标与边界
@@ -21,7 +22,7 @@
 
 | 模块 | 任务与交付物 | 前置 | 状态 |
 | --- | --- | --- | --- |
-| R1 | [Session Runtime 与 Host 收敛](bot-session-runtime/01-session-runtime.md)：一个可注入依赖的 Session 服务和统一输入控制 | 00 合同；先完成 R1.0 调用链审计 | 待实施 |
+| R1 | [Session Runtime 与 Host 收敛](bot-session-runtime/01-session-runtime.md)：一个可注入依赖的 Session 服务和统一输入控制 | 00 合同；先完成 R1.0 调用链审计 | R1.0 已完成（[审计](bot-session-runtime/r1-0-audit.md)）；实施待开工 |
 | R2 | [能力与上下文装配](bot-session-runtime/02-capability-context.md)：每 Run 显式配置、可审计 manifest、作用域隔离 | R1.0 冻结调用合同；接入依赖 R1 | 待实施 |
 | R3 | [Bot 项目与多 Session 协调](bot-session-runtime/03-bot-coordination.md)：项目 brief、任务绑定、隔离并行与恢复 | R1、R2 | 待实施 |
 | R4 | [PR 交付与任务内 Session 协作](bot-session-runtime/04-delivery-and-attach.md)：VCS 事实、merge policy、Desktop Attach / Plugin 输入 | R3；R4-A 与 R4-B 可分别推进 | 待实施 |
@@ -108,7 +109,8 @@ R1.0 必须确认当前 Bot dispatch 是否经过 canonical manifest factory，�
 - [x] 建立研究报告、产品架构设计和 Draft PR #562。
 - [x] 用户确认复用 agent-runtime 承接完整 Session 能力，Bot 为长期协调与 Session 管理层。
 - [x] 将单页草稿整理为总入口、包/协议合同和五个实施模块。
-- [ ] R1：Session Runtime 与 Host 收敛。
+- [x] R1.0：调用链与状态单写者审计（[产出](bot-session-runtime/r1-0-audit.md)）。
+- [ ] R1：Session Runtime 与 Host 收敛（实施待开工）。
 - [ ] R2：能力与上下文装配。
 - [ ] R3：Bot 项目与并行 Session。
 - [ ] R4：PR 交付与任务 Attach。
@@ -122,13 +124,14 @@ R1.0 必须确认当前 Bot dispatch 是否经过 canonical manifest factory，�
 | f5986ace + 本次 13 个 Markdown 文件 | Linux / 独立 worktree | Python UTF-8/相对链接/可见性/测试命令路径/模块结构检查 | 通过；检查 254 个相对链接，0 新增失效链接，2 个既有目录问题 | 6 个新合同/模块卡，5 个实施模块均有依赖/验收/回退/接续 |
 | 本次文档变更 | Linux / 独立 worktree | git diff --check | 通过 | 无产品代码或 schema 改动，未运行产品测试 |
 | 本次已采纳架构决定 | Notion Project State | 追加包边界、R1–R5 顺序与未实施状态 | 成功，无警告 | 不替代本系列代码进度 |
+| R1.0 审计：master `95c30f58`，只读 | Windows / 独立 worktree `.claude/worktrees/bot-session-r1-0` | 5 条代码调查：CLI/TUI、Desktop、Bot、Host 控制面、data/protocol | 全部结论可追溯到 file:line；未构建、未跑测试、未改产品代码 | [R1.0 审计](bot-session-runtime/r1-0-audit.md) |
 
 既有目录问题在 f5986ace 基线可复现：exec-plans/README.md 指向缺失的 active/2026-10-24-dynamic-workflow-package.md；catalog.md 指向空文件 backlog/309-button-unification.md。本系列没有新增这些问题，保留其既有任务归属。
 
 ## 接续 / 结果
 
-当前为规划交付，R1–R5 均未实现。规划 owner 使用上述独立 worktree；执行模块时登记自己的分支/base/owner/独占路径，共享 protocol/data/Host bootstrap 文件先协调归属。Workspace context 工具在本环境不可用，已通过版本化计划、Git worktree 和 PR 对账。
+当前为规划交付：R1–R5 的产品代码均未实现，R1.0 只产出审计与合同结论。规划 owner 使用上述独立 worktree；执行模块时登记自己的分支/base/owner/独占路径，共享 protocol/data/Host bootstrap 文件先协调归属。Workspace context 工具在本环境不可用，已通过版本化计划、Git worktree 和 PR 对账。
 
 本次外部交付沿用 Draft PR #562；未授权合并，保留分支与 worktree。Notion Project State 仅同步已采纳的架构决定，不代替本系列实施状态。
 
-下一步：认领 R1.0，追踪 Session create → manifest/admission → Worker → RunEngine → durable terminal 的生产调用链，给出单写者与字段兼容表，然后提交第一片 additive protocol / Runtime ports diff。
+下一步：提交 R1.0 的第一片 additive protocol diff（结构化输入与控制租约类型，纯类型不改行为），随后实施 R1.1——`agent-runtime/src/session` 公开 subpath、通用历史恢复迁入、三态 admission 端口（先落 C1 wire stage 降维）、Host 原入口转发新服务。R1.1 实施完成后按 [R1.0 审计](bot-session-runtime/r1-0-audit.md) 第 5 节的 C2–C6 与第 2 节的四处双写逐项收敛。

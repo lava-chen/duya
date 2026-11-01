@@ -116,7 +116,7 @@ R3 只新增现有 Project/Task 到 hostId、endpoint、workspace/cwd、sessionI
 ## 进度与验收
 
 - [x] 记录不新增 package、Runtime 承接 Session、Bot 管理层和 Host 适配层的目标。
-- [ ] R1.0 输出生产调用者/状态单写者清单与最小 DTO diff。
+- [x] R1.0 输出生产调用者/状态单写者清单与最小 DTO diff（[审计](r1-0-audit.md)，基线 master `95c30f58`）。
 - [ ] R2.1 冻结能力字段、缺省/空值语义与 manifest 兼容样例。
 - [ ] 每模块真实调用通过后更新当前架构文档与门禁，不用新增 baseline 隐藏反向依赖。
 
