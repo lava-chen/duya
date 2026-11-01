@@ -291,12 +291,23 @@ export function createToolInvokeDispatcherFromRegistry(
         // carries the bounded metadata lines).
         const blocks = (result as { blocks?: unknown[] } | null)?.blocks;
         const structured = (result as { structured?: unknown } | null)?.structured;
+        // Plan tool-surface W1 (F23): forward the remaining ToolResultWire
+        // payloads a direct call would have persisted — the open metadata
+        // record, inline images, and the runtime-only deferred extras.
+        const forwardedMetadata = (result as { metadata?: Record<string, unknown> } | null)?.metadata;
+        const forwardedImages = (result as { images?: Array<{ data: string; mediaType: string }> } | null)?.images;
+        const forwardedPendingExtra = (result as { pendingExtraResult?: Promise<{ result: string; is_error?: boolean }> } | null)?.pendingExtraResult;
+        const forwardedPendingContext = (result as { pendingContext?: Promise<unknown> } | null)?.pendingContext;
         return {
           result: resultText ?? `Tool \`${executionEntry.definition.name}\` returned no result.`,
           toolName: executionEntry.definition.name,
           ...(isError ? { error: true } : {}),
           ...(blocks ? { blocks } : {}),
           ...(structured !== undefined ? { structured } : {}),
+          ...(forwardedMetadata ? { metadata: forwardedMetadata } : {}),
+          ...(forwardedImages && forwardedImages.length > 0 ? { images: forwardedImages } : {}),
+          ...(forwardedPendingExtra ? { pendingExtraResult: forwardedPendingExtra } : {}),
+          ...(forwardedPendingContext ? { pendingContext: forwardedPendingContext } : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

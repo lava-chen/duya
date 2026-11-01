@@ -40,6 +40,18 @@ export interface ToolInvokeOutcome {
   blocks?: unknown[];
   /** Plan 580 D8: verbatim `structuredContent` from the MCP result. */
   structured?: unknown;
+  /**
+   * Plan tool-surface W1 (F23): the rest of the real target's
+   * `ToolResultWire` that a direct call would have persisted — forwarded
+   * additively so wrapper results carry the same payloads as direct ones.
+   * `pendingExtraResult`/`pendingContext` are the runtime-only handshake
+   * fields; forwarding them preserves deferred-context/extra-result
+   * semantics through the wrapper.
+   */
+  metadata?: Record<string, unknown>;
+  images?: Array<{ data: string; mediaType: string }>;
+  pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
+  pendingContext?: Promise<unknown>;
 }
 
 export interface ToolInvokeDispatcher {
@@ -138,18 +150,31 @@ export class ToolInvokeTool implements Tool, ToolExecutor {
         arguments: args as Record<string, unknown>,
       }, context);
       const isError = outcome.error === true;
+      // W1 (F23): forward the target's ToolResult payloads additively —
+      // metadata (merged with the router's own errorCode), inline images,
+      // and the runtime-only deferred extras — so a routed result carries
+      // the same fields a direct call would have persisted.
+      const mergedMetadata = outcome.metadata || outcome.errorCode
+        ? {
+            ...(outcome.metadata ?? {}),
+            ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+          }
+        : undefined;
       return {
         id: crypto.randomUUID(),
         name: this.name,
         result:
           outcome.result ??
           `${TOOL_INVOKE_RESULT_MARKER}\n\n# Tool Invoke: \`${toolId}\`\n\n_No result returned._`,
-        ...(outcome.errorCode ? { metadata: { errorCode: outcome.errorCode } } : {}),
+        ...(mergedMetadata ? { metadata: mergedMetadata } : {}),
         ...(isError ? { error: true } : {}),
         // Plan 580 D8: pass the canonical MCP blocks through untouched.
         ...(outcome.blocks ? { blocks: outcome.blocks } : {}),
         ...(outcome.structured !== undefined ? { structured: outcome.structured } : {}),
-      };
+        ...(outcome.images && outcome.images.length > 0 ? { images: outcome.images } : {}),
+        ...(outcome.pendingExtraResult ? { pendingExtraResult: outcome.pendingExtraResult } : {}),
+        ...(outcome.pendingContext ? { pendingContext: outcome.pendingContext } : {}),
+      } as ToolResult;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.errorResult(

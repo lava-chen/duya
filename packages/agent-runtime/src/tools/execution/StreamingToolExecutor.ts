@@ -764,8 +764,15 @@ export class StreamingToolExecutor<TContext extends object = object> {
 
   /**
    * Add a tool to the execution queue
+   *
+   * `scheduling.batch` is the W1 real-target override: when the caller
+   * (ToolExecutionPipeline) resolved the real target behind a routed call
+   * (e.g. `tool_invoke`), the target's own direct-call batch is used
+   * instead of the outer name's classification. `undefined` (or a call
+   * without the hint) keeps the legacy `classifyTool(block.name)` behavior,
+   * which fail-closes unknown names to SYSTEM.
    */
-  addTool(block: ToolCall): void {
+  addTool(block: ToolCall, scheduling?: { batch?: ToolBatch }): void {
     const toolDefinition = this.toolRegistry.getTool(block.name)
 
     if (!toolDefinition) {
@@ -794,7 +801,7 @@ export class StreamingToolExecutor<TContext extends object = object> {
       return
     }
 
-    const batch = classifyTool(block.name, (message) => this.log('warn', message))
+    const batch = scheduling?.batch ?? classifyTool(block.name, (message) => this.log('warn', message))
 
     const trackedTool: TrackedTool = {
       id: block.id,

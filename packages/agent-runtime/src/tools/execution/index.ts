@@ -19,6 +19,11 @@ export type {
   PathExtractorResolver,
 } from './ToolExecutionPipeline.js';
 export type {
+  SchedulingCall,
+  SchedulingTargetResolver,
+  SchedulingTargetView,
+} from './real-target.js';
+export type {
   CanUseToolDecision,
   CanUseToolFn,
   DeferredToolContext,

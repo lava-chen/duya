@@ -106,6 +106,7 @@ import { ToolRegistry } from '@duya/host/worker-tool-registry';
 import type { ToolExecutor } from '@duya/host/worker-tool-registry';
 import { invalidateToolCatalogSchemaReads, recordToolCatalogSchemaRead, ToolCatalogTool, type ToolCatalogView } from '@duya/agent-runtime/tools/discovery/ToolCatalogTool';
 import { ToolInvokeTool } from '@duya/agent-runtime/tools/discovery/ToolInvokeTool';
+import { createRealTargetResolver } from '@duya/agent-runtime/tools/discovery/real-target';
 import { createToolInvokeDispatcherFromRegistry } from '@duya/host/worker-execution/deferred-dispatcher';
 import { recordUndeclaredCall, evaluateVisibilityGuard, } from '@duya/host/worker-execution/visibility-guard';
 import { getOSContextBridge, injectOSContextFragment, } from '@duya/host/worker-context/os-context-binding';
@@ -241,7 +242,14 @@ export class WorkerSession implements AgentRuntime {
         request.bindToolUseContext(toolUseContext);
         resolved.catalogTool.setContextView(toolUseContext, resolved.catalogView);
         resolved.toolInvokeExecutor.setDispatcherForContext(toolUseContext, request.toolInvokeDispatcher);
-        const executor = new ToolExecutionPipeline(resolved.registry, request.canUseTool, toolUseContext);
+        const executor = new ToolExecutionPipeline(resolved.registry, request.canUseTool, toolUseContext, undefined, {
+            // W1 real-target seam: a routed `tool_invoke` call is scheduled like
+            // a direct call of its resolved target — same batch, same dependency
+            // and path declarations. The resolver is read-only (one catalog
+            // lookup, no side effects, no permission); execution re-resolves
+            // live and re-validates in the dispatcher regardless.
+            resolveSchedulingTarget: createRealTargetResolver(resolved.registry),
+        });
         request.publisher?.publish(request.turn, executor);
         return executor;
     }
