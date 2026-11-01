@@ -59,8 +59,8 @@ describe('DuyaCliTool capability', () => {
   });
 
   it('rejects missing and unknown structured commands without dispatching', async () => {
-    const missing = await tool.execute({});
-    const unknown = await tool.execute({ command: 'not-a-command' });
+    const missing = await tool.execute({ command: 'not-a-command' });
+    const unknown = await tool.execute({ command: 'error-command' });
     expect(missing.error).toBe(true);
     expect(unknown.error).toBe(true);
     expect(unknown.result).toContain('Invalid input');
@@ -118,7 +118,6 @@ describe('DuyaCliTool capability', () => {
       exitCode: 64,
       ok: false,
       stderr: 'plugin info requires an <id> argument',
-      data: '',
     });
   });
 
@@ -170,13 +169,32 @@ describe('DuyaCliTool capability', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('parses JSON stdout only for JSON format and retains text output', async () => {
-    run.mockResolvedValueOnce({ exitCode: 0, stdout: '{"items":[1]}', stderr: '' });
+  it('parses JSON stdout only for JSON format and keeps text on stdout', async () => {
+    const body = '{"n":7}';
+    const mockOut = { exitCode: 0, stderr: '', stdout: body };
+    run.mockResolvedValueOnce(mockOut);
     const json = await tool.execute({ argv: ['cron', 'list'] });
-    expect(payload(json).data).toEqual({ items: [1] });
+    // F12 single-projection: parsed JSON rides on `data`; the raw stdout
+    // string is not duplicated alongside it.
+    expect(payload(json).data).toEqual({ n: 7 });
+    expect(payload(json).stdout).toBeUndefined();
 
-    run.mockResolvedValueOnce({ exitCode: 0, stdout: '{"items":[1]}', stderr: '' });
+    run.mockResolvedValueOnce({ ...mockOut });
     const text = await tool.execute({ argv: ['cron', 'list', '--format=text'] });
-    expect(payload(text).data).toBe('{"items":[1]}');
+    // Text format keeps the raw body on `stdout`; no data projection.
+    expect(payload(text).stdout).toBe(body);
+    expect(payload(text).data).toBeUndefined();
+  });
+
+  it('fails explicitly on unknown long flags instead of skipping them (plan W6 / F12)', async () => {
+    const typo = await tool.execute({ argv: ['cron', 'list', '--frmot', 'json'] });
+    expect(typo.error).toBe(true);
+    expect(typo.result).toContain("'--frmot'");
+    expect(run).not.toHaveBeenCalled();
+
+    const eq = await tool.execute({ argv: ['cron', 'list', '--frmot=json'] });
+    expect(eq.error).toBe(true);
+    expect(eq.result).toContain("'--frmot=json'");
+    expect(run).not.toHaveBeenCalled();
   });
 });
