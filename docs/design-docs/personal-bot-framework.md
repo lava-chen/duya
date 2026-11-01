@@ -76,16 +76,22 @@ Bot 生命周期为 `active → paused → active` 或 `active/paused → archiv
     ├── Project*（优先引用现有 Project）
     │   ├── Responsibility* / existing Goal or Routine reference
     │   └── ProjectExecutionBinding*
-    │       ├── Agent endpoint / hostId
-    │       ├── machine-local workingDirectory
-    │       └── Session* → Run*
+    │       ├── Agent endpoint / hostId / machine-local workingDirectory
+    │       └── SessionRunBinding* → Run*
+    │           └── VCS refs: repository, branch, commit, PR, merge
     └── bot-level policy / memory scope / default coordination context
 
 Session 是底层执行工具，不是 Desktop 的用户界面实体。Desktop 只呈现 Bot、Project、责任和结果；不提供独立 Session 列表或 Session 对话工作台。一个 Session 可以被 Bot 按 Project / Responsibility 调用，也可由 CLI/TUI 用户直接使用。Bot 可为一个 Project 建立多个执行绑定，外部 Thread 订阅可以路由到对应 Project / Responsibility；没有明确目标的消息回落到 Bot 的默认协调入口。
 
 Bot Process 负责选择 Project 和 execution binding，按权限与预算为当前 Run 组装 typed ContextEnvelope，再调用 Session Agent。Envelope 可包括当前任务与验收标准、Bot 角色策略、Project 摘要、按作用域检索出的记忆、必要历史引用和可用工具权限；Session Agent 不直接读取 Bot 私有记忆数据库，也不假定多个 Session 自动共享上下文。注入内容应有来源、scope 和预算，避免把 Bot 全量记忆无筛选地复制到每次 Run。
 
-这使 Session 可保持通用、可移植和较简单：它只消费给定的任务与上下文，执行工具并返回事件、结果和终态；Bot 负责长期身份、记忆检索、授权、Project 路由、任务状态和结果整合。Session API 当前尚未成熟，因此 Bot 领域只依赖 Host 定义的窄 SessionAgentPort / adapter；当前实现可先适配本机 Host，远端 endpoint 作为后续兼容实现，避免 Bot 业务绑定现有 Session API 的临时细节。
+这使 Session 可保持通用、可移植和较简单：它只消费给定的任务与上下文，执行工具并返回事件、结果、终态及可验证的 Git / PR 引用；Bot 负责长期身份、记忆检索、授权、Project 路由、任务状态和结果整合。Session API 当前尚未成熟，因此 Bot 领域只依赖 Host 定义的窄 SessionAgentPort / adapter；当前实现可先适配本机 Host，远端 endpoint 作为后续兼容实现，避免 Bot 业务绑定现有 Session API 的临时细节。
+
+TUI 应是同一 Session Agent 能力的简洁人机操作面，不混入 Bot 的长期记忆、跨 Project 规划、责任调度、Thread 路由或跨 Session 状态。当前已确认 `/project` 用于选择本机 Session 工作目录，`/pr` 用于读取 / 显式刷新当前 Session 关联的 PR；前者是执行输入，后者是 Session 级诊断，本身并不能证明 TUI 混入了 Bot 控制面。实施前仍需把 CLI/TUI 所有页面与 command 按所有权审计；若存在 Bot 长期规划 / 状态 / 路由职责，就移至 Bot。模型 / provider 选择、工具执行、权限提示、Session 上下文和工作目录仍是 Session 执行所需功能，不因“纯化”一概删除。Bot 调用稳定的 headless SessionAgentPort / Host API，不驱动交互式 TUI UI。Bot Project Activity 覆盖 PR lifecycle 后，再决定 TUI `/pr` 收敛为只读诊断或移除重复的项目级管理呈现。
+
+执行绑定还要关联 VCS 生命周期，而不只保存 sessionId：将 Project / Responsibility / `runId` 与 repository identity、working directory、branch ref、head commit、PR provider / ID / URL、PR 状态、merge commit / 时间持久关联。现有 621 已提供 HostIntegrationApiV1、Session ↔ PR 多对多链接、基于 checkpoint commit 的 PR 匹配、显式 GitHub 刷新和 PR 状态历史；应直接扩展这条底座。当前 PR projection 记录 `headSha` 和 `merged` 状态，但没有 merge commit SHA / 时间 / 方法，也没有 Bot / Project / Run 关联或 PR 评论回路由。Session Agent 在运行时报告新建或切换的 branch、commit 和创建 PR 等事实；GitHub 等 VCS adapter 接收 PR 评论、关闭和 merge 事件，并按持久关联送回负责的 Bot / Project / work binding。合并必须落到具体 PR 与 merge commit（区分普通 merge、squash merge、rebase merge；source head 与 merge commit 不混为同一 SHA）。本机 git observation 与远端 PR webhook / poll 是两个来源，事件都需去重和记录来源，不能仅凭模型文本声称“已合并”。当前 worktree 可使用命名 branch，也可 detached；checkpoint ref 不能被误当作 branch 名。
+
+Bot 的 Project Activity 汇总 branch、PR review / merge 与最终交付状态；这不是 Session UI，也不把 Git 状态塞进 Session 自己的生命周期状态机。当前 Desktop / Web 已有 621 的 Session checkout / integration UI，需在迁移中改为 Project Activity，复用 Host 查询与刷新能力。PR / Issue 后续评论根据 VCS thread subscription 关联到原 Project execution binding，再由 Bot 决定是否唤醒同一个 Session Agent / Session。
 
 同一 Session 同时只能由一个 Session Agent Host 执行。会话历史、Agent endpoint、工作目录和 artifacts 必须绑定到具体执行环境；跨机器恢复需要明确的 transcript snapshot / workspace transfer 合同，不能只复制 sessionId。不同 Session 若访问同一个可写目录，仍默认串行；并行写入要先为 Project 的不同执行目标配置隔离目录 / checkout。
 
@@ -100,7 +106,7 @@ Bot Activity 汇总 Project / Responsibility、当前 Run、待审批、外部�
 | Duya Desktop（Bot-first） | 只做 Bot 工作台：管理 Bot、Projects、长期目标 / 责任、记忆、自动化、审批、节点状态与结果；不提供 Session 列表或独立 Session 对话 UI | botId、Project、Responsibility、Bot Activity |
 | Duya CLI / TUI（Session-first） | 即时执行终端：创建、连接并监督 Session；支持编程 / 终端、多模型 / Harness、临时任务与并行工作 | sessionId、runId、工具事件、workspace |
 | Bot Process | Bot 的持久协调进程，可本机或云端运行；持有长期状态，选择 Project / Agent endpoint，组装上下文并调用 Session Agent | botId、policy、project binding、context envelope、任务路由 |
-| Duya Session Agent | 提供底层 Session / Run 能力，可部署在不同 OS、容器、云 VM 或本地机器，被 Bot 或 TUI 调用 | agent endpoint、hostId、Session / Run、机器本地工作区 |
+| Duya Session Agent | 提供底层 Session / Run 能力，可部署在不同 OS、容器、云 VM 或本地机器，被 Bot 或 TUI 调用；返回结构化执行与 Git 活动事实 | agent endpoint、hostId、Session / Run、机器本地工作区 |
 
 目标形态如下。第一阶段 Bot Process 仍可由当前 Host 装配并与本机 Desktop 同机；第二阶段它脱离 Electron UI 生命周期，支持本机后台或云端部署；第三阶段 Session Agent endpoints 扩展到不同机器和目录。当前 master 尚没有云端 Bot Process 和跨机 Session Agent 协议。
 
@@ -117,7 +123,7 @@ Bot Activity 汇总 Project / Responsibility、当前 Run、待审批、外部�
     CLI / TUI ────────────── Session Agent
     （直接使用底层执行能力）
 
-Desktop UI、Bot Process、CLI/TUI 与 Session Agent 共用版本化 agent-protocol、Host Session / Run contract 和 agent-runtime；不复制 Bot 专属模型循环。TUI 可独立使用 Session Agent；Bot 可按 Project / Responsibility 调用一个适合的 Agent endpoint。Session 是产品可调用的执行能力，但当前 API 还不成熟，所以 Bot→Session 之间保留适配层和版本化协议，不让 Desktop UI 或 Bot 领域包依赖具体 Runner 实现。
+Desktop UI、Bot Process、CLI/TUI 与 Session Agent 共用版本化 agent-protocol、Host Session / Run contract 和 agent-runtime；不复制 Bot 专属模型循环。Session Agent 的 headless Host API 是 Bot 调用的执行单位；TUI 是人直接操作同一能力的薄界面，不是 Bot 要自动化的界面。Session API 还不成熟，Bot→Session 之间保留适配层和版本化协议。Session Agent / Host 报告本地 checkout、branch（若存在）、commit 和运行结果；独立的 VCS provider adapter 观察 PR / review / merge。Bot 域把这些有来源的事实关联到 Project / Responsibility / Run，并负责长期状态投影和后续事件路由。
 
 状态与身份分层：
 
@@ -125,10 +131,14 @@ Desktop UI、Bot Process、CLI/TUI 与 Session Agent 共用版本化 agent-proto
 - `projectId` 引用 Bot 管理的项目；`ProjectExecutionBinding` 将项目和责任映射到 agent endpoint / hostId / 工作目录 / Session 复用策略。
 - `hostId` 标识承载 Session Agent 的机器或隔离执行环境。一台 Host 可为多个 Bot 执行授权任务，一个 Bot 可使用多台 Host。
 - `sessionId` 是执行环境提供的低层上下文 ID；Bot 可创建或复用，Desktop 不把它呈现为可独立管理的工作对象。
-- `runId` 标识一次执行。Bot Process 权威维护用户可见的任务归属、记忆和 ContextEnvelope；执行 Host 持有本地 transcript、工作目录和 artifacts。
+- `runId` 标识一次执行。Bot Process 权威维护用户可见的任务归属、记忆和 ContextEnvelope；执行 Host 持有本地 transcript、工作目录和 artifacts。Bot 再将 Run 与 branch、commit、PR 和 merge evidence 关联，Desktop 只显示 Project / Bot 级进度与结果。
 - Desktop UI 关闭不应终止已接纳工作；TUI 保留独立 Session Agent 的本地执行能力。
 
 现有发布流程已经区分 `desktop/v*` 与 `cli/v*`。当前 CLI 包含 Host Worker 与 Node Runtime，可本地独立执行；Session Agent 跨机器运行仍需新增部署 / 连接合同。[Desktop / CLI 发布计划](../exec-plans/active/2026-10-29-product-release-separation.md) [CLI 打包脚本](../../scripts/package-cli-release.mjs) 云端 / headless Bot Process 可能需要 `duya-bot` 部署包与 `bot/v*` 发布线；这属于 Bot 产品的部署形态，不是第三种用户工作流。协议兼容版本与 Desktop、CLI、Bot Process 的二进制版本分开协商。
+
+**复用当前 PR lifecycle 实现：** 621 计划已提供 HostIntegrationApiV1、Session ↔ PR 多对多关联、显式 GitHub sync、SQLite 最新观察与状态迁移历史，以及基于 checkpoint commit 的 PR 匹配。新 Bot 层从这些能力构建 Project Activity 和 binding；不再写一个第二套 PR observer / PR 状态库。当前 projection 只有 PR head SHA 和 `merged` 状态，没有 merge commit SHA、时间、方式，也没有 Bot / Project / Responsibility / Run 归属或评论事件回路由。`unknown` 与观察错误继续作为正式状态，禁止推测合并成功。
+
+**Session TUI 的职责核查：** 当前 CLI/TUI 含 `/project` 本机工作目录选择和 `/pr` Session 关联 PR 读取 / 刷新。前者是运行 Session 所需的 cwd 输入，不等同于长期 Bot Project 管理；后者可作为 Session 诊断，但长期 PR / review / merge 状态与评论回路由应由 Bot Project Activity 持有。S0 需把现有 TUI command / 页面逐项归类：保留执行必需的 provider / model、工具、权限、cwd、Session / Run 控制；将 Bot 长期记忆、跨 Project 规划、责任调度、订阅路由和项目级状态管理迁至 Bot。Bot Activity 补齐后再决定 `/pr` 只保留诊断或移除重复呈现，不让 TUI 另建状态源。
 
 多环境接入阶段通过短时一次性配对凭证注册 Session Agent Host，随后节点建立持久双向认证加密连接。Tailscale / WireGuard 可先提供网络可达性；应用层仍需验证 Host 身份、Bot / Project 授权范围、协议兼容、ContextEnvelope scope 和 Run mandate / fencing。节点离线时 Bot Process 保留任务与事实，按策略等待或重新分配；未知的外部副作用结果不能标记为成功。首版不承诺活动 Session 跨机器透明迁移、多写者 Bot Process 或 HA。
 
@@ -142,8 +152,8 @@ Desktop UI、Bot Process、CLI/TUI 与 Session Agent 共用版本化 agent-proto
 
 | 包 | 负责回答的问题 | 不应承担 |
 | --- | --- | --- |
-| `@duya/bot` | 这个长期角色承担什么、哪些输入应推进它、何时提醒、怎样关联记忆与既有工作 | 模型 / tool 轮次循环、worker、网络、DB、凭据执行 |
-| `@duya/host` | 用哪些真实适配器运行这些用例，哪个 Run 已受理，怎样对账生命周期 | 将 Bot 的纯业务规则散落进 HTTP / worker handler |
+| `@duya/bot` | 这个长期角色承担什么、管理哪些 Project / Responsibility、怎样选上下文、路由事件并关联 Session / Git / PR / merge 事实 | 模型 / tool 轮次循环、worker、网络、DB、凭据执行与 VCS provider I/O |
+| `@duya/host` | 用哪些真实适配器运行这些用例，哪个 Run 已受理，怎样对账 Session / VCS 生命周期 | 将 Bot 规则散落进 HTTP / worker handler 或 provider SDK |
 | `@duya/agent-runtime` | 一次 Run 如何执行、控制、授权、产生事件并等待持久终态 | 用户长期角色、渠道身份、routine 与个人通知偏好 |
 | `@duya/agent-core` | 与产品无关的纯 Run 推理及可复用算法 | Bot 资料、渠道、长期责任或个人记忆 I/O |
 
@@ -173,7 +183,7 @@ Client projections: @duya/client-core and @duya/ui
 packages/bot/src/
   domain/          identity, responsibility, wake admission, attention policy
   application/     create/update/pause, accept input, dispatch, reconcile
-  ports/           narrow repository/run/memory/delivery/clock interfaces
+  ports/           narrow repository/run/session/memory/VCS/delivery/clock interfaces
   index.ts         explicit public API
 packages/host/src/bot/
   service.ts       composition and lifecycle, no business-rule accumulation
@@ -202,12 +212,14 @@ Bot 用例之间通过明确参数和返回结果组合，不用一个万能 `Bo
 | `acceptInput` | 解析可信目标 binding，校验权限与大小，先落 durable inbox，再返回 accepted + wakeId；相同来源事件返回同一个 receipt |
 | `dispatchNext` | 原子认领唤醒与 Bot 控制权，经 RunPort 请求启动，返回 canonical runId 或明确拒绝；客户端不认领执行权 |
 | `setResponsibility / setRoutine` | 验证时区、触发规则、预算与授权；修改可读版本号，禁用后已排队工作重新校验 |
-| `getBot / getActivity / getResponsibilities` | 只读；读取不触发 Run，不清理队列，不变更租约 |
+| `getBot / getProjectActivity / getResponsibilities` | 只读；呈现 Project、Run、branch、PR、merge 和交付摘要，不暴露独立 Session 管理 UI，也不触发 Run |
+| `bindExecutionTarget` | 绑定 Project 到授权 Agent endpoint、hostId、repository 和工作目录；变更有 revision，可审计并撤销 |
+| `handleVcsEvent` | 验证 provider event / receipt，将 branch、PR、review、close / merge 事实关联到 Project / Responsibility / Run；幂等更新 Activity，必要时产生新的 wake |
 | `reconcile` | 对账 claim、dispatch receipt、Run 终态与 outbox；只补缺失环节，不盲目重做动作 |
 
 `RunPort` 提供 start / inspect / cancel 并复用 Host 接口。start 必须支持持久 dispatchKey 的幂等受理；cancel 绑定捕获的 runId + attempt，不能取消 Session 中后来的新 Run。接受拒绝时不得产生 worker 执行。
 
-`BotRepositoryPort` 只暴露原子业务操作，如 accept、claim、attachRun、completeInput、enqueueDelivery；禁止提供裸 SQL、通用 db.call 或多个独立 save 拼装事务。`MemoryPort` 接收 owner、bot、project、audience 作用域和预算；`DeliveryPort` 返回明确远端回执或 unknown outcome。端口结果使用具名联合类型，不以 null / 空数组吞掉基础设施失败。
+`BotRepositoryPort` 只暴露原子业务操作，如 accept、claim、attachRun、completeInput、enqueueDelivery；禁止提供裸 SQL、通用 db.call 或多个独立 save 拼装事务。`MemoryPort` 接收 owner、bot、project、audience 作用域和预算；`VcsPort` 以结构化 repository / branch / PR / merge ref 和事件 receipt 返回可验证事实；`DeliveryPort` 返回明确远端回执或 unknown outcome。端口结果使用具名联合类型，不以 null / 空数组吞掉基础设施失败。
 
 owner 是 Host 从已认证连接与数据根所有权解析出的 principal，首版不为此引入 SaaS 租户系统。Bot admission lease 只协调该 Bot 的控制工作，既有 Run / Session 锁仍是执行权威；不得让两把锁分别批准同一工作。
 
