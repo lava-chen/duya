@@ -25,6 +25,13 @@ export {
 
 export interface AgentMCPApplyTarget extends WorkerMCPApplyTarget<ToolUseContext> {
   getPermissionMode?(): PermissionMode;
+  /**
+   * Live registry view for the MCP executor generation-currency check (W1
+   * residual): `getExecutor(name)` must return the executor the registry
+   * would run for that internal name right now. `undefined` disables the
+   * check (legacy hosts / tests).
+   */
+  getActiveMCPRegistry?(): { getExecutor(name: string): unknown } | undefined;
 }
 
 export interface ApplyOpts {
@@ -65,6 +72,11 @@ export function createWorkerMCPExecutorPorts(
     beforeInvoke: async (context) => context.pluginAppInvocationGuard === undefined
       ? true
       : context.pluginAppInvocationGuard(),
+    isExecutorCurrent: (toolName, executor) => {
+      const registry = agent.getActiveMCPRegistry?.();
+      if (!registry) return true;
+      return registry.getExecutor(toolName) === executor;
+    },
     logger: agentMcpExecutorLogger,
   };
 }

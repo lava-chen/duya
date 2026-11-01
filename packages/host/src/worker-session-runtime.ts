@@ -1041,6 +1041,10 @@ export class WorkerSession implements AgentRuntime {
     };
     onMessagesCompacted: ((newMessageCount: number) => void) | undefined;
     readonly activeMCPRegistry: ToolRegistry = new ToolRegistry();
+    /** Live registry view for the MCP executor generation-currency check (W1 residual). */
+    getActiveMCPRegistry(): { getExecutor(name: string): unknown } {
+        return this.activeMCPRegistry;
+    }
     activeMCPRuntimeSnapshot: import('@duya/host/connector-services/apply').ActiveMCPRuntimeSnapshot | null = null;
     private providerNameToInternalKey: Map<string, string> = new Map();
     private activeAgentProfileId: string | undefined;
