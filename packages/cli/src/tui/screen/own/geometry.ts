@@ -10,6 +10,11 @@ export interface RegionLayout {
   readonly metrics: RegionMetrics;
   readonly borderStyle: NonNullable<RegionPatch['borderStyle']>;
   readonly borderColor: string;
+  /**
+   * The fill behind the region, as a blessed tag body (`'236-bg'`), or
+   * undefined for a region that has no band.
+   */
+  readonly background: string | undefined;
   readonly hidden: boolean;
   /** Body lines in either representation: tags or spans. */
   readonly lines: readonly SceneLine[];
@@ -187,6 +192,7 @@ export function layoutRegion(
     },
     borderStyle,
     borderColor: patch?.borderColor ?? DEFAULT_BORDER_COLOR[region],
+    background: patch?.background,
     hidden: patch?.hidden ?? DEFAULT_HIDDEN[region],
     lines: patch?.lines ?? [],
     contentWidth: Math.max(0, box.width - inset.left - inset.right),

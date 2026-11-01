@@ -63,6 +63,15 @@ export interface RegionPatch {
   /** Border colour, as a name the surface's renderer understands. */
   readonly borderColor?: string;
   /**
+   * The fill behind the region, as a blessed tag body (`'236-bg'`).
+   *
+   * The composer's band: the whole rectangle is painted in this colour, the
+   * rules included, so the input box reads as one solid surface instead of
+   * two lines with text between them. A `-bg` body is a BACKGROUND — it
+   * fills the cell behind the text and leaves the text colour alone.
+   */
+  readonly background?: string;
+  /**
    * The region's frame. `composer` is the input box's two horizontal rules with
    * no sides; `framed` is a full box; `none` drops it entirely, which is what a
    * short terminal does because the two rows cost more than the frame is worth.

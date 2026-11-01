@@ -242,8 +242,9 @@ describe('TUIApp integration', () => {
     app.stop();
     // The full-screen composer paints its body without the rules, so the
     // prompt row is a different row than in inline mode. The colour is the
-    // same fact either way.
-    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)m!/u);
+    // same fact either way — and the composer's band rides along in the same
+    // parameter list, so the red may be followed by a background.
+    expect(out.text()).toMatch(/\x1b\[(?:91|38;5;9)(?:;48;5;\d+)?m!/u);
   });
 
   // The user-visible half of the keymap validator. `interrupt` is dispatched

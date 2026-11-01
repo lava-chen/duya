@@ -1870,6 +1870,9 @@ export class TUIApp {
         // The composer's frame is the effort indicator: the two rules the user
         // types between carry the level the next message will run at.
         borderColor: effortBorderColor(this.effortLevel()),
+        // The band: the whole input rectangle is filled, the rules included,
+        // so the box the user types into reads as one solid surface.
+        background: this.theme.tags.composerBg,
         height,
         bottom: this.composerBottom(size),
         lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
@@ -1878,12 +1881,15 @@ export class TUIApp {
         bottom: height + STATUS_ROWS + this.popupRows(),
       });
     } else {
-      this.inlineInputLines = this.colorComposerRules(
+      const painted = this.colorComposerRules(
         layout.lines,
         borderRows > 0,
         layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
         { row: borderRows > 0 ? 1 : 0, glyph: shellGlyph },
       );
+      // The inline screen model has no region to fill — the rows ARE the
+      // composer — so the band travels with the text.
+      this.inlineInputLines = this.bandComposerRows(painted, layout.lines, size.columns);
     }
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
@@ -1938,6 +1944,10 @@ export class TUIApp {
       const height = visible.length + this.inputChromeRows();
       this.fullScreen.update('input', {
         borderColor: 'cyan',
+        // The panel takes the composer's slot, so it does NOT take the
+        // composer's band: a popup on a filled band would read as part of the
+        // input box.
+        background: undefined,
         height,
         bottom: this.composerBottom(size),
         lines: visible,
@@ -1993,6 +2003,32 @@ export class TUIApp {
         ? `${tagBody}${escapeTags(line)}${close}`
         : paint(line, index);
       return index === placeholderRow ? `{${mutedTag}}${painted}{/${mutedTag}}` : painted;
+    });
+  }
+
+  /**
+   * Put the composer's rows on the theme's band.
+   *
+   * The full-screen surface can fill a region, but the inline one cannot: its
+   * rows ARE the composer. So the band travels with the text — each row is
+   * padded to the terminal width and wrapped in the background tag, which is
+   * what makes the inline composer a solid block instead of a highlighted
+   * line.
+   *
+   * The padding is measured on the RAW row, because the painted row carries
+   * tags and its tag characters are not cells.
+   */
+  private bandComposerRows(
+    painted: readonly string[],
+    raw: readonly string[],
+    columns: number,
+  ): string[] {
+    const tag = this.theme.tags.composerBg;
+    const width = Math.max(1, columns);
+    return painted.map((line, index) => {
+      const used = visibleWidth(raw[index] ?? '');
+      const pad = ' '.repeat(Math.max(0, width - used));
+      return `{${tag}}${line}${pad}{/${tag}}`;
     });
   }
 

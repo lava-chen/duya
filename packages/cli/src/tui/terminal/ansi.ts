@@ -26,7 +26,7 @@
  * same primitive codex uses (`insert_history.rs:165-178`).
  */
 
-import { sgrParameterFor, type SpanColor } from '../core/color.js';
+import { backgroundParameterFor, sgrParameterFor, type SpanColor } from '../core/color.js';
 import { hasAttr, sameStyle, type StyledSpan } from '../core/span.js';
 
 /** CSI introducer. */
@@ -213,10 +213,13 @@ function spanParameters(span: StyledSpan): string[] {
   return parameters;
 }
 
-/** A background is the foreground code shifted up by ten (30→40, 90→100). */
-function backgroundParameterFor(color: SpanColor): string {
-  return color.kind === 'indexed' ? `48;5;${color.index}` : String(Number(sgrParameterFor(color)) + 10);
-}
+/**
+ * A background is the foreground code shifted up by ten (30→40, 90→100).
+ *
+ * The rule itself lives in `core/color.ts`, next to the colour vocabulary it
+ * belongs to; this re-export keeps the historical import site working.
+ */
+export { backgroundParameterFor };
 
 /**
  * The SGR parameters for a span, joined — what a CELL carries as its style.

@@ -309,8 +309,11 @@ export function spanRolesOf(styles: Pick<Styles, 'tags'>): InlineSpanRoles {
  */
 function openTags(style: SpanStyle, order: 'color-first' | 'attrs-first', view: SpanTagView): string[] {
   const colour = style.fg === undefined ? [] : [`{${tagBodyFor(style.fg)}}`];
+  const background = style.bg === undefined ? [] : [`{${tagBodyFor(style.bg, 'bg')}}`];
   const attributes = (style.attrs ?? []).map((attribute) => `{${attribute}}`);
-  return order === 'color-first' ? [...colour, ...attributes] : [...attributes, ...colour];
+  return order === 'color-first'
+    ? [...colour, ...background, ...attributes]
+    : [...attributes, ...colour, ...background];
 }
 
 /**
@@ -355,7 +358,7 @@ function deltaTags(style: SpanStyle, envelope: SpanStyle, view: SpanTagView): st
     if (!inherited.has(attribute)) out.push(`{${attribute}}`);
   }
   if (style.fg !== undefined && !sameColor(style.fg, envelope.fg)) out.push(`{${tagBodyFor(style.fg)}}`);
-  if (style.bg !== undefined && !sameColor(style.bg, envelope.bg)) out.push(`{${tagBodyFor(style.bg)}}`);
+  if (style.bg !== undefined && !sameColor(style.bg, envelope.bg)) out.push(`{${tagBodyFor(style.bg, 'bg')}}`);
   return out;
 }
 
