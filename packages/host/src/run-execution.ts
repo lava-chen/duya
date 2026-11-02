@@ -52,6 +52,7 @@ import type { RuntimeSessionService } from '@duya/agent-runtime/session';
 import {
   admissionWireStage,
   createHostSessionService,
+  toStartAgentRunRefusal,
   type HostAdmissionTurn,
 } from './session-admission.js';
 import { randomUUID } from 'node:crypto';
@@ -625,11 +626,7 @@ export class HostRunExecutionController {
       // was never written" (retry and alert). The Bot dispatcher branches on
       // exactly that difference, so collapsing them here made the branch
       // unreachable.
-      return {
-        accepted: false,
-        stage: admissionWireStage(outcome.stage),
-        reason: outcome.reason,
-      };
+      return toStartAgentRunRefusal(outcome);
     } finally {
       if (caller && this.#delegationBySession.get(sessionId) === caller) {
         this.#delegationBySession.delete(sessionId);

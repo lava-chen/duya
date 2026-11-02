@@ -330,7 +330,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/run-api.ts": {
-      "bytes": 17300,
+      "bytes": 17403,
       "imports": [],
       "format": "esm"
     },
@@ -22787,7 +22787,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -31627,7 +31627,7 @@
       "format": "esm"
     },
     "packages/host/src/session-admission.ts": {
-      "bytes": 11964,
+      "bytes": 12463,
       "imports": [
         {
           "path": "packages/agent-runtime/src/session/index.ts",
@@ -31794,7 +31794,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 52014,
+      "bytes": 51952,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -40731,7 +40731,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42636,7 +42636,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -44058,7 +44058,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44067,7 +44067,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9969
@@ -45153,7 +45153,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -46101,7 +46101,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4759058
+      "bytes": 4759116
     }
   }
 }
