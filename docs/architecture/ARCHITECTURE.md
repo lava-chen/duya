@@ -996,6 +996,24 @@ The JSONL rollouts are the source of truth; `message_index` is a rebuildable pro
 - **Archive** (`db:session:archive/unarchive/listArchived`): Host checks locks across the spawn subtree, mirrors every rollout segment into `archived/<date>/`, and rolls files/metadata back on failure. Unarchive restores one session's segments and legacy single-file rows; descendants remain archived. Archived sessions leave the default `list()` result (`includeArchived` to reveal).
 - **Non-bot rotation** (Plan 506 C1): long ordinary chats rotate on the same `archive-<g>.jsonl` layout as bots once they cross `NON_BOT_ROTATION_THRESHOLD_BYTES` (4 MB) — compaction triggers rotation for already-rotated sessions; the active file's generation directory is sticky so segments never split.
 
+### Project continuity (Coordinator task two, 2026-11-02)
+
+`projects.project_id` remains the durable identity. Migration 21 in
+`@duya/data` adds revisioned current-state, decision, project-memory and
+Activity records alongside `project_task_sessions`; the existing `tasks` rows
+remain the sole task content/status authority. Task acceptance is a separate
+project binding field: a completed Task remains pending review until a user
+accepts or rejects it. Decisions and memories keep bounded source references
+and revision history.
+
+`HostProjectApiV1` and authenticated project HTTP routes provide one
+continuity snapshot and a bounded context projection to UI and Host clients.
+The projection references coordinator/work Session transcripts by ID rather
+than copying message history. On Worker initialization the Desktop adapter
+loads project context through the Host API and includes it in the system
+prompt; prompt assembly uses `@duya/memory` ranking/rendering helpers. Session
+message history itself remains in MessageLog.
+
 ### Memory State DB (Plan 479)
 
 Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot.json directory), managed by `apps/desktop/src/main/memory-state/`. Its legacy schema includes projects / rollout catalog (0001), leases + stage1 outputs (0002-0003), curation runs / publications (0008), and the bot memory tier index (0010). `projects` and `project_bots` are now canonical in `duya-core.db`; `CoreDataHost` imports their legacy rows read-only and idempotently during startup, with completion recorded in core `meta`.
