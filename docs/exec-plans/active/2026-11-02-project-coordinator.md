@@ -72,9 +72,9 @@ Owner：当前 Codex；独立 worktree：`/workspace/work/review-582`；分支�
 
 - 相关 13 个测试文件共 142 项通过：Host Session/Project/input API，CoreDataHost 升级，Desktop DB bridge/执行适配器，ProjectStore/ProjectService，Run/Workspace migration rehearsal。
 - `npm run typecheck:all`、`npm run architecture:check`、`NODE_USE_ENV_PROXY=1 npm run electron:build`、`npm run check:packaged-artifacts:bundle` 均退出 0；Electron 类型门禁无新增错误，178 项既有错误仍在 baseline。
-- 非生成文件 `git diff --check` 通过；生成 bundle 保留原提示词模板中的 Markdown 行尾空格，未手工修改生成内容。提交后核对 `npm run bundle:verify` 和远端 CI。
+- 非生成文件 `git diff --check` 通过；生成 bundle 保留原提示词模板中的 Markdown 行尾空格，未手工修改生成内容。代码提交 `8aa55c1c` 后 `npm run bundle:verify` 退出 0，1029 项输入全部 FRESH，工作区干净。
 
-交付：更新原 PR #582，不合并；产品真机验收由用户负责。本轮未实现项目记忆、Task/activity UI 或显式任务验收。
+交付：代码提交 `8aa55c1c` 和本节验证记录推送到原 PR #582；远端 CI 待该 head 完成。原 PR 保持 Draft，不合并；产品真机验收由用户负责。本轮未实现项目记忆、Task/activity UI 或显式任务验收。
 
 本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系；Session 工具的 Coordinator 派发由 Host 从受信 caller Session 解析 Project、创建规范 Task 并绑定工作 Session。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。隐藏 Coordinator profile 由 Host 强制 `session`/`todo` 白名单；子 Session 切换到 `code-expert`，不继承管理限制。项目新对话绑定/复用协调 Session。项目记忆 scope、Task/activity 工作台与显式验收/完成对账仍待完成。
 
