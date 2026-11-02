@@ -58,6 +58,24 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 本轮证据与接续
 
+### PR #582 review 修复（2026-11-02）
+
+Owner：当前 Codex；独立 worktree：`/workspace/work/review-582`；分支：`codex/fix-pr-582`；修复 base：`caa1f9f3`。共享 workspace 工具不可用，已按 Git/PR 对账；不修改其他检出。
+
+1. 验证最新提交中的迁移编号和 bundle 修复，并补已有数据库升级回归。
+2. 将 Desktop Session 管理接入共享 Host 派工服务，统一 Task 绑定、工作角色和启动结果。
+3. 修复派工失败后的 Task 状态，运行相关回归、类型/架构门禁和 Electron 构建，再更新原 PR。
+
+已实现：保留 `caa1f9f3` 的 61–63 迁移，新增 v48/v50 升级、重启和外键删除回归；Desktop Coordinator 的六项 Session 管理动作经受信 caller 接共享 Host 服务，规范 Task 绑定在启动前落库，工作 Run 显式传递 `code-expert`；Task 仅在 Run 启动成功后进入 `in_progress`。普通 Desktop Session 的原通知路径保留。Host 服务增加正式子路径导出；Worker bundle 已从本检出重建。
+
+验证环境：Linux、Node `24.19.0`，base `caa1f9f3` 加本节修复路径；本地第三方依赖只读复用，Electron/SQLite 使用独立副本，未修改共享检出。
+
+- 相关 13 个测试文件共 142 项通过：Host Session/Project/input API，CoreDataHost 升级，Desktop DB bridge/执行适配器，ProjectStore/ProjectService，Run/Workspace migration rehearsal。
+- `npm run typecheck:all`、`npm run architecture:check`、`NODE_USE_ENV_PROXY=1 npm run electron:build`、`npm run check:packaged-artifacts:bundle` 均退出 0；Electron 类型门禁无新增错误，178 项既有错误仍在 baseline。
+- 非生成文件 `git diff --check` 通过；生成 bundle 保留原提示词模板中的 Markdown 行尾空格，未手工修改生成内容。提交后核对 `npm run bundle:verify` 和远端 CI。
+
+交付：更新原 PR #582，不合并；产品真机验收由用户负责。本轮未实现项目记忆、Task/activity UI 或显式任务验收。
+
 本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系；Session 工具的 Coordinator 派发由 Host 从受信 caller Session 解析 Project、创建规范 Task 并绑定工作 Session。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。隐藏 Coordinator profile 由 Host 强制 `session`/`todo` 白名单；子 Session 切换到 `code-expert`，不继承管理限制。项目新对话绑定/复用协调 Session。项目记忆 scope、Task/activity 工作台与显式验收/完成对账仍待完成。
 
 下一动作：接入项目记忆 scope 和 Task/activity UI，并实现基于可审阅结果的显式 Task 完成/验收；Run 终态不可自动冒充 Task 完成。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。

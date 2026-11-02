@@ -28,6 +28,10 @@ const SESSION_ACTIONS = new Set([
   'session:spawnRename',
 ]);
 
+export function isHostSessionAction(action: string): boolean {
+  return SESSION_ACTIONS.has(action);
+}
+
 export interface SessionServiceCaller {
   readonly sessionId: string;
   readonly runId: string;
@@ -220,6 +224,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
         workingDirectory,
         model: model ?? session.model,
         providerId: session.providerId,
+        ...(session.agentProfileId ? { agentProfileId: session.agentProfileId } : {}),
         origin: 'agent',
       }, caller);
     } catch (error) {
@@ -376,7 +381,6 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               options.projectCoordination!.tasks.update(projectTaskId, { status: 'pending' });
               return { ok: false, sessionId: child.id, reason: 'project_task_binding_failed' };
             }
-            options.projectCoordination!.tasks.update(projectTaskId, { status: 'in_progress' });
           }
 
           if (!callerIsCurrent(caller)) {
@@ -416,6 +420,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               reason: failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`,
             };
           }
+          if (projectTaskId) options.projectCoordination!.tasks.update(projectTaskId, { status: 'in_progress' });
           return {
             ok: true,
             sessionId: child.id,

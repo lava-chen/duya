@@ -231,6 +231,7 @@ modules:
     publicEntrypoints:
       - packages/host/src/index.ts
       - packages/host/src/session-api.ts
+      - packages/host/src/session-service.ts
       - packages/host/src/http-client.ts
       - packages/host/src/local-host.ts
       - packages/host/src/run-engine-model.ts

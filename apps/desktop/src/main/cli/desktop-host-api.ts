@@ -122,6 +122,7 @@ import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
+import { createDesktopSessionManagementService } from './desktop-session-management';
 import { BotDispatchStore, BotSchedulerStore, LOCAL_BOT_OWNER } from '@duya/data';
 import { BotChannels, BotDispatcher, readBotPrompt } from '@duya/host';
 import { createDesktopBotChannels } from '../channels/bot-channel-runtime';
@@ -163,6 +164,21 @@ export interface DesktopHostApiHandle {
 }
 
 let sessionApiClient: HostSessionHttpClient | null = null;
+let desktopSessionManagement: ReturnType<typeof createDesktopSessionManagementService> | null = null;
+let desktopSessionManagementStores: CoreStores | null = null;
+
+export function getDesktopSessionManagementService() {
+  const stores = getCoreStores();
+  if (!desktopSessionManagement || desktopSessionManagementStores !== stores) {
+    desktopSessionManagement = createDesktopSessionManagementService({
+      stores,
+      sessions: getDesktopHostSessionApi(),
+      checkoutService: getDesktopCheckoutService(),
+    });
+    desktopSessionManagementStores = stores;
+  }
+  return desktopSessionManagement;
+}
 let desktopCheckoutService: SessionCheckoutService | null = null;
 let desktopCheckoutServiceStores: CoreStores | null = null;
 let desktopBotScheduler: BotSchedulerStore | null = null;
@@ -623,6 +639,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
 
   const client = new HostSessionHttpClient(`http://${HOST}:${server.port}`, token);
   sessionApiClient = client;
+  desktopSessionManagement = null;
   botDispatcher.start();
 
   // `PluginManager.listInstalled()` is a synchronous read model consumed by
@@ -654,7 +671,11 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
         if (desktopBotScheduler === botScheduler) desktopBotScheduler = null;
         if (desktopBotDispatchStore === botDispatchStore) desktopBotDispatchStore = null;
         setManagedBotWakePort(null);
-        if (sessionApiClient === client) sessionApiClient = null;
+        if (sessionApiClient === client) {
+          sessionApiClient = null;
+          desktopSessionManagement = null;
+          desktopSessionManagementStores = null;
+        }
         if (runningHandle === handle) runningHandle = null;
         if (pluginAppInvocationInternalApi === pluginAppInvocationApi) pluginAppInvocationInternalApi = null;
         if (pluginAppInstanceApiRef === pluginAppInstanceApi) pluginAppInstanceApiRef = null;
