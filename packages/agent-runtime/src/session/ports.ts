@@ -29,10 +29,11 @@
  * Session service, and both stay outside it.
  *
  * The workspace reference below is therefore the whole of "where am I": an
- * opaque workspace id, a root id, and a path RELATIVE to that root. It cannot
- * express `..`, so a session structurally cannot address a directory outside
- * its own workspace — no permission check needed for a path the shape cannot
- * represent.
+ * opaque workspace id, a root id, and a path RELATIVE to that root. The
+ * relative path is a checked type — `toSessionRelativePath` refuses anything
+ * that leaves the root — so a session cannot address a directory outside its
+ * own workspace, and the check is a property of the value rather than a
+ * promise in a comment. See `SessionWorkspace` for the reasoning.
  */
 
 /**
@@ -43,11 +44,145 @@
  * wire. It carries identifiers, never a resolved filesystem path — the Host
  * resolves those, and a runtime that knew them would be one refactor away
  * from leaking them into a prompt or an event.
+ *
+ * ## The path is NOT just a string
+ *
+ * `relativePath` used to be typed `string`, while this file claimed the path
+ * "cannot express `..`" so a session could not address a directory outside its
+ * workspace. A plain string expresses `..` perfectly well, so the claim was
+ * decoration: the type did not prevent the escape, it only described the
+ * intent.
+ *
+ * It is now a BRANDED type that can only be produced by
+ * `toSessionRelativePath()`, which rejects anything that leaves the root. The
+ * brand stops a raw string from being passed where a checked path is
+ * expected; the validator is what actually stops the escape. Both are needed:
+ * the brand is the compile-time half, the validator is the runtime half, and
+ * neither substitutes for the other.
  */
 export interface SessionWorkspace {
   readonly workspaceId: string;
   readonly rootId: string | null;
-  readonly relativePath: string;
+  readonly relativePath: SessionRelativePath;
+}
+
+const SESSION_RELATIVE_PATH_BRAND: unique symbol = Symbol('duya.sessionRelativePath');
+
+/**
+ * A path relative to a workspace root that provably stays inside it.
+ *
+ * Produce one with `toSessionRelativePath`. The empty string is the root
+ * itself and is valid.
+ */
+export type SessionRelativePath = string & {
+  readonly [SESSION_RELATIVE_PATH_BRAND]: true;
+};
+
+/**
+ * Why a relative path was refused.
+ *
+ * The reasons are separate because they are separate failures: an absolute
+ * path is a caller that passed a resolved filesystem path where a workspace
+ * reference was expected, a parent segment is an escape attempt, and a
+ * control character is an injection. Merging them into one "invalid path"
+ * would lose the distinction between a bug and an attack.
+ */
+export type SessionRelativePathRejection =
+  | 'absolute_path'
+  | 'parent_segment'
+  | 'control_character';
+
+/**
+ * Split a path into segments, tolerating both separators.
+ *
+ * Windows accepts both, so a path that looks safe with one separator must not
+ * become unsafe with the other.
+ */
+function pathSegments(raw: string): string[] {
+  return raw.split(/[\\/]+/).filter((segment) => segment.length > 0);
+}
+
+/**
+ * Windows strips trailing dots and spaces from a path segment before it
+ * touches the filesystem.
+ *
+ * That makes `".. "` — two dots and a space — resolve as the parent
+ * directory, and `".. ."` as well. `"..."` collapses to an empty name, which
+ * is not a usable directory either.
+ *
+ * So a segment made ONLY of dots and spaces is refused, whatever it reduces
+ * to. `"."` is the exception: it is the current directory and stays inside
+ * the root.
+ */
+function isParentSegment(segment: string): boolean {
+  const withoutTrailingDotsAndSpaces = segment.replace(/[ .]+$/, '');
+  if (withoutTrailingDotsAndSpaces !== '') {
+    // A normal name. Windows may shorten it ("a.." is "a"), but shortening
+    // cannot leave the root.
+    return false;
+  }
+  // Only dots and spaces are left. "." is the current directory; anything
+  // with two or more dots is a parent or an unusable name.
+  return segment.replace(/ /g, '').length >= 2;
+}
+
+/**
+ * Check a path without throwing.
+ *
+ * Returns the reason it would be refused, or `null` when the path is safe.
+ */
+export function sessionRelativePathRejection(raw: string): SessionRelativePathRejection | null {
+  for (const character of raw) {
+    // The point is to REJECT control characters: a NUL truncates a path at the
+    // syscall boundary on some platforms, and a newline in a path breaks every
+    // log line that prints it.
+    if (character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f) {
+      return 'control_character';
+    }
+  }
+
+  // An absolute path, a Windows drive prefix, or a UNC share. All three
+  // name a location OUTSIDE the workspace root, which is exactly what a
+  // relative reference must never do.
+  if (raw.startsWith('/') || raw.startsWith('\\')) {
+    return 'absolute_path';
+  }
+  if (/^[A-Za-z]:/.test(raw)) {
+    return 'absolute_path';
+  }
+
+  for (const segment of pathSegments(raw)) {
+    if (isParentSegment(segment)) {
+      return 'parent_segment';
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Check whether a path stays inside its workspace root.
+ */
+export function isSessionRelativePathSafe(raw: string): boolean {
+  return sessionRelativePathRejection(raw) === null;
+}
+
+/**
+ * Turn a raw path into a checked workspace-relative path.
+ *
+ * @throws when the path is absolute, contains a parent segment, or carries a
+ *   control character. A caller that cannot produce a safe path has a bug or
+ *   an attack, and both deserve a loud failure rather than a sanitised path
+ *   that quietly points somewhere else.
+ */
+export function toSessionRelativePath(raw: string): SessionRelativePath {
+  const rejection = sessionRelativePathRejection(raw);
+  if (rejection !== null) {
+    throw new Error(
+      `session workspace: refusing a relative path (${rejection}): ${JSON.stringify(raw)}`,
+    );
+  }
+  return raw as SessionRelativePath;
 }
 
 /**

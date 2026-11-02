@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createRuntimeSessionService,
   SessionExecutionUnavailableError,
+  toSessionRelativePath,
   type SessionAdmissionOutcome,
   type SessionRunRequest,
 } from '../src/session/index.js';
@@ -18,7 +19,11 @@ import {
 function request(): SessionRunRequest {
   return {
     sessionId: 'session-1',
-    workspace: { workspaceId: 'workspace-1', rootId: 'root-1', relativePath: 'src' },
+    workspace: {
+      workspaceId: 'workspace-1',
+      rootId: 'root-1',
+      relativePath: toSessionRelativePath('src'),
+    },
     prompt: 'hello',
     requestId: 'request-1',
   };
