@@ -51,6 +51,7 @@ export interface ProjectEntityDTO {
   color: string | null
   created_at: number
   last_seen_at: number
+  coordinator_session_id: string | null
 }
 
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
@@ -1390,6 +1391,10 @@ export interface ElectronAPI {
       | { success: true; project: ProjectEntityDTO | null }
       | { success: false; error: string }
     >
+    bindCoordinatorSession: (projectId: string, sessionId: string) => Promise<
+      | { success: true; project: ProjectEntityDTO }
+      | { success: false; error: string }
+    >
     register: (input: {
       name: string
       description?: string | null
@@ -2133,6 +2138,8 @@ const electronAPI: ElectronAPI = {
     // apps/desktop/src/main/ipc/project-entity-handlers.ts for the main-process side.
     list: () => ipcRenderer.invoke('projects:list'),
     get: (projectId: string) => ipcRenderer.invoke('projects:get', projectId),
+    bindCoordinatorSession: (projectId: string, sessionId: string) =>
+      ipcRenderer.invoke('projects:bind-coordinator', { projectId, sessionId }),
     register: (input: {
       name: string
       description?: string | null

@@ -1,19 +1,19 @@
 # Project Coordinator：项目对话、执行协调与长期记忆
 
-状态：active，产品代码待认领 · owner：Codex root（本轮设计）· 更新：2026-11-02。
-设计分支：`codex/project-first-plan` · worktree：`/workspace/work/project-first-plan` · base：master `af4aaede`。
+状态：active，核心基础设施实现中 · owner：Codex · 更新：2026-11-02。
+实现分支：`codex/project-coordinator` · base：master `af4aaede`。
 
 ## 目标与边界
 
 Project Coordinator 是当前产品主线：用户进入项目与项目 Agent 长期对话，由它组织工作 Session，记住项目决定、进度与下一步。Personal Bot 暂缓增强；CLI/TUI 保持独立使用，后续增强/Release 不再排在 Project 前面。只修项目闭环所需的 Session 基础，不先完成全部底层迁移。
 
-本页只保留三个总体任务，每项可整体交给一个 Agent。产品角色、包归属和状态权威以 [Project-first 架构决策](../../design-docs/project-first-architecture.md)为准。本轮只落文档；下面的实现均未完成，不以设计写入代表产品已具备。
+本页只保留三个总体任务，每项可整体交给一个 Agent。产品角色、包归属和状态权威以 [Project-first 架构决策](../../design-docs/project-first-architecture.md)为准。实现交接索引见 [Coordinator implementation handoff](../../design-docs/project-coordinator-implementation-handoff.md)。
 
 实施前共同读取：[Claude 官方/逆向调研与工具映射](../../references/claude-projects-coordinator.md) → [首版实施合同](../../design-docs/project-coordinator-contract.md)。工具面、工作身份、事件回路和记忆接缝已给出统一语义；实现者对照现有 DTO 做最小适配并记录裁定，不再各自猜测 Claude 的 63 个工具。
 
 ## 开工前已核对的接缝
 
-快照：2026-11-02，master `af4aaede`；接手时核对最新 PR，勿使用旧状态头。
+快照：2026-11-02，master `af4aaede`；#579/#580 均为未合并 PR。本分支集成 #580 的 `session_inputs`/`session_control_leases` 权威及工具授权/子会话恢复修复；#579 的旧 mailbox/Session-extension 回执与租约实现不引入，后续只择取其 Session MCP 表面适配 Host 权威。
 
 | 现状 | 实施影响 |
 | --- | --- |
@@ -60,7 +60,29 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 本轮证据与接续
 
-已读用户讨论全文；只读核对主干 Project/Task/记忆/包依赖及 #579 `5057f201`、#580 `88efd64b`。本轮设计 owner 独占本计划、新架构决策与相关导航/旧设计提示；未改产品代码、DB、授权配置或发布状态，产品测试沿用用户负责的安排。
+### PR #582 review 修复（2026-11-02）
+
+Owner：当前 Codex；独立 worktree：`/workspace/work/review-582`；分支：`codex/fix-pr-582`；修复 base：`caa1f9f3`。共享 workspace 工具不可用，已按 Git/PR 对账；不修改其他检出。
+
+1. 验证最新提交中的迁移编号和 bundle 修复，并补已有数据库升级回归。
+2. 将 Desktop Session 管理接入共享 Host 派工服务，统一 Task 绑定、工作角色和启动结果。
+3. 修复派工失败后的 Task 状态，运行相关回归、类型/架构门禁和 Electron 构建，再更新原 PR。
+
+已实现：保留 `caa1f9f3` 的 61–63 迁移，新增 v48/v50 升级、重启和外键删除回归；Desktop Coordinator 的六项 Session 管理动作经受信 caller 接共享 Host 服务，规范 Task 绑定在启动前落库，工作 Run 显式传递 `code-expert`；Task 仅在 Run 启动成功后进入 `in_progress`。普通 Desktop Session 的原通知路径保留。Host 服务增加正式子路径导出；Worker bundle 已从本检出重建。
+
+验证环境：Linux、Node `24.19.0`，base `caa1f9f3` 加本节修复路径；本地第三方依赖只读复用，Electron/SQLite 使用独立副本，未修改共享检出。
+
+- 相关 13 个测试文件共 142 项通过：Host Session/Project/input API，CoreDataHost 升级，Desktop DB bridge/执行适配器，ProjectStore/ProjectService，Run/Workspace migration rehearsal。
+- `npm run typecheck:all`、`npm run architecture:check`、`NODE_USE_ENV_PROXY=1 npm run electron:build`、`npm run check:packaged-artifacts:bundle` 均退出 0；Electron 类型门禁无新增错误，178 项既有错误仍在 baseline。
+- 非生成文件 `git diff --check` 通过；生成 bundle 保留原提示词模板中的 Markdown 行尾空格，未手工修改生成内容。代码提交 `8aa55c1c` 后 `npm run bundle:verify` 退出 0，1029 项输入全部 FRESH，工作区干净。
+
+交付：代码提交 `8aa55c1c` 和本节验证记录推送到原 PR #582；远端 CI 待该 head 完成。原 PR 保持 Draft，不合并；产品真机验收由用户负责。本轮未实现项目记忆、Task/activity UI 或显式任务验收。
+
+本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系；Session 工具的 Coordinator 派发由 Host 从受信 caller Session 解析 Project、创建规范 Task 并绑定工作 Session。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。隐藏 Coordinator profile 由 Host 强制 `session`/`todo` 白名单；子 Session 切换到 `code-expert`，不继承管理限制。项目新对话绑定/复用协调 Session。项目记忆 scope、Task/activity 工作台与显式验收/完成对账仍待完成。
+
+下一动作：接入项目记忆 scope 和 Task/activity UI，并实现基于可审阅结果的显式 Task 完成/验收；Run 终态不可自动冒充 Task 完成。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### 调研补充（2026-11-02）
 
 调研补充（2026-11-02）：已直接阅读官方新版 Projects/发布、旧版 Projects 区分、本地记忆文档及逆向原文，新增来源分级、20 个已点名工具、Duya 首版工具字段/状态/反馈/记忆合同；它们是执行依据，不是 Coordinator 已实现的证据。7 份调研变更文档的 UTF-8、98 条链接目标/Git 可见性及 diff 检查通过，20 个工具名逐项在下载原文中核对；未运行产品测试。下载与原始摘录留 ignored docs-local，版本化文档不依赖本机资料。
 

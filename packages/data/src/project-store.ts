@@ -41,6 +41,7 @@ export interface ProjectRow {
   color: string | null;
   created_at: number;
   last_seen_at: number;
+  coordinator_session_id: string | null;
 }
 
 /** One entry of the `projects.paths` JSON column. */
@@ -54,6 +55,14 @@ export interface ProjectBotRow {
   project_id: string;
   bot_id: string;
   joined_at: number;
+}
+
+export interface ProjectTaskLinkRow {
+  project_id: string;
+  task_id: string;
+  coordinator_session_id: string;
+  work_session_id: string | null;
+  updated_at: number;
 }
 
 export interface InsertProjectInput {
@@ -120,10 +129,10 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Migration id=18: create projects + project_bots. */
+  /** Project migrations use ids 61–63, above the current core schema maximum. */
   static readonly migrations: Migration[] = [
     {
-      id: 18,
+      id: 61,
       name: 'create_projects',
       up: (db) => {
         db.exec(`
@@ -148,6 +157,39 @@ export class ProjectStore {
 
           CREATE INDEX IF NOT EXISTS idx_project_bots_bot ON project_bots(bot_id);
           CREATE INDEX IF NOT EXISTS idx_projects_last_seen ON projects(last_seen_at);
+        `);
+      },
+    },
+    {
+      id: 62,
+      name: 'project_coordinator_session',
+      up: (db) => {
+        const columns = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+        if (!columns.some((column) => column.name === 'coordinator_session_id')) {
+          db.exec('ALTER TABLE projects ADD COLUMN coordinator_session_id TEXT');
+        }
+      },
+    },
+    {
+      id: 63,
+      name: 'project_task_session_links',
+      up: (db) => {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+        const hasTasks = tables.some((table) => table.name === 'tasks');
+        const hasSessions = tables.some((table) => table.name === 'sessions');
+        db.exec(`
+        CREATE TABLE IF NOT EXISTS project_task_sessions (
+          project_id TEXT NOT NULL,
+          task_id TEXT NOT NULL UNIQUE,
+          coordinator_session_id TEXT NOT NULL,
+          work_session_id TEXT,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (project_id, task_id),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+          ${hasTasks ? ', FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE' : ''}
+          ${hasSessions ? ', FOREIGN KEY (work_session_id) REFERENCES sessions(id) ON DELETE SET NULL' : ''}
+        );
+        CREATE INDEX IF NOT EXISTS idx_project_task_sessions_project ON project_task_sessions(project_id, updated_at);
         `);
       },
     },
@@ -203,6 +245,13 @@ export class ProjectStore {
     const row = this.db
       .prepare('SELECT * FROM projects WHERE canonical_root = ?')
       .get(canonicalRoot) as ProjectRow | undefined;
+    return row ?? null;
+  }
+
+  getByCoordinatorSession(sessionId: string): ProjectRow | null {
+    if (!sessionId) return null;
+    const row = this.db.prepare('SELECT * FROM projects WHERE coordinator_session_id = ? ORDER BY last_seen_at DESC LIMIT 1')
+      .get(sessionId) as ProjectRow | undefined;
     return row ?? null;
   }
 
@@ -274,8 +323,52 @@ export class ProjectStore {
   }
 
   delete(projectId: string): boolean {
-    const r = this.db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
-    return Number(r.changes) > 0;
+    return this.db.transaction(() => {
+      // Keep the link store usable in isolated ProjectStore databases too;
+      // Task and Session tables are owned by separate aggregates and may not
+      // exist in migration rehearsals/imports.
+      this.db.prepare('DELETE FROM project_task_sessions WHERE project_id = ?').run(projectId);
+      const r = this.db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
+      return Number(r.changes) > 0;
+    })();
+  }
+
+  bindCoordinatorSession(projectId: string, sessionId: string): ProjectRow | null {
+    const row = this.db.prepare('SELECT project_id FROM projects WHERE project_id = ?').get(projectId);
+    if (!row) return null;
+    this.db.prepare('UPDATE projects SET coordinator_session_id = ? WHERE project_id = ?').run(sessionId, projectId);
+    return this.get(projectId);
+  }
+
+  listTaskLinks(projectId: string): ProjectTaskLinkRow[] {
+    return this.db.prepare('SELECT * FROM project_task_sessions WHERE project_id = ? ORDER BY updated_at DESC, task_id')
+      .all(projectId) as ProjectTaskLinkRow[];
+  }
+
+  bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {
+    const now = Date.now();
+    const bind = this.db.transaction((): ProjectTaskLinkRow => {
+      const existing = this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow | undefined;
+      if (existing) {
+        if (existing.project_id !== projectId || existing.coordinator_session_id !== coordinatorSessionId) {
+          throw new Error(`Task "${taskId}" is already bound to a different Project coordinator`);
+        }
+        return existing;
+      }
+      this.db.prepare(`INSERT INTO project_task_sessions
+        (project_id, task_id, coordinator_session_id, work_session_id, updated_at)
+        VALUES (?, ?, ?, NULL, ?)`)
+        .run(projectId, taskId, coordinatorSessionId, now);
+      return this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow;
+    });
+    return bind();
+  }
+
+  bindWorkSession(projectId: string, taskId: string, workSessionId: string): ProjectTaskLinkRow | null {
+    const now = Date.now();
+    const result = this.db.prepare(`UPDATE project_task_sessions SET work_session_id = ?, updated_at = ?
+      WHERE project_id = ? AND task_id = ?`).run(workSessionId, now, projectId, taskId);
+    return result.changes ? this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow : null;
   }
 
   // ─── project_bots ───

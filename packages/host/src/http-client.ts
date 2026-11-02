@@ -142,6 +142,7 @@ import type {
   HostProjectCreateInput,
   HostProjectPatch,
   HostProjectRecord,
+  HostProjectTaskLink,
   HostLockAcquireInput,
   HostLockRenewInput,
   HostLockReleaseInput,
@@ -2411,6 +2412,30 @@ export class HostSessionHttpClient implements
       `/v1/projects/${encodeURIComponent(projectId)}`,
     );
     return result.deleted;
+  }
+
+  async bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null> {
+    const result = await this.request<{ project: HostProjectRecord | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/coordinator`, { sessionId });
+    return result.project;
+  }
+
+  async listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]> {
+    const result = await this.request<{ tasks: readonly HostProjectTaskLink[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/tasks`);
+    return result.tasks;
+  }
+
+  async bindProjectTask(projectId: string, taskId: string, coordinatorSessionId: string): Promise<HostProjectTaskLink> {
+    const result = await this.request<{ task: HostProjectTaskLink }>(
+      'POST', `/v1/projects/${encodeURIComponent(projectId)}/tasks`, { taskId, coordinatorSessionId });
+    return result.task;
+  }
+
+  async bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null> {
+    const result = await this.request<{ task: HostProjectTaskLink | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/work-session`, { workSessionId });
+    return result.task;
   }
 
   // ── Plan 621: checkout and integration observations ───────────────────

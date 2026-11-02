@@ -239,6 +239,24 @@ export function registerProjectEntityHandlers(): void {
     }
   });
 
+  ipcMain.handle('projects:bind-coordinator', async (_event, rawInput: unknown): Promise<
+    { success: true; project: ProjectRowDTO } | { success: false; error: string }
+  > => {
+    if (!rawInput || typeof rawInput !== 'object') return { success: false, error: 'Invalid coordinator binding' };
+    const { projectId, sessionId } = rawInput as { projectId?: unknown; sessionId?: unknown };
+    if (typeof projectId !== 'string' || !projectId || typeof sessionId !== 'string' || !sessionId) {
+      return { success: false, error: 'projectId and sessionId are required' };
+    }
+    try {
+      const row = await getDesktopHostProjectApi().bindCoordinatorSession(projectId, sessionId);
+      return row ? { success: true, project: toDTO(row) } : { success: false, error: 'Project not found' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('projects:bind-coordinator failed', error instanceof Error ? error : new Error(message), undefined, LogComponent.DB);
+      return { success: false, error: message };
+    }
+  });
+
   ipcMain.handle('projects:register', async (_event, rawInput: unknown): Promise<
     | { success: true; projectId: string; project: ProjectRowDTO }
     | { success: false; error: string; code: 'EMPTY_PATHS' | 'INVALID_INPUT' }

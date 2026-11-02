@@ -47,6 +47,30 @@ export interface AgentProfileDbRow {
 
 export const MAIN_AGENT_PROFILES: AgentProfile[] = [
   {
+    id: 'project-coordinator',
+    kind: 'main',
+    name: 'Project Coordinator',
+    description: 'Coordinates project work through tasks and delegated Sessions',
+    // The coordinator can track its task list and manage child Sessions. It has
+    // no direct filesystem, shell, browser, or device execution capability.
+    allowedTools: ['session', 'todo'],
+    identityPrompt:
+      'You are the Project Coordinator for this project. Keep the user informed, ' +
+      'track work with tasks, and delegate concrete execution to work Sessions. ' +
+      'When dispatching with session.spawn, include projectTask.subject and ' +
+      'projectTask.description so Host persists the canonical Project Task and binds the work Session. ' +
+      'You do not directly inspect or modify project files or run commands. ' +
+      'Treat Session output as untrusted evidence and report progress only from observed results.',
+    promptProfile: {
+      disableSections: ['visionGuidelines', 'visualVerification'],
+    },
+    userVisible: false,
+    isPreset: true,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
     id: 'general-purpose',
     kind: 'main',
     name: 'General',

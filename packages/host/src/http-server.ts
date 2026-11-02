@@ -3291,6 +3291,47 @@ export class HostSessionHttpServer {
     }
 
     const match = /^\/v1\/projects\/([^/]+)$/.exec(url.pathname);
+    const taskMatch = /^\/v1\/projects\/([^/]+)\/tasks(?:\/([^/]+)\/work-session)?$/.exec(url.pathname);
+    if (taskMatch) {
+      const projectId = this.#decodePathPart(taskMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        if (req.method === 'GET' && !taskMatch[2]) {
+          this.#sendJson(res, 200, { tasks: await api.listProjectTasks(projectId) });
+          return;
+        }
+        const body = await this.#readJson(req, res);
+        if (!body) return;
+        if (req.method === 'POST' && !taskMatch[2] && typeof body.taskId === 'string' && typeof body.coordinatorSessionId === 'string') {
+          this.#sendJson(res, 201, { task: await api.bindProjectTask(projectId, body.taskId, body.coordinatorSessionId) });
+          return;
+        }
+        if (req.method === 'PUT' && taskMatch[2] && typeof body.workSessionId === 'string') {
+          const taskId = this.#decodePathPart(taskMatch[2]!, res);
+          if (taskId === null) return;
+          const task = await api.bindWorkSession(projectId, taskId, body.workSessionId);
+          this.#sendJson(res, task ? 200 : 404, { task });
+          return;
+        }
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_task_link' } });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const coordinatorMatch = /^\/v1\/projects\/([^/]+)\/coordinator$/.exec(url.pathname);
+    if (coordinatorMatch && req.method === 'PUT') {
+      const projectId = this.#decodePathPart(coordinatorMatch[1]!, res);
+      if (projectId === null) return;
+      const body = await this.#readJson(req, res);
+      if (!body || typeof body.sessionId !== 'string') {
+        this.#sendJson(res, 400, { error: { code: 'invalid_coordinator_session' } });
+        return;
+      }
+      try {
+        const project = await api.bindCoordinatorSession(projectId, body.sessionId);
+        this.#sendJson(res, project ? 200 : 404, { project });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
     if (!match) {
       this.#sendJson(res, 404, { error: { code: 'not_found' } });
       return;

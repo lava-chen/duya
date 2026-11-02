@@ -68,8 +68,12 @@ entry points. Its shared architecture separates these layers:
   parent's canonical workspace directory. `get` reads the tracked run's durable
   output; `reply` launches another run and `cancel` targets its captured run ID.
   This composition returns an explicit query-based completion policy. Automatic
-  parent wake delivery/restart reconciliation and Desktop delegation migration
-  remain separate work (610 T21/T22).
+  parent wake delivery/restart reconciliation remain separate work (610 T21/T22).
+  Desktop Project Coordinators use this same service through the DB bridge,
+  with canonical Project Task bindings and `code-expert` work Sessions. The
+  Desktop adapter validates the caller against the durable run/epoch and starts
+  work through its existing Agent Server execution API. Ordinary Desktop
+  session delegation still uses the legacy notification path.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Managed checkout execution**: Host checks ownership for local Write/Edit/
   ApplyPatch and shell dispatch, including deferred calls and shell workers,
