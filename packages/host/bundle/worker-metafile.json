@@ -139,6 +139,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/data/src/session-inputs.ts": {
+      "bytes": 17843,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/version.ts": {
       "bytes": 6103,
       "imports": [],
@@ -1140,7 +1145,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 54006,
+      "bytes": 54611,
       "imports": [
         {
           "path": "node:crypto",
@@ -1186,6 +1191,11 @@
           "path": "packages/data/src/pending-wakes.ts",
           "kind": "import-statement",
           "original": "./pending-wakes.js"
+        },
+        {
+          "path": "packages/data/src/session-inputs.ts",
+          "kind": "import-statement",
+          "original": "./session-inputs.js"
         },
         {
           "path": "packages/data/src/run-store.ts",
@@ -1707,7 +1717,7 @@
       "format": "esm"
     },
     "packages/data/src/index.ts": {
-      "bytes": 2647,
+      "bytes": 3033,
       "imports": [
         {
           "path": "packages/data/src/data-paths.ts",
@@ -1998,6 +2008,11 @@
           "path": "packages/data/src/bot-outbox.ts",
           "kind": "import-statement",
           "original": "./bot-outbox.js"
+        },
+        {
+          "path": "packages/data/src/session-inputs.ts",
+          "kind": "import-statement",
+          "original": "./session-inputs.js"
         }
       ],
       "format": "esm"
@@ -30897,6 +30912,28 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/session-input-api.ts": {
+      "bytes": 12761,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/session-input-routes.ts": {
+      "bytes": 6437,
+      "imports": [
+        {
+          "path": "packages/host/src/session-input-api.ts",
+          "kind": "import-statement",
+          "original": "./session-input-api.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/task-api.ts": {
       "bytes": 4871,
       "imports": [
@@ -30947,7 +30984,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 267906,
+      "bytes": 268544,
       "imports": [
         {
           "path": "node:crypto",
@@ -31028,6 +31065,11 @@
           "path": "packages/host/src/plugin-app-grant-routes.ts",
           "kind": "import-statement",
           "original": "./plugin-app-grant-routes.js"
+        },
+        {
+          "path": "packages/host/src/session-input-routes.ts",
+          "kind": "import-statement",
+          "original": "./session-input-routes.js"
         },
         {
           "path": "packages/host/src/session-api.ts",
@@ -32159,7 +32201,7 @@
       "format": "esm"
     },
     "packages/host/src/bot-dispatcher.ts": {
-      "bytes": 14411,
+      "bytes": 15901,
       "imports": [
         {
           "path": "node:crypto",
@@ -32181,7 +32223,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 50265,
+      "bytes": 54199,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -32477,6 +32519,11 @@
           "path": "packages/host/src/run-api.ts",
           "kind": "import-statement",
           "original": "./run-api.js"
+        },
+        {
+          "path": "packages/host/src/session-input-api.ts",
+          "kind": "import-statement",
+          "original": "./session-input-api.js"
         },
         {
           "path": "packages/host/src/session-compaction.ts",
@@ -40467,6 +40514,9 @@
         "packages/data/src/pending-wakes.ts": {
           "bytesInOutput": 30
         },
+        "packages/data/src/session-inputs.ts": {
+          "bytesInOutput": 30
+        },
         "packages/agent-protocol/src/version.ts": {
           "bytesInOutput": 171
         },
@@ -40729,7 +40779,7 @@
           "bytesInOutput": 45
         },
         "packages/data/src/core-stores.ts": {
-          "bytesInOutput": 107
+          "bytesInOutput": 113
         },
         "packages/data/src/rollout-events.ts": {
           "bytesInOutput": 35
@@ -40849,7 +40899,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/index.ts": {
-          "bytesInOutput": 350
+          "bytesInOutput": 356
         },
         "packages/host/src/worker-logger.ts": {
           "bytesInOutput": 4332
@@ -42586,7 +42636,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -42952,7 +43002,7 @@
           "bytesInOutput": 105
         },
         "../../../node_modules/tinycolor2/esm/tinycolor.js": {
-          "bytesInOutput": 15556
+          "bytesInOutput": 15554
         },
         "../../../node_modules/@jimp/utils/dist/esm/index.js": {
           "bytesInOutput": 2056
@@ -44008,7 +44058,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44017,7 +44067,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9969
@@ -45300,6 +45350,12 @@
         "packages/plugin-core/src/apps/declarations.ts": {
           "bytesInOutput": 2647
         },
+        "packages/host/src/session-input-api.ts": {
+          "bytesInOutput": 15
+        },
+        "packages/host/src/session-input-routes.ts": {
+          "bytesInOutput": 96
+        },
         "packages/host/src/run-api.ts": {
           "bytesInOutput": 10
         },
@@ -46045,7 +46101,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4758946
+      "bytes": 4759058
     }
   }
 }
