@@ -22787,7 +22787,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -30913,7 +30913,7 @@
       "format": "esm"
     },
     "packages/host/src/session-input-api.ts": {
-      "bytes": 12761,
+      "bytes": 13122,
       "imports": [
         {
           "path": "node:crypto",
@@ -40731,7 +40731,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -44571,7 +44571,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -46101,7 +46101,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4759116
+      "bytes": 4759105
     }
   }
 }

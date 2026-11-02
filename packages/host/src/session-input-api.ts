@@ -177,6 +177,11 @@ export function createHostSessionInputApi(
 
   return {
     async submitInput(request: SessionInputRequest): Promise<SessionInputReceipt> {
+      // A refused input KEEPS its refusal: the same request id always gets
+      // the same answer, so a caller that wants a fresh attempt asks with a
+      // new request id. That is the price of the retry safety above, and it
+      // is the right way round — a refusal that changed its mind on a retry
+      // would be a receipt nobody could reconcile.
       const sessionId = requireText(request.sessionId, 'sessionId');
       const requestId = requireText(request.requestId, 'requestId');
       if (typeof request.content !== 'string') {
