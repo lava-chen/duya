@@ -107,6 +107,53 @@ export interface InvokeResult {
   reason?: InvokeRejectReason;
 }
 
+/**
+ * Send one inter-agent event to the CALLER worker, over IPC.
+ *
+ * ## Why IPC and not stdin
+ *
+ * The caller worker's main loop (for await ... parseStdin()) blocks while
+ * awaiting MessageSessionTool.execute(), so stdin messages pile up unread —
+ * including interagent:event — causing a deadlock where chat:done is in the
+ * stdin buffer but never processed, and the tool hangs until its 60s local
+ * timeout.
+ *
+ * IPC messages are received by process.on('message') in the caller
+ * (agent-process-entry.ts:2849) which runs independently of the stdin loop
+ * and synchronously resolves the tool promise via the 'interagent:event'
+ * case (agent-process-entry.ts:2736).
+ *
+ * ## Why this is a module function and not only a method
+ *
+ * The router sends events to the caller for the whole invoke lifecycle, and
+ * the agent server's message handler needs the same channel for the one
+ * failure that happens BEFORE the router is involved: an invoke whose
+ * handler threw. That path used `sendCommand` — the deadlock channel this
+ * comment is about — so the caller's error never arrived and the tool hung
+ * until its timeout.
+ */
+export function sendInteragentEventToCaller(
+  workerManager: WorkerManager,
+  callerSessionId: string,
+  invokeId: string,
+  event: WorkerEvent,
+): void {
+  const child = workerManager.getWorker(callerSessionId);
+  if (!child || child.killed) {
+    workerLogger.warn('Cannot send interagent:event: caller worker gone', {
+      callerSessionId, invokeId, eventType: event.type,
+    });
+    return;
+  }
+  child.send({ type: 'interagent:event', id: invokeId, event }, (err) => {
+    if (err) {
+      workerLogger.warn('Failed to send interagent:event via IPC', {
+        callerSessionId, invokeId, eventType: event.type, error: err.message,
+      });
+    }
+  });
+}
+
 export class InteragentRouter {
   private cycleDetector = new CycleDetector();
   private activeInvokes = new Map<string, {
@@ -134,27 +181,27 @@ export class InteragentRouter {
 
     // 1. Self-call
     if (callerSessionId === targetSessionId) {
-      return { ok: false, reason: 'self_call' };
+      return this.reject(params, 'self_call');
     }
 
     // 2. Cycle detection
     if (this.cycleDetector.wouldCreateCycle(callerSessionId, targetSessionId)) {
-      return { ok: false, reason: 'cycle_detected' };
+      return this.reject(params, 'cycle_detected');
     }
 
     // 3. Target state check
     const targetSession = this.deps.sessionManager.getSession(targetSessionId);
     if (!targetSession) {
-      return { ok: false, reason: 'target_not_found' };
+      return this.reject(params, 'target_not_found');
     }
     const allowedStates: SessionState[] = [SessionState.IDLE, SessionState.COMPLETED, SessionState.ERROR, SessionState.CRASHED];
     if (!allowedStates.includes(targetSession.state)) {
-      return { ok: false, reason: 'target_busy' };
+      return this.reject(params, 'target_busy');
     }
 
     // 4. Worker cap
     if (this.deps.workerManager.workerCount >= calculateMaxConcurrentWorkers()) {
-      return { ok: false, reason: 'server_busy' };
+      return this.reject(params, 'server_busy');
     }
 
     // 5. Register in cycle detector and active invokes
@@ -175,6 +222,30 @@ export class InteragentRouter {
     }
 
     return { ok: true };
+  }
+
+  /**
+   * Report a refusal to the CALLER, and return the refusal.
+   *
+   * ## Why a refusal has to reach the caller
+   *
+   * The caller is blocked on a promise that only a terminal event can
+   * settle. A refusal that is returned to the agent server and not
+   * forwarded leaves the tool waiting for its whole timeout — which is how
+   * "the target session is busy" reached the user as "interagent local
+   * timeout", with the real reason nowhere on screen.
+   *
+   * The refusal is reported over IPC for the reason
+   * {@link sendInteragentEventToCaller} gives.
+   */
+  private reject(params: InvokeParams, reason: InvokeRejectReason): InvokeResult {
+    this.sendEventToCaller(params.callerSessionId, params.id, {
+      type: 'chat:error',
+      sessionId: params.targetSessionId,
+      message: `interagent invoke rejected: ${reason}`,
+      code: reason,
+    });
+    return { ok: false, reason };
   }
 
   private async spawnAndDriveTarget(params: InvokeParams): Promise<void> {
@@ -569,30 +640,7 @@ export class InteragentRouter {
   }
 
   private sendEventToCaller(callerSessionId: string, invokeId: string, event: WorkerEvent): void {
-    // MUST use IPC (child.send) not stdin (sendCommand).
-    // The caller worker's main loop (for await ... parseStdin()) blocks
-    // while awaiting MessageSessionTool.execute(), so stdin messages pile
-    // up unread — including interagent:event — causing a deadlock where
-    // chat:done is in the stdin buffer but never processed, and the tool
-    // hangs until its 60s local timeout.
-    // IPC messages are received by process.on('message') in the caller
-    // (agent-process-entry.ts:2849) which runs independently of the stdin
-    // loop and synchronously resolves the tool promise via the
-    // 'interagent:event' case (agent-process-entry.ts:2736).
-    const child = this.deps.workerManager.getWorker(callerSessionId);
-    if (!child || child.killed) {
-      workerLogger.warn('Cannot send interagent:event: caller worker gone', {
-        callerSessionId, invokeId, eventType: event.type,
-      });
-      return;
-    }
-    child.send({ type: 'interagent:event', id: invokeId, event }, (err) => {
-      if (err) {
-        workerLogger.warn('Failed to send interagent:event via IPC', {
-          callerSessionId, invokeId, eventType: event.type, error: err.message,
-        });
-      }
-    });
+    sendInteragentEventToCaller(this.deps.workerManager, callerSessionId, invokeId, event);
   }
 
   private cleanup(id: string): void {

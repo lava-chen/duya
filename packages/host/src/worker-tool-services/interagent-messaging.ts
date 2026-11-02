@@ -22,25 +22,34 @@ export function createWorkerInteragentMessagingPort(): MessageSessionPort {
       const donePromise = new Promise<WorkerEvent>((resolve) => { resolveDone = resolve; });
       const errorPromise = new Promise<WorkerEvent>((resolve) => { resolveError = resolve; });
 
-      let localTimer: ReturnType<typeof setTimeout> | undefined;
-      const timerPromise = new Promise<WorkerEvent>((resolve) => {
-        localTimer = setTimeout(() => {
-          resolve({
-            type: 'chat:error',
-            sessionId: request.targetSessionId,
-            message: 'interagent local timeout',
-            code: 'timeout',
-          } as WorkerEvent);
-        }, (request.timeout + 5) * 1000);
-      });
-
       const call: PendingInteragentCall = {
         events: [],
         resolveDone,
         resolveError,
-        timer: localTimer!,
+        timer: undefined as unknown as ReturnType<typeof setTimeout>,
       };
       registerPendingInteragentCall(request.id, call);
+
+      let localTimer: ReturnType<typeof setTimeout> | undefined;
+      const timerPromise = new Promise<WorkerEvent>((resolve) => {
+        localTimer = setTimeout(() => {
+          // Nothing arrived at all means the invoke never reached a handler:
+          // the host dropped it. A timeout with frames on the wire means the
+          // target was working and ran long. The two are different failures,
+          // and saying "timeout" for both is what hid the cause of every
+          // inter-agent bug this port ever had.
+          const dispatched = call.events.length > 0;
+          resolve({
+            type: 'chat:error',
+            sessionId: request.targetSessionId,
+            message: dispatched
+              ? 'interagent local timeout'
+              : 'interagent invoke was never handled by the host',
+            code: dispatched ? 'timeout' : 'not_dispatched',
+          } as WorkerEvent);
+        }, (request.timeout + 5) * 1000);
+      });
+      call.timer = localTimer!;
 
       if (!process.send) {
         unregisterPendingInteragentCall(request.id);

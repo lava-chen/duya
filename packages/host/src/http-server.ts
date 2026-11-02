@@ -181,6 +181,8 @@ import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
 import { routePluginAppGrants } from './plugin-app-grant-routes.js';
+import type { HostSessionInputApiV1 } from '@duya/agent-protocol';
+import { routeSessionInputs } from './session-input-routes.js';
 import type {
   HostLocalSidebarSectionsApiV1,
   SidebarSectionCreateInput,
@@ -426,6 +428,8 @@ export interface HostSessionHttpServerOptions {
   readonly localMailboxApi?: HostLocalMailboxApiV1;
   /** Local-only durable wake queue markers. */
   readonly localPendingWakeApi?: HostLocalPendingWakeApiV1;
+  /** Durable Session inputs and the per-session control lease (R1.2). */
+  readonly sessionInputApi?: HostSessionInputApiV1;
   readonly workflowRunApi?: WorkflowRunApiV1;
   readonly runApi?: HostRunApiV1;
   /** Host-owned execution: start/cancel real runs (plan 12 gate 3). */
@@ -1027,6 +1031,13 @@ export class HostSessionHttpServer {
     }
     if (url.pathname === '/v1/tool-approvals' || url.pathname.startsWith('/v1/tool-approvals/')) {
       await this.#routeToolApprovals(req, url, res);
+      return;
+    }
+    if (url.pathname === '/v1/session-inputs' || url.pathname.startsWith('/v1/session-inputs/')) {
+      await routeSessionInputs(req, url, res, this.#options.sessionInputApi, {
+        readJson: (request, response) => this.#readJson(request, response),
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/search/sessions') {
