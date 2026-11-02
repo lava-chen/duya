@@ -146,7 +146,7 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Project migrations use ids 61–64, above the current core schema maximum. */
+  /** Project migrations use ids 61–65, above the current core schema maximum. */
   static readonly migrations: Migration[] = [
     {
       id: 61,
@@ -266,6 +266,22 @@ export class ProjectStore {
         );
         CREATE INDEX IF NOT EXISTS idx_project_activity_cursor ON project_activity(project_id, event_id);
       `);
+      },
+    },
+    {
+      id: 65,
+      name: 'project_task_work_session_index',
+      up: (db) => {
+        // A work Session resolves its Project and Task from this column, so the
+        // lookup must not scan every link. The acceptance guard keeps databases
+        // that reached v64 before that column existed usable.
+        const columns = db.prepare('PRAGMA table_info(project_task_sessions)').all() as Array<{ name: string }>;
+        if (!columns.length) return;
+        if (!columns.some((column) => column.name === 'acceptance_status')) {
+          db.exec(`ALTER TABLE project_task_sessions ADD COLUMN acceptance_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (acceptance_status IN ('pending','accepted','rejected'))`);
+        }
+        db.exec('CREATE INDEX IF NOT EXISTS idx_project_task_sessions_work_session ON project_task_sessions(work_session_id)');
       },
     },
   ];
@@ -415,6 +431,13 @@ export class ProjectStore {
     return this.get(projectId);
   }
 
+  clearCoordinatorSession(sessionId: string): boolean {
+    if (!sessionId) return false;
+    const result = this.db.prepare('UPDATE projects SET coordinator_session_id = NULL WHERE coordinator_session_id = ?')
+      .run(sessionId);
+    return result.changes > 0;
+  }
+
   listTaskLinks(projectId: string): ProjectTaskLinkRow[] {
     return this.db.prepare('SELECT * FROM project_task_sessions WHERE project_id = ? ORDER BY updated_at DESC, task_id')
       .all(projectId) as ProjectTaskLinkRow[];
@@ -422,6 +445,12 @@ export class ProjectStore {
 
   getTaskLink(taskId: string): ProjectTaskLinkRow | null {
     return (this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow | undefined) ?? null;
+  }
+
+  getTaskLinkByWorkSession(workSessionId: string): ProjectTaskLinkRow | null {
+    if (!workSessionId) return null;
+    return (this.db.prepare('SELECT * FROM project_task_sessions WHERE work_session_id = ? ORDER BY updated_at DESC LIMIT 1')
+      .get(workSessionId) as ProjectTaskLinkRow | undefined) ?? null;
   }
 
   bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {

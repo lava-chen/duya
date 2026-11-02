@@ -67,6 +67,19 @@ export interface ProjectActivity {
   readonly source: ProjectContinuitySource; readonly payload: Record<string, unknown>; readonly createdAt: number;
 }
 export interface ProjectTaskSnapshot { readonly task: Task | null; readonly link: HostProjectTaskLink; }
+
+/** Which durable role a Session holds in a Project. */
+export type ProjectSessionRole = 'coordinator' | 'work';
+
+/** Session-scoped project context: the Project is derived from the Session, never from the caller's payload. */
+export interface ProjectSessionContext {
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly role: ProjectSessionRole;
+  readonly taskId: string | null;
+  readonly text: string;
+  readonly sourceRefs: readonly ProjectContinuitySource[];
+}
 export interface ProjectContinuitySnapshot {
   readonly project: HostProjectRecord;
   readonly state: ProjectContinuityState | null;
@@ -87,11 +100,15 @@ export interface HostProjectApiV1 {
   updateProject(projectId: string, patch: HostProjectPatch): Promise<HostProjectRecord | null>;
   deleteProject(projectId: string): Promise<boolean>;
   bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null>;
+  /** Clear the binding only when the given Session is the current coordinator. */
+  clearCoordinatorSession(sessionId: string): Promise<boolean>;
   listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]>;
   bindProjectTask(projectId: string, taskId: string, coordinatorSessionId: string): Promise<HostProjectTaskLink>;
   bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null>;
   getProjectContinuity(projectId: string, options?: { afterCursor?: number; limit?: number }): Promise<ProjectContinuitySnapshot | null>;
   getProjectContext(projectId: string, taskId?: string, maxCharacters?: number): Promise<{ text: string; sourceRefs: readonly ProjectContinuitySource[] } | null>;
+  /** Resolve the Project/Task from a Session's durable binding and return its bounded context. */
+  getSessionProjectContext(sessionId: string, maxCharacters?: number): Promise<ProjectSessionContext | null>;
   updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: ProjectContinuitySource }): Promise<ProjectContinuityState | null>;
   updateProjectDecision(input: { projectId: string; key: string; content: string; status: ProjectDecision['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectDecision | null>;
   updateProjectMemory(input: { projectId: string; key: string; content: string; status: ProjectMemory['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectMemory | null>;

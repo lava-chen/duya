@@ -2420,6 +2420,19 @@ export class HostSessionHttpClient implements
     return result.project;
   }
 
+  async clearCoordinatorSession(sessionId: string): Promise<boolean> {
+    const result = await this.request<{ cleared: boolean }>(
+      'DELETE', `/v1/projects/coordinator-session?sessionId=${encodeURIComponent(sessionId)}`);
+    return result.cleared;
+  }
+
+  async getSessionProjectContext(sessionId: string, maxCharacters?: number) {
+    const query = maxCharacters === undefined ? '' : `?maxCharacters=${maxCharacters}`;
+    const result = await this.request<{ context: import('@duya/agent-protocol/projects').ProjectSessionContext | null }>(
+      'GET', `/v1/sessions/${encodeURIComponent(sessionId)}/project-context${query}`);
+    return result.context;
+  }
+
   async listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]> {
     const result = await this.request<{ tasks: readonly HostProjectTaskLink[] }>(
       'GET', `/v1/projects/${encodeURIComponent(projectId)}/tasks`);

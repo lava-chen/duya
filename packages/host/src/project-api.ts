@@ -8,6 +8,7 @@ import type {
   ProjectDecision,
   ProjectMemory,
   ProjectContinuityState,
+  ProjectSessionContext,
 } from '@duya/agent-protocol/projects';
 import type { Task } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
@@ -39,7 +40,7 @@ function pathsToJson(paths: readonly HostProjectPathEntry[]): string {
 
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
-  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
+  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'clearCoordinatorSession' | 'listTaskLinks' | 'getTaskLinkByWorkSession' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
   tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
 ): HostProjectApiV1 {
   return {
@@ -107,6 +108,10 @@ export function createHostProjectApi(
     async bindCoordinatorSession(projectId, sessionId) {
       const row = projects.bindCoordinatorSession(projectId, sessionId);
       return row ? toRecord(row) : null;
+    },
+
+    async clearCoordinatorSession(sessionId) {
+      return projects.clearCoordinatorSession(sessionId);
     },
 
     async listProjectTasks(projectId) {
@@ -188,13 +193,21 @@ export function createHostProjectApi(
       }));
       const text = assembleProjectContinuityContext({
         projectName: snapshot.project.name || snapshot.project.project_id,
-        ...(snapshot.state ? { currentState: snapshot.state.currentState, nextStep: snapshot.state.nextStep } : {}),
-        decisions: accepted.map((item) => ({ key: item.key, content: item.content, sourceType: item.source.type, sourceId: item.source.id, updatedAt: item.updatedAt })),
+        projectId: snapshot.project.project_id,
+        ...(snapshot.state ? {
+          currentState: snapshot.state.currentState,
+          nextStep: snapshot.state.nextStep,
+          stateRevision: snapshot.state.revision,
+          stateSourceType: snapshot.state.source.type,
+          stateSourceId: snapshot.state.source.id,
+        } : {}),
+        decisions: accepted.map((item) => ({ key: item.key, content: item.content, sourceType: item.source.type, sourceId: item.source.id,
+          updatedAt: item.updatedAt, revision: item.revision })),
         memories,
         recentActivity,
         ...(relevantTasks.length ? { taskBrief: relevantTasks.map(({ task: item, link }) => item
-          ? `- ${item.id} [${item.status}; acceptance=${link.acceptanceStatus}] ${item.subject}${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}\n  ${item.description}`
-          : `- ${link.taskId} [Task record unavailable; acceptance=${link.acceptanceStatus}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}`).join('\n') } : {}),
+          ? `- ${item.id} [${item.status}; acceptance=${link.acceptanceStatus}] ${item.subject} [source: task:${item.id}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}\n  ${item.description}`
+          : `- ${link.taskId} [Task record unavailable; acceptance=${link.acceptanceStatus}] [source: task:${link.taskId}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}`).join('\n') } : {}),
         ...(maxCharacters === undefined ? {} : { maxCharacters }),
       });
       const sourceRefs = [
@@ -204,6 +217,36 @@ export function createHostProjectApi(
         ...(task ? [{ type: 'task', id: task.id }] : []),
       ];
       return { text, sourceRefs };
+    },
+
+    async getSessionProjectContext(sessionId, maxCharacters) {
+      if (!sessionId) return null;
+      const asCoordinator = projects.getByCoordinatorSession(sessionId);
+      if (asCoordinator) {
+        const context = await this.getProjectContext(asCoordinator.project_id, undefined, maxCharacters);
+        return context ? {
+          projectId: asCoordinator.project_id,
+          projectName: asCoordinator.name || asCoordinator.project_id,
+          role: 'coordinator',
+          taskId: null,
+          text: context.text,
+          sourceRefs: context.sourceRefs,
+        } satisfies ProjectSessionContext : null;
+      }
+      const link = projects.getTaskLinkByWorkSession(sessionId);
+      if (!link) return null;
+      const project = projects.get(link.project_id);
+      if (!project) return null;
+      const context = await this.getProjectContext(link.project_id, link.task_id, maxCharacters);
+      if (!context) return null;
+      return {
+        projectId: project.project_id,
+        projectName: project.name || project.project_id,
+        role: 'work',
+        taskId: link.task_id,
+        text: context.text,
+        sourceRefs: context.sourceRefs,
+      } satisfies ProjectSessionContext;
     },
 
     async updateProjectState(input) {

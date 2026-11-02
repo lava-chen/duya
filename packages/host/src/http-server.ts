@@ -970,6 +970,11 @@ export class HostSessionHttpServer {
       await this.#routeProjects(req, url, res);
       return;
     }
+    const sessionProjectContextMatch = /^\/v1\/sessions\/([^/]+)\/project-context$/.exec(url.pathname);
+    if (sessionProjectContextMatch) {
+      await this.#routeSessionProjectContext(req, url, res, sessionProjectContextMatch[1]!);
+      return;
+    }
     if (url.pathname === '/v1/checkouts' || url.pathname.startsWith('/v1/checkouts/')) {
       await this.#routeCheckouts(req, url, res);
       return;
@@ -3261,6 +3266,27 @@ export class HostSessionHttpServer {
     }
   }
 
+  async #routeSessionProjectContext(req: IncomingMessage, url: URL, res: ServerResponse, rawSessionId: string): Promise<void> {
+    const api = this.#options.projectApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'project_api_unavailable' } });
+      return;
+    }
+    if (req.method !== 'GET') {
+      this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+      return;
+    }
+    const sessionId = this.#decodePathPart(rawSessionId, res);
+    if (sessionId === null) return;
+    const max = Number(url.searchParams.get('maxCharacters') ?? 8000);
+    try {
+      const context = await api.getSessionProjectContext(sessionId, Number.isFinite(max) ? max : 8000);
+      this.#sendJson(res, context ? 200 : 404, { context });
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
   async #routeProjects(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
     const api = this.#options.projectApi;
     if (!api) {
@@ -3293,6 +3319,24 @@ export class HostSessionHttpServer {
         return;
       }
       this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+      return;
+    }
+
+    if (url.pathname === '/v1/projects/coordinator-session') {
+      if (req.method !== 'DELETE') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const sessionId = url.searchParams.get('sessionId');
+      if (!sessionId) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_session' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, { cleared: await api.clearCoordinatorSession(sessionId) });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
       return;
     }
 
