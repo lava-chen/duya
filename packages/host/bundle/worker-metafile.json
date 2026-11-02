@@ -325,7 +325,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/run-api.ts": {
-      "bytes": 15846,
+      "bytes": 15721,
       "imports": [],
       "format": "esm"
     },
@@ -413,6 +413,11 @@
     },
     "packages/agent-protocol/src/mailbox.ts": {
       "bytes": 4376,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-protocol/src/session-input.ts": {
+      "bytes": 11764,
       "imports": [],
       "format": "esm"
     },
@@ -625,7 +630,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 5736,
+      "bytes": 6005,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -806,6 +811,11 @@
           "path": "packages/agent-protocol/src/mailbox.ts",
           "kind": "import-statement",
           "original": "./mailbox.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/session-input.ts",
+          "kind": "import-statement",
+          "original": "./session-input.js"
         },
         {
           "path": "packages/agent-protocol/src/research-api.ts",
@@ -40470,6 +40480,9 @@
         "packages/agent-protocol/src/mailbox.ts": {
           "bytesInOutput": 30
         },
+        "packages/agent-protocol/src/session-input.ts": {
+          "bytesInOutput": 30
+        },
         "packages/agent-protocol/src/research-api.ts": {
           "bytesInOutput": 18
         },
@@ -40582,7 +40595,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 462
+          "bytesInOutput": 468
         },
         "packages/data/src/bot-scheduler-store.ts": {
           "bytesInOutput": 2958
@@ -42454,7 +42467,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43882,7 +43895,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -43891,10 +43904,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9969
+          "bytesInOutput": 9952
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -45919,7 +45932,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757646
+      "bytes": 4757627
     }
   }
 }
