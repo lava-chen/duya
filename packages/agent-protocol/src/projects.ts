@@ -16,7 +16,7 @@ export interface HostProjectRecord {
   readonly created_at: number;
   readonly last_seen_at: number;
   /** Stable conversation owner; replacing it never changes project/task identity. */
-  readonly coordinator_session_id?: string | null;
+  readonly coordinator_session_id: string | null;
 }
 
 export interface HostProjectCreateInput {
