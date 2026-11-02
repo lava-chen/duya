@@ -3335,6 +3335,11 @@ export class HostSessionHttpServer {
           const state = await api.updateProjectState({ projectId, expectedRevision: body.expectedRevision, currentState: body.currentState, nextStep: body.nextStep, source: body.source });
           this.#sendJson(res, state ? 200 : 409, { state }); return;
         }
+        if (continuityMatch[2] === 'state' && req.method === 'GET') {
+          // 200 with a null state, NOT a 404: a missing project is an answer.
+          const state = await api.getProjectState(projectId);
+          this.#sendJson(res, 200, { state }); return;
+        }
       } catch (error) { this.#sendApiError(res, error); }
       this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } }); return;
     }
@@ -3410,20 +3415,6 @@ export class HostSessionHttpServer {
       try {
         const project = await api.bindCoordinatorSession(projectId, body.sessionId);
         this.#sendJson(res, project ? 200 : 404, { project });
-      } catch (error) { this.#sendApiError(res, error); }
-      return;
-    }
-    const stateMatch = /^\/v1\/projects\/([^/]+)\/state$/.exec(url.pathname);
-    if (stateMatch && req.method === 'GET') {
-      const projectId = this.#decodePathPart(stateMatch[1]!, res);
-      if (projectId === null) return;
-      try {
-        // 200 with a null state, NOT a 404 — the same answer the sibling
-        // project route gives for a project that is not there. A missing
-        // project is an answer, and the client asked a question it can be
-        // told.
-        const state = await api.getProjectState(projectId);
-        this.#sendJson(res, 200, { state });
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }
