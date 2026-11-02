@@ -459,7 +459,16 @@ describe('output truncation through the production Host and worker', () => {
       const run = await client.getAgentRun(started.runId);
       expect(run?.status).toBe('failed');
       expect(JSON.stringify(run)).toContain('output token limit');
-      expect(provider.requests).toHaveLength(4);
+      // The turn's OWN requests, counted by their budget: one attempt plus the
+      // three automatic continuations the engine allows, and then it fails
+      // visibly instead of looping.
+      //
+      // Counting every request the provider saw would be a race against the
+      // Host's multimodal capability probe: that probe is a separate request
+      // with its own tiny budget, and it lands whenever it lands. The sibling
+      // case above already counts the turn's requests the same way.
+      const turnRequests = provider.requests.filter(request => request.maxTokens === 32_768);
+      expect(turnRequests).toHaveLength(4);
     } finally {
       await host.close();
       await provider.close();
