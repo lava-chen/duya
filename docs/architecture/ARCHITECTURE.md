@@ -4,6 +4,14 @@
 
 ## Overview
 
+Product direction (2026-11-02, decision rather than implemented behavior):
+[Project-first architecture](../design-docs/project-first-architecture.md)
+separates Project Coordinator, Personal Bot and working Sessions while sharing
+the current Host/Runtime infrastructure. Project Coordinator is the current
+delivery priority; Personal Bot enhancements and independent CLI release work
+follow it. See the [three implementation tasks](../exec-plans/active/2026-11-02-project-coordinator.md).
+The implementation descriptions below retain their original verification scope.
+
 Monorepo / Agent Harness changes follow the single execution plan
 [587](../exec-plans/active/587-agent-harness-monorepo/README.md).
 Its contracts and phase gates define the target; this document describes
