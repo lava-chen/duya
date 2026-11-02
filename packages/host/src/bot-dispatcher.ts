@@ -224,8 +224,43 @@ export class BotDispatcher {
       });
       // Read durable facts even when the start reply was refused or lost.
       if (!await reconcile()) {
-        if (await execution.isSessionBusy(input.sessionId)
-            || (!acceptance.accepted && acceptance.stage === 'refused_dispatch_failed')) {
+        // Which refusals are worth retrying is a POLICY question, and the
+        // answer differs per stage — so it is written out rather than
+        // inferred from one string comparison.
+        //
+        // Before the wire carried fine stages, every refusal that was not
+        // `refused_dispatch_failed` was dead-lettered, and the bucket mixed
+        // "the session is busy" (wait) with "this exact run already exists"
+        // (reconcile) and "the run row was never written" (retry, and
+        // alert). A busy Bot session was dead-lettered on the strength of a
+        // stage that said nothing about busy.
+        //
+        // The stages now say which is which:
+        //
+        //  - `refused_session_busy` — the session is owned by another run.
+        //    Waiting is the fix, so the grant goes back.
+        //  - `refused_run_not_created` / `refused_run_not_durable` — a
+        //    durability problem. Retrying is meaningful, so the grant goes
+        //    back and the run keeps no durable record to reconcile against.
+        //  - `refused_dispatch_failed` — the executor was not there.
+        //    Retrying after one spawns is the fix.
+        //  - `refused_dispatch_threw` — the dispatch itself threw. That is a
+        //    Host bug rather than a state, so retrying it forever would spin
+        //    on a defect. It is dead-lettered with the stage named, so an
+        //    operator sees which condition fired.
+        //  - `refused_run_already_exists` — the run is recorded and correct.
+        //    `reconcile` above already tried to adopt it; when it could not,
+        //    dead-lettering is right, because starting a second run is worse.
+        //
+        // `isSessionBusy` is checked first because it is the DURABLE fact:
+        // a busy session is busy whether or not the start said so.
+        const retryable = !acceptance.accepted && (
+          acceptance.stage === 'refused_session_busy'
+          || acceptance.stage === 'refused_run_not_created'
+          || acceptance.stage === 'refused_run_not_durable'
+          || acceptance.stage === 'refused_dispatch_failed'
+        );
+        if (await execution.isSessionBusy(input.sessionId) || retryable) {
           store.release(grant, key);
         } else if (!acceptance.accepted) {
           store.deadLetter(grant, `start_refused: ${acceptance.stage}`);

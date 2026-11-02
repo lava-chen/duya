@@ -243,6 +243,11 @@ modules:
       - packages/host/src/run-control-plane.ts
       - packages/host/src/worker-db-client.ts
       - packages/host/src/worker-os-context/index.ts
+      # R1.1: the admission adapter. The Desktop's chat router classifies its
+      # refusals through THIS, so the Desktop and the standalone Host answer
+      # the same refusal the same way. A second classifier in the Desktop
+      # would be a second answer to one question.
+      - packages/host/src/session-admission.ts
     owner: host
 
   - id: agent-core
@@ -292,6 +297,10 @@ modules:
     publicEntrypoints:
       - packages/agent-runtime/src/index.ts
       - packages/agent-runtime/src/context/contextual-user-fragment.ts
+      # R1.1: the Runtime Session service and its ports. The subpath is the
+      # surface the Host injects into; the Host's own compatibility layer
+      # (`packages/host/src/worker-session-history.ts`) forwards to it.
+      - packages/agent-runtime/src/session/index.ts
     owner: agent
 
   - id: workflow

@@ -57,6 +57,15 @@ export interface DuyaCliInvocation {
   fromPath?: string;
   scope?: string;
   deleteData?: boolean;
+  /**
+   * Long flags the argv parser did not recognize (plan tool-surface W6 /
+   * F12). The wrapper no longer silently skips them: the tool fails the
+   * call naming them, because a typo'd flag that vanishes is worse than a
+   * visible error — the model would believe it applied an option it did
+   * not. Kept on the invocation so the port's dispatcher can enrich the
+   * error with the command's real flag surface.
+   */
+  unknownFlags?: string[];
 }
 
 export interface DuyaCliRunResult {

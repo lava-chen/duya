@@ -75,6 +75,10 @@
       "types": "./dist/turns/*.d.ts",
       "import": "./dist/turns/*.js"
     },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "import": "./dist/session/index.js"
+    },
     "./authorization/tool-invoke-decision": {
       "types": "./dist/authorization/tool-invoke-decision.d.ts",
       "import": "./dist/authorization/tool-invoke-decision.js"

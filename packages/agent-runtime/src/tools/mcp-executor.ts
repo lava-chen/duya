@@ -23,6 +23,18 @@ export interface MCPExecutorPorts<TContext extends object> {
   ): Promise<ToolPermissionDecision | undefined>;
   /** Optional final authority check immediately before the captured side effect. */
   beforeInvoke?(context: TContext, input: Record<string, unknown>): Promise<boolean>;
+  /**
+   * Generation-currency check (plan tool-surface W1 residual; F18 direct-path
+   * parity). The executor captures ONE MCP generation's `invoke` closure, and
+   * an `ask` decision can park a call inside this executor for minutes. If a
+   * replace-set lands in that window, the live registry no longer points at
+   * THIS executor and executing would run the pre-replacement connection —
+   * the exact "approved A, executed B" signature #558 closed on the routed
+   * path. Implementations compare `registry.getExecutor(toolName)` with the
+   * executor reference that runs; `false` fails the call with the named
+   * `authority_revoked` gate error instead of executing stale.
+   */
+  isExecutorCurrent?(toolName: string, executor: object): boolean;
   logger?: ToolExecutionLogger;
 }
 
@@ -59,7 +71,24 @@ export function createMCPToolExecutor<TContext extends object>(
   const guardedInvoke = async (
     context: TContext | undefined,
     input: Record<string, unknown>,
+    executorRef: object,
   ): Promise<RuntimeToolResult> => {
+    // Generation currency (W1 residual): an `ask` window can park this call
+    // for minutes. If the live registry no longer points at THIS executor,
+    // the captured invoke closure belongs to a replaced/removed generation.
+    // Fail with the named gate error rather than executing stale — the routed
+    // path's equivalent is #558's post-approval re-resolution.
+    if (ports.isExecutorCurrent && !ports.isExecutorCurrent(toolName, executorRef)) {
+      logger?.warn?.('[MCP] tool registration changed before execution; refusing stale generation', {
+        toolName,
+        source,
+      }, 'MCP');
+      return gateErrorResult(
+        'deny',
+        '[MCP permission gate] The tool registration changed before execution; re-dispatch the call.',
+        'authority_revoked',
+      );
+    }
     if (context && ports.beforeInvoke) {
       let allowed = false;
       try { allowed = await ports.beforeInvoke(context, input); } catch { allowed = false; }
@@ -92,7 +121,7 @@ export function createMCPToolExecutor<TContext extends object>(
     return withAppToolContext(context, () => invoke(input));
   };
 
-  return {
+  const executor: ToolExecutor<TContext, RuntimeToolResult> = {
     execute: async (input, _workingDirectory, context) => {
       const activeMode = context ? ports.getPermissionMode(context) : undefined;
       const decision = decideMcpSource(source, activeMode, toolName);
@@ -143,7 +172,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return guardedInvoke(context, input);
+            return guardedInvoke(context, input, executor);
           }
 
           const userDecision = await ports.requestPermission(context, {
@@ -169,7 +198,7 @@ export function createMCPToolExecutor<TContext extends object>(
               source,
               mode: activeMode,
             }, 'MCP');
-            return guardedInvoke(context, input);
+            return guardedInvoke(context, input, executor);
           }
           if (userDecision === 'deny') {
             logger?.warn?.('[MCP] tool call denied by user', { toolName, source }, 'MCP');
@@ -199,7 +228,8 @@ export function createMCPToolExecutor<TContext extends object>(
         }
       }
 
-      return guardedInvoke(context, input);
+      return guardedInvoke(context, input, executor);
     },
   };
+  return executor;
 }

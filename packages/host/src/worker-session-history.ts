@@ -1,98 +1,45 @@
-export interface WorkerSessionHistoryLoad<Row, ParsedDocument extends { readonly message_id: string }> {
-  readonly messages: readonly Row[];
-  readonly parsedDocuments?: readonly ParsedDocument[];
-}
-
-export interface WorkerSessionHistoryRepairResult {
-  readonly success?: boolean;
-  readonly reason?: string;
-}
-
-export interface WorkerSessionHistoryPorts<
-  Row,
-  Attachment,
-  ParsedDocument extends { readonly message_id: string },
-  Message,
-> {
-  readonly load: (sessionId: string) => Promise<WorkerSessionHistoryLoad<Row, ParsedDocument>>;
-  readonly loadAttachments: (sessionId: string) => Map<string, Attachment[]> | Promise<Map<string, Attachment[]>>;
-  readonly toMessage: (
-    row: Row,
-    attachments: Map<string, Attachment[]> | undefined,
-    parsedDocuments: Map<string, ParsedDocument[]> | undefined,
-  ) => Message;
-  readonly validate: (messages: Message[]) => Message[];
-  readonly messageId: (message: Message) => string | undefined;
-  readonly replace: (
-    sessionId: string,
-    messages: readonly Message[],
-    generation: number,
-  ) => Promise<WorkerSessionHistoryRepairResult>;
-  readonly checkpointIdSuffix: string;
-}
-
-export interface WorkerSessionHistory<Message> {
-  readonly rowCount: number;
-  readonly messages: Message[];
-  readonly repairAttempted: boolean;
-  readonly repairResult?: WorkerSessionHistoryRepairResult;
-}
-
 /**
- * Load a worker session's history, restore attachment context, and persist any
- * validated repair before returning messages to the executor. The message
- * vocabulary remains supplied by the worker adapter; Host owns the ordering
- * and persistence boundary without importing the legacy Agent model types.
+ * The Host's compatibility surface for session history restore.
+ *
+ * ## Why this file still exists
+ *
+ * The implementation moved to `@duya/agent-runtime/session` (R1.1). The OLD
+ * names are still exported here because this path is a PUBLISHED subpath
+ * (`packages/host/package.json`, `"./worker-session-history"`) — breaking it
+ * in the same diff that moved the code would make "the code moved" and "a
+ * consumer broke" indistinguishable.
+ *
+ * A forwarding layer keeps them as two facts. The diff shows the
+ * implementation leaving this package, and a consumer that breaks shows up
+ * separately, with its own cause. A second copy of the function would have
+ * hidden both.
+ *
+ * ## What is NOT here
+ *
+ * The old names are aliases, not wrappers. `hydrateWorkerSessionHistory` and
+ * `hydrateSessionHistory` are the same function object, and the Host's test
+ * asserts that identity — a forwarding layer that re-wrapped the call would
+ * still type-check and would still pass a behavioural test, while quietly
+ * becoming a second implementation.
  */
-export async function hydrateWorkerSessionHistory<
-  Row,
-  Attachment,
-  ParsedDocument extends { readonly message_id: string },
-  Message,
->(
-  sessionId: string,
-  ports: WorkerSessionHistoryPorts<Row, Attachment, ParsedDocument, Message>,
-): Promise<WorkerSessionHistory<Message>> {
-  const loaded = await ports.load(sessionId);
-  if (loaded.messages.length === 0) {
-    return { rowCount: 0, messages: [], repairAttempted: false };
-  }
 
-  let attachments: Map<string, Attachment[]> | undefined;
-  try {
-    attachments = await ports.loadAttachments(sessionId);
-  } catch {
-    // Keep legacy behavior: a failure to load attachment bytes must not prevent
-    // the text/history rows from being restored.
-  }
+export type {
+  SessionHistoryPorts as WorkerSessionHistoryPorts,
+  SessionHistoryLoad as WorkerSessionHistoryLoad,
+  SessionHistoryRepairResult as WorkerSessionHistoryRepairResult,
+  SessionHistory as WorkerSessionHistory,
+} from '@duya/agent-runtime/session';
 
-  let parsedDocuments: Map<string, ParsedDocument[]> | undefined;
-  if (loaded.parsedDocuments?.length) {
-    parsedDocuments = new Map<string, ParsedDocument[]>();
-    for (const document of loaded.parsedDocuments) {
-      const grouped = parsedDocuments.get(document.message_id) ?? [];
-      grouped.push(document);
-      parsedDocuments.set(document.message_id, grouped);
-    }
-  }
+export { hydrateSessionHistory as hydrateWorkerSessionHistory } from '@duya/agent-runtime/session';
 
-  const messages = loaded.messages.map((row) => ports.toMessage(row, attachments, parsedDocuments));
-  const validated = ports.validate(messages);
-  if (validated === messages) {
-    return { rowCount: loaded.messages.length, messages: validated, repairAttempted: false };
-  }
+// The current names, re-exported so a Host consumer that has been migrated
+// does not have to reach past this file into the Runtime package to reach the
+// same implementation.
+export type {
+  SessionHistoryPorts,
+  SessionHistoryLoad,
+  SessionHistoryRepairResult,
+  SessionHistory,
+} from '@duya/agent-runtime/session';
 
-  // Projection-synthesized compaction checkpoint markers are already carried
-  // inline by their rebase event. Re-persisting one creates a duplicate row on
-  // the next load, so keep it in memory while excluding it from the replace.
-  const persistable = validated.filter((message) =>
-    !(ports.messageId(message) ?? '').endsWith(ports.checkpointIdSuffix),
-  );
-  const repairResult = await ports.replace(sessionId, persistable, 0);
-  return {
-    rowCount: loaded.messages.length,
-    messages: validated,
-    repairAttempted: true,
-    repairResult,
-  };
-}
+export { hydrateSessionHistory } from '@duya/agent-runtime/session';

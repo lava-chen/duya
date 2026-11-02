@@ -307,7 +307,20 @@ export type RunStartStage =
  * nobody, and is closed by nothing.
  */
 export type RunStartAcceptance =
-  | { readonly accepted: true; readonly runId: string }
+  | {
+      readonly accepted: true;
+      readonly runId: string;
+      /**
+       * The fingerprint of the frozen manifest this run was opened under.
+       *
+       * It travels back with the acceptance because a caller that learns a run
+       * was admitted must also be able to name the configuration it was
+       * admitted under, and the manifest is the only authority for that
+       * fingerprint. Deriving it a second time at the call site would be a
+       * second derivation of one value.
+       */
+      readonly manifestHash: string;
+    }
   | {
       readonly accepted: false;
       /** The id that was minted and then abandoned, for the log line. */
