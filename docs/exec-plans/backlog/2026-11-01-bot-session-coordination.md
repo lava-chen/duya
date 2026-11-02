@@ -89,6 +89,7 @@ PR #562 最初只交付计划与路由文档，UTF-8、173 条链接目标与 Gi
 ### CLI/TUI 收尾实现（2026-11-02）
 
 - 分支：`codex/session-cli-closeout`，从 #562 计划分支合并最新主干 `af4aaede` 后实现；代码与计划通过同一 PR #562 交付。
+- 集成代码提交：`bda4ba58866b7e136678e09e130c6307f7f12b9e`；合并 PR #562 最新计划修订后的分支头：`8caf253421fa9801183c212c15698b6870972c87`。候选包由前者的源码构建，后者只追加计划优先级/接续记录。
 - `packages/cli/src/providers.ts` 将 provider 列表/新增/默认/删除改接 Host `/v1/local/providers*`。无活动 Host 时 CLI 启动本机 Host；错误只回显状态码和安全错误码。TUI `/login` 复用同一 API。
 - `duya tui`、`duya chat` 支持 `--workspace`。恢复已有 Session 时从 Host 的 Session 记录恢复原目录，并拒绝显式传入的不同目录，避免执行目录漂移。
 - 构建：`npm run build:cli-dev` 通过；`npm run typecheck:all` 通过（其内置 `eval:agent:core:check` 运行了 4 个 recorder 断言，全部通过；未运行产品测试）。`git diff --check` 在生成 bundle 归位后复核。
