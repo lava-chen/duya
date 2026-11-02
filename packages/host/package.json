@@ -255,6 +255,10 @@
       "types": "./dist/run-orchestrator.d.ts",
       "import": "./dist/run-orchestrator.js"
     },
+    "./session-admission": {
+      "types": "./dist/session-admission.d.ts",
+      "import": "./dist/session-admission.js"
+    },
     "./control-plane-service": {
       "types": "./dist/control-plane-service.d.ts",
       "import": "./dist/control-plane-service.js"

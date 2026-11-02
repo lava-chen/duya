@@ -50,7 +50,7 @@ import type {
   ToolCallRequest,
   ToolDrainItem,
 } from '@duya/agent-runtime';
-import { createToolSideEffectLedger, ledgerFile } from '../src/worker-tool-ledger.js';
+import { createToolSideEffectLedger, ledgerFile } from '../src/engine/tool-side-effect-ledger.js';
 
 const RUN_ID: RunId = 'run_ledger_probe';
 const CALL: ToolCallRequest = {
