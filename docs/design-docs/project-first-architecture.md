@@ -3,6 +3,8 @@
 状态：产品方向已采纳，Coordinator 代码待实施 · 2026-11-02。
 本决策取代“个人 Bot 统一管理所有 Project”和“先完整发布 CLI 再做 Project”的产品排期。执行见 [Project Coordinator 计划](../exec-plans/active/2026-11-02-project-coordinator.md)。
 
+实施依据已补齐：[官方/逆向调研及工具映射](../references/claude-projects-coordinator.md)与[首版工具、状态和事件合同](project-coordinator-contract.md)。三项总体任务共用该合同，不再各自研究并重建一份 Coordinator 工具面。
+
 ## 产品与运行入口是两条轴
 
 | 产品角色 | 目标与持久身份 | 默认能力 |
@@ -14,6 +16,8 @@
 Desktop 首要入口为 Project：进入项目即进入项目协调对话，同时可查看和进入工作 Session。Web 复用客户端基础，当前不扩展；CLI/TUI 保留独立 Session 工作台，产品增强与发布排在 Project 首个闭环之后。只补 Coordinator 必需的 Session 正确性，不等待整个 Session 改造完成。
 
 Coordinator 本身也使用普通 Session/Run Runtime 进行模型对话，但角色为协调者；“运行在 Session 中”不授予工作 Session 的设备工具权限。更换协调 Session 不改变 Project 身份、任务和记忆。
+
+工作话题（UI Thread）也不等于 sessionId：首版由 Project Task 及其执行绑定投影，稳定工作身份可关联多次 Session/Run。Claude 博客的 channel/thread/云端/设备子 Session 层次只作参考，Duya 不为此先实现云端双层部署。
 
 ## 仓库保持一个 Monorepo
 
@@ -51,6 +55,8 @@ Coordinator 本身也使用普通 Session/Run Runtime 进行模型对话，但�
 
 首版 Coordinator 只开放三个能力组：项目状态与记忆、工作 Session 生命周期、用户沟通。具体工具名按既有 Host API 和 duya_app contributor 落实，不以模仿外部产品工具数量为目标。任务、记忆和设置变更由窄 Host 服务执行，所以 Coordinator 不需要 Bash/Read/Write/Edit。
 
+最小 project_* 管理面与既有 session_* 的字段、输出和归属见实施合同；直接回复沿用现有 assistant 消息投影。Host 还必须把关键工作结果/阻塞形成持久反馈并唤醒 Coordinator，不能只有 spawn/get 轮询。本地新工作 Run 也显式接收项目上下文与记忆，不依赖目录或个人 Bot 隐式继承。
+
 白名单同时约束模型可见目录和真实执行；tool_invoke、MCP 别名、deferred 工具和恢复后 registry 不得绕过。工作 Session 获得任务自己的能力配置，Coordinator 的窄白名单不能误传成“所有子 Session 都无工具”，子任务也不能超出用户/项目授权。
 
 ## 首轮必须裁定的现有分歧
@@ -66,4 +72,4 @@ Coordinator 本身也使用普通 Session/Run Runtime 进行模型对话，但�
 
 先交付项目对话 → 派发工作 → 结果回项目 → 重启/新协调对话仍记得决定与进度。个人 Bot 主动性、Routine 增强、多 Host、完整插件安装迁移、自动 merge 和包目录重组暂缓。CLI 发布计划保留为独立后续，不成为 Project 开工前置。
 
-所附讨论中的 Claude 工具数量和实现细节本轮未独立核验，不作为已确认的架构依据。此决策依据用户明确的产品目标及上述 Duya 源码/PR 接缝；当前只交付设计与执行计划，未实现 Coordinator。
+本轮已直接核验官方新版 Projects 发布/文档、旧版 Projects 说明、本地 memory 文档及 Aaddrick 逆向原文。官方确认产品分工与长期记忆；63 个工具和内部 channel/thread 结构属于作者当时观察，原文只分类点名 20 个 Coordinator 工具，没有全部 Schema。证据等级、版本差异与 Duya 自己的选择在调研中逐项标明；不宣称复制了私有实现。当前只交付设计与执行计划，未实现 Coordinator。

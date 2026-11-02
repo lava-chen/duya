@@ -4,6 +4,8 @@
 
 当前产品主线为 [Project Coordinator](active/2026-11-02-project-coordinator.md)：先完成项目协调、项目记忆和 Desktop 协作闭环。Personal Bot 暂缓增强；Session 只先补 Coordinator 必需的执行基础，独立 CLI 增强/Release 后续安排。产品角色与仓库边界见 [Project-first 决策](../design-docs/project-first-architecture.md)。
 
+三个任务共用已核验的 [Claude 调研/工具映射](../references/claude-projects-coordinator.md)与[首版实施合同](../design-docs/project-coordinator-contract.md)，不再各自探索工具和状态模型。
+
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |

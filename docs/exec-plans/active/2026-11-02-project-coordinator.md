@@ -9,6 +9,8 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 本页只保留三个总体任务，每项可整体交给一个 Agent。产品角色、包归属和状态权威以 [Project-first 架构决策](../../design-docs/project-first-architecture.md)为准。本轮只落文档；下面的实现均未完成，不以设计写入代表产品已具备。
 
+实施前共同读取：[Claude 官方/逆向调研与工具映射](../../references/claude-projects-coordinator.md) → [首版实施合同](../../design-docs/project-coordinator-contract.md)。工具面、工作身份、事件回路和记忆接缝已给出统一语义；实现者对照现有 DTO 做最小适配并记录裁定，不再各自猜测 Claude 的 63 个工具。
+
 ## 开工前已核对的接缝
 
 快照：2026-11-02，master `af4aaede`；接手时核对最新 PR，勿使用旧状态头。
@@ -26,7 +28,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 请基于最新主干和上述架构决策，完成可运行的 Project Coordinator：每个项目有可恢复/可替换的协调对话，使用共享 Runtime、独立角色与严格工具白名单；通过项目管理和 Session 管理能力推进任务，设备操作交给工作 Session。
 
-先与 #579/#580 owner 对齐输入、租约和工具授权实现，统一为一个 Host 权威，再接项目/任务/工作 Session 的持久绑定、派发、观察和结果反馈。支持单项目两个独立任务在隔离目录执行；共享写目录受 Host 串行/ownership 约束。模型、Prompt、工具及上下文按角色/任务装配，不让 Coordinator 的禁用执行工具限制误伤工作 Session，也不让间接调用绕过限制。
+先与 #579/#580 owner 对齐输入、租约和工具授权实现，统一为一个 Host 权威；按实施合同接 project_* 管理能力及既有 session_*，建立稳定工作身份与 Session/Run 绑定。完成关键结果/阻塞的持久反馈和 Coordinator 唤醒，不停在手工 get 轮询。支持就地回答、复用已有工作与两个隔离任务并行；共享写目录受 Host 串行/ownership 约束。模型、Prompt、工具及上下文按角色/任务装配，不让 Coordinator 的窄白名单误伤工作 Session，也不让间接调用绕过限制。
 
 **交付：**用户给项目任务 → Coordinator 派发工作 Session → 获得真实进度/阻塞/结果并回复；重复输入、取消和重启能按现有 Run/receipt 对账。给出集成 PR、源码归属和用户测试入口。第一版不引入个人 Bot、通用 planner、全自动拆任务或新执行引擎。
 
@@ -34,7 +36,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 请在任务一稳定的 projectId/Task/Session 合同上，完成项目长期连续性。区分可查询的当前任务/决策/绑定、带来源和版本的项目记忆、既有对话原文；复用 data、memory、transcript，不将全部历史堆成一个 Prompt 或第二份状态库。
 
-让 Coordinator 和新工作 Session 获得与任务相关的当前项目背景；工作产出可形成有来源的记忆候选，用户纠正可更新或废止旧结论。重启 Host、压缩或替换协调对话后，仍能找回未完工作、正确解释当前决定并继续。项目之间及个人 Bot 私有记忆保持作用域边界。
+按实施合同完成 project_memory_read/update、预算内索引与按需正文、近期消息/工作/Activity 装配，让 Coordinator 和新工作 Session 显式获得项目背景。特别覆盖本机执行，不能假定 Session 自动继承项目记忆。工作产出可形成有来源的记忆候选，用户纠正可更新或废止旧结论。重启 Host、压缩或替换协调对话后，仍能找回未完工作、正确解释当前决定并继续。项目之间及个人 Bot 私有记忆保持作用域边界。
 
 **交付：**重新打开项目或新建协调对话，能根据可追溯记录回答“上次决定了什么、现在做到哪里、下一步是什么”，并继续原工作。任务完成以验收事实判断，Run 结束和模型总结不冒充验收。无需第一版就建设全自动知识提取/反思平台。
 
@@ -42,7 +44,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 请将上述能力接成 Desktop 的核心使用路径：项目入口、中央 Coordinator 对话、可查看的工作 Session/任务/Activity。复用共享 UI/client-core 和真实 Host API；先用最少界面完成工作，不把个人 Bot 页面改名冒充 Coordinator。
 
-支持用户从项目进入原工作 Session查看和直接协作，再回到项目继续协调。只读不取得调度权；接管后 Coordinator 暂缓该 Session 的新指令，在途工具继续，交还后对账恢复，其他任务可继续。相同状态由同一服务投影，避免 UI 另存一份项目进度。
+按实施合同展示稳定工作话题及其 Session/Run，区分进行中、需用户输入、待验收与已完成。支持用户进入原工作 Session 查看和直接协作，再回到项目继续协调。只读不取得调度权；接管后 Coordinator 暂缓该 Session 的新指令，在途工具继续，交还后对账恢复，其他任务可继续。审批回答落到实际 Run/请求，主对话一句“可以”不代答另一工作 Session。普通回复使用既有单一消息投影，相同状态由同一服务投影。
 
 **交付：**在真实 Desktop/Host/Worker 链路里完成“项目对话 → 两个工作 Session → 用户介入一个 → 结果回项目 → 重启后继续”。用户负责产品测试，Agent 负责可运行交付、必要构建/门禁、测试步骤及反馈修复；不另扩建测试项目，不把 Web/多机/自动 merge 加进本轮。
 
@@ -60,4 +62,6 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 已读用户讨论全文；只读核对主干 Project/Task/记忆/包依赖及 #579 `5057f201`、#580 `88efd64b`。本轮设计 owner 独占本计划、新架构决策与相关导航/旧设计提示；未改产品代码、DB、授权配置或发布状态，产品测试沿用用户负责的安排。
 
-managed worktree/context 工具未提供，使用 Git linked worktree 和版本化计划对账。Linux 上 7 份文档的 UTF-8、178 条链接目标与 Git 可见性、git diff --check 通过；无新增断链，旧索引 1 条缺失目标保留。未运行产品测试；PR 保留待 review/集成。下一动作：认领任务一，从 #579/#580 的单一输入/租约权威与 Coordinator 角色接线开始，不再先扩张个人 Bot 工具集。
+调研补充（2026-11-02）：已直接阅读官方新版 Projects/发布、旧版 Projects 区分、本地记忆文档及逆向原文，新增来源分级、20 个已点名工具、Duya 首版工具字段/状态/反馈/记忆合同；它们是执行依据，不是 Coordinator 已实现的证据。7 份调研变更文档的 UTF-8、98 条链接目标/Git 可见性及 diff 检查通过，20 个工具名逐项在下载原文中核对；未运行产品测试。下载与原始摘录留 ignored docs-local，版本化文档不依赖本机资料。
+
+managed worktree/context 工具未提供，使用 Git linked worktree 和版本化计划对账。首次设计提交 c886184e 在 Linux 上检查 7 份文档的 UTF-8、178 条链接目标/Git 可见性和 git diff --check；无新增断链，旧索引 1 条缺失目标保留。后续调研检查范围见上段。PR 保留待 review/集成。下一动作：认领任务一，按首版实施合同收敛 #579/#580 的单一输入/租约权威并接通 Coordinator，不再重复探索外部工具清单或先扩张个人 Bot 工具集。
