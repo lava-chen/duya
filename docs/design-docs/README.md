@@ -5,6 +5,7 @@
 | 主题 | 记录 |
 | --- | --- |
 | Project-first 产品架构（当前方向） | [project-first-architecture](project-first-architecture.md)：Project Coordinator、Personal Bot、工作 Session 的边界、共享仓库与状态权威 |
+| Coordinator 首版实施合同 | [project-coordinator-contract](project-coordinator-contract.md)：具体工具输入/输出、稳定工作身份、派发反馈、控制权与项目记忆接缝 |
 | 个人长期 Bot | [personal-bot-framework](personal-bot-framework.md)：Bot / Session / Run、包边界、持久唤醒、记忆与迁移合同（设计提案） |
 | CLI 控制面 | [roadmap](cli-control-plane/roadmap.md)及同目录阶段决策 |
 | Gateway 职责 | [channel-only-gateway](channel-only-gateway.md) |
