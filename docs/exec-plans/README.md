@@ -2,12 +2,13 @@
 
 先定位用户本次任务，再读取对应计划的验收与接续点。这里维护路由，不复制各计划的实时状态。
 
-Bot / Session 包边界和后续实施从[Bot / Session Runtime 计划系列](backlog/2026-11-01-bot-session-coordination.md)进入：包含逐包合同、四个本机交付模块和后台/多机后续模块，代码实施仍在 backlog。
+Session 本轮按[CLI 发布收尾计划](backlog/2026-11-01-bot-session-coordination.md)的 A/B 两项推进：先收尾独立 CLI/TUI Session，再打包发布。用户负责产品测试；Plugin 的 Host 边界与后续 Bot 发现也记在同一计划，R1–R5 不再整组阻塞 CLI 发布。
 
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | 认领 A：接续 #578/#579、收尾独立 Session；B 准备自包含包，等集成 SHA 与用户测试后发布 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |

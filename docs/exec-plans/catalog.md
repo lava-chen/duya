@@ -7,6 +7,7 @@
 
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
+| [Session CLI 发布收尾与 Bot / Host 边界](backlog/2026-11-01-bot-session-coordination.md) | 本轮 | A 收尾独立 Session；B 自包含打包与 CLI Release；用户测试，Bot 工具集及完整插件迁移另议 |
 | [工具暴露与 Harness 调用链收敛](active/2026-10-31-tool-surface-and-harness-convergence.md) | P0 | W0 请求级 census 与 W1 执行契约；跨 616/617 的实施顺序、MCP/CLI/skill、provider、恢复与退役验收 |
 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | — | Desktop / CLI 独立 tag、release workflow、自包含 CLI 分发和安装器 |
 | [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | P0 | 设计与 S0–S7 迁移：窄 Bot 领域、Host 装配、持久唤醒与跨渠道对账；不重建 Harness |
@@ -105,6 +106,5 @@
 | [model-call-trace](backlog/561-model-call-trace.md) | 0/40, unstarted |
 | [tab-shell-workbench](backlog/571-tab-shell-workbench.md) | 0/28, unstarted |
 | [chain-ab-runtime-merge-evaluation](backlog/581-chain-ab-runtime-merge-evaluation.md) | decision doc only; execution deferred to plan 582+ |
-| [Bot / Session Runtime 计划系列](backlog/2026-11-01-bot-session-coordination.md) | 已建立总入口、包/协议合同和 R1–R5；扩展现有 agent-runtime，四个本机交付模块后再做常驻/多机；产品实施仍在 backlog |
 
 完整迁移前记录与历史列表见[索引快照](archive/2026-10-20-index-snapshot.md)。

@@ -1,137 +1,84 @@
-# Bot / Session Runtime 实施计划总入口
+# Session CLI 发布收尾与 Bot / Host 边界
 
-状态：backlog（R1.0 审计已实施，产品代码待开工）· 负责人：Codex / root · 更新：2026-11-01
-规划分支：codex/bot-session-coordination · worktree：/workspace/work/bot-session-coordination
-代码基线：4f0738bae34777cce45308291f3207f90e6705a1 · 规划起点：f5986ace · owner：当前会话
-R1.0 执行：分支 `codex/bot-session-runtime-r1-0`（base master `95c30f58`）· worktree `.claude/worktrees/bot-session-r1-0` · 产出 [R1.0 审计](bot-session-runtime/r1-0-audit.md)
-交付：[Draft PR #562](https://github.com/lava-chen/duya/pull/562)
+状态：执行中（A、B 待认领）· 更新：2026-11-02 · 交付：[PR #562](https://github.com/lava-chen/duya/pull/562)
 
-## 目标与边界
+本轮只交付一个可独立安装、使用和恢复的 CLI/TUI Session 产品，按下面两个任务收尾后发布 CLI Release。用户负责产品测试；Agent 负责实现、构建、打包、交付测试包和修复反馈。本页替代原先“R1 → R2 → R3 → R4 全完成才交付”的排期。
 
-用户与 Bot 确认项目目标后，Bot 拆分一批有验收标准的 Task，为每个 Task 选择模型、提示、Skill、Plugin、工具、上下文和权限，在隔离工作区中启动或复用 Session。用户能进入同一个 Session 提具体要求；Bot 跟踪 branch、PR、CI、review 和 merge，持续协调项目。
+沿用当前文件路径以保留 #562 及模块入链；任务是否在执行以本页和计划索引为准。原 [R1–R5 细分](bot-session-runtime/00-package-and-protocol-contracts.md)保留为后续设计参考，未完成项不自动成为本次发布前置。
 
-采用现有 agent-runtime 作为完整 Session Runtime 的实现包，在包内建立 session / assembly / engine 边界。Session Agent 是可调用能力的产品称呼，不建立 session-agent package。Bot 是长期状态、协调 Session 和工作 Session 管理层；协调与工作复用同一执行引擎。Host 注入真实模型、存储、连接器、凭据、工作区和进程适配器。
+## 产品边界
 
-本次交付是完整实施计划与设计同步。R1–R5 的代码实施分别认领；批准本计划不代表运行时迁移、发布或 PR 合并已经发生。
+- **Session = CLI/TUI 的独立产品能力。** 安装 CLI 后，本机 Host 提供 Session 接口；TUI、非交互 CLI 和获授权调用者复用它。不依赖先启动 Desktop 或创建 Bot。
+- **Host = 可信资源与平台能力。** 管模型、存储、进程、插件部署、凭据、授权和 Run 准入；Runtime 组合 Session 行为并复用既有引擎。
+- **Bot = 长期 Agent 与 Session 协调者。** Desktop 必须接 Bot；用户与 Bot 最终访问同一个工作 Session。Bot 工具集另由后续 Agent 讨论，本轮不设计。
+- 保留现有 apps/desktop、packages/cli、agent-runtime、host 与 plugin-core；不改目录名、不新增 Session 包或第二套引擎/状态账本。
 
-关联：[设计](../../design-docs/personal-bot-framework.md) · [研究依据](../../references/agent-coordination-models.md) · [既有 Bot 框架](../active/2026-10-25-personal-bot-framework.md)
+## 已核对事实与痛点
 
-## 如何使用本计划
+快照：2026-11-02，主干 `74c3e3b0`；PR 状态是当时观测，接手时重读。未在本轮重跑产品测试。
 
-先读 [00：包边界与协议合同](bot-session-runtime/00-package-and-protocol-contracts.md)，再执行当前 ready 模块。模块文件维护自己的实施进度和验证证据；本入口维护依赖、交付门槛和跨模块决策。
-
-| 模块 | 任务与交付物 | 前置 | 状态 |
-| --- | --- | --- | --- |
-| R1 | [Session Runtime 与 Host 收敛](bot-session-runtime/01-session-runtime.md)：一个可注入依赖的 Session 服务和统一输入控制 | 00 合同；先完成 R1.0 调用链审计 | R1.0 已完成（[审计](bot-session-runtime/r1-0-audit.md)）；实施待开工 |
-| R2 | [能力与上下文装配](bot-session-runtime/02-capability-context.md)：每 Run 显式配置、可审计 manifest、作用域隔离 | R1.0 冻结调用合同；接入依赖 R1 | 待实施 |
-| R3 | [Bot 项目与多 Session 协调](bot-session-runtime/03-bot-coordination.md)：项目 brief、任务绑定、隔离并行与恢复 | R1、R2 | 待实施 |
-| R4 | [PR 交付与任务内 Session 协作](bot-session-runtime/04-delivery-and-attach.md)：VCS 事实、merge policy、Desktop Attach / Plugin 输入 | R3；R4-A 与 R4-B 可分别推进 | 待实施 |
-| R5 | [后台常驻与多机执行](bot-session-runtime/05-resident-and-remote.md)：UI 生命周期解耦、配对、远程 Run | R1–R4 本机交付门通过 | 后续阶段 |
-
-顺序为 R1 → R2 → R3 → R4。R2 的协议设计可在 R1.0 后提前进行，但只在 R1 的服务入口接入；R4-A 的 VCS 与 R4-B 的 UI 可分别实现，共享文件按合同指定一个 owner。R5 不阻塞首轮本机产品交付。
-
-每个大模块拆成文件内标注的少量 PR 切片。每片结束记录已实现、已验证、已合并的范围，保持可运行的生产入口，避免最后集中接线。
-
-## 已采纳的决定
-
-| 决定 | 实施约束 |
+| 事实 / 证据 | 对本轮的影响 |
 | --- | --- |
-| Desktop = Bot / Project / Task-first | 从任务详情查看并 Attach 对应 Session；TUI 提供完整独立 Session 工作台 |
-| Runtime = 完整 Session 能力 | 增量迁入通用 Session 行为，保留已有 RunEngine、RunController、ledger 和终态持久化语义 |
-| Host = 资源适配与可信入口 | 负责认证、授权、manifest 冻结、数据/模型/工具/进程/网络适配；通用 Session 决策由 Runtime 统一实现 |
-| Bot = 长期协调与 Session 管理 | 一个协调 Session 加若干工作 Session；botId、项目和任务独立持久化，协调 Session 可恢复或替换 |
-| Protocol = 统一调用合同 | Bot 只依赖协议和端口；Host 装配 Bot 与 Runtime，保持 bot → protocol、host → bot/runtime 的方向 |
-| RunManifest = 既有运行快照 | 扩展现有 StartAgentRunInput / RunManifest / provenance / fingerprint / RunStore；能力清单、必需能力与授权分别表达 |
-| Task / Session / Run 分开 | 一个 Task 可以多次 Run；并行写任务使用隔离 checkout；Run 结束不直接代表 Task 或 Project 完成 |
-| 用户与 Bot 直连同一 Session | 查看状态无需接管；开始协作取得指令调度租约，Bot 暂缓新输入，在途工具继续 |
-| merge = 有来源的交付事实 | 默认需要用户审批；授权自动合并时检查当前 head、CI、review、分支规则，并保存 provider evidence |
+| [#573](https://github.com/lava-chen/duya/pull/573)、[#574](https://github.com/lava-chen/duya/pull/574) 已合并输入/租约协议和 Runtime Session 服务；[#577](https://github.com/lava-chen/duya/pull/577) 已合并统一启动入口与细分拒绝结果 | 复用已落地入口；忙碌、重复请求、创建失败必须分别处理，不重新设计 Session API |
+| [#578](https://github.com/lava-chen/duya/pull/578) 已实现引擎核心迁移、未合并；driver/composition 仍在 Host | 与 owner 核对集成范围；剩余消息类型迁移和纯文件搬迁不阻塞 CLI 发布 |
+| [#579](https://github.com/lava-chen/duya/pull/579) Draft 已实现 duya_app Session 工具及异步 receipt；双 Worker、恢复、取消及权限差分待验收 | 接续现有 PR，不另造工具入口；工具发现成功不能代表真实执行闭环 |
+| #579 的 session-input-service 目前由 Worker 调用，actor 派生为 bot；lease 校验与 mailbox apply 跨 API | 不宣称 Desktop/TUI 用户接管已完成；本轮实际发布的输入路径必须处理过期 Run/turn、重复请求和控制权变化，修复影响它的竞态 |
+| worker-subagents/service 仍有绕过统一控制面的子会话路径（#577 的已知剩余项） | 若此次 CLI 暴露该路径，在 A 内收口；不把所有 Bot/多 Agent 改造一并纳入 |
+| [#521](https://github.com/lava-chen/duya/pull/521) 已合并 Bot 身份、Inbox/Outbox、幂等派发及常驻相关基础；Bot dispatcher 默认仍按 bot:<id> 串行 | Bot 不是从零开始；多任务绑定、用户接管和反馈闭环后续独立推进 |
+| CLI 安装器、独立发布和 Windows 安装器已随 [#541](https://github.com/lava-chen/duya/pull/541)、[#552](https://github.com/lava-chen/duya/pull/552)、[#559](https://github.com/lava-chen/duya/pull/559) 合并 | 缺口是最终实包及 Release 交付，不再新建发布系统；旧发布计划的“四平台”已落后于当前五项矩阵 |
 
-包级职责、字段兼容和状态单写者只在 [00 合同](bot-session-runtime/00-package-and-protocol-contracts.md) 维护。其他模块引用它，避免各自定义另一套 Session API。
+## 任务 A：收尾独立 Session（先派这一项）
 
-## 现有代码基线与需要核实的接缝
+**交付：一个可打包的集成提交、实际支持的 CLI/TUI 命令表、用户可操作的测试步骤。**
 
-2026-11-01 核对 origin/master 为 4f0738ba。以下是调查结果，不等于迁移已经完成：
+- [ ] 从最新 master 开独立 worktree；核对 #578/#579 的最新 head、CI 和 owner，沿已有 PR 接续。#577 已合并，不重复迁移。
+- [ ] 接通：配置 Provider → 选择目录 → 创建/恢复 Session → 发任务 → 工具执行/审批 → steer/排队/取消 → 终态与历史保存；非交互 CLI 同用 Host。
+- [ ] 收口本次暴露的 Session 工具：创建、查询/读取、异步发送/回执、取消与恢复。按既有 requestId/Run 账本对账，忙碌不误报成功，旧指令不落入新 Run；修复这条路径的 lease/mailbox 竞态。
+- [ ] 保持 TUI 自动启动/附着同机 Host；既有 Session 可恢复。Desktop/Bot 未运行时，本轮声明支持的模型、基础工具及本机插件能力仍可用；缺插件/依赖时明确诊断。
+- [ ] 只修阻断上述流程的问题；记录最终 commit、相关 PR、未交付能力和测试步骤，交给用户测试。用户反馈在本任务收尾，不再启动新一轮架构计划。
 
-| 已有实现 | 复用方式 / 当前缺口 |
+独占路径：Session 相关的 agent-protocol、agent-runtime、host、CLI 调用及 worker bundle；先与 #578/#579 owner 对齐，避免覆盖在途修改。
+
+**完成标志：**上述流程已实现并可构建，用户获得可运行候选与测试清单；“用户测试通过”单独记录，不由工具目录、单测数字或计划勾选代替。
+
+## 任务 B：打包并发布 CLI（A 冻结后收尾）
+
+**交付：自包含测试包 → 用户测试反馈修复 → CLI Release 与可用安装入口。** 打包准备可与 A 同期进行，最终版本基于同一个集成 SHA。
+
+- [ ] 复用当前构建与打包入口：`npm run build:cli-dev`、`scripts/package-cli-release.mjs`、`.github/workflows/release-cli.yml`；附带 Node、Host worker、prompt/assets 及实际运行依赖，不要求用户预装 Node 或 Desktop。
+- [ ] 按现有矩阵准备 macOS x64/arm64、Linux x64/arm64、Windows x64 包与 SHA-256；核对原生模块和入口路径，提供安装/更新方式。构建成功与用户实测结果分别记录。
+- [ ] 核对最近 CLI tag 决定候选版本；同步 `packages/cli/package.json`、必要锁文件及 `docs/release-notes/cli-v<V>.md`。测试未完成时交付候选包，不能标成正式验收通过。
+- [ ] 用户测试反馈收尾后，按本次 CLI 发布目标和[发布指南](../../development/release.md)集成版本 PR；`cli/v<V>` 指向版本匹配的集成提交。核验 Release、五项产物、SHA256SUMS 和安装器版本解析，记录 tag/SHA/下载链接。
+
+独占路径：CLI 版本、release notes、安装器、打包脚本和 CLI workflow；A 的源码与 bundle 以冻结 SHA 为准。Agent 运行必要类型/架构/构建检查；产品和真机测试由用户负责，不另扩建测试项目。CI 的必需检查继续遵循仓库规则。
+
+用户测试清单：安装并启动；配置 Provider 与首轮工具调用；TUI steer/排队/审批/取消；退出重开恢复；已启用插件的 Skill/MCP 调用及缺失诊断；更新与版本显示。Session 间调用若随本版交付，补测异步回执、重复发送和重启恢复。
+
+**完成标志：**用户测试结果已记入本页；Release 的版本、提交、平台资产、校验和与安装入口对应一致。
+
+## Plugin：平台能力，由 Host 管理
+
+Plugin 不属于 Session 引擎底层，也不为 Bot/Session 各建一套。它是两者共用的平台能力：**Bot/CLI/Desktop 发管理请求 → Host 安装、授权与注册 → Session 使用获准能力。** Bot 需要使用插件时也沿同一 Host 机制，不垄断管理入口。
+
+| 概念 | 权威与边界 |
 | --- | --- |
-| agent-runtime 的 RunEngineImpl、RunController、RunSession、事件与压缩流水线 | 保持运行语义；现有 RunSession 是每 Run ledger/settlement 实体，不把它直接当作持久对话 Session |
-| Host 的 WorkerSession、worker-engine-driver、worker-session-history | 通用 Session 行为迁入 Runtime；Bot prompt、全局配置、DB 和模型客户端依赖先通过端口断开 |
-| HostSessionApiV1、HostRunExecutionApiV1 | 组成窄 Session 调用面；复用既有 DTO、历史、Run ledger 和存储 |
-| RunManifest、buildRunManifest、RunStore manifest_json / manifest_hash | 已有不可变配置快照与 provenance；connectorBindings 当前为空，任务能力与上下文引用尚未完整表达 |
-| StartAgentRunInput 的 typed overrides 和 attachments | model/provider/profile/permission/modes/tools 与文件附件已存在；mentions/display 等仍有 options 字段 |
-| Bot Dispatcher 的 bot:<id> Session 映射与 busy guard | 保留旧默认路由；增加任务 Session 绑定和 per Session / workspace 调度，避免只按 Bot 串行 |
-| Desktop stream reattach 与 TUI mailbox steer | 已有观察/局部输入路径；尚缺跨客户端 actor、持久输入回执、user-control lease 和统一 Host 输入入口 |
-| 621 的 checkout、checkpoint、HostIntegrationApiV1、IntegrationStore | 复用 PR 关联和观测；补归属、CI/review 路由与 merge SHA/方法/时间，不另建 PR store |
-| clientScoped Host 的客户端租约 | R5 核对窗口关闭与 durable Bot 工作的生命周期，不能把最后一个 UI 离开当成 Bot 完成 |
+| Installation | Host/设备级：文件、版本、依赖、安装健康、凭据；共享格式/解析规则继续放 plugin-core，具体 IO 与部署放 Host |
+| Binding | Project/Session/Run 使用范围：Host 解析 requested ∩ installed ∩ authorized ∩ policy；扩展既有 manifest/binding，不复制 registry |
+| Session 消费 | 使用 Host 提供的 Skill/MCP/工具与本轮上下文；不实现安装器，凭据不进入 transcript/manifest |
+| 部署形态 | 同 Host 复用安装；HTTP MCP 可只配置连接；stdio/CLI/Skill/Hook 在执行 Host 部署；Mini App 界面由客户端承载，不自动下发每台执行机器 |
 
-R1.0 必须确认当前 Bot dispatch 是否经过 canonical manifest factory，以及旧 synthesized manifest 路径的真实消费者；不从旧注释推断当前执行归属。
+现状证据：`packages/host/src/plugin-install-paths.ts` 只解析安装目录，`local-plugin-registry-api.ts` 提供目录投影；安装管理仍有 `apps/desktop/src/main/plugins/PluginManager.ts` 依赖。CLI 存在安装命令不证明 standalone Host 已承接完整安装服务。
 
-## 交付门与验收
+本次只修独立 CLI 的发现、加载、缺失诊断和必要打包缺口。完整 PluginManager 下沉、Bot 驱动安装、逐任务 binding 与跨 Host 分发留作后续 Plugin Lifecycle & Distribution；不要求它们全部完成才发布。后续先做同机“请求安装 → Host 安装/授权 → 新 Run 实际调用”，成功以真实调用与健康状态为准。
 
-| 门槛 | 必须证明的结果 | 责任模块 |
-| --- | --- | --- |
-| G1：统一 Session | 无 Bot 的调用方通过 Runtime Session 服务创建、执行、读取、取消和恢复；真实 Worker 路径经过新入口 | R1 |
-| G2：任务配置隔离 | 两个 Session 使用不同能力和上下文；显式空与缺省可区分；必需能力缺失明确拒绝；manifest 可校验并兼容旧记录 | R2 |
-| G3：项目并行 | 一个 Bot 按 Task 选择两个隔离 checkout 和 Session，并发执行；同目录写任务串行；重试不重复创建 Run | R3 |
-| G4：直接协作 | Desktop 从任务进入同一 Session；Plugin 发送结构化引用；用户接管暂缓 Bot 新输入，交还后对账恢复 | R1、R4-B |
-| G5：PR 交付 | Project 可追踪 branch/PR/CI/review；反馈回到原任务；合并检查当前 head 并记录可验证 merge evidence | R4-A |
-| G6：后台与多机 | UI 关闭后工作可继续或持久等待；远程断连不误报成功；同一 Bot 可调用两台 Host 的不同目录 | R5 |
+## 后续范围与 Agent 发现追加区
 
-首轮产品交付为 G1–G5：用户与 Bot 讨论项目 → 两个任务独立装配能力 → 两个 worktree / branch 并行 → 用户直接修改其中一个任务要求 → Bot 汇总 PR 和检查结果 → 用户审批后确认 merge。缺凭据或外部服务时记录该门未完成，不能用 mock 成功替代真实集成。
+Bot 工具集、项目/任务调度、Desktop 任务 Attach、跨机执行和自动 PR/merge 不列入此次 CLI 发布验收。旧模块保留：[R1](bot-session-runtime/01-session-runtime.md) · [R2](bot-session-runtime/02-capability-context.md) · [R3](bot-session-runtime/03-bot-coordination.md) · [R4](bot-session-runtime/04-delivery-and-attach.md) · [R5](bot-session-runtime/05-resident-and-remote.md)。
 
-代码片验证遵循根规则：相关纯规则/合同/真实 Worker 测试，typecheck:all、architecture:check；改打包边界时做构建，UI 变更走真实浏览器路径。本轮仅修改文档，执行编码、链接、可见性和 diff 检查，不把未来场景标为已通过。
+后续 Agent 在本节末尾追加：**日期/owner；发现与源码或 PR；最小行动；是否阻断本次 CLI（给具体原因）；接手任务/PR。** Bot 工具集由后续讨论决定，不在本轮预定。只有能指出本次 CLI 用户流程失败的事项才提升为 A/B 阻断项。
 
-## 跨模块兼容与回退
+## 本次文档交付与接续
 
-- 每片先保留稳定 API，再逐调用方迁入新服务；已迁移调用方只有一条实际执行路径，旧入口转发而不再独立调度。
-- Session/Run/transcript/PR 表继续使用原 ID。新关系、输入回执、租约和 VCS 字段采用 additive migration，旧记录可读；具体表名和 migration 编号以开工时 schema 为准。
-- 现有 Run fingerprint 保持可验证；manifest 扩展遵循版本化 reader 和 canonical hash 规则，不读取后重写历史 hash。
-- 回退优先关闭新的 Bot 多 Session 派发、保留已创建 Task/Session/Run 供查询与对账；同一 Session 有在途 Run 时不得切换到另一执行 owner。
-- 窗口、网络、调度租约、Worker 和输入回执故障按各模块矩阵对账。unknown 保留为 unknown；外部 merge/投递结果不通过盲重试确认。
-- 一台 Host 的多个 Bot 共用执行资源约束；同一 Session 单一执行 owner。同一工作区的不同 Session 也受到写入隔离约束。
+文档 owner：Codex root；独立 worktree：`/workspace/work/session-release-plan`；本地分支：`codex/session-cli-release-plan`；基于 #562 head `f7e760d2`，通过同一 PR 分支交付。独占本页、计划入口和 catalog。managed worktree/context 工具未提供，使用 Git linked worktree 与版本化计划对账。
 
-## 与既有计划的关系
-
-| 既有计划 | 本计划的接续点 |
-| --- | --- |
-| [个人 Bot 框架](../active/2026-10-25-personal-bot-framework.md) | 保留身份、Inbox/Outbox、owner epoch、receipt 与恢复语义；扩展项目和任务关联 |
-| [621 工作区生命周期](../active/621-coding-workspace-lifecycle-harness.md) | 复用 checkout/branch/checkpoint/integration，增量补 Bot 归属与 merge 事实 |
-| [620 Session 记录](../active/620-session-record-architecture.md) | 沿用历史与投影权威，不复制 transcript |
-| [622 Runtime 纯净度](../active/622-agent-platform-convergence/06-runtime-purity.md) | 共享依赖审计；本轮只消除迁入 Session 代码引入的反向依赖，其他历史纯净度独立排期 |
-| [工具与 Harness 收敛](../active/2026-10-31-tool-surface-and-harness-convergence.md) | 复用能力目录/调用/信任机制，不新增插件注册系统 |
-| [独立发布](../active/2026-10-29-product-release-separation.md) | 保持 CLI/Desktop 既有发布线；R5 再决定 headless Bot 部署入口 |
-
-旧单页 S0–S7 的工作已归入 R1.0（审计）、R1（Session/输入）、R2（配置）、R3（绑定/派发）、R4（UI/VCS）和 R5（常驻/多机）。本页及链接模块是后续执行入口，不继续按旧 S 编号派工。
-
-## 进度
-
-- [x] 核对代码基线、既有发布/Session/Run/Bot/VCS 能力。
-- [x] 建立研究报告、产品架构设计和 Draft PR #562。
-- [x] 用户确认复用 agent-runtime 承接完整 Session 能力，Bot 为长期协调与 Session 管理层。
-- [x] 将单页草稿整理为总入口、包/协议合同和五个实施模块。
-- [x] R1.0：调用链与状态单写者审计（[产出](bot-session-runtime/r1-0-audit.md)）。
-- [ ] R1：Session Runtime 与 Host 收敛（实施待开工）。
-- [ ] R2：能力与上下文装配。
-- [ ] R3：Bot 项目与并行 Session。
-- [ ] R4：PR 交付与任务 Attach。
-- [ ] R5：后台常驻与远程执行。
-
-## 验证记录
-
-| SHA / dirty 范围 | 环境 | 命令或操作 | 结果 | 证据 |
-| --- | --- | --- | --- | --- |
-| 4f0738ba 代码；f5986ace 既有文档 | Linux / 独立 worktree | 源码与既有计划核对、origin/master 查询 | 当前代码基线未变化 | Run/Session/manifest/Bot/VCS 调查见研究报告 |
-| f5986ace + 本次 13 个 Markdown 文件 | Linux / 独立 worktree | Python UTF-8/相对链接/可见性/测试命令路径/模块结构检查 | 通过；检查 254 个相对链接，0 新增失效链接，2 个既有目录问题 | 6 个新合同/模块卡，5 个实施模块均有依赖/验收/回退/接续 |
-| 本次文档变更 | Linux / 独立 worktree | git diff --check | 通过 | 无产品代码或 schema 改动，未运行产品测试 |
-| 本次已采纳架构决定 | Notion Project State | 追加包边界、R1–R5 顺序与未实施状态 | 成功，无警告 | 不替代本系列代码进度 |
-| R1.0 审计：master `95c30f58`，只读 | Windows / 独立 worktree `.claude/worktrees/bot-session-r1-0` | 5 条代码调查：CLI/TUI、Desktop、Bot、Host 控制面、data/protocol | 全部结论可追溯到 file:line；未构建、未跑测试、未改产品代码 | [R1.0 审计](bot-session-runtime/r1-0-audit.md) |
-
-既有目录问题在 f5986ace 基线可复现：exec-plans/README.md 指向缺失的 active/2026-10-24-dynamic-workflow-package.md；catalog.md 指向空文件 backlog/309-button-unification.md。本系列没有新增这些问题，保留其既有任务归属。
-
-## 接续 / 结果
-
-当前为规划交付：R1–R5 的产品代码均未实现，R1.0 只产出审计与合同结论。规划 owner 使用上述独立 worktree；执行模块时登记自己的分支/base/owner/独占路径，共享 protocol/data/Host bootstrap 文件先协调归属。Workspace context 工具在本环境不可用，已通过版本化计划、Git worktree 和 PR 对账。
-
-本次外部交付沿用 Draft PR #562；未授权合并，保留分支与 worktree。Notion Project State 仅同步已采纳的架构决定，不代替本系列实施状态。
-
-下一步：提交 R1.0 的第一片 additive protocol diff（结构化输入与控制租约类型，纯类型不改行为），随后实施 R1.1——`agent-runtime/src/session` 公开 subpath、通用历史恢复迁入、三态 admission 端口（先落 C1 wire stage 降维）、Host 原入口转发新服务。R1.1 实施完成后按 [R1.0 审计](bot-session-runtime/r1-0-audit.md) 第 5 节的 C2–C6 与第 2 节的四处双写逐项收敛。
+本轮只更新文档与路由：UTF-8、173 条链接的目标与 Git 可见性、diff 检查通过；未新增断链，原索引 1 条缺失目标保留。未运行产品测试，未合并代码 PR，未创建 tag/Release。原设计与审计证据保留在模块文件和 Git 历史。下一动作：认领任务 A；任务 B 可先准备打包，等待 A 的集成 SHA 和用户测试。
