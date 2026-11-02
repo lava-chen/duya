@@ -1,5 +1,7 @@
 # 个人长期 Bot 框架设计
 
+> 2026-11-02：本文关于 Bot 统管 Project、Bot-first Desktop 和先做个人 Bot 的产品假设已被 [Project-first 决策/计划 #581](https://github.com/lava-chen/duya/pull/581)替代。本文保留为个人 Bot 的历史设计及基础实现参考，不再作为当前产品架构入口；Project Coordinator 独立于 Personal Bot。
+
 将 Bot 定义为用户长期委托的智能体：有稳定身份、持续责任、受控记忆与行动权限，能够在多次 Run、多个渠道和客户端离线期间推进工作。目标是建立一个清晰的 Bot 领域包，并由现有 Host 统一装配执行。
 
 状态：设计提案，尚未实现。源码核对基线：`270ba52869b6414094e553dd7f9abde5a1e429f7`，2026-10-25。

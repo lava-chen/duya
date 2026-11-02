@@ -1,5 +1,7 @@
 # R3：Bot 项目与多 Session 协调
 
+> 已被 [Project Coordinator #581](https://github.com/lava-chen/duya/pull/581)替代：Project 有自己的 Coordinator，不再由一个个人 Bot 统一管理多个 Project。本文保留任务/执行绑定和恢复的设计参考，不按以下旧产品假设直接派工。
+
 状态：backlog · 负责人：待认领 · 更新：2026-11-01
 规划环境见[总入口](../2026-11-01-bot-session-coordination.md)；实施时登记 branch / base / owner / 独占路径。
 前置：[R1 Session 服务](01-session-runtime.md)、[R2 显式配置](02-capability-context.md)。后续：[R4](04-delivery-and-attach.md)。

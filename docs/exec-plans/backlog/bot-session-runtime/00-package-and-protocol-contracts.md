@@ -1,13 +1,13 @@
 # 包边界与协议合同
 
-状态：已采纳的目标合同，代码未实施 · 更新：2026-11-01
+状态：历史目标合同；产品角色与优先级以 [Project-first #581](https://github.com/lava-chen/duya/pull/581)为准 · 更新：2026-11-02
 规划 owner / worktree / base 与实施状态见[总入口](../2026-11-01-bot-session-coordination.md)。模块执行前登记自己的分支与路径归属。
 
 ## 目标与边界
 
 完整 Session 能力在现有 agent-runtime 内实现。Session Agent 是产品能力名称；本系列不建立 session-agent package，也不复活待退役的 agent package。Host 提供可信接入和 IO 适配；Bot 通过协议端口管理 Session。
 
-本合同定义跨模块的唯一目标边界。具体字段名、可选性和 schema 版本在 R1.0 / R2.1 对照真实调用者后冻结；以下拟议接口不是当前已实现 API。
+本合同保留共享 Runtime/Host/协议的历史推导，不再定义产品角色的唯一目标边界。Bot 管理 Project 的假设已被 #581 替代；具体字段名、可选性和 schema 按新调用者冻结，以下拟议接口不是当前已实现 API。
 
 ## Package 改动地图
 
