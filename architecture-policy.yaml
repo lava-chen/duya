@@ -243,6 +243,11 @@ modules:
       - packages/host/src/run-control-plane.ts
       - packages/host/src/worker-db-client.ts
       - packages/host/src/worker-os-context/index.ts
+      # R1.1: the admission adapter. The Desktop's chat router classifies its
+      # refusals through THIS, so the Desktop and the standalone Host answer
+      # the same refusal the same way. A second classifier in the Desktop
+      # would be a second answer to one question.
+      - packages/host/src/session-admission.ts
     owner: host
 
   - id: agent-core

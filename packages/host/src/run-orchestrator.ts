@@ -860,7 +860,16 @@ export class RunOrchestrator {
       });
       this.#retain(runId, handle);
       dispatched = true;
-      return { accepted: true, runId };
+      // The manifest hash travels back with the acceptance because the
+      // Runtime's admitted result carries it: a caller that learns a run was
+      // admitted must also be able to name the frozen configuration it was
+      // admitted under, and the only authority for that hash is the manifest
+      // the Control Plane was given.
+      //
+      // It is computed ONCE, above, by the canonical factory. Re-deriving it
+      // here would be a second derivation of one value — the drift
+      // `controller.ts:542-547` warns about.
+      return { accepted: true, runId, manifestHash: built.manifestHash };
     } catch (error) {
       this.#forgetRun(runId);
       // The binding is released here rather than left to survive a refused

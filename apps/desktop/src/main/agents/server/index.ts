@@ -4,9 +4,10 @@ import { WorkerManager } from './worker-manager';
 import { WorkflowRuntimeManager } from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
-import { createHandleRequest, RouterDeps } from './router';
+import { createHandleRequest, RouterDeps, type DesktopSessionStartRequest } from './router';
 import { InteragentRouter } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
+import { createHostSessionService } from '@duya/host/session-admission';
 import { createDesktopNativeRunEventWriter } from './native-run-event-writer';
 import { DesktopPluginAppServerBridge } from './plugin-app-bridge';
 import type { DesktopPluginAppServerRequest } from '../plugin-app-server-rpc';
@@ -283,6 +284,63 @@ async function hydrateSessionsFromDb(): Promise<void> {
 // autocreates, and the no-worker guard still produces a specific 404.
 void hydrateSessionsFromDb();
 
+// The Desktop's run layer, and the unified session entry over it.
+//
+// The orchestrator is the Desktop's RUN layer — it observes frames and
+// settles sessions. It is not an admission entry, and the router used to
+// call it directly, which meant the Desktop decided for itself what a
+// refusal meant while the standalone Host collapsed the same refusals onto
+// two stages. The session service is the ONE entry both clients use.
+//
+// `createHostSessionService` takes the orchestrator rather than an
+// `openRun` function on purpose: a file that has to NAME the Control
+// Plane's start entry is a file that can call it, and that is how the
+// second admission path appeared in the first place.
+const runOrchestrator = new RunOrchestrator({
+  dbRequest,
+  // The ONE durable writer for Runtime-minted envelopes on this surface.
+  // Without it the orchestrator refuses every native `run:event` — and since
+  // the legacy reverse-translation stopped persisting, a Desktop chat turn
+  // would keep its run row and write no events at all. See the module for why
+  // `currentEpoch` is a fact here rather than a read it cannot perform.
+  nativeWriter: createDesktopNativeRunEventWriter({ request: dbRequest, logger }),
+  // ## `onEvent` is deliberately NOT wired here
+  //
+  // `onEvent` is the LIVE arm: it hands each canonical envelope to a consumer
+  // while the process still holds it, before and independently of the ledger.
+  // Desktop has no such consumer. Its renderer reads the transcript back from
+  // the `run_events` rows over HTTP (`GET /runs/:id/events` and friends), and
+  // its live chat stream is the worker's OWN legacy SSE frames, which
+  // `normalizeAndObserve` forwards untouched — wiring `onEvent` here would
+  // open a second delivery path onto the same renderer with no consumer
+  // behind it, and nothing would read what it published.
+  //
+  // The consequence is that `#releaseTerminalToConsumers` — the barrier that
+  // withholds a terminal until its commit is durable — has no Desktop consumer
+  // to protect. That is safe ONLY because every route that actually TELLS a
+  // Desktop client about a terminal goes through a durable gate instead:
+  // `settleSession`'s return value (the SSE and non-SSE chat paths), the
+  // cancel receipt (`handleDeleteChat`), and `resultFor` (the run-result
+  // route) all report `#durableTerminalFor`, never the Runtime's in-memory
+  // verdict. If a live consumer is ever added to this surface, it must be
+  // attached HERE so it inherits that barrier rather than bypassing it.
+  logger,
+  channel: createWorkerExecutionChannel({
+    // The command is delivered by the host because the host owns
+    // `WorkerManager`; the fields on it come from the run, so the run layer
+    // still decides WHAT is executed and only the host decides HOW.
+    dispatch: (command) => workerManager.sendCommand(command.sessionId, { ...command }),
+    // The host's EXISTING single stop path, not a second one. `stop` used to
+    // be an empty function, so a runtime cancel reported `applied: true` for a
+    // stop that had touched nothing. R2.3 keeps the same call and adds the
+    // OUTCOME: the host has always killed the worker after the grace deadline,
+    // and the run layer now gets to see that happen instead of recording the
+    // kill as a clean cancellation.
+    interrupt: (sessionId, graceMs, reason) =>
+      workerManager.interruptWorker(sessionId, graceMs, reason),
+  }),
+});
+
 const deps: RouterDeps = {
   sessionManager,
   workerManager,
@@ -300,55 +358,17 @@ const deps: RouterDeps = {
     workerDbRequests,
     logger,
     httpLogger,
-  }),  // Plan 586 Reference Run / plan 587 R2.1 single run entry. The chat route
-  // calls `openRun` exactly once, and that call OPENS the run and DISPATCHES the
+  }),
+  // Plan 586 Reference Run / plan 587 R2.1 single run entry. The chat route
+  // opens the run exactly once, and that call OPENS the run and DISPATCHES the
   // turn: the channel below is what issues `chat:start`, with the canonical run
   // id, the manifest hash and the input revision on it. The router used to send
   // that command itself, which made two dispatches of one turn and left the
   // executor carrying an id no run row knew about.
-  runOrchestrator: new RunOrchestrator({
-    dbRequest,
-    // The ONE durable writer for Runtime-minted envelopes on this surface.
-    // Without it the orchestrator refuses every native `run:event` — and since
-    // the legacy reverse-translation stopped persisting, a Desktop chat turn
-    // would keep its run row and write no events at all. See the module for why
-    // `currentEpoch` is a fact here rather than a read it cannot perform.
-    nativeWriter: createDesktopNativeRunEventWriter({ request: dbRequest, logger }),
-    // ## `onEvent` is deliberately NOT wired here
-    //
-    // `onEvent` is the LIVE arm: it hands each canonical envelope to a consumer
-    // while the process still holds it, before and independently of the ledger.
-    // Desktop has no such consumer. Its renderer reads the transcript back from
-    // the `run_events` rows over HTTP (`GET /runs/:id/events` and friends), and
-    // its live chat stream is the worker's OWN legacy SSE frames, which
-    // `normalizeAndObserve` forwards untouched — wiring `onEvent` here would
-    // open a second delivery path onto the same renderer with no consumer
-    // behind it, and nothing would read what it published.
-    //
-    // The consequence is that `#releaseTerminalToConsumers` — the barrier that
-    // withholds a terminal until its commit is durable — has no Desktop consumer
-    // to protect. That is safe ONLY because every route that actually TELLS a
-    // Desktop client about a terminal goes through a durable gate instead:
-    // `settleSession`'s return value (the SSE and non-SSE chat paths), the
-    // cancel receipt (`handleDeleteChat`), and `resultFor` (the run-result
-    // route) all report `#durableTerminalFor`, never the Runtime's in-memory
-    // verdict. If a live consumer is ever added to this surface, it must be
-    // attached HERE so it inherits that barrier rather than bypassing it.
-    logger,
-    channel: createWorkerExecutionChannel({
-      // The command is delivered by the host because the host owns
-      // `WorkerManager`; the fields on it come from the run, so the run layer
-      // still decides WHAT is executed and only the host decides HOW.
-      dispatch: (command) => workerManager.sendCommand(command.sessionId, { ...command }),
-      // The host's EXISTING single stop path, not a second one. `stop` used to
-      // be an empty function, so a runtime cancel reported `applied: true` for a
-      // stop that had touched nothing. R2.3 keeps the same call and adds the
-      // OUTCOME: the host has always killed the worker after the grace deadline,
-      // and the run layer now gets to see that happen instead of recording the
-      // kill as a clean cancellation.
-      interrupt: (sessionId, graceMs, reason) =>
-        workerManager.interruptWorker(sessionId, graceMs, reason),
-    }),
+  runOrchestrator,
+  // R1.1: the unified session entry.
+  sessionService: createHostSessionService<DesktopSessionStartRequest>({
+    controlPlane: runOrchestrator,
   }),
 };
 

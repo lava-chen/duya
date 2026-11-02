@@ -42,10 +42,20 @@ export * from './worker-limits.js';
 export * from './worker-manager.js';
 export * from './worker-session-registry.js';
 export {
+  admissionWireStage,
+  classifyRunStartAcceptance,
+  createHostSessionAdmission,
+} from './session-admission.js';
+export type {
+  HostSessionAdmissionPorts,
+  StartAgentRunRefusalStage,
+} from './session-admission.js';
+export {
   HostRunExecutionController,
   HostRunExecutionError,
   type HostRunExecutionControllerOptions,
   type HostRunExecutionLogger,
+  type HostSessionStartRequest,
   type HostTurnDefaults,
   type WorkerDbBridge,
 } from './run-execution.js';

@@ -57,6 +57,9 @@
       "@duya/host/run-control-plane": [
         "../../packages/host/dist/run-control-plane.d.ts"
       ],
+      "@duya/host/session-admission": [
+        "../../packages/host/dist/session-admission.d.ts"
+      ],
       "@duya/host/channel-prompts": [
         "../../packages/host/dist/channel-prompts.d.ts"
       ],

@@ -13,6 +13,7 @@ import {
   SessionExecutionUnavailableError,
   toSessionRelativePath,
   type SessionAdmissionOutcome,
+  type SessionAdmissionStage,
   type SessionRunRequest,
 } from '../src/session/index.js';
 
@@ -46,20 +47,35 @@ describe('createRuntimeSessionService', () => {
     // The two lead to different next steps — retry or report — so a service
     // that flattened them into one answer would make the caller guess.
     const rejected = createRuntimeSessionService({
-      admission: { admit: async () => ({ state: 'rejected', reason: 'session is busy' }) },
+      admission: { admit: async () => ({ state: 'rejected', stage: 'session_busy', reason: 'session is busy' }) },
     });
     const failed = createRuntimeSessionService({
-      admission: { admit: async () => ({ state: 'failed', reason: 'host unreachable' }) },
+      admission: { admit: async () => ({ state: 'failed', stage: 'dispatch_refused', reason: 'host unreachable' }) },
     });
 
     await expect(rejected.startRun(request())).resolves.toEqual({
       state: 'rejected',
+      stage: 'session_busy',
       reason: 'session is busy',
     });
     await expect(failed.startRun(request())).resolves.toEqual({
       state: 'failed',
+      stage: 'dispatch_refused',
       reason: 'host unreachable',
     });
+  });
+
+  it('passes the stage through unchanged', async () => {
+    // The stage is the port's contract: it says WHICH situation happened, and
+    // the service has no business reinterpreting it. A service that mapped
+    // stages onto states here would make the Host's vocabulary a Runtime
+    // dependency.
+    const stage: SessionAdmissionStage = 'run_already_exists';
+    const service = createRuntimeSessionService({
+      admission: { admit: async () => ({ state: 'rejected', stage, reason: 'the run is already recorded' }) },
+    });
+
+    await expect(service.startRun(request())).resolves.toMatchObject({ stage });
   });
 
   it('refuses to cancel when the host has no execution surface', async () => {

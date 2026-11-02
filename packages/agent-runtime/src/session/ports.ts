@@ -193,6 +193,20 @@ export function toSessionRelativePath(raw: string): SessionRelativePath {
  * freeze. A request that carried them would be a second authority — the Host
  * would have to either trust the caller's frozen configuration or reject it,
  * and rejecting it would mean the Host had two ways to produce a manifest.
+ *
+ * ## It is the DEFAULT shape, not the only one
+ *
+ * A port that answered with this shape would force every Host to fit its
+ * turn into six fields, and the fields a Host needs to freeze a manifest are
+ * NOT these six: the Host has already resolved the session's defaults, the
+ * permission ceiling and the turn overrides by the time it asks for
+ * admission, and it needs to hand those forward.
+ *
+ * So the admission port is generic over its request type, and this shape is
+ * the default for a Host that has nothing extra to say. The Runtime does not
+ * read the request: it forwards it. That is what lets the same service serve
+ * a Host that sends a prompt and a Host that sends a fully resolved turn
+ * without the Runtime knowing which is which.
  */
 export interface SessionRunRequest {
   readonly sessionId: string;
@@ -226,6 +240,91 @@ export interface SessionRunIdentity {
 }
 
 /**
+ * WHICH situation stopped an admission.
+ *
+ * The three states below say whether a retry is meaningful; this says WHICH
+ * thing happened. Both are needed, and they are not redundant: `rejected`
+ * covers four different situations whose next steps differ, and a caller that
+ * only learns "rejected" has to guess whether to wait, to reconcile against a
+ * receipt, or to tell the user their request was wrong.
+ *
+ * R1.0 found the Host collapsing five internal failure modes into one wire
+ * stage, and that the collapsed bucket mixed "the session is busy" (wait),
+ * "this exact run already exists" (reconcile against the receipt) and "the
+ * run row was never written" (retry, and alert). This vocabulary is the
+ * un-collapsed form.
+ *
+ * ## It is the port's own vocabulary
+ *
+ * The Runtime owns these names because the Runtime owns the port. The Host
+ * maps its internal stages onto them at the adapter boundary, so a Host-side
+ * refactor does not become a Runtime change, and the Host's own stage names
+ * stay where they are — the Control Plane's, not the session service's.
+ */
+export type SessionAdmissionStage =
+  /**
+   * The session does not exist in the Host's stores.
+   *
+   * The request named something that is not there. Nothing about the moment
+   * changes the answer.
+   */
+  | 'no_session'
+  /**
+   * The request named a value the Host will not run — an invalid permission
+   * mode, a malformed option, an unknown profile.
+   *
+   * A bug in the caller's request, not a state of the world.
+   */
+  | 'invalid_input'
+  /**
+   * Another run owns this session.
+   *
+   * The caller WAITS. The session's state is the reason, so the refusal is a
+   * property of the session rather than of the attempt.
+   */
+  | 'session_busy'
+  /**
+   * The Control Plane reports this run id already records the same manifest
+   * and input.
+   *
+   * The row exists and is CORRECT. What is refused is a SECOND execution
+   * against it, so the caller's next step is to reconcile against the
+   * receipt — not to retry, and not to report an error.
+   */
+  | 'run_already_exists'
+  /**
+   * The Control Plane would not create the run row.
+   *
+   * A durability problem: the run has no durable record. Retrying is
+   * meaningful, and an operator should be told.
+   */
+  | 'run_not_created'
+  /**
+   * The row exists but `run.started` never landed.
+   *
+   * A transient storage problem. The run is half-recorded and the caller
+   * cannot tell from the row alone whether it is live.
+   */
+  | 'not_durable'
+  /**
+   * The executor was not there — no worker, closed pipe.
+   *
+   * Retrying after one spawns is the fix.
+   */
+  | 'dispatch_refused'
+  /**
+   * The dispatch itself threw.
+   *
+   * A Host bug rather than a state of the world.
+   */
+  | 'dispatch_failed'
+  /**
+   * The Host's own plumbing failed before any of the above could be
+   * attributed.
+   */
+  | 'unknown';
+
+/**
  * Why an admission did not happen.
  *
  * The three states are not decoration. R1.0 found that the Host currently
@@ -235,6 +334,9 @@ export interface SessionRunIdentity {
  * written" (retry, and alert). Those need different next steps, so a port
  * that answered with a boolean would force the caller to guess which one it
  * got.
+ *
+ * `stage` narrows each state to the situation that caused it, so the caller
+ * can act on the difference without parsing the reason string.
  */
 export type SessionAdmissionOutcome =
   /** The Host accepted the request and froze a run. */
@@ -245,14 +347,34 @@ export type SessionAdmissionOutcome =
    * Retrying the same request will be refused the same way: the refusal is a
    * property of the request and the session's state, not of the moment.
    */
-  | { readonly state: 'rejected'; readonly reason: string }
+  | {
+      readonly state: 'rejected';
+      readonly stage: SessionAdmissionStage;
+      readonly reason: string;
+      /**
+       * The run id, when the refusal NAMED one.
+       *
+       * `run_already_exists` is the case that needs it: the run is recorded
+       * and correct, and the caller's next step is to reconcile against that
+       * receipt rather than start a second run. A refusal that minted an id
+       * and then abandoned it has no id to report, so this is optional rather
+       * than always null.
+       */
+      readonly runId?: string;
+    }
   /**
    * The Host could not be reached, or answered something unusable.
    *
    * Retrying is meaningful here, and the distinction from `rejected` is the
    * whole reason this port has three states.
    */
-  | { readonly state: 'failed'; readonly reason: string };
+  | {
+      readonly state: 'failed';
+      readonly stage: SessionAdmissionStage;
+      readonly reason: string;
+      /** The run id, when the failure NAMED one. See `rejected`. */
+      readonly runId?: string;
+    };
 
 /**
  * How a session asks the Host to start a run.
@@ -262,9 +384,19 @@ export type SessionAdmissionOutcome =
  * this service: that is a recursion, and it is the failure mode the R1 plan
  * names explicitly. The direction is one-way — the Runtime asks, the Host
  * decides.
+ *
+ * ## Why it is generic over its request
+ *
+ * The Runtime never reads the request; it forwards it. So the port does not
+ * have to insist on one shape, and a Host that has already resolved the
+ * session's defaults and the turn's permission ceiling can hand those
+ * forward instead of re-deriving them from a prompt.
+ *
+ * The default is {@link SessionRunRequest}, which is what a Host with nothing
+ * extra to say sends.
  */
-export interface SessionAdmissionPort {
-  admit(request: SessionRunRequest): Promise<SessionAdmissionOutcome>;
+export interface SessionAdmissionPort<Request = SessionRunRequest> {
+  admit(request: Request): Promise<SessionAdmissionOutcome>;
 }
 
 /**
