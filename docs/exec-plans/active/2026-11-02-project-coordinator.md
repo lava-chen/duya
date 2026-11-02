@@ -61,7 +61,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 任务三切片：Desktop 项目工作台（2026-11-02）
 
-分支 `codex/project-first-desktop`，base `origin/codex/project-coordinator`（#582 head `3d714eba`），worktree `.claude/worktrees/project-first-desktop`。
+分支 `codex/project-first-desktop`，base `codex/coordinator-seam` `f1d81f61`（#586 head；栈为 #583 ← #585 ← #586），worktree `.claude/worktrees/project-first-desktop`。原始切片基于 #582（`3d714eba`），2026-11-02 已按下列「#584 依赖重整」rebase 到栈顶。
 
 #582 已交付 Coordinator 侧：受限协调对话、派发时创建规范 Task 并绑定工作 Session。本切片补上**桌面端的项目工作台**——把这些关系变成用户能看见、能进入、能接管的东西。
 
@@ -116,6 +116,26 @@ Owner：当前 Codex；worktree `E:\Projects\duya\.claude\worktrees\project-firs
 CI 首次真正跑起来（base 是 `master` 才会触发），在提交 `ea36480e` 上全绿：architecture 1m48s（含 bundle:verify）、build 3m25s、test 11m29s、typecheck 7m44s、test scope 13s，全部 pass，`mergeStateStatus: CLEAN`。
 
 因此本切片的两道人工关卡——统一状态读取、接管/交还的真实拦截——既有本地门禁（14728 个用例）也有 CI 复核。产品真机验收仍由用户负责。
+
+### #584 依赖重整（2026-11-02）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支：`codex/project-first-desktop`；rebase base：`codex/coordinator-seam` `f1d81f61`（#586 head）。本轮把 #584 从「直接基于 #582、等待 master」改为显式依赖完整栈：#583（项目记忆/连续性）→ #585（Run 结果回传）→ #586（Coordinator 领域收敛）→ #584（Desktop 工作台）。
+
+过程与修复：
+
+- `git rebase f1d81f61` 后逐个解决冲突：`project-api.ts` 保留连续性 API 与项目状态投影/工作 Session 归并；`agent-protocol/projects.ts` 与 `http-client.ts` 同时保留连续性方法和 `getProjectState`；`desktop-host-api.ts` 合并 `createHostTaskApi` 的项目参数、`createHostProjectApi` 的 Session scope 与 `sessionInputApi`；`packages/host/package.json` 同时保留 `project-run-settlement`、`project/*` 与 `session-input-api` 导出；docs 合并栈内新证据。
+- 原 #584 head 的 `project-coordinator-implementation-handoff.md` 自带未解决的冲突标记（此前 rebase 遗留）。本轮按当前事实重写「Remaining integration」：Task 显式验收和记忆候选确认仍待完成；Desktop 工作台、结果回项目、Coordinator 领域收敛标记为已完成。
+- 合并后发现连续性路由的 `(continuity|context|state)` 正则先拦截了 `GET /projects/:id/state` 并返回 405。修复为在同一路由块内处理 GET 读取，删除重复的 `stateMatch` 分支；`project-state-http` 的缺项目读取用例恢复通过。
+
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- 相关 17 个测试文件 140 项通过：Host `project-state-http`、`project-api-http`、`project-run-settlement`、`project-work-session-continuity`、`project-dispatch`、`project-domain-boundary`、`project-prompt`、worker profiles、`session-service`、`session-entry-guards`、`local-host`；Desktop `interagent-router`、`project-workspace-handlers`、`desktop-session-management`；UI `ProjectWorkPanel`、`project-workspace-store`、`nav-history-store`。
+- `npm run build:packages`、`npm run typecheck:all`、`npm run architecture:check`、`npm run bundle:worker`、`NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--max-old-space-size=8192 npm run electron:build` 均退出 0；架构门禁 3081 项全部 tolerated，无新增违规。
+- rebase 后代码提交 `806dce4e`，路由修复提交 `fd44beca`；提交后重跑 `npm run bundle:verify` 应为 FRESH，重建的 `packages/host/bundle` 随修复提交入库。
+
+已知边界：PR base 非 `master`，仓库 CI 不会触发（`test.yml` 仅监听 base=`master`）；本栈的验证以本节命令结果为准。集成顺序必须为 #583 → #585 → #586 → #584，任一 PR 未合入前 #584 不单独合并。产品真机验收仍由用户负责。
+
+下一动作：把 #584 的 base 改为 `codex/coordinator-seam`，以 `--force-with-lease` 推送本节提交；栈稳定后再统一改 base 到 `master` 触发 CI。
 
 ## 本轮证据与接续
 
