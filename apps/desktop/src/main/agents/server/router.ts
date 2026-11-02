@@ -20,6 +20,12 @@ import { acquireChatLock, releaseChatLock, type ChatLockOrigin } from './chat-ru
 import { acceptedVerbs } from '../../control-plane/permission-vocabulary';
 import { recordPermissionDecision } from '../../control-plane/permission-decision-record';
 import type { RunOrchestrator } from '@duya/host/run-orchestrator';
+import {
+  admissionWireStage,
+  classifyRunStartAcceptance,
+  type HostAdmissionTurn,
+  type RuntimeSessionService,
+} from '@duya/host/session-admission';
 import type { BotDispatchTicket } from '@duya/agent-protocol';
 import { parseAgentIdFromBotSession } from '../../wake/bot-session-id';
 import { buildCronProviderConfig, resolveCronModel } from '../../automation/provider-config';
@@ -440,6 +446,15 @@ export interface BotProviderConfigFallbackDeps {
   dbRequest?: (action: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
 
+/**
+ * What the Desktop asks the Session service to start.
+ *
+ * The same shape the standalone Host uses: the resolved turn, and the Bot
+ * dispatch claim when the turn came from a Bot. The Runtime forwards it
+ * without reading it.
+ */
+export type DesktopSessionStartRequest = HostAdmissionTurn;
+
 export interface RouterDeps {
   sessionManager: SessionManager;
   workerManager: WorkerManager;
@@ -465,6 +480,21 @@ export interface RouterDeps {
    * it is absent the chat path is byte-for-byte the pre-586 path.
    */
   runOrchestrator?: RunOrchestrator;
+  /**
+   * The unified session entry.
+   *
+   * R1.1: the router starts a turn through the Session service, the same
+   * service the standalone Host uses, so both clients ask the same question
+   * in the same words and get the same answer.
+   *
+   * The service is a separate dependency from the orchestrator on purpose.
+   * The orchestrator is the Desktop's run layer — it observes frames and
+   * settles sessions — and it is not an admission entry. Reaching for it
+   * directly was the bypass the R1.0 audit found: the Desktop then decided
+   * for itself what a refusal meant, and answered with the Control Plane's
+   * internal stage while the Host answered with a collapsed one.
+   */
+  sessionService?: RuntimeSessionService<DesktopSessionStartRequest>;
 }
 
 export function sendJson(res: http.ServerResponse, statusCode: number, data: unknown): void {
@@ -1436,68 +1466,109 @@ async function handlePostChat(
             reserve: async (candidateRunId: string) => await deps.dbRequest('bot:dispatch:reserve', { ticket, candidateRunId }) as never,
             isCurrent: async () => await deps.dbRequest('bot:dispatch:isCurrent', { ticket }) === true,
           } : undefined;
-          const start = await deps.runOrchestrator.openRun(sessionId, {
-            prompt,
-            options: parsed.options || {},
-            ...(typeof providerConfig?.model === 'string' ? { model: providerConfig.model } : {}),
-            ...(typeof providerConfig?.providerId === 'string' ? { providerId: providerConfig.providerId } : {}),
-            ...(providerConfig?.providerType === 'openai' || providerConfig?.providerType === 'anthropic'
-              ? { apiFormat: providerConfig.providerType }
-              : {}),
-            // Always a string. `RunManifest.cwd` is required, and the `init`
-            // command a few lines above already uses `''` for "no working
-            // directory"; passing `undefined` instead put an absent cwd INTO
-            // the frozen manifest, where it hashed as a real configuration.
-            workingDirectory: workingDirectory || '',
-            ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
-            // R2.2: the configuration the router ALREADY resolved, handed to the
-            // Control Plane rather than re-derived by it. Before this the
-            // manifest was assembled from a fraction of what this function
-            // holds, so the run row described a run whose profile, mode,
-            // effort, permission policy and roots could not be reconstructed
-            // from the run itself.
-            // `parsed.options` is typed `Record<string, unknown>`, so each of
-            // these is narrowed at the boundary rather than cast. A cast here
-            // would put a value into the run row that nothing had checked.
-            ...(typeof parsed.options?.agentProfileId === 'string' && parsed.options.agentProfileId !== ''
-              ? { agentProfileId: parsed.options.agentProfileId }
-              : {}),
-            ...(typeof parsed.options?.mode === 'string' && parsed.options.mode !== ''
-              ? { modes: [parsed.options.mode] }
-              : {}),
-            ...(typeof parsed.options?.effort === 'string' ? { effort: parsed.options.effort } : {}),
-            // The project's other writable roots are already merged into the
-            // rules the worker gets, so recording them here keeps the manifest's
-            // root set and the executor's root set from being derived twice.
-            ...(projectAdditionalRoots.length > 0 ? { additionalRoots: projectAdditionalRoots } : {}),
-            // NOT wired, and the omission is the finding, not an oversight:
-            //
-            //  - `effectivePermissionRules` is NOT a `PermissionRulesWire`. The
-            //    merge helper returns the legacy permission context shape
-            //    (`{ permissions: { additionalDirectories, … } }`), and
-            //    `PermissionRulesWire` is a flat `Record<PermissionRuleSource,
-            //    readonly string[]>`. Handing one to the other would type-check
-            //    only behind a cast and would put a value in the run row that
-            //    no reader could interpret — a silent substitution wearing a
-            //    type annotation. So the manifest records
-            //    `permissionPolicy` as synthesised until a real wire-form source
-            //    exists, and the factory's `rules` support is ready for it.
-            //
-            //  - `permissionModeOverride` is `'default' | 'auto' |
-            //    'bypassPermissions'`, and `PermissionPolicyMode` is
-            //    `'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' |
-            //    'dontAsk'`. `auto` has no counterpart, and inventing one would
-            //    be the Control Plane deciding policy the product has not
-            //    decided. So the manifest's `mode` stays the standing default
-            //    and says so, rather than guessing which half of `auto` was
-            //    meant.
-            runOrigin: runOrigin === 'agent' ? 'bot' : runOrigin === 'background' ? 'wake' : 'user',
-            // A chat turn IS a streaming turn. Naming it is what makes a
-            // worker that cannot stream a refusal rather than a silent
-            // degradation — see `requiredCapabilities` in the manifest.
-            requiredCapabilities: ['streaming'],
-          }, dispatchAdmission);
-          if (!start.accepted) {
+          // The turn starts through the UNIFIED session entry, the same one
+          // the standalone Host uses.
+          //
+          // The R1.0 audit found the Desktop calling the Control Plane's
+          // start entry directly, and the two paths disagreeing about what a
+          // refusal MEANS: the Host collapsed five internal stages onto two
+          // wire stages, while the Desktop read the internal stage and
+          // answered with it. So the same refusal produced two different
+          // answers depending on which client asked, and a caller that
+          // learned "the session is busy" from one and "the run did not
+          // open" from the other had no way to tell that one waits and the
+          // other retries.
+          //
+          // One entry, one answer. The Desktop keeps its own pre-admission
+          // work — the session lookup, the provider resolution, the worker
+          // spawn — because those are Desktop facts the standalone Host does
+          // not have. What it no longer does is decide for itself what a
+          // refusal means.
+          const outcome = deps.sessionService
+            ? await deps.sessionService.startRun({
+              sessionId,
+              intent: {
+                prompt,
+                options: parsed.options || {},
+                ...(typeof providerConfig?.model === 'string' ? { model: providerConfig.model } : {}),
+                ...(typeof providerConfig?.providerId === 'string' ? { providerId: providerConfig.providerId } : {}),
+                ...(providerConfig?.providerType === 'openai' || providerConfig?.providerType === 'anthropic'
+                  ? { apiFormat: providerConfig.providerType }
+                  : {}),
+                // Always a string. `RunManifest.cwd` is required, and the `init`
+                // command a few lines above already uses `''` for "no working
+                // directory"; passing `undefined` instead put an absent cwd INTO
+                // the frozen manifest, where it hashed as a real configuration.
+                workingDirectory: workingDirectory || '',
+                ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
+                // R2.2: the configuration the router ALREADY resolved, handed to the
+                // Control Plane rather than re-derived by it. Before this the
+                // manifest was assembled from a fraction of what this function
+                // holds, so the run row described a run whose profile, mode,
+                // effort, permission policy and roots could not be reconstructed
+                // from the run itself.
+                // `parsed.options` is typed `Record<string, unknown>`, so each of
+                // these is narrowed at the boundary rather than cast. A cast here
+                // would put a value into the run row that nothing had checked.
+                ...(typeof parsed.options?.agentProfileId === 'string' && parsed.options.agentProfileId !== ''
+                  ? { agentProfileId: parsed.options.agentProfileId }
+                  : {}),
+                ...(typeof parsed.options?.mode === 'string' && parsed.options.mode !== ''
+                  ? { modes: [parsed.options.mode] }
+                  : {}),
+                ...(typeof parsed.options?.effort === 'string' ? { effort: parsed.options.effort } : {}),
+                // The project's other writable roots are already merged into the
+                // rules the worker gets, so recording them here keeps the manifest's
+                // root set and the executor's root set from being derived twice.
+                ...(projectAdditionalRoots.length > 0 ? { additionalRoots: projectAdditionalRoots } : {}),
+                // NOT wired, and the omission is the finding, not an oversight:
+                //
+                //  - `effectivePermissionRules` is NOT a `PermissionRulesWire`. The
+                //    merge helper returns the legacy permission context shape
+                //    (`{ permissions: { additionalDirectories, … } }`), and
+                //    `PermissionRulesWire` is a flat `Record<PermissionRuleSource,
+                //    readonly string[]>`. Handing one to the other would type-check
+                //    only behind a cast and would put a value in the run row that
+                //    no reader could interpret — a silent substitution wearing a
+                //    type annotation. So the manifest records
+                //    `permissionPolicy` as synthesised until a real wire-form source
+                //    exists, and the factory's `rules` support is ready for it.
+                //
+                //  - `permissionModeOverride` is `'default' | 'auto' |
+                //    'bypassPermissions'`, and `PermissionPolicyMode` is
+                //    `'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' |
+                //    'dontAsk'`. `auto` has no counterpart, and inventing one would
+                //    be the Control Plane deciding policy the product has not
+                //    decided. So the manifest's `mode` stays the standing default
+                //    and says so, rather than guessing which half of `auto` was
+                //    meant.
+                runOrigin: runOrigin === 'agent' ? 'bot' : runOrigin === 'background' ? 'wake' : 'user',
+                // A chat turn IS a streaming turn. Naming it is what makes a
+                // worker that cannot stream a refusal rather than a silent
+                // degradation — see `requiredCapabilities` in the manifest.
+                requiredCapabilities: ['streaming'],
+              },
+              ...(dispatchAdmission === undefined ? {} : { admission: dispatchAdmission }),
+            })
+            // A router assembled WITHOUT the session service keeps the direct
+            // path, and the classifier still decides what the refusal means.
+            : classifyRunStartAcceptance(await deps.runOrchestrator.openRun(sessionId, {
+              prompt,
+              options: parsed.options || {},
+              workingDirectory: workingDirectory || '',
+              ...(resolvedProject?.projectId ? { projectId: resolvedProject.projectId } : {}),
+              ...(typeof parsed.options?.agentProfileId === 'string' && parsed.options.agentProfileId !== ''
+                ? { agentProfileId: parsed.options.agentProfileId }
+                : {}),
+              ...(typeof parsed.options?.mode === 'string' && parsed.options.mode !== ''
+                ? { modes: [parsed.options.mode] }
+                : {}),
+              ...(typeof parsed.options?.effort === 'string' ? { effort: parsed.options.effort } : {}),
+              ...(projectAdditionalRoots.length > 0 ? { additionalRoots: projectAdditionalRoots } : {}),
+              runOrigin: runOrigin === 'agent' ? 'bot' : runOrigin === 'background' ? 'wake' : 'user',
+              requiredCapabilities: ['streaming'],
+            }, dispatchAdmission));
+          if (outcome.state !== 'admitted') {
             // The refusal is ANSWERED, not logged.
             //
             // The previous comment here claimed the stream handlers "will close
@@ -1509,27 +1580,25 @@ async function handlePostChat(
             // of showing an error.
             //
             // So the response is answered here, while it is still this router's
-            // to answer. `openRun` has already given the run row a terminal, so
-            // the failure is durable as well as visible, and the stage travels
-            // in the body because an operator reading the log needs to know
-            // which of the five refusals this was.
-            httpLogger.error('chat turn could not be dispatched — answering the request', new Error(start.reason), {
+            // to answer. The run row has already been given a terminal, so the
+            // failure is durable as well as visible, and the stage travels in
+            // the body because an operator reading the log needs to know which
+            // of the refusals this was.
+            httpLogger.error('chat turn could not be dispatched — answering the request', new Error(outcome.reason), {
               sessionId,
-              runId: start.runId ?? undefined,
-              stage: start.stage,
-              reason: start.reason,
+              outcomeStage: outcome.stage,
+              reason: outcome.reason,
             });
             // The streaming lock is taken for a turn that will never stream, so
             // it is released here exactly as the `catch` below releases it.
             revertStreamingLock();
             sendJson(res, 500, {
-              error: `this turn could not be started: ${start.reason}`,
-              stage: start.stage,
-              ...(start.runId === null ? {} : { runId: start.runId }),
+              error: `this turn could not be started: ${outcome.reason}`,
+              stage: admissionWireStage(outcome.stage),
             });
             return;
           }
-          res.setHeader('x-duya-run-id', start.runId);
+          res.setHeader('x-duya-run-id', outcome.identity.runId);
         }
 
         // The run is open and the turn is dispatched, so the response can be
