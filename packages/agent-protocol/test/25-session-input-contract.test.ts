@@ -35,12 +35,34 @@ import {
   SESSION_INPUT_ACTOR_KINDS,
   SESSION_INPUT_INTENTS,
   SESSION_INPUT_STAGES,
+  type SessionControlLeaseRequest,
+  type SessionInputReceipt,
+  type SessionInputRequest,
 } from '../src/index.js';
 
 const RUN_API_SRC = fileURLToPath(new URL('../src/run-api.ts', import.meta.url));
 const SESSION_INPUT_SRC = fileURLToPath(new URL('../src/session-input.ts', import.meta.url));
 
+/**
+ * The identity is derived by the Host, so neither request may carry one.
+ *
+ * These are COMPILE-time guards: adding an `actor` field back to
+ * `SessionInputRequest` makes the type `never`, and the assignment below
+ * stops compiling. A runtime assertion could not catch that — an extra
+ * optional field is invisible at runtime — which is exactly why this one
+ * lives in the type system.
+ */
+type RequestMustCarryNoIdentity = 'actor' extends keyof SessionInputRequest ? never : true;
+type LeaseRequestMustCarryNoHolder = 'holder' extends keyof SessionControlLeaseRequest ? never : true;
+const requestCarriesNoIdentity: RequestMustCarryNoIdentity = true;
+const leaseRequestCarriesNoHolder: LeaseRequestMustCarryNoHolder = true;
+
 describe('drift #25: the R1.0 session input contract', () => {
+  it('neither request carries a self-declared identity', () => {
+    expect(requestCarriesNoIdentity).toBe(true);
+    expect(leaseRequestCarriesNoHolder).toBe(true);
+  });
+
   it('the receipt stages are exactly the five provable ones', () => {
     expect([...SESSION_INPUT_STAGES]).toEqual([
       'persisted',
@@ -77,6 +99,20 @@ describe('drift #25: the R1.0 session input contract', () => {
 
   it('a control lease can be held by a user, a bot or a plugin', () => {
     expect([...SESSION_CONTROL_HOLDER_KINDS]).toEqual(['user', 'bot', 'plugin']);
+  });
+
+  it('the receipt names the identity the Host derived', () => {
+    // The identity moved from the request to the outcome, so a caller can
+    // see WHO was recorded and still cannot forge it.
+    const receipt: SessionInputReceipt = {
+      inputId: 'input-1',
+      requestId: 'request-1',
+      sessionId: 'session-1',
+      actor: { kind: 'user', id: 'local' },
+      stage: 'persisted',
+    };
+    expect(receipt.actor.kind).toBe('user');
+    expect(receipt.stage).toBe('persisted');
   });
 
   it('HostRunExecutionApiV1 declares watchLiveAgentRunEvents exactly once', () => {

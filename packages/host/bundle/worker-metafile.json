@@ -417,7 +417,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/session-input.ts": {
-      "bytes": 10659,
+      "bytes": 11764,
       "imports": [],
       "format": "esm"
     },

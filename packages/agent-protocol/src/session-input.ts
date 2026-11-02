@@ -19,16 +19,25 @@
  * to attach to. These types are that vocabulary. They are ADDITIVE: no
  * production path uses them yet, and R1.1 wires the first one.
  *
- * ## The actor is DERIVED, never submitted
+ * ## The identity is DERIVED, and the request does not carry one
  *
- * `actor` exists on the request so a receipt can name who sent something, but
- * the Host MUST derive it from the authenticated caller, the Bot mandate, or a
- * trusted Plugin binding — never from a field a model or a plugin wrote into a
- * prompt. A self-declared actor would make "the user said this" and "a model
- * said the user said this" indistinguishable in the durable record, and the
- * whole point of the control lease is that it decides who may direct a Session.
- * The type therefore keeps `actor` on the REQUEST (the Host fills it in when
- * it builds the durable record) and keeps it off the receipt's trust chain.
+ * The request has NO `actor` field, and the lease request has NO `holder`
+ * field. That is the whole point: the Host derives the identity from the
+ * authenticated caller, the Bot mandate, or a trusted Plugin binding, and
+ * never from a field a model, a plugin or a client wrote into a payload.
+ *
+ * An earlier draft of this file put `actor` on the request and described it
+ * as "filled in by the Host" — which is incoherent, because the request IS
+ * what the client sends. It would have invited exactly the failure the plan
+ * names: "the user said this" and "a model said the user said this" would
+ * have been indistinguishable in the durable record, and the control lease
+ * decides who may direct a Session.
+ *
+ * So the derived identity appears on the OUTCOME instead: the receipt echoes
+ * the actor the Host recorded, and the lease names the holder the Host
+ * granted it to. A caller can therefore see who was recorded — and cannot
+ * forge it. Drift test #25 fails the build if an identity field reappears on
+ * either request.
  *
  * ## `requestId` is the dedup key, and it is the caller's
  *
@@ -140,14 +149,15 @@ export interface SessionContextRef {
  *
  * Additive: this is the shape R1.1's input service accepts. Existing callers
  * keep using `startAgentRun` and the mailbox until they are migrated.
+ *
+ * There is deliberately NO identity field here. See the file header: the
+ * Host derives who sent the input, and the receipt echoes it.
  */
 export interface SessionInputRequest {
   readonly sessionId: string;
   /** Caller-chosen idempotency key. Retrying a submit reuses it. */
   readonly requestId: string;
   readonly intent: SessionInputIntent;
-  /** Filled in by the Host from the authenticated caller. */
-  readonly actor: SessionInputActor;
   readonly content: string;
   readonly attachments?: readonly FileAttachment[];
   readonly contextRefs?: readonly SessionContextRef[];
@@ -168,6 +178,13 @@ export interface SessionInputReceipt {
   readonly inputId: string;
   readonly requestId: string;
   readonly sessionId: string;
+  /**
+   * The identity the Host DERIVED for this input.
+   *
+   * Echoed, never supplied. A caller can see who was recorded and cannot
+   * claim to be someone else.
+   */
+  readonly actor: SessionInputActor;
   readonly stage: SessionInputStage;
   /** Present when `stage` is `rejected`. */
   readonly reason?: string;
@@ -207,14 +224,16 @@ export interface SessionControlLease {
   readonly expiresAt: number;
 }
 
-/** What a lease request asks for. */
+/**
+ * What a lease request asks for.
+ *
+ * There is NO `holder` field. The holder is the authenticated caller, derived
+ * by the Host — a request that named its own holder would let a plugin ask
+ * for a user's lease. The granted lease names the holder the Host recorded.
+ */
 export interface SessionControlLeaseRequest {
   readonly sessionId: string;
   readonly requestId: string;
-  readonly holder: {
-    readonly kind: SessionControlHolderKind;
-    readonly id: string;
-  };
   /**
    * The revision the caller believes is current.
    *
