@@ -58,6 +58,6 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 本轮证据与接续
 
-本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。Coordinator 角色、直接派发服务、项目记忆 scope 与 Desktop 工作台接线仍待完成，不能视为闭环已交付。
+本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。已加 Host 强制工具白名单的隐藏 Coordinator profile，并让项目新对话绑定/复用它。直接派发服务、项目记忆 scope、Task/activity 工作台仍待完成，不能视为闭环已交付。
 
-下一动作：实现 Host Coordinator 的管理工具与工作 Session 派发/结果对账，随后接项目记忆 scope 和 Desktop 项目入口。全仓 `typecheck:all` 正在运行；不把 Host API 上的绑定能力当成 UI/运行时闭环。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+下一动作：将现有 `session`/`todo` 调用闭合到 Project Task 创建、工作 Session 派发/结果对账，随后接项目记忆 scope 和 Task/activity UI。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
