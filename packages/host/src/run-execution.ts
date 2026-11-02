@@ -69,6 +69,7 @@ import {
   type RunDispatchAdmission,
 } from './run-orchestrator.js';
 import { WorkerManager } from './worker-manager.js';
+import { InteragentServer } from './worker-interagent-server.js';
 import { resolveTurnOverrides } from './run-turn-overrides.js';
 import { SessionState, WorkerSessionRegistry } from './worker-session-registry.js';
 import { normalizeWorkerEvent } from './worker-frames.js';
@@ -229,6 +230,15 @@ export class HostRunExecutionController {
    * Runtime asks, the Host decides.
    */
   readonly #sessionService: RuntimeSessionService<HostSessionStartRequest>;
+  /**
+   * The Host's `interagent:invoke` server.
+   *
+   * Without it the `MessageSession` tool's invoke was dropped on the floor:
+   * the caller waited out its watchdog and reported "interagent local
+   * timeout", which is the one symptom that hides the cause. See the
+   * module's own header.
+   */
+  readonly #interagent: InteragentServer;
   readonly #liveRunEvents = new LiveRunEventHub();
   readonly #nativeRunIds = new Set<string>();
   readonly #delegationBySession = new Map<string, SessionServiceCaller>();
@@ -377,6 +387,21 @@ export class HostRunExecutionController {
     // first place.
     this.#sessionService = createHostSessionService<HostSessionStartRequest>({
       controlPlane: this.#orchestrator,
+    });
+
+    // The inter-agent server, wired to the same control plane the ordinary
+    // runs use. The target's turn is started through `startAgentRun`, so it
+    // is admitted, recorded and settled like any other run — the server
+    // adds a channel, not a second admission path.
+    this.#interagent = new InteragentServer({
+      startRun: (input) => this.startAgentRun(input),
+      isSessionBusy: (sessionId) => this.isSessionBusy(sessionId),
+      getWorker: (sessionId) => this.#workerManager.getWorker(sessionId),
+      cancelRun: (runId, reason) => this.cancelAgentRun(runId, reason),
+      log: {
+        warn: (message, context) => options.logger.warn(message, context),
+        info: (message, context) => options.logger.info(message, context),
+      },
     });
   }
 
@@ -882,6 +907,23 @@ export class HostRunExecutionController {
       return;
     }
 
+    if (type === 'interagent:invoke') {
+      // The CALLER is the session whose worker sent this, as the Host knows
+      // it. The message carries a `callerSessionId`, but a worker that could
+      // name a different session in it could make the Host deliver one
+      // session's events to another, so the Host's own binding wins.
+      await this.#interagent.handleInvoke({
+        id: typeof msg.id === 'string' ? msg.id : '',
+        callerSessionId: sessionId,
+        callerAgentName: typeof msg.callerAgentName === 'string' ? msg.callerAgentName : 'agent',
+        targetSessionId: typeof msg.targetSessionId === 'string' ? msg.targetSessionId : '',
+        message: typeof msg.message === 'string' ? msg.message : '',
+        mode: msg.mode === 'full' ? 'full' : 'minimal',
+        timeout: typeof msg.timeout === 'number' && Number.isFinite(msg.timeout) ? msg.timeout : 60,
+      });
+      return;
+    }
+
     if (type === 'bash_task:update') {
       // The worker's registry is the only writer of bash task state; this
       // message is already a complete snapshot, so replace rather than merge.
@@ -910,6 +952,13 @@ export class HostRunExecutionController {
           this.#workerManager.sendCommand(sessionId, { type: 'permission:resolve', sessionId, id: (request as Record<string, unknown>).id, decision: 'deny' });
           throw error;
         }
+      }
+      // A session that is the TARGET of an inter-agent invoke has its
+      // frames copied to the CALLER. The frame travels RAW, in the worker's
+      // own `chat:*` vocabulary, because that is the vocabulary the caller's
+      // tool reads.
+      if (type.startsWith('chat:')) {
+        this.#interagent.forwardTargetFrame(sessionId, msg);
       }
       const normalized = normalizeWorkerEvent(msg);
       if (normalized === null) return;

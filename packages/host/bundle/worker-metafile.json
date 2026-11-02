@@ -31704,6 +31704,11 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-interagent-server.ts": {
+      "bytes": 10178,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/run-turn-overrides.ts": {
       "bytes": 16532,
       "imports": [
@@ -31747,7 +31752,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 49505,
+      "bytes": 52014,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -31793,6 +31798,11 @@
           "path": "packages/host/src/worker-manager.ts",
           "kind": "import-statement",
           "original": "./worker-manager.js"
+        },
+        {
+          "path": "packages/host/src/worker-interagent-server.ts",
+          "kind": "import-statement",
+          "original": "./worker-interagent-server.js"
         },
         {
           "path": "packages/host/src/run-turn-overrides.ts",
@@ -37325,7 +37335,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-services/interagent-messaging.ts": {
-      "bytes": 2274,
+      "bytes": 2892,
       "imports": [
         {
           "path": "packages/host/src/worker-interagent-calls.ts",
@@ -40671,7 +40681,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42576,7 +42586,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -44511,7 +44521,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45888,7 +45898,7 @@
           "bytesInOutput": 70
         },
         "packages/host/src/worker-tool-services/interagent-messaging.ts": {
-          "bytesInOutput": 637
+          "bytesInOutput": 751
         },
         "packages/host/src/worker-tool-bindings/message-session.ts": {
           "bytesInOutput": 70
@@ -46035,7 +46045,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4758834
+      "bytes": 4758946
     }
   }
 }
