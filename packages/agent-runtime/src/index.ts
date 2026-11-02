@@ -233,6 +233,28 @@ export type {
   WorkerAdapterSurfaceOptions,
 } from './engine/worker-adapter-surface.js';
 
+// Plan R1.1: the run's event spine, its engine execution and its tool side
+// effect ledger are RUNTIME concerns -- they speak only the protocol and the
+// runtime's own ports. They lived in Host because the worker was the only
+// caller; ownership follows the vocabulary, not the caller.
+export { createRunEventSpine } from './engine/run-event-spine.js';
+export type {
+  RunEventSpine,
+  RunEventSpineOptions,
+  SpinePersistence,
+} from './engine/run-event-spine.js';
+export { executeRunEngine } from './engine/run-engine-execution.js';
+export type {
+  ExecuteRunEngineOptions,
+  RunEngineExecutionResult,
+} from './engine/run-engine-execution.js';
+export {
+  createToolSideEffectLedger,
+  defaultLedgerDir,
+  ledgerFile,
+} from './engine/tool-side-effect-ledger.js';
+export type { LedgerOptions } from './engine/tool-side-effect-ledger.js';
+
 export {
   LEGACY_SSE_TYPES,
   INTERNAL_SSE_TYPES,
