@@ -340,7 +340,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/run.ts": {
-      "bytes": 12840,
+      "bytes": 12845,
       "imports": [],
       "format": "esm"
     },
@@ -10645,7 +10645,7 @@
       "format": "cjs"
     },
     "../../../node_modules/picomatch/lib/scan.js": {
-      "bytes": 9483,
+      "bytes": 9189,
       "imports": [
         {
           "path": "../../../node_modules/picomatch/lib/utils.js",
@@ -10661,7 +10661,7 @@
       "format": "cjs"
     },
     "../../../node_modules/picomatch/lib/parse.js": {
-      "bytes": 35144,
+      "bytes": 33731,
       "imports": [
         {
           "path": "../../../node_modules/picomatch/lib/constants.js",
@@ -10677,7 +10677,7 @@
       "format": "cjs"
     },
     "../../../node_modules/picomatch/lib/picomatch.js": {
-      "bytes": 10722,
+      "bytes": 10091,
       "imports": [
         {
           "path": "../../../node_modules/picomatch/lib/scan.js",
@@ -10895,12 +10895,12 @@
       "format": "esm"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js": {
-      "bytes": 10619,
+      "bytes": 10309,
       "imports": [],
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/exception.js": {
-      "bytes": 6405,
+      "bytes": 5950,
       "imports": [],
       "format": "cjs"
     },
@@ -10916,7 +10916,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/helpers/each.js": {
-      "bytes": 11772,
+      "bytes": 9875,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
@@ -11059,7 +11059,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/internal/proto-access.js": {
-      "bytes": 11057,
+      "bytes": 8627,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
@@ -11075,7 +11075,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/base.js": {
-      "bytes": 9641,
+      "bytes": 9636,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
@@ -11121,7 +11121,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/runtime.js": {
-      "bytes": 49189,
+      "bytes": 45261,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
@@ -11207,34 +11207,19 @@
       "imports": [],
       "format": "cjs"
     },
-    "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/node-types.js": {
-      "bytes": 2235,
-      "imports": [],
-      "format": "cjs"
-    },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/visitor.js": {
-      "bytes": 15292,
+      "bytes": 12631,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/exception.js",
           "kind": "require-call",
           "original": "../exception"
-        },
-        {
-          "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
-          "kind": "require-call",
-          "original": "../utils"
-        },
-        {
-          "path": "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/node-types.js",
-          "kind": "require-call",
-          "original": "./node-types"
         }
       ],
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/whitespace-control.js": {
-      "bytes": 24212,
+      "bytes": 23162,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/visitor.js",
@@ -11256,7 +11241,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/base.js": {
-      "bytes": 3926,
+      "bytes": 9943,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/parser.js",
@@ -11274,6 +11259,11 @@
           "original": "./helpers"
         },
         {
+          "path": "../../../node_modules/handlebars/dist/cjs/handlebars/exception.js",
+          "kind": "require-call",
+          "original": "../exception"
+        },
+        {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
           "kind": "require-call",
           "original": "../utils"
@@ -11282,7 +11272,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/compiler.js": {
-      "bytes": 73950,
+      "bytes": 58116,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/exception.js",
@@ -11298,11 +11288,6 @@
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/ast.js",
           "kind": "require-call",
           "original": "./ast"
-        },
-        {
-          "path": "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/node-types.js",
-          "kind": "require-call",
-          "original": "./node-types"
         }
       ],
       "format": "cjs"
@@ -11455,7 +11440,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/code-gen.js": {
-      "bytes": 21565,
+      "bytes": 15878,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js",
@@ -11471,7 +11456,7 @@
       "format": "cjs"
     },
     "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/javascript-compiler.js": {
-      "bytes": 124572,
+      "bytes": 122987,
       "imports": [
         {
           "path": "../../../node_modules/handlebars/dist/cjs/handlebars/base.js",
@@ -13516,8 +13501,13 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-prompts/configs/project.ts": {
+      "bytes": 1167,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/worker-prompts/registry.ts": {
-      "bytes": 1431,
+      "bytes": 1537,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/PromptsRegistry.ts",
@@ -13543,6 +13533,11 @@
           "path": "packages/host/src/worker-prompts/configs/bot.ts",
           "kind": "import-statement",
           "original": "./configs/bot.js"
+        },
+        {
+          "path": "packages/host/src/worker-prompts/configs/project.ts",
+          "kind": "import-statement",
+          "original": "./configs/project.js"
         }
       ],
       "format": "esm"
@@ -16421,7 +16416,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/progress-bridge.ts": {
-      "bytes": 4681,
+      "bytes": 3975,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/progress-tracker.ts",
@@ -16923,7 +16918,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/service.ts": {
-      "bytes": 49758,
+      "bytes": 49506,
       "imports": [
         {
           "path": "node:crypto",
@@ -19581,7 +19576,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-      "bytes": 53923,
+      "bytes": 51762,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js",
@@ -19996,7 +19991,7 @@
       "imports": []
     },
     "../../../node_modules/fast-uri/lib/utils.js": {
-      "bytes": 22505,
+      "bytes": 20635,
       "imports": [],
       "format": "cjs"
     },
@@ -20012,7 +20007,7 @@
       "format": "cjs"
     },
     "../../../node_modules/fast-uri/index.js": {
-      "bytes": 25881,
+      "bytes": 21620,
       "imports": [
         {
           "path": "../../../node_modules/fast-uri/lib/utils.js",
@@ -21257,7 +21252,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-      "bytes": 5247,
+      "bytes": 1478,
       "imports": [],
       "format": "esm"
     },
@@ -21273,7 +21268,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-      "bytes": 8736,
+      "bytes": 8232,
       "imports": [
         {
           "path": "../../../node_modules/zod/v4/index.js",
@@ -21294,7 +21289,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-      "bytes": 47017,
+      "bytes": 40372,
       "imports": [
         {
           "path": "../../../node_modules/pkce-challenge/dist/index.node.js",
@@ -21325,11 +21320,6 @@
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/server/auth/errors.js",
           "kind": "import-statement",
           "original": "../server/auth/errors.js"
-        },
-        {
-          "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js",
-          "kind": "import-statement",
-          "original": "../shared/transport.js"
         }
       ],
       "format": "esm"
@@ -21356,7 +21346,7 @@
       "format": "esm"
     },
     "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-      "bytes": 23781,
+      "bytes": 22564,
       "imports": [
         {
           "path": "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/mediaType.js",
@@ -21954,250 +21944,250 @@
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js": {
+    "../../../node_modules/diff/libesm/diff/base.js": {
       "bytes": 12008,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/character.js": {
+    "../../../node_modules/diff/libesm/diff/character.js": {
       "bytes": 228,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/string.js": {
+    "../../../node_modules/diff/libesm/util/string.js": {
       "bytes": 7127,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/word.js": {
+    "../../../node_modules/diff/libesm/diff/word.js": {
       "bytes": 13933,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/string.js",
+          "path": "../../../node_modules/diff/libesm/util/string.js",
           "kind": "import-statement",
           "original": "../util/string.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/params.js": {
+    "../../../node_modules/diff/libesm/util/params.js": {
       "bytes": 410,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js": {
+    "../../../node_modules/diff/libesm/diff/line.js": {
       "bytes": 2629,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/params.js",
+          "path": "../../../node_modules/diff/libesm/util/params.js",
           "kind": "import-statement",
           "original": "../util/params.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/sentence.js": {
+    "../../../node_modules/diff/libesm/diff/sentence.js": {
       "bytes": 1904,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/css.js": {
+    "../../../node_modules/diff/libesm/diff/css.js": {
       "bytes": 275,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/json.js": {
+    "../../../node_modules/diff/libesm/diff/json.js": {
       "bytes": 2914,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "./line.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/diff/array.js": {
+    "../../../node_modules/diff/libesm/diff/array.js": {
       "bytes": 370,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./base.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/line-endings.js": {
+    "../../../node_modules/diff/libesm/patch/line-endings.js": {
       "bytes": 2334,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js": {
-      "bytes": 6218,
+    "../../../node_modules/diff/libesm/patch/parse.js": {
+      "bytes": 23719,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/util/distance-iterator.js": {
+    "../../../node_modules/diff/libesm/util/distance-iterator.js": {
       "bytes": 1487,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/apply.js": {
+    "../../../node_modules/diff/libesm/patch/apply.js": {
       "bytes": 12892,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/string.js",
+          "path": "../../../node_modules/diff/libesm/util/string.js",
           "kind": "import-statement",
           "original": "../util/string.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/line-endings.js",
+          "path": "../../../node_modules/diff/libesm/patch/line-endings.js",
           "kind": "import-statement",
           "original": "./line-endings.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js",
+          "path": "../../../node_modules/diff/libesm/patch/parse.js",
           "kind": "import-statement",
           "original": "./parse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/util/distance-iterator.js",
+          "path": "../../../node_modules/diff/libesm/util/distance-iterator.js",
           "kind": "import-statement",
           "original": "../util/distance-iterator.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/reverse.js": {
-      "bytes": 1081,
+    "../../../node_modules/diff/libesm/patch/reverse.js": {
+      "bytes": 3061,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/patch/create.js": {
-      "bytes": 9499,
+    "../../../node_modules/diff/libesm/patch/create.js": {
+      "bytes": 15125,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "../diff/line.js"
         }
       ],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/convert/dmp.js": {
+    "../../../node_modules/diff/libesm/convert/dmp.js": {
       "bytes": 580,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/convert/xml.js": {
+    "../../../node_modules/diff/libesm/convert/xml.js": {
       "bytes": 781,
       "imports": [],
       "format": "esm"
     },
-    "../../../packages/capabilities/node_modules/diff/libesm/index.js": {
+    "../../../node_modules/diff/libesm/index.js": {
       "bytes": 1914,
       "imports": [
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js",
+          "path": "../../../node_modules/diff/libesm/diff/base.js",
           "kind": "import-statement",
           "original": "./diff/base.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/character.js",
+          "path": "../../../node_modules/diff/libesm/diff/character.js",
           "kind": "import-statement",
           "original": "./diff/character.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/word.js",
+          "path": "../../../node_modules/diff/libesm/diff/word.js",
           "kind": "import-statement",
           "original": "./diff/word.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js",
+          "path": "../../../node_modules/diff/libesm/diff/line.js",
           "kind": "import-statement",
           "original": "./diff/line.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/sentence.js",
+          "path": "../../../node_modules/diff/libesm/diff/sentence.js",
           "kind": "import-statement",
           "original": "./diff/sentence.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/css.js",
+          "path": "../../../node_modules/diff/libesm/diff/css.js",
           "kind": "import-statement",
           "original": "./diff/css.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/json.js",
+          "path": "../../../node_modules/diff/libesm/diff/json.js",
           "kind": "import-statement",
           "original": "./diff/json.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/diff/array.js",
+          "path": "../../../node_modules/diff/libesm/diff/array.js",
           "kind": "import-statement",
           "original": "./diff/array.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/apply.js",
+          "path": "../../../node_modules/diff/libesm/patch/apply.js",
           "kind": "import-statement",
           "original": "./patch/apply.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/parse.js",
+          "path": "../../../node_modules/diff/libesm/patch/parse.js",
           "kind": "import-statement",
           "original": "./patch/parse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/reverse.js",
+          "path": "../../../node_modules/diff/libesm/patch/reverse.js",
           "kind": "import-statement",
           "original": "./patch/reverse.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/patch/create.js",
+          "path": "../../../node_modules/diff/libesm/patch/create.js",
           "kind": "import-statement",
           "original": "./patch/create.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/convert/dmp.js",
+          "path": "../../../node_modules/diff/libesm/convert/dmp.js",
           "kind": "import-statement",
           "original": "./convert/dmp.js"
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/convert/xml.js",
+          "path": "../../../node_modules/diff/libesm/convert/xml.js",
           "kind": "import-statement",
           "original": "./convert/xml.js"
         }
@@ -22218,7 +22208,7 @@
           "external": true
         },
         {
-          "path": "../../../packages/capabilities/node_modules/diff/libesm/index.js",
+          "path": "../../../node_modules/diff/libesm/index.js",
           "kind": "import-statement",
           "original": "diff"
         },
@@ -29641,7 +29631,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-pool.ts": {
-      "bytes": 28159,
+      "bytes": 27997,
       "imports": [
         {
           "path": "child_process",
@@ -30541,13 +30531,8 @@
       "format": "esm"
     },
     "packages/host/src/session-service.ts": {
-      "bytes": 30608,
+      "bytes": 28735,
       "imports": [
-        {
-          "path": "node:crypto",
-          "kind": "import-statement",
-          "external": true
-        },
         {
           "path": "node:fs/promises",
           "kind": "import-statement",
@@ -30557,6 +30542,27 @@
           "path": "node:path",
           "kind": "import-statement",
           "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/project/identity.ts": {
+      "bytes": 1674,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/project/dispatch.ts": {
+      "bytes": 6810,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/project/identity.ts",
+          "kind": "import-statement",
+          "original": "./identity.js"
         }
       ],
       "format": "esm"
@@ -30890,7 +30896,7 @@
       "format": "esm"
     },
     "packages/plugin-core/src/apps/declarations.ts": {
-      "bytes": 13677,
+      "bytes": 9957,
       "imports": [
         {
           "path": "../../../node_modules/zod/index.js",
@@ -32228,7 +32234,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-manager.ts": {
-      "bytes": 41074,
+      "bytes": 40270,
       "imports": [
         {
           "path": "child_process",
@@ -32735,7 +32741,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 55503,
+      "bytes": 55626,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -32791,6 +32797,11 @@
           "path": "packages/host/src/session-service.ts",
           "kind": "import-statement",
           "original": "./session-service.js"
+        },
+        {
+          "path": "packages/host/src/project/dispatch.ts",
+          "kind": "import-statement",
+          "original": "./project/dispatch.js"
         },
         {
           "path": "packages/host/src/host-diagnostics-log.ts",
@@ -35054,8 +35065,14 @@
       "format": "esm"
     },
     "packages/host/src/worker-profiles/types.ts": {
-      "bytes": 10981,
-      "imports": [],
+      "bytes": 10732,
+      "imports": [
+        {
+          "path": "packages/host/src/project/identity.ts",
+          "kind": "import-statement",
+          "original": "../project/identity.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/host/src/worker-profiles/AgentProfileService.ts": {
@@ -35382,7 +35399,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-hooks/executor.ts": {
-      "bytes": 22356,
+      "bytes": 22105,
       "imports": [
         {
           "path": "node:child_process",
@@ -41248,7 +41265,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42622,28 +42639,28 @@
           "bytesInOutput": 1118
         },
         "../../../node_modules/picomatch/lib/scan.js": {
-          "bytesInOutput": 3181
+          "bytesInOutput": 3081
         },
         "../../../node_modules/picomatch/lib/parse.js": {
-          "bytesInOutput": 14748
+          "bytesInOutput": 14525
         },
         "../../../node_modules/picomatch/lib/picomatch.js": {
-          "bytesInOutput": 2253
+          "bytesInOutput": 2226
         },
         "../../../node_modules/picomatch/index.js": {
           "bytesInOutput": 218
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/utils.js": {
-          "bytesInOutput": 1280
+          "bytesInOutput": 1261
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/exception.js": {
-          "bytesInOutput": 773
+          "bytesInOutput": 755
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/helpers/block-helper-missing.js": {
           "bytesInOutput": 475
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/helpers/each.js": {
-          "bytesInOutput": 1159
+          "bytesInOutput": 1077
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/helpers/helper-missing.js": {
           "bytesInOutput": 331
@@ -42673,10 +42690,10 @@
           "bytesInOutput": 534
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/internal/proto-access.js": {
-          "bytesInOutput": 1391
+          "bytesInOutput": 1277
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/base.js": {
-          "bytesInOutput": 1650
+          "bytesInOutput": 1649
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/safe-string.js": {
           "bytesInOutput": 198
@@ -42685,7 +42702,7 @@
           "bytesInOutput": 249
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/runtime.js": {
-          "bytesInOutput": 5850
+          "bytesInOutput": 5526
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/no-conflict.js": {
           "bytesInOutput": 398
@@ -42699,23 +42716,20 @@
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/parser.js": {
           "bytesInOutput": 26792
         },
-        "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/node-types.js": {
-          "bytesInOutput": 368
-        },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/visitor.js": {
-          "bytesInOutput": 1894
+          "bytesInOutput": 1753
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/whitespace-control.js": {
-          "bytesInOutput": 2569
+          "bytesInOutput": 2513
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/helpers.js": {
           "bytesInOutput": 2505
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/base.js": {
-          "bytesInOutput": 677
+          "bytesInOutput": 1629
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/compiler.js": {
-          "bytesInOutput": 8935
+          "bytesInOutput": 7771
         },
         "../../../node_modules/handlebars/node_modules/source-map/lib/base64.js": {
           "bytesInOutput": 369
@@ -42751,10 +42765,10 @@
           "bytesInOutput": 140
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/code-gen.js": {
-          "bytesInOutput": 2286
+          "bytesInOutput": 2093
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars/compiler/javascript-compiler.js": {
-          "bytesInOutput": 15580
+          "bytesInOutput": 15545
         },
         "../../../node_modules/handlebars/dist/cjs/handlebars.js": {
           "bytesInOutput": 687
@@ -42982,7 +42996,7 @@
           "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 698
@@ -43150,13 +43164,13 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -43294,13 +43308,13 @@
           "bytesInOutput": 362
         },
         "../../../node_modules/fast-uri/lib/utils.js": {
-          "bytesInOutput": 7695
+          "bytesInOutput": 7209
         },
         "../../../node_modules/fast-uri/lib/schemes.js": {
           "bytesInOutput": 2576
         },
         "../../../node_modules/fast-uri/index.js": {
-          "bytesInOutput": 7811
+          "bytesInOutput": 7148
         },
         "../../../node_modules/ajv/dist/runtime/uri.js": {
           "bytesInOutput": 163
@@ -43771,16 +43785,16 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1695
+          "bytesInOutput": 1694
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3079
+          "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 81
+          "bytesInOutput": 80
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1526
+          "bytesInOutput": 1521
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -43789,10 +43803,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50730
+          "bytesInOutput": 50715
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1885
+          "bytesInOutput": 1878
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -44578,7 +44592,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44590,7 +44604,7 @@
           "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9984
+          "bytesInOutput": 9969
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -44920,7 +44934,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 619
+          "bytesInOutput": 613
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -44943,8 +44957,11 @@
         "packages/host/src/worker-prompts/configs/bot.ts": {
           "bytesInOutput": 747
         },
+        "packages/host/src/worker-prompts/configs/project.ts": {
+          "bytesInOutput": 452
+        },
         "packages/host/src/worker-prompts/registry.ts": {
-          "bytesInOutput": 138
+          "bytesInOutput": 165
         },
         "packages/host/src/worker-prompts/bot/basicPrompt.ts": {
           "bytesInOutput": 479
@@ -45019,7 +45036,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1553
+          "bytesInOutput": 1549
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -45034,7 +45051,7 @@
           "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 669
+          "bytesInOutput": 667
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -45091,7 +45108,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45160,7 +45177,7 @@
           "bytesInOutput": 601
         },
         "packages/host/src/worker-subagents/progress-bridge.ts": {
-          "bytesInOutput": 1371
+          "bytesInOutput": 1302
         },
         "packages/host/src/worker-subagents/background-lifecycle.ts": {
           "bytesInOutput": 7942
@@ -45208,7 +45225,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/service.ts": {
-          "bytesInOutput": 16171
+          "bytesInOutput": 16142
         },
         "packages/capabilities/src/SubagentTool/subagentResult.ts": {
           "bytesInOutput": 2430
@@ -45400,7 +45417,7 @@
           "bytesInOutput": 271
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js": {
-          "bytesInOutput": 16761
+          "bytesInOutput": 16109
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/validation/ajv-provider.js": {
           "bytesInOutput": 457
@@ -45424,13 +45441,13 @@
           "bytesInOutput": 192
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js": {
-          "bytesInOutput": 1618
+          "bytesInOutput": 272
         },
         "../../../node_modules/pkce-challenge/dist/index.node.js": {
           "bytesInOutput": 846
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth.js": {
-          "bytesInOutput": 4573
+          "bytesInOutput": 4499
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/shared/auth-utils.js": {
           "bytesInOutput": 446
@@ -45439,7 +45456,7 @@
           "bytesInOutput": 1604
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/auth.js": {
-          "bytesInOutput": 11992
+          "bytesInOutput": 10592
         },
         "../../../node_modules/eventsource-parser/dist/index.js": {
           "bytesInOutput": 3426
@@ -45448,7 +45465,7 @@
           "bytesInOutput": 333
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/client/streamableHttp.js": {
-          "bytesInOutput": 7579
+          "bytesInOutput": 7073
         },
         "../../../node_modules/@modelcontextprotocol/sdk/dist/esm/inMemory.js": {
           "bytesInOutput": 618
@@ -45546,10 +45563,10 @@
         "packages/capabilities/src/EditTool/EditTool.ts": {
           "bytesInOutput": 11538
         },
-        "../../../packages/capabilities/node_modules/diff/libesm/diff/base.js": {
+        "../../../node_modules/diff/libesm/diff/base.js": {
           "bytesInOutput": 2784
         },
-        "../../../packages/capabilities/node_modules/diff/libesm/diff/line.js": {
+        "../../../node_modules/diff/libesm/diff/line.js": {
           "bytesInOutput": 630
         },
         "packages/capabilities/src/GlobTool/GlobTool.ts": {
@@ -45831,6 +45848,9 @@
         "packages/host/src/session-archive.ts": {
           "bytesInOutput": 10
         },
+        "packages/host/src/project/identity.ts": {
+          "bytesInOutput": 598
+        },
         "packages/host/src/host-diagnostics-log.ts": {
           "bytesInOutput": 20
         },
@@ -45868,7 +45888,7 @@
           "bytesInOutput": 5
         },
         "packages/plugin-core/src/apps/declarations.ts": {
-          "bytesInOutput": 3468
+          "bytesInOutput": 2647
         },
         "packages/host/src/session-input-api.ts": {
           "bytesInOutput": 15
@@ -45970,7 +45990,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-manager.ts": {
-          "bytesInOutput": 11490
+          "bytesInOutput": 11471
         },
         "packages/host/src/run-turn-overrides.ts": {
           "bytesInOutput": 5
@@ -46264,7 +46284,7 @@
           "bytesInOutput": 2644
         },
         "packages/host/src/worker-profiles/types.ts": {
-          "bytesInOutput": 4376
+          "bytesInOutput": 3827
         },
         "packages/host/src/worker-profiles/AgentProfileService.ts": {
           "bytesInOutput": 2643
@@ -46312,7 +46332,7 @@
           "bytesInOutput": 5
         },
         "packages/host/src/worker-hooks/executor.ts": {
-          "bytesInOutput": 5912
+          "bytesInOutput": 5897
         },
         "packages/host/src/worker-hooks/notify.ts": {
           "bytesInOutput": 670
@@ -46657,7 +46677,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4772012
+      "bytes": 4764449
     }
   }
 }

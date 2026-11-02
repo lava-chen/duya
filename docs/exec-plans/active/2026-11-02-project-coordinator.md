@@ -110,16 +110,18 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 
 下一动作：推送 `codex/project-run-feedback` 并以 `codex/project-memory-continuity` 为 base 开 stacked PR，不合并。之后先做 Coordinator 领域收敛（`packages/host/src/project/`：profile/policy、Task→Session 派发端口、上下文装配、结果对账；独立 project prompt 目录），让通用 `session-service` 不再判断具体产品身份；再统一重整 #583/#584 依赖。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
 
-### CI 门禁修复（2026-11-03）
+### Coordinator 领域收敛切片（2026-11-02）
 
-Owner：当前 Codex；worktree：`E:\Projects\duya\.claude\worktrees\project-run-feedback`；分支：`codex/project-run-feedback`；base：`master`（#583 已以 `bae0896e` 合入）。首个 CI run（41572058161）的 `test` 报 4 个失败文件，其中 3 个是 rebase 后才暴露的全局门禁，1 个是既有慢测试超时。
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\coordinator-seam`；分支：`codex/coordinator-seam`；base：`codex/project-run-feedback` `91db906e`（#585 head）。本切片只冻结 Coordinator 的产品身份、派发规则和提示词归属，不重构全仓、不改 Runner/协议、不扩张 UI。
 
-- `slice-classification`：`apps/desktop/src/main/projects/run-feedback.ts` 未被分类。新增该前缀到 `cp-durable`（Desktop 侧的结算胶水，写 durable activity 与唯一协调邮箱行），并按规则重录 `RULE_TABLE_FINGERPRINT`（仅此一条规则移动），提交 `dfab3147`。
-- `package-boundary`：`@duya/memory` 新增私有模块 `project-continuity` 未在断言列表中，补入，提交 `06643bbf`。
-- `13-citation-drift`：rebase 使 `router.ts` 整体后移 19 行，5 处引用失准；只改行号，锚点文本不变，提交 `bc67ea21`。
-- `PanelMoreMenu`：第 4 个等待 `listSurfaces` 的用例漏了 `SLOW_CATALOGUE_TIMEOUT_MS`，CI 在 30 s 默认值上超时；补同一截止时间，断言不变，提交 `4fb3f608`。
-- 引用改动落在 worker bundle 输入闭包内，重建并提交 `be463e55`；`npm run bundle:verify` 随后 FRESH 0/1050。
+已实现：`packages/host/src/project/identity.ts` 单点定义协调者 profile id、工作 Session profile、工具白名单、Task 字段上限、身份提示与 `isProjectCoordinatorProfile`；`packages/host/src/project/dispatch.ts` 以 `ProjectDispatchPort` 收敛派发规则（两段式：`planDispatch` 只读校验角色/Task/项目绑定，`createTask` 在 workspace 校验后落库），并提供归属授权 `authorizesWorkSession`、可管理 Session 列表 `listWorkSessionIds`、工作角色映射 `workSessionProfileId`。通用 `session-service.ts` 只依赖端口，不再出现 `project-coordinator`/`code-expert`/`projectCoordination` 字面量（新增源码边界测试守住）；`local-host.ts` 与 Desktop `desktop-session-management.ts` 都装配真实端口；`db-bridge.ts` 改用身份谓词。协调者 profile 改用身份常量，并新增独立 `project` 提示系统（`configs/project.ts` + `assets/project/delegation.hbs`、`reporting.hbs`），不再回落 `general`；身份文本仍由运行时以 `host:identity` 前置，提示系统只负责派发/汇报契约。`@duya/host/package.json` 增加 `./project/*` 子路径导出。
 
-验证环境：Windows、Node `v24.16.0`，在本 worktree 执行。`npm run typecheck:all` 退出 0（Electron 门禁 178 项既有错误、无新增）；`npm run architecture:check` 退出 0（3073 项容忍，无新增违规）；三个门禁测试分别 30/6/5 项通过；`PanelMoreMenu` 7 项通过（158 s）。工作区干净，5 个提交待推送。
+已知边界：`project-api.ts` 的 HTTP Task 管理、项目上下文装配与结果对账仍在各自模块，留给后续切片；本切片未改 #583 的记忆链路，也未合并任何 PR；`#585` 与本 PR 均保持 Draft，真机验收由用户负责。
 
-下一动作：推送本分支触发 CI；CI 绿后按仓库交付规则以 merge commit 合入 `master`，再把下一层 PR 的 base 改到 `master`、重新触发并验证。
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- 相关 Host/Desktop 7 个测试文件 67 项通过：`project-dispatch`（9）、`project-domain-boundary`（1）、`project-prompt`（2）、`worker-profiles/types`、`project-work-session-continuity`、Desktop `desktop-session-management`（5）、session/project 回归（`session-service`、`session-entry-guards`、`local-host`、`project-api-http`、`project-run-settlement`）。
+- `npm run build:packages`、`npm run typecheck:all`、`npm run architecture:check`、`npm run bundle:worker`、`npm run check:packaged-artifacts:bundle`、`NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--max-old-space-size=8192 npm run electron:build` 均退出 0；Electron 类型门禁 178 项既有错误仍在 baseline，架构门禁 3069 项 tolerated，无新增违规。
+- 提交后重跑 `npm run bundle:verify` 应为 FRESH（1053 项输入）；重建的 `packages/host/bundle` 随本提交入库。
+
+下一动作：提交并推送 `codex/coordinator-seam`，以 `codex/project-run-feedback` 为 base 开 stacked Draft PR，不合并；随后统一重整 #583/#584 依赖，再把项目上下文装配、HTTP Task 管理与结果对账并入领域层。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
