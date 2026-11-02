@@ -22787,7 +22787,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -40731,7 +40731,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -44571,7 +44571,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -46101,7 +46101,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4759105
+      "bytes": 4759116
     }
   }
 }
