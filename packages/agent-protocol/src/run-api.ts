@@ -249,14 +249,45 @@ export interface StartAgentRunInput {
  * something the Host will not run" and "the Host tried and could not run it"
  * are different facts, and a caller that cannot tell them apart retries a
  * request that will never succeed.
+ *
+ * ## The five refusal stages are not decoration
+ *
+ * The Host used to collapse five internal failure modes into two wire
+ * stages, and the collapsed bucket mixed three situations that need
+ * different next steps:
+ *
+ * - "the session is busy" — WAIT, then try again.
+ * - "this exact run already exists" — RECONCILE against the receipt. Do not
+ *   start a second run, and do not report an error either.
+ * - "the run row was never written" — RETRY, and tell an operator.
+ *
+ * A caller that only learns "the run did not open" has to guess, and the
+ * guess is wrong in a way the user sees: a busy session looks like a failed
+ * turn, and an already-recorded run looks like a lost one.
+ *
+ * So the internal stages get their own wire stages here. The two coarse
+ * stages stay because they are still the honest answer for the cases that
+ * have no finer one, and because an existing consumer must keep working.
  */
 export type StartAgentRunStage =
   | 'created'
   | 'dispatched'
   | 'refused_no_session'
   | 'refused_invalid_input'
+  /** The run did not open and no finer stage applies. */
   | 'refused_run_open_failed'
-  | 'refused_dispatch_failed';
+  /** The executor was not there. Retrying after one spawns is the fix. */
+  | 'refused_dispatch_failed'
+  /** Another run owns this session. Wait for it to settle. */
+  | 'refused_session_busy'
+  /** The run already exists with the same manifest and input. Reconcile. */
+  | 'refused_run_already_exists'
+  /** The Control Plane would not create the row. Retry, and alert. */
+  | 'refused_run_not_created'
+  /** The row exists but `run.started` never landed. Retry. */
+  | 'refused_run_not_durable'
+  /** The dispatch itself threw. A Host bug rather than a state. */
+  | 'refused_dispatch_threw';
 
 export type StartAgentRunResult =
   | { readonly accepted: true; readonly stage: 'created' | 'dispatched'; readonly runId: RunId }

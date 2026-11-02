@@ -28,6 +28,7 @@ export type {
   SessionRunRequest,
   SessionRunIdentity,
   SessionAdmissionOutcome,
+  SessionAdmissionStage,
   SessionAdmissionPort,
   SessionExecutionPort,
   SessionHistoryLoad,

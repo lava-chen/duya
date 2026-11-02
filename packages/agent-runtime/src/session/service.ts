@@ -48,8 +48,15 @@ import type {
   SessionRunRequest,
 } from './ports.js';
 
-/** The ports a session service is assembled from. */
-export interface RuntimeSessionServicePorts {
+/**
+ * The ports a session service is assembled from.
+ *
+ * Generic over the admission request so a Host can hand forward a request
+ * shape of its own. The service forwards the request without reading it, so
+ * the only thing the generic buys is that a Host is not forced to reshape
+ * what it already resolved into the Runtime's default shape.
+ */
+export interface RuntimeSessionServicePorts<Request = SessionRunRequest> {
   /**
    * Required.
    *
@@ -57,7 +64,7 @@ export interface RuntimeSessionServicePorts {
    * reason to exist, and making the port optional would push that failure
    * into the first real call instead of the assembly.
    */
-  readonly admission: SessionAdmissionPort;
+  readonly admission: SessionAdmissionPort<Request>;
   /**
    * Optional, and its absence is LOUD.
    *
@@ -69,7 +76,7 @@ export interface RuntimeSessionServicePorts {
 }
 
 /** The Runtime Session service. */
-export interface RuntimeSessionService {
+export interface RuntimeSessionService<Request = SessionRunRequest> {
   /**
    * Restore a session's history.
    *
@@ -88,7 +95,7 @@ export interface RuntimeSessionService {
    * the outcome is returned unchanged — this service does not reinterpret a
    * refusal as an error or an error as a refusal.
    */
-  startRun(request: SessionRunRequest): Promise<SessionAdmissionOutcome>;
+  startRun(request: Request): Promise<SessionAdmissionOutcome>;
   /**
    * Cancel a run.
    *
@@ -122,9 +129,9 @@ export class SessionExecutionUnavailableError extends Error {
  * and in the Run ledger the Host owns; a service that cached either would
  * become a second authority the first time a Host and a service disagreed.
  */
-export function createRuntimeSessionService(
-  ports: RuntimeSessionServicePorts,
-): RuntimeSessionService {
+export function createRuntimeSessionService<Request = SessionRunRequest>(
+  ports: RuntimeSessionServicePorts<Request>,
+): RuntimeSessionService<Request> {
   return {
     async restoreHistory(sessionId, historyPorts) {
       return await hydrateSessionHistory(sessionId, historyPorts);
