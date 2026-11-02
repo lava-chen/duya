@@ -64,6 +64,39 @@ describe('Bot durable dispatch', () => {
     expect(h.dispatcher.hasWork()).toBe(false);
   });
 
+  it('releases a grant for the refusals that waiting or retrying fixes', async () => {
+    // The wire used to collapse these into one bucket, so the dispatcher
+    // could not tell them apart and dead-lettered a merely BUSY session.
+    // Each stage below names a situation whose fix is to try again.
+    const retryable = [
+      'refused_session_busy',
+      'refused_run_not_created',
+      'refused_run_not_durable',
+      'refused_dispatch_failed',
+    ] as const;
+    for (const stage of retryable) {
+      const h = harness();
+      vi.spyOn(h.execution, 'startBotRun').mockResolvedValue({ accepted: false, stage, reason: `refused at ${stage}` });
+      // The session is NOT busy, so only the stage can decide this.
+      vi.spyOn(h.execution, 'isSessionBusy').mockResolvedValue(false);
+      const accepted = await h.accept();
+      await h.dispatcher.tick();
+      expect(h.dispatcher.get(accepted.entry.id)?.deadLetterReason ?? null, `${stage} should not be dead-lettered`).toBeNull();
+    }
+  });
+
+  it('dead-letters a dispatch that threw rather than spinning on the defect', async () => {
+    // `refused_dispatch_threw` is a Host bug rather than a state, so
+    // retrying it forever would spin on a defect. It is dead-lettered with
+    // the stage named, so an operator sees which condition fired.
+    const h = harness();
+    vi.spyOn(h.execution, 'startBotRun').mockResolvedValue({ accepted: false, stage: 'refused_dispatch_threw', reason: 'the dispatch adapter threw' });
+    vi.spyOn(h.execution, 'isSessionBusy').mockResolvedValue(false);
+    const accepted = await h.accept();
+    await h.dispatcher.tick();
+    expect(h.dispatcher.get(accepted.entry.id)?.deadLetterReason).toBe('start_refused: refused_dispatch_threw');
+  });
+
   it('deduplicates input, reserves the Host-minted run and settles only its durable terminal', async () => {
     const h = harness();
     const accepted = await h.accept();

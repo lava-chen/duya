@@ -22767,7 +22767,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -32144,7 +32144,7 @@
       "format": "esm"
     },
     "packages/host/src/bot-dispatcher.ts": {
-      "bytes": 12292,
+      "bytes": 14411,
       "imports": [
         {
           "path": "node:crypto",
@@ -42520,7 +42520,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -45988,7 +45988,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757684
+      "bytes": 4757672
     }
   }
 }
