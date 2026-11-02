@@ -100,6 +100,7 @@ import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
 import { createHostRunApi } from './run-api.js';
+import { createHostSessionInputApi, type SessionInputDelivery } from './session-input-api.js';
 import {
   SessionCompactor,
   SessionSideQuestioner,
@@ -709,6 +710,75 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       });
     }
 
+    // Where an accepted input goes.
+    //
+    // The three intents are the three things the Host can do to a live
+    // session, and each one names the carrier it uses: a new turn is a run, a
+    // steer is a mailbox row the running turn picks up, and an interrupt is
+    // the cancellation of the run that is running now.
+    //
+    // A steer and an interrupt need a run to act on. Refusing them when
+    // there is none is honest — "the session was busy" would be a different
+    // fact, and "delivered" would be a lie about work that was never done.
+    const deliverSessionInput = async (input: {
+      readonly sessionId: string;
+      readonly requestId: string;
+      readonly intent: 'steer' | 'enqueue' | 'interrupt';
+      readonly content: string;
+    }): Promise<SessionInputDelivery> => {
+      const execution = runExecution;
+      if (!execution) return { state: 'rejected', reason: 'host_execution_unavailable' };
+      if (input.intent === 'interrupt') {
+        const attempt = execution.currentSessionAttempt(input.sessionId);
+        if (!attempt) return { state: 'rejected', reason: 'no_active_run' };
+        const cancelled = await execution.cancelAgentRun(
+          attempt.runId as import('@duya/agent-protocol').RunId,
+          'interrupted by a session input',
+        );
+        return cancelled.requested
+          ? { state: 'delivered', runId: attempt.runId }
+          : { state: 'rejected', reason: 'interrupt_refused' };
+      }
+      if (input.intent === 'steer') {
+        const attempt = execution.currentSessionAttempt(input.sessionId);
+        if (!attempt) return { state: 'rejected', reason: 'no_active_run' };
+        // The mailbox's own idempotency key carries the request id, so a
+        // retried steer does not become a second follow-up row.
+        core.stores.mailbox.enqueue({
+          id: randomUUID(),
+          sessionId: input.sessionId,
+          submittedRunId: attempt.runId,
+          content: input.content,
+          kind: 'followup',
+          clientMsgId: `session-input:${input.requestId}`,
+          source: 'session-input',
+        });
+        return { state: 'delivered', runId: attempt.runId };
+      }
+      const started = await execution.startAgentRun({
+        sessionId: input.sessionId as import('@duya/agent-protocol').SessionId,
+        prompt: input.content,
+        options: {},
+      });
+      return started.accepted
+        ? { state: 'delivered', runId: started.runId }
+        : { state: 'rejected', reason: started.stage };
+    };
+
+    // The Session input surface (R1.2): durable inputs, their receipts and
+    // the per-session control lease.
+    //
+    // The identity is bound HERE and not per request. The HTTP surface is
+    // reached with the Host's own bearer token, so the caller is the local
+    // user; a request that could name its own actor would let any client post
+    // as a user, and the lease is exactly the thing that decides who may
+    // direct a session.
+    const sessionInputApi = createHostSessionInputApi({
+      stores: core.stores,
+      actor: { kind: 'user', id: 'local' },
+      ...(runExecution ? { delivery: { deliver: (input) => deliverSessionInput(input) } } : {}),
+    });
+
     if (options.botRuntime !== undefined) {
       if (!runExecution) throw new Error('Bot runtime requires a worker entry');
       const readBot = async (botId: string) => {
@@ -733,6 +803,17 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
         store: new BotDispatchStore(core.database.db),
         runs: core.stores.runs,
         execution: runExecution,
+        // The control lease (R1.2). The Host reads it and decides: the Bot
+        // asks whether it may direct the session, and it never reads the
+        // lease itself.
+        control: {
+          blockedBy: (sessionId, holder) => {
+            const lease = core.stores.sessionControlLeases.read(sessionId);
+            if (lease === null) return null;
+            if (lease.holderKind === holder.kind && lease.holderId === holder.id) return null;
+            return 'control_lease_held';
+          },
+        },
         ...(botChannels ? {
           settleInput: (entry, runId) => botChannels!.complete(entry, runId),
           pollDeliveries: () => botChannels!.poll(),
@@ -829,6 +910,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     server = new HostSessionHttpServer({
       api,
       localSessionApi,
+      sessionInputApi,
       localRolloutApi: createHostLocalRolloutApi({ stores: core.stores, sessions: api, rolloutRoot }),
   // The dedicated read, so `workspace_filesystem` has a channel whose job is
   // reading a file rather than restoring a transcript through it.
@@ -920,7 +1002,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       goalApi,
       modeStateApi,
       taskApi,
-      projectApi: createHostProjectApi(core.stores.projects),
+      projectApi: createHostProjectApi(core.stores.projects, core.stores.tasks),
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),

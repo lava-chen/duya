@@ -160,7 +160,8 @@ function extractMessageText(content: unknown): string {
  * the model must poll the file itself) and worktree isolation (the model has
  * to know where the child's edits actually live). */
 function formatSubagentStartedBackground(
-  subagentId: string,
+  sessionId: string,
+  taskId: string,
   agentType: string,
   description: string,
   continueParentWork: boolean,
@@ -177,7 +178,12 @@ function formatSubagentStartedBackground(
     : BACKGROUND_SUBAGENT_IDLE_NOTICE;
   const lines = [
     `Subagent started in background.`,
-    `subagent_id: ${subagentId}`,
+    // The SESSION id, not the task id. `resume_from` reads `sessions.id`, and
+    // the tool's own description says the value is "a subagent_id returned by
+    // a previous task call" — so the id this notice names has to be the one
+    // a resume accepts. The task id is a different thing and is named
+    // separately, below, where it is used.
+    `subagent_id: ${sessionId}`,
     `type: ${agentType}`,
     `description: ${description}`,
     ``,
@@ -189,7 +195,7 @@ function formatSubagentStartedBackground(
   if (extras.autoWake) {
     lines.push(`It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output only takes a status/output snapshot; it never blocks. If the task looks stuck, use kill_task.`);
   } else {
-    lines.push(`It runs independently of this session, and auto_wake is false: you will NOT be notified when it completes. Poll it yourself with get_task_output using task_id "${subagentId}"; the full transcript is at ${extras.outputFilePath}. Read that file for the complete output once the task reports a terminal status.`);
+    lines.push(`It runs independently of this session, and auto_wake is false: you will NOT be notified when it completes. Poll it yourself with get_task_output using task_id "${taskId}"; the full transcript is at ${extras.outputFilePath}. Read that file for the complete output once the task reports a terminal status.`);
   }
   if (extras.worktreeBase) {
     lines.push(``);
@@ -776,6 +782,7 @@ export class WorkerSubagentService<
           agentInput.prompt,
         );
         const spawnNotice = formatSubagentStartedBackground(
+          subAgentSessionId,
           taskId,
           agentDefinition.agentType,
           agentInput.description || agentInput.name || subAgentName,

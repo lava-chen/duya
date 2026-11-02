@@ -5,6 +5,7 @@ import type {
   HostProjectPathEntry,
   HostProjectRecord,
 } from '@duya/agent-protocol/projects';
+import type { CoreDataHostStores } from '@duya/data/core-data-host';
 import {
   parseProjectPaths,
   serializeProjectPaths,
@@ -31,7 +32,10 @@ function pathsToJson(paths: readonly HostProjectPathEntry[]): string {
 }
 
 /** Build the asynchronous project API over the Host-owned Data store. */
-export function createHostProjectApi(projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject'>): HostProjectApiV1 {
+export function createHostProjectApi(
+  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession'>,
+  tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
+): HostProjectApiV1 {
   return {
     async listProjects() {
       return projects.list().map(toRecord);
@@ -92,6 +96,36 @@ export function createHostProjectApi(projects: Pick<ProjectStore, 'list' | 'get'
       if (!projects.get(projectId)) return false;
       projects.deleteBotsByProject(projectId);
       return projects.delete(projectId);
+    },
+
+    async bindCoordinatorSession(projectId, sessionId) {
+      const row = projects.bindCoordinatorSession(projectId, sessionId);
+      return row ? toRecord(row) : null;
+    },
+
+    async listProjectTasks(projectId) {
+      if (!projects.get(projectId)) return [];
+      return projects.listTaskLinks(projectId).map((link) => ({
+        projectId: link.project_id,
+        taskId: link.task_id,
+        coordinatorSessionId: link.coordinator_session_id,
+        workSessionId: link.work_session_id,
+        updatedAt: link.updated_at,
+      }));
+    },
+
+    async bindProjectTask(projectId, taskId, coordinatorSessionId) {
+      if (!projects.get(projectId)) throw new Error(`Project "${projectId}" does not exist`);
+      if (!tasks?.get(taskId)) throw new Error(`Task "${taskId}" does not exist`);
+      const link = projects.bindTask(projectId, taskId, coordinatorSessionId);
+      return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
+        workSessionId: link.work_session_id, updatedAt: link.updated_at };
+    },
+
+    async bindWorkSession(projectId, taskId, workSessionId) {
+      const link = projects.bindWorkSession(projectId, taskId, workSessionId);
+      return link ? { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
+        workSessionId: link.work_session_id, updatedAt: link.updated_at } : null;
     },
   };
 }

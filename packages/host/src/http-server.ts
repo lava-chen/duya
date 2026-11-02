@@ -181,6 +181,8 @@ import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
 import { routePluginAppGrants } from './plugin-app-grant-routes.js';
+import type { HostSessionInputApiV1 } from '@duya/agent-protocol';
+import { routeSessionInputs } from './session-input-routes.js';
 import type {
   HostLocalSidebarSectionsApiV1,
   SidebarSectionCreateInput,
@@ -426,6 +428,8 @@ export interface HostSessionHttpServerOptions {
   readonly localMailboxApi?: HostLocalMailboxApiV1;
   /** Local-only durable wake queue markers. */
   readonly localPendingWakeApi?: HostLocalPendingWakeApiV1;
+  /** Durable Session inputs and the per-session control lease (R1.2). */
+  readonly sessionInputApi?: HostSessionInputApiV1;
   readonly workflowRunApi?: WorkflowRunApiV1;
   readonly runApi?: HostRunApiV1;
   /** Host-owned execution: start/cancel real runs (plan 12 gate 3). */
@@ -1027,6 +1031,13 @@ export class HostSessionHttpServer {
     }
     if (url.pathname === '/v1/tool-approvals' || url.pathname.startsWith('/v1/tool-approvals/')) {
       await this.#routeToolApprovals(req, url, res);
+      return;
+    }
+    if (url.pathname === '/v1/session-inputs' || url.pathname.startsWith('/v1/session-inputs/')) {
+      await routeSessionInputs(req, url, res, this.#options.sessionInputApi, {
+        readJson: (request, response) => this.#readJson(request, response),
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/search/sessions') {
@@ -3280,6 +3291,47 @@ export class HostSessionHttpServer {
     }
 
     const match = /^\/v1\/projects\/([^/]+)$/.exec(url.pathname);
+    const taskMatch = /^\/v1\/projects\/([^/]+)\/tasks(?:\/([^/]+)\/work-session)?$/.exec(url.pathname);
+    if (taskMatch) {
+      const projectId = this.#decodePathPart(taskMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        if (req.method === 'GET' && !taskMatch[2]) {
+          this.#sendJson(res, 200, { tasks: await api.listProjectTasks(projectId) });
+          return;
+        }
+        const body = await this.#readJson(req, res);
+        if (!body) return;
+        if (req.method === 'POST' && !taskMatch[2] && typeof body.taskId === 'string' && typeof body.coordinatorSessionId === 'string') {
+          this.#sendJson(res, 201, { task: await api.bindProjectTask(projectId, body.taskId, body.coordinatorSessionId) });
+          return;
+        }
+        if (req.method === 'PUT' && taskMatch[2] && typeof body.workSessionId === 'string') {
+          const taskId = this.#decodePathPart(taskMatch[2]!, res);
+          if (taskId === null) return;
+          const task = await api.bindWorkSession(projectId, taskId, body.workSessionId);
+          this.#sendJson(res, task ? 200 : 404, { task });
+          return;
+        }
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_task_link' } });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const coordinatorMatch = /^\/v1\/projects\/([^/]+)\/coordinator$/.exec(url.pathname);
+    if (coordinatorMatch && req.method === 'PUT') {
+      const projectId = this.#decodePathPart(coordinatorMatch[1]!, res);
+      if (projectId === null) return;
+      const body = await this.#readJson(req, res);
+      if (!body || typeof body.sessionId !== 'string') {
+        this.#sendJson(res, 400, { error: { code: 'invalid_coordinator_session' } });
+        return;
+      }
+      try {
+        const project = await api.bindCoordinatorSession(projectId, body.sessionId);
+        this.#sendJson(res, project ? 200 : 404, { project });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
     if (!match) {
       this.#sendJson(res, 404, { error: { code: 'not_found' } });
       return;

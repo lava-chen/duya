@@ -74,10 +74,13 @@ function createMockDeps(overrides?: {
     stdout: EventEmitter;
     killed?: boolean;
     stdin?: { writable: boolean };
+    send: ReturnType<typeof vi.fn>;
   };
   fakeChild.stdout = fakeStdout;
   fakeChild.killed = false;
   fakeChild.stdin = { writable: true };
+  // The IPC channel the router reports the caller's terminal event on.
+  fakeChild.send = vi.fn();
 
   if (readyChannel === 'stdout') {
     // Wait for the stdout 'data' listener to register, then emit ready.
@@ -206,6 +209,58 @@ describe('InteragentRouter rejection', () => {
     const router = new InteragentRouter(deps);
     const result = await router.handleInvoke(createParams());
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('InteragentRouter refusal reaches the caller', () => {
+  // The caller is blocked on a promise that only a terminal event can
+  // settle. A refusal that is returned to the agent server and not
+  // forwarded leaves the tool waiting out its whole timeout, so the user
+  // sees "interagent local timeout" instead of the real reason.
+  const expectRefusalDelivered = (
+    child: { send: ReturnType<typeof vi.fn> },
+    reason: string,
+  ) => {
+    expect(child.send).toHaveBeenCalledTimes(1);
+    const payload = child.send.mock.calls[0][0] as {
+      type: string;
+      id: string;
+      event: { type: string; code?: string; message?: string };
+    };
+    expect(payload.type).toBe('interagent:event');
+    expect(payload.id).toBe('test-invoke-1');
+    expect(payload.event.type).toBe('chat:error');
+    expect(payload.event.code).toBe(reason);
+  };
+
+  it('delivers a self-call refusal to the caller', async () => {
+    const deps = createMockDeps();
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams({ callerSessionId: 'A', targetSessionId: 'A' }));
+
+    expect(result).toEqual({ ok: false, reason: 'self_call' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'self_call');
+  });
+
+  it('delivers a busy-target refusal to the caller', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.STREAMING });
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams());
+
+    expect(result).toEqual({ ok: false, reason: 'target_busy' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'target_busy');
+  });
+
+  it('delivers an unknown-target refusal to the caller', async () => {
+    const deps = createMockDeps({ sessionExists: false });
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams());
+
+    expect(result).toEqual({ ok: false, reason: 'target_not_found' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'target_not_found');
   });
 });
 

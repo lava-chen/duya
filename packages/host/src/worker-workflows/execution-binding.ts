@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 
 import { SUBAGENT_TOOL_NAME } from '@duya/capabilities/SubagentTool/constants';
 import type { SubagentRunDeps } from '../worker-subagents/run-agent.js';
+import { attachChildJournal } from '../worker-journal/child-journal.js';
 import { getAgentDefinitions } from '../worker-subagents/built-in-agents.js';
 import type { ToolUseContext } from '../worker-run-contracts.js';
 import type {
@@ -34,7 +35,8 @@ export function createWorkerWorkflowExecutionPorts(
   options: WorkerWorkflowExecutionOptions,
 ): WorkflowExecutionPorts {
   const subagentDeps: SubagentRunDeps = {
-    createSubAgent: (subAgentOptions) => options.assembly.createSession(subAgentOptions),
+    createSubAgent: (subAgentOptions) =>
+      attachChildJournal(options.assembly.createSession(subAgentOptions), subAgentOptions.sessionId),
     createToolRegistry: () => options.assembly.createRegistry(subagentDeps),
   };
   const registry = options.assembly.createRegistry(subagentDeps);

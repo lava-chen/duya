@@ -41,6 +41,7 @@ export interface ProjectRow {
   color: string | null;
   created_at: number;
   last_seen_at: number;
+  coordinator_session_id: string | null;
 }
 
 /** One entry of the `projects.paths` JSON column. */
@@ -54,6 +55,14 @@ export interface ProjectBotRow {
   project_id: string;
   bot_id: string;
   joined_at: number;
+}
+
+export interface ProjectTaskLinkRow {
+  project_id: string;
+  task_id: string;
+  coordinator_session_id: string;
+  work_session_id: string | null;
+  updated_at: number;
 }
 
 export interface InsertProjectInput {
@@ -150,6 +159,26 @@ export class ProjectStore {
           CREATE INDEX IF NOT EXISTS idx_projects_last_seen ON projects(last_seen_at);
         `);
       },
+    },
+    {
+      id: 19,
+      name: 'project_coordinator_session',
+      up: (db) => db.exec('ALTER TABLE projects ADD COLUMN coordinator_session_id TEXT'),
+    },
+    {
+      id: 20,
+      name: 'project_task_session_links',
+      up: (db) => db.exec(`
+        CREATE TABLE project_task_sessions (
+          project_id TEXT NOT NULL,
+          task_id TEXT NOT NULL UNIQUE,
+          coordinator_session_id TEXT NOT NULL,
+          work_session_id TEXT,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (project_id, task_id)
+        );
+        CREATE INDEX idx_project_task_sessions_project ON project_task_sessions(project_id, updated_at);
+      `),
     },
   ];
 
@@ -276,6 +305,36 @@ export class ProjectStore {
   delete(projectId: string): boolean {
     const r = this.db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
     return Number(r.changes) > 0;
+  }
+
+  bindCoordinatorSession(projectId: string, sessionId: string): ProjectRow | null {
+    const row = this.db.prepare('SELECT project_id FROM projects WHERE project_id = ?').get(projectId);
+    if (!row) return null;
+    this.db.prepare('UPDATE projects SET coordinator_session_id = ? WHERE project_id = ?').run(sessionId, projectId);
+    return this.get(projectId);
+  }
+
+  listTaskLinks(projectId: string): ProjectTaskLinkRow[] {
+    return this.db.prepare('SELECT * FROM project_task_sessions WHERE project_id = ? ORDER BY updated_at DESC, task_id')
+      .all(projectId) as ProjectTaskLinkRow[];
+  }
+
+  bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {
+    const now = Date.now();
+    this.db.prepare(`INSERT INTO project_task_sessions
+      (project_id, task_id, coordinator_session_id, work_session_id, updated_at)
+      VALUES (?, ?, ?, NULL, ?)
+      ON CONFLICT(task_id) DO UPDATE SET project_id=excluded.project_id,
+        coordinator_session_id=excluded.coordinator_session_id, updated_at=excluded.updated_at`)
+      .run(projectId, taskId, coordinatorSessionId, now);
+    return this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow;
+  }
+
+  bindWorkSession(projectId: string, taskId: string, workSessionId: string): ProjectTaskLinkRow | null {
+    const now = Date.now();
+    const result = this.db.prepare(`UPDATE project_task_sessions SET work_session_id = ?, updated_at = ?
+      WHERE project_id = ? AND task_id = ?`).run(workSessionId, now, projectId, taskId);
+    return result.changes ? this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow : null;
   }
 
   // ─── project_bots ───

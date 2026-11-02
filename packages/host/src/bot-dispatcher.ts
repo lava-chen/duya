@@ -10,6 +10,23 @@ export interface BotDispatcherOptions {
   readonly store: BotDispatchStore;
   readonly scheduler?: BotSchedulerStore;
   readonly runs: Pick<RunRepository, 'getRun'>;
+  /**
+   * The session's control lease, read before a dispatch.
+   *
+   * ## Why the Bot asks
+   *
+   * The lease says who may direct a session. A Bot that dispatches into a
+   * session somebody else holds is exactly what the lease exists to stop, and
+   * the check has to happen HERE — at the one place the Bot starts a run —
+   * because the Bot's own inbox has no idea that a session can be claimed.
+   *
+   * The port takes the Bot's own identity, so the Host decides whether the
+   * lease stops THIS Bot rather than the Bot deciding for itself.
+   */
+  readonly control?: {
+    /** Whether somebody else holds the session. Null when the Bot may go. */
+    blockedBy(sessionId: string, holder: { readonly kind: 'bot'; readonly id: string }): string | null;
+  };
   readonly execution: {
     startBotRun(input: StartAgentRunInput, admission: RunDispatchAdmission): Promise<StartAgentRunResult>;
     isRunLive(runId: string): boolean | Promise<boolean>;
@@ -116,6 +133,10 @@ export class BotDispatcher {
       if (this.#closed) break;
       if (this.options.scheduler && this.options.scheduler.get(botId, ownerId).mode !== 'host') continue;
       const sessionId = `bot:${botId}`;
+      // The session may be claimed by somebody else. Checking BEFORE the
+      // claim keeps the Bot from taking a grant it cannot use, and keeps the
+      // poll loop from spinning on a session it is not allowed to touch.
+      if (this.options.control?.blockedBy(sessionId, { kind: 'bot', id: botId })) continue;
       // One turn per Bot. Lane priority is applied by the claim transaction.
       if (await execution.isSessionBusy(sessionId)) continue;
       const grant = store.claim(ownerId, botId, this.#leaseOwner, Date.now() + (this.options.leaseMs ?? 30_000));
@@ -213,6 +234,13 @@ export class BotDispatcher {
     if (await reconcile()) return;
     try {
       await this.options.validateBot(grant.entry.botId);
+      // Re-checked HERE, right before the run starts: the claim and the
+      // dispatch are separated by async work, and a takeover in between must
+      // stop the dispatch rather than race it.
+      if (this.options.control?.blockedBy(`bot:${grant.entry.botId}`, { kind: 'bot', id: grant.entry.botId })) {
+        store.release(grant, key);
+        return;
+      }
       const input = await this.options.resolveInput(grant.entry);
       if (this.#closed || !store.isCurrent(grant)) return;
       const acceptance = await execution.startBotRun(input, {
