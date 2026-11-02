@@ -124,4 +124,6 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\coo
 - `npm run build:packages`、`npm run typecheck:all`、`npm run architecture:check`、`npm run bundle:worker`、`npm run check:packaged-artifacts:bundle`、`NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--max-old-space-size=8192 npm run electron:build` 均退出 0；Electron 类型门禁 178 项既有错误仍在 baseline，架构门禁 3069 项 tolerated，无新增违规。
 - 提交后重跑 `npm run bundle:verify` 应为 FRESH（1053 项输入）；重建的 `packages/host/bundle` 随本提交入库。
 
-下一动作：提交并推送 `codex/coordinator-seam`，以 `codex/project-run-feedback` 为 base 开 stacked Draft PR，不合并；随后统一重整 #583/#584 依赖，再把项目上下文装配、HTTP Task 管理与结果对账并入领域层。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+交付：代码提交 `f1d81f61` 推送到 `codex/coordinator-seam`，并以 `codex/project-run-feedback` 为 base 开 stacked Draft PR [#586](https://github.com/lava-chen/duya/pull/586)；`bundle:verify` 提交后为 FRESH（0/1053）。PR base 非 `master`，仓库 CI 不会触发（`test.yml` 仅监听 base=`master`），验证以本节记录为准，不合并。
+
+下一动作：统一重整 #583/#584 依赖（已把 #584 rebase 到本切片 head 并改 base 到 `codex/coordinator-seam`，见该计划）；栈稳定后再把项目上下文装配、HTTP Task 管理与结果对账并入领域层，并统一改 base 到 `master` 触发 CI。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
