@@ -18262,6 +18262,11 @@
       ],
       "format": "esm"
     },
+    "packages/agent-runtime/src/session/ports.ts": {
+      "bytes": 13504,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-runtime/src/session/history.ts": {
       "bytes": 3913,
       "imports": [],
@@ -18279,8 +18284,13 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/session/index.ts": {
-      "bytes": 1524,
+      "bytes": 1704,
       "imports": [
+        {
+          "path": "packages/agent-runtime/src/session/ports.ts",
+          "kind": "import-statement",
+          "original": "./ports.js"
+        },
         {
           "path": "packages/agent-runtime/src/session/history.ts",
           "kind": "import-statement",
@@ -40412,7 +40422,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -42494,7 +42504,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -44719,11 +44729,11 @@
         "packages/agent-runtime/src/authorization/profile-bridge.ts": {
           "bytesInOutput": 372
         },
-        "packages/agent-runtime/src/session/history.ts": {
-          "bytesInOutput": 618
-        },
         "packages/agent-runtime/src/session/index.ts": {
           "bytesInOutput": 0
+        },
+        "packages/agent-runtime/src/session/history.ts": {
+          "bytesInOutput": 618
         },
         "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts": {
           "bytesInOutput": 2042
@@ -45962,7 +45972,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757616
+      "bytes": 4757641
     }
   }
 }
