@@ -295,6 +295,8 @@ export type StartAgentRunResult =
       readonly accepted: false;
       readonly stage: Exclude<StartAgentRunStage, 'created' | 'dispatched'>;
       readonly reason: string;
+      /** The existing run to reconcile when the refusal names one. */
+      readonly runId?: RunId;
     };
 
 export type CancelAgentRunResult =
