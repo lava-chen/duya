@@ -1,4 +1,4 @@
-import { createWorkerAdapterSurface, type RunEnginePorts, type RunInputSnapshot, type RunPersistence, type TerminalCandidate, type ToolSideEffectLedger, } from '@duya/agent-runtime';
+import { createWorkerAdapterSurface, createRunEventSpine, createToolSideEffectLedger, defaultLedgerDir, executeRunEngine, ledgerFile, type RunEnginePorts, type RunInputSnapshot, type RunPersistence, type TerminalCandidate, type ToolSideEffectLedger, } from '@duya/agent-runtime';
 import { existsSync, readFileSync } from 'node:fs';
 import { FIRST_EPOCH, firstAttemptFence, manifestFingerprint } from '@duya/agent-protocol';
 import type { PermissionPolicyMode } from '@duya/agent-protocol';
@@ -8,9 +8,6 @@ import type { AssistantMessage, ChatOptions, MessageContent, SSEEvent, TokenUsag
 import type { EngineProductSession } from '@duya/host/worker-run-session-port';
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { buildLegacyRunInput, buildLegacyRunManifest, composeLegacyRunPorts, createLegacyAssembleTurn, gateRunApproval, runLayerOptions, selectRunDriverLeg, type LegacyRunFacts, type LegacyRunHost, } from '@duya/host/worker-run-composition';
-import { createRunEventSpine } from '@duya/host/run-event-spine';
-import { executeRunEngine } from '@duya/host/run-engine-execution';
-import { createToolSideEffectLedger, defaultLedgerDir, ledgerFile } from '@duya/host/worker-tool-ledger';
 const RUNTIME_IDENTITY = { name: 'duya-worker-entry', version: '0.1.0' } as const;
 const PROTOCOL = { major: 1, minor: 0 } as const;
 function toPromptText(prompt: string | MessageContent[]): string {
