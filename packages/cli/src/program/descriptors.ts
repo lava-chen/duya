@@ -818,7 +818,7 @@ const subConfigProviderAdd: CliSubcommand = {
     { flags: '--name <name>', description: 'Display name' },
     { flags: '--type <type>', description: 'Provider type: openai | anthropic | ollama | openai-compatible | gemini | deepseek' },
     { flags: '--base-url <url>', description: 'API base URL (optional)' },
-    { flags: '--api-key <key>', description: 'API key (stored encrypted; optional)' },
+    { flags: '--api-key <key>', description: 'API key (written by the Host to its secrets file; optional)' },
     { flags: '--active', description: 'Mark as the active provider' },
     { flags: '--yes', description: 'Skip confirmation prompt' },
   ],
@@ -837,7 +837,7 @@ const subConfigProviderSetDefault: CliSubcommand = {
   description:
     'Set the soft default provider. The default is the implicit fallback when a thread has no explicit provider, and for vision, gateway, title generation, embedding, and scheduled automation. Pass --clear to unset the default.',
   write: true,
-  args: [{ name: 'id', required: true, description: 'Provider id (ignored when --clear is set)' }],
+  args: [{ name: 'id', required: false, description: 'Provider id (omit when using --clear)' }],
   options: [
     { flags: '--clear', description: 'Unset the default provider' },
     { flags: '--yes', description: 'Skip confirmation prompt' },

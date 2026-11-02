@@ -378,6 +378,10 @@ function buildEntry(
   else options.enabled_models = [...write.models];
   if (write.defaultModel === '') delete options.defaultModel;
   else options.defaultModel = write.defaultModel;
+  if (write.extraEnv !== undefined) {
+    if (Object.keys(write.extraEnv).length === 0) delete entry.extraEnv;
+    else entry.extraEnv = { ...write.extraEnv };
+  }
   if (Object.keys(options).length === 0) delete entry.options;
   else entry.options = options;
   return entry;
@@ -488,6 +492,7 @@ export interface NormalizedWrite {
   readonly baseUrl: string;
   readonly models: readonly string[];
   readonly defaultModel: string;
+  readonly extraEnv?: Readonly<Record<string, string>>;
   readonly apiKey?: string;
   readonly expectedRevision?: string;
 }
@@ -518,6 +523,18 @@ export function normalizeWrite(input: HostProviderWriteInput): NormalizedWrite {
     throw invalidWrite('models must be a list of model ids');
   }
   const models = Array.isArray(raw.models) ? uniqueStrings(raw.models, 'model id', 200, 500) : [];
+  let extraEnv: Record<string, string> | undefined;
+  if (raw.extraEnv !== undefined) {
+    if (!isRecord(raw.extraEnv)) throw invalidWrite('extraEnv must be an object of environment values');
+    extraEnv = {};
+    for (const [key, value] of Object.entries(raw.extraEnv)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || value.length > 4_000) {
+        throw invalidWrite('extraEnv keys must be environment names and values must be strings up to 4000 characters');
+      }
+      extraEnv[key] = value;
+    }
+    if (Object.keys(extraEnv).length > 32) throw invalidWrite('extraEnv supports at most 32 entries');
+  }
   const apiKey = raw.apiKey === undefined ? undefined : String(raw.apiKey ?? '');
   if (apiKey !== undefined) {
     if (MASKED_KEY_PATTERN.test(apiKey)) {
@@ -542,6 +559,7 @@ export function normalizeWrite(input: HostProviderWriteInput): NormalizedWrite {
     baseUrl,
     models,
     defaultModel,
+    ...(extraEnv === undefined ? {} : { extraEnv }),
     ...(apiKey === undefined ? {} : { apiKey }),
     ...(expectedRevision === undefined || expectedRevision === ''
       ? {}

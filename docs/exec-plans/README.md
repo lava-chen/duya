@@ -8,7 +8,7 @@ Session 本轮按[CLI 发布收尾计划](backlog/2026-11-01-bot-session-coordin
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | 认领 A：接续 #578/#579、收尾独立 Session；B 准备自包含包，等集成 SHA 与用户测试后发布 |
+| Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | 用户测试 Linux x64 CLI 候选；按反馈收尾并由 CI 产出其余四个平台，之后发布 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |

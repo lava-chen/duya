@@ -38,10 +38,14 @@ export async function runProviderLogin(
     return;
   }
 
-  if (action === 'add') {
-    await addProvider(tui, api, presets);
-  } else {
-    await manageProviders(tui, api);
+  try {
+    if (action === 'add') {
+      await addProvider(tui, api, presets);
+    } else {
+      await manageProviders(tui, api);
+    }
+  } finally {
+    await api.close();
   }
 }
 
@@ -150,10 +154,10 @@ async function addProvider(
 
   try {
     await api.setDefault(savedProvider.id);
-    tui.printNotice(`Saved ${savedProvider.name} to Desktop providers and set it as the Desktop default.`);
+    tui.printNotice(`Saved ${savedProvider.name} to this device and set it as the default provider.`);
   } catch (error) {
-    tui.printNotice(`Saved ${savedProvider.name} to Desktop providers.`);
-    tui.printError(`Could not set it as the Desktop default: ${readableError(error)}`);
+    tui.printNotice(`Saved ${savedProvider.name} to this device.`);
+    tui.printError(`Could not set it as the default provider: ${readableError(error)}`);
   }
   tui.printNotice('The running chat-cli keeps its startup provider; the CLI does not hot-switch credentials yet.');
 }
@@ -170,7 +174,7 @@ async function manageProviders(
     return;
   }
   if (providers.length === 0) {
-    tui.printNotice('No providers are configured in Desktop yet. Choose /login add to connect one.');
+    tui.printNotice('No providers are configured on this device yet. Choose /login add to connect one.');
     return;
   }
 
@@ -180,8 +184,8 @@ async function manageProviders(
   if (provider === undefined) return;
 
   const action = await tui.choose(`Manage ${provider.name}`, [
-    { label: 'Set as Desktop default', value: 'default', description: 'Used by Desktop features without an explicit provider' },
-    { label: 'Remove provider', value: 'remove', description: 'Delete this provider from Desktop settings' },
+    { label: 'Set as default', value: 'default', description: 'Used by sessions without an explicit provider' },
+    { label: 'Remove provider', value: 'remove', description: 'Delete this provider from this device' },
     { label: 'Back', value: 'back' },
   ]);
   if (action === null || action === 'back') return;
@@ -189,7 +193,7 @@ async function manageProviders(
   if (action === 'default') {
     try {
       await api.setDefault(provider.id);
-      tui.printNotice(`${provider.name} is now the Desktop default provider.`);
+      tui.printNotice(`${provider.name} is now the default provider.`);
       tui.printNotice('The running chat-cli keeps its startup provider; the CLI does not hot-switch credentials yet.');
     } catch (error) {
       tui.printError(readableError(error));
@@ -204,7 +208,7 @@ async function manageProviders(
   if (confirm !== 'yes') return;
   try {
     await api.remove(provider.id);
-    tui.printNotice(`Removed ${provider.name} from Desktop providers.`);
+    tui.printNotice(`Removed ${provider.name} from this device.`);
   } catch (error) {
     tui.printError(readableError(error));
   }

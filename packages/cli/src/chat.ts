@@ -94,6 +94,8 @@ export interface ChatCommandOptions {
   readonly token?: string;
   readonly runtimeFile?: string;
   readonly session?: string;
+  /** Initial project directory for a newly created session. */
+  readonly workingDirectory?: string;
   readonly print?: string;
   readonly model?: string;
   readonly providerId?: string;
@@ -295,7 +297,7 @@ async function chatOnce(
     ...(options.model !== undefined ? { model: options.model } : {}),
     ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
     ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
-    workingDirectory: process.cwd(),
+    workingDirectory: options.workingDirectory ?? process.cwd(),
   });
   if (!start.accepted) {
     write(`${RED}run refused: ${start.stage} —${start.reason ?? ''}${RESET}`);
@@ -703,7 +705,7 @@ export async function chatTui(
    * A session's own execution-location cursor still wins over it: that is the
    * `/worktree` checkout, which is a per-session fact, not a surface one.
    */
-  let projectDirectory = path.resolve(process.cwd());
+  let projectDirectory = path.resolve(options.workingDirectory ?? process.cwd());
   const executionCwd = (): string => {
     const cursor = activeSession.extensions?.executionLocation;
     return cursor !== null && typeof cursor === 'object' && 'cwd' in cursor && typeof cursor.cwd === 'string'
@@ -1996,6 +1998,7 @@ export async function runChatCommand(options: ChatCommandOptions): Promise<numbe
   }
 
   let sessionId: SessionId;
+  let sessionOptions = options;
   const owned = new OwnedSessions();
   if (options.session !== undefined && options.session.trim().length > 0) {
     sessionId = options.session.trim() as SessionId;
@@ -2004,20 +2007,26 @@ export async function runChatCommand(options: ChatCommandOptions): Promise<numbe
       write(`${RED}session ${sessionId} does not exist on this Host${RESET}`);
       return 1;
     }
+    if (options.workingDirectory !== undefined
+      && path.resolve(options.workingDirectory) !== path.resolve(existing.workingDirectory)) {
+      write(`${RED}workspace does not match session ${sessionId}; use the session's recorded directory (${existing.workingDirectory})${RESET}`);
+      return 1;
+    }
+    sessionOptions = { ...options, workingDirectory: existing.workingDirectory };
   } else {
-    const created = await createChatSession(client, options);
+    const created = await createChatSession(client, options, options.workingDirectory);
     sessionId = created.id;
     owned.own(created.id);
   }
 
   if (options.print !== undefined) {
     try {
-      return await chatOnce(client, sessionId, options.print, options);
+      return await chatOnce(client, sessionId, options.print, sessionOptions);
     } finally {
       // A refused run leaves the session empty; a completed one has the
       // prompt in it. Either way the check is the same.
       await owned.releaseEmpty(client);
     }
   }
-  return chatInteractive(client, sessionId, options, owned);
+  return chatInteractive(client, sessionId, sessionOptions, owned);
 }
