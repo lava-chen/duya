@@ -221,6 +221,18 @@ export class TaskStore {
   }
 
   deleteBySession(sessionId: string): void {
+    // Project-owned Tasks outlive their Coordinator Session. The Project link
+    // remains the canonical Task owner; deleting/replacing a chat may remove
+    // ordinary session todos, but cannot erase work that must resume in a new
+    // Coordinator conversation.
+    const projectLinksReady = Boolean(this.db.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_task_sessions'",
+    ).get());
+    if (projectLinksReady) {
+      this.db.prepare(`DELETE FROM tasks WHERE session_id = ? AND id NOT IN
+        (SELECT task_id FROM project_task_sessions)`).run(sessionId);
+      return;
+    }
     this.db.prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
   }
 

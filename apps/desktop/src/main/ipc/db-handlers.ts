@@ -41,6 +41,7 @@ import {
   getDesktopHostLockApi,
   getDesktopHostLocalSidebarSectionsApi,
   getDesktopHostLocalUsageApi,
+  getDesktopHostProjectApi,
 } from '../cli/desktop-host-api';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';

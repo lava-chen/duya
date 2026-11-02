@@ -2438,6 +2438,66 @@ export class HostSessionHttpClient implements
     return result.task;
   }
 
+  async getProjectContinuity(projectId: string, options: { afterCursor?: number; limit?: number } = {}) {
+    const query = new URLSearchParams();
+    if (options.afterCursor !== undefined) query.set('after', String(options.afterCursor));
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    const suffix = query.size ? `?${query}` : '';
+    const result = await this.request<{ continuity: import('@duya/agent-protocol/projects').ProjectContinuitySnapshot | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/continuity${suffix}`);
+    return result.continuity;
+  }
+
+  async getProjectContext(projectId: string, taskId?: string, maxCharacters?: number) {
+    const query = new URLSearchParams();
+    if (taskId) query.set('taskId', taskId);
+    if (maxCharacters !== undefined) query.set('maxCharacters', String(maxCharacters));
+    const suffix = query.size ? `?${query}` : '';
+    const result = await this.request<{ context: { text: string; sourceRefs: readonly { type: string; id: string }[] } | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/context${suffix}`);
+    return result.context;
+  }
+
+  async updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: { type: string; id: string } }) {
+    const { projectId, ...body } = input;
+    const result = await this.request<{ state: import('@duya/agent-protocol/projects').ProjectContinuityState | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/state`, body);
+    return result.state;
+  }
+
+  async updateProjectDecision(input: { projectId: string; key: string; content: string; status: 'proposed' | 'accepted' | 'superseded'; expectedRevision: number; source: { type: string; id: string } }) {
+    const { projectId, key, ...body } = input;
+    const result = await this.request<{ decision: import('@duya/agent-protocol/projects').ProjectDecision | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}`, body);
+    return result.decision;
+  }
+
+  async updateProjectMemory(input: { projectId: string; key: string; content: string; status: 'candidate' | 'active' | 'superseded' | 'retired'; expectedRevision: number; source: { type: string; id: string } }) {
+    const { projectId, key, ...body } = input;
+    const result = await this.request<{ memory: import('@duya/agent-protocol/projects').ProjectMemory | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(key)}`, body);
+    return result.memory;
+  }
+
+  async updateProjectTaskAcceptance(input: { projectId: string; taskId: string; status: 'accepted' | 'rejected'; source: { type: string; id: string } }) {
+    const { projectId, taskId, ...body } = input;
+    const result = await this.request<{ task: HostProjectTaskLink | null }>(
+      'PUT', `/v1/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/acceptance`, body);
+    return result.task;
+  }
+
+  async listProjectMemoryHistory(projectId: string, key: string, limit = 20) {
+    const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectMemory[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
+    return result.records;
+  }
+
+  async listProjectDecisionHistory(projectId: string, key: string, limit = 20) {
+    const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectDecision[] }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
+    return result.records;
+  }
+
   // ── Plan 621: checkout and integration observations ───────────────────
   async controlSessionCheckout(sessionId: string, command: import('@duya/agent-protocol').SessionCheckoutCommand): Promise<import('@duya/agent-protocol').SessionCheckoutResult> {
     const response = await this.request<{ result: import('@duya/agent-protocol').SessionCheckoutResult }>('POST', '/v1/checkouts/control', { sessionId, command }, 120_000);
