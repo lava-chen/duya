@@ -4,6 +4,12 @@
 
 ## Overview
 
+Product direction override (2026-11-02): [Project-first #581](https://github.com/lava-chen/duya/pull/581)
+supersedes this branch's Bot-first product assumptions. Project Coordinator is
+independent of Personal Bot, reuses Host/Runtime, and takes priority over
+independent CLI release work. Keep the implementation descriptions below
+within their original verification scope; this PR does not implement Coordinator.
+
 Monorepo / Agent Harness changes follow the single execution plan
 [587](../exec-plans/active/587-agent-harness-monorepo/README.md).
 Its contracts and phase gates define the target; this document describes

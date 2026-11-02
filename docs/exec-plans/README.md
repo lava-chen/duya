@@ -2,13 +2,14 @@
 
 先定位用户本次任务，再读取对应计划的验收与接续点。这里维护路由，不复制各计划的实时状态。
 
-Session 本轮按[CLI 发布收尾计划](backlog/2026-11-01-bot-session-coordination.md)的 A/B 两项推进：先收尾独立 CLI/TUI Session，再打包发布。用户负责产品测试；Plugin 的 Host 边界与后续 Bot 发现也记在同一计划，R1–R5 不再整组阻塞 CLI 发布。
+当前主线调整为 [Project Coordinator（#581）](https://github.com/lava-chen/duya/pull/581)：项目协调 → 项目长期状态/记忆 → Desktop 协作。Personal Bot 暂缓增强；Session 先补项目闭环必需基础。[CLI 发布 A/B](backlog/2026-11-01-bot-session-coordination.md)保留为后续交付，不阻塞 Project 开工。
 
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
-| Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | 用户测试 Linux x64 CLI 候选；按反馈收尾并由 CI 产出其余四个平台，之后发布 |
+| Project Coordinator（当前主线） | [独立计划与架构决策 #581](https://github.com/lava-chen/duya/pull/581) | 先认领总体任务一：统一输入/租约权威并完成项目协调；本 PR 仅保留 CLI 后续交付 |
+| Session CLI 收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | Linux x64 候选已打包；用户产品测试并反馈，之后由 CI 产出其余平台并发布 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
@@ -24,7 +25,7 @@ Session 本轮按[CLI 发布收尾计划](backlog/2026-11-01-bot-session-coordin
 | TUI 下一步建议采纳 | [2026-10-28 TUI 建议采纳与会话边界](active/2026-10-28-tui-turn-suggestion-adopt-and-reset.md) | 空输入按 Enter 采纳建议填入输入框；换会话清空旧建议；PR #532 已合并（`356d0370`），真机冒烟待用户 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
-| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0–S6-A 已合并（#495、#521）；S7 旧路径退役另立切片 |
+| 个人长期 Bot 框架（暂缓增强） | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 保留 S0–S6-A 成果，Project 不再默认由个人 Bot 管理；后续顺序以 #581 为准 |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
