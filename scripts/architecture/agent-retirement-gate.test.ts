@@ -331,7 +331,7 @@ describe('agent-retirement-gate', () => {
     // RETIREMENT_GATE_FIXTURE_CONTEXT_END
   });
 
-  it('treats recorded deleted source paths as bounded history in the slice inventory', () => {
+  it('bounds recorded deleted source paths as history while keeping active references visible', () => {
     writeFixture(
       'scripts/architecture/slice-classification.test.ts',
       [
