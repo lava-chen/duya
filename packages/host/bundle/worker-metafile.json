@@ -15665,6 +15665,95 @@
       ],
       "format": "esm"
     },
+    "packages/agent-runtime/src/engine/run-event-spine.ts": {
+      "bytes": 5511,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/events/event-emitter.ts",
+          "kind": "import-statement",
+          "original": "../events/event-emitter.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/run-session.ts",
+          "kind": "import-statement",
+          "original": "../run-session.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/request-scope.ts": {
+      "bytes": 7087,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/request-assembly.ts": {
+      "bytes": 12875,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/compaction.ts": {
+      "bytes": 14404,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/run-engine.ts": {
+      "bytes": 201074,
+      "imports": [
+        {
+          "path": "packages/agent-core/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/request-scope.ts",
+          "kind": "import-statement",
+          "original": "./request-scope.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/request-assembly.ts",
+          "kind": "import-statement",
+          "original": "./request-assembly.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/compaction.ts",
+          "kind": "import-statement",
+          "original": "./compaction.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/run-engine-execution.ts": {
+      "bytes": 3923,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/engine/run-engine.ts",
+          "kind": "import-statement",
+          "original": "./run-engine.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/engine/tool-side-effect-ledger.ts": {
+      "bytes": 14474,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/agent-protocol/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/agent-runtime/src/transport/line-codec.ts": {
       "bytes": 10197,
       "imports": [
@@ -15792,49 +15881,8 @@
       ],
       "format": "esm"
     },
-    "packages/agent-runtime/src/engine/request-scope.ts": {
-      "bytes": 7087,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/engine/request-assembly.ts": {
-      "bytes": 12875,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/engine/compaction.ts": {
-      "bytes": 14404,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 201074,
-      "imports": [
-        {
-          "path": "packages/agent-core/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-core"
-        },
-        {
-          "path": "packages/agent-runtime/src/engine/request-scope.ts",
-          "kind": "import-statement",
-          "original": "./request-scope.js"
-        },
-        {
-          "path": "packages/agent-runtime/src/engine/request-assembly.ts",
-          "kind": "import-statement",
-          "original": "./request-assembly.js"
-        },
-        {
-          "path": "packages/agent-runtime/src/engine/compaction.ts",
-          "kind": "import-statement",
-          "original": "./compaction.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/agent-runtime/src/index.ts": {
-      "bytes": 17985,
+      "bytes": 18852,
       "imports": [
         {
           "path": "packages/agent-runtime/src/controller.ts",
@@ -15935,6 +15983,21 @@
           "path": "packages/agent-runtime/src/engine/worker-adapter-surface.ts",
           "kind": "import-statement",
           "original": "./engine/worker-adapter-surface.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/run-event-spine.ts",
+          "kind": "import-statement",
+          "original": "./engine/run-event-spine.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/run-engine-execution.ts",
+          "kind": "import-statement",
+          "original": "./engine/run-engine-execution.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/engine/tool-side-effect-ledger.ts",
+          "kind": "import-statement",
+          "original": "./engine/tool-side-effect-ledger.js"
         },
         {
           "path": "packages/agent-runtime/src/legacy-sse-contract.ts",
@@ -17181,51 +17244,8 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/run-event-spine.ts": {
-      "bytes": 5445,
-      "imports": [
-        {
-          "path": "packages/agent-runtime/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-runtime"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/run-engine-execution.ts": {
-      "bytes": 3910,
-      "imports": [
-        {
-          "path": "packages/agent-runtime/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-runtime"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/worker-tool-ledger.ts": {
-      "bytes": 14483,
-      "imports": [
-        {
-          "path": "node:fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/agent-protocol/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/agent-protocol"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/host/src/worker-engine-driver.ts": {
-      "bytes": 15357,
+      "bytes": 15211,
       "imports": [
         {
           "path": "packages/agent-runtime/src/index.ts",
@@ -17246,21 +17266,6 @@
           "path": "packages/host/src/worker-run-composition.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-run-composition"
-        },
-        {
-          "path": "packages/host/src/run-event-spine.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/run-event-spine"
-        },
-        {
-          "path": "packages/host/src/run-engine-execution.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/run-engine-execution"
-        },
-        {
-          "path": "packages/host/src/worker-tool-ledger.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/worker-tool-ledger"
         }
       ],
       "format": "esm"
@@ -31580,7 +31585,7 @@
       "format": "esm"
     },
     "packages/host/src/session-admission.ts": {
-      "bytes": 11678,
+      "bytes": 11964,
       "imports": [
         {
           "path": "packages/agent-runtime/src/session/index.ts",
@@ -38452,6 +38457,16 @@
           "external": true
         },
         {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:child_process",
           "kind": "require-call",
           "external": true
@@ -39493,16 +39508,6 @@
         },
         {
           "path": "node:os",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "node:fs",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "node:path",
           "kind": "require-call",
           "external": true
         },
@@ -40690,10 +40695,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40777,7 +40782,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -42388,7 +42393,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-runtime/src/run-session.ts": {
-          "bytesInOutput": 6603
+          "bytesInOutput": 6602
         },
         "packages/agent-runtime/src/events/event-emitter.ts": {
           "bytesInOutput": 2959
@@ -42406,7 +42411,7 @@
           "bytesInOutput": 34
         },
         "packages/agent-runtime/src/controller.ts": {
-          "bytesInOutput": 62
+          "bytesInOutput": 61
         },
         "packages/agent-runtime/src/authorization/invocation-decision.ts": {
           "bytesInOutput": 860
@@ -42474,6 +42479,27 @@
         "packages/agent-runtime/src/engine/worker-adapter-surface.ts": {
           "bytesInOutput": 682
         },
+        "packages/agent-runtime/src/engine/run-event-spine.ts": {
+          "bytesInOutput": 475
+        },
+        "packages/agent-runtime/src/engine/request-scope.ts": {
+          "bytesInOutput": 462
+        },
+        "packages/agent-runtime/src/engine/request-assembly.ts": {
+          "bytesInOutput": 801
+        },
+        "packages/agent-runtime/src/engine/compaction.ts": {
+          "bytesInOutput": 2019
+        },
+        "packages/agent-runtime/src/engine/run-engine.ts": {
+          "bytesInOutput": 20113
+        },
+        "packages/agent-runtime/src/engine/run-engine-execution.ts": {
+          "bytesInOutput": 907
+        },
+        "packages/agent-runtime/src/engine/tool-side-effect-ledger.ts": {
+          "bytesInOutput": 2573
+        },
         "packages/agent-runtime/src/transport/line-codec.ts": {
           "bytesInOutput": 35
         },
@@ -42504,23 +42530,11 @@
         "packages/agent-runtime/src/transport/equivalence.ts": {
           "bytesInOutput": 35
         },
-        "packages/agent-runtime/src/engine/request-scope.ts": {
-          "bytesInOutput": 462
-        },
-        "packages/agent-runtime/src/engine/request-assembly.ts": {
-          "bytesInOutput": 801
-        },
-        "packages/agent-runtime/src/engine/compaction.ts": {
-          "bytesInOutput": 2019
-        },
-        "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 20113
-        },
         "packages/agent-runtime/src/index.ts": {
-          "bytesInOutput": 221
+          "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43180,10 +43194,10 @@
           "bytesInOutput": 3078
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1526
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -43192,10 +43206,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50724
+          "bytesInOutput": 50729
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1881
+          "bytesInOutput": 1884
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -43948,7 +43962,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44596,7 +44610,7 @@
           "bytesInOutput": 5051
         },
         "packages/host/src/worker-engine-driver.ts": {
-          "bytesInOutput": 4142
+          "bytesInOutput": 4139
         },
         "packages/host/src/worker-run-composition.ts": {
           "bytesInOutput": 6353
@@ -44627,15 +44641,6 @@
         },
         "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
           "bytesInOutput": 4023
-        },
-        "packages/host/src/run-event-spine.ts": {
-          "bytesInOutput": 440
-        },
-        "packages/host/src/run-engine-execution.ts": {
-          "bytesInOutput": 876
-        },
-        "packages/host/src/worker-tool-ledger.ts": {
-          "bytesInOutput": 2542
         },
         "packages/host/src/worker-interagent-calls.ts": {
           "bytesInOutput": 111
@@ -45052,7 +45057,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -45988,7 +45993,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757727
+      "bytes": 4757782
     }
   }
 }
