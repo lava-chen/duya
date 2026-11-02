@@ -1002,7 +1002,7 @@ The JSONL rollouts are the source of truth; `message_index` is a rebuildable pro
 
 ### Project continuity (Coordinator task two, 2026-11-02)
 
-`projects.project_id` remains the durable identity. Migration 21 in
+`projects.project_id` remains the durable identity. Migration 64 in
 `@duya/data` adds revisioned current-state, decision, project-memory and
 Activity records alongside `project_task_sessions`; the existing `tasks` rows
 remain the sole task content/status authority. Task acceptance is a separate

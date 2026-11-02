@@ -2,7 +2,7 @@
  * project-store.ts — ProjectStore aggregate for `duya-core.db` (plan 534).
  *
  * `projects` / `project_bots` were misplaced in `memory-state.db` (plan 525).
- * This store is the canonical home: DDL migration id 18 plus typed CRUD and
+ * This store is the canonical home: project migrations 61–64 plus typed CRUD and
  * the path-JSON helpers. The schema is a verbatim carry-over of the accumulated
  * memory-state migrations (0001 base + 0012 entity + 0013 icon/color) so reads
  * behave identically.
@@ -146,7 +146,7 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Project migrations use ids 61–63, above the current core schema maximum. */
+  /** Project migrations use ids 61–64, above the current core schema maximum. */
   static readonly migrations: Migration[] = [
     {
       id: 61,
@@ -211,7 +211,7 @@ export class ProjectStore {
       },
     },
     {
-      id: 21,
+      id: 64,
       name: 'project_continuity_records',
       up: (db) => db.exec(`
         ALTER TABLE project_task_sessions ADD COLUMN acceptance_status TEXT NOT NULL DEFAULT 'pending'
