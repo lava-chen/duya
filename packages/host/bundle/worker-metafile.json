@@ -18262,9 +18262,46 @@
       ],
       "format": "esm"
     },
-    "packages/host/src/worker-session-history.ts": {
-      "bytes": 3719,
+    "packages/agent-runtime/src/session/ports.ts": {
+      "bytes": 13504,
       "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/session/history.ts": {
+      "bytes": 3913,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/session/service.ts": {
+      "bytes": 5676,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/session/history.ts",
+          "kind": "import-statement",
+          "original": "./history.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/agent-runtime/src/session/index.ts": {
+      "bytes": 1704,
+      "imports": [
+        {
+          "path": "packages/agent-runtime/src/session/ports.ts",
+          "kind": "import-statement",
+          "original": "./ports.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/session/history.ts",
+          "kind": "import-statement",
+          "original": "./history.js"
+        },
+        {
+          "path": "packages/agent-runtime/src/session/service.ts",
+          "kind": "import-statement",
+          "original": "./service.js"
+        }
+      ],
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts": {
@@ -29620,7 +29657,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 176412,
+      "bytes": 176394,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -29813,9 +29850,9 @@
           "original": "@duya/agent-runtime/authorization/profile-bridge"
         },
         {
-          "path": "packages/host/src/worker-session-history.ts",
+          "path": "packages/agent-runtime/src/session/index.ts",
           "kind": "import-statement",
-          "original": "@duya/host/worker-session-history"
+          "original": "@duya/agent-runtime/session"
         },
         {
           "path": "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts",
@@ -42467,7 +42504,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43139,10 +43176,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50721
+          "bytesInOutput": 50724
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1880
+          "bytesInOutput": 1881
         },
         "../../../node_modules/@jimp/plugin-color/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -44057,7 +44094,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 62760
+          "bytesInOutput": 62759
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -44692,8 +44729,11 @@
         "packages/agent-runtime/src/authorization/profile-bridge.ts": {
           "bytesInOutput": 372
         },
-        "packages/host/src/worker-session-history.ts": {
-          "bytesInOutput": 619
+        "packages/agent-runtime/src/session/index.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/agent-runtime/src/session/history.ts": {
+          "bytesInOutput": 618
         },
         "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts": {
           "bytesInOutput": 2042
@@ -45932,7 +45972,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757627
+      "bytes": 4757641
     }
   }
 }
