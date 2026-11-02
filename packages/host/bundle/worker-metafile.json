@@ -33503,6 +33503,11 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/worker-subagents/tool-authorization.ts": {
+      "bytes": 5668,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/workspace/tool-write-gate.ts": {
       "bytes": 5790,
       "imports": [
@@ -33627,7 +33632,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/run-agent.ts": {
-      "bytes": 35926,
+      "bytes": 35656,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/definitions.ts",
@@ -33648,6 +33653,11 @@
           "path": "packages/host/src/worker-subagents/tool-utils.ts",
           "kind": "import-statement",
           "original": "./tool-utils.js"
+        },
+        {
+          "path": "packages/host/src/worker-subagents/tool-authorization.ts",
+          "kind": "import-statement",
+          "original": "./tool-authorization.js"
         },
         {
           "path": "packages/host/src/worker-tool-registry.ts",
@@ -40695,10 +40705,10 @@
           "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40782,7 +40792,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -42534,7 +42544,7 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -44475,7 +44485,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1418
+          "bytesInOutput": 1420
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45438,7 +45448,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/run-agent.ts": {
-          "bytesInOutput": 8613
+          "bytesInOutput": 8425
         },
         "packages/host/src/worker-subagents/tool-utils.ts": {
           "bytesInOutput": 603
@@ -45448,6 +45458,9 @@
         },
         "packages/capabilities/src/background-task-tool.ts": {
           "bytesInOutput": 4362
+        },
+        "packages/host/src/worker-subagents/tool-authorization.ts": {
+          "bytesInOutput": 692
         },
         "packages/host/src/workspace/tool-write-gate.ts": {
           "bytesInOutput": 2094
@@ -45993,7 +46006,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757835
+      "bytes": 4758292
     }
   }
 }
