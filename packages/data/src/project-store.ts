@@ -146,10 +146,10 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Migration id=18: create projects + project_bots. */
+  /** Project migrations use ids 61–63, above the current core schema maximum. */
   static readonly migrations: Migration[] = [
     {
-      id: 18,
+      id: 61,
       name: 'create_projects',
       up: (db) => {
         db.exec(`
@@ -178,27 +178,37 @@ export class ProjectStore {
       },
     },
     {
-      id: 19,
+      id: 62,
       name: 'project_coordinator_session',
-      up: (db) => db.exec('ALTER TABLE projects ADD COLUMN coordinator_session_id TEXT'),
+      up: (db) => {
+        const columns = db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+        if (!columns.some((column) => column.name === 'coordinator_session_id')) {
+          db.exec('ALTER TABLE projects ADD COLUMN coordinator_session_id TEXT');
+        }
+      },
     },
     {
-      id: 20,
+      id: 63,
       name: 'project_task_session_links',
-      up: (db) => db.exec(`
-        CREATE TABLE project_task_sessions (
+      up: (db) => {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>;
+        const hasTasks = tables.some((table) => table.name === 'tasks');
+        const hasSessions = tables.some((table) => table.name === 'sessions');
+        db.exec(`
+        CREATE TABLE IF NOT EXISTS project_task_sessions (
           project_id TEXT NOT NULL,
           task_id TEXT NOT NULL UNIQUE,
           coordinator_session_id TEXT NOT NULL,
           work_session_id TEXT,
           updated_at INTEGER NOT NULL,
           PRIMARY KEY (project_id, task_id),
-          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
-          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
-          FOREIGN KEY (work_session_id) REFERENCES sessions(id) ON DELETE SET NULL
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+          ${hasTasks ? ', FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE' : ''}
+          ${hasSessions ? ', FOREIGN KEY (work_session_id) REFERENCES sessions(id) ON DELETE SET NULL' : ''}
         );
-        CREATE INDEX idx_project_task_sessions_project ON project_task_sessions(project_id, updated_at);
-      `),
+        CREATE INDEX IF NOT EXISTS idx_project_task_sessions_project ON project_task_sessions(project_id, updated_at);
+        `);
+      },
     },
     {
       id: 21,
@@ -380,8 +390,14 @@ export class ProjectStore {
   }
 
   delete(projectId: string): boolean {
-    const r = this.db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
-    return Number(r.changes) > 0;
+    return this.db.transaction(() => {
+      // Keep the link store usable in isolated ProjectStore databases too;
+      // Task and Session tables are owned by separate aggregates and may not
+      // exist in migration rehearsals/imports.
+      this.db.prepare('DELETE FROM project_task_sessions WHERE project_id = ?').run(projectId);
+      const r = this.db.prepare('DELETE FROM projects WHERE project_id = ?').run(projectId);
+      return Number(r.changes) > 0;
+    })();
   }
 
   bindCoordinatorSession(projectId: string, sessionId: string): ProjectRow | null {
