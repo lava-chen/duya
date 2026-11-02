@@ -109,6 +109,14 @@ Owner：当前 Codex；worktree `E:\Projects\duya\.claude\worktrees\project-firs
 
 接续：分支与 worktree 保留（PR 未集成，按仓库规则不回收）。**门禁已全绿**（typecheck:all / architecture:check / bundle:verify / 全量 vitest / electron:build 全部退出 0）。堆叠 PR 拿不到 CI（仓库 workflow 只监听 base=`master`），门禁以本节记录为准。下一条动作：#582 落地后把本 PR 的 base 改到 `master` 并触发一次 CI，再补「结果回项目」的活动流与 Coordinator 唤醒。
 
+### PR #584 集成就绪（2026-11-02）
+
+#582 已合入 master（merge commit `04f7645f`，远端分支已删），PR [#584](https://github.com/lava-chen/duya/pull/584) 的 base 随之改为 `master`。本分支的 base `3d714eba` 已是新 master 的祖先，`git diff origin/master...HEAD` 恰好是本切片的 37 个文件 —— 不需要再 rebase。
+
+CI 首次真正跑起来（base 是 `master` 才会触发），在提交 `ea36480e` 上全绿：architecture 1m48s（含 bundle:verify）、build 3m25s、test 11m29s、typecheck 7m44s、test scope 13s，全部 pass，`mergeStateStatus: CLEAN`。
+
+因此本切片的两道人工关卡——统一状态读取、接管/交还的真实拦截——既有本地门禁（14728 个用例）也有 CI 复核。产品真机验收仍由用户负责。
+
 ## 本轮证据与接续
 
 ### PR #582 review 修复（2026-11-02）
