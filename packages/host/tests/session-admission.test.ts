@@ -18,6 +18,7 @@ import {
   admissionWireStage,
   classifyRunStartAcceptance,
   createHostSessionAdmission,
+  toStartAgentRunRefusal,
 } from '../src/session-admission.js';
 import type { RunStartAcceptance, RunStartStage } from '@duya/agent-runtime';
 import type { SessionAdmissionStage } from '@duya/agent-runtime/session';
@@ -125,6 +126,21 @@ describe('classifyRunStartAcceptance', () => {
     // A refusal that minted an id and then abandoned it reports no id, so
     // the field is optional rather than always null.
     expect(withoutId.runId).toBeUndefined();
+  });
+
+  it('preserves a named run id in the Host wire refusal', () => {
+    const outcome = classifyRunStartAcceptance({
+      accepted: false, runId: 'run-9', stage: 'run_already_exists', reason: 'exists',
+    });
+
+    expect(outcome.state).not.toBe('admitted');
+    if (outcome.state === 'admitted') return;
+    expect(toStartAgentRunRefusal(outcome)).toEqual({
+      accepted: false,
+      stage: 'refused_run_already_exists',
+      reason: 'exists',
+      runId: 'run-9',
+    });
   });
 });
 

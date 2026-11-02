@@ -48,7 +48,7 @@ import {
   type RuntimeSessionService,
 } from '@duya/agent-runtime/session';
 import type { RunStartAcceptance, RunStartStage } from '@duya/agent-runtime';
-import type { StartAgentRunStage } from '@duya/agent-protocol';
+import type { RunId, StartAgentRunResult, StartAgentRunStage } from '@duya/agent-protocol';
 import type { RunDispatchAdmission, RunTurnIntent } from './run-orchestrator.js';
 
 /**
@@ -137,6 +137,18 @@ const WIRE_STAGE_BY_SESSION_STAGE: {
  */
 export function admissionWireStage(stage: SessionAdmissionStage): StartAgentRunRefusalStage {
   return WIRE_STAGE_BY_SESSION_STAGE[stage];
+}
+
+/** Project a refused or failed admission onto the Host's wire result. */
+export function toStartAgentRunRefusal(
+  outcome: Extract<SessionAdmissionOutcome, { readonly state: 'rejected' | 'failed' }>,
+): Extract<StartAgentRunResult, { readonly accepted: false }> {
+  return {
+    accepted: false,
+    stage: admissionWireStage(outcome.stage),
+    reason: outcome.reason,
+    ...(outcome.runId === undefined ? {} : { runId: outcome.runId as RunId }),
+  };
 }
 
 /**
