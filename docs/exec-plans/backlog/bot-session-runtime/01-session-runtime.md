@@ -41,7 +41,7 @@ Bot、TUI 和 Desktop 使用同一 Session 服务进行创建、历史恢复、R
 ### R1.1：Session 服务与依赖注入
 
 - [x] 在 agent-runtime/src/session 建立服务与公开 subpath，优先组合已有 Session/Run DTO、RunPersistence 和引擎端口。（PR #574）
-- [ ] 将通用历史恢复、Session 操作次序和 Engine 桥接迁入 Runtime；Bot prompt/memory、全局 profile loader、DB、模型客户端改由 Host 提供。（历史恢复与操作次序已迁入 PR #574；Engine 桥接未迁）
+- [ ] 将通用历史恢复、Session 操作次序和 Engine 桥接迁入 Runtime；Bot prompt/memory、全局 profile loader、DB、模型客户端改由 Host 提供。（历史恢复与操作次序已迁入 PR #574；Engine 桥接的**引擎核心**已迁入 PR #578，**适配层**未迁——见下方「Engine 桥接迁移的边界」）
 - [x] 服务通过 admission 端口请求启动；Host 冻结 manifest、保存 receipt 并创建 Run 身份，Runtime 不自行重复准入。（三态端口 PR #574；Host 适配器接线 PR #577）
 - [x] admission adapter 调用现有控制面原子操作，不能回调已经转发 Runtime 的公开 start 入口形成递归；Worker handler 与客户端服务各自的调用方向有测试证明。（PR #577：适配器独占 `openRun`，`session-entry-guards.test.ts` 断言全仓只有该文件触达控制面起跑入口）
 - [x] Host 原入口先转发新服务，迁一个调用方验一个；已迁调用方关闭旧独立调度路径。（`worker-process-entry` PR #574；`run-execution.ts` 与 Desktop 的 `openRun` 直调 PR #577 收敛，Desktop 改走同一 session service）
@@ -96,4 +96,19 @@ R1.1 第一个切片已实施：分支 `codex/bot-session-runtime-r1-1`（base `
 
 R1.1 第二个切片已实施：分支 `codex/bot-session-unified-entry`（base `master` `56d42535`，PR #577）。三处改动同源：Runtime 准入结果带命名 stage；Host 新增 `packages/host/src/session-admission.ts` 作为唯一准入适配器（独占控制面 `openRun`，不再回调已转发 Runtime 的公开 start 入口）；Desktop router 改走同一 session service，不再自行判定拒绝语义。C1 已修：wire 新增 `refused_session_busy` / `refused_run_already_exists` / `refused_run_not_created` / `refused_run_not_durable` / `refused_dispatch_threw`，"等一等 / 按回执对账 / 重试并告警"三种下一步不再同名。准入端口改为对请求类型泛型（`SessionRunRequest` 为默认形），Host 传自己解析好的 turn。验证：host + agent-runtime 362 文件 / 3426 用例、desktop server 15 文件 / 147 用例，均 0 失败；`typecheck:electron` 无新增类型错误、`typecheck:runtime` exit 0、`architecture:check` 无新增违规、`bundle:verify` FRESH。新增真实 Worker 端到端测试（`packages/host/tests/session-admission-e2e.test.ts`）与结构守卫（`session-entry-guards.test.ts`）。
 
-R1.1 剩余：Engine 桥接迁移（`worker-engine-driver.ts` 仍在 Host）。R1.2 输入服务、R1.3 子会话收口（`worker-subagents/service.ts` 仍不过控制面）与 Bot dispatcher 按细分 stage 调整重试策略均未开始。
+#577 的 CI 首轮 `41393157489` 在 `packages/agent-protocol/test/13-citation-drift.test.ts` 失败：#577 重写 Desktop router 后，协议包注释里指向 router 的 10 处 `file:line` 锚点整体位移。门禁只捕获同一行有反引号符号的 7 处，另外 3 处（`envelope.ts:19`、`:31`、`run.ts:27`）同样失效但无锚点，一并修正。修协议包注释会使两个 bundle 输入文件变化，`bundle:verify` 随即报 STALE，故补一个 bundle 刷新 commit（`4229c62e`）。协议包是叶子包，改的只有注释。
+
+### Engine 桥接迁移的边界
+
+「Engine 桥接」在代码上分两层，边界不在文件而在**词汇表**：
+
+| 层 | 文件 | 含 `@duya/ai` 词汇 |
+| --- | --- | --- |
+| 引擎核心 | `run-event-spine.ts` / `run-engine-execution.ts` / `worker-tool-ledger.ts` | 否 |
+| 适配层 | `worker-engine-driver.ts` / `worker-run-composition.ts` / `worker-run-session-port.ts` / `worker-run-contracts.ts` | 是 |
+
+`architecture-policy.yaml` 里 `agent-runtime` 的 `requires` 不含 `ai`，而 `worker-run-contracts.ts` 把 `@duya/ai` 的 `Message` / `MessageContent` / `SSEEvent` / `TokenUsage` 重导出成全仓词汇，`EngineProductSession`（25 个方法）也建在这套类型上。**把适配层搬进 Runtime 是一次 worker 消息词汇表迁移**：`@duya/agent-protocol/transcript` 有等价类型，但 `MessageContent` 联合成员是 6 个而 `@duya/ai` 是 4 个，形状不同，影响面横跨 `packages/ai` 的 provider 适配与 `packages/host` 的 turn 管线。
+
+R1.1 第三个切片已实施：分支 `codex/bot-session-engine-bridge`（PR #578）。引擎核心三件迁入 `packages/agent-runtime/src/engine/`，Host 保留三个薄转发层保住已发布 subpath，`worker-engine-driver.ts` 与遗留 `packages/agent` 直接引 Runtime，ledger 测试随实现迁移到 `packages/agent-runtime/test/`。验证：host + agent-runtime 361 文件 / 3425 用例、0 失败；`typecheck:runtime` exit 0、`typecheck:electron` 无新增类型错误、`architecture:check` 无新增违规、`bundle:verify` FRESH。bundle 重建经 metafile 核对为**搬家不是漂移**：inputs 2051 → 2051，移出 3 条 host 路径、移入 3 条 runtime 路径，其余 2048 个输入 `bytesInOutput` 逐项相等。
+
+R1.1 剩余：适配层（driver + composition + session port + contracts）仍在 Host，需先做 worker 消息词汇表迁移，见上表与「边界」段。R1.2 输入服务、R1.3 子会话收口（`worker-subagents/service.ts` 仍不过控制面）均未开始。
