@@ -183,6 +183,10 @@
       "types": "./dist/project-api.d.ts",
       "import": "./dist/project-api.js"
     },
+    "./session-input-api": {
+      "types": "./dist/session-input-api.d.ts",
+      "import": "./dist/session-input-api.js"
+    },
     "./research-api": {
       "types": "./dist/research-api.d.ts",
       "import": "./dist/research-api.js"

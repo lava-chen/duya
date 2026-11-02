@@ -7,6 +7,7 @@ import {
   CaretDownIcon,
   CaretRightIcon,
   ChatCirclePlusIcon,
+  ChatCircleIcon,
   FolderIcon,
   PencilSimpleIcon,
   ArchiveIcon,
@@ -32,6 +33,7 @@ import {
 } from "@/components/ui/CreateProjectDialog";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
 import { useProjectsStore, type ProjectEntity } from "@/stores/projects-store";
+import { useProjectWorkspaceStore } from "@/stores/project-workspace-store";
 import { useTranslation } from "@/hooks/useTranslation";
 
 /**
@@ -353,6 +355,25 @@ export function ProjectsView() {
     });
   };
 
+  /**
+   * Enter the project: the coordinator conversation in the middle, the
+   * project's tasks and working sessions beside it.
+   *
+   * The coordinator is created on first use, so a project the user has never
+   * entered opens onto a conversation rather than an empty page.
+   */
+  const handleEnterProject = async (projectId: string) => {
+    const coordinatorSessionId = await useProjectWorkspaceStore.getState().enterProject(projectId);
+    if (!coordinatorSessionId) {
+      // Entering a project that cannot be opened is a failure the user has to
+      // see: the store holds the reason, this says that it happened.
+      setBanner({ kind: "error", message: t("project.workspace.enterFailed") });
+      return;
+    }
+    await setActiveThread(coordinatorSessionId);
+    setCurrentView("project");
+  };
+
   const handleNewChatInProject = async (row: ProjectRowModel) => {
     const thread = await createThread({
       workingDirectory: row.paths[0],
@@ -598,6 +619,18 @@ export function ProjectsView() {
                     align="end"
                     minWidth={180}
                     items={[
+                      ...(row.kind === "entity" && row.projectId
+                        ? [
+                            {
+                              kind: "action" as const,
+                              id: "enter-project",
+                              label: t("project.workspace.open"),
+                              className: "project-dropdown-item",
+                              iconLeft: <ChatCircleIcon size={14} />,
+                              onSelect: () => void handleEnterProject(row.projectId as string),
+                            },
+                          ]
+                        : []),
                       {
                         kind: "action",
                         id: "new-chat",

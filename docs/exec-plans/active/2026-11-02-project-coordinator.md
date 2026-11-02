@@ -53,10 +53,61 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 任务一先冻结共享合同并交可运行路径；任务二、三可据该合同准备，最终在同一集成版本完成上述场景。若仍是一个 Agent 接续，按一 → 二 → 三推进。共享 protocol、data migration 和 Host bootstrap 只有一个集成 owner，其他 Agent 独立 worktree，先对齐再修改。
 
 - [ ] 一：项目协调与 Session 派发/反馈已实现；唯一输入/租约权威和工具限制已接通。
-- [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与新 Worker 上下文装配已实现；Desktop 展示操作属于任务三）。
-- [ ] 三：Desktop 实际产品流程可交用户验收；通过范围与未通过反馈分别记录。
+- [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与按需上下文读取已实现；完整注入与 Desktop 交互归任务三后续）。
+- [x] 三（Desktop 项目工作台切片，已接线可验收）：统一项目状态读取、协调对话、工作 Session/任务/进度、只读查看、用户接管与交还；「结果回项目」的活动流与 Coordinator 唤醒由 #585 补齐。
+- [ ] 三：完整产品流程交用户验收（含 Task 显式验收、记忆候选确认/纠正）；通过范围与未通过反馈分别记录。
 
 个人 Bot 工具集和主动性暂缓。原 [#562](https://github.com/lava-chen/duya/pull/562) 只保留 CLI 独立收尾交付，不再作为总体架构入口；旧 Bot-first 文档不覆盖本决策，集成 #562 时必须保留此优先级。Project 首个闭环完成后再排 Session 增强/CLI Release 和后续 Bot。
+
+## 任务三切片：Desktop 项目工作台（2026-11-02）
+
+分支 `codex/project-first-desktop`，base `origin/codex/project-coordinator`（#582 head `3d714eba`），worktree `.claude/worktrees/project-first-desktop`。
+
+#582 已交付 Coordinator 侧：受限协调对话、派发时创建规范 Task 并绑定工作 Session。本切片补上**桌面端的项目工作台**——把这些关系变成用户能看见、能进入、能接管的东西。
+
+**已接线（真实数据，无 mock）**
+
+| 能力 | 位置 |
+| --- | --- |
+| 统一项目状态 | `HostProjectApiV1.getProjectState` → `GET /v1/projects/:id/state`；项目、协调 Session、任务、工作 Session 一次读出 |
+| 协调对话 | `projects:coordinator:ensure`：经 Host Session API 建 Session 并绑定 `coordinator_session_id`；失效绑定会被替换 |
+| 工作 Session 进度 | `projects:workSessionStatus`：读 Agent Server 的 `/sessions/:id/status`（运行中/空闲/完成/出错） |
+| 用户接管与交还 | `session:control:lease:*` → #580 的 `session_control_leases`；租约由 Host 持有，界面只是询问 |
+| 接管真的拦得住 | Desktop Agent Server 的 interagent router 读租约：用户持有时，协调对话对该 Session 的新指令被拒（`control_lease_held`，并写明持有人），在途工具继续 |
+| Desktop 界面 | `ProjectWorkspaceView`（中间协调对话 + 右侧任务/工作 Session/进度）、`ProjectSessionBanner`（只读/接管/交还/返回项目）、`ProjectsView` 的「进入项目」入口 |
+
+**未在本切片内**
+
+- 「结果回项目」的活动流与 Coordinator 唤醒：工作 Session 跑完的结果目前仍在 Session 管理面里，没有回到项目视图。这是本切片之后最直接的下一步。
+- Task 的显式验收/完成对账、项目记忆 scope（任务二）、Web/多机/自动 merge。
+
+**下一步**：补活动流与唤醒后，工作 Session 的完成状态可以自己出现在项目里，用户不必手动刷新。
+
+### Desktop 项目工作台切片验证（2026-11-02）
+
+Owner：当前 Codex；worktree `E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支 `codex/project-first-desktop`；base `origin/codex/project-coordinator` = `3d714eba`（#582 head，已 rebase 到该 head）；提交 `99cbd01e`；交付 PR [#584](https://github.com/lava-chen/duya/pull/584)（OPEN / MERGEABLE / CLEAN，base = `codex/project-coordinator`，**#582 必须先落地**）。
+
+环境：Windows 11、Node `v24.16.0`、git `2.50.0`；`NODE_OPTIONS=--max-old-space-size=12288`；依赖为共享 junction，只在 worktree 内编辑与构建。
+
+- `npm run typecheck:all` 退出 0（含 22 个包构建、protocol/client-core/core/workflow/runtime/web/electron/cli/voice/evals 全量类型门禁；Electron 门禁报告「no new type errors (178 known across 101 key(s))」，既有 baseline 未增加）。
+- `npm run architecture:check` 退出 0：3051 项全部落在既有 baseline，「OK — no new boundary violations」。
+- `npm run bundle:verify` 退出 0：`0/1029 bundle inputs changed`，FRESH。Worker bundle 已从本检出重建并与源码同一提交。
+- 全量 `npx vitest run --maxWorkers=2`：**1347 个测试文件通过 / 3 跳过，14728 个用例通过 / 30 跳过**，退出 0，耗时 637.71s。
+- `npm run electron:build` 退出 0：「Electron build complete」，原生模块（better-sqlite3 / bindings / file-uri-to-path / node-pty）已拷入产物；main/preload/renderer 产物来自本检出。
+
+  这条门禁在本机曾连续失败多次（Go 的 `runtime: cannot allocate memory` 与 V8 的 `Zone Allocation failed`）。根因是**V8 与 esbuild 的 Go 堆在抢同一份提交额度**：只给 V8 调 `--max-old-space-size` 无效，因为 esbuild 的 Go 运行时仍申请不到内存。可用的组合是给 V8 足量堆、同时压住 Go 堆：
+
+  ```
+  NODE_OPTIONS=--max-old-space-size=6144 GOMEMLIMIT=900MiB GOGC=30 npm run electron:build
+  ```
+
+  `NODE_OPTIONS` 对 V8 有效，`GOMEMLIMIT`/`GOGC` 对 esbuild 的 Go 运行时有效；两者分开调不会有这个组合。
+
+过程中的一次真实失败与修复：rebase 到 #582 新 head 后，链接表新增 `ON DELETE CASCADE`（任务行删除时绑定随之删除），本切片原先「任务行没了仍报绑定」的断言不再成立。已改为两个用例——新库级联后项目不再列出该任务；旧库（无该外键）仍如实报出 `status: 'unknown'`。Host 侧保留 `unknown` 分支并在注释里写明它只对早于该外键的数据库可达。
+
+未验证：产品真机体验（进入项目、接管、交还、返回项目）由用户验收；「结果回项目」的活动流与唤醒尚未实现。
+
+接续：分支与 worktree 保留（PR 未集成，按仓库规则不回收）。**门禁已全绿**（typecheck:all / architecture:check / bundle:verify / 全量 vitest / electron:build 全部退出 0）。堆叠 PR 拿不到 CI（仓库 workflow 只监听 base=`master`），门禁以本节记录为准。下一条动作：#582 落地后把本 PR 的 base 改到 `master` 并触发一次 CI，再补「结果回项目」的活动流与 Coordinator 唤醒。
 
 ## 本轮证据与接续
 

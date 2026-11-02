@@ -43,11 +43,12 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
   const { t } = useTranslation();
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [forceShowOnboarding, setForceShowOnboarding] = useState(false);
-  const { currentView, isHydrated, activeThreadId, settingsTab } = useConversationStore();
+  const { currentView, isHydrated, activeThreadId, settingsTab, activeProjectId } = useConversationStore();
   const { panelOpen, tabs, activeTabId, setPanelOpen, activateTab, workspaceExpanded } = usePanel();
 
   // Title-bar back/forward: commit every navigation-relevant transition
-  // (view, session, settings tab, side-panel page) into the nav history.
+  // (view, session, project, settings tab, side-panel page) into the nav
+  // history.
   // The store coalesces multi-pass commits and swallows the echo of its own
   // back()/forward() applies — see nav-history-store.ts.
   useEffect(() => {
@@ -55,10 +56,11 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
     useNavHistoryStore.getState().commit({
       view: currentView,
       threadId: activeThreadId ?? null,
+      projectId: activeProjectId ?? null,
       settingsTab: settingsTab ?? null,
       panel: { open: panelOpen, activeTabId },
     });
-  }, [currentView, activeThreadId, settingsTab, panelOpen, activeTabId, isHydrated]);
+  }, [currentView, activeThreadId, activeProjectId, settingsTab, panelOpen, activeTabId, isHydrated]);
 
   // Restore a history snapshot. The conversation slice is written directly
   // (synchronous, exact — setActiveThread is async and id-only, wrong for
@@ -70,6 +72,9 @@ function AppShellInner({ children, capabilities }: AppShellProps) {
     useConversationStore.setState({
       activeThreadId: target.threadId,
       currentView: target.view,
+      // The project view is meaningless without its project, so the project
+      // travels with the snapshot.
+      ...(target.projectId ? { activeProjectId: target.projectId } : {}),
       ...(target.view === "settings" && target.settingsTab
         ? { settingsTab: target.settingsTab }
         : {}),

@@ -183,6 +183,25 @@ const interagentRouter = new InteragentRouter({
   sessionManager,
   dbRequest,
   workerDbRequests,
+  // The control lease (R1.2). The lease says who may direct a session, and a
+  // session the user has taken over is not the Coordinator's to instruct.
+  //
+  // The lease lives in the main process's core database, and this process
+  // reaches it over the same bridge every other DB read uses — so there is one
+  // authority, read one way, and no second lease store to drift from it.
+  //
+  // ANY live lease blocks the invoke. The lease exists precisely to say "this
+  // session has an owner that is not an agent", and a session-to-session
+  // invoke is always an agent speaking to another.
+  controlLease: {
+    blockedBy: async (sessionId: string) => {
+      const lease = await dbRequest('session:controlLease', { sessionId }) as {
+        holderKind?: string;
+      } | null;
+      if (!lease || !lease.holderKind) return null;
+      return { code: 'control_lease_held' as const, holderKind: lease.holderKind };
+    },
+  },
 });
 
 workerManager.setMessageHandler((sessionId, msg, child) => {

@@ -545,7 +545,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const goalApi = createHostGoalApi(core.stores);
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores, core.stores.projects);
-    const projectApi = createHostProjectApi(core.stores.projects, core.stores.tasks);
+    const projectApi = createHostProjectApi(core.stores.projects, core.stores.tasks, {
+      sessions: core.stores.sessions,
+      spawnEdges: core.stores.spawnEdges,
+    });
     const lockApi = createHostLockApi(core.stores);
     // ONE instance per API, shared by the HTTP surface and the worker db
     // bridge: the bridge must answer the same rows the HTTP surface does,

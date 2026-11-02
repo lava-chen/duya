@@ -8,6 +8,9 @@ import type {
   ProjectDecision,
   ProjectMemory,
   ProjectContinuityState,
+  HostProjectState,
+  HostProjectTaskState,
+  HostProjectWorkSession,
 } from '@duya/agent-protocol/projects';
 import type { Task } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
@@ -16,6 +19,7 @@ import {
   serializeProjectPaths,
   type ProjectRow,
   type ProjectStore,
+  type ProjectTaskLinkRow,
 } from '@duya/data/project-store';
 import { validateProjectMemoryKey } from '@duya/memory';
 import { buildProjectContext } from './project/context.js';
@@ -38,10 +42,24 @@ function pathsToJson(paths: readonly HostProjectPathEntry[]): string {
   return serializeProjectPaths(paths.map(({ path, description }) => ({ path, description })));
 }
 
+/**
+ * The session facts a project state projection needs.
+ *
+ * A project has two kinds of working session: the ones its coordinator
+ * spawned (the spawn lineage) and the ones bound to a project task. Both are
+ * read here, and only here — the projection does not ask a client to
+ * assemble them.
+ */
+export interface HostProjectSessionScope {
+  readonly sessions: Pick<CoreDataHostStores['sessions'], 'get'>;
+  readonly spawnEdges: Pick<CoreDataHostStores['spawnEdges'], 'listChildren'>;
+}
+
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
   projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
   tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
+  scope?: HostProjectSessionScope,
 ): HostProjectApiV1 {
   return {
     async listProjects() {
@@ -232,6 +250,43 @@ export function createHostProjectApi(
       return projects.listDecisionHistory(projectId, key, limit).map((row) => ({ key: row.decision_key, content: row.content,
         status: row.status, revision: row.revision, source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at }));
     },
+
+    async getProjectState(projectId) {
+      const row = projects.get(projectId);
+      if (!row) return null;
+
+      // The links are the project's own record of what belongs to it. A link
+      // whose task row is gone is still reported: the binding is a fact, and
+      // hiding it would make the projection look tidier than the database is.
+      // A link table that cascades on the task deletes the link with it, and
+      // this branch is only reached on a database created before that
+      // foreign key existed.
+      const links = projects.listTaskLinks(projectId);
+      const taskStates: HostProjectTaskState[] = links.map((link) => {
+        const task = tasks?.get(link.task_id) ?? null;
+        return {
+          taskId: link.task_id,
+          subject: task?.subject ?? '',
+          description: task?.description ?? '',
+          status: task?.status ?? 'unknown',
+          activeForm: task?.activeForm ?? null,
+          owner: task?.owner ?? null,
+          blocks: task?.blocks ?? [],
+          blockedBy: task?.blockedBy ?? [],
+          coordinatorSessionId: link.coordinator_session_id,
+          workSessionId: link.work_session_id,
+          updatedAt: task?.updatedAt ?? link.updated_at,
+        };
+      });
+
+      return {
+        project: toRecord(row),
+        coordinatorSessionId: row.coordinator_session_id,
+        tasks: taskStates,
+        workSessions: collectWorkSessions(row, links, scope),
+        observedAt: Date.now(),
+      };
+    },
   };
 }
 
@@ -248,6 +303,57 @@ function toProjectTask(task: Awaited<ReturnType<NonNullable<Pick<CoreDataHostSto
     subject: task.subject, description: task.description, status,
     ...(task.activeForm ? { activeForm: task.activeForm } : {}), ...(task.owner ? { owner: task.owner } : {}),
     blocks: task.blocks, blockedBy: task.blockedBy, metadata: task.metadata };
+}
+
+/**
+ * The working sessions of a project.
+ *
+ * Two sources, and the order matters: a session the coordinator spawned and a
+ * session bound to a project task can be the same session, and the binding is
+ * the stronger fact — it is the one that says WHICH task the session works
+ * on. So the binding is applied last and replaces the spawned entry.
+ */
+function collectWorkSessions(
+  row: ProjectRow,
+  links: readonly ProjectTaskLinkRow[],
+  scope: HostProjectSessionScope | undefined,
+): HostProjectWorkSession[] {
+  if (!scope) return [];
+  const bySession = new Map<string, HostProjectWorkSession>();
+
+  const coordinatorSessionId = row.coordinator_session_id;
+  if (coordinatorSessionId) {
+    for (const edge of scope.spawnEdges.listChildren(coordinatorSessionId)) {
+      const session = scope.sessions.get(edge.childSessionId);
+      if (!session || session.status === 'deleted') continue;
+      bySession.set(session.id, {
+        sessionId: session.id,
+        title: session.title,
+        workingDirectory: session.workingDirectory,
+        status: session.status,
+        updatedAt: session.updatedAt,
+        taskId: null,
+        origin: 'spawned',
+      });
+    }
+  }
+
+  for (const link of links) {
+    if (!link.work_session_id) continue;
+    const session = scope.sessions.get(link.work_session_id);
+    if (!session || session.status === 'deleted') continue;
+    bySession.set(session.id, {
+      sessionId: session.id,
+      title: session.title,
+      workingDirectory: session.workingDirectory,
+      status: session.status,
+      updatedAt: session.updatedAt,
+      taskId: link.task_id,
+      origin: 'bound',
+    });
+  }
+
+  return [...bySession.values()].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

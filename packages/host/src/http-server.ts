@@ -3413,6 +3413,20 @@ export class HostSessionHttpServer {
       } catch (error) { this.#sendApiError(res, error); }
       return;
     }
+    const stateMatch = /^\/v1\/projects\/([^/]+)\/state$/.exec(url.pathname);
+    if (stateMatch && req.method === 'GET') {
+      const projectId = this.#decodePathPart(stateMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        // 200 with a null state, NOT a 404 — the same answer the sibling
+        // project route gives for a project that is not there. A missing
+        // project is an answer, and the client asked a question it can be
+        // told.
+        const state = await api.getProjectState(projectId);
+        this.#sendJson(res, 200, { state });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
     if (!match) {
       this.#sendJson(res, 404, { error: { code: 'not_found' } });
       return;
