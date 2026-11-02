@@ -417,7 +417,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/session-input.ts": {
-      "bytes": 11493,
+      "bytes": 11764,
       "imports": [],
       "format": "esm"
     },
@@ -18262,6 +18262,11 @@
       ],
       "format": "esm"
     },
+    "packages/agent-runtime/src/session/ports.ts": {
+      "bytes": 13504,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-runtime/src/session/history.ts": {
       "bytes": 3913,
       "imports": [],
@@ -18279,8 +18284,13 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/session/index.ts": {
-      "bytes": 1524,
+      "bytes": 1704,
       "imports": [
+        {
+          "path": "packages/agent-runtime/src/session/ports.ts",
+          "kind": "import-statement",
+          "original": "./ports.js"
+        },
         {
           "path": "packages/agent-runtime/src/session/history.ts",
           "kind": "import-statement",
@@ -22757,7 +22767,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -40412,7 +40422,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -40751,7 +40761,7 @@
           "bytesInOutput": 35
         },
         "packages/data/src/model-capability-store.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/data/src/app-connection-store.ts": {
           "bytesInOutput": 30
@@ -42494,13 +42504,13 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -42527,7 +42537,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -44719,11 +44729,11 @@
         "packages/agent-runtime/src/authorization/profile-bridge.ts": {
           "bytesInOutput": 372
         },
-        "packages/agent-runtime/src/session/history.ts": {
-          "bytesInOutput": 618
-        },
         "packages/agent-runtime/src/session/index.ts": {
           "bytesInOutput": 0
+        },
+        "packages/agent-runtime/src/session/history.ts": {
+          "bytesInOutput": 618
         },
         "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts": {
           "bytesInOutput": 2042
@@ -45962,7 +45972,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757612
+      "bytes": 4757627
     }
   }
 }

@@ -23,6 +23,8 @@
  */
 export type {
   SessionWorkspace,
+  SessionRelativePath,
+  SessionRelativePathRejection,
   SessionRunRequest,
   SessionRunIdentity,
   SessionAdmissionOutcome,
@@ -32,6 +34,12 @@ export type {
   SessionHistoryRepairResult,
   SessionHistoryPorts,
   SessionHistory,
+} from './ports.js';
+
+export {
+  isSessionRelativePathSafe,
+  sessionRelativePathRejection,
+  toSessionRelativePath,
 } from './ports.js';
 
 export { hydrateSessionHistory } from './history.js';
