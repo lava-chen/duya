@@ -330,4 +330,26 @@ describe('agent-retirement-gate', () => {
     expect(report.blockingReferenceCount).toBeGreaterThan(0);
     // RETIREMENT_GATE_FIXTURE_CONTEXT_END
   });
+
+  it('treats recorded deleted source paths as bounded history in the slice inventory', () => {
+    writeFixture(
+      'scripts/architecture/slice-classification.test.ts',
+      [
+        '// RETIREMENT_GATE_FIXTURE_CONTEXT_START',
+        `const deletedPath = 'packages/${'agent'}/src/tool/MessageSessionTool/MessageSessionTool.ts';`,
+        '// RETIREMENT_GATE_FIXTURE_CONTEXT_END',
+        `const activeDependency = 'packages/${'agent'}/src/index.ts';`,
+      ].join('\n'),
+    );
+
+    const report = collectAgentRetirementReport(fixtureRoot);
+    const findings = report.findings.filter((finding) =>
+      finding.file === 'scripts/architecture/slice-classification.test.ts',
+    );
+
+    expect(findings).toHaveLength(2);
+    expect(findings.filter((finding) => finding.fixtureContext)).toHaveLength(1);
+    expect(report.referenceCount).toBe(1);
+    expect(report.fixtureReferenceCount).toBe(1);
+  });
 });
