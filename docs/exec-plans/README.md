@@ -2,10 +2,13 @@
 
 先定位用户本次任务，再读取对应计划的验收与接续点。这里维护路由，不复制各计划的实时状态。
 
+当前产品主线为 [Project Coordinator](active/2026-11-02-project-coordinator.md)：先完成项目协调、项目记忆和 Desktop 协作闭环。Personal Bot 暂缓增强；Session 只先补 Coordinator 必需的执行基础，独立 CLI 增强/Release 后续安排。产品角色与仓库边界见 [Project-first 决策](../design-docs/project-first-architecture.md)。
+
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 认领任务一：收敛 #579/#580 的输入/租约权威，接项目协调角色与工作 Session；任务二/三完成记忆和 Desktop |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
@@ -21,7 +24,7 @@
 | TUI 下一步建议采纳 | [2026-10-28 TUI 建议采纳与会话边界](active/2026-10-28-tui-turn-suggestion-adopt-and-reset.md) | 空输入按 Enter 采纳建议填入输入框；换会话清空旧建议；PR #532 已合并（`356d0370`），真机冒烟待用户 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
-| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0–S6-A 已合并（#495、#521）；S7 旧路径退役另立切片 |
+| 个人长期 Bot 框架（暂缓增强） | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 保留 S0–S6-A 成果；优先复用项目闭环必需基础，个人 Bot 增强和 S7 另行排期 |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |

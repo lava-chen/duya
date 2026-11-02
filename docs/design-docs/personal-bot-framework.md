@@ -1,5 +1,7 @@
 # 个人长期 Bot 框架设计
 
+> 2026-11-02 产品方向调整：Personal Bot 暂缓增强，Project Coordinator 成为独立的当前主线。本文保留个人 Bot 的历史设计与实现依据；不再据此把 Project 协调归给 Bot。当前决策见 [Project-first](project-first-architecture.md)，执行见 [Coordinator 计划](../exec-plans/active/2026-11-02-project-coordinator.md)。
+
 将 Bot 定义为用户长期委托的智能体：有稳定身份、持续责任、受控记忆与行动权限，能够在多次 Run、多个渠道和客户端离线期间推进工作。目标是建立一个清晰的 Bot 领域包，并由现有 Host 统一装配执行。
 
 状态：设计提案，尚未实现。源码核对基线：`270ba52869b6414094e553dd7f9abde5a1e429f7`，2026-10-25。
