@@ -16,7 +16,7 @@ import {
 export type WorkerMCPApplyTarget<TContext extends object> = Pick<
   MCPApplyRuntimePort<MCPManager, TContext>,
   'getActiveMCPManager' | 'getNonMCPModelVisibleToolNames' | 'setActiveMCPRuntime'
->;
+> & Pick<MCPApplyRuntimePort<MCPManager, TContext>, 'getHostOwnedMCPServers'>;
 
 export interface WorkerMCPApplyOptions<TContext extends object> {
   readonly target: WorkerMCPApplyTarget<TContext>;
@@ -34,6 +34,7 @@ export function createWorkerMCPApplyRuntime<TContext extends object>(
   return {
     getActiveMCPManager: () => target.getActiveMCPManager(),
     getNonMCPModelVisibleToolNames: () => target.getNonMCPModelVisibleToolNames(),
+    getHostOwnedMCPServers: () => target.getHostOwnedMCPServers?.() ?? [],
     setActiveMCPRuntime: (snapshot) => target.setActiveMCPRuntime(snapshot),
     createManager: () => new MCPManager(),
     createMCPToolExecutor: (options) => createMCPToolExecutor({

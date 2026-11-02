@@ -234,23 +234,6 @@ export interface DbResponseCommand {
   error?: string;
 }
 
-export interface InteragentInvokeCommand {
-  type: 'interagent:invoke';
-  id: string;              // UUID, correlates invoke → events
-  callerSessionId: string;
-  callerAgentName: string; // for metadata stamping on target's messages
-  targetSessionId: string;
-  message: string;
-  mode: 'minimal' | 'full';
-  timeout: number;         // seconds
-}
-
-export interface InteragentEventMessage {
-  type: 'interagent:event';
-  id: string;              // correlates to invoke id
-  event: WorkerEvent;      // target worker's stdout event (chat:text, chat:tool_use, chat:done, chat:error, ...)
-}
-
 /**
  * ZCode-parity saved-workflow launch. Dispatched by the agent server's
  * POST /workflow/:name/trigger route; executed by the worker's
@@ -287,8 +270,6 @@ export type WorkerCommand =
   | PermissionResolveCommand
   | PermissionSetCommand
   | DbResponseCommand
-  | InteragentInvokeCommand
-  | InteragentEventMessage
   | WorkflowRunCommand
   | { type: string; [key: string]: unknown };
 

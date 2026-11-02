@@ -15,7 +15,7 @@
 | `apps/desktop/src/preload/index.ts:1` | 整个 `contextBridge` 表面（3220 行）—— renderer 能调什么全看这里 |
 | `apps/desktop/src/main/ipc/index.ts:43` | 34 个 `register*Handlers` 的集中导出；`apps/desktop/src/main/ipc/lazy-ipc-registry.ts:1` 是懒注册表 |
 | `apps/desktop/src/main/ipc/contracts.ts:34` | 高风险通道的 zod 入参 schema |
-| `apps/desktop/src/main/agents/server/router.ts:1` | run 路由（4130 行）；`interagent-router.ts`、`workflow-runtime-manager.ts` 同目录 |
+| `apps/desktop/src/main/agents/server/router.ts:1` | run 路由（4130 行）；`workflow-runtime-manager.ts` 同目录 |
 | `apps/desktop/src/main/agents/server/worker-manager.ts:20` | worker 路径解析：打包走 `resources/harness-bundle/worker-entry.js`（运行时路径，不在仓库内），开发走 `packages/host/bundle/worker-entry.js`（`:25`） |
 | `apps/desktop/src/main/memory-state/migrations/index.ts:42` | `memory-state.db` 的 schema 迁移（**不是** `packages/data` 那套） |
 

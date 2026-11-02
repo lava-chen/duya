@@ -39,6 +39,10 @@
       "types": "./dist/session-api.d.ts",
       "import": "./dist/session-api.js"
     },
+    "./session-input-service": {
+      "types": "./dist/session-input-service.d.ts",
+      "import": "./dist/session-input-service.js"
+    },
     "./local-session-api": {
       "types": "./dist/local-session-api.d.ts",
       "import": "./dist/local-session-api.js"
@@ -398,10 +402,6 @@
     "./worker-transport": {
       "types": "./dist/worker-transport.d.ts",
       "import": "./dist/worker-transport.js"
-    },
-    "./worker-interagent-calls": {
-      "types": "./dist/worker-interagent-calls.d.ts",
-      "import": "./dist/worker-interagent-calls.js"
     },
     "./worker-journal/*": {
       "types": "./dist/worker-journal/*.d.ts",

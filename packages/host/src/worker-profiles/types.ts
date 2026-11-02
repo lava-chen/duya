@@ -242,7 +242,9 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
       // No mode-switching side effects.
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
       // No session-to-session messaging or vision.
-      'session_search', 'message_session', 'vision_analyze',
+      'session_list', 'session_spawn', 'session_get', 'session_reply',
+      'session_cancel', 'session_rename', 'session_search', 'session_read',
+      'session_fork', 'session_send', 'session_status', 'session_control', 'vision_analyze',
     ],
     promptProfile: {
       // Memory content is the curator's INPUT data, not context about

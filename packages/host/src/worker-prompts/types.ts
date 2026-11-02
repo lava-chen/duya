@@ -32,8 +32,7 @@ export const TOOL_NAMES = {
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',
-  SESSION_SEARCH: 'SessionSearch',
-  MESSAGE_SESSION: 'MessageSession',
+  SESSION_SEARCH: 'mcp_duya_app_session_search',
   SLEEP: 'Sleep',
   VISION: 'vision_analyze',
 } as const

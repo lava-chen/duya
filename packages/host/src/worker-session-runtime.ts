@@ -71,8 +71,10 @@ import { readConfigAgents, toAgentProfile } from '@duya/host/worker-profiles/con
 import { parseAgentMentions, buildMentionedAgentsContext } from '@duya/agent-core/message/agent-mentions';
 import type { AgentProfile } from '@duya/agent-core';
 import { isToolVisible, type ToolVisibilityConstraints } from '@duya/agent-runtime/authorization/tool-filter';
-import { mailboxDb, modeStateDb, pluginDb } from '@duya/host/worker-db-client';
+import { mailboxDb, modeStateDb, pluginDb, sessionInputDb } from '@duya/host/worker-db-client';
 import { MCPManager } from '@duya/host/connector-services/worker-mcp';
+import { createDuyaAppMcpServerConfig } from '@duya/host/worker-tool-bindings/session-app';
+import type { MCPServerConfig } from '@duya/capabilities/MCP/ports';
 import { buildMCPCapabilityCatalog } from '@duya/capabilities/MCP/capability-catalog';
 import type { MailboxRow } from '@duya/host/worker-mailbox-row';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '@duya/host/worker-hooks/loop';
@@ -979,6 +981,7 @@ export class WorkerSession implements AgentRuntime {
     private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
     private visualAnalysis: VisualAnalysisService;
     private mcpManager: MCPManager | null = null;
+    private readonly hostOwnedMcpServers: readonly MCPServerConfig[] = [createDuyaAppMcpServerConfig()];
     private mcpReadyResolve: (() => void) | null = null;
     private mcpReady: Promise<void> = new Promise((resolve) => {
         this.mcpReadyResolve = resolve;
@@ -1469,13 +1472,14 @@ export class WorkerSession implements AgentRuntime {
         });
     }
     private async _claimMailboxAtCheckpoint(runId: string, messages: Message[], seqIndex: number, checkpoint: 'before_model_turn' | 'before_final_answer', wakeRun = false, imageInputSupported = isModelLikelyMultimodal(this.model)): Promise<RuntimeMailboxDecision> {
-        if (!this.sessionId) {
+        const sessionId = this.sessionId;
+        if (!sessionId) {
             return { action: 'continue', absorbed: false };
         }
         let claim: RuntimeMailboxClaim;
         try {
             claim = await mailboxDb.claimBatch({
-                sessionId: this.sessionId,
+                sessionId,
                 runId,
                 checkpoint,
                 limit: 10,
@@ -1487,6 +1491,42 @@ export class WorkerSession implements AgentRuntime {
         }
         if (!claim.rows.length) {
             return { action: 'continue', absorbed: false };
+        }
+        const deliveryEligibleRows: MailboxRow[] = [];
+        for (let index = 0; index < claim.rows.length; index += 1) {
+            const row = claim.rows[index];
+            if (!row) continue;
+            if (!row.source.startsWith('session_input:')) {
+                deliveryEligibleRows.push(row);
+                continue;
+            }
+            const claimToken = claim.claimTokens[index];
+            if (!claimToken) continue;
+            try {
+                const rejection = await sessionInputDb.validateDelivery({
+                    inputId: row.id,
+                    sessionId,
+                    runId,
+                    turnId: this.currentTurnId,
+                });
+                if (rejection === null) {
+                    deliveryEligibleRows.push(row);
+                    continue;
+                }
+                await mailboxDb.cancelByAgent({ id: row.id, claimToken, reason: rejection });
+                logger.warn(`[AgentMailbox] rejected stale Session input ${row.id}: ${rejection}`);
+            }
+            catch (err) {
+                try {
+                    await mailboxDb.cancelByAgent({
+                        id: row.id,
+                        claimToken,
+                        reason: 'session_input_validation_unavailable',
+                    });
+                }
+                catch { /* Keep the input out of this run even if receipt finalization also fails. */ }
+                logger.warn(`[AgentMailbox] Host could not validate Session input ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+            }
         }
         const applyRow = async (row: MailboxRow, index: number, summary: string): Promise<void> => {
             const claimToken = claim.claimTokens[index];
@@ -1500,7 +1540,7 @@ export class WorkerSession implements AgentRuntime {
                 summary,
             });
         };
-        const usableRows = claim.rows.filter((row) => row.content.trim().length > 0 || parseMailboxAttachments(row.attachments_json).length > 0);
+        const usableRows = deliveryEligibleRows.filter((row) => row.content.trim().length > 0 || parseMailboxAttachments(row.attachments_json).length > 0);
         if (!usableRows.length) {
             return { action: 'continue', absorbed: false };
         }
@@ -2204,6 +2244,9 @@ export class WorkerSession implements AgentRuntime {
     }
     getActiveMCPManager(): MCPManager | null {
         return this.mcpManager;
+    }
+    getHostOwnedMCPServers(): readonly MCPServerConfig[] {
+        return this.hostOwnedMcpServers;
     }
     async setActiveMCPRuntime(install: {
         manager: MCPManager;

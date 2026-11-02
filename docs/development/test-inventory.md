@@ -8,11 +8,11 @@ flags, not the letter.
 
 | metric | value |
 | --- | --- |
-| test files | 1178 |
-| test cases | 12917 |
-| assertions | 31804 |
-| module mocks | 679 |
-| measured test time | 329.0s |
+| test files | 1180 |
+| test cases | 12904 |
+| assertions | 31823 |
+| module mocks | 681 |
+| measured test time | 329.3s |
 
 `test cases` and `assertions` are static counts of `it(`/`test(`/`expect(` call sites in
 the source. A run reports more cases than call sites, because `it.each` and loops expand
@@ -22,14 +22,14 @@ one call site into several runtime cases.
 
 | module | files | cases | assertions | mocks | measured s | A | B | C |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `apps/desktop` | 296 | 3404 | 8868 | 328 | 78.0 | 279 | 17 | 0 |
+| `apps/desktop` | 295 | 3385 | 8838 | 328 | 78.0 | 278 | 17 | 0 |
 | `packages/cli` | 87 | 1005 | 2307 | 12 | 66.3 | 83 | 4 | 0 |
-| `packages/host` | 159 | 1547 | 4469 | 36 | 50.3 | 152 | 7 | 0 |
-| `scripts` | 29 | 496 | 1031 | 0 | 47.6 | 28 | 1 | 0 |
-| `packages/agent-runtime` | 102 | 1055 | 2928 | 0 | 29.5 | 102 | 0 | 0 |
+| `packages/host` | 161 | 1557 | 4511 | 38 | 50.6 | 153 | 8 | 0 |
+| `scripts` | 29 | 495 | 1029 | 0 | 47.8 | 28 | 1 | 0 |
+| `packages/agent-runtime` | 102 | 1050 | 2923 | 0 | 29.5 | 102 | 0 | 0 |
 | `packages/ui` | 209 | 2147 | 4746 | 283 | 28.8 | 190 | 19 | 0 |
 | `evals` | 10 | 102 | 226 | 0 | 10.3 | 10 | 0 | 0 |
-| `packages/capabilities` | 71 | 602 | 1547 | 8 | 5.4 | 71 | 0 | 0 |
+| `packages/capabilities` | 72 | 604 | 1561 | 8 | 5.4 | 72 | 0 | 0 |
 | `packages/memory` | 18 | 248 | 634 | 2 | 3.4 | 18 | 0 | 0 |
 | `apps/web` | 8 | 68 | 218 | 0 | 2.8 | 8 | 0 | 0 |
 | `packages/agent-protocol` | 28 | 324 | 531 | 0 | 2.0 | 27 | 1 | 0 |
@@ -53,7 +53,7 @@ one call site into several runtime cases.
 
 | flag | files |
 | --- | ---: |
-| `mock-heavy` | 34 |
+| `mock-heavy` | 35 |
 | `stdout-write` | 11 |
 | `skipped` | 4 |
 

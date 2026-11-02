@@ -475,6 +475,9 @@ describe('W0 request-level tool census', () => {
 
     const names = new Set(record.finalToolNames);
     // BOT_TOOLSET exact names promote their deferred registrations (plan 496).
+    // This census manually installs only the W0 fixture MCP server; it does
+    // not compose WorkerSession's Host-owned duya_app config, so Session app
+    // names are outside this census and require separate coverage.
     for (const toolName of [
       'send_message',
       'send_to_agent',
@@ -484,7 +487,6 @@ describe('W0 request-level tool census', () => {
       'post_to_room',
       'list_app_connectors',
       'connect_app',
-      'session',
     ]) {
       expect(names.has(toolName), `bot turn-one tool: ${toolName}`).toBe(true);
     }

@@ -5,10 +5,10 @@
  * a message to another agent. The message is written to the agent_mailbox table
  * (kind='agent_dm') and the 476 Wake Bus handles waking the target agent.
  *
- * Key differences from MessageSessionTool:
- * - Fire-and-forget: does not wait for a reply
- * - Uses mailbox (not interagent:invoke request-response)
- * - Async delivery via Wake Bus
+ * This Bot inbox/outbox capability addresses an agent identity and carries
+ * Bot message intents. `session_send` addresses one Session directly and
+ * returns that Session's durable input receipt; the two tools keep separate
+ * delivery and wake semantics.
  */
 
 import { randomUUID } from "node:crypto";
@@ -49,7 +49,7 @@ const SEND_TO_AGENT_SCHEMA: Record<string, unknown> = {
     toAgentId: {
       type: "string",
       description:
-        "The id of the target agent to message. Use SessionSearch to discover agent ids first.",
+        "The id of the target agent to message. Use mcp_duya_app_session_search to discover agent ids first.",
     },
     text: {
       type: "string",

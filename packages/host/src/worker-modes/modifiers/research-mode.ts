@@ -35,7 +35,7 @@ import { adaptWorkerModeToolRegistrations } from './tool-registration.js';
  */
 const RESEARCH_MODE_PROMPT = `# Deep Research Mode Active
 
-You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, session_search, ask_user_question, vision) and produce a comprehensive research report.
+You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, mcp_duya_app_session_search, ask_user_question, vision) and produce a comprehensive research report.
 
 ## Starting & Finalizing
 

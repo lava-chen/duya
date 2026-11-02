@@ -459,8 +459,7 @@ export class BotPromptAssembly {
           modelId: '' as string,
           enabledTools: new Set<string>([
             ...(ctx.mcpTools ? ctx.mcpTools.map((t) => t.name) : []),
-            'Read', 'Skill', 'SessionSearch', 'TodoWrite', 'Task',
-            TOOL_NAMES.MESSAGE_SESSION,
+            'Read', 'Skill', TOOL_NAMES.SESSION_SEARCH, 'TodoWrite', 'Task',
           ]),
           sessionStartTime: 0,
         },

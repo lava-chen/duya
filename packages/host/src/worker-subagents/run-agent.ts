@@ -14,6 +14,7 @@ import type {
   TokenUsage,
 } from '../worker-run-contracts.js'
 import type { PermissionMode } from '@duya/capabilities/permissions'
+import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './definitions.js'
 import { isBuiltInAgent } from './definitions.js'
 import type { WorkerSubagentEngineSession } from './engine-run.js'
@@ -400,7 +401,7 @@ export async function* runAgent({
   // Prevent recursive agent calls - strip every agent-orchestration tool
   // (subagent spawn, inter-agent messaging, background-task management) from
   // sub-agents so a sub-agent can never spawn or delegate to another agent.
-  toolsToUse = toolsToUse.filter(t => !SUBAGENT_FORBIDDEN_TOOLS.has(t.name))
+  toolsToUse = toolsToUse.filter(t => !SUBAGENT_FORBIDDEN_TOOLS.has(appToolOriginalName(t.name)))
 
   // Inherit the parent's live MCP tools when the agent opts in via `mcpTools`.
   // The parent captures the MCP client inside the executor closure, so the
@@ -410,7 +411,7 @@ export async function* runAgent({
   if (agentDefinition.mcpTools) {
     const mcpExecutors = toolUseContext.options.mcpToolExecutors
     const mcpTools = availableTools.filter(
-      (t) => t.mcpInfo && !SUBAGENT_FORBIDDEN_TOOLS.has(t.name),
+      (t) => t.mcpInfo && !SUBAGENT_FORBIDDEN_TOOLS.has(appToolOriginalName(t.name)),
     )
     for (const mcpTool of mcpTools) {
       const executor = mcpExecutors?.get(mcpTool.name)

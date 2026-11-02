@@ -17,7 +17,9 @@
  * where is it now?" — and the plan's P2 contract (a receipt that distinguishes
  * `persisted` / `queued` / `delivered` / `consumed` / `rejected`) has nothing
  * to attach to. These types are that vocabulary. They are ADDITIVE: no
- * production path uses them yet, and R1.1 wires the first one.
+ * Host Session input routes now use this contract for authenticated app-tool
+ * calls. The legacy TUI and Bot paths remain separate and are not silently
+ * reinterpreted as Session input.
  *
  * ## The identity is DERIVED, and the request does not carry one
  *
@@ -60,7 +62,8 @@
  *
  * `revision` increments on every grant. A holder proves it still holds the
  * lease by presenting the revision it was given, and the Host checks that
- * revision atomically against the stored one before dispatching anything. A
+ * revision against the stored one when accepting an input, then rechecks the
+ * recorded lease snapshot when a Worker claims it. A
  * boolean "is a lease held" cannot answer the question that matters — "is THIS
  * holder still the one that was granted" — and that question is what makes a
  * takeover safe: the previous holder's in-flight instruction must fail the
@@ -73,12 +76,14 @@
  * (`bot_inbox.lease_epoch`, `bot_scheduler_owners.epoch`, `runs.epoch`).
  * Keeping this one in its own type is the point.
  *
- * ## Why these are types and not behaviour
+ * ## How the Host implements this contract
  *
  * The package is a transport-neutral leaf with zero runtime dependencies
- * (drift test #1). The storage, the atomicity and the wiring belong to the
- * Host; the vocabulary belongs here. Nothing in this file may grow a
- * dependency on the Host, the runtime, or the database.
+ * (drift test #1). The Host records accepted input in its existing mailbox,
+ * stores the control lease on the Host Session record, and revalidates
+ * expected Run/Turn and lease snapshots when a Worker claims an input. This
+ * protocol owns the vocabulary; nothing here may depend on the Host, runtime,
+ * or database.
  */
 
 import type { FileAttachment } from './file-attachment.js';
@@ -147,8 +152,9 @@ export interface SessionContextRef {
 /**
  * A request to put one instruction into a Session.
  *
- * Additive: this is the shape R1.1's input service accepts. Existing callers
- * keep using `startAgentRun` and the mailbox until they are migrated.
+ * The Host's `duya_app` Session send tool uses this request shape. Existing
+ * TUI and Bot callers retain their current entry points until separately
+ * migrated.
  *
  * There is deliberately NO identity field here. See the file header: the
  * Host derives who sent the input, and the receipt echoes it.
@@ -161,6 +167,8 @@ export interface SessionInputRequest {
   readonly content: string;
   readonly attachments?: readonly FileAttachment[];
   readonly contextRefs?: readonly SessionContextRef[];
+  /** Revision from session_control.acquire when the target has an active controller lease. */
+  readonly controlRevision?: number;
   /** The run this instruction was written for. Absent means "the current one". */
   readonly expectedRunId?: string;
   /** The turn this instruction was written for. Absent means "the current one". */

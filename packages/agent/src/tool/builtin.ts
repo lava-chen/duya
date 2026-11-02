@@ -21,7 +21,6 @@ export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
 export { imageGenerateTool, IMAGE_GENERATE_TOOL_NAME, ImageGenerateTool } from './ImageGenerateTool/index.js';
-export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/index.js';
 export { duyaCliTool } from './DuyaCliTool/index.js';
 export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool/index.js';
 export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';

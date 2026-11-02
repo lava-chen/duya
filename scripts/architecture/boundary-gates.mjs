@@ -1011,8 +1011,8 @@ export function reachabilityFrom(entryRel, roots = packageRoots()) {
  *   - loop moved into `agent-runtime/**` (the owner G8 names) -> 1 -> 2 findings,
  *     because `agent-runtime/src/index.ts` is already in the closure via
  *     `packages/agent/src/process/run-engine-model.ts`
- *   - the entry's direct `DuyaAgent` import removed (G4 fixed) -> still 2,
- *     because `MessageSessionTool.ts:7` value-imports the entry
+ *   - the entry's direct `DuyaAgent` import removed (G4 fixed) -> still 2
+ *     in the measured pre-#576 tree, when MessageSession value-imported it
  *
  * Relocating the loop therefore made the gate WORSE, and the only ways to make
  * a reachability predicate go green were a dynamic `import()` (which

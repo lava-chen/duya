@@ -5,7 +5,7 @@
 import type { Tool } from '../worker-run-contracts.js'
 import type { AgentDefinition } from './definitions.js'
 import { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME } from '@duya/capabilities/SubagentTool/constants'
-import { MESSAGE_SESSION_TOOL_NAME } from '@duya/capabilities/message-session-tool'
+import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace'
 import { GET_TASK_OUTPUT_TOOL_NAME } from '@duya/agent-core/task-notifications/tool-names'
 import { KILL_TASK_TOOL_NAME } from '@duya/capabilities/background-task-tool'
 
@@ -19,7 +19,18 @@ import { KILL_TASK_TOOL_NAME } from '@duya/capabilities/background-task-tool'
 export const SUBAGENT_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
   SUBAGENT_TOOL_NAME,
   LEGACY_SUBAGENT_TOOL_NAME,
-  MESSAGE_SESSION_TOOL_NAME,
+  'session_list',
+  'session_spawn',
+  'session_get',
+  'session_reply',
+  'session_cancel',
+  'session_rename',
+  'session_search',
+  'session_read',
+  'session_fork',
+  'session_send',
+  'session_status',
+  'session_control',
   GET_TASK_OUTPUT_TOOL_NAME,
   KILL_TASK_TOOL_NAME,
   // A task checkout is assigned by its parent and has a fixed terminal receipt.

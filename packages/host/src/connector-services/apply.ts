@@ -110,6 +110,8 @@ export interface MCPApplyRuntimePort<
    * This is the INITIAL usedNames seed for providerName allocation.
    */
   getNonMCPModelVisibleToolNames(): Set<string>;
+  /** Host-owned MCP servers that are composed in-process with configured servers. */
+  getHostOwnedMCPServers?(): readonly MCPServerConfig[];
   /**
    * Atomic install of the new MCP runtime. The implementation
    * must:
@@ -340,7 +342,31 @@ async function runApply<
   // dependencies), then connect in parallel. Each addServer call
   // spawns an independent child process + handshake + listTools
   // RPC, so parallelization cuts startup from N*~1-2s to ~1-2s.
-  const nextConfigs: MCPServerConfig[] = next.resolvedConfigs.map(resolvedToLegacyConfig);
+  const hostOwnedConfigs = [...(runtime.getHostOwnedMCPServers?.() ?? [])];
+  const reservedNames = new Set(hostOwnedConfigs.map((config) => config.name));
+  const discoveredConfigs = next.resolvedConfigs
+    .map(resolvedToLegacyConfig)
+    .filter((config) => {
+      if (!reservedNames.has(config.name)) return true;
+      const reason = `The server name "${config.name}" is reserved for a Host-owned in-process app.`;
+      next.issues.push({
+        phase: 'resolution',
+        source: { source: 'settings' },
+        serverName: config.name,
+        error: {
+          type: 'mcp-settings-invalid',
+          source: { source: 'settings' },
+          serverName: config.name,
+          reason,
+        },
+        humanMessage: reason,
+        severity: 'warning',
+        suggestedAction: 'Rename the configured MCP server and reload the server list.',
+      });
+      logger.warn(`[MCP] Refusing configured server "${config.name}": the name is reserved for a Host-owned app.`);
+      return false;
+    });
+  const nextConfigs: MCPServerConfig[] = [...discoveredConfigs, ...hostOwnedConfigs];
 
   // Incremental reconnect (hot-reload granularity): reuse the
   // previously active clients whose connect-relevant config is

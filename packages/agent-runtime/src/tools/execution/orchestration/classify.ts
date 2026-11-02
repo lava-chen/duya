@@ -67,6 +67,16 @@ export function classifyTool(toolName: string, onWarning?: (message: string) => 
   const batch = TOOL_BATCH_MAP[toolName]
   if (batch !== undefined) return batch
 
+  // The Session tools now travel through duya_app's MCP registry. Keep their
+  // orchestration semantics based on the capability action, since treating
+  // every MCP call as READ would allow concurrent Session mutations.
+  const appSessionAction = /^mcp_duya_app_session_(.+)$/.exec(toolName)?.[1]
+  if (appSessionAction) {
+    return ['list', 'get', 'search', 'read', 'status'].includes(appSessionAction)
+      ? ToolBatch.READ
+      : ToolBatch.SYSTEM
+  }
+
   // MCP-derived tools (provider names always start with the `mcp_` prefix,
   // see computeProviderName) are external server calls. They are not in the
   // static map, but treat them as READ so independent MCP queries can run in

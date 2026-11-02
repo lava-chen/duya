@@ -244,10 +244,11 @@ Function `createBuiltinRegistry()` registers:
 | `enter/exit_plan_mode`, `SwitchMode` | Mode controls |
 | `browser` | Supported web browsing, search, and fetch surface |
 | `Skill`, `Brief` | Skill and task guidance |
-| `SessionSearch`, `MessageSession` | Session continuity and inter-agent messaging |
 | `vision_analyze`, `show_widget`, `read_module` | Vision and generative UI |
 | `duya_cli` | Desktop control-plane operations |
 | `memory`, `AskUserQuestion`, `tool_search` | Memory, interaction, and on-demand discovery |
+
+Session search, discovery, transcript, and management tools are exposed by the Host-owned `duya_app` MCP server. Bot inbox/outbox delivery remains `send_to_agent`.
 
 ### BashTool Security (`BashTool.ts`)
 

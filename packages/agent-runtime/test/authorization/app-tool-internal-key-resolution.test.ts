@@ -60,8 +60,8 @@ const VISIBLE = 'mcp_duya_app_update_state';
 const INTERNAL = 'mcp__duya_app__update_state';
 
 /** An always-allowed app tool, under both spellings. */
-const ALWAYS_VISIBLE = 'mcp_duya_app_MessageSession';
-const ALWAYS_INTERNAL = 'mcp__duya_app__MessageSession';
+const ALWAYS_VISIBLE = 'mcp_duya_app_session_search';
+const ALWAYS_INTERNAL = 'mcp__duya_app__session_search';
 
 const UPDATE_STATE_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
@@ -69,9 +69,9 @@ const UPDATE_STATE_REGISTRATION: AppToolRegistration = {
   source: 'app',
 };
 
-const SESSION_REGISTRATION: AppToolRegistration = {
+const SESSION_SEARCH_REGISTRATION: AppToolRegistration = {
   serverName: 'duya_app',
-  toolName: 'MessageSession',
+  toolName: 'session_search',
   source: 'app',
 };
 
@@ -134,14 +134,14 @@ function registrationsFor(
 
 describe('the deferred path decides the same as the direct path', () => {
   it('applies the always-allowed set under the internal key', async () => {
-    // `MessageSession` is unconditionally allowed. Addressed by the
+    // `session_search` is unconditionally allowed. Addressed by the
     // registry's internal key it must still be — otherwise the same tool
     // asks on one path and runs on the other.
     const evaluate = createEvaluator();
     const decision = await evaluate(
       ALWAYS_INTERNAL,
       {},
-      makeContext('default', {}, registrationsFor(ALWAYS_VISIBLE, ALWAYS_INTERNAL, SESSION_REGISTRATION)),
+      makeContext('default', {}, registrationsFor(ALWAYS_VISIBLE, ALWAYS_INTERNAL, SESSION_SEARCH_REGISTRATION)),
     );
     expect(decision.behavior).toBe('allow');
   });
@@ -270,7 +270,7 @@ describe('the internal key earns no unconditional allow on its own', () => {
         {},
         registrationsFor(ALWAYS_VISIBLE, ALWAYS_INTERNAL, {
           serverName: 'duya',
-          toolName: 'app_MessageSession',
+          toolName: 'app_session_search',
           source: 'plugin',
         }),
       ),
@@ -316,14 +316,14 @@ describe('the host registry answers for both spellings', () => {
   }
 
   it('keeps the app layer own always-allowed tool allowed under the internal key', async () => {
-    const built = buildWith({ serverName: 'duya_app', toolName: 'MessageSession', source: 'app' });
+    const built = buildWith({ serverName: 'duya_app', toolName: 'session_search', source: 'app' });
     const decision = await built.canUseTool(ALWAYS_INTERNAL, {});
     expect(decision.behavior).toBe('allow');
   });
 
   it('refuses that allow to a third-party tool under the internal key', async () => {
-    const built = buildWith({ serverName: 'duya', toolName: 'app_MessageSession', source: 'plugin' });
-    const decision = await built.canUseTool('mcp__duya__app_MessageSession', {});
+    const built = buildWith({ serverName: 'duya', toolName: 'app_session_search', source: 'plugin' });
+    const decision = await built.canUseTool('mcp__duya__app_session_search', {});
     expect(decision.behavior).not.toBe('allow');
   });
 });
