@@ -113,7 +113,7 @@
       "format": "esm"
     },
     "packages/data/src/project-store.ts": {
-      "bytes": 14712,
+      "bytes": 28316,
       "imports": [
         {
           "path": "node:crypto",
@@ -176,7 +176,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/projects.ts": {
-      "bytes": 2264,
+      "bytes": 5446,
       "imports": [],
       "format": "esm"
     },
@@ -1145,7 +1145,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 53113,
+      "bytes": 53739,
       "imports": [
         {
           "path": "node:crypto",
@@ -10561,7 +10561,7 @@
       "imports": [],
       "format": "esm"
     },
-    "node_modules/marked/lib/marked.esm.js": {
+    "packages/host/node_modules/marked/lib/marked.esm.js": {
       "bytes": 41676,
       "imports": [],
       "format": "esm"
@@ -10606,7 +10606,7 @@
           "external": true
         },
         {
-          "path": "node_modules/marked/lib/marked.esm.js",
+          "path": "packages/host/node_modules/marked/lib/marked.esm.js",
           "kind": "import-statement",
           "original": "marked"
         },
@@ -11655,7 +11655,7 @@
       "format": "cjs"
     },
     "node_modules/yaml/dist/nodes/Alias.js": {
-      "bytes": 3901,
+      "bytes": 4042,
       "imports": [
         {
           "path": "node_modules/yaml/dist/doc/anchors.js",
@@ -12778,7 +12778,7 @@
       "format": "cjs"
     },
     "node_modules/yaml/dist/compose/resolve-flow-scalar.js": {
-      "bytes": 7386,
+      "bytes": 7417,
       "imports": [
         {
           "path": "node_modules/yaml/dist/nodes/Scalar.js",
@@ -23984,7 +23984,7 @@
       ],
       "format": "esm"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/chunkstream.js": {
+    "node_modules/pngjs/lib/chunkstream.js": {
       "bytes": 4249,
       "imports": [
         {
@@ -24000,33 +24000,33 @@
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/interlace.js": {
+    "node_modules/pngjs/lib/interlace.js": {
       "bytes": 2004,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/paeth-predictor.js": {
+    "node_modules/pngjs/lib/paeth-predictor.js": {
       "bytes": 372,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse.js": {
+    "node_modules/pngjs/lib/filter-parse.js": {
       "bytes": 4798,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/interlace.js",
+          "path": "node_modules/pngjs/lib/interlace.js",
           "kind": "require-call",
           "original": "./interlace"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/paeth-predictor.js",
+          "path": "node_modules/pngjs/lib/paeth-predictor.js",
           "kind": "require-call",
           "original": "./paeth-predictor"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-async.js": {
+    "node_modules/pngjs/lib/filter-parse-async.js": {
       "bytes": 558,
       "imports": [
         {
@@ -24035,61 +24035,61 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/chunkstream.js",
+          "path": "node_modules/pngjs/lib/chunkstream.js",
           "kind": "require-call",
           "original": "./chunkstream"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse.js",
+          "path": "node_modules/pngjs/lib/filter-parse.js",
           "kind": "require-call",
           "original": "./filter-parse"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js": {
+    "node_modules/pngjs/lib/constants.js": {
       "bytes": 662,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/crc.js": {
+    "node_modules/pngjs/lib/crc.js": {
       "bytes": 853,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser.js": {
+    "node_modules/pngjs/lib/parser.js": {
       "bytes": 7720,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js",
+          "path": "node_modules/pngjs/lib/constants.js",
           "kind": "require-call",
           "original": "./constants"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/crc.js",
+          "path": "node_modules/pngjs/lib/crc.js",
           "kind": "require-call",
           "original": "./crc"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitmapper.js": {
+    "node_modules/pngjs/lib/bitmapper.js": {
       "bytes": 6477,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/interlace.js",
+          "path": "node_modules/pngjs/lib/interlace.js",
           "kind": "require-call",
           "original": "./interlace"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/format-normaliser.js": {
+    "node_modules/pngjs/lib/format-normaliser.js": {
       "bytes": 2366,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-async.js": {
+    "node_modules/pngjs/lib/parser-async.js": {
       "bytes": 4368,
       "imports": [
         {
@@ -24103,75 +24103,75 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/chunkstream.js",
+          "path": "node_modules/pngjs/lib/chunkstream.js",
           "kind": "require-call",
           "original": "./chunkstream"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-async.js",
+          "path": "node_modules/pngjs/lib/filter-parse-async.js",
           "kind": "require-call",
           "original": "./filter-parse-async"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser.js",
+          "path": "node_modules/pngjs/lib/parser.js",
           "kind": "require-call",
           "original": "./parser"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitmapper.js",
+          "path": "node_modules/pngjs/lib/bitmapper.js",
           "kind": "require-call",
           "original": "./bitmapper"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/format-normaliser.js",
+          "path": "node_modules/pngjs/lib/format-normaliser.js",
           "kind": "require-call",
           "original": "./format-normaliser"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitpacker.js": {
+    "node_modules/pngjs/lib/bitpacker.js": {
       "bytes": 4670,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js",
+          "path": "node_modules/pngjs/lib/constants.js",
           "kind": "require-call",
           "original": "./constants"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-pack.js": {
+    "node_modules/pngjs/lib/filter-pack.js": {
       "bytes": 4279,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/paeth-predictor.js",
+          "path": "node_modules/pngjs/lib/paeth-predictor.js",
           "kind": "require-call",
           "original": "./paeth-predictor"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer.js": {
+    "node_modules/pngjs/lib/packer.js": {
       "bytes": 3723,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js",
+          "path": "node_modules/pngjs/lib/constants.js",
           "kind": "require-call",
           "original": "./constants"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/crc.js",
+          "path": "node_modules/pngjs/lib/crc.js",
           "kind": "require-call",
           "original": "./crc"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitpacker.js",
+          "path": "node_modules/pngjs/lib/bitpacker.js",
           "kind": "require-call",
           "original": "./bitpacker"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-pack.js",
+          "path": "node_modules/pngjs/lib/filter-pack.js",
           "kind": "require-call",
           "original": "./filter-pack"
         },
@@ -24183,7 +24183,7 @@
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-async.js": {
+    "node_modules/pngjs/lib/packer-async.js": {
       "bytes": 1162,
       "imports": [
         {
@@ -24197,19 +24197,19 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js",
+          "path": "node_modules/pngjs/lib/constants.js",
           "kind": "require-call",
           "original": "./constants"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer.js",
+          "path": "node_modules/pngjs/lib/packer.js",
           "kind": "require-call",
           "original": "./packer"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-inflate.js": {
+    "node_modules/pngjs/lib/sync-inflate.js": {
       "bytes": 3751,
       "imports": [
         {
@@ -24235,28 +24235,28 @@
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-reader.js": {
+    "node_modules/pngjs/lib/sync-reader.js": {
       "bytes": 1114,
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-sync.js": {
+    "node_modules/pngjs/lib/filter-parse-sync.js": {
       "bytes": 483,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-reader.js",
+          "path": "node_modules/pngjs/lib/sync-reader.js",
           "kind": "require-call",
           "original": "./sync-reader"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse.js",
+          "path": "node_modules/pngjs/lib/filter-parse.js",
           "kind": "require-call",
           "original": "./filter-parse"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-sync.js": {
+    "node_modules/pngjs/lib/parser-sync.js": {
       "bytes": 2580,
       "imports": [
         {
@@ -24265,39 +24265,39 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-inflate.js",
+          "path": "node_modules/pngjs/lib/sync-inflate.js",
           "kind": "require-call",
           "original": "./sync-inflate"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-reader.js",
+          "path": "node_modules/pngjs/lib/sync-reader.js",
           "kind": "require-call",
           "original": "./sync-reader"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-sync.js",
+          "path": "node_modules/pngjs/lib/filter-parse-sync.js",
           "kind": "require-call",
           "original": "./filter-parse-sync"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser.js",
+          "path": "node_modules/pngjs/lib/parser.js",
           "kind": "require-call",
           "original": "./parser"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitmapper.js",
+          "path": "node_modules/pngjs/lib/bitmapper.js",
           "kind": "require-call",
           "original": "./bitmapper"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/format-normaliser.js",
+          "path": "node_modules/pngjs/lib/format-normaliser.js",
           "kind": "require-call",
           "original": "./format-normaliser"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-sync.js": {
+    "node_modules/pngjs/lib/packer-sync.js": {
       "bytes": 1193,
       "imports": [
         {
@@ -24306,35 +24306,35 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js",
+          "path": "node_modules/pngjs/lib/constants.js",
           "kind": "require-call",
           "original": "./constants"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer.js",
+          "path": "node_modules/pngjs/lib/packer.js",
           "kind": "require-call",
           "original": "./packer"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/png-sync.js": {
+    "node_modules/pngjs/lib/png-sync.js": {
       "bytes": 252,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-sync.js",
+          "path": "node_modules/pngjs/lib/parser-sync.js",
           "kind": "require-call",
           "original": "./parser-sync"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-sync.js",
+          "path": "node_modules/pngjs/lib/packer-sync.js",
           "kind": "require-call",
           "original": "./packer-sync"
         }
       ],
       "format": "cjs"
     },
-    "node_modules/@jimp/js-png/node_modules/pngjs/lib/png.js": {
+    "node_modules/pngjs/lib/png.js": {
       "bytes": 4418,
       "imports": [
         {
@@ -24348,17 +24348,17 @@
           "external": true
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-async.js",
+          "path": "node_modules/pngjs/lib/parser-async.js",
           "kind": "require-call",
           "original": "./parser-async"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-async.js",
+          "path": "node_modules/pngjs/lib/packer-async.js",
           "kind": "require-call",
           "original": "./packer-async"
         },
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/png-sync.js",
+          "path": "node_modules/pngjs/lib/png-sync.js",
           "kind": "require-call",
           "original": "./png-sync"
         }
@@ -24374,7 +24374,7 @@
       "bytes": 1274,
       "imports": [
         {
-          "path": "node_modules/@jimp/js-png/node_modules/pngjs/lib/png.js",
+          "path": "node_modules/pngjs/lib/png.js",
           "kind": "import-statement",
           "original": "pngjs"
         },
@@ -25536,13 +25536,24 @@
       "imports": [],
       "format": "esm"
     },
-    "node_modules/strtok3/lib/stream/Deferred.js": {
-      "bytes": 261,
+    "node_modules/strtok3/lib/AbortSignal.js": {
+      "bytes": 240,
+      "imports": [
+        {
+          "path": "node_modules/strtok3/lib/stream/Errors.js",
+          "kind": "import-statement",
+          "original": "./stream/Errors.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/strtok3/lib/BufferSizeError.js": {
+      "bytes": 1300,
       "imports": [],
       "format": "esm"
     },
     "node_modules/strtok3/lib/stream/AbstractStreamReader.js": {
-      "bytes": 2544,
+      "bytes": 2576,
       "imports": [
         {
           "path": "node_modules/strtok3/lib/stream/Errors.js",
@@ -25552,13 +25563,18 @@
       ],
       "format": "esm"
     },
+    "node_modules/strtok3/lib/stream/Deferred.js": {
+      "bytes": 261,
+      "imports": [],
+      "format": "esm"
+    },
     "node_modules/strtok3/lib/stream/StreamReader.js": {
-      "bytes": 2495,
+      "bytes": 4313,
       "imports": [
         {
-          "path": "node_modules/strtok3/lib/stream/Errors.js",
+          "path": "node_modules/strtok3/lib/stream/AbstractStreamReader.js",
           "kind": "import-statement",
-          "original": "./Errors.js"
+          "original": "./AbstractStreamReader.js"
         },
         {
           "path": "node_modules/strtok3/lib/stream/Deferred.js",
@@ -25566,9 +25582,9 @@
           "original": "./Deferred.js"
         },
         {
-          "path": "node_modules/strtok3/lib/stream/AbstractStreamReader.js",
+          "path": "node_modules/strtok3/lib/stream/Errors.js",
           "kind": "import-statement",
-          "original": "./AbstractStreamReader.js"
+          "original": "./Errors.js"
         }
       ],
       "format": "esm"
@@ -25585,7 +25601,7 @@
       "format": "esm"
     },
     "node_modules/strtok3/lib/stream/WebStreamByobReader.js": {
-      "bytes": 951,
+      "bytes": 955,
       "imports": [
         {
           "path": "node_modules/strtok3/lib/stream/WebStreamReader.js",
@@ -25596,17 +25612,17 @@
       "format": "esm"
     },
     "node_modules/strtok3/lib/stream/WebStreamDefaultReader.js": {
-      "bytes": 2087,
+      "bytes": 2159,
       "imports": [
-        {
-          "path": "node_modules/strtok3/lib/stream/Errors.js",
-          "kind": "import-statement",
-          "original": "./Errors.js"
-        },
         {
           "path": "node_modules/strtok3/lib/stream/AbstractStreamReader.js",
           "kind": "import-statement",
           "original": "./AbstractStreamReader.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/stream/Errors.js",
+          "kind": "import-statement",
+          "original": "./Errors.js"
         }
       ],
       "format": "esm"
@@ -25659,8 +25675,18 @@
       "format": "esm"
     },
     "node_modules/strtok3/lib/AbstractTokenizer.js": {
-      "bytes": 3832,
+      "bytes": 8503,
       "imports": [
+        {
+          "path": "node_modules/strtok3/lib/AbortSignal.js",
+          "kind": "import-statement",
+          "original": "./AbortSignal.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/BufferSizeError.js",
+          "kind": "import-statement",
+          "original": "./BufferSizeError.js"
+        },
         {
           "path": "node_modules/strtok3/lib/stream/index.js",
           "kind": "import-statement",
@@ -25669,8 +25695,8 @@
       ],
       "format": "esm"
     },
-    "node_modules/strtok3/lib/ReadStreamTokenizer.js": {
-      "bytes": 4009,
+    "node_modules/strtok3/lib/BlobTokenizer.js": {
+      "bytes": 2127,
       "imports": [
         {
           "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
@@ -25686,54 +25712,75 @@
       "format": "esm"
     },
     "node_modules/strtok3/lib/BufferTokenizer.js": {
-      "bytes": 1789,
+      "bytes": 1862,
       "imports": [
-        {
-          "path": "node_modules/strtok3/lib/stream/index.js",
-          "kind": "import-statement",
-          "original": "./stream/index.js"
-        },
         {
           "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
           "kind": "import-statement",
           "original": "./AbstractTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/stream/index.js",
+          "kind": "import-statement",
+          "original": "./stream/index.js"
         }
       ],
       "format": "esm"
     },
-    "node_modules/strtok3/lib/BlobTokenizer.js": {
-      "bytes": 1820,
+    "node_modules/strtok3/lib/ReadStreamTokenizer.js": {
+      "bytes": 5621,
       "imports": [
+        {
+          "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
+          "kind": "import-statement",
+          "original": "./AbstractTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/stream/index.js",
+          "kind": "import-statement",
+          "original": "./stream/index.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "node_modules/strtok3/lib/isRandomAccessTokenizer.js": {
+      "bytes": 389,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/strtok3/lib/TokenizerBoundaryError.js": {
+      "bytes": 434,
+      "imports": [],
+      "format": "esm"
+    },
+    "node_modules/strtok3/lib/TokenizerView.js": {
+      "bytes": 6753,
+      "imports": [
+        {
+          "path": "node_modules/strtok3/lib/isRandomAccessTokenizer.js",
+          "kind": "import-statement",
+          "original": "./isRandomAccessTokenizer.js"
+        },
         {
           "path": "node_modules/strtok3/lib/stream/index.js",
           "kind": "import-statement",
           "original": "./stream/index.js"
         },
         {
-          "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
+          "path": "node_modules/strtok3/lib/TokenizerBoundaryError.js",
           "kind": "import-statement",
-          "original": "./AbstractTokenizer.js"
+          "original": "./TokenizerBoundaryError.js"
         }
       ],
       "format": "esm"
     },
     "node_modules/strtok3/lib/core.js": {
-      "bytes": 2269,
+      "bytes": 2310,
       "imports": [
         {
-          "path": "node_modules/strtok3/lib/stream/index.js",
+          "path": "node_modules/strtok3/lib/AbortSignal.js",
           "kind": "import-statement",
-          "original": "./stream/index.js"
-        },
-        {
-          "path": "node_modules/strtok3/lib/ReadStreamTokenizer.js",
-          "kind": "import-statement",
-          "original": "./ReadStreamTokenizer.js"
-        },
-        {
-          "path": "node_modules/strtok3/lib/BufferTokenizer.js",
-          "kind": "import-statement",
-          "original": "./BufferTokenizer.js"
+          "original": "./AbortSignal.js"
         },
         {
           "path": "node_modules/strtok3/lib/BlobTokenizer.js",
@@ -25741,6 +25788,21 @@
           "original": "./BlobTokenizer.js"
         },
         {
+          "path": "node_modules/strtok3/lib/BufferSizeError.js",
+          "kind": "import-statement",
+          "original": "./BufferSizeError.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/BufferTokenizer.js",
+          "kind": "import-statement",
+          "original": "./BufferTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/ReadStreamTokenizer.js",
+          "kind": "import-statement",
+          "original": "./ReadStreamTokenizer.js"
+        },
+        {
           "path": "node_modules/strtok3/lib/stream/index.js",
           "kind": "import-statement",
           "original": "./stream/index.js"
@@ -25749,33 +25811,83 @@
           "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
           "kind": "import-statement",
           "original": "./AbstractTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/BufferSizeError.js",
+          "kind": "import-statement",
+          "original": "./BufferSizeError.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/isRandomAccessTokenizer.js",
+          "kind": "import-statement",
+          "original": "./isRandomAccessTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/stream/index.js",
+          "kind": "import-statement",
+          "original": "./stream/index.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/TokenizerBoundaryError.js",
+          "kind": "import-statement",
+          "original": "./TokenizerBoundaryError.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/TokenizerView.js",
+          "kind": "import-statement",
+          "original": "./TokenizerView.js"
         }
       ],
       "format": "esm"
     },
+    "node_modules/strtok3/lib/NotRegularFileError.js": {
+      "bytes": 287,
+      "imports": [],
+      "format": "esm"
+    },
     "node_modules/strtok3/lib/FileTokenizer.js": {
-      "bytes": 2280,
+      "bytes": 3122,
       "imports": [
         {
-          "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
+          "path": "node:fs",
           "kind": "import-statement",
-          "original": "./AbstractTokenizer.js"
-        },
-        {
-          "path": "node_modules/strtok3/lib/stream/index.js",
-          "kind": "import-statement",
-          "original": "./stream/index.js"
+          "external": true
         },
         {
           "path": "node:fs/promises",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "node_modules/strtok3/lib/AbortSignal.js",
+          "kind": "import-statement",
+          "original": "./AbortSignal.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/AbstractTokenizer.js",
+          "kind": "import-statement",
+          "original": "./AbstractTokenizer.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/BufferSizeError.js",
+          "kind": "import-statement",
+          "original": "./BufferSizeError.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/NotRegularFileError.js",
+          "kind": "import-statement",
+          "original": "./NotRegularFileError.js"
+        },
+        {
+          "path": "node_modules/strtok3/lib/stream/index.js",
+          "kind": "import-statement",
+          "original": "./stream/index.js"
         }
       ],
       "format": "esm"
     },
     "node_modules/strtok3/lib/index.js": {
-      "bytes": 834,
+      "bytes": 1580,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -25793,16 +25905,26 @@
           "original": "./FileTokenizer.js"
         },
         {
+          "path": "node_modules/strtok3/lib/core.js",
+          "kind": "import-statement",
+          "original": "./core.js"
+        },
+        {
           "path": "node_modules/strtok3/lib/FileTokenizer.js",
           "kind": "import-statement",
           "original": "./FileTokenizer.js"
         },
         {
-          "path": "node_modules/strtok3/lib/core.js",
+          "path": "node_modules/strtok3/lib/NotRegularFileError.js",
           "kind": "import-statement",
-          "original": "./core.js"
+          "original": "./NotRegularFileError.js"
         }
       ],
+      "format": "esm"
+    },
+    "node_modules/@borewit/text-codec/lib/index.js": {
+      "bytes": 10680,
+      "imports": [],
       "format": "esm"
     },
     "node_modules/ieee754/index.js": {
@@ -25810,23 +25932,18 @@
       "imports": [],
       "format": "cjs"
     },
-    "node_modules/@borewit/text-codec/lib/index.js": {
-      "bytes": 11890,
-      "imports": [],
-      "format": "esm"
-    },
-    "node_modules/token-types/lib/index.js": {
-      "bytes": 9735,
+    "node_modules/token-types/dist/lib/index.js": {
+      "bytes": 10344,
       "imports": [
-        {
-          "path": "node_modules/ieee754/index.js",
-          "kind": "import-statement",
-          "original": "ieee754"
-        },
         {
           "path": "node_modules/@borewit/text-codec/lib/index.js",
           "kind": "import-statement",
           "original": "@borewit/text-codec"
+        },
+        {
+          "path": "node_modules/ieee754/index.js",
+          "kind": "import-statement",
+          "original": "ieee754"
         }
       ],
       "format": "esm"
@@ -25930,7 +26047,7 @@
       "bytes": 4836,
       "imports": [
         {
-          "path": "node_modules/token-types/lib/index.js",
+          "path": "node_modules/token-types/dist/lib/index.js",
           "kind": "import-statement",
           "original": "token-types"
         }
@@ -25941,7 +26058,7 @@
       "bytes": 10432,
       "imports": [
         {
-          "path": "node_modules/token-types/lib/index.js",
+          "path": "node_modules/token-types/dist/lib/index.js",
           "kind": "import-statement",
           "original": "token-types"
         },
@@ -25980,7 +26097,7 @@
       "format": "esm"
     },
     "node_modules/uint8array-extras/index.js": {
-      "bytes": 7373,
+      "bytes": 7988,
       "imports": [],
       "format": "esm"
     },
@@ -25988,7 +26105,7 @@
       "bytes": 1861,
       "imports": [
         {
-          "path": "node_modules/token-types/lib/index.js",
+          "path": "node_modules/token-types/dist/lib/index.js",
           "kind": "import-statement",
           "original": "token-types"
         }
@@ -26004,7 +26121,7 @@
       "bytes": 72328,
       "imports": [
         {
-          "path": "node_modules/token-types/lib/index.js",
+          "path": "node_modules/token-types/dist/lib/index.js",
           "kind": "import-statement",
           "original": "token-types"
         },
@@ -29087,7 +29204,7 @@
       "format": "cjs"
     },
     "node_modules/sax/lib/sax.js": {
-      "bytes": 50146,
+      "bytes": 50818,
       "imports": [
         {
           "path": "stream",
@@ -30452,7 +30569,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 102043,
+      "bytes": 105846,
       "imports": [],
       "format": "esm"
     },
@@ -30541,7 +30658,7 @@
       "format": "esm"
     },
     "packages/host/src/session-service.ts": {
-      "bytes": 26870,
+      "bytes": 29752,
       "imports": [
         {
           "path": "node:crypto",
@@ -30955,7 +31072,7 @@
       "format": "esm"
     },
     "packages/host/src/task-api.ts": {
-      "bytes": 4725,
+      "bytes": 5246,
       "imports": [
         {
           "path": "node:crypto",
@@ -30992,19 +31109,500 @@
       ],
       "format": "esm"
     },
+    "packages/memory/src/project-continuity.ts": {
+      "bytes": 2887,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_ledger.ts": {
+      "bytes": 13546,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_projection.ts": {
+      "bytes": 12029,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/entity_dirs.ts": {
+      "bytes": 5074,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_projection_live.ts": {
+      "bytes": 11071,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/entity_dirs.ts",
+          "kind": "import-statement",
+          "original": "./entity_dirs.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/eligibility.ts": {
+      "bytes": 9108,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/lease.ts": {
+      "bytes": 18176,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/compactMessages.ts": {
+      "bytes": 16102,
+      "imports": [
+        {
+          "path": "packages/ai/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/ai"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/stage1_prompt_loader.ts": {
+      "bytes": 12797,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/prompt.ts": {
+      "bytes": 21415,
+      "imports": [
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/outbox.ts": {
+      "bytes": 12280,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/projectionContent.ts": {
+      "bytes": 5131,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/writer.ts": {
+      "bytes": 9820,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/system_log.ts": {
+      "bytes": 6870,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/types.ts": {
+      "bytes": 8828,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/extractor.ts": {
+      "bytes": 44839,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/lease.ts",
+          "kind": "import-statement",
+          "original": "./lease.js"
+        },
+        {
+          "path": "packages/memory/src/compactMessages.ts",
+          "kind": "import-statement",
+          "original": "./compactMessages.js"
+        },
+        {
+          "path": "packages/memory/src/prompt.ts",
+          "kind": "import-statement",
+          "original": "./prompt.js"
+        },
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        },
+        {
+          "path": "packages/memory/src/writer.ts",
+          "kind": "import-statement",
+          "original": "./writer.js"
+        },
+        {
+          "path": "packages/memory/src/canonical_file.ts",
+          "kind": "import-statement",
+          "original": "./canonical_file.js"
+        },
+        {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "./forget_ledger.js"
+        },
+        {
+          "path": "packages/memory/src/system_log.ts",
+          "kind": "import-statement",
+          "original": "./system_log.js"
+        },
+        {
+          "path": "packages/memory/src/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/memory_layout.ts": {
+      "bytes": 9176,
+      "imports": [
+        {
+          "path": "packages/memory/src/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/reconcile.ts": {
+      "bytes": 10142,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/stage1_policy_editor.ts": {
+      "bytes": 13563,
+      "imports": [
+        {
+          "path": "fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/index.ts": {
+      "bytes": 5746,
+      "imports": [
+        {
+          "path": "packages/memory/src/canonical_file.ts",
+          "kind": "import-statement",
+          "original": "./canonical_file.js"
+        },
+        {
+          "path": "packages/memory/src/project-continuity.ts",
+          "kind": "import-statement",
+          "original": "./project-continuity.js"
+        },
+        {
+          "path": "packages/memory/src/curation_ledger.ts",
+          "kind": "import-statement",
+          "original": "./curation_ledger.js"
+        },
+        {
+          "path": "packages/memory/src/curation_projection.ts",
+          "kind": "import-statement",
+          "original": "./curation_projection.js"
+        },
+        {
+          "path": "packages/memory/src/curation_projection_live.ts",
+          "kind": "import-statement",
+          "original": "./curation_projection_live.js"
+        },
+        {
+          "path": "packages/memory/src/eligibility.ts",
+          "kind": "import-statement",
+          "original": "./eligibility.js"
+        },
+        {
+          "path": "packages/memory/src/entity_dirs.ts",
+          "kind": "import-statement",
+          "original": "./entity_dirs.js"
+        },
+        {
+          "path": "packages/memory/src/extractor.ts",
+          "kind": "import-statement",
+          "original": "./extractor.js"
+        },
+        {
+          "path": "packages/memory/src/lease.ts",
+          "kind": "import-statement",
+          "original": "./lease.js"
+        },
+        {
+          "path": "packages/memory/src/memory_layout.ts",
+          "kind": "import-statement",
+          "original": "./memory_layout.js"
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        },
+        {
+          "path": "packages/memory/src/reconcile.ts",
+          "kind": "import-statement",
+          "original": "./reconcile.js"
+        },
+        {
+          "path": "packages/memory/src/stage1_policy_editor.ts",
+          "kind": "import-statement",
+          "original": "./stage1_policy_editor.js"
+        },
+        {
+          "path": "packages/memory/src/system_log.ts",
+          "kind": "import-statement",
+          "original": "./system_log.js"
+        },
+        {
+          "path": "packages/memory/src/tierConflicts.ts",
+          "kind": "import-statement",
+          "original": "./tierConflicts.js"
+        },
+        {
+          "path": "packages/memory/src/wakeup.ts",
+          "kind": "import-statement",
+          "original": "./wakeup.js"
+        },
+        {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "./forget_ledger.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
-      "bytes": 5016,
+      "bytes": 15926,
       "imports": [
         {
           "path": "packages/data/src/project-store.ts",
           "kind": "import-statement",
           "original": "@duya/data/project-store"
+        },
+        {
+          "path": "packages/memory/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 264253,
+      "bytes": 270007,
       "imports": [
         {
           "path": "node:crypto",
@@ -32243,7 +32841,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 53196,
+      "bytes": 53218,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -38840,6 +39438,11 @@
           "external": true
         },
         {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:fs/promises",
           "kind": "require-call",
           "external": true
@@ -40559,7 +41162,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
@@ -40751,7 +41354,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42290,7 +42893,7 @@
           "bytesInOutput": 710
         },
         "node_modules/yaml/dist/nodes/Alias.js": {
-          "bytesInOutput": 1740
+          "bytesInOutput": 1769
         },
         "node_modules/yaml/dist/nodes/Scalar.js": {
           "bytesInOutput": 470
@@ -42440,7 +43043,7 @@
           "bytesInOutput": 2944
         },
         "node_modules/yaml/dist/compose/resolve-flow-scalar.js": {
-          "bytesInOutput": 2853
+          "bytesInOutput": 2847
         },
         "node_modules/yaml/dist/compose/compose-scalar.js": {
           "bytesInOutput": 1550
@@ -42485,7 +43088,7 @@
           "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 698
@@ -42692,7 +43295,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
@@ -43025,7 +43628,7 @@
           "bytesInOutput": 105
         },
         "node_modules/tinycolor2/esm/tinycolor.js": {
-          "bytesInOutput": 15554
+          "bytesInOutput": 15556
         },
         "node_modules/@jimp/utils/dist/esm/index.js": {
           "bytesInOutput": 2056
@@ -43072,70 +43675,70 @@
         "node_modules/@jimp/js-jpeg/dist/esm/index.js": {
           "bytesInOutput": 175
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/chunkstream.js": {
+        "node_modules/pngjs/lib/chunkstream.js": {
           "bytesInOutput": 2170
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/interlace.js": {
+        "node_modules/pngjs/lib/interlace.js": {
           "bytesInOutput": 663
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/paeth-predictor.js": {
+        "node_modules/pngjs/lib/paeth-predictor.js": {
           "bytesInOutput": 155
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse.js": {
+        "node_modules/pngjs/lib/filter-parse.js": {
           "bytesInOutput": 1979
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-async.js": {
+        "node_modules/pngjs/lib/filter-parse-async.js": {
           "bytesInOutput": 322
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/constants.js": {
+        "node_modules/pngjs/lib/constants.js": {
           "bytesInOutput": 407
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/crc.js": {
+        "node_modules/pngjs/lib/crc.js": {
           "bytesInOutput": 469
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser.js": {
+        "node_modules/pngjs/lib/parser.js": {
           "bytesInOutput": 4795
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitmapper.js": {
+        "node_modules/pngjs/lib/bitmapper.js": {
           "bytesInOutput": 2252
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/format-normaliser.js": {
+        "node_modules/pngjs/lib/format-normaliser.js": {
           "bytesInOutput": 800
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-async.js": {
+        "node_modules/pngjs/lib/parser-async.js": {
           "bytesInOutput": 2504
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/bitpacker.js": {
+        "node_modules/pngjs/lib/bitpacker.js": {
           "bytesInOutput": 1900
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-pack.js": {
+        "node_modules/pngjs/lib/filter-pack.js": {
           "bytesInOutput": 1649
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer.js": {
+        "node_modules/pngjs/lib/packer.js": {
           "bytesInOutput": 2283
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-async.js": {
+        "node_modules/pngjs/lib/packer-async.js": {
           "bytesInOutput": 753
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-inflate.js": {
+        "node_modules/pngjs/lib/sync-inflate.js": {
           "bytesInOutput": 1880
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/sync-reader.js": {
+        "node_modules/pngjs/lib/sync-reader.js": {
           "bytesInOutput": 667
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/filter-parse-sync.js": {
+        "node_modules/pngjs/lib/filter-parse-sync.js": {
           "bytesInOutput": 232
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/parser-sync.js": {
+        "node_modules/pngjs/lib/parser-sync.js": {
           "bytesInOutput": 1028
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/packer-sync.js": {
+        "node_modules/pngjs/lib/packer-sync.js": {
           "bytesInOutput": 646
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/png-sync.js": {
+        "node_modules/pngjs/lib/png-sync.js": {
           "bytesInOutput": 140
         },
-        "node_modules/@jimp/js-png/node_modules/pngjs/lib/png.js": {
+        "node_modules/pngjs/lib/png.js": {
           "bytesInOutput": 2537
         },
         "node_modules/@jimp/js-png/dist/esm/constants.js": {
@@ -43241,10 +43844,10 @@
           "bytesInOutput": 3078
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1526
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -43253,16 +43856,16 @@
           "bytesInOutput": 145
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50729
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1884
         },
         "node_modules/@jimp/plugin-blit/node_modules/zod/index.js": {
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-blit/dist/esm/index.js": {
-          "bytesInOutput": 1175
+          "bytesInOutput": 1176
         },
         "node_modules/@jimp/plugin-blur/dist/esm/blur-tables.js": {
           "bytesInOutput": 1735
@@ -43274,10 +43877,10 @@
           "bytesInOutput": 1735
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1694
+          "bytesInOutput": 1695
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3078
+          "bytesInOutput": 3079
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/v3/errors.js": {
           "bytesInOutput": 81
@@ -43292,10 +43895,10 @@
           "bytesInOutput": 145
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50729
+          "bytesInOutput": 50730
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1884
+          "bytesInOutput": 1885
         },
         "node_modules/@jimp/plugin-circle/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -43393,14 +43996,20 @@
         "node_modules/strtok3/lib/stream/Errors.js": {
           "bytesInOutput": 225
         },
-        "node_modules/strtok3/lib/stream/Deferred.js": {
-          "bytesInOutput": 154
+        "node_modules/strtok3/lib/AbortSignal.js": {
+          "bytesInOutput": 64
+        },
+        "node_modules/strtok3/lib/BufferSizeError.js": {
+          "bytesInOutput": 420
         },
         "node_modules/strtok3/lib/stream/AbstractStreamReader.js": {
           "bytesInOutput": 883
         },
+        "node_modules/strtok3/lib/stream/Deferred.js": {
+          "bytesInOutput": 154
+        },
         "node_modules/strtok3/lib/stream/StreamReader.js": {
-          "bytesInOutput": 936
+          "bytesInOutput": 1780
         },
         "node_modules/strtok3/lib/stream/WebStreamReader.js": {
           "bytesInOutput": 161
@@ -43409,7 +44018,7 @@
           "bytesInOutput": 262
         },
         "node_modules/strtok3/lib/stream/WebStreamDefaultReader.js": {
-          "bytesInOutput": 676
+          "bytesInOutput": 689
         },
         "node_modules/strtok3/lib/stream/WebStreamReaderFactory.js": {
           "bytesInOutput": 223
@@ -43418,34 +44027,46 @@
           "bytesInOutput": 45
         },
         "node_modules/strtok3/lib/AbstractTokenizer.js": {
-          "bytesInOutput": 1302
-        },
-        "node_modules/strtok3/lib/ReadStreamTokenizer.js": {
-          "bytesInOutput": 1393
-        },
-        "node_modules/strtok3/lib/BufferTokenizer.js": {
-          "bytesInOutput": 577
+          "bytesInOutput": 2841
         },
         "node_modules/strtok3/lib/BlobTokenizer.js": {
-          "bytesInOutput": 612
+          "bytesInOutput": 714
+        },
+        "node_modules/strtok3/lib/BufferTokenizer.js": {
+          "bytesInOutput": 622
+        },
+        "node_modules/strtok3/lib/ReadStreamTokenizer.js": {
+          "bytesInOutput": 1953
+        },
+        "node_modules/strtok3/lib/isRandomAccessTokenizer.js": {
+          "bytesInOutput": 18
+        },
+        "node_modules/strtok3/lib/TokenizerBoundaryError.js": {
+          "bytesInOutput": 18
+        },
+        "node_modules/strtok3/lib/TokenizerView.js": {
+          "bytesInOutput": 34
         },
         "node_modules/strtok3/lib/core.js": {
-          "bytesInOutput": 375
+          "bytesInOutput": 313
+        },
+        "node_modules/strtok3/lib/NotRegularFileError.js": {
+          "bytesInOutput": 138
         },
         "node_modules/strtok3/lib/FileTokenizer.js": {
-          "bytesInOutput": 853
+          "bytesInOutput": 1160
         },
         "node_modules/strtok3/lib/index.js": {
-          "bytesInOutput": 234
+          "bytesInOutput": 536
+        },
+        "node_modules/@borewit/text-codec/lib/index.js": {
+          "bytesInOutput": 4249
         },
         "node_modules/ieee754/index.js": {
           "bytesInOutput": 897
         },
-        "node_modules/@borewit/text-codec/lib/index.js": {
-          "bytesInOutput": 2916
-        },
-        "node_modules/token-types/lib/index.js": {
-          "bytesInOutput": 914
+        "node_modules/token-types/dist/lib/index.js": {
+          "bytesInOutput": 1094
         },
         "node_modules/ms/index.js": {
           "bytesInOutput": 1414
@@ -43571,7 +44192,7 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-contain/dist/esm/index.js": {
-          "bytesInOutput": 677
+          "bytesInOutput": 678
         },
         "node_modules/@jimp/plugin-crop/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -43823,7 +44444,7 @@
           "bytesInOutput": 18
         },
         "node_modules/@jimp/plugin-print/dist/esm/index.js": {
-          "bytesInOutput": 1615
+          "bytesInOutput": 1616
         },
         "node_modules/@jimp/plugin-rotate/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -44036,7 +44657,7 @@
           "bytesInOutput": 1629
         },
         "node_modules/sax/lib/sax.js": {
-          "bytesInOutput": 21579
+          "bytesInOutput": 21763
         },
         "node_modules/xml2js/lib/bom.js": {
           "bytesInOutput": 121
@@ -44075,7 +44696,7 @@
           "bytesInOutput": 587
         },
         "node_modules/jimp/dist/esm/index.js": {
-          "bytesInOutput": 880
+          "bytesInOutput": 881
         },
         "packages/capabilities/src/AppConnectionTool/index.ts": {
           "bytesInOutput": 3129
@@ -44374,7 +44995,7 @@
         "packages/host/src/worker-agents-md/loader.ts": {
           "bytesInOutput": 4955
         },
-        "node_modules/marked/lib/marked.esm.js": {
+        "packages/host/node_modules/marked/lib/marked.esm.js": {
           "bytesInOutput": 41461
         },
         "packages/host/src/worker-agents-md/sanitize.ts": {
@@ -44423,7 +45044,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 613
+          "bytesInOutput": 619
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -44522,7 +45143,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1549
+          "bytesInOutput": 1553
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -44534,10 +45155,10 @@
           "bytesInOutput": 855
         },
         "packages/host/src/worker-prompts/bot/memory/tierReader.ts": {
-          "bytesInOutput": 3254
+          "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 668
+          "bytesInOutput": 669
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -45317,7 +45938,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 38211
+          "bytesInOutput": 39840
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 81
@@ -45387,6 +46008,39 @@
         },
         "packages/host/src/project-api.ts": {
           "bytesInOutput": 5
+        },
+        "packages/memory/src/index.ts": {
+          "bytesInOutput": 5
+        },
+        "packages/memory/src/curation_projection.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/curation_projection_live.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/lease.ts": {
+          "bytesInOutput": 38
+        },
+        "packages/memory/src/compactMessages.ts": {
+          "bytesInOutput": 5
+        },
+        "packages/memory/src/prompt.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/memory/src/writer.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/types.ts": {
+          "bytesInOutput": 516
+        },
+        "packages/memory/src/extractor.ts": {
+          "bytesInOutput": 123
+        },
+        "packages/memory/src/memory_layout.ts": {
+          "bytesInOutput": 19
+        },
+        "packages/memory/src/stage1_policy_editor.ts": {
+          "bytesInOutput": 460
         },
         "packages/host/src/worker-config/provider-catalog.ts": {
           "bytesInOutput": 24
@@ -46124,7 +46778,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4768201
+      "bytes": 4777151
     }
   }
 }

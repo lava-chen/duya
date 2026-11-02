@@ -1585,23 +1585,6 @@ export function registerDbHandlers(): void {
 
   // ==================== Project Group Handlers ====================
 
-  // Project Coordinator workers ask the owning Host for a bounded, sourced
-  // continuity context. This keeps project authorization at the Host and
-  // avoids routing project memory through a Personal Bot membership.
-  ipcMain.handle('db:project:continuity-context', async (_event, payload: { projectId?: unknown; taskId?: unknown }) => {
-    if (typeof payload?.projectId !== 'string' || !payload.projectId) return { success: false, error: 'projectId_required' };
-    try {
-      const context = await getDesktopHostProjectApi().getProjectContext(
-        payload.projectId,
-        typeof payload.taskId === 'string' ? payload.taskId : undefined,
-        8000,
-      );
-      return { success: true, context };
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : String(error) };
-    }
-  });
-
   ipcMain.handle('db:project:getGroups', async () => {
     // Plan 328 Phase 5: aggregate from core SessionStore instead of legacy
     // chat_sessions table. Read through Host and group by working_directory.
