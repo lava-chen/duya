@@ -416,11 +416,14 @@ describe('the run handle is public, and the loop routes through it', () => {
     // Call-shaped, so the `import { driveRunWithEngine }` line -- which carries
     // the name but no `(` -- is not counted as a second call site.
     expect((entry.match(/driveRunWithEngine\s*\(/g) ?? []).length).toBe(1);
-    // The driver delegates engine construction and settlement to Host.
+    // The driver delegates engine construction and settlement to the Runtime,
+    // which has owned them since plan R1.1 moved the run's engine core out of
+    // Host. The path is asserted too: a driver that reached back into
+    // `@duya/host/run-engine-execution` would be a Host-owned engine again.
     const execution = stripComments(fs.readFileSync(
-      path.join(HERE, '..', '..', 'src', 'run-engine-execution.ts'), 'utf8',
+      path.join(HERE, '..', '..', '..', 'agent-runtime', 'src', 'engine', 'run-engine-execution.ts'), 'utf8',
     ));
-    expect(driver).toContain("from '@duya/host/run-engine-execution'");
+    expect(driver).toMatch(/import \{[^}]*executeRunEngine[^}]*\} from '@duya\/agent-runtime'/);
     expect((driver.match(/executeRunEngine\s*\(/g) ?? []).length).toBe(1);
     expect((execution.match(/new RunEngineImpl\s*\(/g) ?? []).length).toBe(1);
   });
