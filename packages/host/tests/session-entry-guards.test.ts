@@ -111,4 +111,27 @@ describe('the unified session entry', () => {
     expect(source).toContain('createHostSessionService<DesktopSessionStartRequest>(');
     expect(source).toContain('controlPlane: runOrchestrator');
   });
+
+  it('reaches the Control Plane from one place in the Desktop too', () => {
+    // The Desktop is a separate process with its own orchestrator, so the
+    // Host's guard does not cover it. Its router used to reach for the
+    // Control Plane's start entry itself, and the router is the file most
+    // likely to grow a second path — the streaming lock, the bot ticket and
+    // the provider resolution all live there.
+    //
+    // The fallback branch exists for a router assembled WITHOUT the session
+    // service, so the call is still there; what must not happen is the
+    // router DECIDING the refusal on its own, which the classifier case
+    // above already pins.
+    const desktopSources = fs.readdirSync(path.join(repoRoot, 'apps/desktop/src/main/agents/server'), { recursive: true })
+      .filter((entry): entry is string => typeof entry === 'string' && entry.endsWith('.ts'))
+      // Test fixtures reach for the Control Plane on purpose — the harness
+      // builds a run to assert against. A fixture cannot become an
+      // admission path for a client, so it is out of scope here.
+      .filter((entry) => !entry.split(/[\\/]/).includes('__tests__'))
+      .map((entry) => `apps/desktop/src/main/agents/server/${entry}`);
+    const callers = desktopSources.filter((file) => callSites(file).length > 0);
+    // Exactly one: the router's fallback branch.
+    expect(callers).toEqual(['apps/desktop/src/main/agents/server/router.ts']);
+  });
 });
