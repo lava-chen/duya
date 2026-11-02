@@ -1,10 +1,13 @@
 /**
- * Host-owned run event spine used by the production RunDriver.
+ * The run's event spine, used by the production RunDriver.
  *
  * This module creates the run session, live stream, event emitter, and
- * terminal-candidate recorder. It depends only on `@duya/agent-runtime`, so
- * Host composition can own these lifecycle facts without importing Electron
- * or the legacy `@duya/agent` facade.
+ * terminal-candidate recorder. It depends only on the protocol and the
+ * runtime's own ports, so a host composes the run's lifecycle facts without
+ * importing Electron or the legacy `@duya/agent` facade.
+ *
+ * It used to live in Host, and moved here in plan R1.1: ownership follows
+ * the vocabulary a module speaks, not who happens to call it.
  *
  * `proposeTerminal` records an advisory candidate; `RunSession.settle` remains
  * the single writer of the terminal. The spine decides no prompt, tool,
@@ -24,7 +27,7 @@ export type SpinePersistence = RunPersistence;
  *
  * `runId` and `sessionId` are required because a durable event stamped with the
  * wrong run is a row no reader can find. `seqIndex` is required for the reason
- * `LegacyRunHost.seqIndex` gives (`run-composition.ts:388-395`): a default
+ * `LegacyRunHost.seqIndex` gives (`packages/host/src/worker-run-composition.ts:90`): a default
  * would stamp rows with a constant that silently mis-orders them against real
  * transcript rows.
  */
@@ -47,7 +50,7 @@ export interface RunEventSpineOptions {
    * When it IS supplied every durable event goes through it, because
    * `RunEventEmitter` already pushed the envelope to the run's own stream --
    * a second `stream.push` here is the duplicate the emitter's own header
-   * (`event-emitter.ts:293`) exists to prevent.
+   * (`events/event-emitter.ts:26-33`) exists to prevent.
    */
   readonly onAnnounce?: (envelope: unknown) => void;
 }
@@ -79,7 +82,7 @@ export interface RunEventSpine {
  *
  * Builds the three objects in the order the run needs them: the session first
  * (it is the ledger), then the stream, then the emitter over both. That order
- * is the controller's (`controller.ts:497,536,537`) and it is not incidental --
+ * is the controller's (`controller.ts:510,549,550`) and it is not incidental --
  * the emitter's terminal hold is keyed on the EVENT by `#mint`, so a run whose
  * emitter was assembled over anything but its own session would announce a
  * terminal before its durable barrier answered.
@@ -106,7 +109,7 @@ export function createRunEventSpine(options: RunEventSpineOptions): RunEventSpin
   // `subscribe` (`run-session.ts:1126-1132`), so the observer is a second arm on
   // the publisher the emitter already writes to rather than a second write --
   // an event announced twice is the duplicate the emitter's own header
-  // (`event-emitter.ts:293`) exists to prevent.
+  // (`events/event-emitter.ts:26-33`) exists to prevent.
   const publisher = options.onAnnounce === undefined
     ? stream
     : {
@@ -117,7 +120,7 @@ export function createRunEventSpine(options: RunEventSpineOptions): RunEventSpin
       };
   const emitter = new RunEventEmitter({ session, stream: publisher, runId });
 
-  // Advisory. Recorded, never settled -- `ports.ts:1028-1035` names
+  // Advisory. Recorded, never settled -- `ports.ts:1061` names
   // `RunSession.settle` the single writer of the terminal.
   let proposed: TerminalCandidate | null = null;
   const proposeTerminal = (candidate: TerminalCandidate): void => {
