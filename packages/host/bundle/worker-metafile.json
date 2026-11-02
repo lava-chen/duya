@@ -18263,7 +18263,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/session/ports.ts": {
-      "bytes": 17998,
+      "bytes": 18557,
       "imports": [],
       "format": "esm"
     },
@@ -31580,7 +31580,7 @@
       "format": "esm"
     },
     "packages/host/src/session-admission.ts": {
-      "bytes": 11240,
+      "bytes": 11678,
       "imports": [
         {
           "path": "packages/agent-runtime/src/session/index.ts",
@@ -40438,7 +40438,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 22
@@ -40537,7 +40537,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 687
@@ -42520,7 +42520,7 @@
           "bytesInOutput": 221
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -44251,7 +44251,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -45052,7 +45052,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -45988,7 +45988,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4757683
+      "bytes": 4757684
     }
   }
 }

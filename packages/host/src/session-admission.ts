@@ -157,10 +157,16 @@ export function classifyRunStartAcceptance(
     return { state: 'admitted', identity };
   }
   const classified = STAGE_CLASSIFICATION[acceptance.stage];
+  // The run id travels with a refusal that NAMED one. `run_already_exists`
+  // is the case that needs it: the run is recorded and correct, and the
+  // caller's next step is to reconcile against that receipt rather than
+  // start a second one. A refusal that minted an id and then abandoned it
+  // reports no id, so the field is optional rather than always null.
   return {
     state: classified.state,
     stage: classified.stage,
     reason: acceptance.reason,
+    ...(acceptance.runId === null ? {} : { runId: acceptance.runId }),
   };
 }
 

@@ -109,6 +109,23 @@ describe('classifyRunStartAcceptance', () => {
     expect(outcome.state).toBe('rejected');
     expect(outcome.state === 'admitted' ? outcome.identity : null).toBeNull();
   });
+
+  it('carries the run id on a refusal that named one', () => {
+    // The caller of `run_already_exists` needs the id: the run is recorded
+    // and correct, and the next step is to reconcile against that receipt
+    // rather than start a second run.
+    const withId = classifyRunStartAcceptance({
+      accepted: false, runId: 'run-9', stage: 'run_already_exists', reason: 'exists',
+    });
+    const withoutId = classifyRunStartAcceptance({
+      accepted: false, runId: null, stage: 'run_active', reason: 'busy',
+    });
+
+    expect(withId).toMatchObject({ runId: 'run-9' });
+    // A refusal that minted an id and then abandoned it reports no id, so
+    // the field is optional rather than always null.
+    expect(withoutId.runId).toBeUndefined();
+  });
 });
 
 describe('admissionWireStage', () => {

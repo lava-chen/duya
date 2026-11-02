@@ -351,6 +351,16 @@ export type SessionAdmissionOutcome =
       readonly state: 'rejected';
       readonly stage: SessionAdmissionStage;
       readonly reason: string;
+      /**
+       * The run id, when the refusal NAMED one.
+       *
+       * `run_already_exists` is the case that needs it: the run is recorded
+       * and correct, and the caller's next step is to reconcile against that
+       * receipt rather than start a second run. A refusal that minted an id
+       * and then abandoned it has no id to report, so this is optional rather
+       * than always null.
+       */
+      readonly runId?: string;
     }
   /**
    * The Host could not be reached, or answered something unusable.
@@ -362,6 +372,8 @@ export type SessionAdmissionOutcome =
       readonly state: 'failed';
       readonly stage: SessionAdmissionStage;
       readonly reason: string;
+      /** The run id, when the failure NAMED one. See `rejected`. */
+      readonly runId?: string;
     };
 
 /**

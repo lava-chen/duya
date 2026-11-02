@@ -1595,6 +1595,12 @@ async function handlePostChat(
             sendJson(res, 500, {
               error: `this turn could not be started: ${outcome.reason}`,
               stage: admissionWireStage(outcome.stage),
+              // The run id travels with a refusal that NAMED one, because
+              // `run_already_exists` is exactly the case where the caller
+              // needs it: the run is recorded and correct, and the caller's
+              // next step is to reconcile against it rather than start
+              // another.
+              ...(outcome.runId === undefined ? {} : { runId: outcome.runId }),
             });
             return;
           }
