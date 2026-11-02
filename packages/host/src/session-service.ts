@@ -40,7 +40,7 @@ export interface SessionServiceCaller {
 
 export interface HostSessionServiceOptions {
   readonly projectCoordination?: {
-    readonly projects: Pick<ProjectStore, 'getByCoordinatorSession' | 'bindTask' | 'bindWorkSession'>;
+    readonly projects: Pick<ProjectStore, 'getByCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession'>;
     readonly tasks: Pick<CoreDataHostStores['tasks'], 'create' | 'update'>;
   };
   readonly checkoutService?: import('./workspace/session-checkout-service.js').SessionCheckoutService;
@@ -201,7 +201,20 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
   async function ownedChild(sessionId: string, caller: SessionServiceCaller): Promise<HostSessionRecord | null> {
     const child = await options.sessions.get(sessionId, { includeAllSessions: true });
     requireCurrentCaller(caller);
-    return child?.parentSessionId === caller.sessionId ? child : null;
+    if (!child) return null;
+    if (child.parentSessionId === caller.sessionId) return child;
+
+    // Project work Sessions outlive the Coordinator Session that created
+    // them. Authorize the currently bound Coordinator through the durable
+    // project→task→work-session link, while retaining ordinary parent checks
+    // for all other Sessions.
+    if (!options.projectCoordination) return null;
+    const callerSession = await options.sessions.get(caller.sessionId, { includeAllSessions: true });
+    requireCurrentCaller(caller);
+    if (callerSession?.agentProfileId !== 'project-coordinator') return null;
+    const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
+    return project && options.projectCoordination.projects.listTaskLinks(project.project_id)
+      .some((link) => link.work_session_id === sessionId) ? child : null;
   }
 
   async function startRun(
@@ -469,6 +482,40 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             if (nextCursor === null || seenCursors.has(nextCursor)) break;
             seenCursors.add(nextCursor);
             cursor = nextCursor;
+          }
+          // Include durable project work Sessions created by an earlier
+          // Coordinator so the replacement Coordinator can discover and
+          // manage them through the same Session tool surface.
+          const currentCaller = await options.sessions.get(caller.sessionId, { includeAllSessions: true });
+          requireCurrentCaller(caller);
+          if (currentCaller?.agentProfileId === 'project-coordinator' && options.projectCoordination) {
+            const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
+            if (project) {
+              const existingIds = new Set(sessions.map((item) => item.id));
+              for (const link of options.projectCoordination.projects.listTaskLinks(project.project_id)) {
+                const workSessionId = link.work_session_id;
+                if (!workSessionId || existingIds.has(workSessionId)) continue;
+                const session = await options.sessions.get(workSessionId, { includeAllSessions: true });
+                requireCurrentCaller(caller);
+                if (!session) continue;
+                const local = await options.readLocalSession(session.id);
+                requireCurrentCaller(caller);
+                const metadata = readSpawnMetadata(session);
+                const run = metadata?.runId ? await options.runs.getAgentRun(metadata.runId) : null;
+                requireCurrentCaller(caller);
+                sessions.push({
+                  id: session.id,
+                  title: session.title,
+                  status: run?.status ?? metadata?.status ?? session.status,
+                  working_directory: local?.workingDirectory ?? '',
+                  created_at: Number(session.createdAt),
+                  updated_at: Number(session.updatedAt),
+                  ...(metadata?.runId ? { runId: metadata.runId } : {}),
+                  ...(run ? { runStatus: run.status } : {}),
+                });
+                existingIds.add(session.id);
+              }
+            }
           }
           return { ok: true, sessions };
         }

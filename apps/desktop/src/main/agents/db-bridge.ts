@@ -1661,6 +1661,20 @@ export async function dispatchDbAction(
     }
 
     // ==================== Project actions ====================
+    case 'project:continuity-context': {
+      const projectId = typeof p.projectId === 'string' ? p.projectId : '';
+      if (!projectId) return { success: false, error: 'projectId_required' };
+      try {
+        const context = await getDesktopHostProjectApi().getProjectContext(
+          projectId,
+          typeof p.taskId === 'string' ? p.taskId : undefined,
+          8000,
+        );
+        return { success: true, context };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
     case 'project:getGroups': {
       // Plan 328 Phase 5: aggregate from core SessionStore.
       // Plan 525: sessions of one multi-path project entity merge into a

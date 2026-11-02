@@ -213,52 +213,60 @@ export class ProjectStore {
     {
       id: 64,
       name: 'project_continuity_records',
-      up: (db) => db.exec(`
-        ALTER TABLE project_task_sessions ADD COLUMN acceptance_status TEXT NOT NULL DEFAULT 'pending'
-          CHECK (acceptance_status IN ('pending','accepted','rejected'));
-        CREATE TABLE project_continuity_state (
+      up: (db) => {
+        // A migration can have applied its DDL before its ledger row was
+        // committed (for example after an interrupted upgrade). Inspect the
+        // actual schema as well as the ledger so replay is safe.
+        const taskLinkColumns = db.prepare('PRAGMA table_info(project_task_sessions)').all() as Array<{ name: string }>;
+        if (taskLinkColumns.length && !taskLinkColumns.some((column) => column.name === 'acceptance_status')) {
+          db.exec(`ALTER TABLE project_task_sessions ADD COLUMN acceptance_status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (acceptance_status IN ('pending','accepted','rejected'))`);
+        }
+        db.exec(`
+        CREATE TABLE IF NOT EXISTS project_continuity_state (
           project_id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1,
           current_state TEXT NOT NULL DEFAULT '', next_step TEXT NOT NULL DEFAULT '',
           source_type TEXT NOT NULL, source_id TEXT NOT NULL, updated_at INTEGER NOT NULL,
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE TABLE project_decisions (
+        CREATE TABLE IF NOT EXISTS project_decisions (
           project_id TEXT NOT NULL, decision_key TEXT NOT NULL, content TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN ('proposed','accepted','superseded')),
           revision INTEGER NOT NULL DEFAULT 1, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
           updated_at INTEGER NOT NULL, PRIMARY KEY(project_id, decision_key),
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE TABLE project_memories (
+        CREATE TABLE IF NOT EXISTS project_memories (
           project_id TEXT NOT NULL, memory_key TEXT NOT NULL, content TEXT NOT NULL,
           status TEXT NOT NULL CHECK (status IN ('candidate','active','superseded','retired')),
           revision INTEGER NOT NULL DEFAULT 1, source_type TEXT NOT NULL, source_id TEXT NOT NULL,
           updated_at INTEGER NOT NULL, PRIMARY KEY(project_id, memory_key),
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE TABLE project_memory_history (
+        CREATE TABLE IF NOT EXISTS project_memory_history (
           project_id TEXT NOT NULL, memory_key TEXT NOT NULL, revision INTEGER NOT NULL,
           content TEXT NOT NULL, status TEXT NOT NULL, source_type TEXT NOT NULL,
           source_id TEXT NOT NULL, updated_at INTEGER NOT NULL,
           PRIMARY KEY(project_id, memory_key, revision),
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE TABLE project_decision_history (
+        CREATE TABLE IF NOT EXISTS project_decision_history (
           project_id TEXT NOT NULL, decision_key TEXT NOT NULL, revision INTEGER NOT NULL,
           content TEXT NOT NULL, status TEXT NOT NULL, source_type TEXT NOT NULL,
           source_id TEXT NOT NULL, updated_at INTEGER NOT NULL,
           PRIMARY KEY(project_id, decision_key, revision),
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE TABLE project_activity (
+        CREATE TABLE IF NOT EXISTS project_activity (
           event_id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL,
           event_type TEXT NOT NULL, task_id TEXT, session_id TEXT, run_id TEXT,
           source_type TEXT NOT NULL, source_id TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}',
           created_at INTEGER NOT NULL,
           FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
-        CREATE INDEX idx_project_activity_cursor ON project_activity(project_id, event_id);
-      `),
+        CREATE INDEX IF NOT EXISTS idx_project_activity_cursor ON project_activity(project_id, event_id);
+      `);
+      },
     },
   ];
 
