@@ -4,6 +4,14 @@
 
 ## Overview
 
+Product direction (2026-11-02, decision rather than implemented behavior):
+[Project-first architecture](../design-docs/project-first-architecture.md)
+separates Project Coordinator, Personal Bot and working Sessions while sharing
+the current Host/Runtime infrastructure. Project Coordinator is the current
+delivery priority; Personal Bot enhancements and independent CLI release work
+follow it. See the [three implementation tasks](../exec-plans/active/2026-11-02-project-coordinator.md).
+The implementation descriptions below retain their original verification scope.
+
 Monorepo / Agent Harness changes follow the single execution plan
 [587](../exec-plans/active/587-agent-harness-monorepo/README.md).
 Its contracts and phase gates define the target; this document describes
@@ -60,8 +68,12 @@ entry points. Its shared architecture separates these layers:
   parent's canonical workspace directory. `get` reads the tracked run's durable
   output; `reply` launches another run and `cancel` targets its captured run ID.
   This composition returns an explicit query-based completion policy. Automatic
-  parent wake delivery/restart reconciliation and Desktop delegation migration
-  remain separate work (610 T21/T22).
+  parent wake delivery/restart reconciliation remain separate work (610 T21/T22).
+  Desktop Project Coordinators use this same service through the DB bridge,
+  with canonical Project Task bindings and `code-expert` work Sessions. The
+  Desktop adapter validates the caller against the durable run/epoch and starts
+  work through its existing Agent Server execution API. Ordinary Desktop
+  session delegation still uses the legacy notification path.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Managed checkout execution**: Host checks ownership for local Write/Edit/
   ApplyPatch and shell dispatch, including deferred calls and shell workers,

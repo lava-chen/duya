@@ -15,6 +15,8 @@ export interface HostProjectRecord {
   readonly color: string | null;
   readonly created_at: number;
   readonly last_seen_at: number;
+  /** Stable conversation owner; replacing it never changes project/task identity. */
+  readonly coordinator_session_id: string | null;
 }
 
 export interface HostProjectCreateInput {
@@ -33,6 +35,14 @@ export interface HostProjectPatch {
   readonly color?: string | null;
 }
 
+export interface HostProjectTaskLink {
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly coordinatorSessionId: string;
+  readonly workSessionId: string | null;
+  readonly updatedAt: number;
+}
+
 /** Versioned asynchronous API for durable project metadata. */
 export interface HostProjectApiV1 {
   listProjects(): Promise<readonly HostProjectRecord[]>;
@@ -40,4 +50,8 @@ export interface HostProjectApiV1 {
   createProject(input: HostProjectCreateInput): Promise<HostProjectRecord>;
   updateProject(projectId: string, patch: HostProjectPatch): Promise<HostProjectRecord | null>;
   deleteProject(projectId: string): Promise<boolean>;
+  bindCoordinatorSession(projectId: string, sessionId: string): Promise<HostProjectRecord | null>;
+  listProjectTasks(projectId: string): Promise<readonly HostProjectTaskLink[]>;
+  bindProjectTask(projectId: string, taskId: string, coordinatorSessionId: string): Promise<HostProjectTaskLink>;
+  bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null>;
 }

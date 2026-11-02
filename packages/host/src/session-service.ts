@@ -15,6 +15,8 @@ import type {
   HostSessionRecord,
 } from '@duya/agent-protocol/session-api';
 import type { CoreSession } from '@duya/data/session-store';
+import type { ProjectStore } from '@duya/data/project-store';
+import type { CoreDataHostStores } from '@duya/data/core-data-host';
 
 const SPAWN_METADATA_KEY = 'host.sessionSpawn';
 const SESSION_ACTIONS = new Set([
@@ -26,6 +28,10 @@ const SESSION_ACTIONS = new Set([
   'session:spawnRename',
 ]);
 
+export function isHostSessionAction(action: string): boolean {
+  return SESSION_ACTIONS.has(action);
+}
+
 export interface SessionServiceCaller {
   readonly sessionId: string;
   readonly runId: string;
@@ -33,6 +39,10 @@ export interface SessionServiceCaller {
 }
 
 export interface HostSessionServiceOptions {
+  readonly projectCoordination?: {
+    readonly projects: Pick<ProjectStore, 'getByCoordinatorSession' | 'bindTask' | 'bindWorkSession'>;
+    readonly tasks: Pick<CoreDataHostStores['tasks'], 'create' | 'update'>;
+  };
   readonly checkoutService?: import('./workspace/session-checkout-service.js').SessionCheckoutService;
   readonly sessions: Pick<HostSessionApiV1,
     'get' | 'create' | 'list' | 'update' | 'getSessionChangeStats'>;
@@ -214,6 +224,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
         workingDirectory,
         model: model ?? session.model,
         providerId: session.providerId,
+        ...(session.agentProfileId ? { agentProfileId: session.agentProfileId } : {}),
         origin: 'agent',
       }, caller);
     } catch (error) {
@@ -293,6 +304,14 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           }
           const parent = await parentFor(caller);
           if (!parent) return { ok: false, reason: 'parent_session_missing_or_unbound' };
+          const isProjectCoordinator = parent.record.agentProfileId === 'project-coordinator';
+          const rawProjectTask = payload.projectTask;
+          if (isProjectCoordinator && (!rawProjectTask || typeof rawProjectTask !== 'object' || Array.isArray(rawProjectTask))) {
+            return { ok: false, reason: 'project_coordinator_requires_project_task' };
+          }
+          if (!isProjectCoordinator && rawProjectTask !== undefined) {
+            return { ok: false, reason: 'project_task_requires_project_coordinator' };
+          }
           const requestedCanonical = await realpath(requestedDirectory).catch(() => null);
           requireCurrentCaller(caller);
           if (!requestedCanonical || !sameCanonicalDirectory(parent.workingDirectory, requestedCanonical)) {
@@ -300,6 +319,33 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           }
           const workspace = boundWorkspace(parent.record);
           if (!workspace) return { ok: false, reason: 'parent_workspace_unbound' };
+
+          let projectTaskId: string | undefined;
+          if (rawProjectTask !== undefined) {
+            const projectTask = rawProjectTask as Record<string, unknown>;
+            const subject = typeof projectTask.subject === 'string' ? projectTask.subject.trim() : '';
+            const description = typeof projectTask.description === 'string' ? projectTask.description.trim() : '';
+            if (Object.keys(projectTask).some((key) => key !== 'subject' && key !== 'description')
+              || !subject || subject.length > 160 || !description || description.length > 12_000) {
+              return { ok: false, reason: 'invalid_project_task' };
+            }
+            if (!options.projectCoordination) return { ok: false, reason: 'project_coordination_unavailable' };
+            const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
+            if (!project) return { ok: false, reason: 'project_coordinator_not_bound' };
+            projectTaskId = randomUUID();
+            try {
+              options.projectCoordination.tasks.create({
+                id: projectTaskId,
+                sessionId: caller.sessionId,
+                subject,
+                description,
+                status: 'pending',
+              });
+              options.projectCoordination.projects.bindTask(project.project_id, projectTaskId, caller.sessionId);
+            } catch (error) {
+              return { ok: false, reason: `project_task_create_failed:${error instanceof Error ? error.message : String(error)}` };
+            }
+          }
 
           let child: HostSessionRecord;
           try {
@@ -314,7 +360,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               providerId: parent.record.providerId,
               mode: parent.record.mode,
               permissionMode: parent.record.permissionMode,
-              agentProfileId: parent.record.agentProfileId,
+              // A restricted Project Coordinator delegates into a real work
+              // role; its management-only allowlist must not leak to the child.
+              agentProfileId: isProjectCoordinator ? 'code-expert' : parent.record.agentProfileId,
               parentSessionId: parent.record.id,
               spawn: { type: 'session', reason: 'session-tool' },
               agentType: 'spawn',
@@ -323,6 +371,16 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             child = await options.sessions.create(input);
           } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+          }
+
+          if (projectTaskId) {
+            const project = options.projectCoordination!.projects.getByCoordinatorSession(caller.sessionId);
+            const linked = project && options.projectCoordination!.projects.bindWorkSession(project.project_id, projectTaskId, child.id);
+            if (!linked) {
+              await markCreatedChildFailed(child.id, 'project_task_binding_failed');
+              options.projectCoordination!.tasks.update(projectTaskId, { status: 'pending' });
+              return { ok: false, sessionId: child.id, reason: 'project_task_binding_failed' };
+            }
           }
 
           if (!callerIsCurrent(caller)) {
@@ -354,6 +412,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           if ('reason' in started) {
             const failureReason = started.reason;
             const failed = await markCreatedChildFailed(child.id, failureReason);
+            if (projectTaskId) options.projectCoordination!.tasks.update(projectTaskId, { status: 'pending' });
             return {
               ok: false,
               sessionId: child.id,
@@ -361,10 +420,12 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               reason: failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`,
             };
           }
+          if (projectTaskId) options.projectCoordination!.tasks.update(projectTaskId, { status: 'in_progress' });
           return {
             ok: true,
             sessionId: child.id,
             parentId: parent.record.id,
+            ...(projectTaskId ? { taskId: projectTaskId } : {}),
             runId: started.runId,
             operationId: started.operationId,
             completionNotification: 'query',

@@ -610,6 +610,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     if (options.workerPath !== undefined) {
       const sessionService = createHostSessionService({
         checkoutService,
+        projectCoordination: { projects: core.stores.projects, tasks: core.stores.tasks },
         sessions: api,
         runs: createHostRunApi(core.stores),
         execution: {
@@ -1002,7 +1003,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       goalApi,
       modeStateApi,
       taskApi,
-      projectApi: createHostProjectApi(core.stores.projects),
+      projectApi: createHostProjectApi(core.stores.projects, core.stores.tasks),
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),
