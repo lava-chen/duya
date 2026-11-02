@@ -92,3 +92,20 @@ managed worktree/context 工具未提供，使用 Git linked worktree 和版本�
 2026-11-02 连续性切片（基于任务一 HostProjectApiV1）新增 Core DB 的版本化项目状态、决策、记忆候选/历史、Task 验收记录与 Activity；Host 提供分页快照、历史查询和预算受限上下文接口，并在项目 Session 的新 Worker 初始化时装配当前记录。当前 Task 状态仍只来自既有 TaskStore，删除 Coordinator Session 时会保留项目绑定 Task；Transcript 只由 MessageLog 提供引用。候选不会注入 Coordinator；只有用户确认的记忆和决策进入上下文。
 
 下一动作：任务三接入 Project continuity HTTP/Host client 接口，展示 Task/Activity/transcript refs，提供 Task 验收与记忆候选确认/纠正操作，并覆盖失败 child start 对账。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### 运行结果自动回传切片（2026-11-02）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-run-feedback`；分支：`codex/project-run-feedback`；base：`codex/project-memory-continuity` `27a4a5a8`（#583 head）；代码提交：`dd7a095d`。本切片只补 #584 已承认的缺口：工作 Session 完成后，结果自动进入 Project Activity 并唤醒 Coordinator，不扩张 UI，也不自动验收 Task。
+
+已实现：共享 `packages/host/src/project-run-settlement.ts` 把 Run 终态写成唯一 `run.terminal` Activity（迁移 65 的 `(project_id, source_id)` 局部唯一索引 + `appendActivityOnce`），并按 `clientMsgId = project-run-terminal:<runId>` 向协调 Session 落一条 durable `background_notification`；Activity 已存在但通知缺失时仍补写。独立 Host 由 `HostRunExecutionControllerOptions.onRunSettled` 直接结算；Desktop 由 Agent Server 在终态 durable 后经 IPC 通知 Main，Main 复用 `mail:created` 与 `wake.idleDispatch` 两条既有唤醒路径。启动时两端都做幂等对账：每个工作 Session 只补最近 72 小时内最新终态 Run，跳过已验收/已驳回 Task，且只有真正补写记录或通知才计为恢复。通知摘要取最近 24 个 `assistant.text_block`，总长上限 4000 字符；失败使用 `error_json`；`budget_exhausted`/`cancelled` 明确说明。通知正文明确 Task 尚未验收，Run 终态不改变 acceptance。
+
+已知边界：渲染层无监听时（启动对账早于窗口）通知保持 pending，由 Coordinator 下一轮领取；独立 Host 没有 idle dispatcher，同样下一轮领取；两者都依赖已落库的通知，不丢结果。
+
+验证环境：Windows、Node `v24.16.0`；未修改共享检出。
+
+- 相关 8 个测试文件 65 项通过：`project-run-settlement`（11，含真实迁移重放与幂等）、`project-store`（11）、`local-host`、`project-api-http`、`project-work-session-continuity`、`run-execution`、`run-execution-turn-contract`、`session-service`。
+- `npm run typecheck:all`、`npm run architecture:check`、`npm run electron:build`、`npm run check:packaged-artifacts:bundle` 均退出 0；架构门禁无新增违规。首次 Electron 构建与测试并发时 V8 OOM，单独重跑退出 0。
+- 提交 `dd7a095d` 后 `npm run bundle:verify` 退出 0，1050 项输入全部 FRESH，工作区干净。`git diff --check` 仅剩两类已知例外：仓库本就以 CRLF 入库的 `agent-server-lifecycle.ts`，以及生成 bundle 中原样保留的模板空白。
+- `git show --stat dd7a095d`：14 文件，+1203/−193；含重建的 `packages/host/bundle`。
+
+下一动作：推送 `codex/project-run-feedback` 并以 `codex/project-memory-continuity` 为 base 开 stacked PR，不合并。之后先做 Coordinator 领域收敛（`packages/host/src/project/`：profile/policy、Task→Session 派发端口、上下文装配、结果对账；独立 project prompt 目录），让通用 `session-service` 不再判断具体产品身份；再统一重整 #583/#584 依赖。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
