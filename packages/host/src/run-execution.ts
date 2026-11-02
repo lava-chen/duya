@@ -48,6 +48,12 @@ import type {
 } from '@duya/agent-protocol';
 import { isPermissionPolicyMode, lessPermissivePermissionMode, type PermissionPolicyMode } from '@duya/agent-protocol';
 import { profileToAgentMode } from '@duya/agent-runtime/authorization/profile-bridge';
+import type { RuntimeSessionService } from '@duya/agent-runtime/session';
+import {
+  admissionWireStage,
+  createHostSessionService,
+  type HostAdmissionTurn,
+} from './session-admission.js';
 import { randomUUID } from 'node:crypto';
 import type { RunRepository } from './repository-port.js';
 import { RunEventConflictError, RunEpochFencedError } from '@duya/data/run-store';
@@ -181,6 +187,26 @@ export class HostRunExecutionError extends Error {
   }
 }
 
+/**
+ * What the Host asks the Session service to start.
+ *
+ * The Host has already resolved everything a turn needs by the time it gets
+ * here: the session's defaults, the turn's permission ceiling, the option
+ * overrides, the working directory. The `intent` carries that resolution.
+ *
+ * ## Why the Runtime's default request shape is not used
+ *
+ * `SessionRunRequest` carries a prompt and a workspace. The Host cannot use
+ * it, because the Host is the layer that resolves those into a frozen
+ * manifest, and sending the prompt back would mean re-deriving everything
+ * the Host already knows — or freezing a manifest from a subset of the
+ * facts, which is the failure this migration exists to remove.
+ *
+ * So the admission port is generic over its request and the Host uses its
+ * own. The Runtime forwards it without reading it.
+ */
+export interface HostSessionStartRequest extends HostAdmissionTurn {}
+
 export class HostRunExecutionController {
   readonly permissionRequests: WorkerPermissionRequests | undefined;
   /**
@@ -195,6 +221,14 @@ export class HostRunExecutionController {
   readonly #registry: WorkerSessionRegistry;
   readonly #workerManager: WorkerManager;
   readonly #orchestrator: RunOrchestrator;
+  /**
+   * The ONE entry for starting a turn.
+   *
+   * The service owns the ORDER; the admission port owns the DECISION. It
+   * reaches the Control Plane directly, so the direction is one-way: the
+   * Runtime asks, the Host decides.
+   */
+  readonly #sessionService: RuntimeSessionService<HostSessionStartRequest>;
   readonly #liveRunEvents = new LiveRunEventHub();
   readonly #nativeRunIds = new Set<string>();
   readonly #delegationBySession = new Map<string, SessionServiceCaller>();
@@ -332,6 +366,17 @@ export class HostRunExecutionController {
       void this.#onWorkerMessage(sessionId, msg, child).catch((error: unknown) => {
         this.#options.logger.error('Worker event handling failed', error instanceof Error ? error : new Error(String(error)), { sessionId });
       });
+    });
+
+    // The Session service, wired to the Control Plane.
+    //
+    // The service and its admission adapter are assembled TOGETHER, in the
+    // adapter's own module, so that this file never reaches for the Control
+    // Plane's start entry. A file that reaches for it is a file that can
+    // call it, and that is how the second admission path appeared in the
+    // first place.
+    this.#sessionService = createHostSessionService<HostSessionStartRequest>({
+      controlPlane: this.#orchestrator,
     });
   }
 
@@ -531,29 +576,40 @@ export class HostRunExecutionController {
     };
 
     if (caller) this.#delegationBySession.set(sessionId, caller);
-    let acceptance;
     try {
-      acceptance = await this.#orchestrator.openRun(sessionId, intent, admission);
+      // The Runtime Session service is the ONE entry for starting a turn.
+      //
+      // The service owns the ORDER; the admission port owns the DECISION.
+      // The port calls the Control Plane directly — never a public start
+      // entry that forwards back into the service, which would be a
+      // recursion. The direction is one-way.
+      const outcome = await this.#sessionService.startRun({
+        sessionId,
+        intent,
+        ...(admission === undefined ? {} : { admission }),
+      });
+      if (outcome.state === 'admitted') {
+        this.#sessionByRun.set(outcome.identity.runId, sessionId);
+        this.#liveRunEvents.open(outcome.identity.runId as RunId);
+        return { accepted: true, stage: 'dispatched', runId: outcome.identity.runId as RunId };
+      }
+      // The refusal keeps the stage it was given.
+      //
+      // The old wire vocabulary mapped five internal stages onto two, which
+      // made "the session is busy" (wait) indistinguishable from "the run row
+      // was never written" (retry and alert). The Bot dispatcher branches on
+      // exactly that difference, so collapsing them here made the branch
+      // unreachable.
+      return {
+        accepted: false,
+        stage: admissionWireStage(outcome.stage),
+        reason: outcome.reason,
+      };
     } finally {
       if (caller && this.#delegationBySession.get(sessionId) === caller) {
         this.#delegationBySession.delete(sessionId);
       }
     }
-    if (acceptance.accepted) {
-      this.#sessionByRun.set(acceptance.runId, sessionId);
-      this.#liveRunEvents.open(acceptance.runId as RunId);
-      return { accepted: true, stage: 'dispatched', runId: acceptance.runId as RunId };
-    }
-    const stage = acceptance.stage;
-    const wireStage: StartAgentRunResult extends never ? never : 'refused_run_open_failed' | 'refused_dispatch_failed' =
-      stage === 'dispatch_refused' || stage === 'dispatch_threw'
-        ? 'refused_dispatch_failed'
-        : 'refused_run_open_failed';
-    return {
-      accepted: false,
-      stage: wireStage,
-      reason: acceptance.reason,
-    };
   }
 
   async cancelAgentRun(runId: RunId, reason?: string): Promise<CancelAgentRunResult> {
