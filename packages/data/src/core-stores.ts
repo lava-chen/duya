@@ -54,6 +54,12 @@ import { Mailbox } from './mailbox.js';
 import { ProjectStore } from './project-store.js';
 import { ResearchStore } from './research-store.js';
 import { PendingWakeStore } from './pending-wakes.js';
+import {
+  SESSION_CONTROL_LEASE_MIGRATIONS,
+  SESSION_INPUT_MIGRATIONS,
+  SessionControlLeaseStore,
+  SessionInputStore,
+} from './session-inputs.js';
 import { RunStore } from './run-store.js';
 import { BotInboxStore } from './bot-inbox.js';
 import { BotOutboxStore } from './bot-outbox.js';
@@ -1218,6 +1224,10 @@ export interface CoreDataStores {
   appInstances: PluginAppInstanceStore;
   /** Durable user grants for Plugin App capabilities. */
   appGrants: PluginAppGrantStore;
+  /** R1.2: durable Session inputs — the record of what was accepted, and of what it reached. */
+  sessionInputs: SessionInputStore;
+  /** R1.2: the per-session lease on the right to direct that session. */
+  sessionControlLeases: SessionControlLeaseStore;
 }
 
 /** Construct the Electron-free core data stores over a Host-owned handle. */
@@ -1246,6 +1256,8 @@ export function createCoreDataStores(
     integrations: new IntegrationStore(db),
     appInstances: new PluginAppInstanceStore(db),
     appGrants: new PluginAppGrantStore(db),
+    sessionInputs: new SessionInputStore(db),
+    sessionControlLeases: new SessionControlLeaseStore(db),
   };
 }
 
@@ -1273,6 +1285,8 @@ export function collectCoreDataMigrations(): Migration[] {
     ...IntegrationStore.migrations,
     ...PluginAppInstanceStore.migrations,
     ...PluginAppGrantStore.migrations,
+    ...SESSION_INPUT_MIGRATIONS,
+    ...SESSION_CONTROL_LEASE_MIGRATIONS,
   ].sort((a, b) => a.id - b.id);
 }
 
