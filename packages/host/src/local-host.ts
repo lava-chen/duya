@@ -541,7 +541,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // ledger-only composition.
     const goalApi = createHostGoalApi(core.stores);
     const modeStateApi = createHostModeStateApi(core.stores);
-    const taskApi = createHostTaskApi(core.stores);
+    const taskApi = createHostTaskApi(core.stores, core.stores.projects);
     const lockApi = createHostLockApi(core.stores);
     // ONE instance per API, shared by the HTTP surface and the worker db
     // bridge: the bridge must answer the same rows the HTTP surface does,
