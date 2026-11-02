@@ -134,6 +134,35 @@ describe('Host owns the shared inter-agent call registry', () => {
     await vi.advanceTimersByTimeAsync(5_000);
     const result = await resultPromise;
 
+    // Nothing ever arrived, so the invoke never reached a handler. Calling
+    // that a "timeout" hid the cause of every inter-agent bug this port had.
+    expect(result).toEqual({
+      kind: 'terminal',
+      terminalEvent: {
+        type: 'chat:error',
+        sessionId: 'target-session',
+        message: 'interagent invoke was never handled by the host',
+        code: 'not_dispatched',
+      },
+      events: [],
+    });
+    expect(getPendingInteragentCall('nonce-timeout')).toBeUndefined();
+  });
+
+  it('reports a timeout when the target answered but never finished', async () => {
+    vi.useFakeTimers();
+    installProcessSend(() => true);
+
+    const resultPromise = createWorkerInteragentMessagingPort().invoke(request('nonce-slow', 0));
+    const pending = getPendingInteragentCall('nonce-slow');
+    expect(pending).toBeDefined();
+    // A frame arrived, so the invoke WAS dispatched; the target simply never
+    // finished. That is a different failure from the one above.
+    pending?.events.push({ type: 'chat:text', sessionId: 'target-session', content: 'Working.' } as WorkerEvent);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await resultPromise;
+
     expect(result).toEqual({
       kind: 'terminal',
       terminalEvent: {
@@ -142,8 +171,8 @@ describe('Host owns the shared inter-agent call registry', () => {
         message: 'interagent local timeout',
         code: 'timeout',
       },
-      events: [],
+      events: [{ type: 'chat:text', sessionId: 'target-session', content: 'Working.' }],
     });
-    expect(getPendingInteragentCall('nonce-timeout')).toBeUndefined();
+    expect(getPendingInteragentCall('nonce-slow')).toBeUndefined();
   });
 });
