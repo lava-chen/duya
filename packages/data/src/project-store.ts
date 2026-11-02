@@ -535,6 +535,10 @@ export class ProjectStore {
     return this.db.prepare('SELECT * FROM project_activity WHERE project_id = ? AND event_id > ? ORDER BY event_id LIMIT ?')
       .all(projectId, Math.max(0, after), Math.max(1, Math.min(100, limit))) as ProjectActivityRow[];
   }
+  listRecentActivity(projectId: string, limit = 10) {
+    return this.db.prepare('SELECT * FROM project_activity WHERE project_id = ? ORDER BY event_id DESC LIMIT ?')
+      .all(projectId, Math.max(1, Math.min(50, limit))).reverse() as ProjectActivityRow[];
+  }
 
   // ─── project_bots ───
 

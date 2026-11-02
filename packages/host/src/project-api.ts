@@ -39,7 +39,7 @@ function pathsToJson(paths: readonly HostProjectPathEntry[]): string {
 
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
-  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity'>,
+  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
   tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
 ): HostProjectApiV1 {
   return {
@@ -181,11 +181,17 @@ export function createHostProjectApi(
       const accepted = snapshot.decisions.filter((item) => item.status === 'accepted');
       const memories = rankProjectMemory(snapshot.memories.filter((item) => item.status === 'active')
         .map((item) => ({ ...item, sourceType: item.source.type, sourceId: item.source.id })), task ? `${task.subject} ${task.description}` : '').slice(0, 20);
+      const recentActivity = projects.listRecentActivity(projectId, 10).map((item) => ({
+        key: String(item.event_id),
+        content: `${item.event_type}${item.task_id ? ` · task ${item.task_id}` : ''}${item.session_id ? ` · session ${item.session_id}` : ''}`,
+        sourceType: item.source_type, sourceId: item.source_id, updatedAt: item.created_at,
+      }));
       const text = assembleProjectContinuityContext({
         projectName: snapshot.project.name || snapshot.project.project_id,
         ...(snapshot.state ? { currentState: snapshot.state.currentState, nextStep: snapshot.state.nextStep } : {}),
         decisions: accepted.map((item) => ({ key: item.key, content: item.content, sourceType: item.source.type, sourceId: item.source.id, updatedAt: item.updatedAt })),
         memories,
+        recentActivity,
         ...(relevantTasks.length ? { taskBrief: relevantTasks.map(({ task: item, link }) => item
           ? `- ${item.id} [${item.status}; acceptance=${link.acceptanceStatus}] ${item.subject}${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}\n  ${item.description}`
           : `- ${link.taskId} [Task record unavailable; acceptance=${link.acceptanceStatus}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}`).join('\n') } : {}),
@@ -194,6 +200,7 @@ export function createHostProjectApi(
       const sourceRefs = [
         ...(snapshot.state ? [snapshot.state.source] : []),
         ...accepted.map((item) => item.source), ...memories.map((item) => ({ type: item.sourceType, id: item.sourceId })),
+        ...recentActivity.map((item) => ({ type: item.sourceType, id: item.sourceId })),
         ...(task ? [{ type: 'task', id: task.id }] : []),
       ];
       return { text, sourceRefs };

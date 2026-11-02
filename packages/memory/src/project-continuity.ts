@@ -13,6 +13,7 @@ export interface ProjectContextInput {
   readonly nextStep?: string;
   readonly decisions: readonly ProjectContextItem[];
   readonly memories: readonly ProjectContextItem[];
+  readonly recentActivity?: readonly ProjectContextItem[];
   readonly taskBrief?: string;
   readonly maxCharacters?: number;
 }
@@ -52,6 +53,10 @@ export function assembleProjectContinuityContext(input: ProjectContextInput): st
   if (input.memories.length) {
     lines.push('### Project memory');
     for (const item of input.memories) lines.push(`- ${item.key}: ${item.content} [source: ${item.sourceType}:${item.sourceId}]`);
+  }
+  if (input.recentActivity?.length) {
+    lines.push('### Recent project activity');
+    for (const item of input.recentActivity) lines.push(`- ${item.content} [source: ${item.sourceType}:${item.sourceId}]`);
   }
   if (input.taskBrief) lines.push(`### Current task\n${input.taskBrief}`);
   const full = lines.join('\n\n');
