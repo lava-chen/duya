@@ -175,7 +175,10 @@ export class ProjectStore {
           coordinator_session_id TEXT NOT NULL,
           work_session_id TEXT,
           updated_at INTEGER NOT NULL,
-          PRIMARY KEY (project_id, task_id)
+          PRIMARY KEY (project_id, task_id),
+          FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+          FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+          FOREIGN KEY (work_session_id) REFERENCES sessions(id) ON DELETE SET NULL
         );
         CREATE INDEX idx_project_task_sessions_project ON project_task_sessions(project_id, updated_at);
       `),
@@ -232,6 +235,13 @@ export class ProjectStore {
     const row = this.db
       .prepare('SELECT * FROM projects WHERE canonical_root = ?')
       .get(canonicalRoot) as ProjectRow | undefined;
+    return row ?? null;
+  }
+
+  getByCoordinatorSession(sessionId: string): ProjectRow | null {
+    if (!sessionId) return null;
+    const row = this.db.prepare('SELECT * FROM projects WHERE coordinator_session_id = ? ORDER BY last_seen_at DESC LIMIT 1')
+      .get(sessionId) as ProjectRow | undefined;
     return row ?? null;
   }
 
@@ -321,13 +331,21 @@ export class ProjectStore {
 
   bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {
     const now = Date.now();
-    this.db.prepare(`INSERT INTO project_task_sessions
-      (project_id, task_id, coordinator_session_id, work_session_id, updated_at)
-      VALUES (?, ?, ?, NULL, ?)
-      ON CONFLICT(task_id) DO UPDATE SET project_id=excluded.project_id,
-        coordinator_session_id=excluded.coordinator_session_id, updated_at=excluded.updated_at`)
-      .run(projectId, taskId, coordinatorSessionId, now);
-    return this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow;
+    const bind = this.db.transaction((): ProjectTaskLinkRow => {
+      const existing = this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow | undefined;
+      if (existing) {
+        if (existing.project_id !== projectId || existing.coordinator_session_id !== coordinatorSessionId) {
+          throw new Error(`Task "${taskId}" is already bound to a different Project coordinator`);
+        }
+        return existing;
+      }
+      this.db.prepare(`INSERT INTO project_task_sessions
+        (project_id, task_id, coordinator_session_id, work_session_id, updated_at)
+        VALUES (?, ?, ?, NULL, ?)`)
+        .run(projectId, taskId, coordinatorSessionId, now);
+      return this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow;
+    });
+    return bind();
   }
 
   bindWorkSession(projectId: string, taskId: string, workSessionId: string): ProjectTaskLinkRow | null {

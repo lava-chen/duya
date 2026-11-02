@@ -58,6 +58,6 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 本轮证据与接续
 
-本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。已加 Host 强制工具白名单的隐藏 Coordinator profile，并让项目新对话绑定/复用它。直接派发服务、项目记忆 scope、Task/activity 工作台仍待完成，不能视为闭环已交付。
+本轮从 master `af4aaede` 开始实现：集成 #580 PR head（`7bea4bd1`），添加项目协调 Session 与 Project/Task/工作 Session 的 Core DB 关系及 Host HTTP API。现有 `TaskStore` 仍为任务内容/状态唯一权威，`project_task_sessions` 仅持有关系；Session 工具的 Coordinator 派发由 Host 从受信 caller Session 解析 Project、创建规范 Task 并绑定工作 Session。输入/回执/控制租约采用 #580 的两张表；没有 #579 的并行 receipt/lease 写路径。隐藏 Coordinator profile 由 Host 强制 `session`/`todo` 白名单；子 Session 切换到 `code-expert`，不继承管理限制。项目新对话绑定/复用协调 Session。项目记忆 scope、Task/activity 工作台与显式验收/完成对账仍待完成。
 
-下一动作：将现有 `session`/`todo` 调用闭合到 Project Task 创建、工作 Session 派发/结果对账，随后接项目记忆 scope 和 Task/activity UI。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+下一动作：接入项目记忆 scope 和 Task/activity UI，并实现基于可审阅结果的显式 Task 完成/验收；Run 终态不可自动冒充 Task 完成。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。

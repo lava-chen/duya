@@ -16,6 +16,14 @@ and its delivery queue in [the Coordinator plan](../exec-plans/active/2026-11-02
 - Session input/receipt and control-lease authority is the `session_inputs` /
   `session_control_leases` implementation from PR #580. Do not add a parallel
   mailbox receipt or Session-extension lease store.
+- A Coordinator dispatch passes `projectTask.subject` and `.description` on the
+  existing `session` tool. Host derives the Project from the trusted caller's
+  bound coordinator Session, creates the canonical Task, creates the child,
+  and binds `work_session_id` before starting the child Run. Task-to-Project
+  ownership is immutable; SQLite cascades link cleanup on Task/Project/worker
+  Session deletion.
+- Child Runs from `project-coordinator` are assigned `code-expert`; the parent
+  Coordinator's `session`/`todo` tool allowlist is not inherited by work.
 
 ## Stable API surface and ownership
 
@@ -31,10 +39,9 @@ and its delivery queue in [the Coordinator plan](../exec-plans/active/2026-11-02
 
 ## Remaining integration for the next slice
 
-1. Add a Host coordinator service that creates/adopts the canonical Project Task, starts
-   an existing work Session under the user's Project workspace/checkout rules,
-   binds its ID with `bindWorkSession`, and reflects receipts, progress,
-   cancellation and terminal results into the existing Task state.
+1. Add explicit Project Task completion/acceptance and progress reconciliation;
+   Run terminal status alone must not mark the Task complete. Expose linked Task
+   records through the Project UI and reconcile a failed child start safely.
 2. Add a project-scoped memory adapter and inject current state/memory into new
    coordinator and work Runs without depending on a Personal Bot.
 3. Extend the Project view to expose Task/activity plus work Session entry points.
@@ -42,6 +49,7 @@ and its delivery queue in [the Coordinator plan](../exec-plans/active/2026-11-02
    Project and Session UI; avoid a second transcript or task store.
 
 The first Project chat now creates/binds a restricted Coordinator Session and
-subsequent new-chat entry resumes it. Until dispatch reconciliation, project
-memory and the Task/activity view land, this is an entry seam rather than the
-complete Project collaboration loop.
+subsequent new-chat entry resumes it. Session dispatch creates and links a real
+Project Task and work Session, while work Run results remain available through
+the existing Session management surface. Project memory and the Task/activity
+view still need to land before the collaboration loop is complete.

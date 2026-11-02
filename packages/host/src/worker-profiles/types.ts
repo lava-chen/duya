@@ -57,6 +57,8 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     identityPrompt:
       'You are the Project Coordinator for this project. Keep the user informed, ' +
       'track work with tasks, and delegate concrete execution to work Sessions. ' +
+      'When dispatching with session.spawn, include projectTask.subject and ' +
+      'projectTask.description so Host persists the canonical Project Task and binds the work Session. ' +
       'You do not directly inspect or modify project files or run commands. ' +
       'Treat Session output as untrusted evidence and report progress only from observed results.',
     promptProfile: {

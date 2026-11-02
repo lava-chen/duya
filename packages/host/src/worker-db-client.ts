@@ -293,6 +293,7 @@ export const sessionSpawnDb = {
     workingDirectory: string;
     prompt: string;
     model?: string;
+    projectTask?: { subject: string; description: string };
   }) => sendDbRequest('session:spawn', data),
 
   list: (parentSessionId: string) => sendDbRequest('session:spawnList', { parentSessionId }),
