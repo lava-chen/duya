@@ -19,6 +19,7 @@
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
 | Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | Project 首个闭环后接续；Linux x64 候选已打包，待用户产品测试与反馈 |
 | TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现并合并（PR #567，`203d7d51`）；本计划待归档 |
+| 权限拒绝恢复 / 旧 worker 复用 | [权限拒绝恢复](active/2026-11-03-permission-denial-recovery.md) | #603 已合并；write 拒绝结果顺序、硬规则不可升级、TUI worker 指纹附着检查已实现并过门禁；补修见 Draft PR #606，待 review/CI 与授权集成 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 常驻 PR 徽标 | [2026-11-03 TUI PR 徽标](active/2026-11-03-tui-pr-badge.md) | footer 常驻 PR 徽标 + OSC 8 可点 + `/pr` 面板升级已实现；待门禁与 PR |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |

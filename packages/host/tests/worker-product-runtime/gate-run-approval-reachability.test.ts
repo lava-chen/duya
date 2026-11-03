@@ -73,7 +73,7 @@ function request(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
 }
 
 /** The minimum `assembly` this function reads: one `canUseTool`. */
-function assemblyReturning(decision: { allowed: boolean; behavior: 'allow' | 'ask' | 'deny' }): RunTurnAssembly {
+function assemblyReturning(decision: { allowed: boolean; behavior: 'allow' | 'ask' | 'deny'; approvalEscalatable?: boolean }): RunTurnAssembly {
     return { canUseTool: async () => decision } as unknown as RunTurnAssembly;
 }
 
@@ -82,6 +82,14 @@ function approverSpy(verdict: { allowed: boolean; scope?: 'once' } | { allowed: 
 }
 
 describe('gateRunApproval: which approvals can reach a human', () => {
+    it('never escalates a hard policy denial, even when repeated', async () => {
+        const approver = approverSpy();
+        const gate = gateRunApproval(assemblyReturning({ allowed: false, behavior: 'deny' }), approver);
+        const signal = new AbortController().signal;
+        await gate(request(), signal);
+        await expect(gate(request(), signal)).resolves.toMatchObject({ allowed: false, reason: 'denied' });
+        expect(approver).not.toHaveBeenCalled();
+    });
     it('treats an `ask` verdict as allowed, without consulting the approver', async () => {
         // The positive claim. `ask` is `buildPermissions`' way of saying "this
         // needs the user", and it is the value most permission modes return for
@@ -145,7 +153,7 @@ describe('gateRunApproval: which approvals can reach a human', () => {
         // decide the retry. The approver here ALLOWS, so the call proceeds --
         // the human overrules the guess.
         const approver = approverSpy({ allowed: true, scope: 'once' });
-        const gate = gateRunApproval(assemblyReturning({ allowed: false, behavior: 'deny' }), approver);
+        const gate = gateRunApproval(assemblyReturning({ allowed: false, behavior: 'deny', approvalEscalatable: true }), approver);
         const signal = new AbortController().signal;
 
         await gate(request(), signal);
@@ -163,7 +171,7 @@ describe('gateRunApproval: which approvals can reach a human', () => {
         // policy's.
         const gate = gateRunApproval(
             {
-                canUseTool: async () => ({ allowed: false, behavior: 'deny', message: '访问工作区之外的个人数据' }),
+                canUseTool: async () => ({ allowed: false, behavior: 'deny', message: '访问工作区之外的个人数据', approvalEscalatable: true }),
             } as unknown as RunTurnAssembly,
             approverSpy({ allowed: false, reason: 'denied' }),
         );
@@ -183,7 +191,7 @@ describe('gateRunApproval: which approvals can reach a human', () => {
         // exactly the recovery the refusal text asks for -- and must not be
         // punished for the first attempt's count.
         const approver = approverSpy();
-        const gate = gateRunApproval(assemblyReturning({ allowed: false, behavior: 'deny' }), approver);
+        const gate = gateRunApproval(assemblyReturning({ allowed: false, behavior: 'deny', approvalEscalatable: true }), approver);
         const signal = new AbortController().signal;
 
         await gate(request({ input: { command: 'ls a' } }), signal);

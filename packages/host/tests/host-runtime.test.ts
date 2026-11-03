@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   localHostRuntimePath,
   readLocalHostRuntimeFrom,
+  workerBundleSha256,
 } from '../src/host-runtime.js';
 
 /**
@@ -14,6 +15,18 @@ import {
  * missing Host for a Host that is running.
  */
 describe('Host runtime descriptor', () => {
+  it('fingerprints worker bytes rather than the installation path', async () => {
+    await withDataRoot(async (root) => {
+      const first = path.join(root, 'a.js');
+      const second = path.join(root, 'b.js');
+      await fs.writeFile(first, 'old engine');
+      await fs.writeFile(second, 'old engine');
+      const before = workerBundleSha256(first);
+      expect(workerBundleSha256(second)).toBe(before);
+      await fs.writeFile(first, 'denial recovery engine');
+      expect(workerBundleSha256(first)).not.toBe(before);
+    });
+  });
   async function withDataRoot(run: (dataRoot: string) => Promise<void>): Promise<void> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-runtime-'));
     try {

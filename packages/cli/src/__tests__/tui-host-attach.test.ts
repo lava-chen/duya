@@ -17,6 +17,7 @@
  * symptom than a session that is not where you expected, is worse than not
  * having the option.
  */
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -173,7 +174,9 @@ describe('duya tui Host discovery', () => {
     expect(refusal).toContain('DUYA_DATA_ROOT');
   });
 
-  it('accepts a Host that declares run execution', async () => {
+  it('accepts a Host running the matching worker bytes', async () => {
+    const workerPath = join(await temporaryRoot(), 'worker.js');
+    await writeFile(workerPath, 'matching worker');
     const origin = await handshakeServer({ provides: ['agent_run_execution'] });
 
     await expect(discoveredHostRefusal({
@@ -182,7 +185,22 @@ describe('duya tui Host discovery', () => {
       pid: 4242,
       close: async () => {},
       started: false,
-    })).resolves.toBeNull();
+      workerBundleSha256: createHash('sha256').update('matching worker').digest('hex'),
+    }, workerPath)).resolves.toBeNull();
+  });
+
+  it.each([undefined, 'a'.repeat(64)])('refuses a missing or stale worker fingerprint (%s)', async (fingerprint) => {
+    const workerPath = join(await temporaryRoot(), 'worker.js');
+    await writeFile(workerPath, 'new engine with denial recovery');
+    const origin = await handshakeServer({ provides: ['agent_run_execution'] });
+    const refusal = await discoveredHostRefusal({
+      origin, token: 'tok', pid: 4242, close: async () => {}, started: false,
+      ...(fingerprint === undefined ? {} : { workerBundleSha256: fingerprint }),
+    }, workerPath);
+    expect(refusal).toContain('different or unverifiable worker build');
+    expect(refusal).toContain('4242');
+    expect(refusal).toContain('Finish active runs');
+    expect(refusal).toContain('No session was created');
   });
 
   it('refuses when the descriptor says a process is alive but its HTTP surface is not', async () => {

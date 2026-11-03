@@ -25,6 +25,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 
 /** The Host always binds loopback; a descriptor naming another host is not ours. */
 const HOST = '127.0.0.1';
@@ -42,6 +43,13 @@ export interface LocalHostRuntime {
   readonly token: string;
   readonly pid: number;
   readonly startedAt: number;
+  /** Worker bytes selected when this Host started, before any workers fork. */
+  readonly workerBundleSha256?: string;
+}
+
+/** Compare installed worker code without relying on the shared package version. */
+export function workerBundleSha256(workerPath: string): string {
+  return createHash('sha256').update(fs.readFileSync(workerPath)).digest('hex');
 }
 
 /**
@@ -91,7 +99,9 @@ export async function readLocalHostRuntimeFrom(dataRoot: string): Promise<LocalH
     typeof value.port !== 'number' || !Number.isInteger(value.port) || value.port < 1 || value.port > 65535 ||
     typeof value.token !== 'string' || value.token.length === 0 ||
     typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid < 1 ||
-    typeof value.startedAt !== 'number' || !Number.isSafeInteger(value.startedAt)
+    typeof value.startedAt !== 'number' || !Number.isSafeInteger(value.startedAt) ||
+    (value.workerBundleSha256 !== undefined &&
+      (typeof value.workerBundleSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.workerBundleSha256)))
   ) {
     throw new Error('Duya Host runtime descriptor has invalid fields');
   }

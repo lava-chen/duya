@@ -62,6 +62,8 @@ export interface CanUseToolDecision {
   allowed: boolean;
   /** Explicit persisted or standing user consent, bound to this invocation. */
   userApproved?: boolean;
+  /** Only an advisory auto-classifier refusal may be reviewed by a human. */
+  approvalEscalatable?: boolean;
   behavior?: 'allow' | 'ask' | 'deny';
   message?: string;
 }
