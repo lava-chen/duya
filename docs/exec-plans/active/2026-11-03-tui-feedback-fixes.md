@@ -58,11 +58,21 @@ heading / muted），走已有的 span → tag 管线，因此浅色主题同样
 
 ## 验收
 
-- `node node_modules/vitest/vitest.mjs run packages/cli/src/tui/__tests__/`
-- `node node_modules/vitest/vitest.mjs run packages/command-catalog packages/host/tests/worker-manager-*.test.ts`
-- `npm run typecheck:all`
-- `npm run architecture:check`
+- `node node_modules/vitest/vitest.mjs run packages/cli/src/tui/__tests__/ packages/command-catalog` — 77 文件 / 964 用例通过
+- `node node_modules/vitest/vitest.mjs run packages/host/tests/worker-manager-*.test.ts` — 12 用例通过（这些会真的 fork 子进程）
+- `npm run typecheck:all` — exit 0
+- `npm run architecture:check` — exit 0，无新增违规（删除的两个文件留下 18 条失配指纹，未 `--write` 收缩）
 - 真机：`duya chat` 起会话不弹窗；`/` 列表无 `/capabilities`、`/read-file`；bash 命令有颜色
+
+PR：[#589](https://github.com/lava-chen/duya/pull/589)（base `04f7645f`，HEAD `386f74e3`）。
+
+窗口本身没有自动化断言（Windows 控制台分配在 JS 内不可观测），需要真机确认。
+
+## 遗留
+
+- `docs/development/test-inventory.{md,json}` 仍列出已删的两个测试文件：`--write` 在没有
+  `--report` 时拒绝执行（会丢掉所有已测时长），`--no-measurements` 代价更大。
+- 架构 baseline 里 18 条指纹因文件删除而失配，收缩留到一次专门的 `--write`。
 
 ## 未纳入
 
