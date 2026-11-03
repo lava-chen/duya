@@ -7,7 +7,7 @@ interface FakeTuiOptions {
   readonly onInterrupt: () => void;
   readonly onExit: () => void;
   readonly isBusy: () => boolean;
-  readonly queuedDrafts: () => readonly { readonly text: string; readonly mode: 'steer' | 'queue' }[];
+  readonly queuedDrafts: () => readonly { readonly text: string }[];
   readonly queuePaused: () => boolean;
   readonly onSteer: (text: string) => void | Promise<void>;
   readonly onQueueDraft: (text: string) => void | Promise<void>;
@@ -323,7 +323,10 @@ describe('chatTui production callback wiring', () => {
       expect.objectContaining({ content: 'steer me', kind: 'followup', submittedRunId: 'run-first' }),
     ]);
     expect(app.users).toEqual(['first', 'steer me']);
-    expect(app.options.queuedDrafts()).toEqual([{ text: 'steer me', mode: 'steer' }]);
+    // The steer is NOT a queued draft: it is with the running turn and already
+    // echoed above, so the pending-drafts block has nothing to add — painting
+    // it there made a sent message read as one that never left.
+    expect(app.options.queuedDrafts()).toEqual([]);
 
     firstStream.resolve();
     await waitUntil(() => !app.options.isBusy());
@@ -352,7 +355,7 @@ describe('chatTui production callback wiring', () => {
     app.options.onSubmit('first');
     await waitUntil(() => app.options.isBusy());
     app.options.onQueueDraft('later');
-    expect(app.options.queuedDrafts()).toEqual([{ text: 'later', mode: 'queue' }]);
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'later' }]);
     expect(starts).toEqual(['first']);
 
     firstStream.resolve();
@@ -424,14 +427,16 @@ describe('chatTui production callback wiring', () => {
     app.options.onSubmit('first');
     await waitUntil(() => app.options.isBusy());
     app.options.onQueueDraft('held');
-    expect(app.options.queuedDrafts()).toEqual([{ text: 'held', mode: 'queue' }]);
+    expect(app.options.queuedDrafts()).toEqual([{ text: 'held' }]);
 
     app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'send');
     app.options.onSubmit('/queue');
     await waitUntil(() => enqueued.length === 1);
 
     expect(enqueued[0]).toMatchObject({ content: 'held', kind: 'followup' });
-    expect(app.options.queuedDrafts()).toEqual([{ text: 'held', mode: 'steer' }]);
+    // Send-now turned the waiting draft into a steer: it left the waiting list
+    // the moment it was handed over, so the preview paints nothing for it.
+    expect(app.options.queuedDrafts()).toEqual([]);
     expect(app.users).toEqual(['first', 'held']);
 
     firstStream.resolve();
@@ -446,6 +451,7 @@ describe('chatTui production callback wiring', () => {
   it('sends a send-now draft as one user line even when the old turn missed it', async () => {
     const firstStream = deferred<void>();
     const starts: string[] = [];
+    const enqueued: string[] = [];
     const cancelled: { id: string; reason?: string }[] = [];
     const client = makeClient({
       startAgentRun: vi.fn(({ prompt }: { prompt: string }) => {
@@ -455,7 +461,10 @@ describe('chatTui production callback wiring', () => {
       watchAgentRunEvents: vi.fn(async function* (runId: RunId) {
         if (runId === 'run-first') await firstStream.promise;
       }),
-      enqueue: vi.fn(async (input: { content: string }) => ({ id: 'row-9', status: 'pending', content: input.content })),
+      enqueue: vi.fn(async (input: { content: string }) => {
+        enqueued.push(input.content);
+        return { id: 'row-9', status: 'pending', content: input.content };
+      }),
       getItem: vi.fn(async () => ({ id: 'row-9', status: 'pending', content: 'held' })),
       cancel: vi.fn(async (id: string, reason?: string) => {
         cancelled.push({ id, reason });
@@ -469,7 +478,9 @@ describe('chatTui production callback wiring', () => {
     app.options.onQueueDraft('held');
     app.chooseAnswers.push((choices) => choices[0]?.value ?? null, 'send');
     app.options.onSubmit('/queue');
-    await waitUntil(() => app.options.queuedDrafts()[0]?.mode === 'steer');
+    // Send-now is proved by the mailbox row it wrote, not by the preview: a
+    // steer is deliberately absent from `queuedDrafts`.
+    await waitUntil(() => enqueued.length === 1);
 
     // The run settles before its next model boundary, so the steer never
     // reaches it: the drain sends the row's text as a new turn instead.
