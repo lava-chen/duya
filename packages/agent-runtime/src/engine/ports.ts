@@ -74,6 +74,7 @@
 
 import type {
   CompactionId,
+  ErrorCode,
   RunBudget,
   RunEpoch,
   RunEvent,
@@ -309,6 +310,22 @@ export interface ToolOutcome {
    */
   readonly isError: boolean | undefined;
   readonly durationMs: number;
+  /**
+   * How the producer classifies a failure, if it classifies it at all.
+   *
+   * Absent means "no classification offered", and the projection then says
+   * `tool_failed` -- the same default a producer that reported a bare bit gets.
+   * Present matters for the failures a consumer must treat differently from a
+   * crashing tool: a call that was REFUSED before it ran (policy denial, an
+   * exhausted budget) never touched the world, so reporting it as `tool_failed`
+   * would put "the effect may have landed" into a record where the opposite is
+   * known. `permission_denied_by_policy` is the code that says so
+   * (`packages/agent-protocol/src/errors.ts`).
+   *
+   * The set is the protocol's closed `ErrorCode`, not a local vocabulary: a
+   * consumer is entitled to switch on every member of it.
+   */
+  readonly errorCode?: ErrorCode;
   /**
    * The producer's own metadata, carried verbatim.
    *
@@ -662,8 +679,27 @@ export type ApprovalVerdict =
    * decision and belongs in the transcript; an unreachable approver is a
    * failure of the surface, and conflating them makes a broken bridge look
    * like a user saying no.
+   *
+   * ## `detail` is the approver's own sentence, and why it is carried
+   *
+   * "Belongs in the transcript" only means something if the sentence that
+   * explains the refusal travels with it. Without `detail` the engine can say
+   * "denied" and nothing else, and the model is left guessing which of the
+   * three very different things happened: a user said no, a policy refused, or
+   * no approval surface answered. `detail` is that sentence, authored by
+   * whoever made the decision (a permission gate's `message`, an approval
+   * card's rejection reason) and carried verbatim -- the engine does not
+   * reword it, because the wording is the part that knows WHY.
+   *
+   * Optional, because a host that has nothing to add must not be forced to
+   * invent text: absence means "this approver said no without a reason", which
+   * is a different fact from an empty one.
    */
-  | { readonly allowed: false; readonly reason: 'denied' | 'cancelled' | 'unavailable' };
+  | {
+      readonly allowed: false;
+      readonly reason: 'denied' | 'cancelled' | 'unavailable';
+      readonly detail?: string;
+    };
 
 export type ApprovalScope = 'once' | 'always' | 'session';
 
