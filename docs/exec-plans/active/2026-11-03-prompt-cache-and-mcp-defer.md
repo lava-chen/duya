@@ -54,8 +54,8 @@ MCP 默认 `exposure='search'`（deferred）；OpenRouter / Google 仍为 `toolD
 - [x] MCP 工具默认改为 deferred（对齐 Codex `ToolSearchAlwaysDeferMcpTools`）
 - [x] host 测试通过（57 tests：tool-exposure 13 + file-config 34 + mcp-catalog 1 + census 9）
 - [x] `npm run architecture:check`（exit 0，无新增边界违规）
-- [ ] `npm run typecheck:all`
-- [ ] 提交 + PR
+- [x] `npm run typecheck:all`（exit 0）
+- [x] 提交 + PR（#608）
 
 ## 发现与决策
 
@@ -110,6 +110,7 @@ MCP 默认 `exposure='search'`（deferred）；OpenRouter / Google 仍为 `toolD
 | a9c3897a + 工作树 dirty | Windows 11 | `npx vitest run`（host 4 个测试文件） | 0 | 48 passed（首轮 census 1 失败：漏传 options，已修） |
 | a9c3897a + 工作树 dirty | Windows 11 | `npx vitest run tests/worker-product-runtime/tool-surface-w0-census.test.ts` | 0 | 9 passed |
 | a9c3897a + 工作树 dirty | Windows 11 | `npm run architecture:check` | 0 | 3188 项全部 tolerated，无新增违规 |
+| a9c3897a + 工作树 dirty | Windows 11 | `npm run typecheck:all` | 0 | 末段 typecheck:voice / typecheck:evals / eval:agent:core:check 全过 |
 
 ## 接续 / 结果
 
@@ -120,7 +121,13 @@ MCP 默认 `exposure='search'`（deferred）；OpenRouter / Google 仍为 `toolD
 副作用：默认 MCP 曝光由 eager 变 deferred —— 依赖 MCP 工具直连的既有行为会改为经 `tool_catalog`/`tool_invoke`；
 若模型不主动检索，该 MCP 工具不会被调用。回退方式见「发现与决策」第 8 条。
 
-阻塞：无。`npm run typecheck:all` 在工作树内运行中。
+阻塞：无。PR #608 已创建并 MERGEABLE，等待必需 review 与 CI。
 
-下一步：`npm run typecheck:all` 通过后提交 + 开 PR。
-完成判据：typecheck 通过且 PR 创建成功。
+提交：`7ee94f2e`（ai 缓存断点）、`c370814a`（host MCP 默认延迟）、`78f6a8d9`（计划文档）、
+`f0e0f0f0` 之后的 census 头注释修正。
+
+下一步：由获授权的集成者 review 并以 merge commit 集成 #608；集成后在本计划写合并 SHA。
+完成判据：PR 合并且合并后验证通过。
+
+回收：worktree `E:/Projects/duya/.claude/worktrees/cache-mcp-defer` 保留至 PR 集成并通过合并后验证；
+ignored 的 dist 产物（host prompt assets 拷贝）不在 Git 快照内，如需重建按 build.md 重新生成。
