@@ -593,7 +593,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/checkout-api.ts": {
-      "bytes": 8225,
+      "bytes": 9453,
       "imports": [],
       "format": "esm"
     },
@@ -16541,8 +16541,45 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/workspace/data-root.ts": {
+      "bytes": 531,
+      "imports": [
+        {
+          "path": "packages/data/src/data-paths.ts",
+          "kind": "import-statement",
+          "original": "@duya/data/data-paths"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/workspace/settings.ts": {
+      "bytes": 4312,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../../node_modules/@iarna/toml/toml.js",
+          "kind": "import-statement",
+          "original": "@iarna/toml"
+        },
+        {
+          "path": "packages/host/src/workspace/data-root.ts",
+          "kind": "import-statement",
+          "original": "./data-root.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/workspace/paths.ts": {
-      "bytes": 2641,
+      "bytes": 4673,
       "imports": [
         {
           "path": "node:crypto",
@@ -16555,15 +16592,25 @@
           "external": true
         },
         {
-          "path": "packages/data/src/data-paths.ts",
+          "path": "packages/host/src/workspace/data-root.ts",
           "kind": "import-statement",
-          "original": "@duya/data/data-paths"
+          "original": "./data-root.js"
+        },
+        {
+          "path": "packages/host/src/workspace/settings.ts",
+          "kind": "import-statement",
+          "original": "./settings.js"
+        },
+        {
+          "path": "packages/host/src/workspace/data-root.ts",
+          "kind": "import-statement",
+          "original": "./data-root.js"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/workspace/checkout-metadata.ts": {
-      "bytes": 7575,
+      "bytes": 7582,
       "imports": [
         {
           "path": "node:crypto",
@@ -16594,10 +16641,15 @@
       "format": "esm"
     },
     "packages/host/src/workspace/checkout-origin.ts": {
-      "bytes": 2348,
+      "bytes": 4119,
       "imports": [
         {
           "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
           "kind": "import-statement",
           "external": true
         },
@@ -16610,13 +16662,13 @@
           "path": "packages/host/src/workspace/git.ts",
           "kind": "import-statement",
           "original": "./git.js"
+        },
+        {
+          "path": "packages/host/src/workspace/checkout-metadata.ts",
+          "kind": "import-statement",
+          "original": "./checkout-metadata.js"
         }
       ],
-      "format": "esm"
-    },
-    "packages/host/src/workspace/checkpoint-session.ts": {
-      "bytes": 381,
-      "imports": [],
       "format": "esm"
     },
     "packages/host/src/workspace/registration.ts": {
@@ -16643,6 +16695,57 @@
           "original": "./fs-utils.js"
         }
       ],
+      "format": "esm"
+    },
+    "packages/host/src/workspace/cleanup.ts": {
+      "bytes": 6256,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/host/src/workspace/checkout-origin.ts",
+          "kind": "import-statement",
+          "original": "./checkout-origin.js"
+        },
+        {
+          "path": "packages/host/src/workspace/fs-utils.ts",
+          "kind": "import-statement",
+          "original": "./fs-utils.js"
+        },
+        {
+          "path": "packages/host/src/workspace/git.ts",
+          "kind": "import-statement",
+          "original": "./git.js"
+        },
+        {
+          "path": "packages/host/src/workspace/paths.ts",
+          "kind": "import-statement",
+          "original": "./paths.js"
+        },
+        {
+          "path": "packages/host/src/workspace/registration.ts",
+          "kind": "import-statement",
+          "original": "./registration.js"
+        },
+        {
+          "path": "packages/host/src/workspace/settings.ts",
+          "kind": "import-statement",
+          "original": "./settings.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/workspace/checkpoint-session.ts": {
+      "bytes": 381,
+      "imports": [],
       "format": "esm"
     },
     "packages/host/src/workspace/worktree-removal.ts": {
@@ -16682,7 +16785,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace/checkout-provider.ts": {
-      "bytes": 17095,
+      "bytes": 19413,
       "imports": [
         {
           "path": "node:fs",
@@ -16715,6 +16818,11 @@
           "original": "./paths.js"
         },
         {
+          "path": "packages/host/src/workspace/cleanup.ts",
+          "kind": "import-statement",
+          "original": "./cleanup.js"
+        },
+        {
           "path": "packages/host/src/workspace/checkout-metadata.ts",
           "kind": "import-statement",
           "original": "./checkout-metadata.js"
@@ -16723,6 +16831,11 @@
           "path": "packages/host/src/workspace/checkout-origin.ts",
           "kind": "import-statement",
           "original": "./checkout-origin.js"
+        },
+        {
+          "path": "packages/host/src/workspace/settings.ts",
+          "kind": "import-statement",
+          "original": "./settings.js"
         },
         {
           "path": "packages/host/src/workspace/checkpoint-session.ts",
@@ -16748,7 +16861,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace/index.ts": {
-      "bytes": 1801,
+      "bytes": 2460,
       "imports": [
         {
           "path": "packages/host/src/workspace/errors.ts",
@@ -16771,6 +16884,11 @@
           "original": "./checkout-metadata.js"
         },
         {
+          "path": "packages/host/src/workspace/cleanup.ts",
+          "kind": "import-statement",
+          "original": "./cleanup.js"
+        },
+        {
           "path": "packages/host/src/workspace/worktree-removal.ts",
           "kind": "import-statement",
           "original": "./worktree-removal.js"
@@ -16784,6 +16902,16 @@
           "path": "packages/host/src/workspace/paths.ts",
           "kind": "import-statement",
           "original": "./paths.js"
+        },
+        {
+          "path": "packages/host/src/workspace/settings.ts",
+          "kind": "import-statement",
+          "original": "./settings.js"
+        },
+        {
+          "path": "packages/host/src/workspace/checkout-origin.ts",
+          "kind": "import-statement",
+          "original": "./checkout-origin.js"
         },
         {
           "path": "packages/host/src/workspace/git.ts",
@@ -30452,7 +30580,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 108671,
+      "bytes": 109261,
       "imports": [],
       "format": "esm"
     },
@@ -30578,7 +30706,7 @@
       "format": "esm"
     },
     "packages/host/src/checkout-api.ts": {
-      "bytes": 6704,
+      "bytes": 8515,
       "imports": [],
       "format": "esm"
     },
@@ -31485,7 +31613,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 276447,
+      "bytes": 277512,
       "imports": [
         {
           "path": "node:crypto",
@@ -32093,7 +32221,7 @@
       "format": "esm"
     },
     "packages/host/src/workspace-lifecycle-api.ts": {
-      "bytes": 5947,
+      "bytes": 6616,
       "imports": [
         {
           "path": "packages/host/src/checkout-api.ts",
@@ -40052,7 +40180,12 @@
           "external": true
         },
         {
-          "path": "node:crypto",
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
           "kind": "require-call",
           "external": true
         },
@@ -40068,6 +40201,26 @@
         },
         {
           "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
           "kind": "require-call",
           "external": true
         },
@@ -41023,7 +41176,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -41056,7 +41209,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
@@ -41182,7 +41335,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1967
+          "bytesInOutput": 1954
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -41248,7 +41401,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -41290,10 +41443,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 46
+          "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 45
+          "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 113
@@ -41305,7 +41458,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
           "bytesInOutput": 29
@@ -41353,7 +41506,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -41365,7 +41518,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -43150,7 +43303,7 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 17
+          "bytesInOutput": 29
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -43489,7 +43642,7 @@
           "bytesInOutput": 1002
         },
         "packages/plugin-core/src/mcp/core/alias.ts": {
-          "bytesInOutput": 69
+          "bytesInOutput": 82
         },
         "packages/capabilities/src/MCP/result-blocks.ts": {
           "bytesInOutput": 1119
@@ -43708,7 +43861,7 @@
           "bytesInOutput": 80
         },
         "../../../node_modules/@jimp/types/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1525
         },
         "../../../node_modules/@jimp/types/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -43717,10 +43870,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/types/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50728
         },
         "../../../node_modules/@jimp/types/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1883
         },
         "../../../node_modules/@jimp/types/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -43732,16 +43885,16 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1694
+          "bytesInOutput": 1695
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3078
+          "bytesInOutput": 3079
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/errors.js": {
-          "bytesInOutput": 80
+          "bytesInOutput": 81
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/helpers/parseUtil.js": {
-          "bytesInOutput": 1521
+          "bytesInOutput": 1526
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/helpers/typeAliases.js": {
           "bytesInOutput": 18
@@ -43750,16 +43903,16 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50730
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1885
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/index.js": {
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-blit/dist/esm/index.js": {
-          "bytesInOutput": 1175
+          "bytesInOutput": 1176
         },
         "../../../node_modules/@jimp/plugin-blur/dist/esm/blur-tables.js": {
           "bytesInOutput": 1735
@@ -44068,7 +44221,7 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-contain/dist/esm/index.js": {
-          "bytesInOutput": 677
+          "bytesInOutput": 678
         },
         "../../../node_modules/@jimp/plugin-crop/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -44320,7 +44473,7 @@
           "bytesInOutput": 18
         },
         "../../../node_modules/@jimp/plugin-print/dist/esm/index.js": {
-          "bytesInOutput": 1615
+          "bytesInOutput": 1616
         },
         "../../../node_modules/@jimp/plugin-rotate/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -44572,13 +44725,13 @@
           "bytesInOutput": 587
         },
         "../../../node_modules/jimp/dist/esm/index.js": {
-          "bytesInOutput": 880
+          "bytesInOutput": 881
         },
         "packages/capabilities/src/AppConnectionTool/index.ts": {
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44587,10 +44740,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9984
+          "bytesInOutput": 9967
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -45091,7 +45244,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45175,28 +45328,37 @@
           "bytesInOutput": 0
         },
         "packages/host/src/workspace/checkout-provider.ts": {
-          "bytesInOutput": 6028
+          "bytesInOutput": 6554
         },
         "packages/host/src/workspace/git.ts": {
           "bytesInOutput": 758
         },
         "packages/host/src/workspace/paths.ts": {
-          "bytesInOutput": 741
+          "bytesInOutput": 1001
         },
-        "packages/host/src/workspace/checkout-metadata.ts": {
-          "bytesInOutput": 2280
+        "packages/host/src/workspace/data-root.ts": {
+          "bytesInOutput": 71
+        },
+        "packages/host/src/workspace/settings.ts": {
+          "bytesInOutput": 1453
+        },
+        "packages/host/src/workspace/cleanup.ts": {
+          "bytesInOutput": 1762
         },
         "packages/host/src/workspace/checkout-origin.ts": {
-          "bytesInOutput": 1238
+          "bytesInOutput": 1650
+        },
+        "packages/host/src/workspace/checkout-metadata.ts": {
+          "bytesInOutput": 2276
+        },
+        "packages/host/src/workspace/registration.ts": {
+          "bytesInOutput": 1167
         },
         "packages/host/src/workspace/checkpoint-session.ts": {
           "bytesInOutput": 184
         },
-        "packages/host/src/workspace/registration.ts": {
-          "bytesInOutput": 1168
-        },
         "packages/host/src/workspace/worktree-removal.ts": {
-          "bytesInOutput": 2621
+          "bytesInOutput": 2620
         },
         "packages/host/src/workspace/execution-location-fence.ts": {
           "bytesInOutput": 2026
@@ -45814,7 +45976,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 39840
+          "bytesInOutput": 39942
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 81
@@ -46657,7 +46819,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4772012
+      "bytes": 4776538
     }
   }
 }
