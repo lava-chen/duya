@@ -67,10 +67,8 @@ export interface SpanStyle {
   /** Canonical order, deduped. Never mutate; build it with `attrs()`. */
   readonly attrs?: readonly SpanAttribute[];
   /**
-   * Reserved for OSC 8 hyperlinks (plan 615 §O3): a stable id an output may
-   * later use to emit `ESC ] 8 ; …`. Nothing emits OSC 8 yet, and the ANSI
-   * serializer treats it as a no-op, so setting it cannot change any bytes
-   * before that lands.
+   * Optional hyperlink target for OSC 8. The ANSI writer accepts only safe
+   * HTTP(S) URLs and bounds their length before emitting terminal controls.
    */
   readonly linkId?: string;
 }
@@ -78,6 +76,28 @@ export interface SpanStyle {
 /** A run of text with one effective style. */
 export interface StyledSpan extends SpanStyle {
   readonly text: string;
+}
+
+/** Validate bounded web URLs before a renderer emits an OSC 8 control. */
+export function safeHyperlink(value: string | undefined): string | null {
+  if (value === undefined || value.length > 2048 || /[\x00-\x20\x7f]/u.test(value)) return null;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch { return null; }
+}
+
+export function encodeHyperlinkTag(value: string): string | null {
+  const safe = safeHyperlink(value);
+  return safe === null ? null : `link-${Buffer.from(safe).toString('base64url')}`;
+}
+
+export function decodeHyperlinkTag(body: string): string | undefined {
+  if (!body.startsWith('link-')) return undefined;
+  try { return safeHyperlink(Buffer.from(body.slice(5), 'base64url').toString('utf8')) ?? undefined; }
+  catch { return undefined; }
 }
 
 /**
@@ -249,7 +269,8 @@ export function tokensToSpans(
         // The label stays readable and the target rides along in the link
         // style — the shape already shipped (plan D7). The space is part of the
         // plain run so the target keeps its own style boundary.
-        push(`${token.label} `, inherited);
+        push(token.label, mergeSpanStyles(inherited, { linkId: token.target }));
+        push(' ', inherited);
         push(`(${token.target})`, mergeSpanStyles(inherited, { fg: roles.link }));
         break;
       case 'image':

@@ -1289,6 +1289,7 @@ export async function chatTui(
     expandBlocks: effectivePreferences.expandBlocks,
     showToolResults: effectivePreferences.showToolResults,
     toolGroupMode: effectivePreferences.toolGroupMode,
+    statusline: effectivePreferences.statusline,
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
@@ -1869,6 +1870,9 @@ export async function chatTui(
                 // the transcript on screen has to be re-read for it to
                 // show that.
                 reloadTranscript: reloadTranscript,
+                searchTranscript: (query) => tui.searchTranscript(query),
+                editPreviousPrompt: () => tui.editPreviousPrompt(),
+                insertPrompt: (text) => tui.insertPrompt(text),
               },
             },
             args,

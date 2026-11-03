@@ -50,6 +50,9 @@ import {
 import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
+import { StatusBar } from './components/status-bar.js';
+import { renderTree } from './core/component.js';
+import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
@@ -92,7 +95,8 @@ import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } 
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
 import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
 import { compactActivity } from './text.js';
-import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer.js';
+import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import type { StatuslineProfile } from './preferences.js';
 import {
   nextPermissionMode,
   permissionBadge,
@@ -455,6 +459,7 @@ export interface TUIAppOptions {  /** Window title. */
   readonly showToolResults?: boolean;
   /** How many rows a tool run takes. `/display` and `/settings` move it live. */
   readonly toolGroupMode?: ToolGroupMode;
+  readonly statusline?: StatuslineProfile;
   /** Start with every block expanded — the saved state of the expand key. */
   readonly expandBlocks?: boolean;
   /**
@@ -517,6 +522,7 @@ export interface TuiLivePreferences {
   readonly expandBlocks?: boolean;
   readonly showToolResults?: boolean;
   readonly toolGroupMode?: ToolGroupMode;
+  readonly statusline?: StatuslineProfile;
   readonly completionRows?: number;
   readonly inputRows?: number;
 }
@@ -618,6 +624,11 @@ export class TUIApp {
   private showToolResults: boolean;
   /** How many rows a tool run takes: every call, their names, or only the running one. */
   private toolGroupMode: ToolGroupMode;
+  private statusline: StatuslineProfile;
+  /** Per-block transcript state for the Codex-style history navigation keys. */
+  private selectedBlockId: string | undefined;
+  private readonly expandedBlockIds = new Set<string>();
+  private readonly collapsedBlockIds = new Set<string>();
   /**
    * Rows the input box may GROW to.
    *
@@ -845,6 +856,7 @@ export class TUIApp {
     // with: the transcript is a conversation, and a tool's JSON is a detail.
     this.showToolResults = options.showToolResults ?? false;
     this.toolGroupMode = options.toolGroupMode ?? 'full';
+    this.statusline = options.statusline ?? 'full';
     this.maxInputRows = Math.max(1, options.maxInputRows ?? MAX_INPUT_ROWS);
     this.completion = new CompletionController(
       options.completionSources ?? EMPTY_COMPLETION_SOURCES,
@@ -1182,6 +1194,7 @@ export class TUIApp {
     if (patch.expandBlocks !== undefined) this.expanded = patch.expandBlocks;
     if (patch.showToolResults !== undefined) this.showToolResults = patch.showToolResults;
     if (patch.toolGroupMode !== undefined) this.toolGroupMode = patch.toolGroupMode;
+    if (patch.statusline !== undefined) this.statusline = patch.statusline;
     if (patch.completionRows !== undefined) {
       this.completionRows = Math.max(1, patch.completionRows);
     }
@@ -1212,6 +1225,7 @@ export class TUIApp {
     expandBlocks: boolean;
     showToolResults: boolean;
     toolGroupMode: ToolGroupMode;
+    statusline: StatuslineProfile;
     completionRows: number;
     inputRows: number;
   } {
@@ -1224,6 +1238,7 @@ export class TUIApp {
       expandBlocks: this.expanded,
       showToolResults: this.showToolResults,
       toolGroupMode: this.toolGroupMode,
+      statusline: this.statusline,
       completionRows: this.completionRows,
       inputRows: this.maxInputRows,
     };
@@ -1794,6 +1809,9 @@ export class TUIApp {
       // toggle, this one is the standing preference from `/settings`.
       showToolResults: this.expanded || this.showToolResults,
       toolGroupMode: this.toolGroupMode,
+      expandedBlockIds: this.expandedBlockIds,
+      collapsedBlockIds: this.collapsedBlockIds,
+      selectedBlockId: this.selectedBlockId,
       toolResultLines: 5,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
@@ -1827,7 +1845,10 @@ export class TUIApp {
    * Phase 4 set out to remove.
    */
   private paintTranscript(): void {
-    const width = this.terminalSize().columns;
+    const columns = this.terminalSize().columns;
+    const width = this.inlineSurface !== null
+      ? columns
+      : transcriptWidth(this.fullScreen.measure('transcript'), columns);
     const pane = this.transcriptPane;
     pane.props = {
       renderer: this.transcript,
@@ -1849,7 +1870,12 @@ export class TUIApp {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
       borderColor: this.focus === 'tasks' ? 'cyan' : 'gray',
-      lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
+      // Route the established pane through the retained component renderer.
+      // ScreenSurface still owns borders and layout; the tree owns the pane's
+      // viewport and clipping, so this is a safe first integration step.
+      lines: renderTree(pane, width, this.visibleTranscriptRows()).rows.map((row) =>
+        spansToTags(row, tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }))),
+      ),
     });
   }
 
@@ -2417,8 +2443,7 @@ export class TUIApp {
   private footerLines(width: number, hint: string): string[] {
     const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    return buildFooterLines({
-      width,
+    const props = {
       cwd,
       branch: this.gitBranch(cwd),
       sessionName: this.options.sessionName?.() ?? null,
@@ -2445,6 +2470,23 @@ export class TUIApp {
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
       permission: this.permissionBadge(),
+      statusline: this.statusline,
+    };
+    const statusBar = new StatusBar(props);
+    const tagView = tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }));
+    return renderTree(statusBar, width, statusBar.measure(width)).rows.map((row) => {
+      const spans = [...row];
+      while (spans.length > 0) {
+        const last = spans[spans.length - 1];
+        if (last === undefined) break;
+        const trimmed = last.text.replace(/ +$/u, '');
+        if (trimmed !== last.text) {
+          if (trimmed === '') spans.pop();
+          else spans[spans.length - 1] = { ...last, text: trimmed };
+        }
+        if (trimmed !== '' || /[^ ]/u.test(last.text)) break;
+      }
+      return spansToTags(spans, tagView);
     });
   }
 
@@ -2968,6 +3010,9 @@ export class TUIApp {
   clearTranscript(): void {
     const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
+    this.selectedBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
     if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
@@ -2985,6 +3030,9 @@ export class TUIApp {
   /** Replace the visible transcript with a persisted session history. */
   replaceTranscript(messages: readonly TranscriptMessage[]): void {
     this.model.clear();
+    this.selectedBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
     this.lastUsage = null;
@@ -3409,6 +3457,35 @@ exportHistory(): string[] {
     return this.editor.text;
   }
 
+  /** Search rendered transcript blocks without changing durable session history. */
+  searchTranscript(query: string): readonly string[] {
+    const needle = query.trim().toLocaleLowerCase();
+    if (needle === '') return [];
+    return this.model.blocks.flatMap((block, index) => {
+      if (!('text' in block) || !block.text.toLocaleLowerCase().includes(needle)) return [];
+      const text = block.text.replace(/\s+/gu, ' ').trim();
+      const excerpt = text.length > 220 ? `${text.slice(0, 217)}…` : text;
+      return [`${index + 1}. ${block.kind}: ${excerpt}`];
+    });
+  }
+
+  /** Load the latest user message into the composer; session history stays intact. */
+  editPreviousPrompt(): boolean {
+    const previous = [...this.model.blocks].reverse().find((block) => block.kind === 'user');
+    if (previous === undefined) return false;
+    this.editor.setText(previous.text, Array.from(previous.text).length);
+    this.refreshInputCompletion();
+    this.scheduler.requestImmediate();
+    return true;
+  }
+
+  /** Put a reusable prompt in the composer; the user reviews before sending. */
+  insertPrompt(text: string): void {
+    this.editor.setText(text, Array.from(text).length);
+    this.refreshInputCompletion();
+    this.scheduler.requestImmediate();
+  }
+
   /** Render options, exposed so tests can drive the shell. */
   get renderState(): {
     expanded: boolean;
@@ -3493,6 +3570,17 @@ exportHistory(): string[] {
       this.options.onExit?.();
       this.stop();
     });
+    const selectBlock = (direction: -1 | 1): void => {
+      if (this.interactivePrompt !== null || this.swallowForWindow() || this.focus !== 'input') return;
+      const blocks = this.model.blocks;
+      if (blocks.length === 0) return;
+      const current = blocks.findIndex((block) => block.id === this.selectedBlockId);
+      const next = current < 0
+        ? blocks.length - 1
+        : Math.max(0, Math.min(blocks.length - 1, current + direction));
+      this.selectedBlockId = blocks[next]?.id;
+      this.scheduler.requestImmediate();
+    };
     // C-l (clear) and C-t (expand-all) are bound further down, from the
     // action table, so an override rewires them in one place.
     this.bindKey(['C-a'], () => {
@@ -3587,6 +3675,24 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
+    this.bindAction('transcript-previous', () => selectBlock(-1));
+    this.bindAction('transcript-next', () => selectBlock(1));
+    this.bindAction('transcript-toggle-block', () => {
+      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
+      const id = this.selectedBlockId;
+      if (id === undefined) return;
+      if (this.collapsedBlockIds.has(id)) {
+        this.collapsedBlockIds.delete(id);
+        this.expandedBlockIds.add(id);
+      } else if (this.expandedBlockIds.has(id) || this.expanded) {
+        this.expandedBlockIds.delete(id);
+        this.collapsedBlockIds.add(id);
+      } else {
+        this.expandedBlockIds.add(id);
+      }
+      this.noteTranscriptMutation();
+      this.scheduler.requestImmediate();
+    });
 
     // Ctrl+C is deliberately NOT rebindable: it is the interrupt-and-exit
     // channel, and a config file that moved it could lock a user out of the
