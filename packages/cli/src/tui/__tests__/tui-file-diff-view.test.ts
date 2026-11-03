@@ -98,6 +98,17 @@ describe('file change block', () => {
     expect(context).not.toContain('-bg}');
   });
 
+  it('paints the divider, so a handled row has no gap through the middle', () => {
+    // The number sits on its own chip, but everything from the divider to the
+    // right edge is one fill. Leaving the divider unpainted cut a stripe of
+    // terminal background through the row, which reads as a broken line.
+    const rendered = renderTranscript(modelWithDiff(DIFF), OPTIONS);
+    const added = rendered.split('\n').find((line) => line.includes('const store = createStore();')) ?? '';
+    const removed = rendered.split('\n').find((line) => line.includes('const legacy = true;')) ?? '';
+    expect(added).toContain('{22-bg} │ ');
+    expect(removed).toContain('{52-bg} │ ');
+  });
+
   it('never lets a row outgrow the pane', () => {
     const rendered = renderTranscript(modelWithDiff(DIFF), OPTIONS);
     for (const line of rendered.split('\n')) {

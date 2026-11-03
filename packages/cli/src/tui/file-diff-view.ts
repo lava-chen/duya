@@ -179,7 +179,11 @@ function renderRow(
     ? `${escapeTags(sign)}${escapeTags(content)}`
     // The padding lives INSIDE the fill, so the colour reaches the right edge.
     : `${escapeTags(sign)}${escapeTags(content)}${' '.repeat(Math.max(0, budget - visibleWidth(content)))}`;
-  return `${number}${DIVIDER}${wrap(rowBg, wrap(foreground, body))}`;
+  // The divider is painted with the row's fill, not left bare. A handled row is
+  // one continuous chip from the divider to the right edge; leaving the divider
+  // unpainted cut a gap of terminal background through the middle of it, which
+  // reads as a break in the line rather than as two deliberate chips.
+  return `${number}${wrap(rowBg, `${DIVIDER}${wrap(foreground, body)}`)}`;
 }
 
 /**
