@@ -57,6 +57,8 @@ import { createPluginCompletionSource } from './tui/plugin-candidates.js';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { OwnedSessions } from './owned-sessions.js';
 import { normalizeEffort } from './tui/theme.js';
+import { readPrBadge } from './tui/pr-refresh.js';
+import type { PrBadge } from './tui/pr-badge.js';
 import { shellDraftOf } from './tui/shell-command.js';
 import {
   DEFAULT_TUI_PREFERENCES,
@@ -743,6 +745,16 @@ export async function chatTui(
   let activeStream: AbortController | null = null;
   const pendingCancellations = new Map<RunId, Promise<void>>();
   let busy = false;
+  /**
+   * The pull request the footer shows for this session, and the session whose
+   * projection has already been synced.
+   *
+   * The projection read is free — it never touches the network — but the ONE
+   * call that discovers which pull request a session belongs to does touch it,
+   * so it is attempted once per session and never repeated.
+   */
+  let pullRequestBadge: PrBadge | null = null;
+  let prSyncedSessionId: string | null = null;
   let cancellationRequested = false;
   /**
    * The next prompt the worker predicted for the last turn.
@@ -823,10 +835,14 @@ export async function chatTui(
     execute: (text, draft) => runTurn(text, draft),
     onChange: (snapshot) => {
       const busyChanged = busy !== snapshot.busy;
+      const wasBusy = busy;
       busy = snapshot.busy;
       if (!finished) {
         if (busyChanged) tui.setBusy(busy);
         tui.refresh();
+        // A finished turn is when the pull request may have moved, so the
+        // badge is re-read here — never on every frame.
+        if (wasBusy && !busy) void refreshPullRequestBadge(/*allowSync*/ true);
       }
     },
     onError: (error) => {
@@ -1263,6 +1279,9 @@ export async function chatTui(
     // The footer's right-hand column. Same facts as the status text above, but
     // split so the model can be right-aligned against the token counters
     // instead of sharing one crowded row with them.
+    // The pull request the Host last observed for this session, for the
+    // footer's badge. The loop owns the reading; the footer only draws it.
+    pullRequestBadge: () => pullRequestBadge,
     modelLabel: () => ({
       provider: activeSession.providerId,
       model: activeSession.model || options.model || 'default',
@@ -1325,6 +1344,42 @@ export async function chatTui(
       }
     },
   });
+  /**
+   * Re-read the pull request this session is working on.
+   *
+   * The projection read never touches the network; the sync does, and it runs
+   * only when the projection is empty — a session that already has a pull
+   * request is not re-observed on every turn.
+   *
+   * `allowSync` is false for the reads that happen before the session has
+   * checkpoint refs: at that point a sync can only answer "nothing to sync",
+   * and spending the one sync attempt on it would leave the badge empty for
+   * the rest of the session.
+   *
+   * A failure keeps the badge it had. The badge is optional, and an error
+   * line for an optional fact is noise the user cannot act on.
+   */
+  async function refreshPullRequestBadge(allowSync: boolean): Promise<void> {
+    if (finished) return;
+    const sessionId = activeSession.id;
+    try {
+      const badge = await readPrBadge({
+        read: () => client.observeIntegrationsForSession(sessionId),
+        sync: () => client.syncIntegrations(sessionId),
+        alreadySynced: () => prSyncedSessionId === sessionId,
+        markSynced: () => { prSyncedSessionId = sessionId; },
+        allowSync,
+      });
+      // The session may have moved on while the read was in flight; a badge
+      // for another session is worse than no badge.
+      if (finished || activeSession.id !== sessionId) return;
+      pullRequestBadge = badge;
+    } catch {
+      return;
+    }
+    if (!finished) tui.refresh();
+  }
+
   backgroundPoller.start();
 
   /**
@@ -1469,6 +1524,10 @@ export async function chatTui(
     }
     const previousModel = activeSession.model;
     activeSession = selected;
+    // The badge belonged to the session we just left; the new one has to be
+    // read on its own terms.
+    pullRequestBadge = null;
+    void refreshPullRequestBadge(/*allowSync*/ false);
     await resyncEffortForModelChange(previousModel);
     watchSession(selectedId);
     tui.replaceTranscript(await loadSessionMessages(client, selectedId));
@@ -1493,6 +1552,10 @@ export async function chatTui(
   ): Promise<void> {
     const previousModel = activeSession.model;
     activeSession = await createChatSession(client, options, directory);
+    // The badge belonged to the session we just left; the new one has to be
+    // read on its own terms.
+    pullRequestBadge = null;
+    void refreshPullRequestBadge(/*allowSync*/ false);
     // The new session has no turn to predict from, and the old session's
     // prediction would be sent to this one if it stayed in the composer.
     clearTurnSuggestion();
@@ -1983,6 +2046,10 @@ export async function chatTui(
   }
   if (options.diagnosticsLogPath !== undefined) tui.printNotice('Logs: ' + options.diagnosticsLogPath);
   tui.start();
+  // The badge is worth reading once at startup: the projection read is free,
+  // and a session that already has a pull request should show it before the
+  // first turn ends.
+  void refreshPullRequestBadge(/*allowSync*/ false);
   // Start watching after the first paint: the seed read marks the ledger as
   // seen, so opening a session does not replay everything it already ran.
   remoteWatchTimer = setInterval(() => {

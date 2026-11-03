@@ -29,7 +29,8 @@
 
 import type { HostIntegrationRecord, HostIntegrationSyncResult } from '@duya/agent-protocol';
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
-import { describeError, hostErrorCode, showPanel } from './shared.js';
+import { describeError, hostErrorCode, showEntries, showPanel, type TuiViewEntry } from './shared.js';
+import { prGroup, prStateLabel, PR_GROUP_ORDER } from '../pr-badge.js';
 
 const FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
 
@@ -52,6 +53,9 @@ function reasonLine(record: HostIntegrationRecord): string | null {
 function recordLines(record: HostIntegrationRecord): string[] {
   const lines = [
     `  ${record.repo}#${record.prNumber}  ${stateLine(record)}`,
+    `      state     ${prStateLabel(record.state)}`,
+    `      base      ${record.baseRef ?? '(not observed)'}`,
+    `      head      ${record.headSha === null ? '(not observed)' : record.headSha.slice(0, 7)}`,
     `      url       ${record.url ?? '(not observed)'}`,
     `      observed  as of ${new Date(record.observedAt).toLocaleString()}`,
   ];
@@ -74,6 +78,49 @@ function prLines(records: readonly HostIntegrationRecord[]): string[] {
   lines.push('  Source: Host integration projection (GET /v1/integrations), read-only.');
   lines.push('  Run /pr refresh to re-read the pull requests from the hosting service.');
   return lines;
+}
+
+/**
+ * The rows in the order a reader wants them.
+ *
+ * What needs attention comes first, then work in flight, then what is done.
+ * Within a group the most recently observed wins: the older row of the same
+ * pull request is a stale reading of the same thing.
+ */
+function orderedRecords(records: readonly HostIntegrationRecord[]): HostIntegrationRecord[] {
+  return [...records].sort((a, b) => {
+    const byGroup = PR_GROUP_ORDER.indexOf(prGroup(a.state)) - PR_GROUP_ORDER.indexOf(prGroup(b.state));
+    if (byGroup !== 0) return byGroup;
+    return b.observedAt - a.observedAt;
+  });
+}
+
+/** The detail page of one pull request: every fact the projection holds. */
+function prDetailLines(record: HostIntegrationRecord): string[] {
+  const lines = [
+    `${record.repo}#${record.prNumber}`,
+    '',
+    `  state      ${record.state} — ${prStateLabel(record.state)}`,
+    `  base       ${record.baseRef ?? '(not observed)'}`,
+    `  head       ${record.headSha ?? '(not observed)'}`,
+    `  url        ${record.url ?? '(not observed)'}`,
+    `  observed   as of ${new Date(record.observedAt).toLocaleString()}`,
+  ];
+  const reason = reasonLine(record);
+  if (reason !== null) lines.push(`  reason     ${reason}`);
+  lines.push('', '  Source: Host integration projection (GET /v1/integrations), read-only.');
+  return lines;
+}
+
+/** The list, one row per pull request. */
+function prEntries(records: readonly HostIntegrationRecord[]): TuiViewEntry[] {
+  return orderedRecords(records).map((record) => ({
+    label: `${record.repo}#${record.prNumber}`,
+    value: `${record.repo}#${record.prNumber}`,
+    description: prStateLabel(record.state),
+    valueLabel: record.state,
+    detailLines: prDetailLines(record),
+  }));
 }
 
 /** The outcome of one explicit refresh, printed before the fresh projection. */
@@ -112,7 +159,7 @@ const PR_COMMAND: TuiSlashCommandDef = {
       }
 
       const records = await ctx.client.observeIntegrationsForSession(ctx.session.id);
-      showPanel(ctx, 'Pull requests', prLines(records), { footer: FOOTER, scrollable: true });
+      showEntries(ctx, 'Pull requests', prEntries(records), prLines(records));
     } catch (error) {
       // A Host without an integration provider cannot answer; that is not the
       // same as "this session has no pull requests".
