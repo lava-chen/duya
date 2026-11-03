@@ -61,7 +61,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 ## 任务三切片：Desktop 项目工作台（2026-11-02）
 
-分支 `codex/project-first-desktop`，base `codex/coordinator-seam` `f1d81f61`（#586 head；栈为 #583 ← #585 ← #586），worktree `.claude/worktrees/project-first-desktop`。原始切片基于 #582（`3d714eba`），2026-11-02 已按下列「#584 依赖重整」rebase 到栈顶。
+分支 `codex/project-first-desktop`，base `codex/project-tools`（#587 head；当前栈为 #583 ← #585 ← #586 ← #587），worktree `.claude/worktrees/project-first-desktop`。原始切片基于 #582（`3d714eba`）；2026-11-02 先 rebase 到 `codex/coordinator-seam` `f1d81f61`，2026-11-03 再 rebase 到项目工具切片（见文末「#584 二次 rebase」）。
 
 #582 已交付 Coordinator 侧：受限协调对话、派发时创建规范 Task 并绑定工作 Session。本切片补上**桌面端的项目工作台**——把这些关系变成用户能看见、能进入、能接管的东西。
 
@@ -238,4 +238,22 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 
 交付：代码提交 `eedab8b0` 推送到 `codex/project-tools`，以 `codex/coordinator-seam` 为 base 开 stacked Draft PR；不合并。
 
-下一动作：把 #584 rebase 到本切片 head 并更新其 base；栈稳定后再统一改 base 到 `master` 触发 CI。仍不合并，等待用户授权。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+下一动作：栈稳定后再统一改 base 到 `master` 触发 CI。仍不合并，等待用户授权。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### #584 二次 rebase 到项目工具切片（2026-11-03）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支：`codex/project-first-desktop`；新 base：`codex/project-tools` `a1e971b9`（#587 head）。把 Desktop 工作台从旧 seam head `f1d81f61` 整体 rebase 到项目工具切片，使 #584 同时获得 `c809ad69` 的 seam 记录、项目工具、上下文/对账领域化与独立提示词系统；上节「#584 依赖重整」记录的 base 与导出结论由本节取代。
+
+冲突处理：`desktop-host-api.ts` 同时保留 `getDesktopProjectToolService` 与 `getDesktopHostSessionInputApi`；`local-host.ts` 复用单一 `projectApi` 实例并把 #584 的 `{ sessions, spawnEdges }` scope 传入构造；`packages/host/package.json` 保留 `./project/*` 与 `./session-input-api`，不恢复已迁入 `./project/*` 的 `./project-run-settlement`；生成 bundle 先取被应用提交的版本，rebase 完成后从合并源码重建（`a75feaae`）。
+
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- `npm run build:packages`：22 个包通过；首次在 `@duya/web` 写文件时报 Windows `UNKNOWN: unknown error, write`，重跑通过。
+- `npm run typecheck:all` 退出 0；`npm run architecture:check` 退出 0（3095 项 tolerated，无新增违规）。
+- 相关 32 个测试文件 239 项通过：项目 Host 全套（含 `project-state-http`）、worker-prompts/profiles、local-host/session、Desktop project tool/trusted-attempt/interagent/session management/workspace handlers、UI project workspace。
+- `npm run bundle:verify` 退出 0：提交 `a75feaae` 后 0/1059 输入变化，FRESH。
+- `npm run electron:build` 单次执行仍未返回 0：使用 `NODE_OPTIONS=--max-old-space-size=6144 GOMEMLIMIT=900MiB GOGC=30` 时，renderer 的 V8 worker 在 rendering chunks 阶段仍 OOM；随后 `NODE_OPTIONS=--max-old-space-size=8192 npx vite build`（1m47s）、`node scripts/build-electron.mjs`、`node scripts/build-recorder-worker.mjs` 分别退出 0，原生模块已拷入产物。bundle 已还原，输入保持 FRESH。
+
+交付：`codex/project-first-desktop` 以 `--force-with-lease` 推送，PR [#584](https://github.com/lava-chen/duya/pull/584) base 改为 `codex/project-tools`；不合并。
+
+下一动作：栈稳定后把整个栈统一改 base 到 `master` 触发 CI；仍等待用户授权后再合并。
