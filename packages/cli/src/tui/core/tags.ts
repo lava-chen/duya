@@ -126,11 +126,14 @@ export function tagsToSpans(line: string): readonly StyledSpan[] {
       if (attribute !== undefined) {
         const at = lastIndexOfAttr(stack, attribute);
         if (at !== -1) stack.splice(at, 1);
+      } else if (body.startsWith('link-')) {
+        // BEFORE the colour check: a link body is base64url and can END in
+        // `-fg`, which would otherwise pop a colour frame and leave the link
+        // open for the rest of the line.
+        const at = lastIndexOfLink(stack);
+        if (at !== -1) stack.splice(at, 1);
       } else if (body.endsWith('-fg') || body.endsWith('-bg')) {
         const at = slot === 'bg' ? lastIndexOfBg(stack) : lastIndexOfFg(stack);
-        if (at !== -1) stack.splice(at, 1);
-      } else if (body.startsWith('link-')) {
-        const at = lastIndexOfLink(stack);
         if (at !== -1) stack.splice(at, 1);
       } else {
         plain += match[0];
