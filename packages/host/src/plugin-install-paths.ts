@@ -36,6 +36,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { resolveConfigRoot } from './agent-profile-config.js';
+import { pickLatestVersion } from './plugins/cache/version-resolver.js';
 
 /** The cache segment the builtin plugins are stored under. */
 const BUILTIN_MARKETPLACE = 'builtin';
@@ -82,6 +83,8 @@ export function collectPluginInstallRoots(configRootOverride?: string): string[]
     return [configRootOverride];
   }
 
+  if (process.env.DUYA_DATA_ROOT?.trim()) return [resolveConfigRoot()];
+
   const override = process.env[USER_DATA_OVERRIDE_ENV];
   if (override && override.trim().length > 0) {
     const absolute = path.isAbsolute(override) ? override : path.resolve(process.cwd(), override);
@@ -114,6 +117,8 @@ export function resolvePluginInstallPath(
   for (const root of roots) {
     const installed = resolveExistingPath(path.join(root, 'plugins', 'installed', pluginId));
     if (installed) return installed;
+  }
+  for (const root of roots) {
     const builtin = resolveBuiltinCacheDir(root, pluginId);
     if (builtin) return builtin;
   }
@@ -142,9 +147,8 @@ export function resolvePluginDataPath(
 /**
  * The newest cached version of a builtin plugin.
  *
- * The version directories are compared the same way the Desktop compares
- * them (`listCachedVersions` sorts the directory names), so both sides pick
- * the same version.
+ * The version directories use the same comparator as Desktop and the shared
+ * plugin catalog, so both sides pick the same version.
  */
 function resolveBuiltinCacheDir(root: string, pluginId: string): string | undefined {
   const base = path.join(root, 'plugins', 'cache', BUILTIN_MARKETPLACE, pluginId);
@@ -153,12 +157,11 @@ function resolveBuiltinCacheDir(root: string, pluginId: string): string | undefi
     versions = fs
       .readdirSync(base, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
+      .map((entry) => entry.name);
   } catch {
     return undefined;
   }
-  const newest = versions[versions.length - 1];
+  const newest = pickLatestVersion(versions);
   if (!newest) return undefined;
   const dir = path.join(base, newest);
   return fs.existsSync(dir) ? dir : undefined;

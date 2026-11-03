@@ -1,3 +1,7 @@
+import { createPluginAudit } from './plugins/audit.js';
+import { createPluginServices } from './plugins/service.js';
+import { createPluginManagementApi } from './plugins/management-api.js';
+import { getLogger as getPluginLogger } from './worker-logger.js';
 import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 import {
   readLocalHostRuntimeFrom,
@@ -556,6 +560,9 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     // question.
     const localMailboxApi = createHostLocalMailboxApi(core.stores.mailbox);
     const localPluginSetupApi = createHostLocalPluginSetupApi(new PluginSetupStore(mainDatabase.db));
+    const pluginServices = createPluginServices({ configRoot: dataRoot, setupApi: () => localPluginSetupApi,
+      logger: { debug: (m, d, c) => getPluginLogger().debug(m, d, c), info: (m, d, c) => getPluginLogger().info(m, d, c),
+        warn: (m, d, c) => getPluginLogger().warn(m, d, c), error: (m, d, c) => getPluginLogger().error(m, undefined, d, c) } });
     // The same rule for the domains the worker writes through the bridge:
     // one instance per API, shared by the HTTP surface and the bridge.
     const localTurnReviewApi = createHostLocalTurnReviewApi(turnReviews);
@@ -981,6 +988,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // standalone Host reads the same `config.toml` the Desktop does, so
       // both answer the same list.
       localPluginInventoryApi: createHostLocalPluginInventoryApi(),
+      pluginManagementApi: createPluginManagementApi(pluginServices.manager, pluginServices),
+      pluginManagementAudit: createPluginAudit(dataRoot, (m, d) => getPluginLogger().warn(m, d)),
       // The repository-root AGENTS.md write. The client names a session and
       // the Host resolves the directory, because a path from a client is a
       // path an attacker chooses.

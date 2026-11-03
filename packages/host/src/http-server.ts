@@ -1,3 +1,6 @@
+import type { PluginAuditEvent } from './plugins/audit.js';
+import type { HostPluginManagementApiV1 } from '@duya/agent-protocol/plugin-management';
+import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
 import { logger } from '@duya/host/worker-logger';
 import {
@@ -396,6 +399,8 @@ export interface HostSessionHttpServerOptions {
    * say" are different facts.
    */
   readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
+  readonly pluginManagementApi?: HostPluginManagementApiV1;
+  readonly pluginManagementAudit?: (event: PluginAuditEvent) => Promise<void>;
   /**
    * Handing a session over to the desktop app.
    *
@@ -1914,6 +1919,10 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
+      return;
+    }
+    if (url.pathname === '/v1/plugins' || url.pathname.startsWith('/v1/plugins/') || url.pathname === '/v1/plugin-catalog' || url.pathname === '/v1/plugin-marketplaces' || url.pathname.startsWith('/v1/plugin-marketplaces/')) {
+      await routePluginManagement(req, res, url, this.#options.pluginManagementApi, () => this.#readJson(req, res), this.#options.pluginManagementAudit);
       return;
     }
     if (url.pathname === '/v1/local/plugins' && req.method === 'GET') {

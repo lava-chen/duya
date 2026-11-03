@@ -1,3 +1,7 @@
+import { createPluginAudit } from '@duya/host/plugins/audit';
+import { createPluginManagementApi } from '@duya/host/plugins/management-api';
+import { getPluginManager } from '../plugins/PluginManager';
+import { getDesktopPluginServices } from '../plugins/shared-plugin-services';
 import { randomBytes, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -578,6 +582,8 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     // The plugin inventory the CLI's `/plugin` reads. The Desktop reads the
     // same registry through its own page, so both surfaces see one list.
     localPluginInventoryApi: createHostLocalPluginInventoryApi(),
+    pluginManagementApi: createPluginManagementApi(getPluginManager(), getDesktopPluginServices()),
+    pluginManagementAudit: createPluginAudit(resolveDataRoot(), (m, d) => getLogger().warn(m, d, LogComponent.Main)),
     pluginAppInstanceApi,
     pluginAppGrantApi,
     pluginAppInvocationApi,

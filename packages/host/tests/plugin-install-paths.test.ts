@@ -50,10 +50,11 @@ describe('plugin install path resolution', () => {
     const root = tempRoot();
     try {
       mkdirp(path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '1.0.0'));
-      mkdirp(path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '2.0.0'));
+      mkdirp(path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '1.9.0'));
+      mkdirp(path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '1.10.0'));
 
       expect(resolvePluginInstallPath('com.duya.documents', { roots: [root] })).toBe(
-        path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '2.0.0'),
+        path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '1.10.0'),
       );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -67,6 +68,21 @@ describe('plugin install path resolution', () => {
       mkdirp(path.join(root, 'plugins', 'cache', 'builtin', 'com.duya.documents', '2.0.0'));
 
       expect(resolvePluginInstallPath('com.duya.documents', { roots: [root] })).toBe(
+        fs.realpathSync(installed),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers an existing legacy installation over a cached builtin in the shared root', () => {
+    const root = tempRoot();
+    try {
+      const shared = mkdirp(path.join(root, 'shared'));
+      const legacy = mkdirp(path.join(root, 'legacy'));
+      mkdirp(path.join(shared, 'plugins', 'cache', 'builtin', 'com.duya.documents', '2.0.0'));
+      const installed = mkdirp(path.join(legacy, 'plugins', 'installed', 'com.duya.documents'));
+      expect(resolvePluginInstallPath('com.duya.documents', { roots: [shared, legacy] })).toBe(
         fs.realpathSync(installed),
       );
     } finally {

@@ -169,10 +169,12 @@ export function buildControlPlane(program: Command): void {
             agentDeny: toList(opts.deny),
             agentPlugins: toList(opts.plugins),
             // Plan 200 P4 — plugin list / install / uninstall flags.
+            available: opts.available === true,
             enabled: opts.enabled === true,
             verbose: opts.verbose === true,
             fromPath: typeof opts.fromPath === 'string' ? opts.fromPath : undefined,
             scope: typeof opts.scope === 'string' ? opts.scope : undefined,
+            marketplace: typeof opts.marketplace === 'string' ? opts.marketplace : undefined,
             deleteData: opts.deleteData === true,
           },
         };

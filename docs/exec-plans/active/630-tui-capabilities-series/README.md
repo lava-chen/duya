@@ -13,7 +13,7 @@
 | 切片 | 内容 | 依赖 |
 | --- | --- | --- |
 | [630a 富面板模态原语](630a-tui-rich-panel-modal.md) | slash 触发的全屏模态面板通道 + Tabs/分页/搜索原语 | 无 |
-| [631 plugin 市场管理界面](631-tui-plugin-market-ui.md) | Host plugin/marketplace 写路由 + `/plugin` 多 tab 界面 | 630a |
+| [631 plugin 市场管理界面](631-tui-plugin-market-ui.md) | Desktop、CLI、TUI 共用 Host 插件管理；CLI/TUI 命令已实现，多 tab 界面留作后续 UI 切片 | 630a |
 | [632 provider 与模型管理](632-tui-provider-management.md) | Host provider 写路由 + `/provider` 列表/向导/编辑 | A 无 · B 630a |
 | [633 项目切换](633-tui-project-switch.md) | `/project` 切换 TUI 会话所在项目 | 无，可穿插 |
 | [634 事件流显示档](634-tui-transcript-display-profiles.md) | `/display` 显示组合切换 + Desktop 接共享 key | 无 |

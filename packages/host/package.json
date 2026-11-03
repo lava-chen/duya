@@ -642,6 +642,10 @@
     "./worker-process-entry": {
       "types": "./dist/worker-process-entry.d.ts",
       "import": "./dist/worker-process-entry.js"
+    },
+    "./plugins/*": {
+      "types": "./dist/plugins/*.d.ts",
+      "import": "./dist/plugins/*.js"
     }
   },
   "files": [
@@ -674,7 +678,8 @@
     "picomatch": "^4.0.4",
     "yaml": "^2.9.0",
     "esbuild": "^0.27.7",
-    "playwright": "^1.59.1"
+    "playwright": "^1.59.1",
+    "@duya/connectors": "0.1.0"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.3",

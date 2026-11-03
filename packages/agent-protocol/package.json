@@ -95,13 +95,9 @@
       "types": "./dist/agent-profiles.d.ts",
       "import": "./dist/agent-profiles.js"
     },
-
     "./bot-api": {
-
       "types": "./dist/bot-api.d.ts",
-
       "import": "./dist/bot-api.js"
-
     },
     "./gateway-directory": {
       "types": "./dist/gateway-directory.d.ts",
@@ -206,6 +202,10 @@
     "./bot-inbox-api": {
       "types": "./dist/bot-inbox-api.d.ts",
       "import": "./dist/bot-inbox-api.js"
+    },
+    "./plugin-management": {
+      "types": "./dist/plugin-management.d.ts",
+      "import": "./dist/plugin-management.js"
     }
   },
   "files": [
