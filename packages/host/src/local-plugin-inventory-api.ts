@@ -23,6 +23,7 @@ import {
   createHostLocalPluginRegistryApi,
   type HostPluginRegistryEntry,
 } from './local-plugin-registry-api.js';
+import { collectPluginInstallRoots, resolvePluginInstallPath, resolvePluginDataPath } from './plugin-install-paths.js';
 
 /**
  * One registry entry, reduced to what a client may see.
@@ -34,7 +35,7 @@ import {
  * server and skill names); the manifest's declarations (env, headers,
  * command, args, url) never do.
  */
-function toInventoryEntry(entry: HostPluginRegistryEntry): HostPluginInventoryEntry {
+function toInventoryEntry(entry: HostPluginRegistryEntry, roots: readonly string[]): HostPluginInventoryEntry {
   return {
     id: entry.id,
     name: entry.name,
@@ -43,8 +44,8 @@ function toInventoryEntry(entry: HostPluginRegistryEntry): HostPluginInventoryEn
     ...(entry.longDescription === undefined ? {} : { longDescription: entry.longDescription }),
     enabled: entry.enabled,
     marketplace: entry.marketplace,
-    installed: entry.installPath !== undefined,
-    hasDataPath: entry.dataPath !== undefined,
+    installed: entry.installPath !== undefined || resolvePluginInstallPath(entry.id, { roots }) !== undefined,
+    hasDataPath: entry.dataPath !== undefined || resolvePluginDataPath(entry.id, { roots }) !== undefined,
     ...(entry.description === undefined ? {} : { description: entry.description }),
     ...(entry.appConnections === undefined ? {} : { appConnections: entry.appConnections }),
     ...(entry.manifest?.capabilities?.mcpServers === undefined
@@ -64,9 +65,10 @@ export function createHostLocalPluginInventoryApi(
   configRootOverride?: string,
 ): HostPluginInventoryApiV1 {
   const registry = createHostLocalPluginRegistryApi(configRootOverride);
+  const roots = collectPluginInstallRoots(configRootOverride);
   return {
     async listPluginInventory(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
-      return { plugins: registry.listPlugins().map(toInventoryEntry) };
+      return { plugins: registry.listPlugins().map(entry => toInventoryEntry(entry, roots)) };
     },
   };
 }

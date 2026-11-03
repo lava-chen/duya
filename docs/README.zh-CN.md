@@ -73,6 +73,20 @@ npm run dev:tui
 
 输入框默认使用主题底色；设置 `DUYA_TUI_COMPOSER_BG=transparent` 可让终端自身背景透出。
 
+插件命令会连接当前数据目录的 Host；没有运行中的 Host 时自动启动，无需先打开 Desktop。Desktop、CLI 与 TUI 使用同一份插件配置和管理服务：
+
+```powershell
+duya plugin list
+duya plugin list --available
+duya plugin marketplace add "D:\My Plugins\marketplace" --yes
+duya plugin install <id> --marketplace <name> --yes
+duya plugin install --from-path "D:\My Plugins\example" --yes
+duya plugin disable <id> --yes
+duya plugin uninstall <id> --yes
+```
+
+TUI 内可使用 `/plugin discover`、`/plugin install <id>@<marketplace>`、`/plugin install-path <directory>`、`/plugin enable <id>`、`/plugin disable <id>`、`/plugin update <id>`、`/plugin uninstall <id>`；市场命令为 `/plugin marketplace list|add|remove|refresh`。变更需要确认，新配置在重新加载或新建 Session 后生效。
+
 Windows x64 用户可在首个稳定版 Windows CLI release 发布后，通过 PowerShell 安装独立 CLI：
 
 ```powershell

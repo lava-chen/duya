@@ -40,6 +40,8 @@ const state = vi.hoisted(() => {
   };
 });
 
+vi.mock('../config/compass', () => ({ resolveConfigRoot: () => state.tempRoot }));
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -77,6 +79,7 @@ vi.mock('./manifest', async (importOriginal) => ({
 }));
 
 vi.mock('./cache/layout', () => ({
+  resolvePluginDataPath: vi.fn(() => undefined),
   ensurePluginCacheDir: vi.fn(),
   createInstalledSymlink: vi.fn(),
   removeInstalledSymlink: vi.fn(),

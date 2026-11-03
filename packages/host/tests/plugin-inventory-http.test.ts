@@ -102,6 +102,15 @@ describe('the Host plugin inventory route', () => {
     for (const server of opened.splice(0)) await server.close();
   });
 
+  it('keeps disabled and missing-package states distinct', async () => {
+    const root = configRootWithInstalledPlugin();
+    try {
+      fs.writeFileSync(path.join(root, 'config.toml'), '[plugins."com.duya.documents@official"]\nenabled = false\n');
+      const inventory = await createHostLocalPluginInventoryApi(root).listPluginInventory();
+      expect(inventory.plugins[0]).toMatchObject({ enabled: false, installed: true });
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it('refuses with a named code when the Host has no plugin registry', async () => {
     const { server, origin } = await startServer({});
     opened.push(server);

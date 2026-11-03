@@ -95,13 +95,9 @@
       "types": "./dist/agent-profiles.d.ts",
       "import": "./dist/agent-profiles.js"
     },
-
     "./bot-api": {
-
       "types": "./dist/bot-api.d.ts",
-
       "import": "./dist/bot-api.js"
-
     },
     "./gateway-directory": {
       "types": "./dist/gateway-directory.d.ts",
@@ -195,6 +191,10 @@
       "types": "./dist/task-tool-names.d.ts",
       "import": "./dist/task-tool-names.js"
     },
+    "./tool-file-diff": {
+      "types": "./dist/tool-file-diff.d.ts",
+      "import": "./dist/tool-file-diff.js"
+    },
     "./bot-delivery-api": {
       "types": "./dist/bot-delivery-api.d.ts",
       "import": "./dist/bot-delivery-api.js"
@@ -202,6 +202,10 @@
     "./bot-inbox-api": {
       "types": "./dist/bot-inbox-api.d.ts",
       "import": "./dist/bot-inbox-api.js"
+    },
+    "./plugin-management": {
+      "types": "./dist/plugin-management.d.ts",
+      "import": "./dist/plugin-management.js"
     }
   },
   "files": [

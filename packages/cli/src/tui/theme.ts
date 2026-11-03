@@ -54,6 +54,30 @@ export type ThemeToken =
   | 'thinking'
   | 'diffAdd'
   | 'diffDel'
+  /**
+   * The fills a diff row is painted with.
+   *
+   * `diffAddBg` / `diffDelBg` fill the sign-and-content part of a changed
+   * row; `diffNumBgAdd` / `diffNumBgDel` fill the line-number chip beside it,
+   * so the numbers read as a column of their own instead of competing with the
+   * code's colours. `diffGutter` is the number's foreground, `diffHunk` the
+   * `⋮` between hunks, and `diffHeader` the path of a multi-file change.
+   *
+   * They are BACKGROUNDS, like `composerBg` and `promptBg`: the tag bodies
+   * end in `-bg` and they fill the cell behind the text.
+   *
+   * The values are codex's own 256-colour fallbacks for its RGB diff fills
+   * (`codex-rs/tui/src/diff_render.rs`): the exact RGB cannot be used because
+   * this palette has no truecolor channel, and hex tags were rejected for the
+   * reason above.
+   */
+  | 'diffAddBg'
+  | 'diffDelBg'
+  | 'diffNumBgAdd'
+  | 'diffNumBgDel'
+  | 'diffGutter'
+  | 'diffHunk'
+  | 'diffHeader'
   | 'heading'
   | 'link'
   /**
@@ -86,6 +110,15 @@ export const DARK_THEME_TAGS: ThemeTags = {
   thinking: 'magenta-fg',
   diffAdd: 'bright-green-fg',
   diffDel: 'red-fg',
+  // codex's dark 256-colour fallbacks: 22 / 52 are its diff fills, 23 / 53
+  // one step brighter for the line-number chips.
+  diffAddBg: '22-bg',
+  diffDelBg: '52-bg',
+  diffNumBgAdd: '23-bg',
+  diffNumBgDel: '53-bg',
+  diffGutter: 'gray-fg',
+  diffHunk: 'gray-fg',
+  diffHeader: 'cyan-fg',
   heading: 'cyan-fg',
   link: 'gray-fg',
   composerBg: '236-bg',
@@ -109,6 +142,15 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   thinking: '128-fg',
   diffAdd: '28-fg',
   diffDel: '160-fg',
+  // codex's light 256-colour fallbacks: 194 / 224 are its diff fills, 157 /
+  // 217 the line-number chips.
+  diffAddBg: '194-bg',
+  diffDelBg: '224-bg',
+  diffNumBgAdd: '157-bg',
+  diffNumBgDel: '217-bg',
+  diffGutter: '236-fg',
+  diffHunk: '244-fg',
+  diffHeader: '30-fg',
   heading: '30-fg',
   link: '243-fg',
   composerBg: '255-bg',

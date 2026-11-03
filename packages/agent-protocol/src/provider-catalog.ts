@@ -177,6 +177,8 @@ export interface HostProviderWriteInput {
   readonly baseUrl?: string;
   readonly models?: readonly string[];
   readonly defaultModel?: string;
+  /** Non-secret environment overrides used by provider presets. */
+  readonly extraEnv?: Readonly<Record<string, string>>;
   /**
    * Write-only. Absent keeps the stored key, `''` clears it.
    *

@@ -1,3 +1,4 @@
+import type { HostPluginManagementApiV1, HostPluginInstallInput } from '@duya/agent-protocol/plugin-management';
 import type {
   HostLocalSessionImportInput,
   HostLocalSessionImportResult,
@@ -1796,6 +1797,17 @@ export class HostSessionHttpClient implements
    * The answer is a WRAPPER object, the same shape the MCP and skill
    * inventories answer with, so every inventory reads the same way.
    */
+  async listManagedPlugins(): ReturnType<HostPluginManagementApiV1['list']> { return this.request('GET', '/v1/plugins'); }
+  async listPluginCatalog(): ReturnType<HostPluginManagementApiV1['catalog']> { return this.request('GET', '/v1/plugin-catalog'); }
+  async listPluginMarketplaces(): ReturnType<HostPluginManagementApiV1['listMarketplaces']> { return this.request('GET', '/v1/plugin-marketplaces'); }
+  async addPluginMarketplace(source: string): ReturnType<HostPluginManagementApiV1['addMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces', { source }); }
+  async removePluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['removeMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/remove', {}); }
+  async refreshPluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['refreshMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/refresh', {}); }
+  async installPlugin(input: HostPluginInstallInput): ReturnType<HostPluginManagementApiV1['install']> { return this.request('POST', '/v1/plugins/install', input); }
+  async setPluginEnabled(id: string, enabled: boolean): ReturnType<HostPluginManagementApiV1['setEnabled']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + (enabled ? '/enable' : '/disable'), {}); }
+  async uninstallPlugin(id: string, deleteData = false): ReturnType<HostPluginManagementApiV1['uninstall']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/uninstall', { deleteData }); }
+  async updatePlugin(id: string): ReturnType<HostPluginManagementApiV1['update']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/update', {}); }
+
   async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
     return this.request('GET', '/v1/local/plugins');
   }
