@@ -1,11 +1,11 @@
 # 631 TUI 插件市场管理界面
 
-状态：Draft PR [#602](https://github.com/lava-chen/duya/pull/602) · 未合并 · 负责人：Codex · 更新：2026-11-03
-分支：`codex/shared-plugin-service` · managed worktree：`D:\codex\worktrees\shared-plugin-service\duya` · base：`cbb3a7617540ba815eec0f042130f28e83b36d6d` · owner：Codex
+状态：共享插件服务已合并（PR [#602](https://github.com/lava-chen/duya/pull/602)，merge `4ee7107275cfb557f722eaba983beaad4681ce4a`）；TUI 三 tab 市场界面仍待后续切片 · 更新：2026-11-03
+实现分支：`codex/shared-plugin-service` · managed worktree：`D:\codex\worktrees\shared-plugin-service\duya` · 初始 base：`cbb3a7617540ba815eec0f042130f28e83b36d6d` · 同步 master：`f0dce1ee2c4df9a0148480f94bc1487c20350e9d` · owner：Codex
 
 ## 目标与边界
 
-2026-11-03 用户授权实施共享插件服务：Desktop、CLI、TUI 共用业务实现、配置与安装存储；CLI 自动连接/启动独立 Host。当前 managed worktree：`D:\codex\worktrees\shared-plugin-service\duya`；分支：`codex/shared-plugin-service`；base：`cbb3a7617540ba815eec0f042130f28e83b36d6d`。本任务独占 Host 插件服务/HTTP、协议、CLI plugin 入口、Desktop 插件适配器与本计划。先交付统一业务与命令适配，市场多 tab 展示按原验收继续跟踪。
+2026-11-03 用户授权实施共享插件服务：Desktop、CLI、TUI 共用业务实现、配置与安装存储；CLI 自动连接/启动独立 Host。实现分支 `codex/shared-plugin-service` 初始 base 为 `cbb3a761`，合入前同步到 `master` `f0dce1ee`；PR #602 已于 2026-11-03 合并，merge SHA `4ee7107275cfb557f722eaba983beaad4681ce4a`。本切片交付统一业务与命令适配，市场多 tab 展示继续作为后续 UI 切片。
 
 依赖已复核：#512、#514 均已合并，旧阻塞解除。workspace_get_context/activity 工具不可用，以版本化计划、Git 与 PR 对账。实现切片：共享管理/目录/注册表与根目录端口 → Host API 与 CLI 自动附着 → Desktop/TUI 适配 → 无 Electron 的安装/启禁/卸载及配置一致性验证 → 门禁、PR。
 
@@ -60,6 +60,8 @@
 | `cbb3a761` + 本计划实现改动 | Windows / Electron 44.9.1 / Node 24.16.0 | `npm --ignore-scripts run electron:build` | 0；worker、CLI、Gateway、Desktop 构建完成 | ignored `docs-local/plugin-electron-build-final.log` |
 | `cbb3a761` + 本计划实现改动 | Windows / Electron 44.9.1 / Node 24.16.0 | IPC Playwright：Desktop 安装 → CLI 查询/禁用 → Desktop 状态确认 → CLI 卸载 | 1 / 1 passed | ignored `docs-local/plugin-electron-e2e.log` |
 | `cbb3a761` + 本计划实现改动 | Windows / Node 24.16.0，隔离临时数据根目录，无 Desktop | CLI marketplace add/list、`plugin list --available`、指定 marketplace 安装、禁用、查询、卸载、移除；另验证无 `--yes` 的 update 返回 3 | 8 个操作成功；未确认写操作按预期拒绝 | ignored `docs-local/plugin-cli-smoke-final.json` |
+| `66c08e04`（PR #602 head，已合并） | Windows / Node 24.16.0 | `npm run build:packages -- --target @duya/host`; `npm run bundle:worker`; `npm run bundle:verify` | 0；`FRESH 0/1095` | 同检出构建与 bundle 门禁 |
+| PR #602 head `66c08e04` / merge `4ee71072` | GitHub Actions，ubuntu-latest / Node 22 | run [41614705838](https://github.com/lava-chen/duya/actions/runs/41614705838)：architecture、typecheck、test、build | 全部 success；bundle freshness 通过；受影响 Electron E2E job 按条件 skipped。独立 IPC Playwright E2E 1/1 已在上方记录 | PR #602 checks |
 
 ## 接续 / 结果
 
@@ -71,4 +73,4 @@
 
 真实 CLI：隔离 `DUYA_DATA_ROOT`，无 Desktop，Host 自动启动；本地市场的添加/列出、可用插件浏览、指定市场安装、禁用、查询、卸载和移除均成功。Desktop IPC 与 CLI 跨进程共享状态的真实 Electron 用例通过。非交互更新缺少 `--yes` 返回退出码 3，没有执行写操作。
 
-实现提交：`2bb5e80361c209834b22dc308a068faa59749f6b`。Draft PR #602 已推送；worker bundle freshness 为 `FRESH 0/1092`。没有合并。原三 tab 浏览界面继续作为后续 UI 切片。旧 `.claude/worktrees/631-plugin-host` 不属于本会话，不修改或回收；#512/#514 的旧依赖阻塞已解除。
+实现提交：`2bb5e80361c209834b22dc308a068faa59749f6b`；合并前同步 `master` `f0dce1ee`，刷新 worker bundle 的提交为 `66c08e04fd4e15005bbf4039730d55b595e997b0`。PR #602 已通过 architecture、typecheck、test 与 build 并以 merge commit `4ee7107275cfb557f722eaba983beaad4681ce4a` 合入 master；最终 worker bundle freshness 为 `FRESH 0/1095`。原三 tab 浏览界面继续作为后续 UI 切片。旧 `.claude/worktrees/631-plugin-host` 不属于本会话，不修改或回收；#512/#514 的旧依赖阻塞已解除。
