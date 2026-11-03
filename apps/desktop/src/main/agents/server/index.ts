@@ -5,7 +5,6 @@ import { WorkflowRuntimeManager } from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps, type DesktopSessionStartRequest } from './router';
-import { InteragentRouter } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
 import { createHostSessionService } from '@duya/host/session-admission';
 import { createDesktopNativeRunEventWriter } from './native-run-event-writer';

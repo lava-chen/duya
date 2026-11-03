@@ -130,6 +130,12 @@ export interface MCPApplyRuntimePort<
   /** Create a Runtime-guarded executor around a generation-captured invoke. */
   createMCPToolExecutor(options: {
     toolName: string;
+    /**
+     * The registry key the executor is registered under, used by the
+     * generation-currency check. MCP tools are indexed by their internal
+     * key, so this must be that key — not the server-local tool name.
+     */
+    registryKey?: string;
     source: McpToolSource;
     invoke(input: Record<string, unknown>): Promise<RuntimeToolResult>;
   }): ToolExecutor<TContext, RuntimeToolResult>;
@@ -483,6 +489,12 @@ async function runApply<
     // mandatory source-provenance and approval guard.
     const executor = runtime.createMCPToolExecutor({
       toolName: capturedMcpInfo.toolName,
+      // The registry indexes this tool under its INTERNAL key, so the
+      // generation-currency check has to look it up under that key. The
+      // server-local original name (`session_spawn`) is not a registry key
+      // and would never resolve, refusing every MCP call as a stale
+      // generation.
+      registryKey: t.internalKey,
       source,
       invoke: (input) => scopedClient.callTool(capturedMcpInfo.toolName, input),
     });

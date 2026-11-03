@@ -33,6 +33,13 @@ export interface MCPExecutorPorts<TContext extends object> {
    * path. Implementations compare `registry.getExecutor(toolName)` with the
    * executor reference that runs; `false` fails the call with the named
    * `authority_revoked` gate error instead of executing stale.
+   *
+   * The name handed over is the one the registry indexes this executor under
+   * — the registry's storage key for MCP tools (the internal key), NOT the
+   * server-local original tool name. The registry stores MCP tools under
+   * `mcp__<server>__<tool>` and shows the model a different name entirely, so
+   * a lookup by the original name would never resolve and every MCP call would
+   * be refused as a stale generation.
    */
   isExecutorCurrent?(toolName: string, executor: object): boolean;
   logger?: ToolExecutionLogger;
@@ -40,6 +47,16 @@ export interface MCPExecutorPorts<TContext extends object> {
 
 export interface MCPToolExecutorOptions<TContext extends object> {
   toolName: string;
+  /**
+   * The registry key this executor is registered under, used by the
+   * generation-currency check to look the executor up in the live registry.
+   *
+   * Defaults to `toolName`, which is correct only for tools the registry
+   * indexes by their visible name. MCP tools are indexed by their internal
+   * key, so a host that registers MCP tools MUST pass that key here — else
+   * every MCP call is refused as a stale generation.
+   */
+  registryKey?: string;
   source: McpToolSource;
   invoke(input: Record<string, unknown>): Promise<RuntimeToolResult>;
   ports: MCPExecutorPorts<TContext>;
@@ -54,6 +71,7 @@ export function createMCPToolExecutor<TContext extends object>(
   options: MCPToolExecutorOptions<TContext>,
 ): ToolExecutor<TContext, RuntimeToolResult> {
   const { toolName, source, invoke, ports } = options;
+  const registryKey = options.registryKey ?? toolName;
   const logger = ports.logger;
 
   const gateErrorResult = (
@@ -78,7 +96,7 @@ export function createMCPToolExecutor<TContext extends object>(
     // the captured invoke closure belongs to a replaced/removed generation.
     // Fail with the named gate error rather than executing stale — the routed
     // path's equivalent is #558's post-approval re-resolution.
-    if (ports.isExecutorCurrent && !ports.isExecutorCurrent(toolName, executorRef)) {
+    if (ports.isExecutorCurrent && !ports.isExecutorCurrent(registryKey, executorRef)) {
       logger?.warn?.('[MCP] tool registration changed before execution; refusing stale generation', {
         toolName,
         source,

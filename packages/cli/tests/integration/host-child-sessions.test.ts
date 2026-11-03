@@ -121,11 +121,16 @@ async function readRequest(request: http.IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function catalogSessionToolId(results: string): string | undefined {
+function catalogSessionToolId(results: string, toolName: string): string | undefined {
   return catalogResultValues(results).flatMap((value) => {
-    const record = value as { matches?: { tool_id?: unknown; name?: unknown }[]; tool_id?: unknown };
-    if (typeof record.tool_id === 'string') return [record.tool_id];
-    const entry = record.matches?.find((item) => item.name === 'session');
+    const record = value as {
+      matches?: { tool_id?: unknown; name?: unknown }[];
+      tools?: { tool_id?: unknown; name?: unknown }[];
+      tool_id?: unknown;
+      name?: unknown;
+    };
+    if (typeof record.tool_id === 'string' && record.name === toolName) return [record.tool_id];
+    const entry = (record.matches ?? record.tools)?.find((item) => item.name === toolName);
     return typeof entry?.tool_id === 'string' ? [entry.tool_id] : [];
   })[0];
 }
@@ -165,49 +170,46 @@ function catalogResultValues(results: string): unknown[] {
   return values;
 }
 
-function sessionInvocationStream(id: string, toolId: string, action: string, input: Record<string, unknown>): string {
-  return toolUseStream('tool_invoke', id, { tool_id: toolId, arguments: { action, ...input } });
+function sessionInvocationStream(id: string, toolName: string, input: Record<string, unknown>): string {
+  return toolUseStream(toolName, id, { ...input });
 }
 
 function responseForParentTurn(results: string, workspace: string, priorToolUseIds: ReadonlySet<string>): string {
-  const toolId = catalogSessionToolId(results);
+  const spawnToolId = catalogSessionToolId(results, 'mcp_duya_app_session_spawn');
+  const replyToolId = catalogSessionToolId(results, 'mcp_duya_app_session_reply');
+  const cancelToolId = catalogSessionToolId(results, 'mcp_duya_app_session_cancel');
+  const getToolId = catalogSessionToolId(results, 'mcp_duya_app_session_get');
+  const listToolId = catalogSessionToolId(results, 'mcp_duya_app_session_list');
   const childIds = [...results.matchAll(/Spawned session ([0-9a-f-]{36})/giu)].map((match) => match[1] as string);
   const childOneId = childIds[0];
   const childTwoId = childIds[1];
-  if (!priorToolUseIds.has('parent-session-search')) return toolUseStream('tool_catalog', 'parent-session-search', { query: 'session' });
-  if (!priorToolUseIds.has('parent-session-schema')) {
-    if (!toolId) throw new Error(`session tool was absent from catalog results: ${results}`);
-    return toolUseStream('tool_catalog', 'parent-session-schema', { tool_id: toolId });
-  }
+  if (!priorToolUseIds.has('parent-session-search')) return toolUseStream('tool_catalog', 'parent-session-search', { namespace: 'duya_app' });
   if (!priorToolUseIds.has('parent-spawn-one')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-spawn-one', toolId, 'spawn', {
+    return sessionInvocationStream('parent-spawn-one', 'mcp_duya_app_session_spawn', {
       prompt: 'CHILD_ONE_FIRST: complete this deterministic child task.', workingDirectory: workspace,
     });
   }
   if (!priorToolUseIds.has('parent-spawn-two')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-spawn-two', toolId, 'spawn', {
+    return sessionInvocationStream('parent-spawn-two', 'mcp_duya_app_session_spawn', {
       prompt: 'CHILD_TWO_BLOCK: wait for the parent to cancel this run.', workingDirectory: workspace,
     });
   }
   if (!priorToolUseIds.has('parent-reply-one')) {
-    if (!toolId || !childOneId || !childTwoId) throw new Error(`parent did not receive both spawned session ids: ${results}`);
-    return sessionInvocationStream('parent-reply-one', toolId, 'reply', {
+    if (!childOneId || !childTwoId) throw new Error(`parent did not receive both spawned session ids: ${results}`);
+    return sessionInvocationStream('parent-reply-one', 'mcp_duya_app_session_reply', {
       sessionId: childOneId, prompt: 'CHILD_ONE_FOLLOWUP: return the follow-up completion marker.',
     });
   }
   if (!priorToolUseIds.has('parent-cancel-two')) {
-    if (!toolId || !childTwoId) throw new Error(`parent did not receive the second spawned session id: ${results}`);
-    return sessionInvocationStream('parent-cancel-two', toolId, 'cancel', { sessionId: childTwoId });
+    if (!childTwoId) throw new Error(`parent did not receive the second spawned session id: ${results}`);
+    return sessionInvocationStream('parent-cancel-two', 'mcp_duya_app_session_cancel', { sessionId: childTwoId });
   }
   if (!priorToolUseIds.has('parent-get-one')) {
-    if (!toolId || !childOneId) throw new Error(`parent did not receive the first spawned session id: ${results}`);
-    return sessionInvocationStream('parent-get-one', toolId, 'get', { sessionId: childOneId });
+    if (!childOneId) throw new Error(`parent did not receive the first spawned session id: ${results}`);
+    return sessionInvocationStream('parent-get-one', 'mcp_duya_app_session_get', { sessionId: childOneId });
   }
   if (!priorToolUseIds.has('parent-list-children')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-list-children', toolId, 'list', {});
+    return sessionInvocationStream('parent-list-children', 'mcp_duya_app_session_list', {});
   }
   return textStream('PARENT_CHILD_SESSIONS_DONE', 'parent-final');
 }
@@ -236,6 +238,15 @@ async function startScriptedProvider(workspace: string, clientRef: { current?: H
       if (prompt.includes('PARENT_CHILD_SESSIONS_VERTICAL') || transcript.includes('PARENT_CHILD_SESSIONS_VERTICAL')) {
         const parentResults = toolResultsText(messages);
         const priorToolUseIds = toolUseIds(messages);
+        if (process.env.DUYA_PROBE_CATALOG) {
+          process.stderr.write(`[probe] results=${JSON.stringify(parentResults.slice(0, 1200))}\n`);
+          process.stderr.write(`[probe] priorToolUseIds=${JSON.stringify([...priorToolUseIds])}\n`);
+          process.stderr.write(`[probe] spawnResults=${JSON.stringify(toolResultsText(messages).match(/\[completed\][^\n]{0,300}/gu)?.slice(-4))}\n`);
+          process.stderr.write(`[probe] toolUseNames=${JSON.stringify(messages.flatMap((message) => Array.isArray(message.content) ? message.content.filter((block): block is Record<string, unknown> => typeof block === 'object' && block !== null && (block as Record<string, unknown>).type === 'tool_use').map((block) => `${block.name}:${JSON.stringify(block.input)?.slice(0, 120)}`) : []).slice(-6))}\n`);
+          process.stderr.write(`[probe] allResults=${JSON.stringify(messages.flatMap((message) => Array.isArray(message.content) ? message.content.filter((block): block is Record<string, unknown> => typeof block === 'object' && block !== null && (block as Record<string, unknown>).type === 'tool_result').map((block) => String((block as Record<string, unknown>).content).slice(0, 400)) : []).slice(-3))}\n`);
+          process.stderr.write(`[probe] providerTools=${JSON.stringify((payload.tools ?? []).map((tool) => tool.name).filter((name) => typeof name === 'string' && name.includes('session')))}\n`);
+          process.stderr.write(`[probe] allToolNames=${JSON.stringify((payload.tools ?? []).map((tool) => tool.name).slice(0, 40))}\n`);
+        }
         if (priorToolUseIds.has('parent-spawn-two') && !priorToolUseIds.has('parent-reply-one')) {
           const childOneId = toolResultsText(messages).match(/Spawned session ([0-9a-f-]{36})/iu)?.[1];
           if (!childOneId || !clientRef.current) throw new Error('parent follow-up turn has no child session or Host client');
@@ -327,8 +338,12 @@ async function approveSessionToolRequests(
   let approvedCount = 0;
   while (Date.now() < deadline) {
     const pending = await client.listPendingPermissionRequests(parentSessionId);
+    if (process.env.DUYA_PROBE_CATALOG) {
+      process.stderr.write(`[probe] pendingPermissions=${JSON.stringify(pending.map((item) => ({ toolName: item.toolName, status: item.status })))}\n`);
+    }
     for (const request of pending) {
-      if (request.toolName !== 'session') continue;
+      process.stderr.write(`[probe] approving ${request.toolName}\n`);
+      if (request.toolName !== 'session' && !request.toolName.includes('session_')) continue;
       await client.resolvePermissionRequest(request.id, {
         status: 'allow',
         decision: `approved by local Host child-session integration test for run ${parentRunId}`,
