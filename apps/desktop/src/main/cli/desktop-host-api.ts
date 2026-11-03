@@ -117,6 +117,7 @@ import type { HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from '@duya/host/session-api';
 import { createHostTaskApi } from '@duya/host/task-api';
 import { createHostProjectApi } from '@duya/host/project-api';
+import { createProjectToolService, type ProjectToolService } from '@duya/host/project/tool-service';
 import { createHostPermissionRequestApi } from '@duya/host/permission-request-api';
 import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
@@ -907,6 +908,18 @@ export function getDesktopHostTaskApi(): HostTaskApiV1 {
 export function getDesktopHostProjectApi(): HostProjectApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host project API is not running');
   return sessionApiClient;
+}
+
+let desktopProjectToolService: ProjectToolService | null = null;
+
+export function getDesktopProjectToolService(): ProjectToolService {
+  if (desktopProjectToolService === null) {
+    desktopProjectToolService = createProjectToolService({
+      stores: { projects: getCoreStores().projects },
+      projectApi: getDesktopHostProjectApi(),
+    });
+  }
+  return desktopProjectToolService;
 }
 
 export function getDesktopHostPermissionRequestApi(): HostPermissionRequestApiV1 {

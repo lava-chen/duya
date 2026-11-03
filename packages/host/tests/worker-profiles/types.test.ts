@@ -6,15 +6,16 @@ import { resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filt
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
-    expect(coordinator.allowedTools).toEqual(['session', 'todo']);
+    expect(coordinator.allowedTools).toEqual(['session', 'project', 'todo']);
     expect(coordinator.promptSystem).toBe('project');
-    expect(coordinator.identityPrompt).toContain('Project Coordinator');
+    expect(coordinator.suppressIdentityBlock).toBe(true);
+    expect(coordinator.identityPrompt).toBeUndefined();
     expect(coordinator.userVisible).toBe(false);
     const result = resolveAllowedTools(
       coordinator,
-      ['session', 'todo', 'read', 'write', 'bash', 'task', 'memory'],
+      ['session', 'todo', 'project', 'read', 'write', 'bash', 'task', 'memory'],
     );
-    expect(result.allowed.sort()).toEqual(['session', 'todo']);
+    expect(result.allowed.sort()).toEqual(['project', 'session', 'todo']);
     expect(result.isValid).toBe(true);
   });
   it('includes the memory-curator preset', () => {

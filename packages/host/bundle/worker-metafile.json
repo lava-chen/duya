@@ -17,7 +17,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-client.ts": {
-      "bytes": 52336,
+      "bytes": 52702,
       "imports": [
         {
           "path": "packages/host/src/worker-db-context.ts",
@@ -13517,7 +13517,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/configs/project.ts": {
-      "bytes": 1201,
+      "bytes": 1518,
       "imports": [],
       "format": "esm"
     },
@@ -30567,7 +30567,7 @@
       "format": "esm"
     },
     "packages/host/src/project/identity.ts": {
-      "bytes": 1709,
+      "bytes": 1081,
       "imports": [],
       "format": "esm"
     },
@@ -31494,8 +31494,19 @@
       ],
       "format": "esm"
     },
+    "packages/host/src/project/context.ts": {
+      "bytes": 3654,
+      "imports": [
+        {
+          "path": "packages/memory/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
-      "bytes": 16205,
+      "bytes": 13972,
       "imports": [
         {
           "path": "packages/data/src/project-store.ts",
@@ -31506,6 +31517,11 @@
           "path": "packages/memory/src/index.ts",
           "kind": "import-statement",
           "original": "@duya/memory"
+        },
+        {
+          "path": "packages/host/src/project/context.ts",
+          "kind": "import-statement",
+          "original": "./project/context.js"
         }
       ],
       "format": "esm"
@@ -32007,8 +32023,8 @@
       "imports": [],
       "format": "esm"
     },
-    "packages/host/src/project-run-settlement.ts": {
-      "bytes": 12724,
+    "packages/host/src/project/reconciliation.ts": {
+      "bytes": 12716,
       "imports": [
         {
           "path": "node:crypto",
@@ -32016,6 +32032,11 @@
           "external": true
         }
       ],
+      "format": "esm"
+    },
+    "packages/host/src/project/tool-service.ts": {
+      "bytes": 11118,
+      "imports": [],
       "format": "esm"
     },
     "packages/host/src/permission-request-api.ts": {
@@ -32678,7 +32699,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-db-bridge.ts": {
-      "bytes": 68040,
+      "bytes": 69427,
       "imports": [
         {
           "path": "node:crypto",
@@ -32761,7 +32782,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 55626,
+      "bytes": 55872,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -33044,9 +33065,14 @@
           "original": "./project-api.js"
         },
         {
-          "path": "packages/host/src/project-run-settlement.ts",
+          "path": "packages/host/src/project/reconciliation.ts",
           "kind": "import-statement",
-          "original": "./project-run-settlement.js"
+          "original": "./project/reconciliation.js"
+        },
+        {
+          "path": "packages/host/src/project/tool-service.ts",
+          "kind": "import-statement",
+          "original": "./project/tool-service.js"
         },
         {
           "path": "packages/host/src/permission-request-api.ts",
@@ -35085,7 +35111,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-profiles/types.ts": {
-      "bytes": 10732,
+      "bytes": 10799,
       "imports": [
         {
           "path": "packages/host/src/project/identity.ts",
@@ -36934,7 +36960,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 141972,
+      "bytes": 142013,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -38005,6 +38031,60 @@
       ],
       "format": "esm"
     },
+    "packages/capabilities/src/project/tool.ts": {
+      "bytes": 18039,
+      "imports": [
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/capabilities/src/BaseTool.ts",
+          "kind": "import-statement",
+          "original": "../BaseTool.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/project/index.ts": {
+      "bytes": 391,
+      "imports": [
+        {
+          "path": "packages/capabilities/src/project/tool.ts",
+          "kind": "import-statement",
+          "original": "./tool.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/worker-tool-services/project.ts": {
+      "bytes": 458,
+      "imports": [
+        {
+          "path": "packages/host/src/worker-db-client.ts",
+          "kind": "import-statement",
+          "original": "../worker-db-client.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/worker-tool-bindings/project.ts": {
+      "bytes": 471,
+      "imports": [
+        {
+          "path": "packages/capabilities/src/project/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/project"
+        },
+        {
+          "path": "packages/host/src/worker-tool-services/project.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-tool-services/project"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/worker-image-generation/image-generation-config.ts": {
       "bytes": 6869,
       "imports": [
@@ -38669,7 +38749,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tools/builtin.ts": {
-      "bytes": 8537,
+      "bytes": 8844,
       "imports": [
         {
           "path": "packages/host/src/worker-tools/worktree.ts",
@@ -38770,6 +38850,11 @@
           "path": "packages/host/src/worker-tool-bindings/session.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-tool-bindings/session"
+        },
+        {
+          "path": "packages/host/src/worker-tool-bindings/project.ts",
+          "kind": "import-statement",
+          "original": "@duya/host/worker-tool-bindings/project"
         },
         {
           "path": "packages/capabilities/src/VisionTool/VisionTool.ts",
@@ -40929,6 +41014,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:fs/promises",
           "kind": "require-call",
           "external": true
@@ -41036,7 +41126,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14622
+          "bytesInOutput": 14684
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -41093,7 +41183,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 48
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 35
@@ -41195,10 +41285,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -41219,7 +41309,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1954
+          "bytesInOutput": 1967
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -41285,7 +41375,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -43187,13 +43277,13 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -43787,16 +43877,16 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50715
+          "bytesInOutput": 50724
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1878
+          "bytesInOutput": 1881
         },
         "../../../node_modules/@jimp/plugin-blit/node_modules/zod/index.js": {
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-blit/dist/esm/index.js": {
-          "bytesInOutput": 1175
+          "bytesInOutput": 1176
         },
         "../../../node_modules/@jimp/plugin-blur/dist/esm/blur-tables.js": {
           "bytesInOutput": 1735
@@ -44105,7 +44195,7 @@
           "bytesInOutput": 29
         },
         "../../../node_modules/@jimp/plugin-contain/dist/esm/index.js": {
-          "bytesInOutput": 677
+          "bytesInOutput": 678
         },
         "../../../node_modules/@jimp/plugin-crop/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -44357,7 +44447,7 @@
           "bytesInOutput": 18
         },
         "../../../node_modules/@jimp/plugin-print/dist/esm/index.js": {
-          "bytesInOutput": 1615
+          "bytesInOutput": 1616
         },
         "../../../node_modules/@jimp/plugin-rotate/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -44609,13 +44699,13 @@
           "bytesInOutput": 587
         },
         "../../../node_modules/jimp/dist/esm/index.js": {
-          "bytesInOutput": 880
+          "bytesInOutput": 881
         },
         "packages/capabilities/src/AppConnectionTool/index.ts": {
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -44624,10 +44714,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9984
+          "bytesInOutput": 9967
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -44918,7 +45008,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -44981,7 +45071,7 @@
           "bytesInOutput": 747
         },
         "packages/host/src/worker-prompts/configs/project.ts": {
-          "bytesInOutput": 452
+          "bytesInOutput": 665
         },
         "packages/host/src/worker-prompts/registry.ts": {
           "bytesInOutput": 165
@@ -45050,7 +45140,7 @@
           "bytesInOutput": 3025
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -45713,7 +45803,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 897
+          "bytesInOutput": 891
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -45872,7 +45962,7 @@
           "bytesInOutput": 10
         },
         "packages/host/src/project/identity.ts": {
-          "bytesInOutput": 598
+          "bytesInOutput": 67
         },
         "packages/host/src/host-diagnostics-log.ts": {
           "bytesInOutput": 20
@@ -45976,7 +46066,7 @@
         "packages/host/src/agents-md/index.ts": {
           "bytesInOutput": 0
         },
-        "packages/host/src/project-run-settlement.ts": {
+        "packages/host/src/project/reconciliation.ts": {
           "bytesInOutput": 20
         },
         "packages/host/src/tool-approval-api.ts": {
@@ -46175,7 +46265,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 54009
+          "bytesInOutput": 54035
         },
         "packages/host/src/worker-journal/child-journal.ts": {
           "bytesInOutput": 214
@@ -46307,7 +46397,7 @@
           "bytesInOutput": 2644
         },
         "packages/host/src/worker-profiles/types.ts": {
-          "bytesInOutput": 3827
+          "bytesInOutput": 3833
         },
         "packages/host/src/worker-profiles/AgentProfileService.ts": {
           "bytesInOutput": 2643
@@ -46567,8 +46657,20 @@
         "packages/host/src/worker-tool-bindings/session.ts": {
           "bytesInOutput": 70
         },
+        "packages/capabilities/src/project/tool.ts": {
+          "bytesInOutput": 10229
+        },
+        "packages/capabilities/src/project/index.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/host/src/worker-tool-services/project.ts": {
+          "bytesInOutput": 72
+        },
+        "packages/host/src/worker-tool-bindings/project.ts": {
+          "bytesInOutput": 69
+        },
         "packages/host/src/worker-tools/builtin.ts": {
-          "bytesInOutput": 2605
+          "bytesInOutput": 2784
         },
         "packages/host/src/worker-image-generation/ImageGenerateTool.ts": {
           "bytesInOutput": 372
@@ -46700,7 +46802,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4772466
+      "bytes": 4782786
     }
   }
 }

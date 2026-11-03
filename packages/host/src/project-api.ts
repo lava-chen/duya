@@ -17,7 +17,8 @@ import {
   type ProjectRow,
   type ProjectStore,
 } from '@duya/data/project-store';
-import { assembleProjectContinuityContext, rankProjectMemory, validateProjectMemoryKey } from '@duya/memory';
+import { validateProjectMemoryKey } from '@duya/memory';
+import { buildProjectContext } from './project/context.js';
 
 export class HostProjectApiError extends Error {
   constructor(readonly code: 'project_conflict', message: string) {
@@ -174,36 +175,12 @@ export function createHostProjectApi(
     async getProjectContext(projectId, taskId, maxCharacters) {
       const snapshot = await this.getProjectContinuity(projectId, { limit: 100 });
       if (!snapshot) return null;
-      const task = taskId ? snapshot.tasks.find((row) => row.link.taskId === taskId)?.task : null;
-      const relevantTasks = taskId
-        ? snapshot.tasks.filter((row) => row.link.taskId === taskId)
-        : snapshot.tasks.filter(({ task: item, link }) => item && (item.status !== 'completed' || link.acceptanceStatus === 'pending'));
-      const accepted = snapshot.decisions.filter((item) => item.status === 'accepted');
-      const memories = rankProjectMemory(snapshot.memories.filter((item) => item.status === 'active')
-        .map((item) => ({ ...item, sourceType: item.source.type, sourceId: item.source.id })), task ? `${task.subject} ${task.description}` : '').slice(0, 20);
-      const recentActivity = projects.listRecentActivity(projectId, 10).map((item) => ({
-        key: String(item.event_id),
-        content: `${item.event_type}${item.task_id ? ` · task ${item.task_id}` : ''}${item.session_id ? ` · session ${item.session_id}` : ''}`,
-        sourceType: item.source_type, sourceId: item.source_id, updatedAt: item.created_at,
-      }));
-      const text = assembleProjectContinuityContext({
-        projectName: snapshot.project.name || snapshot.project.project_id,
-        ...(snapshot.state ? { currentState: snapshot.state.currentState, nextStep: snapshot.state.nextStep } : {}),
-        decisions: accepted.map((item) => ({ key: item.key, content: item.content, sourceType: item.source.type, sourceId: item.source.id, updatedAt: item.updatedAt })),
-        memories,
-        recentActivity,
-        ...(relevantTasks.length ? { taskBrief: relevantTasks.map(({ task: item, link }) => item
-          ? `- ${item.id} [${item.status}; acceptance=${link.acceptanceStatus}] ${item.subject}${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}\n  ${item.description}`
-          : `- ${link.taskId} [Task record unavailable; acceptance=${link.acceptanceStatus}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}`).join('\n') } : {}),
+      return buildProjectContext({
+        snapshot,
+        recentActivity: projects.listRecentActivity(projectId, 10),
+        ...(taskId === undefined ? {} : { taskId }),
         ...(maxCharacters === undefined ? {} : { maxCharacters }),
       });
-      const sourceRefs = [
-        ...(snapshot.state ? [snapshot.state.source] : []),
-        ...accepted.map((item) => item.source), ...memories.map((item) => ({ type: item.sourceType, id: item.sourceId })),
-        ...recentActivity.map((item) => ({ type: item.sourceType, id: item.sourceId })),
-        ...(task ? [{ type: 'task', id: task.id }] : []),
-      ];
-      return { text, sourceRefs };
     },
 
     async updateProjectState(input) {

@@ -1739,7 +1739,7 @@ export class WorkerSession implements AgentRuntime {
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
             logger.info('[Agent] streamChat: Added system prompt prefix');
         }
-        if (appliedProfile) {
+        if (appliedProfile && !appliedProfile.suppressIdentityBlock) {
             const identityBlock = buildAgentIdentityBlock(appliedProfile);
             hostBlocks.push({ name: 'host:identity', content: identityBlock });
             systemPromptContent = identityBlock + '\n\n' + systemPromptContent;

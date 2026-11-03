@@ -97,7 +97,8 @@ import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
 import { createHostTaskApi } from './task-api.js';
 import { createHostProjectApi } from './project-api.js';
-import { createProjectRunSettlementService } from './project-run-settlement.js';
+import { createProjectRunSettlementService } from './project/reconciliation.js';
+import { createProjectToolService } from './project/tool-service.js';
 import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
@@ -544,6 +545,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     const goalApi = createHostGoalApi(core.stores);
     const modeStateApi = createHostModeStateApi(core.stores);
     const taskApi = createHostTaskApi(core.stores, core.stores.projects);
+    const projectApi = createHostProjectApi(core.stores.projects, core.stores.tasks);
     const lockApi = createHostLockApi(core.stores);
     // ONE instance per API, shared by the HTTP surface and the worker db
     // bridge: the bridge must answer the same rows the HTTP surface does,
@@ -710,6 +712,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           lockApi,
           modeStateApi,
           taskApi,
+          projectToolApi: createProjectToolService({
+            stores: { projects: core.stores.projects },
+            projectApi,
+          }),
           pluginAppInvocationApi,
           mailboxApi: localMailboxApi,
           pluginSetupApi: localPluginSetupApi,
@@ -1032,7 +1038,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       goalApi,
       modeStateApi,
       taskApi,
-      projectApi: createHostProjectApi(core.stores.projects, core.stores.tasks),
+      projectApi,
       researchApi: createHostResearchApi(core.stores),
       permissionRequestApi: runExecution?.permissionRequests ?? createHostPermissionRequestApi(core.stores),
       toolApprovalApi: createHostToolApprovalApi(mainDatabase.db),

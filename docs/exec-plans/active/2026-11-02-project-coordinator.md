@@ -141,3 +141,22 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\coo
 交付：代码提交 `f1d81f61` 推送到 `codex/coordinator-seam`，并以 `codex/project-run-feedback` 为 base 开 stacked Draft PR [#586](https://github.com/lava-chen/duya/pull/586)；`bundle:verify` 提交后为 FRESH（0/1053）。PR base 非 `master`，仓库 CI 不会触发（`test.yml` 仅监听 base=`master`），验证以本节记录为准，不合并。
 
 下一动作：统一重整 #583/#584 依赖（已把 #584 rebase 到本切片 head 并改 base 到 `codex/coordinator-seam`，见该计划）；栈稳定后再把项目上下文装配、HTTP Task 管理与结果对账并入领域层，并统一改 base 到 `master` 触发 CI。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### Coordinator 项目工具与提示词系统切片（2026-11-03）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-tools`；分支：`codex/project-tools`；base：`codex/coordinator-seam` `c809ad69`（#586 head）；代码提交：`eedab8b0`。本切片补齐 Coordinator 真正可用的项目操作面，并把上下文装配、结果对账与提示词收进领域层；不改 Runner/协议、不扩张 UI、不合并。
+
+已实现：`packages/capabilities/src/project/` 新增 `project` 工具（`get` / `context` / `update_state` / `record_decision` / `record_memory`），Host `packages/host/src/project/tool-service.ts` 从受信 caller 的 Coordinator 绑定解析项目，写操作以调用 Session 为 provenance，拒绝 `accepted` / `active` 等用户专属状态（`user_action_required`）与陈旧 revision（`revision_conflict`）。`project:tool` 经 standalone Host 的 worker DB bridge 和 Desktop `dispatchDbAction` 两个拓扑接通；Desktop 把 `project:tool`、`session:spawn*` 纳入 transport attempt 关联，caller 只取 `trustedAttempt` 或 transport 注册的 Session，不接受 worker payload 自报。`project-api.ts` 的预算上下文装配拆到 `project/context.ts`，Run 结果对账迁入 `project/reconciliation.ts` 并由 `./project/*` 导出。提示词侧 `configs/project.ts` 改为自包含组合（identity → system → operation → delegation → reporting → finalAnswer），新增 `project/identity.hbs`、`project/operation.hbs`；`AgentProfile.suppressIdentityBlock` 让运行时不再为 Coordinator 前置通用身份块；profile 白名单新增 `project`。
+
+已知边界：Task 显式验收 UI、记忆候选审阅/纠正 UI 与“每次 Run 自动注入会话范围上下文”仍未实现；`project` 工具只服务当前绑定 Coordinator，其他 Session 被拒绝；栈 PR 的 base 非 `master`，仓库 CI 不触发（`test.yml` 仅监听 base=`master`），验证以本节记录为准；不合并。
+
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- 相关 27 个测试文件 173 项通过（project Host 全套、worker-prompts/profiles、local-host、session、Desktop project tool/trusted-attempt/session management）；worker DB bridge 13 个文件 65 项通过。
+- `npm run typecheck:all`、`npm run architecture:check` 退出 0；架构门禁 3083 项 tolerated，无新增违规。
+- 提交 `eedab8b0` 后 `npm run bundle:verify` 退出 0，1059 项输入全部 FRESH。
+- `npm run electron:build` 单次执行未返回 0：首次 Vite 阶段 V8 zone OOM，重试在 rendering chunks 阶段报 Rollup `Cannot set property code`；随后 `npx vite build`（2m8s）、`node scripts/build-electron.mjs`、`node scripts/build-recorder-worker.mjs` 分别退出 0。重建期间 `bundle:worker` 产生的 bundle 字节差异和 `inline-content.ts` 行尾噪声已还原，bundle 输入仍 FRESH；该构建步骤的稳定性沿用仓库既有非确定性说明，不视为本切片代码失败。
+
+交付：代码提交 `eedab8b0` 推送到 `codex/project-tools`，以 `codex/coordinator-seam` 为 base 开 stacked Draft PR；不合并。
+
+下一动作：把 #584 rebase 到本切片 head 并更新其 base；栈稳定后再统一改 base 到 `master` 触发 CI。仍不合并，等待用户授权。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
