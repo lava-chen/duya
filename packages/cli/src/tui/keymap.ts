@@ -13,8 +13,8 @@
  *
  * ## What an override actually touches
  *
- * Only the simple global toggles (help / history / usage / focus /
- * expand-all / clear / follow-tail) are rebound from the table. The editor
+ * Global actions (help / history / usage / focus / clear / expand-all /
+ * follow-tail / transcript navigation and per-block toggle) are rebound from the table. The editor
  * and completion dispatch is priority-ordered routing, not flat binding —
  * rebinding those keys from a flat table would silently break the routing
  * contract `bindKeys` documents. Overrides to non-rebindable actions are
@@ -45,6 +45,9 @@ export const REBINDABLE_ACTIONS: ReadonlySet<string> = new Set([
   'expand-all',
   'clear',
   'follow-tail',
+  'transcript-previous',
+  'transcript-next',
+  'transcript-toggle-block',
 ]);
 
 /**

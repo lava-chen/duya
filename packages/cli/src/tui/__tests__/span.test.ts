@@ -34,7 +34,7 @@ import {
 } from '../core/span.js';
 import { tokenizeInline } from '../markdown/inline.js';
 import { renderInlineTokens, spanRolesOf, spansToTags, tagViewOf } from '../markdown/inline.js';
-import { spansToAnsi } from '../terminal/ansi.js';
+import { safeHyperlink, spansToAnsi } from '../terminal/ansi.js';
 import { renderMarkup } from '../screen/own/markup.js';
 import { stylesOf } from '../transcript-view.js';
 
@@ -230,11 +230,12 @@ describe('spansToAnsi', () => {
       .toBe('\x1b[1;3;38;5;241mx\x1b[m');
   });
 
-  it('treats linkId as a no-op (OSC 8 is reserved, not emitted)', () => {
-    const withLink = spansToAnsi([{ text: 'a', fg: namedColor('gray')!, linkId: 'x' }]);
-    const without = spansToAnsi([{ text: 'a', fg: namedColor('gray')! }]);
-    expect(withLink).toBe(without);
-    expect(withLink).not.toContain('\x1b]');
+  it('emits OSC 8 for safe HTTP(S) targets and closes the link', () => {
+    expect(spansToAnsi([{ text: 'a', linkId: 'https://example.com/a' }]))
+      .toBe('\x1b]8;;https://example.com/a\x1b\\a\x1b]8;;\x1b\\');
+    expect(safeHyperlink('javascript:alert(1)')).toBeNull();
+    expect(safeHyperlink('https://example.com/\x1b]8;;evil')).toBeNull();
+    expect(safeHyperlink(`https://example.com/${'a'.repeat(2048)}`)).toBeNull();
   });
 
   it('agrees byte-for-byte with the tag path on the same spans', () => {

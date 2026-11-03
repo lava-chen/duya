@@ -1658,7 +1658,11 @@ function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles):
       // error they will hit again next turn.
       return styles.error(`✗ ${block.message}`);
     case 'notice':
-      return styles.muted(block.text);
+      return options.width === undefined
+        ? styles.muted(block.text)
+        : wrapWithCursor(block.text, Math.max(1, options.width), 0).rows
+          .map((line) => styles.muted(line))
+          .join('\n');
     // Node kinds are drawn by the trail; render them standalone here.
     case 'thinking':
     case 'tool':

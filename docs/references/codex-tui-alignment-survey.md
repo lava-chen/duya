@@ -1,6 +1,6 @@
 # Codex TUI 表面与斜杠命令体系对照（duya ↔ openai/codex）
 
-> **状态**：参考资料（reference）· **调研日期**：2026-11-04
+> **状态**：参考资料（reference）· **调研日期**：2026-11-03
 > **对标源码**：`E:\cloned-projects\codex` @ `fbf5f0d3a716d08c254d3e4941d5b12eaff5afe7`（2026-11-03，"Decode live transcript updates in the cloud client (#59047)"）
 > **本项目基线**：duya @ `203d7d5191bc463915591af3911649a7b313394a`（Merge PR #567 "codex/tui-codex-surface"）
 > **用途**：为「TUI 学 codex 表面」后续切片提供差距依据。原始摘录与代理调研原文在 ignored 的 `docs-local/research/codex-tui-alignment/`。
