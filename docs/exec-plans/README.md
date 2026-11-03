@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色已实现并过门禁；待真机冒烟与 PR |
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 认领任务一：收敛 #579/#580 的输入/租约权威，接项目协调角色与工作 Session；任务二/三完成记忆和 Desktop |
+| TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现，TUI 1334 例全绿；待门禁与 PR |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |

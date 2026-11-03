@@ -22,6 +22,14 @@
  * Flattening the distinction would make `{cyan-fg}` and `{6-fg}` the same
  * colour, which they are not on a themed terminal.
  *
+ * ## The slot is separate from the colour
+ *
+ * A colour does not know whether it paints text or the cell behind it: the
+ * tag body does (`{gray-fg}` vs `{gray-bg}`), and so does the call site.
+ * That is why `colorFromTagBody` and `tagBodyFor` take a `ColorSlot` rather
+ * than encoding it in the colour — the same `gray` is legal in both slots
+ * and means something different in each.
+ *
  * ## Names, not numbers
  *
  * A named colour remembers its SPELLING (`gray`, `brightgreen`) rather than
@@ -64,6 +72,18 @@ export type SpanColor =
   | { readonly kind: 'named'; readonly name: string }
   | { readonly kind: 'indexed'; readonly index: number };
 
+/**
+ * Which slot of a cell a colour fills.
+ *
+ * The tag vocabulary spells the two apart (`{gray-fg}` vs `{gray-bg}`) and
+ * blessed parses them apart: `_parseTags` routes a `-bg` body to its own
+ * background stack, so a foreground tag never becomes a background by
+ * accident. The same colour can sit in either slot — `gray` is a legal
+ * foreground and a legal background — so the slot is a property of the TAG,
+ * not of the colour.
+ */
+export type ColorSlot = 'fg' | 'bg';
+
 /** Blessed looks a colour up by its flattened name: `bright-green` → `brightgreen`. */
 export function flattenColorName(name: string): string {
   return name.toLowerCase().replace(/[- ]/gu, '');
@@ -83,15 +103,21 @@ export function indexedColor(index: number): SpanColor | undefined {
 }
 
 /**
- * Parse a tag body (`gray-fg`, `241-fg`, without the braces) into a colour.
+ * Parse a tag body (`gray-fg`, `241-fg`, `gray-bg`, without the braces) into a
+ * colour.
  *
  * Returns `undefined` for anything that is not a colour, which is what keeps
  * an unknown tag visible as literal text instead of silently rendering as the
  * default colour.
+ *
+ * The slot decides the suffix that is accepted: `'fg'` (the default) reads
+ * `-fg`, `'bg'` reads `-bg`. A `-bg` body is NOT a foreground colour, so the
+ * two spellings can never be confused for one another.
  */
-export function colorFromTagBody(body: string): SpanColor | undefined {
-  if (!body.toLowerCase().endsWith('-fg')) return undefined;
-  const value = body.slice(0, -'-fg'.length);
+export function colorFromTagBody(body: string, slot: ColorSlot = 'fg'): SpanColor | undefined {
+  const suffix = slot === 'bg' ? '-bg' : '-fg';
+  if (!body.toLowerCase().endsWith(suffix)) return undefined;
+  const value = body.slice(0, -suffix.length);
   if (value === '') return undefined;
 
   // A 256-colour number. Guard the range: `{999999-fg}` is a typo, not a
@@ -100,9 +126,10 @@ export function colorFromTagBody(body: string): SpanColor | undefined {
   return namedColor(value);
 }
 
-/** The tag body for a colour, e.g. `gray-fg` or `241-fg`. */
-export function tagBodyFor(color: SpanColor): string {
-  return color.kind === 'named' ? `${color.name}-fg` : `${color.index}-fg`;
+/** The tag body for a colour, e.g. `gray-fg`, `241-fg`, `gray-bg`. */
+export function tagBodyFor(color: SpanColor, slot: ColorSlot = 'fg'): string {
+  const suffix = slot === 'bg' ? '-bg' : '-fg';
+  return color.kind === 'named' ? `${color.name}${suffix}` : `${color.index}${suffix}`;
 }
 
 /**
@@ -115,6 +142,20 @@ export function tagBodyFor(color: SpanColor): string {
 export function sgrParameterFor(color: SpanColor): string {
   if (color.kind === 'indexed') return `38;5;${color.index}`;
   return String(NAMED_SGR[color.name] ?? 39);
+}
+
+/**
+ * The SGR parameter for the same colour in the BACKGROUND slot.
+ *
+ * A background is the foreground code shifted up by ten (30→40, 90→100), and
+ * an indexed colour becomes `48;5;n`. This is the one place that knows the
+ * shift, so the tag parser, the span writer and the cell painter cannot
+ * disagree about what `{gray-bg}` means.
+ */
+export function backgroundParameterFor(color: SpanColor): string {
+  return color.kind === 'indexed'
+    ? `48;5;${color.index}`
+    : String(Number(sgrParameterFor(color)) + 10);
 }
 
 /** Whether two colours denote the same colour. */

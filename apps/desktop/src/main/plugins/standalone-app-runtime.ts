@@ -150,7 +150,7 @@ export async function readPluginUiSurfaceResource(
   const manifest = readPluginManifest(entry.installPath);
   if (manifest.id !== pluginId) throw new Error('plugin_app_resource_server_mismatch');
   const app = manifest.apps?.find((item) => item.appId === appId);
-  if (!app?.ui?.surfaces.some((surface) => surface.server === server && surface.resourceUri === resourceUri)) {
+  if (!app?.ui?.surfaces?.some((surface) => surface.server === server && surface.resourceUri === resourceUri)) {
     throw new Error('plugin_app_surface_not_found');
   }
 

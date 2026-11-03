@@ -33,7 +33,7 @@ function render(): string {
 
 describe('transcript-view markup', () => {
   it('uses Blessed-compatible bright color tag names', () => {
-    expect(render()).toContain('{bright-green-fg}› 你是谁{/bright-green-fg}');
+    expect(render()).toContain('{bright-green-fg}你是谁{/bright-green-fg}');
     expect(render()).not.toContain('brightGreen-fg');
   });
 
@@ -54,10 +54,13 @@ describe('transcript-view markup', () => {
     expect(render()).toContain('你是谁');
   });
 
-  it('brackets the user line in exactly one balanced style', () => {
+  it('brackets the user line in one balanced band', () => {
     const rendered = render();
-    // Flat by design: the nested form leaked its outer closing tag.
-    expect(rendered).toContain('{bright-green-fg}› 你是谁{/bright-green-fg}');
+    // The band is the outermost pair — a submitted prompt sits on a fill —
+    // and the marker and the text close inside it, never after it.
+    expect(rendered).toContain(
+      '{238-bg}{gray-fg}› {/gray-fg}{bright-green-fg}你是谁{/bright-green-fg}{/238-bg}',
+    );
   });
 
   it('escapes braces in model output rather than letting blessed eat them', () => {

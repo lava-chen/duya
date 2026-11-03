@@ -2,6 +2,7 @@ import { visibleWidth } from '../../width.js';
 import { renderMarkup } from './markup.js';
 import { layoutRegion, screenRegions, type GeometryOptions, type RegionLayout } from './geometry.js';
 import { spanStyleParameters } from '../../terminal/ansi.js';
+import { backgroundParameterFor, colorFromTagBody, type SpanColor } from '../../core/color.js';
 import type { SceneLine, StyledSpan } from '../../core/span.js';
 import type { RegionPatch, SurfaceRegion } from '../types.js';
 
@@ -217,6 +218,37 @@ function borderSgr(color: string): string {
   return '37';
 }
 
+/**
+ * The SGR parameter for a region's background fill.
+ *
+ * The fill is named the way the palette names it — a blessed tag body such as
+ * `236-bg` — so the theme decides the colour and the renderer only decides
+ * how to paint it. An unknown body paints no fill at all: a band that
+ * silently vanished would be worse than one that never existed.
+ */
+function backgroundSgr(body: string | undefined): string {
+  if (body === undefined) return '';
+  const color = colorFromTagBody(body, 'bg');
+  return color === undefined ? '' : backgroundParameterFor(color);
+}
+
+/** The colour behind a region's fill, for the spans that sit on it. */
+function backgroundColor(body: string | undefined): SpanColor | undefined {
+  return body === undefined ? undefined : colorFromTagBody(body, 'bg');
+}
+
+/**
+ * Put a line on the region's fill.
+ *
+ * A tagged line is wrapped in the fill's tag; a span line gets the fill as
+ * its background unless it already carries one. Both keep the fill UNDER the
+ * text: the band is the cell behind the text, never the text colour.
+ */
+function withBackground(line: SceneLine, body: string, color: SpanColor): SceneLine {
+  if (typeof line === 'string') return `{${body}}${line}{/${body}}`;
+  return line.map((span) => (span.bg === undefined ? { ...span, bg: color } : span));
+}
+
 function drawBorder(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): void {
   const { metrics, borderStyle } = layout;
   if (borderStyle === 'none') return;
@@ -224,7 +256,10 @@ function drawBorder(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): 
   const top = metrics.top;
   const right = left + metrics.width - 1;
   const bottom = top + metrics.height - 1;
-  const color = borderSgr(layout.borderColor);
+  // The band belongs to the rules too: a rule drawn in the effort colour but
+  // on the default background would cut the composer's fill in half.
+  const fill = backgroundSgr(layout.background);
+  const color = fill === '' ? borderSgr(layout.borderColor) : `${borderSgr(layout.borderColor)};${fill}`;
   const horizontal = unicodeBox ? '─' : '-';
   for (let x = left; x <= right; x += 1) {
     putCell(grid, top, x, horizontal, color);
@@ -249,8 +284,12 @@ function drawRegion(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): 
   const top = Math.max(0, metrics.top);
   const right = Math.min(grid[0]?.length ?? 0, metrics.left + metrics.width);
   const bottom = Math.min(grid.length, metrics.top + metrics.height);
+  // The fill goes down FIRST, across the whole rectangle: the band is the
+  // region, and the text is drawn on top of it.
+  const fill = backgroundSgr(layout.background);
+  const fillColor = backgroundColor(layout.background);
   for (let y = top; y < bottom; y += 1) {
-    for (let x = left; x < right; x += 1) putCell(grid, y, x, ' ', '');
+    for (let x = left; x < right; x += 1) putCell(grid, y, x, ' ', fill);
   }
   drawBorder(grid, layout, unicodeBox);
   const contentLeft = metrics.left + metrics.innerLeft;
@@ -260,12 +299,13 @@ function drawRegion(grid: Cell[][], layout: RegionLayout, unicodeBox: boolean): 
   let cursorRow = 0;
   for (const line of layout.lines) {
     if (cursorRow >= layout.contentHeight) break;
+    const painted = fillColor === undefined ? line : withBackground(line, layout.background ?? '', fillColor);
     cursorRow += drawLine(
       grid,
       contentTop + cursorRow,
       contentLeft,
       layout.contentWidth,
-      line,
+      painted,
       layout.contentHeight - cursorRow,
     );
   }
@@ -277,11 +317,33 @@ function rowKey(row: readonly Cell[]): string {
   ).join('\u0000');
 }
 
+/**
+ * Whether a cell's SGR parameters ask for a background.
+ *
+ * A background parameter is either the `48;…` family or one of the eight
+ * background codes (40–47) and their bright variants (100–107). The check
+ * exists because a cell's style is an opaque parameter list, and this is the
+ * one question the painter asks about it.
+ */
+function hasBackground(style: string): boolean {
+  if (style === '') return false;
+  for (const part of style.split(';')) {
+    if (part === '48' || part.startsWith('48;')) return true;
+    const code = Number(part);
+    if (Number.isInteger(code) && ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))) return true;
+  }
+  return false;
+}
+
 function renderRow(row: readonly Cell[]): string {
   let last = -1;
   for (let index = row.length - 1; index >= 0; index -= 1) {
     const cell = row[index];
-    if (cell !== undefined && !cell.continuation && cell.text !== ' ') {
+    // A cell that carries a BACKGROUND is content even when its text is a
+    // space: that is how a filled band reaches the edge of the row. Trimming
+    // it would cut the band's last columns off and leave the composer a frame
+    // rather than a surface.
+    if (cell !== undefined && !cell.continuation && (cell.text !== ' ' || hasBackground(cell.style))) {
       last = index + Math.max(1, cell.width) - 1;
       break;
     }

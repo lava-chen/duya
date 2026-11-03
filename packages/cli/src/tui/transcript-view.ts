@@ -183,6 +183,58 @@ const ANCHOR_COLUMNS = 2;
 
 
 /**
+ * The columns the selection caret costs in front of a row.
+ *
+ * `❯ ` is two columns, and it is prepended to the selected block's first row
+ * — in front of whatever that row already carries. A row that fills the pane
+ * has to know about it, or the caret pushes the row one line too long.
+ */
+export const SELECTION_CARET_COLUMNS = 2;
+
+/**
+ * Render a submitted prompt the way codex renders one.
+ *
+ * codex draws a sent prompt as a filled band across the pane with a dim `› `
+ * in front of the text (`history_cell/messages.rs` `UserHistoryCell`, with the
+ * fill from `style.rs` `history_prompt_style`). The band is what makes a sent
+ * message read as SENT rather than as another line of conversation, so it is
+ * worth the row of trailing spaces.
+ *
+ * Two details carry over:
+ *
+ * - the `› ` marker is muted and the continuation rows are indented under it,
+ *   so a multi-line prompt still reads as one block;
+ * - the band spans the whole pane, which means the text is padded to the
+ *   pane width — with the selection caret's two columns subtracted when this
+ *   block is the selected one, because that caret is prepended to the row.
+ *
+ * Without a known width (a caller that does not know the pane) the band covers
+ * the text only, which is still a band.
+ */
+function renderUserPrompt(
+  text: string,
+  options: RenderOptions,
+  styles: Styles,
+  selected: boolean,
+): string {
+  const band = styles.tags.promptBg;
+  const muted = styles.tags.muted;
+  const user = styles.tags.user;
+  const marker = '› ';
+  const width = options.width;
+  const pane = width === undefined ? undefined : Math.max(0, width - (selected ? SELECTION_CARET_COLUMNS : 0));
+  const rows = pane === undefined || pane <= marker.length
+    ? [text]
+    : wrapWithCursor(text, pane - marker.length, 0).rows;
+  return rows.map((row, index) => {
+    const prefix = index === 0 ? marker : '  ';
+    const body = escapeTags(row);
+    const pad = pane === undefined ? '' : ' '.repeat(Math.max(0, pane - visibleWidth(prefix) - visibleWidth(row)));
+    return `{${band}}{${muted}}${prefix}{/${muted}}{${user}}${body}{/${user}}${pad}{/${band}}`;
+  }).join('\n');
+}
+
+/**
  * One style per call. The style FUNCTIONS stay flat — each wraps its argument
  * in exactly one tag pair — but the inline tokenizer composes them, so a
  * rendered line can carry nested pairs (`{bold}…{accent}…{/accent}…{/bold}`).
@@ -1658,9 +1710,16 @@ export function blockExpanded(id: string, options: RenderOptions): boolean {
 function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles): string {
   switch (block.kind) {
     case 'user':
-      // FLAT: one style, no nesting, payload escaped. `›` lost its bold to
-      // achieve that, which is the trade the leak measured out.
-      return styles.user(`› ${block.text}`);
+      // The band is the point: a sent prompt reads as SENT because it sits on
+      // a fill, not because it is a different colour. The `› ` marker is
+      // muted and the text keeps the user's colour, which is duya's own way
+      // of saying "this one was yours".
+      return renderUserPrompt(
+        block.text,
+        options,
+        styles,
+        options.selectedBlockId !== undefined && options.selectedBlockId === block.id,
+      );
     case 'assistant':
       return renderAssistant(block.text, block.finalized, styles, options.width);
     case 'error':
