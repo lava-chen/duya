@@ -8,6 +8,7 @@
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
 | [Project Coordinator](active/2026-11-02-project-coordinator.md) | 当前主线 | 项目协调与执行闭环 → 长期状态/记忆 → Desktop 项目工作台；Bot 暂缓，CLI 独立发布后续 |
+| [Session CLI 发布收尾与 Bot / Host 边界](backlog/2026-11-01-bot-session-coordination.md) | 后续 | Project 首个闭环后接续，不作为 Coordinator 前置 |
 | [工具暴露与 Harness 调用链收敛](active/2026-10-31-tool-surface-and-harness-convergence.md) | P0 | W0 请求级 census 与 W1 执行契约；跨 616/617 的实施顺序、MCP/CLI/skill、provider、恢复与退役验收 |
 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | — | Desktop / CLI 独立 tag、release workflow、自包含 CLI 分发和安装器 |
 | [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 暂缓增强 | 保留既有成果；当前产品顺序以 Project Coordinator 计划为准 |
