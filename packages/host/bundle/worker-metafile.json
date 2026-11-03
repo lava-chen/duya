@@ -23042,7 +23042,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31628,
+      "bytes": 31638,
       "imports": [],
       "format": "esm"
     },
@@ -45236,7 +45236,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -46835,7 +46835,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -47138,7 +47138,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1874
+          "bytesInOutput": 1880
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47177,7 +47177,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 610
+          "bytesInOutput": 616
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 610
@@ -47366,7 +47366,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1423
+          "bytesInOutput": 1425
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -49322,7 +49322,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5754401
+      "bytes": 5754440
     }
   }
 }
