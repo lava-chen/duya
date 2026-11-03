@@ -81,6 +81,26 @@
       "types": "./dist/marketplace/source-parse.d.ts",
       "default": "./dist/marketplace/source-parse.js"
     },
+    "./marketplace/git-source": {
+      "types": "./dist/marketplace/git-source.d.ts",
+      "default": "./dist/marketplace/git-source.js"
+    },
+    "./marketplace/manifest": {
+      "types": "./dist/marketplace/manifest.d.ts",
+      "default": "./dist/marketplace/manifest.js"
+    },
+    "./marketplace/official-seeds": {
+      "types": "./dist/marketplace/official-seeds.d.ts",
+      "default": "./dist/marketplace/official-seeds.js"
+    },
+    "./install/layout": {
+      "types": "./dist/install/layout.d.ts",
+      "default": "./dist/install/layout.js"
+    },
+    "./install/package": {
+      "types": "./dist/install/package.d.ts",
+      "default": "./dist/install/package.js"
+    },
     "./plugins/loader/capability-discovery": {
       "types": "./dist/plugins/loader/capability-discovery.d.ts",
       "default": "./dist/plugins/loader/capability-discovery.js"

@@ -1,119 +1,88 @@
-import fs from 'fs';
-import path from 'path';
+// layout.ts — the Desktop's view of the shared plugin package layout.
+//
+// The layout itself lives in `@duya/plugin-core/install/layout` (plan 631): the
+// standalone Host installs plugins too, and two implementations of
+// `<userData>/plugins/cache/<marketplace>/<id>/<version>` plus its installed link
+// is how the two surfaces end up with two copies of one plugin. This file supplies
+// the root from Electron's `userData`, which is the only thing the shared module
+// could not know.
+import * as path from 'path';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
+import {
+  cacheStats,
+  cleanupOldVersions as coreCleanupOldVersions,
+  createInstalledLink,
+  ensureDir,
+  installedLinkPath,
+  listCachedVersions as coreListCachedVersions,
+  pluginCacheRoot,
+  pluginInstalledRoot,
+  pluginMarketplaceCacheDir,
+  pluginVersionCacheDir,
+  removeInstalledLink,
+  resolveInstalledLink,
+  type CacheStats,
+  type PluginRoots,
+} from '@duya/plugin-core/install/layout';
+
+export type { CacheStats };
 
 const COMPONENT = 'PluginCacheLayout' as LogComponent;
 
-function ensureDir(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
+function roots(): PluginRoots {
+  return { rootDir: app.getPath('userData') };
 }
 
 export function getPluginCacheRoot(): string {
-  const userData = app.getPath('userData');
-  return path.join(userData, 'plugins', 'cache');
+  return pluginCacheRoot(roots());
 }
 
 export function getPluginInstalledRoot(): string {
-  const userData = app.getPath('userData');
-  return path.join(userData, 'plugins', 'installed');
+  return pluginInstalledRoot(roots());
 }
 
 export function getPluginMarketplaceCacheDir(marketplace: string): string {
-  return path.join(getPluginCacheRoot(), marketplace);
+  return pluginMarketplaceCacheDir(roots(), marketplace);
 }
 
 export function getPluginVersionCacheDir(
   marketplace: string,
   pluginId: string,
-  version: string
+  version: string,
 ): string {
-  return path.join(getPluginCacheRoot(), marketplace, pluginId, version);
+  return pluginVersionCacheDir(roots(), marketplace, pluginId, version);
 }
 
 export function ensurePluginCacheDir(
   marketplace: string,
   pluginId: string,
-  version: string
+  version: string,
 ): string {
   const cacheDir = getPluginVersionCacheDir(marketplace, pluginId, version);
   ensureDir(cacheDir);
   return cacheDir;
 }
 
-export function listCachedVersions(
-  marketplace: string,
-  pluginId: string
-): string[] {
-  const pluginCacheDir = path.join(getPluginCacheRoot(), marketplace, pluginId);
-  if (!fs.existsSync(pluginCacheDir)) return [];
-
-  return fs
-    .readdirSync(pluginCacheDir, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
-    .map((dirent) => dirent.name)
-    .sort();
+export function listCachedVersions(marketplace: string, pluginId: string): string[] {
+  return coreListCachedVersions(roots(), marketplace, pluginId);
 }
 
 export function getPluginInstalledSymlinkPath(pluginId: string): string {
-  return path.join(getPluginInstalledRoot(), pluginId);
+  return installedLinkPath(roots(), pluginId);
 }
 
-/**
- * lstat-based existence check for the installed link path. `fs.existsSync`
- * follows the link, so it returns false for a dangling symlink (one whose
- * versioned cache dir is already gone) — using it here silently skipped
- * cleanup of ghost links and made every reinstall fail with EEXIST.
- */
-function linkEntryExists(linkPath: string): boolean {
-  try {
-    fs.lstatSync(linkPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function createInstalledSymlink(
-  pluginId: string,
-  cacheDir: string
-): void {
-  const logger = getLogger();
-  const installedDir = getPluginInstalledRoot();
-  ensureDir(installedDir);
-
-  const linkPath = getPluginInstalledSymlinkPath(pluginId);
-  removeInstalledSymlink(pluginId);
-
-  fs.symlinkSync(cacheDir, linkPath, 'dir');
-  logger.info('Plugin symlink created', { pluginId, cacheDir }, COMPONENT);
+export function createInstalledSymlink(pluginId: string, cacheDir: string): void {
+  createInstalledLink(roots(), pluginId, cacheDir);
+  getLogger().info('Plugin symlink created', { pluginId, cacheDir }, COMPONENT);
 }
 
 export function removeInstalledSymlink(pluginId: string): void {
-  const linkPath = getPluginInstalledSymlinkPath(pluginId);
-  if (!linkEntryExists(linkPath)) return;
-
-  const stat = fs.lstatSync(linkPath);
-  if (stat.isSymbolicLink()) {
-    fs.unlinkSync(linkPath);
-  } else {
-    // Real directory at the link path (never created by this module, but
-    // rmSync on the path itself does not follow it, so this is safe).
-    fs.rmSync(linkPath, { recursive: true, force: true });
-  }
+  removeInstalledLink(roots(), pluginId);
 }
 
 export function resolveInstalledSymlink(pluginId: string): string | null {
-  const linkPath = getPluginInstalledSymlinkPath(pluginId);
-  if (!fs.existsSync(linkPath)) return null;
-
-  try {
-    return fs.realpathSync(linkPath);
-  } catch {
-    return null;
-  }
+  return resolveInstalledLink(roots(), pluginId);
 }
 
 export function isSymlinkValid(pluginId: string, expectedCacheDir: string): boolean {
@@ -125,57 +94,11 @@ export function isSymlinkValid(pluginId: string, expectedCacheDir: string): bool
 export function cleanupOldVersions(
   marketplace: string,
   pluginId: string,
-  keepLatest: number
+  keepLatest: number,
 ): string[] {
-  const logger = getLogger();
-  const versions = listCachedVersions(marketplace, pluginId);
-
-  if (versions.length <= keepLatest) return [];
-
-  const toRemove = versions.slice(0, versions.length - keepLatest);
-  const pluginCacheDir = path.join(getPluginCacheRoot(), marketplace, pluginId);
-
-  for (const version of toRemove) {
-    const versionDir = path.join(pluginCacheDir, version);
-    fs.rmSync(versionDir, { recursive: true, force: true });
-    logger.info('Cleaned up old plugin version', { pluginId, version }, COMPONENT);
-  }
-
-  return toRemove;
+  return coreCleanupOldVersions(roots(), marketplace, pluginId, keepLatest);
 }
 
-export function getCacheStats(): {
-  totalPlugins: number;
-  totalVersions: number;
-  totalSizeBytes: number;
-} {
-  const cacheRoot = getPluginCacheRoot();
-  if (!fs.existsSync(cacheRoot)) {
-    return { totalPlugins: 0, totalVersions: 0, totalSizeBytes: 0 };
-  }
-
-  let totalPlugins = 0;
-  let totalVersions = 0;
-  let totalSizeBytes = 0;
-
-  function walk(dir: string, depth: number): void {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (depth === 2) totalVersions++;
-        if (depth === 1) totalPlugins++;
-        walk(fullPath, depth + 1);
-      } else if (entry.isFile()) {
-        try {
-          totalSizeBytes += fs.statSync(fullPath).size;
-        } catch {
-          // skip inaccessible files
-        }
-      }
-    }
-  }
-
-  walk(cacheRoot, 0);
-  return { totalPlugins, totalVersions, totalSizeBytes };
+export function getCacheStats(): CacheStats {
+  return cacheStats(roots());
 }
