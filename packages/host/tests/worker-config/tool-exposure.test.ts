@@ -23,8 +23,8 @@ describe('readToolExposureConfig (plan 452 Phase A)', () => {
     delete process.env.DUYA_TOOLS_ON_DEMAND_DISCOVERY;
   });
 
-  it('defaults to hint exposure (onDemandDiscovery: false) without config', () => {
-    expect(readToolExposureConfig(tmpRoot).onDemandDiscovery).toBe(false);
+  it('defaults to search exposure (onDemandDiscovery: true) without config', () => {
+    expect(readToolExposureConfig(tmpRoot).onDemandDiscovery).toBe(true);
   });
 
   it('reads [tools] on_demand_discovery = true from config.toml', () => {
@@ -38,7 +38,7 @@ describe('readToolExposureConfig (plan 452 Phase A)', () => {
 
   it('keeps the default on malformed config', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), 'not [valid toml {{{', 'utf-8');
-    expect(readToolExposureConfig(tmpRoot).onDemandDiscovery).toBe(false);
+    expect(readToolExposureConfig(tmpRoot).onDemandDiscovery).toBe(true);
   });
 
   it('env override wins over config file', () => {
@@ -65,10 +65,10 @@ describe('readToolExposureConfig legacy MCP policy', () => {
     delete process.env.DUYA_TOOLS_ON_DEMAND_DISCOVERY;
   });
 
-  it('defaults to hint exposure', () => {
+  it('defaults to search exposure', () => {
     const config = readToolExposureConfig(tmpRoot);
-    expect(config.exposure).toBe('hint');
-    expect(config.onDemandDiscovery).toBe(false);
+    expect(config.exposure).toBe('search');
+    expect(config.onDemandDiscovery).toBe(true);
   });
 
   it('reads the explicit exposure keys', () => {
@@ -107,7 +107,7 @@ describe('readToolExposureConfig legacy MCP policy', () => {
 
   it('ignores invalid exposure values (keeps default)', () => {
     fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\nexposure = "banana"\n', 'utf-8');
-    expect(readToolExposureConfig(tmpRoot).exposure).toBe('hint');
+    expect(readToolExposureConfig(tmpRoot).exposure).toBe('search');
   });
 
   it('env DUYA_TOOLS_EXPOSURE overrides config', () => {
