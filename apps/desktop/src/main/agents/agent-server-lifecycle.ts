@@ -239,6 +239,25 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
+      if (msg.type === 'project-run-settled' && typeof msg.runId === 'string') {
+        // Main owns the project ledger, the mailbox and the renderer fan-out;
+        // the Agent Server only announces that the Run's terminal is durable.
+        // Imported lazily: the settlement reaches the idle dispatcher, which
+        // already depends on this lifecycle module.
+        const runId = msg.runId;
+        void import('../projects/run-feedback')
+          .then(({ settleProjectRun }) => settleProjectRun(runId))
+          .catch((error) => {
+            getLogger().error(
+              'Project run settlement dispatch failed',
+              error instanceof Error ? error : new Error(String(error)),
+              { runId },
+              LogComponent.Main,
+            );
+          });
+        return;
+      }
+
       if (msg.type === 'db:request') {
         // Plan 587 C6.1: this is the second real transport for `db:request`, and
         // it is NOT in the chat pool's map — the agent server is its own child.

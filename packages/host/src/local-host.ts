@@ -96,6 +96,7 @@ import { createHostGoalApi } from './goal-api.js';
 import { createHostModeStateApi } from './mode-state-api.js';
 import { createHostTaskApi } from './task-api.js';
 import { createHostProjectApi } from './project-api.js';
+import { createProjectRunSettlementService } from './project-run-settlement.js';
 import { createHostPermissionRequestApi } from './permission-request-api.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import { createHostLockApi } from './lock-api.js';
@@ -629,6 +630,19 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           runExecution.validateSessionCaller(caller);
         },
       });
+      // The standalone Host records a finished work-Session Run and leaves a
+      // durable Coordinator notification in the mailbox. There is no renderer
+      // idle dispatcher here, so the row is delivered on the Coordinator's
+      // next turn (or by whichever surface drains the mailbox).
+      const projectRunSettlement = createProjectRunSettlementService({
+        stores: {
+          runs: core.stores.runs,
+          projects: core.stores.projects,
+          tasks: core.stores.tasks,
+          mailbox: core.stores.mailbox,
+        },
+        logger: executionLogger,
+      });
       runExecution = new HostRunExecutionController({
         checkoutService,
         runs: core.stores.runs,
@@ -703,12 +717,23 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           logger: executionLogger,
         }),
         logger: executionLogger,
+        onRunSettled: (runId) => projectRunSettlement.settleRun(runId),
         worker: {
           resolveWorkerPath: () => options.workerPath as string,
           resolveBetterSqlite3Path: () =>
             options.betterSqlite3Path ?? path.join(process.cwd(), 'node_modules', 'better-sqlite3'),
         },
       });
+      // Recover terminal work-Session Runs whose notification never reached
+      // the mailbox, such as a crash between the activity and mailbox writes.
+      try {
+        projectRunSettlement.reconcile();
+      } catch (error) {
+        executionLogger.error(
+          'Project run reconciliation failed',
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
     }
 
     // Where an accepted input goes.

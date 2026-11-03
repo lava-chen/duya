@@ -179,6 +179,10 @@
       "types": "./dist/project-api.d.ts",
       "import": "./dist/project-api.js"
     },
+    "./project-run-settlement": {
+      "types": "./dist/project-run-settlement.d.ts",
+      "import": "./dist/project-run-settlement.js"
+    },
     "./research-api": {
       "types": "./dist/research-api.d.ts",
       "import": "./dist/research-api.js"

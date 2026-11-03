@@ -354,6 +354,19 @@ if (gotTheLock) {
     const { startDesktopHostApi } = await import('./cli/desktop-host-api');
     await startDesktopHostApi();
 
+    // Recover work-Session Runs whose terminal predates this boot but whose
+    // project activity or Coordinator notification never got written. The
+    // durable rows created here are delivered by the mailbox on the
+    // Coordinator's next turn.
+    try {
+      const { reconcileProjectRuns } = await import('./projects/run-feedback');
+      reconcileProjectRuns();
+    } catch (error) {
+      logger.warn('Project run reconciliation failed to start', {
+        error: error instanceof Error ? error.message : String(error),
+      }, 'Main');
+    }
+
     // Plan 587 C6.1: create the Control Plane after CoreStores and the Host API
     // client are ready. `db:request` handlers reach THIS instance through
     // `getControlPlane()`.

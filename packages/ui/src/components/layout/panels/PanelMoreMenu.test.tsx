@@ -113,11 +113,11 @@ beforeEach(() => {
 
 describe("PanelMoreMenu", () => {
   /**
-   * The three cases that wait for the Mini App surface directory carry an
+   * The four cases that wait for the Mini App surface directory carry an
    * explicit timeout.
    *
    * They are the only slow cases in this file: the two that never wait for
-   * `listSurfaces` finish in 8-53 ms, while these three measure 10.9-11.6 s
+   * `listSurfaces` finish in 8-53 ms, while these four measure 10.9-11.6 s
    * each on a developer machine. The vitest default is 30 s per test, so on a
    * loaded CI runner the catalogue read crosses it and the job fails on a
    * timeout that has nothing to do with the assertion.
@@ -216,7 +216,7 @@ describe("PanelMoreMenu", () => {
       server: "reports",
       availability: "always",
     }));
-  });
+  }, SLOW_CATALOGUE_TIMEOUT_MS);
 
   it("opens the background-tasks panel from the menu", async () => {
     await openMenu();

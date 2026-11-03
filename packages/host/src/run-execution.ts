@@ -167,6 +167,12 @@ export interface HostRunExecutionControllerOptions {
   readonly runs: AttemptFencedRunStore;
   /** Resolves a session's turn defaults; `null` means the session does not exist. */
   readonly sessionDefaults: (sessionId: string) => Promise<HostTurnDefaults | null>;
+  /**
+   * Fired after a Run's terminal is durable and the controller has released
+   * the attempt. Project settlement hangs off this hook; a throwing callback
+   * must not turn a committed terminal into a failed settle.
+   */
+  readonly onRunSettled?: (runId: string) => void;
   /** Serves the worker's `db:request` frames. Required — see module doc. */
   readonly bridge: WorkerDbBridge;
   readonly logger: HostRunExecutionLogger;
@@ -348,6 +354,15 @@ export class HostRunExecutionController {
           if (state === SessionState.STREAMING || state === SessionState.COMPLETING) {
             this.#registry.transitionState(row.session_id, SessionState.COMPLETED);
           }
+        }
+        try {
+          options.onRunSettled?.(runId);
+        } catch (error) {
+          options.logger.error(
+            'Host run settlement callback failed',
+            error instanceof Error ? error : new Error(String(error)),
+            { runId },
+          );
         }
       },
       channel: createWorkerExecutionChannel({
