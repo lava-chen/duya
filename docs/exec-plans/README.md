@@ -14,6 +14,7 @@
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |
 | TUI 插件显示名 | [2026-11-03 TUI /plugin 显示插件真名](active/2026-11-03-tui-plugin-display-name.md) | Host 投影 `interface.displayName/shortDescription/longDescription`；`/plugin` 列表、详情与 `@` 补全显示 PDF/Zotero 等真名；相关用例与类型/架构门禁已过，PR #598 待集成 |
 | TUI 插件市场管理 | [631 TUI 插件市场管理界面](active/630-tui-capabilities-series/631-tui-plugin-market-ui.md) | `/plugin` 三 tab 浏览器与 Host 写 API 已实现；PR #601 待最新 CI 与授权集成 |
+| TUI 工具折叠与运行期输出 | [636 TUI 工具行的折叠与运行期输出](active/636-tui-live-shell-output.md) | 折叠行至少画一行、`[+ N]` 改为被隐藏行数并在标记内点名 `Ctrl+T`（`04e7faff`）；下一步 `tool.output_delta` 协议链与 Host 字节源 |
 | TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](archive/2026-11-03-tui-transparent-composer-background.md) | `DUYA_TUI_COMPOSER_BG=transparent` 已合并（PR #595，`cccab45e`）；master 临时 CLI 已安装并加入用户 PATH |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
