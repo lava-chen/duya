@@ -1,6 +1,6 @@
 # 630 TUI 四能力系列
 
-状态：active · 负责人：630 系列 owner · 更新：2026-10-26
+状态：active · 负责人：630 系列 owner · 更新：2026-11-03
 
 ## 目标与边界
 
@@ -34,4 +34,7 @@
 
 计划检出：`.claude/worktrees/tui-capabilities-plan` · 分支：`codex/630-634-tui-capabilities-plans` · base：`e9391659`（已合入 master `d80ca3c6`）。
 实现检出（630a）：`.claude/worktrees/630a-rich-panel` · 分支：`codex/630a-tui-rich-panel-modal` · base：`d80ca3c6`。
-下一步：630a 过 PR 集成后开工 632；其余切片在 630a 合入前保持 pending。
+
+- 630a（#512）与 632 A（#514）已于 2026-10-27 合入 master；632 B `/provider` 面板 #518 仍 OPEN。
+- 631 三片已落地：安装执行上收 `plugin-core`、Host 插件管理写面、TUI `/plugin` 三 tab 面板。实现检出 `.claude/worktrees/tui-plugin-management` · 分支 `codex/tui-plugin-management` · base `c8c78380`（叠加在 #598 显示名修复之上）。真机验收未闭合，见 [631](631-tui-plugin-market-ui.md) 的「接续 / 结果」。
+- 下一步：631 开 PR、#598 合入后把 base 改回 master；634、633 仍按 2026-10-26 的顺序待开工。

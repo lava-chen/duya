@@ -1,6 +1,7 @@
 import { createPluginAudit } from './plugins/audit.js';
 import { createPluginServices } from './plugins/service.js';
 import { createPluginManagementApi } from './plugins/management-api.js';
+import { createHostLocalPluginManagementApi } from './plugin-management/index.js';
 import { getLogger as getPluginLogger } from './worker-logger.js';
 import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 import {
@@ -1000,6 +1001,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // both answer the same list.
       localPluginInventoryApi: createHostLocalPluginInventoryApi(),
       pluginManagementApi: createPluginManagementApi(pluginServices.manager, pluginServices),
+      // Expose the revision-aware local contract used by the TUI client.
+      localPluginManagementApi: createHostLocalPluginManagementApi({ log: executionLogger }),
       pluginManagementAudit: createPluginAudit(dataRoot, (m, d) => getPluginLogger().warn(m, d)),
       // The repository-root AGENTS.md write. The client names a session and
       // the Host resolves the directory, because a path from a client is a

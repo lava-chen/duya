@@ -556,6 +556,11 @@ export class RichPanelController implements PanelController {
       return true;
     }
     if (name === 'tab' && mods.shift !== true) {
+      // A tab may claim Tab as a row action — the toggle codex puts on a plugin
+      // row. In the list, where the cursor is on a row, that claim wins; in the
+      // strip, and for every tab that never binds `tab`, Tab stays the
+      // tab-switch it has always been. Opt-in, so no existing panel changes.
+      if (this.focus === 'content' && this.hasRowAction('tab')) return this.runRowAction('tab');
       this.move(1);
       return true;
     }

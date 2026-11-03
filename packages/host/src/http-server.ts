@@ -1,5 +1,5 @@
 import type { PluginAuditEvent } from './plugins/audit.js';
-import type { HostPluginManagementApiV1 } from '@duya/agent-protocol/plugin-management';
+import type { HostPluginManagementApiV1, HostPluginManagementInstallInput } from '@duya/agent-protocol/plugin-management';
 import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
 import { logger } from '@duya/host/worker-logger';
@@ -174,6 +174,15 @@ import type {
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryApiV1 } from '@duya/agent-protocol/plugin-inventory';
+import type {
+  HostLocalPluginManagementApiV1,
+  HostMarketplaceAddInput,
+  HostMarketplaceRemoveInput,
+  HostPluginEnabledInput,
+  HostPluginInstallInput,
+  HostPluginRemoveInput,
+} from '@duya/agent-protocol/plugin-management';
+import { HostPluginApiError } from './plugin-management/index.js';
 import type { HostSessionHandoffApiV1 } from '@duya/agent-protocol/session-handoff';
 import type { HostAgentsMdApiV1 } from '@duya/agent-protocol/doctor';
 import type { HostPluginAppInstanceApiV1 } from '@duya/agent-protocol';
@@ -401,6 +410,17 @@ export interface HostSessionHttpServerOptions {
   readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
   readonly pluginManagementApi?: HostPluginManagementApiV1;
   readonly pluginManagementAudit?: (event: PluginAuditEvent) => Promise<void>;
+  /**
+   * Local-only marketplace catalog reads plus the `[plugins]` / `[marketplaces]`
+   * writes behind them.
+   *
+   * Optional for the same reason the inventory is: a Host composed without a
+   * writable plugin root answers 404 `plugin_management_api_unavailable` instead
+   * of accepting a POST whose effect would be nothing. Reads are separate from
+   * the inventory because an install needs the catalog, not just what is already
+   * on disk.
+   */
+  readonly localPluginManagementApi?: HostLocalPluginManagementApiV1;
   /**
    * Handing a session over to the desktop app.
    *
@@ -1935,6 +1955,122 @@ export class HostSessionHttpServer {
       }
       try {
         this.#sendJson(res, 200, await api.listPluginInventory());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugin-catalog' && req.method === 'GET') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      try {
+        this.#sendJson(res, 200, await api.listPluginCatalog());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/marketplaces' && req.method === 'GET') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      try {
+        this.#sendJson(res, 200, await api.listMarketplaces());
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugins/install' && req.method === 'POST') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      try {
+        // The API validates the fields: an empty pluginId, a marketplace that is
+        // really a path and a stale revision are refused there, next to the file
+        // they protect, rather than re-derived per route.
+        this.#sendJson(res, 200, await api.installPlugin(body as unknown as HostPluginInstallInput));
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (
+      (url.pathname === '/v1/local/plugins/enable' || url.pathname === '/v1/local/plugins/disable')
+      && req.method === 'POST'
+    ) {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      // The pathname is the intent, so a surface never sends a boolean it could
+      // get backwards; anything in the body is overwritten by the route.
+      const enabled = url.pathname.endsWith('/enable');
+      try {
+        this.#sendJson(
+          res,
+          200,
+          await api.setPluginEnabled({ ...(body as unknown as HostPluginEnabledInput), enabled }),
+        );
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/plugins/uninstall' && req.method === 'POST') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      try {
+        this.#sendJson(res, 200, await api.removePlugin(body as unknown as HostPluginRemoveInput));
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/marketplaces/add' && req.method === 'POST') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      try {
+        this.#sendJson(
+          res,
+          200,
+          await api.addMarketplace(body as unknown as HostMarketplaceAddInput),
+        );
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/marketplaces/remove' && req.method === 'POST') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      try {
+        this.#sendJson(
+          res,
+          200,
+          await api.removeMarketplace(body as unknown as HostMarketplaceRemoveInput),
+        );
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+    if (url.pathname === '/v1/local/marketplaces/refresh' && req.method === 'POST') {
+      const api = this.#pluginManagementApi(res);
+      if (api === null) return;
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      try {
+        // `{}` is a real request: sync every configured source and report one
+        // outcome each. A 400 would make the generic sync impossible from a
+        // client that has no marketplace name to offer.
+        this.#sendJson(res, 200, await api.refreshMarketplace(body));
       } catch (error) {
         this.#sendApiError(res, error);
       }
@@ -5652,6 +5788,22 @@ export class HostSessionHttpServer {
     }
   }
 
+  /**
+   * Resolve the plugin write surface, or answer the 404 and return null.
+   *
+   * Nine routes need it, and a Host composed without a writable plugin root has
+   * to refuse all of them with the same code: "this Host cannot manage plugins"
+   * is not "no plugins are offered", and the TUI shows them differently.
+   */
+  #pluginManagementApi(res: ServerResponse): HostLocalPluginManagementApiV1 | null {
+    const api = this.#options.localPluginManagementApi;
+    if (api === undefined) {
+      this.#sendJson(res, 404, { error: { code: 'plugin_management_api_unavailable' } });
+      return null;
+    }
+    return api;
+  }
+
   #sendApiError(res: ServerResponse, error: unknown): void {
     if (error instanceof HostSessionCompactionError) {
       // The status is carried by the error: "no live worker" and "the side
@@ -5679,6 +5831,14 @@ export class HostSessionHttpServer {
       // into a form (400), a row another surface deleted (404), a stale
       // revision (409) and a config.toml that cannot be parsed (409) need
       // different remedies, and a 500 for any of them is a lie about the Host.
+      this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
+      return;
+    }
+    if (error instanceof HostPluginApiError) {
+      // Same rule one domain over: a plugin that is not in any catalog (404),
+      // a marketplace still holding installed plugins (409), a clone that would
+      // land outside its root (409) and a fetch that failed (502) are four
+      // different remedies for the user.
       this.#sendJson(res, error.status, { error: { code: error.code, message: error.message } });
       return;
     }

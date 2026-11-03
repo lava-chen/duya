@@ -139,6 +139,10 @@
       "types": "./dist/plugin-inventory.d.ts",
       "import": "./dist/plugin-inventory.js"
     },
+    "./plugin-management": {
+      "types": "./dist/plugin-management.d.ts",
+      "import": "./dist/plugin-management.js"
+    },
     "./session-handoff": {
       "types": "./dist/session-handoff.d.ts",
       "import": "./dist/session-handoff.js"
@@ -202,10 +206,6 @@
     "./bot-inbox-api": {
       "types": "./dist/bot-inbox-api.d.ts",
       "import": "./dist/bot-inbox-api.js"
-    },
-    "./plugin-management": {
-      "types": "./dist/plugin-management.d.ts",
-      "import": "./dist/plugin-management.js"
     }
   },
   "files": [

@@ -1,4 +1,4 @@
-import type { HostPluginManagementApiV1, HostPluginInstallInput } from '@duya/agent-protocol/plugin-management';
+import type { HostPluginManagementApiV1, HostPluginManagementInstallInput } from '@duya/agent-protocol/plugin-management';
 import type {
   HostLocalSessionImportInput,
   HostLocalSessionImportResult,
@@ -253,6 +253,20 @@ import type {
 } from '@duya/agent-protocol/app-connections';
 import type { HostLocalPluginSetupApiV1 } from '@duya/agent-protocol/plugin-setup';
 import type { HostPluginInventoryEntry } from '@duya/agent-protocol/plugin-inventory';
+import type {
+  HostLocalPluginManagementApiV1,
+  HostMarketplaceAddInput,
+  HostMarketplaceList,
+  HostMarketplaceMutationResult,
+  HostMarketplaceRefreshResult,
+  HostMarketplaceRemoveInput,
+  HostPluginCatalogList,
+  HostPluginEnabledInput,
+  HostPluginInstallInput,
+  HostPluginMutationResult,
+  HostPluginRemoveInput,
+  HostPluginRemoveResult,
+} from '@duya/agent-protocol/plugin-management';
 import type { HostSessionHandoffResult } from '@duya/agent-protocol/session-handoff';
 import type { InitAgentsMdResult } from '@duya/agent-protocol/doctor';
 import type {
@@ -430,7 +444,8 @@ export class HostSessionHttpClient implements
   HostResearchApiV1,
   HostSessionInputApiV1,
   HostHealthApiV1,
-  HostLocalProviderManagementApiV1 {
+  HostLocalProviderManagementApiV1,
+  HostLocalPluginManagementApiV1 {
   constructor(
     private readonly origin: string,
     private readonly token: string,
@@ -1800,18 +1815,71 @@ export class HostSessionHttpClient implements
    * inventories answer with, so every inventory reads the same way.
    */
   async listManagedPlugins(): ReturnType<HostPluginManagementApiV1['list']> { return this.request('GET', '/v1/plugins'); }
-  async listPluginCatalog(): ReturnType<HostPluginManagementApiV1['catalog']> { return this.request('GET', '/v1/plugin-catalog'); }
+  async listPluginCatalogLegacy(): ReturnType<HostPluginManagementApiV1['catalog']> { return this.request('GET', '/v1/plugin-catalog'); }
   async listPluginMarketplaces(): ReturnType<HostPluginManagementApiV1['listMarketplaces']> { return this.request('GET', '/v1/plugin-marketplaces'); }
   async addPluginMarketplace(source: string): ReturnType<HostPluginManagementApiV1['addMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces', { source }); }
   async removePluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['removeMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/remove', {}); }
   async refreshPluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['refreshMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/refresh', {}); }
-  async installPlugin(input: HostPluginInstallInput): ReturnType<HostPluginManagementApiV1['install']> { return this.request('POST', '/v1/plugins/install', input); }
-  async setPluginEnabled(id: string, enabled: boolean): ReturnType<HostPluginManagementApiV1['setEnabled']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + (enabled ? '/enable' : '/disable'), {}); }
+  async installPluginLegacy(input: HostPluginManagementInstallInput): ReturnType<HostPluginManagementApiV1['install']> { return this.request('POST', '/v1/plugins/install', input); }
+  async setPluginEnabledLegacy(id: string, enabled: boolean): ReturnType<HostPluginManagementApiV1['setEnabled']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + (enabled ? '/enable' : '/disable'), {}); }
   async uninstallPlugin(id: string, deleteData = false): ReturnType<HostPluginManagementApiV1['uninstall']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/uninstall', { deleteData }); }
   async updatePlugin(id: string): ReturnType<HostPluginManagementApiV1['update']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/update', {}); }
 
   async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
     return this.request('GET', '/v1/local/plugins');
+  }
+
+  /**
+   * The installable catalog: every plugin the configured marketplaces offer.
+   *
+   * Separate from {@link listPlugins} the way the provider catalog is separate
+   * from the provider table — one answers "what could I install", the other
+   * "what do I have". A Host without a writable plugin root refuses with 404
+   * `plugin_management_api_unavailable` rather than returning an empty catalog.
+   */
+  async listPluginCatalog(): Promise<HostPluginCatalogList> {
+    return this.request<HostPluginCatalogList>('GET', '/v1/local/plugin-catalog');
+  }
+
+  /** The configured marketplace sources and what the Host could observe about each. */
+  async listMarketplaces(): Promise<HostMarketplaceList> {
+    return this.request<HostMarketplaceList>('GET', '/v1/local/marketplaces');
+  }
+
+  async installPlugin(input: HostPluginInstallInput): Promise<HostPluginMutationResult> {
+    return this.request<HostPluginMutationResult>('POST', '/v1/local/plugins/install', input);
+  }
+
+  async setPluginEnabled(input: HostPluginEnabledInput): Promise<HostPluginMutationResult> {
+    // The pathname carries the intent, so the boolean cannot be inverted in
+    // transit: the route derives `enabled` from which half it is.
+    const path = input.enabled ? '/v1/local/plugins/enable' : '/v1/local/plugins/disable';
+    return this.request<HostPluginMutationResult>('POST', path, input);
+  }
+
+  async removePlugin(input: HostPluginRemoveInput): Promise<HostPluginRemoveResult> {
+    return this.request<HostPluginRemoveResult>('POST', '/v1/local/plugins/uninstall', input);
+  }
+
+  async addMarketplace(input: HostMarketplaceAddInput): Promise<HostMarketplaceMutationResult> {
+    return this.request<HostMarketplaceMutationResult>('POST', '/v1/local/marketplaces/add', input);
+  }
+
+  async removeMarketplace(
+    input: HostMarketplaceRemoveInput,
+  ): Promise<HostMarketplaceMutationResult> {
+    return this.request<HostMarketplaceMutationResult>(
+      'POST',
+      '/v1/local/marketplaces/remove',
+      input,
+    );
+  }
+
+  async refreshMarketplace(input: {
+    readonly marketplace?: string;
+    readonly expectedRevision?: string;
+  } = {}): Promise<HostMarketplaceRefreshResult> {
+    return this.request<HostMarketplaceRefreshResult>('POST', '/v1/local/marketplaces/refresh', input);
   }
 
   /**

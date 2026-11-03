@@ -1,6 +1,6 @@
 import type { PluginServices } from './service.js';
 import fs from 'node:fs';
-import type { HostManagedPlugin, HostPluginManagementApiV1, HostPluginInstallInput } from '@duya/agent-protocol/plugin-management';
+import type { HostManagedPlugin, HostPluginManagementApiV1, HostPluginManagementInstallInput } from '@duya/agent-protocol/plugin-management';
 import type { PluginResult } from '@duya/plugin-core';
 import type { SharedPluginManager } from './PluginManager.js';
 import { PluginScope } from './types.js';
@@ -83,7 +83,7 @@ export function createPluginManagementApi(manager: SharedPluginManager, services
         }))
       };
     },
-    async install(input: HostPluginInstallInput) {
+    async install(input: HostPluginManagementInstallInput) {
       if (input.scope !== undefined && input.scope !== 'user') throw new PluginManagementError('unsupported_plugin_scope', 'Only user plugin scope is supported by this Host');
       if (input.pluginId) requirePluginSegment(input.pluginId);
       if (!input.fromPath && !input.pluginId) throw new PluginManagementError('invalid_plugin_install', 'Provide a plugin id or source directory');
