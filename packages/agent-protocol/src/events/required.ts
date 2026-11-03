@@ -129,6 +129,7 @@ export const REQUIRED_FIELDS = {
     mcp: false,
   },
   'tool.arguments_delta': { toolCallId: true, delta: true },
+  'tool.output_delta': { toolCallId: true, delta: true },
   'tool.progress': { toolCallId: true, elapsedMs: true, title: false, percent: false, stage: false },
   'tool.group_progress': { groupId: false, title: true, source: true },
   'tool.timed_out': { toolCallId: true, toolName: true, elapsedMs: true },
