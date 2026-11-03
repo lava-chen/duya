@@ -5,7 +5,7 @@ import { WorkflowRuntimeManager } from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps, type DesktopSessionStartRequest } from './router';
-import { InteragentRouter } from './interagent-router';
+import { InteragentRouter, sendInteragentEventToCaller } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
 import { createHostSessionService } from '@duya/host/session-admission';
 import { createDesktopNativeRunEventWriter } from './native-run-event-writer';
@@ -183,6 +183,25 @@ const interagentRouter = new InteragentRouter({
   sessionManager,
   dbRequest,
   workerDbRequests,
+  // The control lease (R1.2). The lease says who may direct a session, and a
+  // session the user has taken over is not the Coordinator's to instruct.
+  //
+  // The lease lives in the main process's core database, and this process
+  // reaches it over the same bridge every other DB read uses — so there is one
+  // authority, read one way, and no second lease store to drift from it.
+  //
+  // ANY live lease blocks the invoke. The lease exists precisely to say "this
+  // session has an owner that is not an agent", and a session-to-session
+  // invoke is always an agent speaking to another.
+  controlLease: {
+    blockedBy: async (sessionId: string) => {
+      const lease = await dbRequest('session:controlLease', { sessionId }) as {
+        holderKind?: string;
+      } | null;
+      if (!lease || !lease.holderKind) return null;
+      return { code: 'control_lease_held' as const, holderKind: lease.holderKind };
+    },
+  },
 });
 
 workerManager.setMessageHandler((sessionId, msg, child) => {
@@ -212,7 +231,10 @@ workerManager.setMessageHandler((sessionId, msg, child) => {
   }
 
   if (msg.type === 'interagent:invoke') {
-    // Fire and forget — errors are handled internally and sent as chat:error
+    // The router owns the whole invoke lifecycle, including its refusals:
+    // a refusal is reported to the caller as a terminal event, so the
+    // caller's tool promise settles with the REAL reason instead of
+    // waiting out its timeout.
     void interagentRouter.handleInvoke({
       id: msg.id as string,
       callerSessionId: msg.callerSessionId as string,
@@ -223,16 +245,14 @@ workerManager.setMessageHandler((sessionId, msg, child) => {
       timeout: msg.timeout as number,
     }).catch((err) => {
       workerLogger.error('Interagent invoke failed', err instanceof Error ? err : new Error(String(err)), { invokeId: msg.id as string });
-      // Send synthetic error to caller
-      workerManager.sendCommand(msg.callerSessionId as string, {
-        type: 'interagent:event',
-        id: msg.id as string,
-        event: {
-          type: 'chat:error',
-          sessionId: msg.targetSessionId as string,
-          message: `interagent invoke failed: ${err instanceof Error ? err.message : String(err)}`,
-          code: 'invoke_failed',
-        },
+      // Over IPC, never stdin: the caller's main loop is blocked awaiting
+      // this tool, so a stdin-borne event would sit unread until the
+      // caller's own timeout. See sendInteragentEventToCaller.
+      sendInteragentEventToCaller(workerManager, msg.callerSessionId as string, msg.id as string, {
+        type: 'chat:error',
+        sessionId: msg.targetSessionId as string,
+        message: `interagent invoke failed: ${err instanceof Error ? err.message : String(err)}`,
+        code: 'invoke_failed',
       });
     });
   }
@@ -325,6 +345,12 @@ const runOrchestrator = new RunOrchestrator({
   // verdict. If a live consumer is ever added to this surface, it must be
   // attached HERE so it inherits that barrier rather than bypassing it.
   logger,
+  // A durable terminal is the earliest point at which Main can turn the Run
+  // into project feedback. Main owns the project ledger and the renderer
+  // fan-out; this process only announces the settled run.
+  onRunSettled: (runId) => {
+    process.send?.({ type: 'project-run-settled', runId });
+  },
   channel: createWorkerExecutionChannel({
     // The command is delivered by the host because the host owns
     // `WorkerManager`; the fields on it come from the run, so the run layer

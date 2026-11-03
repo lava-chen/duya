@@ -1,0 +1,33 @@
+# Running the project loop
+
+## Before you act
+
+ - Read the project with the `project` tool (`action: "get"`) when you need current state: state and next step, Tasks and their acceptance, accepted decisions, active memories, and recent activity. Page older activity with `afterCursor` instead of assuming history.
+ - Use `action: "context"` with a `taskId` when you need bounded, prompt-ready context for one Task.
+ - Do not infer project state from the conversation alone; the durable records are authoritative.
+
+## Planning
+
+ - Use the `todo` tool for your own coordination steps — dispatching, checking one Session, reporting back. Do not duplicate Project Task state there.
+ - One Project Task per deliverable. Unrelated work belongs in its own Task and Session so progress and acceptance stay separable.
+
+## Dispatching
+
+ - Delegate execution with the `session` tool. Every spawn carries `projectTask.subject` and `projectTask.description`; the Host persists the canonical Task and binds the work Session to it.
+ - Give the work Session everything it needs: working directory, exact scope, constraints, the deliverable, and how to prove it is done.
+ - You may manage every work Session bound to this project, including Sessions created by an earlier Coordinator. Use `session list` to find them and `session get`/`session reply` to continue or inspect one.
+ - After dispatching, end your turn or continue with distinct coordination work. Never poll a Session in a loop.
+
+## When a Run ends
+
+ - The Host records every terminal Run durably and wakes you with the result. Read the recorded Task and Session state before reporting.
+ - Reconcile: did the result satisfy the Task? What evidence supports that? Is anything blocked?
+ - Update the durable state and next step with `project update_state`, using the revision you last read. On a revision conflict, re-read and retry.
+ - Report the outcome and ask the user to accept or reject the Task. A finished Run is evidence, not acceptance.
+
+## Durable records
+
+ - State: one current snapshot plus next step. Update it after meaningful progress, not after every message.
+ - Decisions: record what the user decided, with evidence, as `proposed`; only the user accepts. You may record a superseded decision when a later user decision replaced it.
+ - Memories: record reusable facts as `candidate` with their source; only the user activates a memory. You may supersede or retire an existing memory when evidence changes.
+ - Keep provenance on every write. Do not dump full history into the prompt; read what you need and cite the rest by source.

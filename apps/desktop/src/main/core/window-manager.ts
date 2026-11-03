@@ -11,16 +11,34 @@ import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
 import { attachWebviewGuard } from './webview-guard';
 import { loadWindowState, saveWindowState } from './window-state';
+import { promptCloseChoice } from './lifecycle-dialogs';
 
 const logger = getLogger();
 
 // Module-level window state
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+/** True while the one-time close-to-hide notice is on screen. */
+let closeNoticePending = false;
+/** True when the close notice's "Quit" button asked for the exit. */
+let closeNoticeConfirmedQuit = false;
 
 // Export getters/setters
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow;
+}
+
+/**
+ * Was this quit already confirmed by the close notice?
+ *
+ * The notice's Quit button says "stop everything", which is the same question
+ * the quit guard asks before discarding running work. Asking twice would make
+ * the first answer look ignored. Reads once and clears.
+ */
+export function consumeCloseNoticeQuit(): boolean {
+  const confirmed = closeNoticeConfirmedQuit;
+  closeNoticeConfirmedQuit = false;
+  return confirmed;
 }
 
 export function getIsQuitting(): boolean {
@@ -332,21 +350,66 @@ export async function createWindow(): Promise<void> {
     // so the next launch restores the same position. `getNormalBounds()`
     // returns the un-maximized rect when maximized, which is what we want
     // to restore — combined with the `maximized` flag above.
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    const persistBounds = (acknowledgeNotice = false) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
       try {
         const bounds = mainWindow.getNormalBounds();
         saveWindowState({
           ...bounds,
           maximized: mainWindow.isMaximized(),
+          // `saveWindowState` merges with the file on disk, so omitting the
+          // flag keeps whatever the user already answered.
+          ...(acknowledgeNotice ? { hideNoticeAcknowledged: true } : {}),
         });
       } catch {
         // Best-effort — skip saving if the window is already torn down.
       }
+    };
+
+    if (isQuitting) {
+      persistBounds();
+      return;
     }
-    if (!isQuitting) {
-      event.preventDefault();
+
+    event.preventDefault();
+    // A second close click while the notice is on screen must not stack a
+    // second dialog; the first one already owns the decision.
+    if (closeNoticePending) return;
+
+    // The notice explains the hide-on-close behaviour once. `isTestMode`
+    // skips it: a blocking modal would hang an automated launch.
+    const acknowledged = isTestMode || loadWindowState()?.hideNoticeAcknowledged === true;
+    if (acknowledged) {
+      persistBounds();
       mainWindow?.hide();
+      return;
     }
+
+    closeNoticePending = true;
+    const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    void promptCloseChoice(parent)
+      .then((choice) => {
+        closeNoticePending = false;
+        if (choice.acknowledge) persistBounds(true);
+        else persistBounds();
+        if (choice.action === 'quit') {
+          closeNoticeConfirmedQuit = true;
+          setIsQuitting(true);
+          app.quit();
+          return;
+        }
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+      })
+      .catch((error) => {
+        closeNoticePending = false;
+        logger.error(
+          'Close notice failed; hiding the window instead',
+          error instanceof Error ? error : new Error(String(error)),
+          undefined,
+          LogComponent.Main,
+        );
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide();
+      });
   });
 
   mainWindow.on('closed', () => {

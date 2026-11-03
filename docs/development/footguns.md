@@ -12,6 +12,8 @@
 | SQLite 提示 NODE_MODULE_VERSION 不匹配 | 先看实际加载的绑定；确认不匹配后分别用 `npm run rebuild:node` 或 `npm run rebuild` |
 | 打包后工具或提示词无法加载 | 核对独立 worker、外部依赖和资源映射，见 [构建](build.md) |
 | Web BFF 新路由拒绝或越权 | 检查 `apps/web/src/server/web-bff.ts` 的 origin / CSRF 守卫 |
+| 助手消息行在 DOM 里，但没有正文 | 正文排在 tool / thinking 动作**之前**时会被折进折叠的「Worked for …」组；正文必须排在工具调用之后，见 `packages/ui/src/components/chat/MessageItem.tsx` 的 `lastWorkIndex` |
+| 审批卡点「允许」后不消失 | 审批卡读的是 run 投影的 `awaitingAnswer`，不是审批 ledger；解决时必须在 run 事件流上发 `permission.resolved` |
 | worktree 回收或恢复异常 | 停止写入并保留现存成果，按 [worktree](worktree.md)对账；不追加递归删除或整树恢复 |
 
 保留首个可执行错误、进程、命令和环境；错误未复现前，不通过改断言、加 baseline 或反复重建掩盖原因。

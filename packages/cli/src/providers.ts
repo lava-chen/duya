@@ -3,13 +3,14 @@
  * writer of config.toml and secrets.json; CLI and Desktop both use this API.
  */
 
-import { readLocalHostRuntime, startLocalHost, type LocalHostHandle } from '@duya/host/local-host';
+import { readLocalHostRuntimeFrom } from '@duya/host/host-runtime';
+import { resolveDataRoot } from '@duya/data';
 import type {
   HostProviderDetail,
   HostProviderList,
   HostProviderWriteInput,
 } from '@duya/agent-protocol/provider-catalog';
-import { resolveHostWorkerPath } from './worker-path.js';
+import { startBackgroundHost } from './tui/background-host.js';
 
 export interface ManagedProvider {
   id: string;
@@ -56,7 +57,7 @@ export class ProviderManagementError extends Error {
 }
 
 async function connectHost(): Promise<HostConnection> {
-  let runtime = await readRuntimeOrNull();
+  const runtime = await readRuntimeOrNull();
   if (runtime !== null) {
     return {
       origin: `http://${runtime.host}:${runtime.port}`,
@@ -65,33 +66,24 @@ async function connectHost(): Promise<HostConnection> {
     };
   }
 
-  let owned: LocalHostHandle | null = null;
-  try {
-    // Starting the Host here makes first-use setup possible without Desktop.
-    // It publishes the normal descriptor so the next `duya tui` attaches to
-    // the same owner instead of opening a second database.
-    owned = await startLocalHost({ workerPath: resolveHostWorkerPath() });
-    return {
-      origin: owned.origin,
-      token: owned.token ?? '',
-      close: () => owned!.close(),
-    };
-  } catch (startError) {
-    // Another CLI may have won the Host startup race. Reuse it only after its
-    // authenticated descriptor is visible.
-    runtime = await readRuntimeOrNull();
-    if (runtime === null) throw startError;
-    return {
-      origin: `http://${runtime.host}:${runtime.port}`,
-      token: runtime.token,
-      close: async () => {},
-    };
-  }
+  // Starting a Host here makes first-use setup possible without Desktop. It
+  // publishes the normal descriptor so the next `duya tui` attaches to the
+  // same owner instead of opening a second database.
+  //
+  // The Host runs as its own process: a client that links the Host in-process
+  // also links the runtime behind it, and the process boundary between the
+  // CLI and the agent runtime stops being structural (gate G11-1).
+  const started = await startBackgroundHost();
+  return {
+    origin: started.origin,
+    token: started.token,
+    close: async () => {},
+  };
 }
 
 async function readRuntimeOrNull() {
   try {
-    return await readLocalHostRuntime();
+    return await readLocalHostRuntimeFrom(resolveDataRoot());
   } catch {
     // A malformed or half-written descriptor is not a usable Host. The
     // startup lock remains the final authority if a live Host owns the data.

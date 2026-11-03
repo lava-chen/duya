@@ -34,7 +34,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readLocalHostRuntime } from '@duya/host/local-host';
+import { readLocalHostRuntimeFrom } from '@duya/host/host-runtime';
 import { resolveDataRoot } from '@duya/data';
 import type { DiscoveredHost } from '../tui-command.js';
 
@@ -133,9 +133,9 @@ export async function startBackgroundHost(options: BackgroundHostOptions = {}): 
 }
 
 /** Read the runtime descriptor, treating an unreadable one as "not there yet". */
-async function readRuntime(dataRoot: string | undefined): Promise<Awaited<ReturnType<typeof readLocalHostRuntime>>> {
+async function readRuntime(dataRoot: string | undefined): Promise<Awaited<ReturnType<typeof readLocalHostRuntimeFrom>>> {
   try {
-    return await readLocalHostRuntime(dataRoot);
+    return await readLocalHostRuntimeFrom(dataRoot ?? resolveDataRoot());
   } catch {
     // A half-written descriptor is not evidence of a running Host. The wait
     // continues; the owner-lock error names the real owner if there is one.

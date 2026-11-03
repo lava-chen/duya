@@ -152,6 +152,9 @@ export function createChildProcess(
   return spawn(runtime.command, runtime.args, {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
     env: runtime.env,
+    // See `agent-process-pool`: a console child of a console-less parent gets
+    // its own window on Windows.
+    windowsHide: true,
   });
 }
 

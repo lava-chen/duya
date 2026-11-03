@@ -7,11 +7,10 @@
 
 | 计划 | 原优先级 | 定位后的核对方向 |
 | --- | --- | --- |
-| [Project Coordinator #581](https://github.com/lava-chen/duya/pull/581) | 当前主线 | 独立的项目协调/记忆/Desktop 计划；Personal Bot 暂缓，Session 为项目提供执行基础 |
-| [Session CLI 发布收尾与 Bot / Host 边界](backlog/2026-11-01-bot-session-coordination.md) | 后续 | A/B 保留，Project 首个闭环后接续；不作为 Coordinator 开工前置 |
-| [工具暴露与 Harness 调用链收敛](active/2026-10-31-tool-surface-and-harness-convergence.md) | P0 | W0 请求级 census 与 W1 执行契约；跨 616/617 的实施顺序、MCP/CLI/skill、provider、恢复与退役验收 |
+| [Project Coordinator](active/2026-11-02-project-coordinator.md) | 当前主线 | 项目协调与执行闭环 → 长期状态/记忆 → Desktop 项目工作台；Bot 暂缓，CLI 独立发布后续 |
 | [2026-10-29 Desktop 与 CLI 独立发布](active/2026-10-29-product-release-separation.md) | — | Desktop / CLI 独立 tag、release workflow、自包含 CLI 分发和安装器 |
-| [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 暂缓增强 | 保留既有成果；当前总体方向以 Project Coordinator #581 为准 |
+| [2026-10-25 个人长期 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 暂缓增强 | 保留既有成果；当前产品顺序以 Project Coordinator 计划为准 |
+| [Session CLI 发布收尾与 Bot / Host 边界](backlog/2026-11-01-bot-session-coordination.md) | 后续 | A/B 保留，Project 首个闭环后接续；不作为 Coordinator 开工前置 |
 | [630 TUI 四能力系列](active/630-tui-capabilities-series/README.md) | P1 | 630a 模态原语 → 631 plugin 市场 / 632 provider 管理；633 项目切换与 634 显示档可并行；集成顺序见系列 README |
 | [插件 UI MCP 资源](active/2026-10-24-plugin-ui-mcp-resources.md) | — | S1 契约先提交并报告，再按 S2–S6 迁移资源面与兼容入口 |
 | [2026-10-22-panel-column-layout](active/2026-10-22-panel-column-layout.md) | — | 侧面板从单列 tab 改为多列 + 列内堆叠 + 可脱窗；切片 A/B 并行，C/D 第二波 |

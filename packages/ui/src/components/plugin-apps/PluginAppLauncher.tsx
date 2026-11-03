@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { capturePluginAppBinding, openPluginApp } from "./open-plugin-app";
 
 interface PluginAppLauncherProps {
   pluginId: string;
@@ -37,11 +38,14 @@ export function PluginAppLauncher({ pluginId, apps }: PluginAppLauncherProps) {
       return;
     }
     setHint(null);
-    panel?.openOrActivatePage("plugin-app", {
+    // The binding is captured now, from the chat the user is looking at. The
+    // tab keeps it, so switching chats later cannot re-point the App.
+    openPluginApp(panel, {
       pluginId,
       appId: app.appId,
       title: app.appId,
       availability: app.runtime === 'standalone' ? "always" : "session",
+      binding: capturePluginAppBinding(activeThreadId),
     });
   };
 

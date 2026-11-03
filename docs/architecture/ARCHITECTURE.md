@@ -4,11 +4,13 @@
 
 ## Overview
 
-Product direction override (2026-11-02): [Project-first #581](https://github.com/lava-chen/duya/pull/581)
-supersedes this branch's Bot-first product assumptions. Project Coordinator is
-independent of Personal Bot, reuses Host/Runtime, and takes priority over
-independent CLI release work. Keep the implementation descriptions below
-within their original verification scope; this PR does not implement Coordinator.
+Product direction (2026-11-02, decision rather than implemented behavior):
+[Project-first architecture](../design-docs/project-first-architecture.md)
+separates Project Coordinator, Personal Bot and working Sessions while sharing
+the current Host/Runtime infrastructure. Project Coordinator is the current
+delivery priority; Personal Bot enhancements and independent CLI release work
+follow it. See the [three implementation tasks](../exec-plans/active/2026-11-02-project-coordinator.md).
+The implementation descriptions below retain their original verification scope.
 
 Monorepo / Agent Harness changes follow the single execution plan
 [587](../exec-plans/active/587-agent-harness-monorepo/README.md).
@@ -66,8 +68,12 @@ entry points. Its shared architecture separates these layers:
   parent's canonical workspace directory. `get` reads the tracked run's durable
   output; `reply` launches another run and `cancel` targets its captured run ID.
   This composition returns an explicit query-based completion policy. Automatic
-  parent wake delivery/restart reconciliation and Desktop delegation migration
-  remain separate work (610 T21/T22).
+  parent wake delivery/restart reconciliation remain separate work (610 T21/T22).
+  Desktop Project Coordinators use this same service through the DB bridge,
+  with canonical Project Task bindings and `code-expert` work Sessions. The
+  Desktop adapter validates the caller against the durable run/epoch and starts
+  work through its existing Agent Server execution API. Ordinary Desktop
+  session delegation still uses the legacy notification path.
 - **AI Layer**: `@duya/ai` multi-protocol adapter
 - **Managed checkout execution**: Host checks ownership for local Write/Edit/
   ApplyPatch and shell dispatch, including deferred calls and shell workers,
@@ -1004,6 +1010,24 @@ The JSONL rollouts are the source of truth; `message_index` is a rebuildable pro
 - **Fork** (`db:session:forkAt`): Host seeds a new session from the repaired source timeline through a message id; fresh ids (`fork:<newSessionId>:<oldId>`), `parent_session_id` + `session_spawn_edges` edge of type `fork`.
 - **Archive** (`db:session:archive/unarchive/listArchived`): Host checks locks across the spawn subtree, mirrors every rollout segment into `archived/<date>/`, and rolls files/metadata back on failure. Unarchive restores one session's segments and legacy single-file rows; descendants remain archived. Archived sessions leave the default `list()` result (`includeArchived` to reveal).
 - **Non-bot rotation** (Plan 506 C1): long ordinary chats rotate on the same `archive-<g>.jsonl` layout as bots once they cross `NON_BOT_ROTATION_THRESHOLD_BYTES` (4 MB) — compaction triggers rotation for already-rotated sessions; the active file's generation directory is sticky so segments never split.
+
+### Project continuity (Coordinator task two, 2026-11-02)
+
+`projects.project_id` remains the durable identity. Migration 64 in
+`@duya/data` adds revisioned current-state, decision, project-memory and
+Activity records alongside `project_task_sessions`; the existing `tasks` rows
+remain the sole task content/status authority. Task acceptance is a separate
+project binding field: a completed Task remains pending review until a user
+accepts or rejects it. Decisions and memories keep bounded source references
+and revision history.
+
+`HostProjectApiV1` and authenticated project HTTP routes provide one
+continuity snapshot and a bounded context projection to UI and Host clients.
+The projection references coordinator/work Session transcripts by ID rather
+than copying message history. On Worker initialization the Desktop adapter
+loads project context through the Host API and includes it in the system
+prompt; prompt assembly uses `@duya/memory` ranking/rendering helpers. Session
+message history itself remains in MessageLog.
 
 ### Memory State DB (Plan 479)
 

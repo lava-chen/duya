@@ -2,6 +2,7 @@ import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-m
 import { definedProperties } from './worker-context/defined-properties.js';
 import { ExecutionLocationError, ExecutionLocationFence, type ExecutionLocationSwitch } from './workspace/execution-location-fence.js';
 import { sessionDb } from './worker-db-client.js';
+import { attachChildJournal } from './worker-journal/child-journal.js';
 import { refreshLocationSkills } from './worker-execution/location-skills.js';
 import { backgroundAgentLifecycle } from './worker-subagents/background-lifecycle.js';
 import type { SessionCheckoutCommand, SessionCheckoutResult } from '@duya/agent-protocol';
@@ -1738,7 +1739,7 @@ export class WorkerSession implements AgentRuntime {
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
             logger.info('[Agent] streamChat: Added system prompt prefix');
         }
-        if (appliedProfile) {
+        if (appliedProfile && !appliedProfile.suppressIdentityBlock) {
             const identityBlock = buildAgentIdentityBlock(appliedProfile);
             hostBlocks.push({ name: 'host:identity', content: identityBlock });
             systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
@@ -2161,10 +2162,27 @@ export class WorkerSession implements AgentRuntime {
     getLastAppliedAgentProfile(): AgentProfile | undefined {
         return this.lastAppliedAgentProfile;
     }
+    /**
+     * Build the session a delegated run executes in.
+     *
+     * The child gets its OWN Journal, and that is not a detail: the parent's
+     * journal cannot cover it. `message_index` is keyed by session, and a
+     * child is a different session with its own row. A child without a
+     * journal persisted nothing, so every message it produced stayed in its
+     * in-memory timeline and died with the process — which is why
+     * `resume_from` could not find a sub-agent's history: the history was
+     * never written, and the resume lookup was pointed at an empty table.
+     *
+     * Public because it is the seam a test needs: the factory is private, so
+     * a test cannot hand the child a double and watch what it was given.
+     */
+    createChildSession(options: AgentOptions): WorkerSession {
+        return attachChildJournal(new WorkerSession(options, this.assembly), options.sessionId);
+    }
     async initToolCatalog(): Promise<void> {
         const createBuiltinRegistry = this.assembly.createRegistry;
         this.subagentDeps = {
-            createSubAgent: (agentOptions) => new WorkerSession(agentOptions, this.assembly),
+            createSubAgent: (agentOptions) => this.createChildSession(agentOptions),
             createToolRegistry: () => createBuiltinRegistry(this.subagentDeps),
         };
         let enabledPluginIds: Set<string> | undefined;

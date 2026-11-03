@@ -248,6 +248,7 @@ describe('@duya/memory package boundary', () => {
     expect(priv).toEqual([
       'compactMessages',
       'curation_validator',
+      'project-continuity',
       'prompt',
       'stage1_prompt_loader',
       'types',

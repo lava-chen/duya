@@ -1242,8 +1242,11 @@ export async function chatTui(
     completionSources,
     echoSubmitted: false,
     canSubmit: () => !sessionTransition,
-    queuedDrafts: () => queue.drafts.map((draft) => ({ text: draft.text, mode: draft.mode })),
-    queuedCount: () => queue.drafts.length,
+    // Only drafts the user is still WAITING on: a steer is already with the
+    // running turn and already echoed into the transcript, so painting it here
+    // repeated a sent message under the composer and read as "not sent yet".
+    queuedDrafts: () => queue.waiting.map((draft) => ({ text: draft.text })),
+    queuedCount: () => queue.waiting.length,
     queuePaused: () => queue.snapshot.paused,
     onRecallQueued: () => {
       const draft = queue.takeLastDraft();
@@ -1288,6 +1291,7 @@ export async function chatTui(
     expandBlocks: effectivePreferences.expandBlocks,
     showToolResults: effectivePreferences.showToolResults,
     toolGroupMode: effectivePreferences.toolGroupMode,
+    statusline: effectivePreferences.statusline,
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,
@@ -1868,6 +1872,9 @@ export async function chatTui(
                 // the transcript on screen has to be re-read for it to
                 // show that.
                 reloadTranscript: reloadTranscript,
+                searchTranscript: (query) => tui.searchTranscript(query),
+                editPreviousPrompt: () => tui.editPreviousPrompt(),
+                insertPrompt: (text) => tui.insertPrompt(text),
               },
             },
             args,

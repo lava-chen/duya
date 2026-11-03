@@ -288,3 +288,58 @@ describe('Bot claim fence', () => {
     expect(h.store.record(old, key, result.runId!)).toBe(false);
   });
 });
+
+describe('the session control lease', () => {
+  it('does not dispatch into a session somebody else holds', async () => {
+    const h = harness();
+    const blockedBy = vi.fn(() => 'control_lease_held');
+    const dispatcher = new BotDispatcher({ ...h.options, control: { blockedBy } });
+    const accepted = await dispatcher.accept({
+      ownerId: 'owner', botId: 'helper', source: 'test', sourceEventId: 'event', lane: 'user',
+      payloadJson: JSON.stringify({ prompt: 'hello' }),
+    });
+
+    await dispatcher.tick();
+
+    expect(blockedBy).toHaveBeenCalledWith('bot:helper', { kind: 'bot', id: 'helper' });
+    expect(h.dispatch).not.toHaveBeenCalled();
+    // The input stays pending: the Bot waits for the session instead of
+    // dead-lettering work it was not allowed to do.
+    expect(dispatcher.get(accepted.entry.id)?.status).toBe('pending');
+  });
+
+  it('re-checks the lease right before the dispatch', async () => {
+    // The claim and the dispatch are separated by async work, so a takeover
+    // in between has to stop the dispatch rather than race it.
+    const h = harness();
+    const blockedBy = vi.fn()
+      .mockReturnValueOnce(null)
+      .mockReturnValue('control_lease_held');
+    const dispatcher = new BotDispatcher({ ...h.options, control: { blockedBy } });
+    const accepted = await dispatcher.accept({
+      ownerId: 'owner', botId: 'helper', source: 'test', sourceEventId: 'event', lane: 'user',
+      payloadJson: JSON.stringify({ prompt: 'hello' }),
+    });
+
+    await dispatcher.tick();
+
+    expect(blockedBy).toHaveBeenCalledTimes(2);
+    expect(h.dispatch).not.toHaveBeenCalled();
+    expect(dispatcher.get(accepted.entry.id)?.status).toBe('pending');
+  });
+
+  it('dispatches as usual when nobody holds the session', async () => {
+    const h = harness();
+    const blockedBy = vi.fn(() => null);
+    const dispatcher = new BotDispatcher({ ...h.options, control: { blockedBy } });
+    const accepted = await dispatcher.accept({
+      ownerId: 'owner', botId: 'helper', source: 'test', sourceEventId: 'event', lane: 'user',
+      payloadJson: JSON.stringify({ prompt: 'hello' }),
+    });
+
+    await dispatcher.tick();
+
+    expect(dispatcher.get(accepted.entry.id)?.status).toBe('dispatched');
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+  });
+});

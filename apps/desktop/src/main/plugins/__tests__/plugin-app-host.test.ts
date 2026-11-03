@@ -40,7 +40,7 @@ vi.mock('../../agents/agent-server-lifecycle', () => ({
   requestAgentServerPluginApp: mocks.readResource,
 }));
 
-import { registerPluginAppHostHandlers } from '../plugin-app-host';
+import { getPluginAppSurfaceCache, registerPluginAppHostHandlers } from '../plugin-app-host';
 
 const PLUGIN_ID = 'com.duya.canvas';
 const APP_ID = 'canvas';
@@ -92,6 +92,9 @@ function handler(channel: string): (...args: unknown[]) => unknown {
 
 beforeEach(() => {
   mocks.handlers.clear();
+  // Cached surface documents would otherwise leak across cases: several of
+  // them deliberately serve different HTML for the same surface identity.
+  getPluginAppSurfaceCache().clear();
   mocks.listInstalled.mockReset();
   mocks.listInstances.mockReset().mockResolvedValue([INSTANCE]);
   mocks.createInstance.mockReset();
@@ -193,6 +196,10 @@ describe('Plugin UI resource launch', () => {
   });
 
   it('rejects cross-plugin server identity, unsupported MIME and oversized HTML', async () => {
+    // Each case below serves a *different* document under the same surface
+    // identity, which cannot happen in production — one identity is one
+    // document, which is why the launch caches it. Clearing between cases
+    // keeps each validation path on its own read.
     mocks.readResource.mockResolvedValueOnce({
       success: true, result: { resource: {
         source: 'plugin', pluginId: 'com.duya.other', serverName: 'plugin:com.duya.other:dashboard',
@@ -204,6 +211,7 @@ describe('Plugin UI resource launch', () => {
     }) as { ok: boolean; error?: string };
     expect(foreign).toMatchObject({ ok: false, error: 'resource_server_mismatch' });
 
+    getPluginAppSurfaceCache().clear();
     mocks.readResource.mockResolvedValueOnce({
       success: true, result: { resource: {
         source: 'plugin', pluginId: PLUGIN_ID, serverName: `plugin:${PLUGIN_ID}:dashboard`,
@@ -215,6 +223,7 @@ describe('Plugin UI resource launch', () => {
     }) as { ok: boolean; error?: string };
     expect(mime).toMatchObject({ ok: false, error: 'resource_mime_unsupported' });
 
+    getPluginAppSurfaceCache().clear();
     mocks.readResource.mockResolvedValueOnce({
       success: true, result: { resource: {
         source: 'plugin', pluginId: PLUGIN_ID, serverName: `plugin:${PLUGIN_ID}:dashboard`,

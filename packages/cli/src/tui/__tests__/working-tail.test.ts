@@ -147,12 +147,27 @@ describe('backgroundSummarySuffix', () => {
   });
 
   it('names only the running halves', () => {
-    expect(backgroundSummarySuffix({ bashRunning: 1, subagentRunning: 0, totalTasks: 1 }))
+    // `totalTasks` never appears in the suffix: a count the user cannot act on
+    // is noise, and finished rows are reachable through the same hint anyway.
+    expect(backgroundSummarySuffix({ bashRunning: 1, subagentRunning: 0, totalTasks: 5 }))
       .toBe(' · 1 background · /tasks details');
+  });
+
+  it('points at the switcher while an agent is still running', () => {
+    // One destination, two verbs: while a subagent is live the view offers
+    // SWITCHING, and that is the part worth spending the hint on. `/tasks` is
+    // the only command either way.
     expect(backgroundSummarySuffix({ bashRunning: 0, subagentRunning: 2, totalTasks: 2 }))
-      .toBe(' · 2 subagent · /tasks details');
+      .toBe(' · 2 subagent · /tasks to switch');
     expect(backgroundSummarySuffix({ bashRunning: 1, subagentRunning: 1, totalTasks: 4 }))
-      .toBe(' · 1 background · 1 subagent · /tasks details');
+      .toBe(' · 1 background · 1 subagent · /tasks to switch');
+  });
+
+  it('goes back to the details hint once the last agent finishes', () => {
+    // The finished agents are still listed; "switch" would promise a live
+    // thread that no longer exists.
+    expect(backgroundSummarySuffix({ bashRunning: 0, subagentRunning: 0, totalTasks: 2 }))
+      .toBe(' · /tasks details');
   });
 
   it('still offers the details once everything has finished', () => {

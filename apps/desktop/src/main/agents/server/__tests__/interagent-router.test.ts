@@ -74,10 +74,13 @@ function createMockDeps(overrides?: {
     stdout: EventEmitter;
     killed?: boolean;
     stdin?: { writable: boolean };
+    send: ReturnType<typeof vi.fn>;
   };
   fakeChild.stdout = fakeStdout;
   fakeChild.killed = false;
   fakeChild.stdin = { writable: true };
+  // The IPC channel the router reports the caller's terminal event on.
+  fakeChild.send = vi.fn();
 
   if (readyChannel === 'stdout') {
     // Wait for the stdout 'data' listener to register, then emit ready.
@@ -158,6 +161,31 @@ function createParams(overrides?: Partial<InvokeParams>): InvokeParams {
   };
 }
 
+/**
+ * Assert the refusal reached the caller, and return the message it carried.
+ *
+ * The caller is blocked on a promise that only a terminal event can settle, so
+ * a refusal that is returned to the agent server and not forwarded leaves the
+ * tool waiting out its whole timeout — the user sees "interagent local
+ * timeout" instead of the real reason.
+ */
+const expectRefusalDelivered = (
+  child: { send: ReturnType<typeof vi.fn> },
+  reason: string,
+) => {
+  expect(child.send).toHaveBeenCalledTimes(1);
+  const payload = child.send.mock.calls[0][0] as {
+    type: string;
+    id: string;
+    event: { type: string; code?: string; message?: string };
+  };
+  expect(payload.type).toBe('interagent:event');
+  expect(payload.id).toBe('test-invoke-1');
+  expect(payload.event.type).toBe('chat:error');
+  expect(payload.event.code).toBe(reason);
+  return payload.event.message ?? '';
+};
+
 describe('InteragentRouter rejection', () => {
   it('rejects self-call', async () => {
     const deps = createMockDeps();
@@ -206,6 +234,103 @@ describe('InteragentRouter rejection', () => {
     const router = new InteragentRouter(deps);
     const result = await router.handleInvoke(createParams());
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('InteragentRouter and the control lease', () => {
+  // The lease is what makes a takeover real: while the user holds a working
+  // session, a Coordinator may still WATCH it, but it may not send it a new
+  // instruction. The lease is the authority — the router only asks it.
+  it('refuses an invoke into a session the user has taken over', async () => {
+    const deps = {
+      ...createMockDeps({ sessionState: SessionState.IDLE }),
+      controlLease: {
+        blockedBy: vi.fn().mockResolvedValue({ code: 'control_lease_held' as const, holderKind: 'user' }),
+      },
+    };
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams());
+    expect(result).toEqual({ ok: false, reason: 'control_lease_held' });
+    expect(deps.controlLease.blockedBy).toHaveBeenCalledWith('B');
+  });
+
+  it('names the holder in the refusal, so the caller knows what to wait for', async () => {
+    const deps = {
+      ...createMockDeps({ sessionState: SessionState.IDLE }),
+      controlLease: {
+        blockedBy: vi.fn().mockResolvedValue({ code: 'control_lease_held' as const, holderKind: 'user' }),
+      },
+    };
+    const router = new InteragentRouter(deps);
+    await router.handleInvoke(createParams());
+    const message = expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'control_lease_held');
+    expect(message).toContain('the user has taken this session over');
+  });
+
+  it('does not blame the user for a lease some other holder owns', async () => {
+    const deps = {
+      ...createMockDeps({ sessionState: SessionState.IDLE }),
+      controlLease: {
+        blockedBy: vi.fn().mockResolvedValue({ code: 'control_lease_held' as const, holderKind: 'bot' }),
+      },
+    };
+    const router = new InteragentRouter(deps);
+    await router.handleInvoke(createParams());
+    const message = expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'control_lease_held');
+    expect(message).not.toContain('the user has taken');
+    expect(message).toContain('held by another owner');
+  });
+
+  it('accepts an invoke into a session nobody holds', async () => {
+    const deps = {
+      ...createMockDeps({ sessionState: SessionState.IDLE }),
+      controlLease: {
+        blockedBy: vi.fn().mockResolvedValue(null),
+      },
+    };
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams());
+    expect(result).toEqual({ ok: true });
+  });
+
+  it('accepts an invoke when this surface has no lease authority at all', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.IDLE });
+    const router = new InteragentRouter(deps);
+    const result = await router.handleInvoke(createParams());
+    expect(result).toEqual({ ok: true });
+  });
+});
+
+describe('InteragentRouter refusal reaches the caller', () => {
+
+  it('delivers a self-call refusal to the caller', async () => {
+    const deps = createMockDeps();
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams({ callerSessionId: 'A', targetSessionId: 'A' }));
+
+    expect(result).toEqual({ ok: false, reason: 'self_call' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'self_call');
+  });
+
+  it('delivers a busy-target refusal to the caller', async () => {
+    const deps = createMockDeps({ sessionState: SessionState.STREAMING });
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams());
+
+    expect(result).toEqual({ ok: false, reason: 'target_busy' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'target_busy');
+  });
+
+  it('delivers an unknown-target refusal to the caller', async () => {
+    const deps = createMockDeps({ sessionExists: false });
+    const router = new InteragentRouter(deps);
+
+    const result = await router.handleInvoke(createParams());
+
+    expect(result).toEqual({ ok: false, reason: 'target_not_found' });
+    expectRefusalDelivered(deps.workerManager.getWorker('A') as never, 'target_not_found');
   });
 });
 

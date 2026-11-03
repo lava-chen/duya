@@ -1,8 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { PRESET_AGENT_PROFILES } from '../../src/worker-profiles/types.js';
+import { PROJECT_COORDINATOR_PROFILE_ID } from '../../src/project/identity.js';
 import { resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
 
 describe('PRESET_AGENT_PROFILES', () => {
+  it('project-coordinator runs on the dedicated project prompt system', () => {
+    const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
+    expect(coordinator.allowedTools).toEqual(['session', 'project', 'todo']);
+    expect(coordinator.promptSystem).toBe('project');
+    expect(coordinator.suppressIdentityBlock).toBe(true);
+    expect(coordinator.identityPrompt).toBeUndefined();
+    expect(coordinator.userVisible).toBe(false);
+    const result = resolveAllowedTools(
+      coordinator,
+      ['session', 'todo', 'project', 'read', 'write', 'bash', 'task', 'memory'],
+    );
+    expect(result.allowed.sort()).toEqual(['project', 'session', 'todo']);
+    expect(result.isValid).toBe(true);
+  });
   it('includes the memory-curator preset', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator');
     expect(curator).toBeDefined();

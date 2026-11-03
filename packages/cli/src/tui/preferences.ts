@@ -35,6 +35,8 @@ export const TUI_TOOL_GROUP_MODE_SETTING = 'cli.tui.toolGroupMode';
 export const TUI_STARTUP_BANNER_SETTING = 'cli.tui.startupBanner';
 export const TUI_COMPLETION_ROWS_SETTING = 'cli.tui.completionRows';
 export const TUI_INPUT_ROWS_SETTING = 'cli.tui.inputRows';
+export const TUI_STATUSLINE_SETTING = 'cli.tui.statusline';
+export type StatuslineProfile = 'full' | 'compact' | 'location' | 'usage';
 /**
  * Saved reasoning effort (desktop parity: auto/low/medium/high/max).
  *
@@ -89,6 +91,7 @@ export interface TuiPreferences {
   readonly completionRows: number;
   /** Rows the input box may grow to before it scrolls internally. */
   readonly inputRows: number;
+  readonly statusline: StatuslineProfile;
 }
 
 /**
@@ -125,6 +128,7 @@ export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
   startupBanner: true,
   completionRows: 8,
   inputRows: 8,
+  statusline: 'full',
 };
 
 /** Completion popup rows: fewer than three is unusable, more than twelve covers the screen. */
@@ -236,6 +240,9 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
     startupBanner: parseBoolean(values[TUI_STARTUP_BANNER_SETTING], DEFAULT_TUI_PREFERENCES.startupBanner),
     completionRows: parseRangedInt(values[TUI_COMPLETION_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.completionRows, COMPLETION_ROWS_RANGE),
     inputRows: parseRangedInt(values[TUI_INPUT_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.inputRows, INPUT_ROWS_RANGE),
+    statusline: values[TUI_STATUSLINE_SETTING] === 'compact' || values[TUI_STATUSLINE_SETTING] === 'location' || values[TUI_STATUSLINE_SETTING] === 'usage'
+      ? values[TUI_STATUSLINE_SETTING]
+      : 'full',
   };
 }
 

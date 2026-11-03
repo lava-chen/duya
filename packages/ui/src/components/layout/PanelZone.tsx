@@ -29,6 +29,15 @@ const WALL_GAP = 4;
 /** The wall's own padding, in pixels; keeps every card inset like a small
  * window inside the app. Must match the CSS `.panel-wall` padding. */
 const WALL_PADDING = 8;
+/**
+ * How many Mini App panes may stay mounted while the panel region is closed.
+ *
+ * A warm App costs a renderer process, a live host session and an unrevoked
+ * document URL. Three covers the wall's realistic side-by-side use (a couple
+ * of Apps next to a diff or a terminal) without letting a tab-hoarder turn
+ * the panel into a process farm.
+ */
+const MAX_WARM_PLUGIN_APP_PANES = 3;
 
 export function PanelZone() {
   const {
@@ -100,6 +109,30 @@ export function PanelZone() {
   } as CSSProperties;
 
   const tabsById = useMemo(() => new Map(tabs.map((tab) => [tab.id, tab])), [tabs]);
+
+  // Which Mini App panes are allowed to stay mounted while the region is
+  // collapsed. Ordered by recent activation, capped because every warm App is
+  // a renderer process, a live host session and an unrevoked document URL.
+  const warmPanesRef = useRef<string[]>([]);
+  useEffect(() => {
+    if (!activeTabId) return;
+    if (tabsById.get(activeTabId)?.pageId !== "plugin-app") return;
+    warmPanesRef.current = [
+      activeTabId,
+      ...warmPanesRef.current.filter((id) => id !== activeTabId),
+    ].slice(0, MAX_WARM_PLUGIN_APP_PANES);
+  }, [activeTabId, tabsById]);
+  const warmPluginAppPanes = useMemo(() => {
+    const warm = new Set<string>();
+    // The pane in front is warm by definition, even if it was just activated
+    // in this very render and the order above has not caught up yet.
+    if (activeTabId && tabsById.get(activeTabId)?.pageId === "plugin-app") warm.add(activeTabId);
+    for (const id of warmPanesRef.current) {
+      if (warm.size >= MAX_WARM_PLUGIN_APP_PANES) break;
+      if (tabsById.get(id)?.pageId === "plugin-app") warm.add(id);
+    }
+    return warm;
+  }, [activeTabId, tabsById]);
   const { columns, rows } = wallShape(layout);
   const columnPanes = useMemo(
     () => Array.from({ length: columns }, (_, index) => paneIdsInColumn(layout, index)),
@@ -541,6 +574,16 @@ export function PanelZone() {
         : descriptor.icon;
       const isExpanded = expandedPaneId === paneId;
       const hidden = Boolean(expandedPaneId) && !isExpanded;
+      // A Mini App stays mounted while the panel region is collapsed: an
+      // iframe cannot be re-parented without reloading, so unmounting it
+      // throws away the App's interface state even though the App's own
+      // instance store is durable. `hidden` still unmounts — that pane is
+      // yielding the wall to a maximized sibling, not being collapsed.
+      // While the region is open every pane mounts, as it always did; the
+      // warmth budget only decides what survives the collapse, so a fourth
+      // App cannot buy itself a permanent background renderer process.
+      const keepPluginAppMounted = tab.pageId !== "plugin-app"
+        || (!hidden && (panelOpen || warmPluginAppPanes.has(paneId)));
       // A lone card already fills the wall, so its header action expands the
       // whole panel region instead. With two or more cards the same action
       // expands the card and the region together, so a maximized panel always
@@ -606,7 +649,7 @@ export function PanelZone() {
             expandTestId={controlsWorkspace ? "workspace-expand" : undefined}
           >
             <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
-              {(tab.pageId !== "plugin-app" || (panelOpen && !hidden))
+              {keepPluginAppMounted
                 ? <Component tab={tab} embedded />
                 : null}
             </Suspense>
@@ -626,7 +669,9 @@ export function PanelZone() {
       togglePaneExpanded,
       activateTab,
       isSessionView,
+      panelOpen,
       setWorkspaceExpanded,
+      warmPluginAppPanes,
       workspaceExpanded,
     ]
   );
