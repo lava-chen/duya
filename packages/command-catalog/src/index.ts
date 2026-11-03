@@ -651,17 +651,19 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     availableWhileBusy: true,
   },
   {
-    // The plugins installed on this machine. The CLI lists them as text; the
+    // The plugin surface. The CLI opens the tabbed marketplace browser —
+    // installed rows, discoverable rows, and the sources themselves — and the
     // Desktop opens the marketplace where they are managed.
     name: 'plugin',
     label: 'Plugins',
     labelZh: '插件',
-    description: 'Inspect the installed plugins',
-    descriptionZh: '查看已安装的插件',
+    description: 'Browse marketplaces, install and toggle plugins',
+    descriptionZh: '浏览插件市场，安装与启用插件',
     category: 'info',
     surfaces: ['desktop', 'cli'],
     requiresSession: true,
-    // Listing the plugins is a read.
+    // Opening the browser is a read; the panel refuses its own writes until
+    // the streaming turn settles.
     availableWhileBusy: true,
   },
   {

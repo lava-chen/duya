@@ -1,213 +1,199 @@
 /**
  * packages/cli/src/tui/slash/plugin.ts
  *
- * `/plugin` — the plugins installed on this machine.
+ * `/plugin` — browse the marketplaces, install, toggle and remove plugins.
  *
- * ## Why the CLI asks the Host
+ * ## Three tabs, one set of files
  *
- * The TUI is a pure HTTP client of the Host (see packages/cli/src/chat.ts),
- * so the plugin inventory is a Host read: `GET /v1/local/plugins`. The
- * Host knows which plugin packages exist on disk; the CLI has no business
- * scanning another process's data directory for them.
+ * This panel is the TUI projection of the Host's plugin management surface:
+ * `Installed` (what this machine records intent for), `Discover` (what the
+ * configured marketplaces offer and this machine does not have) and
+ * `Marketplaces` (the sources themselves, addable and removable). All three come
+ * from Host reads — the CLI never scans a data directory — and every gesture
+ * writes through the Host, so the Desktop sees exactly what the TUI did.
  *
- * ## The shape this command reads
+ * ## Why the detail rides the row
  *
- * The inventory answers
+ * The dock holds one panel at a time, so a detail "page" would replace the list
+ * and lose the cursor when it came back. `WindowItem.detail` is the merged
+ * primitive for exactly this: the selected row's long text renders under the
+ * list, and the list viewport already reserves the rows it costs. Enter is
+ * therefore free to be the verb rather than the description — toggle on
+ * Installed, install on Discover, refresh on Marketplaces.
  *
- *     { plugins: [{ id, name, displayName?, shortDescription?,
- *                   longDescription?, enabled, marketplace, installed,
- *                   description?, appConnections?, mcpServers?, skillNames? }] }
+ * ## Two Tab gestures
  *
- * `installed` says whether the plugin's package directory could be found.
- * A plugin that is registered but whose package is gone is a DIFFERENT fact
- * from a plugin that was never installed, and the list says which one it
- * is — a registered plugin with no package is a broken install, not a
- * missing one. The component fields are NAMES ONLY (the projection rule the
- * inventory route keeps); an older Host answers without them and the detail
- * page shows fewer lines, which is honest degradation.
+ * In the list, Tab toggles the highlighted plugin: the gesture codex puts on a
+ * plugin row, and the reason `RichPanelController` lets a tab claim the chord.
+ * Only the Installed tab claims it — a Tab that installed a plugin from
+ * Discover would be a write the user did not mean. In the tab strip, and for
+ * every other panel, Tab stays the tab switch it has always been, and Shift+Tab
+ * switches tabs from either focus, so claiming Tab never traps anyone in a list.
+ * The plain letters (`i`, `u`, `t`, `r`, `x`) fire from the strip, because in
+ * the list every plain letter belongs to the filter.
  *
- * `displayName` is the name a user recognizes (`PDF`); `name` is the
- * registry's identity (`com.duya.pdf`). This view renders the label first
- * and falls back to the identity only when an older Host sends no interface
- * text, while the mention token stays the id in every case.
+ * ## "Cannot answer" is not "nothing"
  *
- * ## The list is a browser, not a table
- *
- * A listing you cannot move through is a wall of text: the rows render as a
- * selectable list (`showEntries`), Enter opens the selected plugin's detail
- * page, and Esc comes back. The detail page also states the mention form
- * (`@<id>`), because pointing a turn at a plugin is the one action this view
- * leads to — matching the desktop's `@` popover.
- *
- * ## "No plugins" and "this Host cannot answer" are different answers
- *
- * A Host without the inventory answers 404
- * `plugin_inventory_api_unavailable`. That is not "no plugins are
- * installed" — it is "this Host cannot answer the question", and the two
- * are rendered differently. An empty list is a fact that was observed; a
- * refusal is not, and a panel that said "no plugins" for a Host that never
- * answered would report a fact it never observed.
+ * A Host without the management surface answers 404
+ * `plugin_management_api_unavailable`, and a `TUIApp` without a dock cannot open
+ * a tabbed panel at all. Both degrade to the read-only inventory listing, which
+ * states that it is a degradation, rather than showing an empty marketplace.
  */
 
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
+import type { RichPanelHandle } from '../TUIApp.js';
+import type { RichPanelTab, WindowItem } from '../window.js';
 import { describeError, hostErrorCode, showEntries, showPanel, type TuiViewEntry } from './shared.js';
 
-const FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
+const READ_ONLY_FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
+const INSTALLED_FOOTER = 'Tab / t toggle · i reinstall · u uninstall · ⇄ switch tab · Esc close';
+const DISCOVER_FOOTER = 'Enter / i install · ⇄ switch tab · Esc close';
+const MARKETPLACE_FOOTER = 'Enter / r refresh · a add · x remove · ⇄ switch tab · Esc close';
 
-/** One installed plugin, as the Host's inventory reports it. */
+/** One catalog row, as far as this view needs to trust it. */
+interface CatalogRow {
+  readonly pluginId: string;
+  readonly marketplace: string;
+  readonly name: string;
+  readonly displayName?: string;
+  readonly shortDescription?: string;
+  readonly longDescription?: string;
+  readonly description?: string;
+  readonly version: string;
+  readonly installPolicy: string;
+  readonly installed: boolean;
+  readonly enabled: boolean;
+}
+
+/** One marketplace row, including the error the probe could not clear. */
+interface MarketplaceRow {
+  readonly name: string;
+  readonly displayName: string;
+  readonly kind: string;
+  readonly url?: string;
+  readonly path?: string;
+  readonly ref?: string;
+  readonly hidden: boolean;
+  readonly pluginCount: number;
+  readonly isDefault: boolean;
+  readonly error?: string;
+}
+
+/** One inventory row: the installed plugin plus the component names it declares. */
 interface PluginEntry {
   readonly id: string;
   readonly name: string;
   readonly displayName?: string;
   readonly shortDescription?: string;
   readonly longDescription?: string;
+  readonly description?: string;
   readonly enabled: boolean;
   readonly marketplace: string;
   readonly installed: boolean;
-  readonly description?: string;
   readonly appConnections?: readonly string[];
   readonly mcpServers?: readonly string[];
   readonly skillNames?: readonly string[];
 }
 
-/**
- * The slice of the Host client this command depends on.
- *
- * `listPlugins()` ships on `HostSessionHttpClient` together with the Host's
- * inventory route. It is declared here as a structural interface so this
- * file states the contract it reads instead of trusting a payload shape; a
- * client that does not carry the method cannot answer, and that is a fact
- * the command can report rather than a crash it cannot.
- */
-interface PluginInventoryCapableClient {
-  listPlugins(): Promise<unknown>;
+/** Everything the panel shows, as of one read. */
+interface PanelData {
+  readonly rows: readonly CatalogRow[];
+  readonly marketplaces: readonly MarketplaceRow[];
+  readonly inventory: readonly PluginEntry[];
+  readonly revision: string;
+  /** Why the marketplace list is empty, when it is empty because it could not be read. */
+  readonly marketplaceError?: string;
 }
 
-/**
- * The string list one component field carries, read leniently.
- *
- * The summaries are NAMES the Host projects; an older Host answers without
- * them and the detail page just shows fewer lines.
- */
+function readText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
 function readNames(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.filter((item): item is string => typeof item === 'string' && item !== '');
 }
 
-/**
- * One non-empty presentation string, read leniently.
- *
- * The payload arrives over HTTP, so a value that is not a string — or is
- * blank — counts as "not declared" rather than as an error.
- */
-function readText(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+function readArray(value: unknown): readonly unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
-/**
- * Narrow one unknown record into the fields this command shows.
- *
- * The payload arrives over HTTP as JSON, so the declared type describes the
- * happy path and not a guarantee: one malformed entry must not take the
- * whole listing down.
- */
-function narrowPlugin(value: unknown): PluginEntry | undefined {
+function narrowCatalogRow(value: unknown): CatalogRow | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
+  const pluginId = readText(record['pluginId']);
+  if (pluginId === undefined) return undefined;
   return {
-    id: typeof record['id'] === 'string' ? record['id'] : '',
-    name: typeof record['name'] === 'string' ? record['name'] : '',
+    pluginId,
+    marketplace: readText(record['marketplace']) ?? '',
+    name: readText(record['name']) ?? pluginId,
     displayName: readText(record['displayName']),
     shortDescription: readText(record['shortDescription']),
     longDescription: readText(record['longDescription']),
-    // A plugin that does not say whether it is enabled counts as enabled: a
-    // registry only writes `enabled = false` when the user turned it off.
-    enabled: record['enabled'] !== false,
-    marketplace: typeof record['marketplace'] === 'string' ? record['marketplace'] : '',
-    installed: record['installed'] !== false,
     description: readText(record['description']),
+    version: readText(record['version']) ?? '0.0.0',
+    installPolicy: readText(record['installPolicy']) ?? 'available',
+    installed: record['installed'] === true,
+    // A row that does not say counts as enabled: the file writes the boolean
+    // only when a person turned the plugin off.
+    enabled: record['enabled'] !== false,
+  };
+}
+
+function narrowMarketplaceRow(value: unknown): MarketplaceRow | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const name = readText(record['name']);
+  if (name === undefined) return undefined;
+  const count = record['pluginCount'];
+  return {
+    name,
+    displayName: readText(record['displayName']) ?? name,
+    kind: readText(record['kind']) ?? 'git',
+    url: readText(record['url']),
+    path: readText(record['path']),
+    ref: readText(record['ref']),
+    hidden: record['hidden'] === true,
+    pluginCount: typeof count === 'number' ? count : 0,
+    isDefault: record['isDefault'] === true,
+    error: readText(record['error']),
+  };
+}
+
+function narrowInventoryEntry(value: unknown): PluginEntry | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = readText(record['id']);
+  if (id === undefined) return undefined;
+  return {
+    id,
+    name: readText(record['name']) ?? id,
+    displayName: readText(record['displayName']),
+    shortDescription: readText(record['shortDescription']),
+    longDescription: readText(record['longDescription']),
+    description: readText(record['description']),
+    enabled: record['enabled'] !== false,
+    marketplace: readText(record['marketplace']) ?? '',
+    installed: record['installed'] !== false,
     appConnections: readNames(record['appConnections']),
     mcpServers: readNames(record['mcpServers']),
     skillNames: readNames(record['skillNames']),
   };
 }
 
-/** The label a user recognizes: the interface name, else the registry name/id. */
-function pluginLabel(entry: PluginEntry): string {
-  if (entry.displayName !== undefined) return entry.displayName;
-  if (entry.name !== '') return entry.name;
-  return entry.id !== '' ? entry.id : '(unnamed)';
+/** The label a user recognizes: the interface name, else the manifest name or id. */
+function rowLabel(row: CatalogRow): string {
+  return row.displayName ?? (row.name !== '' ? row.name : row.pluginId);
 }
 
-/** The one-line description a list row shows. */
-function pluginSummary(entry: PluginEntry): string | undefined {
-  return entry.shortDescription ?? entry.description;
+/** The composite key the configuration file uses — and the row's identity here. */
+function rowKey(row: CatalogRow): string {
+  return `${row.pluginId}@${row.marketplace}`;
 }
 
-/** The prose a detail page shows, richest first. */
-function pluginProse(entry: PluginEntry): string | undefined {
-  return entry.longDescription ?? entry.shortDescription ?? entry.description;
-}
-
-/**
- * The plugins in an inventory payload.
- *
- * `undefined` means the payload is not an inventory at all — a different
- * fact from "the inventory is empty", and one the caller has to report
- * differently.
- */
-function readPlugins(payload: unknown): readonly PluginEntry[] | undefined {
-  if (typeof payload !== 'object' || payload === null) return undefined;
-  const raw = (payload as { readonly plugins?: unknown }).plugins;
-  if (!Array.isArray(raw)) return undefined;
-  const plugins: PluginEntry[] = [];
-  for (const item of raw) {
-    const entry = narrowPlugin(item);
-    if (entry !== undefined) plugins.push(entry);
-  }
-  return plugins;
-}
-
-/** The listing, one row per plugin. */
-function pluginLines(plugins: readonly PluginEntry[]): string[] {
-  if (plugins.length === 0) {
-    return [
-      'No plugins are installed.',
-      '',
-      '  The plugin inventory answered with an empty list — this Host does',
-      '  serve it, and there is nothing installed.',
-    ];
-  }
-
-  const rows = plugins.map((entry) => ({
-    name: pluginLabel(entry),
-    marketplace: entry.marketplace !== '' ? entry.marketplace : '(local)',
-    enabled: entry.enabled ? 'yes' : 'no',
-    installed: entry.installed ? 'yes' : 'no',
-  }));
-  const nameWidth = Math.max(4, ...rows.map((row) => row.name.length));
-  const marketplaceWidth = Math.max(11, ...rows.map((row) => row.marketplace.length));
-
-  const lines = [`${rows.length} plugin${rows.length === 1 ? '' : 's'}`];
-  for (const row of rows) {
-    lines.push(
-      `  ${row.name.padEnd(nameWidth)}  ${row.marketplace.padEnd(marketplaceWidth)}  `
-      + `${row.enabled.padEnd(7)}  ${row.installed}`,
-    );
-  }
-  const missing = plugins.filter((entry) => !entry.installed).length;
-  if (missing > 0) {
-    lines.push(
-      '',
-      `  ${missing} plugin${missing === 1 ? ' is' : 's are'} registered but the package`
-      + `${missing === 1 ? ' was' : 's were'} not found on disk.`,
-    );
-  }
-  return lines;
-}
-
-/** The capability sentence a plugin's component summaries make: `2 apps · 1 MCP server · 3 skills`. */
-function capabilitySummary(entry: PluginEntry): string | undefined {
+/** `2 apps · 1 MCP server · 3 skills`, from the inventory projection of the same plugin. */
+function capabilitySummary(entry: PluginEntry | undefined): string | undefined {
+  if (entry === undefined) return undefined;
   const parts: string[] = [];
   const apps = entry.appConnections?.length ?? 0;
   const servers = entry.mcpServers?.length ?? 0;
@@ -218,96 +204,365 @@ function capabilitySummary(entry: PluginEntry): string | undefined {
   return parts.length === 0 ? undefined : parts.join(' · ');
 }
 
-/** The detail page of one plugin: identity, state, capabilities, how to mention it. */
-function pluginDetailLines(entry: PluginEntry): string[] {
-  const name = pluginLabel(entry);
-  const lines = [name];
-  const prose = pluginProse(entry);
-  if (prose !== undefined) lines.push(prose);
-  lines.push('');
-  lines.push(`  id          ${entry.id}`);
-  lines.push(`  marketplace ${entry.marketplace !== '' ? entry.marketplace : '(local)'}`);
-  lines.push(`  enabled     ${entry.enabled ? 'yes' : 'no'}`);
-  lines.push(`  installed   ${entry.installed ? 'yes' : 'no'}`);
-  const summary = capabilitySummary(entry);
-  if (summary !== undefined) {
-    lines.push('', `  capabilities: ${summary}`);
-    for (const appId of entry.appConnections ?? []) lines.push(`    app: ${appId}`);
-    for (const server of entry.mcpServers ?? []) lines.push(`    MCP server: ${server}`);
-    for (const skill of entry.skillNames ?? []) lines.push(`    skill: ${skill}`);
-  }
-  lines.push('', '  Mention it in a message as @' + (entry.id || name) + ' to point this turn at it.');
-  return lines;
+/** The explanation the selected plugin row earns. */
+function rowDetail(row: CatalogRow, inventory: readonly PluginEntry[]): string {
+  const prose = row.longDescription ?? row.shortDescription ?? row.description;
+  const facts = [
+    `id ${row.pluginId}`,
+    `marketplace ${row.marketplace}`,
+    `version ${row.version}`,
+    row.enabled ? 'on' : 'off',
+  ].join(' · ');
+  const lines = prose === undefined ? [facts] : [prose, facts];
+  const capabilities = capabilitySummary(inventory.find((entry) => entry.id === row.pluginId));
+  if (capabilities !== undefined) lines.push(`capabilities: ${capabilities}`);
+  lines.push(`mention it as @${row.pluginId} to point a turn at it`);
+  return lines.join('\n  ');
 }
 
-/** The interactive list, one selectable entry per plugin. */
-function pluginEntries(plugins: readonly PluginEntry[]): TuiViewEntry[] {
-  return plugins.map((entry) => {
-    const name = pluginLabel(entry);
-    const summary = capabilitySummary(entry);
-    const description = pluginSummary(entry);
-    const state = entry.installed ? (entry.enabled ? 'on' : 'off') : 'missing';
+function catalogItems(rows: readonly CatalogRow[], inventory: readonly PluginEntry[]): WindowItem[] {
+  return rows.map((row) => {
+    const summary = row.shortDescription ?? row.description;
     return {
-      label: name,
-      value: entry.id !== '' ? entry.id : name,
-      description: description !== undefined && summary !== undefined
-        ? `${summary} — ${description}`
-        : description ?? summary,
-      valueLabel: state,
-      summary: summary ?? description,
-      detailLines: pluginDetailLines(entry),
+      label: rowLabel(row),
+      value: rowKey(row),
+      ...(summary === undefined ? {} : { description: summary }),
+      valueLabel: row.installed ? (row.enabled ? 'on' : 'off') : 'not installed',
+      detail: rowDetail(row, inventory),
     };
   });
 }
 
-const PLUGIN_COMMAND: TuiSlashCommandDef = {
-  name: 'plugin',
-  description: 'List the installed plugins',
-  group: 'Session info',
-  async run(ctx: TuiSlashContext) {
-    // The Host's inventory route lands `listPlugins` on the client. A client
-    // without it cannot answer, and the command says so rather than calling
-    // into nothing.
-    const client: Partial<PluginInventoryCapableClient> = ctx.client;
-    if (typeof client.listPlugins !== 'function') {
-      ctx.tui.printError(
-        'This CLI cannot read the plugin inventory: its Host client does not offer the inventory route.',
-      );
-      return { kind: 'handled' };
-    }
+function marketplaceItems(rows: readonly MarketplaceRow[]): WindowItem[] {
+  return rows.map((row) => ({
+    label: row.displayName,
+    value: row.name,
+    description: row.url ?? row.path ?? '',
+    valueLabel: `${row.pluginCount} plugin${row.pluginCount === 1 ? '' : 's'}`,
+    detail: [
+      row.error ?? 'synced',
+      `source ${row.kind}`,
+      ...(row.ref === undefined ? [] : [`ref ${row.ref}`]),
+      ...(row.hidden ? ['hidden from the catalog'] : []),
+      ...(row.isDefault ? ['a pre-seeded official source'] : []),
+    ].join(' · '),
+  }));
+}
 
-    let payload: unknown;
-    try {
-      payload = await client.listPlugins();
-    } catch (error) {
-      // A Host without the inventory cannot answer. That is not the same as
-      // an empty inventory, and it is rendered differently.
+/**
+ * Read the lists the panel shows.
+ *
+ * The catalog and the marketplace list are the panel's substance; the inventory
+ * only adds the capability line, so a Host that cannot serve it is ignored rather
+ * than fatal. A catalog read failure throws — there is then no panel to draw.
+ */
+async function readPanelData(ctx: TuiSlashContext): Promise<PanelData> {
+  const client = ctx.client;
+  const [catalog, marketplaces, inventory] = await Promise.all([
+    client.listPluginCatalog(),
+    client.listMarketplaces().catch((error: unknown) => {
+      // An empty tab with a named reason is honest; a thrown error would take
+      // the whole panel down over one namespace this Host could not read.
+      ctx.tui.printError(`Could not read the marketplaces: ${describeError(error)}`);
+      return null;
+    }),
+    client.listPlugins().catch(() => null),
+  ]);
+  const rows = readArray(catalog.entries)
+    .map(narrowCatalogRow)
+    .filter((row): row is CatalogRow => row !== undefined);
+  return {
+    rows,
+    marketplaces: marketplaces === null
+      ? []
+      : readArray(marketplaces.marketplaces)
+        .map(narrowMarketplaceRow)
+        .filter((row): row is MarketplaceRow => row !== undefined),
+    inventory: inventory === null
+      ? []
+      : readArray(inventory.plugins)
+        .map(narrowInventoryEntry)
+        .filter((entry): entry is PluginEntry => entry !== undefined),
+    revision: catalog.revision,
+    ...(marketplaces === null ? { marketplaceError: 'the marketplace list could not be read' } : {}),
+  };
+}
+
+/** The read-only browser the panel degrades to, one row per installed plugin. */
+function readOnlyEntries(plugins: readonly PluginEntry[]): TuiViewEntry[] {
+  return plugins.map((entry) => {
+    const name = entry.displayName ?? (entry.name !== '' ? entry.name : entry.id);
+    const summary = capabilitySummary(entry);
+    const description = entry.shortDescription ?? entry.description;
+    const prose = entry.longDescription ?? entry.shortDescription ?? entry.description;
+    return {
+      label: name,
+      value: entry.id,
+      ...(description === undefined && summary === undefined
+        ? {}
+        : { description: description ?? summary }),
+      valueLabel: entry.installed ? (entry.enabled ? 'on' : 'off') : 'missing',
+      ...(summary === undefined && description === undefined
+        ? {}
+        : { summary: summary ?? description }),
+      detailLines: [
+        name,
+        ...(prose === undefined ? [] : [prose]),
+        '',
+        `  id          ${entry.id}`,
+        `  marketplace ${entry.marketplace !== '' ? entry.marketplace : '(local)'}`,
+        `  enabled     ${entry.enabled ? 'yes' : 'no'}`,
+        `  installed   ${entry.installed ? 'yes' : 'no'}`,
+        ...(summary === undefined ? [] : ['', `  capabilities: ${summary}`]),
+        ...(entry.appConnections ?? []).map((appId) => `    app: ${appId}`),
+        ...(entry.mcpServers ?? []).map((server) => `    MCP server: ${server}`),
+        ...(entry.skillNames ?? []).map((skill) => `    skill: ${skill}`),
+        '',
+        `  Mention it in a message as @${entry.id || name} to point this turn at it.`,
+      ],
+    };
+  });
+}
+
+/**
+ * The read-only listing, with the reason the panel is not on screen.
+ *
+ * The reason is part of the output, not a warning: a person who asked for the
+ * marketplace browser needs to know they got the inventory instead.
+ */
+function showReadOnly(ctx: TuiSlashContext, reason: string): void {
+  ctx.client
+    .listPlugins()
+    .then((payload) => {
+      const plugins = readArray((payload as { plugins?: unknown }).plugins)
+        .map(narrowInventoryEntry)
+        .filter((entry): entry is PluginEntry => entry !== undefined);
+      const entries = readOnlyEntries(plugins);
+      // The fallback a terminal without a list browser gets has to carry the
+      // names, not just a count: `showEntries` renders these lines instead of
+      // the rows, so a count alone would answer "what is installed" with "one".
+      showEntries(ctx, 'Plugins', entries, [
+        plugins.length === 0
+          ? 'No plugins are installed.'
+          : `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} from the inventory.`,
+        '',
+        ...entries.map((entry) => `  ${entry.label}  ${entry.valueLabel ?? ''}`.trimEnd()),
+        '',
+        `  ${reason}`,
+      ]);
+    })
+    .catch((error: unknown) => {
       if (hostErrorCode(error) === 'plugin_inventory_api_unavailable') {
         showPanel(ctx, 'Plugins', [
-          'This Host does not serve the plugin inventory, so it cannot answer.',
+          'This Host cannot manage plugins, and cannot say what is installed either.',
           '',
-          '  That is different from "no plugins are installed" — here the',
-          '  question was never asked of an authority that could answer it.',
-          '',
-          '  Source: Host plugin inventory (GET /v1/local/plugins),',
-          '  404 plugin_inventory_api_unavailable.',
-        ], { footer: FOOTER, scrollable: true });
-        return { kind: 'handled' };
+          '  404 plugin_management_api_unavailable and 404 plugin_inventory_api_unavailable',
+          '  are refusals to answer, not an empty plugin list.',
+        ], { footer: READ_ONLY_FOOTER, scrollable: true });
+        return;
       }
       ctx.tui.printError(`Could not read the plugin inventory: ${describeError(error)}`);
+    });
+}
+
+const PLUGIN_COMMAND: TuiSlashCommandDef = {
+  name: 'plugin',
+  description: 'Browse marketplaces, install and toggle plugins',
+  group: 'Session info',
+  async run(ctx: TuiSlashContext) {
+    const client = ctx.client;
+    if (ctx.tui.showRichPanel === undefined) {
+      showReadOnly(ctx, 'This terminal has no tabbed panel, so this is the read-only inventory.');
       return { kind: 'handled' };
     }
 
-    const plugins = readPlugins(payload);
-    if (plugins === undefined) {
-      ctx.tui.printError(
-        'Could not read the plugin inventory: the Host answered with something that is not an inventory.',
+    let data: PanelData;
+    try {
+      data = await readPanelData(ctx);
+    } catch (error) {
+      if (hostErrorCode(error) === 'plugin_management_api_unavailable') {
+        showReadOnly(ctx, 'This Host does not serve the plugin management surface.');
+        return { kind: 'handled' };
+      }
+      ctx.tui.printError(`Could not read the plugin catalog: ${describeError(error)}`);
+      return { kind: 'handled' };
+    }
+
+    /**
+     * The live panel and whether the user has left it.
+     *
+     * Every mutation re-reads and repaints, and a refresh that lands after the
+     * panel closed must not reach for a handle the dock no longer holds.
+     */
+    let panel: RichPanelHandle | null = null;
+    let closed = false;
+
+    const findRow = (key: string): CatalogRow | undefined =>
+      data.rows.find((row) => rowKey(row) === key);
+
+    /**
+     * Re-read and repaint all three tabs.
+     *
+     * A failed mutation re-reads too: the Host may have written before it
+     * refused, and a panel still showing the pre-mutation rows would report a
+     * state that is no longer on disk.
+     */
+    async function refresh(): Promise<void> {
+      try {
+        data = await readPanelData(ctx);
+      } catch (error) {
+        if (!closed) {
+          ctx.tui.printError(`Could not re-read the plugin catalog: ${describeError(error)}`);
+        }
+        return;
+      }
+      if (closed || panel === null) return;
+      panel.syncTab('installed', installedSection());
+      panel.syncTab('discover', discoverSection());
+      panel.syncTab('marketplaces', marketplaceSection());
+    }
+
+    /** Run one mutation, refusing while a turn streams. */
+    async function mutate(label: string, action: () => Promise<unknown>): Promise<void> {
+      if (ctx.busy) {
+        ctx.tui.printError(`Cannot ${label} while a turn is streaming — wait for it to settle.`);
+        return;
+      }
+      try {
+        await action();
+      } catch (error) {
+        ctx.tui.printError(`Could not ${label}: ${describeError(error)}`);
+        await refresh();
+        return;
+      }
+      await refresh();
+    }
+
+    function toggle(key: string): void {
+      const row = findRow(key);
+      if (row === undefined) return;
+      void mutate(`toggle ${rowLabel(row)}`, () =>
+        client.setPluginEnabled({
+          pluginId: row.pluginId,
+          marketplace: row.marketplace,
+          enabled: !row.enabled,
+          expectedRevision: data.revision,
+        }),
       );
-      return { kind: 'handled' };
     }
 
-    showEntries(ctx, 'Plugins', pluginEntries(plugins), pluginLines(plugins));
-    return { kind: 'handled' };
+    function install(key: string): void {
+      const row = findRow(key);
+      if (row === undefined) return;
+      if (row.installPolicy === 'not_available') {
+        ctx.tui.printError(`${rowLabel(row)} is not offered for installation by ${row.marketplace}.`);
+        return;
+      }
+      void mutate(`install ${rowLabel(row)}`, () =>
+        client.installPlugin({
+          pluginId: row.pluginId,
+          marketplace: row.marketplace,
+          expectedRevision: data.revision,
+        }),
+      );
+    }
+
+    function uninstall(key: string): void {
+      const row = findRow(key);
+      if (row === undefined) return;
+      void mutate(`uninstall ${rowLabel(row)}`, () =>
+        client.removePlugin({
+          pluginId: row.pluginId,
+          marketplace: row.marketplace,
+          expectedRevision: data.revision,
+        }),
+      );
+    }
+
+    function refreshMarketplace(name: string): void {
+      void mutate('refresh the marketplace', () =>
+        client.refreshMarketplace({ marketplace: name, expectedRevision: data.revision }),
+      );
+    }
+
+    function addMarketplace(): void {
+      if (ctx.tui.promptText === undefined) {
+        ctx.tui.printError('This terminal cannot prompt for a marketplace source.');
+        return;
+      }
+      void (async () => {
+        const source = await ctx.tui.promptText?.(
+          'Add marketplace — git URL, owner/repo, or a local directory',
+          { placeholder: 'owner/repo' },
+        );
+        if (source === null || source === undefined || source.trim() === '') return;
+        await mutate('add the marketplace', () =>
+          client.addMarketplace({ source: source.trim(), expectedRevision: data.revision }),
+        );
+      })();
+    }
+
+    function removeMarketplace(name: string): void {
+      void mutate(`remove ${name}`, () =>
+        client.removeMarketplace({ marketplace: name, expectedRevision: data.revision }),
+      );
+    }
+
+    function installedSection(): RichPanelTab {
+      return {
+        id: 'installed',
+        label: 'Installed',
+        footer: INSTALLED_FOOTER,
+        items: catalogItems(data.rows.filter((row) => row.installed), data.inventory),
+        filterable: true,
+        onSubmit: toggle,
+        // Tab is the toggle in the list; the letters are the same verbs from
+        // the strip, where no filter is eating them.
+        rowActions: { tab: toggle, t: toggle, i: install, u: uninstall },
+      };
+    }
+
+    function discoverSection(): RichPanelTab {
+      return {
+        id: 'discover',
+        label: 'Discover',
+        footer: DISCOVER_FOOTER,
+        items: catalogItems(
+          data.rows.filter((row) => !row.installed && row.installPolicy !== 'not_available'),
+          data.inventory,
+        ),
+        filterable: true,
+        onSubmit: install,
+        // No `u` here: this tab only lists rows the machine does not have, and
+        // uninstalling one of them is a question with no answer.
+        rowActions: { i: install },
+      };
+    }
+
+    function marketplaceSection(): RichPanelTab {
+      return {
+        id: 'marketplaces',
+        label: 'Marketplaces',
+        footer: MARKETPLACE_FOOTER,
+        items: marketplaceItems(data.marketplaces),
+        filterable: true,
+        onSubmit: refreshMarketplace,
+        rowActions: { r: refreshMarketplace, x: removeMarketplace, a: () => addMarketplace() },
+      };
+    }
+
+    return ctx.tui
+      .showRichPanel({
+        title: 'Plugins',
+        tabs: [installedSection(), discoverSection(), marketplaceSection()],
+        onOpen: (handle) => {
+          panel = handle;
+        },
+        onClose: () => {
+          closed = true;
+        },
+      })
+      .then(() => ({ kind: 'handled' as const }));
   },
 };
 
