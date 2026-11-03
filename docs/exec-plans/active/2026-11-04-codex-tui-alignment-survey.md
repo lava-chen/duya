@@ -66,7 +66,8 @@
 已验证：关键数字全部用命令独立复核；全部 `file:line` 来自实际 Read/Grep 命中行。
 
 PR：<https://github.com/lava-chen/duya/pull/590>（分支 `docs/codex-tui-alignment-survey`，
-base `master`，**未合并**）。提交 `ec214e26`（报告 + 索引）。未经用户授权不合并。
+base `master`，**Draft，未合并**）。提交 `ec214e26`（报告 + 索引）、`f2ed4772`（本计划）。
+未经用户授权不合并。
 
 未提交路径：无（worktree 干净，`git status --short` 空）。
 
