@@ -66,6 +66,7 @@
 | worktree dirty | Linux / Node 24.19.0 | `npm run typecheck:all` | 0；22 包构建、Web bundle、所有类型检查及 eval 检查通过 | Electron/evals 报告 178 项既有基线错误，无新增类型错误；Vite 仅有分块提示 |
 | PR #590 head `2307a45c` | GitHub Actions / Node 22 | `test scope`, `architecture`, `typecheck`, `test`, `build` | 全部成功 | 最新 PR head 上五项检查均通过 |
 | master `dbffec07` | Linux / Git | fetch `origin/master` + ancestor/status 检查 | 0；PR head 是 master 祖先，worktree clean | 合并后的 master 指向 merge commit `dbffec07d71c5dc8fbff977fe8e313fca5f77611` |
+| PR #592 / master `96121161` | GitHub Actions / Linux | `test scope`, `architecture`；归档路径与 master ancestry 检查 | 必需检查成功；typecheck/test/build 按文档路径过滤跳过 | 归档计划已在 master，merge commit `96121161a6e53aec35671e28e84526ea05690e63` |
 
 当前基线：实现前记录于 `0ba68cf70adc04b3632de4eb72a64ae81a426ca7`。验证环境为 Linux / Node 24.19.0。worktree 的 workspace 链接和临时 `picomatch` ambient declaration 仅用于验证，收尾时已移除；构建产物均未纳入改动。报告原标注的日期已更正为 2026-11-03。
 
@@ -83,6 +84,6 @@ PR：<https://github.com/lava-chen/duya/pull/590>（分支 `docs/codex-tui-align
 
 边界：backtrack 仅回填最新 user prompt，提交后创建新回合；Host timeline 是追加式，当前实现不会删除或截断历史。OSC 8 仅接受不含凭据、控制字符且长度不超过 2048 字符的 HTTP(S) URL。Statusline 以四种可保存的布局 profile 配置。
 
-回收：PR #590 已合并；实现 worktree 在本计划归档 PR 集成后由 `scripts/remove-worktree.sh` 回收，并核对 ignored 临时文件与 Git 状态。
+回收：PR #590 与计划归档 PR #592 已合并；实现与文档 worktree 均干净、成果已在 master。当前会话结束前从第三个检出调用 `scripts/remove-worktree.sh` 回收两个 worktree，并删除已合并的本地分支。
 
-下一步：本计划归档 PR #591 合并后，使用 `scripts/remove-worktree.sh` 回收实现与归档 worktree，并确认本地任务分支已不再被 worktree 使用。
+下一步：执行并核对上述 worktree 回收，确认任务分支不再被 worktree 使用。
