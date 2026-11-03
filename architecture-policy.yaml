@@ -1099,7 +1099,11 @@ selfTest:
   # provider types. The file is deleted with that service, so the violation is
   # gone rather than hidden: restoring the file makes this count read 96 again.
   # The fingerprint baseline is unchanged; new findings still block.
-  module-dependency: 95
+  # 95 -> 92 (2026-11-03, PR #602): adding the newly owned Host -> connectors
+  # and CLI -> legacy-plugin-core dependencies classifies three previously
+  # undeclared plugin-management edges as permitted. Measured by the resolver;
+  # the PR's architecture self-test reported 92 against this snapshot's 95.
+  module-dependency: 92
   # 349 -> 343 (2026-10-10, plan 610 A5 continuation). Ledger, not vibes:
   #   +2  group-handlers.ts / group-turn-dispatcher.ts — their cross-package
   #       RELATIVE imports (`../../../../../packages/agent/src/message/
