@@ -28,7 +28,7 @@
 - [x] `/plugin`：列表、静态回退、详情改用显示名/短描述/长描述，mention token 保持 id
 - [x] `@` 补全：行标签与 mention `name` 改用显示名，候选值保持 id
 - [x] 测试：host 清单、`/plugin` 静态回退、交互列表、`@` 补全覆盖显示名与回退
-- [ ] 提交、推送任务分支、开 PR（不合并，等用户授权）
+- [x] 提交、推送任务分支、开 PR（`aec144fa`，[PR #598](https://github.com/lava-chen/duya/pull/598)）；未合并
 
 ## 发现与决策
 
@@ -48,6 +48,8 @@
 
 ## 接续 / 结果
 
-已实现：协议字段、Host 投影、TUI `/plugin` 与 `@` 补全显示名、四组测试。未提交，未推送，未开 PR。
+已实现：协议字段、Host 投影、TUI `/plugin` 与 `@` 补全显示名、四组测试。
+已提交并推送：`aec144fa`（11 files），[PR #598](https://github.com/lava-chen/duya/pull/598)，未合并。
+工作树残留：`packages/capabilities/src/ModuleTool/inline-content.ts` 仅有行尾过滤差异（`git diff` 为空），未纳入提交。
 回收：worktree 保留至 PR 集成。
-下一步：补齐 `typecheck:all` / `architecture:check` 后提交（Conventional Commits）、推送 `codex/tui-plugin-display-name`、开 PR；合并需用户授权。
+下一步：等 PR #598 的 review / CI，通过后由获授权集成者合并；真机冒烟需运行带内置插件的 Host，观察 `/plugin` 是否显示 `PDF`/`Zotero` 等显示名。
