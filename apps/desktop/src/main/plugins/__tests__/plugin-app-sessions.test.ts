@@ -132,4 +132,99 @@ describe('PluginAppSessionStore', () => {
     const store = new PluginAppSessionStore();
     expect(store.setBinding('ghost', { bindingId: 'b1', nonce: 'n1' })).toBe(false);
   });
+
+  it('records the hosting renderer when the launch names one', () => {
+    const store = new PluginAppSessionStore();
+    const hosted = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i', webContentsId: 7 });
+    const headless = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i' });
+
+    expect(hosted.webContentsId).toBe(7);
+    expect(headless.webContentsId).toBeUndefined();
+  });
+});
+
+describe('PluginAppSessionStore.reapDead', () => {
+  it('drops only the sessions whose renderer is gone', () => {
+    const store = new PluginAppSessionStore();
+    const alive = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i', webContentsId: 1 });
+    const crashed = store.open({ pluginId: 'p', appId: 'b', instanceId: 'i', webContentsId: 2 });
+
+    const dropped = store.reapDead((id) => id === 1);
+
+    expect(dropped.map((lease) => lease.session.sessionId)).toEqual([crashed.sessionId]);
+    expect(store.get(alive.sessionId)).not.toBeNull();
+    expect(store.get(crashed.sessionId)).toBeNull();
+  });
+
+  it('hands the dropped session its binding back, so it can be released', () => {
+    const store = new PluginAppSessionStore();
+    const session = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i', webContentsId: 2 });
+    store.setBinding(session.sessionId, { bindingId: 'b1', nonce: 'n1' });
+
+    const [lease] = store.reapDead(() => false);
+
+    // The record is gone from the store, so the caller could not look the
+    // binding up afterwards: it has to come back out with the removal.
+    expect(lease.binding).toEqual({ bindingId: 'b1', nonce: 'n1' });
+    expect(store.bindingOf(session.sessionId)).toBeNull();
+  });
+
+  it('never reaps a session that records no host', () => {
+    const store = new PluginAppSessionStore();
+    const headless = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i' });
+
+    // A test seam did not opt into a liveness check it cannot satisfy.
+    expect(store.reapDead(() => false)).toEqual([]);
+    expect(store.get(headless.sessionId)).not.toBeNull();
+  });
+
+  it('reports nothing when every renderer is alive', () => {
+    const store = new PluginAppSessionStore();
+    store.open({ pluginId: 'p', appId: 'a', instanceId: 'i', webContentsId: 1 });
+    expect(store.reapDead(() => true)).toEqual([]);
+    expect(store.size).toBe(1);
+  });
+});
+
+describe('PluginAppSessionStore.evictOldest', () => {
+  it('does nothing while the count is within the limit', () => {
+    const store = new PluginAppSessionStore();
+    const first = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i' });
+    expect(store.evictOldest(1)).toEqual([]);
+    expect(store.get(first.sessionId)).not.toBeNull();
+  });
+
+  it('drops the oldest sessions first', () => {
+    const store = new PluginAppSessionStore();
+    const first = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i' });
+    const second = store.open({ pluginId: 'p', appId: 'b', instanceId: 'i' });
+    const third = store.open({ pluginId: 'p', appId: 'c', instanceId: 'i' });
+
+    const evicted = store.evictOldest(2);
+
+    expect(evicted.map((lease) => lease.session.sessionId)).toEqual([first.sessionId]);
+    expect(store.get(first.sessionId)).toBeNull();
+    expect(store.get(second.sessionId)).not.toBeNull();
+    expect(store.get(third.sessionId)).not.toBeNull();
+    expect(store.size).toBe(2);
+  });
+});
+
+describe('PluginAppSessionStore.take', () => {
+  it('returns the session and its binding, and leaves nothing behind', () => {
+    const store = new PluginAppSessionStore();
+    const session = store.open({ pluginId: 'p', appId: 'a', instanceId: 'i' });
+    store.setBinding(session.sessionId, { bindingId: 'b1', nonce: 'n1' });
+
+    const lease = store.take(session.sessionId);
+
+    expect(lease?.session).toEqual(session);
+    expect(lease?.binding).toEqual({ bindingId: 'b1', nonce: 'n1' });
+    expect(store.get(session.sessionId)).toBeNull();
+    expect(store.bindingOf(session.sessionId)).toBeNull();
+  });
+
+  it('returns null for an unknown session', () => {
+    expect(new PluginAppSessionStore().take('ghost')).toBeNull();
+  });
 });

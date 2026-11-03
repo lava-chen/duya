@@ -34,6 +34,14 @@ export interface PluginAppSession {
   chatSessionId?: string;
   runtime: 'agent-run' | 'standalone';
   packageRevision?: string;
+  /**
+   * The renderer that hosts the guest frame.
+   *
+   * A session is only useful while that renderer lives: a reload or a crash
+   * destroys the iframe and the session can never be addressed again. Absent
+   * means "unknown host" (tests, headless launches) and is never reaped.
+   */
+  webContentsId?: number;
   createdAt: number;
 }
 
@@ -41,6 +49,12 @@ export interface PluginAppSession {
 export interface PluginAppSessionBinding {
   bindingId: string;
   nonce: string;
+}
+
+/** A removed session and what it held, so the caller can release both. */
+export interface PluginAppSessionLease {
+  session: PluginAppSession;
+  binding: PluginAppSessionBinding | null;
 }
 
 /** The complete set of things a guest is allowed to ask for. */
@@ -130,6 +144,7 @@ export class PluginAppSessionStore {
     chatSessionId?: string;
     runtime?: 'agent-run' | 'standalone';
     packageRevision?: string;
+    webContentsId?: number;
   }): PluginAppSession {
     const session: PluginAppSession = {
       sessionId: randomUUID(),
@@ -140,6 +155,7 @@ export class PluginAppSessionStore {
       chatSessionId: input.chatSessionId,
       runtime: input.runtime ?? 'agent-run',
       packageRevision: input.packageRevision,
+      webContentsId: input.webContentsId,
       createdAt: Date.now(),
     };
     this.#sessions.set(session.sessionId, session);
@@ -169,10 +185,65 @@ export class PluginAppSessionStore {
     return this.#bindings.get(sessionId) ?? null;
   }
 
+  /**
+   * Remove a session and hand back everything it held.
+   *
+   * Callers release the binding and the document mount *after* the removal,
+   * so the record has to come back out with the removal: reading it first and
+   * deleting second lets an early return skip the release, and deleting first
+   * and reading second finds nothing left to release.
+   */
+  take(sessionId: string): PluginAppSessionLease | null {
+    const session = this.#sessions.get(sessionId);
+    const binding = this.#bindings.get(sessionId) ?? null;
+    this.#bindings.delete(sessionId);
+    if (!session) return null;
+    this.#sessions.delete(sessionId);
+    return { session, binding };
+  }
+
   /** Drop a session and the binding it minted. */
   close(sessionId: string): boolean {
-    this.#bindings.delete(sessionId);
-    return this.#sessions.delete(sessionId);
+    return this.take(sessionId) !== null;
+  }
+
+  /**
+   * Drop every session whose hosting renderer is gone.
+   *
+   * A renderer that reloads or crashes takes its iframes with it but leaves
+   * the sessions behind: nothing can address them any more, and each one still
+   * holds a document mount and possibly a Host binding. Returns the ids it
+   * dropped so the caller can release those artifacts.
+   *
+   * Sessions with no recorded host are skipped — a test seam must not be
+   * reaped by a liveness check it never opted into.
+   */
+  reapDead(isAlive: (webContentsId: number) => boolean): PluginAppSessionLease[] {
+    const dropped: PluginAppSessionLease[] = [];
+    for (const session of [...this.#sessions.values()]) {
+      if (session.webContentsId === undefined) continue;
+      if (isAlive(session.webContentsId)) continue;
+      const lease = this.take(session.sessionId);
+      if (lease) dropped.push(lease);
+    }
+    return dropped;
+  }
+
+  /**
+   * Keep at most `limit` sessions, oldest first.
+   *
+   * A hard ceiling, not a policy: it exists so a renderer that leaks launches
+   * (a remount loop, a stuck reload) cannot grow the registry without bound.
+   */
+  evictOldest(limit: number): PluginAppSessionLease[] {
+    if (this.#sessions.size <= limit) return [];
+    const ordered = [...this.#sessions.values()].sort((left, right) => left.createdAt - right.createdAt);
+    const evicted: PluginAppSessionLease[] = [];
+    for (const session of ordered.slice(0, Math.max(0, this.#sessions.size - limit))) {
+      const lease = this.take(session.sessionId);
+      if (lease) evicted.push(lease);
+    }
+    return evicted;
   }
 
   get size(): number {
