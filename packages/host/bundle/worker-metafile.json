@@ -538,7 +538,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/plugin-inventory.ts": {
-      "bytes": 3273,
+      "bytes": 3756,
       "imports": [],
       "format": "esm"
     },
@@ -31827,7 +31827,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 13517,
+      "bytes": 15624,
       "imports": [
         {
           "path": "node:fs",
@@ -31863,7 +31863,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-inventory-api.ts": {
-      "bytes": 2948,
+      "bytes": 3255,
       "imports": [
         {
           "path": "packages/host/src/local-plugin-registry-api.ts",
@@ -41126,7 +41126,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14684
+          "bytesInOutput": 14671
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -41186,7 +41186,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/session-compaction.ts": {
           "bytesInOutput": 30
@@ -41285,10 +41285,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 700
+          "bytesInOutput": 687
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 189
+          "bytesInOutput": 176
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -41309,7 +41309,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1967
+          "bytesInOutput": 1954
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -41336,7 +41336,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/provider-catalog.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/app-connections.ts": {
           "bytesInOutput": 30
@@ -43109,7 +43109,7 @@
           "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 698
@@ -43277,13 +43277,13 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 317
+          "bytesInOutput": 304
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -45047,7 +45047,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 619
+          "bytesInOutput": 613
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -45149,7 +45149,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1553
+          "bytesInOutput": 1549
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -45164,7 +45164,7 @@
           "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 669
+          "bytesInOutput": 667
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -45221,7 +45221,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -46055,7 +46055,7 @@
           "bytesInOutput": 24
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 2398
+          "bytesInOutput": 2828
         },
         "packages/plugin-core/src/plugins/loader/capability-discovery.ts": {
           "bytesInOutput": 3170
@@ -46802,7 +46802,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4783791
+      "bytes": 4784093
     }
   }
 }
