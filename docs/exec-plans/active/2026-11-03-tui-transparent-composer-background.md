@@ -22,7 +22,8 @@
 - [x] 复现并定位：当前 shell 没有 `COLORFGBG`，主题回退到 dark，composer 绘制 `236-bg`。
 - [x] 增加透明背景解析与全屏/inline 渲染覆盖。
 - [x] 更新本机 CLI 包并验证 PowerShell/CMD 解析与版本输出。
-- [ ] 门禁、提交并创建 Draft PR。
+- [x] 门禁、提交并创建 Draft PR #595。
+- [ ] 等待最新 PR head 的 CI 与 review；未经授权不合并。
 
 ## 发现与决策
 
@@ -40,9 +41,12 @@
 | dirty `codex/tui-transparent-composer` | Windows 11 / Node 24.16.0 | `npm run architecture:check` | 0 | `OK — no new boundary violations` |
 | dirty `codex/tui-transparent-composer` | Windows 11 / Node 24.16.0 | `npm run build:cli-dev`; `DUYA_CLI_VERSION=0.0.0-master.550b664-transparent node scripts/package-cli-release.mjs --output try-install/duya-cli-transparent` | 0 | 4.13 MB CLI bundle; standalone Windows package built |
 | package `0.0.0-master.550b664-transparent` | Windows 11 / PowerShell + CMD | Set `DUYA_TUI_COMPOSER_BG=transparent` in package launchers, install under `%LOCALAPPDATA%\duya\master-cli\0.0.0-master.550b664-transparent`, add its `bin` first in user `PATH`; run `duya --version` | 0 in both shells | Both resolve to the new `duya.ps1` / `duya.cmd` and print the new version; previous installs remain on PATH |
+| `c5d032c6` | GitHub | Push `codex/tui-transparent-composer`; open Draft PR #595 | Created | <https://github.com/lava-chen/duya/pull/595>; initial check snapshot had no statuses yet |
 
 ## 接续 / 结果
 
 本机透明安装：`%LOCALAPPDATA%\duya\master-cli\0.0.0-master.550b664-transparent`；其 PowerShell/CMD 启动器为 TUI 设置透明背景并恢复调用 shell 的环境；用户 PATH 将新版 bin 放在首位，旧包装器和前一个 master 包仍保留。
 
-下一步：复查 diff 并提交；推送后创建 Draft PR，等待 review/CI。获授权集成前保留分支和 worktree。
+当前源码提交：`c5d032c681be3324b41ede2d3d4404f0488d1258`；PR：<https://github.com/lava-chen/duya/pull/595>（Draft，初始 checks 尚未出现）。
+
+下一步：检查 PR head 上的必需 CI 与 review；继续保留 Draft 和 worktree，获授权集成前不合并。
