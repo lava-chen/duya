@@ -68,6 +68,14 @@ export function normalizeWorkerEvent(event: Record<string, unknown>): Record<str
       type: 'tool_use_delta',
       data: { id: event.id, name: event.name, delta: event.delta },
     };
+  } else if (msgType === 'chat:tool_output') {
+    // A running command's own bytes. `stream` is absent because a managed shell
+    // writes stdout and stderr into the same descriptor; the client must not
+    // claim to know which one a slice came from.
+    sseEvent = {
+      type: 'tool_output',
+      data: { toolUseId: event.toolUseId, data: event.data },
+    };
   } else if (msgType === 'chat:tool_group_progress') {
     sseEvent = {
       type: 'tool_group_progress',

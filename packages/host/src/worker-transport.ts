@@ -138,7 +138,14 @@ export function sendEvent(event: Record<string, unknown>): void {
 function isDisposableEvent(event: Record<string, unknown>): boolean {
   return event.type === 'chat:text_delta' ||
     event.type === 'chat:thinking_delta' ||
-    event.type === 'chat:tool_use_delta';
+    event.type === 'chat:tool_use_delta' ||
+    // A live shell tail belongs with the other three: it is ephemeral by
+    // protocol (`tool.output_delta` is not retainable), the authoritative text is
+    // the tool's RESULT frame, and a command that prints faster than stdout
+    // accepts is exactly the case this queue exists for. Without this arm the
+    // frame counts as non-disposable and `failTransport()` kills the worker over
+    // a preview.
+    event.type === 'chat:tool_output';
 }
 
 export async function* parseStdin(): AsyncGenerator<WorkerCommand> {

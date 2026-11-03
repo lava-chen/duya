@@ -148,6 +148,32 @@ describe('sendEvent backpressure queue', () => {
     expect(types.filter((type) => type === 'chat:text_delta').length).toBeLessThan(2101);
   });
 
+  it('sheds a live shell tail rather than treating it as a frame worth dying for', () => {
+    // Plan 636: a command that prints faster than stdout accepts is exactly the
+    // case this queue exists for, and the tail is the least valuable frame in it
+    // -- `tool.output_delta` is ephemeral by protocol and the authoritative text
+    // travels on `chat:tool_result`. Without the `isDisposableEvent` arm this
+    // flood counts against the non-disposable capacity and kills the worker.
+    const { setStalled } = stallStdout();
+    const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`process.exit(${code})`);
+    }) as never);
+    const spy = vi.mocked(process.stdout.write);
+
+    expect(() => {
+      for (let n = 1; n <= 2100; n++) {
+        sendEvent({ type: 'chat:tool_output', toolUseId: 'call-tail', data: `line ${n}\n` });
+      }
+      sendEvent({ type: 'chat:done', sessionId: 'session-tail-pressure-test' });
+    }).not.toThrow();
+    expect(exit).not.toHaveBeenCalled();
+
+    const output = [String(spy.mock.calls[0]?.[0]), ...captureDrain(setStalled)];
+    const types = output.map((line) => (JSON.parse(line) as { type: string }).type);
+    expect(types).toContain('chat:done');
+    expect(types.filter((type) => type === 'chat:tool_output').length).toBeLessThan(2100);
+  });
+
   it('terminates non-zero instead of shedding native events at the frame cap', () => {
     stallStdout();
     const exit = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
