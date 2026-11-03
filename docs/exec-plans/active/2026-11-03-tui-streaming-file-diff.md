@@ -70,8 +70,8 @@
 ## 接续 / 结果
 
 - 分支 `worktree-tui-streaming-file-diff`，worktree `E:\Projects\duya\.claude\worktrees\tui-streaming-file-diff`，base `96121161`。
-- S1–S4 已实现未提交，待分片提交并开 PR。
+- S1–S4 已实现并提交为 3 个 commit（`28d911af` / `645824db` / `8649b63e`），PR：https://github.com/lava-chen/duya/pull/599（draft，未合并）。
 - 切片按 3 个 commit 交付（原计划 4 片）：S3 与 S4 共用 `transcript-view.ts` / `blocks.ts` / `host-event-stream.ts` 的相邻 hunk（同一 import 行、同一 `nodeBody` 分支），拆成两片需要逐 hunk 手术且中间态不可编译，评审收益为零。3 个 commit = 契约与生产端 / 元数据与共享助手 / TUI 渲染与流式。
 - 真机验收未做：`npm run build:cli-dev && npm run dev:tui` 只能人工敲（TUI 不能用管道驱动）。人工检查点见「验收」。
 - 外部副作用：无。阻塞：无。
-- 下一步：提交 3 个 commit → 开 PR → 人工真机验收。
+- 下一步：人工真机验收（`npm run build:cli-dev && npm run dev:tui`）→ 验收通过后请用户授权合并。
