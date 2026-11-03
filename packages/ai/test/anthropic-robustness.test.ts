@@ -841,4 +841,104 @@ describe('parseAnthropicEvent MiniMax thinking handling', () => {
       { type: 'text', text: '<thinking>reasoning</thinking>answer' },
     ]);
   });
+
+  // ─── Bare (untagged) reasoning dumped into the text channel ───────────────
+  //
+  // Captured against MiniMax-M3.1-Flash: the wire sent a 19-character thinking
+  // block, then 21k characters of untagged reasoning as text_delta. The old
+  // guard required *zero* thinking content, so the dump rendered as the answer.
+
+  const wireEvent = (delta: unknown): Anthropic.MessageStreamEvent =>
+    ({ type: 'content_block_delta', delta } as unknown as Anthropic.MessageStreamEvent);
+  const textBlockStart = (): Anthropic.MessageStreamEvent =>
+    ({ type: 'content_block_start', content_block: { type: 'text' } } as unknown as Anthropic.MessageStreamEvent);
+  const eventTypes = (result: unknown): string[] =>
+    (Array.isArray(result) ? result : [result]).map((e: { type: string }) => e.type);
+
+  it('reroutes an untagged reasoning dump that follows a short genuine thinking block', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    parseAnthropicEvent(wireEvent({ type: 'thinking_delta', thinking: 'Let me get the m2.7' }), msg, state);
+    parseAnthropicEvent(textBlockStart(), msg, state);
+
+    const dump = 'The user asked three things: 1. use m2.7, 2. explain the gap, 3. measure cache. '
+      + 'x'.repeat(600);
+    const result = parseAnthropicEvent(wireEvent({ type: 'text_delta', text: dump }), msg, state);
+
+    expect(eventTypes(result)).toEqual(['thinking_delta']);
+    expect(msg.content).toHaveLength(1);
+    expect(msg.content[0]).toMatchObject({ type: 'thinking' });
+    expect((msg.content[0] as { thinking: string }).thinking)
+      .toBe('Let me get the m2.7' + dump);
+  });
+
+  it('keeps rerouting the rest of a block once its head matched a reasoning prefix', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    parseAnthropicEvent(wireEvent({ type: 'thinking_delta', thinking: 'Hmm' }), msg, state);
+    parseAnthropicEvent(textBlockStart(), msg, state);
+    parseAnthropicEvent(wireEvent({ type: 'text_delta', text: 'Let me check the logs first.' }), msg, state);
+
+    const tail = 'Actually, the biggest factor is the prefill size.';
+    const result = parseAnthropicEvent(wireEvent({ type: 'text_delta', text: tail }), msg, state);
+
+    expect(eventTypes(result)).toEqual(['thinking_delta']);
+    expect(msg.content).toHaveLength(1);
+    expect((msg.content[0] as { thinking: string }).thinking).toContain('biggest factor');
+  });
+
+  it('passes text straight through once the wire delivered substantial genuine thinking', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    parseAnthropicEvent(
+      wireEvent({ type: 'thinking_delta', thinking: 'y'.repeat(250) }),
+      msg,
+      state,
+    );
+    parseAnthropicEvent(textBlockStart(), msg, state);
+
+    const result = parseAnthropicEvent(
+      wireEvent({ type: 'text_delta', text: 'Let me recap the numbers for you.' }),
+      msg,
+      state,
+    );
+
+    expect(eventTypes(result)).toEqual(['text_delta']);
+    expect((msg.content[1] as { text: string }).text).toBe('Let me recap the numbers for you.');
+  });
+
+  it('releases an undecided head window at content_block_stop instead of hiding it', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    parseAnthropicEvent(textBlockStart(), msg, state);
+    parseAnthropicEvent(wireEvent({ type: 'text_delta', text: 'Here is the summary table' }), msg, state);
+    expect(msg.content[0]).toMatchObject({ type: 'text', text: '' });
+
+    const result = parseAnthropicEvent(
+      { type: 'content_block_stop' } as unknown as Anthropic.MessageStreamEvent,
+      msg,
+      state,
+    );
+
+    expect(eventTypes(result)).toEqual(['text_delta', 'text_end']);
+    expect(msg.content[0]).toMatchObject({ type: 'text', text: 'Here is the summary table' });
+  });
+
+  it('does not buffer answer text in a stream that tags its thinking', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    const first = parseAnthropicEvent(
+      wireEvent({ type: 'text_delta', text: '<thinking>plan</thinking>Short answer.' }),
+      msg,
+      state,
+    );
+    expect(eventTypes(first)).toEqual(['thinking_delta', 'text_delta']);
+
+    const second = parseAnthropicEvent(
+      wireEvent({ type: 'text_delta', text: ' More answer.' }),
+      msg,
+      state,
+    );
+    expect(eventTypes(second)).toEqual(['text_delta']);
+  });
 });
