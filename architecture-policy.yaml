@@ -584,6 +584,15 @@ modules:
       - packages/plugin-core/src/mcp/core/list-tools.ts
       - packages/plugin-core/src/mcp/core/projection.ts
       - packages/plugin-core/src/security/path-validator.ts
+      # Plan 631: marketplace git execution, catalog reader, official seeds and
+      # the install layout — the plugin install execution a standalone Host needs
+      # and that used to exist only inside Electron's userData assumption.
+      - packages/plugin-core/src/marketplace/source-parse.ts
+      - packages/plugin-core/src/marketplace/git-source.ts
+      - packages/plugin-core/src/marketplace/manifest.ts
+      - packages/plugin-core/src/marketplace/official-seeds.ts
+      - packages/plugin-core/src/install/layout.ts
+      - packages/plugin-core/src/install/package.ts
     owner: extensibility
 
   # Plan 610 A5 — the first of the six new packages.
