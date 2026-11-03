@@ -547,6 +547,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/plugin-management.ts": {
+      "bytes": 9638,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/session-handoff.ts": {
       "bytes": 1439,
       "imports": [],
@@ -640,7 +645,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 6068,
+      "bytes": 6108,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -946,6 +951,11 @@
           "path": "packages/agent-protocol/src/plugin-inventory.ts",
           "kind": "import-statement",
           "original": "./plugin-inventory.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/plugin-management.ts",
+          "kind": "import-statement",
+          "original": "./plugin-management.js"
         },
         {
           "path": "packages/agent-protocol/src/session-handoff.ts",
@@ -30228,7 +30238,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 110872,
+      "bytes": 113637,
       "imports": [],
       "format": "esm"
     },
@@ -30260,7 +30270,7 @@
       "format": "esm"
     },
     "packages/host/src/plugin-install-paths.ts": {
-      "bytes": 6844,
+      "bytes": 8063,
       "imports": [
         {
           "path": "node:fs",
@@ -30852,7 +30862,7 @@
       "format": "esm"
     },
     "packages/host/src/plugins/management-api.ts": {
-      "bytes": 5966,
+      "bytes": 5986,
       "imports": [
         {
           "path": "node:fs",
@@ -30868,6 +30878,290 @@
           "path": "packages/host/src/plugins/manifest.ts",
           "kind": "import-statement",
           "original": "./manifest.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/install/layout.ts": {
+      "bytes": 8687,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/install/package.ts": {
+      "bytes": 8533,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/install/layout.ts",
+          "kind": "import-statement",
+          "original": "./layout.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/marketplace/git-source.ts": {
+      "bytes": 13019,
+      "imports": [
+        {
+          "path": "node:child_process",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/source-parse.ts",
+          "kind": "import-statement",
+          "original": "./source-parse.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/marketplace/manifest.ts": {
+      "bytes": 6208,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "../../workspace/duya/node_modules/zod/index.js",
+          "kind": "import-statement",
+          "original": "zod"
+        },
+        {
+          "path": "packages/plugin-core/src/formats/registry.ts",
+          "kind": "import-statement",
+          "original": "../formats/registry.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/plugin-core/src/marketplace/official-seeds.ts": {
+      "bytes": 2784,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-management/plugin-files.ts": {
+      "bytes": 7123,
+      "imports": [
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/install/layout.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/install/layout"
+        },
+        {
+          "path": "packages/host/src/config-agents/config-file.ts",
+          "kind": "import-statement",
+          "original": "../config-agents/config-file.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-management/plugin-catalog.ts": {
+      "bytes": 9207,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/formats/registry.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/formats/registry"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/git-source.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/git-source"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/manifest.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/manifest"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-files.ts",
+          "kind": "import-statement",
+          "original": "./plugin-files.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-management/plugin-marketplaces.ts": {
+      "bytes": 4693,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/git-source.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/git-source"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/manifest.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/manifest"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/official-seeds.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/official-seeds"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-management/management-api.ts": {
+      "bytes": 28038,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/plugin-core/src/install/package.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/install/package"
+        },
+        {
+          "path": "packages/plugin-core/src/install/layout.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/install/layout"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/git-source.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/git-source"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/manifest.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/manifest"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/official-seeds.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/official-seeds"
+        },
+        {
+          "path": "packages/plugin-core/src/marketplace/source-parse.ts",
+          "kind": "import-statement",
+          "original": "@duya/plugin-core/marketplace/source-parse"
+        },
+        {
+          "path": "packages/host/src/plugin-install-paths.ts",
+          "kind": "import-statement",
+          "original": "../plugin-install-paths.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-catalog.ts",
+          "kind": "import-statement",
+          "original": "./plugin-catalog.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-files.ts",
+          "kind": "import-statement",
+          "original": "./plugin-files.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-marketplaces.ts",
+          "kind": "import-statement",
+          "original": "./plugin-marketplaces.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/host/src/plugin-management/index.ts": {
+      "bytes": 1417,
+      "imports": [
+        {
+          "path": "packages/host/src/plugin-management/management-api.ts",
+          "kind": "import-statement",
+          "original": "./management-api.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-catalog.ts",
+          "kind": "import-statement",
+          "original": "./plugin-catalog.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-files.ts",
+          "kind": "import-statement",
+          "original": "./plugin-files.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/plugin-marketplaces.ts",
+          "kind": "import-statement",
+          "original": "./plugin-marketplaces.js"
         }
       ],
       "format": "esm"
@@ -31005,7 +31299,7 @@
       "format": "esm"
     },
     "packages/host/src/plugins/http.ts": {
-      "bytes": 4719,
+      "bytes": 4852,
       "imports": [
         {
           "path": "packages/host/src/plugins/management-api.ts",
@@ -31907,7 +32201,7 @@
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 272068,
+      "bytes": 278227,
       "imports": [
         {
           "path": "packages/host/src/plugins/http.ts",
@@ -31968,6 +32262,11 @@
           "path": "packages/host/src/provider-management/index.ts",
           "kind": "import-statement",
           "original": "./provider-management/index.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/index.ts",
+          "kind": "import-statement",
+          "original": "./plugin-management/index.js"
         },
         {
           "path": "packages/host/src/local-plugin-app-instance-api.ts",
@@ -33120,7 +33419,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56092,
+      "bytes": 56343,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -33136,6 +33435,11 @@
           "path": "packages/host/src/plugins/management-api.ts",
           "kind": "import-statement",
           "original": "./plugins/management-api.js"
+        },
+        {
+          "path": "packages/host/src/plugin-management/index.ts",
+          "kind": "import-statement",
+          "original": "./plugin-management/index.js"
         },
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -41717,6 +42021,96 @@
           "external": true
         },
         {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:child_process",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:crypto",
           "kind": "require-call",
           "external": true
@@ -42506,7 +42900,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 604
+          "bytesInOutput": 591
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -42658,6 +43052,9 @@
         "packages/agent-protocol/src/plugin-inventory.ts": {
           "bytesInOutput": 30
         },
+        "packages/agent-protocol/src/plugin-management.ts": {
+          "bytesInOutput": 30
+        },
         "packages/agent-protocol/src/session-handoff.ts": {
           "bytesInOutput": 30
         },
@@ -42704,7 +43101,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 473
+          "bytesInOutput": 479
         },
         "packages/data/src/bot-scheduler-store.ts": {
           "bytesInOutput": 3786
@@ -44372,10 +44769,10 @@
           "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
-          "bytesInOutput": 696
+          "bytesInOutput": 697
         },
         "packages/host/src/skills/skillsSync.ts": {
-          "bytesInOutput": 4256
+          "bytesInOutput": 4272
         },
         "packages/capabilities/src/utils/path.ts": {
           "bytesInOutput": 1134
@@ -44579,7 +44976,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 36
+          "bytesInOutput": 23
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1627
@@ -46130,7 +46527,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 62705
+          "bytesInOutput": 62708
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -46400,7 +46797,7 @@
           "bytesInOutput": 1533
         },
         "packages/host/src/worker-prompts/bot/loader.ts": {
-          "bytesInOutput": 3024
+          "bytesInOutput": 3027
         },
         "packages/host/src/agent-profile-config.ts": {
           "bytesInOutput": 699
@@ -46433,19 +46830,19 @@
           "bytesInOutput": 1933
         },
         "packages/bot/src/application/service.ts": {
-          "bytesInOutput": 3473
+          "bytesInOutput": 3474
         },
         "packages/host/src/worker-prompts/bot/memory/tierReader.ts": {
-          "bytesInOutput": 3251
+          "bytesInOutput": 3263
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 668
+          "bytesInOutput": 669
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
         },
         "packages/host/src/worker-prompts/bot/factory.ts": {
-          "bytesInOutput": 42
+          "bytesInOutput": 43
         },
         "packages/host/src/worker-journal/Journal.ts": {
           "bytesInOutput": 2279
@@ -46454,10 +46851,10 @@
           "bytesInOutput": 5
         },
         "packages/host/src/skills/loader.ts": {
-          "bytesInOutput": 9827
+          "bytesInOutput": 9839
         },
         "packages/host/src/skills/diagnostics.ts": {
-          "bytesInOutput": 344
+          "bytesInOutput": 346
         },
         "packages/agent-core/src/skills/skill-scanner.ts": {
           "bytesInOutput": 12282
@@ -46475,10 +46872,10 @@
           "bytesInOutput": 1394
         },
         "packages/host/src/skills/skillService.ts": {
-          "bytesInOutput": 5279
+          "bytesInOutput": 5284
         },
         "packages/agent-core/src/skills/resolver.ts": {
-          "bytesInOutput": 824
+          "bytesInOutput": 828
         },
         "packages/host/src/worker-modes/modifiers/registry.ts": {
           "bytesInOutput": 1157
@@ -46493,25 +46890,25 @@
           "bytesInOutput": 3416
         },
         "packages/host/src/worker-modes/engine/persistence.ts": {
-          "bytesInOutput": 1052
+          "bytesInOutput": 1057
         },
         "packages/agent-protocol/src/worker-protocol.ts": {
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1417
+          "bytesInOutput": 1425
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
         },
         "packages/host/src/worker-modes/research-mode/research-config.ts": {
-          "bytesInOutput": 904
+          "bytesInOutput": 907
         },
         "packages/host/src/worker-modes/modifiers/tool-registration.ts": {
-          "bytesInOutput": 257
+          "bytesInOutput": 258
         },
         "packages/host/src/worker-modes/modifiers/research-mode.ts": {
-          "bytesInOutput": 4128
+          "bytesInOutput": 4129
         },
         "packages/host/src/worker-modes/plan/plan-tracker.ts": {
           "bytesInOutput": 3103
@@ -46526,28 +46923,28 @@
           "bytesInOutput": 10713
         },
         "packages/host/src/worker-modes/goal/goal-tools.ts": {
-          "bytesInOutput": 7652
+          "bytesInOutput": 7667
         },
         "packages/host/src/worker-modes/goal/goal-evaluator.ts": {
-          "bytesInOutput": 9177
+          "bytesInOutput": 9185
         },
         "packages/host/src/worker-modes/goal/goal-config.ts": {
-          "bytesInOutput": 2249
+          "bytesInOutput": 2252
         },
         "packages/host/src/worker-modes/goal/goal-changes.ts": {
-          "bytesInOutput": 991
+          "bytesInOutput": 996
         },
         "packages/host/src/worker-modes/goal/goal-summarizer.ts": {
-          "bytesInOutput": 1146
+          "bytesInOutput": 1147
         },
         "packages/host/src/worker-modes/goal/goal-plan.ts": {
           "bytesInOutput": 305
         },
         "packages/host/src/worker-modes/modifiers/goal/goal-mode.ts": {
-          "bytesInOutput": 1792
+          "bytesInOutput": 1793
         },
         "packages/host/src/worker-modes/engine/engine.ts": {
-          "bytesInOutput": 395
+          "bytesInOutput": 397
         },
         "packages/host/src/worker-modes/modifiers/index.ts": {
           "bytesInOutput": 134
@@ -46757,7 +47154,7 @@
           "bytesInOutput": 1270
         },
         "packages/host/src/worker-workflows/runtime-child.ts": {
-          "bytesInOutput": 2608
+          "bytesInOutput": 2609
         },
         "packages/capabilities/src/permissions/types.ts": {
           "bytesInOutput": 172
@@ -47258,10 +47655,10 @@
           "bytesInOutput": 220
         },
         "packages/plugin-core/src/marketplace/source-parse.ts": {
-          "bytesInOutput": 2839
+          "bytesInOutput": 2838
         },
         "packages/cli/src/commands/plugin.ts": {
-          "bytesInOutput": 7357
+          "bytesInOutput": 7356
         },
         "packages/host/src/host-runtime.ts": {
           "bytesInOutput": 947
@@ -47270,7 +47667,7 @@
           "bytesInOutput": 1132
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 41866
+          "bytesInOutput": 42599
         },
         "packages/cli/src/tui/background-host.ts": {
           "bytesInOutput": 1665
@@ -47282,7 +47679,7 @@
           "bytesInOutput": 1240
         },
         "packages/host/src/plugin-install-paths.ts": {
-          "bytesInOutput": 1516
+          "bytesInOutput": 1693
         },
         "packages/host/src/plugins/cache/version-resolver.ts": {
           "bytesInOutput": 1144
@@ -47342,7 +47739,7 @@
           "bytesInOutput": 4578
         },
         "packages/host/src/plugins/marketplace/manager.ts": {
-          "bytesInOutput": 5123
+          "bytesInOutput": 5122
         },
         "packages/host/src/plugins/identity.ts": {
           "bytesInOutput": 224
@@ -47360,13 +47757,43 @@
           "bytesInOutput": 876
         },
         "packages/host/src/config-agents/config-file.ts": {
-          "bytesInOutput": 3087
+          "bytesInOutput": 3083
         },
         "packages/host/src/plugins/management-api.ts": {
           "bytesInOutput": 3350
         },
+        "packages/host/src/plugin-management/management-api.ts": {
+          "bytesInOutput": 9433
+        },
+        "packages/plugin-core/src/install/package.ts": {
+          "bytesInOutput": 2292
+        },
+        "packages/plugin-core/src/install/layout.ts": {
+          "bytesInOutput": 1182
+        },
+        "packages/plugin-core/src/marketplace/git-source.ts": {
+          "bytesInOutput": 3479
+        },
+        "packages/plugin-core/src/marketplace/manifest.ts": {
+          "bytesInOutput": 1677
+        },
+        "packages/plugin-core/src/marketplace/official-seeds.ts": {
+          "bytesInOutput": 700
+        },
+        "packages/host/src/plugin-management/plugin-catalog.ts": {
+          "bytesInOutput": 2556
+        },
+        "packages/host/src/plugin-management/plugin-files.ts": {
+          "bytesInOutput": 1818
+        },
+        "packages/host/src/plugin-management/plugin-marketplaces.ts": {
+          "bytesInOutput": 930
+        },
+        "packages/host/src/plugin-management/index.ts": {
+          "bytesInOutput": 0
+        },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 15879
+          "bytesInOutput": 15917
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13421
@@ -47393,10 +47820,10 @@
           "bytesInOutput": 1434
         },
         "packages/host/src/plugins/http.ts": {
-          "bytesInOutput": 2524
+          "bytesInOutput": 2668
         },
         "packages/host/src/http-server.ts": {
-          "bytesInOutput": 125689
+          "bytesInOutput": 127682
         },
         "packages/host/src/checkout-api.ts": {
           "bytesInOutput": 1975
@@ -47420,7 +47847,7 @@
           "bytesInOutput": 8067
         },
         "packages/host/src/provider-management/provider-files.ts": {
-          "bytesInOutput": 1808
+          "bytesInOutput": 1804
         },
         "packages/host/src/provider-management/remote-probe.ts": {
           "bytesInOutput": 3569
@@ -47705,7 +48132,7 @@
           "bytesInOutput": 28171
         },
         "packages/host/src/bot/service.ts": {
-          "bytesInOutput": 342
+          "bytesInOutput": 343
         },
         "packages/host/src/config-agents/bot-paths.ts": {
           "bytesInOutput": 271
@@ -47888,13 +48315,13 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 54758
+          "bytesInOutput": 54760
         },
         "packages/host/src/worker-journal/child-journal.ts": {
           "bytesInOutput": 214
         },
         "packages/host/src/worker-execution/location-skills.ts": {
-          "bytesInOutput": 574
+          "bytesInOutput": 576
         },
         "packages/host/src/worker-context/mailbox-attachment-context.ts": {
           "bytesInOutput": 801
@@ -47903,7 +48330,7 @@
           "bytesInOutput": 5774
         },
         "packages/host/src/worker-modes/goal/goal-commands.ts": {
-          "bytesInOutput": 3026
+          "bytesInOutput": 3027
         },
         "packages/host/src/worker-mentions.ts": {
           "bytesInOutput": 5647
@@ -48422,7 +48849,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5588414
+      "bytes": 5615686
     }
   }
 }
