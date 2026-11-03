@@ -288,6 +288,18 @@ describe('translateFrame — the producer vocabulary', () => {
     expect(hook.event.type).toBe('hook.invoked');
   });
 
+  it('surfaces a terminal failure text as the card summary', () => {
+    // The lifecycle's terminal frame carries the failure text in `data`
+    // (AgentProgressEvent has no summary member); the translated durable
+    // event must not drop it, or a failed child renders with no explanation.
+    const failed = roundTrip({
+      type: 'agent_progress',
+      data: { agentEventType: 'failed', subagentId: 's9', data: 'model exploded' },
+    });
+    expect(failed.event.type).toBe('subagent.completed');
+    expect(failed.event).toMatchObject({ status: 'failed', summary: 'model exploded' });
+  });
+
   it('classifies a producer error code without losing the original', () => {
     const { event } = roundTrip({ type: 'error', data: { message: 'nope', code: 'rate_limit_error' } });
     if (event.type !== 'run.failed') throw new Error('unreachable');

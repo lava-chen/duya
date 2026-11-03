@@ -534,7 +534,16 @@ function pushBashTaskSnapshot(): void {
         label: task.agentName || task.agentType,
         agentType: task.agentType,
         subagentSessionId: task.subAgentSessionId,
-        status: task.status,
+        // The lifecycle's TaskStatus is a superset of the wire union:
+        // `pending` means registered-but-not-yet-streaming (a running row to
+        // every consumer) and `failed` is the wire's `error`. Passing the raw
+        // values through got both silently dropped by the Host index's
+        // status whitelist.
+        status: task.status === 'pending'
+            ? ('running' as const)
+            : task.status === 'failed'
+                ? ('error' as const)
+                : task.status,
         startTime: task.startedAt,
         ...(task.completedAt === undefined ? {} : { endTime: task.completedAt }),
         ...(task.error === undefined ? {} : { error: task.error }),

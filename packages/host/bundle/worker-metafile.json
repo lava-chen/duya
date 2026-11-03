@@ -15399,7 +15399,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-      "bytes": 34379,
+      "bytes": 34626,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -23042,7 +23042,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -29942,7 +29942,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 176706,
+      "bytes": 177199,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -43607,7 +43607,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 557
+          "bytesInOutput": 544
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 8813
@@ -45236,7 +45236,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -45275,7 +45275,7 @@
           "bytesInOutput": 180
         },
         "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-          "bytesInOutput": 9683
+          "bytesInOutput": 9691
         },
         "packages/agent-runtime/src/transport/execution-channel.ts": {
           "bytesInOutput": 190
@@ -45407,7 +45407,7 @@
           "bytesInOutput": 243
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -46997,7 +46997,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 63043
+          "bytesInOutput": 63102
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -47138,7 +47138,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1880
+          "bytesInOutput": 1874
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47177,7 +47177,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 616
+          "bytesInOutput": 610
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 610
@@ -49322,7 +49322,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5754440
+      "bytes": 5754458
     }
   }
 }

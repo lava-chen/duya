@@ -515,7 +515,10 @@ function translateAgentProgress(data: Readonly<Record<string, unknown>>): Transl
       subagentId,
       status: kind.includes('failed') ? 'failed' : 'completed',
       durationMs: num(data['durationMs']),
-      ...optionalString('summary', data['summary']),
+      // Terminal frames from the lifecycle carry the failure text in `data`
+      // (AgentProgressEvent has no summary member); surface it as the card
+      // summary so a failed child explains itself without opening /tasks.
+      ...optionalString('summary', data['summary'] ?? data['data']),
     });
   }
   return ok({
