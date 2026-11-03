@@ -81,6 +81,9 @@ import { InputDialog } from "@/components/ui/InputDialog";
 import { DropdownMenu, type MenuAction } from "@/components/ui/DropdownMenu";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
+import { useMiniAppPlacements } from "@/components/plugin-apps/useMiniAppPlacements";
+import { getPluginUiSurfaceIcon } from "@/components/plugin-apps/plugin-ui-surface-icons";
+import { capturePluginAppBinding, openPluginApp } from "@/components/plugin-apps/open-plugin-app";
 import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
 import { useBotContacts } from "./sidebar/use-bot-contacts";
 import { BotContactListItem } from "./sidebar/BotContactListItem";
@@ -174,7 +177,7 @@ const settingsNavGroups: {
  */
 const AppSidebarInner = memo(
   forwardRef<HTMLDivElement, AppSidebarProps>(function AppSidebarInner({ isSettingsPage = false, collapsed = false, onExpand, style, capabilities }, ref) {
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
     // Plan 471 v7: replaced the old `isNameProjectDialogOpen` + name-only
@@ -434,6 +437,10 @@ const AppSidebarInner = memo(
     const newChatUnavailable = capabilities?.localFileAccess === false && !activeThreadId && !newChatSourceSessionId;
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
+    // Mini Apps that asked to appear as a sidebar entry. The host only renders
+    // the entry; the App itself still opens in its own sandboxed frame.
+    const sidebarAppPlacements = useMiniAppPlacements("sidebar.item")
+      .filter((entry) => entry.availability !== "session" || Boolean(activeThreadId));
 
     // Plan 471: user-defined sidebar sections (loaded from SQLite). The store
     // is the renderer-side mirror of `sidebar_sections` + `sidebar_section_projects`.
@@ -1264,6 +1271,38 @@ const AppSidebarInner = memo(
               );
             })
           )}
+          {sidebarAppPlacements.map((entry) => {
+            // The host owns the entry, the plugin owns the frame: clicking one
+            // of these opens the App in its sandboxed panel page, exactly like
+            // the Apps page does.
+            const Icon = getPluginUiSurfaceIcon(entry.icon);
+            const label = entry.title[locale] ?? entry.title.en;
+            return (
+              <button
+                key={`mini-app:${entry.pluginId}:${entry.appId}:${entry.surfaceId ?? ""}`}
+                type="button"
+                className="rail-btn"
+                title={label}
+                aria-label={label}
+                onClick={() => {
+                  setSidebarTab("work");
+                  setCurrentView("chat");
+                  openPluginApp(panel, {
+                    pluginId: entry.pluginId,
+                    appId: entry.appId,
+                    surfaceId: entry.surfaceId,
+                    server: entry.server,
+                    title: label,
+                    icon: entry.icon,
+                    availability: entry.availability,
+                    binding: capturePluginAppBinding(activeThreadId),
+                  });
+                }}
+              >
+                <Icon size={17} />
+              </button>
+            );
+          })}
           <div className="rail-spacer" />
           <button
             type="button"
