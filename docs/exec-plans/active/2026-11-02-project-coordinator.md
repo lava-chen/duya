@@ -257,3 +257,27 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 交付：`codex/project-first-desktop` 以 `--force-with-lease=13277f3e` 推送到 `19f36ced`；PR [#584](https://github.com/lava-chen/duya/pull/584) base 已改为 `codex/project-tools`（head `19f36ced`，Draft）；不合并。
 
 下一动作：栈稳定后把整个栈统一改 base 到 `master` 触发 CI；仍等待用户授权后再合并。
+
+### 栈 rebase 到最新 master 并准备集成（2026-11-03）
+
+Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity` / `project-run-feedback` / `coordinator-seam` / `project-tools` / `project-first-desktop`）。原因：`origin/master` 已从 `04f7645f` 前进到 `203d7d51`（20 个提交），#583 相对最新 master 显示 `CONFLICTING`，栈无法直接触发 master CI。
+
+逐层用 `git rebase --onto` 重放，旧 head → 新 head：
+
+- #583 `27a4a5a8` → `8d9f20d9`
+- #585 `91db906e` → `2c394c50`
+- #586 `c809ad69` → `75ca66e3`
+- #587 `a1e971b9` → `aa99361a`
+- #584 `1af340bc` → `b83b2acb`
+
+冲突处理：`docs/exec-plans/README.md` 保留 master 新增的 TUI 行与新版 Coordinator 行；五层 bundle 冲突先取被重放提交的生成物，rebase 完成后从合并源码统一重建并单独提交；`apps/desktop/src/main/index.ts` 两侧改动区域不同，自动合并。`inline-content.ts` 的换行符 churn 每次构建后回退，不进入提交。
+
+验证环境：Windows、Node `v24.18.0`；各层在自身 worktree 执行。本轮未重跑本地 `electron:build`（上一轮已在本栈旧 base 上分步构建通过）；最终栈的 Electron 构建交由 master PR CI 的 `build` job 验收。
+
+- #583：`build:packages` 22 个通过；`typecheck:all` 退出 0；`architecture:check` 退出 0（3066 tolerated）；5 个相关测试文件 37 项通过；`bundle:verify` FRESH 0/1049。
+- #585：`architecture:check` 退出 0（3073）；2 个测试文件 22 项通过；bundle FRESH 0/1050。
+- #586：`architecture:check` 退出 0（3075）；4 个测试文件 22 项通过；bundle FRESH 0/1053。
+- #587：`build:packages` 22 个通过；`architecture:check` 退出 0（3089）；9 个测试文件 62 项通过；bundle FRESH 0/1059。
+- #584（完整栈）：`build:packages` 22 个通过；`typecheck:all` 退出 0；`architecture:check` 退出 0（3101 tolerated，无新增）；21 个相关测试文件 176 项通过；bundle FRESH 0/1059（`b83b2acb`）。
+
+交付：五个分支分别以 `--force-with-lease` 推送；PR #583/#585/#586/#587/#584 仍为 Draft 栈。下一步：统一把 base 改到 `master` 触发 CI，CI 绿后按序以 merge commit 集成。
