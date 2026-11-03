@@ -16421,7 +16421,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/progress-bridge.ts": {
-      "bytes": 3975,
+      "bytes": 4681,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/progress-tracker.ts",
@@ -16923,7 +16923,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/service.ts": {
-      "bytes": 49506,
+      "bytes": 49758,
       "imports": [
         {
           "path": "node:crypto",
@@ -41248,7 +41248,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -43150,7 +43150,7 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
@@ -44578,7 +44578,7 @@
           "bytesInOutput": 3129
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -45160,7 +45160,7 @@
           "bytesInOutput": 601
         },
         "packages/host/src/worker-subagents/progress-bridge.ts": {
-          "bytesInOutput": 1302
+          "bytesInOutput": 1371
         },
         "packages/host/src/worker-subagents/background-lifecycle.ts": {
           "bytesInOutput": 7942
@@ -45208,7 +45208,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/service.ts": {
-          "bytesInOutput": 16142
+          "bytesInOutput": 16171
         },
         "packages/capabilities/src/SubagentTool/subagentResult.ts": {
           "bytesInOutput": 2430
@@ -46657,7 +46657,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4771900
+      "bytes": 4772012
     }
   }
 }
