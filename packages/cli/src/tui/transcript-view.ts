@@ -831,18 +831,35 @@ function toolStatusMark(
   }
 }
 
-/** Shared disclosure suffix: `[-]` when shown, `[+ N <unit>]` when not. */
+/** Rows a folded tool call still draws. One: the marker carries everything else. */
+const COLLAPSED_RESULT_LINES = 1;
+
+/** The key that opens a folded body, named so the fold is not a dead end. */
+const DISCLOSURE_KEY = 'Ctrl+T';
+
+/**
+ * Shared disclosure suffix: `[-]` when shown, `[+ N <unit> · Ctrl+T]` when not.
+ *
+ * `N` is what the fold HIDES, not what the result holds. A marker that counts
+ * the whole report promises a body the reader then only partly gets, because
+ * the expanded body is itself capped — the count and the rows have to come from
+ * the same accounting, which is what `shownResultLines` exists to guarantee.
+ *
+ * The key is named inside the marker because a fold with no way out is a dead
+ * end, and the footer says nothing about it.
+ */
 function toolDisclosure(
   hasResult: boolean,
-  resultLineCount: number,
+  hiddenLineCount: number,
   showDetails: boolean,
   styles: Styles,
   unit = 'lines',
 ): string {
   if (!hasResult) return '';
-  return showDetails
-    ? styles.muted(' [-]')
-    : styles.muted(` [+ ${resultLineCount} ${unit}]`);
+  if (showDetails) return styles.muted(' [-]');
+  if (hiddenLineCount <= 0) return '';
+  const noun = hiddenLineCount === 1 ? unit.replace(/lines$/u, 'line') : unit;
+  return styles.muted(` [+ ${hiddenLineCount} ${noun} · ${DISCLOSURE_KEY}]`);
 }
 
 /**
@@ -907,17 +924,10 @@ function shellBody(
   styles: Styles,
   indent: string,
 ): string[] {
-  // A command the user ran themselves gets a far bigger budget than an agent
-  // call: its output is what the user asked for, and codex gives its user
-  // shell cells the same headroom.
-  // A failure gets double the budget: the message the reader needs is usually
-  // at the end, and minimax-code's preview budget does the same.
-  const budget = isLocalShellTool(block.name)
-    ? LOCAL_SHELL_RESULT_LINES
-    : block.status === 'error'
-      ? options.toolResultLines * 2
-      : options.toolResultLines;
-  const selected = selectShellOutput(result, block.status, Math.max(1, budget));
+  // The budget is the fold's own accounting, so it lives in `resultBudget`:
+  // three callers (this body, the plain body, the disclosure) must not be able
+  // to disagree about how many lines an expanded call draws.
+  const selected = selectShellOutput(result, block.status, resultBudget(block, options));
   const lines: string[] = [];
   const command = block.command;
   // The evidence line exists because the ROW's preview is clipped to one line.
@@ -964,9 +974,7 @@ function plainBody(
     });
     return rows.map((line) => `${indent}${line}`);
   }
-  // An error gets double the budget: the message the reader needs is usually
-  // at the end of the report (minimax-code's preview budget does the same).
-  const budget = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
+  const budget = resultBudget(block, options);
   const formatted = formatToolResult(block.name, result);
   const body = capLines(formatted, budget);
   const bodyLines = body.split('\n');
@@ -1336,22 +1344,72 @@ function toolBodyAllowed(options: RenderOptions, id: string): boolean {
 }
 
 /**
- * How many rows a tool's body would actually put on screen.
+ * The result text a tool's BODY draws.
  *
- * `[+ N lines]` has to promise the number the reader gets when they expand. For
- * a raw result that is the raw line count, but a subagent's result is a JSON
- * receipt the body REWRITES into a short report — one physical line in, a dozen
- * rows out — so counting the raw text would understate the fold by an order of
- * magnitude. The formatter is run here for exactly that case, and nowhere else:
- * a grep report's line count is its own, and re-formatting every tool to count
- * would spend the render budget of tools that never needed it.
+ * Shell output is shown as it came; everything else goes through the per-tool
+ * formatter first, because the formatter is what turns a JSON receipt into the
+ * report a reader sees. The fold has to count the text it folds, so the count
+ * and the rows both read through here rather than agreeing by accident.
  */
-function countReportLines(block: Extract<Block, { kind: 'tool' }>, result: string): number {
-  const body = block.subagent === undefined ? result : formatToolResult(block.name, result);
-  return body.trim().split(/\r?\n/u).length;
+function bodyResultText(block: Extract<Block, { kind: 'tool' }>, result: string): string {
+  return isShellTool(block.name) ? result : formatToolResult(block.name, result);
 }
 
-/** `[-]` / `[+ N lines]` for one tool call. */
+/** Whether this call's details are on screen right now. */
+function showsToolDetails(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions): boolean {
+  return options.collapsedBlockIds?.has(block.id) !== true &&
+    (options.showToolResults || blockExpanded(block.id, options));
+}
+
+/**
+ * How many result lines an EXPANDED call draws.
+ *
+ * A command the user ran gets a far bigger budget than an agent call: its
+ * output is what the user asked for, and codex gives its user shell cells the
+ * same headroom. A failure gets double, because the message the reader needs is
+ * at the end — minimax-code's preview budget does the same. Three callers read
+ * this, so it cannot drift from the fold's arithmetic.
+ */
+function resultBudget(block: Extract<Block, { kind: 'tool' }>, options: RenderOptions): number {
+  if (isLocalShellTool(block.name)) return LOCAL_SHELL_RESULT_LINES;
+  const base = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
+  return Math.max(1, base);
+}
+
+/**
+ * How many of a result's lines are on screen in the current state.
+ *
+ * The marker shows `total - this`, which is the only way a fold can promise
+ * less than it holds. A spawn and a todo list return `total` because their
+ * bodies draw whatever the fold says — the brief and the list ARE the thing the
+ * reader came for — so nothing hides behind their marker; a file change reports
+ * its diff counts for the same reason.
+ */
+function shownResultLines(
+  total: number,
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+): number {
+  if (block.subagent !== undefined || isTodoTool(block.name)) return total;
+  if (block.diff !== undefined && block.diff.length > 0) return total;
+  const cap = showsToolDetails(block, options) ? resultBudget(block, options) : COLLAPSED_RESULT_LINES;
+  return Math.min(total, cap);
+}
+
+/**
+ * How many rows a tool's body would actually put on screen.
+ *
+ * Counted from `bodyResultText`, not the raw result: a subagent's receipt and a
+ * grep report are both REWRITTEN into a different line count — one physical
+ * line in, a dozen rows out — so counting the raw text misstates the fold. The
+ * formatter therefore runs a second time per block, which `transcript-cache`
+ * bounds to once per content change rather than once per frame.
+ */
+function countReportLines(block: Extract<Block, { kind: 'tool' }>, result: string): number {
+  return bodyResultText(block, result).trim().split(/\r?\n/u).length;
+}
+
+/** `[-]` / `[+ N lines · Ctrl+T]` for one tool call. */
 function toolDisclosureOf(
   block: Extract<Block, { kind: 'tool' }>,
   options: RenderOptions,
@@ -1360,9 +1418,7 @@ function toolDisclosureOf(
   const result = block.result?.trimEnd() ?? '';
   if (result.trim() === '') return '';
   if (!toolBodyAllowed(options, block.id)) return '';
-  const isExpanded = blockExpanded(block.id, options);
-  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
-    (options.showToolResults || isExpanded);
+  const showDetails = showsToolDetails(block, options);
   // A file change's size is the CHANGE's size, not the prose's line count:
   // `[+ 3 lines]` on a 200-line rewrite says nothing about the rewrite, while
   // `(+200 -0)` says exactly what happened.
@@ -1371,9 +1427,10 @@ function toolDisclosureOf(
     const size = `${styles.diffAdd(`+${counts.added}`)} ${styles.diffDel(`-${counts.removed}`)}`;
     return showDetails ? `${size} ${styles.muted('[-]')}` : size;
   }
-  const resultLines = countReportLines(block, result);
+  const total = countReportLines(block, result);
+  const hidden = total - shownResultLines(total, block, options);
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
-  return toolDisclosure(true, resultLines, showDetails, styles, unit);
+  return toolDisclosure(true, hidden, showDetails, styles, unit);
 }
 
 /**
@@ -1587,11 +1644,48 @@ function nodeBody(
     return streamingFileBody(block, options, styles, plan.bodyIndent);
   }
   if (result.trim() === '') return [];
-  const isExpanded = blockExpanded(block.id, options);
-  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
-    (options.showToolResults || isExpanded);
-  if (!showDetails) return [];
+  if (!showsToolDetails(block, options)) {
+    return foldedResultBody(block, result, styles, plan.bodyIndent, options);
+  }
   return toolBody(block, result, options, styles, plan.bodyIndent);
+}
+
+/**
+ * The one row a folded call still draws.
+ *
+ * A fold that renders nothing is an absence, not a preview: the reader cannot
+ * tell a command that printed one clean line from one that printed nothing, and
+ * `[+ 20 lines]` with no row under it is a promise with nothing behind it. The
+ * LAST line is the one worth a row — that is where a command's conclusion lives,
+ * which is why `selectShellOutput` keeps it even when expanding and why a
+ * folded thought already previews its newest line.
+ *
+ * Clipped to the pane width, because one line has to mean ONE row: a tail that
+ * wraps would make the cheapest preview in the transcript the dearest.
+ */
+function foldedResultBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  result: string,
+  styles: Styles,
+  indent: string,
+  options: RenderOptions,
+): string[] {
+  // A file change states its size on the row (`+200 -0`); a prose tail under it
+  // would restate what the diff counts say better. Paired with `shownResultLines`
+  // so the marker and the body refuse the same call for the same reason.
+  if (block.diff !== undefined && block.diff.length > 0) return [];
+  const lines = bodyResultText(block, result).split('\n').filter((line) => line.trim() !== '');
+  if (lines.length === 0) return [];
+  // A failure's exit code outranks its last line. `selectShellOutput` hoists it
+  // for the same reason: a tail selection drops the first line, and the exit
+  // code is the one fact about a run that must never be the thing a fold loses.
+  const exit = block.status === 'error' ? lines.find(isExitCodeLine) : undefined;
+  const raw = exit ?? lines[lines.length - 1] ?? '';
+  const columns = contentColumns(options.width);
+  const text = columns === undefined
+    ? raw
+    : truncateToWidth(raw, Math.max(1, columns - visibleWidth(indent)));
+  return [`${indent}${isExitCodeLine(text) ? styles.error(text) : styles.muted(text)}`];
 }
 
 /** Render one block with the layout the plan asks for. */
