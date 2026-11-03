@@ -34310,7 +34310,7 @@
       "format": "esm"
     },
     "packages/cli/src/api/plugin-client.ts": {
-      "bytes": 2735,
+      "bytes": 2978,
       "imports": [
         {
           "path": "packages/host/src/host-runtime.ts",
@@ -45246,7 +45246,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -47190,7 +47190,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 616
+          "bytesInOutput": 610
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 610
@@ -48144,10 +48144,10 @@
           "bytesInOutput": 7356
         },
         "packages/host/src/host-runtime.ts": {
-          "bytesInOutput": 947
+          "bytesInOutput": 951
         },
         "packages/cli/src/api/plugin-client.ts": {
-          "bytesInOutput": 1132
+          "bytesInOutput": 1286
         },
         "packages/host/src/http-client.ts": {
           "bytesInOutput": 42599
@@ -49332,7 +49332,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5753028
+      "bytes": 5753168
     }
   }
 }

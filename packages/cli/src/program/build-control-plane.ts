@@ -179,7 +179,7 @@ export function buildControlPlane(program: Command): void {
           },
         };
         const code = await sub.run(ctx);
-        if (code !== 0) process.exit(code);
+        if (code !== 0) process.exitCode = code;
       });
 
       top.addCommand(subCmd);
@@ -209,7 +209,7 @@ export function buildControlPlane(program: Command): void {
           },
         };
         const code = await defaultSub.run(ctx);
-        if (code !== 0) process.exit(code);
+        if (code !== 0) process.exitCode = code;
       });
     }
   }
