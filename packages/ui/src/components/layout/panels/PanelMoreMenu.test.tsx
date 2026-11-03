@@ -180,6 +180,44 @@ describe("PanelMoreMenu", () => {
     expect(screen.queryByText("Activity")).toBeNull();
   }, SLOW_CATALOGUE_TIMEOUT_MS);
 
+  it("offers an App that declared a session-panel placement", async () => {
+    mocks.listSurfaces.mockResolvedValue({
+      success: true,
+      data: {
+        surfaces: [alwaysSurface],
+        conflicts: [],
+        placements: [{
+          pluginId: "com.duya.board",
+          pluginName: "Board",
+          appId: "sprint",
+          slot: "session.panel",
+          scope: "session",
+          surfaceId: "overview",
+          server: "reports",
+          availability: "always",
+          title: { en: "Sprint", zh: "冲刺" },
+          icon: "chart-bar",
+        }],
+      },
+    });
+
+    await openMenu();
+    await waitFor(() => expect(mocks.listSurfaces).toHaveBeenCalled());
+
+    fireEvent.mouseEnter(screen.getByText("apps.title"));
+    fireEvent.click(await screen.findByText("Sprint"));
+
+    // A placement is an entry, not a component: it opens the same sandboxed
+    // panel page the catalogue does.
+    expect(mocks.openOrActivatePage).toHaveBeenCalledWith("plugin-app", expect.objectContaining({
+      pluginId: "com.duya.board",
+      appId: "sprint",
+      surfaceId: "overview",
+      server: "reports",
+      availability: "always",
+    }));
+  });
+
   it("opens the background-tasks panel from the menu", async () => {
     await openMenu();
     fireEvent.click(screen.getByText("panel.backgroundTasks"));

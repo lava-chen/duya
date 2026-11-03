@@ -1,24 +1,37 @@
 import type {
+  PluginAppPlacement,
+  PluginAppPlacementSlot,
+  PluginUiPlacementDirectoryEntry,
   PluginUiSurface,
   PluginUiSurfaceDirectory,
   PluginUiSurfaceDirectoryEntry,
 } from '@duya/plugin-core/apps/declarations';
 
+interface InstalledApp {
+  appId: string;
+  runtime?: 'agent-run' | 'standalone';
+  ui?: {
+    surfaces?: ReadonlyArray<PluginUiSurface>;
+    placements?: ReadonlyArray<PluginAppPlacement>;
+  };
+}
+
 interface InstalledPluginSurfaceSource {
   id: string;
   name: string;
   enabled: boolean;
-  apps?: ReadonlyArray<{
-    appId: string;
-    ui?: { surfaces: ReadonlyArray<PluginUiSurface> };
-  }>;
+  apps?: ReadonlyArray<InstalledApp>;
 }
 
-/** Project installed Plugin App metadata into the host's enabled surface directory. */
+/** Order the host renders slots in; also the directory's sort order. */
+const SLOT_ORDER: readonly PluginAppPlacementSlot[] = ['sidebar.item', 'session.panel'];
+
+/** Project installed Plugin App metadata into the host's enabled directory. */
 export function buildPluginUiSurfaceDirectory(
   plugins: readonly InstalledPluginSurfaceSource[],
 ): PluginUiSurfaceDirectory {
   const candidates = new Map<string, Array<{ entry: PluginUiSurfaceDirectoryEntry; enabled: boolean }>>();
+  const placements: PluginUiPlacementDirectoryEntry[] = [];
 
   for (const plugin of plugins) {
     for (const app of plugin.apps ?? []) {
@@ -32,6 +45,32 @@ export function buildPluginUiSurfaceDirectory(
         const owners = candidates.get(surface.id) ?? [];
         owners.push({ entry, enabled: plugin.enabled });
         candidates.set(surface.id, owners);
+      }
+
+      // A disabled plugin contributes no entries at all: the point of
+      // disabling it is that nothing of it shows up.
+      if (!plugin.enabled) continue;
+
+      for (const placement of app.ui?.placements ?? []) {
+        // A surface id that does not resolve means the manifest reached the
+        // registry without this check (an older install, a hand-edited
+        // registry). The entry would open nothing, so it is dropped rather
+        // than shown broken.
+        const surface = placement.surface === undefined
+          ? undefined
+          : app.ui?.surfaces?.find((candidate) => candidate.id === placement.surface);
+        if (placement.surface !== undefined && !surface) continue;
+        placements.push({
+          pluginId: plugin.id,
+          pluginName: plugin.name,
+          appId: app.appId,
+          slot: placement.slot,
+          scope: placement.scope,
+          ...(surface ? { surfaceId: surface.id, server: surface.server } : {}),
+          availability: surface?.availability ?? (app.runtime === 'standalone' ? 'always' : 'session'),
+          title: surface?.title ?? { en: app.appId, zh: app.appId },
+          icon: surface?.icon ?? 'plug',
+        });
       }
     }
   }
@@ -61,7 +100,16 @@ export function buildPluginUiSurfaceDirectory(
 
   surfaces.sort((left, right) => left.id.localeCompare(right.id));
   conflicts.sort((left, right) => left.id.localeCompare(right.id));
-  return { surfaces, conflicts };
+  placements.sort(comparePlacement);
+
+  return { surfaces, conflicts, placements };
+}
+
+function comparePlacement(left: PluginUiPlacementDirectoryEntry, right: PluginUiPlacementDirectoryEntry): number {
+  return SLOT_ORDER.indexOf(left.slot) - SLOT_ORDER.indexOf(right.slot)
+    || left.pluginId.localeCompare(right.pluginId)
+    || left.appId.localeCompare(right.appId)
+    || (left.surfaceId ?? '').localeCompare(right.surfaceId ?? '');
 }
 
 function compareOwner(

@@ -25,7 +25,9 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useMiniAppCatalog } from "@/components/plugin-apps/useMiniAppCatalog";
+import { useMiniAppPlacements } from "@/components/plugin-apps/useMiniAppPlacements";
 import { getPluginUiSurfaceIcon } from "@/components/plugin-apps/plugin-ui-surface-icons";
+import { capturePluginAppBinding, openPluginApp } from "@/components/plugin-apps/open-plugin-app";
 
 export function PanelMoreMenu() {
   const { t, locale } = useTranslation();
@@ -43,6 +45,9 @@ export function PanelMoreMenu() {
   // Read the catalogue the first time the menu opens, not when the launcher
   // row mounts: the row is on screen for every chat, the apps are not.
   const { plugins, surfaces, loading, error } = useMiniAppCatalog({ enabled: open });
+  // Apps that asked to be offered as a session panel entry. Same gating as the
+  // catalogue: the launcher row is on screen for every chat, the menu is not.
+  const panelPlacements = useMiniAppPlacements("session.panel", { enabled: open });
 
   const miniAppItems = useMemo<MenuAction[]>(() => {
     const surfaceItems: MenuAction[] = surfaces
@@ -57,7 +62,7 @@ export function PanelMoreMenu() {
           label: title,
           iconLeft: <Icon size={14} stroke={1.5} />,
           onSelect: () => {
-            panel?.openOrActivatePage("plugin-app", {
+            openPluginApp(panel, {
               pluginId: surface.pluginId,
               appId: surface.appId,
               surfaceId: surface.id,
@@ -65,6 +70,7 @@ export function PanelMoreMenu() {
               title,
               icon: surface.icon,
               availability: surface.availability,
+              binding: capturePluginAppBinding(activeThreadId),
             });
           },
         };
@@ -85,18 +91,47 @@ export function PanelMoreMenu() {
               label: app.appId,
               disabled: !standalone && !activeThreadId,
               onSelect: () => {
-                panel?.openOrActivatePage("plugin-app", {
+                openPluginApp(panel, {
                   pluginId: plugin.id,
                   appId: app.appId,
                   title: app.appId,
                   availability: standalone ? "always" : "session",
+                  binding: capturePluginAppBinding(activeThreadId),
                 });
               },
             };
           }),
       );
 
-    if (surfaceItems.length === 0 && entryItems.length === 0) {
+    // Declared session-panel entries come first: a plugin that asked for this
+    // slot has already decided the App belongs here, unlike the general list
+    // where every surface competes for the same two lines.
+    const placementItems: MenuAction[] = panelPlacements
+      .filter((entry) => entry.availability !== "session" || Boolean(activeThreadId))
+      .map((entry) => {
+        const Icon = getPluginUiSurfaceIcon(entry.icon);
+        const label = entry.title[locale] ?? entry.title.en;
+        return {
+          kind: "action",
+          id: `mini-app-placement:${entry.pluginId}:${entry.appId}:${entry.surfaceId ?? ""}`,
+          label,
+          iconLeft: <Icon size={14} stroke={1.5} />,
+          onSelect: () => {
+            openPluginApp(panel, {
+              pluginId: entry.pluginId,
+              appId: entry.appId,
+              surfaceId: entry.surfaceId,
+              server: entry.server,
+              title: label,
+              icon: entry.icon,
+              availability: entry.availability,
+              binding: capturePluginAppBinding(activeThreadId),
+            });
+          },
+        };
+      });
+
+    if (placementItems.length === 0 && surfaceItems.length === 0 && entryItems.length === 0) {
       if (loading) {
         return [{
           kind: "action",
@@ -125,6 +160,7 @@ export function PanelMoreMenu() {
     }
 
     return [
+      ...placementItems,
       ...surfaceItems,
       ...entryItems,
       { kind: "divider", id: "mini-apps-divider" },
@@ -137,7 +173,7 @@ export function PanelMoreMenu() {
         },
       },
     ];
-  }, [surfaces, plugins, activeThreadId, loading, error, locale, panel, setCurrentView, t]);
+  }, [surfaces, panelPlacements, plugins, activeThreadId, loading, error, locale, panel, setCurrentView, t]);
 
   const items: MenuAction[] = [
     {

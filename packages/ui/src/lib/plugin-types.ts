@@ -11,6 +11,14 @@ import type {
   PluginUiSurfaceDirectory,
 } from '@duya/plugin-core/apps/declarations';
 
+// Placement vocabulary re-exported so UI code has one import path for the
+// plugin-app contract and never reaches into plugin-core directly.
+export type {
+  PluginAppPlacement,
+  PluginAppPlacementSlot,
+  PluginUiPlacementDirectoryEntry,
+} from '@duya/plugin-core/apps/declarations';
+
 // ============================================================================
 // MCP re-exports from @duya/plugin-core (plan 97, Phase 0)
 // Pure types only — no I/O, no runtime calls. Renderer surfaces these to

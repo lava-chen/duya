@@ -177,7 +177,7 @@ export function registerPluginHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:ui-surfaces:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, data: { surfaces: [], conflicts: [] }, error: message };
+      return { success: false, data: { surfaces: [], conflicts: [], placements: [] }, error: message };
     }
   });
 
