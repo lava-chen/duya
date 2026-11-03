@@ -39,7 +39,7 @@ import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tool
 import { emitSSE } from './emit-sse.js';
 import { sanitizeSurrogates } from '../utils/sanitize-unicode.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
-import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem, applyCacheControlToTools } from '../utils/prompt-caching.js';
+import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem, applyCacheControlToTools, supportsToolDefinitionCache } from '../utils/prompt-caching.js';
 import { sortToolsByName } from '../utils/tool-order.js';
 import { isToolSchemaMismatchError } from '../utils/errors.js';
 import { parseJsonWithRepair } from '../utils/json-repair.js';
@@ -1864,16 +1864,18 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // Plan 480 P0.1: tool-level cache breakpoint. The `tools` param is the
       // longest stable public prefix of every request (same registry snapshot
       // + sortToolsByName → byte-identical across turns), so marking its final
-      // tool makes the whole tool surface cache-resident. Only native
-      // Anthropic surfaces accept cache_control on tool definitions — MiniMax
-      // and other compat endpoints resolve to nativeLayout=false — and a
-      // transport that omits tools ('none') has nothing to mark. The messages
-      // budget in applyCacheControl reserves a slot when this is active so the
-      // request total stays system(1) + tools(1) + messages(≤2) ≤ 4.
+      // tool makes the whole tool surface cache-resident. Native Anthropic
+      // surfaces accept cache_control on tool definitions, and so do the
+      // Anthropic-compatible endpoints that serve the native tool-definition
+      // shape (MiniMax, GLM) — `supportsToolDefinitionCache` is the single
+      // authority on that, and it also keeps the OpenRouter-style surfaces
+      // (which do not accept the marker) out. A transport that omits tools
+      // ('none') has nothing to mark. The messages budget in applyCacheControl
+      // reserves a slot when this is active so the request total stays
+      // system(1) + tools(1) + messages(≤2) ≤ 4.
       const toolsPresent = (chatOptions?.tools?.length ?? 0) > 0;
       const toolsCacheBreakpoint =
-        cacheEligibility.eligible &&
-        cacheEligibility.nativeLayout &&
+        supportsToolDefinitionCache(cacheEligibility) &&
         toolsPresent &&
         transport !== 'none';
 

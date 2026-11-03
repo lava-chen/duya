@@ -30,6 +30,32 @@ export interface CacheEligibility {
   eligible: boolean
   nativeLayout: boolean
   maxBreakpoints: number
+  /**
+   * Whether the endpoint accepts `cache_control` on tool definitions.
+   *
+   * `nativeLayout` describes the *message* wire shape (native Anthropic puts
+   * `cache_control` on the tool-result message itself), which is a different
+   * concern from the *tool definition* shape. Third-party Anthropic-compatible
+   * endpoints (MiniMax, GLM) serve the native tool-definition shape but not
+   * the native tool-result message shape, so the two flags can differ.
+   *
+   * When unset, the tool-definition breakpoint follows `nativeLayout`.
+   */
+  toolDefinitionCache?: boolean
+}
+
+/**
+ * Whether the endpoint accepts a `cache_control` breakpoint on the final tool
+ * definition.
+ *
+ * The `tools` param is the longest stable public prefix of every request
+ * (same registry snapshot + `sortToolsByName` → byte-identical across turns),
+ * so marking its final tool keeps the whole tool surface cache-resident —
+ * on duya's toolset that is ~40k-70k tokens per request.
+ */
+export function supportsToolDefinitionCache(eligibility: CacheEligibility): boolean {
+  if (!eligibility.eligible) return false
+  return eligibility.toolDefinitionCache ?? eligibility.nativeLayout
 }
 
 /**
@@ -140,6 +166,24 @@ export function checkCacheEligibility(
     }
   }
 
+  // Anthropic-compatible endpoints served under an `/anthropic` API path
+  // (MiniMax `api.minimaxi.com/anthropic`, GLM `open.bigmodel.cn/api/anthropic`).
+  // They accept Anthropic-style `cache_control` breakpoints — including on
+  // tool definitions, verified against the MiniMax endpoint — but their
+  // tool_result message layout is not the native Anthropic one, so
+  // `nativeLayout` stays false while `toolDefinitionCache` enables the
+  // tool-definition breakpoint.
+  if (isAnthropicCompatiblePath(baseUrl)) {
+    return {
+      provider,
+      modelId,
+      eligible: true,
+      nativeLayout: false,
+      toolDefinitionCache: true,
+      maxBreakpoints: 4,
+    }
+  }
+
   // Third-party Anthropic-compatible APIs (explicit opt-in via api mode)
   if (normalizedProvider !== 'openrouter' && normalizedModel.includes('claude')) {
     return {
@@ -158,6 +202,23 @@ export function checkCacheEligibility(
     eligible: false,
     nativeLayout: false,
     maxBreakpoints: 0,
+  }
+}
+
+/**
+ * Detect an Anthropic-compatible endpoint by its API path.
+ *
+ * The provider id alone is not a reliable signal: duya's Anthropic-protocol
+ * providers are `minimax-cn` and `glm-cn`, and third-party deployments add
+ * new ones over time. The `/anthropic` path segment is what actually
+ * identifies the wire shape.
+ */
+function isAnthropicCompatiblePath(baseUrl: string | undefined): boolean {
+  if (typeof baseUrl !== 'string') return false
+  try {
+    return new URL(baseUrl).pathname.toLowerCase().includes('/anthropic')
+  } catch {
+    return false
   }
 }
 
@@ -442,7 +503,10 @@ export function applyCacheControlToTools<T>(
   cacheRetention: CacheRetention = 'short',
   baseUrl?: string
 ): T[] {
-  if (!eligibility.eligible || eligibility.maxBreakpoints === 0 || cacheRetention === 'none') {
+  if (!supportsToolDefinitionCache(eligibility)) {
+    return tools;
+  }
+  if (eligibility.maxBreakpoints === 0 || cacheRetention === 'none') {
     return tools;
   }
   if (!Array.isArray(tools) || tools.length === 0) {
