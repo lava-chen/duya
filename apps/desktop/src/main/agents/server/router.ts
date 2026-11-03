@@ -551,6 +551,22 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
 const RUN_LAYER_ONLY_FRAMES: ReadonlySet<string> = new Set(['chat:message_finalized', 'run:event']);
 
 /**
+ * Actions whose worker request carries a run attempt the transport must
+ * corroborate. Dispatch (`session:spawn*`) decides which Run a child belongs
+ * to, and the project tool resolves its caller as a Coordinator Session, so
+ * both need the Agent Server's run ledger rather than the worker's claim.
+ */
+const ATTEMPT_CORRELATED_ACTIONS: ReadonlySet<string> = new Set([
+  'plugin-app:binding-current',
+  'project:tool',
+]);
+
+function isAttemptCorrelatedAction(action: unknown): boolean {
+  return typeof action === 'string'
+    && (ATTEMPT_CORRELATED_ACTIONS.has(action) || action.startsWith('session:spawn'));
+}
+
+/**
  * The attempt a transport correlated a worker request with, or `null`.
  *
  * The Agent Server owns the run ledger and the worker supervisor, so it is
@@ -566,7 +582,7 @@ function correlateWorkerAttempt(
   message: Record<string, unknown>,
   deps: Pick<RouterDeps, 'workerManager' | 'runOrchestrator'>,
 ): { sessionId: string; runId: string; epoch: number } | null {
-  if (message.action !== 'plugin-app:binding-current') return null;
+  if (!isAttemptCorrelatedAction(message.action)) return null;
   const execution = message.execution;
   if (!execution || typeof execution !== 'object' || Array.isArray(execution)) return null;
   const candidate = execution as Record<string, unknown>;

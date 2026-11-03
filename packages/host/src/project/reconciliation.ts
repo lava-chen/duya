@@ -1,5 +1,5 @@
 /**
- * project-run-settlement.ts — the durable half of "a work Session finished".
+ * reconciliation.ts — the durable half of "a work Session finished".
  *
  * A dispatched work Session's Run reaching a terminal is only a fact in the
  * run ledger. The project loop needs that fact in two other places:

@@ -128,7 +128,7 @@ function resolveTransport(): DbTransport {
 
 // Send DB request and wait for response
 async function sendDbRequest(action: string, payload: unknown): Promise<unknown> {
-  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current'
+  const execution = action.startsWith('session:spawn') || action === 'plugin-app:binding-current' || action === 'project:tool'
     ? workerDbRunContext()
     : undefined;
   // Legacy Desktop interagent turns have no Host run identity yet. Preserve
@@ -746,6 +746,14 @@ export const attachmentDb = {
 
 export const projectDb = {
   getGroups: () => sendDbRequest('project:getGroups', {}),
+
+  /**
+   * The Project Coordinator's durable project view. The Host resolves the
+   * project and the caller from the trusted worker attempt; the payload is
+   * only the requested action and its arguments.
+   */
+  tool: (input: { action: string; payload: Record<string, unknown> }) =>
+    sendDbRequest('project:tool', input),
 
   /**
    * Plan 536 L4: lightweight cwd -> projectId reverse-lookup. Returns

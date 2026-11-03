@@ -22,6 +22,7 @@ import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
 import { sessionSearchTool } from '@duya/host/worker-tool-bindings/session-search';
 import { messageSessionTool } from '@duya/host/worker-tool-bindings/message-session';
 import { sessionTool } from '@duya/host/worker-tool-bindings/session';
+import { projectTool } from '@duya/host/worker-tool-bindings/project';
 import { VisionTool } from '@duya/capabilities/VisionTool/VisionTool';
 import { imageGenerateTool } from '@duya/host/worker-image-generation';
 import { askUserQuestionTool } from '@duya/capabilities';
@@ -86,6 +87,10 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
     registry.register(messageSessionTool.toTool(), messageSessionTool, { exposure: 'deferred' });
     registry.register(sessionTool.toTool(), sessionTool, { exposure: 'deferred' });
+    registry.register(projectTool.toTool(), projectTool, {
+      exposure: 'deferred',
+      inputSchemaSummary: 'get project state/tasks/decisions/memories/activity, context, update_state, record_decision, record_memory',
+    });
     const visionTool = new VisionTool();
     registry.register(visionTool, visionTool, { exposure: 'eager' });
     registry.register(imageGenerateTool.toTool(), imageGenerateTool, {

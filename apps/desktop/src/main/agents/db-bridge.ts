@@ -59,6 +59,7 @@ import {
   getDesktopHostLocalTurnSuggestionApi,
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
+  getDesktopProjectToolService,
   getDesktopHostPluginAppInvocationApi,
   getDesktopCheckoutService,
   getDesktopSessionManagementService,
@@ -1662,6 +1663,24 @@ export async function dispatchDbAction(
     }
 
     // ==================== Project actions ====================
+    case 'project:tool': {
+      // The caller is the Session the transport bound the worker to. A worker
+      // payload cannot name it, because the tool resolves the project from
+      // that Session's durable Coordinator binding.
+      const callerSessionId = trustedAttempt?.sessionId ?? sender?.registeredSessionId;
+      if (!callerSessionId) return { ok: false, reason: 'project_tool_requires_caller' };
+      if (typeof p.action !== 'string' || p.action === '') return { ok: false, reason: 'invalid_action' };
+      const toolPayload = p.payload;
+      if (toolPayload !== undefined
+        && (typeof toolPayload !== 'object' || toolPayload === null || Array.isArray(toolPayload))) {
+        return { ok: false, reason: 'invalid_payload' };
+      }
+      return getDesktopProjectToolService().dispatch({
+        action: p.action,
+        payload: (toolPayload ?? {}) as Record<string, unknown>,
+        callerSessionId,
+      });
+    }
     case 'project:continuity-context': {
       const projectId = typeof p.projectId === 'string' ? p.projectId : '';
       if (!projectId) return { success: false, error: 'projectId_required' };
