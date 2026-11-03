@@ -8,6 +8,7 @@ import { useOptionalPanel } from "@/hooks/usePanel";
 import { Button } from "@/components/ui/Button";
 import { getPluginUiSurfaceIcon } from "./plugin-ui-surface-icons";
 import { useMiniAppCatalog } from "./useMiniAppCatalog";
+import { capturePluginAppBinding, openPluginApp } from "./open-plugin-app";
 
 /** Desktop launcher for Mini Apps declared by installed plugins. */
 export function MiniAppsView() {
@@ -57,7 +58,7 @@ export function MiniAppsView() {
                             key={`${surface.pluginId}:${surface.id}`}
                             variant="secondary"
                             size="sm"
-                            onClick={() => panel?.openOrActivatePage("plugin-app", {
+                            onClick={() => openPluginApp(panel, {
                               pluginId: surface.pluginId,
                               appId: surface.appId,
                               surfaceId: surface.id,
@@ -65,6 +66,7 @@ export function MiniAppsView() {
                               title: surface.title[locale],
                               icon: surface.icon,
                               availability: surface.availability,
+                              binding: capturePluginAppBinding(activeThreadId),
                             })}
                           >
                             <Icon size={14} stroke={1.5} />
