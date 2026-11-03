@@ -13,6 +13,8 @@ import {
   applyCacheControl,
   applyCacheControlToSystem,
   applyCacheControlToTools,
+  checkCacheEligibility,
+  supportsToolDefinitionCache,
 } from '../src/utils/prompt-caching.js';
 
 const ELIGIBLE = { eligible: true, maxBreakpoints: 4, nativeLayout: true };
@@ -52,6 +54,109 @@ function countBreakpoints(messages: unknown[]): number {
 function makeMessages(count: number): Array<Record<string, unknown>> {
   return Array.from({ length: count }, (_, i) => ({ role: 'user', content: `msg ${i}` }));
 }
+
+describe('checkCacheEligibility — Anthropic-compatible endpoints', () => {
+  it('marks an /anthropic path endpoint eligible with the tool-definition breakpoint enabled', () => {
+    const result = checkCacheEligibility(
+      'minimax-cn',
+      'MiniMax-M3.1-Flash',
+      'https://api.minimaxi.com/anthropic',
+    );
+    expect(result.eligible).toBe(true);
+    // The tool_result message layout is not the native Anthropic one, so the
+    // message-level marker stays off — only the tool-definition breakpoint
+    // (whose shape these endpoints do accept) is enabled.
+    expect(result.nativeLayout).toBe(false);
+    expect(result.toolDefinitionCache).toBe(true);
+    expect(result.maxBreakpoints).toBe(4);
+  });
+
+  it('applies the same rule to every /anthropic path, not a provider allowlist', () => {
+    for (const [provider, model, baseUrl] of [
+      ['minimax', 'MiniMax-M2.7', 'https://api.minimax.io/anthropic'],
+      ['glm', 'glm-5.3', 'https://open.bigmodel.cn/api/anthropic'],
+      ['bailian', 'qwen3-coder', 'https://coding.dashscope.aliyuncs.com/apps/anthropic'],
+      ['kimi', 'kimi-k2', 'https://api.moonshot.cn/anthropic'],
+      ['z-ai', 'glm-5.3', 'https://api.z.ai/api/anthropic'],
+      ['deepseek', 'deepseek-chat', 'https://api.deepseek.com/anthropic'],
+    ] as const) {
+      const result = checkCacheEligibility(provider, model, baseUrl);
+      expect(result.eligible, provider).toBe(true);
+      expect(supportsToolDefinitionCache(result), provider).toBe(true);
+    }
+  });
+
+  it('leaves the OpenRouter-style surfaces without the tool-definition breakpoint', () => {
+    const result = checkCacheEligibility(
+      'openrouter',
+      'anthropic/claude-sonnet-4-6',
+      'https://openrouter.ai/api/v1',
+    );
+    expect(result.eligible).toBe(true);
+    expect(supportsToolDefinitionCache(result)).toBe(false);
+  });
+
+  it('does not treat a non-Anthropic path as eligible', () => {
+    const result = checkCacheEligibility(
+      'deepseek',
+      'deepseek-chat',
+      'https://api.deepseek.com/v1',
+    );
+    expect(result.eligible).toBe(false);
+    expect(supportsToolDefinitionCache(result)).toBe(false);
+  });
+
+  it('keeps the native Anthropic surface on the native tool-definition layout', () => {
+    const result = checkCacheEligibility(
+      'anthropic',
+      'claude-sonnet-4-6',
+      'https://api.anthropic.com',
+    );
+    expect(result.eligible).toBe(true);
+    expect(result.nativeLayout).toBe(true);
+    expect(supportsToolDefinitionCache(result)).toBe(true);
+  });
+});
+
+describe('supportsToolDefinitionCache', () => {
+  it('falls back to nativeLayout when toolDefinitionCache is unset', () => {
+    expect(supportsToolDefinitionCache({ eligible: true, nativeLayout: true, maxBreakpoints: 4 })).toBe(true);
+    expect(supportsToolDefinitionCache({ eligible: true, nativeLayout: false, maxBreakpoints: 4 })).toBe(false);
+  });
+
+  it('is false whenever the endpoint is ineligible', () => {
+    expect(
+      supportsToolDefinitionCache({
+        eligible: false,
+        nativeLayout: true,
+        toolDefinitionCache: true,
+        maxBreakpoints: 0,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('applyCacheControlToTools on an Anthropic-compatible endpoint', () => {
+  const COMPAT_ELIGIBLE = {
+    eligible: true,
+    nativeLayout: false,
+    toolDefinitionCache: true,
+    maxBreakpoints: 4,
+  };
+
+  it('marks the final tool definition', () => {
+    const tools = makeTools(3);
+    const result = applyCacheControlToTools(tools, COMPAT_ELIGIBLE);
+    expect((result[2] as Record<string, unknown>).cache_control).toEqual({ type: 'ephemeral' });
+    expect((result[0] as Record<string, unknown>).cache_control).toBeUndefined();
+  });
+
+  it('does not mutate the input array', () => {
+    const tools = makeTools(2);
+    applyCacheControlToTools(tools, COMPAT_ELIGIBLE);
+    expect((tools[1] as Record<string, unknown>).cache_control).toBeUndefined();
+  });
+});
 
 describe('applyCacheControlToSystem', () => {
   it('wraps a string system prompt in a text block with cache_control', () => {
