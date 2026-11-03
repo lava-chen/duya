@@ -340,7 +340,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/run.ts": {
-      "bytes": 12845,
+      "bytes": 12840,
       "imports": [],
       "format": "esm"
     },
@@ -22807,7 +22807,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ModuleTool/inline-content.ts": {
-      "bytes": 31638,
+      "bytes": 31628,
       "imports": [],
       "format": "esm"
     },
@@ -40999,7 +40999,7 @@
           "bytesInOutput": 213
         },
         "packages/host/src/worker-db-client.ts": {
-          "bytesInOutput": 14622
+          "bytesInOutput": 14635
         },
         "packages/data/src/data-paths.ts": {
           "bytesInOutput": 627
@@ -41071,7 +41071,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 266
+          "bytesInOutput": 279
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -41158,10 +41158,10 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/agent-dm.ts": {
-          "bytesInOutput": 687
+          "bytesInOutput": 700
         },
         "packages/agent-protocol/src/session-ids.ts": {
-          "bytesInOutput": 176
+          "bytesInOutput": 189
         },
         "packages/agent-protocol/src/wake.ts": {
           "bytesInOutput": 30
@@ -41182,7 +41182,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1954
+          "bytesInOutput": 1967
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -41419,7 +41419,7 @@
           "bytesInOutput": 356
         },
         "packages/host/src/worker-logger.ts": {
-          "bytesInOutput": 4315
+          "bytesInOutput": 4332
         },
         "../../../node_modules/@iarna/toml/lib/parser.js": {
           "bytesInOutput": 1902
@@ -42982,7 +42982,7 @@
           "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 698
@@ -43150,13 +43150,13 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -43183,7 +43183,7 @@
           "bytesInOutput": 49
         },
         "packages/agent-core/src/task-notifications/tags.ts": {
-          "bytesInOutput": 223
+          "bytesInOutput": 236
         },
         "packages/agent-protocol/src/task-tool-names.ts": {
           "bytesInOutput": 41
@@ -44833,7 +44833,7 @@
           "bytesInOutput": 371
         },
         "packages/capabilities/src/utils/shellDetector.ts": {
-          "bytesInOutput": 3429
+          "bytesInOutput": 3425
         },
         "packages/host/src/worker-prompts/PromptSystem.ts": {
           "bytesInOutput": 7425
@@ -44881,7 +44881,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1877
+          "bytesInOutput": 1883
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -44920,7 +44920,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 613
+          "bytesInOutput": 619
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -45010,7 +45010,7 @@
           "bytesInOutput": 3025
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 708
+          "bytesInOutput": 702
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 697
@@ -45019,7 +45019,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1549
+          "bytesInOutput": 1553
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -45034,7 +45034,7 @@
           "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 667
+          "bytesInOutput": 669
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -46657,7 +46657,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4771746
+      "bytes": 4771862
     }
   }
 }
