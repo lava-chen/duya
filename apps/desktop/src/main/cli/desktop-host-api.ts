@@ -29,6 +29,7 @@ import type {
   HostToolApprovalApiV1,
   HostTaskApiV1,
   HostProjectApiV1,
+  HostSessionInputApiV1,
   HostRunApiV1,
   HostWorkspaceRegistrationApiV1,
   HostLocalSettingsApiV1,
@@ -119,6 +120,8 @@ import type { HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from '@duya/host/session-api';
 import { createHostTaskApi } from '@duya/host/task-api';
 import { createHostProjectApi } from '@duya/host/project-api';
+import { createProjectToolService, type ProjectToolService } from '@duya/host/project/tool-service';
+import { createHostSessionInputApi } from '@duya/host/session-input-api';
 import { createHostPermissionRequestApi } from '@duya/host/permission-request-api';
 import { createHostToolApprovalApi } from '@duya/host/tool-approval-api';
 import { createHostLockApi } from '@duya/host/lock-api';
@@ -600,7 +603,25 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     goalApi: createHostGoalApi(stores),
     modeStateApi: createHostModeStateApi(stores),
     taskApi: createHostTaskApi(stores, stores.projects),
-    projectApi: createHostProjectApi(stores.projects, stores.tasks),
+    projectApi: createHostProjectApi(stores.projects, stores.tasks, {
+      sessions: stores.sessions,
+      spawnEdges: stores.spawnEdges,
+    }),
+    // R1.2: the durable Session inputs and the per-session control lease.
+    //
+    // The identity is bound HERE and not per request. The Desktop's Host is
+    // reached with the Host's own bearer token, so the caller is the local
+    // user — and the lease is exactly the thing that decides who may direct a
+    // session, so it must not be something a request could name for itself.
+    //
+    // There is no delivery port: the Desktop's chat pipeline is its input
+    // path, and giving it a second one would be the parallel-authority bug
+    // this service exists to end. What the Desktop needs from here is the
+    // lease — the authority on who may take a working session over.
+    sessionInputApi: createHostSessionInputApi({
+      stores,
+      actor: { kind: 'user', id: 'local' },
+    }),
     researchApi: createHostResearchApi(stores),
     permissionRequestApi: createHostPermissionRequestApi(stores),
     toolApprovalApi: createHostToolApprovalApi(mainDatabase),
@@ -909,6 +930,31 @@ export function getDesktopHostTaskApi(): HostTaskApiV1 {
 
 export function getDesktopHostProjectApi(): HostProjectApiV1 {
   if (!sessionApiClient) throw new Error('Desktop Host project API is not running');
+  return sessionApiClient;
+}
+
+let desktopProjectToolService: ProjectToolService | null = null;
+
+export function getDesktopProjectToolService(): ProjectToolService {
+  if (desktopProjectToolService === null) {
+    desktopProjectToolService = createProjectToolService({
+      stores: { projects: getCoreStores().projects },
+      projectApi: getDesktopHostProjectApi(),
+    });
+  }
+  return desktopProjectToolService;
+}
+
+/**
+ * The R1.2 Session input service, reached the same way everything else is.
+ *
+ * The Desktop's Host is the only authority on the control lease, so the
+ * Desktop asks it over the same loopback the project API uses rather than
+ * reading the lease table itself. A surface that read the table would be a
+ * second authority the moment the Host shortened a lease.
+ */
+export function getDesktopHostSessionInputApi(): HostSessionInputApiV1 {
+  if (!sessionApiClient) throw new Error('Desktop Host session input API is not running');
   return sessionApiClient;
 }
 

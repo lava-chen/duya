@@ -79,6 +79,69 @@ export interface ProjectContinuitySnapshot {
   readonly transcriptRefs: readonly { sessionId: string; role: 'coordinator' | 'work'; taskId?: string }[];
 }
 
+/**
+ * A project task, projected from the canonical task store together with the
+ * project binding that says which coordinator owns it and which work session
+ * executes it.
+ *
+ * The task CONTENT lives in the task store; this is a projection of it plus
+ * the binding. A client never writes task content through the project API, so
+ * there is no second task state machine behind this shape.
+ */
+export interface HostProjectTaskState {
+  readonly taskId: string;
+  readonly subject: string;
+  readonly description: string;
+  /** Canonical task status. `unknown` when the task row is missing. */
+  readonly status: string;
+  readonly activeForm: string | null;
+  readonly owner: string | null;
+  readonly blocks: readonly string[];
+  readonly blockedBy: readonly string[];
+  readonly coordinatorSessionId: string;
+  readonly workSessionId: string | null;
+  readonly updatedAt: number;
+}
+
+/**
+ * A working session of a project.
+ *
+ * Two origins, and the difference matters: `spawned` sessions are children of
+ * the coordinator session in the spawn lineage, `bound` sessions were attached
+ * to a project task explicitly. A session can be both; the binding wins,
+ * because it is the stronger fact.
+ */
+export type HostProjectWorkSessionOrigin = 'spawned' | 'bound';
+
+export interface HostProjectWorkSession {
+  readonly sessionId: string;
+  readonly title: string;
+  readonly workingDirectory: string;
+  /** Session row status. `unknown` when the session row is missing. */
+  readonly status: string;
+  readonly updatedAt: number;
+  /** The project task this session executes, when one is bound. */
+  readonly taskId: string | null;
+  readonly origin: HostProjectWorkSessionOrigin;
+}
+
+/**
+ * The unified project state.
+ *
+ * One read, one authority: the project row, its coordinator conversation, the
+ * project tasks and the working sessions are projected together so a client
+ * never has to assemble a project view from several sources that could
+ * disagree with each other.
+ */
+export interface HostProjectState {
+  readonly project: HostProjectRecord;
+  readonly coordinatorSessionId: string | null;
+  readonly tasks: readonly HostProjectTaskState[];
+  readonly workSessions: readonly HostProjectWorkSession[];
+  /** When the projection was taken. */
+  readonly observedAt: number;
+}
+
 /** Versioned asynchronous API for durable project metadata. */
 export interface HostProjectApiV1 {
   listProjects(): Promise<readonly HostProjectRecord[]>;
@@ -98,4 +161,13 @@ export interface HostProjectApiV1 {
   updateProjectTaskAcceptance(input: { projectId: string; taskId: string; status: 'accepted' | 'rejected'; source: ProjectContinuitySource }): Promise<HostProjectTaskLink | null>;
   listProjectMemoryHistory(projectId: string, key: string, limit?: number): Promise<readonly ProjectMemory[]>;
   listProjectDecisionHistory(projectId: string, key: string, limit?: number): Promise<readonly ProjectDecision[]>;
+  /**
+   * Read the whole project state in one projection.
+   *
+   * Returns null when the project does not exist. This is the read the Desktop
+   * project workspace uses: the coordinator conversation, the tasks and the
+   * working sessions all come from the same observation, so the view cannot
+   * show a coordinator that disagrees with the task it is bound to.
+   */
+  getProjectState(projectId: string): Promise<HostProjectState | null>;
 }

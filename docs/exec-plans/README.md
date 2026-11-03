@@ -10,6 +10,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](active/2026-11-03-tui-transparent-composer-background.md) | 增加 `DUYA_TUI_COMPOSER_BG=transparent`；验证全屏/inline 都不画输入框底色，并更新本机测试 CLI |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁（typecheck/architecture/build/测试 + 视觉走查）；PR #594 待 review 与集成 |
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |

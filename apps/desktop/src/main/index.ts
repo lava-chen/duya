@@ -75,6 +75,7 @@ import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerProjectEntityHandlers } from './ipc/project-entity-handlers';
+import { registerProjectWorkspaceHandlers } from './ipc/project-workspace-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerWorkspaceLifecycleHandlers } from './ipc/workspace-lifecycle-handlers';
 import { registerBashTaskHandlers } from './ipc/bash-task-handlers';
@@ -1095,6 +1096,9 @@ registerGitHandlers();
 // Plan 621 slice F: the renderer's window onto the Host's checkout and
 // integration observations.
 registerWorkspaceLifecycleHandlers();
+// Project-first: the renderer's window onto the project's unified state, its
+// coordinator conversation and the per-session control lease.
+registerProjectWorkspaceHandlers();
 // Plan 552 Phase 7: workflow console reads (run list / journal).
 registerWorkflowHandlers();
 // Plan 556 Phase 5: recorder control + session library + badge overlay.

@@ -33,6 +33,7 @@ import {
 const entry = (overrides: Partial<NavHistoryEntry> = {}): NavHistoryEntry => ({
   view: "chat",
   threadId: "t1",
+  projectId: null,
   settingsTab: null,
   panel: { open: false, activeTabId: null },
   ...overrides,

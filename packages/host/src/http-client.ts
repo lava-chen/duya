@@ -142,11 +142,19 @@ import type {
   HostProjectCreateInput,
   HostProjectPatch,
   HostProjectRecord,
+  HostProjectState,
   HostProjectTaskLink,
   HostLockAcquireInput,
   HostLockRenewInput,
   HostLockReleaseInput,
   LockOrigin,
+} from '@duya/agent-protocol';
+import type {
+  SessionControlLease,
+  SessionControlLeaseRequest,
+  SessionInputReceipt,
+  SessionInputRequest,
+  HostSessionInputApiV1,
 } from '@duya/agent-protocol';
 import type {
   HostCheckoutObserved,
@@ -419,6 +427,7 @@ export class HostSessionHttpClient implements
   HostRunApiV1,
   HostProjectApiV1,
   HostResearchApiV1,
+  HostSessionInputApiV1,
   HostHealthApiV1,
   HostLocalProviderManagementApiV1 {
   constructor(
@@ -2498,6 +2507,62 @@ export class HostSessionHttpClient implements
     const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectDecision[] }>(
       'GET', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
     return result.records;
+  }
+
+  async getProjectState(projectId: string): Promise<HostProjectState | null> {
+    const result = await this.request<{ state: HostProjectState | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/state`);
+    return result.state;
+  }
+
+  // ── R1.2: durable Session inputs and the per-session control lease ────
+  //
+  // The lease is the authority on who may direct a session, so a client that
+  // wants to take over a working session asks the Host for it. A refused
+  // grant is an ordinary outcome and comes back as `null`, not as an error:
+  // somebody else already holds the session.
+
+  async submitInput(request: SessionInputRequest): Promise<SessionInputReceipt> {
+    const result = await this.request<{ receipt: SessionInputReceipt }>('POST', '/v1/session-inputs', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      intent: request.intent,
+      content: request.content,
+    });
+    return result.receipt;
+  }
+
+  async readInputReceipt(sessionId: string, requestId: string): Promise<SessionInputReceipt | null> {
+    const result = await this.request<{ receipt: SessionInputReceipt | null }>(
+      'GET',
+      `/v1/session-inputs/receipt?sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`,
+    );
+    return result.receipt;
+  }
+
+  async acquireControlLease(request: SessionControlLeaseRequest): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>('POST', '/v1/session-inputs/lease', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      ...(request.expectedRevision === undefined ? {} : { expectedRevision: request.expectedRevision }),
+      ttlMs: request.ttlMs,
+    });
+    return result.lease;
+  }
+
+  async releaseControlLease(sessionId: string, revision: number): Promise<boolean> {
+    const result = await this.request<{ released: boolean }>('POST', '/v1/session-inputs/lease/release', {
+      sessionId,
+      revision,
+    });
+    return result.released;
+  }
+
+  async readControlLease(sessionId: string): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>(
+      'GET', `/v1/session-inputs/lease?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    return result.lease;
   }
 
   // ── Plan 621: checkout and integration observations ───────────────────

@@ -71,6 +71,31 @@ export interface InteragentRouterDeps {
    * silently hang for 30 seconds until the db-client timeout fires.
    */
   workerDbRequests: WorkerDbRequests;
+  /**
+   * The control lease, as the authority on who may direct a session.
+   *
+   * A session the USER has taken over is not the Coordinator's to direct. The
+   * lease is the authority — this router only asks it, and it never grants
+   * anything itself.
+   *
+   * Absent means "this surface has no lease authority", and the invoke is
+   * accepted as before. That is the honest default for an embedder that never
+   * assembled one.
+   */
+  controlLease?: {
+    /**
+     * The reason this session may not be directed right now, or null when it
+     * may. Read-only: it grants no rights.
+     *
+     * The holder kind comes back with it because the caller has to be told
+     * WHO holds the session: "the user is in there" is something a Coordinator
+     * can report and wait for, while "someone holds it" is a shrug.
+     *
+     * Asynchronous because the lease lives in the main process's database and
+     * the Agent Server reaches it over the process bridge.
+     */
+    blockedBy(sessionId: string): Promise<{ code: 'control_lease_held'; holderKind: string } | null>;
+  };
 }
 
 // Plan 426 Phase 1.1: adaptive cap shared with the HTTP router (CPU/2
@@ -100,7 +125,41 @@ export type InvokeRejectReason =
   | 'cycle_detected'
   | 'target_busy'
   | 'server_busy'
-  | 'target_not_found';
+  | 'target_not_found'
+  | 'control_lease_held';
+
+/**
+ * What the caller is told when an invoke is refused.
+ *
+ * The lease refusal gets its own sentence because the Coordinator has to be
+ * able to act on it: "the user has taken this session over" is a fact it can
+ * report and plan around, while "rejected: control_lease_held" is a code it
+ * would have to guess at.
+ */
+const REJECTION_MESSAGES: Record<InvokeRejectReason, string> = {
+  self_call: 'interagent invoke rejected: a session cannot invoke itself',
+  cycle_detected: 'interagent invoke rejected: the target already depends on the caller',
+  target_busy: 'interagent invoke rejected: the target session is busy',
+  server_busy: 'interagent invoke rejected: too many workers are running',
+  target_not_found: 'interagent invoke rejected: the target session does not exist',
+  control_lease_held:
+    'interagent invoke rejected: this session is held by another owner, so it cannot be instructed right now. Keep watching it and wait for the lease to be handed back.',
+};
+
+/**
+ * The sentence the caller reads.
+ *
+ * The lease refusal names the holder, because the holder is what decides what
+ * the caller does next: a session the USER took over is worth waiting for and
+ * worth telling the user about, and a session some other owner holds is a
+ * different situation that must not be reported as "the user is in there".
+ */
+function rejectionMessage(reason: InvokeRejectReason, leaseHolderKind?: string): string {
+  if (reason === 'control_lease_held' && leaseHolderKind === 'user') {
+    return 'interagent invoke rejected: the user has taken this session over, so it cannot be instructed right now. Keep watching it and wait for the user to hand it back.';
+  }
+  return REJECTION_MESSAGES[reason];
+}
 
 export interface InvokeResult {
   ok: boolean;
@@ -204,7 +263,21 @@ export class InteragentRouter {
       return this.reject(params, 'server_busy');
     }
 
-    // 5. Register in cycle detector and active invokes
+    // 5. The control lease.
+    //
+    // This is the gate that makes a takeover real: while the user holds the
+    // lease on a working session, a Coordinator may still WATCH it, but it may
+    // not send it a new instruction. The refusal is reported to the caller
+    // with its own reason, so the Coordinator learns "the user is in there"
+    // instead of waiting out its timeout.
+    const leaseBlockedBy = this.deps.controlLease
+      ? await this.deps.controlLease.blockedBy(targetSessionId)
+      : null;
+    if (leaseBlockedBy) {
+      return this.reject(params, leaseBlockedBy.code, leaseBlockedBy.holderKind);
+    }
+
+    // 6. Register in cycle detector and active invokes
     this.cycleDetector.addInvoke(id, callerSessionId, targetSessionId);
 
     const timer = setTimeout(() => {
@@ -213,7 +286,7 @@ export class InteragentRouter {
 
     this.activeInvokes.set(id, { callerSessionId, targetSessionId, timer });
 
-    // 6. Lazy spawn target worker + drive chat turn (steps 5-11 in spec §6.2)
+    // 7. Lazy spawn target worker + drive chat turn (steps 5-11 in spec §6.2)
     try {
       await this.spawnAndDriveTarget(params);
     } catch (err) {
@@ -238,11 +311,11 @@ export class InteragentRouter {
    * The refusal is reported over IPC for the reason
    * {@link sendInteragentEventToCaller} gives.
    */
-  private reject(params: InvokeParams, reason: InvokeRejectReason): InvokeResult {
+  private reject(params: InvokeParams, reason: InvokeRejectReason, leaseHolderKind?: string): InvokeResult {
     this.sendEventToCaller(params.callerSessionId, params.id, {
       type: 'chat:error',
       sessionId: params.targetSessionId,
-      message: `interagent invoke rejected: ${reason}`,
+      message: rejectionMessage(reason, leaseHolderKind),
       code: reason,
     });
     return { ok: false, reason };

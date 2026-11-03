@@ -59,6 +59,7 @@ import {
   getDesktopHostLocalTurnSuggestionApi,
   getDesktopHostLocalChannelPersistenceApi,
   getDesktopHostProjectApi,
+  getDesktopProjectToolService,
   getDesktopHostPluginAppInvocationApi,
   getDesktopCheckoutService,
   getDesktopSessionManagementService,
@@ -201,6 +202,7 @@ import { getChannelBackgroundWakes } from '../wake/channels';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
 import type { NewEvent } from '../db/core';
+import { getCoreStoresOrNull } from '../db/core-connection';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
@@ -594,6 +596,29 @@ export async function dispatchDbAction(
 
     case 'session:get':
       return readHostSessionRow(p.id as string);
+
+    // The control lease, read-only.
+    //
+    // The Agent Server runs in its own process, so the lease — which lives in
+    // the main process's core database — is read through the bridge. The
+    // answer is only ever "is this session currently leased", and it grants no
+    // rights: the caller that may direct the session is decided by the Host
+    // that holds the lease, not by whoever asked.
+    case 'session:controlLease': {
+      const sessionId = String(p.sessionId ?? '');
+      if (!sessionId) throw new Error('Invalid sessionId.');
+      const stores = getCoreStoresOrNull();
+      if (!stores) return null;
+      const lease = stores.sessionControlLeases.read(sessionId);
+      if (!lease) return null;
+      return {
+        sessionId: lease.sessionId,
+        holderKind: lease.holderKind,
+        holderId: lease.holderId,
+        revision: lease.revision,
+        expiresAt: lease.expiresAtMs,
+      };
+    }
 
     case 'session:checkoutControl': {
       const id = String(p.id ?? '');
@@ -1662,6 +1687,24 @@ export async function dispatchDbAction(
     }
 
     // ==================== Project actions ====================
+    case 'project:tool': {
+      // The caller is the Session the transport bound the worker to. A worker
+      // payload cannot name it, because the tool resolves the project from
+      // that Session's durable Coordinator binding.
+      const callerSessionId = trustedAttempt?.sessionId ?? sender?.registeredSessionId;
+      if (!callerSessionId) return { ok: false, reason: 'project_tool_requires_caller' };
+      if (typeof p.action !== 'string' || p.action === '') return { ok: false, reason: 'invalid_action' };
+      const toolPayload = p.payload;
+      if (toolPayload !== undefined
+        && (typeof toolPayload !== 'object' || toolPayload === null || Array.isArray(toolPayload))) {
+        return { ok: false, reason: 'invalid_payload' };
+      }
+      return getDesktopProjectToolService().dispatch({
+        action: p.action,
+        payload: (toolPayload ?? {}) as Record<string, unknown>,
+        callerSessionId,
+      });
+    }
     case 'project:continuity-context': {
       const projectId = typeof p.projectId === 'string' ? p.projectId : '';
       if (!projectId) return { success: false, error: 'projectId_required' };

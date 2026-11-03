@@ -8,7 +8,6 @@
 import type { AgentProfile } from '@duya/agent-core';
 import {
   PROJECT_COORDINATOR_ALLOWED_TOOLS,
-  PROJECT_COORDINATOR_IDENTITY_PROMPT,
   PROJECT_COORDINATOR_PROFILE_ID,
 } from '../project/identity.js';
 
@@ -59,10 +58,12 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     // The coordinator can track its task list and manage child Sessions. It has
     // no direct filesystem, shell, browser, or device execution capability.
     allowedTools: [...PROJECT_COORDINATOR_ALLOWED_TOOLS],
-    identityPrompt: PROJECT_COORDINATOR_IDENTITY_PROMPT,
     // Dedicated composition: the coordinator must not inherit the general
-    // agent's file-editing, shell, or desktop-tool guidance.
+    // agent's file-editing, shell, or desktop-tool guidance. Its identity is
+    // the first section of that system, so the runtime's generic identity
+    // block stays out of the prompt.
     promptSystem: 'project',
+    suppressIdentityBlock: true,
     userVisible: false,
     isPreset: true,
     isEnabled: true,

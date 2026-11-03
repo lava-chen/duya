@@ -1,5 +1,5 @@
 /**
- * project-run-settlement.test.ts — the shared Run-terminal → project feedback
+ * project-reconciliation.test.ts — the shared Run-terminal → project feedback
  * loop: one activity row, one durable Coordinator notification, no acceptance.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -8,7 +8,7 @@ import {
   formatProjectRunNotice,
   type ProjectRunSettlementStores,
   type ProjectRunNotice,
-} from '../src/project-run-settlement.js';
+} from '../src/project/reconciliation.js';
 import type { ProjectActivityRow, ProjectTaskLinkRow } from '@duya/data/project-store';
 import type { RunRow } from '@duya/data/run-store';
 import type { MailboxItem } from '@duya/data/mailbox';

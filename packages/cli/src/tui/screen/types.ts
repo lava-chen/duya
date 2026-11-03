@@ -70,7 +70,8 @@ export interface RegionPatch {
    * two lines with text between them. A `-bg` body is a BACKGROUND — it
    * fills the cell behind the text and leaves the text colour alone.
    */
-  readonly background?: string;
+  /** `null` explicitly clears an existing fill; omission keeps the prior fill. */
+  readonly background?: string | null;
   /**
    * The region's frame. `composer` is the input box's two horizontal rules with
    * no sides; `framed` is a full box; `none` drops it entirely, which is what a
