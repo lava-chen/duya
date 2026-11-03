@@ -45,6 +45,15 @@ describe.skipIf(!nativeSqliteAvailable)('ProjectStore', () => {
     try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
   });
 
+  it('replays the continuity migration after its schema changes already exist', () => {
+    const continuityMigration = ProjectStore.migrations.find((migration) => migration.id === 64);
+    expect(continuityMigration).toBeDefined();
+    expect(() => continuityMigration!.up(db)).not.toThrow();
+    expect(() => continuityMigration!.up(db)).not.toThrow();
+    const columns = db.prepare('PRAGMA table_info(project_task_sessions)').all() as Array<{ name: string }>;
+    expect(columns.filter((column) => column.name === 'acceptance_status')).toHaveLength(1);
+  });
+
   it('insert → get round-trips a project with defaults', () => {
     const row = store.insert({ project_id: 'p-1', canonical_root: 'E:/repos/one' });
     expect(row.project_id).toBe('p-1');

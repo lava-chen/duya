@@ -116,6 +116,18 @@ export function shellCommandOf(input: unknown): string | undefined {
 const EXIT_CODE_LINE = /^\[Exit code: -?\d+\]$/u;
 
 /**
+ * Whether this output line is the exit-code line `BashTool` prepends.
+ *
+ * Exported because two renderers need the same answer for different reasons:
+ * the selection below hoists the line out of a tail, and the transcript paints
+ * it in the error colour instead of the muted one. Testing for it twice, with
+ * two regexes, is how one of them drifts.
+ */
+export function isExitCodeLine(line: string): boolean {
+  return EXIT_CODE_LINE.test(line.trim());
+}
+
+/**
  * Choose the lines of a shell result worth showing.
  *
  * Success shows head-tail: the conclusion of a successful command is usually
@@ -129,7 +141,7 @@ export function selectShellOutput(result: string, status: ToolStatus, budget: nu
   if (lines.length === 0) return ['(no output)'];
 
   const exitLine = status === 'error'
-    ? lines.find((line) => EXIT_CODE_LINE.test(line.trim()))
+    ? lines.find((line) => isExitCodeLine(line))
     : undefined;
   const body = exitLine === undefined ? lines : lines.filter((line) => line !== exitLine);
   const head: string[] = exitLine === undefined ? [] : [exitLine];

@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from 'child_process';
+import { fork, type ChildProcess, type ForkOptions } from 'child_process';
 import * as fs from 'fs';
 import nodeModule from 'node:module';
 import type { StopDisposition } from '@duya/agent-protocol';
@@ -389,14 +389,27 @@ export class WorkerManager {
       this.options.resolveBetterSqlite3Path(),
     );
 
-    const child = fork(workerPath, [], {
+    const forkOptions: ForkOptions = {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'] as any,
       env: {
         ...env,
         ELECTRON_RUN_AS_NODE: '1',
       },
       execPath: process.execPath,
-    });
+      // Windows only, but it has to be here for both platforms' callers: a
+      // console-subsystem child (`node.exe`, or Electron under
+      // ELECTRON_RUN_AS_NODE) started by a process that has NO console of its
+      // own gets a brand new one, and a new console is a window on screen. The
+      // Host that the TUI starts is deliberately detached (see
+      // `background-host.ts`) and therefore has no console, so every worker it
+      // forked flashed a terminal window at the user — one per session.
+      //
+      // Typed as a cast because `ForkOptions` omits `windowsHide` even though
+      // `fork` forwards its options straight to `spawn`, which honours it.
+      windowsHide: true,
+    } as ForkOptions;
+
+    const child = fork(workerPath, [], forkOptions);
 
     const workerPid = child.pid;
     this.logger.info('Worker spawned', {

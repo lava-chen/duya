@@ -597,7 +597,7 @@ async function startDesktopHostApiOnce(): Promise<DesktopHostApiHandle> {
     runExecutionApi,
     goalApi: createHostGoalApi(stores),
     modeStateApi: createHostModeStateApi(stores),
-    taskApi: createHostTaskApi(stores),
+    taskApi: createHostTaskApi(stores, stores.projects),
     projectApi: createHostProjectApi(stores.projects, stores.tasks),
     researchApi: createHostResearchApi(stores),
     permissionRequestApi: createHostPermissionRequestApi(stores),
