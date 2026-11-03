@@ -71,6 +71,7 @@ import { normalizePath } from '@duya/data/path-utils';
 import { getControlPlane } from '@duya/host/control-plane-service';
 import { COMMAND_SCHEMA_VERSION, type CommandSenderFacts } from '@duya/host/command-receipt';
 import { isHostSessionAction } from '@duya/host/session-service';
+import { isProjectCoordinatorProfile } from '@duya/host/project/identity';
 import { writeRunReceiptOnWire } from '@duya/host/run-receipt';
 import { authorizePluginAppBindingCheck } from './plugin-app-binding-check';
 import type { WorkflowRunSnapshot, WorkflowRunStatus, WorkflowTriggerKind } from '@duya/agent-protocol/workflow-runs';
@@ -399,7 +400,7 @@ export async function dispatchDbAction(
       ?? (typeof p.parentSessionId === 'string' ? p.parentSessionId : typeof p.callerSessionId === 'string' ? p.callerSessionId : '');
     // Role and ownership come from Host storage and transport, never the tool payload.
     const caller = callerSessionId ? await getDesktopHostSessionApi().get(callerSessionId, { includeAllSessions: true }) : null;
-    if (caller?.agentProfileId === 'project-coordinator') {
+    if (isProjectCoordinatorProfile(caller?.agentProfileId)) {
       if (!trustedAttempt) return { ok: false, reason: 'caller_attempt_not_current' };
       const result = await getDesktopSessionManagementService().dispatch(action, p, trustedAttempt);
       if (action === 'session:spawn' && typeof result === 'object' && result !== null && 'ok' in result && result.ok === true) {

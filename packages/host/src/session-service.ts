@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import * as path from 'node:path';
 import type {
@@ -15,8 +14,7 @@ import type {
   HostSessionRecord,
 } from '@duya/agent-protocol/session-api';
 import type { CoreSession } from '@duya/data/session-store';
-import type { ProjectStore } from '@duya/data/project-store';
-import type { CoreDataHostStores } from '@duya/data/core-data-host';
+import type { ProjectDispatchPlan, ProjectDispatchPort } from './project/dispatch.js';
 
 const SPAWN_METADATA_KEY = 'host.sessionSpawn';
 const SESSION_ACTIONS = new Set([
@@ -39,10 +37,12 @@ export interface SessionServiceCaller {
 }
 
 export interface HostSessionServiceOptions {
-  readonly projectCoordination?: {
-    readonly projects: Pick<ProjectStore, 'getByCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession'>;
-    readonly tasks: Pick<CoreDataHostStores['tasks'], 'create' | 'update'>;
-  };
+  /**
+   * Project product rules for dispatching work Sessions. Session management
+   * itself stays project-agnostic; a composition that hosts a Project
+   * Coordinator must supply this port.
+   */
+  readonly projectDispatch?: ProjectDispatchPort;
   readonly checkoutService?: import('./workspace/session-checkout-service.js').SessionCheckoutService;
   readonly sessions: Pick<HostSessionApiV1,
     'get' | 'create' | 'list' | 'update' | 'getSessionChangeStats'>;
@@ -204,17 +204,18 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
     if (!child) return null;
     if (child.parentSessionId === caller.sessionId) return child;
 
-    // Project work Sessions outlive the Coordinator Session that created
-    // them. Authorize the currently bound Coordinator through the durable
-    // project→task→work-session link, while retaining ordinary parent checks
-    // for all other Sessions.
-    if (!options.projectCoordination) return null;
+    // Work Sessions outlive the Coordinator Session that created them. The
+    // project port authorizes the currently bound Coordinator through the
+    // durable project→task→work-session link; ordinary Sessions keep the
+    // parent-only ownership check above.
+    if (!options.projectDispatch) return null;
     const callerSession = await options.sessions.get(caller.sessionId, { includeAllSessions: true });
     requireCurrentCaller(caller);
-    if (callerSession?.agentProfileId !== 'project-coordinator') return null;
-    const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
-    return project && options.projectCoordination.projects.listTaskLinks(project.project_id)
-      .some((link) => link.work_session_id === sessionId) ? child : null;
+    return options.projectDispatch.authorizesWorkSession(
+      callerSession?.agentProfileId,
+      caller.sessionId,
+      sessionId,
+    ) ? child : null;
   }
 
   async function startRun(
@@ -317,14 +318,16 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           }
           const parent = await parentFor(caller);
           if (!parent) return { ok: false, reason: 'parent_session_missing_or_unbound' };
-          const isProjectCoordinator = parent.record.agentProfileId === 'project-coordinator';
-          const rawProjectTask = payload.projectTask;
-          if (isProjectCoordinator && (!rawProjectTask || typeof rawProjectTask !== 'object' || Array.isArray(rawProjectTask))) {
-            return { ok: false, reason: 'project_coordinator_requires_project_task' };
-          }
-          if (!isProjectCoordinator && rawProjectTask !== undefined) {
-            return { ok: false, reason: 'project_task_requires_project_coordinator' };
-          }
+          const dispatchPlan: ProjectDispatchPlan = options.projectDispatch
+            ? options.projectDispatch.planDispatch({
+                callerSessionId: caller.sessionId,
+                callerProfileId: parent.record.agentProfileId,
+                projectTask: payload.projectTask,
+              })
+            : payload.projectTask === undefined
+              ? { kind: 'plain' }
+              : { kind: 'refused', reason: 'project_coordination_unavailable' };
+          if (dispatchPlan.kind === 'refused') return { ok: false, reason: dispatchPlan.reason };
           const requestedCanonical = await realpath(requestedDirectory).catch(() => null);
           requireCurrentCaller(caller);
           if (!requestedCanonical || !sameCanonicalDirectory(parent.workingDirectory, requestedCanonical)) {
@@ -334,30 +337,10 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           if (!workspace) return { ok: false, reason: 'parent_workspace_unbound' };
 
           let projectTaskId: string | undefined;
-          if (rawProjectTask !== undefined) {
-            const projectTask = rawProjectTask as Record<string, unknown>;
-            const subject = typeof projectTask.subject === 'string' ? projectTask.subject.trim() : '';
-            const description = typeof projectTask.description === 'string' ? projectTask.description.trim() : '';
-            if (Object.keys(projectTask).some((key) => key !== 'subject' && key !== 'description')
-              || !subject || subject.length > 160 || !description || description.length > 12_000) {
-              return { ok: false, reason: 'invalid_project_task' };
-            }
-            if (!options.projectCoordination) return { ok: false, reason: 'project_coordination_unavailable' };
-            const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
-            if (!project) return { ok: false, reason: 'project_coordinator_not_bound' };
-            projectTaskId = randomUUID();
-            try {
-              options.projectCoordination.tasks.create({
-                id: projectTaskId,
-                sessionId: caller.sessionId,
-                subject,
-                description,
-                status: 'pending',
-              });
-              options.projectCoordination.projects.bindTask(project.project_id, projectTaskId, caller.sessionId);
-            } catch (error) {
-              return { ok: false, reason: `project_task_create_failed:${error instanceof Error ? error.message : String(error)}` };
-            }
+          if (dispatchPlan.kind === 'project') {
+            const created = options.projectDispatch!.createTask(dispatchPlan, caller.sessionId);
+            if (!created.ok) return { ok: false, reason: created.reason };
+            projectTaskId = created.taskId;
           }
 
           let child: HostSessionRecord;
@@ -375,7 +358,9 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               permissionMode: parent.record.permissionMode,
               // A restricted Project Coordinator delegates into a real work
               // role; its management-only allowlist must not leak to the child.
-              agentProfileId: isProjectCoordinator ? 'code-expert' : parent.record.agentProfileId,
+              agentProfileId: options.projectDispatch
+                ? options.projectDispatch.workSessionProfileId(parent.record.agentProfileId)
+                : parent.record.agentProfileId,
               parentSessionId: parent.record.id,
               spawn: { type: 'session', reason: 'session-tool' },
               agentType: 'spawn',
@@ -386,12 +371,11 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
           }
 
-          if (projectTaskId) {
-            const project = options.projectCoordination!.projects.getByCoordinatorSession(caller.sessionId);
-            const linked = project && options.projectCoordination!.projects.bindWorkSession(project.project_id, projectTaskId, child.id);
+          if (dispatchPlan.kind === 'project' && projectTaskId) {
+            const linked = options.projectDispatch!.bindWorkSession(dispatchPlan, projectTaskId, child.id);
             if (!linked) {
               await markCreatedChildFailed(child.id, 'project_task_binding_failed');
-              options.projectCoordination!.tasks.update(projectTaskId, { status: 'pending' });
+              options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
               return { ok: false, sessionId: child.id, reason: 'project_task_binding_failed' };
             }
           }
@@ -425,7 +409,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           if ('reason' in started) {
             const failureReason = started.reason;
             const failed = await markCreatedChildFailed(child.id, failureReason);
-            if (projectTaskId) options.projectCoordination!.tasks.update(projectTaskId, { status: 'pending' });
+            if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
             return {
               ok: false,
               sessionId: child.id,
@@ -433,7 +417,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               reason: failed ? failureReason : `${failureReason}; child_failure_metadata_write_failed`,
             };
           }
-          if (projectTaskId) options.projectCoordination!.tasks.update(projectTaskId, { status: 'in_progress' });
+          if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'in_progress');
           return {
             ok: true,
             sessionId: child.id,
@@ -488,34 +472,32 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           // manage them through the same Session tool surface.
           const currentCaller = await options.sessions.get(caller.sessionId, { includeAllSessions: true });
           requireCurrentCaller(caller);
-          if (currentCaller?.agentProfileId === 'project-coordinator' && options.projectCoordination) {
-            const project = options.projectCoordination.projects.getByCoordinatorSession(caller.sessionId);
-            if (project) {
-              const existingIds = new Set(sessions.map((item) => item.id));
-              for (const link of options.projectCoordination.projects.listTaskLinks(project.project_id)) {
-                const workSessionId = link.work_session_id;
-                if (!workSessionId || existingIds.has(workSessionId)) continue;
-                const session = await options.sessions.get(workSessionId, { includeAllSessions: true });
-                requireCurrentCaller(caller);
-                if (!session) continue;
-                const local = await options.readLocalSession(session.id);
-                requireCurrentCaller(caller);
-                const metadata = readSpawnMetadata(session);
-                const run = metadata?.runId ? await options.runs.getAgentRun(metadata.runId) : null;
-                requireCurrentCaller(caller);
-                sessions.push({
-                  id: session.id,
-                  title: session.title,
-                  status: run?.status ?? metadata?.status ?? session.status,
-                  working_directory: local?.workingDirectory ?? '',
-                  created_at: Number(session.createdAt),
-                  updated_at: Number(session.updatedAt),
-                  ...(metadata?.runId ? { runId: metadata.runId } : {}),
-                  ...(run ? { runStatus: run.status } : {}),
-                });
-                existingIds.add(session.id);
-              }
-            }
+          const workSessionIds = options.projectDispatch?.listWorkSessionIds(
+            currentCaller?.agentProfileId,
+            caller.sessionId,
+          ) ?? [];
+          const existingIds = new Set(sessions.map((item) => item.id));
+          for (const workSessionId of workSessionIds) {
+            if (existingIds.has(workSessionId)) continue;
+            const session = await options.sessions.get(workSessionId, { includeAllSessions: true });
+            requireCurrentCaller(caller);
+            if (!session) continue;
+            const local = await options.readLocalSession(session.id);
+            requireCurrentCaller(caller);
+            const metadata = readSpawnMetadata(session);
+            const run = metadata?.runId ? await options.runs.getAgentRun(metadata.runId) : null;
+            requireCurrentCaller(caller);
+            sessions.push({
+              id: session.id,
+              title: session.title,
+              status: run?.status ?? metadata?.status ?? session.status,
+              working_directory: local?.workingDirectory ?? '',
+              created_at: Number(session.createdAt),
+              updated_at: Number(session.updatedAt),
+              ...(metadata?.runId ? { runId: metadata.runId } : {}),
+              ...(run ? { runStatus: run.status } : {}),
+            });
+            existingIds.add(session.id);
           }
           return { ok: true, sessions };
         }

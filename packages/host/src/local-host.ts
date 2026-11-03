@@ -45,6 +45,7 @@ import {
 import type { HostWorkspaceAccess } from './session-api.js';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from './session-api.js';
 import { createHostSessionService } from './session-service.js';
+import { createProjectDispatchPort } from './project/dispatch.js';
 import {
   createFileDiagnosticsLogger,
   createStdioDiagnosticsLogger,
@@ -611,7 +612,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
     if (options.workerPath !== undefined) {
       const sessionService = createHostSessionService({
         checkoutService,
-        projectCoordination: { projects: core.stores.projects, tasks: core.stores.tasks },
+        projectDispatch: createProjectDispatchPort({
+          projects: core.stores.projects,
+          tasks: core.stores.tasks,
+        }),
         sessions: api,
         runs: createHostRunApi(core.stores),
         execution: {

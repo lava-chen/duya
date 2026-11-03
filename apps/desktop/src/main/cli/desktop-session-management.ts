@@ -1,5 +1,6 @@
 import type { CoreDataStores } from '@duya/data/core-stores';
 import { createHostSessionService, type HostSessionServiceOptions } from '@duya/host/session-service';
+import { createProjectDispatchPort } from '@duya/host/project/dispatch';
 import { createHostRunApi } from '@duya/host/run-api';
 import { createDesktopRunExecutionApi } from './desktop-run-execution-api';
 
@@ -16,7 +17,10 @@ export function createDesktopSessionManagementService(options: {
     sessions: options.sessions,
     runs,
     ...(options.checkoutService ? { checkoutService: options.checkoutService } : {}),
-    projectCoordination: { projects: stores.projects, tasks: stores.tasks },
+    projectDispatch: createProjectDispatchPort({
+      projects: stores.projects,
+      tasks: stores.tasks,
+    }),
     execution: options.execution ?? createDesktopRunExecutionApi({
       getSessionForRun: async (runId) => (await runs.getAgentRun(runId))?.sessionId ?? null,
     }),
