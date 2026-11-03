@@ -92,6 +92,11 @@
     "./workflows/schema": {
       "types": "./dist/workflows/schema.d.ts",
       "default": "./dist/workflows/schema.js"
+    },
+    "./formats/permissions": {
+      "types": "./dist/formats/permissions.d.ts",
+      "import": "./dist/formats/permissions.js",
+      "default": "./dist/formats/permissions.js"
     }
   },
   "scripts": {

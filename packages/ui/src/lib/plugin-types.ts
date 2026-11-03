@@ -1,3 +1,4 @@
+import { PluginPermissionSchema } from '@duya/plugin-core/formats/permissions';
 import { z } from 'zod';
 import type {
   PluginError,
@@ -193,11 +194,7 @@ export const PluginEntrySchema = z.object({
   main: z.string().min(1),
 });
 
-export const PluginPermissionSchema = z.object({
-  name: z.string().min(1),
-  scope: z.string().optional(),
-  domains: z.array(z.string()).optional(),
-});
+export { PluginPermissionSchema } from '@duya/plugin-core/formats/permissions';
 
 export const PluginDependencySchema = z.object({
   id: z.string(),

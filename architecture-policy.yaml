@@ -227,7 +227,8 @@ modules:
     # package — the Host is the ONLY upward edge (its `src/bot/` file adapters
     # assemble `@duya/bot`'s service over the TOML / fs backends), mirroring
     # the S0 bot-boundary gate's direction rules.
-    requires: [agent-protocol, agent-runtime, agent-core, workflow, legacy-ai, data, capabilities, memory, legacy-plugin-core, bot]
+    # Shared plugin manifest parsing consumes connectors' zero-IO .app.json schema.
+    requires: [agent-protocol, agent-runtime, agent-core, workflow, legacy-ai, data, capabilities, memory, legacy-plugin-core, connectors, bot]
     publicEntrypoints:
       - packages/host/src/index.ts
       - packages/host/src/session-api.ts
@@ -764,10 +765,13 @@ modules:
     # import the shared command vocabulary, which is metadata by construction
     # (that package has zero dependencies).
     #
+    # `legacy-plugin-core` (2026-11-03): the CLI normalizes marketplace source
+    # syntax with the same pure parser the Host uses before resolving client-CWD
+    # local paths. Keeping parsing shared avoids a second, weaker URL policy.
     # Both declared rather than baselined: the CLI importing the same slash
     # vocabulary the Desktop imports is the entire point of the package, and the
     # `ai` functions are the ones plan 610 A0 §3.1 identified as IO-free.
-    requires: [input-completion, data, duya-host, agent-protocol, client-core, legacy-ai, command-catalog]
+    requires: [input-completion, data, duya-host, agent-protocol, client-core, legacy-ai, command-catalog, legacy-plugin-core]
     owner: agent
 
   - id: legacy-gateway
