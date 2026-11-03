@@ -104,6 +104,19 @@ export function createHostWorkspaceLifecycleApis(
       // managed checkout, so there is nothing to own.
       return registration.registered ? root : null;
     },
+    // Repository-wide cleanup also has to consider repositories that only the
+    // session table knows about — the configured root scan cannot see a
+    // checkout whose repository it never learned. Scoped runs never call this.
+    listActiveSourceRoots: async () => {
+      const roots = new Set<string>();
+      for (const session of sessions.list()) {
+        if (session.workingDirectory === '') continue;
+        const toplevel = await gitOrNull(session.workingDirectory, ['rev-parse', '--show-toplevel']);
+        const trimmed = toplevel?.trim();
+        if (trimmed) roots.add(canonicalPath(trimmed));
+      }
+      return [...roots];
+    },
   });
 
   // The observed PR/CI/review projection reads the same core handle as every

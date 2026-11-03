@@ -55,6 +55,7 @@ import {
   observeCheckoutForSession,
   observeIntegrationsForSession,
 } from "@/lib/workspace-lifecycle-ipc";
+import { getConfigValue, subscribeConfigUpdates } from "@/lib/config-port-bus";
 import type { HostIntegrationState } from "@duya/agent-protocol";
 
 /** States in which a pull request still exists and is worth a badge. */
@@ -92,14 +93,59 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 /**
+ * The configured `git-worktree-root`, mirrored for the row filter.
+ *
+ * `null` means the user kept the default layout. The value arrives
+ * asynchronously; until it does, the default-layout filter still applies, and
+ * a later value clears the cache and re-runs every subscribed row.
+ */
+let configuredRoot: string | null = null;
+let rootSubscriptionStarted = false;
+const rootListeners = new Set<() => void>();
+
+function setConfiguredRoot(next: string | null): void {
+  if (next === configuredRoot) return;
+  configuredRoot = next;
+  cache.clear();
+  for (const listener of rootListeners) listener();
+}
+
+function ensureRootSubscription(): void {
+  if (rootSubscriptionStarted) return;
+  rootSubscriptionStarted = true;
+  subscribeConfigUpdates((config) => {
+    const raw = config.worktreeRoot;
+    setConfiguredRoot(typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null);
+  });
+  void getConfigValue("worktreeRoot").then((raw) => {
+    if (rootListeners.size === 0) return;
+    setConfiguredRoot(typeof raw === "string" && raw.trim() !== "" ? raw.trim() : null);
+  });
+}
+
+function normalizeForCompare(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
  * Whether a working directory can be a managed checkout.
  *
- * A managed checkout always sits under a `worktrees` directory
- * (`<data root>/worktrees/<repo>-<hash>/<slug>-<hash>`), so a path without
- * that segment is the user's own tree — and the Host answers `null` for it.
+ * A managed checkout sits under a `worktrees` directory by default
+ * (`<data root>/worktrees/<repo>-<hash>/<slug>-<hash>`), or under the
+ * configured `git-worktree-root`. A path under neither is the user's own
+ * tree — and the Host answers `null` for it anyway.
+ *
+ * Case is folded because this only decides whether to ASK; a false positive
+ * costs one request whose answer the Host still owns, while a false negative
+ * would hide a badge.
  */
 function mayBeManagedCheckout(workingDirectory: string | null | undefined): boolean {
   if (!workingDirectory) return false;
+  if (configuredRoot !== null) {
+    const root = normalizeForCompare(configuredRoot);
+    const dir = normalizeForCompare(workingDirectory);
+    if (dir === root || dir.startsWith(`${root}/`)) return true;
+  }
   return workingDirectory.split(/[\\/]/).includes("worktrees");
 }
 
@@ -167,6 +213,18 @@ export function useSessionWorktreeBadges(
   workingDirectory: string | null | undefined,
 ): SessionWorktreeBadgeCounts {
   const [counts, setCounts] = useState<SessionWorktreeBadgeCounts>(EMPTY);
+  // Bumped when the configured root arrives or changes; the cache was
+  // cleared at that point, so the effect below re-observes.
+  const [rootVersion, setRootVersion] = useState(0);
+
+  useEffect(() => {
+    ensureRootSubscription();
+    const listener = () => setRootVersion((version) => version + 1);
+    rootListeners.add(listener);
+    return () => {
+      rootListeners.delete(listener);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,7 +250,7 @@ export function useSessionWorktreeBadges(
     return () => {
       cancelled = true;
     };
-  }, [sessionId, workingDirectory]);
+  }, [sessionId, workingDirectory, rootVersion]);
 
   return counts;
 }

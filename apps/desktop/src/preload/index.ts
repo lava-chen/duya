@@ -2717,6 +2717,8 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.invoke('workspace-lifecycle:checkout:observe', root),
       requestReclaim: (root: string) =>
         ipcRenderer.invoke('workspace-lifecycle:checkout:reclaim', root),
+      cleanup: (input?: import('@duya/agent-protocol').HostWorktreeCleanupInput) =>
+        ipcRenderer.invoke('workspace-lifecycle:checkout:cleanup', input),
     },
     integrations: {
       observeForSession: (sessionId: string) =>

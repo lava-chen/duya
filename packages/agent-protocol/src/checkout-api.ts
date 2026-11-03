@@ -149,6 +149,30 @@ export interface HostSessionCheckoutView {
   readonly isOwner: boolean;
 }
 
+/** Which checkouts a cleanup run may consider. */
+export interface HostWorktreeCleanupInput {
+  /** Restrict to one repository. Absent means "discover managed repositories". */
+  readonly sourceCwd?: string;
+  /** Report what would be removed without deleting anything. */
+  readonly dryRun?: boolean;
+}
+
+/**
+ * Outcome of a cleanup run.
+ *
+ * Refusals are normal results in `retained`, not errors: cleanup reuses the
+ * same fail-closed reclaim matrix and can never outvote it. `failed` means the
+ * Host could not finish a decision for that path, never that it was deletable.
+ */
+export interface HostWorktreeCleanupResult {
+  readonly dryRun: boolean;
+  readonly keepCount: number;
+  readonly examined: number;
+  readonly removed: readonly string[];
+  readonly retained: readonly { readonly root: string; readonly reason: HostCheckoutRetainReason }[];
+  readonly failed: readonly { readonly root: string; readonly message: string }[];
+}
+
 /** Wire contract for checkout observation and reclaim. */
 export interface HostCheckoutApiV1 {
   /** Observe the checkout the given session sits in, reusing no cached state. */
@@ -173,4 +197,10 @@ export interface HostCheckoutApiV1 {
     | { readonly removed: true }
     | { readonly removed: false; readonly reason: HostCheckoutRetainReason }
   >;
+
+  /**
+   * Keep the newest `keepCount` managed checkouts per repository and reclaim
+   * the rest. Deletion still goes through the fail-closed reclaim matrix.
+   */
+  cleanupWorktrees(input?: HostWorktreeCleanupInput): Promise<HostWorktreeCleanupResult>;
 }

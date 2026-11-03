@@ -120,7 +120,7 @@ export type SettingsTab =
   | 'provider-picker' | 'provider-edit'
   | 'extensions' | 'channels' | 'browser' | 'security'
   | 'usage' | 'agents' | 'support' | 'memory' | 'hooks' | 'voice' | 'performance'
-  | 'wake';
+  | 'worktrees' | 'wake';
 
 /**
  * Plan 205: the target of the `provider-edit` page. Either
