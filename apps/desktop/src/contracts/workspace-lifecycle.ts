@@ -16,6 +16,8 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
 } from '@duya/agent-protocol';
 
 /**
@@ -38,6 +40,12 @@ export interface WorkspaceLifecycleCheckoutAPI {
   observeCheckout: (root: string) => Promise<HostCheckoutObserved>;
   /** Ask the Host to remove one checkout. A refusal is a normal answer. */
   requestReclaim: (root: string) => Promise<WorkspaceLifecycleReclaimResult>;
+  /**
+   * Run the Host's retention pass. Refusals come back in `retained`; there is
+   * no per-checkout confirmation here because the Host already applied the
+   * fail-closed matrix. Callers must confirm with the user first.
+   */
+  cleanup: (input?: HostWorktreeCleanupInput) => Promise<HostWorktreeCleanupResult>;
 }
 
 /** The integration half of the bridge: the observed PR projection. */

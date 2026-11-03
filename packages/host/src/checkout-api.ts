@@ -31,6 +31,8 @@ import type {
   HostCheckoutObserved,
   HostCheckoutRetainReason,
   HostCheckoutRoot,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
   SessionId,
 } from '@duya/agent-protocol';
 
@@ -55,6 +57,15 @@ export interface CheckoutObservationPort {
   observe(root: string): Promise<CheckoutObservation>;
   list(sourceCwd: string): Promise<readonly { readonly root: string; readonly cwd: string; readonly sourceRoot: string; readonly baseSha: string }[]>;
   reclaim(root: string): Promise<{ removed: true } | { removed: false; reason: HostCheckoutRetainReason }>;
+  /**
+   * Retention pass. Optional so an observation-only port keeps compiling; the
+   * API reports "not available" rather than pretending nothing was found.
+   */
+  cleanup?(options: {
+    sourceCwd?: string;
+    dryRun?: boolean;
+    sourceRoots?: readonly string[];
+  }): Promise<HostWorktreeCleanupResult>;
 }
 
 export type HostCheckoutApiErrorCode =
@@ -83,6 +94,12 @@ export interface CreateHostCheckoutApiOptions {
    * the session is not inside any checkout; that is a normal answer.
    */
   readonly resolveSessionCheckoutRoot?: (sessionId: SessionId) => Promise<string | null>;
+  /**
+   * Repositories to consider for a repository-independent cleanup run, usually
+   * derived from session working directories. Without it, cleanup only scans
+   * the roots it can see on disk.
+   */
+  readonly listActiveSourceRoots?: () => Promise<readonly string[]>;
 }
 
 export function createHostCheckoutApi(options: CreateHostCheckoutApiOptions): HostCheckoutApiV1 {
@@ -136,6 +153,32 @@ export function createHostCheckoutApi(options: CreateHostCheckoutApiOptions): Ho
       requireNonEmpty(root, 'root');
       // A refusal is the answer to "may this be deleted", not a failure.
       return await requirePort().reclaim(root);
+    },
+
+    async cleanupWorktrees(input: HostWorktreeCleanupInput = {}) {
+      const port = requirePort();
+      if (port.cleanup === undefined) {
+        throw new HostCheckoutApiError(
+          'checkout_observation_unavailable',
+          'This Host cannot clean up checkouts.',
+        );
+      }
+      if (input.sourceCwd !== undefined) requireNonEmpty(input.sourceCwd, 'sourceCwd');
+      if (input.dryRun !== undefined && typeof input.dryRun !== 'boolean') {
+        throw new HostCheckoutApiError('invalid_checkout_query', 'dryRun must be a boolean', 400);
+      }
+
+      // A repository-wide run also needs the repositories only the run table
+      // knows about; a scoped run must not widen its blast radius.
+      const sourceRoots = input.sourceCwd === undefined && options.listActiveSourceRoots !== undefined
+        ? await options.listActiveSourceRoots()
+        : undefined;
+
+      return await port.cleanup({
+        ...(input.sourceCwd === undefined ? {} : { sourceCwd: input.sourceCwd }),
+        dryRun: input.dryRun === true,
+        ...(sourceRoots === undefined ? {} : { sourceRoots }),
+      });
     },
   };
 }

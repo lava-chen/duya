@@ -58,6 +58,8 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
   SessionCheckoutCommand,
   AcceptInputCommand,
   BotDispatchTicket,
@@ -707,6 +709,7 @@ export interface DesktopHostWorkspaceLifecycleApi {
   observeCheckoutForSession(sessionId: string): Promise<HostSessionCheckoutView>;
   observeCheckoutByRoot(root: string): Promise<HostCheckoutObserved>;
   requestCheckoutReclaim(root: string): Promise<WorkspaceLifecycleReclaimResult>;
+  cleanupCheckouts(input: HostWorktreeCleanupInput): Promise<HostWorktreeCleanupResult>;
   observeIntegrationsForSession(sessionId: string): Promise<readonly HostIntegrationRecord[]>;
   syncIntegrations(sessionId: string): Promise<HostIntegrationSyncResult>;
 }

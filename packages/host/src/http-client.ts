@@ -154,6 +154,8 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
 } from '@duya/agent-protocol';
 import type {
   HostLocalMailboxApiV1,
@@ -2556,6 +2558,21 @@ export class HostSessionHttpClient implements
     const result = await this.request<{
       result: { readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason };
     }>('POST', '/v1/checkouts/reclaim', { root }, CHECKOUT_REQUEST_TIMEOUT_MS);
+    return result.result;
+  }
+
+  /**
+   * Run the Host's retention pass. A repository-wide run also asks the Host to
+   * consider repositories it knows from active sessions; this client never
+   * enumerates checkouts on its own.
+   */
+  async cleanupCheckouts(input: HostWorktreeCleanupInput = {}): Promise<HostWorktreeCleanupResult> {
+    const result = await this.request<{ result: HostWorktreeCleanupResult }>(
+      'POST',
+      '/v1/checkouts/cleanup',
+      input,
+      CHECKOUT_REQUEST_TIMEOUT_MS,
+    );
     return result.result;
   }
 

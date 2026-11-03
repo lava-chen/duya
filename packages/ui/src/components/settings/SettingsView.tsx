@@ -14,6 +14,7 @@ import {
   HooksSection,
   VoiceSection,
   PerformanceSection,
+  WorktreesSection,
   WakeAgentSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
@@ -47,6 +48,7 @@ export function SettingsView() {
         {tab === "hooks" && <HooksSection />}
         {tab === "voice" && <VoiceSection />}
         {tab === "performance" && <PerformanceSection />}
+        {tab === "worktrees" && <WorktreesSection />}
         {tab === "wake" && <WakeAgentSection />}
       </div>
     </div>

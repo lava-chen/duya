@@ -106,6 +106,31 @@ describe('ConfigStore MessagePort subscription', () => {
     expect(resp?.value).toBe('minimax');
   });
 
+  it('maps the worktree flat keys onto the [desktop] table', () => {
+    const store = new ConfigStore(opts);
+    const port = new FakePort();
+    store.addSubscriber(port as never, 'renderer');
+
+    port.emit({ type: 'config:set', key: 'worktreeRoot', value: 'D:\\checkouts' });
+    port.emit({ type: 'config:set', key: 'worktreeAutoCleanupEnabled', value: true });
+    port.emit({ type: 'config:set', key: 'worktreeKeepCount', value: 7 });
+
+    expect(store.get().desktop).toEqual({
+      'git-worktree-root': 'D:\\checkouts',
+      'worktree-auto-cleanup-enabled': true,
+      'worktree-keep-count': 7,
+    });
+
+    const update = port.last<UpdateMsg>('config:update');
+    expect(update?.config.worktreeRoot).toBe('D:\\checkouts');
+    expect(update?.config.worktreeAutoCleanupEnabled).toBe(true);
+    expect(update?.config.worktreeKeepCount).toBe(7);
+
+    const onDisk = fs.readFileSync(opts.configPath, 'utf-8');
+    expect(onDisk).toContain('[desktop]');
+    expect(onDisk).toContain('git-worktree-root');
+  });
+
   it('handleSet writes through ConfigStore and persists to TOML', () => {
     const store = new ConfigStore(opts);
     const port = new FakePort();

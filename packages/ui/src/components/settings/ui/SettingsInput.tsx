@@ -9,7 +9,7 @@ export interface SettingsInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
-  type?: "text" | "password" | "email" | "url";
+  type?: "text" | "password" | "email" | "url" | "number";
   disabled?: boolean;
   error?: string;
   action?: React.ReactNode;

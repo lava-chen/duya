@@ -18,13 +18,22 @@ import type {
   CheckoutProvider,
   CheckoutRetainReason,
   CheckoutRoot,
+  WorktreeCleanupOptions,
+  WorktreeCleanupResult,
 } from './types.js';
 import { CheckoutError, CheckoutOwnerError } from './errors.js';
 import { describeGitFailure, git, gitOrNull, gitPathAbsolute } from './git.js';
 import { canonicalPath, isDirectory, removeEmptyDirectory, samePath } from './fs-utils.js';
-import { allocateCheckoutName, managedRootFor, slugifyWorktreeName } from './paths.js';
+import {
+  allocateCheckoutName,
+  defaultManagedRootFor,
+  managedRootFor,
+  slugifyWorktreeName,
+} from './paths.js';
+import { discoverManagedRepos, runWorktreeCleanup } from './cleanup.js';
 import { bindOwner, clearOwner, readOwner } from './checkout-metadata.js';
-import { readCheckoutBase, writeCheckoutOrigin } from './checkout-origin.js';
+import { hasCheckoutIdentity, readCheckoutBase, writeCheckoutOrigin } from './checkout-origin.js';
+import { readWorktreeSettings, type WorktreeSettings } from './settings.js';
 import { checkpointSessionComponent } from './checkpoint-session.js';
 import { inspectRegistration, worktreeEntries } from './registration.js';
 import { evaluateReclaim, reclaimCheckout, type ReclaimInputs } from './worktree-removal.js';
@@ -40,6 +49,8 @@ const SAFE_REF_COMPONENT = /^[A-Za-z0-9._:-]+$/;
 export interface CheckoutProviderPorts extends Partial<ReclaimInputs> {
   /** Overridable clock, for tests that must not depend on wall time. */
   now?: () => number;
+  /** Structured logging hook; the workspace layer has no logger of its own. */
+  warn?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
 /**
@@ -53,6 +64,7 @@ const DEFAULT_PORTS: Required<CheckoutProviderPorts> = {
   isSessionAlive: async () => true,
   cwdInUse: async () => false,
   now: () => Date.now(),
+  warn: () => {},
 };
 
 export class GitCheckoutProvider implements CheckoutProvider {
@@ -63,6 +75,7 @@ export class GitCheckoutProvider implements CheckoutProvider {
       isSessionAlive: ports.isSessionAlive ?? DEFAULT_PORTS.isSessionAlive,
       cwdInUse: ports.cwdInUse ?? DEFAULT_PORTS.cwdInUse,
       now: ports.now ?? DEFAULT_PORTS.now,
+      warn: ports.warn ?? DEFAULT_PORTS.warn,
     };
   }
 
@@ -118,8 +131,15 @@ export class GitCheckoutProvider implements CheckoutProvider {
       throw new CheckoutError('resolve_failed', `${sourceCwd} is outside ${sourceRoot}`);
     }
 
+    // Read per creation: a root change applies to the next checkout without a
+    // restart, and tests redirect the config with the checkout data root.
+    const settings = readWorktreeSettings();
+    for (const problem of settings.problems) {
+      this.ports.warn('worktree settings ignored', { problem, sourceRoot });
+    }
+
     const slug = slugifyWorktreeName(input.label);
-    const root = path.join(managedRootFor(sourceRoot), allocateCheckoutName(slug, sourceRoot));
+    const root = path.join(managedRootFor(sourceRoot, settings), allocateCheckoutName(slug, sourceRoot));
     mkdirSync(path.dirname(root), { recursive: true });
 
     try {
@@ -145,7 +165,9 @@ export class GitCheckoutProvider implements CheckoutProvider {
       await writeCheckoutOrigin(root, baseSha, input.operationId);
       const owner = input.ownerSessionId.trim();
       if (owner) await bindOwner(root, owner);
-      return { root, cwd, sourceRoot, sourceCwd, baseSha };
+      const checkout = { root, cwd, sourceRoot, sourceCwd, baseSha };
+      if (settings.autoCleanupEnabled) await this.autoCleanup(sourceRoot, root, settings);
+      return checkout;
     } catch (err) {
       await this.rollback(sourceRoot, root);
       if (err instanceof CheckoutError || err instanceof CheckoutOwnerError) throw err;
@@ -153,6 +175,24 @@ export class GitCheckoutProvider implements CheckoutProvider {
         'worktree_add_failed',
         `cannot populate checkout: ${describeGitFailure(err) || 'unknown failure'}`,
       );
+    }
+  }
+
+  /**
+   * Best-effort retention pass after a successful creation.
+   *
+   * `await`ed so a caller's next action sees the steady state, but a cleanup
+   * failure never fails the creation: the new checkout is already usable and
+   * is protected from this run.
+   */
+  private async autoCleanup(sourceRoot: string, root: string, settings: WorktreeSettings): Promise<void> {
+    try {
+      await runWorktreeCleanup(this, { sourceCwd: sourceRoot, protectRoots: [root] }, settings);
+    } catch (error) {
+      this.ports.warn('automatic worktree cleanup failed', {
+        sourceRoot,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -231,9 +271,12 @@ export class GitCheckoutProvider implements CheckoutProvider {
   /**
    * Reverse-derived from `git worktree list`, never from a registry.
    *
-   * Only checkouts whose parent directory is this repository's managed root —
-   * and that pass the full identity check — are returned, so an unrelated
-   * worktree a user created by hand is never presented as ours.
+   * A checkout counts as managed when it is registered for this repository
+   * AND either its parent is a managed root (current or historical) or its
+   * git directory carries a duya marker. The marker half is what keeps
+   * checkouts visible after `git-worktree-root` changes; an unrelated
+   * worktree a user created by hand has neither and is never presented as
+   * ours.
    */
   async list(sourceCwd: string): Promise<CheckoutRoot[]> {
     const cwd = canonicalPath(sourceCwd);
@@ -246,18 +289,22 @@ export class GitCheckoutProvider implements CheckoutProvider {
     const sourceCommonDir = await gitPathAbsolute(sourceRoot, ['--git-common-dir']);
     if (!sourceCommonDir) return [];
 
-    const managedRoot = canonicalPath(managedRootFor(sourceRoot));
+    const managedRoots = [
+      canonicalPath(managedRootFor(sourceRoot)),
+      canonicalPath(defaultManagedRootFor(sourceRoot)),
+    ];
     const entries = await worktreeEntries(cwd);
     if (!entries) return [];
 
     const checkouts: CheckoutRoot[] = [];
     for (const entry of entries) {
       const root = canonicalPath(entry.path);
-      if (!samePath(path.dirname(root), managedRoot)) continue;
+      const underManagedRoot = managedRoots.some((managed) => samePath(path.dirname(root), managed));
 
       const registration = await inspectRegistration(root);
-      if (!registration.registered || !registration.commonDir) continue;
+      if (!registration.registered || !registration.gitDir || !registration.commonDir) continue;
       if (!samePath(registration.commonDir, sourceCommonDir)) continue;
+      if (!underManagedRoot && !hasCheckoutIdentity(registration.gitDir)) continue;
 
       const entryCwd = path.join(root, relativeCwd);
       if (!this.isSafeCwd(root, entryCwd)) continue;
@@ -415,6 +462,14 @@ export class GitCheckoutProvider implements CheckoutProvider {
 
   async reclaim(root: string): Promise<{ removed: true } | { removed: false; reason: CheckoutRetainReason }> {
     return reclaimCheckout(root, this.reclaimInputs());
+  }
+
+  async cleanup(options: WorktreeCleanupOptions = {}): Promise<WorktreeCleanupResult> {
+    return runWorktreeCleanup(this, options, readWorktreeSettings());
+  }
+
+  async discoverManagedRepos(): Promise<string[]> {
+    return discoverManagedRepos(readWorktreeSettings());
   }
 }
 

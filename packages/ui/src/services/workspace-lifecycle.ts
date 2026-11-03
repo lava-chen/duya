@@ -45,6 +45,8 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
   SessionId,
 } from '@duya/agent-protocol';
 
@@ -75,6 +77,12 @@ export interface WorkspaceLifecyclePort {
     requestReclaim(
       root: string,
     ): Promise<{ readonly removed: true } | { readonly removed: false; readonly reason: HostCheckoutRetainReason }>;
+    /**
+     * Run the Host's retention pass. Optional because a surface may expose
+     * checkout observation without offering deletion (the browser build does).
+     * Refusals are entries in `retained`, not errors.
+     */
+    cleanup?(input?: HostWorktreeCleanupInput): Promise<HostWorktreeCleanupResult>;
   };
   readonly integrations: {
     /** Every integration associated with a session, across all its PRs. */

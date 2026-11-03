@@ -129,6 +129,9 @@ const FLAT_TO_PATH: Record<string, string> = {
   defaultIde: 'ide.default',
   customAgents: 'agents',
   performanceSettings: 'performance',
+  worktreeRoot: 'desktop.git-worktree-root',
+  worktreeAutoCleanupEnabled: 'desktop.worktree-auto-cleanup-enabled',
+  worktreeKeepCount: 'desktop.worktree-keep-count',
 };
 
 type PortRole = 'renderer' | 'agent' | 'main';

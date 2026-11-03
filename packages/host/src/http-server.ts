@@ -3529,6 +3529,34 @@ export class HostSessionHttpServer {
       return;
     }
 
+    if (url.pathname === '/v1/checkouts/cleanup') {
+      if (req.method !== 'POST') {
+        this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+        return;
+      }
+      const body = await this.#readJson(req, res);
+      if (body === null) return;
+      if (body.sourceCwd !== undefined && !isBoundedString(body.sourceCwd, 1, 4096)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
+        this.#sendJson(res, 400, { error: { code: 'invalid_checkout_query' } });
+        return;
+      }
+      try {
+        this.#sendJson(res, 200, {
+          result: await api.cleanupWorktrees({
+            ...(body.sourceCwd === undefined ? {} : { sourceCwd: body.sourceCwd as string }),
+            ...(body.dryRun === undefined ? {} : { dryRun: body.dryRun as boolean }),
+          }),
+        });
+      } catch (error) {
+        this.#sendApiError(res, error);
+      }
+      return;
+    }
+
     this.#sendJson(res, 404, { error: { code: 'not_found' } });
   }
 
