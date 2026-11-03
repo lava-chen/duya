@@ -109,3 +109,17 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 - `git show --stat dd7a095d`：14 文件，+1203/−193；含重建的 `packages/host/bundle`。
 
 下一动作：推送 `codex/project-run-feedback` 并以 `codex/project-memory-continuity` 为 base 开 stacked PR，不合并。之后先做 Coordinator 领域收敛（`packages/host/src/project/`：profile/policy、Task→Session 派发端口、上下文装配、结果对账；独立 project prompt 目录），让通用 `session-service` 不再判断具体产品身份；再统一重整 #583/#584 依赖。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### CI 门禁修复（2026-11-03）
+
+Owner：当前 Codex；worktree：`E:\Projects\duya\.claude\worktrees\project-run-feedback`；分支：`codex/project-run-feedback`；base：`master`（#583 已以 `bae0896e` 合入）。首个 CI run（41572058161）的 `test` 报 4 个失败文件，其中 3 个是 rebase 后才暴露的全局门禁，1 个是既有慢测试超时。
+
+- `slice-classification`：`apps/desktop/src/main/projects/run-feedback.ts` 未被分类。新增该前缀到 `cp-durable`（Desktop 侧的结算胶水，写 durable activity 与唯一协调邮箱行），并按规则重录 `RULE_TABLE_FINGERPRINT`（仅此一条规则移动），提交 `dfab3147`。
+- `package-boundary`：`@duya/memory` 新增私有模块 `project-continuity` 未在断言列表中，补入，提交 `06643bbf`。
+- `13-citation-drift`：rebase 使 `router.ts` 整体后移 19 行，5 处引用失准；只改行号，锚点文本不变，提交 `bc67ea21`。
+- `PanelMoreMenu`：第 4 个等待 `listSurfaces` 的用例漏了 `SLOW_CATALOGUE_TIMEOUT_MS`，CI 在 30 s 默认值上超时；补同一截止时间，断言不变，提交 `4fb3f608`。
+- 引用改动落在 worker bundle 输入闭包内，重建并提交 `be463e55`；`npm run bundle:verify` 随后 FRESH 0/1050。
+
+验证环境：Windows、Node `v24.16.0`，在本 worktree 执行。`npm run typecheck:all` 退出 0（Electron 门禁 178 项既有错误、无新增）；`npm run architecture:check` 退出 0（3073 项容忍，无新增违规）；三个门禁测试分别 30/6/5 项通过；`PanelMoreMenu` 7 项通过（158 s）。工作区干净，5 个提交待推送。
+
+下一动作：推送本分支触发 CI；CI 绿后按仓库交付规则以 merge commit 合入 `master`，再把下一层 PR 的 base 改到 `master`、重新触发并验证。
