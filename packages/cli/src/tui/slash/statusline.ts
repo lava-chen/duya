@@ -3,9 +3,9 @@ import { TUI_STATUSLINE_SETTING } from '../preferences.js';
 import type { TuiSlashCommandDef } from './types.js';
 
 const CHOICES: readonly { id: StatuslineProfile; label: string; detail: string }[] = [
-  { id: 'full', label: 'Full', detail: 'Directory, branch, session, token usage, context, speed and model.' },
+  { id: 'full', label: 'Full', detail: 'Directory, branch, pull request, session, token usage, context, speed and model.' },
   { id: 'compact', label: 'Compact', detail: 'Directory, key hint, token usage, context and model.' },
-  { id: 'location', label: 'Location', detail: 'Directory, branch, session and model.' },
+  { id: 'location', label: 'Location', detail: 'Directory, branch, pull request, session and model.' },
   { id: 'usage', label: 'Usage', detail: 'Token usage, context, speed and model.' },
 ];
 

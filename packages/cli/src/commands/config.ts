@@ -1,7 +1,7 @@
 /**
  * packages/cli/src/commands/config.ts
  *
- * `duya config …` — read and write DUYA desktop configuration.
+ * `duya config …` — manage configuration through the local Host.
  *
  * Plan 102: this command tree is the agent-facing (and terminal-facing)
  * surface for everything that used to live in `duya_config`. Each
@@ -17,6 +17,7 @@
 import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
+import { connectProviderManagementApi, ProviderManagementError } from '../providers.js';
 import type { CliSubcommandContext } from '../program/registry.js';
 import type { ExitCode } from '../program/registry.js';
 
@@ -145,11 +146,16 @@ function envArrayToObject(env: string[] | undefined): Record<string, string> | u
 // ---------------------------------------------------------------------------
 
 function writeErrorAndExit(err: unknown): never {
+  if (err instanceof ProviderManagementError) {
+    process.stderr.write(`${err.message}\n`);
+    process.exit(err.status === 400 ? 64 : 1);
+  }
   if (err instanceof CliApiError) {
     process.stderr.write(err.hint + '\n');
     process.exit(err.isAppUnavailable() ? 2 : 1);
   }
-  throw err;
+  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -157,17 +163,29 @@ function writeErrorAndExit(err: unknown): never {
 // ---------------------------------------------------------------------------
 
 export async function runConfigProviderList(ctx: CliSubcommandContext): Promise<ExitCode> {
+  let api: Awaited<ReturnType<typeof connectProviderManagementApi>> | undefined;
   try {
-    const client = await CliApiClient.connect();
-    const body = await client.get<{ providers: ProviderDTO[] }>('/v1/config/providers');
+    api = await connectProviderManagementApi();
+    const providers = (await api.list()).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      providerType: provider.providerType,
+      ...(provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl }),
+      isActive: provider.isActive,
+      ...(provider.isDefault === undefined ? {} : { isDefault: provider.isDefault }),
+      hasKey: provider.hasKey,
+      ...(provider.model === undefined ? {} : { model: provider.model }),
+    }));
     if (ctx.format === 'json') {
-      process.stdout.write(renderJson({ providers: body.providers }) + '\n');
+      process.stdout.write(renderJson({ providers }) + '\n');
     } else {
-      process.stdout.write(renderProvidersText(body.providers) + '\n');
+      process.stdout.write(renderProvidersText(providers) + '\n');
     }
     return 0;
   } catch (err) {
     return writeErrorAndExit(err), 0;
+  } finally {
+    await api?.close();
   }
 }
 
@@ -177,11 +195,24 @@ export async function runConfigProviderInfo(ctx: CliSubcommandContext): Promise<
     process.stderr.write('config provider info <id> — id is required\n');
     return 64;
   }
+  let api: Awaited<ReturnType<typeof connectProviderManagementApi>> | undefined;
   try {
-    const client = await CliApiClient.connect();
-    const body = await client.get<{ provider: ProviderDTO }>(
-      `/v1/config/providers/${encodeURIComponent(id)}`,
-    );
+    api = await connectProviderManagementApi();
+    const provider = (await api.list()).find((row) => row.id === id);
+    if (provider === undefined) {
+      process.stderr.write(`Provider '${id}' was not found.\n`);
+      return 1;
+    }
+    const body = { provider: {
+      id: provider.id,
+      name: provider.name,
+      providerType: provider.providerType,
+      ...(provider.baseUrl === undefined ? {} : { baseUrl: provider.baseUrl }),
+      isActive: provider.isActive,
+      ...(provider.isDefault === undefined ? {} : { isDefault: provider.isDefault }),
+      hasKey: provider.hasKey,
+      ...(provider.model === undefined ? {} : { model: provider.model }),
+    } };
     if (ctx.format === 'json') {
       process.stdout.write(renderJson({ provider: body.provider }) + '\n');
     } else {
@@ -190,6 +221,8 @@ export async function runConfigProviderInfo(ctx: CliSubcommandContext): Promise<
     return 0;
   } catch (err) {
     return writeErrorAndExit(err), 0;
+  } finally {
+    await api?.close();
   }
 }
 
@@ -199,19 +232,25 @@ export async function runConfigProviderAdd(ctx: CliSubcommandContext): Promise<E
     process.stderr.write('config provider add — --id, --name, --type are required\n');
     return 64;
   }
+  let api: Awaited<ReturnType<typeof connectProviderManagementApi>> | undefined;
   try {
-    const client = await CliApiClient.connect();
-    const body = await client.post<{ ok: boolean; provider: ProviderDTO }>(
-      '/v1/config/providers',
-      {
-        id: configId,
-        name: configName,
-        providerType: configType,
-        baseUrl: configBaseUrl ?? '',
-        apiKey: configApiKey ?? '',
-        isActive: configActive === true,
+    api = await connectProviderManagementApi();
+    const provider = await api.add({
+      id: configId,
+      name: configName,
+      providerType: configType,
+      baseUrl: configBaseUrl ?? '',
+      ...(configApiKey === undefined ? {} : { apiKey: configApiKey }),
+      ...(typeof ctx.options.configModel === 'string' ? { model: ctx.options.configModel } : {}),
+    });
+    if (configActive === true) await api.setDefault(provider.id);
+    const body = {
+      ok: true,
+      provider: {
+        ...provider,
+        ...(configActive === true ? { isActive: true, isDefault: true } : {}),
       },
-    );
+    };
     if (ctx.format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
     } else {
@@ -220,6 +259,8 @@ export async function runConfigProviderAdd(ctx: CliSubcommandContext): Promise<E
     return 0;
   } catch (err) {
     return writeErrorAndExit(err), 0;
+  } finally {
+    await api?.close();
   }
 }
 
@@ -229,11 +270,11 @@ export async function runConfigProviderRemove(ctx: CliSubcommandContext): Promis
     process.stderr.write('config provider remove <id> — id is required\n');
     return 64;
   }
+  let api: Awaited<ReturnType<typeof connectProviderManagementApi>> | undefined;
   try {
-    const client = await CliApiClient.connect();
-    const body = await client.delete<{ ok: boolean; removed: string }>(
-      `/v1/config/providers/${encodeURIComponent(id)}`,
-    );
+    api = await connectProviderManagementApi();
+    await api.remove(id);
+    const body = { ok: true, removed: id };
     if (ctx.format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
     } else {
@@ -242,22 +283,23 @@ export async function runConfigProviderRemove(ctx: CliSubcommandContext): Promis
     return 0;
   } catch (err) {
     return writeErrorAndExit(err), 0;
+  } finally {
+    await api?.close();
   }
 }
 
 export async function runConfigProviderSetDefault(ctx: CliSubcommandContext): Promise<ExitCode> {
   const id = ctx.args[0];
-  if (!id) {
+  const clear = ctx.options.configClear === true;
+  if (!id && !clear) {
     process.stderr.write('config provider set-default <id> — id is required (use --clear to unset the default)\n');
     return 64;
   }
-  const clear = ctx.options.configClear === true;
+  let api: Awaited<ReturnType<typeof connectProviderManagementApi>> | undefined;
   try {
-    const client = await CliApiClient.connect();
-    const body = await client.put<{ ok: boolean; defaultProviderId: string | null }>(
-      `/v1/config/providers/${encodeURIComponent(id)}/default`,
-      { clear },
-    );
+    api = await connectProviderManagementApi();
+    await api.setDefault(clear ? null : id!);
+    const body = { ok: true, defaultProviderId: clear ? null : id! };
     if (ctx.format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
     } else {
@@ -270,6 +312,8 @@ export async function runConfigProviderSetDefault(ctx: CliSubcommandContext): Pr
     return 0;
   } catch (err) {
     return writeErrorAndExit(err), 0;
+  } finally {
+    await api?.close();
   }
 }
 

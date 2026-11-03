@@ -106,6 +106,7 @@ import {
 } from './theme.js';
 import { compactActivity } from './text.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import type { PrBadge } from './pr-badge.js';
 import type { StatuslineProfile } from './preferences.js';
 import {
   nextPermissionMode,
@@ -441,6 +442,13 @@ export interface TUIAppOptions {  /** Window title. */
   readonly modelLabel?: () => { provider?: string; model: string; thinking?: string };
   /** Session name for the footer's path row, when the caller has one. */
   readonly sessionName?: () => string | null;
+  /**
+   * The pull request this session is working on, for the footer's badge.
+   *
+   * A callback, like the other footer facts: the Host observes pull requests
+   * out of band, and the footer must never wait for one to ask.
+   */
+  readonly pullRequestBadge?: () => PrBadge | null;
   /**
    * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
    *
@@ -2505,6 +2513,10 @@ export class TUIApp {
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
       permission: this.permissionBadge(),
+      // The pull request the Host last observed for this session, and whether
+      // this terminal can carry the link that makes the badge clickable.
+      pullRequest: this.options.pullRequestBadge?.() ?? null,
+      hyperlinks: this.terminalEnv.hyperlinks,
       statusline: this.statusline,
     };
     const statusBar = new StatusBar(props);
