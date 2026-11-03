@@ -14,7 +14,8 @@
  *
  * The inventory answers
  *
- *     { plugins: [{ id, name, enabled, marketplace, installed,
+ *     { plugins: [{ id, name, displayName?, shortDescription?,
+ *                   longDescription?, enabled, marketplace, installed,
  *                   description?, appConnections?, mcpServers?, skillNames? }] }
  *
  * `installed` says whether the plugin's package directory could be found.
@@ -24,6 +25,11 @@
  * missing one. The component fields are NAMES ONLY (the projection rule the
  * inventory route keeps); an older Host answers without them and the detail
  * page shows fewer lines, which is honest degradation.
+ *
+ * `displayName` is the name a user recognizes (`PDF`); `name` is the
+ * registry's identity (`com.duya.pdf`). This view renders the label first
+ * and falls back to the identity only when an older Host sends no interface
+ * text, while the mention token stays the id in every case.
  *
  * ## The list is a browser, not a table
  *
@@ -52,6 +58,9 @@ const FOOTER = '↑↓ / PgUp / PgDn scroll · Esc close';
 interface PluginEntry {
   readonly id: string;
   readonly name: string;
+  readonly displayName?: string;
+  readonly shortDescription?: string;
+  readonly longDescription?: string;
   readonly enabled: boolean;
   readonly marketplace: string;
   readonly installed: boolean;
@@ -86,6 +95,16 @@ function readNames(value: unknown): readonly string[] | undefined {
 }
 
 /**
+ * One non-empty presentation string, read leniently.
+ *
+ * The payload arrives over HTTP, so a value that is not a string — or is
+ * blank — counts as "not declared" rather than as an error.
+ */
+function readText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/**
  * Narrow one unknown record into the fields this command shows.
  *
  * The payload arrives over HTTP as JSON, so the declared type describes the
@@ -98,18 +117,36 @@ function narrowPlugin(value: unknown): PluginEntry | undefined {
   return {
     id: typeof record['id'] === 'string' ? record['id'] : '',
     name: typeof record['name'] === 'string' ? record['name'] : '',
+    displayName: readText(record['displayName']),
+    shortDescription: readText(record['shortDescription']),
+    longDescription: readText(record['longDescription']),
     // A plugin that does not say whether it is enabled counts as enabled: a
     // registry only writes `enabled = false` when the user turned it off.
     enabled: record['enabled'] !== false,
     marketplace: typeof record['marketplace'] === 'string' ? record['marketplace'] : '',
     installed: record['installed'] !== false,
-    description: typeof record['description'] === 'string' && record['description'] !== ''
-      ? record['description']
-      : undefined,
+    description: readText(record['description']),
     appConnections: readNames(record['appConnections']),
     mcpServers: readNames(record['mcpServers']),
     skillNames: readNames(record['skillNames']),
   };
+}
+
+/** The label a user recognizes: the interface name, else the registry name/id. */
+function pluginLabel(entry: PluginEntry): string {
+  if (entry.displayName !== undefined) return entry.displayName;
+  if (entry.name !== '') return entry.name;
+  return entry.id !== '' ? entry.id : '(unnamed)';
+}
+
+/** The one-line description a list row shows. */
+function pluginSummary(entry: PluginEntry): string | undefined {
+  return entry.shortDescription ?? entry.description;
+}
+
+/** The prose a detail page shows, richest first. */
+function pluginProse(entry: PluginEntry): string | undefined {
+  return entry.longDescription ?? entry.shortDescription ?? entry.description;
 }
 
 /**
@@ -143,7 +180,7 @@ function pluginLines(plugins: readonly PluginEntry[]): string[] {
   }
 
   const rows = plugins.map((entry) => ({
-    name: entry.name !== '' ? entry.name : entry.id || '(unnamed)',
+    name: pluginLabel(entry),
     marketplace: entry.marketplace !== '' ? entry.marketplace : '(local)',
     enabled: entry.enabled ? 'yes' : 'no',
     installed: entry.installed ? 'yes' : 'no',
@@ -183,9 +220,10 @@ function capabilitySummary(entry: PluginEntry): string | undefined {
 
 /** The detail page of one plugin: identity, state, capabilities, how to mention it. */
 function pluginDetailLines(entry: PluginEntry): string[] {
-  const name = entry.name !== '' ? entry.name : entry.id || '(unnamed)';
+  const name = pluginLabel(entry);
   const lines = [name];
-  if (entry.description !== undefined) lines.push(entry.description);
+  const prose = pluginProse(entry);
+  if (prose !== undefined) lines.push(prose);
   lines.push('');
   lines.push(`  id          ${entry.id}`);
   lines.push(`  marketplace ${entry.marketplace !== '' ? entry.marketplace : '(local)'}`);
@@ -205,17 +243,18 @@ function pluginDetailLines(entry: PluginEntry): string[] {
 /** The interactive list, one selectable entry per plugin. */
 function pluginEntries(plugins: readonly PluginEntry[]): TuiViewEntry[] {
   return plugins.map((entry) => {
-    const name = entry.name !== '' ? entry.name : entry.id || '(unnamed)';
+    const name = pluginLabel(entry);
     const summary = capabilitySummary(entry);
+    const description = pluginSummary(entry);
     const state = entry.installed ? (entry.enabled ? 'on' : 'off') : 'missing';
     return {
       label: name,
       value: entry.id !== '' ? entry.id : name,
-      description: entry.description !== undefined && summary !== undefined
-        ? `${summary} — ${entry.description}`
-        : entry.description ?? summary,
+      description: description !== undefined && summary !== undefined
+        ? `${summary} — ${description}`
+        : description ?? summary,
       valueLabel: state,
-      summary: summary ?? entry.description,
+      summary: summary ?? description,
       detailLines: pluginDetailLines(entry),
     };
   });

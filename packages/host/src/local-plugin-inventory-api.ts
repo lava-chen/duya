@@ -30,13 +30,17 @@ import {
  * `installed` and `hasDataPath` are booleans on purpose: the client learns
  * that the package directory is missing without learning where the ones
  * that exist live. The component summaries ride along under the same rule —
- * NAMES only (description, app connector ids, MCP server and skill names);
- * the manifest's declarations (env, headers, command, args, url) never do.
+ * NAMES only (the interface texts, description, app connector ids, MCP
+ * server and skill names); the manifest's declarations (env, headers,
+ * command, args, url) never do.
  */
 function toInventoryEntry(entry: HostPluginRegistryEntry): HostPluginInventoryEntry {
   return {
     id: entry.id,
     name: entry.name,
+    ...(entry.displayName === undefined ? {} : { displayName: entry.displayName }),
+    ...(entry.shortDescription === undefined ? {} : { shortDescription: entry.shortDescription }),
+    ...(entry.longDescription === undefined ? {} : { longDescription: entry.longDescription }),
     enabled: entry.enabled,
     marketplace: entry.marketplace,
     installed: entry.installPath !== undefined,
