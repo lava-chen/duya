@@ -154,7 +154,14 @@ worktree `.claude/worktrees/auto-denial-recovery`（分支 `codex/auto-denial-re
   `gate-run-approval-reachability.test.ts`（二次升级、不同调用不共享计数）。
 
 验证：`typecheck:all` 通过（worktree 内，junction overlay 解析 worktree 源码）；
-`agent-runtime/test` + `host/tests` vitest 全量通过（见下表补记）。
+agent-runtime/test + host/tests vitest 全量通过（workspace 3 个 git 测试在全量并发下
+超时为既有环境问题，单独运行与主检出均全绿）；`bundle:verify` FRESH（bundle 已同
+commit 重建）。
 
-回收：未到回收条件（无 PR）。
-下一步：commit → `bundle:verify` 链（改了 agent-runtime/host 源码，CI 会查）→ PR。
+## 交付
+
+commit `19100cb0`（分支 `codex/auto-denial-recovery`）→
+**PR #603** https://github.com/lava-chen/duya/pull/603（base master，2026-11-03 开）。
+
+回收：待 PR review/CI 通过并经授权合并后，按 worktree 指南回收本检出。
+下一步：跟踪 CI（architecture/build/test/test scope/typecheck 五项），review 意见回落本计划。
