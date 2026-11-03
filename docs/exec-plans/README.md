@@ -80,6 +80,7 @@
 | TUI 权限 banner | [2026-10-29 TUI 权限 banner 与 Shift+Tab 快速切换](archive/2026-10-29-tui-permission-banner.md) | footer 右下角权限徽标 + Shift+Tab 循环（bypass 二次确认）；PR #538 已合并（`73710504`），真机冒烟待用户 |
 | TUI 补全弹窗行宽 | [2026-10-29 TUI 补全弹窗的行宽](archive/2026-10-29-tui-popup-row-width.md) | 候选描述截断而非折行，弹窗不再比预留高、最后一个候选重新可见；修 #531 带进 master 的既有红用例；PR #542 已合并（`c8b47c3f`） |
 | TUI 学 codex 表面与斜杠命令 | [Codex TUI 对照与实现](archive/2026-11-03-codex-tui-alignment-survey.md) | 七个切片已合并（PR #590，`dbffec07`）；全量 TUI、架构、类型检查与构建通过 |
+| 子代理回传链路加固 | [2026-11-03 子代理回传加固与类型收紧](active/2026-11-03-subagent-delivery-hardening.md) | 回执双 id、wire 补 subagentId、终态帧、Host 索引并入 subagent、类型注册表已实现；PR #607 待 CI 与授权集成 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 
