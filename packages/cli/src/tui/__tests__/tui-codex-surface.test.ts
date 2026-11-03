@@ -23,7 +23,7 @@
  * and the same bytes are what codex asks for.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PassThrough, Writable } from 'stream';
 
 import { renderMarkup } from '../screen/own/markup.js';
@@ -34,8 +34,13 @@ import { renderTranscript } from '../transcript-view.js';
 import { TUIApp } from '../TUIApp.js';
 import { MIN_RENDER_INTERVAL_MS } from '../render-scheduler.js';
 import { visibleWidth } from '../width.js';
+import { DARK_THEME_TAGS, LIGHT_THEME_TAGS, resolveComposerBackground } from '../theme.js';
 
 const OPTIONS = { expanded: false, showToolResults: true, toolResultLines: 5 };
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /** Drop the tags so a layout assertion reads the text a user sees. */
 function strip(text: string): string {
@@ -69,6 +74,19 @@ describe('the background slot', () => {
     // A parser that accepted `{236-bg}` in the foreground slot would paint
     // the TEXT instead of the cell behind it — the opposite of the intent.
     expect(tagsToSpans('{236-bg}AB{/236-bg}')[0]?.fg).toBeUndefined();
+  });
+});
+
+describe('the composer background choice', () => {
+  it('keeps the themed fill by default', () => {
+    expect(resolveComposerBackground(DARK_THEME_TAGS, {})).toBe('236-bg');
+    expect(resolveComposerBackground(LIGHT_THEME_TAGS, {})).toBe('255-bg');
+  });
+
+  it('leaves the terminal background untouched in transparent mode', () => {
+    const env = { DUYA_TUI_COMPOSER_BG: 'transparent' };
+    expect(resolveComposerBackground(DARK_THEME_TAGS, env)).toBeUndefined();
+    expect(resolveComposerBackground(LIGHT_THEME_TAGS, env)).toBeUndefined();
   });
 });
 
@@ -129,6 +147,17 @@ describe('the composer band', () => {
     expect(outputText()).not.toContain('48;5;');
     surface.destroy();
   });
+
+  it('accepts an explicit transparent background', async () => {
+    const { surface, outputText } = makeSurface();
+    surface.attachAll();
+    surface.update('input', { lines: ['hello'], height: 3, background: null });
+    surface.render();
+    await flushed();
+
+    expect(outputText()).not.toContain('48;5;');
+    surface.destroy();
+  });
 });
 
 describe('the composer band in the inline screen model', () => {
@@ -166,6 +195,39 @@ describe('the composer band in the inline screen model', () => {
     // text: every composer row is wrapped in it.
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) expect(row.startsWith('{236-bg}')).toBe(true);
+  });
+
+  it('omits the band when transparent mode is requested', async () => {
+    vi.stubEnv('DUYA_TUI_COMPOSER_BG', 'transparent');
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      onSubmit: () => undefined,
+    });
+    app.start();
+    await settleRendered();
+    const rows = (app as unknown as { inlineInputLines: string[] }).inlineInputLines;
+    app.stop();
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row).not.toContain('-bg}');
+  });
+
+  it('omits the full-screen fill when transparent mode is requested', async () => {
+    vi.stubEnv('DUYA_TUI_COMPOSER_BG', 'transparent');
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      onSubmit: () => undefined,
+    });
+    app.start();
+    await settleRendered();
+    app.stop();
+
+    expect(out.text()).not.toContain('48;5;');
   });
 });
 

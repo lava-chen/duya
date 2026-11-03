@@ -93,7 +93,17 @@ import {
 } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
+import {
+  effortBorderColor,
+  effortBorderTag,
+  normalizeEffort,
+  resolveComposerBackground,
+  resolveThemeName,
+  taggedWith,
+  themeFor,
+  type EffortLevel,
+  type ThemeName,
+} from './theme.js';
 import { compactActivity } from './text.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { StatuslineProfile } from './preferences.js';
@@ -2019,7 +2029,7 @@ export class TUIApp {
         borderColor: effortBorderColor(this.effortLevel()),
         // The band: the whole input rectangle is filled, the rules included,
         // so the box the user types into reads as one solid surface.
-        background: this.theme.tags.composerBg,
+        background: resolveComposerBackground(this.theme.tags) ?? null,
         height,
         bottom: this.composerBottom(size),
         lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
@@ -2170,7 +2180,8 @@ export class TUIApp {
     raw: readonly string[],
     columns: number,
   ): string[] {
-    const tag = this.theme.tags.composerBg;
+    const tag = resolveComposerBackground(this.theme.tags);
+    if (tag === undefined) return [...painted];
     const width = Math.max(1, columns);
     return painted.map((line, index) => {
       const used = visibleWidth(raw[index] ?? '');
