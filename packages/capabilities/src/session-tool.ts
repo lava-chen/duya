@@ -51,7 +51,7 @@ export type SessionSpawnOperation<T> = { ok: true } & T | { ok: false; reason: s
 /** Host worker-DB actions used by the session tool. */
 export interface SessionToolPort {
   getCallerSessionId(contextSessionId?: string): string;
-  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string } & SessionCompletionReceipt>>;
+  spawn(input: { parentSessionId: string; workingDirectory: string; prompt: string; model?: string; use_worktree?: boolean; source_branch?: string; branch_name?: string; projectTask?: { subject: string; description: string } }): Promise<SessionSpawnOperation<{ sessionId: string; parentId: string; workingDirectory?: string; checkout?: unknown; branchName?: string; isolation?: string; taskId?: string } & SessionCompletionReceipt>>;
   list(parentSessionId: string): Promise<SessionSpawnOperation<{ sessions: SessionSpawnSession[] }>>;
   get(sessionId: string, callerSessionId: string): Promise<SessionSpawnOperation<{ session: SessionSpawnDetails }>>;
   reply(input: { sessionId: string; callerSessionId: string; prompt: string; model?: string }): Promise<SessionSpawnOperation<{ sessionId: string } & SessionCompletionReceipt>>;
@@ -66,6 +66,16 @@ const SESSION_SCHEMA: Record<string, unknown> = {
     use_worktree: { type: 'boolean', description: 'Give the new session an isolated checkout and branch. Required true for an independent branch or PR. Omitted: isolate when the parent entered a managed checkout, otherwise share. false shares the current directory and may be read-only if another session owns it.' },
     source_branch: { type: 'string', description: 'Local base ref for an isolated child; defaults to the parent execution HEAD. Requires use_worktree=true.' },
     branch_name: { type: 'string', description: 'New branch for the isolated child; defaults to duya/session/<session-id>. Requires use_worktree=true.' },
+    projectTask: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'When dispatching from a Project Coordinator, the canonical Project Task to create before starting this work Session.',
+      properties: {
+        subject: { type: 'string', minLength: 1, maxLength: 160 },
+        description: { type: 'string', minLength: 1, maxLength: 12000 },
+      },
+      required: ['subject', 'description'],
+    },
     action: {
       type: 'string',
       enum: ['spawn', 'list', 'get', 'reply', 'cancel', 'rename'],
@@ -183,6 +193,14 @@ export class SessionTool extends BaseTool {
             ...(typeof input.use_worktree === 'boolean' ? { use_worktree: input.use_worktree } : {}),
             ...(typeof input.source_branch === 'string' ? { source_branch: input.source_branch } : {}),
             ...(typeof input.branch_name === 'string' ? { branch_name: input.branch_name } : {}),
+            ...(typeof input.projectTask === 'object' && input.projectTask !== null
+              && typeof (input.projectTask as Record<string, unknown>).subject === 'string'
+              && typeof (input.projectTask as Record<string, unknown>).description === 'string'
+              ? { projectTask: {
+                  subject: (input.projectTask as { subject: string }).subject,
+                  description: (input.projectTask as { description: string }).description,
+                } }
+              : {}),
             parentSessionId: callerSessionId,
             workingDirectory,
             prompt,
@@ -193,7 +211,7 @@ export class SessionTool extends BaseTool {
             id: randomUUID(),
             name: this.name,
             result:
-              `Spawned session ${result.sessionId} in ${result.workingDirectory ?? workingDirectory}. ` +
+              `Spawned session ${result.sessionId}${result.taskId ? ` for Project Task ${result.taskId}` : ''} in ${result.workingDirectory ?? workingDirectory}. ` +
               (result.checkout ? `Isolated checkout: ${JSON.stringify(result.checkout)}. Branch: ${result.branchName ?? 'see checkout receipt'}. ` : '') +
               `It is running asynchronously ` +
               `in its own session (visible in the sidebar). ` +

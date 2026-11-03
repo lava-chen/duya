@@ -114,6 +114,11 @@ export function projectToLegacyFrame(
           ...(event.outcome.outcome === 'tool_error' ? { error: true } : {}),
           ...(event.outcome.outcome === 'success' ? { error: false } : {}),
           duration_ms: event.durationMs,
+          // The producer's structured payload rides along verbatim. A
+          // file-mutating tool publishes its change set here, and a renderer
+          // that can read it draws the change instead of re-deriving it from
+          // the prose result.
+          ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
         },
       };
 

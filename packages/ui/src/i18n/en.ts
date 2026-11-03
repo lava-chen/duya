@@ -127,6 +127,33 @@ const en = {
   'projects.removeFailed': 'Remove failed, please retry',
   'projects.bannerDismiss': 'Dismiss',
 
+  // Project-first — the project workspace: the coordinator conversation, the
+  // project's tasks and working sessions, and the takeover of one of them.
+  'project.workspace.open': 'Enter project',
+  'project.workspace.coordinator': 'Coordinator',
+  'project.workspace.refresh': 'Refresh',
+  'project.workspace.tasks': 'Tasks',
+  'project.workspace.noTasks': 'No tasks yet',
+  'project.workspace.workSessions': 'Working sessions',
+  'project.workspace.noWorkSessions': 'No working sessions yet',
+  'project.workspace.statusRunning': 'Running',
+  'project.workspace.statusIdle': 'Idle',
+  'project.workspace.statusDone': 'Done',
+  'project.workspace.statusError': 'Error',
+  'project.workspace.statusUnknown': 'Unknown',
+  'project.workspace.taskPending': 'Pending',
+  'project.workspace.taskInProgress': 'In progress',
+  'project.workspace.taskCompleted': 'Completed',
+  'project.workspace.taskUnknown': 'Unknown',
+  'project.workspace.takeOver': 'Take over',
+  'project.workspace.handBack': 'Hand back',
+  'project.workspace.holding': 'You are working here',
+  'project.workspace.readOnlyHint': 'Read-only. Take the session over to work in it yourself.',
+  'project.workspace.holdingHint': 'You are working in this session. The coordinator cannot instruct it until you hand it back.',
+  'project.workspace.readOnlyPlaceholder': 'Take the session over to continue this conversation.',
+  'project.workspace.backToProject': 'Back to project',
+  'project.workspace.enterFailed': 'The project could not be opened.',
+
   'sidebar.toggleThemeAria': 'Toggle theme',
 
   'time.yesterday': 'Yesterday',

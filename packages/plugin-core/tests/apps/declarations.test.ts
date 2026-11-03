@@ -86,12 +86,105 @@ describe('PluginAppDefinitionsSchema', () => {
     expect(parsed[1]?.entry).toBe(validApp.entry);
   });
 
-  it('requires each App to declare either a static entry or at least one surface', () => {
+  it('requires each App to declare a static entry, a surface, or a placement', () => {
     expect(() =>
       PluginAppDefinitionsSchema.parse([
         { appId: 'empty', requiredCapabilities: [], stateSchemaVersion: 1 },
       ]),
-    ).toThrow(/static entry or at least one UI surface/i);
+    ).toThrow(/static entry, a UI surface, or a placement/i);
+  });
+
+  it('accepts a placement-only UI block', () => {
+    // A placement that opens the package entry needs no MCP surface at all:
+    // that is the shape of a purely local App that wants a sidebar icon.
+    const parsed = PluginAppDefinitionsSchema.parse([{
+      appId: 'pinned',
+      entry: 'apps/pinned/index.html',
+      ui: { placements: [{ slot: 'sidebar.item', scope: 'session' }] },
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    }]);
+
+    expect(parsed[0]?.ui?.surfaces).toBeUndefined();
+    expect(parsed[0]?.ui?.placements).toEqual([{ slot: 'sidebar.item', scope: 'session' }]);
+  });
+
+  it('rejects an unknown slot rather than accepting a dead entry', () => {
+    // The slot set is a promise that something renders there. An unknown slot
+    // must fail at install time, not silently never appear.
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([{
+        appId: 'future',
+        entry: 'apps/future/index.html',
+        ui: { placements: [{ slot: 'project.tab', scope: 'session' }] },
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      }]),
+    ).toThrow(/slot/i);
+  });
+
+  it('rejects a placement without a surface when the App has no entry', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([{
+        appId: 'dangling',
+        ui: { placements: [{ slot: 'sidebar.item', scope: 'global' }] },
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      }]),
+    ).toThrow(/static entry/i);
+  });
+
+  it('rejects a placement that names a surface the App does not declare', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([{
+        appId: 'typo',
+        entry: 'apps/typo/index.html',
+        ui: {
+          surfaces: [validSurface],
+          placements: [{ slot: 'sidebar.item', scope: 'session', surface: 'overveiw' }],
+        },
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      }]),
+    ).toThrow(/unknown surface/i);
+  });
+
+  it('accepts a placement that names one of the App surfaces', () => {
+    const parsed = PluginAppDefinitionsSchema.parse([{
+      appId: 'placed',
+      ui: {
+        surfaces: [validSurface],
+        placements: [{ slot: 'session.panel', scope: 'global', surface: 'overview' }],
+      },
+      requiredCapabilities: [],
+      stateSchemaVersion: 1,
+    }]);
+
+    expect(parsed[0]?.ui?.placements?.[0]?.surface).toBe('overview');
+  });
+
+  it('rejects an empty ui block', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([{
+        appId: 'empty-ui',
+        entry: 'apps/empty-ui/index.html',
+        ui: {},
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      }]),
+    ).toThrow(/surfaces or placements/i);
+  });
+
+  it('rejects unknown fields on a placement', () => {
+    expect(() =>
+      PluginAppDefinitionsSchema.parse([{
+        appId: 'loose',
+        entry: 'apps/loose/index.html',
+        ui: { placements: [{ slot: 'sidebar.item', scope: 'session', order: 1 }] },
+        requiredCapabilities: [],
+        stateSchemaVersion: 1,
+      }]),
+    ).toThrow(/order/i);
   });
 
   it('validates surface fields and requires a ui:// resource URI', () => {

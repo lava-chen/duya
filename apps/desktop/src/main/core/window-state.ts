@@ -19,6 +19,13 @@ import { getLogger, LogComponent } from '../logging/logger';
 export interface WindowState extends Rectangle {
   /** True if the window was maximized when last saved. */
   maximized: boolean;
+  /**
+   * True once the user has been told that closing the window only hides it.
+   *
+   * The notice is a one-time explanation, not a setting: it is stored next to
+   * the bounds so the second close is silent. Absent means "never shown".
+   */
+  hideNoticeAcknowledged?: boolean;
 }
 
 const STATE_FILE = 'window-state.json';
@@ -71,6 +78,7 @@ export function loadWindowState(): WindowState | null {
     return {
       ...bounds,
       maximized: parsed.maximized === true,
+      hideNoticeAcknowledged: parsed.hideNoticeAcknowledged === true,
     };
   } catch (error) {
     getLogger().warn(
@@ -82,10 +90,28 @@ export function loadWindowState(): WindowState | null {
   }
 }
 
+/** Read the raw state file, tolerating a missing or corrupt one. */
+function readRawState(): Partial<WindowState> {
+  try {
+    const statePath = getStatePath();
+    if (!fs.existsSync(statePath)) return {};
+    const parsed: unknown = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+    return parsed as Partial<WindowState>;
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Atomically persist the window state. Writes to a `.tmp` sibling first,
  * then renames over the target so a partial write never replaces a
  * previously-good state.
+ *
+ * Fields the caller did not pass are carried over from the file on disk.
+ * The bounds are written on every close while the one-time flags are set
+ * once, so a blind overwrite would erase the acknowledgement on the very
+ * next close and show the notice again.
  */
 export function saveWindowState(state: WindowState): void {
   const logger = getLogger();
@@ -93,8 +119,9 @@ export function saveWindowState(state: WindowState): void {
     const statePath = getStatePath();
     const tmpPath = `${statePath}.tmp`;
     const dir = path.dirname(statePath);
+    const merged: WindowState = { ...(readRawState() as WindowState), ...state };
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(tmpPath, JSON.stringify(state), 'utf-8');
+    fs.writeFileSync(tmpPath, JSON.stringify(merged), 'utf-8');
     fs.renameSync(tmpPath, statePath);
   } catch (error) {
     logger.warn(

@@ -22,6 +22,23 @@
  *   blessed's parser: `{241-fg}` renders as `\x1b[38;5;241m` (`element.js`
  *   `_parseTags` → `program._attr('241 fg')`). Hex tags were rejected: they
  *   quantise to the nearest 16-colour entry, which is not controllable.
+ *
+ * ## The two surfaces, and why they are fixed numbers
+ *
+ * codex fills the composer and the submitted prompts with a colour BLENDED
+ * from the terminal's own background: 12% white over it in a dark terminal,
+ * 4% black over it in a light one (`style.rs` `user_message_bg_rgb` /
+ * `history_prompt_style`). That needs to know what the terminal background
+ * actually is, and duya has no way to ask — the OSC 11 probe was rejected in
+ * plan 611 W1.1, so the only hint is the `COLORFGBG` heuristic, which says
+ * "dark" or "light" and nothing more.
+ *
+ * So the two fills are fixed 256-colour greys instead: `236` (`#303030`) behind
+ * the composer and `238` (`#3c3c3c`) behind a submitted prompt in the dark
+ * palette, `255` (`#eeeeee`) and `254` (`#e4e4e4`) in the light one. The
+ * invariant that survives the approximation is the one that matters: a
+ * submitted prompt is MORE prominent than the composer it replaces, in both
+ * palettes — lighter on a dark terminal, darker on a light one.
  */
 
 export type ThemeName = 'dark' | 'light';
@@ -37,8 +54,42 @@ export type ThemeToken =
   | 'thinking'
   | 'diffAdd'
   | 'diffDel'
+  /**
+   * The fills a diff row is painted with.
+   *
+   * `diffAddBg` / `diffDelBg` fill the sign-and-content part of a changed
+   * row; `diffNumBgAdd` / `diffNumBgDel` fill the line-number chip beside it,
+   * so the numbers read as a column of their own instead of competing with the
+   * code's colours. `diffGutter` is the number's foreground, `diffHunk` the
+   * `⋮` between hunks, and `diffHeader` the path of a multi-file change.
+   *
+   * They are BACKGROUNDS, like `composerBg` and `promptBg`: the tag bodies
+   * end in `-bg` and they fill the cell behind the text.
+   *
+   * The values are codex's own 256-colour fallbacks for its RGB diff fills
+   * (`codex-rs/tui/src/diff_render.rs`): the exact RGB cannot be used because
+   * this palette has no truecolor channel, and hex tags were rejected for the
+   * reason above.
+   */
+  | 'diffAddBg'
+  | 'diffDelBg'
+  | 'diffNumBgAdd'
+  | 'diffNumBgDel'
+  | 'diffGutter'
+  | 'diffHunk'
+  | 'diffHeader'
   | 'heading'
-  | 'link';
+  | 'link'
+  /**
+   * The fill behind the composer.
+   *
+   * The two `*Bg` tokens are BACKGROUNDS, not foregrounds: their tag bodies
+   * end in `-bg` and they fill the cell behind the text. They live in the same
+   * table because they are the same kind of thing — a decision the palette
+   * makes — and because every consumer already carries a `ThemeTags` around.
+   */
+  | 'composerBg'
+  | 'promptBg';
 
 /** Token → blessed tag body (`'gray-fg'`, `'241-fg'`). */
 export type ThemeTags = Readonly<Record<ThemeToken, string>>;
@@ -59,8 +110,19 @@ export const DARK_THEME_TAGS: ThemeTags = {
   thinking: 'magenta-fg',
   diffAdd: 'bright-green-fg',
   diffDel: 'red-fg',
+  // codex's dark 256-colour fallbacks: 22 / 52 are its diff fills, 23 / 53
+  // one step brighter for the line-number chips.
+  diffAddBg: '22-bg',
+  diffDelBg: '52-bg',
+  diffNumBgAdd: '23-bg',
+  diffNumBgDel: '53-bg',
+  diffGutter: 'gray-fg',
+  diffHunk: 'gray-fg',
+  diffHeader: 'cyan-fg',
   heading: 'cyan-fg',
   link: 'gray-fg',
+  composerBg: '236-bg',
+  promptBg: '238-bg',
 };
 
 /**
@@ -80,8 +142,19 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   thinking: '128-fg',
   diffAdd: '28-fg',
   diffDel: '160-fg',
+  // codex's light 256-colour fallbacks: 194 / 224 are its diff fills, 157 /
+  // 217 the line-number chips.
+  diffAddBg: '194-bg',
+  diffDelBg: '224-bg',
+  diffNumBgAdd: '157-bg',
+  diffNumBgDel: '217-bg',
+  diffGutter: '236-fg',
+  diffHunk: '244-fg',
+  diffHeader: '30-fg',
   heading: '30-fg',
   link: '243-fg',
+  composerBg: '255-bg',
+  promptBg: '254-bg',
 };
 
 const PALETTES: Readonly<Record<ThemeName, ThemeTags>> = {
@@ -92,6 +165,21 @@ const PALETTES: Readonly<Record<ThemeName, ThemeTags>> = {
 /** The theme used when nothing else is configured. */
 export function defaultTheme(): ThemeName {
   return 'dark';
+}
+
+/**
+ * Resolve the composer's fill independently of the text palette.
+ *
+ * `DUYA_TUI_COMPOSER_BG=transparent` leaves the terminal's own background in
+ * place. The default keeps the themed surface used by existing installations.
+ */
+export function resolveComposerBackground(
+  tags: ThemeTags,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env['DUYA_TUI_COMPOSER_BG']?.toLowerCase() === 'transparent'
+    ? undefined
+    : tags.composerBg;
 }
 
 /**

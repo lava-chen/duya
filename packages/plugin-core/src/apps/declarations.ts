@@ -77,6 +77,59 @@ export const PluginUiSurfaceSchema = z
 
 export type PluginUiSurface = z.infer<typeof PluginUiSurfaceSchema>;
 
+/**
+ * The places an App may ask the host to render an entry for it.
+ *
+ * A closed set on purpose: a slot is a promise that something will actually be
+ * rendered there, and accepting an unknown one would let a plugin declare an
+ * entry that silently never appears. `project.tab` is deliberately absent
+ * until the Project workspace has a host to render it — adding it now would
+ * mean accepting a value nobody honours.
+ */
+export const PLUGIN_APP_PLACEMENT_SLOTS = ['sidebar.item', 'session.panel'] as const;
+
+export type PluginAppPlacementSlot = (typeof PLUGIN_APP_PLACEMENT_SLOTS)[number];
+
+/**
+ * One declared entry point for an App.
+ *
+ * This is a *placement*, not a component: the host renders an entry that opens
+ * the App in its sandboxed frame. Nothing from the plugin enters the host's
+ * React tree.
+ *
+ * `surface` names which of the App's surfaces this entry opens. Omitting it
+ * means "the package entry file", which only an App with `entry` can honour —
+ * validated when the whole App is checked.
+ */
+export const PluginAppPlacementSchema = z
+  .object({
+    slot: z.enum(PLUGIN_APP_PLACEMENT_SLOTS),
+    /**
+     * `session` entries exist inside a chat; `global` entries exist without
+     * one. The scope decides whether the App needs a chat session to open.
+     */
+    scope: z.enum(['session', 'global']),
+    surface: z.string().min(1).max(64).regex(APP_ID_PATTERN).optional(),
+  })
+  .strict();
+
+export type PluginAppPlacement = z.infer<typeof PluginAppPlacementSchema>;
+
+/** Safe projection of one placement for the host directory. */
+export interface PluginUiPlacementDirectoryEntry {
+  pluginId: string;
+  pluginName: string;
+  appId: string;
+  slot: PluginAppPlacementSlot;
+  scope: PluginAppPlacement['scope'];
+  /** Present when the entry opens a surface; absent for a package entry App. */
+  surfaceId?: string;
+  server?: string;
+  availability: 'always' | 'session';
+  title: { en: string; zh: string };
+  icon: string;
+}
+
 /** Safe projection of an installed Plugin App surface for the host directory. */
 export interface PluginUiSurfaceDirectoryEntry extends PluginUiSurface {
   pluginId: string;
@@ -93,6 +146,8 @@ export interface PluginUiSurfaceDirectoryConflict {
 export interface PluginUiSurfaceDirectory {
   surfaces: PluginUiSurfaceDirectoryEntry[];
   conflicts: PluginUiSurfaceDirectoryConflict[];
+  /** Enabled placement entries, ordered by slot then owner. */
+  placements: PluginUiPlacementDirectoryEntry[];
 }
 
 /** A package-local App declaration; it describes metadata, not a grant. */
@@ -103,9 +158,19 @@ export const PluginAppDefinitionSchema = z
     entry: z.string().min(1).refine(isPackageRelativePosixPath).optional(),
     ui: z
       .object({
-        surfaces: z.array(PluginUiSurfaceSchema).min(1).max(64),
+        /**
+         * `surfaces` used to be required. A placement that opens the package
+         * entry needs none, so the pair is now optional individually and the
+         * object only has to carry at least one of them.
+         */
+        surfaces: z.array(PluginUiSurfaceSchema).min(1).max(64).optional(),
+        placements: z.array(PluginAppPlacementSchema).min(1).max(16).optional(),
       })
       .strict()
+      .refine((ui) => ui.surfaces !== undefined || ui.placements !== undefined, {
+        message: 'ui requires surfaces or placements',
+        path: ['surfaces'],
+      })
       .optional(),
     /** Standalone Apps keep their own MCP session when no agent run is active. */
     runtime: z.enum(['agent-run', 'standalone']).optional(),
@@ -122,13 +187,35 @@ export const PluginAppDefinitionSchema = z
   })
   .strict()
   .superRefine((app, ctx) => {
-    if (app.entry === undefined && (app.ui?.surfaces.length ?? 0) === 0) {
+    const surfaceCount = app.ui?.surfaces?.length ?? 0;
+    const placementCount = app.ui?.placements?.length ?? 0;
+    if (app.entry === undefined && surfaceCount === 0 && placementCount === 0) {
       ctx.addIssue({
         code: 'custom',
-        message: 'App requires a static entry or at least one UI surface',
+        message: 'App requires a static entry, a UI surface, or a placement',
         path: ['entry'],
       });
     }
+    // A placement with no `surface` opens the package entry, so it is only
+    // launchable when the App has one. Caught here rather than at launch:
+    // a broken entry point should not survive installation.
+    app.ui?.placements?.forEach((placement, index) => {
+      if (placement.surface !== undefined || app.entry !== undefined) return;
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Placement without a surface requires a static entry',
+        path: ['ui', 'placements', index, 'surface'],
+      });
+    });
+    app.ui?.placements?.forEach((placement, index) => {
+      if (placement.surface === undefined) return;
+      if (app.ui?.surfaces?.some((surface) => surface.id === placement.surface)) return;
+      ctx.addIssue({
+        code: 'custom',
+        message: `Placement names unknown surface: ${placement.surface}`,
+        path: ['ui', 'placements', index, 'surface'],
+      });
+    });
   });
 
 export type PluginAppDefinition = z.infer<typeof PluginAppDefinitionSchema>;
@@ -187,7 +274,7 @@ export const PluginAppDefinitionsSchema = z
 
     const surfaceOwners = new Map<string, { appIndex: number; surfaceIndex: number }>();
     apps.forEach((app, appIndex) => {
-      app.ui?.surfaces.forEach((surface, surfaceIndex) => {
+      app.ui?.surfaces?.forEach((surface, surfaceIndex) => {
         const owner = surfaceOwners.get(surface.id);
         if (owner !== undefined) {
           ctx.addIssue({
@@ -209,7 +296,7 @@ export function pluginAppDefinitionsSchemaForMcpServers(
   const declaredServers = new Set(mcpServerNames);
   return PluginAppDefinitionsSchema.superRefine((apps, ctx) => {
     apps.forEach((app, appIndex) => {
-      app.ui?.surfaces.forEach((surface, surfaceIndex) => {
+      app.ui?.surfaces?.forEach((surface, surfaceIndex) => {
         if (!declaredServers.has(surface.server)) {
           ctx.addIssue({
             code: 'custom',

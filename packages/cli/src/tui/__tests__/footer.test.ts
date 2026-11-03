@@ -129,6 +129,20 @@ describe('readGitBranch', () => {
 });
 
 describe('buildFooterLines', () => {
+  it('supports compact, location-only and usage-only layouts', () => {
+    const compact = footer({ statusline: 'compact' }).map(plain).join(' ');
+    expect(compact).toContain('E:\\Projects\\duya');
+    expect(compact).toContain('↑49k');
+    expect(compact).toContain('deepseek-flash');
+    expect(compact).not.toContain('(master)');
+    const location = footer({ statusline: 'location' }).map(plain).join(' ');
+    expect(location).toContain('(master)');
+    expect(location).not.toContain('↑49k');
+    const usage = footer({ statusline: 'usage' }).map(plain).join(' ');
+    expect(usage).toContain('↑49k');
+    expect(usage).not.toContain('E:\\Projects\\duya');
+  });
+
   it('renders exactly two rows', () => {
     expect(footer()).toHaveLength(2);
   });

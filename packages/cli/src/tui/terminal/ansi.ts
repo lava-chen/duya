@@ -26,8 +26,8 @@
  * same primitive codex uses (`insert_history.rs:165-178`).
  */
 
-import { sgrParameterFor, type SpanColor } from '../core/color.js';
-import { hasAttr, sameStyle, type StyledSpan } from '../core/span.js';
+import { backgroundParameterFor, sgrParameterFor, type SpanColor } from '../core/color.js';
+import { hasAttr, safeHyperlink, sameStyle, type StyledSpan } from '../core/span.js';
 
 /** CSI introducer. */
 const CSI = '\x1b[';
@@ -213,10 +213,13 @@ function spanParameters(span: StyledSpan): string[] {
   return parameters;
 }
 
-/** A background is the foreground code shifted up by ten (30→40, 90→100). */
-function backgroundParameterFor(color: SpanColor): string {
-  return color.kind === 'indexed' ? `48;5;${color.index}` : String(Number(sgrParameterFor(color)) + 10);
-}
+/**
+ * A background is the foreground code shifted up by ten (30→40, 90→100).
+ *
+ * The rule itself lives in `core/color.ts`, next to the colour vocabulary it
+ * belongs to; this re-export keeps the historical import site working.
+ */
+export { backgroundParameterFor };
 
 /**
  * The SGR parameters for a span, joined — what a CELL carries as its style.
@@ -263,10 +266,17 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string {
   let out = '';
   /** The style the terminal is in, or null before anything has been written. */
   let written: StyledSpan | null = null;
+  let activeLink: string | null = null;
 
   for (const span of spans) {
     if (span.text === '') continue;
     if (written === null || !sameStyle(written, span)) {
+      const nextLink = safeHyperlink(span.linkId);
+      if (activeLink !== nextLink) {
+        if (activeLink !== null) out += '\x1b]8;;\x1b\\';
+        if (nextLink !== null) out += `\x1b]8;;${nextLink}\x1b\\`;
+        activeLink = nextLink;
+      }
       const parameters = spanParameters(span);
       // Reset only when the terminal is actually in a style: the first styled
       // run of a line therefore starts without a leading `ESC[m`, which is
@@ -279,8 +289,11 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string {
   }
 
   if (isStyled(written)) out += `${CSI}m`;
+  if (activeLink !== null) out += '\x1b]8;;\x1b\\';
   return out;
 }
+
+export { safeHyperlink } from '../core/span.js';
 
 /**
  * Mouse reporting, SGR flavour.

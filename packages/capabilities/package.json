@@ -295,6 +295,14 @@
       "types": "./dist/session-tool.d.ts",
       "import": "./dist/session-tool.js"
     },
+    "./project": {
+      "types": "./dist/project/index.d.ts",
+      "import": "./dist/project/index.js"
+    },
+    "./message-session-tool": {
+      "types": "./dist/message-session-tool.d.ts",
+      "import": "./dist/message-session-tool.js"
+    },
     "./agent-management-tool": {
       "types": "./dist/agent-management-tool.d.ts",
       "import": "./dist/agent-management-tool.js"

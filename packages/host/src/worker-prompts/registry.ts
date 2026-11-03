@@ -13,11 +13,13 @@ import { generalConfig } from './configs/general.js'
 import { codeConfig } from './configs/code.js'
 import { researchConfig } from './configs/research.js'
 import { botConfig } from './configs/bot.js'
+import { projectConfig } from './configs/project.js'
 
 PromptsRegistry.register('general', generalConfig)
 PromptsRegistry.register('code', codeConfig)
 PromptsRegistry.register('research', researchConfig)
 PromptsRegistry.register('bot', botConfig)
+PromptsRegistry.register('project', projectConfig)
 
 /**
  * Resolve the prompt system name from an agent profile.

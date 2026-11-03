@@ -2,10 +2,18 @@
 
 先定位用户本次任务，再读取对应计划的验收与接续点。这里维护路由，不复制各计划的实时状态。
 
+当前产品主线为 [Project Coordinator](active/2026-11-02-project-coordinator.md)：先完成项目协调、项目记忆和 Desktop 协作闭环。Personal Bot 暂缓增强；Session 只先补 Coordinator 必需的执行基础，独立 CLI 增强/Release 后续安排。产品角色与仓库边界见 [Project-first 决策](../design-docs/project-first-architecture.md)。
+
+三个任务共用已核验的 [Claude 调研/工具映射](../references/claude-projects-coordinator.md)与[首版实施合同](../design-docs/project-coordinator-contract.md)，不再各自探索工具和状态模型。
+
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](active/2026-11-03-tui-transparent-composer-background.md) | 增加 `DUYA_TUI_COMPOSER_BG=transparent`；验证全屏/inline 都不画输入框底色，并更新本机测试 CLI |
+| TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
+| Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
+| TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现并合并（PR #567，`203d7d51`）；本计划待归档 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
 | Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | PR 前阻塞：补齐 #576 D0/D1/D4 语义裁定、Host-owned MCP 实际发现/成功调用覆盖，再完成类型、架构与 Worker 闭环门禁 |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
@@ -22,7 +30,7 @@
 | TUI 下一步建议采纳 | [2026-10-28 TUI 建议采纳与会话边界](active/2026-10-28-tui-turn-suggestion-adopt-and-reset.md) | 空输入按 Enter 采纳建议填入输入框；换会话清空旧建议；PR #532 已合并（`356d0370`），真机冒烟待用户 |
 | 面板脱窗渲染闭环 | [2026-10-25 面板脱窗渲染](active/2026-10-25-panel-popout-render.md) | 脱窗 UI 闭环与 resize 药丸语言已过门禁；PR #493 已合并，真机冒烟待用户 |
 | Mini App 面板打开 | [2026-10-25 Mini App 面板打开](active/2026-10-25-mini-app-panel-open.md) | launcher 改面板打开与授权弹窗挂主窗口已过门禁；PR #485 已合并，真机冒烟待用户 |
-| 个人长期 Bot 框架 | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | S0–S6-A 已合并（#495、#521）；S7 旧路径退役另立切片 |
+| 个人长期 Bot 框架（暂缓增强） | [2026-10-25 Bot 框架](active/2026-10-25-personal-bot-framework.md) | 保留 S0–S6-A 成果；优先复用项目闭环必需基础，个人 Bot 增强和 S7 另行排期 |
 | Workflow 并发恢复 | [2026-10-24 workflow 并发上限持久化](active/2026-10-24-workflow-retune-persistence.md) | live workflow 的并发上限更新已持久化；PR #453 待 review 与集成授权 |
 | TUI 粘贴附件 | [2026-10-24 TUI 粘贴附件](active/2026-10-24-tui-paste-attachments.md) | 附件与 `!` 卡片已落地；PR #467 与 master 的合并冲突已解，待 review、CI 与集成授权；真机冒烟未跑 |
 | 字体系统对齐 | [2026-10-24 字体系统对齐](active/2026-10-24-font-system-alignment.md) | 三栈收敛 + FontContext 拆除已过门禁，开 PR 待集成 |
@@ -66,6 +74,7 @@
 | TUI 本地 shell UI | [2026-10-28 TUI 本地 shell 命令的专属 UI](archive/2026-10-28-tui-shell-command-ui.md) | composer 红色 `!` 提示符 + 本地命令 "You ran" 独立卡片；PR #533 已合并（`bd526d3b`），真机冒烟待用户 |
 | TUI 权限 banner | [2026-10-29 TUI 权限 banner 与 Shift+Tab 快速切换](archive/2026-10-29-tui-permission-banner.md) | footer 右下角权限徽标 + Shift+Tab 循环（bypass 二次确认）；PR #538 已合并（`73710504`），真机冒烟待用户 |
 | TUI 补全弹窗行宽 | [2026-10-29 TUI 补全弹窗的行宽](archive/2026-10-29-tui-popup-row-width.md) | 候选描述截断而非折行，弹窗不再比预留高、最后一个候选重新可见；修 #531 带进 master 的既有红用例；PR #542 已合并（`c8b47c3f`） |
+| TUI 学 codex 表面与斜杠命令 | [Codex TUI 对照与实现](archive/2026-11-03-codex-tui-alignment-survey.md) | 七个切片已合并（PR #590，`dbffec07`）；全量 TUI、架构、类型检查与构建通过 |
 
 没有明确任务时，再按本表顺序选择可执行项。目录和旧 `Status` 头都不能代替接续证据。
 

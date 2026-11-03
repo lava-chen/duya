@@ -1,3 +1,6 @@
+import type { PluginAuditEvent } from './plugins/audit.js';
+import type { HostPluginManagementApiV1 } from '@duya/agent-protocol/plugin-management';
+import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
 import { logger } from '@duya/host/worker-logger';
 import {
@@ -181,6 +184,8 @@ import type { HostPluginAppInvocationApiV1 } from '@duya/agent-protocol';
 import { routePluginAppInvocations } from './plugin-app-invocation-routes.js';
 import type { HostPluginAppGrantApiV1 } from '@duya/agent-protocol';
 import { routePluginAppGrants } from './plugin-app-grant-routes.js';
+import type { HostSessionInputApiV1 } from '@duya/agent-protocol';
+import { routeSessionInputs } from './session-input-routes.js';
 import type {
   HostLocalSidebarSectionsApiV1,
   SidebarSectionCreateInput,
@@ -223,6 +228,12 @@ import { HostTaskApiError } from './task-api.js';
 import { HostRunApiError } from './run-api.js';
 import { HostSessionCompactionError } from './session-compaction.js';
 import { HostProjectApiError } from './project-api.js';
+
+function isProjectSource(value: unknown): value is { type: string; id: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  return typeof source.type === 'string' && typeof source.id === 'string' && source.id.trim().length > 0;
+}
 import { isHostResearchAction, type HostResearchApiV1 } from '@duya/agent-protocol/research-api';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
@@ -388,6 +399,8 @@ export interface HostSessionHttpServerOptions {
    * say" are different facts.
    */
   readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
+  readonly pluginManagementApi?: HostPluginManagementApiV1;
+  readonly pluginManagementAudit?: (event: PluginAuditEvent) => Promise<void>;
   /**
    * Handing a session over to the desktop app.
    *
@@ -426,6 +439,8 @@ export interface HostSessionHttpServerOptions {
   readonly localMailboxApi?: HostLocalMailboxApiV1;
   /** Local-only durable wake queue markers. */
   readonly localPendingWakeApi?: HostLocalPendingWakeApiV1;
+  /** Durable Session inputs and the per-session control lease (R1.2). */
+  readonly sessionInputApi?: HostSessionInputApiV1;
   readonly workflowRunApi?: WorkflowRunApiV1;
   readonly runApi?: HostRunApiV1;
   /** Host-owned execution: start/cancel real runs (plan 12 gate 3). */
@@ -1027,6 +1042,13 @@ export class HostSessionHttpServer {
     }
     if (url.pathname === '/v1/tool-approvals' || url.pathname.startsWith('/v1/tool-approvals/')) {
       await this.#routeToolApprovals(req, url, res);
+      return;
+    }
+    if (url.pathname === '/v1/session-inputs' || url.pathname.startsWith('/v1/session-inputs/')) {
+      await routeSessionInputs(req, url, res, this.#options.sessionInputApi, {
+        readJson: (request, response) => this.#readJson(request, response),
+        sendJson: (response, status, body) => this.#sendJson(response, status, body),
+      });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/v1/search/sessions') {
@@ -1897,6 +1919,10 @@ export class HostSessionHttpServer {
       } catch (error) {
         this.#sendApiError(res, error);
       }
+      return;
+    }
+    if (url.pathname === '/v1/plugins' || url.pathname.startsWith('/v1/plugins/') || url.pathname === '/v1/plugin-catalog' || url.pathname === '/v1/plugin-marketplaces' || url.pathname.startsWith('/v1/plugin-marketplaces/')) {
+      await routePluginManagement(req, res, url, this.#options.pluginManagementApi, () => this.#readJson(req, res), this.#options.pluginManagementAudit);
       return;
     }
     if (url.pathname === '/v1/local/plugins' && req.method === 'GET') {
@@ -3280,6 +3306,127 @@ export class HostSessionHttpServer {
     }
 
     const match = /^\/v1\/projects\/([^/]+)$/.exec(url.pathname);
+    const historyMatch = /^\/v1\/projects\/([^/]+)\/(decisions|memory)\/([^/]+)\/history$/.exec(url.pathname);
+    if (historyMatch && req.method === 'GET') {
+      const projectId = this.#decodePathPart(historyMatch[1]!, res), key = this.#decodePathPart(historyMatch[3]!, res);
+      if (projectId === null || key === null) return;
+      const limit = Number(url.searchParams.get('limit') ?? 20);
+      try {
+        const records = historyMatch[2] === 'memory'
+          ? await api.listProjectMemoryHistory(projectId, key, Number.isFinite(limit) ? limit : 20)
+          : await api.listProjectDecisionHistory(projectId, key, Number.isFinite(limit) ? limit : 20);
+        this.#sendJson(res, 200, { records });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const continuityMatch = /^\/v1\/projects\/([^/]+)\/(continuity|context|state)$/.exec(url.pathname);
+    const continuityRecordMatch = /^\/v1\/projects\/([^/]+)\/(decisions|memory)\/([^/]+)$/.exec(url.pathname);
+    if (continuityMatch) {
+      const projectId = this.#decodePathPart(continuityMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        if (continuityMatch[2] === 'continuity' && req.method === 'GET') {
+          const after = Number(url.searchParams.get('after') ?? 0), limit = Number(url.searchParams.get('limit') ?? 50);
+          const snapshot = await api.getProjectContinuity(projectId, { afterCursor: Number.isFinite(after) ? after : 0, limit: Number.isFinite(limit) ? limit : 50 });
+          this.#sendJson(res, snapshot ? 200 : 404, { continuity: snapshot }); return;
+        }
+        if (continuityMatch[2] === 'context' && req.method === 'GET') {
+          const taskId = url.searchParams.get('taskId') ?? undefined;
+          const max = Number(url.searchParams.get('maxCharacters') ?? 8000);
+          const context = await api.getProjectContext(projectId, taskId, Number.isFinite(max) ? max : 8000);
+          this.#sendJson(res, context ? 200 : 404, { context }); return;
+        }
+        if (continuityMatch[2] === 'state' && req.method === 'PUT') {
+          const body = await this.#readJson(req, res); if (!body) return;
+          if (typeof body.expectedRevision !== 'number' || typeof body.currentState !== 'string' || typeof body.nextStep !== 'string' || !isProjectSource(body.source)) {
+            this.#sendJson(res, 400, { error: { code: 'invalid_project_state' } }); return;
+          }
+          const state = await api.updateProjectState({ projectId, expectedRevision: body.expectedRevision, currentState: body.currentState, nextStep: body.nextStep, source: body.source });
+          this.#sendJson(res, state ? 200 : 409, { state }); return;
+        }
+        if (continuityMatch[2] === 'state' && req.method === 'GET') {
+          // 200 with a null state, NOT a 404: a missing project is an answer.
+          const state = await api.getProjectState(projectId);
+          this.#sendJson(res, 200, { state }); return;
+        }
+      } catch (error) { this.#sendApiError(res, error); }
+      this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } }); return;
+    }
+    if (continuityRecordMatch) {
+      const projectId = this.#decodePathPart(continuityRecordMatch[1]!, res);
+      const key = this.#decodePathPart(continuityRecordMatch[3]!, res);
+      if (projectId === null || key === null) return;
+      const body = await this.#readJson(req, res); if (!body) return;
+      if (req.method !== 'PUT' || typeof body.content !== 'string' || typeof body.expectedRevision !== 'number' || !isProjectSource(body.source)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_record' } }); return;
+      }
+      try {
+        if (continuityRecordMatch[2] === 'decisions') {
+          if (!['proposed', 'accepted', 'superseded'].includes(String(body.status))) { this.#sendJson(res, 400, { error: { code: 'invalid_decision_status' } }); return; }
+          const decision = await api.updateProjectDecision({ projectId, key, content: body.content, status: body.status as 'proposed' | 'accepted' | 'superseded', expectedRevision: body.expectedRevision, source: body.source });
+          this.#sendJson(res, decision ? 200 : 409, { decision }); return;
+        }
+        if (!['candidate', 'active', 'superseded', 'retired'].includes(String(body.status))) { this.#sendJson(res, 400, { error: { code: 'invalid_memory_status' } }); return; }
+        const memory = await api.updateProjectMemory({ projectId, key, content: body.content, status: body.status as 'candidate' | 'active' | 'superseded' | 'retired', expectedRevision: body.expectedRevision, source: body.source });
+        this.#sendJson(res, memory ? 200 : 409, { memory }); return;
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const acceptanceMatch = /^\/v1\/projects\/([^/]+)\/tasks\/([^/]+)\/acceptance$/.exec(url.pathname);
+    if (acceptanceMatch) {
+      const projectId = this.#decodePathPart(acceptanceMatch[1]!, res), taskId = this.#decodePathPart(acceptanceMatch[2]!, res);
+      if (projectId === null || taskId === null) return;
+      const body = await this.#readJson(req, res); if (!body) return;
+      if (req.method !== 'PUT' || !['accepted', 'rejected'].includes(String(body.status)) || !isProjectSource(body.source)) {
+        this.#sendJson(res, 400, { error: { code: 'invalid_task_acceptance' } }); return;
+      }
+      try {
+        const task = await api.updateProjectTaskAcceptance({ projectId, taskId, status: body.status as 'accepted' | 'rejected', source: body.source });
+        this.#sendJson(res, task ? 200 : 404, { task });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const taskMatch = /^\/v1\/projects\/([^/]+)\/tasks(?:\/([^/]+)\/work-session)?$/.exec(url.pathname);
+    if (taskMatch) {
+      const projectId = this.#decodePathPart(taskMatch[1]!, res);
+      if (projectId === null) return;
+      try {
+        if (req.method === 'GET' && !taskMatch[2]) {
+          this.#sendJson(res, 200, { tasks: await api.listProjectTasks(projectId) });
+          return;
+        }
+        const body = await this.#readJson(req, res);
+        if (!body) return;
+        if (req.method === 'POST' && !taskMatch[2] && typeof body.taskId === 'string' && typeof body.coordinatorSessionId === 'string') {
+          this.#sendJson(res, 201, { task: await api.bindProjectTask(projectId, body.taskId, body.coordinatorSessionId) });
+          return;
+        }
+        if (req.method === 'PUT' && taskMatch[2] && typeof body.workSessionId === 'string') {
+          const taskId = this.#decodePathPart(taskMatch[2]!, res);
+          if (taskId === null) return;
+          const task = await api.bindWorkSession(projectId, taskId, body.workSessionId);
+          this.#sendJson(res, task ? 200 : 404, { task });
+          return;
+        }
+        this.#sendJson(res, 400, { error: { code: 'invalid_project_task_link' } });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
+    const coordinatorMatch = /^\/v1\/projects\/([^/]+)\/coordinator$/.exec(url.pathname);
+    if (coordinatorMatch && req.method === 'PUT') {
+      const projectId = this.#decodePathPart(coordinatorMatch[1]!, res);
+      if (projectId === null) return;
+      const body = await this.#readJson(req, res);
+      if (!body || typeof body.sessionId !== 'string') {
+        this.#sendJson(res, 400, { error: { code: 'invalid_coordinator_session' } });
+        return;
+      }
+      try {
+        const project = await api.bindCoordinatorSession(projectId, body.sessionId);
+        this.#sendJson(res, project ? 200 : 404, { project });
+      } catch (error) { this.#sendApiError(res, error); }
+      return;
+    }
     if (!match) {
       this.#sendJson(res, 404, { error: { code: 'not_found' } });
       return;
@@ -3321,6 +3468,7 @@ export class HostSessionHttpServer {
     }
     this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
   }
+
 
   /**
    * Checkout observation (plan 621 §4.6, first two reconcile entries).

@@ -58,3 +58,18 @@ export * from './sidebar-sections-store.js';
 export * from './provider-model-pricing-store.js';
 export * from './provider-model-capability-store.js';
 export { BotOutboxStore, BOT_OUTBOX_MIGRATIONS } from './bot-outbox.js';
+export {
+  SESSION_CONTROL_LEASE_MIGRATIONS,
+  SESSION_INPUT_MIGRATIONS,
+  SessionControlLeaseStore,
+  SessionInputStore,
+} from './session-inputs.js';
+export type {
+  PersistSessionInputInput,
+  SessionControlHolderKind,
+  SessionControlLeaseRecord,
+  SessionInputActorKind,
+  SessionInputIntent,
+  SessionInputRecord,
+  SessionInputStage,
+} from './session-inputs.js';

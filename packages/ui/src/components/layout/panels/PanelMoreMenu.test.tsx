@@ -113,11 +113,11 @@ beforeEach(() => {
 
 describe("PanelMoreMenu", () => {
   /**
-   * The three cases that wait for the Mini App surface directory carry an
+   * The four cases that wait for the Mini App surface directory carry an
    * explicit timeout.
    *
    * They are the only slow cases in this file: the two that never wait for
-   * `listSurfaces` finish in 8-53 ms, while these three measure 10.9-11.6 s
+   * `listSurfaces` finish in 8-53 ms, while these four measure 10.9-11.6 s
    * each on a developer machine. The vitest default is 30 s per test, so on a
    * loaded CI runner the catalogue read crosses it and the job fails on a
    * timeout that has nothing to do with the assertion.
@@ -178,6 +178,44 @@ describe("PanelMoreMenu", () => {
     fireEvent.mouseEnter(screen.getByText("apps.title"));
     expect(await screen.findByText("Overview")).toBeTruthy();
     expect(screen.queryByText("Activity")).toBeNull();
+  }, SLOW_CATALOGUE_TIMEOUT_MS);
+
+  it("offers an App that declared a session-panel placement", async () => {
+    mocks.listSurfaces.mockResolvedValue({
+      success: true,
+      data: {
+        surfaces: [alwaysSurface],
+        conflicts: [],
+        placements: [{
+          pluginId: "com.duya.board",
+          pluginName: "Board",
+          appId: "sprint",
+          slot: "session.panel",
+          scope: "session",
+          surfaceId: "overview",
+          server: "reports",
+          availability: "always",
+          title: { en: "Sprint", zh: "冲刺" },
+          icon: "chart-bar",
+        }],
+      },
+    });
+
+    await openMenu();
+    await waitFor(() => expect(mocks.listSurfaces).toHaveBeenCalled());
+
+    fireEvent.mouseEnter(screen.getByText("apps.title"));
+    fireEvent.click(await screen.findByText("Sprint"));
+
+    // A placement is an entry, not a component: it opens the same sandboxed
+    // panel page the catalogue does.
+    expect(mocks.openOrActivatePage).toHaveBeenCalledWith("plugin-app", expect.objectContaining({
+      pluginId: "com.duya.board",
+      appId: "sprint",
+      surfaceId: "overview",
+      server: "reports",
+      availability: "always",
+    }));
   }, SLOW_CATALOGUE_TIMEOUT_MS);
 
   it("opens the background-tasks panel from the menu", async () => {

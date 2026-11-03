@@ -22,6 +22,9 @@
 export { parseCanonicalFile } from './canonical_file.js';
 export type { ParsedCanonicalFile } from './canonical_file.js';
 
+export { assembleProjectContinuityContext, rankProjectMemory, validateProjectMemoryKey } from './project-continuity.js';
+export type { ProjectContextItem, ProjectContextInput } from './project-continuity.js';
+
 export {
   computeInputSetHash,
   claimRun,

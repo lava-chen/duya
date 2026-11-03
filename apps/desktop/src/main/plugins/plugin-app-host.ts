@@ -19,10 +19,10 @@
  * and the chat session all come from the session record.
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, webContents } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PluginAppDefinition } from '@duya/plugin-core/apps/declarations';
+import type { PluginAppDefinition, PluginUiSurface } from '@duya/plugin-core/apps/declarations';
 import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declarations';
 import { scopedPluginServerName } from '@duya/plugin-core';
 import type { PluginAppResourceRead } from '@duya/agent-protocol';
@@ -30,6 +30,7 @@ import {
   PluginAppSessionStore,
   authorizePluginAppCall,
   type PluginAppGuestMessage,
+  type PluginAppSessionLease,
 } from './plugin-app-sessions';
 import { getPluginManager } from './PluginManager';
 import { readPluginManifest } from './manifest';
@@ -48,6 +49,7 @@ import {
   resolveStandaloneApp,
   shutdownStandaloneApps,
 } from './standalone-app-runtime';
+import { PluginAppSurfaceCache } from './plugin-app-surface-cache';
 
 export type PluginAppHostError =
   | 'plugin_not_found'
@@ -98,6 +100,14 @@ export interface PluginAppCallResult {
 }
 
 const sessions = new PluginAppSessionStore();
+/**
+ * Validated surface documents, keyed by the identity the read depends on.
+ *
+ * Opening an App used to re-read its MCP resource every single time — agent
+ * server → worker, with a standalone fallback — which is the slowest part of
+ * a launch that changes nothing. A plugin change drops its entries.
+ */
+const surfaceCache = new PluginAppSurfaceCache();
 let shuttingDown = false;
 
 /**
@@ -163,7 +173,7 @@ function findInstalledApp(
 
 function validateSurfaceResource(
   pluginId: string,
-  surface: NonNullable<PluginAppDefinition['ui']>['surfaces'][number],
+  surface: PluginUiSurface,
   resource: PluginAppResourceRead,
 ): string {
   const expectedServerName = scopedPluginServerName(pluginId, surface.server);
@@ -219,7 +229,64 @@ async function resolveInstance(
   }
 }
 
-async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenResult> {
+/**
+ * Read and validate one surface document from its live MCP server.
+ *
+ * An App opened inside a chat reads through that chat's agent worker, so the
+ * resource is served by the same process the App will call tools in; a launch
+ * without a connected worker (or a standalone App) falls back to a client this
+ * process owns.
+ */
+async function readSurfaceHtml(
+  pluginId: string,
+  appId: string,
+  surface: PluginUiSurface,
+  chatSessionId: string | undefined,
+  standalone: boolean,
+): Promise<string> {
+  let resource: PluginAppResourceRead | undefined;
+  if (chatSessionId && !standalone) {
+    let fallbackToFreshClient = false;
+    try {
+      const response = await requestAgentServerPluginApp({
+        operation: 'read-resource',
+        sessionId: chatSessionId,
+        pluginId,
+        server: surface.server,
+        resourceUri: surface.resourceUri,
+      });
+      if (!response.success) {
+        if (['plugin_app_worker_unavailable', 'plugin_app_resource_server_unavailable'].includes(response.error.code)) {
+          fallbackToFreshClient = true;
+        } else {
+          throw new Error(response.error.code);
+        }
+      } else if (!('resource' in response.result)) {
+        throw new Error('plugin_app_worker_response_invalid');
+      } else {
+        resource = response.result.resource;
+      }
+    } catch (error) {
+      if (error instanceof Error && ['plugin_app_agent_server_unavailable', 'plugin_app_worker_unavailable'].includes(error.message)) {
+        fallbackToFreshClient = true;
+      } else {
+        throw error;
+      }
+    }
+    if (fallbackToFreshClient) {
+      resource = await readPluginUiSurfaceResource(pluginId, appId, surface.server, surface.resourceUri);
+    }
+  } else {
+    resource = await readPluginUiSurfaceResource(pluginId, appId, surface.server, surface.resourceUri);
+  }
+  if (!resource) throw new Error('plugin_app_worker_response_invalid');
+  return validateSurfaceResource(pluginId, surface, resource);
+}
+
+/** Grace period before a closed session's document stops being served. */
+const DOCUMENT_REVOKE_GRACE_MS = 5_000;
+
+async function handleOpen(request: PluginAppOpenRequest, senderWebContentsId?: number): Promise<PluginAppOpenResult> {
   if (shuttingDown) return { ok: false, error: 'host_unavailable' };
   if (typeof request?.pluginId !== 'string' || typeof request?.appId !== 'string') {
     return { ok: false, error: 'plugin_not_found' };
@@ -235,7 +302,7 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
   const standalone = found.app.runtime === 'standalone';
   const surface = request.surfaceId === undefined
     ? undefined
-    : found.app.ui?.surfaces.find((candidate) => candidate.id === request.surfaceId);
+    : found.app.ui?.surfaces?.find((candidate) => candidate.id === request.surfaceId);
   if (request.surfaceId !== undefined && !surface) return { ok: false, error: 'surface_not_found' };
   const chatSessionId = request.chatSessionId?.length ? request.chatSessionId : undefined;
   if (!standalone && !chatSessionId && surface?.availability !== 'always') return { ok: false, error: 'host_unavailable' };
@@ -247,50 +314,28 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
   if (!surface && !entryPath) return { ok: false, error: 'entry_unavailable' };
   let surfaceHtml: string | undefined;
   if (surface) {
-    try {
-      let resource: PluginAppResourceRead | undefined;
-      if (chatSessionId && !standalone) {
-        let fallbackToFreshClient = false;
-        try {
-          const response = await requestAgentServerPluginApp({
-            operation: 'read-resource',
-            sessionId: chatSessionId,
-            pluginId: request.pluginId,
-            server: surface.server,
-            resourceUri: surface.resourceUri,
-          });
-          if (!response.success) {
-            if (['plugin_app_worker_unavailable', 'plugin_app_resource_server_unavailable'].includes(response.error.code)) {
-              fallbackToFreshClient = true;
-            } else {
-              throw new Error(response.error.code);
-            }
-          } else if (!('resource' in response.result)) {
-            throw new Error('plugin_app_worker_response_invalid');
-          } else {
-            resource = response.result.resource;
-          }
-        } catch (error) {
-          if (error instanceof Error && ['plugin_app_agent_server_unavailable', 'plugin_app_worker_unavailable'].includes(error.message)) {
-            fallbackToFreshClient = true;
-          } else {
-            throw error;
-          }
-        }
-        if (fallbackToFreshClient) {
-          resource = await readPluginUiSurfaceResource(
-            request.pluginId, request.appId, surface.server, surface.resourceUri,
-          );
-        }
-      } else {
-        resource = await readPluginUiSurfaceResource(
-          request.pluginId, request.appId, surface.server, surface.resourceUri,
+    // The cache key carries every input the document depends on. `server` is
+    // part of it because the same surface id may be re-pointed at another MCP
+    // server by a manifest change, and that is a different document.
+    const cacheKey = {
+      pluginId: request.pluginId,
+      appId: request.appId,
+      surfaceId: surface.id,
+      server: surface.server,
+      resourceUri: surface.resourceUri,
+    };
+    const cached = surfaceCache.get(cacheKey);
+    if (cached !== undefined) {
+      surfaceHtml = cached;
+    } else {
+      try {
+        surfaceHtml = await readSurfaceHtml(
+          request.pluginId, request.appId, surface, chatSessionId, standalone,
         );
+        surfaceCache.set(cacheKey, surfaceHtml);
+      } catch (error) {
+        return { ok: false, error: resourceOpenError(error) };
       }
-      if (!resource) throw new Error('plugin_app_worker_response_invalid');
-      surfaceHtml = validateSurfaceResource(request.pluginId, surface, resource);
-    } catch (error) {
-      return { ok: false, error: resourceOpenError(error) };
     }
   }
   if (standaloneApp && !(await approveStandaloneApp(standaloneApp))) return { ok: false, error: 'grant_denied' };
@@ -310,6 +355,7 @@ async function handleOpen(request: PluginAppOpenRequest): Promise<PluginAppOpenR
     chatSessionId,
     runtime: standalone ? 'standalone' : 'agent-run',
     packageRevision: standaloneApp?.revision,
+    webContentsId: senderWebContentsId,
   });
 
   try {
@@ -431,12 +477,18 @@ async function handleCall(request: PluginAppCallRequest): Promise<PluginAppCallR
   return dispatch(request.sessionId, authorized.message);
 }
 
-function handleClose(request: { sessionId?: string }): { ok: boolean } {
-  if (typeof request?.sessionId !== 'string') return { ok: false };
-  pluginAppAssets.revoke(request.sessionId);
-  const session = sessions.get(request.sessionId);
-  if (session?.runtime === 'standalone') void closeStandaloneApp(request.sessionId);
-  const binding = sessions.bindingOf(request.sessionId);
+/**
+ * Release everything a closed session holds.
+ *
+ * The document URL is revoked on a delay: the iframe that was showing it may
+ * still be loading — a detached window being created, a panel being torn
+ * down, a reload in flight — and revoking underneath that load turns a normal
+ * close into a blank 404. Five seconds is longer than any load this path
+ * takes and shorter than a user would notice.
+ */
+function releaseSession(lease: PluginAppSessionLease, sessionId: string): void {
+  if (lease.session.runtime === 'standalone') void closeStandaloneApp(sessionId);
+  const binding = lease.binding;
   if (binding) {
     try {
       void getDesktopHostPluginAppInvocationApi().revokePluginAppInvocation(binding.bindingId, binding.nonce);
@@ -444,14 +496,68 @@ function handleClose(request: { sessionId?: string }): { ok: boolean } {
       // The Host may already be gone; the session is dropped either way.
     }
   }
-  return { ok: sessions.close(request.sessionId) };
+  const timer = setTimeout(() => pluginAppAssets.revoke(sessionId), DOCUMENT_REVOKE_GRACE_MS);
+  timer.unref?.();
+}
+
+function handleClose(request: { sessionId?: string }): { ok: boolean } {
+  if (typeof request?.sessionId !== 'string') return { ok: false };
+  const lease = sessions.take(request.sessionId);
+  if (!lease) return { ok: false };
+  releaseSession(lease, request.sessionId);
+  return { ok: true };
+}
+
+/**
+ * Drop sessions whose hosting renderer no longer exists.
+ *
+ * A reload or a crash destroys the iframes but leaves the sessions behind:
+ * they can never be addressed again, and each one still holds a document
+ * mount and possibly a Host binding. Nothing else notices, because the
+ * renderer that would have called close is gone.
+ */
+function reapDeadSessions(): void {
+  const dropped = sessions.reapDead((id) => {
+    const contents = webContents.fromId(id);
+    return contents !== undefined && contents !== null && !contents.isDestroyed();
+  });
+  for (const lease of dropped) releaseSession(lease, lease.session.sessionId);
+}
+
+/** Interval of the renderer-liveness sweep. */
+const SESSION_SWEEP_INTERVAL_MS = 60_000;
+/** Hard ceiling on live guests; a leak is bounded, not a policy. */
+const MAX_LIVE_SESSIONS = 64;
+let sessionSweep: NodeJS.Timeout | null = null;
+
+function startSessionSweep(): void {
+  if (sessionSweep) return;
+  sessionSweep = setInterval(() => {
+    if (shuttingDown) return;
+    try {
+      reapDeadSessions();
+      for (const lease of sessions.evictOldest(MAX_LIVE_SESSIONS)) {
+        releaseSession(lease, lease.session.sessionId);
+      }
+    } catch {
+      // A sweep that throws must not take the process down; the next tick
+      // retries with the same state.
+    }
+  }, SESSION_SWEEP_INTERVAL_MS);
+  sessionSweep.unref?.();
 }
 
 /** Register the Plugin App host channels. */
 export function registerPluginAppHostHandlers(): void {
-  ipcMain.handle('plugin-app:open', (_event, request: PluginAppOpenRequest) => handleOpen(request));
+  ipcMain.handle('plugin-app:open', (event, request: PluginAppOpenRequest) => {
+    // The hosting renderer is recorded so a crashed or reloaded renderer can
+    // be reaped. It is optional: a launch does not depend on knowing it.
+    const senderId = (event as { sender?: { id?: number } } | undefined)?.sender?.id;
+    return handleOpen(request, typeof senderId === 'number' ? senderId : undefined);
+  });
   ipcMain.handle('plugin-app:call', (_event, request: PluginAppCallRequest) => handleCall(request));
   ipcMain.handle('plugin-app:close', (_event, request: { sessionId?: string }) => handleClose(request));
+  startSessionSweep();
 }
 
 /** Test seam: the live session registry. */
@@ -459,8 +565,16 @@ export function getPluginAppSessions(): PluginAppSessionStore {
   return sessions;
 }
 
+/** Test seam: the validated surface document cache. */
+export function getPluginAppSurfaceCache(): PluginAppSurfaceCache {
+  return surfaceCache;
+}
+
 /** Invalidate every guest of a changed plugin and ask the host UI to reopen it. */
 export function invalidatePluginAppSessions(pluginId: string): void {
+  // The documents belong to the plugin, so they go with it: a reinstall can
+  // change the HTML without changing any id in the manifest.
+  surfaceCache.clearPlugin(pluginId);
   for (const session of sessions.forPlugin(pluginId)) {
     handleClose({ sessionId: session.sessionId });
   }
@@ -471,7 +585,12 @@ export function invalidatePluginAppSessions(pluginId: string): void {
 
 export async function shutdownPluginApps(): Promise<void> {
   shuttingDown = true;
+  if (sessionSweep) {
+    clearInterval(sessionSweep);
+    sessionSweep = null;
+  }
   await shutdownStandaloneApps();
   for (const session of sessions.all()) handleClose({ sessionId: session.sessionId });
+  surfaceCache.clear();
   await pluginAppAssets.close();
 }

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { CoreDataHost } from '../src/core-data-host.js';
+import { CoreDataHost, collectCoreDatabaseMigrations } from '../src/core-data-host.js';
+import { CoreDatabase } from '../src/core-database.js';
+import { ProjectStore } from '../src/project-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -33,6 +35,45 @@ function createHost(root: string): CoreDataHost {
 }
 
 describe('CoreDataHost', () => {
+  it.each([48, 50])('upgrades an existing v%s project database without losing its bindings', (version) => {
+    const root = makeTempDirectory();
+    const filename = path.join(root, 'duya-core.db');
+    const old = new CoreDatabase({ filename, migrations: [
+      ...collectCoreDatabaseMigrations().filter((migration) => migration.id <= version),
+      { ...ProjectStore.migrations[0]!, id: 18 },
+    ] });
+    new ProjectStore(old.db).insert({ project_id: 'project-1', canonical_root: root, name: 'Existing project' });
+    expect(old.schemaVersion).toBe(version);
+    old.close();
+
+    const upgraded = createHost(root);
+    try {
+      const { projects, sessions, tasks } = upgraded.stores;
+      expect(projects.get('project-1')).toMatchObject({ name: 'Existing project', coordinator_session_id: null });
+      sessions.create({ id: 'coordinator', agentProfileId: 'project-coordinator' });
+      sessions.create({ id: 'worker', parentSessionId: 'coordinator' });
+      tasks.create({ id: 'task', sessionId: 'coordinator', subject: 'Existing project work', description: 'Persist across upgrade', status: 'pending' });
+      projects.bindCoordinatorSession('project-1', 'coordinator');
+      projects.bindTask('project-1', 'task', 'coordinator');
+      projects.bindWorkSession('project-1', 'task', 'worker');
+    } finally {
+      upgraded.close();
+    }
+    const reopened = createHost(root);
+    try {
+      expect(reopened.stores.projects.getByCoordinatorSession('coordinator')?.project_id).toBe('project-1');
+      expect(reopened.stores.projects.listTaskLinks('project-1')).toMatchObject([
+        { task_id: 'task', work_session_id: 'worker' },
+      ]);
+      reopened.stores.sessions.delete('worker');
+      expect(reopened.stores.projects.listTaskLinks('project-1')[0]?.work_session_id).toBeNull();
+      reopened.stores.tasks.delete('task');
+      expect(reopened.stores.projects.listTaskLinks('project-1')).toEqual([]);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it('owns migrations and reopens durable session stores', () => {
     const root = makeTempDirectory();
     const first = createHost(root);

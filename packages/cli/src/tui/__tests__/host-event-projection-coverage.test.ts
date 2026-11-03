@@ -107,9 +107,6 @@ const DECLARED_UNPROJECTED: Record<string, { reason: string; suspicious?: true }
         reason: 'Minted by `chat-event-translator.ts:356`. A provider retry looks identical to a stall, so the wait reads as a hang.',
         suspicious: true,
     },
-    'tool.arguments_delta': {
-        reason: 'Minted by `run-engine.ts:1320`. Argument streaming is dropped, but `tool.call_preview` delivers the complete arguments, so nothing is lost — only the progressive fill.',
-    },
     'tool.timed_out': {
         reason: 'Minted by `#dispatchCall` on a refused call. D9: it is a protocol-illegal orphan (no matching `tool.call_started`) and is REFUSED by the ledger before it can reach any consumer, projector included.',
         suspicious: true,

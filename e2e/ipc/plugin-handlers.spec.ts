@@ -16,6 +16,10 @@
  */
 import { test, expect } from '@playwright/test';
 import { launchDuya, closeDuya, invokeApi, type DuyaApp } from '../helpers';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import fs from 'node:fs';
+import path from 'node:path';
 
 let dua: DuyaApp;
 
@@ -67,4 +71,32 @@ test.describe('plugin IPC (read-only)', () => {
     expect(result.success).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
   });
+});
+
+test('Desktop install and standalone CLI share plugin configuration and management', async ({}, testInfo) => {
+  const namespace = 'ipc-plugin-shared-service';
+  const source = testInfo.outputPath('fixture-plugin');
+  fs.mkdirSync(source, { recursive: true });
+  fs.writeFileSync(path.join(source, 'plugin.json'), JSON.stringify({
+    schemaVersion: 'duya.plugin.v2', id: 'com.duya.ipc-shared', name: 'Shared service fixture', version: '1.0.0',
+    description: 'IPC/CLI consistency fixture', author: { name: 'Fixture' }, capabilities: {}, permissions: [], engines: { duya: '>=0.1.0' },
+  }));
+  dua = await launchDuya({ namespace, previewMode: true });
+  const install = await invokeApi<{ success: boolean }>(dua.page, 'plugin.installLocal', { pluginPath: source });
+  expect(install.success).toBe(true);
+  const run = async (args: string[]) => {
+    const result = await promisify(execFile)(process.execPath, [path.resolve('packages/cli/bundle/cli.cjs'), 'plugin', ...args, '--format', 'json'], {
+      cwd: path.resolve('.'), timeout: 30_000,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined, DUYA_TEST: '1', DUYA_TEST_NAMESPACE: namespace },
+    });
+    return JSON.parse(result.stdout);
+  };
+  expect((await run(['list'])).plugins).toContainEqual(expect.objectContaining({ id: 'com.duya.ipc-shared', version: '1.0.0', enabled: true }));
+  await run(['disable', 'com.duya.ipc-shared', '--yes']);
+  const registry = await invokeApi<{ success: boolean; data: { id: string; enabled: boolean }[] }>(dua.page, 'plugin.registry.list');
+  expect(registry.success).toBe(true);
+  expect(registry.data).toContainEqual(expect.objectContaining({ id: 'com.duya.ipc-shared', enabled: false }));
+  await run(['uninstall', 'com.duya.ipc-shared', '--yes']);
+  const after = await invokeApi<{ data: { id: string }[] }>(dua.page, 'plugin.registry.list');
+  expect(after.data.some(plugin => plugin.id === 'com.duya.ipc-shared')).toBe(false);
 });

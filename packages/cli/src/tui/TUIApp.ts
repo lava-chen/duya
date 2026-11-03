@@ -50,6 +50,9 @@ import {
 import { frameRecord, frameString, TranscriptModel, readBlockKey, type LegacyFrame, type Block } from './blocks.js';
 import { ActivityTracker } from './components/activity.js';
 import { TranscriptPane } from './components/transcript-pane.js';
+import { StatusBar } from './components/status-bar.js';
+import { renderTree } from './core/component.js';
+import { tagViewOf, spansToTags } from './markdown/inline.js';
 import { DeltaBuffer, DEFAULT_STALE_MS } from './delta-buffer.js';
 import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
@@ -90,9 +93,20 @@ import {
 } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
+import {
+  effortBorderColor,
+  effortBorderTag,
+  normalizeEffort,
+  resolveComposerBackground,
+  resolveThemeName,
+  taggedWith,
+  themeFor,
+  type EffortLevel,
+  type ThemeName,
+} from './theme.js';
 import { compactActivity } from './text.js';
-import { buildFooterLines, formatTokensPerSecond, readGitBranch } from './footer.js';
+import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import type { StatuslineProfile } from './preferences.js';
 import {
   nextPermissionMode,
   permissionBadge,
@@ -111,6 +125,11 @@ import {
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import { BackgroundTaskModel, formatTaskDuration, taskStatusGlyph, type BackgroundTaskGroup, type BackgroundTaskRow, type BackgroundTaskView } from './background-tasks.js';
+import {
+  subagentIdentityText,
+  subagentOutcomeLabel,
+  type SubagentOutcome,
+} from './subagent.js';
 import type { BackgroundTaskListV1 } from '@duya/agent-protocol';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import type { FileAttachment } from '@duya/agent-protocol';
@@ -222,21 +241,19 @@ export interface TuiChoice {
   readonly description?: string;
 }
 
-/** One pending draft as the queue preview paints it. */
+/**
+ * One draft the user is still waiting on, as the queue preview paints it.
+ *
+ * There is no `mode` here on purpose. A delivered steer is not waiting for
+ * anything — the Host holds its row and the transcript already echoes it — so
+ * it never reaches this view; the caller filters it out at the source
+ * (`TurnQueue.waiting`). A view that could express "already sent" invited the
+ * two bugs this preview has had: painting a sent message as queued, and then
+ * painting it as sent under the composer, where anything that sits is read as
+ * unsent input.
+ */
 export interface QueuedDraftView {
   readonly text: string;
-  /**
-   * How the draft reaches the agent.
-   *
-   * `steer` means the draft was ALREADY handed over: the Host holds the row
-   * and the running turn reads it at its next step. `queue` means it is still
-   * waiting for a turn to carry it.
-   *
-   * The preview paints the two differently, because a steer that is painted
-   * like a queued draft reads as "not sent yet" — and the user has already
-   * seen their own text echoed into the transcript.
-   */
-  readonly mode: 'steer' | 'queue';
 }
 
 /** One row of a live settings list: a name, its current value, and what it does. */
@@ -321,9 +338,10 @@ export interface TUIAppOptions {  /** Window title. */
   readonly echoSubmitted?: boolean;
   readonly canSubmit?: () => boolean;
   /**
-   * Pending drafts with their intended delivery, so the preview can tell a
-   * steer (already handed to the running turn, and painted as sent) from a
-   * fresh turn (still waiting).
+   * Drafts still WAITING for a turn to carry them.
+   *
+   * A steer is not among them: it is already with the running turn. See
+   * `QueuedDraftView`.
    */
   readonly queuedDrafts?: () => readonly QueuedDraftView[];
   readonly queuePaused?: () => boolean;
@@ -451,6 +469,7 @@ export interface TUIAppOptions {  /** Window title. */
   readonly showToolResults?: boolean;
   /** How many rows a tool run takes. `/display` and `/settings` move it live. */
   readonly toolGroupMode?: ToolGroupMode;
+  readonly statusline?: StatuslineProfile;
   /** Start with every block expanded — the saved state of the expand key. */
   readonly expandBlocks?: boolean;
   /**
@@ -513,6 +532,7 @@ export interface TuiLivePreferences {
   readonly expandBlocks?: boolean;
   readonly showToolResults?: boolean;
   readonly toolGroupMode?: ToolGroupMode;
+  readonly statusline?: StatuslineProfile;
   readonly completionRows?: number;
   readonly inputRows?: number;
 }
@@ -614,6 +634,11 @@ export class TUIApp {
   private showToolResults: boolean;
   /** How many rows a tool run takes: every call, their names, or only the running one. */
   private toolGroupMode: ToolGroupMode;
+  private statusline: StatuslineProfile;
+  /** Per-block transcript state for the Codex-style history navigation keys. */
+  private selectedBlockId: string | undefined;
+  private readonly expandedBlockIds = new Set<string>();
+  private readonly collapsedBlockIds = new Set<string>();
   /**
    * Rows the input box may GROW to.
    *
@@ -625,6 +650,23 @@ export class TUIApp {
   private focus: 'input' | 'tasks' = 'input';
   /** Selected row in the task view, over `backgroundTaskRows()`. */
   private selectedTaskRow = -1;
+  /**
+   * The task the SELECTION last landed on, by id.
+   *
+   * The row index is a position in a list that changes under the user — a task
+   * finishing, a new spawn arriving — so the index cannot be the selection. This
+   * is the identity the view re-resolves after every refresh; without it,
+   * pressing Enter on a row that shifted a moment ago opens its neighbour.
+   */
+  private selectedTaskId: string | null = null;
+  /**
+   * The subagent whose live panel the task view is showing, by subagent id.
+   *
+   * "Watching" one child is the runtime switch this view exists for: the list
+   * keeps the others one arrow away, the panel under it follows the watched one,
+   * and Esc walks back out (panel → list → input). Null means not watching.
+   */
+  private watchedSubagentId: string | null = null;
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -824,6 +866,7 @@ export class TUIApp {
     // with: the transcript is a conversation, and a tool's JSON is a detail.
     this.showToolResults = options.showToolResults ?? false;
     this.toolGroupMode = options.toolGroupMode ?? 'full';
+    this.statusline = options.statusline ?? 'full';
     this.maxInputRows = Math.max(1, options.maxInputRows ?? MAX_INPUT_ROWS);
     this.completion = new CompletionController(
       options.completionSources ?? EMPTY_COMPLETION_SOURCES,
@@ -1001,8 +1044,14 @@ export class TUIApp {
   }
 
   /**
-   * Enter the task view. F6 and `/tasks` both land here so the two entrances
-   * cannot disagree about what "the task view" selects.
+   * Enter the task view. F6, `/tasks` and every other entrance land here so
+   * they cannot disagree about what "the task view" selects.
+   *
+   * The cursor lands on the first TASK rather than on the first row, because a
+   * group heading is not something Enter can act on: opening the view to deal
+   * with a task and then having to press Down once is a keystroke that buys
+   * nothing. When the subagent group is empty that first task is a bash one, so
+   * the rule holds whichever half has work.
    */
   openTasks(): void {
     if (this.disposed) return;
@@ -1010,7 +1059,9 @@ export class TUIApp {
       this.focus = 'tasks';
       this.completion.close();
       const rows = this.backgroundTaskRows();
-      this.selectedTaskRow = rows.length === 0 ? -1 : 0;
+      const firstTask = rows.findIndex((row) => row.kind === 'task');
+      this.selectedTaskRow = rows.length === 0 ? -1 : Math.max(0, firstTask);
+      this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
     }
     // The bash half is polled, not pushed; opening the view is the explicit
     // request for a current reading while the timer is quiet.
@@ -1018,12 +1069,39 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
-  /** Force a repaint after the wiring read a fresh snapshot out of band. */
+  /** The task id a row belongs to, or null for a group heading. */
+  private taskIdAt(index: number): string | null {
+    const row = index < 0 ? undefined : this.backgroundTaskRows()[index];
+    return row !== undefined && row.kind === 'task' ? row.task.id : null;
+  }
+
+  /**
+   * Re-point the selection after the list changed underneath it.
+   *
+   * By IDENTITY, not by index: a task that finishes keeps its rank, but a task
+   * that APPEARS above the cursor shifts every index below it, and the row the
+   * user was about to open would silently become a different one.
+   */
   private clampTaskSelection(): void {
-    const count = this.backgroundTasks.rows().length;
-    if (count === 0) this.selectedTaskRow = -1;
-    else if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
-    else if (this.selectedTaskRow >= count) this.selectedTaskRow = count - 1;
+    const rows = this.backgroundTaskRows();
+    if (rows.length === 0) {
+      this.selectedTaskRow = -1;
+      this.selectedTaskId = null;
+      // Nothing left to watch: a panel about a task that no longer exists is a
+      // panel about nothing.
+      this.watchedSubagentId = null;
+      return;
+    }
+    if (this.selectedTaskId !== null) {
+      const found = rows.findIndex((row) => row.kind === 'task' && row.task.id === this.selectedTaskId);
+      if (found !== -1) {
+        this.selectedTaskRow = found;
+        return;
+      }
+    }
+    if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
+    else if (this.selectedTaskRow >= rows.length) this.selectedTaskRow = rows.length - 1;
+    this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
   }
 
   /** Move a draft the controller recalled back into the composer. */
@@ -1126,6 +1204,7 @@ export class TUIApp {
     if (patch.expandBlocks !== undefined) this.expanded = patch.expandBlocks;
     if (patch.showToolResults !== undefined) this.showToolResults = patch.showToolResults;
     if (patch.toolGroupMode !== undefined) this.toolGroupMode = patch.toolGroupMode;
+    if (patch.statusline !== undefined) this.statusline = patch.statusline;
     if (patch.completionRows !== undefined) {
       this.completionRows = Math.max(1, patch.completionRows);
     }
@@ -1156,6 +1235,7 @@ export class TUIApp {
     expandBlocks: boolean;
     showToolResults: boolean;
     toolGroupMode: ToolGroupMode;
+    statusline: StatuslineProfile;
     completionRows: number;
     inputRows: number;
   } {
@@ -1168,6 +1248,7 @@ export class TUIApp {
       expandBlocks: this.expanded,
       showToolResults: this.showToolResults,
       toolGroupMode: this.toolGroupMode,
+      statusline: this.statusline,
       completionRows: this.completionRows,
       inputRows: this.maxInputRows,
     };
@@ -1588,8 +1669,11 @@ export class TUIApp {
     const width = Math.max(1, this.terminalSize().columns - 1);
     const rows = this.backgroundTaskRows();
     const lines: string[] = [];
+    // The header names what ENTER does, which is not one thing any more: a
+    // subagent is watched in place, a bash task opens its output. `open` was
+    // already a lie for the first half; `open/watch` says both.
     lines.push(escapeTags(compactActivity(
-      'Tasks · ↑↓ select · ←→ fold · Enter open · Esc back',
+      'Tasks · ↑↓ select · ←→ fold · Enter open/watch · Esc back',
       width,
     )));
     if (rows.length === 0) {
@@ -1599,7 +1683,11 @@ export class TUIApp {
       )));
       return lines;
     }
-    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10));
+    // The watched agent's panel takes rows from the LIST, not from a modal:
+    // the point of watching one child is that the others stay visible and one
+    // arrow key away.
+    const watchRows = this.watchPanelLines(width);
+    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10 - watchRows.length));
     const selected = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
     const first = Math.max(0, Math.min(selected - (budget - 1), Math.max(0, rows.length - budget)));
     for (let index = first; index < Math.min(rows.length, first + budget); index += 1) {
@@ -1608,6 +1696,58 @@ export class TUIApp {
         ? this.taskGroupLine(row.group, index === selected, width)
         : this.taskRowLine(row.task, index === selected, width));
     }
+    lines.push(...watchRows);
+    return lines;
+  }
+
+  /**
+   * Rows for the subagent being watched, or none.
+   *
+   * The panel is a STATUS CARD, not a transcript: what the child is, what it
+   * was asked, how long it has been running and how it ended. It stops there
+   * because that is what this process can prove — a child's own messages live in
+   * the worker that runs it, and inventing a "transcript" here would be an empty
+   * promise dressed as a page.
+   */
+  private watchPanelLines(width: number): string[] {
+    const id = this.watchedSubagentId;
+    if (id === null) return [];
+    const view = this.backgroundTaskRows()
+      .find((row) => row.kind === 'task' && row.task.id === id);
+    const task = view === undefined || view.kind !== 'task' ? null : view.task;
+    const card = this.model.subagentCards().find((entry) => entry.card.subagentId === id)?.card ?? null;
+    if (task === null && card === null) return [];
+
+    const identity = card === null
+      ? (task?.title ?? 'agent')
+      : subagentIdentityText(card.spec, id);
+
+    const outcome: SubagentOutcome = card?.outcome
+      ?? (task === null ? 'unknown' : task.status === 'running' ? 'running' : 'unknown');
+    const startedAtMs = card?.startedAtMs ?? task?.startedAtMs ?? Date.now();
+    const endedAtMs = card?.durationMs === undefined
+      ? (task?.endedAtMs ?? Date.now())
+      : startedAtMs + card.durationMs;
+    const elapsed = formatTaskDuration(Math.max(0, endedAtMs - startedAtMs));
+
+    const unicode = this.terminalEnv.unicodeBox;
+    const glyph = outcome === 'running'
+      ? (unicode ? '●' : '*')
+      : outcome === 'completed'
+        ? (unicode ? '✔' : '+')
+        : outcome === 'failed'
+          ? (unicode ? '✖' : 'x')
+          : outcome === 'cancelled'
+            ? (unicode ? '■' : '-')
+            : '?';
+    const head = `  ${glyph} ${identity} · ${subagentOutcomeLabel(outcome)} · ${elapsed}`;
+    const lines = [`{cyan-fg}${compactActivity(head, width)}{/cyan-fg}`];
+    const brief = card?.spec.brief ?? task?.detail ?? '';
+    if (brief !== '') lines.push(`{gray-fg}${compactActivity(`    ${brief}`, width)}{/gray-fg}`);
+    if (card?.summary !== undefined && card.summary !== '') {
+      lines.push(`{gray-fg}${compactActivity(`    ${card.summary}`, width)}{/gray-fg}`);
+    }
+    lines.push(`{gray-fg}${compactActivity('    Esc back to the list · ↑↓ another agent', width)}{/gray-fg}`);
     return lines;
   }
 
@@ -1623,10 +1763,16 @@ export class TUIApp {
     const suffix = task.status === 'running'
       ? ` · ${elapsed}`
       : ` · ${task.status} · ${elapsed}`;
+    // `(watching)` is the same marker codex puts on `(current)` in its picker:
+    // once a panel is open below the list, the row it belongs to has to say so,
+    // or the panel looks like it is about whatever the cursor is on.
+    const watching = task.kind === 'subagent' && task.id === this.watchedSubagentId
+      ? ' (watching)'
+      : '';
     // Truncate the PLAIN text: fitting a line that already carries tags would
     // count markup as columns and can cut a tag in half (see working-tail.ts).
     const text = compactActivity(
-      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}`,
+      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}${watching}`,
       width,
     );
     return selected ? `{cyan-fg}${text}{/cyan-fg}` : text;
@@ -1673,6 +1819,9 @@ export class TUIApp {
       // toggle, this one is the standing preference from `/settings`.
       showToolResults: this.expanded || this.showToolResults,
       toolGroupMode: this.toolGroupMode,
+      expandedBlockIds: this.expandedBlockIds,
+      collapsedBlockIds: this.collapsedBlockIds,
+      selectedBlockId: this.selectedBlockId,
       toolResultLines: 5,
       ...(this.showThinking ? {} : { showThinking: false }),
       theme: this.theme.tags,
@@ -1688,7 +1837,31 @@ export class TUIApp {
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
         : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
+      liveRows: this.liveTranscriptRows(),
     };
+  }
+
+  /**
+   * Rows the surface can rewrite in place.
+   *
+   * Inline mode's live area is the terminal minus the chrome the composer, the
+   * status line and the task list take. The chrome is deliberately
+   * OVER-estimated: an over-estimate shrinks the streaming preview, and a
+   * preview that is too small only shows fewer lines, while one that is too
+   * large would push its own top rows into the scrollback while they are still
+   * being written.
+   */
+  private liveTranscriptRows(): number {
+    if (this.inlineSurface === null) return this.visibleTranscriptRows();
+    const capacity = Math.max(1, this.terminalSize().rows);
+    const chrome =
+      this.inputRows +
+      this.inputChromeRows() +
+      STATUS_ROWS +
+      this.popupRows() +
+      // The working tail, the task list and the queue preview.
+      4;
+    return Math.max(1, capacity - chrome);
   }
 
   /** Invalidate the assembled lines after a private transcript-model change. */
@@ -1706,7 +1879,10 @@ export class TUIApp {
    * Phase 4 set out to remove.
    */
   private paintTranscript(): void {
-    const width = this.terminalSize().columns;
+    const columns = this.terminalSize().columns;
+    const width = this.inlineSurface !== null
+      ? columns
+      : transcriptWidth(this.fullScreen.measure('transcript'), columns);
     const pane = this.transcriptPane;
     pane.props = {
       renderer: this.transcript,
@@ -1728,7 +1904,12 @@ export class TUIApp {
       // The border is the focus tell in full-screen mode: the task list owns
       // the arrows while the transcript does not respond to them at all.
       borderColor: this.focus === 'tasks' ? 'cyan' : 'gray',
-      lines: [...pane.visibleLines(width, this.visibleTranscriptRows())],
+      // Route the established pane through the retained component renderer.
+      // ScreenSurface still owns borders and layout; the tree owns the pane's
+      // viewport and clipping, so this is a safe first integration step.
+      lines: renderTree(pane, width, this.visibleTranscriptRows()).rows.map((row) =>
+        spansToTags(row, tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }))),
+      ),
     });
   }
 
@@ -1870,6 +2051,9 @@ export class TUIApp {
         // The composer's frame is the effort indicator: the two rules the user
         // types between carry the level the next message will run at.
         borderColor: effortBorderColor(this.effortLevel()),
+        // The band: the whole input rectangle is filled, the rules included,
+        // so the box the user types into reads as one solid surface.
+        background: resolveComposerBackground(this.theme.tags) ?? null,
         height,
         bottom: this.composerBottom(size),
         lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
@@ -1878,12 +2062,15 @@ export class TUIApp {
         bottom: height + STATUS_ROWS + this.popupRows(),
       });
     } else {
-      this.inlineInputLines = this.colorComposerRules(
+      const painted = this.colorComposerRules(
         layout.lines,
         borderRows > 0,
         layout.hasPlaceholder ? (borderRows > 0 ? 1 : 0) : -1,
         { row: borderRows > 0 ? 1 : 0, glyph: shellGlyph },
       );
+      // The inline screen model has no region to fill — the rows ARE the
+      // composer — so the band travels with the text.
+      this.inlineInputLines = this.bandComposerRows(painted, layout.lines, size.columns);
     }
     this.inputRows = layout.bodyRows;
     this.inputCursor = {
@@ -1938,6 +2125,10 @@ export class TUIApp {
       const height = visible.length + this.inputChromeRows();
       this.fullScreen.update('input', {
         borderColor: 'cyan',
+        // The panel takes the composer's slot, so it does NOT take the
+        // composer's band: a popup on a filled band would read as part of the
+        // input box.
+        background: undefined,
         height,
         bottom: this.composerBottom(size),
         lines: visible,
@@ -1997,6 +2188,33 @@ export class TUIApp {
   }
 
   /**
+   * Put the composer's rows on the theme's band.
+   *
+   * The full-screen surface can fill a region, but the inline one cannot: its
+   * rows ARE the composer. So the band travels with the text — each row is
+   * padded to the terminal width and wrapped in the background tag, which is
+   * what makes the inline composer a solid block instead of a highlighted
+   * line.
+   *
+   * The padding is measured on the RAW row, because the painted row carries
+   * tags and its tag characters are not cells.
+   */
+  private bandComposerRows(
+    painted: readonly string[],
+    raw: readonly string[],
+    columns: number,
+  ): string[] {
+    const tag = resolveComposerBackground(this.theme.tags);
+    if (tag === undefined) return [...painted];
+    const width = Math.max(1, columns);
+    return painted.map((line, index) => {
+      const used = visibleWidth(raw[index] ?? '');
+      const pad = ' '.repeat(Math.max(0, width - used));
+      return `{${tag}}${line}${pad}{/${tag}}`;
+    });
+  }
+
+  /**
    * Paint the composer's body rows, dimming the placeholder row.
    *
    * The placeholder is the next prompt the worker predicted for the last turn.
@@ -2021,17 +2239,23 @@ export class TUIApp {
     });
   }
 
+  /**
+   * The drafts still waiting for their turn, one row each.
+   *
+   * This block is chrome that sits directly above the composer, so everything
+   * in it has to mean "you are still waiting on this". A delivered steer is
+   * excluded at the source for exactly that reason: it is already in the
+   * transcript, and a second copy here was read as a message that had not been
+   * sent — the opposite of what had just happened.
+   */
   private queuePreviewLines(): string[] {
-    const pending = this.options.queuedDrafts?.() ?? [];
-    if (pending.length === 0 || this.terminalSize().rows < 7) return [];
+    const waiting = this.options.queuedDrafts?.() ?? [];
+    if (waiting.length === 0 || this.terminalSize().rows < 7) return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
-    const shown = pending.slice(-QUEUE_PREVIEW_ROWS);
-    const hidden = pending.length - shown.length;
+    const shown = waiting.slice(-QUEUE_PREVIEW_ROWS);
+    const hidden = waiting.length - shown.length;
     const lines = shown.map((draft) => escapeTags(compactActivity(
-      // A steer is ON ITS WAY — the running turn reads it at its next step —
-      // so it is painted as sent. Painting it like a queued draft made a
-      // message the user had already sent look like one that never left.
-      (draft.mode === 'steer' ? '↳ sent' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
+      '⧗ queued · ' + draft.text.replace(/\s+/gu, ' '),
       width,
     )));
     if (hidden > 0) lines.unshift(`… ${hidden} earlier`);
@@ -2179,7 +2403,7 @@ export class TUIApp {
       : busy
         ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'tasks'
-        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
         : this.editor.isEmpty && this.hasTurnSuggestion()
         ? 'Enter adopt / Tab history / F6 tasks'
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
@@ -2254,8 +2478,7 @@ export class TUIApp {
   private footerLines(width: number, hint: string): string[] {
     const cwd = this.options.workspaceDirectory?.() ?? process.cwd();
     const budget = this.options.contextBudgetTokens?.() ?? null;
-    return buildFooterLines({
-      width,
+    const props = {
       cwd,
       branch: this.gitBranch(cwd),
       sessionName: this.options.sessionName?.() ?? null,
@@ -2282,6 +2505,23 @@ export class TUIApp {
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
       permission: this.permissionBadge(),
+      statusline: this.statusline,
+    };
+    const statusBar = new StatusBar(props);
+    const tagView = tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }));
+    return renderTree(statusBar, width, statusBar.measure(width)).rows.map((row) => {
+      const spans = [...row];
+      while (spans.length > 0) {
+        const last = spans[spans.length - 1];
+        if (last === undefined) break;
+        const trimmed = last.text.replace(/ +$/u, '');
+        if (trimmed !== last.text) {
+          if (trimmed === '') spans.pop();
+          else spans[spans.length - 1] = { ...last, text: trimmed };
+        }
+        if (trimmed !== '' || /[^ ]/u.test(last.text)) break;
+      }
+      return spansToTags(spans, tagView);
     });
   }
 
@@ -2805,6 +3045,9 @@ export class TUIApp {
   clearTranscript(): void {
     const hadTranscript = this.model.blocks.length > 0;
     this.model.clear();
+    this.selectedBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
     if (hadTranscript) this.noteTranscriptMutation();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
@@ -2822,6 +3065,9 @@ export class TUIApp {
   /** Replace the visible transcript with a persisted session history. */
   replaceTranscript(messages: readonly TranscriptMessage[]): void {
     this.model.clear();
+    this.selectedBlockId = undefined;
+    this.expandedBlockIds.clear();
+    this.collapsedBlockIds.clear();
     this.textBuffer.reset();
     this.thinkingBuffer.reset();
     this.lastUsage = null;
@@ -3246,6 +3492,35 @@ exportHistory(): string[] {
     return this.editor.text;
   }
 
+  /** Search rendered transcript blocks without changing durable session history. */
+  searchTranscript(query: string): readonly string[] {
+    const needle = query.trim().toLocaleLowerCase();
+    if (needle === '') return [];
+    return this.model.blocks.flatMap((block, index) => {
+      if (!('text' in block) || !block.text.toLocaleLowerCase().includes(needle)) return [];
+      const text = block.text.replace(/\s+/gu, ' ').trim();
+      const excerpt = text.length > 220 ? `${text.slice(0, 217)}…` : text;
+      return [`${index + 1}. ${block.kind}: ${excerpt}`];
+    });
+  }
+
+  /** Load the latest user message into the composer; session history stays intact. */
+  editPreviousPrompt(): boolean {
+    const previous = [...this.model.blocks].reverse().find((block) => block.kind === 'user');
+    if (previous === undefined) return false;
+    this.editor.setText(previous.text, Array.from(previous.text).length);
+    this.refreshInputCompletion();
+    this.scheduler.requestImmediate();
+    return true;
+  }
+
+  /** Put a reusable prompt in the composer; the user reviews before sending. */
+  insertPrompt(text: string): void {
+    this.editor.setText(text, Array.from(text).length);
+    this.refreshInputCompletion();
+    this.scheduler.requestImmediate();
+  }
+
   /** Render options, exposed so tests can drive the shell. */
   get renderState(): {
     expanded: boolean;
@@ -3330,6 +3605,17 @@ exportHistory(): string[] {
       this.options.onExit?.();
       this.stop();
     });
+    const selectBlock = (direction: -1 | 1): void => {
+      if (this.interactivePrompt !== null || this.swallowForWindow() || this.focus !== 'input') return;
+      const blocks = this.model.blocks;
+      if (blocks.length === 0) return;
+      const current = blocks.findIndex((block) => block.id === this.selectedBlockId);
+      const next = current < 0
+        ? blocks.length - 1
+        : Math.max(0, Math.min(blocks.length - 1, current + direction));
+      this.selectedBlockId = blocks[next]?.id;
+      this.scheduler.requestImmediate();
+    };
     // C-l (clear) and C-t (expand-all) are bound further down, from the
     // action table, so an override rewires them in one place.
     this.bindKey(['C-a'], () => {
@@ -3424,6 +3710,24 @@ exportHistory(): string[] {
     this.bindAction('help', () => { this.toggleWindow('help'); });
     this.bindAction('history', () => { this.toggleWindow('history'); });
     this.bindAction('usage', () => { this.toggleWindow('usage'); });
+    this.bindAction('transcript-previous', () => selectBlock(-1));
+    this.bindAction('transcript-next', () => selectBlock(1));
+    this.bindAction('transcript-toggle-block', () => {
+      if (this.interactivePrompt !== null || this.swallowForWindow()) return;
+      const id = this.selectedBlockId;
+      if (id === undefined) return;
+      if (this.collapsedBlockIds.has(id)) {
+        this.collapsedBlockIds.delete(id);
+        this.expandedBlockIds.add(id);
+      } else if (this.expandedBlockIds.has(id) || this.expanded) {
+        this.expandedBlockIds.delete(id);
+        this.collapsedBlockIds.add(id);
+      } else {
+        this.expandedBlockIds.add(id);
+      }
+      this.noteTranscriptMutation();
+      this.scheduler.requestImmediate();
+    });
 
     // Ctrl+C is deliberately NOT rebindable: it is the interrupt-and-exit
     // channel, and a config file that moved it could lock a user out of the
@@ -3672,7 +3976,10 @@ exportHistory(): string[] {
         this.handleOverlayKey(ch, key);
         return;
       }
-      if (this.focus === 'tasks') this.focus = 'input';
+      // Typing means leaving the view entirely — including the watched
+      // agent's panel: the keys are the editor's again, and a panel about a
+      // task nobody is looking at is just rows taken from the conversation.
+      this.exitTaskView();
       this.editor.insert(ch);
       this.paste.feed(ch, now());
       this.refreshCompletion();
@@ -3742,7 +4049,8 @@ exportHistory(): string[] {
         else this.editor.insert('  ');
       },
       escape: () => {
-        if (this.focus === 'tasks') this.focus = 'input';
+        // One step back, not all the way out: panel → list → input.
+        if (this.focus === 'tasks') this.backOutOfTaskView();
         else if (this.completion.isOpen) this.completion.close();
         else if (this.isBusyNow()) {
           // Esc means "stop"; with prose in the composer it means "stop, then
@@ -3840,7 +4148,7 @@ exportHistory(): string[] {
     }
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     // A paste that is one absolute path to an attachable file becomes a chip
     // instead of text (terminal file drags arrive exactly this way). The shape
     // test is synchronous; the `stat` is not, so the fallback — pasting the
@@ -3899,7 +4207,7 @@ exportHistory(): string[] {
     this.chipSeq += 1;
     const labelled: TuiDraftAttachment = { ...attachment, label: attachmentChipLabel(attachment, this.chipSeq) };
     this.draftAttachments.push(labelled);
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     this.editor.insert(labelled.label + ' ');
     this.refreshCompletion();
     this.scheduler.requestImmediate();
@@ -4120,7 +4428,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     this.follow = true;
     this.scrollTop = 0;
     this.scheduler.requestImmediate();
@@ -4130,10 +4438,37 @@ exportHistory(): string[] {
     if (this.focus === 'input') {
       this.openTasks();
     } else {
-      this.focus = 'input';
+      this.exitTaskView();
       this.refreshCompletion();
       this.scheduler.requestImmediate();
     }
+  }
+
+  /**
+   * Leave the task view entirely: drop the watched panel and give the arrows
+   * back to the editor.
+   */
+  private exitTaskView(): void {
+    this.watchedSubagentId = null;
+    this.focus = 'input';
+  }
+
+  /**
+   * Esc inside the task view: one step BACK, not all the way out.
+   *
+   * Watching a child is a place the user went, so Esc walks the way they came —
+   * panel → list → input. Jumping straight to the input would make the list a
+   * one-way door, and the user would have to re-open it to pick a different
+   * agent.
+   */
+  private backOutOfTaskView(): void {
+    if (this.watchedSubagentId !== null) {
+      this.watchedSubagentId = null;
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.exitTaskView();
+    this.scheduler.requestImmediate();
   }
 
   private moveTaskSelection(delta: number): void {
@@ -4141,6 +4476,9 @@ exportHistory(): string[] {
     if (count === 0) return;
     const current = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
     this.selectedTaskRow = Math.max(0, Math.min(count - 1, current + delta));
+    // The identity follows the cursor: this is the one place the selection is
+    // set from user intent rather than re-resolved from the list.
+    this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
     this.scheduler.requestImmediate();
   }
 
@@ -4152,6 +4490,16 @@ exportHistory(): string[] {
     const group = row.kind === 'group' ? row.group : this.backgroundTasks.groups().find((g) => g.id === row.task.kind);
     if (group === undefined) return;
     this.backgroundTasks.setGroupCollapsed(group.id, collapsed);
+    // Land on the heading of the group that was just folded. Folding hides the
+    // row the cursor was on, and the fallback — "clamp to the nearest index" —
+    // drops the user into a DIFFERENT group, where the next Left or Right acts
+    // on something they were not looking at.
+    const heading = this.backgroundTaskRows()
+      .findIndex((candidate) => candidate.kind === 'group' && candidate.group.id === group.id);
+    if (heading !== -1) {
+      this.selectedTaskRow = heading;
+      this.selectedTaskId = null;
+    }
     this.clampTaskSelection();
     this.scheduler.requestImmediate();
   }
@@ -4163,6 +4511,15 @@ exportHistory(): string[] {
     if (row.kind === 'group') {
       this.backgroundTasks.toggleGroup(row.group.id);
       this.clampTaskSelection();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    // A subagent opens IN PLACE: its subject is a live status, and a modal that
+    // froze it at the moment of the keypress would be the one thing an agent
+    // list must never be. A bash task opens the modal, because its subject is a
+    // document — a scrollable output tail — that the live area cannot hold.
+    if (row.task.kind === 'subagent') {
+      this.watchedSubagentId = this.watchedSubagentId === row.task.id ? null : row.task.id;
       this.scheduler.requestImmediate();
       return;
     }

@@ -210,7 +210,27 @@ describe('the Agent Server router — the trusted attempt it announces', () => {
     expect(harness.sent.some((message) => message.type === 'desktop-plugin-app:trusted-attempt')).toBe(false);
   });
 
-  it('announces nothing for an action that is not the binding check', async () => {
+  it('announces the attempt for every action that acts on the caller session', async () => {
+    const harness = await openHarness();
+    const child = harness.workers.spawnWorker(SESSION_ID);
+    const attempt = harness.orchestrator.attemptFor(harness.runId);
+
+    for (const action of ['project:tool', 'session:spawn', 'session:spawnList']) {
+      harness.sent.length = 0;
+      forward(harness, SESSION_ID, child, {
+        type: 'db:request',
+        id: `req-${action}`,
+        action,
+        payload: {},
+        execution: { sessionId: SESSION_ID, runId: harness.runId, epoch: attempt?.epoch },
+      });
+
+      expect(harness.sent.find((message) => message.type === 'desktop-plugin-app:trusted-attempt'))
+        .toMatchObject({ id: `req-${action}`, sessionId: SESSION_ID, runId: harness.runId, epoch: attempt?.epoch });
+    }
+  });
+
+  it('announces nothing for an action that is not attempt-correlated', async () => {
     const harness = await openHarness();
     const child = harness.workers.spawnWorker(SESSION_ID);
     const attempt = harness.orchestrator.attemptFor(harness.runId);
