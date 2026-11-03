@@ -293,3 +293,14 @@ Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity`
 验证环境：Windows、Node `v24.16.0`。每次合并前确认最新 head 的 architecture / build / typecheck / test / test scope 全绿；本地每层 `bundle:verify` 均为 FRESH。
 
 下一动作：#584 CI 绿后合并；随后在 master 上重跑类型与架构门禁、相关测试，记录最终 SHA，并回收各 worktree。
+
+### 栈集成完成与 master 收尾验证（2026-11-03）
+
+- #584 CI 41584788112 在 head `30dc5866` 全绿（含 `build` job 的 `electron:build`），合入 `8290cf88`。五层 PR #583/#585/#586/#587/#584 全部以 merge commit 集成，master 未直接 push。
+- master `8290cf88` 收尾验证（Windows、Node `v24.18.0`，独立 worktree 检出 detached `origin/master`）：
+  - `npm run check:packaged-artifacts:bundle`：FRESH，0/1059 输入变化。
+  - `npm run architecture:check`：退出 0，3098 tolerated，无新增违规。
+  - 相关测试：host project 9 文件 49 项通过；memory / desktop / UI project 8 文件 98 项通过。
+  - `npm run typecheck:all`：退出 0。
+- 回收：五个 worktree 均先以 `scripts/remove-worktree.sh --dry-run` 通过身份、锁与清洁检查，再正式移除；本地分支经 `git merge-base --is-ancestor origin/master` 核对后删除（`git branch -d` 因主检出 HEAD 不在 master 上而误判未合并，核对祖先关系后改用 `-D`）。非本栈 worktree（如 `project-coordinator`）未触碰。
+- 剩余未覆盖：真机 UI 验收仍由用户负责；Task 显式验收流、记忆候选复核 UI、每次 run 的 session 级上下文注入等产品缺口按各切片计划后续推进。
