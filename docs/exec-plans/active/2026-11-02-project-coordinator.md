@@ -281,3 +281,15 @@ Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity`
 - #584（完整栈）：`build:packages` 22 个通过；`typecheck:all` 退出 0；`architecture:check` 退出 0（3101 tolerated，无新增）；21 个相关测试文件 176 项通过；bundle FRESH 0/1059（`b83b2acb`）。
 
 交付：五个分支分别以 `--force-with-lease` 推送；PR #583/#585/#586/#587/#584 仍为 Draft 栈。下一步：统一把 base 改到 `master` 触发 CI，CI 绿后按序以 merge commit 集成。
+
+### 按序集成与二次 rebase（2026-11-03）
+
+- #583 合入 `bae0896e`。#585 首个 master CI（41572058161）暴露三个全局门禁和一处慢测试超时，修复见上节；重跑 CI 41578794840 全绿后，head `23571bae` 合入 `af7c3b17`。
+- 期间 master 连续前进（#589 `76343778`、#591 `8160f321`、直接提交 `dbffec07`），#585 两次以 `git rebase --onto origin/master` 重放并逐轮重建 bundle（`2de26c5c`、`23571bae`）。bundle 冲突只取生成物，最终一律从重放后的源码重建；`inline-content.ts` 的换行符 churn 每次构建后回退。
+- #586 以 `--onto origin/master 2c394c50` 只重放自身提交，恢复被冲突覆盖的 CI 门禁记录，bundle 重建 `adf0456d`；CI 41580340985 全绿，合入 `550b664b`。
+- #587 改 base 到 master 后以 `--onto origin/master adf0456d` 重放；CI 41581566287 因 `router.ts` 再后移 16 行触发 citation drift，补齐 5 处 router 引用和 `legacy/sse-event.ts` 锚点（`18787728`），bundle 重建 `92dad124`；CI 41583140279 全绿，合入 `a2675e4a`。
+- #584 改 base 到 master 后以 `--onto origin/master 92dad124` 重放（无冲突），bundle 重建 `1cb857e6`，`bundle:verify` FRESH 0/1059；完整门禁交由本 PR 的 master CI 验收。
+
+验证环境：Windows、Node `v24.16.0`。每次合并前确认最新 head 的 architecture / build / typecheck / test / test scope 全绿；本地每层 `bundle:verify` 均为 FRESH。
+
+下一动作：#584 CI 绿后合并；随后在 master 上重跑类型与架构门禁、相关测试，记录最终 SHA，并回收各 worktree。
