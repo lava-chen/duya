@@ -45,11 +45,13 @@
 | 同上 | 同 | `npx vitest run packages/host/tests/plugin-inventory-http.test.ts packages/cli/src/tui/slash/__tests__/plugin.test.ts packages/cli/src/tui/slash/__tests__/interactive-list.test.ts packages/cli/src/tui/__tests__/plugin-candidates.test.ts` | 0，4 files / 23 tests passed | 显示名投影、列表/详情、`@` 标签与旧 Host 回退 |
 | 同上 | 同 | `npm run typecheck:all` | 首跑 134（`@duya/ui` 的 `tsc` OOM：本机当时仅约 1 GB 可用内存）；内存释放后以 `NODE_OPTIONS=--max-old-space-size=6144` 重跑，0 通过 | 10 条 electron-gate baseline 收缩，未 `--write` |
 | 同上 | 同 | `npm run architecture:check` | 0，OK — no new boundary violations | 18 条 baseline 指纹不再触发，未 `--write` |
+| PR #598 首轮 CI | ubuntu / Node 22 | `npm run bundle:verify`（architecture job） | 1，STALE：3 个 Host 输入晚于 bundle 提交 | CI 要求同一变更内重建 worker bundle |
+| 同上 + `6b584883` | win32 / Node v24.18.0 / worktree | `npm run bundle:worker` → `npm run bundle:verify` | 0，FRESH 0/1059 inputs changed | 只提交了 `worker-entry.js` / `worker-metafile.json` 的内容差异 |
 
 ## 接续 / 结果
 
 已实现：协议字段、Host 投影、TUI `/plugin` 与 `@` 补全显示名、四组测试。
-已提交并推送：`aec144fa`（11 files），[PR #598](https://github.com/lava-chen/duya/pull/598)，未合并。
-工作树残留：`packages/capabilities/src/ModuleTool/inline-content.ts` 仅有行尾过滤差异（`git diff` 为空），未纳入提交。
+已提交并推送：`aec144fa`（功能）→ `0795267a`（计划记录）→ `6b584883`（worker bundle 重建），[PR #598](https://github.com/lava-chen/duya/pull/598)，未合并。
+工作树残留：无。构建/打包曾产生行尾过滤差异，已确认 `git diff` 为空并还原。
 回收：worktree 保留至 PR 集成。
-下一步：等 PR #598 的 review / CI，通过后由获授权集成者合并；真机冒烟需运行带内置插件的 Host，观察 `/plugin` 是否显示 `PDF`/`Zotero` 等显示名。
+下一步：等 PR #598 的 CI 重跑与 review，通过后由获授权集成者合并；真机冒烟需运行带内置插件的 Host，观察 `/plugin` 是否显示 `PDF`/`Zotero` 等显示名。
