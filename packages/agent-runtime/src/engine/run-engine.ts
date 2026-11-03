@@ -1621,14 +1621,23 @@ export class RunEngineImpl implements RunEngine {
       signal,
     );
     if (!verdict.allowed) {
-      // Reported rather than dropped. `unavailable` is kept distinct from
-      // `denied` so a broken bridge does not read as a user saying no — see
-      // `ApprovalVerdict`.
-      ports.events.publish({
-        type: 'tool.timed_out',
-        toolCallId: call.callId,
-        toolName: call.name,
-        elapsedMs: 0,
+      // The refusal is an ANSWER, not a silence.
+      //
+      // This branch used to publish a `tool.timed_out` and return, which lied
+      // twice: nothing had timed out, and the model was never told anything.
+      // `#shouldStop` then read "nothing dispatched" as "the model finished its
+      // work" and ended the run -- so a single refusal, in a step with no
+      // sibling call, silently truncated the turn. A live session showed it:
+      // assistant says it will read a directory, the classifier refuses, and the
+      // transcript ends there.
+      //
+      // `unavailable` stays distinct from `denied` (see `ApprovalVerdict`); the
+      // distinction now reaches the model in the refusal text instead of only
+      // reaching a log line.
+      await this.#refuseCall(ctx, call, {
+        kind: 'approval',
+        reason: verdict.reason,
+        ...(verdict.detail === undefined ? {} : { detail: verdict.detail }),
       });
       return;
     }
@@ -1639,6 +1648,9 @@ export class RunEngineImpl implements RunEngine {
     // tool calls must be able to stop the call that would cross it.
     if (this.#budgetExhausted(ports, ctx.spend, ctx.startedAt)) {
       ports.tools.discard('budget_exhausted');
+      // Same hole, same fix: a refused call owes the model a result. Without it
+      // the run ends believing the model had nothing left to answer.
+      await this.#refuseCall(ctx, call, { kind: 'budget' });
       return;
     }
 
@@ -1662,16 +1674,88 @@ export class RunEngineImpl implements RunEngine {
     ctx.tickets.set(call.callId, ticket);
     // The name only, and only for a call that is actually on its way: the
     // landing result needs it to name the tool it belongs to
-    // (`TurnOutputPort.recordToolResult`), and a denied or budget-refused call
-    // has no result to name.
+    // (`TurnOutputPort.recordToolResult`).
     ctx.toolNames.set(call.callId, call.name);
-    // Recorded only once the call is actually on its way, so a denied or
-    // budget-refused call does not count as work the next turn must answer.
+    // Recorded only once the call is actually on its way: `dispatched` is the
+    // engine's claim about WORK, and a refused call did no work. What a refusal
+    // does own is an answer the model must see, which is `#refuseCall`'s
+    // separate `turnWork.refuse()` -- the two counters exist because the two
+    // facts differ, and folding them would put "the tool ran" into a count that
+    // `#shouldStop` reads.
     ctx.turnWork.record();
-    // The anti-dead-loop streak, recorded at the SAME point and for the same
-    // reason: a call that was refused never happened, and counting it would let
-    // a model be hard-stopped for calls it never made. `#shouldStop` reads this
-    // at the end of the turn.
+    // The anti-dead-loop streak. `#refuseCall` records refusals on the same
+    // line and for the same reason a dispatch does: the model ASKED for this
+    // call, so a model that keeps asking for the same refused call is not
+    // converging, and only the streak can stop it.
+    ctx.repeatedCalls.record(call.name, call.input);
+  }
+
+  /**
+   * Answer a call the engine refused to dispatch.
+   *
+   * ## Why a refusal has to be a result, and not an event
+   *
+   * The model's next request is built from the transcript plus the fragments
+   * the engine deferred. A refusal that exists only as an EVENT is a fact about
+   * the host's telemetry: the model never reads it, retries what it just did, or
+   * -- the case this exists for -- says nothing at all and the turn ends because
+   * the engine counted no work.
+   *
+   * So a refusal takes the same route a real result takes (`#commitToolResult`),
+   * with `settleLedger: false` because `sideEffects.begin` never ran: there is
+   * no effect to classify, and inventing a `failed` row for a call that never
+   * started is exactly the false record the ledger exists to prevent.
+   *
+   * ## Why the refusal ALSO wears a `tool.call_started`
+   *
+   * The old refusal published only a `tool.timed_out`, and the D9 sweep
+   * (`engine-publication.test.ts`, plan 610) measured where that went: the
+   * ledger's pairing invariant (`agent-protocol/run-ledger.ts:221-229`) throws
+   * `tool_completed_without_start` for any completion without an authoritative
+   * start, the emitter converts the throw into a refusal return value, and the
+   * production port discards it -- so a denial reached NOBODY, not the TUI, not
+   * the durable log. This completion would die exactly the same death without
+   * the start.
+   *
+   * The start is therefore emitted, and it is honest under the ledger's
+   * definition of the word: `started` means the engine TOOK the callId and
+   * committed to answering it, and a refusal is an answer. What it does not
+   * mean -- what it never meant for any event -- is "the tool executed". The
+   * completion's `errorCode` (`permission_denied_by_policy`) is what says the
+   * tool never ran, and the transcript's result text says it again in the
+   * model's own vocabulary.
+   */
+  async #refuseCall(ctx: RunContext, call: ToolCallRequest, refusal: CallRefusal): Promise<void> {
+    // The start first, and for the pairing reason above: without it the
+    // completion below is dropped by the ledger's lifecycle invariant and the
+    // refusal reaches nobody -- the D9 defect, reconstructed one event later.
+    ctx.ports.events.publish({
+      type: 'tool.call_started',
+      toolCallId: call.callId,
+      toolName: call.name,
+      arguments: call.input,
+      attempt: 1,
+    });
+    const item: ToolOutcome = {
+      kind: 'tool_result',
+      callId: call.callId,
+      content: refusalText(call, refusal),
+      // The call did not run, and saying "no status" here would make the
+      // projection guess `indeterminate` -- a refusal is the most determinate
+      // outcome there is.
+      isError: true,
+      durationMs: 0,
+      errorCode: refusal.kind === 'budget' ? 'budget_exhausted' : 'permission_denied_by_policy',
+    };
+    await this.#commitToolResult(ctx, item, { toolName: call.name, settleLedger: false });
+    // Counted separately from `dispatched`, because it is a different fact:
+    // `#shouldStop` must reopen the loop for a refused call (the model owes an
+    // answer to an answer it has not read yet) without claiming the tool ran.
+    ctx.turnWork.refuse();
+    ctx.toolNames.set(call.callId, call.name);
+    // The same streak a dispatch records. A model that retries the identical
+    // refused call is not converging, and `repeatedCallStop` is the host's
+    // declared ceiling for that; a model that changes the call resets it.
     ctx.repeatedCalls.record(call.name, call.input);
   }
 
@@ -1746,75 +1830,14 @@ export class RunEngineImpl implements RunEngine {
             // (`:2722`) -- before any of the effects, so a host effect that
             // throws does not retroactively un-count a result that landed.
             results += 1;
-            if (ports.sideEffects !== undefined) {
-              // Settle against the key the LEDGER minted at dispatch, not against
-              // the callId. A ledger that namespaces its keys (`key:<callId>`, as
-              // `InMemoryCheckpointStore` does) would otherwise record a settle
-              // against a row that does not exist, leaving every call permanently
-              // `dispatched` — an effect a crash could never classify.
-              const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
-              await ports.sideEffects.settle({
-                attemptKey: ticket.attemptKey,
-                // The LEDGER's question is binary -- did this attempt fail? -- and
-                // that is why the widened `isError` is resolved HERE, by the one
-                // consumer that needs two values, rather than narrowed in the
-                // adapter. `=== true` rather than truthiness: a call whose
-                // producer said nothing is not evidence of a failure, and the
-                // ledger's `succeeded` is a claim about the EFFECT landing, not
-                // about the tool having reported a status.
-                state: item.isError === true ? 'failed' : 'succeeded',
-                detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
-              });
-            }
-            // The result as an EVENT, in the slot the four-step order fixes:
-            // AFTER the ledger settle and BEFORE `context.defer`, so the durable
-            // record of the effect exists before the effect is visible anywhere.
-            //
-            // `durationMs` and `metadata` are the PRODUCER's, carried verbatim
-            // from the same drain item (`ports.ts` `ToolOutcome`) rather than
-            // measured here: the engine did not time the call and must not claim
-            // to. The outcome is projected, never defaulted -- see
-            // `toolOutcomeOf`.
-            ports.events.publish({
-              type: 'tool.call_completed',
-              toolCallId: item.callId,
-              content: item.content,
-              outcome: toolOutcomeOf(item),
-              durationMs: item.durationMs,
-              ...(item.metadata === undefined ? {} : { metadata: item.metadata }),
+            await this.#commitToolResult(ctx, item, {
+              toolName: ctx.toolNames.get(item.callId) ?? '',
+              // A drained result comes from somewhere that DID dispatch, so the
+              // ledger question applies. The `?? SYNTHETIC_TICKET` fallback is
+              // the drain's own: a host that produced a result without a ticket
+              // (the progress tool does) still gets a settle.
+              settleLedger: true,
             });
-            const fragment: TransientContextFragment = {
-              kind: 'deferred_tool_context',
-              text: item.content,
-              key: `tool_result:${item.callId}`,
-            };
-            // Both: `defer` hands it to the host for the next assembly, and the
-            // local list carries it into this run's own message seed. One write,
-            // two readers, no second copy of the text.
-            ports.context.defer(fragment);
-            ctx.deferred.current.push(fragment);
-            const turnOutput = ports.turnOutput;
-            if (turnOutput !== undefined) {
-              await turnOutput.recordToolResult({
-                turn: ctx.turn,
-                // BY IDENTITY, so what the host is handed is exactly what the
-                // model will see next turn -- see `ToolResultRecord`.
-                outcome: item,
-                // `''` when this run never dispatched the call, which is the
-                // legacy fallback verbatim (`DuyaAgent.ts:2771`).
-                toolName: ctx.toolNames.get(item.callId) ?? '',
-              });
-            }
-            // Adopted, and it reaches the NEXT model request -- the current one
-            // is already built. Same position as `before_tool` above and the same
-            // reason; the legacy's `PostToolUse` (loop bus) injects land the same
-            // way, after the turn's results are committed and before the next
-            // request is assembled.
-            this.#adopt(
-              ctx.ports,
-              await this.#contribute(ctx, 'after_tool', { outcome: item }),
-              ctx.deferred.current,
-            );
             break;
           }
           case 'deferred_context': {
@@ -1878,6 +1901,110 @@ export class RunEngineImpl implements RunEngine {
       // landed results rather than about whether the loop ran to the end.
       ctx.turnWork.drained = results;
     }
+  }
+
+  /**
+   * Everything that happens when ONE call has an answer for the model.
+   *
+   * ## Why this is a method and not the body of the drain arm
+   *
+   * Because a call can end without ever reaching the drain. The approval gate
+   * sits BEFORE dispatch (`#dispatchCall`), so a refused call produces no drain
+   * item -- and the shape of the bug that costs is not "the result is missing"
+   * but "the model is told nothing and the loop reads that as a finished turn".
+   * Measured on a live session: a single `bash` refused by the auto-mode
+   * classifier ended the run as `completed` with the last assistant message
+   * still promising to run it.
+   *
+   * A second implementation of "a result landed" next to the drain arm would
+   * drift -- the arm's order (ledger, event, defer, transcript, after_tool) is
+   * load-bearing and documented above. So the refused path calls the SAME code,
+   * and the only thing it varies is the ledger question: it has no ticket,
+   * because `sideEffects.begin` only runs after approval.
+   */
+  async #commitToolResult(
+    ctx: RunContext,
+    item: ToolOutcome,
+    options: {
+      /** The tool's name for the transcript row; `''` when unknown, as the legacy did. */
+      readonly toolName: string;
+      /**
+       * Whether the ledger has an attempt row to settle.
+       *
+       * False for a call refused before dispatch. Settling there would classify
+       * an effect that was never started, which is the one thing the ledger
+       * exists to prevent; the row's absence already says "this never ran".
+       */
+      readonly settleLedger: boolean;
+    },
+  ): Promise<void> {
+    const { ports } = ctx;
+    if (options.settleLedger && ports.sideEffects !== undefined) {
+      // Settle against the key the LEDGER minted at dispatch, not against the
+      // callId. A ledger that namespaces its keys (`key:<callId>`, as
+      // `InMemoryCheckpointStore` does) would otherwise record a settle against
+      // a row that does not exist, leaving every call permanently `dispatched`
+      // — an effect a crash could never classify.
+      const ticket = ctx.tickets.get(item.callId) ?? SYNTHETIC_TICKET;
+      await ports.sideEffects.settle({
+        attemptKey: ticket.attemptKey,
+        // The LEDGER's question is binary -- did this attempt fail? -- and that is
+        // why the widened `isError` is resolved HERE, by the one consumer that
+        // needs two values, rather than narrowed in the adapter. `=== true`
+        // rather than truthiness: a call whose producer said nothing is not
+        // evidence of a failure, and the ledger's `succeeded` is a claim about
+        // the EFFECT landing, not about the tool having reported a status.
+        state: item.isError === true ? 'failed' : 'succeeded',
+        detail: item.content.slice(0, LEDGER_DETAIL_LIMIT),
+      });
+    }
+    // The result as an EVENT, in the slot the four-step order fixes: AFTER the
+    // ledger settle and BEFORE `context.defer`, so the durable record of the
+    // effect exists before the effect is visible anywhere.
+    //
+    // `durationMs` and `metadata` are the PRODUCER's, carried verbatim from the
+    // same drain item (`ports.ts` `ToolOutcome`) rather than measured here: the
+    // engine did not time the call and must not claim to. The outcome is
+    // projected, never defaulted -- see `toolOutcomeOf`.
+    ports.events.publish({
+      type: 'tool.call_completed',
+      toolCallId: item.callId,
+      content: item.content,
+      outcome: toolOutcomeOf(item),
+      durationMs: item.durationMs,
+      ...(item.metadata === undefined ? {} : { metadata: item.metadata }),
+    });
+    const fragment: TransientContextFragment = {
+      kind: 'deferred_tool_context',
+      text: item.content,
+      key: `tool_result:${item.callId}`,
+    };
+    // Both: `defer` hands it to the host for the next assembly, and the local
+    // list carries it into this run's own message seed. One write, two readers,
+    // no second copy of the text.
+    ports.context.defer(fragment);
+    ctx.deferred.current.push(fragment);
+    const turnOutput = ports.turnOutput;
+    if (turnOutput !== undefined) {
+      await turnOutput.recordToolResult({
+        turn: ctx.turn,
+        // BY IDENTITY, so what the host is handed is exactly what the model
+        // will see next turn -- see `ToolResultRecord`.
+        outcome: item,
+        // `''` when this run never dispatched the call, which is the legacy
+        // fallback verbatim (`DuyaAgent.ts:2771`).
+        toolName: options.toolName,
+      });
+    }
+    // Adopted, and it reaches the NEXT model request -- the current one is
+    // already built. Same position as `before_tool` above and the same reason;
+    // the legacy's `PostToolUse` (loop bus) injects land the same way, after the
+    // turn's results are committed and before the next request is assembled.
+    this.#adopt(
+      ctx.ports,
+      await this.#contribute(ctx, 'after_tool', { outcome: item }),
+      ctx.deferred.current,
+    );
   }
 
   // ── Decision 4 ────────────────────────────────────────────────────────────
@@ -1995,7 +2122,16 @@ export class RunEngineImpl implements RunEngine {
     // here would strand them: the tool ran, its effect is on disk, and the
     // answer never reaches the model. This is `needsFollowUp` at
     // `DuyaAgent.ts:3107`, and it is a fact about what the engine dispatched.
-    if (turnWork.dispatched > 0) return null;
+    //
+    // A REFUSAL counts here too, and for the same reason with a different
+    // premise: the tool did not run, but the model asked for it and has not read
+    // the refusal yet. Ending the turn there is how a refused call used to
+    // delete the rest of the model's own plan -- the transcript stopped on an
+    // assistant message promising a call that never happened and was never
+    // answered. The ceiling above still applies, and `repeatedCallStop` still
+    // stops a model that keeps asking for the same refused call, so reopening
+    // the loop cannot spin.
+    if (turnWork.dispatched > 0 || turnWork.refused > 0) return null;
 
     // ── Inter-turn injection sites 2 and 3 of 3: around the final answer ─────
     // Both sit here, after the `dispatched` test and before the run is allowed
@@ -3153,6 +3289,21 @@ export class RunEngineImpl implements RunEngine {
 class TurnWork {
   dispatched = 0;
   /**
+   * Calls this turn that were REFUSED before dispatch, and whose refusal the
+   * model has not read yet.
+   *
+   * Separately counted because the two facts are different and `#shouldStop`
+   * needs both. `dispatched` answers "did a tool run"; this answers "does the
+   * model owe an answer to something it asked for". A refusal produces a
+   * `tool_result` the model must see, so a turn that only refused still has
+   * work left -- but claiming it dispatched anything would be false, and would
+   * put a call that never ran into the ledger's accounting.
+   *
+   * Without this counter the engine reads "nothing dispatched" as "the model
+   * finished", which is how one refused `bash` truncated a live turn.
+   */
+  refused = 0;
+  /**
    * Tool RESULTS that landed this turn, as opposed to calls dispatched.
    *
    * The two are different quantities and the preflight compaction site needs
@@ -3167,6 +3318,10 @@ class TurnWork {
 
   record(): void {
     this.dispatched += 1;
+  }
+
+  refuse(): void {
+    this.refused += 1;
   }
 }
 
@@ -3862,11 +4017,11 @@ const TOOL_ERROR_MESSAGE_LIMIT = 512;
  * ## The two arms that are unreachable, and why that is correct
  *
  * `timeout` needs an elapsed bound the producer reported and `cancelled` needs
- * a reason string. `ToolOutcome` carries neither, and a timeout the ENGINE
- * imposed is already published as `tool.timed_out` by `#dispatchCall` with the
- * tool's name and the elapsed time. Emitting `timeout` here from
- * `durationMs` would be a category derived from a duration rather than from
- * anything that happened.
+ * a reason string. `ToolOutcome` carries neither, and the engine does not
+ * impose deadlines of its own on a call it dispatched -- a call that ran too
+ * long is a fact the producer reports, not one a duration implies. Emitting
+ * `timeout` here from `durationMs` would be a category derived from a duration
+ * rather than from anything that happened.
  */
 function toolOutcomeOf(item: ToolOutcome): ToolCallOutcome {
   if (item.isError === undefined) {
@@ -3880,7 +4035,12 @@ function toolOutcomeOf(item: ToolOutcome): ToolCallOutcome {
     return {
       outcome: 'tool_error',
       error: {
-        code: 'tool_failed',
+        // The producer's own classification when it offered one, and
+        // `tool_failed` when it did not. The distinction is not cosmetic: a
+        // refused call never touched the world, so a consumer that treats
+        // `tool_failed` as "the effect may have landed" would be wrong to do so
+        // for `permission_denied_by_policy`.
+        code: item.errorCode ?? 'tool_failed',
         message:
           detail === ''
             ? 'the producer stated this call failed and supplied no text'
@@ -3889,6 +4049,87 @@ function toolOutcomeOf(item: ToolOutcome): ToolCallOutcome {
     };
   }
   return { outcome: 'success' };
+}
+
+/**
+ * Why a call never reached the tool it named.
+ *
+ * Two facts, and they are different: an approver said no (and said why, in its
+ * own words), or the run's tool budget was already spent. Both are refusals --
+ * the call did not run -- but only the first is about authority, and telling a
+ * model "budget exhausted" when a policy refused it sends it looking for a
+ * cheaper command that will be refused again.
+ */
+type CallRefusal =
+  | {
+      readonly kind: 'approval';
+      readonly reason: 'denied' | 'cancelled' | 'unavailable';
+      /** The approver's own sentence, carried verbatim from `ApprovalVerdict`. */
+      readonly detail?: string;
+    }
+  | { readonly kind: 'budget' };
+
+/**
+ * The text a refused call gives the model.
+ *
+ * ## Why this is written for the model and not for the log
+ *
+ * The model reads this as the result of the call it just made, so it has to
+ * answer the two questions the model will act on: did it run, and what now. A
+ * bare "denied" leaves both open, and the observed failure mode of an
+ * unexplained denial is a retry of the same call. So the text says the call was
+ * NOT executed and names the one thing that will not help (repeating it).
+ *
+ * ## Why the `<tool_use_error>` envelope
+ *
+ * Every other failure in this codebase wraps its text that way
+ * (`StreamingToolExecutor.ts:1306` for the executor's own denial), and hosts
+ * key on it (`run-engine-ports.ts:1218` `FAILURE_MARKER`). A refusal that
+ * skipped the envelope would be the one failure a host cannot recognise.
+ *
+ * The approver's detail is sanitised rather than trusted: it comes from a
+ * permission gate or an approval card and may contain the `<` or newline that
+ * would close the envelope early.
+ */
+function refusalText(call: ToolCallRequest, refusal: CallRefusal): string {
+  if (refusal.kind === 'budget') {
+    return wrapToolUseError(
+      `The tool-call budget for this run is exhausted, so ${call.name} was NOT executed. `
+        + 'Finish with what you have, or tell the user what remains.',
+    );
+  }
+  const detail = refusal.detail === undefined ? '' : refusal.detail.trim();
+  switch (refusal.reason) {
+    case 'cancelled':
+      return wrapToolUseError(
+        `${call.name} was cancelled before it ran. Do not repeat it unchanged; ask the user how to proceed.`,
+      );
+    case 'unavailable':
+      return wrapToolUseError(
+        `No approval surface was available, so ${call.name} was NOT executed. `
+          + 'Tell the user what needs approving instead of retrying.',
+      );
+    case 'denied':
+    default:
+      return wrapToolUseError(
+        (detail === ''
+          ? `Permission to run ${call.name} was denied by policy.`
+          : `Permission to run ${call.name} was denied by policy: ${detail}`)
+          + ' The call was NOT executed. Do not repeat the same call; '
+          + 'change the approach (for example stay inside the workspace) or tell the user what you need.',
+      );
+  }
+}
+
+/**
+ * The envelope every tool failure in this codebase wears.
+ *
+ * `<` and newlines are replaced rather than escaped: the envelope is a marker,
+ * not markup, and a newline inside it makes a single-line consumer (the TUI's
+ * preview, a host's `FAILURE_MARKER` split) read half a message.
+ */
+function wrapToolUseError(text: string): string {
+  return `<tool_use_error>${text.replace(/[<\n]/g, ' ').trim()}</tool_use_error>`;
 }
 
 /**

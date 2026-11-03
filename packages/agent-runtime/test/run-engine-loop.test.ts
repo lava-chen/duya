@@ -924,7 +924,7 @@ describe('a dispatch is unreachable without a ledger ticket', () => {
     expect(h.log.indexOf('approval.authorize:write')).toBeLessThan(h.log.indexOf('ledger.begin:write'));
   });
 
-  it('a denied call is never dispatched and takes no ticket', async () => {
+  it('a denied call is never dispatched, takes no ticket, and is ANSWERED to the model', async () => {
     const h = harness({
       turns: [
         {
@@ -943,11 +943,114 @@ describe('a dispatch is unreachable without a ledger ticket', () => {
 
     await run(engineWith(clock), h);
 
+    // Nothing ran, so nothing to classify in the ledger.
     expect(h.dispatched).toEqual([]);
     expect(h.ledger).toEqual([]);
-    // And the refusal is REPORTED, not dropped: a broken bridge must not read
-    // as a run that simply had no tools.
-    expect(h.events.map((e) => e.type)).toContain('tool.timed_out');
+    // The refusal is an ANSWER, not a silence. The old behavior published a
+    // `tool.timed_out` here -- a fact about nothing -- and returned, so
+    // `#shouldStop` read "nothing dispatched" and ended the run with the
+    // model's plan truncated. The refusal now takes the same route a real
+    // result takes: a completion event, whose projection names the refusal as
+    // `permission_denied_by_policy` (never `tool_failed`: no effect landed),
+    // and a deferred fragment the next assembly carries to the model.
+    const completed = h.events.find((e) => e.type === 'tool.call_completed') as
+      | { type: 'tool.call_completed'; outcome: { outcome: string; error?: { code: string } }; content: string }
+      | undefined;
+    expect(completed).toBeDefined();
+    expect(completed!.outcome).toMatchObject({ outcome: 'tool_error', error: { code: 'permission_denied_by_policy' } });
+    // The text is the failure envelope every host failure wears, and it says
+    // the call was NOT executed -- an unexplained "denied" is what makes a
+    // model retry the identical call.
+    expect(completed!.content).toContain('<tool_use_error>');
+    expect(completed!.content).toContain('NOT executed');
+    // And the refusal reaches the MODEL, as the fragment the next assembly
+    // carries -- the deferred key and the second model call agree.
+    expect(h.deferred).toEqual(['tool_result:c1']);
+    const [, turnTwo] = h.sentMessages;
+    expect(turnTwo!.map((m) => m.id)).toEqual(['fragment:tool_result:c1']);
+    // And the loop REOPENS: the model owes an answer to a result it has not
+    // read, which is why the scripted second turn is consumed at all. Under
+    // the old behavior this run ended after the first model call and the
+    // refusal was never seen.
+    expect(h.sentMessages.length).toBe(2);
+  });
+
+  it('a budget-refused call is answered with the budget text and no ledger row', async () => {
+    // `maxToolCalls: 1` and TWO calls in one turn: the first dispatches (the
+    // ceiling is spent on it), the second is refused by the pre-dispatch gate.
+    // That gate is the one this test targets -- a per-call ceiling must refuse
+    // the call that would CROSS it.
+    const h = harness({
+      turns: [
+        {
+          frames: [
+            {
+              type: 'tool_use',
+              call: { callId: 'c1', name: 'bash', input: {}, sideEffect: 'reconcilable' },
+            },
+            {
+              type: 'tool_use',
+              call: { callId: 'c2', name: 'bash', input: {}, sideEffect: 'reconcilable' },
+            },
+          ],
+        },
+        { frames: [{ type: 'text', text: 'done' }] },
+      ],
+      budget: {
+        budget: { maxToolCalls: 1 },
+        spend: () => ({ turns: 0, toolCalls: 0, tokens: 0 }),
+        evaluate: () => ({ exhausted: false, breaches: [] }),
+      },
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h, { manifest: manifestFor({ budget: { maxToolCalls: 1 } }) });
+
+    // Only the first call went out; the second was refused before dispatch.
+    expect(h.dispatched.map((c) => c.callId)).toEqual(['c1']);
+    // And the ledger never classified the refused call: no begin (it never got
+    // a ticket) and no settle (there is no effect to settle).
+    expect(h.ledger.join('\n')).not.toContain('c2');
+    // But the model is ANSWERED: the ceiling refused the call, and a refusal
+    // that arrived as silence was the original bug in a different costume.
+    const completed = h.events.find(
+      (e) => e.type === 'tool.call_completed' && (e as { toolCallId?: string }).toolCallId === 'c2',
+    ) as { type: 'tool.call_completed'; outcome: { outcome: string; error?: { code: string } }; content: string } | undefined;
+    expect(completed).toBeDefined();
+    expect(completed!.outcome).toMatchObject({ outcome: 'tool_error', error: { code: 'budget_exhausted' } });
+    expect(completed!.content).toContain('budget');
+    expect(completed!.content).toContain('NOT executed');
+  });
+
+  it('a denied call whose verdict carries a reason puts THAT reason in front of the model', async () => {
+    const h = harness({
+      turns: [
+        {
+          frames: [
+            {
+              type: 'tool_use',
+              call: { callId: 'c1', name: 'bash', input: {}, sideEffect: 'reconcilable' },
+            },
+          ],
+        },
+        { frames: [{ type: 'text', text: 'understood' }] },
+      ],
+      allow: () => ({
+        allowed: false,
+        reason: 'denied',
+        detail: '该操作会访问工作区之外的个人记忆与偏好数据。',
+      }),
+    });
+    const clock = fakeClock();
+
+    await run(engineWith(clock), h);
+
+    // The detail is the ONLY part that knows WHY; without it the model retries,
+    // because retrying is the only move an unexplained refusal leaves it.
+    const completed = h.events.find((e) => e.type === 'tool.call_completed') as
+      | { type: 'tool.call_completed'; content: string }
+      | undefined;
+    expect(completed!.content).toContain('该操作会访问工作区之外的个人记忆与偏好数据。');
   });
 
   it('refuses a side-effecting call when no ledger is attached', async () => {

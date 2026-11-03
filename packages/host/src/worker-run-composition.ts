@@ -1,6 +1,6 @@
 import type { AIClient } from '@duya/ai';
 import type { ApprovalRequest, ApprovalVerdict, AssembledTurn, ExtensionPort, ModelFrame, ModelMessage, ModelRequest, RunEnginePorts, RunCommandPort, RunEventEmitter, RunInputSnapshot, TerminalCandidate, ToolCallRequest, ToolDescriptor, ToolDrainItem, ToolDispatchTicket, ToolOutcome, TransientContextFragment, TurnAssemblyInput, } from '@duya/agent-runtime';
-import { attachmentDigest, canonicalJson, sha256Hex, type FileAttachment, type PermissionPolicyMode, type RunId, type RunManifest, type TokenUsage as ProtocolTokenUsage, } from '@duya/agent-protocol';
+import { attachmentDigest, canonicalJson, sha256Hex, type FileAttachment, type JsonValue, type PermissionPolicyMode, type RunId, type RunManifest, type TokenUsage as ProtocolTokenUsage, } from '@duya/agent-protocol';
 import type { TokenUsage } from '@duya/host/worker-run-contracts';
 import type { AssistantMessage, Message, MessageContent, SSEEvent } from '@duya/host/worker-run-contracts';
 import type { Tool } from '@duya/host/worker-run-contracts';
@@ -227,15 +227,70 @@ export function composeLegacyRunPorts(agent: EngineProductSession, host: LegacyR
     agent.bindRunForkMarker(host.runFork ?? null);
     return buildEnginePorts(composeLegacyRunSources(agent, host));
 }
+/**
+ * The engine's approval gate: `canUseTool` decides, and a repeated refusal can
+ * be handed to the human instead of being final.
+ *
+ * ## What this function is NOT allowed to do
+ *
+ * It does not re-implement the permission policy. `canUseTool` is the same gate
+ * the legacy executor uses (`PermissionsGate`), so a decision made here and a
+ * decision made there agree by construction; re-deriving "is this safe" in the
+ * host would be a second policy that can drift.
+ *
+ * ## Why the refusal carries `message`
+ *
+ * A deny verdict's `message` is the only place the REASON exists ("Auto mode
+ * blocked bash: ..."), and without it the engine can only tell the model that
+ * something was refused. The model then retries the same call, because retrying
+ * is the only move an unexplained refusal leaves it. Carried as `detail`.
+ *
+ * `behavior === 'ask'` is deliberately NOT handled here: the executor inside
+ * the tool pipeline asks the user (`requestPermission`), and asking twice for
+ * one call would double-prompt the same decision.
+ *
+ * ## Why the second refusal escalates
+ *
+ * A classifier is a guess. `auto` mode's classifier is an LLM reading the
+ * command text -- it allowed `ls ~/.duya/` twice and refused
+ * `ls ~/.duya/memory/global/people/ .../preferences/` in the same session,
+ * quoting "personal memory and preference data". When that guess costs the
+ * model its plan, the model's only recovery is a different call; when it
+ * repeats the SAME call, the guess is now standing between the user and work
+ * they asked for, so the human decides. That is the shape of codex's
+ * `escalate_on_failure` (`core/src/tools/orchestrator.rs:364-520`): sandbox
+ * refusal, then an approval prompt for the retry.
+ *
+ * First refusal stays silent. `auto` exists to be quiet, and a prompt on the
+ * first blocked call would make it `ask` mode with extra steps.
+ */
 export function gateRunApproval(assembly: RunTurnAssembly, askApproval: LegacyRunHost['askApproval']): LegacyRunHost['askApproval'] {
+    /** Refusals per identical call in this run; see "Why the second refusal escalates". */
+    const refusals = new Map<string, number>();
     return async (request, signal) => {
-        const { behavior } = normalizeCanUseToolDecision(await assembly.canUseTool(request.toolName, { ...request.input }, request.callId));
-        if (behavior === 'deny') {
-            return { allowed: false, reason: 'denied' } as const;
+        const decision = normalizeCanUseToolDecision(await assembly.canUseTool(request.toolName, { ...request.input }, request.callId));
+        if (decision.behavior !== 'deny') {
+            return { allowed: true, scope: 'once' } as const;
         }
-        void askApproval;
-        void signal;
-        return { allowed: true, scope: 'once' } as const;
+        // The input is the tool's declared JSON schema instance even though its
+        // static type only promises `unknown` values; `canonicalJson` is the
+        // stable serializer the protocol already trusts for exactly this shape.
+        const key = `${request.toolName}\u0000${canonicalJson(request.input as JsonValue)}`;
+        const seen = (refusals.get(key) ?? 0) + 1;
+        refusals.set(key, seen);
+        const detail = decision.message === undefined ? {} : { detail: decision.message };
+        if (seen > 1) {
+            const verdict = await askApproval(request, signal);
+            if (verdict.allowed) {
+                return verdict;
+            }
+            // The card answered, and its answer is the better record: `cancelled`
+            // is what a still-pending approval resolves to, and the engine turns
+            // that into "this was cancelled, ask the user" rather than "a policy
+            // forbids it" -- which is what is actually true while a card waits.
+            return { allowed: false, reason: verdict.reason, ...detail } as const;
+        }
+        return { allowed: false, reason: 'denied', ...detail } as const;
     };
 }
 export type RunDriverLeg = {
