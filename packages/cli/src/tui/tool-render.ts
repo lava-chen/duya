@@ -28,6 +28,8 @@
  * are not — a half-parsed report rendered as prose is worse than JSON.
  */
 
+import { formatTaskDuration, isSubagentTool } from './subagent.js';
+
 /** The status a tool block carries, mirrored from `ToolBlock`. */
 export type ToolStatus = 'running' | 'ok' | 'error' | 'unknown';
 
@@ -148,8 +150,8 @@ export function selectShellOutput(result: string, status: ToolStatus, budget: nu
 /**
  * Format a tool result for the transcript, or return it unchanged.
  *
- * Only `grep` and `glob` have a formatter today; everything else is
- * pass-through so the renderer's diff colourising still applies.
+ * Only `grep`, `glob` and the subagent spawn have a formatter today; everything
+ * else is pass-through so the renderer's diff colourising still applies.
  */
 export function formatToolResult(name: string, result: string): string {
   if (name === 'grep') {
@@ -158,6 +160,10 @@ export function formatToolResult(name: string, result: string): string {
   }
   if (name === 'glob') {
     const formatted = formatGlobReport(result);
+    if (formatted !== null) return formatted;
+  }
+  if (isSubagentTool(name)) {
+    const formatted = formatSubagentReport(result);
     if (formatted !== null) return formatted;
   }
   return result;
@@ -233,4 +239,72 @@ function formatGlobReport(result: string): string | null {
   if (!result.includes('\n\n')) return null;
   const chunks = result.split(/\n{2,}/u).filter((chunk) => chunk.trim() !== '');
   return chunks.join('\n');
+}
+
+/** `940`, `12.3k`, `1.2M` — the same thresholds the footer uses. */
+function compactTokens(count: number): string {
+  const value = Math.max(0, Math.round(count));
+  if (value < 1000) return String(value);
+  if (value < 10_000) return `${(value / 1000).toFixed(1)}k`;
+  if (value < 1_000_000) return `${Math.round(value / 1000)}k`;
+  return `${(value / 1_000_000).toFixed(1)}M`;
+}
+
+/** A finite number from a parsed receipt, or 0. */
+function receiptNumber(report: Record<string, unknown>, key: string): number {
+  const value = report[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * A subagent receipt as a report, or `null` when this is not one.
+ *
+ * ## Why the receipt is not shown as JSON
+ *
+ * The `task` tool returns a typed receipt — status, counts, duration, tokens,
+ * and above all `content`, which is the child's ANSWER. Rendered raw, the whole
+ * thing is one line of JSON in which the answer is the tail of a key, and the
+ * reader has to parse punctuation to find the only part they wanted. The header
+ * line is the receipt's own numbers, the body is the answer.
+ *
+ * ## `running` is not a failure and not a completion
+ *
+ * A background spawn returns immediately with `status: 'running'`; calling that
+ * `completed` would be a claim about work that has not happened, and calling it
+ * `failed` would be worse. The word is printed as it came, and the elapsed
+ * fields are simply absent because the run has not produced them yet.
+ */
+function formatSubagentReport(result: string): string | null {
+  const report = parseReport(result);
+  if (report === null) return null;
+  const content = typeof report['content'] === 'string' ? report['content'].trim() : '';
+  const error = typeof report['error'] === 'string' ? report['error'].trim() : '';
+  // A receipt without either half is not the shape this formatter knows; the
+  // raw result is then the honest thing to print.
+  if (content === '' && error === '') return null;
+
+  const status = typeof report['status'] === 'string' ? report['status'] : '';
+  const headline: string[] = [];
+  if (status === 'running' || report['background'] === true) headline.push('background');
+  else if (status !== '') headline.push(status);
+
+  const tools = receiptNumber(report, 'totalToolUseCount');
+  if (tools > 0) headline.push(`${tools} tool${tools === 1 ? '' : 's'}`);
+  const duration = receiptNumber(report, 'totalDurationMs');
+  if (duration > 0) headline.push(formatTaskDuration(duration));
+  const tokens = receiptNumber(report, 'totalTokens');
+  if (tokens > 0) headline.push(`${compactTokens(tokens)} tokens`);
+
+  const lines: string[] = [];
+  if (headline.length > 0) lines.push(headline.join(' · '));
+  if (error !== '') lines.push(`error: ${error}`);
+  if (content !== '') lines.push(content);
+
+  const warnings = report['warnings'];
+  if (Array.isArray(warnings)) {
+    for (const warning of warnings) {
+      if (typeof warning === 'string' && warning.trim() !== '') lines.push(`warning: ${warning.trim()}`);
+    }
+  }
+  return lines.join('\n');
 }

@@ -546,12 +546,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   {
     // The one view whose whole purpose is to be opened WHILE a turn runs: a
     // promoted bash command or a subagent outlives the model's answer, and the
-    // user needs to inspect it without waiting for the run to finish.
+    // user needs to inspect it without waiting for the run to finish. Subagents
+    // are listed above the bash tasks because they are the half the user acts
+    // on (Enter watches one in place) rather than only reads.
     name: 'tasks',
     label: 'Background tasks',
     labelZh: '后台任务',
-    description: 'Show background bash tasks and subagents',
-    descriptionZh: '查看后台 bash 任务与子代理',
+    description: 'Switch between subagents and inspect background bash tasks',
+    descriptionZh: '在子代理之间切换，并查看后台 bash 任务',
     category: 'info',
     surfaces: ['cli'],
     requiresSession: true,

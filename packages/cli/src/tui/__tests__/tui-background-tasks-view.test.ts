@@ -133,7 +133,9 @@ describe('the background summary row', () => {
     app.stop();
 
     expect(out.text()).toContain('1 subagent');
-    expect(out.text()).toContain('/tasks details');
+    // A running subagent changes the VERB the summary row offers, not the
+    // command: there is nothing to switch to once every child has finished.
+    expect(out.text()).toContain('/tasks to switch');
   });
 });
 
@@ -163,12 +165,28 @@ describe('the task list', () => {
     app.stop();
 
     const text = out.text();
-    expect(text).toContain('Tasks · ↑↓ select · ←→ fold · Enter open · Esc back');
+    expect(text).toContain('Tasks · ↑↓ select · ←→ fold · Enter open/watch · Esc back');
     expect(text).toContain('▾ Background bash (2) · 1 running');
     expect(text).toContain('▾ Subagents (1) · 1 running');
-    // Running first, then the finished one.
+    // Subagents above bash: the half the user ACTS on sits where the cursor
+    // lands and where the eye starts; the process list is reference.
+    expect(text.indexOf('▾ Subagents')).toBeLessThan(text.indexOf('▾ Background bash'));
+    // Newest first, and status is not a sort key: `npm run dev` started later
+    // than `npm test`, so it stays on top whether or not it is still running.
     expect(text.indexOf('npm run dev')).toBeLessThan(text.indexOf('npm test'));
     expect(text).toContain('Scout');
+  });
+
+  it('lands on the first task, not on a group heading', async () => {
+    const { app, out, input } = await withTwoTasks();
+    press(input, F6);
+    await settleRendered();
+    app.stop();
+
+    // Row 0 is the Subagents heading, which Enter cannot act on. The cursor
+    // starts on the agent below it — opening a list in order to do something
+    // should not cost an extra Down.
+    expect(out.text()).toContain('❯ ● Scout');
   });
 
   it('moves the selection marker with the arrows', async () => {
@@ -176,23 +194,45 @@ describe('the task list', () => {
     press(input, F6);
     await settleRendered();
     out.reset();
+    // Down walks out of the subagent group: past its heading-free single row
+    // and the bash heading, onto the newest bash task.
+    press(input, DOWN);
     press(input, DOWN);
     await settleRendered();
     app.stop();
 
-    // Row 0 is the bash heading, row 1 the running task.
     expect(out.text()).toContain('❯ ● npm run dev');
   });
 
-  it('opens the selected task on Enter without leaving the view', async () => {
+  it('watches a subagent in place on Enter instead of opening a modal', async () => {
+    const { app, out, input, opened } = await withTwoTasks();
+    press(input, F6);
+    await settleRendered();
+    press(input, ENTER);
+    await settleRendered();
+    app.stop();
+
+    // No modal: a subagent's subject is a live status, and freezing it at the
+    // moment of the keypress is the one thing an agent list must not do.
+    expect(opened).toEqual([]);
+    expect(app.renderState.focus).toBe('tasks');
+    // The row says which agent the panel below it is about.
+    expect(lastFrame(out.text())).toContain('(watching)');
+    expect(lastFrame(out.text())).toContain('Scout · running');
+  });
+
+  it('opens a bash task on Enter without leaving the view', async () => {
     const { app, input, opened } = await withTwoTasks();
     press(input, F6);
     await settleRendered();
+    press(input, DOWN);
     press(input, DOWN);
     press(input, ENTER);
     await settleRendered();
     app.stop();
 
+    // A bash task's subject is a document — a scrollable output tail — which
+    // the live area cannot hold, so it keeps the modal.
     expect(opened.map((task) => task.id)).toEqual(['bash-running']);
     expect(app.renderState.focus).toBe('tasks');
   });
@@ -205,19 +245,22 @@ describe('the task list', () => {
     out.reset();
     press(input, LEFT);
     await settleRendered();
-    expect(lastFrame(out.text())).toContain('▸ Background bash');
-    expect(lastFrame(out.text())).not.toContain('npm run dev');
-    expect(lastFrame(out.text())).toContain('Scout');
-    // The bash heading stays; only its children fold away. The subagent group
-    // was never touched and keeps its own row.
-    expect(app.backgroundTaskRows().map((row) => row.kind)).toEqual(['group', 'group', 'task']);
+    expect(lastFrame(out.text())).toContain('▸ Subagents');
+    // The bash group was never touched and keeps its rows.
+    expect(lastFrame(out.text())).toContain('npm run dev');
+    // The folded rows are gone from the LIST (the summary row above it still
+    // says the agent is working, so asserting on the agent's name would pass
+    // either way).
+    expect(app.backgroundTaskRows().map((row) => (row.kind === 'group' ? row.group.id : row.task.id)))
+      .toEqual(['subagent', 'bash', 'bash-running', 'bash-done']);
 
     out.reset();
     press(input, RIGHT);
     await settleRendered();
     app.stop();
-    expect(lastFrame(out.text())).toContain('▾ Background bash');
-    expect(lastFrame(out.text())).toContain('npm run dev');
+    expect(lastFrame(out.text())).toContain('▾ Subagents');
+    expect(app.backgroundTaskRows().map((row) => (row.kind === 'group' ? row.group.id : row.task.id)))
+      .toEqual(['subagent', 'sub-1', 'bash', 'bash-running', 'bash-done']);
   });
 
   it('leaves the view on Esc and stops painting the list', async () => {
@@ -235,7 +278,28 @@ describe('the task list', () => {
     expect(app.renderState.focus).toBe('input');
     expect(lastFrame(out.text())).not.toContain('Tasks · ↑↓ select');
     // The summary stays: leaving the view is not the same as stopping the work.
-    expect(out.text()).toContain('/tasks details');
+    // A running subagent keeps the switching hint on screen.
+    expect(out.text()).toContain('/tasks to switch');
+  });
+
+  it('keeps the list reachable after leaving the watched panel', async () => {
+    const { app, out, input } = await withTwoTasks();
+    press(input, F6);
+    await settleRendered();
+    press(input, ENTER);
+    await settleRendered();
+
+    out.reset();
+    // Esc means one step back, not all the way out: panel → list. The list
+    // stays open so a different agent is one arrow away.
+    press(input, ESC);
+    await sleep(60);
+    await settleRendered();
+    app.stop();
+
+    expect(app.renderState.focus).toBe('tasks');
+    expect(lastFrame(out.text())).toContain('Tasks · ↑↓ select');
+    expect(lastFrame(out.text())).not.toContain('(watching)');
   });
 
   it('says so when the Host cannot answer, rather than claiming emptiness', async () => {

@@ -696,6 +696,10 @@ export class WorkerSubagentService<
         ...((agentInput.description || agentInput.name)
           ? { agentDescription: agentInput.description || agentInput.name }
           : {}),
+        // The `task` call this run answers to. See `AgentProgressPayloadMeta`:
+        // the protocol requires `subagent.started.parentToolCallId`, and this
+        // is the only place that knows it.
+        parentToolCallId: context.toolUseId,
       }
 
       // Background sub-agent progress is streamed directly to SSE while
