@@ -5,7 +5,7 @@
  *
  * The FINAL tools[] the provider reads — not the registry's registration
  * count — for two roles (plain worker, bot) under three exposure configs
- * (default `hint`, explicit `search`, App mention promotion), driven through
+ * (the default `search`, explicit `hint`, App mention promotion), driven through
  * the REAL chain: real `WorkerSession`, real `initToolCatalog`, real
  * `setActiveMCPRuntime` replace-set, real `_resolveTools` visibility filter
  * and `projectForProvider` projection. The only fake is the LLM provider.
