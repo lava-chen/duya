@@ -124,6 +124,36 @@ describe('RichPanelController', () => {
     expect(gone).toEqual(['alpha']);
   });
 
+  it('gives Tab to the row when a tab claims it and to the strip when it does not', () => {
+    const toggled: string[] = [];
+    const { mgr, ctrl } = panel(tabs({
+      installed: { rowActions: { tab: (value) => { toggled.push(value); } } },
+    }));
+
+    // In the strip there is no row under the cursor, so the claim does not
+    // apply: Tab stays the tab switch every panel has always had.
+    expect(mgr.handleKey('tab')).toBe(true);
+    expect(ctrl.activeTabId()).toBe('available');
+    expect(toggled).toEqual([]);
+
+    expect(mgr.handleKey('tab')).toBe(true);
+    expect(ctrl.activeTabId()).toBe('installed');
+
+    mgr.handleKey('down');
+    expect(ctrl.contentFocused()).toBe(true);
+    expect(mgr.handleKey('tab')).toBe(true);
+    expect(toggled).toEqual(['alpha']);
+    // Toggling is not navigating: the panel is still on the same tab.
+    expect(ctrl.activeTabId()).toBe('installed');
+  });
+
+  it('keeps Tab a tab switch in a list whose tab never bound it', () => {
+    const { mgr, ctrl } = panel(tabs());
+    mgr.handleKey('down');
+    expect(mgr.handleKey('tab')).toBe(true);
+    expect(ctrl.activeTabId()).toBe('available');
+  });
+
   it('backs out one layer per Esc and leaves last', () => {
     let closed = 0;
     const mgr = new WindowManager();
@@ -393,6 +423,41 @@ describe('showRichPanel in the TUI', () => {
     expect(inputLines(app)).toContain('filter: i ');
 
     await escapeOut(input, 3);
+    await leaving;
+    app.stop();
+  });
+
+  it('hands Tab to a row action in the list instead of the editor', async () => {
+    // The `/plugin` toggle is the reason this chord is claimable. It has to
+    // survive the whole dispatch order — the dock, then the editor — because a
+    // Tab that reaches the editor inserts a tab character into the prompt and a
+    // Tab that reaches the strip changes tab instead of switching the plugin on.
+    const { app, input } = makeApp();
+    app.start();
+    await settle();
+
+    const toggled: string[] = [];
+    const leaving = app.showRichPanel({
+      title: 'Plugins',
+      tabs: tabs({ installed: { rowActions: { tab: (value) => { toggled.push(value); } } } }),
+    });
+    await settle();
+
+    press(input, 'down');
+    await settle();
+    input.write('\t');
+    await settle();
+    expect(toggled).toEqual(['alpha']);
+    expect(editorText(app)).toBe('');
+
+    // Back in the strip the same chord is navigation again.
+    await escapeOut(input, 1);
+    press(input, 'tab');
+    await settle();
+    expect(toggled).toEqual(['alpha']);
+    expect(inputLines(app)).toContain('super-search');
+
+    await escapeOut(input, 2);
     await leaving;
     app.stop();
   });
