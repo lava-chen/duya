@@ -7,7 +7,9 @@
  * ## What these cases pin
  *
  *  1. The list opens with one selectable row per entry, carrying the right
- *     state column and the per-row summary.
+ *     state column and the per-row summary. A plugin row LABELS with its
+ *     interface display name and DESCRIBES with its short description,
+ *     while the row's value (the mention token) stays the plugin id.
  *
  *  2. Enter opens the selected entry's DETAIL page; the detail page's Esc
  *     (`onBack`) re-opens the list ON THE ROW THAT OPENED THE DETAIL — the
@@ -87,11 +89,14 @@ describe('the interactive view lists', () => {
         plugins: [
           {
             id: 'com.duya.documents',
-            name: 'Documents',
+            name: 'com.duya.documents',
+            displayName: 'Documents',
+            shortDescription: 'Document workflows at a glance',
+            longDescription: 'A long-form description of the document plugin.',
             enabled: true,
             marketplace: 'official',
             installed: true,
-            description: 'Document workflows',
+            description: 'Short registry blurb',
             appConnections: ['slack'],
             mcpServers: ['documents'],
             skillNames: ['doc-review'],
@@ -112,13 +117,20 @@ describe('the interactive view lists', () => {
     expect(harness.lists).toHaveLength(1);
     const list = harness.lists[0]!;
     expect(list.title).toBe('Plugins');
+    // Rows read like the product, not the package: the display name is what
+    // the user sees, while the row's VALUE (the mention token) stays the id.
+    expect(list.items.map((item) => item.label)).toEqual(['Documents', 'Broken']);
     expect(list.items.map((item) => item.valueLabel)).toEqual(['on', 'missing']);
+    expect(list.items[0]?.description).toContain('Document workflows at a glance');
+    expect(list.items[0]?.description).not.toContain('Short registry blurb');
 
     harness.enter('com.duya.documents');
     expect(harness.details).toHaveLength(1);
     const detail = harness.details[0]!;
     expect(detail.title).toBe('Plugins · Documents');
     const body = detail.lines.join('\n');
+    expect(body).toContain('A long-form description of the document plugin.');
+    expect(body).not.toContain('Short registry blurb');
     expect(body).toContain('app: slack');
     expect(body).toContain('MCP server: documents');
     expect(body).toContain('skill: doc-review');
