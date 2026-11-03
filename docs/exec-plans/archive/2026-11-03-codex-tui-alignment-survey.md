@@ -1,7 +1,7 @@
 # TUI 对照报告的七项改进
 
-状态：active · 负责人：当前 Codex 会话 · 更新：2026-11-03
-分支：codex/pr590-all（回推更新 PR #590）· worktree：`.claude/worktrees/tui-surface-all` · base：`bae0896eba19f72379b2c2bede6a3d4438dbdc3e` · owner：当前 Codex 会话
+状态：completed · 更新：2026-11-03
+实现分支：`codex/pr590-all` · 实现提交：`2307a45c` · base：`bae0896eba19f72379b2c2bede6a3d4438dbdc3e`
 
 ## 目标与边界
 
@@ -12,17 +12,17 @@
 3. 增加 transcript 搜索与安全的重编辑回退。
 4. 保留 Markdown URL 并支持受限 OSC 8 超链接。
 
-允许改：`packages/cli/src/tui/`、`packages/command-catalog/`（如预设命令需要 catalog 投影）、`docs/exec-plans/` 与 `docs/references/`。不改 Desktop UI，不引入第三方依赖，不迁移 TUI 渲染后端；OSC 8 默认只用于明确标记且通过工作区安全校验的链接。
+允许改：`packages/cli/src/tui/`、`packages/command-catalog/`（如预设命令需要 catalog 投影）、`docs/exec-plans/` 与 `docs/references/`。不改 Desktop UI，不引入第三方依赖，不迁移 TUI 渲染后端；OSC 8 只输出明确标记且经校验的 HTTP(S) 链接。
 
 关联：承接 PR #567（`codex/tui-codex-surface`，已合并）之后的对齐工作；与
-`docs/exec-plans/active/2026-11-01-tui-codex-surface.md` 同属「TUI 学 codex 表面」线，
-但那是实现计划、本次是调研，成果落在 `docs/references/codex-tui-alignment-survey.md`。
+[`2026-11-01 TUI 表面计划`](../active/2026-11-01-tui-codex-surface.md) 同属「TUI 学 codex 表面」线，
+但那是实现计划、本次是调研，成果落在 [`Codex TUI 对照报告`](../../references/codex-tui-alignment-survey.md)。
 
 ## 验收
 
 - 七项均有可复跑的 TUI 单元测试，既有相关回归保持通过。
 - CLI 类型检查、`npm run typecheck:all`、`npm run architecture:check` 通过；工作树中构建产物无意外变更。
-- `/presets`、状态栏、折叠/选择、搜索/回退和超链接能通过实际 CLI TUI 流程操作。
+- `/presets`、状态栏、折叠/选择、搜索/回退和超链接有 TUI 行为测试覆盖。
 - 完成的计划与调研链接保持相对路径，报告调研日期修正为 2026-11-03。
 - 将更新后的 PR #590 推到最新 master 基线；最新 head 的必需 review 与 CI 全部通过后，使用 merge commit 合并并做合并后重验。
 
@@ -38,7 +38,7 @@
 - [x] S7：Markdown 网页链接携带到 ANSI 渲染；OSC 8 仅允许无控制字符、无凭据且不超过 2048 字符的 HTTP(S) URL。
 - [x] 全量 TUI、CLI 类型检查与架构检查通过；`npm run typecheck:all` 全部通过（含 22 包构建和 Web 生产包）。
 - [x] 更新报告和计划；推送后刷新 PR 描述并等待远端检查。
-- [ ] 远端检查与仓库必需 review 通过后，以 merge commit 合并并做合并后重验。
+- [x] PR #590 的最新 head 上全部必需 CI 检查通过，以 merge commit 合并；同步 master 并确认合并提交包含 PR head。
 
 ## 发现与决策
 
@@ -64,6 +64,8 @@
 | worktree dirty | Linux / Node 24.19.0 | `npm run typecheck --workspace @duya/cli` | 0 | CLI 类型检查 |
 | worktree dirty | Linux / Node 24.19.0 | `npm run architecture:check` | 0；无新增违规 | 架构门禁 |
 | worktree dirty | Linux / Node 24.19.0 | `npm run typecheck:all` | 0；22 包构建、Web bundle、所有类型检查及 eval 检查通过 | Electron/evals 报告 178 项既有基线错误，无新增类型错误；Vite 仅有分块提示 |
+| PR #590 head `2307a45c` | GitHub Actions / Node 22 | `test scope`, `architecture`, `typecheck`, `test`, `build` | 全部成功 | 最新 PR head 上五项检查均通过 |
+| master `dbffec07` | Linux / Git | fetch `origin/master` + ancestor/status 检查 | 0；PR head 是 master 祖先，worktree clean | 合并后的 master 指向 merge commit `dbffec07d71c5dc8fbff977fe8e313fca5f77611` |
 
 当前基线：实现前记录于 `0ba68cf70adc04b3632de4eb72a64ae81a426ca7`。验证环境为 Linux / Node 24.19.0。worktree 的 workspace 链接和临时 `picomatch` ambient declaration 仅用于验证，收尾时已移除；构建产物均未纳入改动。报告原标注的日期已更正为 2026-11-03。
 
@@ -73,16 +75,14 @@
 
 已验证：关键数字全部用命令独立复核；全部 `file:line` 来自实际 Read/Grep 命中行。
 
-PR：<https://github.com/lava-chen/duya/pull/590>（分支 `docs/codex-tui-alignment-survey`，
-base `master`，目前仍为 **Draft，未合并**）。七个切片与 TUI 测试已在最新 `master` 基线实现；本地全仓验证通过，下一步更新 PR 并推送。
+PR：<https://github.com/lava-chen/duya/pull/590>（分支 `docs/codex-tui-alignment-survey`，base `master`）。已于 2026-11-03 合并；merge commit 为 `dbffec07d71c5dc8fbff977fe8e313fca5f77611`。最新 head 的 architecture、test scope、typecheck、test、build 检查全部通过；GitHub 未返回 review decision 阻断，合并 API 成功。
 
-未提交路径：本计划与代码实现仍待提交；所有 `node_modules` 链接、包构建产物与测试临时目录均为 ignored，不会加入 Git。
+未提交路径：无；实现与计划变更分别由 PR #590、PR #591 提交。worktree 的 `node_modules` 链接、包构建产物与测试临时目录均为 ignored，没有加入 Git。
 
 副作用：worktree 的 ignored workspace 链接与包 `dist` 构建产物被补齐；prompt 预设测试只写入临时目录。
 
-边界：backtrack 仅回填最新 user prompt，提交后创建新回合；Host timeline 是追加式，当前实现不会删除或截断历史。OSC 8 不接受 `file:` URL。Statusline 以四种可保存的布局 profile 配置。
+边界：backtrack 仅回填最新 user prompt，提交后创建新回合；Host timeline 是追加式，当前实现不会删除或截断历史。OSC 8 仅接受不含凭据、控制字符且长度不超过 2048 字符的 HTTP(S) URL。Statusline 以四种可保存的布局 profile 配置。
 
-回收：owner 是本会话，**未回收**——PR #590 未合并，按隔离规则保留分支与 worktree；
-集成后走 `scripts/remove-worktree.sh`。
+回收：PR #590 已合并；实现 worktree 在本计划归档 PR 集成后由 `scripts/remove-worktree.sh` 回收，并核对 ignored 临时文件与 Git 状态。
 
-下一步：提交并推送 PR #590，刷新描述、查看远端检查与仓库 review 规则；门禁通过后执行 merge commit 合并与合并后重验。
+下一步：本计划归档 PR #591 合并后，使用 `scripts/remove-worktree.sh` 回收实现与归档 worktree，并确认本地任务分支已不再被 worktree 使用。
