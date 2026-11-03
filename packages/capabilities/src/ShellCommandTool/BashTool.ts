@@ -70,6 +70,41 @@ export interface TruncatedShellOutput {
   fullOutputPath?: string;
 }
 
+/** Leading lines that fit `maxChars`, at most `maxLines`. */
+function takeHeadLines(lines: string[], maxLines: number, maxChars: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (const line of lines) {
+    if (kept.length >= maxLines || used >= maxChars) break;
+    const room = maxChars - used;
+    // A single oversized line (a `\r` progress bar reads as one line) still has
+    // to respect the character budget, so cut it mid-line here.
+    if (line.length > room) {
+      kept.push(line.slice(0, room));
+      break;
+    }
+    kept.push(line);
+    used += line.length + 1;
+  }
+  return kept;
+}
+
+/** Trailing lines that fit `maxChars`, at most `maxLines`. */
+function takeTailLines(lines: string[], maxLines: number, maxChars: number): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0 && kept.length < maxLines && used < maxChars; i--) {
+    const room = maxChars - used;
+    if (lines[i].length > room) {
+      kept.unshift(lines[i].slice(lines[i].length - room));
+      break;
+    }
+    kept.unshift(lines[i]);
+    used += lines[i].length + 1;
+  }
+  return kept;
+}
+
 export function truncateShellOutput(content: string, outputDirectory?: string): TruncatedShellOutput {
   const trimmed = content.trim();
   const lines = trimmed.split('\n');
@@ -88,20 +123,30 @@ export function truncateShellOutput(content: string, outputDirectory?: string): 
     }
   }
 
-  // Keep the tail (errors/final results live at the end)
-  let tail = trimmed.slice(-BASH_MAX_OUTPUT_CHARS);
-  const newlineIdx = tail.indexOf('\n');
-  if (newlineIdx > 0) tail = tail.slice(newlineIdx + 1);
+  // Keep both ends and drop the middle: the head carries the command's own
+  // context (headers, progress, what it started with) and the tail carries the
+  // errors and final results. Each half gets half of both budgets so neither
+  // limit can be exceeded by the other being frugal.
+  const halfLines = Math.floor(BASH_MAX_OUTPUT_LINES / 2);
+  const headChars = Math.ceil(BASH_MAX_OUTPUT_CHARS / 2) - 1; // leaves room for the joining newline
+  const tailChars = Math.floor(BASH_MAX_OUTPUT_CHARS / 2);
+  const head = takeHeadLines(lines, halfLines, headChars);
+  const tail = takeTailLines(lines.slice(head.length), halfLines, tailChars);
+  const kept = [...head, ...tail].join('\n');
 
   const sizeHint = `${(totalBytes / 1024).toFixed(1)}KB`;
   const fullHint = fullOutputPath
     ? `Full output saved to: ${fullOutputPath}\nUse read("${fullOutputPath}") to read the full output.`
     : 'Full output was too large to spill to disk.';
+  // Describes what survived rather than what was dropped, so the line and
+  // character budgets can each bind without the marker going false.
   const marker =
-    `\n\n[Output truncated: showing last ${tail.length.toLocaleString()} of ` +
-    `${totalLines.toLocaleString()} lines / ${sizeHint} total. ${fullHint}]`;
+    `\n\n[Output truncated: kept first ${head.length.toLocaleString()} and last ` +
+    `${tail.length.toLocaleString()} of ${totalLines.toLocaleString()} lines ` +
+    `(${kept.length.toLocaleString()} of ${trimmed.length.toLocaleString()} chars). ` +
+    `${sizeHint} total. ${fullHint}]`;
 
-  return { output: tail + marker, fullOutputPath };
+  return { output: kept + marker, fullOutputPath };
 }
 
 // ============================================================================

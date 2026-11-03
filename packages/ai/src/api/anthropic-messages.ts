@@ -98,15 +98,45 @@ const BARE_THINKING_PREFIXES = [
   'actually,',       // "Actually, let me..."
   'so,',             // "So, I need to..."
   'okay,',           // "Okay, first..."
+  'ok,',             // "Ok, so the..."
+  'wait,',           // "Wait, that last point is important..."
+  'now let',         // "Now let me get the numbers..."
+  'now i have',      // "Now I have everything I need..."
+  'i have enough',   // "I have enough for a solid answer..."
+  'the user asked',  // "The user asked three things: ..."
+  'the user wants',  // "The user wants X, so I should..."
+  'the user said',   // "The user said ... which means..."
 ];
 
 /**
- * Returns true if `text` looks like bare (untagged) thinking content.
- * Used as a fallback when MiniMax sends reasoning without <thinking> tags.
+ * Leading characters of a text block held back while the bare-thinking
+ * classifier reads enough of its head to decide the channel. Bounded so a
+ * legitimate answer is delayed by a short window instead of buffered whole.
  */
+const BARE_THINKING_DECISION_WINDOW = 240;
+
+/**
+ * MiniMax emits a short genuine thinking block ("Let me get the m2.7", 19
+ * chars in the captured session) before dumping the rest of the reasoning
+ * into the text channel, so requiring *no* thinking content at all was too
+ * strict and the leak sailed through. Once the wire has delivered this much
+ * genuine thinking the endpoint is behaving and text is the answer.
+ */
+const BARE_THINKING_MAX_GENUINE_CHARS = 200;
+
+type BareThinkingChannel = 'thinking' | 'text';
+
+interface BareThinkingWindow {
+  /** Channel chosen for the rest of this text block; unset while undecided. */
+  verdict?: BareThinkingChannel;
+  /** Head held back until `verdict` is decided. */
+  pending: string;
+}
+
+/** Returns true if `text` looks like bare (untagged) thinking content. */
 function looksLikeBareThinkingContent(text: string): boolean {
   const trimmed = text.trimStart().toLowerCase();
-  if (trimmed.length < 4 || trimmed.length > 512) return false;
+  if (trimmed.length < 4) return false;
   // Must match a known thinking prefix and be at the start of a potential answer
   // (not in the middle of a sentence).
   for (const prefix of BARE_THINKING_PREFIXES) {
@@ -121,6 +151,48 @@ function looksLikeBareThinkingContent(text: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Assign one text-channel chunk to a channel, holding the block head back
+ * until it is long enough to classify. Returns undefined while undecided.
+ * Once a block is classified the verdict sticks for its remainder, so a
+ * 20k-character reasoning dump is rerouted from its first matched sentence.
+ */
+function routeBareThinkingChunk(
+  window: BareThinkingWindow,
+  chunk: string,
+  canReroute: boolean,
+): { channel: BareThinkingChannel; text: string } | undefined {
+  if (window.verdict) return { channel: window.verdict, text: chunk };
+  if (!canReroute) return { channel: 'text', text: chunk };
+
+  window.pending += chunk;
+  if (looksLikeBareThinkingContent(window.pending)) {
+    window.verdict = 'thinking';
+    return { channel: 'thinking', text: takePending(window) };
+  }
+  if (window.pending.length >= BARE_THINKING_DECISION_WINDOW) {
+    window.verdict = 'text';
+    return { channel: 'text', text: takePending(window) };
+  }
+  return undefined;
+}
+
+/**
+ * Release an undecided window. Content that never got classified stays
+ * visible — defaulting to hiding it would lose a real answer.
+ */
+function flushBareThinkingWindow(window: BareThinkingWindow): string {
+  if (window.verdict) return '';
+  window.verdict = 'text';
+  return takePending(window);
+}
+
+function takePending(window: BareThinkingWindow): string {
+  const text = window.pending;
+  window.pending = '';
+  return text;
 }
 
 // =============================================================================
@@ -1069,7 +1141,14 @@ export function resolveAnthropicThinking(
 export function parseAnthropicEvent(
   event: Anthropic.MessageStreamEvent,
   assistantMsg: AssistantMessage,
-  state: { currentBlockIdx: number; isMiniMax: boolean; thinkParser?: ThinkTagParser },
+  state: {
+    currentBlockIdx: number;
+    isMiniMax: boolean;
+    thinkParser?: ThinkTagParser;
+    bareThinking?: BareThinkingWindow;
+    genuineThinkingChars?: number;
+    taggedThinkingSeen?: boolean;
+  },
 ): AssistantMessageEvent | AssistantMessageEvent[] {
   // Helpers to lazily create the current content block. MiniMax sometimes
   // emits deltas (especially thinking_delta) without a preceding
@@ -1091,6 +1170,22 @@ export function parseAnthropicEvent(
     const newBlock: TextContent = { type: 'text', text: '' };
     assistantMsg.content.push(newBlock);
     return newBlock;
+  }
+
+  // The bare-thinking verdict is taken before any character has been appended,
+  // so the block opened by content_block_start is still empty. Discard it
+  // instead of leaving a zero-length text block in the transcript, then re-target
+  // the open thinking block so a rerouted dump extends the existing thought
+  // rather than rendering as a second collapsed unit.
+  function dropEmptyTextBlock(): void {
+    const block = assistantMsg.content[state.currentBlockIdx];
+    if (block && block.type === 'text' && block.text === '') {
+      assistantMsg.content.splice(state.currentBlockIdx, 1);
+      state.currentBlockIdx = -1;
+    }
+    const lastIndex = assistantMsg.content.length - 1;
+    const last = assistantMsg.content[lastIndex];
+    if (last && last.type === 'thinking') state.currentBlockIdx = lastIndex;
   }
 
   switch (event.type) {
@@ -1139,6 +1234,7 @@ export function parseAnthropicEvent(
         return { type: 'thinking_start', contentIndex: state.currentBlockIdx, partial: assistantMsg };
       }
       if (block.type === 'text') {
+        state.bareThinking = { pending: '' };
         const textBlock: TextContent = { type: 'text', text: '' };
         assistantMsg.content.push(textBlock);
         return { type: 'text_start', contentIndex: state.currentBlockIdx, partial: assistantMsg };
@@ -1201,6 +1297,7 @@ export function parseAnthropicEvent(
         // on demand so reasoning is not dropped.
         const block = ensureThinkingBlock();
         block.thinking += delta.thinking;
+        state.genuineThinkingChars = (state.genuineThinkingChars ?? 0) + delta.thinking.length;
         return { type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: delta.thinking, partial: assistantMsg };
       }
 
@@ -1222,30 +1319,33 @@ export function parseAnthropicEvent(
           const { thinking, text } = state.thinkParser.feed(textDelta);
           const events: AssistantMessageEvent[] = [];
           if (thinking) {
+            state.taggedThinkingSeen = true;
             ensureThinkingBlock().thinking += thinking;
             events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: thinking, partial: assistantMsg });
           }
           if (text) {
-            // Fallback: detect bare thinking content (MiniMax M2.5 sometimes
-            // emits reasoning without any tags in the text channel). Only reroute
-            // if no thinking has been detected yet AND the text looks like
-            // internal reasoning rather than a direct answer.
-            if (
-              !thinking &&
-              assistantMsg.content.filter(b => b.type === 'thinking').length === 0 &&
-              looksLikeBareThinkingContent(text)
-            ) {
-              ensureThinkingBlock().thinking += text;
-              events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+            // Fallback for bare thinking content: MiniMax emits reasoning with
+            // no tags at all in the text channel. A tagged stream is already
+            // separating the channels, and so is one preceded by substantial
+            // genuine thinking — in both cases text is the answer.
+            const bareWindow = state.bareThinking ??= { pending: '' };
+            const canReroute = !state.taggedThinkingSeen
+              && (state.genuineThinkingChars ?? 0) < BARE_THINKING_MAX_GENUINE_CHARS;
+            const routed = routeBareThinkingChunk(bareWindow, text, canReroute);
+            if (routed && routed.channel === 'thinking') {
+              dropEmptyTextBlock();
+              ensureThinkingBlock().thinking += routed.text;
+              events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: routed.text, partial: assistantMsg });
               console.warn(
-                '[duya-ai] [MiniMax] Detected bare thinking content in text channel ' +
-                  '(no tags, pattern matched). This is a MiniMax API bug — consider ' +
-                  'disabling thinking (effort=off) to avoid this issue.',
-                { textPreview: text.slice(0, 80) },
+                '[duya-ai] [MiniMax] Rerouted bare thinking content out of the text ' +
+                  'channel (no tags, head matched a reasoning pattern). This is a ' +
+                  'MiniMax API bug — consider disabling thinking (effort=off) to ' +
+                  'avoid it.',
+                { textPreview: routed.text.slice(0, 80) },
               );
-            } else {
-              ensureTextBlock().text += text;
-              events.push({ type: 'text_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+            } else if (routed) {
+              ensureTextBlock().text += routed.text;
+              events.push({ type: 'text_delta', contentIndex: state.currentBlockIdx, delta: routed.text, partial: assistantMsg });
             }
           }
           return events.length > 0 ? events : { type: 'start', partial: assistantMsg };
@@ -1316,6 +1416,17 @@ export function parseAnthropicEvent(
         return { type: 'toolcall_end', contentIndex: state.currentBlockIdx, toolCall: block, partial: assistantMsg };
       }
       if (block && block.type === 'text') {
+        // A head window still undecided at block end was never matched, so it
+        // is ordinary answer text and must not be dropped.
+        const leftovers = state.bareThinking ? flushBareThinkingWindow(state.bareThinking) : '';
+        state.bareThinking = undefined;
+        if (leftovers) {
+          block.text += leftovers;
+          return [
+            { type: 'text_delta', contentIndex: state.currentBlockIdx, delta: leftovers, partial: assistantMsg },
+            { type: 'text_end', contentIndex: state.currentBlockIdx, content: block.text, partial: assistantMsg },
+          ];
+        }
         return { type: 'text_end', contentIndex: state.currentBlockIdx, content: block.text, partial: assistantMsg };
       }
       if (block && block.type === 'thinking') {
@@ -2087,6 +2198,9 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         currentBlockIdx: -1,
         isMiniMax,
         thinkParser: isMiniMax ? new ThinkTagParser() : undefined,
+        bareThinking: undefined as BareThinkingWindow | undefined,
+        genuineThinkingChars: 0,
+        taggedThinkingSeen: false,
       };
 
       // 6.5. Emit parameter diagnostics before the stream starts.
@@ -2207,6 +2321,22 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
             const sse = emitSSE(internalEvent);
             if (sse) yield sse;
           }
+        }
+      }
+
+      // An undecided head window survives to here when the stream ends without
+      // a content_block_stop; release it as visible text rather than lose it.
+      if (state.bareThinking) {
+        const leftovers = flushBareThinkingWindow(state.bareThinking);
+        state.bareThinking = undefined;
+        if (leftovers) {
+          const block = assistantMsg.content[state.currentBlockIdx];
+          if (block && block.type === 'text') {
+            block.text += leftovers;
+          } else {
+            assistantMsg.content.push({ type: 'text', text: leftovers });
+          }
+          yield { type: 'text', data: leftovers };
         }
       }
 

@@ -34,7 +34,6 @@ import { getCachedAppConnectionDescriptors } from '@duya/host/worker-tool-bindin
 import { projectForProvider, downgradedSchemaDescription } from '@duya/plugin-core/mcp/core/projection';
 import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections, extractExplicitSkillMentions, mergeSkillMentionSources } from '@duya/host/worker-mentions';
 import { matchSkillsForPrompt, buildSkillSuggestionInjection } from '@duya/host/skills';
-import { compressProjectedToolMessages } from '@duya/agent-runtime/context/compact/projectionCompress';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat, estimateContextTextTokens } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveWorkerOutputBudget } from './worker-model-output-budget.js';
