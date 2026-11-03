@@ -252,6 +252,22 @@ describe('the lifecycle frames', () => {
     expect(block.subagent?.spec.name).toBe('Robie');
   });
 
+  it('links the legacy SSE projector spelling of the parent call id', () => {
+    const { model, block } = spawned();
+    const result = model.apply({
+      type: 'agent_progress',
+      data: {
+        agentEventType: 'subagent_started',
+        subagentId: 'sub-1',
+        // legacy-sse-projector serializes parentToolCallId as toolCallId.
+        toolCallId: 'call-1',
+      },
+    });
+
+    expect(result.kind).toBe('mutate');
+    expect(block.subagent?.subagentId).toBe('sub-1');
+  });
+
   it('resolves a completion by child id, without a second lookup table', () => {
     const { model, block } = spawned();
     model.apply({

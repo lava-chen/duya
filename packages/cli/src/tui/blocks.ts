@@ -813,7 +813,10 @@ export class TranscriptModel {
     const subagentId = asString(payload['subagentId']);
 
     if (eventType === 'subagent_started') {
-      const parentCallId = asString(payload['parentToolCallId']);
+      // The canonical protocol calls this `parentToolCallId`, while the legacy
+      // SSE projector exposes the same value as `toolCallId`. The TUI consumes
+      // projected frames, so accept both spellings at this boundary.
+      const parentCallId = asString(payload['parentToolCallId']) || asString(payload['toolCallId']);
       if (parentCallId === '' || subagentId === '') return { kind: 'none' };
       const block = this.toolsByCallId.get(parentCallId);
       if (block === undefined) return { kind: 'none' };
