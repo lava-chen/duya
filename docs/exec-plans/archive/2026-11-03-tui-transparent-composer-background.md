@@ -4,6 +4,7 @@
 
 实现分支：`codex/tui-transparent-composer` · 实现提交：`c5d032c681be3324b41ede2d3d4404f0488d1258` · 起始 base：`550b664b07444ed9fc52698e1a3ad9f703ebc2ed`
 归档更新分支：`codex/archive-tui-transparent-plan` · base：`cccab45e852c2e3402c8d64e2536873100db2063`
+归档更新 PR：<https://github.com/lava-chen/duya/pull/597>（Draft；文档收尾）
 
 ## 目标与边界
 
