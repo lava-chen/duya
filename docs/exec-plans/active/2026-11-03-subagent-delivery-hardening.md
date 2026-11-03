@@ -98,9 +98,19 @@ idle 唤醒语义在文本中如实描述为"下一轮开始时送达"。
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| （待填） | | | | |
+| `d070c94d`（源码+bundle）+ `0810f65a`（bundle 按提交树重建） | Win11 / Node 22.22.2 / worktree `.claude/worktrees/subagent-delivery-fix` | `npm run typecheck:all`（`env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR CODEBUDDY_SAFE_DELETE_ENABLED=0`） | 4 pass / 0 fail | 本文档 |
+| 同上 | 同上 | `npm run architecture:check` | OK，无新增违规（48 条 baseline 失配指纹未 `--write`） | 本文档 |
+| 同上 | 同上 | vitest：agent-core + capabilities + host + cli/tui + agent-runtime（267 文件） | 2924 passed；9 个 git 依赖用例在 base master 同样失败（`spawnSync git ENOENT`，沙箱 PATH），签名一致，非本次引入 | 本文档 |
+| 同上 | 同上 | `npm run bundle:worker` + `bundle:verify` | FRESH 0/1112 | 本文档 |
 
 ## 接续 / 结果
 
-（进行中）
-下一步：S1–S5 实现 → 门禁 → commit + PR。
+- 已实现并验证：S1–S5 全部落地，commit `d070c94d` + `0810f65a`，分支
+  `subagent-delivery-fix`，**PR https://github.com/lava-chen/duya/pull/607**（待 CI 与授权集成）。
+- 未提交路径：无（`packages/capabilities/src/ModuleTool/inline-content.ts` 的行尾假 M 按
+  已知处置 restore 回 HEAD，不入提交）。
+- 副作用：无外部副作用；worker bundle 随源码同 commit。
+- 阻塞：无。集成须等待必需 CI 通过并获用户授权（未经授权不合并）。
+- 下一步（后续计划，不在本 PR）：父会话 idle 时的通知自动唤醒（auto-resume turn）需要与
+  run orchestrator 的 one-live-run-per-session 不变量协同，单独切片设计；本 PR 的回执
+  文案已把通知语义如实描述为"下一轮开始时送达"。
