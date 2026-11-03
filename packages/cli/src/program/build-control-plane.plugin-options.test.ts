@@ -31,6 +31,25 @@ describe('plugin CLI option forwarding', () => {
     expect(runPluginCommand.list).toHaveBeenCalledWith(expect.objectContaining({ available: true }));
   });
 
+  it('sets a failing command exit code without forcing process shutdown', async () => {
+    const previousExitCode = process.exitCode;
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit must not be called');
+    });
+    runPluginCommand.list.mockResolvedValueOnce(1);
+    const program = new Command().exitOverride();
+    buildControlPlane(program);
+
+    try {
+      await program.parseAsync(['node', 'duya', 'plugin', 'list']);
+      expect(process.exitCode).toBe(1);
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = previousExitCode;
+      exit.mockRestore();
+    }
+  });
+
   it('forwards the selected marketplace when installing by id', async () => {
     const program = new Command().exitOverride();
     buildControlPlane(program);
