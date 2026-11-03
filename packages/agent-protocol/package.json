@@ -206,10 +206,6 @@
     "./bot-inbox-api": {
       "types": "./dist/bot-inbox-api.d.ts",
       "import": "./dist/bot-inbox-api.js"
-    },
-    "./plugin-management": {
-      "types": "./dist/plugin-management.d.ts",
-      "import": "./dist/plugin-management.js"
     }
   },
   "files": [

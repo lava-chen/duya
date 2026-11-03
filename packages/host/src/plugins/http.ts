@@ -46,8 +46,10 @@ export async function routePluginManagement(req: IncomingMessage, res: ServerRes
           if (body[key] !== undefined && (typeof body[key] !== 'string' || (body[key] as string).length > 4096)) throw new PluginManagementError('invalid_plugin_install', 'Invalid install arguments');
         }
         result = await api.install({
-          pluginId: body.pluginId as string | undefined, fromPath: body.fromPath as string | undefined,
-          scope: body.scope as string | undefined, marketplace: body.marketplace as string | undefined
+          ...(typeof body.pluginId === 'string' ? { pluginId: body.pluginId } : {}),
+          ...(typeof body.fromPath === 'string' ? { fromPath: body.fromPath } : {}),
+          ...(typeof body.scope === 'string' ? { scope: body.scope } : {}),
+          ...(typeof body.marketplace === 'string' ? { marketplace: body.marketplace } : {}),
         });
       } else if (parts.length === 4) {
         if (parts[3] === 'enable' || parts[3] === 'disable') result = await api.setEnabled(id, parts[3] === 'enable');

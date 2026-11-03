@@ -21,10 +21,17 @@ export interface HostPluginManagementApiV1 {
   list(): Promise<{ plugins: readonly HostManagedPlugin[] }>;
   info(id: string): Promise<HostManagedPlugin>;
   doctor(): Promise<{ checks: readonly { id: string; status: 'ok' | 'warn' | 'error'; message: string; pluginId?: string }[] }>;
-  install(input: HostPluginInstallInput): Promise<{ plugin: HostManagedPlugin }>;
+  install(input: HostPluginManagementInstallInput): Promise<{ plugin: HostManagedPlugin }>;
   setEnabled(id: string, enabled: boolean): Promise<{ plugin: HostManagedPlugin }>;
   uninstall(id: string, deleteData: boolean): Promise<{ id: string; removed: boolean }>;
   update(id: string): Promise<{ plugin: HostManagedPlugin }>;
+}
+
+export interface HostPluginManagementInstallInput {
+  readonly pluginId?: string;
+  readonly fromPath?: string;
+  readonly marketplace?: string;
+  readonly scope?: string;
 }
 
 export interface HostPluginCatalogItem {
@@ -241,10 +248,8 @@ export interface HostLocalPluginManagementApiV1 {
 }
 
 export interface HostPluginInstallInput {
-  readonly pluginId?: string;
-  readonly fromPath?: string;
+  readonly pluginId: string;
   readonly marketplace?: string;
-  readonly scope?: string;
   readonly enabled?: boolean;
   readonly expectedRevision?: string;
 }

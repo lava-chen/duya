@@ -19,8 +19,8 @@ export async function runPluginManagement(ctx: TuiSlashContext, args: string): P
   const value = match[2]?.trim() ?? '';
   try {
     if (action === 'discover') {
-      const { plugins } = await ctx.client.listPluginCatalog();
-      showPanel(ctx, 'Plugin catalog', plugins.map(plugin => `${plugin.id}@${plugin.marketplace}  ${plugin.version}  ${plugin.installed ? 'installed' : 'available'}`), panelOptions);
+      const { entries } = await ctx.client.listPluginCatalog();
+      showPanel(ctx, 'Plugin catalog', entries.map(plugin => `${plugin.pluginId}@${plugin.marketplace}  ${plugin.version}  ${plugin.installed ? 'installed' : 'available'}`), panelOptions);
       return true;
     }
     if (action === 'marketplace' && (!value || value === 'list')) {
@@ -46,11 +46,11 @@ export async function runPluginManagement(ctx: TuiSlashContext, args: string): P
       }
       else if (market[1] === 'remove') await ctx.client.removePluginMarketplace(market[2]);
       else await ctx.client.refreshPluginMarketplace(market[2]);
-    } else if (action === 'install-path') await ctx.client.installPlugin({ fromPath: await localPath(ctx, value) });
+    } else if (action === 'install-path') await ctx.client.installPluginLegacy({ fromPath: await localPath(ctx, value) });
     else if (action === 'install') {
       const at = value.lastIndexOf('@');
-      await ctx.client.installPlugin(at > 0 ? { pluginId: value.slice(0, at), marketplace: value.slice(at + 1) } : { pluginId: value });
-    } else if (action === 'enable' || action === 'disable') await ctx.client.setPluginEnabled(value, action === 'enable');
+      await ctx.client.installPluginLegacy(at > 0 ? { pluginId: value.slice(0, at), marketplace: value.slice(at + 1) } : { pluginId: value });
+    } else if (action === 'enable' || action === 'disable') await ctx.client.setPluginEnabledLegacy(value, action === 'enable');
     else if (action === 'uninstall') await ctx.client.uninstallPlugin(value);
     else await ctx.client.updatePlugin(value);
     showPanel(ctx, 'Plugins', ['Plugin configuration updated.', 'Reload or start a new session to apply the change.'], panelOptions);

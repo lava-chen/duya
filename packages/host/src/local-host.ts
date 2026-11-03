@@ -1,6 +1,7 @@
 import { createPluginAudit } from './plugins/audit.js';
 import { createPluginServices } from './plugins/service.js';
 import { createPluginManagementApi } from './plugins/management-api.js';
+import { createHostLocalPluginManagementApi } from './plugin-management/index.js';
 import { getLogger as getPluginLogger } from './worker-logger.js';
 import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 import {

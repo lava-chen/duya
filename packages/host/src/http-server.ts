@@ -1,5 +1,5 @@
 import type { PluginAuditEvent } from './plugins/audit.js';
-import type { HostPluginManagementApiV1 } from '@duya/agent-protocol/plugin-management';
+import type { HostPluginManagementApiV1, HostPluginManagementInstallInput } from '@duya/agent-protocol/plugin-management';
 import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
 import { logger } from '@duya/host/worker-logger';
