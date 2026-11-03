@@ -1609,6 +1609,58 @@ function streamingFileBody(
   return rows.map((line) => `${indent}${line}`);
 }
 
+/** Rows a running shell row may draw when the live area gives it no ceiling. */
+const LIVE_SHELL_MAX_ROWS = 6;
+
+/**
+ * The tail of a command that is still running.
+ *
+ * The file preview above and this one answer the same question — what is
+ * happening behind this row right now — but the two sources differ: an argument
+ * stream is the model writing a file we already know the shape of, while this is
+ * whatever the process chose to print. So there is nothing to parse here; the
+ * only decision is WHICH LINES survive.
+ *
+ * Tail, never head, and that is not a style choice. A build log's first lines
+ * were written minutes ago; the last line is the one that tells you whether it
+ * is still working or has stopped. Same reasoning codex applies to its
+ * `LiveCommandOutput`, and the same one `selectShellOutput` already states for
+ * completed results in this file.
+ *
+ * Bounded by the live area for the same reason `streamingFileBody` is: rows
+ * above `#liveStart` are already in the terminal's scrollback and cannot be
+ * taken back, and this body is the only thing in the row that still changes.
+ */
+function liveShellBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  const text = block.outputText;
+  if (text === undefined || text.trim() === '') return [];
+  if (!isShellTool(block.name)) return [];
+  const liveRows = options.liveRows;
+  if (liveRows === undefined) return [];
+  // Three rows are already spent before any content arrives: the stanza gap
+  // above, the call's own row, and the summary line below.
+  if (liveRows < 3) return [];
+  const maxRows = Math.min(LIVE_SHELL_MAX_ROWS, liveRows - 3);
+  if (maxRows <= 0) return [];
+  const columns = contentColumns(options.width);
+  const lines = text
+    .replace(/\r\n?/gu, '\n')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .slice(-maxRows);
+  return lines.map((line) => {
+    const clipped = columns === undefined
+      ? line
+      : truncateToWidth(line, Math.max(1, columns - visibleWidth(indent)));
+    return `${indent}${styles.muted(clipped)}`;
+  });
+}
+
 function nodeBody(
   block: Block,
   plan: BlockPlan,
@@ -1641,7 +1693,9 @@ function nodeBody(
     // A call that is still being written shows what it is writing. The
     // preview is bounded by the live area, because a block that scrolls out
     // while it is still changing keeps its frozen half-written rows forever.
-    return streamingFileBody(block, options, styles, plan.bodyIndent);
+    const written = streamingFileBody(block, options, styles, plan.bodyIndent);
+    if (written.length > 0) return written;
+    return liveShellBody(block, options, styles, plan.bodyIndent);
   }
   if (result.trim() === '') return [];
   if (!showsToolDetails(block, options)) {
