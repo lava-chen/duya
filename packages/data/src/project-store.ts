@@ -2,7 +2,7 @@
  * project-store.ts — ProjectStore aggregate for `duya-core.db` (plan 534).
  *
  * `projects` / `project_bots` were misplaced in `memory-state.db` (plan 525).
- * This store is the canonical home: project migrations 61–64 plus typed CRUD and
+ * This store is the canonical home: project migrations 61–65 plus typed CRUD and
  * the path-JSON helpers. The schema is a verbatim carry-over of the accumulated
  * memory-state migrations (0001 base + 0012 entity + 0013 icon/color) so reads
  * behave identically.
@@ -146,7 +146,7 @@ export function projectPaths(row: Pick<ProjectRow, 'paths'>): ProjectPathEntry[]
 }
 
 export class ProjectStore {
-  /** Project migrations use ids 61–64, above the current core schema maximum. */
+  /** Project migrations use ids 61–65, above the current core schema maximum. */
   static readonly migrations: Migration[] = [
     {
       id: 61,
@@ -266,6 +266,29 @@ export class ProjectStore {
         );
         CREATE INDEX IF NOT EXISTS idx_project_activity_cursor ON project_activity(project_id, event_id);
       `);
+      },
+    },
+    {
+      id: 65,
+      name: 'project_activity_run_terminal_dedupe',
+      up: (db) => {
+        // A retried settle and a restart reconciliation must converge on ONE
+        // `run.terminal` row per Run. Keep the earliest row if an interrupted
+        // build already produced duplicates, then let the index enforce it.
+        db.exec(`
+          DELETE FROM project_activity
+            WHERE event_type = 'run.terminal' AND source_type = 'run'
+              AND event_id NOT IN (
+                SELECT MIN(event_id) FROM project_activity
+                  WHERE event_type = 'run.terminal' AND source_type = 'run'
+                  GROUP BY project_id, source_id
+              );
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_project_activity_run_terminal
+            ON project_activity(project_id, source_id)
+            WHERE event_type = 'run.terminal' AND source_type = 'run';
+          CREATE INDEX IF NOT EXISTS idx_project_task_sessions_work_session
+            ON project_task_sessions(work_session_id);
+        `);
       },
     },
   ];
@@ -424,6 +447,12 @@ export class ProjectStore {
     return (this.db.prepare('SELECT * FROM project_task_sessions WHERE task_id = ?').get(taskId) as ProjectTaskLinkRow | undefined) ?? null;
   }
 
+  /** The newest link that dispatched the given work Session, if any. */
+  getTaskLinkByWorkSession(workSessionId: string): ProjectTaskLinkRow | null {
+    return (this.db.prepare('SELECT * FROM project_task_sessions WHERE work_session_id = ? ORDER BY updated_at DESC LIMIT 1')
+      .get(workSessionId) as ProjectTaskLinkRow | undefined) ?? null;
+  }
+
   bindTask(projectId: string, taskId: string, coordinatorSessionId: string): ProjectTaskLinkRow {
     const now = Date.now();
     const bind = this.db.transaction((): ProjectTaskLinkRow => {
@@ -538,6 +567,21 @@ export class ProjectStore {
     const result = this.db.prepare(`INSERT INTO project_activity(project_id,event_type,task_id,session_id,run_id,source_type,source_id,payload,created_at)
       VALUES(@project_id,@event_type,@task_id,@session_id,@run_id,@source_type,@source_id,@payload,@created_at)`).run({...input, created_at: now});
     return this.db.prepare('SELECT * FROM project_activity WHERE event_id = ?').get(Number(result.lastInsertRowid)) as ProjectActivityRow;
+  }
+  /**
+   * Append an activity row unless `(project, event_type, source)` already has
+   * one. The live settlement hook and a restart reconciliation both call this,
+   * so the second caller must observe `created: false` rather than duplicate
+   * the project's history.
+   */
+  appendActivityOnce(input: Omit<ProjectActivityRow, 'event_id' | 'created_at'>): { row: ProjectActivityRow; created: boolean } {
+    return this.db.transaction(() => {
+      const existing = this.db.prepare(
+        'SELECT * FROM project_activity WHERE project_id = ? AND event_type = ? AND source_type = ? AND source_id = ? ORDER BY event_id LIMIT 1',
+      ).get(input.project_id, input.event_type, input.source_type, input.source_id) as ProjectActivityRow | undefined;
+      if (existing) return { row: existing, created: false };
+      return { row: this.appendActivity(input), created: true };
+    })();
   }
   listActivity(projectId: string, after = 0, limit = 50) {
     return this.db.prepare('SELECT * FROM project_activity WHERE project_id = ? AND event_id > ? ORDER BY event_id LIMIT ?')

@@ -34,7 +34,7 @@
  */
 
 import { colorFromTagBody, type ColorSlot } from './color.js';
-import { attrs, sameStyle, type SpanAttribute, type SpanStyle, type StyledSpan } from './span.js';
+import { attrs, decodeHyperlinkTag, sameStyle, type SpanAttribute, type SpanStyle, type StyledSpan } from './span.js';
 
 const TAG = /\{(\/?)([a-zA-Z0-9#_-]+)\}/gu;
 
@@ -51,6 +51,7 @@ interface StyleFrame {
   readonly attr?: SpanAttribute;
   readonly fg?: SpanStyle['fg'];
   readonly bg?: SpanStyle['bg'];
+  readonly linkId?: string;
 }
 
 /** Which slot a tag body fills. `-bg` is a background; everything else a foreground. */
@@ -63,16 +64,19 @@ function effective(stack: readonly StyleFrame[]): SpanStyle {
   const listed: SpanAttribute[] = [];
   let fg: SpanStyle['fg'];
   let bg: SpanStyle['bg'];
+  let linkId: string | undefined;
   for (const frame of stack) {
     if (frame.attr !== undefined) listed.push(frame.attr);
     if (frame.fg !== undefined) fg = frame.fg;
     if (frame.bg !== undefined) bg = frame.bg;
+    if (frame.linkId !== undefined) linkId = frame.linkId;
   }
   const normalised = attrs(...listed);
   return {
     ...(fg === undefined ? {} : { fg }),
     ...(bg === undefined ? {} : { bg }),
     ...(normalised.length === 0 ? {} : { attrs: normalised }),
+    ...(linkId === undefined ? {} : { linkId }),
   };
 }
 
@@ -111,6 +115,7 @@ export function tagsToSpans(line: string): readonly StyledSpan[] {
     }
 
     const attribute = ATTRIBUTE_TAGS[body];
+    const linkId = slash ? undefined : decodeHyperlinkTag(body);
     const slot = slotOf(body);
     const color = attribute === undefined && !slash ? colorFromTagBody(body, slot) : undefined;
 
@@ -124,6 +129,9 @@ export function tagsToSpans(line: string): readonly StyledSpan[] {
       } else if (body.endsWith('-fg') || body.endsWith('-bg')) {
         const at = slot === 'bg' ? lastIndexOfBg(stack) : lastIndexOfFg(stack);
         if (at !== -1) stack.splice(at, 1);
+      } else if (body.startsWith('link-')) {
+        const at = lastIndexOfLink(stack);
+        if (at !== -1) stack.splice(at, 1);
       } else {
         plain += match[0];
       }
@@ -131,6 +139,8 @@ export function tagsToSpans(line: string): readonly StyledSpan[] {
       stack.push({ attr: attribute });
     } else if (color !== undefined) {
       stack.push(slot === 'bg' ? { bg: color } : { fg: color });
+    } else if (linkId !== undefined) {
+      stack.push({ linkId });
     } else {
       // Unknown tag: visible text, like every other parser here.
       plain += match[0];
@@ -164,6 +174,13 @@ function lastIndexOfFg(stack: readonly StyleFrame[]): number {
 function lastIndexOfBg(stack: readonly StyleFrame[]): number {
   for (let index = stack.length - 1; index >= 0; index -= 1) {
     if (stack[index]?.bg !== undefined) return index;
+  }
+  return -1;
+}
+
+function lastIndexOfLink(stack: readonly StyleFrame[]): number {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    if (stack[index]?.linkId !== undefined) return index;
   }
   return -1;
 }

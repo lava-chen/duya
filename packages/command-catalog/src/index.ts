@@ -221,7 +221,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     label: 'Compact context',
     labelZh: '压缩上下文',
     description: 'Compress conversation context to save tokens',
-    descriptionZh: '压缩对话上下文以节省 token',
+    descriptionZh: '压缩对话上下文以节省用量',
     category: 'session',
     // The CLI reaches the same worker-side compaction through a Host HTTP exit.
     surfaces: ['desktop', 'cli'],
@@ -259,40 +259,6 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['desktop', 'cli'],
     requiresSession: true,
     // Reading the transcript mid-turn is safe: it does not touch the run.
-    availableWhileBusy: true,
-  },
-  {
-    // Plan 610 T15. The handshake answer is otherwise invisible: a refusal was
-    // correct and the person at the keyboard had no way to see why. `cli` only
-    // — the Desktop renders capabilities in its own settings surface, and
-    // advertising it here without a Desktop executor is exactly the
-    // advertised-but-unrunnable state the catalog's integrity tests forbid.
-    name: 'capabilities',
-    label: 'Show host capabilities',
-    labelZh: '显示 Host 能力',
-    description: 'Show what this Host serves and what this CLI may rely on',
-    descriptionZh: '显示该 Host 提供的能力，以及本 CLI 可以依赖的能力',
-    category: 'session',
-    surfaces: ['cli'],
-    requiresSession: false,
-    // A capability handshake is a read; it does not touch the run.
-    availableWhileBusy: true,
-  },
-  {
-    // Plan 610 T15. The first command that actually CONSUMES a Host capability:
-    // `/capabilities` prints the negotiation, this one asks for a file, so the
-    // advertised name is proved rather than assumed. `cli` only — there is no
-    // Desktop executor, and advertising it there is the advertised-but-
-    // unrunnable state the catalog's integrity tests forbid.
-    name: 'read-file',
-    label: 'Read workspace file',
-    labelZh: '读取工作区文件',
-    description: 'Read a file from this session\'s workspace through the Host',
-    descriptionZh: '通过 Host 读取当前会话工作区中的文件',
-    category: 'session',
-    surfaces: ['cli'],
-    requiresSession: true,
-    // A file read does not touch the run.
     availableWhileBusy: true,
   },
   {
@@ -435,7 +401,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     label: 'Transcript display',
     labelZh: '会话显示',
     description: 'Choose how much of the event stream the transcript shows',
-    descriptionZh: '选择会话记录显示多少事件流内容',
+    descriptionZh: '选择会话记录中显示多少事件流内容',
     argsHint: '[profile]',
     category: 'config',
     surfaces: ['cli'],
@@ -454,6 +420,49 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // Safe mid-turn: it reads the binding table and paints a panel, touching
     // neither the transcript nor the run.
     availableWhileBusy: true,
+  },
+  {
+    name: 'presets',
+    label: 'Prompt presets',
+    labelZh: '提示词预设',
+    description: 'Save and reuse prompt templates',
+    descriptionZh: '保存和复用提示词模板',
+    argsHint: '[save|use|delete|list]',
+    category: 'config',
+    surfaces: ['cli'],
+    availableWhileBusy: false,
+  },
+  {
+    name: 'statusline',
+    label: 'Status line',
+    labelZh: '状态栏',
+    description: 'Choose which session details the footer shows',
+    descriptionZh: '选择页脚显示的会话信息',
+    argsHint: '[full|compact|location|usage]',
+    category: 'config',
+    surfaces: ['cli'],
+    availableWhileBusy: true,
+  },
+  {
+    name: 'search',
+    label: 'Search transcript',
+    labelZh: '搜索会话记录',
+    description: 'Search messages in the visible transcript',
+    descriptionZh: '搜索当前会话记录',
+    argsHint: '[query]',
+    category: 'info',
+    surfaces: ['cli'],
+    availableWhileBusy: true,
+  },
+  {
+    name: 'backtrack',
+    label: 'Edit previous prompt',
+    labelZh: '重新编辑上一条提示',
+    description: 'Copy the last prompt into the composer for editing',
+    descriptionZh: '将上一条提示复制到输入框中编辑',
+    category: 'session',
+    surfaces: ['cli'],
+    availableWhileBusy: false,
   },
   {
     // One canonical `effort`, on both surfaces. It was briefly declared twice
@@ -546,12 +555,14 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   {
     // The one view whose whole purpose is to be opened WHILE a turn runs: a
     // promoted bash command or a subagent outlives the model's answer, and the
-    // user needs to inspect it without waiting for the run to finish.
+    // user needs to inspect it without waiting for the run to finish. Subagents
+    // are listed above the bash tasks because they are the half the user acts
+    // on (Enter watches one in place) rather than only reads.
     name: 'tasks',
     label: 'Background tasks',
     labelZh: '后台任务',
-    description: 'Show background bash tasks and subagents',
-    descriptionZh: '查看后台 bash 任务与子代理',
+    description: 'Switch between subagents and inspect background bash tasks',
+    descriptionZh: '在子代理之间切换，并查看后台 bash 任务',
     category: 'info',
     surfaces: ['cli'],
     requiresSession: true,
@@ -560,9 +571,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   {
     name: 'transcript',
     label: 'Transcript stats',
-    labelZh: '转录统计',
+    labelZh: '会话记录统计',
     description: 'Show transcript statistics',
-    descriptionZh: '查看会话消息统计',
+    descriptionZh: '查看会话记录的消息统计',
     category: 'info',
     surfaces: ['desktop', 'cli'],
     requiresSession: true,
@@ -576,7 +587,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // unrunnable state the catalog's integrity tests forbid.
     name: 'worktree',
     label: 'Worktree controls',
-    labelZh: 'Worktree 操作',
+    labelZh: '工作副本',
     description: 'Create, enter, leave, synchronize or recover this session checkout',
     descriptionZh: '创建、进入、退出、同步或恢复当前会话的工作副本',
     category: 'session',
@@ -601,9 +612,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // projection read that never leaves the machine.
     name: 'pr',
     label: 'Pull requests',
-    labelZh: 'Pull Request',
+    labelZh: '拉取请求',
     description: 'Show the pull requests associated with this session',
-    descriptionZh: '查看与当前会话关联的 Pull Request',
+    descriptionZh: '查看与当前会话关联的拉取请求',
     argsHint: '[refresh]',
     subcommands: ['refresh'],
     category: 'info',
@@ -814,7 +825,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     label: 'Side question',
     labelZh: '旁问',
     description: 'Ask a side question without interrupting',
-    descriptionZh: '不打断当前对话的旁侧问答',
+    descriptionZh: '不打断当前回合，另问一个问题',
     argsHint: '[question]',
     category: 'tools',
     surfaces: ['desktop', 'cli'],

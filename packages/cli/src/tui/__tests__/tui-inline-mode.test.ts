@@ -199,11 +199,11 @@ describe('inline mode', () => {
   it('lists pending drafts above the composer, one row each and three at most', async () => {
     const out = sink();
     const drafts = [
-      { text: 'first', mode: 'queue' as const },
-      { text: 'second', mode: 'queue' as const },
-      { text: 'third', mode: 'steer' as const },
-      { text: 'fourth', mode: 'queue' as const },
-      { text: 'fifth', mode: 'steer' as const },
+      { text: 'first' },
+      { text: 'second' },
+      { text: 'third' },
+      { text: 'fourth' },
+      { text: 'fifth' },
     ];
     const app = new TUIApp({
       output: out.stream,
@@ -219,12 +219,12 @@ describe('inline mode', () => {
     // The budget is fixed: this block is chrome, and a queue that grows would
     // push the composer down a row per draft until the terminal ran out.
     expect(text).toContain('… 2 earlier');
-    // A steer is already with the running turn, so the row says so. Painting
-    // it as a queued draft made a message the user had sent look like one
-    // that never left.
-    expect(text).toContain('↳ sent · third');
+    // Every row in this block means "still waiting for its turn". A steer is
+    // filtered out before it gets here — it is already in the transcript, and
+    // a second copy under the composer was read as a message that had not
+    // been sent.
     expect(text).toContain('⧗ queued · fourth');
-    expect(text).toContain('↳ sent · fifth');
+    expect(text).toContain('⧗ queued · fifth');
     // The two oldest drafts are behind the summary row, not in it.
     expect(text).not.toContain('· first');
     expect(text).not.toContain('· second');

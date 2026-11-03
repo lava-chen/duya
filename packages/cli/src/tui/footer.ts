@@ -36,6 +36,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { PermissionBadge } from './permission-mode.js';
+import type { StatuslineProfile } from './preferences.js';
 import { taggedWith } from './theme.js';
 import type { Styles } from './transcript-view.js';
 import { visibleWidth } from './width.js';
@@ -86,6 +87,7 @@ export interface FooterInput {
    * could not keep true would be worse than no footer.
    */
   readonly permission?: PermissionBadge | null;
+  readonly statusline?: StatuslineProfile;
 }
 
 /** Between the groups on the stats row: one column each side, like the hints. */
@@ -223,31 +225,39 @@ export function buildFooterLines(input: FooterInput): string[] {
   const width = Math.max(1, Math.floor(input.width));
   const styles = input.styles;
 
-  const location = formatCwdForFooter(input.cwd, input.home);
-  const branch = input.branch ?? null;
+  const profile = input.statusline ?? 'full';
+  const showLocation = profile === 'full' || profile === 'compact' || profile === 'location';
+  const showBranch = profile === 'full' || profile === 'location';
+  const showSession = profile === 'full' || profile === 'location';
+  const showUsage = profile === 'full' || profile === 'compact' || profile === 'usage';
+  const showContext = profile !== 'location';
+  const showRate = profile === 'full' || profile === 'usage';
+  const showModel = profile !== 'location' || profile === 'location';
+  const location = showLocation ? formatCwdForFooter(input.cwd, input.home) : '';
+  const branch = showBranch ? input.branch ?? null : null;
   const withBranch = branch === null || branch === '' ? location : `${location} (${branch})`;
-  const withSession = input.sessionName === undefined || input.sessionName === null || input.sessionName === ''
+  const withSession = !showSession || input.sessionName === undefined || input.sessionName === null || input.sessionName === ''
     ? withBranch
     : `${withBranch} • ${input.sessionName}`;
 
   const stats = input.stats;
   const counters: string[] = [];
-  if (stats.inputTokens > 0) counters.push(`↑${formatTokenCount(stats.inputTokens)}`);
-  if (stats.outputTokens > 0) counters.push(`↓${formatTokenCount(stats.outputTokens)}`);
-  if (stats.totalTokens > 0) counters.push(`Σ${formatTokenCount(stats.totalTokens)}`);
+  if (showUsage && stats.inputTokens > 0) counters.push(`↑${formatTokenCount(stats.inputTokens)}`);
+  if (showUsage && stats.outputTokens > 0) counters.push(`↓${formatTokenCount(stats.outputTokens)}`);
+  if (showUsage && stats.totalTokens > 0) counters.push(`Σ${formatTokenCount(stats.totalTokens)}`);
 
   const budget = stats.contextBudget ?? null;
   const percent = stats.contextPercent;
   // `?` before the first billed call, like pi: the window size is known, the
   // usage is not, and a confident "0%" would be a claim rather than a reading.
-  const contextLabel = budget !== null && budget > 0
+  const contextLabel = showContext && budget !== null && budget > 0
     ? `${percent === null ? '?' : `${Math.round(percent)}%`}/${formatTokenCount(budget)}`
     : '';
   // The output rate of the MOST RECENT billed call, measured against the
   // provider's own request duration. It is omitted entirely when the provider
   // reported no duration, rather than shown as a zero.
   const rate = stats.outputTokensPerSecond;
-  const rateLabel = rate !== null && Number.isFinite(rate) ? formatTokensPerSecond(rate) : '';
+  const rateLabel = showRate && rate !== null && Number.isFinite(rate) ? formatTokensPerSecond(rate) : '';
 
   // Three GROUPS, not a run of bare tokens. The counters answer "what has this
   // session spent", the context pair "how much of the window is left", the rate
@@ -258,7 +268,7 @@ export function buildFooterLines(input: FooterInput): string[] {
   const groups = [counters.join(' '), contextLabel, rateLabel].filter((group) => group !== '');
   const statsPlain = groups.join(SEPARATOR);
 
-  const model = input.model ?? null;
+  const model = showModel ? input.model ?? null : null;
   const provider = model?.provider === undefined || model.provider === '' ? '' : `(${model.provider}) `;
   const thinking = model?.thinking === undefined || model.thinking === '' ? '' : ` • ${model.thinking}`;
   const modelPlain = model === null ? '' : `${provider}${model.model}${thinking}`;
@@ -276,7 +286,7 @@ export function buildFooterLines(input: FooterInput): string[] {
   }).join(styles.muted(SEPARATOR));
 
   const row1 = composeRow(withSession, [
-    { plain: input.hint ?? '', tagged: (text) => styles.muted(text) },
+    { plain: profile === 'full' || profile === 'compact' ? input.hint ?? '' : '', tagged: (text) => styles.muted(text) },
   ], width, styles);
   const row2 = composeRow(statsPlain, rightSegments(input, styles, modelPlain), width, styles, statsTagged);
   return [row1, row2];

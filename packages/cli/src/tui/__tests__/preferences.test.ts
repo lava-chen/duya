@@ -26,6 +26,7 @@ import {
   TUI_SHOW_THINKING_SETTING,
   TUI_STARTUP_BANNER_SETTING,
   TUI_TOOL_GROUP_MODE_SETTING,
+  TUI_STATUSLINE_SETTING,
   describeToolGroupMode,
 } from '../preferences.js';
 
@@ -39,6 +40,14 @@ describe('parseTuiPreferences', () => {
     expect(parsed.toolGroupMode).toBe('full');
     expect(parsed.completionRows).toBe(DEFAULT_TUI_PREFERENCES.completionRows);
     expect(parsed.inputRows).toBe(DEFAULT_TUI_PREFERENCES.inputRows);
+    expect(parsed.statusline).toBe('full');
+  });
+
+  it('accepts supported status line profiles and falls back for unknown values', () => {
+    for (const profile of ['full', 'compact', 'location', 'usage'] as const) {
+      expect(parseTuiPreferences({ [TUI_STATUSLINE_SETTING]: profile }).statusline).toBe(profile);
+    }
+    expect(parseTuiPreferences({ [TUI_STATUSLINE_SETTING]: 'everything' }).statusline).toBe('full');
   });
 
   it('reads the three tool-group modes and refuses a fourth', () => {

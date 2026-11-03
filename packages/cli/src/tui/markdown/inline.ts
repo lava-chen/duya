@@ -41,6 +41,7 @@ import { escapeTags } from './escape.js';
 import { colorFromTagBody, sameColor, tagBodyFor, type SpanColor } from '../core/color.js';
 import {
   attrs,
+  encodeHyperlinkTag,
   mergeSpanStyles,
   tokensToSpans,
   PLAIN_STYLE,
@@ -311,9 +312,11 @@ function openTags(style: SpanStyle, order: 'color-first' | 'attrs-first', view: 
   const colour = style.fg === undefined ? [] : [`{${tagBodyFor(style.fg)}}`];
   const background = style.bg === undefined ? [] : [`{${tagBodyFor(style.bg, 'bg')}}`];
   const attributes = (style.attrs ?? []).map((attribute) => `{${attribute}}`);
+  const encodedLink = view.renderer === 'own' && style.linkId !== undefined ? encodeHyperlinkTag(style.linkId) : null;
+  const link = encodedLink === null ? [] : [`{${encodedLink}}`];
   return order === 'color-first'
-    ? [...colour, ...background, ...attributes]
-    : [...attributes, ...colour, ...background];
+    ? [...colour, ...background, ...attributes, ...link]
+    : [...attributes, ...colour, ...background, ...link];
 }
 
 /**
@@ -359,6 +362,10 @@ function deltaTags(style: SpanStyle, envelope: SpanStyle, view: SpanTagView): st
   }
   if (style.fg !== undefined && !sameColor(style.fg, envelope.fg)) out.push(`{${tagBodyFor(style.fg)}}`);
   if (style.bg !== undefined && !sameColor(style.bg, envelope.bg)) out.push(`{${tagBodyFor(style.bg, 'bg')}}`);
+  if (style.linkId !== undefined && style.linkId !== envelope.linkId && view.renderer === 'own') {
+    const link = encodeHyperlinkTag(style.linkId);
+    if (link !== null) out.push(`{${link}}`);
+  }
   return out;
 }
 

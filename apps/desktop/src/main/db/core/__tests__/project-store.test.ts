@@ -158,4 +158,46 @@ describe.skipIf(!nativeSqliteAvailable)('ProjectStore', () => {
     expect(store.get('p-1')).toBeNull();
     expect(store.delete('p-1')).toBe(false);
   });
+
+  it('dedupes run.terminal activity by project and run, and survives replay', () => {
+    store.insert({ project_id: 'p-1', canonical_root: 'E:/repos/one' });
+    const input = {
+      project_id: 'p-1',
+      event_type: 'run.terminal',
+      task_id: null,
+      session_id: 'work-1',
+      run_id: 'run-1',
+      source_type: 'run',
+      source_id: 'run-1',
+      payload: '{}',
+    };
+
+    const first = store.appendActivityOnce(input);
+    expect(first.created).toBe(true);
+    const second = store.appendActivityOnce(input);
+    expect(second.created).toBe(false);
+    expect(second.row.event_id).toBe(first.row.event_id);
+    expect(store.listActivity('p-1')).toHaveLength(1);
+
+    // The partial unique index is the cross-caller guard, not just the read.
+    expect(() => store.appendActivity(input)).toThrow();
+
+    const dedupeMigration = ProjectStore.migrations.find((migration) => migration.id === 65);
+    expect(dedupeMigration).toBeDefined();
+    expect(() => dedupeMigration!.up(db)).not.toThrow();
+    expect(() => dedupeMigration!.up(db)).not.toThrow();
+  });
+
+  it('finds the task link that dispatched a work session', () => {
+    store.insert({ project_id: 'p-1', canonical_root: 'E:/repos/one' });
+    store.bindTask('p-1', 'task-1', 'coordinator-1');
+    store.bindWorkSession('p-1', 'task-1', 'work-1');
+
+    expect(store.getTaskLinkByWorkSession('work-1')).toMatchObject({
+      project_id: 'p-1',
+      task_id: 'task-1',
+      work_session_id: 'work-1',
+    });
+    expect(store.getTaskLinkByWorkSession('missing')).toBeNull();
+  });
 });

@@ -527,6 +527,11 @@ export const RULES: readonly ClassificationRule[] = [
     why: 'THE Control Plane. Run persistence decisions, manifest binding, permission coordination, durable receipts. Plan 00 §A puts it at `apps/desktop/src/main/control-plane`, which is where it already is.',
   },
   {
+    prefix: 'apps/desktop/src/main/projects',
+    category: 'cp-durable',
+    why: 'Desktop glue for the project result loop: it settles a terminal Run into durable project activity and exactly one Coordinator mailbox row, then hands that row to the existing wake paths. Durable settlement, not presentation.',
+  },
+  {
     prefix: 'apps/desktop/src/main/db',
     category: 'cp-durable',
     why: 'SQLite access and migrations. Storage is CP-owned; the store is the durable substrate the CAS rules write through.',

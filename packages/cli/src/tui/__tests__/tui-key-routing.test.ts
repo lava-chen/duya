@@ -242,40 +242,43 @@ describe('TUIApp key routing', () => {
     });
     await settleRendered();
 
-    // F6 enters the task view. Rows are the bash group heading followed by its
-    // tasks, running first — the same order the view paints.
+    // F6 enters the task view. Both group headings come first — subagents above
+    // bash — and the cursor lands on the first TASK, because a heading is not
+    // something Enter can act on.
     input.write('\x1b[17~');
     await settle();
     expect(app.renderState.focus).toBe('tasks');
-    expect(app.backgroundTaskRows().map((row) => row.kind)).toEqual(['group', 'task', 'task', 'group']);
-    expect(app.renderState.selectedTaskRow).toBe(0);
+    expect(app.backgroundTaskRows().map((row) => row.kind)).toEqual(['group', 'group', 'task', 'task']);
+    expect(app.renderState.selectedTaskRow).toBe(2);
     expect(refreshed).toHaveLength(1);
 
     // Arrows move the task selection, never the editor's history.
     input.write('\x1b[B');
     await settle();
-    expect(app.renderState.selectedTaskRow).toBe(1);
+    expect(app.renderState.selectedTaskRow).toBe(3);
     input.write('\x1b[B');
     await settle();
-    expect(app.renderState.selectedTaskRow).toBe(2);
+    // Already on the last row: the selection stops rather than wrapping, so the
+    // arrows cannot put the cursor on a row the user never saw.
+    expect(app.renderState.selectedTaskRow).toBe(3);
     expect(app.inputText).toBe('');
 
     // Enter on a task row asks the chat loop to open it; the row stays put.
     input.write('\r');
     await settle();
     expect(opened).toEqual(['bash-done']);
-    expect(app.renderState.selectedTaskRow).toBe(2);
+    expect(app.renderState.selectedTaskRow).toBe(3);
 
     // Esc returns the arrows to the composer.
     input.write('\x1b');
     await settleEscape();
     expect(app.renderState.focus).toBe('input');
 
-    // Re-entering starts at the first row again.
+    // Re-entering starts at the first task again.
     input.write('\t');
     await settle();
     expect(app.renderState.focus).toBe('tasks');
-    expect(app.renderState.selectedTaskRow).toBe(0);
+    expect(app.renderState.selectedTaskRow).toBe(2);
 
     // Left folds the group the selection is on (a heading row folds its own
     // group); right unfolds it.

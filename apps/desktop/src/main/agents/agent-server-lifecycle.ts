@@ -189,6 +189,9 @@ export function spawnAgentServer(): Promise<number> {
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       env,
+      // Windows: the server runs as a console child of a console-less parent
+      // (Electron), which would otherwise open a console window per session.
+      windowsHide: true,
     });
 
     let settled = false;
@@ -233,6 +236,25 @@ export function spawnAgentServer(): Promise<number> {
         // consumed by that request, rather than being carried inside the
         // request body, which the worker owns.
         trustedPluginAppAttempts.announceFromMessage(child, msg);
+        return;
+      }
+
+      if (msg.type === 'project-run-settled' && typeof msg.runId === 'string') {
+        // Main owns the project ledger, the mailbox and the renderer fan-out;
+        // the Agent Server only announces that the Run's terminal is durable.
+        // Imported lazily: the settlement reaches the idle dispatcher, which
+        // already depends on this lifecycle module.
+        const runId = msg.runId;
+        void import('../projects/run-feedback')
+          .then(({ settleProjectRun }) => settleProjectRun(runId))
+          .catch((error) => {
+            getLogger().error(
+              'Project run settlement dispatch failed',
+              error instanceof Error ? error : new Error(String(error)),
+              { runId },
+              LogComponent.Main,
+            );
+          });
         return;
       }
 
