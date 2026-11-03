@@ -10,7 +10,14 @@ import type {
 
 /** Progress emitted by a child run and projected to the parent worker/UI. */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'heartbeat' | 'done' | 'error';
+  /**
+   * `'completed'` / `'failed'` are terminal wire events emitted by
+   * BackgroundAgentLifecycle's onTerminal hook (via the spawn-site callback in
+   * service.ts). They ride the same `chat:agent_progress` frame and translate
+   * to the durable `subagent.completed` SSE event. Terminal events only ever
+   * come from the lifecycle, never from a live child run's stream.
+   */
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'heartbeat' | 'done' | 'error' | 'completed' | 'failed';
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;

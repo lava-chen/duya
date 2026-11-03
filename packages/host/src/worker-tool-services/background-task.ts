@@ -14,9 +14,21 @@ const defaultSources: WorkerBackgroundTaskSources = {
 
 /** Binds Capability task tools to the worker's Host-owned lifecycle registries. */
 export function createWorkerBackgroundTaskPort(sources: WorkerBackgroundTaskSources = defaultSources): BackgroundTaskPort {
+  // The spawn receipt names two ids: task_id (this registry's key) and
+  // subagent_id (the child's session id, what `resume_from` accepts). The
+  // model regularly reaches for the receipt's FIRST id, so a lookup that
+  // misses the task-id key falls back to matching the session id before
+  // answering not_found — otherwise the parent concludes the child was lost.
+  const resolveAgentTask = (taskId: string) => {
+    const lifecycle = sources.getAgentLifecycle();
+    const direct = lifecycle.getSnapshot(taskId);
+    if (direct) return direct;
+    const all = lifecycle.getAll();
+    return all.find((task) => task.subAgentSessionId === taskId);
+  };
   return {
     getAgentTask(taskId) {
-      const task = sources.getAgentLifecycle().getSnapshot(taskId);
+      const task = resolveAgentTask(taskId);
       if (!task) return undefined;
       return {
         taskId: task.taskId,
@@ -38,7 +50,8 @@ export function createWorkerBackgroundTaskPort(sources: WorkerBackgroundTaskSour
       return sources.getAgentLifecycle().getAll().map((task) => ({ taskId: task.taskId }));
     },
     tryKillAgentTask(taskId) {
-      return sources.getAgentLifecycle().tryKill(taskId, 'user_kill');
+      const resolved = resolveAgentTask(taskId);
+      return sources.getAgentLifecycle().tryKill(resolved?.taskId ?? taskId, 'user_kill');
     },
     getShellTask(taskId) {
       const task = sources.getShellRegistry().getTask(taskId);

@@ -196,14 +196,23 @@ export class BackgroundTaskModel {
    * Replace the bash half with a fresh Host snapshot.
    *
    * A snapshot is a complete reading, not a delta: a task absent from it is
-   * gone (the registry evicted it), so the replacement is wholesale.
+   * gone (the registry evicted it), so the replacement is wholesale. Rows the
+   * Host marks `kind: 'subagent'` belong to the subagent half and fold into
+   * the same map the live frames feed — the snapshot is what a TUI that never
+   * saw the spawn (fresh attach, missed frames) reads to learn a child
+   * exists at all.
    */
   applyBashSnapshot(snapshot: BackgroundTaskListV1): boolean {
+    const bashRows: BackgroundTaskSummaryV1[] = [];
+    for (const task of snapshot.tasks) {
+      if (task.kind === 'subagent') this.foldSnapshotSubagent(task);
+      else bashRows.push(task);
+    }
     const changed = !this.bashObserved
       || snapshot.observed !== this.bashObserved
-      || !sameBashTasks(this.bash, snapshot.tasks);
+      || !sameBashTasks(this.bash, bashRows);
     this.bashObserved = snapshot.observed;
-    this.bash = snapshot.tasks.slice();
+    this.bash = bashRows;
     // Rank the batch OLDEST-first, so the highest rank is the newest task and
     // the first poll reads the way the old start-time sort did. From here on
     // these ranks are frozen: a task that finishes keeps its slot.
@@ -211,6 +220,46 @@ export class BackgroundTaskModel {
       this.rankOf('bash', task.id);
     }
     return changed;
+  }
+
+  /**
+   * Upsert one snapshot-carried subagent row. The live frames stay the richer
+   * producer (description, summary); a snapshot row only fills in what it
+   * knows and never regresses a card the frames already drew.
+   */
+  private foldSnapshotSubagent(task: BackgroundTaskSummaryV1): void {
+    const existing = this.subagents.get(task.id);
+    const status = task.status === 'running'
+      ? 'running'
+      : task.status === 'killed'
+        ? 'cancelled'
+        : task.status === 'completed'
+          ? 'completed'
+          : 'failed';
+    // A snapshot's `running` can be stale next to a terminal frame this
+    // process already folded; the reverse (frames missed a completion the
+    // snapshot caught) is the reason the fold exists. So a row that already
+    // reached a terminal state never goes back to running.
+    const effectiveStatus = existing !== undefined && existing.status !== 'running' && status === 'running'
+      ? existing.status
+      : status;
+    this.rankOf('subagent', task.id);
+    this.subagents.set(task.id, {
+      id: task.id,
+      kind: 'subagent',
+      title: existing?.title ?? task.label ?? task.agentType ?? 'Agent',
+      ...(existing?.detail === undefined
+        ? (task.agentType === undefined ? {} : { detail: task.agentType })
+        : { detail: existing.detail }),
+      status: effectiveStatus,
+      startedAtMs: existing?.startedAtMs ?? task.startedAtMs,
+      ...(task.endedAtMs === undefined
+        ? (existing?.endedAtMs === undefined ? {} : { endedAtMs: existing.endedAtMs })
+        : { endedAtMs: task.endedAtMs }),
+      ...(task.error === undefined ? {} : { error: task.error }),
+      ...(existing?.summary === undefined ? {} : { summary: existing.summary }),
+    });
+    this.trimTerminalSubagents();
   }
 
   /**
@@ -424,7 +473,7 @@ function bashView(task: BackgroundTaskSummaryV1): BackgroundTaskView {
   return {
     id: task.id,
     kind: 'bash',
-    title: task.command,
+    title: task.command ?? task.label ?? task.id,
     status: task.status,
     startedAtMs: task.startedAtMs,
     ...(task.endedAtMs === undefined ? {} : { endedAtMs: task.endedAtMs }),

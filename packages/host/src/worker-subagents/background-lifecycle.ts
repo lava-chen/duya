@@ -41,6 +41,14 @@ export interface RegisterInput {
    * second source of truth.
    */
   checkout?: CheckoutRunRecord
+  /**
+   * Fired exactly once when this task reaches a terminal status, right after
+   * the status transition commits. The spawn site (service.ts) uses it to
+   * emit the terminal `chat:agent_progress` frame — the only live signal a
+   * renderer gets once the parent's own turn has moved on. Best-effort: a
+   * throwing callback is logged, never propagated.
+   */
+  onTerminal?: (record: TaskRecord) => void
 }
 
 /** Default window (ms) a drained terminal record stays queryable via
@@ -80,6 +88,8 @@ export class BackgroundAgentLifecycle {
    * deleted immediately (which made get_task_output return not_found
    * right after a completion notification pointed the model at it). */
   private drainedAt = new Map<string, number>()
+  /** Per-task terminal callbacks, set at register (see RegisterInput.onTerminal). */
+  private terminalCallbacks = new Map<string, (record: TaskRecord) => void>()
   private drainsByReason: ('completed' | 'killed' | 'failed')[] = ['completed', 'killed', 'failed']
 
   constructor(private readonly drainedRetentionMs: number = DEFAULT_DRAINED_RETENTION_MS) {}
@@ -150,6 +160,7 @@ export class BackgroundAgentLifecycle {
     }
     this.tasks.set(input.taskId, record)
     if (input.checkout) this.checkouts.set(input.taskId, input.checkout)
+    if (input.onTerminal) this.terminalCallbacks.set(input.taskId, input.onTerminal)
     logger.info('[SubAgent] lifecycle registered', {
       taskId: input.taskId,
       parentSessionId: input.parentSessionId,
@@ -159,6 +170,7 @@ export class BackgroundAgentLifecycle {
       outputFilePath: record.outputFilePath,
     }, 'SubAgent')
     this.reportInFlight()
+    this.notifyAnyChange()
     return record
   }
 
@@ -184,6 +196,31 @@ export class BackgroundAgentLifecycle {
     // must learn about it so it can drop the worker keep-alive once drained.
     if (next === 'completed' || next === 'killed' || next === 'failed') {
       this.reportInFlight()
+      // Terminal close-out hook (spawn-site progress frame). Best-effort: a
+      // throwing callback must not break the lifecycle's own bookkeeping.
+      const onTerminal = this.terminalCallbacks.get(taskId)
+      if (onTerminal) {
+        try { onTerminal(r) } catch (err) {
+          logger.warn('[SubAgent] onTerminal callback threw', { taskId, err }, 'SubAgent')
+        }
+      }
+    }
+    this.notifyAnyChange()
+  }
+
+  /**
+   * Coarse "something changed" signal for snapshot consumers (the worker's
+   * `bash_task:update` push merges agent tasks into its payload). Fired after
+   * register and after every transition; NOT fired per progress event —
+   * progress updates the record in place and the throttled snapshot push the
+   * bash registry already runs covers the cadence.
+   */
+  onAnyChange: (() => void) | null = null
+
+  private notifyAnyChange(): void {
+    if (!this.onAnyChange) return
+    try { this.onAnyChange() } catch (err) {
+      logger.warn('[SubAgent] onAnyChange threw', { err }, 'SubAgent')
     }
   }
 
@@ -315,6 +352,7 @@ export class BackgroundAgentLifecycle {
         this.tasks.delete(id)
         this.checkouts.delete(id)
         this.notified.delete(id)
+        this.terminalCallbacks.delete(id)
       }
     }
   }

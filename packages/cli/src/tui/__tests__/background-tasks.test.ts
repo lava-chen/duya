@@ -397,3 +397,70 @@ describe('task presentation helpers', () => {
     expect(lines).toContain('transcript is not shown here');
   });
 });
+
+describe('BackgroundTaskModel snapshot-carried subagents', () => {
+  function agentRow(overrides: Partial<BackgroundTaskSummaryV1> = {}): BackgroundTaskSummaryV1 {
+    return {
+      id: 'sub-1',
+      kind: 'subagent',
+      label: 'Scout',
+      agentType: 'Explore',
+      status: 'running',
+      startedAtMs: 5_000,
+      ...overrides,
+    };
+  }
+
+  it('folds subagent rows into the subagent half instead of the bash list', () => {
+    const model = new BackgroundTaskModel();
+    model.applyBashSnapshot(snapshot([
+      agentRow(),
+      bashTask({ id: 'task-1' }),
+    ]));
+    const groups = model.groups();
+    const subagentGroup = groups.find((group) => group.id === 'subagent');
+    expect(subagentGroup?.tasks.map((task) => [task.id, task.title, task.detail])).toEqual([
+      ['sub-1', 'Scout', 'Explore'],
+    ]);
+    expect(model.bashRunningCount).toBe(1);
+    expect(model.subagentRunningCount).toBe(1);
+  });
+
+  it('maps subagent terminal statuses onto view states', () => {
+    const model = new BackgroundTaskModel();
+    model.applyBashSnapshot(snapshot([
+      agentRow({ id: 'a-done', status: 'completed', endedAtMs: 6_000 }),
+      agentRow({ id: 'a-killed', status: 'killed' }),
+      agentRow({ id: 'a-failed', status: 'error' }),
+    ]));
+    const statuses = Object.fromEntries(
+      model.groups()
+        .find((group) => group.id === 'subagent')
+        ?.tasks.map((task) => [task.id, task.status]) ?? [],
+    );
+    expect(statuses).toEqual({ 'a-done': 'completed', 'a-killed': 'cancelled', 'a-failed': 'failed' });
+  });
+
+  it('never regresses a card the live frames already drew richer', () => {
+    const model = new BackgroundTaskModel();
+    model.applyFrame(startedFrame('sub-1', 'Scout'));
+    model.applyFrame(completedFrame('sub-1', 'completed', 42_000, 'found the answer'));
+    model.applyBashSnapshot(snapshot([agentRow({ status: 'running' })]));
+    const card = model.groups()
+      .find((group) => group.id === 'subagent')
+      ?.tasks.find((task) => task.id === 'sub-1');
+    expect(card).toMatchObject({
+      status: 'completed',
+      title: 'Scout',
+      summary: 'found the answer',
+      endedAtMs: expect.any(Number),
+    });
+  });
+
+  it('gives a fresh attach its subagent rows even when no frames ever arrived', () => {
+    const model = new BackgroundTaskModel();
+    model.applyBashSnapshot(snapshot([agentRow({ status: 'completed', endedAtMs: 6_000 })]));
+    expect(model.hasRunning()).toBe(false);
+    expect(model.groups().find((group) => group.id === 'subagent')?.tasks).toHaveLength(1);
+  });
+});

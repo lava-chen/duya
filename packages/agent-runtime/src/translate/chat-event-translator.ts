@@ -494,7 +494,9 @@ function translatePermission(
  */
 function translateAgentProgress(data: Readonly<Record<string, unknown>>): TranslateResult {
   const kind = str(data['agentEventType']) || str(data['type']);
-  const subagentId = str(data['subagentId'] ?? data['id']);
+  // The worker's raw frames key the child as `agentId`; the durable engine
+  // events and the TUI use `subagentId`. Accept all three spellings.
+  const subagentId = str(data['subagentId'] ?? data['agentId'] ?? data['id']);
 
   if (kind.includes('started')) {
     if (subagentId === '') return unmapped(data);

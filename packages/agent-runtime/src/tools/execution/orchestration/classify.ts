@@ -29,6 +29,13 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   task: ToolBatch.READ,
   Task: ToolBatch.READ,
 
+  // Background-task tools (plan 580 era names). get_task_output is a pure
+  // snapshot read; kill_task terminates a background task, so it is SYSTEM.
+  // Without entries every call logged a misleading "Unknown tool" WARN and
+  // fell into the fail-closed SYSTEM batch anyway.
+  get_task_output: ToolBatch.READ,
+  kill_task: ToolBatch.SYSTEM,
+
   // WRITE batch — 修改文件系统，串行
   write: ToolBatch.WRITE,
   edit: ToolBatch.WRITE,

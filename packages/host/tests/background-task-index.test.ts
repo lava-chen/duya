@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BackgroundTaskIndex, narrowBackgroundTask } from '../src/background-task-index.js';
+import { BackgroundTaskIndex, narrowAgentTask, narrowBackgroundTask } from '../src/background-task-index.js';
 
 const roots: string[] = [];
 
@@ -61,6 +61,44 @@ describe('narrowBackgroundTask', () => {
       autoPromoted: true,
     });
     expect(JSON.stringify(task?.summary)).not.toContain('output.log');
+  });
+});
+
+function rawAgentTask(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: '4f606add-d675-4251-a136-3b038edbed66',
+    kind: 'subagent',
+    label: 'Trace host-to-provider chain',
+    agentType: 'Explore',
+    subagentSessionId: '85258bb1-ef2c-4188-912a-e4c1dc2e939d',
+    status: 'running',
+    startTime: 5_000,
+    outputFile: tempOutput('child transcript'),
+    ...overrides,
+  };
+}
+
+describe('narrowAgentTask', () => {
+  it('accepts a subagent row without a command', () => {
+    const task = narrowAgentTask(rawAgentTask({ status: 'completed', endTime: 9_000 }));
+    expect(task?.summary).toEqual({
+      id: '4f606add-d675-4251-a136-3b038edbed66',
+      kind: 'subagent',
+      label: 'Trace host-to-provider chain',
+      agentType: 'Explore',
+      subagentSessionId: '85258bb1-ef2c-4188-912a-e4c1dc2e939d',
+      status: 'completed',
+      startedAtMs: 5_000,
+      endedAtMs: 9_000,
+    });
+    expect(JSON.stringify(task?.summary)).not.toContain('child transcript');
+  });
+
+  it('rejects rows a guess would have to fill in', () => {
+    expect(narrowAgentTask(null)).toBeNull();
+    expect(narrowAgentTask(rawAgentTask({ id: '' }))).toBeNull();
+    expect(narrowAgentTask(rawAgentTask({ status: 'paused' }))).toBeNull();
+    expect(narrowAgentTask(rawAgentTask({ startTime: 'now' }))).toBeNull();
   });
 });
 
@@ -124,5 +162,42 @@ describe('BackgroundTaskIndex', () => {
     expect(await index.readBackgroundTaskOutput('session-a', 'task-1')).toEqual({
       taskId: 'task-1', text: '', totalBytes: 0, truncated: false,
     });
+  });
+
+  it('merges the subagent partition into one list and orders it with bash tasks', async () => {
+    const index = new BackgroundTaskIndex();
+    index.apply(
+      'session-a',
+      [rawTask({ id: 'bash-running', status: 'running', startTime: 1_000 })],
+      [
+        rawAgentTask({ id: 'agent-running', status: 'running', startTime: 4_000 }),
+        rawAgentTask({ id: 'agent-done', status: 'completed', startTime: 3_000, endTime: 4_500 }),
+      ],
+    );
+    const listed = await index.listBackgroundTasks('session-a');
+    expect(listed.observed).toBe(true);
+    expect(listed.tasks.map((task) => [task.id, task.kind])).toEqual([
+      ['agent-running', 'subagent'],
+      ['bash-running', undefined],
+      ['agent-done', 'subagent'],
+    ]);
+
+    // The subagent partition is wholesale-replaced by its own writer; an
+    // undefined agentTasks (an older worker) keeps the previous rows.
+    index.apply('session-a', [rawTask({ id: 'bash-running', status: 'completed', startTime: 1_000 })]);
+    expect((await index.listBackgroundTasks('session-a')).tasks.map((task) => task.id))
+      .toEqual(['agent-running', 'agent-done', 'bash-running']);
+
+    index.apply('session-a', [rawTask({ id: 'bash-running' })], []);
+    expect((await index.listBackgroundTasks('session-a')).tasks.map((task) => task.id))
+      .toEqual(['bash-running']);
+  });
+
+  it('serves a subagent transcript tail through the same output route', async () => {
+    const index = new BackgroundTaskIndex();
+    const outputFile = tempOutput('child output');
+    index.apply('session-a', [], [rawAgentTask({ outputFile })]);
+    expect(await index.readBackgroundTaskOutput('session-a', '4f606add-d675-4251-a136-3b038edbed66', 5))
+      .toEqual({ taskId: '4f606add-d675-4251-a136-3b038edbed66', text: 'utput', totalBytes: 12, truncated: true });
   });
 });
