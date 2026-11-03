@@ -184,6 +184,12 @@ export type SSEEvent =
   | { type: 'tool_group_progress'; data: { groupId?: string; title: string; source: ToolGroupProgressSource } }
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
+  /** One slice of a running tool's own output, keyed by the call that produced
+   *  it. Never persisted — it exists only so a renderer can show a command's
+   *  tail while it runs. `stream` is OPTIONAL because a managed shell writes
+   *  stdout and stderr into the SAME file, so the interleaving is all the
+   *  producer has; a consumer must not assume the halves are separable. */
+  | { type: 'tool_output'; data: { toolUseId: string; stream?: 'stdout' | 'stderr'; data: string } }
   | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }
   | { type: 'thinking'; data: string; signature?: string; /** True when the provider redacted the reasoning (Anthropic redacted_thinking) — data is empty. */ redacted?: boolean; /** Opaque encrypted reasoning payload to replay as redacted_thinking. */ encrypted?: string }
   | { type: 'done'; reason?: StopReason }

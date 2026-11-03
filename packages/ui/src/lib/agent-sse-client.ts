@@ -21,7 +21,9 @@ export interface AgentSSEClientOptions {
   onToolUse?: (data: { id: string; name: string; input: unknown }) => void;
   onToolResult?: (data: { id: string; result: unknown; error?: string }) => void;
   onToolProgress?: (data: { toolUseId: string; percent: number; stage: string }) => void;
-  onToolOutput?: (data: { toolUseId: string; stream: 'stdout' | 'stderr'; data: string }) => void;
+  /** `stream` is OPTIONAL: a managed shell points stdout and stderr at one
+   *  descriptor, so the producer cannot say which one a slice came from. */
+  onToolOutput?: (data: { toolUseId: string; stream?: 'stdout' | 'stderr'; data: string }) => void;
   onAgentProgress?: (data: {
     agentEventType: string;
     data?: string;
@@ -374,7 +376,7 @@ export class AgentSSEClient {
       case 'tool_output':
         this.dispatch('tool_output', {
           toolUseId: eventObj.toolUseId as string,
-          stream: eventObj.stream as 'stdout' | 'stderr',
+          stream: eventObj.stream as 'stdout' | 'stderr' | undefined,
           data: eventObj.data as string,
         });
         break;
@@ -474,7 +476,7 @@ export class AgentSSEClient {
       case 'tool_output':
         this.options.onToolOutput?.({
           toolUseId: obj.toolUseId as string,
-          stream: obj.stream as 'stdout' | 'stderr',
+          stream: obj.stream as 'stdout' | 'stderr' | undefined,
           data: obj.data as string,
         });
         break;
