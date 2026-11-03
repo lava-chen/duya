@@ -113,7 +113,7 @@
       "format": "esm"
     },
     "packages/data/src/project-store.ts": {
-      "bytes": 14712,
+      "bytes": 28893,
       "imports": [
         {
           "path": "node:crypto",
@@ -176,7 +176,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/projects.ts": {
-      "bytes": 2264,
+      "bytes": 5547,
       "imports": [],
       "format": "esm"
     },
@@ -1145,7 +1145,7 @@
       "format": "esm"
     },
     "packages/data/src/core-stores.ts": {
-      "bytes": 53113,
+      "bytes": 55249,
       "imports": [
         {
           "path": "node:crypto",
@@ -30452,7 +30452,7 @@
       "format": "esm"
     },
     "packages/host/src/http-client.ts": {
-      "bytes": 102043,
+      "bytes": 108671,
       "imports": [],
       "format": "esm"
     },
@@ -30541,7 +30541,7 @@
       "format": "esm"
     },
     "packages/host/src/session-service.ts": {
-      "bytes": 27078,
+      "bytes": 30608,
       "imports": [
         {
           "path": "node:crypto",
@@ -30955,7 +30955,7 @@
       "format": "esm"
     },
     "packages/host/src/task-api.ts": {
-      "bytes": 4725,
+      "bytes": 5400,
       "imports": [
         {
           "path": "node:crypto",
@@ -30992,19 +30992,500 @@
       ],
       "format": "esm"
     },
+    "packages/memory/src/project-continuity.ts": {
+      "bytes": 2952,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_ledger.ts": {
+      "bytes": 13546,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_projection.ts": {
+      "bytes": 12029,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/entity_dirs.ts": {
+      "bytes": 5074,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/curation_projection_live.ts": {
+      "bytes": 11071,
+      "imports": [
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/entity_dirs.ts",
+          "kind": "import-statement",
+          "original": "./entity_dirs.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/eligibility.ts": {
+      "bytes": 9108,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/lease.ts": {
+      "bytes": 18176,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/compactMessages.ts": {
+      "bytes": 16102,
+      "imports": [
+        {
+          "path": "packages/ai/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/ai"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/stage1_prompt_loader.ts": {
+      "bytes": 12797,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/prompt.ts": {
+      "bytes": 21415,
+      "imports": [
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/outbox.ts": {
+      "bytes": 12280,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/projectionContent.ts": {
+      "bytes": 5131,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/writer.ts": {
+      "bytes": 9820,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/system_log.ts": {
+      "bytes": 6870,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/types.ts": {
+      "bytes": 8828,
+      "imports": [],
+      "format": "esm"
+    },
+    "packages/memory/src/extractor.ts": {
+      "bytes": 44839,
+      "imports": [
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/lease.ts",
+          "kind": "import-statement",
+          "original": "./lease.js"
+        },
+        {
+          "path": "packages/memory/src/compactMessages.ts",
+          "kind": "import-statement",
+          "original": "./compactMessages.js"
+        },
+        {
+          "path": "packages/memory/src/prompt.ts",
+          "kind": "import-statement",
+          "original": "./prompt.js"
+        },
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        },
+        {
+          "path": "packages/memory/src/writer.ts",
+          "kind": "import-statement",
+          "original": "./writer.js"
+        },
+        {
+          "path": "packages/memory/src/canonical_file.ts",
+          "kind": "import-statement",
+          "original": "./canonical_file.js"
+        },
+        {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "./forget_ledger.js"
+        },
+        {
+          "path": "packages/memory/src/system_log.ts",
+          "kind": "import-statement",
+          "original": "./system_log.js"
+        },
+        {
+          "path": "packages/memory/src/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/memory_layout.ts": {
+      "bytes": 9176,
+      "imports": [
+        {
+          "path": "packages/memory/src/types.ts",
+          "kind": "import-statement",
+          "original": "./types.js"
+        },
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/reconcile.ts": {
+      "bytes": 10142,
+      "imports": [
+        {
+          "path": "fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "os",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/stage1_policy_editor.ts": {
+      "bytes": 13563,
+      "imports": [
+        {
+          "path": "fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "crypto",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/memory/src/stage1_prompt_loader.ts",
+          "kind": "import-statement",
+          "original": "./stage1_prompt_loader.js"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/memory/src/index.ts": {
+      "bytes": 5970,
+      "imports": [
+        {
+          "path": "packages/memory/src/canonical_file.ts",
+          "kind": "import-statement",
+          "original": "./canonical_file.js"
+        },
+        {
+          "path": "packages/memory/src/project-continuity.ts",
+          "kind": "import-statement",
+          "original": "./project-continuity.js"
+        },
+        {
+          "path": "packages/memory/src/curation_ledger.ts",
+          "kind": "import-statement",
+          "original": "./curation_ledger.js"
+        },
+        {
+          "path": "packages/memory/src/curation_projection.ts",
+          "kind": "import-statement",
+          "original": "./curation_projection.js"
+        },
+        {
+          "path": "packages/memory/src/curation_projection_live.ts",
+          "kind": "import-statement",
+          "original": "./curation_projection_live.js"
+        },
+        {
+          "path": "packages/memory/src/eligibility.ts",
+          "kind": "import-statement",
+          "original": "./eligibility.js"
+        },
+        {
+          "path": "packages/memory/src/entity_dirs.ts",
+          "kind": "import-statement",
+          "original": "./entity_dirs.js"
+        },
+        {
+          "path": "packages/memory/src/extractor.ts",
+          "kind": "import-statement",
+          "original": "./extractor.js"
+        },
+        {
+          "path": "packages/memory/src/lease.ts",
+          "kind": "import-statement",
+          "original": "./lease.js"
+        },
+        {
+          "path": "packages/memory/src/memory_layout.ts",
+          "kind": "import-statement",
+          "original": "./memory_layout.js"
+        },
+        {
+          "path": "packages/memory/src/memory_paths.ts",
+          "kind": "import-statement",
+          "original": "./memory_paths.js"
+        },
+        {
+          "path": "packages/memory/src/outbox.ts",
+          "kind": "import-statement",
+          "original": "./outbox.js"
+        },
+        {
+          "path": "packages/memory/src/projectionContent.ts",
+          "kind": "import-statement",
+          "original": "./projectionContent.js"
+        },
+        {
+          "path": "packages/memory/src/reconcile.ts",
+          "kind": "import-statement",
+          "original": "./reconcile.js"
+        },
+        {
+          "path": "packages/memory/src/stage1_policy_editor.ts",
+          "kind": "import-statement",
+          "original": "./stage1_policy_editor.js"
+        },
+        {
+          "path": "packages/memory/src/system_log.ts",
+          "kind": "import-statement",
+          "original": "./system_log.js"
+        },
+        {
+          "path": "packages/memory/src/tierConflicts.ts",
+          "kind": "import-statement",
+          "original": "./tierConflicts.js"
+        },
+        {
+          "path": "packages/memory/src/wakeup.ts",
+          "kind": "import-statement",
+          "original": "./wakeup.js"
+        },
+        {
+          "path": "packages/memory/src/forget_ledger.ts",
+          "kind": "import-statement",
+          "original": "./forget_ledger.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/host/src/project-api.ts": {
-      "bytes": 5016,
+      "bytes": 16205,
       "imports": [
         {
           "path": "packages/data/src/project-store.ts",
           "kind": "import-statement",
           "original": "@duya/data/project-store"
+        },
+        {
+          "path": "packages/memory/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/memory"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/http-server.ts": {
-      "bytes": 264253,
+      "bytes": 276447,
       "imports": [
         {
           "path": "node:crypto",
@@ -32243,7 +32724,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 53196,
+      "bytes": 54332,
       "imports": [
         {
           "path": "packages/host/src/workspace/task-leases.ts",
@@ -40526,7 +41007,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/project-store.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/research-store.ts": {
           "bytesInOutput": 30
@@ -40562,7 +41043,7 @@
           "bytesInOutput": 35
         },
         "packages/agent-protocol/src/session-fork.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/agent-protocol/src/session-compaction.ts": {
           "bytesInOutput": 30
@@ -40574,7 +41055,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -40658,7 +41139,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/research-api.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/agent-dm.ts": {
           "bytesInOutput": 700
@@ -40685,7 +41166,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/channels.ts": {
-          "bytesInOutput": 1967
+          "bytesInOutput": 1954
         },
         "packages/agent-protocol/src/agent-profiles.ts": {
           "bytesInOutput": 30
@@ -40712,7 +41193,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/provider-catalog.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/agent-protocol/src/app-connections.ts": {
           "bytesInOutput": 30
@@ -40751,7 +41232,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -40781,7 +41262,7 @@
           "bytesInOutput": 2310
         },
         "packages/data/src/run-store.ts": {
-          "bytesInOutput": 8508
+          "bytesInOutput": 8495
         },
         "packages/data/src/bot-outbox.ts": {
           "bytesInOutput": 35
@@ -40793,10 +41274,10 @@
           "bytesInOutput": 29
         },
         "packages/data/src/plugin-app-instance-store.ts": {
-          "bytesInOutput": 46
+          "bytesInOutput": 33
         },
         "packages/data/src/plugin-app-grant-store.ts": {
-          "bytesInOutput": 45
+          "bytesInOutput": 32
         },
         "packages/data/src/core-stores.ts": {
           "bytesInOutput": 113
@@ -40808,13 +41289,13 @@
           "bytesInOutput": 30
         },
         "packages/data/src/message-log.ts": {
-          "bytesInOutput": 128
+          "bytesInOutput": 115
         },
         "packages/data/src/archive-paths.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/legacy-archive-migration.ts": {
-          "bytesInOutput": 34
+          "bytesInOutput": 21
         },
         "packages/data/src/projects-import.ts": {
           "bytesInOutput": 108
@@ -40823,7 +41304,7 @@
           "bytesInOutput": 57
         },
         "packages/data/src/tool-approval-state.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/data/src/send-message-state.ts": {
           "bytesInOutput": 29
@@ -40856,7 +41337,7 @@
           "bytesInOutput": 30
         },
         "packages/data/src/bot-session-paths.ts": {
-          "bytesInOutput": 35
+          "bytesInOutput": 22
         },
         "packages/data/src/legacy-import.ts": {
           "bytesInOutput": 113
@@ -40868,7 +41349,7 @@
           "bytesInOutput": 40
         },
         "packages/data/src/workspace-resolver.ts": {
-          "bytesInOutput": 52
+          "bytesInOutput": 39
         },
         "packages/data/src/terminal-history-store.ts": {
           "bytesInOutput": 30
@@ -42485,7 +42966,7 @@
           "bytesInOutput": 882
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 413
+          "bytesInOutput": 425
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 698
@@ -42659,7 +43140,7 @@
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -42692,7 +43173,7 @@
           "bytesInOutput": 41
         },
         "packages/agent-core/src/task-notifications/tool-names.ts": {
-          "bytesInOutput": 22
+          "bytesInOutput": 35
         },
         "packages/agent-core/src/task-notifications/buildTaskNotification.ts": {
           "bytesInOutput": 1626
@@ -43025,7 +43506,7 @@
           "bytesInOutput": 105
         },
         "../../../node_modules/tinycolor2/esm/tinycolor.js": {
-          "bytesInOutput": 15554
+          "bytesInOutput": 15556
         },
         "../../../node_modules/@jimp/utils/dist/esm/index.js": {
           "bytesInOutput": 2056
@@ -43274,10 +43755,10 @@
           "bytesInOutput": 1735
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/ZodError.js": {
-          "bytesInOutput": 1694
+          "bytesInOutput": 1695
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/locales/en.js": {
-          "bytesInOutput": 3078
+          "bytesInOutput": 3079
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/errors.js": {
           "bytesInOutput": 81
@@ -43292,10 +43773,10 @@
           "bytesInOutput": 145
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/types.js": {
-          "bytesInOutput": 50729
+          "bytesInOutput": 50730
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/v3/external.js": {
-          "bytesInOutput": 1884
+          "bytesInOutput": 1885
         },
         "../../../node_modules/@jimp/plugin-circle/node_modules/zod/index.js": {
           "bytesInOutput": 29
@@ -44090,10 +44571,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 233
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9984
+          "bytesInOutput": 9967
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -44384,7 +44865,7 @@
           "bytesInOutput": 3019
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1883
+          "bytesInOutput": 1877
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -44423,7 +44904,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 613
+          "bytesInOutput": 619
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -44522,7 +45003,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1549
+          "bytesInOutput": 1553
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -44534,10 +45015,10 @@
           "bytesInOutput": 855
         },
         "packages/host/src/worker-prompts/bot/memory/tierReader.ts": {
-          "bytesInOutput": 3254
+          "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 668
+          "bytesInOutput": 669
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -44594,7 +45075,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -45317,7 +45798,7 @@
           "bytesInOutput": 2613
         },
         "packages/host/src/http-client.ts": {
-          "bytesInOutput": 38211
+          "bytesInOutput": 39840
         },
         "packages/host/src/local-host.ts": {
           "bytesInOutput": 81
@@ -45387,6 +45868,39 @@
         },
         "packages/host/src/project-api.ts": {
           "bytesInOutput": 5
+        },
+        "packages/memory/src/index.ts": {
+          "bytesInOutput": 5
+        },
+        "packages/memory/src/curation_projection.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/curation_projection_live.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/lease.ts": {
+          "bytesInOutput": 38
+        },
+        "packages/memory/src/compactMessages.ts": {
+          "bytesInOutput": 5
+        },
+        "packages/memory/src/prompt.ts": {
+          "bytesInOutput": 0
+        },
+        "packages/memory/src/writer.ts": {
+          "bytesInOutput": 16
+        },
+        "packages/memory/src/types.ts": {
+          "bytesInOutput": 516
+        },
+        "packages/memory/src/extractor.ts": {
+          "bytesInOutput": 123
+        },
+        "packages/memory/src/memory_layout.ts": {
+          "bytesInOutput": 19
+        },
+        "packages/memory/src/stage1_policy_editor.ts": {
+          "bytesInOutput": 460
         },
         "packages/host/src/worker-config/provider-catalog.ts": {
           "bytesInOutput": 24
@@ -46124,7 +46638,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4769015
+      "bytes": 4771671
     }
   }
 }

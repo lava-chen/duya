@@ -53,7 +53,7 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 任务一先冻结共享合同并交可运行路径；任务二、三可据该合同准备，最终在同一集成版本完成上述场景。若仍是一个 Agent 接续，按一 → 二 → 三推进。共享 protocol、data migration 和 Host bootstrap 只有一个集成 owner，其他 Agent 独立 worktree，先对齐再修改。
 
 - [ ] 一：项目协调与 Session 派发/反馈已实现；唯一输入/租约权威和工具限制已接通。
-- [ ] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续。
+- [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与新 Worker 上下文装配已实现；Desktop 展示操作属于任务三）。
 - [ ] 三：Desktop 实际产品流程可交用户验收；通过范围与未通过反馈分别记录。
 
 个人 Bot 工具集和主动性暂缓。原 [#562](https://github.com/lava-chen/duya/pull/562) 只保留 CLI 独立收尾交付，不再作为总体架构入口；旧 Bot-first 文档不覆盖本决策，集成 #562 时必须保留此优先级。Project 首个闭环完成后再排 Session 增强/CLI Release 和后续 Bot。
@@ -87,3 +87,8 @@ Owner：当前 Codex；独立 worktree：`/workspace/work/review-582`；分支�
 调研补充（2026-11-02）：已直接阅读官方新版 Projects/发布、旧版 Projects 区分、本地记忆文档及逆向原文，新增来源分级、20 个已点名工具、Duya 首版工具字段/状态/反馈/记忆合同；它们是执行依据，不是 Coordinator 已实现的证据。7 份调研变更文档的 UTF-8、98 条链接目标/Git 可见性及 diff 检查通过，20 个工具名逐项在下载原文中核对；未运行产品测试。下载与原始摘录留 ignored docs-local，版本化文档不依赖本机资料。
 
 managed worktree/context 工具未提供，使用 Git linked worktree 和版本化计划对账。首次设计提交 c886184e 在 Linux 上检查 7 份文档的 UTF-8、178 条链接目标/Git 可见性和 git diff --check；无新增断链，旧索引 1 条缺失目标保留。后续调研检查范围见上段。PR 保留待 review/集成。下一动作：认领任务一，按首版实施合同收敛 #579/#580 的单一输入/租约权威并接通 Coordinator，不再重复探索外部工具清单或先扩张个人 Bot 工具集。
+### 连续性切片（2026-11-02）
+
+2026-11-02 连续性切片（基于任务一 HostProjectApiV1）新增 Core DB 的版本化项目状态、决策、记忆候选/历史、Task 验收记录与 Activity；Host 提供分页快照、历史查询和预算受限上下文接口，并在项目 Session 的新 Worker 初始化时装配当前记录。当前 Task 状态仍只来自既有 TaskStore，删除 Coordinator Session 时会保留项目绑定 Task；Transcript 只由 MessageLog 提供引用。候选不会注入 Coordinator；只有用户确认的记忆和决策进入上下文。
+
+下一动作：任务三接入 Project continuity HTTP/Host client 接口，展示 Task/Activity/transcript refs，提供 Task 验收与记忆候选确认/纠正操作，并覆盖失败 child start 对账。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。

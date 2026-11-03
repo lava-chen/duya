@@ -4,7 +4,12 @@ import type {
   HostProjectPatch,
   HostProjectPathEntry,
   HostProjectRecord,
+  ProjectContinuitySnapshot,
+  ProjectDecision,
+  ProjectMemory,
+  ProjectContinuityState,
 } from '@duya/agent-protocol/projects';
+import type { Task } from '@duya/agent-protocol';
 import type { CoreDataHostStores } from '@duya/data/core-data-host';
 import {
   parseProjectPaths,
@@ -12,6 +17,7 @@ import {
   type ProjectRow,
   type ProjectStore,
 } from '@duya/data/project-store';
+import { assembleProjectContinuityContext, rankProjectMemory, validateProjectMemoryKey } from '@duya/memory';
 
 export class HostProjectApiError extends Error {
   constructor(readonly code: 'project_conflict', message: string) {
@@ -33,7 +39,7 @@ function pathsToJson(paths: readonly HostProjectPathEntry[]): string {
 
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
-  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession'>,
+  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
   tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
 ): HostProjectApiV1 {
   return {
@@ -111,6 +117,7 @@ export function createHostProjectApi(
         coordinatorSessionId: link.coordinator_session_id,
         workSessionId: link.work_session_id,
         updatedAt: link.updated_at,
+        acceptanceStatus: link.acceptance_status,
       }));
     },
 
@@ -119,15 +126,151 @@ export function createHostProjectApi(
       if (!tasks?.get(taskId)) throw new Error(`Task "${taskId}" does not exist`);
       const link = projects.bindTask(projectId, taskId, coordinatorSessionId);
       return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id, updatedAt: link.updated_at };
+        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status };
     },
 
     async bindWorkSession(projectId, taskId, workSessionId) {
       const link = projects.bindWorkSession(projectId, taskId, workSessionId);
       return link ? { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
-        workSessionId: link.work_session_id, updatedAt: link.updated_at } : null;
+        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status } : null;
+    },
+
+    async getProjectContinuity(projectId, options = {}) {
+      const project = projects.get(projectId);
+      if (!project) return null;
+      const projectRecord = toRecord(project);
+      const links = projects.listTaskLinks(projectId);
+      const taskRows = await Promise.all(links.map(async (link) => ({
+        link: { projectId, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
+          workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status },
+        task: tasks ? toProjectTask(await tasks.get(link.task_id)) : null,
+      })));
+      const stateRow = projects.getContinuityState(projectId);
+      const decisions = projects.listDecisions(projectId).map((row) => ({
+        key: row.decision_key, content: row.content, status: row.status, revision: row.revision,
+        source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at,
+      }));
+      const memories = projects.listMemories(projectId, 100).map((row) => ({
+        key: row.memory_key, content: row.content, status: row.status, revision: row.revision,
+        source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at,
+      }));
+      const activityRows = projects.listActivity(projectId, options.afterCursor ?? 0, options.limit ?? 50);
+      const activity = activityRows.map((row) => ({
+        cursor: row.event_id, type: row.event_type, taskId: row.task_id, sessionId: row.session_id,
+        runId: row.run_id, source: { type: row.source_type, id: row.source_id },
+        payload: parseJsonObject(row.payload), createdAt: row.created_at,
+      }));
+      const transcriptRefs = new Map<string, { sessionId: string; role: 'coordinator' | 'work'; taskId?: string }>();
+      if (projectRecord.coordinator_session_id) transcriptRefs.set(projectRecord.coordinator_session_id, { sessionId: projectRecord.coordinator_session_id, role: 'coordinator' });
+      for (const { link } of taskRows) if (link.workSessionId) transcriptRefs.set(link.workSessionId, { sessionId: link.workSessionId, role: 'work', taskId: link.taskId });
+      const state: ProjectContinuityState | null = stateRow ? {
+        revision: stateRow.revision, currentState: stateRow.current_state, nextStep: stateRow.next_step,
+        source: { type: stateRow.source_type, id: stateRow.source_id }, updatedAt: stateRow.updated_at,
+      } : null;
+      return { project: projectRecord, state, tasks: taskRows, decisions, memories, activity,
+        nextCursor: activityRows.at(-1)?.event_id ?? (options.afterCursor ?? 0), transcriptRefs: [...transcriptRefs.values()] } satisfies ProjectContinuitySnapshot;
+    },
+
+    async getProjectContext(projectId, taskId, maxCharacters) {
+      const snapshot = await this.getProjectContinuity(projectId, { limit: 100 });
+      if (!snapshot) return null;
+      const task = taskId ? snapshot.tasks.find((row) => row.link.taskId === taskId)?.task : null;
+      const relevantTasks = taskId
+        ? snapshot.tasks.filter((row) => row.link.taskId === taskId)
+        : snapshot.tasks.filter(({ task: item, link }) => item && (item.status !== 'completed' || link.acceptanceStatus === 'pending'));
+      const accepted = snapshot.decisions.filter((item) => item.status === 'accepted');
+      const memories = rankProjectMemory(snapshot.memories.filter((item) => item.status === 'active')
+        .map((item) => ({ ...item, sourceType: item.source.type, sourceId: item.source.id })), task ? `${task.subject} ${task.description}` : '').slice(0, 20);
+      const recentActivity = projects.listRecentActivity(projectId, 10).map((item) => ({
+        key: String(item.event_id),
+        content: `${item.event_type}${item.task_id ? ` · task ${item.task_id}` : ''}${item.session_id ? ` · session ${item.session_id}` : ''}`,
+        sourceType: item.source_type, sourceId: item.source_id, updatedAt: item.created_at,
+      }));
+      const text = assembleProjectContinuityContext({
+        projectName: snapshot.project.name || snapshot.project.project_id,
+        ...(snapshot.state ? { currentState: snapshot.state.currentState, nextStep: snapshot.state.nextStep } : {}),
+        decisions: accepted.map((item) => ({ key: item.key, content: item.content, sourceType: item.source.type, sourceId: item.source.id, updatedAt: item.updatedAt })),
+        memories,
+        recentActivity,
+        ...(relevantTasks.length ? { taskBrief: relevantTasks.map(({ task: item, link }) => item
+          ? `- ${item.id} [${item.status}; acceptance=${link.acceptanceStatus}] ${item.subject}${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}\n  ${item.description}`
+          : `- ${link.taskId} [Task record unavailable; acceptance=${link.acceptanceStatus}]${link.workSessionId ? ` (work session ${link.workSessionId})` : ''}`).join('\n') } : {}),
+        ...(maxCharacters === undefined ? {} : { maxCharacters }),
+      });
+      const sourceRefs = [
+        ...(snapshot.state ? [snapshot.state.source] : []),
+        ...accepted.map((item) => item.source), ...memories.map((item) => ({ type: item.sourceType, id: item.sourceId })),
+        ...recentActivity.map((item) => ({ type: item.sourceType, id: item.sourceId })),
+        ...(task ? [{ type: 'task', id: task.id }] : []),
+      ];
+      return { text, sourceRefs };
+    },
+
+    async updateProjectState(input) {
+      assertProjectSource(input.source);
+      const result = projects.updateContinuityState({ projectId: input.projectId, expectedRevision: input.expectedRevision,
+        currentState: bounded(input.currentState, 8000), nextStep: bounded(input.nextStep, 2000), sourceType: input.source.type, sourceId: input.source.id });
+      if (!result) return null;
+      return { revision: result.revision, currentState: input.currentState, nextStep: input.nextStep,
+        source: input.source, updatedAt: result.updatedAt };
+    },
+
+    async updateProjectDecision(input) {
+      assertProjectSource(input.source); assertMemoryKey(input.key);
+      if (input.status === 'accepted' && input.source.type !== 'user_message') throw new Error('Only an explicit user decision can accept a project decision');
+      const row = projects.upsertDecision({ project_id: input.projectId, decision_key: input.key, content: bounded(input.content, 4000),
+        status: input.status, expectedRevision: input.expectedRevision, source_type: input.source.type, source_id: input.source.id });
+      if (!row) return null;
+      return { key: row.decision_key, content: row.content, status: row.status, revision: row.revision,
+        source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at } satisfies ProjectDecision;
+    },
+
+    async updateProjectMemory(input) {
+      assertProjectSource(input.source); assertMemoryKey(input.key);
+      if (input.status === 'active' && input.source.type !== 'user_message') throw new Error('A project memory candidate needs explicit user confirmation before activation');
+      const row = projects.upsertMemory({ project_id: input.projectId, memory_key: input.key, content: bounded(input.content, 8000),
+        status: input.status, expectedRevision: input.expectedRevision, source_type: input.source.type, source_id: input.source.id });
+      if (!row) return null;
+      return { key: row.memory_key, content: row.content, status: row.status, revision: row.revision,
+        source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at } satisfies ProjectMemory;
+    },
+
+    async updateProjectTaskAcceptance(input) {
+      assertProjectSource(input.source);
+      if (input.source.type !== 'user_message') throw new Error('Task acceptance must cite an explicit user message');
+      const link = projects.setTaskAcceptance(input.projectId, input.taskId, input.status, input.source.type, input.source.id);
+      if (!link) return null;
+      return { projectId: link.project_id, taskId: link.task_id, coordinatorSessionId: link.coordinator_session_id,
+        workSessionId: link.work_session_id, updatedAt: link.updated_at, acceptanceStatus: link.acceptance_status };
+    },
+
+    async listProjectMemoryHistory(projectId, key, limit = 20) {
+      if (!projects.get(projectId)) return [];
+      return projects.listMemoryHistory(projectId, key, limit).map((row) => ({ key: row.memory_key, content: row.content,
+        status: row.status, revision: row.revision, source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at }));
+    },
+
+    async listProjectDecisionHistory(projectId, key, limit = 20) {
+      if (!projects.get(projectId)) return [];
+      return projects.listDecisionHistory(projectId, key, limit).map((row) => ({ key: row.decision_key, content: row.content,
+        status: row.status, revision: row.revision, source: { type: row.source_type, id: row.source_id }, updatedAt: row.updated_at }));
     },
   };
+}
+
+function assertProjectSource(source: { type: string; id: string }): void {
+  if (!source || !/^(user_message|session|run|task|transcript|worker_result)$/.test(source.type) || !source.id?.trim()) throw new Error('A recognized source reference is required');
+}
+function assertMemoryKey(key: string): void { if (!validateProjectMemoryKey(key)) throw new Error('Invalid project memory key'); }
+function bounded(value: string, max: number): string { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
+function parseJsonObject(value: string): Record<string, unknown> { try { const parsed: unknown = JSON.parse(value); return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
+function toProjectTask(task: Awaited<ReturnType<NonNullable<Pick<CoreDataHostStores['tasks'], 'get'>['get']>>> | null): Task | null {
+  if (!task) return null;
+  const status = task.status === 'completed' || task.status === 'in_progress' ? task.status : 'pending';
+  return { id: task.id, sessionId: task.sessionId, createdAt: task.createdAt, updatedAt: task.updatedAt,
+    subject: task.subject, description: task.description, status,
+    ...(task.activeForm ? { activeForm: task.activeForm } : {}), ...(task.owner ? { owner: task.owner } : {}),
+    blocks: task.blocks, blockedBy: task.blockedBy, metadata: task.metadata };
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
