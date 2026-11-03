@@ -1827,7 +1827,31 @@ export class TUIApp {
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
         : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
+      liveRows: this.liveTranscriptRows(),
     };
+  }
+
+  /**
+   * Rows the surface can rewrite in place.
+   *
+   * Inline mode's live area is the terminal minus the chrome the composer, the
+   * status line and the task list take. The chrome is deliberately
+   * OVER-estimated: an over-estimate shrinks the streaming preview, and a
+   * preview that is too small only shows fewer lines, while one that is too
+   * large would push its own top rows into the scrollback while they are still
+   * being written.
+   */
+  private liveTranscriptRows(): number {
+    if (this.inlineSurface === null) return this.visibleTranscriptRows();
+    const capacity = Math.max(1, this.terminalSize().rows);
+    const chrome =
+      this.inputRows +
+      this.inputChromeRows() +
+      STATUS_ROWS +
+      this.popupRows() +
+      // The working tail, the task list and the queue preview.
+      4;
+    return Math.max(1, capacity - chrome);
   }
 
   /** Invalidate the assembled lines after a private transcript-model change. */

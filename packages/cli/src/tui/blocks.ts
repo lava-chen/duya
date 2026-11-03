@@ -47,6 +47,10 @@ import {
   readSubagentSpec,
   type SubagentCard,
 } from './subagent.js';
+import {
+  parseToolFileDiff,
+  type ToolFileDiff,
+} from '@duya/agent-protocol/tool-file-diff';
 
 /** A frame as the CLI receives it. Structurally `LegacySseFrame`. */
 export interface LegacyFrame {
@@ -165,6 +169,33 @@ export interface ToolBlock {
    * returned, this is the list the transcript draws.
    */
   todos?: readonly TuiTodoItem[];
+  /**
+   * The structured change set of a file-mutating call, once its result
+   * arrived.
+   *
+   * The producer computed it while it still held the file's pre-image and
+   * post-image, so the rows carry their own line numbers. Rendering from
+   * here means the transcript never has to re-derive a diff from prose, and
+   * every client shows the same numbers.
+   */
+  diff?: readonly ToolFileDiff[];
+  /**
+   * Per-operation failures of a partially applied change, verbatim from the
+   * producer. A multi-file patch that landed three files and failed one
+   * reports the failed one here; the diff carries the three that landed.
+   */
+  failures?: readonly string[];
+  /**
+   * The tool call's arguments as raw JSON, accumulated while they are still
+   * arriving.
+   *
+   * The model streams a tool call's arguments (`tool.arguments_delta`), so for
+   * a file write the text of the file exists in this buffer before the call
+   * completes. It is not parsed into fields here: the preview reads what it
+   * needs leniently at render time, and the authoritative arguments replace it
+   * when the call starts.
+   */
+  argumentText?: string;
   /**
    * The subagent this call spawned, when the call WAS a subagent spawn.
    *
@@ -726,6 +757,7 @@ export class TranscriptModel {
     result: string,
     failed: boolean,
     indeterminate = false,
+    metadata?: unknown,
   ): ToolBlock | null {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
@@ -733,6 +765,7 @@ export class TranscriptModel {
     // The result goes back to the model with the next request as well.
     this.contextCharCount += result.length;
     block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
+    this.applyToolMetadata(block, metadata);
     this.bump(block);
     // A todo write returns the WHOLE list (the tool is merge-semantic), so the
     // result the transcript was about to print as JSON becomes the list it
@@ -742,6 +775,27 @@ export class TranscriptModel {
       if (items !== null) block.todos = items;
     }
     return block;
+  }
+
+  /**
+   * Read the producer's structured metadata off a finished tool call.
+   *
+   * The metadata is the producer's own payload, so it is narrowed here rather
+   * than trusted: a diff that is not fully understood is dropped whole, because
+   * a half-rendered change set reads as a file with unexplained gaps.
+   */
+  private applyToolMetadata(block: ToolBlock, metadata: unknown): void {
+    if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) return;
+    const record = metadata as Record<string, unknown>;
+
+    const diff = parseToolFileDiff(record['diff']);
+    if (diff !== null) block.diff = diff;
+
+    const failures = record['failures'];
+    if (Array.isArray(failures)) {
+      const texts = failures.filter((entry): entry is string => typeof entry === 'string');
+      if (texts.length > 0) block.failures = texts;
+    }
   }
 
   /** Look a tool block up by its correlation id. */
@@ -918,11 +972,25 @@ export class TranscriptModel {
         return existed ? { kind: 'mutate', block } : { kind: 'append', block };
       }
 
-      case 'tool_use_delta':
-        // Argument fragments. The announcement already named the tool and the
-        // authoritative arguments arrive on `tool_use`, so there is nothing to
-        // show until then — rendering raw JSON fragments is noise.
-        return { kind: 'none' };
+      case 'tool_use_delta': {
+        // Argument fragments. The call was announced first, so the block
+        // exists and can show the arguments as they arrive — which is the
+        // whole point for a file write: the text of the file is in these
+        // fragments, and the reader can watch it being written.
+        //
+        // The fragments are raw JSON slices, not parsed fields, so they are
+        // accumulated as text and read leniently at render time. The
+        // authoritative arguments arrive with `tool_use` and replace them.
+        const callId = asString(payload['id']);
+        if (callId === '') return { kind: 'none' };
+        const block = this.toolsByCallId.get(callId);
+        if (block === undefined) return { kind: 'none' };
+        const delta = asString(payload['delta']);
+        if (delta === '') return { kind: 'none' };
+        block.argumentText = (block.argumentText ?? '') + delta;
+        this.bump(block);
+        return { kind: 'mutate', block };
+      }
 
       case 'tool_result': {
         const callId = asString(payload['id']);
@@ -937,6 +1005,7 @@ export class TranscriptModel {
           asString(payload['result']),
           payload['error'] === true,
           payload['indeterminate'] === true,
+          payload['metadata'],
         );
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
