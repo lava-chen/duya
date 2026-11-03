@@ -126,6 +126,21 @@ export function defaultTheme(): ThemeName {
 }
 
 /**
+ * Resolve the composer's fill independently of the text palette.
+ *
+ * `DUYA_TUI_COMPOSER_BG=transparent` leaves the terminal's own background in
+ * place. The default keeps the themed surface used by existing installations.
+ */
+export function resolveComposerBackground(
+  tags: ThemeTags,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return env['DUYA_TUI_COMPOSER_BG']?.toLowerCase() === 'transparent'
+    ? undefined
+    : tags.composerBg;
+}
+
+/**
  * Resolve the theme name from the environment.
  *
  * `DUYA_TUI_THEME` wins outright. Otherwise `COLORFGBG` (`fg;bg`) is read —
