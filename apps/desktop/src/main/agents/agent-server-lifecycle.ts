@@ -189,6 +189,9 @@ export function spawnAgentServer(): Promise<number> {
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       env,
+      // Windows: the server runs as a console child of a console-less parent
+      // (Electron), which would otherwise open a console window per session.
+      windowsHide: true,
     });
 
     let settled = false;
