@@ -66,6 +66,7 @@ import { splitStreamCommit } from './stream-commit.js';
 import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
   formatToolResult,
+  isExitCodeLine,
   isLocalShellTool,
   isShellTool,
   LOCAL_SHELL_FAMILY,
@@ -74,8 +75,9 @@ import {
   toolGroupKey,
 } from './tool-render.js';
 import { capLines, codePointWidth, truncateToWidth, visibleWidth, wrapWithCursor } from './width.js';
-import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
+import { DARK_THEME_TAGS, type ThemeTags, type ThemeToken } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
+import { highlightBash, highlightBashLine, type BashRole, type BashToken } from './bash-highlight.js';
 import {
   rawTagPair,
   spanRolesOf,
@@ -86,7 +88,7 @@ import {
 } from './markdown/inline.js';
 import { wrapAtoms, wrapSpans } from './markdown/wrap.js';
 import { colorFromTagBody } from './core/color.js';
-import { spanText, tokensToSpans, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
+import { spanText, tokensToSpans, attrs, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -826,6 +828,53 @@ function toolDisclosure(
 }
 
 /**
+ * The theme token behind each role of a highlighted command.
+ *
+ * The mapping is the whole palette decision: `program` is the thing being run
+ * (accent, bold), `flag` is an option (warning), `string` is quoted text
+ * (success), `operator` is shell punctuation (thinking) and `variable` is an
+ * expansion (heading). `plain` is deliberately absent — an argument takes the
+ * terminal's own foreground, which is what makes the coloured parts read as
+ * coloured rather than the grey ones read as broken.
+ */
+const BASH_ROLE_TOKENS: Readonly<Record<BashRole, ThemeToken | null>> = {
+  program: 'accent',
+  flag: 'warning',
+  string: 'success',
+  operator: 'thinking',
+  variable: 'heading',
+  comment: 'muted',
+  plain: null,
+};
+
+/** Paint one already-tokenized command line. */
+function paintCommandTokens(tokens: readonly BashToken[], styles: Styles): string {
+  const view = tagViewOf(styles);
+  const spans: StyledSpan[] = tokens.map((token) => {
+    const name = BASH_ROLE_TOKENS[token.role];
+    const fg = name === null ? undefined : colorFromTagBody(styles.tags[name]);
+    return {
+      text: token.text,
+      ...(fg === undefined ? {} : { fg }),
+      // The program is the one word a reader looks for; bold is what makes it
+      // findable without giving it a colour no other role can share.
+      ...(token.role === 'program' ? { attrs: attrs('bold') } : {}),
+    };
+  });
+  return spansToTags(spans, view);
+}
+
+/** Paint one line of a shell command. */
+function paintCommand(line: string, styles: Styles): string {
+  return paintCommandTokens(highlightBashLine(line), styles);
+}
+
+/** Paint every line of a shell command. */
+function paintCommandLines(command: string, styles: Styles): string[] {
+  return highlightBash(command).map((tokens) => paintCommandTokens(tokens, styles));
+}
+
+/**
  * The body of a shell tool: maybe an evidence line, then the output.
  *
  * The evidence line repeats the command only when the row's preview is CLIPPED
@@ -857,7 +906,10 @@ function shellBody(
   // When the preview IS the whole command there is nothing to add: repeating it
   // printed the same string twice, once in the label and once under it.
   if (command !== undefined && block.preview !== command) {
-    lines.push(`${indent}${styles.accent('$')} ${escapeTags(command)}`);
+    paintCommandLines(command, styles).forEach((row, index) => {
+      const sigil = index === 0 ? `${styles.accent('$')} ` : '  ';
+      lines.push(`${indent}${sigil}${row}`);
+    });
   }
   // A shell command that PRINTS a diff (`git diff`, patch output) keeps its
   // colours — the selection is the same text the generic path would have seen,
@@ -866,7 +918,12 @@ function shellBody(
     lines.push(...renderCodeBlock('diff', selected, styles).split('\n').map((line) => `${indent}${line}`));
     return lines;
   }
-  for (const line of selected) lines.push(`${indent}${styles.muted(line)}`);
+  for (const line of selected) {
+    // The exit code is the one line of output that is a FACT about the run
+    // rather than the run's text, so it takes the error colour instead of
+    // dissolving into the muted body around it.
+    lines.push(`${indent}${isExitCodeLine(line) ? styles.error(line) : styles.muted(line)}`);
+  }
   return lines;
 }
 
@@ -1005,8 +1062,15 @@ function toolNodeRow(
   // reader must never have to guess whose command produced the output. The
   // wording is codex's ("You ran"), the body is the ordinary shell body.
   if (isLocalShellTool(block.name)) {
-    const target = block.preview === '' ? '' : ` ${escapeTags(block.preview)}`;
+    const target = block.preview === '' ? '' : ` ${paintCommand(block.preview, styles)}`;
     const label = `${styles.bold('You ran')}${target}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
+  }
+  // A shell call names the tool AND shows its command highlighted: the row is
+  // what the reader scans while the run streams, so the command it ran is the
+  // part that has to be legible at a glance.
+  if (isShellTool(block.name) && block.preview !== '') {
+    const label = `${styles.bold(block.name)}(${paintCommand(block.preview, styles)})`;
     return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
   }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
@@ -1114,7 +1178,12 @@ function groupChildRow(
   styles: Styles,
 ): string {
   const target = block.preview === '' ? block.name : block.preview;
-  return `${plan.rowPrefix}${styles.muted(escapeTags(target))}${toolDisclosureOf(block, options, styles)}`;
+  // A shell command is the one target worth colouring: it is code the reader
+  // scans for a program and a flag, not a path they read as a whole.
+  const painted = isShellTool(block.name)
+    ? paintCommand(target, styles)
+    : styles.muted(escapeTags(target));
+  return `${plan.rowPrefix}${painted}${toolDisclosureOf(block, options, styles)}`;
 }
 
 /**

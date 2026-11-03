@@ -222,21 +222,19 @@ export interface TuiChoice {
   readonly description?: string;
 }
 
-/** One pending draft as the queue preview paints it. */
+/**
+ * One draft the user is still waiting on, as the queue preview paints it.
+ *
+ * There is no `mode` here on purpose. A delivered steer is not waiting for
+ * anything — the Host holds its row and the transcript already echoes it — so
+ * it never reaches this view; the caller filters it out at the source
+ * (`TurnQueue.waiting`). A view that could express "already sent" invited the
+ * two bugs this preview has had: painting a sent message as queued, and then
+ * painting it as sent under the composer, where anything that sits is read as
+ * unsent input.
+ */
 export interface QueuedDraftView {
   readonly text: string;
-  /**
-   * How the draft reaches the agent.
-   *
-   * `steer` means the draft was ALREADY handed over: the Host holds the row
-   * and the running turn reads it at its next step. `queue` means it is still
-   * waiting for a turn to carry it.
-   *
-   * The preview paints the two differently, because a steer that is painted
-   * like a queued draft reads as "not sent yet" — and the user has already
-   * seen their own text echoed into the transcript.
-   */
-  readonly mode: 'steer' | 'queue';
 }
 
 /** One row of a live settings list: a name, its current value, and what it does. */
@@ -321,9 +319,10 @@ export interface TUIAppOptions {  /** Window title. */
   readonly echoSubmitted?: boolean;
   readonly canSubmit?: () => boolean;
   /**
-   * Pending drafts with their intended delivery, so the preview can tell a
-   * steer (already handed to the running turn, and painted as sent) from a
-   * fresh turn (still waiting).
+   * Drafts still WAITING for a turn to carry them.
+   *
+   * A steer is not among them: it is already with the running turn. See
+   * `QueuedDraftView`.
    */
   readonly queuedDrafts?: () => readonly QueuedDraftView[];
   readonly queuePaused?: () => boolean;
@@ -2057,17 +2056,23 @@ export class TUIApp {
     });
   }
 
+  /**
+   * The drafts still waiting for their turn, one row each.
+   *
+   * This block is chrome that sits directly above the composer, so everything
+   * in it has to mean "you are still waiting on this". A delivered steer is
+   * excluded at the source for exactly that reason: it is already in the
+   * transcript, and a second copy here was read as a message that had not been
+   * sent — the opposite of what had just happened.
+   */
   private queuePreviewLines(): string[] {
-    const pending = this.options.queuedDrafts?.() ?? [];
-    if (pending.length === 0 || this.terminalSize().rows < 7) return [];
+    const waiting = this.options.queuedDrafts?.() ?? [];
+    if (waiting.length === 0 || this.terminalSize().rows < 7) return [];
     const width = Math.max(1, this.terminalSize().columns - 1);
-    const shown = pending.slice(-QUEUE_PREVIEW_ROWS);
-    const hidden = pending.length - shown.length;
+    const shown = waiting.slice(-QUEUE_PREVIEW_ROWS);
+    const hidden = waiting.length - shown.length;
     const lines = shown.map((draft) => escapeTags(compactActivity(
-      // A steer is ON ITS WAY — the running turn reads it at its next step —
-      // so it is painted as sent. Painting it like a queued draft made a
-      // message the user had already sent look like one that never left.
-      (draft.mode === 'steer' ? '↳ sent' : '⧗ queued') + ' · ' + draft.text.replace(/\s+/gu, ' '),
+      '⧗ queued · ' + draft.text.replace(/\s+/gu, ' '),
       width,
     )));
     if (hidden > 0) lines.unshift(`… ${hidden} earlier`);

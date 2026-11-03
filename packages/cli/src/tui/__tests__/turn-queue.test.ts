@@ -168,6 +168,26 @@ describe('draft identity', () => {
     await h.queue.whenIdle();
   });
 
+  it('reports only drafts that are still waiting for a turn', async () => {
+    const h = harness();
+    h.queue.submit('running');
+    h.queue.submit('held for the next turn');
+    h.queue.submit('steered', { mode: 'steer', mailboxId: 'row-7', echoed: true });
+    // The steer stays in the queue — the next turn has to ask the Host whether
+    // the row was claimed — but nothing should paint it: it is already in the
+    // transcript, and a copy under the composer reads as "not sent yet".
+    expect(h.queue.drafts.map((draft) => draft.text))
+      .toEqual(['held for the next turn', 'steered']);
+    expect(h.queue.waiting.map((draft) => draft.text)).toEqual(['held for the next turn']);
+    h.releases.shift()!('completed');
+    await Promise.resolve();
+    h.releases.shift()!('completed');
+    await Promise.resolve();
+    h.releases.shift()!('completed');
+    await h.queue.whenIdle();
+    expect(h.queue.waiting).toEqual([]);
+  });
+
   it('carries the submitted files with the draft into the turn', async () => {
     const h = harness();
     const attachment: FileAttachment = {

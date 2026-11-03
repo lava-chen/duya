@@ -10,6 +10,7 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
 | Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
 | TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现，TUI 1334 例全绿；待门禁与 PR |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
