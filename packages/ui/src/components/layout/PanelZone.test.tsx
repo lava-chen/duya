@@ -168,6 +168,7 @@ function wall(panes: string[], overrides: Partial<WorkspaceLayout> = {}): Worksp
 
 describe("PanelZone panel wall", () => {
   beforeEach(() => {
+    mocks.panelOpen = true;
     mocks.panelRenders = 0;
     mocks.resizeHandles = {};
     mocks.setColumnWidths.mockClear();
@@ -222,6 +223,66 @@ describe("PanelZone panel wall", () => {
     rerender(<PanelZone />);
     expect(screen.getByTestId("browser-agent-one")).toBeTruthy();
     expect(screen.getByTestId("browser-agent-two")).toBeTruthy();
+  });
+
+  it("keeps a Mini App mounted when the panel region collapses", () => {
+    // An iframe cannot be re-parented without reloading, so collapsing the
+    // panel must hide it rather than unmount it: unmounting throws away the
+    // App's interface state even though its instance store is durable.
+    mocks.tabs = [{ id: "board", pageId: "plugin-app", title: "Board" }];
+    mocks.activeTabId = "board";
+    mocks.panelOpen = true;
+    mocks.layout = wall(["board"]);
+
+    const { rerender } = render(<PanelZone />);
+    expect(screen.queryByTestId("plugin-frame-board")).toBeTruthy();
+
+    mocks.panelOpen = false;
+    rerender(<PanelZone />);
+    expect(screen.queryByTestId("plugin-frame-board")).toBeTruthy();
+  });
+
+  it("budgets how many Mini Apps stay warm while the region is collapsed", () => {
+    // Every warm App is a renderer process, a live host session and an
+    // unrevoked document URL, so only the most recently used few survive.
+    mocks.panelOpen = true;
+    mocks.tabs = ["a", "b", "c", "d"].map((id) => ({
+      id, pageId: "plugin-app" as const, title: id,
+    }));
+    mocks.layout = wall(["a", "b", "c", "d"]);
+    mocks.activeTabId = "a";
+
+    const { rerender } = render(<PanelZone />);
+    for (const id of ["b", "c", "d"]) {
+      mocks.activeTabId = id;
+      mocks.layout = wall(["a", "b", "c", "d"], { activePaneId: id });
+      rerender(<PanelZone />);
+    }
+
+    mocks.panelOpen = false;
+    rerender(<PanelZone />);
+
+    // d, c, b are the three most recent; a falls outside the budget and goes
+    // back to a cold start.
+    expect(screen.queryByTestId("plugin-frame-d")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-frame-c")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-frame-b")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-frame-a")).toBeNull();
+  });
+
+  it("still unmounts a Mini App that is hidden behind a maximized sibling", () => {
+    // `hidden` is yielding the wall, not collapsing it: that pane is not on
+    // screen at all, so keeping its frame alive would buy nothing.
+    mocks.tabs = [
+      { id: "board", pageId: "plugin-app", title: "Board" },
+      { id: "files", pageId: "workspace", title: "Files" },
+    ];
+    mocks.activeTabId = "board";
+    mocks.panelOpen = true;
+    mocks.layout = wall(["board", "files"], { expandedPaneId: "files" });
+
+    render(<PanelZone />);
+    expect(screen.queryByTestId("plugin-frame-board")).toBeNull();
   });
 
   it("renders one card per open page", () => {
