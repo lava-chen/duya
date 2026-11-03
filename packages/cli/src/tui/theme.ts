@@ -22,6 +22,23 @@
  *   blessed's parser: `{241-fg}` renders as `\x1b[38;5;241m` (`element.js`
  *   `_parseTags` → `program._attr('241 fg')`). Hex tags were rejected: they
  *   quantise to the nearest 16-colour entry, which is not controllable.
+ *
+ * ## The two surfaces, and why they are fixed numbers
+ *
+ * codex fills the composer and the submitted prompts with a colour BLENDED
+ * from the terminal's own background: 12% white over it in a dark terminal,
+ * 4% black over it in a light one (`style.rs` `user_message_bg_rgb` /
+ * `history_prompt_style`). That needs to know what the terminal background
+ * actually is, and duya has no way to ask — the OSC 11 probe was rejected in
+ * plan 611 W1.1, so the only hint is the `COLORFGBG` heuristic, which says
+ * "dark" or "light" and nothing more.
+ *
+ * So the two fills are fixed 256-colour greys instead: `236` (`#303030`) behind
+ * the composer and `238` (`#3c3c3c`) behind a submitted prompt in the dark
+ * palette, `255` (`#eeeeee`) and `254` (`#e4e4e4`) in the light one. The
+ * invariant that survives the approximation is the one that matters: a
+ * submitted prompt is MORE prominent than the composer it replaces, in both
+ * palettes — lighter on a dark terminal, darker on a light one.
  */
 
 export type ThemeName = 'dark' | 'light';
@@ -38,7 +55,17 @@ export type ThemeToken =
   | 'diffAdd'
   | 'diffDel'
   | 'heading'
-  | 'link';
+  | 'link'
+  /**
+   * The fill behind the composer.
+   *
+   * The two `*Bg` tokens are BACKGROUNDS, not foregrounds: their tag bodies
+   * end in `-bg` and they fill the cell behind the text. They live in the same
+   * table because they are the same kind of thing — a decision the palette
+   * makes — and because every consumer already carries a `ThemeTags` around.
+   */
+  | 'composerBg'
+  | 'promptBg';
 
 /** Token → blessed tag body (`'gray-fg'`, `'241-fg'`). */
 export type ThemeTags = Readonly<Record<ThemeToken, string>>;
@@ -61,6 +88,8 @@ export const DARK_THEME_TAGS: ThemeTags = {
   diffDel: 'red-fg',
   heading: 'cyan-fg',
   link: 'gray-fg',
+  composerBg: '236-bg',
+  promptBg: '238-bg',
 };
 
 /**
@@ -82,6 +111,8 @@ export const LIGHT_THEME_TAGS: ThemeTags = {
   diffDel: '160-fg',
   heading: '30-fg',
   link: '243-fg',
+  composerBg: '255-bg',
+  promptBg: '254-bg',
 };
 
 const PALETTES: Readonly<Record<ThemeName, ThemeTags>> = {

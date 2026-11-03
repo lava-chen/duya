@@ -23,12 +23,20 @@
  * - **An unknown tag is left alone.** `{nope-fg}` reaches the terminal as
  *   literal text rather than being dropped or guessed at.
  *
- * Only one attribute (`bold`) and one colour slot exist in this vocabulary, so
- * "attributes then colour, innermost wins" fully describes it. Adding a second
- * attribute would need a measurement, not an extrapolation.
+ * Only one attribute (`bold`) and two colour slots exist in this vocabulary,
+ * so "attributes then colour, innermost wins" fully describes it. Adding a
+ * second attribute would need a measurement, not an extrapolation.
+ *
+ * ## The background slot
+ *
+ * A `{236-bg}` tag fills the cell behind the text and leaves the text colour
+ * alone. It is the same rule as the foreground, in a second slot: the
+ * innermost tag for a slot replaces the outer one, and the two slots never
+ * interfere. The SGR order is attributes, then foreground, then background,
+ * matching what `terminal/ansi.ts` writes for a span.
  */
 
-import { colorFromTagBody, sgrParameterFor } from '../../core/color.js';
+import { backgroundParameterFor, colorFromTagBody, sgrParameterFor } from '../../core/color.js';
 
 /**
  * Attribute tags. `bold` is measured against blessed 0.1.81; `italic` (SGR 3)
@@ -51,9 +59,11 @@ interface Style {
   readonly strike: boolean;
   /** An SGR foreground parameter, e.g. `36` or `38;5;241`. */
   readonly fg: string | null;
+  /** An SGR background parameter, e.g. `40` or `48;5;236`. */
+  readonly bg: string | null;
 }
 
-const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null };
+const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null, bg: null };
 
 /** The SGR parameters for a style, in the order blessed emits them. */
 function sgrParameters(style: Style): string[] {
@@ -62,6 +72,7 @@ function sgrParameters(style: Style): string[] {
   if (style.italic) parameters.push('3');
   if (style.strike) parameters.push('9');
   if (style.fg !== null) parameters.push(style.fg);
+  if (style.bg !== null) parameters.push(style.bg);
   return parameters;
 }
 
@@ -81,11 +92,21 @@ const TAG = /\{(\/?)([a-zA-Z0-9#_-]+)\}/g;
 function openingTag(body: string): Style | null {
   const attribute = ATTRIBUTES[body];
   if (attribute !== undefined) {
-    return { bold: body === 'bold', italic: body === 'italic', strike: body === 'strike', fg: null };
+    return { bold: body === 'bold', italic: body === 'italic', strike: body === 'strike', fg: null, bg: null };
   }
-  const color = colorFromTagBody(body);
+  // A `-bg` body fills the cell behind the text; anything else is a
+  // foreground. The two slots are independent, so a band can carry coloured
+  // text inside it.
+  const background = body.endsWith('-bg');
+  const color = colorFromTagBody(body, background ? 'bg' : 'fg');
   if (color === undefined) return null;
-  return { bold: false, italic: false, strike: false, fg: sgrParameterFor(color) };
+  return {
+    bold: false,
+    italic: false,
+    strike: false,
+    fg: background ? null : sgrParameterFor(color),
+    bg: background ? backgroundParameterFor(color) : null,
+  };
 }
 
 /** Fold the stack into the style that is actually in effect. */
@@ -94,13 +115,15 @@ function effective(stack: readonly Style[]): Style {
   let italic = false;
   let strike = false;
   let fg: string | null = null;
+  let bg: string | null = null;
   for (const frame of stack) {
     if (frame.bold) bold = true;
     if (frame.italic) italic = true;
     if (frame.strike) strike = true;
     if (frame.fg !== null) fg = frame.fg;
+    if (frame.bg !== null) bg = frame.bg;
   }
-  return { bold, italic, strike, fg };
+  return { bold, italic, strike, fg, bg };
 }
 
 /**
@@ -130,7 +153,7 @@ export function renderMarkup(line: string): string {
 
   /** Whether the terminal is currently in a styled state. */
   const isStyled = (): boolean =>
-    written !== null && (written.bold || written.italic || written.strike || written.fg !== null);
+    written !== null && (written.bold || written.italic || written.strike || written.fg !== null || written.bg !== null);
 
   /** Emit the transition into `pending`, if there is one to make. */
   const settle = (): void => {
@@ -139,7 +162,8 @@ export function renderMarkup(line: string): string {
       written.bold === pending.bold &&
       written.italic === pending.italic &&
       written.strike === pending.strike &&
-      written.fg === pending.fg
+      written.fg === pending.fg &&
+      written.bg === pending.bg
     ) {
       return;
     }
