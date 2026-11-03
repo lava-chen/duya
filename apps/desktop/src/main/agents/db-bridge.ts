@@ -202,6 +202,7 @@ import { getChannelBackgroundWakes } from '../wake/channels';
 import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
 import type { NewEvent } from '../db/core';
+import { getCoreStoresOrNull } from '../db/core-connection';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
@@ -595,6 +596,29 @@ export async function dispatchDbAction(
 
     case 'session:get':
       return readHostSessionRow(p.id as string);
+
+    // The control lease, read-only.
+    //
+    // The Agent Server runs in its own process, so the lease — which lives in
+    // the main process's core database — is read through the bridge. The
+    // answer is only ever "is this session currently leased", and it grants no
+    // rights: the caller that may direct the session is decided by the Host
+    // that holds the lease, not by whoever asked.
+    case 'session:controlLease': {
+      const sessionId = String(p.sessionId ?? '');
+      if (!sessionId) throw new Error('Invalid sessionId.');
+      const stores = getCoreStoresOrNull();
+      if (!stores) return null;
+      const lease = stores.sessionControlLeases.read(sessionId);
+      if (!lease) return null;
+      return {
+        sessionId: lease.sessionId,
+        holderKind: lease.holderKind,
+        holderId: lease.holderId,
+        revision: lease.revision,
+        expiresAt: lease.expiresAtMs,
+      };
+    }
 
     case 'session:checkoutControl': {
       const id = String(p.id ?? '');

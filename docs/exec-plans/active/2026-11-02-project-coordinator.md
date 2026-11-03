@@ -53,10 +53,89 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 任务一先冻结共享合同并交可运行路径；任务二、三可据该合同准备，最终在同一集成版本完成上述场景。若仍是一个 Agent 接续，按一 → 二 → 三推进。共享 protocol、data migration 和 Host bootstrap 只有一个集成 owner，其他 Agent 独立 worktree，先对齐再修改。
 
 - [ ] 一：项目协调与 Session 派发/反馈已实现；唯一输入/租约权威和工具限制已接通。
-- [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与新 Worker 上下文装配已实现；Desktop 展示操作属于任务三）。
-- [ ] 三：Desktop 实际产品流程可交用户验收；通过范围与未通过反馈分别记录。
+- [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与按需上下文读取已实现；完整注入与 Desktop 交互归任务三后续）。
+- [x] 三（Desktop 项目工作台切片，已接线可验收）：统一项目状态读取、协调对话、工作 Session/任务/进度、只读查看、用户接管与交还；「结果回项目」的活动流与 Coordinator 唤醒由 #585 补齐。
+- [ ] 三：完整产品流程交用户验收（含 Task 显式验收、记忆候选确认/纠正）；通过范围与未通过反馈分别记录。
 
 个人 Bot 工具集和主动性暂缓。原 [#562](https://github.com/lava-chen/duya/pull/562) 只保留 CLI 独立收尾交付，不再作为总体架构入口；旧 Bot-first 文档不覆盖本决策，集成 #562 时必须保留此优先级。Project 首个闭环完成后再排 Session 增强/CLI Release 和后续 Bot。
+
+## 任务三切片：Desktop 项目工作台（2026-11-02）
+
+分支 `codex/project-first-desktop`，base `codex/project-tools`（#587 head；当前栈为 #583 ← #585 ← #586 ← #587），worktree `.claude/worktrees/project-first-desktop`。原始切片基于 #582（`3d714eba`）；2026-11-02 先 rebase 到 `codex/coordinator-seam` `f1d81f61`，2026-11-03 再 rebase 到项目工具切片（见文末「#584 二次 rebase」）。
+
+#582 已交付 Coordinator 侧：受限协调对话、派发时创建规范 Task 并绑定工作 Session。本切片补上**桌面端的项目工作台**——把这些关系变成用户能看见、能进入、能接管的东西。
+
+**已接线（真实数据，无 mock）**
+
+| 能力 | 位置 |
+| --- | --- |
+| 统一项目状态 | `HostProjectApiV1.getProjectState` → `GET /v1/projects/:id/state`；项目、协调 Session、任务、工作 Session 一次读出 |
+| 协调对话 | `projects:coordinator:ensure`：经 Host Session API 建 Session 并绑定 `coordinator_session_id`；失效绑定会被替换 |
+| 工作 Session 进度 | `projects:workSessionStatus`：读 Agent Server 的 `/sessions/:id/status`（运行中/空闲/完成/出错） |
+| 用户接管与交还 | `session:control:lease:*` → #580 的 `session_control_leases`；租约由 Host 持有，界面只是询问 |
+| 接管真的拦得住 | Desktop Agent Server 的 interagent router 读租约：用户持有时，协调对话对该 Session 的新指令被拒（`control_lease_held`，并写明持有人），在途工具继续 |
+| Desktop 界面 | `ProjectWorkspaceView`（中间协调对话 + 右侧任务/工作 Session/进度）、`ProjectSessionBanner`（只读/接管/交还/返回项目）、`ProjectsView` 的「进入项目」入口 |
+
+**未在本切片内**
+
+- 「结果回项目」的活动流与 Coordinator 唤醒：工作 Session 跑完的结果目前仍在 Session 管理面里，没有回到项目视图。这是本切片之后最直接的下一步。
+- Task 的显式验收/完成对账、项目记忆 scope（任务二）、Web/多机/自动 merge。
+
+**下一步**：补活动流与唤醒后，工作 Session 的完成状态可以自己出现在项目里，用户不必手动刷新。
+
+### Desktop 项目工作台切片验证（2026-11-02）
+
+Owner：当前 Codex；worktree `E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支 `codex/project-first-desktop`；base `origin/codex/project-coordinator` = `3d714eba`（#582 head，已 rebase 到该 head）；提交 `99cbd01e`；交付 PR [#584](https://github.com/lava-chen/duya/pull/584)（OPEN / MERGEABLE / CLEAN，base = `codex/project-coordinator`，**#582 必须先落地**）。
+
+环境：Windows 11、Node `v24.16.0`、git `2.50.0`；`NODE_OPTIONS=--max-old-space-size=12288`；依赖为共享 junction，只在 worktree 内编辑与构建。
+
+- `npm run typecheck:all` 退出 0（含 22 个包构建、protocol/client-core/core/workflow/runtime/web/electron/cli/voice/evals 全量类型门禁；Electron 门禁报告「no new type errors (178 known across 101 key(s))」，既有 baseline 未增加）。
+- `npm run architecture:check` 退出 0：3051 项全部落在既有 baseline，「OK — no new boundary violations」。
+- `npm run bundle:verify` 退出 0：`0/1029 bundle inputs changed`，FRESH。Worker bundle 已从本检出重建并与源码同一提交。
+- 全量 `npx vitest run --maxWorkers=2`：**1347 个测试文件通过 / 3 跳过，14728 个用例通过 / 30 跳过**，退出 0，耗时 637.71s。
+- `npm run electron:build` 退出 0：「Electron build complete」，原生模块（better-sqlite3 / bindings / file-uri-to-path / node-pty）已拷入产物；main/preload/renderer 产物来自本检出。
+
+  这条门禁在本机曾连续失败多次（Go 的 `runtime: cannot allocate memory` 与 V8 的 `Zone Allocation failed`）。根因是**V8 与 esbuild 的 Go 堆在抢同一份提交额度**：只给 V8 调 `--max-old-space-size` 无效，因为 esbuild 的 Go 运行时仍申请不到内存。可用的组合是给 V8 足量堆、同时压住 Go 堆：
+
+  ```
+  NODE_OPTIONS=--max-old-space-size=6144 GOMEMLIMIT=900MiB GOGC=30 npm run electron:build
+  ```
+
+  `NODE_OPTIONS` 对 V8 有效，`GOMEMLIMIT`/`GOGC` 对 esbuild 的 Go 运行时有效；两者分开调不会有这个组合。
+
+过程中的一次真实失败与修复：rebase 到 #582 新 head 后，链接表新增 `ON DELETE CASCADE`（任务行删除时绑定随之删除），本切片原先「任务行没了仍报绑定」的断言不再成立。已改为两个用例——新库级联后项目不再列出该任务；旧库（无该外键）仍如实报出 `status: 'unknown'`。Host 侧保留 `unknown` 分支并在注释里写明它只对早于该外键的数据库可达。
+
+未验证：产品真机体验（进入项目、接管、交还、返回项目）由用户验收；「结果回项目」的活动流与唤醒尚未实现。
+
+接续：分支与 worktree 保留（PR 未集成，按仓库规则不回收）。**门禁已全绿**（typecheck:all / architecture:check / bundle:verify / 全量 vitest / electron:build 全部退出 0）。堆叠 PR 拿不到 CI（仓库 workflow 只监听 base=`master`），门禁以本节记录为准。下一条动作：#582 落地后把本 PR 的 base 改到 `master` 并触发一次 CI，再补「结果回项目」的活动流与 Coordinator 唤醒。
+
+### PR #584 集成就绪（2026-11-02）
+
+#582 已合入 master（merge commit `04f7645f`，远端分支已删），PR [#584](https://github.com/lava-chen/duya/pull/584) 的 base 随之改为 `master`。本分支的 base `3d714eba` 已是新 master 的祖先，`git diff origin/master...HEAD` 恰好是本切片的 37 个文件 —— 不需要再 rebase。
+
+CI 首次真正跑起来（base 是 `master` 才会触发），在提交 `ea36480e` 上全绿：architecture 1m48s（含 bundle:verify）、build 3m25s、test 11m29s、typecheck 7m44s、test scope 13s，全部 pass，`mergeStateStatus: CLEAN`。
+
+因此本切片的两道人工关卡——统一状态读取、接管/交还的真实拦截——既有本地门禁（14728 个用例）也有 CI 复核。产品真机验收仍由用户负责。
+
+### #584 依赖重整（2026-11-02）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支：`codex/project-first-desktop`；rebase base：`codex/coordinator-seam` `f1d81f61`（#586 head）。本轮把 #584 从「直接基于 #582、等待 master」改为显式依赖完整栈：#583（项目记忆/连续性）→ #585（Run 结果回传）→ #586（Coordinator 领域收敛）→ #584（Desktop 工作台）。
+
+过程与修复：
+
+- `git rebase f1d81f61` 后逐个解决冲突：`project-api.ts` 保留连续性 API 与项目状态投影/工作 Session 归并；`agent-protocol/projects.ts` 与 `http-client.ts` 同时保留连续性方法和 `getProjectState`；`desktop-host-api.ts` 合并 `createHostTaskApi` 的项目参数、`createHostProjectApi` 的 Session scope 与 `sessionInputApi`；`packages/host/package.json` 同时保留 `project-run-settlement`、`project/*` 与 `session-input-api` 导出；docs 合并栈内新证据。
+- 原 #584 head 的 `project-coordinator-implementation-handoff.md` 自带未解决的冲突标记（此前 rebase 遗留）。本轮按当前事实重写「Remaining integration」：Task 显式验收和记忆候选确认仍待完成；Desktop 工作台、结果回项目、Coordinator 领域收敛标记为已完成。
+- 合并后发现连续性路由的 `(continuity|context|state)` 正则先拦截了 `GET /projects/:id/state` 并返回 405。修复为在同一路由块内处理 GET 读取，删除重复的 `stateMatch` 分支；`project-state-http` 的缺项目读取用例恢复通过。
+
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- 相关 17 个测试文件 140 项通过：Host `project-state-http`、`project-api-http`、`project-run-settlement`、`project-work-session-continuity`、`project-dispatch`、`project-domain-boundary`、`project-prompt`、worker profiles、`session-service`、`session-entry-guards`、`local-host`；Desktop `interagent-router`、`project-workspace-handlers`、`desktop-session-management`；UI `ProjectWorkPanel`、`project-workspace-store`、`nav-history-store`。
+- `npm run build:packages`、`npm run typecheck:all`、`npm run architecture:check`、`npm run bundle:worker`、`NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--max-old-space-size=8192 npm run electron:build` 均退出 0；架构门禁 3081 项全部 tolerated，无新增违规。
+- rebase 后代码提交 `806dce4e`，路由修复提交 `fd44beca`；提交后重跑 `npm run bundle:verify` 应为 FRESH，重建的 `packages/host/bundle` 随修复提交入库。
+
+已知边界：PR base 非 `master`，仓库 CI 不会触发（`test.yml` 仅监听 base=`master`）；本栈的验证以本节命令结果为准。集成顺序必须为 #583 → #585 → #586 → #584，任一 PR 未合入前 #584 不单独合并。产品真机验收仍由用户负责。
+
+下一动作：把 #584 的 base 改为 `codex/coordinator-seam`，以 `--force-with-lease` 推送本节提交；栈稳定后再统一改 base 到 `master` 触发 CI。
 
 ## 本轮证据与接续
 
@@ -159,4 +238,58 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 
 交付：代码提交 `eedab8b0` 推送到 `codex/project-tools`，以 `codex/coordinator-seam` 为 base 开 stacked Draft PR；不合并。
 
-下一动作：把 #584 rebase 到本切片 head 并更新其 base；栈稳定后再统一改 base 到 `master` 触发 CI。仍不合并，等待用户授权。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+下一动作：栈稳定后再统一改 base 到 `master` 触发 CI。仍不合并，等待用户授权。个人 Bot 增强和独立 CLI Release 仍按本计划暂缓。
+
+### #584 二次 rebase 到项目工具切片（2026-11-03）
+
+Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\project-first-desktop`；分支：`codex/project-first-desktop`；新 base：`codex/project-tools` `a1e971b9`（#587 head）。把 Desktop 工作台从旧 seam head `f1d81f61` 整体 rebase 到项目工具切片，使 #584 同时获得 `c809ad69` 的 seam 记录、项目工具、上下文/对账领域化与独立提示词系统；上节「#584 依赖重整」记录的 base 与导出结论由本节取代。
+
+冲突处理：`desktop-host-api.ts` 同时保留 `getDesktopProjectToolService` 与 `getDesktopHostSessionInputApi`；`local-host.ts` 复用单一 `projectApi` 实例并把 #584 的 `{ sessions, spawnEdges }` scope 传入构造；`packages/host/package.json` 保留 `./project/*` 与 `./session-input-api`，不恢复已迁入 `./project/*` 的 `./project-run-settlement`；生成 bundle 先取被应用提交的版本，rebase 完成后从合并源码重建（`a75feaae`）。
+
+验证环境：Windows、Node `v24.18.0`；未修改共享检出。
+
+- `npm run build:packages`：22 个包通过；首次在 `@duya/web` 写文件时报 Windows `UNKNOWN: unknown error, write`，重跑通过。
+- `npm run typecheck:all` 退出 0；`npm run architecture:check` 退出 0（3095 项 tolerated，无新增违规）。
+- 相关 32 个测试文件 239 项通过：项目 Host 全套（含 `project-state-http`）、worker-prompts/profiles、local-host/session、Desktop project tool/trusted-attempt/interagent/session management/workspace handlers、UI project workspace。
+- `npm run bundle:verify` 退出 0：提交 `a75feaae` 后 0/1059 输入变化，FRESH。
+- `npm run electron:build` 单次执行仍未返回 0：使用 `NODE_OPTIONS=--max-old-space-size=6144 GOMEMLIMIT=900MiB GOGC=30` 时，renderer 的 V8 worker 在 rendering chunks 阶段仍 OOM；随后 `NODE_OPTIONS=--max-old-space-size=8192 npx vite build`（1m47s）、`node scripts/build-electron.mjs`、`node scripts/build-recorder-worker.mjs` 分别退出 0，原生模块已拷入产物。bundle 已还原，输入保持 FRESH。
+
+交付：`codex/project-first-desktop` 以 `--force-with-lease=13277f3e` 推送到 `19f36ced`；PR [#584](https://github.com/lava-chen/duya/pull/584) base 已改为 `codex/project-tools`（head `19f36ced`，Draft）；不合并。
+
+下一动作：栈稳定后把整个栈统一改 base 到 `master` 触发 CI；仍等待用户授权后再合并。
+
+### 栈 rebase 到最新 master 并准备集成（2026-11-03）
+
+Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity` / `project-run-feedback` / `coordinator-seam` / `project-tools` / `project-first-desktop`）。原因：`origin/master` 已从 `04f7645f` 前进到 `203d7d51`（20 个提交），#583 相对最新 master 显示 `CONFLICTING`，栈无法直接触发 master CI。
+
+逐层用 `git rebase --onto` 重放，旧 head → 新 head：
+
+- #583 `27a4a5a8` → `8d9f20d9`
+- #585 `91db906e` → `2c394c50`
+- #586 `c809ad69` → `75ca66e3`
+- #587 `a1e971b9` → `aa99361a`
+- #584 `1af340bc` → `b83b2acb`
+
+冲突处理：`docs/exec-plans/README.md` 保留 master 新增的 TUI 行与新版 Coordinator 行；五层 bundle 冲突先取被重放提交的生成物，rebase 完成后从合并源码统一重建并单独提交；`apps/desktop/src/main/index.ts` 两侧改动区域不同，自动合并。`inline-content.ts` 的换行符 churn 每次构建后回退，不进入提交。
+
+验证环境：Windows、Node `v24.18.0`；各层在自身 worktree 执行。本轮未重跑本地 `electron:build`（上一轮已在本栈旧 base 上分步构建通过）；最终栈的 Electron 构建交由 master PR CI 的 `build` job 验收。
+
+- #583：`build:packages` 22 个通过；`typecheck:all` 退出 0；`architecture:check` 退出 0（3066 tolerated）；5 个相关测试文件 37 项通过；`bundle:verify` FRESH 0/1049。
+- #585：`architecture:check` 退出 0（3073）；2 个测试文件 22 项通过；bundle FRESH 0/1050。
+- #586：`architecture:check` 退出 0（3075）；4 个测试文件 22 项通过；bundle FRESH 0/1053。
+- #587：`build:packages` 22 个通过；`architecture:check` 退出 0（3089）；9 个测试文件 62 项通过；bundle FRESH 0/1059。
+- #584（完整栈）：`build:packages` 22 个通过；`typecheck:all` 退出 0；`architecture:check` 退出 0（3101 tolerated，无新增）；21 个相关测试文件 176 项通过；bundle FRESH 0/1059（`b83b2acb`）。
+
+交付：五个分支分别以 `--force-with-lease` 推送；PR #583/#585/#586/#587/#584 仍为 Draft 栈。下一步：统一把 base 改到 `master` 触发 CI，CI 绿后按序以 merge commit 集成。
+
+### 按序集成与二次 rebase（2026-11-03）
+
+- #583 合入 `bae0896e`。#585 首个 master CI（41572058161）暴露三个全局门禁和一处慢测试超时，修复见上节；重跑 CI 41578794840 全绿后，head `23571bae` 合入 `af7c3b17`。
+- 期间 master 连续前进（#589 `76343778`、#591 `8160f321`、直接提交 `dbffec07`），#585 两次以 `git rebase --onto origin/master` 重放并逐轮重建 bundle（`2de26c5c`、`23571bae`）。bundle 冲突只取生成物，最终一律从重放后的源码重建；`inline-content.ts` 的换行符 churn 每次构建后回退。
+- #586 以 `--onto origin/master 2c394c50` 只重放自身提交，恢复被冲突覆盖的 CI 门禁记录，bundle 重建 `adf0456d`；CI 41580340985 全绿，合入 `550b664b`。
+- #587 改 base 到 master 后以 `--onto origin/master adf0456d` 重放；CI 41581566287 因 `router.ts` 再后移 16 行触发 citation drift，补齐 5 处 router 引用和 `legacy/sse-event.ts` 锚点（`18787728`），bundle 重建 `92dad124`；CI 41583140279 全绿，合入 `a2675e4a`。
+- #584 改 base 到 master 后以 `--onto origin/master 92dad124` 重放（无冲突），bundle 重建 `1cb857e6`，`bundle:verify` FRESH 0/1059；完整门禁交由本 PR 的 master CI 验收。
+
+验证环境：Windows、Node `v24.16.0`。每次合并前确认最新 head 的 architecture / build / typecheck / test / test scope 全绿；本地每层 `bundle:verify` 均为 FRESH。
+
+下一动作：#584 CI 绿后合并；随后在 master 上重跑类型与架构门禁、相关测试，记录最终 SHA，并回收各 worktree。

@@ -29,6 +29,13 @@ import type { SettingsTab, ViewType } from "./conversation-store";
 export interface NavHistoryEntry {
   view: ViewType;
   threadId: string | null;
+  /**
+   * The project the user was inside, for the `project` view.
+   *
+   * The view alone is not enough to restore that surface: the project decides
+   * which coordinator conversation and which tasks it shows.
+   */
+  projectId: string | null;
   settingsTab: SettingsTab | null;
   panel: { open: boolean; activeTabId: string | null };
 }
@@ -53,6 +60,7 @@ const sameEntry = (a: NavHistoryEntry | null, b: NavHistoryEntry): boolean =>
   a !== null &&
   a.view === b.view &&
   a.threadId === b.threadId &&
+  a.projectId === b.projectId &&
   (a.settingsTab ?? null) === (b.settingsTab ?? null) &&
   a.panel.open === b.panel.open &&
   a.panel.activeTabId === b.panel.activeTabId;

@@ -3335,6 +3335,11 @@ export class HostSessionHttpServer {
           const state = await api.updateProjectState({ projectId, expectedRevision: body.expectedRevision, currentState: body.currentState, nextStep: body.nextStep, source: body.source });
           this.#sendJson(res, state ? 200 : 409, { state }); return;
         }
+        if (continuityMatch[2] === 'state' && req.method === 'GET') {
+          // 200 with a null state, NOT a 404: a missing project is an answer.
+          const state = await api.getProjectState(projectId);
+          this.#sendJson(res, 200, { state }); return;
+        }
       } catch (error) { this.#sendApiError(res, error); }
       this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } }); return;
     }
