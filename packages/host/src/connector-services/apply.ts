@@ -482,7 +482,11 @@ async function runApply<
     // a replacement connection. The injected Runtime factory owns the
     // mandatory source-provenance and approval guard.
     const executor = runtime.createMCPToolExecutor({
-      toolName: capturedMcpInfo.toolName,
+      // `isExecutorCurrent` compares against the active registry's
+      // provider-visible definition name. The server-local tool name is
+      // retained below for transport dispatch only; using it here makes
+      // every namespaced MCP tool look stale immediately before invocation.
+      toolName: t.providerName,
       source,
       invoke: (input) => scopedClient.callTool(capturedMcpInfo.toolName, input),
     });
