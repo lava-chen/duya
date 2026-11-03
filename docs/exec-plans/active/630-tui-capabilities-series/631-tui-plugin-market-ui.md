@@ -1,6 +1,6 @@
 # 631 TUI 插件市场管理界面
 
-状态：active · 负责人：Codex · 更新：2026-11-03
+状态：Draft PR [#602](https://github.com/lava-chen/duya/pull/602) · 未合并 · 负责人：Codex · 更新：2026-11-03
 分支：`codex/shared-plugin-service` · managed worktree：`D:\codex\worktrees\shared-plugin-service\duya` · base：`cbb3a7617540ba815eec0f042130f28e83b36d6d` · owner：Codex
 
 ## 目标与边界
@@ -71,4 +71,4 @@
 
 真实 CLI：隔离 `DUYA_DATA_ROOT`，无 Desktop，Host 自动启动；本地市场的添加/列出、可用插件浏览、指定市场安装、禁用、查询、卸载和移除均成功。Desktop IPC 与 CLI 跨进程共享状态的真实 Electron 用例通过。非交互更新缺少 `--yes` 返回退出码 3，没有执行写操作。
 
-下一步：检查 worker bundle freshness，暂存本切片文件、提交并开 draft PR；不合并。原三 tab 浏览界面继续作为后续 UI 切片。旧 `.claude/worktrees/631-plugin-host` 不属于本会话，不修改或回收；#512/#514 的旧依赖阻塞已解除。
+实现提交：`2bb5e80361c209834b22dc308a068faa59749f6b`。Draft PR #602 已推送；worker bundle freshness 为 `FRESH 0/1092`。没有合并。原三 tab 浏览界面继续作为后续 UI 切片。旧 `.claude/worktrees/631-plugin-host` 不属于本会话，不修改或回收；#512/#514 的旧依赖阻塞已解除。
