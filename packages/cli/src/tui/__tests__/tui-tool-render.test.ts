@@ -268,13 +268,17 @@ describe('rendered transcript', () => {
     expect(rendered).toContain(`$ ${command}`);
   });
 
-  it('labels a shell result with an output-line count when details are hidden', () => {
+  it('folds a shell result to its last line and counts what it hides', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'b3', name: 'bash', input: { command: 'npm test' } } });
     model.apply({ type: 'tool_result', data: { id: 'b3', result: 'pass 1\npass 2\npass 3\nfail 4' } });
     const rendered = strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false }));
-    expect(rendered).toContain('[+ 4 output lines]');
-    expect(rendered).not.toContain('fail 4');
+    // The marker counts the lines BEHIND the fold, not the lines in the result,
+    // and the one row a fold keeps is the LAST one: a command's conclusion sits
+    // at the end, so a folded call that shows nothing shows the wrong thing.
+    expect(rendered).toContain('[+ 3 output lines · Ctrl+T]');
+    expect(rendered).toContain('fail 4');
+    expect(rendered).not.toContain('pass 1');
   });
 
   it('pins the exit code of a failed command in the body', () => {
@@ -295,8 +299,12 @@ describe('rendered transcript', () => {
     expect(rendered).toContain('err 11');
     // The head of the log is NOT shown — a failure's story is at the tail.
     expect(rendered).not.toContain('err 0\n');
+    // A fold of a FAILURE keeps the exit code, not the last log line: the same
+    // fact `selectShellOutput` hoists, because a tail selection would lose it.
     expect(strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false })))
-      .toContain('[+ 13 output lines]');
+      .toContain('[Exit code: 2]');
+    expect(strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false })))
+      .toContain('[+ 12 output lines · Ctrl+T]');
   });
 
   it('gives the command the user ran a card of its own', () => {

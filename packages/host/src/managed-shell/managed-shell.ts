@@ -23,6 +23,7 @@
 
 import { openSync, readSync, closeSync, statSync } from 'fs';
 import { open, type FileHandle } from 'fs/promises';
+import { StringDecoder } from 'string_decoder';
 import { join } from 'path';
 import { createProcessScope, type ProcessScope, type ProcessTreeKiller, type ScopedProcess } from '@duya/agent-runtime';
 import { BASH_MAX_TIMEOUT_MS } from '@duya/capabilities/ShellCommandTool/constants';
@@ -35,6 +36,7 @@ import type {
 import type { HostLocalMailboxApiV1 } from '@duya/agent-protocol/mailbox';
 import { killProcessTree } from './process-tree-kill.js';
 import { getManagedShellOutputDirectory } from './paths.js';
+import { emitShellOutput, hasShellOutputListener } from './output-stream.js';
 import { getBashTaskRegistry, type BashTaskRegistry } from './task-registry.js';
 import {
   sendHostShellNotification,
@@ -53,6 +55,94 @@ export const MANAGED_BASH_NOTIFICATION_TAIL_CHARS = 3_000;
 export type ManagedBashStatus = ShellCommandCompletion['status'];
 export type ManagedBashCompletion = ShellCommandCompletion;
 export type ManagedBashHandle = ShellCommandHandle & { readonly startTime: number };
+
+/**
+ * How often the live tail is sampled, and how much of it is read per sample.
+ *
+ * The interval is a latency budget, not a throughput one: a row that updates
+ * every 250 ms reads as live, and every 5 s does not. The per-tick ceiling is a
+ * burst bound — a compiler that dumps 200 KB in one second must not hand the UI
+ * 200 KB, and must not make the host read a five-figure string off disk inside
+ * one timer callback. Bytes above it are not lost: they stay in the file, and
+ * the next tick reads from the same offset.
+ */
+const SHELL_OUTPUT_POLL_MS = 250;
+const SHELL_OUTPUT_SLICE_BYTES = 4_096;
+
+/**
+ * Read what the command has printed SINCE the last call, without re-reading the
+ * file.
+ *
+ * `readOutputTail` reads the whole file and slices the end, which is right for
+ * collecting a finished result once and wrong on a 250 ms timer over a log that
+ * grows to megabytes. This one opens once, reads forward from `offset` with one
+ * short positional read, and hands back the next offset.
+ *
+ * `stringDecoder` is not decoration. A slice boundary falls between bytes, and
+ * UTF-8 multi-byte characters do not care where the tick happened to land; the
+ * decoder holds a split sequence back until its continuation arrives on the next
+ * read, so the UI never sees a replacement character in the middle of a word.
+ */
+function readOutputSlice(
+  outputFile: string,
+  offset: number,
+  decoder: StringDecoder,
+): { readonly delta: string; readonly nextOffset: number } | null {
+  let fd: number;
+  try {
+    fd = openSync(outputFile, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const buffer = Buffer.allocUnsafe(SHELL_OUTPUT_SLICE_BYTES);
+    const bytesRead = readSync(fd, buffer, 0, SHELL_OUTPUT_SLICE_BYTES, offset);
+    if (bytesRead === 0) return { delta: '', nextOffset: offset };
+    return {
+      delta: decoder.write(buffer.subarray(0, bytesRead)),
+      nextOffset: offset + bytesRead,
+    };
+  } catch {
+    // A read that fails mid-run is a log file being rotated out from under us.
+    // The command is still running and its result is still being collected by
+    // the settle path; a missing live preview is not worth a host-side error.
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Publish the command's own output while it runs, for whoever is watching.
+ *
+ * Armed only when a subscriber already exists (`hasShellOutputListener`), so a
+ * run that does not render a live tail pays nothing for one. That gate is why
+ * the subscribing side has to register at dispatch, before the tool runs: a
+ * listener that appears mid-command is not a bug, it simply sees the rest of the
+ * output and the final result -- which is what the transcript renders anyway.
+ *
+ * The timer is handed to the scope rather than cancelled here, because that is
+ * what guarantees it dies with the command on all four exit paths -- including
+ * the one where the spawn itself failed and `settle` never ran for a process
+ * that never started. `dispose()` clears scope timers before it runs closers.
+ */
+function armOutputStream(
+  scope: ProcessScope,
+  taskId: string,
+  outputFile: string,
+): void {
+  if (!hasShellOutputListener(taskId)) return;
+  let offset = 0;
+  const decoder = new StringDecoder('utf8');
+  const timer = scope.setInterval(() => {
+    const slice = readOutputSlice(outputFile, offset, decoder);
+    if (slice === null) return;
+    offset = slice.nextOffset;
+    if (slice.delta === '') return;
+    emitShellOutput({ taskId, delta: slice.delta });
+  }, SHELL_OUTPUT_POLL_MS);
+  timer.handle.unref?.();
+}
 
 export interface StartManagedBashParams extends StartShellCommand {
   /**
@@ -160,6 +250,11 @@ export async function startManagedShell(
     status: 'running',
     startTime,
   });
+
+  // Armed after the register so the registry is never one tick ahead of a
+  // subscriber that looks a task up by id; armed inside the same scope that owns
+  // the child, so the tail poller cannot outlive the process it is tailing.
+  armOutputStream(scope, taskId, outputFile);
 
   let timedOut = false;
   let canceled = false;

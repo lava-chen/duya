@@ -680,6 +680,7 @@ function deltaOf(payload: Readonly<Record<string, unknown>>): string | null {
     case 'assistant.text_delta':
     case 'assistant.thinking_delta':
     case 'tool.arguments_delta':
+    case 'tool.output_delta':
       return typeof payload['delta'] === 'string' ? (payload['delta'] as string) : null;
     default:
       return null;

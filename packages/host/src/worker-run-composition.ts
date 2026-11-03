@@ -16,6 +16,7 @@ import { persistLargePastedAttachments } from '@duya/host/worker-context/attachm
 import { projectRuntimeContextToProviderMessage } from '@duya/agent-core/message/message-projectors';
 import { buildEnginePorts, toDrainItem } from '@duya/agent-runtime/adapters/run-engine-ports';
 import type { CompactionSources, LegacyEngineSources } from '@duya/agent-runtime/adapters/run-engine-ports';
+import { onShellOutput } from './managed-shell/output-stream.js';
 function toToolResultMessage(outcome: ToolOutcome): Message {
     const row: Message = {
         role: 'tool',
@@ -114,11 +115,37 @@ export interface LegacyRunHost {
     readonly deferFragment?: (fragment: TransientContextFragment) => void;
     readonly extensions?: ExtensionPort;
     readonly command?: RunCommandPort;
+    /**
+     * Where this run's live shell-output subscriptions are recorded, keyed by
+     * tool call id, holding the unsubscribe.
+     *
+     * OPTIONAL, and the optionality is the ownership boundary: the driver that
+     * supplies the map also closes it in its `finally`, so a host that runs the
+     * engine without one (the headless host) simply has no live tail instead of
+     * leaking a subscriber per tool call. A run-scoped side channel must have a
+     * run-scoped owner, and the run is the only thing that knows when it is over.
+     *
+     * The composition writes here rather than subscribing unconditionally because
+     * `queueTool` is the last point that still precedes the spawn: by the time
+     * `startManagedShell` decides whether to tail the output file, the listener
+     * has to already exist.
+     */
+    readonly shellOutputStops?: Map<string, () => void>;
 }
 export function composeLegacyRunSources(agent: EngineProductSession, host: LegacyRunHost): LegacyEngineSources {
     const pipelines = host.turnPipelines;
     const runFork = host.runFork;
     const controlResults: ToolOutcome[] = [];
+    const shellOutputStops = host.shellOutputStops;
+    /** Stop watching one call's output. Idempotent, and safe for a call that
+     *  never subscribed (the progress tool, and every host that passes no map). */
+    const stopShellOutput = (callId: string): void => {
+        if (shellOutputStops === undefined) return;
+        const stop = shellOutputStops.get(callId);
+        if (stop === undefined) return;
+        shellOutputStops.delete(callId);
+        stop();
+    };
     return {
         openModelStream: (request: ModelRequest, signal: AbortSignal): AsyncIterable<ModelFrame> => createClientModelPort(agent.readModelClient(), {
             refreshDeclaredTools: host.refreshDeclaredTools,
@@ -131,6 +158,17 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
             const name = host.progressToolName?.();
             const progress = name === undefined ? null : readProgressUpdateCall(call.name, name, call.input);
             if (progress === null) {
+                // Subscribe before queueing, because queueing is what leads to the
+                // spawn and the spawn is what asks whether anybody is watching.
+                // Every tool call gets a subscriber, not only shell calls: the key
+                // is the call id, and a tool that never publishes costs one entry
+                // in a map that the run closes. Naming the shell tools here instead
+                // would make this composition depend on a capability's tool names.
+                if (shellOutputStops !== undefined && !shellOutputStops.has(call.callId)) {
+                    shellOutputStops.set(call.callId, onShellOutput(call.callId, (slice) => {
+                        host.emitter.emit({ type: 'tool.output_delta', toolCallId: call.callId, delta: slice.delta });
+                    }));
+                }
                 pipelines.queue({ id: call.callId, name: call.name, input: call.input });
                 return;
             }
@@ -141,11 +179,15 @@ export function composeLegacyRunSources(agent: EngineProductSession, host: Legac
             yield* controlResults.splice(0);
             for await (const update of pipelines.drain()) {
                 const item = toDrainItem(update);
-                if (item !== null)
+                if (item !== null) {
+                    // A settled call has its authoritative result now, so the tail
+                    // it streamed is superseded and the subscriber is dead weight.
+                    if (item.kind === 'tool_result') stopShellOutput(item.callId);
                     yield item;
+                }
             }
         },
-        discardTools: () => { controlResults.length = 0; pipelines.discard(); },
+        discardTools: () => { controlResults.length = 0; if (shellOutputStops !== undefined) { for (const callId of [...shellOutputStops.keys()]) stopShellOutput(callId); } pipelines.discard(); },
         lookup: {
             sideEffectOf: (name) => name === host.progressToolName?.() ? 'read_only' : null,
             toolNames: () => agent.activeMCPRegistry.getAllTools().map((tool: Tool) => tool.name),

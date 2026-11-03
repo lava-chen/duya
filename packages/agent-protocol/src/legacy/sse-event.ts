@@ -38,6 +38,7 @@ export const LEGACY_SSE_EVENT_TYPES = [
   'tool_use_started',
   'tool_use_delta',
   'tool_result',
+  'tool_output',
   'tool_progress',
   'tool_timeout',
   'tool_group_progress',
@@ -72,7 +73,7 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
 > = {
   // Today the declared type says `data: string` while the router actually sends
   // `data.content` (apps/desktop/src/main/agents/server/router.ts:645-647)
-  // and the renderer forwards `event.data` (packages/ui/src/lib/agent-http-client.ts:577).
+  // and the renderer forwards `event.data` (packages/ui/src/lib/agent-http-client.ts:585).
   // The declared type was a lie.
   text: ['assistant.text_block'],
   text_delta: ['assistant.text_delta'],
@@ -88,13 +89,18 @@ export const SSE_EVENT_TO_PROTOCOL: Readonly<
   // still stream; `tool_use` is the authoritative re-emission —
   // packages/host/src/run-engine-model.ts:48-50 says so in as many words. Consumers collapse the
   // pair into ONE upsert slot keyed by id
-  // (agent-sse-client.ts:452-453, stream-session-manager.ts:2079-2080), which
+  // (agent-sse-client.ts:454-455, stream-session-manager.ts:2080-2081), which
   // is precisely why the protocol has to split them: one slot, two
   // durabilities, and no way to tell a duplicate from a correction.
   // Neither carries a result: completion arrives on `tool_result` below.
   tool_use: ['tool.call_started'],
   tool_use_started: ['tool.call_preview'],
   tool_use_delta: ['tool.arguments_delta'],
+  // The legacy frame keeps the `stream` field the renderer declares
+  // (`apps/desktop/src/main/types/agent-message-types.ts`) while the protocol
+  // payload deliberately has none: a managed command writes both descriptors
+  // into one file, so interleaving is all the producer can state.
+  tool_output: ['tool.output_delta'],
   tool_result: ['tool.call_completed'],
   tool_progress: ['tool.progress'],
   tool_timeout: ['tool.timed_out'],

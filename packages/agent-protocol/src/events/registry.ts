@@ -208,6 +208,7 @@ export const EVENT_META = {
   'tool.call_preview': { ...G1_0, requiresCapability: 'tool_call_preview', durability: 'volatile', category: 'tool', description: 'Provisional announcement while arguments still stream. Never durable: the call it describes may not happen as stated.' },
   'tool.call_started': { ...G1_0, durability: 'durable', category: 'tool', description: 'Authoritative intent, emitted exactly once per toolCallId before executor dispatch. The durable half of the side-effect ledger.' },
   'tool.arguments_delta': { ...G1_0, durability: 'ephemeral', category: 'tool', description: 'Streaming tool arguments.' },
+  'tool.output_delta': { ...G1_0, durability: 'ephemeral', category: 'tool', description: 'A slice of a running tool output. Live display only: the transcript keeps the final result, not the byte stream.' },
   'tool.progress': { ...G1_0, durability: 'volatile', category: 'tool', description: 'Long-running tool progress.' },
   'tool.group_progress': { ...G1_0, durability: 'volatile', category: 'tool', description: 'Aggregate progress for a group of tools.' },
   'tool.timed_out': { ...G1_0, durability: 'volatile', category: 'tool', description: 'Tool exceeded its deadline.' },

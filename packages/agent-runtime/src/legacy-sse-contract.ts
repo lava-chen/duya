@@ -59,6 +59,7 @@ export const LEGACY_SSE_TYPES = [
   'tool_use_delta',
   'tool_use',
   'tool_result',
+  'tool_output',
   'tool_progress',
   'tool_group_progress',
   'permission',

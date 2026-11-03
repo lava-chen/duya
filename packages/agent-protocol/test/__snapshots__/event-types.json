@@ -1,5 +1,5 @@
 {
-  "count": 38,
+  "count": 39,
   "types": [
     "assistant.goal_updated",
     "assistant.message_finalized",
@@ -34,6 +34,7 @@
     "tool.call_preview",
     "tool.call_started",
     "tool.group_progress",
+    "tool.output_delta",
     "tool.progress",
     "tool.timed_out",
     "turn.completed",
@@ -240,6 +241,12 @@
     },
     "tool.group_progress": {
       "durability": "volatile",
+      "category": "tool",
+      "minProtocol": "1.0",
+      "minSchemaRevision": 1
+    },
+    "tool.output_delta": {
+      "durability": "ephemeral",
       "category": "tool",
       "minProtocol": "1.0",
       "minSchemaRevision": 1

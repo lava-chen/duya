@@ -491,6 +491,26 @@ export interface ToolArgumentsDeltaPayload {
   readonly delta: string;
 }
 
+/**
+ * One slice of a running tool's OWN output — for a shell command, the bytes it
+ * has written since the previous slice.
+ *
+ * Not the same thing as `tool.arguments_delta`: that stream is the model still
+ * composing the call and it ENDS at dispatch, while this stream starts there.
+ * A renderer that conflated them would draw the command's text as its
+ * arguments.
+ *
+ * There is deliberately no `stream` field. A managed command's stdout and
+ * stderr are handed the same descriptor (`managed-shell.ts`,
+ * `stdio: ['ignore', fd.fd, fd.fd]`), so their interleaving is the only fact
+ * the producer actually holds; naming a stream here would state something the
+ * OS already discarded.
+ */
+export interface ToolOutputDeltaPayload {
+  readonly toolCallId: ToolCallId;
+  readonly delta: string;
+}
+
 export interface ToolProgressPayload {
   readonly toolCallId: ToolCallId;
   readonly title?: string;
@@ -725,6 +745,7 @@ export interface RunEventPayloads {
   'tool.call_preview': ToolCallPreviewPayload;
   'tool.call_started': ToolCallStartedPayload;
   'tool.arguments_delta': ToolArgumentsDeltaPayload;
+  'tool.output_delta': ToolOutputDeltaPayload;
   'tool.progress': ToolProgressPayload;
   'tool.group_progress': ToolGroupProgressPayload;
   'tool.timed_out': ToolTimedOutPayload;

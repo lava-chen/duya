@@ -119,6 +119,11 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
     const run = await agent.beginRun({ options, prompt });
     const announced: RunEventEnvelope[] = [];
     let ports: RunEnginePorts | null = null;
+    // Live shell output for this run: callId -> unsubscribe. Declared outside the
+    // `try` because the `finally` is what empties it -- a run that ends without
+    // reaching `discardTools` (aborted mid-command) would otherwise leave its
+    // subscribers behind in a module-level map that outlives the process's runs.
+    const shellOutputStops = new Map<string, () => void>();
     try {
         const railFrames = await agent.producePromptContextRail(run);
         const leg = selectRunDriverLeg(agent, run);
@@ -245,6 +250,7 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             beginTicket: (call) => ledger.begin(call),
             settleTicket: (settle) => ledger.settle(settle),
             onPerCallUsage: request.onPerCallUsage,
+            shellOutputStops,
             ...(request.turnUsageBlock === undefined
                 ? {}
                 : { turnUsageBlock: request.turnUsageBlock }),
@@ -308,6 +314,8 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
         };
     }
     finally {
+        for (const stop of shellOutputStops.values()) stop();
+        shellOutputStops.clear();
         run.close();
     }
 }

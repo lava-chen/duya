@@ -7,7 +7,7 @@
  * either side. So retryability ships as part of the code.
  *
  * Two booleans in the current codebase are being replaced by this:
- *   - `SSEEvent.error.metadata.isRetryable`  (ai/src/types.ts:190)
+ *   - `SSEEvent.error.metadata.isRetryable`  (ai/src/types.ts:196)
  *   - `Session.errorRetryable`                (packages/host/src/worker-session-registry.ts:22)
  * Both are computed by the WRITER, which is exactly why they are untrustworthy
  * under version skew. Live proof: the router hardcodes `failSession(..., true)`

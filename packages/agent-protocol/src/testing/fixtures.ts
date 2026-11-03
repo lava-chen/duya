@@ -84,6 +84,7 @@ const FIXTURES = {
     attempt: 1,
   },
   'tool.arguments_delta': { toolCallId: 'call-1', delta: '{}' },
+  'tool.output_delta': { toolCallId: 'call-1', delta: 'PASS 1\n' },
   'tool.progress': { toolCallId: 'call-1', elapsedMs: 5 },
   'tool.group_progress': { title: 'fixture group', source: 'test' },
   'tool.timed_out': { toolCallId: 'call-1', toolName: 'Read', elapsedMs: 30_000 },

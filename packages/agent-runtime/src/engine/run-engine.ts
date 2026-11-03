@@ -2878,7 +2878,7 @@ export class RunEngineImpl implements RunEngine {
    *
    *  - a timeline row that is runtime context is `origin: 'context'` in BOTH --
    *    the host stamps it in `toModelMessages`
-   *    (`worker-run-composition.ts:314`) and the replacement stamps it in
+   *    (`worker-run-composition.ts:428`) and the replacement stamps it in
    *    `toRuntimeMessage` (`adapters/run-engine-ports.ts`). It therefore lands
    *    in the host's half and is excluded from the replacement's half.
    *  - a timeline row that is NOT runtime context is `origin !== 'context'` in

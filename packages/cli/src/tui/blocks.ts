@@ -72,6 +72,7 @@ export const FRAME_TYPES = [
   'thinking_delta',
   'tool_use_started',
   'tool_use_delta',
+  'tool_output',
   'tool_use',
   'tool_result',
   'tool_progress',
@@ -94,6 +95,16 @@ export const FRAME_TYPES = [
 ] as const;
 
 export type FrameType = (typeof FRAME_TYPES)[number];
+
+/**
+ * How much of a running command's output the model retains.
+ *
+ * A live row draws the last few lines, so this is a ceiling on memory, not a
+ * render budget: it has to clear the render window by enough that the tail
+ * survives a coalesced burst, and stay small enough that a transcript of many
+ * running commands is not a buffer of build logs.
+ */
+export const OUTPUT_TAIL_MAX_CHARS = 8_192;
 
 export type BlockKind = 'user' | 'assistant' | 'thinking' | 'tool' | 'error' | 'notice';
 
@@ -196,6 +207,21 @@ export interface ToolBlock {
    * when the call starts.
    */
   argumentText?: string;
+  /**
+   * The running command's OWN output, accumulated while it is still running.
+   *
+   * Beside `argumentText`, and the two must not be conflated: that buffer is
+   * the model composing the call and stops growing at dispatch, this one starts
+   * there and is what the process printed. A live shell row draws this; the
+   * finished row draws `result`, which is the authoritative text and supersedes
+   * it — so a renderer that preferred this after completion would keep showing
+   * the tail the poller sampled rather than what the tool actually returned.
+   *
+   * Ephemeral by contract (`tool.output_delta` is `durability: 'ephemeral'`): a
+   * reloaded transcript has no deltas to replay, so a restored row is rendered
+   * from `result` alone and this stays absent.
+   */
+  outputText?: string;
   /**
    * The subagent this call spawned, when the call WAS a subagent spawn.
    *
@@ -762,6 +788,10 @@ export class TranscriptModel {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
     block.result = result;
+    // The live tail is superseded, not supplemented: it is what a poller
+    // happened to sample, and keeping it would leave an 8 KiB build-log buffer
+    // alive for the rest of the session on a block that no longer reads it.
+    block.outputText = undefined;
     // The result goes back to the model with the next request as well.
     this.contextCharCount += result.length;
     block.status = failed ? 'error' : indeterminate ? 'unknown' : 'ok';
@@ -988,6 +1018,29 @@ export class TranscriptModel {
         const delta = asString(payload['delta']);
         if (delta === '') return { kind: 'none' };
         block.argumentText = (block.argumentText ?? '') + delta;
+        this.bump(block);
+        return { kind: 'mutate', block };
+      }
+
+      case 'tool_output': {
+        // The running command printed another slice. Unlike `tool_use` there is
+        // no block to create: output only exists for a call that already
+        // announced itself, and inventing a block here would draw a tool row
+        // whose command nobody stated.
+        const callId = asString(payload['toolUseId']) || asString(payload['id']);
+        if (callId === '') return { kind: 'none' };
+        const block = this.toolsByCallId.get(callId);
+        if (block === undefined) return { kind: 'none' };
+        const delta = asString(payload['data']) || asString(payload['delta']);
+        if (delta === '') return { kind: 'none' };
+        // Bounded at the tail. A verbose build emits megabytes and the live row
+        // draws a handful of lines, so the head is what a cap must discard —
+        // keeping it would leave the row showing the first lines of a command
+        // that has long since moved past them.
+        const joined = (block.outputText ?? '') + delta;
+        block.outputText = joined.length > OUTPUT_TAIL_MAX_CHARS
+          ? joined.slice(joined.length - OUTPUT_TAIL_MAX_CHARS)
+          : joined;
         this.bump(block);
         return { kind: 'mutate', block };
       }

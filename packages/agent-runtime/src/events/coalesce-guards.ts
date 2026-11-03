@@ -138,6 +138,7 @@ export type CoalescingTargetsExistInRegistry = [
   Assert<'assistant.text_delta' extends EventType ? true : false>,
   Assert<'assistant.thinking_delta' extends EventType ? true : false>,
   Assert<'tool.arguments_delta' extends EventType ? true : false>,
+  Assert<'tool.output_delta' extends EventType ? true : false>,
 ];
 
 /**

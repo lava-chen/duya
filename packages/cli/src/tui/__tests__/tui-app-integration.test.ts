@@ -586,7 +586,7 @@ describe('renderTranscript', () => {
     model.apply({ type: 'tool_use', data: { id: 'first', name: 'read_file', input: { path: 'a' } } });
     model.apply({ type: 'tool_result', data: { id: 'first', result: 'first-result\nline two' } });
     model.apply({ type: 'tool_use', data: { id: 'second', name: 'read_file', input: { path: 'b' } } });
-    model.apply({ type: 'tool_result', data: { id: 'second', result: 'second-result' } });
+    model.apply({ type: 'tool_result', data: { id: 'second', result: 'second-result\nsecond tail' } });
     const first = model.blocks[0];
     expect(first?.kind).toBe('tool');
 
@@ -596,7 +596,10 @@ describe('renderTranscript', () => {
       toolResultLines: 5,
     });
     expect(compact).not.toContain('first-result');
-    expect(compact).toContain('[+ 2 lines]');
+    // The fold counts what it WITHHOLDS, and a folded call still shows its last
+    // line — so two lines in, one row on screen, one behind the marker.
+    expect(compact).toContain('line two');
+    expect(compact).toContain('[+ 1 line · Ctrl+T]');
 
     const selected = renderTranscript(model, {
       expanded: false,

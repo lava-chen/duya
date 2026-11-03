@@ -206,6 +206,12 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
     case 'tool_group_progress':
     case 'tool_result':
     case 'tool_progress':
+    // A running command's own bytes. Deliberately not a frame: the engine feeds
+    // the MODEL, and a tail the poller sampled is not what the tool returns --
+    // `tool_result` carries that, so mapping this would put a partial log in the
+    // model's context. It is dropped HERE rather than by `default`, so a future
+    // `SSEEvent` member still has to be named before it can vanish.
+    case 'tool_output':
     case 'tool_timeout':
     case 'system':
     case 'turn_start':

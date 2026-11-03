@@ -5,7 +5,7 @@
  *
  * The FINAL tools[] the provider reads — not the registry's registration
  * count — for two roles (plain worker, bot) under three exposure configs
- * (default `hint`, explicit `search`, App mention promotion), driven through
+ * (the default `search`, explicit `hint`, App mention promotion), driven through
  * the REAL chain: real `WorkerSession`, real `initToolCatalog`, real
  * `setActiveMCPRuntime` replace-set, real `_resolveTools` visibility filter
  * and `projectForProvider` projection. The only fake is the LLM provider.
@@ -271,13 +271,17 @@ function utf8Bytes(value: unknown): number {
 async function runCensus(
   scenario: string,
   options: {
-    exposureEnv?: 'hint' | 'search';
+    exposureEnv?: 'hint' | 'search' | 'full';
     mentionedProviders?: string[];
     botProfile?: boolean;
-  },
+  } = {},
 ): Promise<CensusRecord> {
-  if (options.exposureEnv === 'search') {
-    process.env.DUYA_TOOLS_EXPOSURE = 'search';
+  // Pin the exposure explicitly for every scenario. The census compares
+  // concrete exposure axes, so a scenario that means to measure the eager
+  // axis has to say so — it must not inherit whatever the ambient default
+  // happens to be (the default is `search`, i.e. deferred).
+  if (options.exposureEnv) {
+    process.env.DUYA_TOOLS_EXPOSURE = options.exposureEnv;
   } else {
     delete process.env.DUYA_TOOLS_EXPOSURE;
   }
@@ -424,7 +428,25 @@ async function runCensus(
 // ---------------------------------------------------------------------------
 
 describe('W0 request-level tool census', () => {
-  it('worker under default hint config carries MCP tools with full schemas', async () => {
+  it('defaults to the deferred search policy — MCP tools stay off the request', async () => {
+    installDbIpc();
+    const record = await runCensus('worker-default');
+
+    expect(record.exposureConfig).toBe('search');
+    const names = new Set(record.finalToolNames);
+    // Catalog routers always ride the request.
+    expect(names.has('tool_catalog')).toBe(true);
+    expect(names.has('tool_invoke')).toBe(true);
+    // search -> deferred: MCP tools are NOT on the request, but stay
+    // discoverable through the catalog.
+    expect(names.has('w0_fixture_small')).toBe(false);
+    expect(names.has('w0_fixture_large')).toBe(false);
+    const small = record.tools.find((tool) => tool.name === 'w0_fixture_small');
+    expect(small?.exposure).toBe('deferred');
+    expect(small?.owner).toBe('mcp');
+  });
+
+  it('worker under explicit hint config carries MCP tools with full schemas', async () => {
     installDbIpc();
     const record = await runCensus('worker-hint', { exposureEnv: 'hint' });
 

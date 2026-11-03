@@ -686,6 +686,14 @@ export function normalizeWorkerEvent(event: Record<string, unknown>): Record<str
       type: 'tool_use_delta',
       data: { id: event.id, name: event.name, delta: event.delta },
     };
+  } else if (msgType === 'chat:tool_output') {
+    // A slice of a running command's own output. No `stream`: a managed shell
+    // writes stdout and stderr to one descriptor, so the producer cannot name
+    // which one a slice came from.
+    sseEvent = {
+      type: 'tool_output',
+      data: { toolUseId: event.toolUseId, data: event.data },
+    };
   } else if (msgType === 'chat:tool_group_progress') {
     sseEvent = {
       type: 'tool_group_progress',

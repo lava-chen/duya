@@ -35,7 +35,7 @@ import { projectToLegacyFrame } from '../src/project/legacy-sse-projector.js';
 describe('surface conformance: legacy projection stays total', () => {
   it('splits the registry into mapped and unmapped with no gap or overlap', () => {
     expect(LEGACY_UNMAPPED_EVENT_TYPES).toHaveLength(11);
-    expect(LEGACY_MAPPED_EVENT_TYPES).toHaveLength(27);
+    expect(LEGACY_MAPPED_EVENT_TYPES).toHaveLength(28);
     expect(LEGACY_MAPPED_EVENT_TYPES.length + LEGACY_UNMAPPED_EVENT_TYPES.length).toBe(
       EVENT_TYPES.length,
     );
@@ -97,7 +97,7 @@ describe('surface conformance: legacy projection stays total', () => {
     const envelopes = mapped.map((type, i) => envelope(type, { seq: i + 1 }));
     const { model, legacyFrames } = replayOntoSurface(envelopes);
 
-    expect(legacyFrames).toHaveLength(27);
+    expect(legacyFrames).toHaveLength(28);
     // Every frame's `type` is in the legacy vocabulary the renderer already
     // parses, and none is empty.
     for (const frame of legacyFrames) {

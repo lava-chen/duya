@@ -87,6 +87,14 @@ export interface AgentEvent {
   result?: unknown;
   error?: string;
   content?: string;
+  /** The tool call a live frame belongs to. `tool_progress` and `tool_output`
+   *  are emitted per call, and the SSE client forwards those fields flat, so
+   *  they arrive here rather than inside `data`. */
+  toolUseId?: string;
+  /** Which descriptor a `tool_output` slice came from. OPTIONAL because a managed
+   *  shell points stdout and stderr at the same descriptor, so the producer
+   *  cannot state it. */
+  stream?: 'stdout' | 'stderr';
   reason?: string;
   groupId?: string;
   progressTitle?: string;

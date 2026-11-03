@@ -135,6 +135,7 @@ const DELTA_EVENTS: ReadonlySet<string> = new Set([
   'assistant.text_delta',
   'assistant.thinking_delta',
   'tool.arguments_delta',
+  'tool.output_delta',
 ]);
 
 /**

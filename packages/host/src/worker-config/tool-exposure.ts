@@ -14,14 +14,27 @@
  *                             replacing the empty schema stub with its schema.
  *   - `search`   → deferred   compatibility alias for the unified catalog.
  *
+ * Default is `search`. Deferred MCP tools stay out of the request's `tools`
+ * array and are reached through `tool_catalog` / `tool_invoke`, so a session
+ * with many MCP servers no longer ships every tool schema on every turn —
+ * the tools array is the longest stable prefix of a request, and keeping it
+ * small keeps that prefix cacheable. This mirrors Codex, which always defers
+ * MCP tools when tool search is available
+ * (`Feature::ToolSearchAlwaysDeferMcpTools`, default enabled).
+ *
+ * Unlike Codex, the catalog here is client-side: `tool_catalog` and
+ * `tool_invoke` are ordinary tools, so deferred discovery works on any
+ * function-calling endpoint. There is no "model cannot search" blind spot —
+ * a model that never discovers a deferred tool simply does not call it.
+ *
  * Backward compatibility: the retired `[tools] exposure = "catalog"` value
  * is accepted and normalized to `search`; `[tools] on_demand_discovery = true`
  * maps to `search`. The explicit `exposure` key wins when both appear.
  * Env overrides mirror the config keys (DUYA_TOOLS_EXPOSURE /
- * DUYA_TOOLS_ON_DEMAND_DISCOVERY).
+ * DUYA_TOOLS_ON_DEMAND_DISCOVERY). Set `[tools] exposure = "full"` or
+ * `"hint"` to restore eager MCP tools.
  *
- * The fallback catalog is client-side and works with any function-calling
- * model; native provider tool-search capabilities are negotiated separately.
+ * Native provider tool-search capabilities are negotiated separately.
  */
 
 import * as fs from 'fs';
@@ -55,7 +68,7 @@ export function shouldInjectMcpCatalog(exposure: MCPExposureMode): boolean {
 
 export interface ToolExposureConfig {
   /**
-   * Legacy MCP policy. Default `'hint'`, mapped to eager for compatibility.
+   * Legacy MCP policy. Default `'search'` (deferred catalog dispatch).
    */
   exposure: MCPExposureMode;
   /**
@@ -66,8 +79,8 @@ export interface ToolExposureConfig {
 }
 
 const DEFAULTS: ToolExposureConfig = {
-  exposure: 'hint',
-  onDemandDiscovery: false,
+  exposure: 'search',
+  onDemandDiscovery: true,
 };
 
 const EXPOSURE_VALUES: readonly string[] = ['full', 'hint', 'search'];
