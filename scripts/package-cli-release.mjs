@@ -45,7 +45,12 @@ const runtimeExecutable = fs.realpathSync(process.execPath);
 const runtimeRoot = process.platform === 'win32'
   ? path.dirname(runtimeExecutable)
   : path.dirname(path.dirname(runtimeExecutable));
-const runtimeLicense = path.join(runtimeRoot, 'LICENSE');
+// setup-node and standard Node archives keep LICENSE beside the executable.
+// Managed runtimes can strip documentation files; in that case the build
+// caller may provide the matching official license explicitly.
+const runtimeLicense = process.env.DUYA_NODE_LICENSE
+  ? path.resolve(process.env.DUYA_NODE_LICENSE)
+  : path.join(runtimeRoot, 'LICENSE');
 if (!fs.existsSync(runtimeLicense)) {
   throw new Error(`Node.js runtime license was not found beside ${runtimeExecutable}`);
 }

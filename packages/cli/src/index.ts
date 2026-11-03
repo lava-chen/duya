@@ -121,6 +121,7 @@ export function buildProgram(): Command {
   chat.option('--token <token>', 'Host auth token (else DUYA_HOST_TOKEN or the runtime descriptor)');
   chat.option('--runtime-file <file>', 'Runtime descriptor path (default <dataRoot>/runtime/host-api.json)');
   chat.option('--session <id>', 'Continue an existing session instead of creating one');
+  chat.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
   chat.option('--model <model>', 'Model override for the runs started by this chat');
   chat.option('--provider <id>', 'Provider override for the runs started by this chat (e.g. deepseek, glm-cn)');
   chat.option('--api-format <format>', 'API format override: anthropic | openai');
@@ -133,6 +134,7 @@ export function buildProgram(): Command {
       token: asString(chat.getOptionValue('token')),
       runtimeFile: asString(chat.getOptionValue('runtimeFile')),
       session: asString(chat.getOptionValue('session')),
+      workingDirectory: asString(chat.getOptionValue('workspace')),
       model: asString(chat.getOptionValue('model')),
       providerId: asString(chat.getOptionValue('provider')),
       apiFormat: asString(chat.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
@@ -148,6 +150,7 @@ export function buildProgram(): Command {
     .description('Open the TUI against the Duya Host that owns this data directory (DUYA_TUI_INLINE=1 for the inline screen model)');
   tui.option('--port <port>', 'HTTP port for the embedded Host (0 = auto)', '0');
   tui.option('--session <id>', 'Continue an existing session instead of creating one');
+  tui.option('--workspace <dir>', 'Working directory for a new session (defaults to the current directory)');
   tui.option('--model <model>', 'Default model override');
   tui.option('--provider <id>', 'Default provider override (e.g. deepseek, glm-cn)');
   tui.option('--api-format <format>', 'API format override: anthropic | openai');
@@ -164,6 +167,7 @@ export function buildProgram(): Command {
     const options: TuiCommandOptions = {
       port: asInt(tui.getOptionValue('port')),
       session: asString(tui.getOptionValue('session')),
+      workingDirectory: asString(tui.getOptionValue('workspace')),
       model: asString(tui.getOptionValue('model')),
       providerId: asString(tui.getOptionValue('provider')),
       apiFormat: asString(tui.getOptionValue('apiFormat')) as 'anthropic' | 'openai' | undefined,
