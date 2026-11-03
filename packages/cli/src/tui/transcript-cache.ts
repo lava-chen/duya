@@ -110,6 +110,9 @@ export class TranscriptRenderer {
         options.toolGroupMode ?? 'full',
         String(options.toolResultLines),
         String(options.width ?? 0),
+        // The streaming preview's height depends on it: a block whose rows
+        // changed count has different BYTES, not just a different height.
+        String(options.liveRows ?? 0),
         // plan 615 Phase 0: the renderer decides whether emphasis/strike
         // render as italic/strike attributes or fold — a facet of the bytes.
         options.renderer ?? 'blessed',
@@ -217,5 +220,8 @@ export function renderOptionsKey(options: RenderOptions, width: number): string 
     showThinking: options.showThinking !== false,
     selectedBlockId: options.selectedBlockId ?? null,
     theme: options.theme ?? null,
+    // The streaming preview's height depends on it, so a resize has to
+    // invalidate the assembled document.
+    liveRows: options.liveRows ?? null,
   });
 }

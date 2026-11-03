@@ -4,4 +4,5 @@ export * from './session/run-event-stream.js';
 export * from './session/run-projection.js';
 export * from './decoding/sse.js';
 export * from './decoding/envelope.js';
+export * from './lib/streaming-tool-args.js';
 export * from './transport/host-api.js';
