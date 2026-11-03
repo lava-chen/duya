@@ -98,3 +98,5 @@ PR：**#601**（draft，base `codex/tui-plugin-display-name`，即 #598）。
 实现：`packages/cli/src/program/build-control-plane.ts` 两个退出点改为设置 `process.exitCode`，让 Node 正常清理；插件端对精确的 `/v1/plugins` 404 给出重启 Desktop/Host 的兼容提示。回归覆盖非零命令退出路径和旧 Host 响应。未终止用户正在运行的 Desktop Host。
 
 验证：base `origin/master` `9b8da5e866e94fb6a608e2ca5b9c042dd34987bc`，检出 `D:\codex\worktrees\plugin-host-404\duya`。Vitest 相关 4 个文件、19 项通过；`npm run typecheck:all` 退出码 0；`npm run architecture:check` 退出码 0（无新增违规）。使用当前 CLI bundle + 安装的 Node 对实际旧 Host 复现：打印重启提示、退出码 1、无 libuv assertion。`git diff --check` 通过。分支 `codex/fix-plugin-host-404-exit`，提交 `26dc1e6d`，draft PR [#605](https://github.com/lava-chen/duya/pull/605)；等待 CI/review，尚未合并。
+
+CI follow-up（2026-11-03）：PR head `a952ce51` 的 `architecture` job 在 `bundle:verify` 失败，因为已提交的 `packages/cli/src/api/plugin-client.ts` 也是 worker bundle 输入。用 `npm run build:packages -- --target @duya/host` 与 `npm run bundle:worker` 重建并提交 worker bundle（`d4ffd1ce`）；`npm run bundle:verify` 现为 `FRESH 0/1111`。该 bundle 刷新已推到 PR #605，等待新 head CI 与 review。
