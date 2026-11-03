@@ -22,6 +22,8 @@ import { expandPath } from '../utils/path.js';
 import { isPathWithinRoots } from '@duya/sandbox';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
+import { buildFileDiff } from '../file-diff.js';
+import { TOOL_FILE_DIFF_METADATA_KEY } from '@duya/agent-protocol/tool-file-diff';
 import { computeContentSha, getFileReadState, recordFileRead } from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Write/ApplyPatch). */
@@ -756,6 +758,15 @@ export async function executeEdit(
       const noteSuffix = notes.length > 0 ? `\nNotes:\n${notes.map((n) => `- ${n}`).join('\n')}` : '';
       const metadata: ToolResult['metadata'] = { filePath: resolvedPath };
       if (preImageSha) metadata.preImageSha = preImageSha;
+      // The structured diff rides alongside the prose diff the model reads.
+      // `normalizedContent` and the joined result lines are the same pair the
+      // prose diff is computed from, so the two never disagree.
+      const fileDiff = buildFileDiff({
+        path: resolvedPath,
+        oldText: normalizedContent,
+        newText: resultLines.join('\n'),
+      });
+      if (fileDiff) metadata[TOOL_FILE_DIFF_METADATA_KEY] = [fileDiff];
       return {
         id: toolUseId,
         name: 'edit',

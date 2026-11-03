@@ -26,22 +26,29 @@ export interface WithFileSnapshotResult<T> {
  * own ToolResult while the pre-image snapshot is already on disk. Returns the
  * mutation's result beam along with the captured address. Reading the file is
  * best-effort: a missing/unreadable target yields `preImageSha = undefined`.
+ *
+ * The pre-image TEXT is passed alongside the address because the address is
+ * content-addressed and therefore needs the store to resolve — a caller that
+ * wants to diff the change it is about to make needs the text now, not a
+ * lookup it would have to make and keep alive. It is undefined for the same
+ * reason the address is: the file did not exist.
  */
 export async function withFileSnapshot<T>(
   filePath: string,
-  fn: (preImageSha?: string) => Promise<T>,
+  fn: (preImageSha?: string, preImageText?: string) => Promise<T>,
   store = new FileSnapshotStore(),
 ): Promise<WithFileSnapshotResult<T>> {
   let preImageSha: string | undefined;
+  let preImageText: string | undefined;
   try {
-    const preImage = await readFile(filePath, 'utf8');
-    preImageSha = sha256Of(preImage);
-    await store.put(preImage); // dedupes internally; failures are swallowed
+    preImageText = await readFile(filePath, 'utf8');
+    preImageSha = sha256Of(preImageText);
+    await store.put(preImageText); // dedupes internally; failures are swallowed
   } catch {
     // Missing file (ENOENT) or unreadable target — no pre-image to capture.
     // The caller treats an absent preImageSha as "created-new, nothing to restore".
   }
 
-  const value = await fn(preImageSha);
+  const value = await fn(preImageSha, preImageText);
   return { value, preImageSha };
 }

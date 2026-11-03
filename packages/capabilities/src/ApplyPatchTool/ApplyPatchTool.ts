@@ -41,6 +41,8 @@ import { expandPath } from '../utils/path.js';
 import { isPathWithinRoots } from '@duya/sandbox';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
+import { buildFileDiff } from '../file-diff.js';
+import { TOOL_FILE_DIFF_METADATA_KEY, type ToolFileDiff } from '@duya/agent-protocol/tool-file-diff';
 import { computeContentSha, invalidateFileRead, recordFileRead } from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Edit/Write). */
@@ -411,6 +413,10 @@ export class ApplyPatchTool extends BaseTool {
     const failures: string[] = [];
     /** Collected pre-image snapshot references (path -> content address), plan 429 #3. */
     const fileSnapshots: Array<{ path: string; preImageSha: string }> = [];
+    // One structured diff per operation that actually changed a file. A
+    // multi-file patch publishes one array, and an operation that failed
+    // publishes nothing — the failure list carries that.
+    const fileDiffs: ToolFileDiff[] = [];
     const appState = context?.getAppState?.();
     const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
 
@@ -440,21 +446,30 @@ export class ApplyPatchTool extends BaseTool {
           if (op.kind === 'add') {
             // Plan 429 #3: an add may overwrite an existing file — snapshot any
             // pre-existing content before the write (best-effort).
+            let existing: string | undefined;
             try {
-              const existing = await readFile(resolved, 'utf-8');
+              existing = await readFile(resolved, 'utf-8');
               const preImageSha = await fileSnapshotStore.put(existing);
               fileSnapshots.push({ path: resolved, preImageSha });
             } catch {
               // ENOENT / unreadable — new file, nothing to snapshot.
             }
-            await writeFileAtomic(resolved, (op.content ?? '') + '\n');
-            await reAnchorReadState(resolved, (op.content ?? '') + '\n');
+            const newContent = (op.content ?? '') + '\n';
+            await writeFileAtomic(resolved, newContent);
+            await reAnchorReadState(resolved, newContent);
             applied.push(`added ${op.path}`);
+            const diff = buildFileDiff({
+              path: resolved,
+              oldText: existing ?? '',
+              newText: newContent,
+            });
+            if (diff) fileDiffs.push(diff);
           } else if (op.kind === 'delete') {
             // Plan 429 #3: snapshot the file before deleting it so a rewind
             // can restore it (best-effort).
+            let existing: string | undefined;
             try {
-              const existing = await readFile(resolved, 'utf-8');
+              existing = await readFile(resolved, 'utf-8');
               const preImageSha = await fileSnapshotStore.put(existing);
               fileSnapshots.push({ path: resolved, preImageSha });
             } catch {
@@ -465,6 +480,10 @@ export class ApplyPatchTool extends BaseTool {
             // edit fails with "not been read" instead of a confusing stat error.
             invalidateFileRead(resolved);
             applied.push(`deleted ${op.path}`);
+            if (existing !== undefined) {
+              const diff = buildFileDiff({ path: resolved, oldText: existing, newText: '' });
+              if (diff) fileDiffs.push(diff);
+            }
           } else {
             // update
             let content: string;
@@ -548,6 +567,12 @@ export class ApplyPatchTool extends BaseTool {
             await writeFileAtomic(resolved, result);
             await reAnchorReadState(resolved, result);
             applied.push(`updated ${op.path}`);
+            const diff = buildFileDiff({
+              path: resolved,
+              oldText: fileLines.join('\n'),
+              newText: resultLines.join('\n'),
+            });
+            if (diff) fileDiffs.push(diff);
           }
         } catch (err) {
           failures.push(`${op.path}: ${err instanceof Error ? err.message : String(err)}`);
@@ -577,6 +602,7 @@ export class ApplyPatchTool extends BaseTool {
     if (applied.length > 0) metadata.applied = [...applied];
     if (failures.length > 0) metadata.failures = [...failures];
     if (fileSnapshots.length > 0) metadata.fileSnapshots = fileSnapshots;
+    if (fileDiffs.length > 0) metadata[TOOL_FILE_DIFF_METADATA_KEY] = fileDiffs;
     return {
       id,
       name: this.name,
