@@ -254,6 +254,6 @@ Owner：当前 Codex；独立 worktree：`E:\Projects\duya\.claude\worktrees\pro
 - `npm run bundle:verify` 退出 0：提交 `a75feaae` 后 0/1059 输入变化，FRESH。
 - `npm run electron:build` 单次执行仍未返回 0：使用 `NODE_OPTIONS=--max-old-space-size=6144 GOMEMLIMIT=900MiB GOGC=30` 时，renderer 的 V8 worker 在 rendering chunks 阶段仍 OOM；随后 `NODE_OPTIONS=--max-old-space-size=8192 npx vite build`（1m47s）、`node scripts/build-electron.mjs`、`node scripts/build-recorder-worker.mjs` 分别退出 0，原生模块已拷入产物。bundle 已还原，输入保持 FRESH。
 
-交付：`codex/project-first-desktop` 以 `--force-with-lease` 推送，PR [#584](https://github.com/lava-chen/duya/pull/584) base 改为 `codex/project-tools`；不合并。
+交付：`codex/project-first-desktop` 以 `--force-with-lease=13277f3e` 推送到 `19f36ced`；PR [#584](https://github.com/lava-chen/duya/pull/584) base 已改为 `codex/project-tools`（head `19f36ced`，Draft）；不合并。
 
 下一动作：栈稳定后把整个栈统一改 base 到 `master` 触发 CI；仍等待用户授权后再合并。
