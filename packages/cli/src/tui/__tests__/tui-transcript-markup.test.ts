@@ -231,7 +231,9 @@ describe('tool groups', () => {
 
     const rendered = renderTranscript(model, OPTIONS);
     expect(rendered.match(/read_file\(/gu)).toHaveLength(2);
-    expect(rendered).toContain('terminal(');
+    // The tool name is bold and its command is colourised, so the assertion
+    // reads the text the reader sees rather than the markup around it.
+    expect(strip(rendered)).toContain('terminal(ls)');
   });
 
   it('summarises a mixed exploration pass as operations, not as one of its tools', () => {
