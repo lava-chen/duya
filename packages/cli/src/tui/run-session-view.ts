@@ -327,6 +327,10 @@ export function projectRunSessionFrames(snapshot: RunSessionSnapshot): LegacyFra
             result: tool.result ?? '',
             error: outcome !== undefined && outcome !== 'success' && outcome !== 'indeterminate',
             indeterminate: outcome === 'indeterminate',
+            // The producer's structured payload rides along verbatim, so a
+            // file-mutating tool's change set reaches the renderer instead of
+            // being re-derived from the prose result.
+            ...(tool.metadata === null ? {} : { metadata: tool.metadata }),
           },
         });
         break;

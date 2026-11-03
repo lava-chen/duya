@@ -45,6 +45,9 @@ export * from './errors.js';
 export * from './permission.js';
 export * from './permission-requests.js';
 export * from './tool-approvals.js';
+// Structured file-change diffs a file-mutating tool publishes in its result
+// metadata. The producer computes the line numbers once; consumers render.
+export * from './tool-file-diff.js';
 export * from './locks.js';
 export * from './background-tasks.js';
 export * from './capabilities.js';

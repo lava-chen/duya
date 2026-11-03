@@ -174,6 +174,14 @@ export interface ToolCallSurface {
   readonly progress: ToolProgressSurface | null;
   readonly outcome: ToolCallOutcome | null;
   readonly result: string | null;
+  /**
+   * Structured tool-result metadata, verbatim from `tool.call_completed`.
+   *
+   * A file-mutating tool publishes its change set here, so a client renders a
+   * diff instead of re-deriving one from the prose result. The shape is the
+   * producer's; this surface carries it without interpreting it.
+   */
+  readonly metadata: Readonly<Record<string, unknown>> | null;
   readonly durationMs: number | null;
   /** True once the call can no longer change: completed or timed out. */
   readonly settled: boolean;
@@ -388,6 +396,7 @@ function emptyTool(toolCallId: ToolCallId, name: string): Draft<ToolCallSurface>
     progress: null,
     outcome: null,
     result: null,
+    metadata: null,
     durationMs: null,
     settled: false,
   };
@@ -908,6 +917,11 @@ export class SurfaceModel {
         tool.result = event.content;
         tool.outcome = event.outcome;
         tool.durationMs = event.durationMs;
+        // The metadata rides along untouched: it is the producer's own
+        // structured payload (a file change set, a patch status), and a
+        // client that knows how to read it should not have to re-derive it
+        // from the prose result.
+        tool.metadata = event.metadata ?? null;
         tool.phase = 'completed';
         tool.phaseRevision += 1;
         tool.settled = true;

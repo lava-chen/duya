@@ -191,6 +191,10 @@
       "types": "./dist/task-tool-names.d.ts",
       "import": "./dist/task-tool-names.js"
     },
+    "./tool-file-diff": {
+      "types": "./dist/tool-file-diff.d.ts",
+      "import": "./dist/tool-file-diff.js"
+    },
     "./bot-delivery-api": {
       "types": "./dist/bot-delivery-api.d.ts",
       "import": "./dist/bot-delivery-api.js"
