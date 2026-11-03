@@ -18,7 +18,7 @@
  *
  * ## Coverage is a compile error, not a review item
  *
- * `CONFORMANCE_CASES` is typed `Record<EventType, ConformanceCase>`, so a 39th
+ * `CONFORMANCE_CASES` is typed `Record<EventType, ConformanceCase>`, so a new
  * protocol event without a case is a build failure. The runtime count
  * assertion in the first test reconciles the table against `EVENT_TYPES` from
  * the registry — not against a copy of it.
@@ -248,6 +248,21 @@ export const CONFORMANCE_CASES: Record<EventType, ConformanceCase> = {
       // Streaming fragments must NOT overwrite the provisional object.
       expect(tool?.provisionalArguments).toEqual({});
       expect(tool?.arguments).toBeNull();
+    },
+  },
+  'tool.output_delta': {
+    prelude: ['tool.call_started'],
+    // NO EFFECT, and that is the contract rather than a gap in coverage: the
+    // event is ephemeral, and its authoritative form is the `tool.call_completed`
+    // payload. A model that accumulated the byte stream would grow with whatever
+    // a command printed and still not hold the result.
+    effect: 'none',
+    expect: (m) => {
+      const tool = m.toolByCallId('call-1');
+      // The call the tail belongs to is unchanged by it — no phase, no revision.
+      expect(tool?.phase).toBe('started');
+      expect(tool?.settled).toBe(false);
+      expect(tool?.argumentText).toBe('');
     },
   },
   'tool.call_started': {
@@ -493,7 +508,7 @@ describe('surface conformance: vocabulary', () => {
     // The count is asserted, not assumed: if someone adds a protocol event the
     // compiler forces a case, and these two agree. If someone DELETES one, this
     // is the assertion that notices.
-    expect(registryTypes).toHaveLength(38);
+    expect(registryTypes).toHaveLength(39);
     expect(caseTypes).toHaveLength(registryTypes.length);
 
     const missing = registryTypes.filter((t) => !caseTypes.includes(t));
@@ -512,7 +527,7 @@ describe('surface conformance: vocabulary', () => {
     const volatile = EVENT_TYPES.filter((t) => eventSpecOf(t)?.durability === 'volatile');
     const ephemeral = EVENT_TYPES.filter((t) => eventSpecOf(t)?.durability === 'ephemeral');
 
-    expect(durable.length + volatile.length + ephemeral.length).toBe(38);
+    expect(durable.length + volatile.length + ephemeral.length).toBe(39);
     // The split is what the legacy view never had and what makes replay and
     // reconnect expressible; assert it is non-trivial rather than all-durable.
     expect(durable.length).toBeGreaterThan(0);
