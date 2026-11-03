@@ -256,6 +256,11 @@
       "imports": [],
       "format": "esm"
     },
+    "packages/agent-protocol/src/tool-file-diff.ts": {
+      "bytes": 5965,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/agent-protocol/src/locks.ts": {
       "bytes": 987,
       "imports": [],
@@ -635,7 +640,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/index.ts": {
-      "bytes": 6005,
+      "bytes": 6198,
       "imports": [
         {
           "path": "packages/agent-protocol/src/version.ts",
@@ -731,6 +736,11 @@
           "path": "packages/agent-protocol/src/tool-approvals.ts",
           "kind": "import-statement",
           "original": "./tool-approvals.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/tool-file-diff.ts",
+          "kind": "import-statement",
+          "original": "./tool-file-diff.js"
         },
         {
           "path": "packages/agent-protocol/src/locks.ts",
@@ -15369,7 +15379,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/project/legacy-sse-projector.ts": {
-      "bytes": 11610,
+      "bytes": 11954,
       "imports": [],
       "format": "esm"
     },
@@ -15565,7 +15575,7 @@
       "format": "esm"
     },
     "packages/client-core/src/surface/surface-model.ts": {
-      "bytes": 46738,
+      "bytes": 47452,
       "imports": [],
       "format": "esm"
     },
@@ -15627,13 +15637,18 @@
       ],
       "format": "esm"
     },
+    "packages/client-core/src/lib/streaming-tool-args.ts": {
+      "bytes": 12366,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/client-core/src/transport/host-api.ts": {
       "bytes": 14144,
       "imports": [],
       "format": "esm"
     },
     "packages/client-core/src/index.ts": {
-      "bytes": 301,
+      "bytes": 348,
       "imports": [
         {
           "path": "packages/client-core/src/surface/surface-model.ts",
@@ -15664,6 +15679,11 @@
           "path": "packages/client-core/src/decoding/envelope.ts",
           "kind": "import-statement",
           "original": "./decoding/envelope.js"
+        },
+        {
+          "path": "packages/client-core/src/lib/streaming-tool-args.ts",
+          "kind": "import-statement",
+          "original": "./lib/streaming-tool-args.js"
         },
         {
           "path": "packages/client-core/src/transport/host-api.ts",
@@ -21888,7 +21908,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/file-snapshot.ts": {
-      "bytes": 2067,
+      "bytes": 2518,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -21899,67 +21919,6 @@
           "path": "packages/capabilities/src/file-snapshot-store.ts",
           "kind": "import-statement",
           "original": "./file-snapshot-store.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/capabilities/src/WriteTool/WriteTool.ts": {
-      "bytes": 10368,
-      "imports": [
-        {
-          "path": "node:fs/promises",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/capabilities/src/BaseTool.ts",
-          "kind": "import-statement",
-          "original": "../BaseTool.js"
-        },
-        {
-          "path": "packages/capabilities/src/contracts/dependencies.ts",
-          "kind": "import-statement",
-          "original": "../contracts/dependencies.js"
-        },
-        {
-          "path": "packages/capabilities/src/permissions/policy.ts",
-          "kind": "import-statement",
-          "original": "../permissions/policy.js"
-        },
-        {
-          "path": "packages/capabilities/src/utils/path.ts",
-          "kind": "import-statement",
-          "original": "../utils/path.js"
-        },
-        {
-          "path": "packages/sandbox/src/index.ts",
-          "kind": "import-statement",
-          "original": "@duya/sandbox"
-        },
-        {
-          "path": "packages/capabilities/src/file-mutation-queue.ts",
-          "kind": "import-statement",
-          "original": "../file-mutation-queue.js"
-        },
-        {
-          "path": "packages/capabilities/src/file-snapshot.ts",
-          "kind": "import-statement",
-          "original": "../file-snapshot.js"
-        },
-        {
-          "path": "packages/capabilities/src/file-read-state.ts",
-          "kind": "import-statement",
-          "original": "../file-read-state.js"
         }
       ],
       "format": "esm"
@@ -22214,8 +22173,90 @@
       ],
       "format": "esm"
     },
+    "packages/capabilities/src/file-diff.ts": {
+      "bytes": 4789,
+      "imports": [
+        {
+          "path": "E:/Projects/duya/packages/capabilities/node_modules/diff/libesm/index.js",
+          "kind": "import-statement",
+          "original": "diff"
+        }
+      ],
+      "format": "esm"
+    },
+    "packages/capabilities/src/WriteTool/WriteTool.ts": {
+      "bytes": 11111,
+      "imports": [
+        {
+          "path": "node:fs/promises",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:fs",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "packages/capabilities/src/BaseTool.ts",
+          "kind": "import-statement",
+          "original": "../BaseTool.js"
+        },
+        {
+          "path": "packages/capabilities/src/contracts/dependencies.ts",
+          "kind": "import-statement",
+          "original": "../contracts/dependencies.js"
+        },
+        {
+          "path": "packages/capabilities/src/permissions/policy.ts",
+          "kind": "import-statement",
+          "original": "../permissions/policy.js"
+        },
+        {
+          "path": "packages/capabilities/src/utils/path.ts",
+          "kind": "import-statement",
+          "original": "../utils/path.js"
+        },
+        {
+          "path": "packages/sandbox/src/index.ts",
+          "kind": "import-statement",
+          "original": "@duya/sandbox"
+        },
+        {
+          "path": "packages/capabilities/src/file-mutation-queue.ts",
+          "kind": "import-statement",
+          "original": "../file-mutation-queue.js"
+        },
+        {
+          "path": "packages/capabilities/src/file-snapshot.ts",
+          "kind": "import-statement",
+          "original": "../file-snapshot.js"
+        },
+        {
+          "path": "packages/capabilities/src/file-diff.ts",
+          "kind": "import-statement",
+          "original": "../file-diff.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/tool-file-diff.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/tool-file-diff"
+        },
+        {
+          "path": "packages/capabilities/src/file-read-state.ts",
+          "kind": "import-statement",
+          "original": "../file-read-state.js"
+        }
+      ],
+      "format": "esm"
+    },
     "packages/capabilities/src/EditTool/EditTool.ts": {
-      "bytes": 30936,
+      "bytes": 31526,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22261,6 +22302,16 @@
           "path": "packages/capabilities/src/file-snapshot-store.ts",
           "kind": "import-statement",
           "original": "../file-snapshot-store.js"
+        },
+        {
+          "path": "packages/capabilities/src/file-diff.ts",
+          "kind": "import-statement",
+          "original": "../file-diff.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/tool-file-diff.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/tool-file-diff"
         },
         {
           "path": "packages/capabilities/src/file-read-state.ts",
@@ -22369,7 +22420,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-      "bytes": 23797,
+      "bytes": 25036,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22410,6 +22461,16 @@
           "path": "packages/capabilities/src/file-snapshot-store.ts",
           "kind": "import-statement",
           "original": "../file-snapshot-store.js"
+        },
+        {
+          "path": "packages/capabilities/src/file-diff.ts",
+          "kind": "import-statement",
+          "original": "../file-diff.js"
+        },
+        {
+          "path": "packages/agent-protocol/src/tool-file-diff.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/tool-file-diff"
         },
         {
           "path": "packages/capabilities/src/file-read-state.ts",
@@ -30856,12 +30917,12 @@
       "format": "esm"
     },
     "packages/host/src/plugins/types.ts": {
-      "bytes": 14672,
+      "bytes": 14671,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/plugins/PluginManager.ts": {
-      "bytes": 31127,
+      "bytes": 31126,
       "imports": [
         {
           "path": "packages/host/src/plugins/identity.ts",
@@ -41944,7 +42005,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 279
+          "bytesInOutput": 266
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -41966,6 +42027,9 @@
         },
         "packages/agent-protocol/src/tool-approvals.ts": {
           "bytesInOutput": 30
+        },
+        "packages/agent-protocol/src/tool-file-diff.ts": {
+          "bytesInOutput": 42
         },
         "packages/agent-protocol/src/locks.ts": {
           "bytesInOutput": 30
@@ -42121,7 +42185,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -42139,7 +42203,7 @@
           "bytesInOutput": 2980
         },
         "packages/agent-protocol/src/index.ts": {
-          "bytesInOutput": 468
+          "bytesInOutput": 473
         },
         "packages/data/src/bot-scheduler-store.ts": {
           "bytesInOutput": 2958
@@ -43888,7 +43952,7 @@
           "bytesInOutput": 2959
         },
         "packages/agent-runtime/src/project/legacy-sse-projector.ts": {
-          "bytesInOutput": 4198
+          "bytesInOutput": 4246
         },
         "packages/agent-runtime/src/legacy-sse-contract.ts": {
           "bytesInOutput": 30
@@ -43956,11 +44020,14 @@
         "packages/client-core/src/session/run-projection.ts": {
           "bytesInOutput": 41
         },
+        "packages/client-core/src/lib/streaming-tool-args.ts": {
+          "bytesInOutput": 60
+        },
         "packages/client-core/src/transport/host-api.ts": {
           "bytesInOutput": 30
         },
         "packages/client-core/src/index.ts": {
-          "bytesInOutput": 58
+          "bytesInOutput": 64
         },
         "packages/agent-runtime/src/surface/legacy-projection.ts": {
           "bytesInOutput": 316
@@ -44023,13 +44090,13 @@
           "bytesInOutput": 238
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 29
+          "bytesInOutput": 17
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1911
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 304
+          "bytesInOutput": 317
         },
         "packages/host/src/managed-shell/task-store.ts": {
           "bytesInOutput": 2883
@@ -44530,10 +44597,10 @@
           "bytesInOutput": 221
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/deflate.js": {
-          "bytesInOutput": 14790
+          "bytesInOutput": 14795
         },
         "E:/Projects/duya/node_modules/pako/lib/utils/strings.js": {
-          "bytesInOutput": 1750
+          "bytesInOutput": 1755
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/zstream.js": {
           "bytesInOutput": 256
@@ -44542,13 +44609,13 @@
           "bytesInOutput": 2292
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/inffast.js": {
-          "bytesInOutput": 1864
+          "bytesInOutput": 1869
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/inftrees.js": {
           "bytesInOutput": 1699
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/inflate.js": {
-          "bytesInOutput": 11823
+          "bytesInOutput": 11828
         },
         "E:/Projects/duya/node_modules/pako/lib/zlib/constants.js": {
           "bytesInOutput": 433
@@ -44563,7 +44630,7 @@
           "bytesInOutput": 131
         },
         "E:/Projects/duya/node_modules/utif2/UTIF.js": {
-          "bytesInOutput": 62422
+          "bytesInOutput": 62420
         },
         "E:/Projects/duya/node_modules/@jimp/js-tiff/dist/esm/index.js": {
           "bytesInOutput": 628
@@ -44974,7 +45041,7 @@
           "bytesInOutput": 29
         },
         "E:/Projects/duya/node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1969
+          "bytesInOutput": 1971
         },
         "E:/Projects/duya/node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -45793,7 +45860,7 @@
           "bytesInOutput": 710
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 613
+          "bytesInOutput": 619
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 611
@@ -45895,7 +45962,7 @@
           "bytesInOutput": 661
         },
         "packages/memory/src/forget_ledger.ts": {
-          "bytesInOutput": 1549
+          "bytesInOutput": 1553
         },
         "packages/bot/src/domain/bot-id.ts": {
           "bytesInOutput": 90
@@ -45910,7 +45977,7 @@
           "bytesInOutput": 3253
         },
         "packages/memory/src/canonical_file.ts": {
-          "bytesInOutput": 667
+          "bytesInOutput": 669
         },
         "packages/host/src/worker-prompts/bot/memory/access.ts": {
           "bytesInOutput": 279
@@ -45967,7 +46034,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1420
+          "bytesInOutput": 1418
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -46408,7 +46475,7 @@
           "bytesInOutput": 4721
         },
         "packages/capabilities/src/WriteTool/WriteTool.ts": {
-          "bytesInOutput": 3688
+          "bytesInOutput": 3759
         },
         "packages/capabilities/src/file-mutation-queue.ts": {
           "bytesInOutput": 691
@@ -46419,14 +46486,20 @@
         "packages/capabilities/src/file-snapshot-store.ts": {
           "bytesInOutput": 782
         },
-        "packages/capabilities/src/EditTool/EditTool.ts": {
-          "bytesInOutput": 11538
-        },
         "E:/Projects/duya/packages/capabilities/node_modules/diff/libesm/diff/base.js": {
           "bytesInOutput": 2784
         },
         "E:/Projects/duya/packages/capabilities/node_modules/diff/libesm/diff/line.js": {
-          "bytesInOutput": 630
+          "bytesInOutput": 629
+        },
+        "E:/Projects/duya/packages/capabilities/node_modules/diff/libesm/patch/create.js": {
+          "bytesInOutput": 1398
+        },
+        "packages/capabilities/src/file-diff.ts": {
+          "bytesInOutput": 1019
+        },
+        "packages/capabilities/src/EditTool/EditTool.ts": {
+          "bytesInOutput": 11606
         },
         "packages/capabilities/src/GlobTool/GlobTool.ts": {
           "bytesInOutput": 6677
@@ -46438,7 +46511,7 @@
           "bytesInOutput": 11415
         },
         "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-          "bytesInOutput": 7415
+          "bytesInOutput": 7646
         },
         "packages/capabilities/src/AppServer/app-tool-context.ts": {
           "bytesInOutput": 104
@@ -46549,7 +46622,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 891
+          "bytesInOutput": 897
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -47602,7 +47675,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 4804446
+      "bytes": 4807404
     }
   }
 }
