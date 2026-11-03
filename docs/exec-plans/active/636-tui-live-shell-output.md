@@ -28,12 +28,12 @@
 
 - [x] P1 折叠标记：计数改为被隐藏行数 + 标记内写 `Ctrl+T`
 - [x] P2 折叠体至少一行（失败优先退出码）
-- [ ] P3 协议事件 `tool.output_delta`（payload / registry / required / fixtures / coalesce）
-- [ ] P4 Host 字节源：`startManagedShell` 惰性尾部轮询 → 按 taskId 发布
-- [ ] P5 运行侧接线：`composeLegacyRunSources.queueTool` 按 callId 订阅并 `emitter.emit`
-- [ ] P6 投影：legacy projector → codec → worker-frames → `host-event-stream` → `blocks.ts`
-- [ ] P7 渲染：live shell 体受 `liveRows` 约束；Desktop reducer 补 `tool_output` 落点
-- [ ] P8 bundle 重建 + 真机冒烟
+- [x] P3 协议事件 `tool.output_delta`（payload / registry / required / fixtures / coalesce）
+- [x] P4 Host 字节源：`startManagedShell` 惰性尾部轮询 → 按 taskId 发布
+- [x] P5 运行侧接线：`composeLegacyRunSources.queueTool` 按 callId 订阅并 `emitter.emit`
+- [x] P6 投影：legacy projector → codec → worker-frames → `host-event-stream` → `blocks.ts`
+- [x] P7 渲染：live shell 体受 `liveRows` 约束；Desktop reducer 补 `tool_output` 落点
+- [~] P8 bundle 重建已完成并验证产物含新链路；`duya tui` 真机目视未做（见「接续」）
 
 ## 发现与决策
 
@@ -49,6 +49,13 @@
 
 **参考仓库语义取舍。** 采纳 codex：折叠量与绘制行数出自同一次截断（`activity_disclosure` 返回 `hidden_details`）；省略号里写被省略的行数并在标记内点名 `Ctrl+T`；运行期预览取尾部优先。否掉 codex 的 3 行预览：duya inline 模式下 `liveRows` 不变量要求仍在变化的块整块落在活动窗口内（`#liveStart` 之上已提交进终端 scrollback 永不可撤回），1 行是可在两条不变量间证明的取值。
 
+**落地时才出现的两处契约修正。**
+
+1. `stream` 从必填改为可选（`agent-message-types.ts:38`、`agent-sse-client.ts` 两处回调、`@duya/ai` 的 `SSEEvent`）。既有声明写着 `stream: 'stdout' | 'stderr'`，但 `managed-shell.ts` 用 `stdio: ['ignore', fd.fd, fd.fd]`——两个描述符指向同一个文件，生产者无法回答「这一段是哪条流」。保留必填就要在帧里编一个没人知道的答案，所以改成可选并说明消费方不得假设两路可分。
+2. `toModelFrame`（`run-engine-model.ts:122`）对 `SSEEvent` 用 `assertNever` 收口，新增成员直接编译失败。决策是把 `tool_output` 显式列进「returns null」那一组而不是给它一个帧：这条流的读者是渲染器，喂进模型上下文等于让模型读一份轮询采样出来的残缺日志，再被紧随其后的 `tool_result` 当面推翻。
+
+**真机目视的边界。** `duya chat -p` / `duya tui` 都要走真实 provider 请求（花用户额度），本沙箱内不擅自发起。替代验证取两段真实的：`live-output-tail.test.ts` 与 `shell-output-subscription.test.ts` 的 real-shell 分支用 `startManagedShell` 真起进程（`printf … ; sleep 1 ; printf …`），断言第一片在 `settled` 之前到达运行侧 emitter——字节源与订阅顺序都不是 mock；bundle 侧用 `grep` 确认重建产物含新事件与 `shellOutputStops` 接线。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -57,10 +64,20 @@
 | `04e7faff` / 无 | win32 / Node 24.18.0 | `node node_modules/vitest/vitest.mjs run packages/cli/src/tui` | 1 failed file / 112 passed；1438 tests passed | 基线（主检出）2 failed files / 111 passed，1437 passed；等于或高于基线 |
 | `04e7faff` / 无 | win32 / Node 24.18.0 | `npm run typecheck:cli`；`npm run architecture:check` | 0 / 0 | 「OK — no new boundary violations」（48 条既有指纹） |
 | — | win32 | 主检出 `npm run typecheck:all` 的 `@duya/ui` 25 个错误 | 与本任务无关 | 主检出 dist 过期（`HostWorktreeCleanupInput` 等）；本 worktree 全新构建后干净，`plugin-management.test.ts` 需先建 `@duya/plugin-core/dist` |
+| `446d6a20` + P3–P7 未提交 | win32 / Node 24.18.0 | `node node_modules/vitest/vitest.mjs run packages/cli/src/tui` | 1 failed file / 113 passed；1456 passed | 唯一红为 `slash/__tests__/presets.test.ts:20`（`mode & 0o077` 得 54）；主检出 `a9c3897a` 单跑同文件同一签名 → 非新增。新增 `__tests__/tui-live-shell-tail.test.ts` 18 条全绿 |
+| 同上 | win32 / Node 24.18.0 | `… run packages/host` | 0；270 files passed / 1 skipped，2372 tests | 新文件：`managed-shell/output-stream.test.ts`(6)、`managed-shell/live-output-tail.test.ts`(7，含真进程)、`worker-product-runtime/shell-output-subscription.test.ts`(8，含真进程)、`sse-frame-codec-live-output.test.ts`(7)；`worker-transport-write-queue.test.ts` +1 条可丢弃帧 |
+| 同上 | win32 / Node 24.18.0 | `… run packages/agent-protocol packages/agent-runtime packages/client-core` | 0；151 files，1818 tests | 火线 drift 门禁全绿：#4 穷尽 switch、#5 快照改为 39 类型（手写再生成，未删文件）、#9 SSE/legacy 桥、#13 引用锚点、`surface-conformance`、`coalesce-guards` |
+| 同上 | win32 / Node 24.18.0 | `… run packages/ui`；`… run apps/desktop/…/router-run-tee.test.ts` | 0 / 0；245 files 2473 passed（2 skipped）/ 9 passed | 新文件 `lib/__tests__/stream-session-manager-tool-output.test.ts`(6)；legacy 车道（codec → `normalizeWorkerEvent` → SSE → manager）逐段用真生产者与真消费者对接 |
+| 同上 | win32 / Node 24.18.0 | `npm run architecture:check` | 0 | 「OK — no new boundary violations」；3191 条全部既有 baseline，48 条失效指纹未重录（不改 baseline） |
+| 同上 | win32 / Node 24.18.0 | `npm run bundle:worker`；`npm run build:cli-bundle` | 0 / 0 | `worker-entry.js` 5.49 MB：`tool.output_delta`×3、`output-stream`×1、`shellOutputStops`×2；`cli.cjs` 4.68 MB：`tool.output_delta`×5 |
+| 同上 | win32 / Node 24.18.0 | `npm run typecheck:all` | 0 | 首轮在 `@duya/host` 报 `run-engine-model.ts(230,13): TS2322 … 'never'`——新增 `SSEEvent` 成员撞上 `assertNever`；显式补 `case 'tool_output'` 后复跑零 `error TS`，两条 electron gate「OK — no new type errors (164 known)」。中途另有一处本任务测试自身的 `TS2345`（`stream-session-manager-tool-output.test.ts:89` 把可空 `streamId` 传给要求 `string` 的处理器），改为显式判空并说明「拿不到 streamId 的用例等于什么都没 settle」 |
 
 ## 接续 / 结果
 
-已提交：`04e7faff`（P1+P2，4 文件）。未提交：P3–P8 尚未开工。
-下一步：P3 协议事件落地——判据是 `21-payload-field-manifest` 与 `coalesce-guards` 在新事件类型下全绿，且 `tool.output_delta` 有最小 fixture。
+已提交：`04e7faff`（P1+P2，4 文件）、`446d6a20`（本计划）、P3–P7 按逻辑变更拆分提交（协议 / runtime / host 字节源 / host 接线 / 投影 / TUI 渲染 / Desktop+Web 车道 / 测试）。
 
-回收：未回收。P3–P8 未完成前保留分支与 worktree。
+未完成的一条验收：`duya tui` 真机目视。它需要真实 provider 请求（花用户额度），本沙箱不擅自发起；已用两段真进程测试 + bundle 产物 grep 覆盖同一链路的非模型部分。**接手者请在本地跑一次**：`npm run build:cli-dev && npm run dev:tui`，让 agent 执行一条持续输出的命令（`npm test`），运行中应看到工具行下方最多 6 行的静音尾部且整块落在活动窗口内；若不显示，先查 `hasShellOutputListener(taskId)` 是否在 spawn 前为真（P5 的顺序不变量），再查 `liveRows` 是否 ≥ 4。
+
+已知边界（有意不做）：`tool.output_delta` 是 `ephemeral`，重载历史时没有可回放的帧，恢复出的行只由 `result` 渲染；让渡到后台的命令其后续输出不再有订阅者（run 已关闭其 `shellOutputStops`）；Desktop 侧只补到 `stream-session-manager` 的 tail 累积，`ToolActionsGroup` 的可见性沿用既有 `isRunning` 门。
+
+回收：未回收。真机目视未做前保留分支与 worktree。
