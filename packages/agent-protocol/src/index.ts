@@ -100,6 +100,7 @@ export * from './provider-catalog.js';
 export * from './app-connections.js';
 export * from './plugin-setup.js';
 export * from './plugin-inventory.js';
+export * from './plugin-management.js';
 export * from './session-handoff.js';
 export * from './plugin-app-instances.js';
 export * from './plugin-app-invocations.js';

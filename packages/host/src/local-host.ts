@@ -989,6 +989,8 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // both answer the same list.
       localPluginInventoryApi: createHostLocalPluginInventoryApi(),
       pluginManagementApi: createPluginManagementApi(pluginServices.manager, pluginServices),
+      // Expose the revision-aware local contract used by the TUI client.
+      localPluginManagementApi: createHostLocalPluginManagementApi({ log: executionLogger }),
       pluginManagementAudit: createPluginAudit(dataRoot, (m, d) => getPluginLogger().warn(m, d)),
       // The repository-root AGENTS.md write. The client names a session and
       // the Host resolves the directory, because a path from a client is a

@@ -168,6 +168,34 @@ function resolveBuiltinCacheDir(root: string, pluginId: string): string | undefi
 }
 
 /**
+ * The root a plugin WRITE lands in.
+ *
+ * Reads probe several roots because an installation may live in any of them. A
+ * write gets exactly one answer, and the choice is not cosmetic: the Desktop
+ * installs under its Electron `userData` and lists what it finds there, so a
+ * Host that wrote to the shared data root would produce a plugin the worker
+ * loads and the Desktop's own plugin page reports as missing.
+ *
+ * So the order is: an explicit config root (its reader looks nowhere else, so
+ * the writer must not either), then the CLI's `userData` override, then the
+ * platform `userData` once it exists — that is the Desktop's installation — and
+ * only then the data root, which is what a machine with no Desktop falls back
+ * to.
+ */
+export function resolvePluginWriteRoot(configRootOverride?: string): string {
+  if (configRootOverride) return configRootOverride;
+
+  const override = process.env[USER_DATA_OVERRIDE_ENV];
+  if (override && override.trim().length > 0) {
+    return path.isAbsolute(override) ? override : path.resolve(process.cwd(), override);
+  }
+
+  const userData = platformUserDataDir();
+  if (userData && fs.existsSync(userData)) return userData;
+  return resolveConfigRoot();
+}
+
+/**
  * The real path of `target`, or undefined when it is missing.
  *
  * `existsSync` follows symlinks, so a dangling install link reads as missing
