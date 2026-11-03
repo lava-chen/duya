@@ -76,6 +76,7 @@ import { createHostLocalProviderManagementApi } from './provider-management/inde
 import { createHostLocalAppConnectionApi } from './local-app-connection-api.js';
 import { createHostLocalPluginSetupApi } from './local-plugin-setup-api.js';
 import { createHostLocalPluginInventoryApi } from './local-plugin-inventory-api.js';
+import { createHostLocalPluginManagementApi } from './plugin-management/index.js';
 import { createHostLocalAgentsMdApi } from './local-agents-md-api.js';
 import { createHostPluginAppInstanceApi } from './local-plugin-app-instance-api.js';
 import { createHostPluginAppInvocationApi, type HostPluginAppInvocationAuthority } from './local-plugin-app-invocation-api.js';
@@ -981,6 +982,10 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       // standalone Host reads the same `config.toml` the Desktop does, so
       // both answer the same list.
       localPluginInventoryApi: createHostLocalPluginInventoryApi(),
+      // The write side next door: the marketplace catalog plus install, enable
+      // and marketplace mutations. A CLI on this Host installs into the same
+      // root the Desktop uses, so a plugin added from the TUI shows up in both.
+      localPluginManagementApi: createHostLocalPluginManagementApi({ log: executionLogger }),
       // The repository-root AGENTS.md write. The client names a session and
       // the Host resolves the directory, because a path from a client is a
       // path an attacker chooses.
