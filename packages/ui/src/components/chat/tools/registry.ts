@@ -236,9 +236,9 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    // MessageSession — sends a message to another session's agent.
+    // Legacy MessageSession rows remain readable in saved transcripts.
     // The registry summary only carries the message preview; the
-    // target session *title* is resolved inside MessageSessionToolRow
+    // target session *title* is resolved inside MessageSessionToolRow.
     // (which has access to the conversation store + IPC fallback) so
     // the user never sees a raw session id. This summary is used by
     // the generic catch-all and group summary builder only.

@@ -41,10 +41,9 @@ export const MODULE_TOOLS = new Set(['read_module']);
 export const TASK_TOOLS = new Set(['todo', 'todowrite']);
 
 /**
- * MessageSession tool — sends a message to another session's agent and
- * returns its response. Single canonical name (`MessageSession`)
- * registered on the agent side (see MESSAGE_SESSION_TOOL_NAME in
- * packages/agent/src/tool/MessageSessionTool).
+ * Legacy MessageSession calls may still appear in saved transcripts. Keep
+ * their historical row classification so users can read conversations
+ * written before the Session tools moved under `duya_app`.
  */
 export const MESSAGE_SESSION_TOOLS = new Set(['messagesession']);
 
@@ -138,8 +137,8 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (['task', 'agent', 'subagent', 'sub_agent'].includes(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
-  // MessageSession is inter-agent messaging — bucketed with `agent`
-  // so the group summary reads naturally ("已运行 2 个 agent").
+  // Historical MessageSession calls stay bucketed with `agent` so old
+  // transcript group summaries keep their existing meaning.
   if (isMessageSessionTool(name)) {
     return { count: 1, categoryKey: 'agent' };
   }

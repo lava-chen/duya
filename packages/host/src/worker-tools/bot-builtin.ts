@@ -15,9 +15,6 @@ import { getTaskOutputTool } from '@duya/host/worker-tools/background-task';
 import { killTaskTool } from '@duya/host/worker-tools/background-task';
 import { skillTool } from '@duya/host/worker-tool-bindings/skill';
 import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
-import { sessionSearchTool } from '@duya/host/worker-tool-bindings/session-search';
-import { messageSessionTool } from '@duya/host/worker-tool-bindings/message-session';
-import { sessionTool } from '@duya/host/worker-tool-bindings/session';
 import { VisionTool } from '@duya/capabilities/VisionTool/VisionTool';
 import { imageGenerateTool } from '@duya/host/worker-image-generation';
 import { askUserQuestionTool } from '@duya/capabilities';
@@ -65,7 +62,6 @@ export function registerBotTools(registry: ToolRegistry, deps: SubagentRunDeps, 
     registry.register(postToRoomTool.toTool(), postToRoomTool, { exposure: 'eager' });
     registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposure: 'eager' });
     registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'eager' });
-    registry.register(sessionTool.toTool(), sessionTool, { exposure: 'eager' });
     registry.register(skillTool, skillTool, { exposure: 'eager' });
     const visionTool = new VisionTool();
     registry.register(visionTool, visionTool, { exposure: 'eager' });
@@ -78,8 +74,6 @@ export function registerBotTools(registry: ToolRegistry, deps: SubagentRunDeps, 
     registry.register(grepToolInstance.toTool(), grepToolInstance, { exposure: 'deferred' });
     registry.register(globTool.toTool(), globTool, { exposure: 'deferred' });
     registry.register(briefTool, briefTool, { exposure: 'deferred' });
-    registry.register(sessionSearchTool.toTool(), sessionSearchTool, { exposure: 'deferred' });
-    registry.register(messageSessionTool.toTool(), messageSessionTool, { exposure: 'deferred' });
     registry.register(updateStateTool.toTool(), updateStateTool, { exposure: 'deferred' });
     registry.register(services.duyaCliTool.toTool(), services.duyaCliTool, { exposure: 'deferred' });
     registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });

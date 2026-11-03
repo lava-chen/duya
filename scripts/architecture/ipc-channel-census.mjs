@@ -130,14 +130,6 @@ const SITES = [
     note: '同一条件本应只有一处；>1 即复制品异味',
   },
   {
-    id: 'server-forward-interagent',
-    title: 'Agent Server 跨 agent 转发',
-    file: 'apps/desktop/src/main/agents/server/interagent-router.ts',
-    probe: (channel) => `msg.type === '${channel}'`,
-    rule: { kind: 'consensus' },
-    note: '子 agent 场景的转发；缺此站点会导致跨 agent 调用静默超时',
-  },
-  {
     id: 'server-response-relay',
     title: 'Agent Server 响应回传 worker',
     file: 'apps/desktop/src/main/agents/server/index.ts',

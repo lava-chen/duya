@@ -158,9 +158,9 @@ const ROUTES: RouteEntry[] = [
     render: (tool) => <TodoToolRow tool={tool} />,
   },
   {
-    // MessageSession returns a plain-text response from the target
-    // agent, optionally followed by a "[Target agent used tools: ...]"
-    // trailer. Route to MessageSessionToolRow so the chrome summary
+    // Historical MessageSession results contain a plain-text response and
+    // optional "[Target agent used tools: ...]" trailer. Route them to
+    // MessageSessionToolRow so the chrome summary
     // shows the short target id + message preview instead of the raw
     // JSON dump, and the expanded body renders the response text +
     // tool-call summary + status badge.

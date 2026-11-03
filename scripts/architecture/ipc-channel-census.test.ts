@@ -35,8 +35,6 @@ interface TreeOptions {
   omitOutbound?: string[];
   /** Channels missing from the Host worker-manager drop list. */
   whitelistOmit?: string[];
-  /** Channels missing from the inter-agent forwarder. */
-  interagentOmit?: string[];
   /** How many copies of each forward the agent-server router carries. */
   routerCopies?: number;
 }
@@ -52,7 +50,6 @@ function buildTree(options: TreeOptions = {}): string {
     omitResponseCase = [],
     omitOutbound = [],
     whitelistOmit = [],
-    interagentOmit = [],
     routerCopies = 1,
   } = options;
   const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'ipc-census-'));
@@ -102,16 +99,6 @@ function buildTree(options: TreeOptions = {}): string {
     root,
     'apps/desktop/src/main/agents/server/router.ts',
     Array.from({ length: routerCopies }, (_, index) => `// copy ${index + 1}\n${routerBlock}`).join('\n'),
-  );
-
-  const interagent = FIXTURE_CHANNELS
-    .filter((channel) => !interagentOmit.includes(channel))
-    .map((channel) => `if (msg.type === '${channel}' && process.send) { process.send(msg); }`)
-    .join('\n');
-  writeFile(
-    root,
-    'apps/desktop/src/main/agents/server/interagent-router.ts',
-    interagent || '// no forwards\n',
   );
 
   writeFile(
@@ -239,12 +226,6 @@ describe('consensus rule (undeclared asymmetry)', () => {
     expect(findings[0].channel).toBe('alpha:rpc');
   });
 
-  it('flags a channel missing from the inter-agent forwarder', () => {
-    const report = collectIpcChannelCensus(tree({ interagentOmit: ['alpha:rpc', 'beta:execute'] }));
-    const findings = findingsFor(report, 'server-forward-interagent');
-    expect(findings).toHaveLength(2);
-    expect(new Set(findings.map((finding) => finding.severity))).toEqual(new Set(['asymmetry']));
-  });
 });
 
 /**
@@ -271,11 +252,11 @@ describe('live tree ledger', () => {
     ]);
   });
 
-  it('pins the current structural debt (asymmetry 4 / duplicate 5)', () => {
+  it('pins the current structural debt (asymmetry 2 / duplicate 5)', () => {
     const report = collectIpcChannelCensus();
     const tally = { error: 0, asymmetry: 0, duplicate: 0 };
     for (const finding of report.findings) tally[finding.severity as keyof typeof tally] += 1;
-    expect(tally).toEqual({ error: 0, asymmetry: 4, duplicate: 5 });
+    expect(tally).toEqual({ error: 0, asymmetry: 2, duplicate: 5 });
   });
 
   it('attributes the duplicates to the router and the asymmetries to the two known sites', () => {
@@ -283,6 +264,6 @@ describe('live tree ledger', () => {
     expect(new Set(report.findings.filter((f) => f.severity === 'duplicate').map((f) => f.site)))
       .toEqual(new Set(['server-forward-router']));
     expect(new Set(report.findings.filter((f) => f.severity === 'asymmetry').map((f) => f.site)))
-      .toEqual(new Set(['host-manager-drop', 'server-forward-interagent']));
+      .toEqual(new Set(['host-manager-drop']));
   });
 });

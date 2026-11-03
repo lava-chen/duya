@@ -1,12 +1,12 @@
-// MessageSessionToolRow — handles the `MessageSession` tool (see
-// packages/agent/src/tool/MessageSessionTool). The tool returns a
-// plain-text response from the target agent, optionally followed by a
-// tool-call summary trailer:
+// MessageSessionToolRow renders historical `MessageSession` calls already
+// stored in transcripts. The runtime tool has been retired; this row keeps
+// the old plain-text result and optional target-tool trailer readable.
+// The stored result may contain:
 //   "<response text>\n\n[Target agent used tools: Read, Grep]"
 // On error the result is:
 //   "Error from target session: <message> (code: <code>)"
 //
-// The whole row is a one-click navigation to the target session's
+// The whole row remains a one-click navigation to the target session's
 // chat view (mirrors SubAgentToolRow). The target session title is
 // resolved from the conversation store (or fetched via IPC on mount)
 // so the user never sees a raw session id.
@@ -30,8 +30,8 @@ interface MessageSessionToolRowProps {
 
 // Splits the raw result string into the target agent's response text
 // and the optional "[Target agent used tools: ...]" trailer. The
-// trailer is appended by MessageSessionTool.execute() when the target
-// agent emitted any tool_use blocks during its run.
+// trailer was appended by the retired MessageSession runtime when the
+// target agent emitted any tool_use blocks during its run.
 const TOOL_SUMMARY_MARKER = '\n\n[Target agent used tools:';
 const ERROR_PREFIX = 'Error from target session:';
 
@@ -43,8 +43,8 @@ function parseMessageSessionResult(result: string | undefined): {
 } {
   if (!result) return { text: '', toolSummary: null, error: null, errorCode: null };
 
-  // Error envelope — produced by MessageSessionTool when the target
-  // session emits chat:error or crashes.
+  // Historical error envelope — produced when the target session emitted
+  // chat:error or crashed.
   if (result.startsWith(ERROR_PREFIX)) {
     const rest = result.slice(ERROR_PREFIX.length).trim();
     // Trailing "(code: <code>)" — extract it if present.

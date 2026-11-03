@@ -796,29 +796,6 @@
       }
     },
     {
-      "file": "apps/desktop/src/main/agents/server/__tests__/interagent-router.test.ts",
-      "module": "apps/desktop",
-      "kind": "desktop-main",
-      "collected": true,
-      "tests": 19,
-      "assertions": 30,
-      "mocks": 0,
-      "spies": 0,
-      "targets": [
-        "apps/desktop/src/main/agents/server/interagent-router.ts",
-        "apps/desktop/src/main/agents/server/session-store.ts",
-        "apps/desktop/src/main/agents/server/types.ts",
-        "apps/desktop/src/main/agents/server/worker-manager.ts"
-      ],
-      "flags": [],
-      "measured": {
-        "wallMs": 75,
-        "bodyMs": 74,
-        "failed": 0,
-        "pending": 0
-      }
-    },
-    {
       "file": "apps/desktop/src/main/agents/server/__tests__/plugin-app-bridge-real.test.ts",
       "module": "apps/desktop",
       "kind": "desktop-main",
@@ -7509,8 +7486,8 @@
       "module": "packages/agent-runtime",
       "kind": "runtime",
       "collected": true,
-      "tests": 13,
-      "assertions": 13,
+      "tests": 11,
+      "assertions": 11,
       "mocks": 0,
       "spies": 0,
       "targets": [
@@ -7521,8 +7498,8 @@
       ],
       "flags": [],
       "measured": {
-        "wallMs": 4,
-        "bodyMs": 3,
+        "wallMs": 7,
+        "bodyMs": 7,
         "failed": 0,
         "pending": 0
       }
@@ -7532,8 +7509,8 @@
       "module": "packages/agent-runtime",
       "kind": "runtime",
       "collected": true,
-      "tests": 20,
-      "assertions": 20,
+      "tests": 17,
+      "assertions": 17,
       "mocks": 0,
       "spies": 0,
       "targets": [
@@ -7543,8 +7520,8 @@
       ],
       "flags": [],
       "measured": {
-        "wallMs": 4,
-        "bodyMs": 3,
+        "wallMs": 7,
+        "bodyMs": 7,
         "failed": 0,
         "pending": 0
       }
@@ -11936,6 +11913,27 @@
       }
     },
     {
+      "file": "packages/capabilities/tests/session-app-tools.test.ts",
+      "module": "packages/capabilities",
+      "kind": "capability",
+      "collected": true,
+      "tests": 3,
+      "assertions": 13,
+      "mocks": 0,
+      "spies": 0,
+      "targets": [
+        "packages/capabilities/src/contracts/tool.ts",
+        "packages/capabilities/src/session-app-tools.ts"
+      ],
+      "flags": [],
+      "measured": {
+        "wallMs": 5,
+        "bodyMs": 5,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    {
       "file": "packages/capabilities/tests/skill-tool.test.ts",
       "module": "packages/capabilities",
       "kind": "capability",
@@ -12154,14 +12152,13 @@
       "module": "packages/capabilities",
       "kind": "capability",
       "collected": true,
-      "tests": 7,
-      "assertions": 25,
+      "tests": 6,
+      "assertions": 26,
       "mocks": 0,
       "spies": 0,
       "targets": [
         "packages/capabilities/src/agent-management-tool.ts",
         "packages/capabilities/src/contracts/tool.ts",
-        "packages/capabilities/src/message-session-tool.ts",
         "packages/capabilities/src/post-to-room-tool.ts",
         "packages/capabilities/src/react-to-message-tool.ts",
         "packages/capabilities/src/send-to-agent-tool.ts",
@@ -12170,8 +12167,8 @@
       ],
       "flags": [],
       "measured": {
-        "wallMs": 17,
-        "bodyMs": 17,
+        "wallMs": 27,
+        "bodyMs": 26,
         "failed": 0,
         "pending": 0
       }
@@ -16213,6 +16210,26 @@
       }
     },
     {
+      "file": "packages/host/tests/session-input-service.test.ts",
+      "module": "packages/host",
+      "kind": "host",
+      "collected": true,
+      "tests": 5,
+      "assertions": 17,
+      "mocks": 0,
+      "spies": 0,
+      "targets": [
+        "packages/host/src/session-input-service.ts"
+      ],
+      "flags": [],
+      "measured": {
+        "wallMs": 8,
+        "bodyMs": 8,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    {
       "file": "packages/host/tests/session-service.test.ts",
       "module": "packages/host",
       "kind": "host",
@@ -17000,27 +17017,6 @@
       "measured": {
         "wallMs": 238,
         "bodyMs": 238,
-        "failed": 0,
-        "pending": 0
-      }
-    },
-    {
-      "file": "packages/host/tests/worker-interagent-calls.test.ts",
-      "module": "packages/host",
-      "kind": "host",
-      "collected": true,
-      "tests": 4,
-      "assertions": 17,
-      "mocks": 0,
-      "spies": 0,
-      "targets": [
-        "packages/host/src/worker-interagent-calls.ts",
-        "packages/host/src/worker-tool-services/interagent-messaging.ts"
-      ],
-      "flags": [],
-      "measured": {
-        "wallMs": 5,
-        "bodyMs": 5,
         "failed": 0,
         "pending": 0
       }
@@ -17828,6 +17824,48 @@
       "measured": {
         "wallMs": 306,
         "bodyMs": 306,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    {
+      "file": "packages/host/tests/worker-product-runtime/session-app-mcp.test.ts",
+      "module": "packages/host",
+      "kind": "host",
+      "collected": true,
+      "tests": 1,
+      "assertions": 4,
+      "mocks": 1,
+      "spies": 0,
+      "targets": [
+        "packages/host/src/worker-tool-bindings/session-app.ts"
+      ],
+      "flags": [
+        "mock-heavy"
+      ],
+      "measured": {
+        "wallMs": 28,
+        "bodyMs": 28,
+        "failed": 0,
+        "pending": 0
+      }
+    },
+    {
+      "file": "packages/host/tests/worker-product-runtime/tool-surface-w0-census.test.ts",
+      "module": "packages/host",
+      "kind": "host",
+      "collected": true,
+      "tests": 8,
+      "assertions": 38,
+      "mocks": 1,
+      "spies": 0,
+      "targets": [
+        "packages/host/tests/worker-product-runtime/engine-turn-harness.ts"
+      ],
+      "flags": [],
+      "measured": {
+        "wallMs": 233,
+        "bodyMs": 232,
         "failed": 0,
         "pending": 0
       }
@@ -24201,8 +24239,8 @@
       "module": "scripts",
       "kind": "gate",
       "collected": true,
-      "tests": 15,
-      "assertions": 27,
+      "tests": 14,
+      "assertions": 25,
       "mocks": 0,
       "spies": 0,
       "targets": [
@@ -24210,8 +24248,8 @@
       ],
       "flags": [],
       "measured": {
-        "wallMs": 243,
-        "bodyMs": 243,
+        "wallMs": 330,
+        "bodyMs": 328,
         "failed": 0,
         "pending": 0
       }
@@ -24268,8 +24306,8 @@
       ],
       "flags": [],
       "measured": {
-        "wallMs": 134,
-        "bodyMs": 133,
+        "wallMs": 178,
+        "bodyMs": 177,
         "failed": 0,
         "pending": 0
       }

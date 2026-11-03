@@ -37,7 +37,7 @@ import type { AppToolRegistration } from '@duya/capabilities/AppServer/app-tool-
 /** The model-visible name the shared allocator produces for an app tool. */
 const NAMESPACED = 'mcp_duya_app_update_state';
 /** A bot tool that is always allowed by name. */
-const NAMESPACED_ALWAYS_ALLOWED = 'mcp_duya_app_MessageSession';
+const NAMESPACED_ALWAYS_ALLOWED = 'mcp_duya_app_session_search';
 /** An app tool that is NOT unconditionally allowed, so a deny rule can bite. */
 const NAMESPACED_DENYABLE = NAMESPACED;
 
@@ -108,7 +108,7 @@ describe('the duya_app namespace does not defeat the permission rules', () => {
         registrations: {
           [NAMESPACED_ALWAYS_ALLOWED]: {
             serverName: 'duya_app',
-            toolName: 'MessageSession',
+            toolName: 'session_search',
             source: 'app',
           },
         },
@@ -247,7 +247,7 @@ describe('a name that only looks like an app tool earns no unconditional allow',
         registrations: {
           [NAMESPACED_ALWAYS_ALLOWED]: {
             serverName: 'duya',
-            toolName: 'app_MessageSession',
+            toolName: 'app_session_search',
             source: 'plugin',
           },
         },

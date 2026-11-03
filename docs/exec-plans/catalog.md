@@ -65,6 +65,7 @@
 | [cli-markdown-rendering](active/614-cli-markdown-rendering.md) | P1 | 核对 Markdown 渲染与真实终端验收；先检查 615 的接管范围 |
 | [cli-unified-tui-engine](active/615-cli-unified-tui-engine.md) | P1 | 对照计划、PR 草稿与 Git 核对已交付项，再选择剩余验收 |
 | [duya-app-mcp-layer](active/616-duya-app-mcp-layer.md) | P1 | 按本计划的 T 卡与验证记录接续；桌面扩展另见 618 |
+| [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | P1 | GitHub #576；补齐 D0/D1/D4 语义裁定和 Host-owned MCP 实际发现/成功调用验收后，再决定旧 MessageSession 退役 |
 | [外置能力迁移](active/2026-10-22-external-capability-migration.md) | P1 | Browser、Computer Use、Canvas 分别插件化；按阶段验证并保留旧模块 |
 | [612 rollout 恢复](active/612-rollout-recovery-hardening.md) | P1 | 先核对 Phase 1 的实际落地与证据，Phase 2/3 决策见正文 |
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |

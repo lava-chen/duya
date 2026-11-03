@@ -67,7 +67,10 @@ const LEGACY_AGENT_SCRIPT_RE = /\b(?:build|bundle|rebuild|typecheck):agent\b/gi;
 const SKILL_ASSET_RE = /\b(?:packages[\\/]+agent[\\/]+skills|agent[\\/]+skills)\b/gi;
 const SELECTOR_KINDS = new Set(['worker-artifact', 'legacy-agent-script', 'skill-asset']);
 const HOST_WORKER_PRODUCER_RE = /packages[\\/]+host[\\/]+(?:src|dist|bundle)(?:[\\/]|$)/i;
-const FIXTURE_TEST_FILE = 'scripts/architecture/agent-retirement-gate.test.ts';
+const FIXTURE_TEST_FILES = new Set([
+  'scripts/architecture/agent-retirement-gate.test.ts',
+  'scripts/architecture/slice-classification.test.ts',
+]);
 const FIXTURE_START = '// RETIREMENT_GATE_FIXTURE_CONTEXT_START';
 const FIXTURE_END = '// RETIREMENT_GATE_FIXTURE_CONTEXT_END';
 const SIDE_EFFECT_IMPORT_RE = /\bimport\s*["']([^"'\r\n]+)["']/g;
@@ -141,7 +144,7 @@ function lineForOffset(text, offset) {
 }
 
 function isBoundedFixtureContext(relativePath, raw, offset) {
-  if (relativePath !== FIXTURE_TEST_FILE) return false;
+  if (!FIXTURE_TEST_FILES.has(relativePath)) return false;
   const markerPattern = /^[\t ]*\/\/ RETIREMENT_GATE_FIXTURE_CONTEXT_(START|END)[\t ]*$/gm;
   let inside = false;
   let match;

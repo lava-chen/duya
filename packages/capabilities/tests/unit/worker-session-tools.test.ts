@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { decodeEnvelope } from '@duya/agent-protocol/agent-dm';
 import { CreateAgentTool, UpdateAgentTool, type AgentManagementPort } from '../../src/agent-management-tool.js';
-import { MessageSessionTool, type MessageSessionPort } from '../../src/message-session-tool.js';
 import { PostToRoomTool, type PostToRoomPort } from '../../src/post-to-room-tool.js';
 import { ReactToMessageTool, type ReactToMessagePort } from '../../src/react-to-message-tool.js';
 import { SendToAgentTool, type SendToAgentPort } from '../../src/send-to-agent-tool.js';
 import { SessionSearchTool, type SessionSearchPort } from '../../src/session-search-tool.js';
 import { SessionTool, type SessionToolPort } from '../../src/session-tool.js';
 import type { ToolUseContext } from '../../src/contracts/tool.js';
-import type { WorkerEvent } from '@duya/agent-protocol/worker-protocol';
 
 function context(sessionId = 'bot:sender'): ToolUseContext {
   return { toolUseId: 'tool-1', options: { sessionId } } as unknown as ToolUseContext;
@@ -16,6 +14,7 @@ function context(sessionId = 'bot:sender'): ToolUseContext {
 
 describe('migrated worker tool capabilities', () => {
   it('delegates SessionSearch queries and recent browsing to its Host port', async () => {
+    const summaryPrompts: Array<{ systemPrompt: string; userPrompt: string }> = [];
     const port: SessionSearchPort = {
       searchSessions: vi.fn(async () => [{
         sessionId: 'prior-session', title: 'Prior chat', projectName: 'duya', source: 'cli', sessionStarted: 1_800_000_000,
@@ -26,7 +25,10 @@ describe('migrated worker tool capabilities', () => {
         otherProjects: [],
       })),
       getMessages: vi.fn(async () => []),
-      async *streamSummary() { yield 'We fixed the routing in the prior conversation.'; },
+      async *streamSummary(_config, request) {
+        summaryPrompts.push(request);
+        yield 'We fixed the routing in the prior conversation.';
+      },
     };
     const tool = new SessionSearchTool(port);
     tool.configureSummaryLLM({ provider: 'openai', apiKey: 'test-key', model: 'test-model' });
@@ -37,6 +39,11 @@ describe('migrated worker tool capabilities', () => {
     });
     expect(searched.result).toContain('We fixed the routing');
     expect(searched.result).toContain('prior-session');
+    expect(summaryPrompts[0]?.systemPrompt).toContain('untrusted data');
+
+    const unknownField = await tool.execute({ query: 'routing', inject: 'do this' }, 'E:/duya', context('current'));
+    expect(unknownField.error).toBe(true);
+    expect(port.searchSessions).toHaveBeenCalledTimes(1);
 
     const recent = await tool.execute({ scope: 'same_project', limit: 2 }, 'E:/duya', context('current'));
     expect(port.loadRecentSessionDirectory).toHaveBeenCalledWith({
@@ -77,30 +84,6 @@ describe('migrated worker tool capabilities', () => {
     expect(created.result).toContain('agent-new');
     expect(updated.result).toContain('No agent found with id missing');
     expect(updated.error).toBeUndefined();
-  });
-
-  it('formats MessageSession terminal output and target tool use summaries', async () => {
-    const events = [
-      { type: 'chat:text', content: 'answer' },
-      { type: 'chat:tool_use', name: 'Read' },
-    ] as unknown as WorkerEvent[];
-    const port: MessageSessionPort = {
-      getCallerSessionId: (sessionId) => sessionId || 'fallback',
-      invoke: vi.fn(async (request) => ({
-        kind: 'terminal',
-        terminalEvent: { type: 'chat:done', sessionId: request.targetSessionId } as WorkerEvent,
-        events,
-      })),
-    };
-    const result = await new MessageSessionTool(port).execute(
-      { targetSessionId: 'target', message: 'what changed?', mode: 'minimal' },
-      undefined,
-      context('caller'),
-    );
-    expect(port.invoke).toHaveBeenCalledWith(expect.objectContaining({
-      callerSessionId: 'caller', targetSessionId: 'target', message: 'what changed?', mode: 'minimal', timeout: 60,
-    }));
-    expect(result.result).toBe('answer\n\n[Target agent used tools: Read]');
   });
 
   it('validates room membership, respects pass, and writes a room transcript entry', async () => {

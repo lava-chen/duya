@@ -311,6 +311,32 @@ export const sessionSpawnDb = {
     sendDbRequest('session:spawnRename', { sessionId, callerSessionId, title }),
 };
 
+/** Host Session API projection used by the `duya_app` Session tools. */
+export const sessionAppDb = {
+  listSessions: (input: import('@duya/capabilities').SessionListRequest) =>
+    sendDbRequest('session:appList', input) as Promise<import('@duya/agent-protocol/session-api').HostSessionPage>,
+  readMessages: (input: { sessionId: string; cursor?: string; limit?: number }) =>
+    sendDbRequest('session:appRead', input) as Promise<import('@duya/agent-protocol/session-api').HostMessagePage>,
+  forkAt: (input: { sessionId: string; newSessionId: string; throughMessageId: string; title?: string }) =>
+    sendDbRequest('session:appFork', input) as Promise<import('@duya/agent-protocol/session-api').HostSessionForkResult>,
+};
+
+/** Structured input receipts and control leases; request identity is Host-derived. */
+export const sessionInputDb = {
+  submit: (input: import('@duya/agent-protocol').SessionInputRequest) =>
+    sendDbRequest('session:input:submit', input) as Promise<import('@duya/agent-protocol').SessionInputReceipt>,
+  readReceipt: (sessionId: string, requestId: string) =>
+    sendDbRequest('session:input:receipt', { sessionId, requestId }) as Promise<import('@duya/agent-protocol').SessionInputReceipt | null>,
+  validateDelivery: (input: { inputId: string; sessionId: string; runId: string; turnId: string | null }) =>
+    sendDbRequest('session:input:validateDelivery', input) as Promise<string | null>,
+  acquireControlLease: (input: import('@duya/agent-protocol').SessionControlLeaseRequest) =>
+    sendDbRequest('session:control:acquire', input) as Promise<import('@duya/agent-protocol').SessionControlLease | null>,
+  releaseControlLease: (sessionId: string, revision: number) =>
+    sendDbRequest('session:control:release', { sessionId, revision }) as Promise<boolean>,
+  readControlLease: (sessionId: string) =>
+    sendDbRequest('session:control:read', { sessionId }) as Promise<import('@duya/agent-protocol').SessionControlLease | null>,
+};
+
 // ==================== Message Operations ====================
 
 export const messageDb = {

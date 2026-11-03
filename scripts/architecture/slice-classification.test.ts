@@ -292,6 +292,8 @@ const MOVED_TO_AGENT_PROTOCOL_TEST =
   'moved to packages/agent-protocol/test when the protocol package was extracted into @duya/agent-protocol; that test directory is deliberately unclassified';
 const REMOVED_WITH_THE_NEXT_STEP_SERVICE =
   'deleted when the next-step suggestion moved into the worker; the desktop-only service and its IPC handler were replaced by the worker turn suggestion and the turn-suggestion handler, so no successor file carries this path';
+const RETIRED_WITH_DUYA_APP_SESSION_MCP =
+  'retired with #576 after the duya_app Session MCP passed tool discovery and a successful call; the synchronous interagent invoke, pending-call registry, and router have no runtime successor, while the UI renderer remains for historical transcripts';
 
 const RECORDED_LOSSES: readonly RecordedLoss[] = [
   // packages/ui/src :: host-ui (765)
@@ -1389,6 +1391,11 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'packages/agent/src/tool/GrepTool/__tests__/debug.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/tool/MemoryWriteTool/__tests__/memory-write-tool.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/tool/MessageSessionTool/__tests__/MessageSessionTool.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
+  // RETIREMENT_GATE_FIXTURE_CONTEXT_START
+  { path: 'packages/agent/src/tool/MessageSessionTool/MessageSessionTool.ts', from: 'capability-adapter', why: RETIRED_WITH_DUYA_APP_SESSION_MCP },
+  { path: 'packages/agent/src/tool/MessageSessionTool/constants.ts', from: 'capability-adapter', why: RETIRED_WITH_DUYA_APP_SESSION_MCP },
+  { path: 'packages/agent/src/tool/MessageSessionTool/index.ts', from: 'capability-adapter', why: RETIRED_WITH_DUYA_APP_SESSION_MCP },
+  // RETIREMENT_GATE_FIXTURE_CONTEXT_END
   { path: 'packages/agent/src/tool/ReactToMessageTool/__tests__/react-to-message.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/tool/ReadTool/__tests__/ReadTool.concurrency.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
   { path: 'packages/agent/src/tool/ReadTool/__tests__/ReadTool.test.ts', from: 'capability-adapter', why: RETIRED_WITH_THE_AGENT_TEST_SUITE },
@@ -1938,6 +1945,8 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'packages/conductor/src/renderer/widgets/index.ts', from: 'host-ui', why: REMOVED_WITH_BUILTIN_CANVAS },
   { path: 'packages/conductor/src/renderer/widgets/registry.ts', from: 'host-ui', why: REMOVED_WITH_BUILTIN_CANVAS },
   { path: 'apps/desktop/src/main/agents/server/__tests__/worker-manager.test.ts', from: 'runtime-coordination', why: REMOVED_WITH_EXTERNAL_BROWSER_CAPABILITY },
+  { path: 'apps/desktop/src/main/agents/server/__tests__/interagent-router.test.ts', from: 'runtime-coordination', why: RETIRED_WITH_DUYA_APP_SESSION_MCP },
+  { path: 'apps/desktop/src/main/agents/server/interagent-router.ts', from: 'runtime-coordination', why: RETIRED_WITH_DUYA_APP_SESSION_MCP },
   { path: 'packages/agent/src/compact/transforms/canvasTransform.ts', from: 'runtime-coordination', why: REMOVED_WITH_BUILTIN_CANVAS },
   { path: 'packages/agent/src/process/browser-backend.ts', from: 'runtime-coordination', why: REMOVED_WITH_EXTERNAL_BROWSER_CAPABILITY },
   { path: 'packages/agent/src/process/gui-backend.ts', from: 'runtime-coordination', why: REMOVED_WITH_EXTERNAL_BROWSER_CAPABILITY },

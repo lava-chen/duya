@@ -1,6 +1,7 @@
 import { ASSISTANT_MODES, type AssistantMode } from '@duya/agent-protocol';
 import { BaseTool } from './BaseTool.js';
 import type { ToolResult, ToolUseContext } from './contracts/tool.js';
+import { appToolOriginalName } from './AppServer/app-tool-namespace.js';
 
 export type AgentMode = AssistantMode;
 export type PlanFileSeedStatus = 'empty' | 'non_empty' | 'missing';
@@ -132,6 +133,13 @@ const READONLY_MODE_BANNED_TOOLS = new Set([
   'cp',
   'mkdir',
   'Task',
+  'session_spawn',
+  'session_reply',
+  'session_cancel',
+  'session_rename',
+  'session_fork',
+  'session_send',
+  'session_control',
 ]);
 
 const ALWAYS_ALLOWED_TOOLS = new Set([
@@ -147,7 +155,11 @@ const ALWAYS_ALLOWED_TOOLS = new Set([
   'SwitchMode',
   'Brief',
   'Browser',
-  'SessionSearch',
+  'session_list',
+  'session_get',
+  'session_search',
+  'session_read',
+  'session_status',
   'Config',
   'duya_cli',
   'Skill',
@@ -223,8 +235,9 @@ Your role is EXCLUSIVELY to review code for quality, bugs, security issues, and 
 export function isToolAllowedInMode(toolName: string, mode: AgentMode): boolean {
   const config = MODE_CONFIGS[mode];
   if (!config.readOnly) return true;
-  if (ALWAYS_ALLOWED_TOOLS.has(toolName)) return true;
-  if (config.bannedTools.has(toolName)) return false;
+  const originalName = appToolOriginalName(toolName);
+  if (ALWAYS_ALLOWED_TOOLS.has(toolName) || ALWAYS_ALLOWED_TOOLS.has(originalName)) return true;
+  if (config.bannedTools.has(toolName) || config.bannedTools.has(originalName)) return false;
   return true;
 }
 

@@ -105,7 +105,7 @@ export const BOT_ROSTER_SECTION: BotSectionDef = {
 export const BOT_TASK_DELEGATION_SECTION: BotSectionDef = {
   name: 'botTaskDelegation',
   description:
-    'Coordinator/hands split: prefer spawning child sessions via the `session` tool for project-scoped engineering work; stay the coordinator with the user and other agents (soft preference).',
+    'Coordinator/hands split: prefer spawning child sessions with `mcp_duya_app_session_spawn` for project-scoped engineering work; stay the coordinator with the user and other agents (soft preference).',
   budgetChars: 1200,
   templatePath: 'bot/delegation.hbs',
   prepare: prepareBotTaskDelegationContext,

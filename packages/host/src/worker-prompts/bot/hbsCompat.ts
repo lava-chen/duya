@@ -25,8 +25,7 @@ export const identityHbsSentinel = {
   shell: '',
   modelId: '',
   enabledTools: new Set<string>([
-    'Read', 'Skill', 'SessionSearch', 'TodoWrite', 'Task',
-    TOOL_NAMES.MESSAGE_SESSION,
+    'Read', 'Skill', TOOL_NAMES.SESSION_SEARCH, 'TodoWrite', 'Task',
   ]),
   sessionStartTime: 0,
 }

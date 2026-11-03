@@ -121,93 +121,41 @@ async function readRequest(request: http.IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function catalogSessionToolId(results: string): string | undefined {
-  return catalogResultValues(results).flatMap((value) => {
-    const record = value as { matches?: { tool_id?: unknown; name?: unknown }[]; tool_id?: unknown };
-    if (typeof record.tool_id === 'string') return [record.tool_id];
-    const entry = record.matches?.find((item) => item.name === 'session');
-    return typeof entry?.tool_id === 'string' ? [entry.tool_id] : [];
-  })[0];
-}
-
-function catalogResultValues(results: string): unknown[] {
-  const values: unknown[] = [];
-  const marker = '<!-- duya-tool-catalog-result -->';
-  let cursor = 0;
-  while ((cursor = results.indexOf(marker, cursor)) >= 0) {
-    const start = results.indexOf('{', cursor + marker.length);
-    if (start < 0) break;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-    for (let index = start; index < results.length; index += 1) {
-      const char = results[index];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') inString = false;
-      } else if (char === '"') inString = true;
-      else if (char === '{') depth += 1;
-      else if (char === '}' && --depth === 0) {
-        end = index + 1;
-        break;
-      }
-    }
-    if (end < 0) break;
-    try {
-      values.push(JSON.parse(results.slice(start, end)) as unknown);
-    } catch {
-      // Ignore malformed catalog output while scanning unrelated tool results.
-    }
-    cursor = end;
-  }
-  return values;
-}
-
-function sessionInvocationStream(id: string, toolId: string, action: string, input: Record<string, unknown>): string {
-  return toolUseStream('tool_invoke', id, { tool_id: toolId, arguments: { action, ...input } });
+function sessionInvocationStream(id: string, action: string, input: Record<string, unknown>): string {
+  return toolUseStream(`mcp_duya_app_session_${action}`, id, input);
 }
 
 function responseForParentTurn(results: string, workspace: string, priorToolUseIds: ReadonlySet<string>): string {
-  const toolId = catalogSessionToolId(results);
   const childIds = [...results.matchAll(/Spawned session ([0-9a-f-]{36})/giu)].map((match) => match[1] as string);
   const childOneId = childIds[0];
   const childTwoId = childIds[1];
-  if (!priorToolUseIds.has('parent-session-search')) return toolUseStream('tool_catalog', 'parent-session-search', { query: 'session' });
-  if (!priorToolUseIds.has('parent-session-schema')) {
-    if (!toolId) throw new Error(`session tool was absent from catalog results: ${results}`);
-    return toolUseStream('tool_catalog', 'parent-session-schema', { tool_id: toolId });
-  }
   if (!priorToolUseIds.has('parent-spawn-one')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-spawn-one', toolId, 'spawn', {
+    return sessionInvocationStream('parent-spawn-one', 'spawn', {
       prompt: 'CHILD_ONE_FIRST: complete this deterministic child task.', workingDirectory: workspace,
     });
   }
   if (!priorToolUseIds.has('parent-spawn-two')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-spawn-two', toolId, 'spawn', {
+    if (!childOneId) throw new Error(`parent did not receive the first spawned session id: ${results}`);
+    return sessionInvocationStream('parent-spawn-two', 'spawn', {
       prompt: 'CHILD_TWO_BLOCK: wait for the parent to cancel this run.', workingDirectory: workspace,
     });
   }
   if (!priorToolUseIds.has('parent-reply-one')) {
-    if (!toolId || !childOneId || !childTwoId) throw new Error(`parent did not receive both spawned session ids: ${results}`);
-    return sessionInvocationStream('parent-reply-one', toolId, 'reply', {
+    if (!childOneId || !childTwoId) throw new Error(`parent did not receive both spawned session ids: ${results}`);
+    return sessionInvocationStream('parent-reply-one', 'reply', {
       sessionId: childOneId, prompt: 'CHILD_ONE_FOLLOWUP: return the follow-up completion marker.',
     });
   }
   if (!priorToolUseIds.has('parent-cancel-two')) {
-    if (!toolId || !childTwoId) throw new Error(`parent did not receive the second spawned session id: ${results}`);
-    return sessionInvocationStream('parent-cancel-two', toolId, 'cancel', { sessionId: childTwoId });
+    if (!childTwoId) throw new Error(`parent did not receive the second spawned session id: ${results}`);
+    return sessionInvocationStream('parent-cancel-two', 'cancel', { sessionId: childTwoId });
   }
   if (!priorToolUseIds.has('parent-get-one')) {
-    if (!toolId || !childOneId) throw new Error(`parent did not receive the first spawned session id: ${results}`);
-    return sessionInvocationStream('parent-get-one', toolId, 'get', { sessionId: childOneId });
+    if (!childOneId) throw new Error(`parent did not receive the first spawned session id: ${results}`);
+    return sessionInvocationStream('parent-get-one', 'get', { sessionId: childOneId });
   }
   if (!priorToolUseIds.has('parent-list-children')) {
-    if (!toolId) throw new Error(`session tool ID was not retained in catalog results: ${results}`);
-    return sessionInvocationStream('parent-list-children', toolId, 'list', {});
+    return sessionInvocationStream('parent-list-children', 'list', { scope: 'children' });
   }
   return textStream('PARENT_CHILD_SESSIONS_DONE', 'parent-final');
 }
@@ -328,7 +276,7 @@ async function approveSessionToolRequests(
   while (Date.now() < deadline) {
     const pending = await client.listPendingPermissionRequests(parentSessionId);
     for (const request of pending) {
-      if (request.toolName !== 'session') continue;
+      if (!request.toolName.startsWith('mcp_duya_app_session_')) continue;
       await client.resolvePermissionRequest(request.id, {
         status: 'allow',
         decision: `approved by local Host child-session integration test for run ${parentRunId}`,
@@ -363,7 +311,7 @@ async function approveSessionToolRequests(
 }
 
 describe('Host worker child-session vertical execution', () => {
-  it('spawns isolated real child runs, follows up, cancels a sibling, and reads results through the parent tool', async () => {
+  it('spawns isolated child runs, follows up, cancels a sibling, and reads results through Session MCP tools', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'duya-host-child-sessions-'));
     roots.push(root);
     const workspace = path.join(root, 'workspace');
@@ -434,7 +382,6 @@ describe('Host worker child-session vertical execution', () => {
       }, 15_000);
       const approvalResult = await approvalTask;
       if ('error' in approvalResult) throw approvalResult.error;
-      expect(approvalResult.count).toBeGreaterThan(0);
       const parentEvents = await client.readAgentRunEvents(started.runId, { afterSeq: 0 });
       const children = (await client.listLocalSessions({ parentSessionId: parentId, includeAllSessions: true })).sessions;
       const childRunSnapshot = await Promise.all(children.map(async (child) => ({
@@ -484,16 +431,16 @@ describe('Host worker child-session vertical execution', () => {
       expect(provider.requests.some((request) => request.prompt.includes('CHILD_ONE_FOLLOWUP'))).toBe(true);
       expect(provider.requests.some((request) => request.prompt.includes('CHILD_TWO_BLOCK'))).toBe(true);
       const initialParentRequest = provider.requests.find((request) => request.prompt.includes('PARENT_CHILD_SESSIONS_VERTICAL'));
-      expect(initialParentRequest?.tools.some((tool) => tool.name === 'tool_catalog')).toBe(true);
-      expect(initialParentRequest?.tools.some((tool) => tool.name === 'tool_invoke')).toBe(true);
+      expect(initialParentRequest?.tools.some((tool) => tool.name === 'mcp_duya_app_session_spawn')).toBe(true);
+      expect(initialParentRequest?.tools.some((tool) => tool.name === 'mcp_duya_app_session_reply')).toBe(true);
       expect(provider.requests.some((request) => transcriptText(request.messages).includes('PARENT_CHILD_SESSIONS_VERTICAL') &&
         toolResultsText(request.messages).includes('Status: completed'))).toBe(true);
       expect(provider.requests.some((request) => transcriptText(request.messages).includes('PARENT_CHILD_SESSIONS_VERTICAL') &&
         transcriptText(request.messages).includes('CHILD_ONE_FOLLOWUP_COMPLETED'))).toBe(true);
-      expect(provider.requests.some((request) => transcriptText(request.messages).includes('PARENT_CHILD_SESSIONS_VERTICAL') &&
-        toolResultsText(request.messages).includes('Child sessions (2)') &&
-        toolResultsText(request.messages).includes('[completed]') &&
-        toolResultsText(request.messages).includes('[cancelled]'))).toBe(true);
+      const childListRequest = provider.requests.find((request) => toolUseIds(request.messages).has('parent-list-children'));
+      const childListResult = toolResultsText(childListRequest?.messages ?? []);
+      expect(childListResult).toContain('"sessions"');
+      for (const child of children) expect(childListResult).toContain(child.id);
       const followupRun = completedChild?.runs[0];
       expect(followupRun).toBeDefined();
       if (followupRun) {

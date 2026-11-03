@@ -14,6 +14,7 @@ import type {
   TokenUsage,
 } from '../worker-run-contracts.js'
 import type { PermissionMode } from '@duya/capabilities/permissions'
+import { appToolOriginalName } from '@duya/capabilities/AppServer/app-tool-namespace'
 import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } from './definitions.js'
 import { isBuiltInAgent } from './definitions.js'
 import type { WorkerSubagentEngineSession } from './engine-run.js'
@@ -366,7 +367,7 @@ export async function* runAgent({
   if (agentDefinition.mcpTools) {
     const mcpExecutors = toolUseContext.options.mcpToolExecutors
     const mcpTools = availableTools.filter(
-      (t) => t.mcpInfo && !SUBAGENT_FORBIDDEN_TOOLS.has(t.name),
+      (t) => t.mcpInfo && !SUBAGENT_FORBIDDEN_TOOLS.has(appToolOriginalName(t.name)),
     )
     for (const mcpTool of mcpTools) {
       const executor = mcpExecutors?.get(mcpTool.name)

@@ -57,7 +57,18 @@ export const BOT_TOOLSET: readonly string[] = [
   'post_to_room',
   'list_app_connectors',
   'connect_app',
-  'session',
+  'session_list',
+  'session_spawn',
+  'session_get',
+  'session_reply',
+  'session_cancel',
+  'session_rename',
+  'session_search',
+  'session_read',
+  'session_fork',
+  'session_send',
+  'session_status',
+  'session_control',
 ];
 
 /**

@@ -1,4 +1,5 @@
 export * from './session-api.js';
+export * from './session-input-service.js';
 export * from './local-session-api.js';
 export * from './local-attachment-api.js';
 export * from './local-settings-api.js';

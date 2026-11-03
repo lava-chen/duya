@@ -5,7 +5,6 @@ import { WorkflowRuntimeManager } from './workflow-runtime-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { logger, httpLogger, sessionLogger, workerLogger } from './logger';
 import { createHandleRequest, RouterDeps, type DesktopSessionStartRequest } from './router';
-import { InteragentRouter, sendInteragentEventToCaller } from './interagent-router';
 import { RunOrchestrator, createWorkerExecutionChannel } from '@duya/host/run-orchestrator';
 import { createHostSessionService } from '@duya/host/session-admission';
 import { createDesktopNativeRunEventWriter } from './native-run-event-writer';
@@ -178,32 +177,6 @@ function dbRequest(action: string, payload: Record<string, unknown>): Promise<un
   });
 }
 
-const interagentRouter = new InteragentRouter({
-  workerManager,
-  sessionManager,
-  dbRequest,
-  workerDbRequests,
-  // The control lease (R1.2). The lease says who may direct a session, and a
-  // session the user has taken over is not the Coordinator's to instruct.
-  //
-  // The lease lives in the main process's core database, and this process
-  // reaches it over the same bridge every other DB read uses — so there is one
-  // authority, read one way, and no second lease store to drift from it.
-  //
-  // ANY live lease blocks the invoke. The lease exists precisely to say "this
-  // session has an owner that is not an agent", and a session-to-session
-  // invoke is always an agent speaking to another.
-  controlLease: {
-    blockedBy: async (sessionId: string) => {
-      const lease = await dbRequest('session:controlLease', { sessionId }) as {
-        holderKind?: string;
-      } | null;
-      if (!lease || !lease.holderKind) return null;
-      return { code: 'control_lease_held' as const, holderKind: lease.holderKind };
-    },
-  },
-});
-
 workerManager.setMessageHandler((sessionId, msg, child) => {
   if (desktopPluginAppBridge?.handleWorkerMessage(sessionId, msg, child)) return;
   if (msg.type === 'bash_task:update' && msg.sessionId === sessionId) {
@@ -230,32 +203,7 @@ workerManager.setMessageHandler((sessionId, msg, child) => {
     return;
   }
 
-  if (msg.type === 'interagent:invoke') {
-    // The router owns the whole invoke lifecycle, including its refusals:
-    // a refusal is reported to the caller as a terminal event, so the
-    // caller's tool promise settles with the REAL reason instead of
-    // waiting out its timeout.
-    void interagentRouter.handleInvoke({
-      id: msg.id as string,
-      callerSessionId: msg.callerSessionId as string,
-      callerAgentName: msg.callerAgentName as string,
-      targetSessionId: msg.targetSessionId as string,
-      message: msg.message as string,
-      mode: msg.mode as 'minimal' | 'full',
-      timeout: msg.timeout as number,
-    }).catch((err) => {
-      workerLogger.error('Interagent invoke failed', err instanceof Error ? err : new Error(String(err)), { invokeId: msg.id as string });
-      // Over IPC, never stdin: the caller's main loop is blocked awaiting
-      // this tool, so a stdin-borne event would sit unread until the
-      // caller's own timeout. See sendInteragentEventToCaller.
-      sendInteragentEventToCaller(workerManager, msg.callerSessionId as string, msg.id as string, {
-        type: 'chat:error',
-        sessionId: msg.targetSessionId as string,
-        message: `interagent invoke failed: ${err instanceof Error ? err.message : String(err)}`,
-        code: 'invoke_failed',
-      });
-    });
-  }
+
 });
 
 let isShuttingDown = false;

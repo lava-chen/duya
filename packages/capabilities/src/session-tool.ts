@@ -8,9 +8,9 @@
  * returns immediately with the child session id — the caller carries on and is
  * auto-woken with the result (it must NOT poll).
  *
- * Unlike MessageSession (a blocking one-shot Q&A to an EXISTING session) and
- * SendToAgent (an async message to another agent), this tool CREATES and
- * manages a NEW session that persists in the sidebar with its own transcript.
+ * Unlike `session_send`, which writes an asynchronous input to an existing
+ * Session, this tool CREATES and manages a NEW Session that persists in the
+ * sidebar with its own transcript. Bot-to-bot delivery remains `send_to_agent`.
  */
 
 import { randomUUID } from 'node:crypto';

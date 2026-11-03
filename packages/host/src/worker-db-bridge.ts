@@ -44,6 +44,7 @@ import type { ProjectToolService } from './project/tool-service.js';
 import { createHostToolApprovalApi } from './tool-approval-api.js';
 import type { WorkerDbBridge } from './run-execution.js';
 import type { createHostSessionService, SessionServiceCaller } from './session-service.js';
+import type { createHostSessionInputService } from './session-input-service.js';
 import type { HostPluginAppInvocationInternalApi } from './local-plugin-app-invocation-api.js';
 import type { HostLocalMailboxApiV1 } from '@duya/agent-protocol/mailbox';
 import type {
@@ -123,6 +124,7 @@ export type WorkerBridgeSessionApi = Pick<
   | 'update'
   | 'countTimeline'
   | 'readMessages'
+  | 'forkAt'
   | 'appendTimeline'
   | 'deleteTimeline'
   | 'searchSessions'
@@ -145,6 +147,8 @@ export interface HostWorkerDbBridgeOptions {
   readonly channelDelivery?: (payload: Record<string, unknown>, caller: SessionServiceCaller) => Promise<unknown>;
   readonly checkoutService?: SessionCheckoutService;
   readonly sessionService?: ReturnType<typeof createHostSessionService>;
+  /** Durable, idempotent worker-to-session input and control-lease API. */
+  readonly sessionInputService?: ReturnType<typeof createHostSessionInputService>;
   /** Durable run ledger — serves `run:*` exactly like the ledger API. */
   readonly runs: RunRepository;
   /** Session store — serves worker session reads. */
@@ -300,6 +304,11 @@ function requirePositiveInteger(payload: Record<string, unknown>, key: string, a
 /** An optional payload string: absent stays absent, a present value is text. */
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function rejectUnexpectedFields(payload: Record<string, unknown>, allowed: readonly string[], action: string): void {
+  const unexpected = Object.keys(payload).find((key) => !allowed.includes(key));
+  if (unexpected) throw new WorkerDbBridgeError('invalid_payload', `${action} does not accept ${unexpected}`);
 }
 
 /** Parse a JSON object carried as a string (the mailbox constraint blob). */
@@ -638,6 +647,151 @@ export function createHostWorkerDbBridge(options: HostWorkerDbBridgeOptions): Wo
               : { ...coreSessionToIpcRow(session), snippet: result.snippet };
           }));
           return rows.filter((row): row is Record<string, unknown> => row !== null);
+        }
+        case 'session:appList': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session lists require the Host session input service and trusted worker context.');
+          }
+          rejectUnexpectedFields(payload, ['scope', 'includeArchived', 'cursor', 'limit'], action);
+          const scope = payload.scope === undefined ? 'children' : payload.scope;
+          if (scope !== 'children' && scope !== 'workspace') {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} scope must be children or workspace`);
+          }
+          const includeArchived = payload.includeArchived === undefined ? false : payload.includeArchived;
+          if (typeof includeArchived !== 'boolean') {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} includeArchived must be a boolean`);
+          }
+          const limit = payload.limit === undefined ? 10 : requirePositiveInteger(payload, 'limit', action);
+          if (limit > 50) throw new WorkerDbBridgeError('invalid_payload', `${action} limit cannot exceed 50`);
+          const cursor = optionalString(payload.cursor);
+          if (payload.cursor !== undefined && cursor === undefined) {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} cursor must be a string`);
+          }
+          return options.sessionInputService.listAccessibleSessions({
+            scope,
+            includeArchived,
+            limit,
+            ...(cursor === undefined ? {} : { cursor }),
+          }, caller);
+        }
+        case 'session:appRead': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session reads require the Host session input service and trusted worker context.');
+          }
+          rejectUnexpectedFields(payload, ['sessionId', 'cursor', 'limit'], action);
+          const sessionId = requireString(payload, 'sessionId', action);
+          if (!await options.sessionInputService.canAccessSession(sessionId, caller)) {
+            throw new WorkerDbBridgeError('invalid_payload', 'Session transcript is outside the caller\'s accessible workspace or lineage.');
+          }
+          const limitValue = payload.limit;
+          const limit = limitValue === undefined ? 10 : requirePositiveInteger(payload, 'limit', action);
+          if (limit > 10) throw new WorkerDbBridgeError('invalid_payload', `${action} limit cannot exceed 10`);
+          const cursor = optionalString(payload.cursor);
+          if (payload.cursor !== undefined && cursor === undefined) {
+            throw new WorkerDbBridgeError('invalid_payload', `${action} cursor must be a string`);
+          }
+          return requireSessionApi().readMessages(sessionId, {
+            limit,
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+        }
+        case 'session:appFork': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session forks require the Host Session API and trusted worker context.');
+          }
+          const sessionId = requireString(payload, 'sessionId', action);
+          if (!await options.sessionInputService.canAccessSession(sessionId, caller)) {
+            throw new WorkerDbBridgeError('invalid_payload', 'Session fork source is outside the caller\'s accessible workspace or lineage.');
+          }
+          const newSessionId = requireString(payload, 'newSessionId', action);
+          const throughMessageId = requireString(payload, 'throughMessageId', action);
+          return requireSessionApi().forkAt(sessionId, {
+            newSessionId,
+            throughMessageId,
+            ...(optionalString(payload.title) === undefined ? {} : { title: optionalString(payload.title)! }),
+          });
+        }
+        case 'session:input:submit': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session input requires the Host session input service and trusted worker context.');
+          }
+          const requestId = requireString(payload, 'requestId', action);
+          const sessionId = requireString(payload, 'sessionId', action);
+          const content = requireString(payload, 'content', action);
+          const intent = payload.intent;
+          if (intent !== 'steer' && intent !== 'enqueue' && intent !== 'interrupt') {
+            throw new WorkerDbBridgeError('invalid_payload', 'Session input intent must be steer, enqueue, or interrupt.');
+          }
+          return options.sessionInputService.submitInput({
+            requestId,
+            sessionId,
+            content,
+            intent,
+            ...(typeof payload.controlRevision === 'number' && Number.isSafeInteger(payload.controlRevision)
+              ? { controlRevision: payload.controlRevision }
+              : {}),
+            ...(Array.isArray(payload.attachments) ? { attachments: payload.attachments as NonNullable<import('@duya/agent-protocol').SessionInputRequest['attachments']> } : {}),
+            ...(Array.isArray(payload.contextRefs) ? { contextRefs: payload.contextRefs as NonNullable<import('@duya/agent-protocol').SessionInputRequest['contextRefs']> } : {}),
+            ...(optionalString(payload.expectedRunId) === undefined ? {} : { expectedRunId: optionalString(payload.expectedRunId)! }),
+            ...(optionalString(payload.expectedTurnId) === undefined ? {} : { expectedTurnId: optionalString(payload.expectedTurnId)! }),
+          }, caller);
+        }
+        case 'session:input:receipt': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session receipts require the Host session input service and trusted worker context.');
+          }
+          return options.sessionInputService.readInputReceipt(
+            requireString(payload, 'sessionId', action),
+            requireString(payload, 'requestId', action),
+            caller,
+          );
+        }
+        case 'session:input:validateDelivery': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session input delivery validation requires the Host session input service and trusted worker context.');
+          }
+          const turnId = payload.turnId === null ? null : optionalString(payload.turnId) ?? null;
+          return options.sessionInputService.validateInputDelivery({
+            inputId: requireString(payload, 'inputId', action),
+            sessionId: requireString(payload, 'sessionId', action),
+            runId: requireString(payload, 'runId', action),
+            turnId,
+          }, caller);
+        }
+        case 'session:control:acquire': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session control leases require the Host session input service and trusted worker context.');
+          }
+          const ttlMs = payload.ttlMs;
+          if (typeof ttlMs !== 'number' || !Number.isSafeInteger(ttlMs) || ttlMs < 1) {
+            throw new WorkerDbBridgeError('invalid_payload', 'Session control lease requires ttlMs to be a positive integer.');
+          }
+          return options.sessionInputService.acquireControlLease({
+            sessionId: requireString(payload, 'sessionId', action),
+            requestId: requireString(payload, 'requestId', action),
+            ttlMs,
+            ...(typeof payload.expectedRevision === 'number' ? { expectedRevision: payload.expectedRevision } : {}),
+          }, caller);
+        }
+        case 'session:control:release': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session control leases require the Host session input service and trusted worker context.');
+          }
+          const revision = payload.revision;
+          if (typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 1) {
+            throw new WorkerDbBridgeError('invalid_payload', 'Session control lease requires a positive revision.');
+          }
+          return options.sessionInputService.releaseControlLease(
+            requireString(payload, 'sessionId', action),
+            revision,
+            caller,
+          );
+        }
+        case 'session:control:read': {
+          if (!caller || !options.sessionInputService) {
+            throw new WorkerDbBridgeError('unimplemented_domain', 'Session control leases require the Host session input service and trusted worker context.');
+          }
+          return options.sessionInputService.readControlLease(requireString(payload, 'sessionId', action), caller);
         }
         case 'session:list': {
           return legacySessionRows();

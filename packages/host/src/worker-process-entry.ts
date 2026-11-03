@@ -40,7 +40,6 @@ import { sendEvent, parseStdin, type WorkerCommand, buildWorkflowRunEvent, build
 import { convertSSEToAgentMessage } from '@duya/host/worker-frame-codec';
 import { driveRunWithEngine } from '@duya/host/worker-engine-driver';
 import { withWorkerDbRunContext } from './worker-db-context.js';
-import { getPendingInteragentCall } from '@duya/host/worker-interagent-calls';
 import { resolveTurnRunId } from '@duya/agent-runtime/turns/run-identity';
 import { launchSavedWorkflow } from './worker-workflows/runner.js';
 import { runWorkflowRuntimeChild } from './worker-workflows/runtime-child.js';
@@ -3477,25 +3476,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
             catch (err) {
                 warn('[Agent-Process] subagent:kill threw (ignored):', killMsg.taskId, err);
-            }
-            break;
-        }
-        case 'interagent:event': {
-            const eventMsg = msg as unknown as {
-                type: 'interagent:event';
-                id: string;
-                event: import('@duya/host/worker-transport').WorkerEvent;
-            };
-            const call = getPendingInteragentCall(eventMsg.id);
-            if (!call) {
-                break;
-            }
-            call.events.push(eventMsg.event);
-            if (eventMsg.event.type === 'chat:done') {
-                call.resolveDone(eventMsg.event);
-            }
-            else if (eventMsg.event.type === 'chat:error') {
-                call.resolveError(eventMsg.event);
             }
             break;
         }

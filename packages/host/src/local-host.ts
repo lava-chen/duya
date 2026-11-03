@@ -49,6 +49,7 @@ import {
 import type { HostWorkspaceAccess } from './session-api.js';
 import { createHostSessionApi, createHostWorkspaceRegistrationApi } from './session-api.js';
 import { createHostSessionService } from './session-service.js';
+import { createHostSessionInputService } from './session-input-service.js';
 import { createProjectDispatchPort } from './project/dispatch.js';
 import {
   createFileDiagnosticsLogger,
@@ -646,6 +647,15 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           runExecution.validateSessionCaller(caller);
         },
       });
+      const sessionInputService = createHostSessionInputService({
+        sessions: api,
+        runs: createHostRunApi(core.stores),
+        mailbox: localMailboxApi,
+        validateCaller: (caller) => {
+          if (!runExecution) throw new Error('Host run execution is not ready.');
+          runExecution.validateSessionCaller(caller);
+        },
+      });
       // The standalone Host records a finished work-Session Run and leaves a
       // durable Coordinator notification in the mailbox. There is no renderer
       // idle dispatcher here, so the row is delivered on the Coordinator's
@@ -709,6 +719,7 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
           },
           checkoutService,
           sessionService,
+          sessionInputService,
           runs: core.stores.runs,
           sessions: core.stores.sessions,
           settings,

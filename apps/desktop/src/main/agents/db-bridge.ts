@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { queueDesktopBotChannelReply } from '../cli/desktop-host-api';
+import { queueDesktopBotChannelReply, getDesktopHostRunApi } from '../cli/desktop-host-api';
 import * as path from 'path';
 import type { BrowserWindow } from 'electron';
 import { toolApprovalInputHash } from '@duya/data/tool-approval-state';
@@ -67,6 +67,7 @@ import {
   reserveDesktopBotDispatch,
   isDesktopBotDispatchCurrent,
 } from '../cli/desktop-host-api';
+import { createHostSessionInputService } from '@duya/host/session-input-service';
 import { resolveDataRoot } from '@duya/data/data-paths';
 import { normalizePath } from '@duya/data/path-utils';
 import { getControlPlane } from '@duya/host/control-plane-service';
@@ -380,6 +381,28 @@ const UNATTRIBUTED_SENDER: CommandSenderFacts = {
 /** The wire refusal when composition never created a Control Plane. */
 const RUN_UNAVAILABLE_REASON =
   'this host created no Control Plane, so it has no durable owner for a run; call initCoreDatabase() and createControlPlane() at composition';
+
+function createDesktopSessionInputService(
+  trustedAttempt: CommandSenderFacts['trustedAttempt'],
+) {
+  if (!trustedAttempt) throw new Error('Session input requires a transport-correlated worker attempt.');
+  const runApi = getDesktopHostRunApi();
+  return createHostSessionInputService({
+    sessions: getDesktopHostSessionApi(),
+    runs: runApi,
+    mailbox: getDesktopHostLocalMailboxApi(),
+    validateCaller: async (caller) => {
+      if (
+        caller.sessionId !== trustedAttempt.sessionId || caller.runId !== trustedAttempt.runId ||
+        caller.epoch !== trustedAttempt.epoch
+      ) throw new Error('caller_attempt_not_current');
+      const run = await runApi.getAgentRun(caller.runId);
+      if (!run || run.sessionId !== caller.sessionId || run.status !== 'running') {
+        throw new Error('caller_attempt_not_current');
+      }
+    },
+  });
+}
 
 export async function dispatchDbAction(
   action: string,
@@ -1088,6 +1111,135 @@ export async function dispatchDbAction(
       const opts = p.opts as { limit?: number } | undefined;
       const limit = opts?.limit ?? 10;
       return searchHostSessionRows(p.query as string, limit);
+    }
+
+    case 'session:appList': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const unexpected = Object.keys(p).find((key) => !['scope', 'includeArchived', 'cursor', 'limit'].includes(key));
+      if (unexpected) throw new Error(`session:appList does not accept ${unexpected}`);
+      const scope = p.scope === undefined ? 'children' : p.scope;
+      if (scope !== 'children' && scope !== 'workspace') throw new Error('session:appList scope must be children or workspace');
+      const includeArchived = p.includeArchived === undefined ? false : p.includeArchived;
+      if (typeof includeArchived !== 'boolean') throw new Error('session:appList includeArchived must be a boolean');
+      const limit = p.limit === undefined ? 10 : p.limit;
+      if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+        throw new Error('session:appList limit must be an integer between 1 and 50');
+      }
+      if (p.cursor !== undefined && typeof p.cursor !== 'string') throw new Error('session:appList cursor must be a string');
+      return service.listAccessibleSessions({
+        scope,
+        includeArchived,
+        limit,
+        ...(typeof p.cursor === 'string' && p.cursor ? { cursor: p.cursor } : {}),
+      }, trustedAttempt!);
+    }
+
+    case 'session:appRead': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const unexpected = Object.keys(p).find((key) => !['sessionId', 'cursor', 'limit'].includes(key));
+      if (unexpected) throw new Error(`session:appRead does not accept ${unexpected}`);
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      if (!sessionId) throw new Error('session:appRead requires sessionId');
+      if (!await service.canAccessSession(sessionId, trustedAttempt!)) throw new Error('session_not_accessible');
+      const limit = p.limit === undefined ? 10 : p.limit;
+      if (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1 || limit > 10) {
+        throw new Error('session:appRead limit must be an integer between 1 and 10');
+      }
+      if (p.cursor !== undefined && typeof p.cursor !== 'string') throw new Error('session:appRead cursor must be a string');
+      return getDesktopHostSessionApi().readMessages(sessionId, {
+        limit,
+        ...(typeof p.cursor === 'string' && p.cursor ? { cursor: p.cursor } : {}),
+      });
+    }
+
+    case 'session:appFork': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      const newSessionId = typeof p.newSessionId === 'string' ? p.newSessionId : '';
+      const throughMessageId = typeof p.throughMessageId === 'string' ? p.throughMessageId : '';
+      if (!sessionId || !newSessionId || !throughMessageId) throw new Error('session:appFork requires sessionId, newSessionId, and throughMessageId');
+      if (!await service.canAccessSession(sessionId, trustedAttempt!)) throw new Error('session_not_accessible');
+      const result = await getDesktopHostSessionApi().forkAt(sessionId, {
+        newSessionId,
+        throughMessageId,
+        ...(typeof p.title === 'string' ? { title: p.title } : {}),
+      });
+      if (result.ok) {
+        for (const window of allBrowserWindows()) {
+          if (!window.isDestroyed()) window.webContents.send('sync:threads-changed');
+        }
+      }
+      return result;
+    }
+
+    case 'session:input:submit': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      const requestId = typeof p.requestId === 'string' ? p.requestId : '';
+      const content = typeof p.content === 'string' ? p.content : '';
+      const intent = p.intent;
+      if (!sessionId || !requestId || !content) throw new Error('session input requires sessionId, requestId, and content');
+      if (intent !== 'steer' && intent !== 'enqueue' && intent !== 'interrupt') throw new Error('invalid session input intent');
+      const receipt = await service.submitInput({
+        sessionId,
+        requestId,
+        content,
+        intent,
+        ...(typeof p.controlRevision === 'number' && Number.isSafeInteger(p.controlRevision)
+          ? { controlRevision: p.controlRevision }
+          : {}),
+        ...(typeof p.expectedRunId === 'string' ? { expectedRunId: p.expectedRunId } : {}),
+        ...(typeof p.expectedTurnId === 'string' ? { expectedTurnId: p.expectedTurnId } : {}),
+        ...(Array.isArray(p.attachments) ? { attachments: p.attachments as import('@duya/agent-protocol').SessionInputRequest['attachments'] } : {}),
+        ...(Array.isArray(p.contextRefs) ? { contextRefs: p.contextRefs as import('@duya/agent-protocol').SessionInputRequest['contextRefs'] } : {}),
+      }, trustedAttempt!);
+      if (receipt.stage !== 'rejected') {
+        const item = await getDesktopHostLocalMailboxApi().getByClientMsgId(sessionId, requestId);
+        if (item) {
+          const row = coreMailboxToIpcRow(item);
+          emitMailboxEvent('emitMailCreated', row);
+        }
+      }
+      return receipt;
+    }
+
+    case 'session:input:receipt': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      return service.readInputReceipt(String(p.sessionId ?? ''), String(p.requestId ?? ''), trustedAttempt!);
+    }
+
+    case 'session:input:validateDelivery': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const turnId = p.turnId === null ? null : typeof p.turnId === 'string' ? p.turnId : null;
+      return service.validateInputDelivery({
+        inputId: String(p.inputId ?? ''),
+        sessionId: String(p.sessionId ?? ''),
+        runId: String(p.runId ?? ''),
+        turnId,
+      }, trustedAttempt!);
+    }
+
+    case 'session:control:acquire': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      const ttlMs = p.ttlMs;
+      if (typeof ttlMs !== 'number' || !Number.isSafeInteger(ttlMs) || ttlMs < 1) throw new Error('invalid ttlMs');
+      return service.acquireControlLease({
+        sessionId: String(p.sessionId ?? ''),
+        requestId: String(p.requestId ?? ''),
+        ttlMs,
+        ...(typeof p.expectedRevision === 'number' ? { expectedRevision: p.expectedRevision } : {}),
+      }, trustedAttempt!);
+    }
+
+    case 'session:control:release': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      if (typeof p.revision !== 'number' || !Number.isSafeInteger(p.revision)) throw new Error('invalid revision');
+      return service.releaseControlLease(String(p.sessionId ?? ''), p.revision, trustedAttempt!);
+    }
+
+    case 'session:control:read': {
+      const service = createDesktopSessionInputService(trustedAttempt);
+      return service.readControlLease(String(p.sessionId ?? ''), trustedAttempt!);
     }
 
     case 'session:loadMessages': {
