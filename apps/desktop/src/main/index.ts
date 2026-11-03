@@ -91,8 +91,9 @@ import { registerLazyIpcHandlers } from './ipc/lazy-ipc-registry';
 // Core modules (refactored from inline code)
 // =============================================================================
 
-import { isDev, isPreviewMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
-import { getMainWindow, getIsQuitting, setIsQuitting, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
+import { isDev, isPreviewMode, isTestMode, DEBUG_IPC, debugLog, setupDevMode, setupTestMode, initGlobalErrorHandlers, acquireSingleInstanceLock, setupSecondInstanceHandler, logEnvironmentDiagnostic } from './core/bootstrap';
+import { getMainWindow, getIsQuitting, setIsQuitting, consumeCloseNoticeQuit, getIconPath, getRendererUrl, createWindow } from './core/window-manager';
+import { promptQuitWhileBusy } from './core/lifecycle-dialogs';
 import { attachGpuDiagnostics, formatGpuStatusLine } from './core/gpu-diagnostics';
 import { checkMediaPath } from './core/media-allowlist';
 import { createSafeModeWindow, getSafeModeWindow } from './core/safe-mode';
@@ -1141,10 +1142,35 @@ app.on('window-all-closed', async () => {
   }
 });
 
+/**
+ * Ask before quitting while agent runs are still streaming.
+ *
+ * Hiding the window costs nothing, quitting discards in-flight work, so the
+ * two are not the same gesture. The count is local — no Host RPC — which is
+ * why this needs no timeout; an unreadable count before the session manager
+ * is up means there is nothing running yet.
+ */
+async function confirmQuitWithRunningWork(): Promise<boolean> {
+  if (isTestMode) return true;
+  // The close notice's Quit button already answered this question.
+  if (consumeCloseNoticeQuit()) return true;
+  let streaming = 0;
+  try {
+    streaming = getSessionManager().getStreamingSessionCount();
+  } catch {
+    return true;
+  }
+  if (streaming <= 0) return true;
+  // A dialog that cannot be shown must not silently discard the runs.
+  return promptQuitWhileBusy(getMainWindow(), streaming).catch(() => false);
+}
+
 app.on('before-quit', (event) => {
-  if (!getIsShuttingDown()) {
-    event.preventDefault();
-    const SHUTDOWN_TIMEOUT_MS = 10000;
+  if (getIsShuttingDown()) return;
+  event.preventDefault();
+
+  const SHUTDOWN_TIMEOUT_MS = 10000;
+  const startShutdown = () => {
     const shutdownPromise = performGracefulShutdown();
 
     const forceQuitTimeout = setTimeout(() => {
@@ -1160,7 +1186,15 @@ app.on('before-quit', (event) => {
       clearTimeout(forceQuitTimeout);
       app.exit(1);
     });
-  }
+  };
+
+  void (async () => {
+    if (!(await confirmQuitWithRunningWork())) {
+      logger.info('Quit cancelled while agent runs were streaming', undefined, 'Main');
+      return;
+    }
+    startShutdown();
+  })();
 });
 
 /** Resolve the bundled or development entry point for the shared OS context daemon. */
