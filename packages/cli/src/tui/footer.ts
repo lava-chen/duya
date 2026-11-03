@@ -37,6 +37,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { PermissionBadge } from './permission-mode.js';
 import type { StatuslineProfile } from './preferences.js';
+import { encodeHyperlinkTag } from './core/span.js';
+import { prTone, type PrBadge } from './pr-badge.js';
 import { taggedWith } from './theme.js';
 import type { Styles } from './transcript-view.js';
 import { visibleWidth } from './width.js';
@@ -87,6 +89,20 @@ export interface FooterInput {
    * could not keep true would be worse than no footer.
    */
   readonly permission?: PermissionBadge | null;
+  /**
+   * The pull request this session is working on, as the Host last observed it.
+   *
+   * Null when the Host knows of none: the badge is optional, and a footer that
+   * showed a pull request the Host has not observed would be a claim.
+   */
+  readonly pullRequest?: PrBadge | null;
+  /**
+   * Whether the terminal can carry OSC 8 hyperlinks.
+   *
+   * A literal `]8;;url` in the footer is worse than a plain label, so the link
+   * is only emitted when the terminal is known to understand it.
+   */
+  readonly hyperlinks?: boolean;
   readonly statusline?: StatuslineProfile;
 }
 
@@ -236,10 +252,16 @@ export function buildFooterLines(input: FooterInput): string[] {
   const location = showLocation ? formatCwdForFooter(input.cwd, input.home) : '';
   const branch = showBranch ? input.branch ?? null : null;
   const withBranch = branch === null || branch === '' ? location : `${location} (${branch})`;
-  const withSession = !showSession || input.sessionName === undefined || input.sessionName === null || input.sessionName === ''
-    ? withBranch
-    : `${withBranch} • ${input.sessionName}`;
-
+  // The pull request belongs to "where": it says what the work in this
+  // session is FOR. The narrow profiles leave it out — they are the ones the
+  // reader chose to have less on screen.
+  const showPullRequest = profile === 'full' || profile === 'location';
+  const badge = showPullRequest ? input.pullRequest ?? null : null;
+  const sessionName = !showSession || input.sessionName === undefined || input.sessionName === null ? '' : input.sessionName;
+  // The badge sits BETWEEN the path and the session name: the path is where
+  // the work happens and the name is a label, so a narrow terminal — which
+  // clips from the right — loses the name first and keeps the badge.
+  const row1Plain = `${withBranch}${badge === null ? '' : ` • ${badge.label}`}${sessionName === '' ? '' : ` • ${sessionName}`}`;
   const stats = input.stats;
   const counters: string[] = [];
   if (showUsage && stats.inputTokens > 0) counters.push(`↑${formatTokenCount(stats.inputTokens)}`);
@@ -285,9 +307,29 @@ export function buildFooterLines(input: FooterInput): string[] {
     return styles.muted(group);
   }).join(styles.muted(SEPARATOR));
 
-  const row1 = composeRow(withSession, [
+  // The badge's state is a COLOUR, not a glyph: the footer is a fixed-width
+  // row and a symbol's cell width is ambiguous in CJK terminals.
+  const paintPrBadge = (target: PrBadge): string => {
+    const tone = prTone(target.state);
+    const painted = tone === 'success' ? styles.success(target.label)
+      : tone === 'error' ? styles.error(target.label)
+      : tone === 'warning' ? styles.warning(target.label)
+      : tone === 'muted' ? styles.muted(target.label)
+      : styles.accent(target.label);
+    if (input.hyperlinks !== true || target.url === null) return painted;
+    const tag = encodeHyperlinkTag(target.url);
+    return tag === null ? painted : `{${tag}}${painted}{/${tag}}`;
+  };
+  // Without a badge the row is one muted run, exactly as it was before the
+  // badge existed; with one, only the badge carries its own colour.
+  const row1Tagged = badge === null
+    ? styles.muted(`${withBranch}${sessionName === '' ? '' : ` • ${sessionName}`}`)
+    : styles.muted(`${withBranch} • `)
+      + paintPrBadge(badge)
+      + (sessionName === '' ? '' : styles.muted(` • ${sessionName}`));
+  const row1 = composeRow(row1Plain, [
     { plain: profile === 'full' || profile === 'compact' ? input.hint ?? '' : '', tagged: (text) => styles.muted(text) },
-  ], width, styles);
+  ], width, styles, row1Tagged);
   const row2 = composeRow(statsPlain, rightSegments(input, styles, modelPlain), width, styles, statsTagged);
   return [row1, row2];
 }

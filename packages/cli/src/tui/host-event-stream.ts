@@ -89,6 +89,15 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
         type: 'tool_use',
         data: { id: event.toolCallId, name: event.toolName, input: event.arguments },
       };
+    case 'tool.arguments_delta':
+      // One slice of the tool call's arguments, as the model wrote it. The
+      // call was announced first, so the TUI already has a block to grow.
+      // The payload carries no tool name — a partial call has none yet — so
+      // the block's own name is what the preview reads.
+      return {
+        type: 'tool_use_delta',
+        data: { id: event.toolCallId, delta: event.delta },
+      };
     case 'tool.call_completed': {
       const outcome = event.outcome.outcome;
       return {
@@ -98,6 +107,10 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
           result: event.content,
           error: outcome !== 'success' && outcome !== 'indeterminate',
           indeterminate: outcome === 'indeterminate',
+          // The producer's structured payload rides along verbatim. A
+          // file-mutating tool publishes its change set here, and the TUI
+          // renders it instead of re-deriving a diff from the prose result.
+          ...(event.metadata === undefined ? {} : { metadata: event.metadata }),
         },
       };
     }

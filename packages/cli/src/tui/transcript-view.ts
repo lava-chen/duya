@@ -82,6 +82,7 @@ import {
   type SubagentSpec,
 } from './subagent.js';
 import { DARK_THEME_TAGS, type ThemeTags, type ThemeToken } from './theme.js';
+import { fileDiffCounts, isStreamingFileTool, renderFileDiffRows, renderStreamingFileRows } from './file-diff-view.js';
 import { escapeTags } from './markdown/escape.js';
 import { highlightBash, highlightBashLine, type BashRole, type BashToken } from './bash-highlight.js';
 import {
@@ -171,6 +172,17 @@ export interface RenderOptions {
    * blocks become components. Absent means revision 0 for every block.
    */
   readonly componentRevisions?: ReadonlyMap<string, number>;
+  /**
+   * Rows the surface can rewrite in place.
+   *
+   * A row that leaves the live area is committed to the terminal's scrollback
+   * for good, so a block that is still changing must stay inside this many
+   * rows or its top rows freeze mid-change. The streaming preview of a file
+   * write is bounded by it. Omitted means "unknown", and the preview then
+   * shows its count and nothing else — a block that cannot prove it fits
+   * must not pretend it does.
+   */
+  readonly liveRows?: number;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
@@ -941,6 +953,17 @@ function plainBody(
   styles: Styles,
   indent: string,
 ): string[] {
+  // A file change draws its diff instead of the prose the tool returned. The
+  // prose is still there — the model reads it — but on screen the change set
+  // is what the reader came for, and it is the only part with line numbers.
+  if (block.diff !== undefined && block.diff.length > 0) {
+    const rows = renderFileDiffRows(block.diff, block.failures, {
+      tags: styles.tags,
+      ...(options.width === undefined ? {} : { width: options.width }),
+      indentWidth: visibleWidth(indent),
+    });
+    return rows.map((line) => `${indent}${line}`);
+  }
   // An error gets double the budget: the message the reader needs is usually
   // at the end of the report (minimax-code's preview budget does the same).
   const budget = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
@@ -1340,6 +1363,14 @@ function toolDisclosureOf(
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
+  // A file change's size is the CHANGE's size, not the prose's line count:
+  // `[+ 3 lines]` on a 200-line rewrite says nothing about the rewrite, while
+  // `(+200 -0)` says exactly what happened.
+  const counts = block.diff === undefined ? null : fileDiffCounts(block.diff);
+  if (counts !== null) {
+    const size = `${styles.diffAdd(`+${counts.added}`)} ${styles.diffDel(`-${counts.removed}`)}`;
+    return showDetails ? `${size} ${styles.muted('[-]')}` : size;
+  }
   const resultLines = countReportLines(block, result);
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
   return toolDisclosure(true, resultLines, showDetails, styles, unit);
@@ -1485,6 +1516,42 @@ export function planKey(plan: BlockPlan): string {
 }
 
 /** The rows under a node's own row: a tool result or a thinking preview. */
+/**
+ * The body of a call whose arguments are still arriving.
+ *
+ * A file write's text lives in the arguments, so while they stream the reader
+ * can watch the file being written instead of staring at an empty row.
+ *
+ * The preview's height is bounded by the live area. A row that leaves the live
+ * area is committed to the terminal's scrollback for good, so an unbounded
+ * preview would freeze half-written rows in the user's history — and the
+ * preview is the only thing that changes while the call runs.
+ */
+function streamingFileBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  if (block.argumentText === undefined || block.argumentText === '') return [];
+  if (!isStreamingFileTool(block.name)) return [];
+  // Three rows of the live area are already spoken for before any content
+  // arrives: the stanza gap above this block, the call's own row, and the
+  // summary line below it. A terminal too short to hold those three cannot
+  // show a preview at all — drawing one would push its top row out of the live
+  // area and freeze a half-written file into the scrollback.
+  const liveRows = options.liveRows;
+  if (liveRows !== undefined && liveRows < 3) return [];
+  const maxRows = liveRows === undefined ? 0 : Math.min(12, liveRows - 3);
+  const rows = renderStreamingFileRows(block.name, block.argumentText, {
+    tags: styles.tags,
+    ...(options.width === undefined ? {} : { width: options.width }),
+    indentWidth: visibleWidth(indent),
+    maxRows,
+  });
+  return rows.map((line) => `${indent}${line}`);
+}
+
 function nodeBody(
   block: Block,
   plan: BlockPlan,
@@ -1513,7 +1580,13 @@ function nodeBody(
   }
 
   const result = block.result?.trimEnd() ?? '';
-  if (block.status === 'running' || result.trim() === '') return [];
+  if (block.status === 'running') {
+    // A call that is still being written shows what it is writing. The
+    // preview is bounded by the live area, because a block that scrolls out
+    // while it is still changing keeps its frozen half-written rows forever.
+    return streamingFileBody(block, options, styles, plan.bodyIndent);
+  }
+  if (result.trim() === '') return [];
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);

@@ -1,3 +1,4 @@
+import type { HostPluginManagementApiV1, HostPluginInstallInput } from '@duya/agent-protocol/plugin-management';
 import type {
   HostLocalSessionImportInput,
   HostLocalSessionImportResult,
@@ -142,11 +143,19 @@ import type {
   HostProjectCreateInput,
   HostProjectPatch,
   HostProjectRecord,
+  HostProjectState,
   HostProjectTaskLink,
   HostLockAcquireInput,
   HostLockRenewInput,
   HostLockReleaseInput,
   LockOrigin,
+} from '@duya/agent-protocol';
+import type {
+  SessionControlLease,
+  SessionControlLeaseRequest,
+  SessionInputReceipt,
+  SessionInputRequest,
+  HostSessionInputApiV1,
 } from '@duya/agent-protocol';
 import type {
   HostCheckoutObserved,
@@ -419,6 +428,7 @@ export class HostSessionHttpClient implements
   HostRunApiV1,
   HostProjectApiV1,
   HostResearchApiV1,
+  HostSessionInputApiV1,
   HostHealthApiV1,
   HostLocalProviderManagementApiV1 {
   constructor(
@@ -1789,6 +1799,17 @@ export class HostSessionHttpClient implements
    * The answer is a WRAPPER object, the same shape the MCP and skill
    * inventories answer with, so every inventory reads the same way.
    */
+  async listManagedPlugins(): ReturnType<HostPluginManagementApiV1['list']> { return this.request('GET', '/v1/plugins'); }
+  async listPluginCatalog(): ReturnType<HostPluginManagementApiV1['catalog']> { return this.request('GET', '/v1/plugin-catalog'); }
+  async listPluginMarketplaces(): ReturnType<HostPluginManagementApiV1['listMarketplaces']> { return this.request('GET', '/v1/plugin-marketplaces'); }
+  async addPluginMarketplace(source: string): ReturnType<HostPluginManagementApiV1['addMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces', { source }); }
+  async removePluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['removeMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/remove', {}); }
+  async refreshPluginMarketplace(name: string): ReturnType<HostPluginManagementApiV1['refreshMarketplace']> { return this.request('POST', '/v1/plugin-marketplaces/' + encodeURIComponent(name) + '/refresh', {}); }
+  async installPlugin(input: HostPluginInstallInput): ReturnType<HostPluginManagementApiV1['install']> { return this.request('POST', '/v1/plugins/install', input); }
+  async setPluginEnabled(id: string, enabled: boolean): ReturnType<HostPluginManagementApiV1['setEnabled']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + (enabled ? '/enable' : '/disable'), {}); }
+  async uninstallPlugin(id: string, deleteData = false): ReturnType<HostPluginManagementApiV1['uninstall']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/uninstall', { deleteData }); }
+  async updatePlugin(id: string): ReturnType<HostPluginManagementApiV1['update']> { return this.request('POST', '/v1/plugins/' + encodeURIComponent(id) + '/update', {}); }
+
   async listPlugins(): Promise<{ readonly plugins: readonly HostPluginInventoryEntry[] }> {
     return this.request('GET', '/v1/local/plugins');
   }
@@ -2498,6 +2519,62 @@ export class HostSessionHttpClient implements
     const result = await this.request<{ records: readonly import('@duya/agent-protocol/projects').ProjectDecision[] }>(
       'GET', `/v1/projects/${encodeURIComponent(projectId)}/decisions/${encodeURIComponent(key)}/history?limit=${Math.max(1, Math.min(100, limit))}`);
     return result.records;
+  }
+
+  async getProjectState(projectId: string): Promise<HostProjectState | null> {
+    const result = await this.request<{ state: HostProjectState | null }>(
+      'GET', `/v1/projects/${encodeURIComponent(projectId)}/state`);
+    return result.state;
+  }
+
+  // ── R1.2: durable Session inputs and the per-session control lease ────
+  //
+  // The lease is the authority on who may direct a session, so a client that
+  // wants to take over a working session asks the Host for it. A refused
+  // grant is an ordinary outcome and comes back as `null`, not as an error:
+  // somebody else already holds the session.
+
+  async submitInput(request: SessionInputRequest): Promise<SessionInputReceipt> {
+    const result = await this.request<{ receipt: SessionInputReceipt }>('POST', '/v1/session-inputs', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      intent: request.intent,
+      content: request.content,
+    });
+    return result.receipt;
+  }
+
+  async readInputReceipt(sessionId: string, requestId: string): Promise<SessionInputReceipt | null> {
+    const result = await this.request<{ receipt: SessionInputReceipt | null }>(
+      'GET',
+      `/v1/session-inputs/receipt?sessionId=${encodeURIComponent(sessionId)}&requestId=${encodeURIComponent(requestId)}`,
+    );
+    return result.receipt;
+  }
+
+  async acquireControlLease(request: SessionControlLeaseRequest): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>('POST', '/v1/session-inputs/lease', {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      ...(request.expectedRevision === undefined ? {} : { expectedRevision: request.expectedRevision }),
+      ttlMs: request.ttlMs,
+    });
+    return result.lease;
+  }
+
+  async releaseControlLease(sessionId: string, revision: number): Promise<boolean> {
+    const result = await this.request<{ released: boolean }>('POST', '/v1/session-inputs/lease/release', {
+      sessionId,
+      revision,
+    });
+    return result.released;
+  }
+
+  async readControlLease(sessionId: string): Promise<SessionControlLease | null> {
+    const result = await this.request<{ lease: SessionControlLease | null }>(
+      'GET', `/v1/session-inputs/lease?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    return result.lease;
   }
 
   // ── Plan 621: checkout and integration observations ───────────────────

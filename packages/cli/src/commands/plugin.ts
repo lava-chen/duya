@@ -1,3 +1,5 @@
+import { resolveLocalPluginPath } from '../api/plugin-path.js';
+import { parseMarketplaceSource } from '@duya/plugin-core/marketplace/source-parse';
 /**
  * packages/agent/src/cli/commands/plugin.ts
  *
@@ -10,7 +12,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { stdin, stdout } from 'node:process';
-import { CliApiClient } from '../api/client.js';
+import { PluginApiClient as CliApiClient } from '../api/plugin-client.js';
 import { CliApiError } from '../api/errors.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
 import { CliUserDataMissingError } from '../api/runtime-config.js';
@@ -129,13 +131,32 @@ async function promptConfirm(message: string): Promise<boolean> {
   });
 }
 
+async function confirmWriteOperation(message: string, yes: boolean): Promise<number | undefined> {
+  if (yes) return undefined;
+  if (!isInteractive()) {
+    process.stderr.write('interactive_required: pass --yes to confirm this plugin operation in non-interactive mode\n');
+    return 3;
+  }
+  if (!(await promptConfirm(message))) {
+    process.stderr.write('aborted: plugin operation cancelled\n');
+    return 1;
+  }
+  return undefined;
+}
+
 async function listPlugins(opts: {
+  available?: boolean;
   enabled?: boolean;
   verbose?: boolean;
   format: OutputFormat;
 }): Promise<number> {
   try {
     const client = await CliApiClient.connect();
+    if (opts.available) {
+      const catalog = await client.get<{ plugins: { id: string; marketplace: string; version: string; installed: boolean }[] }>('/v1/plugin-catalog');
+      process.stdout.write(opts.format === 'json' ? renderJson(catalog) + '\n' : catalog.plugins.map(plugin => plugin.id + '@' + plugin.marketplace + '  ' + plugin.version + '  ' + (plugin.installed ? 'installed' : 'available')).join('\n') + '\n');
+      return 0;
+    }
     const body = await client.get<{ plugins: PluginListItem[] }>('/v1/plugins');
     const filtered = opts.enabled ? body.plugins.filter((p) => p.enabled) : body.plugins;
 
@@ -207,7 +228,7 @@ async function runPluginWrite(
       process.stdout.write(renderJson({ plugin: body.plugin, correlationId }) + '\n');
     } else {
       const state = body.plugin.enabled ? 'enabled' : 'disabled';
-      process.stdout.write(`${state} plugin '${id}' at ${body.plugin.changedAt} (correlationId=${correlationId})\n`);
+      process.stdout.write(`${state} plugin '${id}' (correlationId=${correlationId})\n`);
     }
     return 0;
   } catch (err) {
@@ -261,6 +282,7 @@ export const runPluginCommand = {
   install: installPlugin,
   uninstall: uninstallPlugin,
   update: updatePlugin,
+  marketplace: marketplaceCommand,
 };
 
 interface PluginWriteOk {
@@ -269,13 +291,11 @@ interface PluginWriteOk {
   removed?: boolean;
 }
 
-async function installPlugin(ctx: { options: { yes?: boolean; fromPath?: string; scope?: string }; format: OutputFormat }): Promise<number> {
-  if (ctx.options.yes !== true && !isInteractive()) {
-    process.stderr.write('interactive_required: plugin install requires --yes in non-interactive mode\n');
-    return 3;
-  }
+async function installPlugin(ctx: { options: { yes?: boolean; fromPath?: string; scope?: string; marketplace?: string; cwd?: string }; format: OutputFormat }): Promise<number> {
+  const confirmation = await confirmWriteOperation('Confirm plugin installation?', ctx.options.yes === true);
+  if (confirmation !== undefined) return confirmation;
   const pluginId = (ctx as unknown as { args: string[] }).args[0];
-  const fromPath = typeof ctx.options.fromPath === 'string' ? ctx.options.fromPath : undefined;
+  const fromPath = typeof ctx.options.fromPath === 'string' ? resolveLocalPluginPath(ctx.options.fromPath, ctx.options.cwd ?? process.cwd()) : undefined;
   if (!pluginId && !fromPath) {
     process.stderr.write('usage: duya plugin install <id> [--from-path <dir>] [--scope user|system]\n');
     return 64;
@@ -287,6 +307,7 @@ async function installPlugin(ctx: { options: { yes?: boolean; fromPath?: string;
       pluginId,
       fromPath,
       scope: ctx.options.scope,
+      marketplace: ctx.options.marketplace,
     }, { correlationId });
     if (ctx.format === 'json') {
       process.stdout.write(renderJson(body) + '\n');
@@ -302,10 +323,8 @@ async function installPlugin(ctx: { options: { yes?: boolean; fromPath?: string;
 }
 
 async function uninstallPlugin(ctx: { options: { yes?: boolean; deleteData?: boolean }; args: string[]; format: OutputFormat }): Promise<number> {
-  if (ctx.options.yes !== true && !isInteractive()) {
-    process.stderr.write('interactive_required: plugin uninstall requires --yes in non-interactive mode\n');
-    return 3;
-  }
+  const confirmation = await confirmWriteOperation('Confirm plugin uninstall?', ctx.options.yes === true);
+  if (confirmation !== undefined) return confirmation;
   const id = ctx.args[0];
   if (!id) {
     process.stderr.write('usage: duya plugin uninstall <id> [--delete-data]\n');
@@ -328,7 +347,9 @@ async function uninstallPlugin(ctx: { options: { yes?: boolean; deleteData?: boo
   }
 }
 
-async function updatePlugin(ctx: { args: string[]; format: OutputFormat }): Promise<number> {
+async function updatePlugin(ctx: { args: string[]; options: { yes?: boolean; cwd?: string }; format: OutputFormat }): Promise<number> {
+  const confirmation = await confirmWriteOperation('Confirm plugin update?', ctx.options.yes === true);
+  if (confirmation !== undefined) return confirmation;
   const id = ctx.args[0];
   if (!id) {
     process.stderr.write('usage: duya plugin update <id>\n');
@@ -351,3 +372,27 @@ async function updatePlugin(ctx: { args: string[]; format: OutputFormat }): Prom
   }
 }
 
+
+async function marketplaceCommand(ctx: { args: string[]; options: { yes?: boolean; cwd?: string }; format: OutputFormat }): Promise<number> {
+  const action = ctx.args[0] ?? 'list';
+  const value = ctx.args[1];
+  if (!['list', 'add', 'remove', 'refresh'].includes(action) || (action !== 'list' && !value)) {
+    process.stderr.write('Usage: duya plugin marketplace [list|add <source>|remove <name>|refresh <name>]\n'); return 64;
+  }
+  if (action !== 'list' && ctx.options.yes !== true) {
+    if (!isInteractive()) { process.stderr.write('interactive_required: marketplace changes require --yes\n'); return 3; }
+    if (!(await promptConfirm('Confirm marketplace ' + action + '?'))) return 1;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const source = action === 'add' ? parseMarketplaceSource(value!) : undefined;
+    const sourceValue = source?.kind === 'local' ? resolveLocalPluginPath(source.path!, ctx.options.cwd ?? process.cwd()) : value;
+    const result = action === 'list' ? await client.get<{ marketplaces: { name: string; kind: string; pluginCount: number }[] }>('/v1/plugin-marketplaces')
+      : action === 'add' ? await client.post('/v1/plugin-marketplaces', { source: sourceValue })
+        : await client.post('/v1/plugin-marketplaces/' + encodeURIComponent(value!) + '/' + action, {});
+    process.stdout.write(ctx.format === 'json' ? renderJson(result) + '\n' : action === 'list'
+      ? (result as { marketplaces: { name: string; kind: string; pluginCount: number }[] }).marketplaces.map(market => market.name + '  ' + market.kind + '  ' + market.pluginCount + ' plugins').join('\n') + '\n'
+      : 'Marketplace updated.\n');
+    return 0;
+  } catch (error) { return reportError(error); }
+}

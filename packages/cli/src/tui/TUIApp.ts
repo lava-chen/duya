@@ -93,9 +93,20 @@ import {
 } from './window.js';
 import { ACTION_DEFS, helpGroups, KEYMAP_HEADINGS, keysColumn, type ActionDef } from './actions.js';
 import { applyKeyOverrides, loadKeyOverrides, toBlessedKeys, REBINDABLE_ACTIONS, validateKeyOverrides, type KeymapIssue } from './keymap.js';
-import { resolveThemeName, themeFor, type ThemeName, effortBorderColor, effortBorderTag, normalizeEffort, taggedWith, type EffortLevel } from './theme.js';
+import {
+  effortBorderColor,
+  effortBorderTag,
+  normalizeEffort,
+  resolveComposerBackground,
+  resolveThemeName,
+  taggedWith,
+  themeFor,
+  type EffortLevel,
+  type ThemeName,
+} from './theme.js';
 import { compactActivity } from './text.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
+import type { PrBadge } from './pr-badge.js';
 import type { StatuslineProfile } from './preferences.js';
 import {
   nextPermissionMode,
@@ -431,6 +442,13 @@ export interface TUIAppOptions {  /** Window title. */
   readonly modelLabel?: () => { provider?: string; model: string; thinking?: string };
   /** Session name for the footer's path row, when the caller has one. */
   readonly sessionName?: () => string | null;
+  /**
+   * The pull request this session is working on, for the footer's badge.
+   *
+   * A callback, like the other footer facts: the Host observes pull requests
+   * out of band, and the footer must never wait for one to ask.
+   */
+  readonly pullRequestBadge?: () => PrBadge | null;
   /**
    * Reasoning effort for the NEXT turn, as a string (`'low'`, `'high'`, …).
    *
@@ -1827,7 +1845,31 @@ export class TUIApp {
       width: this.inlineSurface !== null
         ? this.terminalSize().columns
         : transcriptWidth(this.fullScreen.measure('transcript'), this.terminalSize().columns),
+      liveRows: this.liveTranscriptRows(),
     };
+  }
+
+  /**
+   * Rows the surface can rewrite in place.
+   *
+   * Inline mode's live area is the terminal minus the chrome the composer, the
+   * status line and the task list take. The chrome is deliberately
+   * OVER-estimated: an over-estimate shrinks the streaming preview, and a
+   * preview that is too small only shows fewer lines, while one that is too
+   * large would push its own top rows into the scrollback while they are still
+   * being written.
+   */
+  private liveTranscriptRows(): number {
+    if (this.inlineSurface === null) return this.visibleTranscriptRows();
+    const capacity = Math.max(1, this.terminalSize().rows);
+    const chrome =
+      this.inputRows +
+      this.inputChromeRows() +
+      STATUS_ROWS +
+      this.popupRows() +
+      // The working tail, the task list and the queue preview.
+      4;
+    return Math.max(1, capacity - chrome);
   }
 
   /** Invalidate the assembled lines after a private transcript-model change. */
@@ -2019,7 +2061,7 @@ export class TUIApp {
         borderColor: effortBorderColor(this.effortLevel()),
         // The band: the whole input rectangle is filled, the rules included,
         // so the box the user types into reads as one solid surface.
-        background: this.theme.tags.composerBg,
+        background: resolveComposerBackground(this.theme.tags) ?? null,
         height,
         bottom: this.composerBottom(size),
         lines: this.colorComposerBody(body, 0, layout.hasPlaceholder, { row: 0, glyph: shellGlyph }),
@@ -2170,7 +2212,8 @@ export class TUIApp {
     raw: readonly string[],
     columns: number,
   ): string[] {
-    const tag = this.theme.tags.composerBg;
+    const tag = resolveComposerBackground(this.theme.tags);
+    if (tag === undefined) return [...painted];
     const width = Math.max(1, columns);
     return painted.map((line, index) => {
       const used = visibleWidth(raw[index] ?? '');
@@ -2470,6 +2513,10 @@ export class TUIApp {
       styles: stylesOf({ theme: this.theme.tags }),
       home: process.env['HOME'] ?? process.env['USERPROFILE'],
       permission: this.permissionBadge(),
+      // The pull request the Host last observed for this session, and whether
+      // this terminal can carry the link that makes the badge clickable.
+      pullRequest: this.options.pullRequestBadge?.() ?? null,
+      hyperlinks: this.terminalEnv.hyperlinks,
       statusline: this.statusline,
     };
     const statusBar = new StatusBar(props);

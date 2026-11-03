@@ -15,7 +15,7 @@
 import {
   createProjectRunSettlementService,
   type ProjectRunSettlementService,
-} from '@duya/host/project-run-settlement';
+} from '@duya/host/project/reconciliation';
 import { getCoreStores, type CoreStores } from '../db/core-connection';
 import { coreMailboxToIpcRow } from '../ipc/core-db-adapters';
 import { emitMailCreated } from '../messaging/mailbox-broadcaster';

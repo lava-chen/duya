@@ -4,6 +4,7 @@ import type {
   PluginUiSurfaceDirectory,
 } from '@duya/plugin-core/apps/declarations'
 import type { FileAttachment } from '@duya/agent-protocol'
+import type { ProjectWorkspaceAPI } from '../contracts/project-workspace'
 
 // Sandboxed preloads can only require electron/events/timers/vm — node:crypto
 // is unavailable here. The preload runs in a Chromium context, so Web Crypto's
@@ -1424,6 +1425,15 @@ export interface ElectronAPI {
     /** Plan 525 — remove a path-only entry from the recent-folders list. */
     removeRecentFolder: (folderPath: string) => Promise<string[]>
   }
+  /**
+   * Project-first: the unified project state, the project's coordinator
+   * conversation, and the per-session control lease.
+   *
+   * The shapes are the Host's own — `apps/desktop/src/contracts/project-workspace.ts`
+   * imports them from `@duya/agent-protocol` rather than re-declaring them, so
+   * the Desktop cannot drift from the Host.
+   */
+  projectWorkspace: ProjectWorkspaceAPI
   sync: SyncAPI
   settings: {
     // Plan 453 Task H: Wake Agent config.
@@ -2157,6 +2167,26 @@ const electronAPI: ElectronAPI = {
     delete: (projectId: string) => ipcRenderer.invoke('projects:delete', projectId),
     removeRecentFolder: (folderPath: string) =>
       ipcRenderer.invoke('projects:remove-recent-folder', folderPath),
+  },
+  // Project-first: the unified project state, the project's coordinator
+  // conversation, and the per-session control lease.
+  //
+  // See apps/desktop/src/main/ipc/project-workspace-handlers.ts for the
+  // main-process side, and apps/desktop/src/contracts/project-workspace.ts for
+  // the shared vocabulary.
+  projectWorkspace: {
+    state: (projectId: string) => ipcRenderer.invoke('projects:state', projectId),
+    ensureCoordinator: (projectId: string) =>
+      ipcRenderer.invoke('projects:coordinator:ensure', projectId),
+    workSessionStatus: (sessionIds: readonly string[]) =>
+      ipcRenderer.invoke('projects:workSessionStatus', sessionIds),
+    lease: {
+      get: (sessionId: string) => ipcRenderer.invoke('session:control:lease:get', sessionId),
+      acquire: (sessionId: string, requestId: string, ttlMs?: number) =>
+        ipcRenderer.invoke('session:control:lease:acquire', sessionId, requestId, ttlMs),
+      release: (sessionId: string, revision: number) =>
+        ipcRenderer.invoke('session:control:lease:release', sessionId, revision),
+    },
   },
   sync: {
     notifyThreadsChanged: () => {

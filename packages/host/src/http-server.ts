@@ -1,3 +1,6 @@
+import type { PluginAuditEvent } from './plugins/audit.js';
+import type { HostPluginManagementApiV1 } from '@duya/agent-protocol/plugin-management';
+import { routePluginManagement } from './plugins/http.js';
 import { timingSafeEqual } from 'node:crypto';
 import { logger } from '@duya/host/worker-logger';
 import {
@@ -396,6 +399,8 @@ export interface HostSessionHttpServerOptions {
    * say" are different facts.
    */
   readonly localPluginInventoryApi?: HostPluginInventoryApiV1;
+  readonly pluginManagementApi?: HostPluginManagementApiV1;
+  readonly pluginManagementAudit?: (event: PluginAuditEvent) => Promise<void>;
   /**
    * Handing a session over to the desktop app.
    *
@@ -1916,6 +1921,10 @@ export class HostSessionHttpServer {
       }
       return;
     }
+    if (url.pathname === '/v1/plugins' || url.pathname.startsWith('/v1/plugins/') || url.pathname === '/v1/plugin-catalog' || url.pathname === '/v1/plugin-marketplaces' || url.pathname.startsWith('/v1/plugin-marketplaces/')) {
+      await routePluginManagement(req, res, url, this.#options.pluginManagementApi, () => this.#readJson(req, res), this.#options.pluginManagementAudit);
+      return;
+    }
     if (url.pathname === '/v1/local/plugins' && req.method === 'GET') {
       const api = this.#options.localPluginInventoryApi;
       if (!api) {
@@ -3334,6 +3343,11 @@ export class HostSessionHttpServer {
           }
           const state = await api.updateProjectState({ projectId, expectedRevision: body.expectedRevision, currentState: body.currentState, nextStep: body.nextStep, source: body.source });
           this.#sendJson(res, state ? 200 : 409, { state }); return;
+        }
+        if (continuityMatch[2] === 'state' && req.method === 'GET') {
+          // 200 with a null state, NOT a 404: a missing project is an answer.
+          const state = await api.getProjectState(projectId);
+          this.#sendJson(res, 200, { state }); return;
         }
       } catch (error) { this.#sendApiError(res, error); }
       this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } }); return;
