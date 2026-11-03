@@ -1,7 +1,7 @@
 # 636 TUI 工具行的折叠与运行期输出
 
-状态：active · 负责人：codex/tui-tool-fold-disclosure 会话 · 更新：2026-11-03
-分支：`codex/tui-tool-fold-disclosure` · worktree：`.claude/worktrees/tui-tool-fold` · base：`9b8da5e866e94fb6a608e2ca5b9c042dd34987bc`（= origin/master）· owner：本会话
+状态：review（PR #610 待授权集成） · 负责人：codex/tui-tool-fold-disclosure 会话 · 更新：2026-11-03
+分支：`codex/tui-tool-fold-disclosure` · worktree：`.claude/worktrees/tui-tool-fold` · base：`a9c3897a4186d33365b3476c5b34a2dc94145594`（= origin/master；分支已 merge 至 `0442e6c7`）· owner：本会话
 
 ## 目标与边界
 
@@ -56,6 +56,8 @@
 
 **真机目视的边界。** `duya chat -p` / `duya tui` 都要走真实 provider 请求（花用户额度），本沙箱内不擅自发起。替代验证取两段真实的：`live-output-tail.test.ts` 与 `shell-output-subscription.test.ts` 的 real-shell 分支用 `startManagedShell` 真起进程（`printf … ; sleep 1 ; printf …`），断言第一片在 `settled` 之前到达运行侧 emitter——字节源与订阅顺序都不是 mock；bundle 侧用 `grep` 确认重建产物含新事件与 `shellOutputStops` 接线。
 
+**一条不属于本任务的 CI 红。** `chat-tui-host-stop-continue.test.ts` 在 run `41669969731` 上超时，本分支没改它。三条独立证据把它钉成既有 flake：PR #608（diff 无任何 `packages/cli` 文件）同一文件同一行同一 `Error: Test timed out in 30000ms.` 复现，只是 `it.each` 参数换成 `cooperative`；两次日志里该测试自带的 15s 帧等待报错 `TUI/Host transition timed out` 出现 0 次，说明卡点在 `startLocalHost` / 硬杀 / `host.close()` 而不是事件投递；把本计划文档单独重推一次（run `41673606318`，执行集合仍是 519 个文件）就全绿。留给后续任务的描述是：全局 `testTimeout: 30000`（`vitest.config.ts:195`）与用例自报的 `30_000` 相同，而内部 `until()` 预算 15s —— 一次慢 spawn 或慢 kill 就吃光余量；且 master 的 push run 把 `test` job 整个 `skipped`，主干上没有任何基线能发现它开始失败。
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -74,12 +76,13 @@
 | `0442e6c7` / 无 | GitHub Actions ubuntu-latest / Node 22.x，run `41669969731`（PR #610） | workflow「Test」按 job 记账 | `architecture` 0、`test scope` 0、`typecheck` 0、`build` 0；`test` 1 | `Test Files 1 failed \| 518 passed (519)`，`Tests 1 failed \| 5622 passed`。唯一红：`packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts > TUI stop and continue through the real Host > continues the same session after a escalated stop` = `Error: Test timed out in 30000ms.` @ `:109:39`；该文件本分支未改动 |
 | `c335999c`（PR #608 `codex/cache-mcp-defer`） | 同上，run `41661142586` | 取失败签名做跨分支对照 | 1 | **同一文件、同一 describe、同一 `it.each` 行 `:109:39`、同一 `Error: Test timed out in 30000ms.`**，只是参数换成 `cooperative`；两边日志中 `TUI/Host transition timed out`（该测试自带的 15s 帧等待报错）出现次数均为 **0** ⇒ 卡点不在 `until()` 而在 `startLocalHost` / worker 硬杀 / `host.close()`。而 #608 的 diff 不含任何 `packages/cli` 文件（`packages/ai/src/api/anthropic-messages.ts`、`utils/prompt-caching.ts`、`packages/host/src/worker-config/tool-exposure.ts` + 测试 + docs） |
 | `0442e6c7` / 无 | win32 / Node 24.18.0 | `… run packages/cli/src/__tests__/chat-tui-host-stop-continue.test.ts` 连跑两次；并读该测试 | 非确定 | 第 1 次两条参数各 30017 / 30024 ms 超时；第 2 次 `cooperative` 4302 ms 通过、`escalated` 30009 ms 超时——失败参数在两次运行间漂移。该测试把 `TUIApp` 整体 mock 掉、worker 是内联写死的 `worker.cjs` 夹具且从不走 bash 工具 ⇒ 本分支的轮询器与新帧不在其执行路径上。`master` 的 push run（如 `41652028885`）里 `test`/`typecheck`/`build` 全部 `skipped` ⇒ 该文件没有 master CI 基线可比 |
+| `86445d8b`（仅改本计划文档）/ 无 | GitHub Actions ubuntu-latest / Node 22.x，run `41673606318` | 同一分支内容重跑 workflow「Test」 | 0 | **五个 job 全绿**（`architecture` / `test scope` / `typecheck` / `test` / `build`），`test` 为 `Test Files 519 passed (519)`、`Tests 5623 passed \| 1 expected fail \| 8 skipped`——文件数与红的那次完全相同，`chat-tui-host-stop-continue.test.ts` 确实在执行集合内。同一份代码红→绿 ⇒ 判定为计时敏感的既有 flake，本分支不改该文件、也不试图在 PR 内修它 |
 
 ## 接续 / 结果
 
 已提交：`04e7faff`（P1+P2，4 文件）、`446d6a20`（本计划）、P3–P7 按逻辑变更拆分提交（协议 / runtime / host 字节源 / host 接线 / 投影 / TUI 渲染 / Desktop+Web 车道 / 测试）、`813fbbbb`（`build(host)` 重建 worker bundle）、`0442e6c7`（merge master）。
 
-交付：PR [#610](https://github.com/lava-chen/duya/pull/610) · base `a9c3897a` · head `0442e6c7`。CI：`architecture` / `test scope` / `typecheck` / `build` 绿，`test` 红一条 —— `chat-tui-host-stop-continue.test.ts` 的 `it.each` 30s 超时。**按文件 / 用例 / 错误签名判定与本分支无关**（见验证记录后三行：同一签名在无 `packages/cli` 改动的 PR #608 上复现、失败参数在两次运行间漂移、本分支未改该文件、且该测试把渲染器与 worker 都换成了夹具）。`test` 不是必需检查，按仓库约定记录后由获授权的集成者评估；未在本分支上试图让该文件变绿。
+交付：PR [#610](https://github.com/lava-chen/duya/pull/610) · base `a9c3897a` · head `0442e6c7`。CI 在 `0442e6c7` 上 `architecture` / `test scope` / `typecheck` / `build` 绿、`test` 红一条；仅改本文档的 `86445d8b` 重跑（run `41673606318`）**五个 job 全绿**。红的那条是 `chat-tui-host-stop-continue.test.ts` 的 `it.each` 30s 超时，**按文件 / 用例 / 错误签名判定与本分支无关**（见验证记录后四行：无 `packages/cli` 改动的 PR #608 同一签名复现、失败参数在运行间漂移、同码重跑变绿、本分支未改该文件且该测试把渲染器与 worker 都换成了夹具）。该检查不是必需检查，按仓库约定记录后由获授权的集成者评估；本分支不试图修它。
 
 未完成的一条验收：`duya tui` 真机目视。它需要真实 provider 请求（花用户额度），本沙箱不擅自发起；已用两段真进程测试 + bundle 产物 grep 覆盖同一链路的非模型部分。**接手者请在本地跑一次**：`npm run build:cli-dev && npm run dev:tui`，让 agent 执行一条持续输出的命令（`npm test`），运行中应看到工具行下方最多 6 行的静音尾部且整块落在活动窗口内；若不显示，先查 `hasShellOutputListener(taskId)` 是否在 spawn 前为真（P5 的顺序不变量），再查 `liveRows` 是否 ≥ 4。
 
