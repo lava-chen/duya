@@ -58,6 +58,14 @@ const mocks = vi.hoisted(() => {
           reason: 'dirty_tracked',
         }),
       ),
+      cleanupCheckouts: vi.fn(async (input?: { dryRun?: boolean }) => ({
+        dryRun: input?.dryRun ?? true,
+        keepCount: 15,
+        examined: 2,
+        removed: [],
+        retained: [],
+        failed: [],
+      })),
       observeIntegrationsForSession: vi.fn(
         async (): Promise<readonly HostIntegrationRecord[]> => [
           {
@@ -112,6 +120,7 @@ beforeEach(() => {
 describe('workspace-lifecycle IPC handlers', () => {
   it('registers one channel per port method', () => {
     expect([...mocks.captured.handle.keys()].sort()).toEqual([
+      'workspace-lifecycle:checkout:cleanup',
       'workspace-lifecycle:checkout:control',
       'workspace-lifecycle:checkout:observe',
       'workspace-lifecycle:checkout:observe-for-session',
@@ -158,6 +167,30 @@ describe('workspace-lifecycle IPC handlers', () => {
   it('returns a reclaim refusal as a normal answer, not an error', async () => {
     const answer = await invoke('workspace-lifecycle:checkout:reclaim', 'C:/repo/worktrees/session-1');
     expect(answer).toEqual({ removed: false, reason: 'dirty_tracked' });
+  });
+
+  it('forwards a parsed cleanup input and returns the Host result unchanged', async () => {
+    const answer = await invoke('workspace-lifecycle:checkout:cleanup', { dryRun: false, bogus: true });
+    expect(mocks.api.cleanupCheckouts).toHaveBeenCalledWith({ dryRun: false });
+    expect(answer).toEqual({
+      dryRun: false,
+      keepCount: 15,
+      examined: 2,
+      removed: [],
+      retained: [],
+      failed: [],
+    });
+  });
+
+  it('refuses a malformed cleanup input instead of forwarding it', async () => {
+    mocks.api.cleanupCheckouts.mockClear();
+    await expect(
+      invoke('workspace-lifecycle:checkout:cleanup', { dryRun: 'yes' }),
+    ).rejects.toThrow(/dryRun/);
+    await expect(
+      invoke('workspace-lifecycle:checkout:cleanup', { sourceCwd: '' }),
+    ).rejects.toThrow(/sourceCwd/);
+    expect(mocks.api.cleanupCheckouts).not.toHaveBeenCalled();
   });
 
   it('keeps an unknown integration observation unknown', async () => {
