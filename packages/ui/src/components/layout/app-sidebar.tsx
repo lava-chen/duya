@@ -128,6 +128,7 @@ const settingsNavGroups: {
     items: [
       { id: 'general', labelKey: 'settings.general', icon: HouseIcon },
       { id: 'appearance', labelKey: 'settings.appearance', icon: MonitorIcon },
+      { id: 'worktrees', labelKey: 'settings.worktrees', icon: FolderIcon },
       { id: 'security', labelKey: 'settings.security', icon: ShieldCheckIcon },
     ],
   },

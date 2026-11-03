@@ -28,6 +28,8 @@ import type {
   HostIntegrationRecord,
   HostIntegrationSyncResult,
   HostSessionCheckoutView,
+  HostWorktreeCleanupInput,
+  HostWorktreeCleanupResult,
   SessionId,
 } from '@duya/agent-protocol';
 import type { PartialWorkspaceLifecyclePort, WorkspaceLifecyclePort } from '@/services/workspace-lifecycle';
@@ -80,6 +82,20 @@ export async function requestCheckoutReclaim(
   return await api.checkouts.requestReclaim(root);
 }
 
+/**
+ * Run the Host's retention pass, or null when this surface cannot answer.
+ *
+ * The Host decides what may be deleted; this wrapper only forwards the
+ * request. Callers must confirm with the user first — cleanup has no undo.
+ */
+export async function cleanupCheckouts(
+  input: HostWorktreeCleanupInput = {},
+): Promise<HostWorktreeCleanupResult | null> {
+  const api = bridge();
+  if (!api) return null;
+  return await api.checkouts.cleanup(input);
+}
+
 /** Every integration observed for a session, or null when this surface cannot answer. */
 export async function observeIntegrationsForSession(
   sessionId: SessionId,
@@ -119,6 +135,7 @@ export function createElectronWorkspaceLifecyclePort(): PartialWorkspaceLifecycl
       observeForSession: (sessionId) => api.checkouts.observeForSession(sessionId),
       observeCheckout: (root) => api.checkouts.observeCheckout(root),
       requestReclaim: (root) => api.checkouts.requestReclaim(root),
+      cleanup: (input) => api.checkouts.cleanup(input),
     },
     integrations: {
       observeForSession: (sessionId) => api.integrations.observeForSession(sessionId),

@@ -92,6 +92,34 @@ export type CheckoutRetainReason =
   | 'owner_alive'
   | 'cwd_inside';
 
+/**
+ * Outcome of one cleanup run.
+ *
+ * A refusal is a normal entry in `retained`, not an error: cleanup shares the
+ * fail-closed reclaim matrix and never outvotes it. `failed` is reserved for
+ * I/O or git errors, which say "this one is unknown", never "delete it anyway".
+ */
+export interface WorktreeCleanupResult {
+  readonly dryRun: boolean;
+  readonly keepCount: number;
+  /** Managed checkouts the run inspected, including retained ones. */
+  readonly examined: number;
+  readonly removed: readonly string[];
+  readonly retained: readonly { readonly root: string; readonly reason: CheckoutRetainReason }[];
+  readonly failed: readonly { readonly root: string; readonly message: string }[];
+}
+
+export interface WorktreeCleanupOptions {
+  /** Restrict the run to one repository. Absent means "discover managed repositories". */
+  readonly sourceCwd?: string;
+  /** Report what would be removed without deleting anything. */
+  readonly dryRun?: boolean;
+  /** Roots never considered for deletion, e.g. the checkout that was just created. */
+  readonly protectRoots?: readonly string[];
+  /** Repositories the caller already knows about (session working dirs). */
+  readonly sourceRoots?: readonly string[];
+}
+
 export interface CheckoutProvider {
   create(input: {
     sourceCwd: string;
@@ -131,6 +159,18 @@ export interface CheckoutProvider {
 
   /** The only deletion entry point. Refusal is a normal result, not an exception. */
   reclaim(root: string): Promise<{ removed: true } | { removed: false; reason: CheckoutRetainReason }>;
+
+  /**
+   * Keep the newest `keepCount` checkouts per repository and reclaim the rest.
+   *
+   * Every deletion goes through `reclaim()`; this method adds selection, not
+   * permission. `examined` counts what was inspected, so a caller can tell
+   * "nothing to clean" from "everything was retained".
+   */
+  cleanup(options?: WorktreeCleanupOptions): Promise<WorktreeCleanupResult>;
+
+  /** Source repositories that currently hold managed checkouts on disk. */
+  discoverManagedRepos(): Promise<string[]>;
 
   /** Write gate at the tool boundary: resolve the checkout from cwd, then compare owners. */
   assertWritable(

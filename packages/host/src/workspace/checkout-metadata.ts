@@ -24,7 +24,7 @@ import { CheckoutOwnerError } from './errors.js';
 import { gitPathAbsolute } from './git.js';
 
 /** Codex Desktop reads this exact file name from the worktree git dir. Keep it. */
-const OWNER_FILENAME = 'codex-thread.json';
+export const OWNER_FILENAME = 'codex-thread.json';
 const OWNER_VERSION = 1;
 
 /** A malformed file must not be mistaken for "no owner". */

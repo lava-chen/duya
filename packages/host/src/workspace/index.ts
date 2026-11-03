@@ -13,6 +13,8 @@ export type {
   CheckoutProvider,
   CheckoutRetainReason,
   CheckoutRoot,
+  WorktreeCleanupOptions,
+  WorktreeCleanupResult,
 } from './types.js';
 
 export { CheckoutError, CheckoutOwnerError } from './errors.js';
@@ -26,11 +28,31 @@ export type { ExecutionLocationDenial, ExecutionLocationErrorCode, ExecutionLoca
 export { bindOwner, clearOwner, ownerPath, readOwner } from './checkout-metadata.js';
 export type { BindOwnerOptions, OwnerRead } from './checkout-metadata.js';
 
+export { discoverManagedRepos, runWorktreeCleanup } from './cleanup.js';
+export type { CleanupPort } from './cleanup.js';
+
 export { evaluateReclaim, reclaimCheckout } from './worktree-removal.js';
 export type { ReclaimInputs, ReclaimVerdict } from './worktree-removal.js';
 
 export { inspectRegistration, parseWorktreeList, sourceRootFromCommonDir, worktreeEntries } from './registration.js';
 export type { Registration, WorktreeEntry } from './registration.js';
 
-export { allocateCheckoutName, managedRootFor, resolveCheckoutDataRoot, slugifyWorktreeName } from './paths.js';
+export {
+  allocateCheckoutName,
+  defaultManagedRootFor,
+  defaultWorktreesRoot,
+  isManagedCheckoutPath,
+  isRepoKeySegment,
+  managedRootFor,
+  resolveCheckoutDataRoot,
+  slugifyWorktreeName,
+} from './paths.js';
+export {
+  DEFAULT_WORKTREE_KEEP_COUNT,
+  MAX_WORKTREE_KEEP_COUNT,
+  readWorktreeSettings,
+} from './settings.js';
+export type { ReadWorktreeSettingsOptions, WorktreeSettings } from './settings.js';
+export { hasCheckoutIdentity, readCheckoutOrigin, writeCheckoutOrigin } from './checkout-origin.js';
+export type { CheckoutOrigin } from './checkout-origin.js';
 export { describeGitFailure, git, gitOrNull, gitPathAbsolute } from './git.js';

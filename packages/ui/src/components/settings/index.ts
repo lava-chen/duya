@@ -13,6 +13,7 @@ export { MemorySection } from "./MemorySection";
 export { HooksSection } from "./HooksSection";
 export { VoiceSection } from "./VoiceSection";
 export { PerformanceSection } from "./PerformanceSection";
+export { WorktreesSection } from "./WorktreesSection";
 // Plan 487: host-level standing permission switch.
 export { HostToolPermissionCard, type LocalToolPermission } from "./HostToolPermissionCard";
 

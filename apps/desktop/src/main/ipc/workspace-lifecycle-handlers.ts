@@ -31,6 +31,26 @@ function requireText(value: unknown, field: string, maxLength: number): string {
   return value;
 }
 
+/** Same bounds as the Host route; an omitted body means a repository-wide run. */
+function parseCleanupInput(value: unknown): { sourceCwd?: string; dryRun?: boolean } {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('workspace-lifecycle: cleanup input must be an object');
+  }
+  const record = value as Record<string, unknown>;
+  const input: { sourceCwd?: string; dryRun?: boolean } = {};
+  if (record.sourceCwd !== undefined) {
+    input.sourceCwd = requireText(record.sourceCwd, 'sourceCwd', MAX_ROOT_LENGTH);
+  }
+  if (record.dryRun !== undefined) {
+    if (typeof record.dryRun !== 'boolean') {
+      throw new Error('workspace-lifecycle: dryRun must be a boolean');
+    }
+    input.dryRun = record.dryRun;
+  }
+  return input;
+}
+
 export function registerWorkspaceLifecycleHandlers(): void {
   ipcMain.handle('workspace-lifecycle:checkout:control', async (_event, sessionId: unknown, command: unknown) => {
     const { parseSessionCheckoutCommand } = await import('@duya/host');
@@ -57,6 +77,13 @@ export function registerWorkspaceLifecycleHandlers(): void {
     async (_event, root: unknown): Promise<unknown> => {
       const path = requireText(root, 'root', MAX_ROOT_LENGTH);
       return await getDesktopHostWorkspaceLifecycleApi().requestCheckoutReclaim(path);
+    },
+  );
+
+  ipcMain.handle(
+    'workspace-lifecycle:checkout:cleanup',
+    async (_event, input: unknown): Promise<unknown> => {
+      return await getDesktopHostWorkspaceLifecycleApi().cleanupCheckouts(parseCleanupInput(input));
     },
   );
 

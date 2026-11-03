@@ -331,6 +331,13 @@ export interface AppEntry {
 export interface DuyaConfig {
   _config_version: number;
 
+  /**
+   * [desktop] — managed-checkout location and retention. Keys are spelled the
+   * same as codex's so a config authored for either tool means the same thing.
+   * The Host reads this table directly; the Desktop only edits it.
+   */
+  desktop: DesktopConfig;
+
   storage: StorageConfig;
   model: ModelConfig;
   providers: Record<string, ProviderEntry>;
@@ -392,8 +399,19 @@ export interface WakeConfig {
   idleDispatch?: 'renderer' | 'main'
 }
 
+export interface DesktopConfig {
+  /** Absolute directory for new checkouts; absent or empty means the default root. */
+  'git-worktree-root'?: string;
+  /** Run a retention pass after a checkout is created. Duya defaults to false. */
+  'worktree-auto-cleanup-enabled'?: boolean;
+  /** How many checkouts to keep per repository. Defaults to 15. */
+  'worktree-keep-count'?: number;
+}
+
 export const DEFAULT_CONFIG: DuyaConfig = {
   _config_version: 1,
+  // Absent keys mean "use the Host defaults"; the Host owns validation.
+  desktop: {},
   storage: { database_path: '', rollout_root: '', attachments_root: '' },
   model: { default: '', provider: '', base_url: '' },
   providers: {},
