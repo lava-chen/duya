@@ -7,7 +7,8 @@
  *
  *  1. Rows: one per ENABLED plugin, plugin rows before file paths is the
  *     composer's ordering concern — here only the row shape (label, value,
- *     capability summary) and the enabled filter.
+ *     capability summary) and the enabled filter. The LABEL prefers the
+ *     interface display name; the VALUE stays the plugin id.
  *
  *  2. Stale-while-revalidate: `list()` answers from cache immediately, one
  *     background refresh runs past the TTL, and `onUpdated` fires when the
@@ -30,11 +31,13 @@ const INVENTORY = {
   plugins: [
     {
       id: 'wechat-pay',
-      name: 'WeChat Pay',
+      name: 'wechat-pay',
+      displayName: 'WeChat Pay',
       enabled: true,
       marketplace: 'official',
       installed: true,
-      description: 'Payments over WeChat',
+      description: 'Registry description',
+      shortDescription: 'Payments over WeChat',
       appConnections: ['wechat_pay'],
       mcpServers: ['wechat-pay-server'],
       skillNames: ['wechat-pay-setup'],
@@ -73,7 +76,12 @@ describe('createPluginCompletionSource', () => {
       group: 'apps',
       category: 'context',
     });
+    // The row reads with the interface display name; without one, the
+    // registry name is the label.
+    expect(rows[1]?.label).toBe('Minimal');
     expect(rows[0]?.description).toContain('1 app · 1 MCP server · 1 skill');
+    expect(rows[0]?.description).toContain('Payments over WeChat');
+    expect(rows[0]?.description).not.toContain('Registry description');
   });
 
   it('refreshes in the background past the TTL and fires onUpdated only on change', async () => {
@@ -125,6 +133,7 @@ describe('createPluginCompletionSource', () => {
       expect.objectContaining({
         pluginId: 'wechat-pay',
         name: 'WeChat Pay',
+        description: 'Payments over WeChat',
         appConnections: ['wechat_pay'],
         mcpServers: ['wechat-pay-server'],
         skillNames: ['wechat-pay-setup'],

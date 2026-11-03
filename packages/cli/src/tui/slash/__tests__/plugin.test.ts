@@ -21,6 +21,10 @@
  *
  *  5. A payload that is not an inventory is an error, not an empty list.
  *
+ *  6. The interface display name is what the column shows: a package named
+ *     `com.duya.pdf` lists as `PDF`, and an older Host that sends no
+ *     interface text still lists its registry name.
+ *
  * The handler is called directly rather than through the registry: the
  * registry entry is another writer's file, and a test that depended on it
  * would fail here for a reason that has nothing to do with this command.
@@ -136,6 +140,35 @@ describe('/plugin', () => {
     // other one — the two cells differ, so a wrong column cannot pass.
     expect(body).toMatch(/duya-git\s+duya-plugins\s+yes\s+yes/);
     expect(body).toMatch(/notes\s+local\s+no\s+yes/);
+  });
+
+  it('lists the interface display name, not the package id', async () => {
+    const harness = await run({
+      inventory: {
+        plugins: [
+          plugin({
+            id: 'com.duya.pdf',
+            name: 'com.duya.pdf',
+            displayName: 'PDF',
+            shortDescription: 'Read, create, and verify PDF files',
+            longDescription: 'A longer description of the PDF plugin.',
+          }),
+        ],
+      },
+    });
+
+    const body = harness.panels[0]?.lines.join('\n') ?? '';
+    expect(body).toMatch(/^\s+PDF\s+/m);
+    expect(body).not.toContain('com.duya.pdf');
+  });
+
+  it('falls back to the registry name when an older Host sends no interface text', async () => {
+    const harness = await run({
+      inventory: { plugins: [plugin({ id: 'com.duya.pdf', name: 'com.duya.pdf' })] },
+    });
+
+    const body = harness.panels[0]?.lines.join('\n') ?? '';
+    expect(body).toMatch(/^\s+com\.duya\.pdf\s+/m);
   });
 
   it('says an empty inventory is an empty inventory', async () => {

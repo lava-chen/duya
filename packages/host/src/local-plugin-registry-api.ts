@@ -69,6 +69,18 @@ export interface HostPluginManifest {
 export interface HostPluginRegistryEntry {
   readonly id: string;
   readonly name: string;
+  /**
+   * The manifest's `interface.displayName`, when the package declares one.
+   *
+   * The package `name` is an id (`com.duya.pdf`); this is the label a user
+   * recognizes (`PDF`). Presentation text only — no credential material.
+   */
+  readonly displayName?: string | undefined;
+  /** The manifest's `interface.shortDescription`. */
+  readonly shortDescription?: string | undefined;
+  /** The manifest's `interface.longDescription`. */
+  readonly longDescription?: string | undefined;
+  /** Whether the user enabled the plugin. */
   readonly enabled: boolean;
   readonly marketplace: string;
   /** The package directory of the installed plugin, when it can be found. */
@@ -238,30 +250,70 @@ function readPluginManifestJson(installPath: string): Record<string, unknown> | 
 }
 
 /**
- * The identity facts a manifest carries: its description and the app
- * connector ids it declares, plus the skill names the package's skill
- * directory holds.
+ * The identity facts a manifest carries: its interface texts (display name
+ * and the two descriptions), the app connector ids it declares, plus the
+ * skill names the package's skill directory holds.
  *
- * All three are NAMES — the projection rule the inventory route exists to
- * keep. The manifest's MCP servers, permissions, icons and every
- * credential-shaped field stay out of this shape entirely. `undefined` per
- * field means "not observed", not "empty".
+ * All are NAMES and presentation strings — the projection rule the
+ * inventory route exists to keep. The manifest's MCP servers, permissions,
+ * icons and every credential-shaped field stay out of this shape entirely.
+ * `undefined` per field means "not observed", not "empty".
  */
 function readPluginPackageFacts(
   installPath: string,
-): Pick<HostPluginRegistryEntry, 'description' | 'appConnections' | 'skillNames'> | undefined {
+): Pick<
+  HostPluginRegistryEntry,
+  | 'displayName'
+  | 'shortDescription'
+  | 'longDescription'
+  | 'description'
+  | 'appConnections'
+  | 'skillNames'
+> | undefined {
   const manifest = readPluginManifestJson(installPath);
+  const displayName = manifest === undefined ? undefined : readManifestInterfaceString(manifest, 'displayName');
+  const shortDescription =
+    manifest === undefined ? undefined : readManifestInterfaceString(manifest, 'shortDescription');
+  const longDescription =
+    manifest === undefined ? undefined : readManifestInterfaceString(manifest, 'longDescription');
   const description = manifest === undefined ? undefined : readManifestDescription(manifest);
   const appConnections = manifest === undefined ? undefined : readManifestAppConnections(manifest);
   const skillNames = readPluginSkillNames(installPath);
-  if (description === undefined && appConnections === undefined && skillNames === undefined) {
+  if (
+    displayName === undefined &&
+    shortDescription === undefined &&
+    longDescription === undefined &&
+    description === undefined &&
+    appConnections === undefined &&
+    skillNames === undefined
+  ) {
     return undefined;
   }
   return {
+    ...(displayName === undefined ? {} : { displayName }),
+    ...(shortDescription === undefined ? {} : { shortDescription }),
+    ...(longDescription === undefined ? {} : { longDescription }),
     ...(description === undefined ? {} : { description }),
     ...(appConnections === undefined ? {} : { appConnections }),
     ...(skillNames === undefined ? {} : { skillNames }),
   };
+}
+
+/**
+ * One non-empty string from the manifest's `interface` block.
+ *
+ * The block is where a duya package carries its presentation texts
+ * (`interface.displayName`, `shortDescription`, `longDescription`). A
+ * non-string or blank value is "not declared".
+ */
+function readManifestInterfaceString(
+  manifest: Record<string, unknown>,
+  key: 'displayName' | 'shortDescription' | 'longDescription',
+): string | undefined {
+  const block = manifest['interface'];
+  if (typeof block !== 'object' || block === null || Array.isArray(block)) return undefined;
+  const value = (block as Record<string, unknown>)[key];
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
 }
 
 /** The manifest's `description`, when it is a non-empty string. */

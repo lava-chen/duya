@@ -35,8 +35,19 @@
 export interface HostPluginInventoryEntry {
   /** The plugin id, without the marketplace suffix. */
   readonly id: string;
-  /** The display name; the registry carries the id as the name. */
+  /**
+   * The registry's name for the plugin — the id, for a standalone Host.
+   *
+   * Kept for identity-stable consumers; render this only when `displayName`
+   * is absent.
+   */
   readonly name: string;
+  /** The manifest's `interface.displayName` — the name a user recognizes. */
+  readonly displayName?: string;
+  /** The manifest's `interface.shortDescription` — one line for a list row. */
+  readonly shortDescription?: string;
+  /** The manifest's `interface.longDescription` — the detail-page prose. */
+  readonly longDescription?: string;
   /** Whether the user enabled the plugin. */
   readonly enabled: boolean;
   /** The marketplace the plugin came from. */
@@ -45,7 +56,7 @@ export interface HostPluginInventoryEntry {
   readonly installed: boolean;
   /** Whether the plugin's own data directory exists. */
   readonly hasDataPath: boolean;
-  /** The manifest's own description, when the package declares one. */
+  /** The manifest's top-level description, when the package declares one. */
   readonly description?: string;
   /** App connector ids the plugin declares (`components.appConnections`). */
   readonly appConnections?: readonly string[];

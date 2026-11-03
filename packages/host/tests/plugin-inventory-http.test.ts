@@ -51,10 +51,11 @@ function configRootWithInstalledPlugin(): string {
     }),
     'utf8',
   );
-  // The manifest facts a client may see: a description, and the app
-  // connector ids the plugin declares. The credential-shaped manifest
-  // fields stay out of the projection by construction; the fixture carries
-  // the declarations so the boundary test can prove it.
+  // The manifest facts a client may see: the interface texts (the label a
+  // user recognizes and the two descriptions), plus the app connector ids
+  // the plugin declares. The credential-shaped manifest fields stay out of
+  // the projection by construction; the fixture carries the declarations so
+  // the boundary test can prove it.
   fs.mkdirSync(path.join(installed, '.duya-plugin'), { recursive: true });
   fs.writeFileSync(
     path.join(installed, '.duya-plugin', 'plugin.json'),
@@ -62,6 +63,11 @@ function configRootWithInstalledPlugin(): string {
       name: 'com.duya.documents',
       version: '1.0.0',
       description: 'Document workflows for the duya suite',
+      interface: {
+        displayName: 'Documents',
+        shortDescription: 'Document workflows at a glance',
+        longDescription: 'Document workflows for the duya suite, in detail.',
+      },
       components: {
         appConnections: ['slack', 'google'],
         mcpServers: ['documents'],
@@ -135,6 +141,9 @@ describe('the Host plugin inventory route', () => {
           {
             id: 'com.duya.documents',
             name: 'com.duya.documents',
+            displayName: 'Documents',
+            shortDescription: 'Document workflows at a glance',
+            longDescription: 'Document workflows for the duya suite, in detail.',
             enabled: true,
             marketplace: 'official',
             installed: true,
@@ -189,6 +198,9 @@ describe('the Host plugin inventory route', () => {
       }
       const plugin = body.plugins[0];
       expect(plugin).toMatchObject({
+        displayName: 'Documents',
+        shortDescription: 'Document workflows at a glance',
+        longDescription: 'Document workflows for the duya suite, in detail.',
         description: 'Document workflows for the duya suite',
         appConnections: ['slack', 'google'],
         mcpServers: ['documents'],

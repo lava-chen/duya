@@ -42,6 +42,8 @@ const PLUGIN_CACHE_TTL_MS = 5_000;
 interface PluginInventoryEntry {
   readonly id: string;
   readonly name: string;
+  readonly displayName?: string;
+  readonly shortDescription?: string;
   readonly enabled: boolean;
   readonly description?: string;
   readonly appConnections?: readonly string[];
@@ -82,6 +84,11 @@ function readNames(value: unknown): readonly string[] {
   return value.filter((item): item is string => typeof item === 'string' && item !== '');
 }
 
+/** One non-empty presentation string, read leniently. */
+function readText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
 /**
  * Narrow one inventory record into what a candidate row needs.
  *
@@ -98,12 +105,28 @@ function narrowEntry(value: unknown): PluginInventoryEntry | undefined {
   return {
     id,
     name: typeof record['name'] === 'string' && record['name'] !== '' ? record['name'] : id,
+    displayName: readText(record['displayName']),
+    shortDescription: readText(record['shortDescription']),
     enabled: record['enabled'] !== false,
-    description: typeof description === 'string' && description !== '' ? description : undefined,
+    description: readText(description),
     appConnections: readNames(record['appConnections']),
     mcpServers: readNames(record['mcpServers']),
     skillNames: readNames(record['skillNames']),
   };
+}
+
+/**
+ * The label a user recognizes: the interface display name, else the
+ * registry name/id. The candidate's `value` and mention `pluginId` stay the
+ * id — only what the user READS prefers the display name.
+ */
+function entryLabel(entry: PluginInventoryEntry): string {
+  return entry.displayName ?? entry.name;
+}
+
+/** The one-line description a popover row and a mention carry. */
+function entryDescription(entry: PluginInventoryEntry): string | undefined {
+  return entry.shortDescription ?? entry.description;
 }
 
 /** The plugins in an inventory payload, enabled ones only. */
@@ -183,20 +206,21 @@ export function createPluginCompletionSource(
     const connected = readConnectedProviders(connections);
     const capabilities: PluginMentionCapabilities[] = entries.map((entry) => ({
       pluginId: entry.id,
-      name: entry.name,
-      description: entry.description,
+      name: entryLabel(entry),
+      description: entryDescription(entry),
       appConnections: [...(entry.appConnections ?? [])],
       mcpServers: [...(entry.mcpServers ?? [])],
       skillNames: [...(entry.skillNames ?? [])],
     }));
     const rows: PopoverItem[] = entries.map((entry) => {
       const summary = capabilitySummary(entry);
+      const description = entryDescription(entry);
       return {
-        label: entry.name,
+        label: entryLabel(entry),
         value: entry.id,
-        description: summary !== undefined && entry.description !== undefined
-          ? `${summary} — ${entry.description}`
-          : entry.description ?? summary,
+        description: summary !== undefined && description !== undefined
+          ? `${summary} — ${description}`
+          : description ?? summary,
         group: 'apps' as const,
         category: 'context' as const,
       };

@@ -543,7 +543,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/plugin-inventory.ts": {
-      "bytes": 3202,
+      "bytes": 3674,
       "imports": [],
       "format": "esm"
     },
@@ -32404,7 +32404,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-registry-api.ts": {
-      "bytes": 13155,
+      "bytes": 15210,
       "imports": [
         {
           "path": "node:fs",
@@ -32440,7 +32440,7 @@
       "format": "esm"
     },
     "packages/host/src/local-plugin-inventory-api.ts": {
-      "bytes": 3235,
+      "bytes": 3538,
       "imports": [
         {
           "path": "packages/host/src/local-plugin-registry-api.ts",
@@ -42722,7 +42722,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 591
+          "bytesInOutput": 604
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -47510,7 +47510,7 @@
           "bytesInOutput": 7357
         },
         "packages/host/src/host-runtime.ts": {
-          "bytesInOutput": 947
+          "bytesInOutput": 951
         },
         "packages/cli/src/api/plugin-client.ts": {
           "bytesInOutput": 1132
@@ -47804,10 +47804,10 @@
           "bytesInOutput": 166
         },
         "packages/host/src/local-plugin-registry-api.ts": {
-          "bytesInOutput": 2394
+          "bytesInOutput": 2824
         },
         "packages/host/src/local-plugin-inventory-api.ts": {
-          "bytesInOutput": 630
+          "bytesInOutput": 828
         },
         "packages/host/src/agents-md/init-template.ts": {
           "bytesInOutput": 1625
@@ -48671,7 +48671,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5674980
+      "bytes": 5675625
     }
   }
 }
