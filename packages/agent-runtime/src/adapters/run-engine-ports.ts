@@ -526,7 +526,7 @@ export function buildInterTurnPort(sources: InterTurnSources): InterTurnInputPor
  * (`worker-context/context-rail.ts:87`), a hook's block
  * (`worker-hooks/injection.ts:277`), an attachment's extracted text
  * (`message-projectors.ts:159`). The HOST's projection turns it into
- * `origin: 'context'` on its way in (`worker-run-composition.ts:314`), and the
+ * `origin: 'context'` on its way in (`worker-run-composition.ts:428`), and the
  * request contract uses that marker to tell "the system attached this row" from
  * "the person said this" (`request-assembly.ts:153`).
  *

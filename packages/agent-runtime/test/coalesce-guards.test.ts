@@ -46,17 +46,27 @@ describe('the batcher merges exactly the families the registry calls ephemeral',
     }
   });
 
-  it('the mergeable set is exactly the three delta families, not a growing list', () => {
+  it('the mergeable set is exactly the delta families, not a growing list', () => {
     expect(new Set(COALESCABLE_EVENT_TYPES)).toEqual(
-      new Set<EventType>(['assistant.text_delta', 'assistant.thinking_delta', 'tool.arguments_delta']),
+      new Set<EventType>([
+        'assistant.text_delta',
+        'assistant.thinking_delta',
+        'tool.arguments_delta',
+        'tool.output_delta',
+      ]),
     );
   });
 
   it('covers every ephemeral type that carries a concatenable delta', () => {
-    // The property behind the set, stated so a fourth ephemeral delta family
-    // cannot be added and then silently bypass coalescing.
+    // The property behind the set, stated so an ephemeral delta family cannot be
+    // added and then silently bypass coalescing.
     const concatenable = EVENT_REGISTRY.ephemeral.filter((type) =>
-      ['assistant.text_delta', 'assistant.thinking_delta', 'tool.arguments_delta'].includes(type),
+      [
+        'assistant.text_delta',
+        'assistant.thinking_delta',
+        'tool.arguments_delta',
+        'tool.output_delta',
+      ].includes(type),
     );
     expect(new Set(concatenable)).toEqual(new Set(COALESCABLE_EVENT_TYPES));
   });

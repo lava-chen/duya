@@ -170,6 +170,18 @@ export function convertSSEToAgentMessage(event: AgentStreamEvent): Record<string
         duration_ms: (event.data as { duration_ms?: number }).duration_ms,
         metadata: (event.data as { metadata?: unknown }).metadata,
       };
+    // A slice of what a RUNNING command has printed. `projectToLegacyFrame`
+    // writes `data: { toolUseId, data }` (`legacy-sse-projector.ts`), so both
+    // reads go through `readPayloadString` rather than a cast.
+    //
+    // There is deliberately no `stream` field: a managed shell points stdout and
+    // stderr at ONE descriptor, so the producer cannot state which one a slice
+    // came from. The legacy union declares it optional for exactly that reason.
+    case 'tool_output': {
+      const toolUseId = readPayloadString(event.data, 'toolUseId') ?? '';
+      const delta = readPayloadString(event.data, 'data') ?? '';
+      return delta === '' ? null : { type: 'chat:tool_output', toolUseId, data: delta };
+    }
     // `projectToLegacyFrame` writes `data: { toolName, elapsedSeconds }`
     // (`legacy-sse-projector.ts:120-124`), so BOTH reads are off `data` and
     // both are NARROWED. The old `stage` value template-stringified the whole

@@ -122,6 +122,16 @@ export function projectToLegacyFrame(
         },
       };
 
+    case 'tool.output_delta':
+      // The renderer keys this family on `toolUseId`, not `id`
+      // (`agent-sse-client.ts:376-381`, `agent-message-types.ts:38`), unlike the
+      // argument deltas directly above. Honouring that is the whole point of
+      // adopting the declared frame rather than inventing a parallel one.
+      return {
+        type: 'tool_output',
+        data: { toolUseId: event.toolCallId, data: event.delta },
+      };
+
     case 'tool.progress':
       return {
         type: 'tool_progress',

@@ -554,6 +554,15 @@ const SUBAGENT_PROGRESS_MAX_TRACKED = 64;
 /** Cap on buffered events per sub-agent, to bound a runaway child's memory. */
 const SUBAGENT_PROGRESS_MAX_EVENTS = 2000;
 
+/**
+ * Cap on the live tail of a running command, in characters.
+ *
+ * Kept near the 30k the tool layer truncates a RESULT to, because the tail is
+ * previewed text that the result replaces: a tail larger than the thing it stands
+ * in for would hold more in the renderer than the transcript ends up showing.
+ */
+const STREAMING_TOOL_OUTPUT_MAX_CHARS = 30_000;
+
 // Field-based listeners for granular subscriptions
 type FieldListeners = {
   text: Set<(text: string) => void>;
@@ -681,6 +690,11 @@ interface SessionState {
   toolUses: ToolUseInfo[];
   toolResults: ToolResultInfo[];
   streamingToolOutput: string;
+  /** The call `streamingToolOutput` belongs to, or `null` when it holds nothing.
+   *  The tail is a per-session field but the frames are per-call, and a turn can
+   *  run two commands at once: without the owner, one call's output would append
+   *  to another's tail and neither result would know to clear it. */
+  streamingToolOutputId: string | null;
   statusText: string | undefined;
   startedAt: number;
   completedAt: number | null;
@@ -842,6 +856,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     toolUses: [],
     toolResults: [],
     streamingToolOutput: '',
+    streamingToolOutputId: null,
     statusText: undefined,
     researchStage: '',
     startedAt: Date.now(),
@@ -1743,6 +1758,7 @@ export class StreamSessionManager {
     state.toolUses = [];
     state.toolResults = [];
     state.streamingToolOutput = '';
+    state.streamingToolOutputId = null;
     // Immediate "preparing" feedback so the UI shows activity the moment the
     // user hits send — before the worker is even contacted. The worker's own
     // status / turn_start events, or the first text/thinking event, replace it
@@ -2094,6 +2110,12 @@ export class StreamSessionManager {
               delta: event.delta,
             });
           }
+          break;
+
+        case 'tool_output':
+          // A slice of what a RUNNING command has printed. The SSE client
+          // forwards these flat (`toolUseId` + `data`), not nested under `data`.
+          this.handleToolOutputEvent(sessionId, streamId, event);
           break;
 
         case 'tool_result':
@@ -2773,6 +2795,39 @@ export class StreamSessionManager {
   }
 
   /**
+   * Append one slice of a RUNNING command's own output to the session's live tail.
+   *
+   * The tail is display-only and self-limiting. `tool.output_delta` is ephemeral
+   * on the protocol, so the text a row shows here is never the record — the
+   * `tool_result` frame replaces it — which is what makes dropping the oldest
+   * characters an overflow rule rather than data loss.
+   *
+   * The owner check is what keeps two commands running in one turn from writing
+   * into each other's tail; the tail is a per-session field and the frames are
+   * per-call.
+   */
+  private handleToolOutputEvent(
+    sessionId: string,
+    streamId: string,
+    payload: { toolUseId?: unknown; data?: unknown } | undefined,
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    const toolUseId = typeof payload?.toolUseId === 'string' ? payload.toolUseId : '';
+    const slice = typeof payload?.data === 'string' ? payload.data : '';
+    if (toolUseId === '' || slice === '') return;
+    if (s.streamingToolOutputId !== null && s.streamingToolOutputId !== toolUseId) return;
+
+    s.streamingToolOutputId = toolUseId;
+    const next = s.streamingToolOutput + slice;
+    s.streamingToolOutput = next.length > STREAMING_TOOL_OUTPUT_MAX_CHARS
+      ? next.slice(next.length - STREAMING_TOOL_OUTPUT_MAX_CHARS)
+      : next;
+    this.notifyToolOutputListeners(sessionId, s.streamingToolOutput);
+    this.resetIdleTimeout(sessionId);
+  }
+
+  /**
    * Plan 461: accumulate a raw JSON argument fragment for a tool call whose
    * arguments are still being generated. Coalesced with a short timer —
    * deltas can arrive per token and we must not re-render the row on every
@@ -2899,6 +2954,14 @@ export class StreamSessionManager {
   ): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    // The result IS the output now, so the preview it was standing in for goes.
+    // Clearing only for the call that owns it is what leaves a still-running
+    // sibling's tail alone.
+    if (s.streamingToolOutputId === result.tool_use_id) {
+      s.streamingToolOutputId = null;
+      s.streamingToolOutput = '';
+      this.notifyToolOutputListeners(sessionId, '');
+    }
     const existingResultIndex = s.toolResults.findIndex((existing) => existing.tool_use_id === result.tool_use_id);
     // Plan 447: skip unconditionally when the result is already durable —
     // previously the guard required the result to also exist in snapshot
@@ -3355,6 +3418,7 @@ export class StreamSessionManager {
     s.streamingText = '';
     s.streamingThinking = '';
     s.streamingToolOutput = '';
+    s.streamingToolOutputId = null;
     s.streamingEvents = [];
     s.toolUses = [];
     s.toolResults = [];

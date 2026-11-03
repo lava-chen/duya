@@ -27,7 +27,7 @@ export type SpinePersistence = RunPersistence;
  *
  * `runId` and `sessionId` are required because a durable event stamped with the
  * wrong run is a row no reader can find. `seqIndex` is required for the reason
- * `LegacyRunHost.seqIndex` gives (`packages/host/src/worker-run-composition.ts:90`): a default
+ * `LegacyRunHost.seqIndex` gives (`packages/host/src/worker-run-composition.ts:91`): a default
  * would stamp rows with a constant that silently mis-orders them against real
  * transcript rows.
  */

@@ -53,6 +53,7 @@ function fold(events: readonly RunEvent[], seen: { missing: EventType[] }) {
       case 'tool.call_preview':
       case 'tool.call_started':
       case 'tool.arguments_delta':
+      case 'tool.output_delta':
       case 'tool.progress':
       case 'tool.group_progress':
       case 'tool.timed_out':

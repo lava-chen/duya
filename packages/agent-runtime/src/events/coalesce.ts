@@ -101,7 +101,10 @@ import { EVENT_REGISTRY } from '@duya/agent-protocol';
  */
 export const COALESCABLE_EVENT_TYPES: ReadonlySet<EventType> = new Set<EventType>(
   EVENT_REGISTRY.ephemeral.filter(
-    (type) => type === 'assistant.text_delta' || type === 'assistant.thinking_delta' || type === 'tool.arguments_delta',
+    (type) => type === 'assistant.text_delta'
+      || type === 'assistant.thinking_delta'
+      || type === 'tool.arguments_delta'
+      || type === 'tool.output_delta',
   ),
 );
 
@@ -205,11 +208,12 @@ export function coalesceKeyOf(runId: RunId, event: RunEvent): CoalesceKey | null
         scope: { kind: 'message', messageId: event.messageId, blockIndex: event.index },
       };
     case 'tool.arguments_delta':
+    case 'tool.output_delta':
       return { runId, eventType: event.type, scope: { kind: 'tool', toolCallId: event.toolCallId } };
     default:
-      // Unreachable: `COALESCABLE_EVENT_TYPES` names exactly the three arms
-      // above, and this build knows every `EventType`. Returned rather than
-      // asserted so a future fourth coalescable type degrades to "not merged"
+      // Unreachable: `COALESCABLE_EVENT_TYPES` names exactly the types the arms
+      // above cover, and this build knows every `EventType`. Returned rather than
+      // asserted so a future coalescable type degrades to "not merged"
       // (correct, just less efficient) instead of a crash in the emit path.
       return null;
   }
@@ -707,6 +711,7 @@ function deltaOf(event: RunEvent): string {
     case 'assistant.text_delta':
     case 'assistant.thinking_delta':
     case 'tool.arguments_delta':
+    case 'tool.output_delta':
       return event.delta;
     default:
       return '';
@@ -727,6 +732,7 @@ function rebuild(entry: PendingEntry): RunEvent {
     case 'assistant.text_delta':
     case 'assistant.thinking_delta':
     case 'tool.arguments_delta':
+    case 'tool.output_delta':
       return { ...entry.base, delta } as RunEvent;
     default:
       return entry.base;

@@ -98,6 +98,14 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
         type: 'tool_use_delta',
         data: { id: event.toolCallId, delta: event.delta },
       };
+    case 'tool.output_delta':
+      // A slice of what the running command has PRINTED, keyed to the call that
+      // is printing it. Distinct from the arm above: that one is the model still
+      // writing the arguments and stops at dispatch, this one starts there.
+      return {
+        type: 'tool_output',
+        data: { toolUseId: event.toolCallId, delta: event.delta },
+      };
     case 'tool.call_completed': {
       const outcome = event.outcome.outcome;
       return {

@@ -319,6 +319,9 @@ describe('the engine does not fabricate narration it was never given', () => {
     for (const arm of [
       'tool.progress',
       'tool.group_progress',
+      // The shell tail is the worker's own bytes, so the engine has no state to
+      // fabricate here either.
+      'tool.output_delta',
       'assistant.status',
       'assistant.mode_changed',
       'assistant.goal_updated',
