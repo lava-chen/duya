@@ -98,6 +98,35 @@ MCP 默认 `exposure='search'`（deferred）；OpenRouter / Google 仍为 `toolD
 8. **保留 `full`/`hint` 作为显式回退**：默认翻转为 `search` 是行为变更，
    `[tools] exposure = "full"` / `"hint"` 可恢复 eager MCP 工具，`DUYA_TOOLS_EXPOSURE` 环境变量同样可覆盖。
 
+9. **plugin 自带的 MCP server 与 bundled 走同一条曝光路径**：`applyMCPConfiguration`
+   （connector-services/apply.ts:499-520）对所有带 `mcpInfo` 的条目统一套
+   `mcpExposureToToolExposure(readToolExposureConfig().exposure)`；
+   `isMcpCatalogEntry`（worker-session-runtime.ts:148-151）明确「plugin 自带的 MCP server
+   报 `plugin`、bundled 报 `mcp`，两者都算 MCP 身份」；两者同归 `owner='mcp'` 桶
+   （`replaceByOwner('mcp', ...)`，worker-session-runtime.ts:2293），因此也会出现在注入
+   系统提示的 MCP 目录里（按 `getOwner === 'mcp'` 过滤，worker-session-runtime.ts:1762）。
+   App-Connector 工具（`connector:<id>` owner）不在此列——它们本就在计划 450 的
+   「始终 deferred + @ 提及提升」策略内，本 PR 不改变。
+
+10. **MCP 目录有条目预算**：注入系统提示的目录最多 12 个 server、每 server 4 个工具名、
+    总共 4096 字符（`packages/capabilities/src/MCP/capability-catalog.ts:26-30`）。
+    canvas 这类单 server 40+ 工具的场景，模型在目录里只看到 4 个名字，其余靠
+    `tool_catalog` 按能力查询——目录文本本身就这么写（"Use `tool_catalog` with a capability
+    query to find a tool, then pass its `tool_id` to read one full schema."）。
+    这与 Codex 用 world-state `<tools>` 区块给感知（4 KiB 预算）是同一量级的取舍。
+
+11. **端到端探针的真实读数**（duya 真实构建产物的 `createAnthropicClient` → 真实 MiniMax
+    端点 `api.minimaxi.com/anthropic`，模型 MiniMax-M2.7，82 工具）：三轮 `message_start`
+    usage 均报 `input_tokens=0`。注意该字段取自 `message_start` 的 usage 块
+    （`anthropic-messages.ts:2200` 透传 `internalEvent.message.usage`），MiniMax 在
+    `message_start` 里不填 `cache_read_input_tokens`，所以 `input_tokens=0` 本身**不足以**
+    证明命中；受控结论仍以 07_cache.py 读完整流（拿最终 usage）的 A/B 为准：
+    不带断点 `in=71,317 / cache_read=188`，带断点 `in=1 / cache_read=71,504`。
+    本探针的价值是证明真实客户端 + 真实端点下请求不报错、且 `message_start` 不再报
+    全量 input token，与命中一致。TTFT 三轮 4846/10925/7413ms 噪声大：M2.7 是推理模型
+    （adaptive thinking 阶段也算首字前时间）、历史逐轮增长、n=3；端点本身在 duya 账本里
+    就有 3–44s 的波动。**这条是旁证，不是受控 A/B。**
+
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
@@ -111,6 +140,9 @@ MCP 默认 `exposure='search'`（deferred）；OpenRouter / Google 仍为 `toolD
 | a9c3897a + 工作树 dirty | Windows 11 | `npx vitest run tests/worker-product-runtime/tool-surface-w0-census.test.ts` | 0 | 9 passed |
 | a9c3897a + 工作树 dirty | Windows 11 | `npm run architecture:check` | 0 | 3188 项全部 tolerated，无新增违规 |
 | a9c3897a + 工作树 dirty | Windows 11 | `npm run typecheck:all` | 0 | 末段 typecheck:voice / typecheck:evals / eval:agent:core:check 全过 |
+| 475710ae | Windows 11 | `packages/ai`: `npx vitest run test/prompt-cache-wire.test.ts` | 0 | 4 passed —— 真实 SDK + 真实 http.Server + 解码请求体 |
+| 475710ae | Windows 11 | `packages/host`: census 产物对比 | 0 | deferred(finalToolCount=21) vs eager(23)；registryToolCount 两者均 47 —— 延迟工具留在 registry、只离开请求 |
+| 475710ae | Windows 11 | 真实客户端探针（`packages/ai/dist` → 真实 MiniMax 端点，82 工具） | 0 | 三轮 `message_start` usage 的 `input_tokens=0`（该 usage 块不含 cache_read 字段，故为旁证）；TTFT 4846/10925/7413ms |
 
 ## 接续 / 结果
 
