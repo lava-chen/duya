@@ -90,3 +90,13 @@ PR：**#601**（draft，base `codex/tui-plugin-display-name`，即 #598）。
 
 下一步：等 #598 合入后把本 PR 的 base 改回 `master`（`gh pr edit 601 --base master`），那时才有 CI 信号——`test.yml` 的 `pull_request` 只监听 `master`，叠在 #598 上的当前形态不排 run，已在 PR 里注明。真机验收两项仍未闭合（见上）。
 阻塞：无（PR 是 draft，验收未闭合与 CI 未跑都不构成合并条件）。检出 `.claude/worktrees/631-plugin-host` 是本计划早期分配、从未使用的一个，与本任务的 `.claude/worktrees/tui-plugin-management` 无关，可在确认无 owner 后回收。
+
+### 2026-11-03 最新 master CLI 插件列表 404
+
+复现：Windows PowerShell 执行 `duya-master plugin list`，实际安装的 master CLI（`0.0.0-master.9b8da5e`）连接到了仍在运行的旧 Desktop Host（`0.0.0-master.cccab45-transparent`），旧 Host 不支持 `/v1/plugins`，因此返回 404。CLI 的 control-plane subcommand 在非零结果时调用同步 `process.exit(1)`，Windows Node 随即触发 libuv `UV_HANDLE_CLOSING` assertion。
+
+实现：`packages/cli/src/program/build-control-plane.ts` 两个退出点改为设置 `process.exitCode`，让 Node 正常清理；插件端对精确的 `/v1/plugins` 404 给出重启 Desktop/Host 的兼容提示。回归覆盖非零命令退出路径和旧 Host 响应。未终止用户正在运行的 Desktop Host。
+
+验证：base `origin/master` `9b8da5e866e94fb6a608e2ca5b9c042dd34987bc`，检出 `D:\codex\worktrees\plugin-host-404\duya`。Vitest 相关 4 个文件、19 项通过；`npm run typecheck:all` 退出码 0；`npm run architecture:check` 退出码 0（无新增违规）。使用当前 CLI bundle + 安装的 Node 对实际旧 Host 复现：打印重启提示、退出码 1、无 libuv assertion。`git diff --check` 通过。分支 `codex/fix-plugin-host-404-exit`，提交 `26dc1e6d`，draft PR [#605](https://github.com/lava-chen/duya/pull/605)；等待 CI/review，尚未合并。
+
+CI follow-up（2026-11-03）：PR head `a952ce51` 的 `architecture` job 在 `bundle:verify` 失败，因为已提交的 `packages/cli/src/api/plugin-client.ts` 也是 worker bundle 输入。用 `npm run build:packages -- --target @duya/host` 与 `npm run bundle:worker` 重建并提交 worker bundle（`d4ffd1ce`）；`npm run bundle:verify` 现为 `FRESH 0/1111`。该 bundle 刷新已推到 PR #605，等待新 head CI 与 review。

@@ -42,8 +42,11 @@ export class PluginApiClient {
       const result: unknown = await response.json();
       if (!response.ok) {
         const detail = result && typeof result === 'object' && 'error' in result ? result.error : undefined;
-        const message = detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-          ? detail.message : `Duya Host returned HTTP ${response.status}`;
+        const detailMessage = detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+          ? detail.message : undefined;
+        const message = response.status === 404 && path === '/v1/plugins'
+          ? 'The connected Duya Host does not support plugin management. Restart DUYA Desktop or the Host, then retry.'
+          : detailMessage ?? `Duya Host returned HTTP ${response.status}`;
         throw new CliApiError(response.status === 404 ? 'not_found' : 'server_error', message, message, response.status);
       }
       return result as T;
