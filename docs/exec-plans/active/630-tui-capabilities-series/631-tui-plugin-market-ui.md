@@ -1,7 +1,7 @@
 # 631 TUI 插件市场管理界面
 
-状态：in review（三片已落地，PR 待推） · 负责人：codex（`codex/tui-plugin-management`） · 更新：2026-11-03
-分支：`codex/tui-plugin-management` · worktree：`.claude/worktrees/tui-plugin-management` · base：`c8c78380`（`codex/tui-plugin-display-name` / #598，叠加） · 当前 head：`b4d80d88` · owner：codex
+状态：in review（PR #601 · draft · base 叠在 #598） · 负责人：codex（`codex/tui-plugin-management`） · 更新：2026-11-03
+分支：`codex/tui-plugin-management` · worktree：`.claude/worktrees/tui-plugin-management` · base：`c8c78380`（`codex/tui-plugin-display-name` / #598，叠加） · 当前 head：`6640ccca`（已推送） · owner：codex
 
 原计划写的两个阻塞都已解除：630a 面板原语 #512 于 2026-10-27 合入 master，通用 TOML 命名空间写侧（`writeConfigNamespace`）随 #514 同批合入。本切片不再等任何分支。
 
@@ -72,18 +72,21 @@
 | 同上 | 同上 | `npm run architecture:check` | 0 | `OK — no new boundary violations`；`tolerated (baselined) 3122`；另有提示 `20 baseline fingerprint(s) no longer triggered. Re-record with --write to shrink the debt.`——上收后 Host 不再走 Desktop 的旧边界，属债务减少，本 PR 不重记 baseline |
 | 同上 | 同上 | `npm run bundle:worker` | 0 | `worker-entry.js` 4.57 MB、`BashTool/BashWorker.js` 49.96 KB；`packages/host/bundle/{worker-entry.js,BashTool/BashWorker.js,package.json,worker-metafile.json}` 4 文件在全部 bundle 输入提交完成后重跑一次，单独 `chore(host)` 提交（沿用 #598 的 `6b584883` 先例） |
 | `b4d80d88`（bundle 提交后） | 同上 | `npm run bundle:verify` | 0 | `FRESH 0/1077 bundle inputs changed after the bundle commit`；在 bundle 提交之前同一命令报 `STALE 6/1077`（6 个输入还是未提交的工作区改动），脚本按 bundle 的提交时点比对，先提交源码再提交 bundle 即闭合 |
+| `6640ccca`（全部提交完成，工作树干净） | 同上 | `npm run check:encoding` · `npm run architecture:check` · `npm run bundle:verify` · `npx vitest run` 六个本任务套件 + `apps/desktop/src/main/plugins` + `packages/command-catalog` | 0 / 0 / 0 / 0 | `no new violations (11 known)`；`OK — no new boundary violations`；`FRESH`；24 files / 302 tests passed（面板 20 + 富面板 21 + Host 写面 12 + plugin-core 22 + catalog 30 + Desktop 插件 197） |
+| 同上 | GitHub | `git push -u origin codex/tui-plugin-management` · `gh pr create --draft --base codex/tui-plugin-display-name` | 0 | [PR #601](https://github.com/lava-chen/duya/pull/601) head `6640ccca`；`gh pr checks 601` = `no checks reported`，原因是 `test.yml` 的 `pull_request` 只监听 `branches: [master]`，stacked base 不触发 run——已在 PR 评论写明，本 PR 的绿目前只到本机门禁 |
 
 `packages/capabilities/src/ModuleTool/inline-content.ts` 出现在 `git status` 里但工作区 blob 与 base 相同（纯 CRLF/stat 假象），未随本任务提交。
 
 ## 接续 / 结果
 
 已实现并提交在 `codex/tui-plugin-management`（base `c8c78380`）：
-`e8bef1e2` plugin-core 上收 · `f84b5601` Host 插件管理写面 · `31a84fd9` 面板 `Tab` 开口 · `d751264b` `/plugin` 三 tab 面板 · `b4d80d88` worker bundle 重建。
+`e8bef1e2` plugin-core 上收 · `f84b5601` Host 插件管理写面 · `31a84fd9` 面板 `Tab` 开口 · `d751264b` `/plugin` 三 tab 面板 · `b4d80d88` worker bundle 重建 · `6640ccca` 本计划更新。
+PR：**#601**（draft，base `codex/tui-plugin-display-name`，即 #598）。
 已验证：见上表；离线文件级测试覆盖 Host 写面与面板交互，未跑真机。
 
 未闭合的验收项（本 PR 不声称已完成）：
 - 「无 Electron 在场，`duya tui` 内添加本地目录市场 + `owner/repo` git 市场并装/禁/卸一轮，Desktop 打开后能看到 TUI 装的插件」——需要一次真机跑，面板与写面都只被离线测试覆盖过。
 - 「安装后退出面板提示 reload/重启会话生效」——未实现：面板 repaint，但不提示重启会话。要加就在 `showRichPanel` 的 promise settle 之后按「本次是否发生过成功的 install/uninstall」给一条 `printNotice`。
 
-下一步：推送 `codex/tui-plugin-management` 开 PR（stacked base 是 #598，`codex/tui-plugin-display-name`；#598 合入后把 base 改回 master）。推送与开 PR 需用户授权。
-阻塞：无。检出 `.claude/worktrees/631-plugin-host` 是本计划早期分配、从未使用的一个，与本任务的 `.claude/worktrees/tui-plugin-management` 无关，可在确认无 owner 后回收。
+下一步：等 #598 合入后把本 PR 的 base 改回 `master`（`gh pr edit 601 --base master`），那时才有 CI 信号——`test.yml` 的 `pull_request` 只监听 `master`，叠在 #598 上的当前形态不排 run，已在 PR 里注明。真机验收两项仍未闭合（见上）。
+阻塞：无（PR 是 draft，验收未闭合与 CI 未跑都不构成合并条件）。检出 `.claude/worktrees/631-plugin-host` 是本计划早期分配、从未使用的一个，与本任务的 `.claude/worktrees/tui-plugin-management` 无关，可在确认无 owner 后回收。
