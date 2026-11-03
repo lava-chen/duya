@@ -238,11 +238,13 @@ i18n：`packages/ui/src/i18n/en.ts` 与 `zh.ts` 同步新增 `settings.worktrees
 | 同上 | 同上 | `npm run typecheck:all` | 0 · 无 TS 错误 | 首次运行 exit 3221225477（环境崩溃），重跑通过 |
 | 同上 | 同上 | `npm run architecture:check` | 0 · OK，tolerated 3068，无新增违规 | 修复 `paths.ts ↔ settings.ts` 环：抽出 `workspace/data-root.ts` |
 | 同上 | 同上 | Playwright 走查（throwaway Vite entry + 系统 Chrome，900×900，DSF 2） | 6 张截图：light/dark × default/invalid/cleanup；无横向溢出；像素 light `255/247`、dark `30/43`；配置写入精确为 `worktreeRoot=D:/checkouts`、`worktreeAutoCleanupEnabled=false`、`worktreeKeepCount=20`；cleanup 入参 `{dryRun:false}` 且仅 1 次 | 截图 `%TEMP%/wt-shots`；harness 已删除 |
+| `4a2e7b8f`（合并 `origin/master` `96121161`） | 同上 | `npx vitest run packages/host/tests/workspace packages/host/tests/checkout-identity.test.ts packages/ui/src/components/settings apps/desktop/src/main/config/__tests__/store-port.test.ts` | 0 · 32 files passed / 1 skipped；227 passed / 5 skipped | 仅 `docs/exec-plans/README.md` 冲突（保留两行） |
+| 同上 | 同上 | `npm run typecheck:all` / `npm run architecture:check` | 0 · 无 TS 错误；架构 OK，tolerated 3072，无新增违规 | 合并后复验 |
 
 ## 接续 / 结果
 
-下一步：无（P1–P6 完成）。提交与 PR 未执行，等待用户授权；`docs/exec-plans/` 在 `.gitignore`，提交本计划需 `git add -f`。
-回收：未回收；分支 `worktree-settings`，worktree 保留。
+下一步：PR #594 等待 review 与 CI；合并需用户授权。`docs/exec-plans/` 在 `.gitignore`，后续提交本计划仍需 `git add -f`。
+回收：未回收；分支 `codex/worktree-settings`，worktree `.claude/worktrees/worktree-settings` 保留。
 
 已知限制（明确未验）：
 - 真机走查用 throwaway Vite 渲染真实组件 + 配置端口 stub，未在 Electron 内点击真实配置总线与 IPC/worker 链路；该链路由 `store-port` 与 Host 测试覆盖，但仍建议集成前在 Electron 里点一次。
