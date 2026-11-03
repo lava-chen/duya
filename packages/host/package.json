@@ -43,6 +43,10 @@
       "types": "./dist/session-service.d.ts",
       "import": "./dist/session-service.js"
     },
+    "./project/*": {
+      "types": "./dist/project/*.d.ts",
+      "import": "./dist/project/*.js"
+    },
     "./local-session-api": {
       "types": "./dist/local-session-api.d.ts",
       "import": "./dist/local-session-api.js"
@@ -178,6 +182,10 @@
     "./project-api": {
       "types": "./dist/project-api.d.ts",
       "import": "./dist/project-api.js"
+    },
+    "./session-input-api": {
+      "types": "./dist/session-input-api.d.ts",
+      "import": "./dist/session-input-api.js"
     },
     "./research-api": {
       "types": "./dist/research-api.d.ts",
@@ -634,6 +642,10 @@
     "./worker-process-entry": {
       "types": "./dist/worker-process-entry.d.ts",
       "import": "./dist/worker-process-entry.js"
+    },
+    "./plugins/*": {
+      "types": "./dist/plugins/*.d.ts",
+      "import": "./dist/plugins/*.js"
     }
   },
   "files": [
@@ -666,7 +678,8 @@
     "picomatch": "^4.0.4",
     "yaml": "^2.9.0",
     "esbuild": "^0.27.7",
-    "playwright": "^1.59.1"
+    "playwright": "^1.59.1",
+    "@duya/connectors": "0.1.0"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.3",

@@ -31,6 +31,11 @@ export interface AgentProfile {
   promptSystem?: 'general' | 'code' | 'research' | 'gateway' | (string & {});
   /** Preset-only identity prompt that replaces the generic agent identity. */
   identityPrompt?: string;
+  /**
+   * Skip the runtime's identity block because the profile's prompt system
+   * already opens with its own identity section. Preset-only.
+   */
+  suppressIdentityBlock?: boolean;
   /** Additional instructions loaded from config for custom agents. */
   globalInstructions?: string;
   /** Whether this profile is selectable by users. */

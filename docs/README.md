@@ -23,5 +23,7 @@
 
 ## 新文档放哪里
 
+Bot / Session Runtime 的跨包迁移由[计划总入口](exec-plans/backlog/2026-11-01-bot-session-coordination.md)导航；exec-plans/backlog/bot-session-runtime/ 保存该系列的包/协议合同与模块实施卡，产品代码尚未实施。
+
 先找现有主题并更新；独立主题才新建。按文档用途选择上表目录，不按 agent 名称或工具品牌建平行体系。
 根目录只保留地图和规则。写作、命名、归档和链接检查见 [AGENTS.md](AGENTS.md)。

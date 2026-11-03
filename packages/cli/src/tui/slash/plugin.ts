@@ -1,3 +1,4 @@
+import { runPluginManagement } from './plugin-management.js';
 /**
  * packages/cli/src/tui/slash/plugin.ts
  *
@@ -225,7 +226,8 @@ const PLUGIN_COMMAND: TuiSlashCommandDef = {
   name: 'plugin',
   description: 'List the installed plugins',
   group: 'Session info',
-  async run(ctx: TuiSlashContext) {
+  async run(ctx: TuiSlashContext, args: string) {
+    if (await runPluginManagement(ctx, args ?? '')) return { kind: 'handled' };
     // The Host's inventory route lands `listPlugins` on the client. A client
     // without it cannot answer, and the command says so rather than calling
     // into nothing.

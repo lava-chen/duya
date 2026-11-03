@@ -37,6 +37,7 @@
  */
 
 import { backgroundParameterFor, colorFromTagBody, sgrParameterFor } from '../../core/color.js';
+import { decodeHyperlinkTag, safeHyperlink } from '../../core/span.js';
 
 /**
  * Attribute tags. `bold` is measured against blessed 0.1.81; `italic` (SGR 3)
@@ -61,9 +62,10 @@ interface Style {
   readonly fg: string | null;
   /** An SGR background parameter, e.g. `40` or `48;5;236`. */
   readonly bg: string | null;
+  readonly linkId: string | null;
 }
 
-const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null, bg: null };
+const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null, bg: null, linkId: null };
 
 /** The SGR parameters for a style, in the order blessed emits them. */
 function sgrParameters(style: Style): string[] {
@@ -90,15 +92,18 @@ const TAG = /\{(\/?)([a-zA-Z0-9#_-]+)\}/g;
  * the hyphenated spelling used to silently drop the whole bright palette.
  */
 function openingTag(body: string): Style | null {
-  const attribute = ATTRIBUTES[body];
+  const normalized = body.toLowerCase();
+  const attribute = ATTRIBUTES[normalized];
   if (attribute !== undefined) {
-    return { bold: body === 'bold', italic: body === 'italic', strike: body === 'strike', fg: null, bg: null };
+    return { bold: normalized === 'bold', italic: normalized === 'italic', strike: normalized === 'strike', fg: null, bg: null, linkId: null };
   }
+  const linkId = decodeHyperlinkTag(body);
+  if (linkId !== undefined) return { ...PLAIN, linkId };
   // A `-bg` body fills the cell behind the text; anything else is a
   // foreground. The two slots are independent, so a band can carry coloured
   // text inside it.
-  const background = body.endsWith('-bg');
-  const color = colorFromTagBody(body, background ? 'bg' : 'fg');
+  const background = normalized.endsWith('-bg');
+  const color = colorFromTagBody(normalized, background ? 'bg' : 'fg');
   if (color === undefined) return null;
   return {
     bold: false,
@@ -106,6 +111,7 @@ function openingTag(body: string): Style | null {
     strike: false,
     fg: background ? null : sgrParameterFor(color),
     bg: background ? backgroundParameterFor(color) : null,
+    linkId: null,
   };
 }
 
@@ -116,14 +122,16 @@ function effective(stack: readonly Style[]): Style {
   let strike = false;
   let fg: string | null = null;
   let bg: string | null = null;
+  let linkId: string | null = null;
   for (const frame of stack) {
     if (frame.bold) bold = true;
     if (frame.italic) italic = true;
     if (frame.strike) strike = true;
     if (frame.fg !== null) fg = frame.fg;
     if (frame.bg !== null) bg = frame.bg;
+    if (frame.linkId !== null) linkId = frame.linkId;
   }
-  return { bold, italic, strike, fg, bg };
+  return { bold, italic, strike, fg, bg, linkId };
 }
 
 /**
@@ -148,6 +156,7 @@ export function renderMarkup(line: string): string {
   let pending: Style = PLAIN;
   /** The style the terminal is actually in, or null if nothing is styled yet. */
   let written: Style | null = null;
+  let activeLink: string | null = null;
   let out = '';
   let cursor = 0;
 
@@ -157,6 +166,12 @@ export function renderMarkup(line: string): string {
 
   /** Emit the transition into `pending`, if there is one to make. */
   const settle = (): void => {
+    const nextLink = safeHyperlink(pending.linkId ?? undefined);
+    if (nextLink !== activeLink) {
+      if (activeLink !== null) out += '\x1b]8;;\x1b\\';
+      if (nextLink !== null) out += `\x1b]8;;${nextLink}\x1b\\`;
+      activeLink = nextLink;
+    }
     if (
       written !== null &&
       written.bold === pending.bold &&
@@ -164,6 +179,7 @@ export function renderMarkup(line: string): string {
       written.strike === pending.strike &&
       written.fg === pending.fg &&
       written.bg === pending.bg
+      && written.linkId === pending.linkId
     ) {
       return;
     }
@@ -187,7 +203,7 @@ export function renderMarkup(line: string): string {
   let match = TAG.exec(line);
   while (match !== null) {
     const [raw, slash, body] = match;
-    const opening = openingTag(body.toLowerCase());
+    const opening = openingTag(body);
 
     // Whatever sits between the previous tag and this one is content, and it
     // inherits the style that was in effect when it started. Emitted HERE,
@@ -227,6 +243,7 @@ export function renderMarkup(line: string): string {
   // end with two resets. Asked through the helper because TypeScript cannot
   // track `written` through the closures above and narrows it to `never` here.
   if (isStyled()) out += '\x1b[m';
+  if (activeLink !== null) out += '\x1b]8;;\x1b\\';
   return out;
 }
 

@@ -23,6 +23,8 @@ import { expandPath } from '../utils/path.js';
 import { isPathWithinRoots } from '@duya/sandbox';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { withFileSnapshot } from '../file-snapshot.js';
+import { buildFileDiff } from '../file-diff.js';
+import { TOOL_FILE_DIFF_METADATA_KEY } from '@duya/agent-protocol/tool-file-diff';
 import { computeContentSha, recordFileRead } from '../file-read-state.js';
 
 // ============================================================
@@ -135,7 +137,10 @@ export class WriteTool extends BaseTool {
   });
 
   extractWritePaths(input: Record<string, unknown>): readonly string[] {
-    const path = input.path;
+    // The schema names the field `file_path`; reading `path` found nothing,
+    // so every write reported an unknown path and the orchestrator could not
+    // order two writes to the same file.
+    const path = input.file_path;
     return typeof path === 'string' && path.length > 0 ? [path] : UNKNOWN_PATHS;
   }
 
@@ -211,7 +216,7 @@ export class WriteTool extends BaseTool {
           }
         }
 
-        const { value: result } = await withFileSnapshot(absolutePath, async (preImageSha) => {
+        const { value: result } = await withFileSnapshot(absolutePath, async (preImageSha, preImageText) => {
           await writeFile(absolutePath, content, encoding as BufferEncoding);
 
           // Record the observed state so a following edit in the same
@@ -239,6 +244,14 @@ export class WriteTool extends BaseTool {
             lineCount,
           };
           if (preImageSha) metadata.preImageSha = preImageSha;
+          // A write that replaces an existing file is a real change, and the
+          // pre-image is right here: the snapshot already read it.
+          const fileDiff = buildFileDiff({
+            path: absolutePath,
+            oldText: preImageText ?? '',
+            newText: content,
+          });
+          if (fileDiff) metadata[TOOL_FILE_DIFF_METADATA_KEY] = [fileDiff];
           return {
             id,
             name: this.name,

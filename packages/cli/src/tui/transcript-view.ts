@@ -66,6 +66,7 @@ import { splitStreamCommit } from './stream-commit.js';
 import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
   formatToolResult,
+  isExitCodeLine,
   isLocalShellTool,
   isShellTool,
   LOCAL_SHELL_FAMILY,
@@ -74,8 +75,16 @@ import {
   toolGroupKey,
 } from './tool-render.js';
 import { capLines, codePointWidth, truncateToWidth, visibleWidth, wrapWithCursor } from './width.js';
-import { DARK_THEME_TAGS, type ThemeTags } from './theme.js';
+import {
+  formatTaskDuration,
+  subagentIdentityParts,
+  type SubagentCard,
+  type SubagentSpec,
+} from './subagent.js';
+import { DARK_THEME_TAGS, type ThemeTags, type ThemeToken } from './theme.js';
+import { fileDiffCounts, isStreamingFileTool, renderFileDiffRows, renderStreamingFileRows } from './file-diff-view.js';
 import { escapeTags } from './markdown/escape.js';
+import { highlightBash, highlightBashLine, type BashRole, type BashToken } from './bash-highlight.js';
 import {
   rawTagPair,
   spanRolesOf,
@@ -86,7 +95,7 @@ import {
 } from './markdown/inline.js';
 import { wrapAtoms, wrapSpans } from './markdown/wrap.js';
 import { colorFromTagBody } from './core/color.js';
-import { spanText, tokensToSpans, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
+import { spanText, tokensToSpans, attrs, PLAIN_STYLE, type SpanStyle, type StyledSpan } from './core/span.js';
 
 export { escapeTags } from './markdown/escape.js';
 
@@ -163,6 +172,17 @@ export interface RenderOptions {
    * blocks become components. Absent means revision 0 for every block.
    */
   readonly componentRevisions?: ReadonlyMap<string, number>;
+  /**
+   * Rows the surface can rewrite in place.
+   *
+   * A row that leaves the live area is committed to the terminal's scrollback
+   * for good, so a block that is still changing must stay inside this many
+   * rows or its top rows freeze mid-change. The streaming preview of a file
+   * write is bounded by it. Omitted means "unknown", and the preview then
+   * shows its count and nothing else — a block that cannot prove it fits
+   * must not pretend it does.
+   */
+  readonly liveRows?: number;
 }
 
 export const DEFAULT_RENDER_OPTIONS: RenderOptions = {
@@ -826,6 +846,53 @@ function toolDisclosure(
 }
 
 /**
+ * The theme token behind each role of a highlighted command.
+ *
+ * The mapping is the whole palette decision: `program` is the thing being run
+ * (accent, bold), `flag` is an option (warning), `string` is quoted text
+ * (success), `operator` is shell punctuation (thinking) and `variable` is an
+ * expansion (heading). `plain` is deliberately absent — an argument takes the
+ * terminal's own foreground, which is what makes the coloured parts read as
+ * coloured rather than the grey ones read as broken.
+ */
+const BASH_ROLE_TOKENS: Readonly<Record<BashRole, ThemeToken | null>> = {
+  program: 'accent',
+  flag: 'warning',
+  string: 'success',
+  operator: 'thinking',
+  variable: 'heading',
+  comment: 'muted',
+  plain: null,
+};
+
+/** Paint one already-tokenized command line. */
+function paintCommandTokens(tokens: readonly BashToken[], styles: Styles): string {
+  const view = tagViewOf(styles);
+  const spans: StyledSpan[] = tokens.map((token) => {
+    const name = BASH_ROLE_TOKENS[token.role];
+    const fg = name === null ? undefined : colorFromTagBody(styles.tags[name]);
+    return {
+      text: token.text,
+      ...(fg === undefined ? {} : { fg }),
+      // The program is the one word a reader looks for; bold is what makes it
+      // findable without giving it a colour no other role can share.
+      ...(token.role === 'program' ? { attrs: attrs('bold') } : {}),
+    };
+  });
+  return spansToTags(spans, view);
+}
+
+/** Paint one line of a shell command. */
+function paintCommand(line: string, styles: Styles): string {
+  return paintCommandTokens(highlightBashLine(line), styles);
+}
+
+/** Paint every line of a shell command. */
+function paintCommandLines(command: string, styles: Styles): string[] {
+  return highlightBash(command).map((tokens) => paintCommandTokens(tokens, styles));
+}
+
+/**
  * The body of a shell tool: maybe an evidence line, then the output.
  *
  * The evidence line repeats the command only when the row's preview is CLIPPED
@@ -857,7 +924,10 @@ function shellBody(
   // When the preview IS the whole command there is nothing to add: repeating it
   // printed the same string twice, once in the label and once under it.
   if (command !== undefined && block.preview !== command) {
-    lines.push(`${indent}${styles.accent('$')} ${escapeTags(command)}`);
+    paintCommandLines(command, styles).forEach((row, index) => {
+      const sigil = index === 0 ? `${styles.accent('$')} ` : '  ';
+      lines.push(`${indent}${sigil}${row}`);
+    });
   }
   // A shell command that PRINTS a diff (`git diff`, patch output) keeps its
   // colours — the selection is the same text the generic path would have seen,
@@ -866,7 +936,12 @@ function shellBody(
     lines.push(...renderCodeBlock('diff', selected, styles).split('\n').map((line) => `${indent}${line}`));
     return lines;
   }
-  for (const line of selected) lines.push(`${indent}${styles.muted(line)}`);
+  for (const line of selected) {
+    // The exit code is the one line of output that is a FACT about the run
+    // rather than the run's text, so it takes the error colour instead of
+    // dissolving into the muted body around it.
+    lines.push(`${indent}${isExitCodeLine(line) ? styles.error(line) : styles.muted(line)}`);
+  }
   return lines;
 }
 
@@ -878,6 +953,17 @@ function plainBody(
   styles: Styles,
   indent: string,
 ): string[] {
+  // A file change draws its diff instead of the prose the tool returned. The
+  // prose is still there — the model reads it — but on screen the change set
+  // is what the reader came for, and it is the only part with line numbers.
+  if (block.diff !== undefined && block.diff.length > 0) {
+    const rows = renderFileDiffRows(block.diff, block.failures, {
+      tags: styles.tags,
+      ...(options.width === undefined ? {} : { width: options.width }),
+      indentWidth: visibleWidth(indent),
+    });
+    return rows.map((line) => `${indent}${line}`);
+  }
   // An error gets double the budget: the message the reader needs is usually
   // at the end of the report (minimax-code's preview budget does the same).
   const budget = block.status === 'error' ? options.toolResultLines * 2 : options.toolResultLines;
@@ -1001,16 +1087,130 @@ function toolNodeRow(
   if (isTodoTool(block.name)) {
     return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
   }
+  // A subagent spawn is a CHILD AGENT, not a call with a prompt: the row says
+  // who it is, what role it plays and what it is spending. See
+  // `subagentIdentityRow`.
+  if (block.subagent !== undefined) {
+    const mark = toolStatusMark(block.status, styles);
+    return `${connector} ${mark} ${subagentIdentityRow(block, styles)}${subagentSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
+  }
   // A command the USER ran is not the agent's tool call, and it says so: the
   // reader must never have to guess whose command produced the output. The
   // wording is codex's ("You ran"), the body is the ordinary shell body.
   if (isLocalShellTool(block.name)) {
-    const target = block.preview === '' ? '' : ` ${escapeTags(block.preview)}`;
+    const target = block.preview === '' ? '' : ` ${paintCommand(block.preview, styles)}`;
     const label = `${styles.bold('You ran')}${target}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
+  }
+  // A shell call names the tool AND shows its command highlighted: the row is
+  // what the reader scans while the run streams, so the command it ran is the
+  // part that has to be legible at a glance.
+  if (isShellTool(block.name) && block.preview !== '') {
+    const label = `${styles.bold(block.name)}(${paintCommand(block.preview, styles)})`;
     return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
   }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/**
+ * `Robie [explorer] (gpt-5 high)` — who a subagent is, in one run of colour.
+ *
+ * The three parts are three DIFFERENT questions and are painted as three
+ * different things, which is the whole point of the row:
+ *
+ *  - the NAME in the accent colour, because it is the handle the reader will
+ *    match against `/subagents` and against the agent's own messages;
+ *  - the ROLE in `[brackets]`, muted, because it is a classification and not a
+ *    name — `explorer` and `Robie` would otherwise read as two agents;
+ *  - the BUDGET in `(parentheses)`, in the thinking colour, because `(gpt-5
+ *    high)` is the only place in the transcript where a child's model and
+ *    effort are visible at all.
+ *
+ * The parts are dropped when absent rather than printed empty: a call that
+ * asked for no model inherits the parent's, and `(inherit)` would be six
+ * columns of a non-fact.
+ *
+ * Returned as a PLAIN + TAGGED pair because the caller has to fit it to a
+ * column budget and a tagged string cannot be measured or cut: the tag body is
+ * eleven characters to a naive length and no columns to the terminal.
+ */
+function subagentIdentity(
+  spec: SubagentSpec,
+  id: string,
+  styles: Styles,
+): { plain: string; tagged: string } {
+  const parts = subagentIdentityParts(spec, id);
+  const rolePlain = parts.role === '' ? '' : ` [${parts.role}]`;
+  const spendPlain = parts.budget === '' ? '' : ` (${parts.budget})`;
+  const tagged = `${styles.accent(parts.name)}`
+    + (rolePlain === '' ? '' : ` ${styles.muted(rolePlain.trimStart())}`)
+    + (spendPlain === '' ? '' : ` ${styles.thinking(`(${parts.budget})`)}`);
+  return { plain: `${parts.name}${rolePlain}${spendPlain}`, tagged };
+}
+
+/** The identity run of a transcript card. */
+function subagentIdentityRow(
+  block: Extract<Block, { kind: 'tool' }>,
+  styles: Styles,
+): string {
+  const card = block.subagent;
+  if (card === undefined) return '';
+  // `subagentId` only exists once `subagent.started` linked itself to this
+  // call; until then the CALL id is the disambiguator, and it is available
+  // from the first frame — which is what keeps two unnamed spawns apart during
+  // the window before either reports in.
+  return subagentIdentity(card.spec, card.subagentId ?? block.callId, styles).tagged;
+}
+
+/**
+ * ` · 1m 03s` once the child reported; ` · failed` when it reported that.
+ *
+ * A duration is only printed when the child itself reported one. Deriving it
+ * from the parent's clock would print the time since the CALL started, which
+ * for a background agent includes the whole turn it was spawned in.
+ */
+function subagentSuffix(block: Extract<Block, { kind: 'tool' }>, styles: Styles): string {
+  const card = block.subagent;
+  if (card === undefined) return '';
+  if (card.outcome === 'failed' || card.outcome === 'cancelled') {
+    return ` · ${card.outcome}`;
+  }
+  if (card.durationMs === undefined) return '';
+  return ` · ${formatTaskDuration(card.durationMs)}`;
+}
+
+/**
+ * Rows under a spawn: the brief, then the child's answer when it is shown.
+ *
+ * The brief is NOT behind the disclosure. It is the row's second half — "Robie
+ * is an explorer" says nothing until you know what Robie was asked — and a
+ * spawn whose brief is folded away is an agent the reader cannot identify. The
+ * RESULT is behind the disclosure like any other tool body, because that is
+ * what the fold is for: the answer can be hundreds of lines.
+ */
+function subagentBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  card: SubagentCard,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  const lines: string[] = [];
+  const brief = card.spec.brief;
+  if (brief !== '') {
+    const budget = options.width === undefined ? undefined : Math.max(1, options.width - indent.length);
+    const text = budget === undefined ? brief : truncateToWidth(brief, budget);
+    lines.push(`${indent}${styles.muted(text)}`);
+  }
+  if (!toolBodyAllowed(options, block.id)) return lines;
+  const result = block.result?.trimEnd() ?? '';
+  if (block.status === 'running' || result.trim() === '') return lines;
+  const isExpanded = blockExpanded(block.id, options);
+  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
+    (options.showToolResults || isExpanded);
+  if (!showDetails) return lines;
+  return [...lines, ...toolBody(block, result, options, styles, indent)];
 }
 
 /**
@@ -1114,7 +1314,12 @@ function groupChildRow(
   styles: Styles,
 ): string {
   const target = block.preview === '' ? block.name : block.preview;
-  return `${plan.rowPrefix}${styles.muted(escapeTags(target))}${toolDisclosureOf(block, options, styles)}`;
+  // A shell command is the one target worth colouring: it is code the reader
+  // scans for a program and a flag, not a path they read as a whole.
+  const painted = isShellTool(block.name)
+    ? paintCommand(target, styles)
+    : styles.muted(escapeTags(target));
+  return `${plan.rowPrefix}${painted}${toolDisclosureOf(block, options, styles)}`;
 }
 
 /**
@@ -1130,6 +1335,22 @@ function toolBodyAllowed(options: RenderOptions, id: string): boolean {
   return options.expanded || options.expandedBlockIds?.has(id) === true;
 }
 
+/**
+ * How many rows a tool's body would actually put on screen.
+ *
+ * `[+ N lines]` has to promise the number the reader gets when they expand. For
+ * a raw result that is the raw line count, but a subagent's result is a JSON
+ * receipt the body REWRITES into a short report — one physical line in, a dozen
+ * rows out — so counting the raw text would understate the fold by an order of
+ * magnitude. The formatter is run here for exactly that case, and nowhere else:
+ * a grep report's line count is its own, and re-formatting every tool to count
+ * would spend the render budget of tools that never needed it.
+ */
+function countReportLines(block: Extract<Block, { kind: 'tool' }>, result: string): number {
+  const body = block.subagent === undefined ? result : formatToolResult(block.name, result);
+  return body.trim().split(/\r?\n/u).length;
+}
+
 /** `[-]` / `[+ N lines]` for one tool call. */
 function toolDisclosureOf(
   block: Extract<Block, { kind: 'tool' }>,
@@ -1142,7 +1363,15 @@ function toolDisclosureOf(
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
-  const resultLines = result.trim().split(/\r?\n/u).length;
+  // A file change's size is the CHANGE's size, not the prose's line count:
+  // `[+ 3 lines]` on a 200-line rewrite says nothing about the rewrite, while
+  // `(+200 -0)` says exactly what happened.
+  const counts = block.diff === undefined ? null : fileDiffCounts(block.diff);
+  if (counts !== null) {
+    const size = `${styles.diffAdd(`+${counts.added}`)} ${styles.diffDel(`-${counts.removed}`)}`;
+    return showDetails ? `${size} ${styles.muted('[-]')}` : size;
+  }
+  const resultLines = countReportLines(block, result);
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
   return toolDisclosure(true, resultLines, showDetails, styles, unit);
 }
@@ -1191,7 +1420,11 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
       // Two todo writes are two DIFFERENT lists, not two calls of one batch:
       // the second is the state AFTER the first. Batching them would hide the
       // second list behind a `todo 2 calls` header.
-      const batchable = !isTodoTool(block.name);
+      //
+      // A subagent spawn is not batchable either, for a different reason: the
+      // batch header names the VERB (`task 3 calls`), which erases the three
+      // names, roles and budgets that are the entire point of those rows.
+      const batchable = !isTodoTool(block.name) && block.subagent === undefined;
       let end = index;
       while (batchable && end + 1 < blocks.length) {
         const next = blocks[end + 1];
@@ -1283,6 +1516,42 @@ export function planKey(plan: BlockPlan): string {
 }
 
 /** The rows under a node's own row: a tool result or a thinking preview. */
+/**
+ * The body of a call whose arguments are still arriving.
+ *
+ * A file write's text lives in the arguments, so while they stream the reader
+ * can watch the file being written instead of staring at an empty row.
+ *
+ * The preview's height is bounded by the live area. A row that leaves the live
+ * area is committed to the terminal's scrollback for good, so an unbounded
+ * preview would freeze half-written rows in the user's history — and the
+ * preview is the only thing that changes while the call runs.
+ */
+function streamingFileBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  if (block.argumentText === undefined || block.argumentText === '') return [];
+  if (!isStreamingFileTool(block.name)) return [];
+  // Three rows of the live area are already spoken for before any content
+  // arrives: the stanza gap above this block, the call's own row, and the
+  // summary line below it. A terminal too short to hold those three cannot
+  // show a preview at all — drawing one would push its top row out of the live
+  // area and freeze a half-written file into the scrollback.
+  const liveRows = options.liveRows;
+  if (liveRows !== undefined && liveRows < 3) return [];
+  const maxRows = liveRows === undefined ? 0 : Math.min(12, liveRows - 3);
+  const rows = renderStreamingFileRows(block.name, block.argumentText, {
+    tags: styles.tags,
+    ...(options.width === undefined ? {} : { width: options.width }),
+    indentWidth: visibleWidth(indent),
+    maxRows,
+  });
+  return rows.map((line) => `${indent}${line}`);
+}
+
 function nodeBody(
   block: Block,
   plan: BlockPlan,
@@ -1293,6 +1562,11 @@ function nodeBody(
     return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
+  // A spawn draws its brief before any of the ordinary body rules apply: the
+  // brief identifies the agent, so it is not "content behind a fold".
+  if (block.subagent !== undefined) {
+    return subagentBody(block, block.subagent, options, styles, plan.bodyIndent);
+  }
   // `names` folds every tool body, a todo list included: the row above already
   // says `Todo list 2/4`, which is the same fact in fewer lines.
   if (!toolBodyAllowed(options, block.id)) return [];
@@ -1306,7 +1580,13 @@ function nodeBody(
   }
 
   const result = block.result?.trimEnd() ?? '';
-  if (block.status === 'running' || result.trim() === '') return [];
+  if (block.status === 'running') {
+    // A call that is still being written shows what it is writing. The
+    // preview is bounded by the live area, because a block that scrolls out
+    // while it is still changing keeps its frozen half-written rows forever.
+    return streamingFileBody(block, options, styles, plan.bodyIndent);
+  }
+  if (result.trim() === '') return [];
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
@@ -1658,7 +1938,11 @@ function renderPlainBlock(block: Block, options: RenderOptions, styles: Styles):
       // error they will hit again next turn.
       return styles.error(`✗ ${block.message}`);
     case 'notice':
-      return styles.muted(block.text);
+      return options.width === undefined
+        ? styles.muted(block.text)
+        : wrapWithCursor(block.text, Math.max(1, options.width), 0).rows
+          .map((line) => styles.muted(line))
+          .join('\n');
     // Node kinds are drawn by the trail; render them standalone here.
     case 'thinking':
     case 'tool':

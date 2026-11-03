@@ -285,6 +285,11 @@ export class AgentProcessPool {
         const child: ChildProcess = spawn(runtime.command, runtime.args, {
           stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
           env: runtime.env,
+          // The agent server can be a console program (`node` in dev builds);
+          // the Electron main process has no console, so without this Windows
+          // opens one for the child and the user sees a terminal window per
+          // session.
+          windowsHide: true,
         });
 
         const runningProcess: RunningProcess = {

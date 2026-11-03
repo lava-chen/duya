@@ -22,11 +22,24 @@ import {
   type FooterInput,
 } from '../footer.js';
 import { DARK_THEME_TAGS } from '../theme.js';
+import { encodeHyperlinkTag } from '../core/span.js';
 import { permissionBadge } from '../permission-mode.js';
+import type { PrBadge } from '../pr-badge.js';
 import { stylesOf } from '../transcript-view.js';
+import { lineToAnsi } from '../terminal/line.js';
 import { visibleWidth } from '../width.js';
 
 const styles = stylesOf({ theme: DARK_THEME_TAGS });
+
+/** The badge the Host observed for the session under test. */
+const PR_BADGE: PrBadge = {
+  repo: 'lava-chen/duya',
+  prNumber: 123,
+  state: 'open',
+  url: 'https://github.com/lava-chen/duya/pull/123',
+  observedAt: 1_700_000_000_000,
+  label: 'PR #123',
+};
 
 function footer(patch: Partial<FooterInput> = {}): string[] {
   return buildFooterLines({
@@ -129,6 +142,59 @@ describe('readGitBranch', () => {
 });
 
 describe('buildFooterLines', () => {
+  it('supports compact, location-only and usage-only layouts', () => {
+    const compact = footer({ statusline: 'compact' }).map(plain).join(' ');
+    expect(compact).toContain('E:\\Projects\\duya');
+    expect(compact).toContain('↑49k');
+    expect(compact).toContain('deepseek-flash');
+    expect(compact).not.toContain('(master)');
+    const location = footer({ statusline: 'location' }).map(plain).join(' ');
+    expect(location).toContain('(master)');
+    expect(location).not.toContain('↑49k');
+    const usage = footer({ statusline: 'usage' }).map(plain).join(' ');
+    expect(usage).toContain('↑49k');
+    expect(usage).not.toContain('E:\\Projects\\duya');
+  });
+
+  it('shows the pull request badge between the path and the session name', () => {
+    const row = plain(footer({
+      sessionName: 'pr-badge',
+      pullRequest: PR_BADGE,
+    })[0] ?? '');
+    expect(row).toContain('E:\\Projects\\duya (master) • PR #123 • pr-badge');
+  });
+
+  it('paints the badge by the state the Host observed', () => {
+    const failing = footer({ pullRequest: { ...PR_BADGE, state: 'checks_failing' } })[0] ?? '';
+    expect(failing).toContain('{bright-red-fg}PR #123{/bright-red-fg}');
+    const merged = footer({ pullRequest: { ...PR_BADGE, state: 'merged' } })[0] ?? '';
+    expect(merged).toContain('{bright-green-fg}PR #123{/bright-green-fg}');
+  });
+
+  it('links the badge only when the terminal can carry a hyperlink', () => {
+    const linked = footer({ pullRequest: PR_BADGE, hyperlinks: true })[0] ?? '';
+    expect(linked).toContain(`{${encodeHyperlinkTag(PR_BADGE.url ?? '')}}`);
+    const unlinked = footer({ pullRequest: PR_BADGE, hyperlinks: false })[0] ?? '';
+    expect(unlinked).not.toContain('link-');
+  });
+
+  it('keeps the badge out of the narrow profiles', () => {
+    const compact = plain(footer({ statusline: 'compact', pullRequest: PR_BADGE })[0] ?? '');
+    expect(compact).not.toContain('PR #123');
+    const location = plain(footer({ statusline: 'location', pullRequest: PR_BADGE })[0] ?? '');
+    expect(location).toContain('PR #123');
+  });
+
+  it('carries the badge link through to the terminal bytes', () => {
+    const row = footer({ pullRequest: PR_BADGE, hyperlinks: true })[0] ?? '';
+    const ansi = lineToAnsi(row);
+    const open = ansi.indexOf('\u001b]8;;https://github.com/lava-chen/duya/pull/123\u001b\\');
+    const close = ansi.indexOf('\u001b]8;;\u001b\\', open + 1);
+    expect(open).toBeGreaterThan(0);
+    // The link covers the badge only: it is closed before the rest of the row.
+    expect(close).toBeGreaterThan(open);
+  });
+
   it('renders exactly two rows', () => {
     expect(footer()).toHaveLength(2);
   });

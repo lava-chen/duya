@@ -81,6 +81,24 @@ export class TurnQueue {
     return [...this.pending];
   }
 
+  /**
+   * The drafts that are still WAITING for a turn to carry them.
+   *
+   * A `steer` is deliberately absent even though it is still in `pending` for
+   * bookkeeping: it has already been handed over. The Host holds its mailbox
+   * row, and the controller echoed the text into the transcript at submit
+   * time — so listing it under the composer repeated a message the user had
+   * already sent, in the one place that means "not sent yet". It stays queued
+   * here only so the next turn can ask the Host whether the row was claimed
+   * (see `runTurn`); that is bookkeeping, not something to paint.
+   *
+   * Codex's pending-steer preview drops a steer the moment the server commits
+   * it. In duya the echo IS that moment, so this preview never shows one.
+   */
+  get waiting(): readonly PendingDraft[] {
+    return this.pending.filter((draft) => draft.mode === 'queue');
+  }
+
   submit(text: string, options: SubmitDraftOptions = {}): void {
     if (this.closed || text.trim() === '') return;
     // A fresh input after interruption is an explicit new intent. Older queued

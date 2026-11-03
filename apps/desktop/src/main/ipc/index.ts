@@ -18,6 +18,7 @@ import { registerAgentServerHandlers } from './agent-server-handlers';
 import { registerRecapHandlers } from './recap-handlers';
 import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectEntityHandlers } from './project-entity-handlers';
+import { registerProjectWorkspaceHandlers } from './project-workspace-handlers';
 import { registerGitHandlers } from './git-handlers';
 import { registerWorkspaceLifecycleHandlers } from './workspace-lifecycle-handlers';
 import { registerMemoryWakeupHandlers } from './memory-wakeup';
@@ -58,6 +59,7 @@ export {
   registerRecapHandlers,
   registerPluginHandlers,
   registerProjectEntityHandlers,
+  registerProjectWorkspaceHandlers,
   registerGitHandlers,
   registerWorkspaceLifecycleHandlers,
   registerMemoryWakeupHandlers,

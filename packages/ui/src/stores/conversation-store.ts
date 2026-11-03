@@ -104,7 +104,12 @@ export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
 export type ProjectGroupBy = 'byProject' | 'byDate';
 
 // View types for state-driven UI
-export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'apps' | 'extensions' | 'projects' | 'workflow';
+//
+// `project` is the Project-first surface: the project's coordinator
+// conversation in the middle, with the project's tasks and working sessions
+// beside it. It is a view of its own and not a chat mode, because a project
+// is not a session — the coordinator is one session inside it.
+export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'automation' | 'agents' | 'apps' | 'extensions' | 'projects' | 'project' | 'workflow';
 // Plan 205: sub-views inside the `providers` settings tab.
 // `provider-picker` lists the preset cards; `provider-edit` shows
 // the inline edit form for the chosen preset (create) or existing
@@ -171,6 +176,16 @@ interface ConversationState {
    */
   archivedThreads: Thread[];
   activeThreadId: string | null;
+  /**
+   * The project the user is inside, when the current view is the project
+   * workspace.
+   *
+   * Navigation state, and it lives here rather than in the project store
+   * because this store is the one that is persisted: a restart must land the
+   * user back in the project they were in, with the coordinator conversation
+   * and the project's work beside it.
+   */
+  activeProjectId: string | null;
   messages: Record<string, Message[]>;
   isHydrated: boolean;
   projects: ProjectGroup[];
@@ -230,6 +245,8 @@ interface ConversationState {
    *  mount and after any archive/unarchive round-trip. */
   loadArchivedThreads: () => Promise<void>;
   setActiveThread: (id: string) => void;
+  /** The project the user is inside, or null when they are not. */
+  setActiveProject: (projectId: string | null) => void;
   goToParentSession: () => void;
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean; syncTitle?: boolean; updateTitle?: boolean }) => void;
   clearMessages: (threadId: string) => void;
@@ -733,6 +750,7 @@ export const useConversationStore = create<ConversationState>()(
       // the sidebar section hides itself when this is empty.
       archivedThreads: [],
       activeThreadId: null,
+      activeProjectId: null,
       messages: {},
       isHydrated: false,
       projects: [],
@@ -1098,6 +1116,10 @@ export const useConversationStore = create<ConversationState>()(
         } catch (err) {
           console.error('[Store] loadArchivedThreads failed', err);
         }
+      },
+
+      setActiveProject: (projectId) => {
+        set({ activeProjectId: projectId });
       },
 
       setActiveThread: async (id) => {
@@ -1894,6 +1916,8 @@ export const useConversationStore = create<ConversationState>()(
         // partializeConversationState (see its docstring). Everything
         // else round-trips verbatim.
         activeThreadId: state.activeThreadId,
+        // The project the user was inside, so a restart lands them back in it.
+        activeProjectId: state.activeProjectId,
         // Messages are NOT persisted here - they're stored in SQLite
         // Persisting only UI state
         collapsedProjects: Array.from(state.collapsedProjects),

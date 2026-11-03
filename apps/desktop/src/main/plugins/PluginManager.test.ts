@@ -110,6 +110,7 @@ vi.mock('../cli/desktop-host-api', () => ({
 }));
 
 vi.mock('./cache/layout', () => ({
+  resolvePluginDataPath: vi.fn(() => undefined),
   ensurePluginCacheDir: vi.fn((_marketplace: string, _pluginId: string, _version: string) => {
     fs.mkdirSync(state.cacheDir, { recursive: true });
     return state.cacheDir;

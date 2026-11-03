@@ -27,7 +27,7 @@
  */
 
 import { backgroundParameterFor, sgrParameterFor, type SpanColor } from '../core/color.js';
-import { hasAttr, sameStyle, type StyledSpan } from '../core/span.js';
+import { hasAttr, safeHyperlink, sameStyle, type StyledSpan } from '../core/span.js';
 
 /** CSI introducer. */
 const CSI = '\x1b[';
@@ -266,10 +266,17 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string {
   let out = '';
   /** The style the terminal is in, or null before anything has been written. */
   let written: StyledSpan | null = null;
+  let activeLink: string | null = null;
 
   for (const span of spans) {
     if (span.text === '') continue;
     if (written === null || !sameStyle(written, span)) {
+      const nextLink = safeHyperlink(span.linkId);
+      if (activeLink !== nextLink) {
+        if (activeLink !== null) out += '\x1b]8;;\x1b\\';
+        if (nextLink !== null) out += `\x1b]8;;${nextLink}\x1b\\`;
+        activeLink = nextLink;
+      }
       const parameters = spanParameters(span);
       // Reset only when the terminal is actually in a style: the first styled
       // run of a line therefore starts without a leading `ESC[m`, which is
@@ -282,8 +289,11 @@ export function spansToAnsi(spans: readonly StyledSpan[]): string {
   }
 
   if (isStyled(written)) out += `${CSI}m`;
+  if (activeLink !== null) out += '\x1b]8;;\x1b\\';
   return out;
 }
+
+export { safeHyperlink } from '../core/span.js';
 
 /**
  * Mouse reporting, SGR flavour.

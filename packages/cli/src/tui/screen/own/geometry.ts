@@ -192,7 +192,7 @@ export function layoutRegion(
     },
     borderStyle,
     borderColor: patch?.borderColor ?? DEFAULT_BORDER_COLOR[region],
-    background: patch?.background,
+    background: patch?.background ?? undefined,
     hidden: patch?.hidden ?? DEFAULT_HIDDEN[region],
     lines: patch?.lines ?? [],
     contentWidth: Math.max(0, box.width - inset.left - inset.right),

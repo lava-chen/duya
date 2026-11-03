@@ -17,6 +17,18 @@ export interface AgentProgressPayloadMeta {
   subAgentSessionId: string
   /** Stable per-task identifier the UI uses to key the card */
   agentId: string
+  /**
+   * The PARENT's tool-call id (`context.toolUseId`), i.e. the `task` call that
+   * spawned this agent.
+   *
+   * Carried because it is the only field that ties a child's lifecycle back to
+   * the tool block already in the parent transcript: `agentId` is minted here
+   * and is unknown to the caller, and `agentSessionId` names the child's
+   * session rather than the call. Without it the protocol's
+   * `subagent.started.parentToolCallId` — a required field — was always empty,
+   * so no renderer could attach a subagent to the call that started it.
+   */
+  parentToolCallId?: string
   agentType: string
   agentName?: string
   agentDescription?: string
@@ -45,6 +57,7 @@ export function buildChatAgentProgressPayload(
     agentDescription: meta.agentDescription,
     agentSessionId: meta.subAgentSessionId,
   }
+  if (meta.parentToolCallId !== undefined) payload.parentToolCallId = meta.parentToolCallId
   if (event.duration !== undefined) payload.duration = event.duration
   if (event.data !== undefined) payload.data = event.data
   if (event.toolName !== undefined) payload.toolName = event.toolName

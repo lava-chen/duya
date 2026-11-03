@@ -19,6 +19,17 @@ import type {
   BackgroundTaskSummaryV1,
 } from '@duya/agent-protocol';
 import { frameRecord, frameString, type LegacyFrame } from './blocks.js';
+import { formatTaskDuration } from './subagent.js';
+
+/**
+ * Re-exported so every existing caller keeps importing it from here.
+ *
+ * The definition moved to `subagent.ts` because the transcript's subagent card
+ * prints a duration too, and a renderer that imported the task MODEL to format
+ * a number would drag `@duya/agent-protocol` into the pure render path.
+ */
+export { formatTaskDuration };
+
 
 export type BackgroundTaskKind = 'bash' | 'subagent';
 export type BackgroundTaskGroupId = BackgroundTaskKind;
@@ -85,15 +96,6 @@ export function taskStatusGlyph(status: BackgroundTaskState, unicode: boolean): 
   }
 }
 
-/** `45s`, `2m 05s`, `1h 03m` — compact enough for one task row. */
-export function formatTaskDuration(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`;
-  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`;
-}
-
 /** Local `YYYY-MM-DD HH:MM:SS`; a wall-clock time needs no timezone suffix. */
 export function formatTaskTime(ms: number): string {
   const d = new Date(ms);
@@ -158,6 +160,29 @@ export class BackgroundTaskModel {
   private bashObserved = false;
   private readonly subagents = new Map<string, BackgroundTaskView>();
   private readonly collapsedGroups = new Set<BackgroundTaskGroupId>();
+  /**
+   * First-seen recency, one rank per task; higher means newer.
+   *
+   * ## Why the list does not re-sort
+   *
+   * The obvious order — running first, then newest first — is wrong for a view
+   * the user NAVIGATES. A task that finishes would jump to the bottom of its
+   * group, under the cursor of somebody who was about to press Enter on it, and
+   * a second completion would move the row they were reading. That is the same
+   * failure codex's agent list calls out by name ("if this is treated as
+   * cleanup, wrap-around navigation reshapes itself mid-session").
+   *
+   * So a task takes a rank the first time it is seen and keeps it for the rest
+   * of the session, and recency alone decides the order. Newest stays on top,
+   * but nothing that already exists ever moves because of a state change.
+   *
+   * The two producers rank differently on purpose: a subagent frame arrives in
+   * spawn order, so arrival order IS recency, while the first bash snapshot is
+   * a batch that has to be ranked by start time. Both end up meaning the same
+   * thing by the time `ordered()` reads them.
+   */
+  private readonly ranks = new Map<string, number>();
+  private nextRank = 0;
 
   /**
    * Whether the Host answered the list request at all. False with no tasks
@@ -179,6 +204,12 @@ export class BackgroundTaskModel {
       || !sameBashTasks(this.bash, snapshot.tasks);
     this.bashObserved = snapshot.observed;
     this.bash = snapshot.tasks.slice();
+    // Rank the batch OLDEST-first, so the highest rank is the newest task and
+    // the first poll reads the way the old start-time sort did. From here on
+    // these ranks are frozen: a task that finishes keeps its slot.
+    for (const task of this.bash.slice().sort((a, b) => a.startedAtMs - b.startedAtMs)) {
+      this.rankOf('bash', task.id);
+    }
     return changed;
   }
 
@@ -198,6 +229,7 @@ export class BackgroundTaskModel {
       const description = frameString(data, 'agentDescription');
       const detail = description !== '' ? description : type !== '' ? type : undefined;
       const startedAtMs = this.subagents.get(id)?.startedAtMs ?? now;
+      this.rankOf('subagent', id);
       this.subagents.set(id, {
         id,
         kind: 'subagent',
@@ -240,6 +272,8 @@ export class BackgroundTaskModel {
     this.bash = [];
     this.bashObserved = false;
     this.subagents.clear();
+    this.ranks.clear();
+    this.nextRank = 0;
   }
 
   /** True when any task — bash or subagent — is still running. */
@@ -256,23 +290,34 @@ export class BackgroundTaskModel {
     return [...this.subagents.values()].filter((task) => task.status === 'running').length;
   }
 
-  /** Every known task, running first and newest first inside each half. */
+  /**
+   * Every known task, in list order: the subagents, then the bash half.
+   *
+   * Delegates to `groups()` rather than sorting again. Two sorts over two rank
+   * namespaces is two answers to "what order is this list in", and they drift
+   * the first time either producer changes — a subagent ranked through
+   * `tasks()` and through `groups()` would not agree with itself.
+   */
   tasks(): BackgroundTaskView[] {
-    return sortTasks([...this.bash.map(bashView), ...this.subagents.values()]);
+    return this.groups().flatMap((group) => group.tasks);
   }
 
-  /** Two groups in display order; an empty group is still a heading. */
+  /**
+   * Two groups in display order; an empty group is still a heading.
+   *
+   * Subagents first, and not because they are newer: a bash task is a process
+   * the user is monitoring, while a subagent is an agent they talk TO and can
+   * switch between. The interactive half belongs at the top, where the cursor
+   * lands and where the eye starts; the process list is reference material and
+   * reads fine underneath it.
+   */
   groups(): BackgroundTaskGroup[] {
-    const bash = sortTasks(this.bash.map(bashView));
-    const subagents = sortTasks([...this.subagents.values()]);
+    const bash = this.ordered(this.bash.map((task) => ({ view: bashView(task), key: task.id })), 'bash');
+    const subagents = this.ordered(
+      [...this.subagents.values()].map((view) => ({ view, key: view.id })),
+      'subagent',
+    );
     return [
-      {
-        id: 'bash',
-        label: 'Background bash',
-        tasks: bash,
-        running: bash.filter((task) => task.status === 'running').length,
-        collapsed: this.collapsedGroups.has('bash'),
-      },
       {
         id: 'subagent',
         label: 'Subagents',
@@ -280,7 +325,43 @@ export class BackgroundTaskModel {
         running: subagents.filter((task) => task.status === 'running').length,
         collapsed: this.collapsedGroups.has('subagent'),
       },
+      {
+        id: 'bash',
+        label: 'Background bash',
+        tasks: bash,
+        running: bash.filter((task) => task.status === 'running').length,
+        collapsed: this.collapsedGroups.has('bash'),
+      },
     ];
+  }
+
+  /** The rank a task was first seen at; 0 for one that has never been seen. */
+  private rankOf(group: BackgroundTaskGroupId, id: string): number {
+    const key = `${group}:${id}`;
+    const existing = this.ranks.get(key);
+    if (existing !== undefined) return existing;
+    const rank = this.nextRank;
+    this.nextRank += 1;
+    this.ranks.set(key, rank);
+    return rank;
+  }
+
+  /**
+   * Sort one group by first-seen recency, NEWEST FIRST.
+   *
+   * The group is part of the rank key because two producers may mint the same
+   * id: a bash task and a subagent are different things even when they are both
+   * called `1`, and sharing a rank would let one group's arrival reorder the
+   * other's rows.
+   */
+  private ordered(
+    entries: ReadonlyArray<{ readonly view: BackgroundTaskView; readonly key: string }>,
+    group: BackgroundTaskGroupId,
+  ): BackgroundTaskView[] {
+    return entries
+      .map((entry) => ({ view: entry.view, rank: this.rankOf(group, entry.key) }))
+      .sort((a, b) => b.rank - a.rank)
+      .map((entry) => entry.view);
   }
 
   /** The flattened rows the task view paints and the arrows move through. */
@@ -353,15 +434,6 @@ function bashView(task: BackgroundTaskSummaryV1): BackgroundTaskView {
     ...(task.pid === undefined ? {} : { pid: task.pid }),
     ...(task.autoPromoted === undefined ? {} : { autoPromoted: task.autoPromoted }),
   };
-}
-
-function sortTasks(tasks: readonly BackgroundTaskView[]): BackgroundTaskView[] {
-  return tasks.slice().sort((a, b) => {
-    const aRunning = a.status === 'running' ? 0 : 1;
-    const bRunning = b.status === 'running' ? 0 : 1;
-    if (aRunning !== bRunning) return aRunning - bRunning;
-    return b.startedAtMs - a.startedAtMs;
-  });
 }
 
 function sameBashTasks(

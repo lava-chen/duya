@@ -28,6 +28,7 @@
  */
 
 import type { SessionId } from '@duya/agent-protocol';
+import * as path from 'node:path';
 import type { HostHandshakeV1 } from '@duya/host/http-client';
 import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
@@ -47,6 +48,7 @@ import { OwnedSessions } from './owned-sessions.js';
 export interface TuiCommandOptions {
   readonly port?: number;
   readonly session?: string;
+  readonly workingDirectory?: string;
   readonly model?: string;
   readonly providerId?: string;
   readonly apiFormat?: 'anthropic' | 'openai';
@@ -220,10 +222,24 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
       lease.close();
       return 1;
     }
+    const recordedDirectory = path.resolve(existing.workingDirectory);
+    if (options.workingDirectory !== undefined
+      && path.resolve(options.workingDirectory) !== recordedDirectory) {
+      write(`${RED}workspace does not match session ${sessionId}; use the session's recorded directory (${recordedDirectory})${RESET}`);
+      lease.close();
+      return 1;
+    }
+    options = { ...options, workingDirectory: recordedDirectory };
   } else {
-    const created = await createChatSession(client, { ...options, origin: host.origin, token: host.token });
+    const workingDirectory = path.resolve(options.workingDirectory ?? process.cwd());
+    const created = await createChatSession(
+      client,
+      { ...options, origin: host.origin, token: host.token },
+      workingDirectory,
+    );
     sessionId = created.id;
     owned.own(created.id);
+    options = { ...options, workingDirectory };
   }
 
   let exitCode = 0;

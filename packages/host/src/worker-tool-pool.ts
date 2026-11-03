@@ -222,6 +222,9 @@ export class WorkerPool {
     const proc = spawn(runtime, [this.workerScriptPath], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
       env: process.env,
+      // Same reason as `worker-manager.spawnWorker`: a console child of a
+      // console-less Host would open a window on Windows.
+      windowsHide: true,
     });
 
     let resolveReady!: () => void;
