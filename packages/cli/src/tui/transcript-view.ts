@@ -75,6 +75,12 @@ import {
   toolGroupKey,
 } from './tool-render.js';
 import { capLines, codePointWidth, truncateToWidth, visibleWidth, wrapWithCursor } from './width.js';
+import {
+  formatTaskDuration,
+  subagentIdentityParts,
+  type SubagentCard,
+  type SubagentSpec,
+} from './subagent.js';
 import { DARK_THEME_TAGS, type ThemeTags, type ThemeToken } from './theme.js';
 import { escapeTags } from './markdown/escape.js';
 import { highlightBash, highlightBashLine, type BashRole, type BashToken } from './bash-highlight.js';
@@ -1058,6 +1064,13 @@ function toolNodeRow(
   if (isTodoTool(block.name)) {
     return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
   }
+  // A subagent spawn is a CHILD AGENT, not a call with a prompt: the row says
+  // who it is, what role it plays and what it is spending. See
+  // `subagentIdentityRow`.
+  if (block.subagent !== undefined) {
+    const mark = toolStatusMark(block.status, styles);
+    return `${connector} ${mark} ${subagentIdentityRow(block, styles)}${subagentSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
+  }
   // A command the USER ran is not the agent's tool call, and it says so: the
   // reader must never have to guess whose command produced the output. The
   // wording is codex's ("You ran"), the body is the ordinary shell body.
@@ -1075,6 +1088,106 @@ function toolNodeRow(
   }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
   return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+}
+
+/**
+ * `Robie [explorer] (gpt-5 high)` — who a subagent is, in one run of colour.
+ *
+ * The three parts are three DIFFERENT questions and are painted as three
+ * different things, which is the whole point of the row:
+ *
+ *  - the NAME in the accent colour, because it is the handle the reader will
+ *    match against `/subagents` and against the agent's own messages;
+ *  - the ROLE in `[brackets]`, muted, because it is a classification and not a
+ *    name — `explorer` and `Robie` would otherwise read as two agents;
+ *  - the BUDGET in `(parentheses)`, in the thinking colour, because `(gpt-5
+ *    high)` is the only place in the transcript where a child's model and
+ *    effort are visible at all.
+ *
+ * The parts are dropped when absent rather than printed empty: a call that
+ * asked for no model inherits the parent's, and `(inherit)` would be six
+ * columns of a non-fact.
+ *
+ * Returned as a PLAIN + TAGGED pair because the caller has to fit it to a
+ * column budget and a tagged string cannot be measured or cut: the tag body is
+ * eleven characters to a naive length and no columns to the terminal.
+ */
+function subagentIdentity(
+  spec: SubagentSpec,
+  id: string,
+  styles: Styles,
+): { plain: string; tagged: string } {
+  const parts = subagentIdentityParts(spec, id);
+  const rolePlain = parts.role === '' ? '' : ` [${parts.role}]`;
+  const spendPlain = parts.budget === '' ? '' : ` (${parts.budget})`;
+  const tagged = `${styles.accent(parts.name)}`
+    + (rolePlain === '' ? '' : ` ${styles.muted(rolePlain.trimStart())}`)
+    + (spendPlain === '' ? '' : ` ${styles.thinking(`(${parts.budget})`)}`);
+  return { plain: `${parts.name}${rolePlain}${spendPlain}`, tagged };
+}
+
+/** The identity run of a transcript card. */
+function subagentIdentityRow(
+  block: Extract<Block, { kind: 'tool' }>,
+  styles: Styles,
+): string {
+  const card = block.subagent;
+  if (card === undefined) return '';
+  // `subagentId` only exists once `subagent.started` linked itself to this
+  // call; until then the CALL id is the disambiguator, and it is available
+  // from the first frame — which is what keeps two unnamed spawns apart during
+  // the window before either reports in.
+  return subagentIdentity(card.spec, card.subagentId ?? block.callId, styles).tagged;
+}
+
+/**
+ * ` · 1m 03s` once the child reported; ` · failed` when it reported that.
+ *
+ * A duration is only printed when the child itself reported one. Deriving it
+ * from the parent's clock would print the time since the CALL started, which
+ * for a background agent includes the whole turn it was spawned in.
+ */
+function subagentSuffix(block: Extract<Block, { kind: 'tool' }>, styles: Styles): string {
+  const card = block.subagent;
+  if (card === undefined) return '';
+  if (card.outcome === 'failed' || card.outcome === 'cancelled') {
+    return ` · ${card.outcome}`;
+  }
+  if (card.durationMs === undefined) return '';
+  return ` · ${formatTaskDuration(card.durationMs)}`;
+}
+
+/**
+ * Rows under a spawn: the brief, then the child's answer when it is shown.
+ *
+ * The brief is NOT behind the disclosure. It is the row's second half — "Robie
+ * is an explorer" says nothing until you know what Robie was asked — and a
+ * spawn whose brief is folded away is an agent the reader cannot identify. The
+ * RESULT is behind the disclosure like any other tool body, because that is
+ * what the fold is for: the answer can be hundreds of lines.
+ */
+function subagentBody(
+  block: Extract<Block, { kind: 'tool' }>,
+  card: SubagentCard,
+  options: RenderOptions,
+  styles: Styles,
+  indent: string,
+): string[] {
+  const lines: string[] = [];
+  const brief = card.spec.brief;
+  if (brief !== '') {
+    const budget = options.width === undefined ? undefined : Math.max(1, options.width - indent.length);
+    const text = budget === undefined ? brief : truncateToWidth(brief, budget);
+    lines.push(`${indent}${styles.muted(text)}`);
+  }
+  if (!toolBodyAllowed(options, block.id)) return lines;
+  const result = block.result?.trimEnd() ?? '';
+  if (block.status === 'running' || result.trim() === '') return lines;
+  const isExpanded = blockExpanded(block.id, options);
+  const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
+    (options.showToolResults || isExpanded);
+  if (!showDetails) return lines;
+  return [...lines, ...toolBody(block, result, options, styles, indent)];
 }
 
 /**
@@ -1199,6 +1312,22 @@ function toolBodyAllowed(options: RenderOptions, id: string): boolean {
   return options.expanded || options.expandedBlockIds?.has(id) === true;
 }
 
+/**
+ * How many rows a tool's body would actually put on screen.
+ *
+ * `[+ N lines]` has to promise the number the reader gets when they expand. For
+ * a raw result that is the raw line count, but a subagent's result is a JSON
+ * receipt the body REWRITES into a short report — one physical line in, a dozen
+ * rows out — so counting the raw text would understate the fold by an order of
+ * magnitude. The formatter is run here for exactly that case, and nowhere else:
+ * a grep report's line count is its own, and re-formatting every tool to count
+ * would spend the render budget of tools that never needed it.
+ */
+function countReportLines(block: Extract<Block, { kind: 'tool' }>, result: string): number {
+  const body = block.subagent === undefined ? result : formatToolResult(block.name, result);
+  return body.trim().split(/\r?\n/u).length;
+}
+
 /** `[-]` / `[+ N lines]` for one tool call. */
 function toolDisclosureOf(
   block: Extract<Block, { kind: 'tool' }>,
@@ -1211,7 +1340,7 @@ function toolDisclosureOf(
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
     (options.showToolResults || isExpanded);
-  const resultLines = result.trim().split(/\r?\n/u).length;
+  const resultLines = countReportLines(block, result);
   const unit = isShellTool(block.name) ? 'output lines' : 'lines';
   return toolDisclosure(true, resultLines, showDetails, styles, unit);
 }
@@ -1260,7 +1389,11 @@ function buildUnits(blocks: readonly Block[]): Unit[] {
       // Two todo writes are two DIFFERENT lists, not two calls of one batch:
       // the second is the state AFTER the first. Batching them would hide the
       // second list behind a `todo 2 calls` header.
-      const batchable = !isTodoTool(block.name);
+      //
+      // A subagent spawn is not batchable either, for a different reason: the
+      // batch header names the VERB (`task 3 calls`), which erases the three
+      // names, roles and budgets that are the entire point of those rows.
+      const batchable = !isTodoTool(block.name) && block.subagent === undefined;
       let end = index;
       while (batchable && end + 1 < blocks.length) {
         const next = blocks[end + 1];
@@ -1362,6 +1495,11 @@ function nodeBody(
     return thinkingBody(block, blockExpanded(block.id, options), styles, plan.bodyIndent, options.width);
   }
   if (block.kind !== 'tool') return [];
+  // A spawn draws its brief before any of the ordinary body rules apply: the
+  // brief identifies the agent, so it is not "content behind a fold".
+  if (block.subagent !== undefined) {
+    return subagentBody(block, block.subagent, options, styles, plan.bodyIndent);
+  }
   // `names` folds every tool body, a todo list included: the row above already
   // says `Todo list 2/4`, which is the same fact in fewer lines.
   if (!toolBodyAllowed(options, block.id)) return [];

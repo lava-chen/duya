@@ -43,6 +43,10 @@
 
 import { isTodoTool, parseTodoItems, type TuiTodoItem } from './todo.js';
 import { shellCommandOf } from './tool-render.js';
+import {
+  readSubagentSpec,
+  type SubagentCard,
+} from './subagent.js';
 
 /** A frame as the CLI receives it. Structurally `LegacySseFrame`. */
 export interface LegacyFrame {
@@ -161,6 +165,18 @@ export interface ToolBlock {
    * returned, this is the list the transcript draws.
    */
   todos?: readonly TuiTodoItem[];
+  /**
+   * The subagent this call spawned, when the call WAS a subagent spawn.
+   *
+   * Present only for the `task` tool (and its legacy `Agent` name). It is the
+   * whole identity of the child — name, role, model, effort, brief — read from
+   * the call's own arguments, then refined by `subagent.started` /
+   * `subagent.completed` as those frames arrive. Kept beside `preview` for the
+   * same reason `todos` is: the row is no longer "a tool called with an
+   * argument", it is a child agent with a lifecycle, and the renderer needs the
+   * fields rather than a string.
+   */
+  subagent?: SubagentCard;
 }
 
 export interface ErrorBlock {
@@ -175,7 +191,13 @@ export interface NoticeBlock {
   text: string;
 }
 
-export type Block = UserBlock | AssistantBlock | ThinkingBlock | ToolBlock | ErrorBlock | NoticeBlock;
+export type Block =
+  | UserBlock
+  | AssistantBlock
+  | ThinkingBlock
+  | ToolBlock
+  | ErrorBlock
+  | NoticeBlock;
 
 /** A permission request, routed to the overlay rather than the transcript. */
 export interface PermissionRequest {
@@ -655,7 +677,7 @@ export class TranscriptModel {
    * Both `tool_use_started` (the announcement) and `tool_use` (the
    * authoritative call) land on the same object, and so does `tool_result`.
    */
-  upsertTool(callId: string, name: string, input: unknown): ToolBlock {
+  upsertTool(callId: string, name: string, input: unknown, at = Date.now()): ToolBlock {
     const existing = this.toolsByCallId.get(callId);
     if (existing !== undefined) {
       if (name !== '') existing.name = name;
@@ -663,6 +685,12 @@ export class TranscriptModel {
       if (preview !== '') existing.preview = preview;
       const command = shellCommandOf(input);
       if (command !== undefined) existing.command = command;
+      // A re-announced call restates the same arguments; the card is only
+      // filled when the first frame carried none (a preview frame may omit
+      // them). Overwriting would reset a lifecycle the second frame arrived
+      // after.
+      const spec = existing.subagent === undefined ? readSubagentSpec(existing.name, input) : null;
+      if (spec !== null) existing.subagent = { spec, startedAtMs: at };
       this.bump(existing);
       return existing;
     }
@@ -672,6 +700,7 @@ export class TranscriptModel {
     // one piece of text in two.
     this.closeOpenContent();
     const command = shellCommandOf(input);
+    const spec = readSubagentSpec(name, input);
     const block: ToolBlock = {
       kind: 'tool',
       id: nextId('tool'),
@@ -680,6 +709,7 @@ export class TranscriptModel {
       preview: buildToolPreview(name, input),
       status: 'running',
       ...(command === undefined ? {} : { command }),
+      ...(spec === null ? {} : { subagent: { spec, startedAtMs: at } }),
     };
     this.toolsByCallId.set(callId, block);
     this.items.push(block);
@@ -740,6 +770,107 @@ export class TranscriptModel {
     const block: NoticeBlock = { kind: 'notice', id: nextId('notice'), text };
     this.items.push(block);
     return block;
+  }
+
+  /**
+   * Every subagent card in the transcript, in the order the calls were made.
+   *
+   * The transcript is the authoritative list of subagents this session SPAWNED:
+   * a spawn is a tool call, so it is in the transcript even when the lifecycle
+   * event that would have updated a task list never arrived. The task view
+   * reads the card for the facts a frame can lose (name, role, brief) and the
+   * frame for the ones only it knows (outcome, duration) — see
+   * `TUIApp.watchPanelLines`.
+   */
+  subagentCards(): Array<{ readonly block: ToolBlock; readonly card: SubagentCard }> {
+    const cards: Array<{ block: ToolBlock; card: SubagentCard }> = [];
+    for (const block of this.items) {
+      if (block.kind !== 'tool' || block.subagent === undefined) continue;
+      cards.push({ block, card: block.subagent });
+    }
+    return cards;
+  }
+
+  /**
+   * Fold one subagent lifecycle frame into the card of the call that spawned it.
+   *
+   * ## Why the linkage is `parentToolCallId`
+   *
+   * `subagent_started` names the parent call; `subagent_completed` names only
+   * the child. So the id is learned at start and remembered on the card, which
+   * is what lets a completion find its row without a second lookup table that
+   * could disagree with the transcript.
+   *
+   * ## Why a missing parent call is not an error
+   *
+   * A subagent started by a call this process never saw — a replayed segment, a
+   * Desktop-started run this terminal is only watching — has no row to update.
+   * The frame is then simply not transcript content, which is the same answer
+   * every other progress frame gets.
+   */
+  private applySubagentProgress(payload: Record<string, unknown>): ApplyResult {
+    const eventType = asString(payload['agentEventType']);
+    const subagentId = asString(payload['subagentId']);
+
+    if (eventType === 'subagent_started') {
+      // The canonical protocol calls this `parentToolCallId`, while the legacy
+      // SSE projector exposes the same value as `toolCallId`. The TUI consumes
+      // projected frames, so accept both spellings at this boundary.
+      const parentCallId = asString(payload['parentToolCallId']) || asString(payload['toolCallId']);
+      if (parentCallId === '' || subagentId === '') return { kind: 'none' };
+      const block = this.toolsByCallId.get(parentCallId);
+      if (block === undefined) return { kind: 'none' };
+      if (block.subagent === undefined) {
+        // The call's own arguments are the primary source; this is the fallback
+        // for a call whose input never arrived (a preview-only stream).
+        const name = asString(payload['agentName']);
+        const agentType = asString(payload['agentType']);
+        const description = asString(payload['agentDescription']);
+        block.subagent = {
+          spec: {
+            name,
+            agentType: agentType === '' ? 'general-purpose' : agentType,
+            model: '',
+            effort: '',
+            brief: description,
+          },
+          startedAtMs: Date.now(),
+        };
+      }
+      if (block.subagent.subagentId === subagentId) return { kind: 'none' };
+      block.subagent.subagentId = subagentId;
+      this.bump(block);
+      return { kind: 'mutate', block };
+    }
+
+    if (eventType === 'subagent_completed') {
+      if (subagentId === '') return { kind: 'none' };
+      const block = this.findSubagentBlock(subagentId);
+      if (block === null) return { kind: 'none' };
+      const card = block.subagent;
+      if (card === undefined) return { kind: 'none' };
+      const raw = asString(payload['status']);
+      const outcome = raw === 'failed' ? 'failed' : raw === 'cancelled' ? 'cancelled' : 'completed';
+      const duration = payload['durationMs'];
+      const summary = asString(payload['summary']);
+      card.outcome = outcome;
+      if (typeof duration === 'number' && Number.isFinite(duration)) {
+        card.durationMs = Math.max(0, duration);
+      }
+      if (summary !== '') card.summary = summary;
+      this.bump(block);
+      return { kind: 'mutate', block };
+    }
+
+    return { kind: 'none' };
+  }
+
+  /** The tool block whose card carries `subagentId`, or `null`. */
+  private findSubagentBlock(subagentId: string): ToolBlock | null {
+    for (const block of this.toolsByCallId.values()) {
+      if (block.subagent?.subagentId === subagentId) return block;
+    }
+    return null;
   }
 
   /** Append an error. Errors are never collapsed, so no status field. */
@@ -936,9 +1067,16 @@ export class TranscriptModel {
       case 'turn_start':
       case 'compact:step':
       case 'compact:over_threshold':
-      case 'agent_progress':
       case 'done':
         return { kind: 'none' };
+
+      case 'agent_progress':
+        // The one progress frame that DOES touch the transcript: a subagent's
+        // lifecycle belongs to the `task` call that spawned it, so it mutates
+        // that call's card instead of appending a row. Every other subagent
+        // event (`heartbeat`, a child's own text/tool frames) stays invisible
+        // here — see `applySubagentProgress`.
+        return this.applySubagentProgress(payload);
 
       default:
         // Unreachable while `FRAME_TYPES` and this switch agree; a new

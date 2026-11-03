@@ -111,6 +111,11 @@ import {
 import { InlineSurface } from './terminal/surface.js';
 import { conversationRegionBottom, type TerminalSize } from './terminal/viewport.js';
 import { BackgroundTaskModel, formatTaskDuration, taskStatusGlyph, type BackgroundTaskGroup, type BackgroundTaskRow, type BackgroundTaskView } from './background-tasks.js';
+import {
+  subagentIdentityText,
+  subagentOutcomeLabel,
+  type SubagentOutcome,
+} from './subagent.js';
 import type { BackgroundTaskListV1 } from '@duya/agent-protocol';
 import type { Message as TranscriptMessage, MessageContent } from '@duya/agent-protocol/transcript';
 import type { FileAttachment } from '@duya/agent-protocol';
@@ -624,6 +629,23 @@ export class TUIApp {
   private focus: 'input' | 'tasks' = 'input';
   /** Selected row in the task view, over `backgroundTaskRows()`. */
   private selectedTaskRow = -1;
+  /**
+   * The task the SELECTION last landed on, by id.
+   *
+   * The row index is a position in a list that changes under the user — a task
+   * finishing, a new spawn arriving — so the index cannot be the selection. This
+   * is the identity the view re-resolves after every refresh; without it,
+   * pressing Enter on a row that shifted a moment ago opens its neighbour.
+   */
+  private selectedTaskId: string | null = null;
+  /**
+   * The subagent whose live panel the task view is showing, by subagent id.
+   *
+   * "Watching" one child is the runtime switch this view exists for: the list
+   * keeps the others one arrow away, the panel under it follows the watched one,
+   * and Esc walks back out (panel → list → input). Null means not watching.
+   */
+  private watchedSubagentId: string | null = null;
   /** Tail-following. Disengaged by scrolling up, restored by Ctrl+End. */
   private follow = true;
   /**
@@ -1000,8 +1022,14 @@ export class TUIApp {
   }
 
   /**
-   * Enter the task view. F6 and `/tasks` both land here so the two entrances
-   * cannot disagree about what "the task view" selects.
+   * Enter the task view. F6, `/tasks` and every other entrance land here so
+   * they cannot disagree about what "the task view" selects.
+   *
+   * The cursor lands on the first TASK rather than on the first row, because a
+   * group heading is not something Enter can act on: opening the view to deal
+   * with a task and then having to press Down once is a keystroke that buys
+   * nothing. When the subagent group is empty that first task is a bash one, so
+   * the rule holds whichever half has work.
    */
   openTasks(): void {
     if (this.disposed) return;
@@ -1009,7 +1037,9 @@ export class TUIApp {
       this.focus = 'tasks';
       this.completion.close();
       const rows = this.backgroundTaskRows();
-      this.selectedTaskRow = rows.length === 0 ? -1 : 0;
+      const firstTask = rows.findIndex((row) => row.kind === 'task');
+      this.selectedTaskRow = rows.length === 0 ? -1 : Math.max(0, firstTask);
+      this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
     }
     // The bash half is polled, not pushed; opening the view is the explicit
     // request for a current reading while the timer is quiet.
@@ -1017,12 +1047,39 @@ export class TUIApp {
     this.scheduler.requestImmediate();
   }
 
-  /** Force a repaint after the wiring read a fresh snapshot out of band. */
+  /** The task id a row belongs to, or null for a group heading. */
+  private taskIdAt(index: number): string | null {
+    const row = index < 0 ? undefined : this.backgroundTaskRows()[index];
+    return row !== undefined && row.kind === 'task' ? row.task.id : null;
+  }
+
+  /**
+   * Re-point the selection after the list changed underneath it.
+   *
+   * By IDENTITY, not by index: a task that finishes keeps its rank, but a task
+   * that APPEARS above the cursor shifts every index below it, and the row the
+   * user was about to open would silently become a different one.
+   */
   private clampTaskSelection(): void {
-    const count = this.backgroundTasks.rows().length;
-    if (count === 0) this.selectedTaskRow = -1;
-    else if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
-    else if (this.selectedTaskRow >= count) this.selectedTaskRow = count - 1;
+    const rows = this.backgroundTaskRows();
+    if (rows.length === 0) {
+      this.selectedTaskRow = -1;
+      this.selectedTaskId = null;
+      // Nothing left to watch: a panel about a task that no longer exists is a
+      // panel about nothing.
+      this.watchedSubagentId = null;
+      return;
+    }
+    if (this.selectedTaskId !== null) {
+      const found = rows.findIndex((row) => row.kind === 'task' && row.task.id === this.selectedTaskId);
+      if (found !== -1) {
+        this.selectedTaskRow = found;
+        return;
+      }
+    }
+    if (this.selectedTaskRow < 0) this.selectedTaskRow = 0;
+    else if (this.selectedTaskRow >= rows.length) this.selectedTaskRow = rows.length - 1;
+    this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
   }
 
   /** Move a draft the controller recalled back into the composer. */
@@ -1587,8 +1644,11 @@ export class TUIApp {
     const width = Math.max(1, this.terminalSize().columns - 1);
     const rows = this.backgroundTaskRows();
     const lines: string[] = [];
+    // The header names what ENTER does, which is not one thing any more: a
+    // subagent is watched in place, a bash task opens its output. `open` was
+    // already a lie for the first half; `open/watch` says both.
     lines.push(escapeTags(compactActivity(
-      'Tasks · ↑↓ select · ←→ fold · Enter open · Esc back',
+      'Tasks · ↑↓ select · ←→ fold · Enter open/watch · Esc back',
       width,
     )));
     if (rows.length === 0) {
@@ -1598,7 +1658,11 @@ export class TUIApp {
       )));
       return lines;
     }
-    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10));
+    // The watched agent's panel takes rows from the LIST, not from a modal:
+    // the point of watching one child is that the others stay visible and one
+    // arrow key away.
+    const watchRows = this.watchPanelLines(width);
+    const budget = Math.max(3, Math.min(8, this.terminalSize().rows - 10 - watchRows.length));
     const selected = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
     const first = Math.max(0, Math.min(selected - (budget - 1), Math.max(0, rows.length - budget)));
     for (let index = first; index < Math.min(rows.length, first + budget); index += 1) {
@@ -1607,6 +1671,58 @@ export class TUIApp {
         ? this.taskGroupLine(row.group, index === selected, width)
         : this.taskRowLine(row.task, index === selected, width));
     }
+    lines.push(...watchRows);
+    return lines;
+  }
+
+  /**
+   * Rows for the subagent being watched, or none.
+   *
+   * The panel is a STATUS CARD, not a transcript: what the child is, what it
+   * was asked, how long it has been running and how it ended. It stops there
+   * because that is what this process can prove — a child's own messages live in
+   * the worker that runs it, and inventing a "transcript" here would be an empty
+   * promise dressed as a page.
+   */
+  private watchPanelLines(width: number): string[] {
+    const id = this.watchedSubagentId;
+    if (id === null) return [];
+    const view = this.backgroundTaskRows()
+      .find((row) => row.kind === 'task' && row.task.id === id);
+    const task = view === undefined || view.kind !== 'task' ? null : view.task;
+    const card = this.model.subagentCards().find((entry) => entry.card.subagentId === id)?.card ?? null;
+    if (task === null && card === null) return [];
+
+    const identity = card === null
+      ? (task?.title ?? 'agent')
+      : subagentIdentityText(card.spec, id);
+
+    const outcome: SubagentOutcome = card?.outcome
+      ?? (task === null ? 'unknown' : task.status === 'running' ? 'running' : 'unknown');
+    const startedAtMs = card?.startedAtMs ?? task?.startedAtMs ?? Date.now();
+    const endedAtMs = card?.durationMs === undefined
+      ? (task?.endedAtMs ?? Date.now())
+      : startedAtMs + card.durationMs;
+    const elapsed = formatTaskDuration(Math.max(0, endedAtMs - startedAtMs));
+
+    const unicode = this.terminalEnv.unicodeBox;
+    const glyph = outcome === 'running'
+      ? (unicode ? '●' : '*')
+      : outcome === 'completed'
+        ? (unicode ? '✔' : '+')
+        : outcome === 'failed'
+          ? (unicode ? '✖' : 'x')
+          : outcome === 'cancelled'
+            ? (unicode ? '■' : '-')
+            : '?';
+    const head = `  ${glyph} ${identity} · ${subagentOutcomeLabel(outcome)} · ${elapsed}`;
+    const lines = [`{cyan-fg}${compactActivity(head, width)}{/cyan-fg}`];
+    const brief = card?.spec.brief ?? task?.detail ?? '';
+    if (brief !== '') lines.push(`{gray-fg}${compactActivity(`    ${brief}`, width)}{/gray-fg}`);
+    if (card?.summary !== undefined && card.summary !== '') {
+      lines.push(`{gray-fg}${compactActivity(`    ${card.summary}`, width)}{/gray-fg}`);
+    }
+    lines.push(`{gray-fg}${compactActivity('    Esc back to the list · ↑↓ another agent', width)}{/gray-fg}`);
     return lines;
   }
 
@@ -1622,10 +1738,16 @@ export class TUIApp {
     const suffix = task.status === 'running'
       ? ` · ${elapsed}`
       : ` · ${task.status} · ${elapsed}`;
+    // `(watching)` is the same marker codex puts on `(current)` in its picker:
+    // once a panel is open below the list, the row it belongs to has to say so,
+    // or the panel looks like it is about whatever the cursor is on.
+    const watching = task.kind === 'subagent' && task.id === this.watchedSubagentId
+      ? ' (watching)'
+      : '';
     // Truncate the PLAIN text: fitting a line that already carries tags would
     // count markup as columns and can cut a tag in half (see working-tail.ts).
     const text = compactActivity(
-      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}`,
+      `${selected ? '❯' : ' '} ${taskStatusGlyph(task.status, this.terminalEnv.unicodeBox)} ${task.title}${suffix}${watching}`,
       width,
     );
     return selected ? `{cyan-fg}${text}{/cyan-fg}` : text;
@@ -2220,7 +2342,7 @@ export class TUIApp {
       : busy
         ? 'Enter steer · Tab queue · Esc stop'
       : this.focus === 'tasks'
-        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open / Esc back`
+        ? `tasks ${taskSelection}/${taskRows.length} / arrows select / Enter open/watch / Esc back`
         : this.editor.isEmpty && this.hasTurnSuggestion()
         ? 'Enter adopt / Tab history / F6 tasks'
         : `${this.editor.isEmpty ? 'Tab history' : 'Tab indent'} / F6 tasks / arrows prompts`;
@@ -3713,7 +3835,10 @@ exportHistory(): string[] {
         this.handleOverlayKey(ch, key);
         return;
       }
-      if (this.focus === 'tasks') this.focus = 'input';
+      // Typing means leaving the view entirely — including the watched
+      // agent's panel: the keys are the editor's again, and a panel about a
+      // task nobody is looking at is just rows taken from the conversation.
+      this.exitTaskView();
       this.editor.insert(ch);
       this.paste.feed(ch, now());
       this.refreshCompletion();
@@ -3783,7 +3908,8 @@ exportHistory(): string[] {
         else this.editor.insert('  ');
       },
       escape: () => {
-        if (this.focus === 'tasks') this.focus = 'input';
+        // One step back, not all the way out: panel → list → input.
+        if (this.focus === 'tasks') this.backOutOfTaskView();
         else if (this.completion.isOpen) this.completion.close();
         else if (this.isBusyNow()) {
           // Esc means "stop"; with prose in the composer it means "stop, then
@@ -3881,7 +4007,7 @@ exportHistory(): string[] {
     }
     // A paste must never accidentally answer a permission prompt.
     if (this.overlay.isActive) return;
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     // A paste that is one absolute path to an attachable file becomes a chip
     // instead of text (terminal file drags arrive exactly this way). The shape
     // test is synchronous; the `stat` is not, so the fallback — pasting the
@@ -3940,7 +4066,7 @@ exportHistory(): string[] {
     this.chipSeq += 1;
     const labelled: TuiDraftAttachment = { ...attachment, label: attachmentChipLabel(attachment, this.chipSeq) };
     this.draftAttachments.push(labelled);
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     this.editor.insert(labelled.label + ' ');
     this.refreshCompletion();
     this.scheduler.requestImmediate();
@@ -4161,7 +4287,7 @@ exportHistory(): string[] {
   }
 
   private followTail(): void {
-    if (this.focus === 'tasks') this.focus = 'input';
+    this.exitTaskView();
     this.follow = true;
     this.scrollTop = 0;
     this.scheduler.requestImmediate();
@@ -4171,10 +4297,37 @@ exportHistory(): string[] {
     if (this.focus === 'input') {
       this.openTasks();
     } else {
-      this.focus = 'input';
+      this.exitTaskView();
       this.refreshCompletion();
       this.scheduler.requestImmediate();
     }
+  }
+
+  /**
+   * Leave the task view entirely: drop the watched panel and give the arrows
+   * back to the editor.
+   */
+  private exitTaskView(): void {
+    this.watchedSubagentId = null;
+    this.focus = 'input';
+  }
+
+  /**
+   * Esc inside the task view: one step BACK, not all the way out.
+   *
+   * Watching a child is a place the user went, so Esc walks the way they came —
+   * panel → list → input. Jumping straight to the input would make the list a
+   * one-way door, and the user would have to re-open it to pick a different
+   * agent.
+   */
+  private backOutOfTaskView(): void {
+    if (this.watchedSubagentId !== null) {
+      this.watchedSubagentId = null;
+      this.scheduler.requestImmediate();
+      return;
+    }
+    this.exitTaskView();
+    this.scheduler.requestImmediate();
   }
 
   private moveTaskSelection(delta: number): void {
@@ -4182,6 +4335,9 @@ exportHistory(): string[] {
     if (count === 0) return;
     const current = this.selectedTaskRow < 0 ? 0 : this.selectedTaskRow;
     this.selectedTaskRow = Math.max(0, Math.min(count - 1, current + delta));
+    // The identity follows the cursor: this is the one place the selection is
+    // set from user intent rather than re-resolved from the list.
+    this.selectedTaskId = this.taskIdAt(this.selectedTaskRow);
     this.scheduler.requestImmediate();
   }
 
@@ -4193,6 +4349,16 @@ exportHistory(): string[] {
     const group = row.kind === 'group' ? row.group : this.backgroundTasks.groups().find((g) => g.id === row.task.kind);
     if (group === undefined) return;
     this.backgroundTasks.setGroupCollapsed(group.id, collapsed);
+    // Land on the heading of the group that was just folded. Folding hides the
+    // row the cursor was on, and the fallback — "clamp to the nearest index" —
+    // drops the user into a DIFFERENT group, where the next Left or Right acts
+    // on something they were not looking at.
+    const heading = this.backgroundTaskRows()
+      .findIndex((candidate) => candidate.kind === 'group' && candidate.group.id === group.id);
+    if (heading !== -1) {
+      this.selectedTaskRow = heading;
+      this.selectedTaskId = null;
+    }
     this.clampTaskSelection();
     this.scheduler.requestImmediate();
   }
@@ -4204,6 +4370,15 @@ exportHistory(): string[] {
     if (row.kind === 'group') {
       this.backgroundTasks.toggleGroup(row.group.id);
       this.clampTaskSelection();
+      this.scheduler.requestImmediate();
+      return;
+    }
+    // A subagent opens IN PLACE: its subject is a live status, and a modal that
+    // froze it at the moment of the keypress would be the one thing an agent
+    // list must never be. A bash task opens the modal, because its subject is a
+    // document — a scrollable output tail — that the live area cannot hold.
+    if (row.task.kind === 'subagent') {
+      this.watchedSubagentId = this.watchedSubagentId === row.task.id ? null : row.task.id;
       this.scheduler.requestImmediate();
       return;
     }

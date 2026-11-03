@@ -106,14 +106,25 @@ export interface BackgroundSummaryCounts {
  *
  * The counts are the RUNNING ones: a task list that says "2 background" after
  * both finished would be a claim about work in flight that is not there.
- * `/tasks details` appears whenever there is anything at all to inspect, which
- * is the one thing a user needs when the counts have gone quiet.
+ *
+ * ## The trailing hint names what the task view can DO right now
+ *
+ * The view is one row and one command either way, so the hint varies by VERB,
+ * not by destination: `/tasks to switch` while a subagent is still running,
+ * `/tasks details` once nothing is. The wording is codex's, and the reason the
+ * switch wording wins the slot is that it is an instruction rather than a
+ * pointer: a live child agent is something the user can JOIN — read what it is
+ * doing, follow it, decide it is going the wrong way — and the tail is the one
+ * row always on screen while that is true. With no child running there is
+ * nothing to switch TO, and the plain "there is something to inspect" pointer
+ * is the honest one.
  */
 export function backgroundSummarySuffix(counts: BackgroundSummaryCounts): string {
   const parts: string[] = [];
   if (counts.bashRunning > 0) parts.push(`${counts.bashRunning} background`);
   if (counts.subagentRunning > 0) parts.push(`${counts.subagentRunning} subagent`);
-  if (counts.totalTasks > 0) parts.push('/tasks details');
+  if (counts.subagentRunning > 0) parts.push('/tasks to switch');
+  else if (counts.totalTasks > 0) parts.push('/tasks details');
   return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`;
 }
 

@@ -7,7 +7,9 @@
  *
  * - a snapshot REPLACES the bash half (the worker's registry is the only
  *   writer, so an absent task is gone);
- * - running rows sort above finished ones, newest first inside each half;
+ * - rows keep the recency they were first seen at: status is not a sort key,
+ *   because a row that moves when its task ends moves out from under the
+ *   cursor that was about to open it;
  * - a subagent that finishes without a start still gets a row, because its
  *   completion is real work the user asked for.
  */
@@ -91,7 +93,7 @@ describe('BackgroundTaskModel bash snapshots', () => {
     expect(model.observed).toBe(true);
   });
 
-  it('sorts running tasks above finished ones, newest first', () => {
+  it('orders by first-seen recency and never re-sorts on a status change', () => {
     const model = new BackgroundTaskModel();
     model.applyBashSnapshot(snapshot([
       bashTask({ id: 'done-new', command: 'new', status: 'completed', startedAtMs: 3_000, endedAtMs: 4_000 }),
@@ -100,12 +102,31 @@ describe('BackgroundTaskModel bash snapshots', () => {
       bashTask({ id: 'run-new', command: 'new-run', status: 'running', startedAtMs: 2_000 }),
     ]));
 
+    // Newest first, and status is NOT a sort key: a finished task outranks a
+    // running one that started earlier. Sorting running-first is what makes a
+    // row jump out from under the cursor the moment its task ends.
     expect(model.tasks().map((task) => task.id)).toEqual([
+      'done-new',
       'run-new',
       'run-old',
-      'done-new',
       'done-old',
     ]);
+
+    // The same task finishing moves nothing: `run-new` completing must leave it
+    // in slot 1, not below `run-old`.
+    model.applyBashSnapshot(snapshot([
+      bashTask({ id: 'done-new', command: 'new', status: 'completed', startedAtMs: 3_000, endedAtMs: 4_000 }),
+      bashTask({ id: 'run-old', command: 'old', status: 'running', startedAtMs: 1_000 }),
+      bashTask({ id: 'done-old', command: 'old-done', status: 'completed', startedAtMs: 500, endedAtMs: 800 }),
+      bashTask({ id: 'run-new', command: 'new-run', status: 'completed', startedAtMs: 2_000, endedAtMs: 9_000 }),
+    ]));
+    expect(model.tasks().map((task) => task.id)).toEqual([
+      'done-new',
+      'run-new',
+      'run-old',
+      'done-old',
+    ]);
+    expect(model.bashRunningCount).toBe(1);
   });
 
   it('counts only running tasks in the summary counts', () => {
@@ -171,6 +192,23 @@ describe('BackgroundTaskModel subagent frames', () => {
     ]);
   });
 
+  it('keeps existing rows in place when a new subagent joins', () => {
+    const model = new BackgroundTaskModel();
+    model.applyFrame(startedFrame('sub-1', 'Scout'), 1_000);
+    model.applyFrame(startedFrame('sub-2', 'Reviewer'), 2_000);
+    model.applyFrame(completedFrame('sub-1', 'completed', 500), 2_500);
+    const before = model.tasks().map((task) => task.id);
+
+    model.applyFrame(startedFrame('sub-3', 'Builder'), 3_000);
+
+    // The newcomer takes the newest slot; the two that were already listed keep
+    // their order relative to each other, which is the property the arrows rely
+    // on when the user is mid-list.
+    const after = model.tasks().map((task) => task.id);
+    expect(after[0]).toBe('sub-3');
+    expect(after.filter((id) => id !== 'sub-3')).toEqual(before);
+  });
+
   it('records a completion with no matching start, deriving its start from the duration', () => {
     const model = new BackgroundTaskModel();
     // The TUI can attach mid-turn (a session resumed) or the start frame can
@@ -226,16 +264,18 @@ describe('BackgroundTaskModel rows and groups', () => {
     model.applyFrame(startedFrame('sub-1', 'Scout'), 2_000);
 
     const groups = model.groups();
+    // Subagents first: the interactive half of the list sits on top, where the
+    // cursor lands; bash processes are reference material underneath it.
     expect(groups.map((group) => [group.id, group.label, group.tasks.length, group.running])).toEqual([
-      ['bash', 'Background bash', 1, 1],
       ['subagent', 'Subagents', 1, 1],
+      ['bash', 'Background bash', 1, 1],
     ]);
 
     expect(model.rows().map((row) => (row.kind === 'group' ? `group:${row.group.id}` : `task:${row.task.id}`))).toEqual([
-      'group:bash',
-      'task:task-1',
       'group:subagent',
       'task:sub-1',
+      'group:bash',
+      'task:task-1',
     ]);
   });
 
@@ -244,7 +284,10 @@ describe('BackgroundTaskModel rows and groups', () => {
     model.applyBashSnapshot(snapshot([bashTask()]));
     const groups = model.groups();
     expect(groups).toHaveLength(2);
-    expect(groups[1]).toMatchObject({ id: 'subagent', tasks: [], running: 0 });
+    // The empty group is the SUBAGENTS one here, and it still gets a heading:
+    // a list whose first heading changes identity with its contents would make
+    // the fold keys act on a different group from one second to the next.
+    expect(groups[0]).toMatchObject({ id: 'subagent', tasks: [], running: 0 });
   });
 
   it('hides a collapsed group\'s tasks but keeps its heading', () => {
