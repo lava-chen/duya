@@ -22,7 +22,7 @@
 - [x] 补 Host 配置接线、执行包装层转发与 driver 回归用例。
 - [x] 定向 Vitest（14/14）、`@duya/agent-runtime` 与 `@duya/host` 类型检查、架构门禁通过。
 - [ ] 全量 `typecheck:all` 完成：在 `@duya/web` 的 Vite 临时配置写入处因共享 `apps/web/node_modules/.vite-temp` 返回 `EPERM`；变更包已在之前的 package build 中编译通过。
-- [ ] commit + PR。
+- [x] 已提交 `93e4275933ac3d08eb5227cddc31bb592b686bda` 并创建 draft PR [#617](https://github.com/lava-chen/duya/pull/617)；保持 draft，等待全量类型检查限制解决后评估。
 
 ## 发现与决策
 
@@ -37,4 +37,4 @@
 
 ## 接续 / 结果
 
-下一步：提交本切片并创建 PR，记录 PR 地址；保留 worktree 直至 PR 集成与获授权的合并后验证。
+下一步：处理全量类型检查在共享 Vite 临时目录的 `EPERM` 限制，更新 PR 验证结果；保留 worktree 直至 PR 集成与获授权的合并后验证。
