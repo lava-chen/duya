@@ -88,6 +88,7 @@ const VIEWPORT_ROWS = 12;
 /** The per-section parts of a `WindowSpec` a list tab provides instead. */
 export interface ListSection {
   readonly items?: readonly WindowItem[];
+  readonly emptyMessage?: string;
   readonly filterable?: boolean;
   readonly initialFilter?: string;
   readonly initialSelected?: number;
@@ -106,6 +107,7 @@ export interface ListSection {
  */
 export class ListState {
   items: readonly WindowItem[] = [];
+  emptyMessage = 'No items.';
   filterable = false;
   onSubmit?: (value: string) => void;
   onActivate?: (value: string) => void;
@@ -117,6 +119,7 @@ export class ListState {
   /** Replace the section's content; selection/scroll/filter start fresh. */
   openSection(section: ListSection): void {
     this.items = section.items ?? [];
+    this.emptyMessage = section.emptyMessage ?? 'No items.';
     this.filterable = section.filterable === true;
     this.onSubmit = section.onSubmit;
     this.onActivate = section.onActivate;
@@ -293,7 +296,7 @@ export class ListState {
     const lines: string[] = [];
     const rows = this.visibleItems();
     if (rows.length === 0) {
-      lines.push('{gray-fg}no matches{/gray-fg}');
+      lines.push(`{gray-fg}${this.filter === '' ? this.emptyMessage : 'No matches.'}{/gray-fg}`);
       return lines;
     }
     this.selected = clampIndex(this.selected, rows.length);

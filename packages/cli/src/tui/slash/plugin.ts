@@ -233,6 +233,32 @@ function catalogItems(rows: readonly CatalogRow[], inventory: readonly PluginEnt
   });
 }
 
+/** Configured plugins stay visible when their marketplace cache is unavailable. */
+function installedRows(data: PanelData): CatalogRow[] {
+  const rows = data.rows.filter((row) => row.installed);
+  const keys = new Set(rows.map(rowKey));
+  for (const entry of data.inventory) {
+    const row: CatalogRow = {
+      pluginId: entry.id,
+      marketplace: entry.marketplace,
+      name: entry.name,
+      ...(entry.displayName === undefined ? {} : { displayName: entry.displayName }),
+      ...(entry.shortDescription === undefined ? {} : { shortDescription: entry.shortDescription }),
+      ...(entry.longDescription === undefined ? {} : { longDescription: entry.longDescription }),
+      ...(entry.description === undefined ? {} : { description: entry.description }),
+      version: 'unknown',
+      installPolicy: 'available',
+      installed: entry.installed,
+      enabled: entry.enabled,
+    };
+    const key = rowKey(row);
+    if (keys.has(key)) continue;
+    rows.push(row);
+    keys.add(key);
+  }
+  return rows;
+}
+
 function marketplaceItems(rows: readonly MarketplaceRow[]): WindowItem[] {
   return rows.map((row) => ({
     label: row.displayName,
@@ -398,7 +424,8 @@ const PLUGIN_COMMAND: TuiSlashCommandDef = {
     let closed = false;
 
     const findRow = (key: string): CatalogRow | undefined =>
-      data.rows.find((row) => rowKey(row) === key);
+      installedRows(data).find((row) => rowKey(row) === key)
+      ?? data.rows.find((row) => rowKey(row) === key);
 
     /**
      * Re-read and repaint all three tabs.
@@ -513,7 +540,8 @@ const PLUGIN_COMMAND: TuiSlashCommandDef = {
         id: 'installed',
         label: 'Installed',
         footer: INSTALLED_FOOTER,
-        items: catalogItems(data.rows.filter((row) => row.installed), data.inventory),
+        items: catalogItems(installedRows(data), data.inventory),
+        emptyMessage: 'No configured plugins.',
         filterable: true,
         onSubmit: toggle,
         // Tab is the toggle in the list; the letters are the same verbs from
@@ -527,6 +555,7 @@ const PLUGIN_COMMAND: TuiSlashCommandDef = {
         id: 'discover',
         label: 'Discover',
         footer: DISCOVER_FOOTER,
+        emptyMessage: 'No plugins to discover.',
         items: catalogItems(
           data.rows.filter((row) => !row.installed && row.installPolicy !== 'not_available'),
           data.inventory,
@@ -545,6 +574,9 @@ const PLUGIN_COMMAND: TuiSlashCommandDef = {
         label: 'Marketplaces',
         footer: MARKETPLACE_FOOTER,
         items: marketplaceItems(data.marketplaces),
+        emptyMessage: data.marketplaceError === undefined
+          ? 'No marketplaces are configured.'
+          : 'Marketplace list is unavailable.',
         filterable: true,
         onSubmit: refreshMarketplace,
         rowActions: { r: refreshMarketplace, x: removeMarketplace, a: () => addMarketplace() },

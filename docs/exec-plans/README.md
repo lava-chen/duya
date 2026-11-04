@@ -14,6 +14,7 @@
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |
 | TUI 插件显示名 | [2026-11-03 TUI /plugin 显示插件真名](active/2026-11-03-tui-plugin-display-name.md) | Host 投影 `interface.displayName/shortDescription/longDescription`；`/plugin` 列表、详情与 `@` 补全显示 PDF/Zotero 等真名；相关用例与类型/架构门禁已过，PR #598 待集成 |
 | TUI 插件市场管理 | [631 TUI 插件市场管理界面](active/630-tui-capabilities-series/631-tui-plugin-market-ui.md) | `/plugin` 三 tab 浏览器与 Host 写 API 已实现；PR #601 待最新 CI 与授权集成 |
+| TUI 插件面板修复 | [2026-11-04 样式与 Installed 列表](active/2026-11-04-tui-plugin-panel-fixes.md) | 修复标签 markup 与 Installed 数据来源；验证及 PR 待完成 |
 | TUI 工具折叠与运行期输出 | [636 TUI 工具行的折叠与运行期输出](active/636-tui-live-shell-output.md) | 折叠行至少画一行、`[+ N]` 改为被隐藏行数并在标记内点名 `Ctrl+T`；新增 `tool.output_delta`（Host 惰性尾部轮询 → TUI 运行期预览 → Desktop/Web 既有 `chat:tool_output` 车道）与 worker bundle 重建；PR #610 已集成（merge `836f9ea9`），真机目视由用户判定按现有证据接受 |
 | TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](archive/2026-11-03-tui-transparent-composer-background.md) | `DUYA_TUI_COMPOSER_BG=transparent` 已合并（PR #595，`cccab45e`）；master 临时 CLI 已安装并加入用户 PATH |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |

@@ -113,6 +113,13 @@ describe('renderMarkup italic/strike (plan 615 Phase 0)', () => {
     expect(renderMarkup('{strike}x{/strike}')).toBe('\x1b[9mx\x1b[m');
   });
 
+  it('renders inverse text and restores it when the tag closes', () => {
+    expect(renderMarkup('{inverse}{cyan-fg} x {/inverse}'))
+      .toBe('\x1b[7;36m x \x1b[m');
+    expect(renderMarkup('{bold}{inverse}x{/inverse}y'))
+      .toBe('\x1b[1;7mx\x1b[m\x1b[1my\x1b[m');
+  });
+
   it('folds stacked attributes into one run, attributes before colour', () => {
     expect(renderMarkup('{bold}{italic}x')).toBe('\x1b[1;3mx\x1b[m');
     expect(renderMarkup('{italic}{cyan-fg}x')).toBe('\x1b[3;36mx\x1b[m');
