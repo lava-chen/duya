@@ -47,6 +47,7 @@ import { getShellForPrompt } from '@duya/capabilities/utils/shellDetector'
 import { logger } from '../worker-logger.js'
 import { HbsPromptSystem } from './hbs/HbsPromptSystem.js'
 import { MODULES } from './modules/registry.js'
+import { resolveSectionPlacement } from './sections/placement-registry.js'
 import type { StaticModuleRef, ModuleName } from './modules/registry.js'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -535,8 +536,10 @@ export class PromptSystem {
    * resolve via renderSectionCompute.
    */
   private buildSectionFromDef(def: SectionDef, context: PromptContext): PromptSection | null {
-    const placement: PromptPlacement = def.placement ?? 'system'
     const sectionName = def.name ?? def.module ?? 'anonymous'
+    // Plan 624 D1: the delivery channel is decided by the placement registry,
+    // not by each config. A config that declares the other channel throws.
+    const placement: PromptPlacement = resolveSectionPlacement(sectionName, def.placement, this.config.name)
     if (placement === 'context' && def.cachePolicy === 'once') {
       throw new Error(
         `PromptSystem '${this.config.name}': section '${sectionName}' declares placement 'context' ` +
