@@ -1957,9 +1957,17 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.test.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
   { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
   { path: 'apps/desktop/src/main/services/next-step/next-step-service.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  // RETIREMENT_GATE_FIXTURE_CONTEXT_START
+  // Census history, not a live reference: these three paths were DELETED with
+  // the plan tool. The retirement gate scans literal `packages/agent/...`
+  // strings, so a census entry that must name the removed path needs the same
+  // bounded exemption `agent-retirement-gate.test.ts` asserts for recorded
+  // losses. Keep the markers tight: an active reference added below END is
+  // still counted and fails the ratchet.
   { path: 'packages/agent/src/tool/PlanTool/PlanTool.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
   { path: 'packages/agent/src/tool/PlanTool/index.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
   { path: 'packages/agent/src/tool/PlanTool/storage.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
+  // RETIREMENT_GATE_FIXTURE_CONTEXT_END
 ];
 
 /**
