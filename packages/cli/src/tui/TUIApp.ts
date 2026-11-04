@@ -105,6 +105,7 @@ import {
   type ThemeName,
 } from './theme.js';
 import { compactActivity } from './text.js';
+import { capacityBar } from './capacity-bar.js';
 import { formatTokensPerSecond, readGitBranch } from './footer.js';
 import type { PrBadge } from './pr-badge.js';
 import type { StatuslineProfile } from './preferences.js';
@@ -3483,15 +3484,15 @@ export class TUIApp {
   }
 
   /**
-   * Fixed-width bar for the status line and the usage window.
+   * Fixed-width bar for the usage window.
    *
-   * Constant length on purpose: a bar that grows and shrinks with usage drags
-   * the rest of the status line around, and a status line that moves is one
-   * the eye cannot learn to skim.
+   * Delegates to the shared `capacityBar` so the window and the footer cannot
+   * disagree about what "half full" looks like. Fixed length on purpose: a bar
+   * that grows and shrinks with usage drags the rest of the line around, and a
+   * line that moves is one the eye cannot learn to skim.
    */
   private contextBar(cells = 8): string {
-    const filled = Math.max(0, Math.min(cells, Math.round((this.contextPercent() / 100) * cells)));
-    return '▰'.repeat(filled) + '▱'.repeat(cells - filled);
+    return capacityBar(this.contextPercent() / 100, cells);
   }
 
   /** The persisted input history. */

@@ -35,6 +35,12 @@
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import {
+  CAPACITY_EMPTY,
+  CAPACITY_FILLED,
+  capacityBarCellsForWidth,
+  capacityFilledCells,
+} from './capacity-bar.js';
 import type { PermissionBadge } from './permission-mode.js';
 import type { StatuslineProfile } from './preferences.js';
 import { encodeHyperlinkTag } from './core/span.js';
@@ -270,11 +276,20 @@ export function buildFooterLines(input: FooterInput): string[] {
 
   const budget = stats.contextBudget ?? null;
   const percent = stats.contextPercent;
+  // The context group is a SHAPE and a number, not a fraction. `42%/200k` was
+  // two numbers of two different kinds glued together by a slash, and the
+  // reader had to do the division themselves to see how close to full the
+  // window was — which is the entire question this row exists to answer. The
+  // bar answers it at a glance; the percentage says it exactly; the window size
+  // was never a reading, only a denominator, and `/context` still reports it.
+  const hasBudget = showContext && budget !== null && budget > 0;
+  const barCells = hasBudget ? capacityBarCellsForWidth(width) : 0;
+  const ratio = percent === null ? null : percent / 100;
   // `?` before the first billed call, like pi: the window size is known, the
   // usage is not, and a confident "0%" would be a claim rather than a reading.
-  const contextLabel = showContext && budget !== null && budget > 0
-    ? `${percent === null ? '?' : `${Math.round(percent)}%`}/${formatTokenCount(budget)}`
-    : '';
+  // The bar is drawn hollow in that case rather than omitted, so the row does
+  // not change shape the moment the first call lands.
+  const context = hasBudget ? contextGroup(styles, barCells, ratio, percent) : null;
   // The output rate of the MOST RECENT billed call, measured against the
   // provider's own request duration. It is omitted entirely when the provider
   // reported no duration, rather than shown as a zero.
@@ -282,30 +297,23 @@ export function buildFooterLines(input: FooterInput): string[] {
   const rateLabel = showRate && rate !== null && Number.isFinite(rate) ? formatTokensPerSecond(rate) : '';
 
   // Three GROUPS, not a run of bare tokens. The counters answer "what has this
-  // session spent", the context pair "how much of the window is left", the rate
-  // "how fast did the last answer come". Single spaces made five numbers of
-  // three different kinds read as one undifferentiated run, which is the shape
-  // this row was criticised for; the separator and one colour per kind are what
-  // tell them apart without adding a row or a label.
-  const groups = [counters.join(' '), contextLabel, rateLabel].filter((group) => group !== '');
-  const statsPlain = groups.join(SEPARATOR);
+  // session spent", the bar "how much of the window is left", the rate "how
+  // fast did the last answer come". Single spaces made five numbers of three
+  // different kinds read as one undifferentiated run, which is the shape this
+  // row was criticised for; the separator and one colour per kind are what tell
+  // them apart without adding a row or a label.
+  const statsGroups: Array<{ readonly plain: string; readonly tagged: string }> = [];
+  const countersText = counters.join(' ');
+  if (countersText !== '') statsGroups.push({ plain: countersText, tagged: styles.muted(countersText) });
+  if (context !== null) statsGroups.push(context);
+  if (rateLabel !== '') statsGroups.push({ plain: rateLabel, tagged: styles.accent(rateLabel) });
+  const statsPlain = statsGroups.map((group) => group.plain).join(SEPARATOR);
+  const statsTagged = statsGroups.map((group) => group.tagged).join(styles.muted(SEPARATOR));
 
   const model = showModel ? input.model ?? null : null;
   const provider = model?.provider === undefined || model.provider === '' ? '' : `(${model.provider}) `;
   const thinking = model?.thinking === undefined || model.thinking === '' ? '' : ` • ${model.thinking}`;
   const modelPlain = model === null ? '' : `${provider}${model.model}${thinking}`;
-
-  // Colour carries kind, and the context percentage is the one number that can
-  // mean "something must be done" — so it is the only thing allowed to be red
-  // or yellow, and outside a warning it is plain muted like the counters.
-  const contextStyle = percent === null || budget === null || budget <= 0
-    ? null
-    : percent > 90 ? styles.error : percent > 70 ? styles.warning : null;
-  const statsTagged = groups.map((group) => {
-    if (group === rateLabel) return styles.accent(group);
-    if (group === contextLabel && contextStyle !== null) return contextStyle(group);
-    return styles.muted(group);
-  }).join(styles.muted(SEPARATOR));
 
   // The badge's state is a COLOUR, not a glyph: the footer is a fixed-width
   // row and a symbol's cell width is ambiguous in CJK terminals.
@@ -332,6 +340,44 @@ export function buildFooterLines(input: FooterInput): string[] {
   ], width, styles, row1Tagged);
   const row2 = composeRow(statsPlain, rightSegments(input, styles, modelPlain), width, styles, statsTagged);
   return [row1, row2];
+}
+
+/**
+ * The context group: a bar, then the percentage, in the tone the percentage
+ * earned.
+ *
+ * Returns plain and tagged together rather than letting the caller tag the
+ * plain string afterwards, because the group is the one place on the row where
+ * TWO tones share a segment — a bar painted in a single colour cannot say
+ * "nearly full" without also painting its empty part in the alarm colour, and
+ * the empty part is precisely what the reader is being warned about running
+ * out of.
+ *
+ * `cells === 0` is the narrow-terminal case: the percentage alone still says
+ * what the bar would have said, so the group degrades to a number instead of
+ * disappearing.
+ */
+function contextGroup(
+  styles: Styles,
+  cells: number,
+  ratio: number | null,
+  percent: number | null,
+): { readonly plain: string; readonly tagged: string } {
+  const filled = capacityFilledCells(ratio, cells);
+  const empty = Math.max(0, cells - filled);
+  // Colour carries absence of room here and nowhere else on this row, because
+  // the context percentage is the one number that can mean "something must be
+  // done". Below the warning threshold it is plain muted, like the counters.
+  const tone = percent === null
+    ? styles.muted
+    : percent > 90 ? styles.error : percent > 70 ? styles.warning : styles.muted;
+  const label = percent === null ? '?' : `${Math.round(percent)}%`;
+  const plainBar = CAPACITY_FILLED.repeat(filled) + CAPACITY_EMPTY.repeat(empty);
+  const taggedBar = (filled === 0 ? '' : tone(CAPACITY_FILLED.repeat(filled)))
+    + (empty === 0 ? '' : styles.muted(CAPACITY_EMPTY.repeat(empty)));
+  return cells === 0
+    ? { plain: label, tagged: tone(label) }
+    : { plain: `${plainBar} ${label}`, tagged: `${taggedBar} ${tone(label)}` };
 }
 
 /**

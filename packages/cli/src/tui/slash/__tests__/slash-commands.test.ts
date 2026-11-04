@@ -856,8 +856,9 @@ describe('/context', () => {
     });
     await command('context').run(ctx, '');
     const out = ctx.notices.join('\n');
-    expect(out).toMatch(/used\s+50k/);
-    expect(out).toContain('25.0% used');
+    // The bar leads and the counts follow it: 50k of 200k is a quarter full, so
+    // three of the twelve cells are filled.
+    expect(out).toMatch(/used\s+▰{3}▱{9}\s+50k \(25\.0%\)/);
     expect(out).toMatch(/remaining\s+150k/);
     expect(out).toContain('model capability');
   });
@@ -907,7 +908,9 @@ describe('/context', () => {
     await command('context').run(ctx, '');
     const out = ctx.notices.join('\n');
     expect(out).toContain('no usage anchor yet');
-    expect(out).not.toContain('% used');
+    // No ratio AND no bar: an empty bar next to "unknown" would be a reading
+    // the panel does not have.
+    expect(out).not.toMatch(/[▰▱]/);
   });
 });
 
