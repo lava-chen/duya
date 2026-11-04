@@ -876,9 +876,47 @@ describe('product turn: a bound turn-output sink does not change the legacy', ()
     expect(row.model).toBeTruthy();
     expect(row.providerId).toBeTruthy();
     expect(row.seq_index).toBe(7);
-    // NOT asserted: `usage`. `agent.messages` is the provider-shaped projection
-    // (`projectTimelinePersistenceMessages`), which is not the row -- the usage
-    // block is asserted where it is actually decided, in the composition's
-    // `toRowUsage`. Asserting it here would be testing the projector.
+    // `agent.messages` is the persistence projection
+    // (`projectTimelinePersistenceMessages`), so `tokenUsage` here IS the column
+    // every durable consumer reads back: the journal only carries
+    // `tokenUsage` (`JOURNAL_MESSAGE_FIELDS`), `LEGACY_KNOWN_KEYS` only keeps
+    // `tokenUsage`, and `/context` / `/cost` / the Desktop ring anchor on it.
+    // A row that sets only `usage` (the provider-shaped block the in-memory
+    // compaction anchor reads) reaches the rollout with no usage at all.
+    expect(row.tokenUsage).toEqual({ input_tokens: 3, output_tokens: 5 });
+  });
+
+  it('persists the SINGLE-CALL usage on the row, never the turn sum', async () => {
+    installFakeDbIpc();
+    const agent = makeAgent();
+    // What the composition actually hands over: the turn-cumulative block with
+    // the final request under `last_call` (`persistedUsageBlock`).
+    //
+    // This port fires once per ASSEMBLED message, so a tool-heavy turn produces
+    // several rows. Persisting that cumulative block on each of them would make
+    // every summing consumer (`/cost`, `seedTokenUsageFromHistory`, the Desktop
+    // usage aggregator) count the turn N times -- plan 546's double-count one
+    // layer down.
+    agent.recordTurnAssistantMessage({
+      content: [{ type: 'text', text: 'first round' }],
+      seqIndex: 8,
+      usage: {
+        input_tokens: 120_000,
+        output_tokens: 300,
+        last_call: { input_tokens: 40_000, output_tokens: 250 },
+        calls: [
+          { input_tokens: 40_000, output_tokens: 250 },
+          { input_tokens: 40_000, output_tokens: 25 },
+          { input_tokens: 40_000, output_tokens: 25 },
+        ],
+      },
+    });
+
+    const rows = agent.messages.filter((m) => m.role === 'assistant');
+    expect(rows.length).toBe(1);
+    // `deriveSingleCallUsage` picks `last_call` (the largest-prompt call of the
+    // turn), not the 120k cumulative sum: a second row in this same turn would
+    // otherwise add another 120k.
+    expect(rows[0]?.tokenUsage).toEqual({ input_tokens: 40_000, output_tokens: 250 });
   });
 });

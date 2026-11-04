@@ -796,8 +796,30 @@ export class WorkerSession implements AgentRuntime {
             seq_index: input.seqIndex,
             ...this.modelAttribution,
         };
-        if (input.usage !== undefined)
-            (row as AssistantMessage).usage = input.usage;
+        if (input.usage !== undefined) {
+            // Two names for two different consumers, and the row needs BOTH.
+            // `usage` is the provider-shaped block the in-memory anchor reads,
+            // while `tokenUsage` is the PERSISTED field: the journal
+            // (`worker-journal/Journal.ts`) and `LEGACY_KNOWN_KEYS`
+            // (`agent-protocol/src/message-ingest.ts`) both only carry
+            // `tokenUsage`, so a row that sets only `usage` reaches the rollout
+            // with no usage at all -- and every consumer that rebuilds an anchor
+            // from durable history (`/context`, `/cost`, the Desktop ring after
+            // a reload) then reports "no anchor" forever.
+            //
+            // SINGLE-CALL, not the turn sum. This port fires once per ASSEMBLED
+            // message (`agent-runtime/src/engine/ports.ts:756`), so a tool-heavy
+            // turn produces several rows that all receive the same caller block.
+            // Persisting the turn-cumulative block would make every summing
+            // consumer (`/cost`'s `sumMessageUsage`, `seedTokenUsageFromHistory`,
+            // the Desktop usage aggregator) count the turn N times -- the plan
+            // 546 double-count, one layer down. `deriveSingleCallUsage` is the
+            // same normalizer plan 546 established, and it is idempotent: a block
+            // that is already single-call passes through unchanged.
+            const singleCall = deriveSingleCallUsage(input.usage) ?? input.usage;
+            (row as AssistantMessage).usage = singleCall;
+            row.tokenUsage = singleCall;
+        }
         this._commitDurable(row);
     }
     commitTurnPromptUserRow(input: {
