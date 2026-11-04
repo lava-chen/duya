@@ -20,12 +20,13 @@ import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declaration
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
+import { resolvePromptSelection } from '@duya/host/agent-composition';
+import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
 import { sendEvent, buildClipboardWriteEvent } from '@duya/host/worker-transport';
 import type { PromptSystem } from '@duya/host/worker-prompts/index';
-import { createBotPromptAssembly, loadBotPromptContext, isBotAgentProfile, computeBotContentHash, countTimelineCompactions, buildProfileUpdateEnvelope, detectProfileUpdate, isProfileUpdateFolded, mergeProfileUpdate, type ProfileBaseline, } from '@duya/host/worker-prompts/index';
+import { createBotPromptAssembly, loadBotPromptContext, computeBotContentHash, countTimelineCompactions, buildProfileUpdateEnvelope, detectProfileUpdate, isProfileUpdateFolded, mergeProfileUpdate, type ProfileBaseline, } from '@duya/host/worker-prompts/index';
 import type { BotPromptAssembly } from '@duya/host/worker-prompts/index';
 import { getAgentsMdManager } from '@duya/host/worker-agents-md/index';
 import { extractTriggerPaths } from '@duya/host/worker-agents-md/nested-loader';
@@ -1733,13 +1734,18 @@ export class WorkerSession implements AgentRuntime {
         return { tools, registry, agentDefinitions, constraints, catalogTool, catalogView, toolInvokeExecutor };
     }
     private async _buildSystemPrompt(tools: Tool[], options?: ChatOptions, appliedProfile?: AgentProfile): Promise<string> {
-        const sysName = resolvePromptSystemName(appliedProfile?.promptSystem);
+        // Plan 624 B1: the decision "which prompt system" now comes from the
+        // composition layer. The section overrides stay on their existing path
+        // (a pure pass-through) so this step changes no bytes.
+        const promptSelection = resolvePromptSelection(appliedProfile);
+        const sysName = promptSelection.promptSystem;
         const promptProfile = appliedProfile
             ? getPromptProfileForAgentProfile(appliedProfile)
             : DEFAULT_PROMPT_PROFILE;
         const promptSystem: PromptSystem = PromptsRegistry.getOrCreate(sysName, promptProfile)
             ?? PromptsRegistry.getOrCreate('general', promptProfile)!;
         logger.info(`[Agent] Using prompt system '${sysName}'${appliedProfile ? ` for profile: ${appliedProfile.name}` : ' (default)'}`);
+        logger.info(`[Agent] Resolved prompt decision: source=${promptSelection.decisions[0]?.source ?? 'unknown'}, requested=${promptSelection.requestedSystem ?? 'none'}`);
         logger.info(`[Agent] Resolved prompt profile: enableSections=${JSON.stringify(promptProfile.enableSections ?? [])}, disableSections=${JSON.stringify(promptProfile.disableSections ?? [])}`);
         let systemPromptContent: string;
         // Host-appended blocks, tracked separately from the PromptSystem
@@ -1801,7 +1807,7 @@ export class WorkerSession implements AgentRuntime {
             systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
             logger.info('[Agent] streamChat: Added system prompt prefix');
         }
-        if (appliedProfile && !appliedProfile.suppressIdentityBlock) {
+        if (appliedProfile && !promptSelection.suppressIdentityBlock) {
             const identityBlock = buildAgentIdentityBlock(appliedProfile);
             hostBlocks.push({ name: 'host:identity', content: identityBlock });
             systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
@@ -1815,7 +1821,7 @@ export class WorkerSession implements AgentRuntime {
                     : agentsMdSection;
             }
         }
-        if (!options?.disableSystemPrompt && isBotAgentProfile(appliedProfile) && appliedProfile) {
+        if (!options?.disableSystemPrompt && promptSelection.usesBotAssembly && appliedProfile) {
             try {
                 const botContext = await loadBotPromptContext(appliedProfile.id);
                 const summaryEpoch = countTimelineCompactions(this.timeline.snapshot());
