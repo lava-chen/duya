@@ -30,7 +30,6 @@ import { reactToMessageTool } from '@duya/host/worker-tool-bindings/react-to-mes
 import { createAgentTool, updateAgentTool, } from '@duya/host/worker-tool-bindings/agent-management';
 import { manageRoutineTool } from '@duya/host/worker-tool-bindings/routine';
 import { listAppConnectorsTool, connectAppTool } from '@duya/host/worker-tool-bindings/app-connector-manage-tools';
-import { planTool } from '@duya/host/worker-tool-bindings/plan';
 export function createBotRegistry( services: BuiltinRegistryServices, deps: SubagentRunDeps, options?: {
     enabledPluginIds?: Set<string>;
 }): ToolRegistry {
@@ -69,7 +68,6 @@ export function registerBotTools(registry: ToolRegistry, deps: SubagentRunDeps, 
         exposure: 'deferred',
         inputSchemaSummary: 'prompt (required), size, quality, reference_image, output_path',
     });
-    registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
     const grepToolInstance = new GrepTool();
     registry.register(grepToolInstance.toTool(), grepToolInstance, { exposure: 'deferred' });
     registry.register(globTool.toTool(), globTool, { exposure: 'deferred' });

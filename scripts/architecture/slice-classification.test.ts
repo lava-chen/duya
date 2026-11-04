@@ -295,6 +295,8 @@ const REMOVED_WITH_THE_NEXT_STEP_SERVICE =
 const RETIRED_WITH_DUYA_APP_SESSION_MCP =
   'retired with #576 after the duya_app Session MCP passed tool discovery and a successful call; the synchronous interagent invoke, pending-call registry, and router have no runtime successor, while the UI renderer remains for historical transcripts';
 
+const REMOVED_WITH_THE_PLAN_TOOL =
+  'deleted with the plan tool, which the user removed on 2026-11-04 (exec-plans/active/2026-11-04-remove-plan-tool.md); the tool only read and archived plan files under ~/.duya/projects/<id>/plans/ and never created them, so no in-tree successor carries this path';
 const RECORDED_LOSSES: readonly RecordedLoss[] = [
   // packages/ui/src :: host-ui (765)
   { path: 'apps/desktop/src/main/ipc/__tests__/stream-session-manager-queue.test.ts', from: 'host-ui', why: MOVED_TO_UI },
@@ -1955,6 +1957,9 @@ const RECORDED_LOSSES: readonly RecordedLoss[] = [
   { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.test.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
   { path: 'apps/desktop/src/main/services/next-step/next-step-prompt.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
   { path: 'apps/desktop/src/main/services/next-step/next-step-service.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_NEXT_STEP_SERVICE },
+  { path: 'packages/agent/src/tool/PlanTool/PlanTool.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
+  { path: 'packages/agent/src/tool/PlanTool/index.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
+  { path: 'packages/agent/src/tool/PlanTool/storage.ts', from: 'capability-adapter', why: REMOVED_WITH_THE_PLAN_TOOL },
 ];
 
 /**
