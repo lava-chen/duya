@@ -1021,6 +1021,15 @@ export class WorkerSession implements AgentRuntime {
      */
     private contextRailBlocks: ContextBlock[] = [];
     /**
+     * Rendered text per rail block id from the previous request (plan 624 D2).
+     *
+     * The rail is rebuilt from the timeline every turn and never appended to
+     * it, so there is no history to replay when asking "what changed". This map
+     * is that baseline: in-memory only, never persisted, and reset with the
+     * session — a resumed session simply sees its first turn as first contact.
+     */
+    private lastRailContents = new Map<string, string>();
+    /**
      * The prompt ledger's per-session state (plan 619 Phase 4): which
      * texts have already been written, so an unchanged one is recorded
      * by hash instead of by content.
@@ -2596,11 +2605,17 @@ export class WorkerSession implements AgentRuntime {
         // The volatile-context rail goes in unconditionally and last: it is
         // current state, not a hook's contribution, and it must not ride the
         // `injectHookContexts` switch.
-        applyContextRail(
+        const railReport = applyContextRail(
             messages as unknown as InjectableMessage[],
             this.contextRailBlocks,
-            { now: Date.now() },
+            { now: Date.now(), previous: this.lastRailContents },
         );
+        // The baseline advances only after the request is built, so the next
+        // turn compares against what this turn actually sent.
+        this.lastRailContents = new Map(this.contextRailBlocks.map((block) => [block.id, block.content]));
+        if (railReport.changed.length > 0 || railReport.removed.length > 0) {
+            logger.debug(`[Agent] context rail: ${railReport.changed.length} updated (${railReport.changed.join(', ')}), ${railReport.removed.length} removed (${railReport.removed.join(', ')})`);
+        }
         // The projection can return blocks instead of a string when a system
         // segment carries structured content (a `legacy_system` row or a
         // compaction's `reinjectedSystemMessages`). Those blocks are dropped
