@@ -13,6 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Message, MessageContent } from '@duya/agent-core/message';
+import { resolveAgentType, unavailableAgentTypeMessage } from '@duya/agent-core/subagents/agent-type-registry';
 import type { ToolResult } from '@duya/capabilities/contracts';
 import type { SubagentToolInput, SubagentToolOverlay, SubagentToolResultPayload } from '@duya/capabilities/SubagentTool';
 import {
@@ -60,18 +61,6 @@ import {
 } from './worktree.js';
 import { samePath } from '../workspace/fs-utils.js';
 import { isManagedCheckoutPath } from '../workspace/paths.js';
-
-const agentTypeAliases: Record<string, string> = {
-  explore: 'Explore',
-  explorer: 'Explore',
-  plan: 'Plan',
-  research: 'Research',
-  codereview: 'CodeReview',
-  'code-review': 'CodeReview',
-  verification: 'verification',
-  'general-purpose': 'general-purpose',
-  generalpurpose: 'general-purpose',
-}
 
 const BACKGROUND_SPAWN_TTL_MS = 10 * 60 * 1000;
 
@@ -178,12 +167,15 @@ function formatSubagentStartedBackground(
     : BACKGROUND_SUBAGENT_IDLE_NOTICE;
   const lines = [
     `Subagent started in background.`,
-    // The SESSION id, not the task id. `resume_from` reads `sessions.id`, and
-    // the tool's own description says the value is "a subagent_id returned by
-    // a previous task call" — so the id this notice names has to be the one
-    // a resume accepts. The task id is a different thing and is named
-    // separately, below, where it is used.
+    // Two ids, two consumers, and the receipt must carry BOTH. `subagent_id`
+    // (the SESSION id) is what `resume_from` accepts — the tool description
+    // says so, and `resume_from` reads `sessions.id`. `task_id` is what
+    // get_task_output / kill_task accept. A receipt that names only one id
+    // sent the model hunting with the wrong key: get_task_output answered
+    // `not_found` for the session id and the parent concluded the child was
+    // lost (2026-11-03 session 507bb717 / task 4f606add).
     `subagent_id: ${sessionId}`,
+    `task_id: ${taskId}`,
     `type: ${agentType}`,
     `description: ${description}`,
     ``,
@@ -193,7 +185,7 @@ function formatSubagentStartedBackground(
     lines.push(``);
   }
   if (extras.autoWake) {
-    lines.push(`It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output only takes a status/output snapshot; it never blocks. If the task looks stuck, use kill_task.`);
+    lines.push(`It runs independently of this session. When it completes, a <task-notification> carrying the final result and the output-file path is delivered automatically at the start of your next turn. You may check its progress once with get_task_output using task_id "${taskId}" — that is a snapshot and never blocks — but do not poll in a loop; the notification carries the full result. If the task looks stuck, use kill_task with the same task_id.`);
   } else {
     lines.push(`It runs independently of this session, and auto_wake is false: you will NOT be notified when it completes. Poll it yourself with get_task_output using task_id "${taskId}"; the full transcript is at ${extras.outputFilePath}. Read that file for the complete output once the task reports a terminal status.`);
   }
@@ -273,9 +265,12 @@ export class WorkerSubagentService<
 
     try {
       const agentDefinitions = context.options.agentDefinitions?.allAgents ?? [];
-      const requestedAgentType = agentInput.subagent_type || 'general-purpose';
-      const normalizedRequested = requestedAgentType.trim().toLowerCase();
-      const canonicalRequestedType = agentTypeAliases[normalizedRequested] || requestedAgentType;
+      // Alias/case normalization and the strict unknown-type rejection live in
+      // agent-core's registry — the same authority the `task` tool schema's
+      // type catalog is built from.
+      const resolution = resolveAgentType(agentInput.subagent_type, agentDefinitions);
+      const requestedAgentType = resolution.ok ? resolution.definition.agentType : resolution.requested;
+      const canonicalRequestedType = requestedAgentType;
       const effectiveRunInBackground = agentInput.run_in_background !== false;
       const parentSessionId = context.options.sessionId;
 
@@ -325,27 +320,21 @@ export class WorkerSubagentService<
         ...(autoWake === false ? { autoWake } : {}),
       }, 'SubAgent')
 
-      const agentDefinition = agentDefinitions.find((def) => {
-        if (def.agentType === canonicalRequestedType) return true;
-        return def.agentType.trim().toLowerCase() === normalizedRequested;
-      });
-
-      if (!agentDefinition) {
+      if (!resolution.ok) {
         logger.warn('[SubAgent] requested agent type not found', {
           requestedAgentType,
           canonicalRequestedType,
-          availableAgentTypes: agentDefinitions.map((def) => def.agentType),
+          availableAgentTypes: resolution.available,
           parentSessionId: context.options.sessionId,
         }, 'SubAgent')
         return {
           id: crypto.randomUUID(),
           name: SUBAGENT_TOOL_NAME,
-          result: JSON.stringify({
-            error: `Agent type "${requestedAgentType}" not found. Available types: ${agentDefinitions.map((d) => d.agentType).join(', ')}`,
-          }),
+          result: JSON.stringify({ error: unavailableAgentTypeMessage(resolution) }),
           error: true,
         };
       }
+      const agentDefinition = resolution.definition;
 
       // Clamp defensively: the schema hints maxLength but the model may not
       // honor it, and this string flows into session titles and events.
@@ -733,6 +722,10 @@ export class WorkerSubagentService<
                 emitLiveProgress(event)
                 return
               }
+              // Terminal events are lifecycle-only (background runs); a
+              // foreground run's stream never emits them, and the wire union
+              // below has no member for them either.
+              if (event.type === 'completed' || event.type === 'failed') return
               // `type` is destructured into its own binding on purpose: an
               // object spread of a narrowed discriminated union widens `type`
               // back to the full union, which would re-admit 'heartbeat'.
@@ -767,6 +760,18 @@ export class WorkerSubagentService<
           autoWake,
           // Plan 621 D: the terminal paths checkpoint/release through this.
           ...(checkoutEntry ? { checkout: checkoutEntry } : {}),
+          // Terminal progress frame: the one live signal that flips the
+          // renderer's subagent card / task row to its final state. The
+          // mailbox <task-notification> reaches the MODEL at the next turn
+          // boundary; without this frame nothing visible changes until then.
+          onTerminal: (terminalRecord) => {
+            emitLiveProgress({
+              type: terminalRecord.status === 'completed' ? 'completed' : 'failed',
+              agentId: taskId,
+              duration: (terminalRecord.completedAt ?? Date.now()) - terminalRecord.startedAt,
+              ...(terminalRecord.error === undefined ? {} : { data: terminalRecord.error }),
+            });
+          },
         })
 
         logger.info('[SubAgent] background task registered', {

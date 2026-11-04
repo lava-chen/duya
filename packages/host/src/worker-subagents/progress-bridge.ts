@@ -51,14 +51,26 @@ export function buildChatAgentProgressPayload(
     type: 'chat:agent_progress',
     sessionId: meta.parentSessionId,
     agentEventType: event.type,
+    // `subagentId` is the field every downstream consumer keys on (the TUI's
+    // BackgroundTaskModel / ActivityTracker, and the runtime translator's
+    // `data['subagentId'] ?? data['agentId'] ?? data['id']` lookup). The raw
+    // frames previously carried only `agentId`, so EVERY live subagent frame
+    // from a background spawn was silently dropped by the TUI.
     agentId: event.agentId ?? meta.agentId,
+    subagentId: event.agentId ?? meta.agentId,
     agentType: meta.agentType,
     agentName: meta.agentName,
     agentDescription: meta.agentDescription,
     agentSessionId: meta.subAgentSessionId,
   }
   if (meta.parentToolCallId !== undefined) payload.parentToolCallId = meta.parentToolCallId
-  if (event.duration !== undefined) payload.duration = event.duration
+  if (event.duration !== undefined) {
+    payload.duration = event.duration
+    payload.durationMs = event.duration
+  }
+  // Terminal events carry their outcome so a consumer can render
+  // completed/failed instead of falling back to "completed" for both.
+  if (event.type === 'completed' || event.type === 'failed') payload.status = event.type
   if (event.data !== undefined) payload.data = event.data
   if (event.toolName !== undefined) payload.toolName = event.toolName
   if (event.toolInput !== undefined) payload.toolInput = event.toolInput

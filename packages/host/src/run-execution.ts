@@ -939,7 +939,9 @@ export class HostRunExecutionController {
     if (type === 'bash_task:update') {
       // The worker's registry is the only writer of bash task state; this
       // message is already a complete snapshot, so replace rather than merge.
-      this.backgroundTasks.apply(sessionId, msg.tasks);
+      // Background subagent tasks ride the same frame as `agentTasks` (the
+      // worker's BackgroundAgentLifecycle is the only writer of that half).
+      this.backgroundTasks.apply(sessionId, msg.tasks, msg.agentTasks);
       return;
     }
 

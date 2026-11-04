@@ -29,11 +29,30 @@ export type BackgroundTaskStatusV1 =
   | 'error'
   | 'lost';
 
-/** One background bash task, as last reported by the owning worker. */
+/**
+ * Which registry produced a task. Absent means `'bash'` (the original wire
+ * shape). Subagent tasks have no `command`; their human-readable identity is
+ * `label` (`agentName` falling back to the agent type).
+ */
+export type BackgroundTaskKindV1 = 'bash' | 'subagent';
+
+/** One background task, as last reported by the owning worker. */
 export interface BackgroundTaskSummaryV1 {
   readonly id: string;
-  readonly command: string;
+  /**
+   * The shell command line. Required for `kind: 'bash'`; absent for
+   * `kind: 'subagent'` (use `label` instead).
+   */
+  readonly command?: string;
   readonly status: BackgroundTaskStatusV1;
+  /** Task family. Omitted on legacy wire rows; readers default to 'bash'. */
+  readonly kind?: BackgroundTaskKindV1;
+  /** Subagent display identity: agent name, falling back to the agent type. */
+  readonly label?: string;
+  /** Subagent's declared type (`Explore`, `Plan`, `general-purpose`, ...). */
+  readonly agentType?: string;
+  /** Subagent's own session id — the watch/resume handle in the TUI. */
+  readonly subagentSessionId?: string;
   /** Epoch milliseconds. */
   readonly startedAtMs: number;
   readonly endedAtMs?: number;

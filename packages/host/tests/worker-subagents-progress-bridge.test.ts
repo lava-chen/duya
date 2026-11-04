@@ -54,3 +54,26 @@ describe('buildChatAgentProgressPayload', () => {
     expect(payload.duration).toBe(1_234);
   });
 });
+
+describe('terminal progress frames', () => {
+  it('carries subagentId, status and durationMs so live consumers can fold the card', () => {
+    const payload = buildChatAgentProgressPayload(
+      { type: 'completed', agentId: 'task-9', duration: 467_305 },
+      META,
+    );
+    expect(payload.agentEventType).toBe('completed');
+    expect(payload.subagentId).toBe('task-9');
+    expect(payload.agentId).toBe('task-9');
+    expect(payload.status).toBe('completed');
+    expect(payload.durationMs).toBe(467_305);
+  });
+
+  it('marks failures so a consumer does not render them as completed', () => {
+    const payload = buildChatAgentProgressPayload(
+      { type: 'failed', agentId: 'task-9', data: 'model exploded' },
+      META,
+    );
+    expect(payload.status).toBe('failed');
+    expect(payload.data).toBe('model exploded');
+  });
+});

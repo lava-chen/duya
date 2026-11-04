@@ -494,7 +494,9 @@ function translatePermission(
  */
 function translateAgentProgress(data: Readonly<Record<string, unknown>>): TranslateResult {
   const kind = str(data['agentEventType']) || str(data['type']);
-  const subagentId = str(data['subagentId'] ?? data['id']);
+  // The worker's raw frames key the child as `agentId`; the durable engine
+  // events and the TUI use `subagentId`. Accept all three spellings.
+  const subagentId = str(data['subagentId'] ?? data['agentId'] ?? data['id']);
 
   if (kind.includes('started')) {
     if (subagentId === '') return unmapped(data);
@@ -513,7 +515,10 @@ function translateAgentProgress(data: Readonly<Record<string, unknown>>): Transl
       subagentId,
       status: kind.includes('failed') ? 'failed' : 'completed',
       durationMs: num(data['durationMs']),
-      ...optionalString('summary', data['summary']),
+      // Terminal frames from the lifecycle carry the failure text in `data`
+      // (AgentProgressEvent has no summary member); surface it as the card
+      // summary so a failed child explains itself without opening /tasks.
+      ...optionalString('summary', data['summary'] ?? data['data']),
     });
   }
   return ok({
