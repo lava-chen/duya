@@ -247,7 +247,7 @@ base `7ef8cbd0`。命令与结果：
 初次全量跑 capabilities 时有 1 个失败：`file-diff-metadata.test.ts` 覆盖已存在
 文件但没有先读——正是新 `write` 门在起作用；该用例已补上 read anchor。
 
-### 遗留
+### 遗留（2026-11-04 已全部结清，见下节）
 
 - 父子会话仍共享 `readStates`：子 agent 读过的文件会让父会话的 edit 通过（误放，
   安全侧但不等价于"父自己也读过"）。彻底修需要工具调用携带 session identity，
@@ -255,3 +255,54 @@ base `7ef8cbd0`。命令与结果：
 - `compressProjectedToolMessages` 仍是未接线状态。若之后把它接进请求组装，需要在
   投影压缩后对 offload 掉的 read 路径 `invalidateFileRead`——否则会出现"投影里是
   占位符、账本说读过"的新一轮错配。
+
+## Phase 4：账本按会话来分（2026-11-04）
+
+### 1. 父子会话不再共享账本
+
+`file-read-state.ts` 从"一个全局 Map"改为"按 session 分桶的 Map"。scope 由
+`readScopeFromContext(context)` 统一派生（`ToolUseContext.options.sessionId`），
+四个读写路径（read/write/edit/apply_patch）都必须走这一个函数：它们各自内联派生
+会让同一 agent 刚读过的文件被自己的 edit 判成 never-read，比门关着更糟。
+
+链路已核实打通：子会话 `WorkerSession.sessionId`（`service.ts` 里
+`crypto.randomUUID()`）→ `TurnAssembler` 写入 `turnContext.sessionId` →
+`buildTurnPipeline` 写入 `ToolUseContext.options.sessionId` → 工具。因此父/子天然
+落在不同桶，不需要 AsyncLocalStorage（异步生成器跨越 `next()` 时上下文不可靠）。
+
+- 无 scope 的调用落到"当前活跃会话"桶，覆盖测试与 legacy 无 context 调用。
+- `beginFileReadSession(id)` 会**清掉其它所有桶**：顶层新会话不继承任何东西，同时
+  给长驻 worker 进程的内存封顶。子会话不调用它（否则每次 spawn 清空父账本）。
+- `clearFileReadState(scope)` 带 scope 只清一个桶；不带 scope 清全部。summary
+  compaction 走不带 scope 的那种——过度失效只是多一次读，失效不足就是 428 的错改。
+
+### 2. 投影压缩子系统已删除
+
+原"遗留"第二条要求"以后接线时必须 invalidate"。核查后改为删除，依据：
+
+- `compressProjectedToolMessages` 在生产路径零调用点；`git log -S` 显示最后一次
+  删掉的调用点全在 `packages/agent` 的测试里（`7c62d533`），Host 迁移
+  （`8f7f5032`）没有把它接回来。
+- 五个变换（shared/offload/reformat/micro/imageTruncation）只能经由该 fold 到达，
+  即整个子系统的唯一消费者是它自己的单测。
+- 真实会话日志里 "truncated by projection-compress" 占位符出现 0 次。
+
+删除范围：agent-runtime 的 6 个源文件 + agent 包的 6 个兼容 re-export + 5 个单测文件；
+`compact/index.ts` 两处导出改为说明性注释；`port-guards.ts` 里引用
+`projectionCompress.ts:44-48` 的等价性论证改为"该 pass 已随 legacy 组装退役，
+结论 a fortiori 成立"。`noteProjectionShrink` 保留但注明"当前无人 arm"——读者
+（`wasLastObservationPostShrink`）仍在生产路径上，且默认 false 本身是正确的。
+
+若确实想要"旧工具结果压缩成占位符"省 token，那是一个独立计划：它会改变每个请求的
+字节，必须单独验证 cache 命中与恢复路径，不能夹在门禁修复里。
+
+### 3. 验证补充
+
+- `... packages/capabilities/tests` -> 357 passed / 2 skipped
+- `... fileReadState.gate.test.ts WriteTool.read-first.test.ts` -> 25 passed（新增 8 个分桶用例）
+- `... packages/agent-runtime/test/context packages/host/tests/runtime-context-contracts` -> 205 passed
+- `npm run check:encoding` / `npm run check:test-coverage` -> OK
+- `node scripts/architecture/architecture-check.mjs` -> no new boundary violations
+- `docs/development/test-inventory.{json,md}` 手工扣掉删除的 5 个测试文件与其
+  22 个 case / 37 个断言（脚本 `--write` 需要 vitest json 报告，否则会丢测量值）
+
