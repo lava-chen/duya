@@ -24,7 +24,7 @@
 - [x] 补 Host 配置接线、执行包装层转发与 `get_task_output` 专用阈值（硬提醒阈值 + 1）及生产 driver 回归。
 - [x] 定向 Vitest（16/16）、`@duya/agent-runtime` 与 `@duya/host` 类型检查、架构门禁通过。
 - [ ] 全量 `typecheck:all` 完成：在 `@duya/web` 的 Vite 临时配置写入处因共享 `apps/web/node_modules/.vite-temp` 返回 `EPERM`；变更包已在之前的 package build 中编译通过。
-- [x] 初始接线已提交 `93e4275933ac3d08eb5227cddc31bb592b686bda`；draft PR [#617](https://github.com/lava-chen/duya/pull/617) 后续补充专用轮询停止策略，保持 draft。
+- [x] 初始接线提交 `93e4275933ac3d08eb5227cddc31bb592b686bda`，复核后的专用停止策略提交 `bebe2afa616449c6838d6e49b8be298f9537c8db` 并推送到 draft PR [#617](https://github.com/lava-chen/duya/pull/617)。
 
 ## 发现与决策
 
@@ -39,4 +39,4 @@
 
 ## 接续 / 结果
 
-下一步：把本次复核修复提交到 PR #617，并保留 draft，直到全量类型检查的共享 Vite 临时目录 `EPERM` 得到安全解决；未经授权不合并。
+下一步：安全解决共享 Vite 临时目录 `EPERM` 后重跑 `typecheck:all` 并更新 PR #617；未经授权不合并。
