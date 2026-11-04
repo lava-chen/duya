@@ -15767,7 +15767,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 208485,
+      "bytes": 209062,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -17412,7 +17412,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
-      "bytes": 29773,
+      "bytes": 30042,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -30656,7 +30656,7 @@
       "format": "esm"
     },
     "packages/host/src/host-runtime.ts": {
-      "bytes": 4008,
+      "bytes": 4559,
       "imports": [
         {
           "path": "node:fs",
@@ -30665,6 +30665,11 @@
         },
         {
           "path": "node:path",
+          "kind": "import-statement",
+          "external": true
+        },
+        {
+          "path": "node:crypto",
           "kind": "import-statement",
           "external": true
         }
@@ -33853,7 +33858,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56343,
+      "bytes": 56588,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -34279,7 +34284,7 @@
       "format": "esm"
     },
     "packages/cli/src/tui/background-host.ts": {
-      "bytes": 7474,
+      "bytes": 7587,
       "imports": [
         {
           "path": "node:child_process",
@@ -35872,7 +35877,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/contracts.ts": {
-      "bytes": 2907,
+      "bytes": 3018,
       "imports": [],
       "format": "esm"
     },
@@ -36291,7 +36296,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permission-gate.ts": {
-      "bytes": 12668,
+      "bytes": 12844,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/invocation-decision.ts",
@@ -42255,6 +42260,11 @@
           "external": true
         },
         {
+          "path": "node:crypto",
+          "kind": "require-call",
+          "external": true
+        },
+        {
           "path": "node:child_process",
           "kind": "require-call",
           "external": true
@@ -43324,7 +43334,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 67
+          "bytesInOutput": 54
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 955
@@ -43339,7 +43349,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 591
+          "bytesInOutput": 604
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -43522,7 +43532,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 84
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45385,7 +45395,7 @@
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 21667
+          "bytesInOutput": 21808
         },
         "packages/agent-runtime/src/engine/run-engine-execution.ts": {
           "bytesInOutput": 907
@@ -45427,13 +45437,13 @@
           "bytesInOutput": 243
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 18
+          "bytesInOutput": 30
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 321
+          "bytesInOutput": 308
         },
         "packages/host/src/managed-shell/output-stream.ts": {
           "bytesInOutput": 370
@@ -46381,7 +46391,7 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1971
+          "bytesInOutput": 1969
         },
         "node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -47161,7 +47171,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1874
+          "bytesInOutput": 1880
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47539,7 +47549,7 @@
           "bytesInOutput": 4214
         },
         "packages/host/src/worker-run-composition.ts": {
-          "bytesInOutput": 6899
+          "bytesInOutput": 6952
         },
         "packages/host/src/run-engine-model.ts": {
           "bytesInOutput": 3674
@@ -48157,7 +48167,7 @@
           "bytesInOutput": 7356
         },
         "packages/host/src/host-runtime.ts": {
-          "bytesInOutput": 947
+          "bytesInOutput": 1185
         },
         "packages/cli/src/api/plugin-client.ts": {
           "bytesInOutput": 1286
@@ -48166,7 +48176,7 @@
           "bytesInOutput": 42599
         },
         "packages/cli/src/tui/background-host.ts": {
-          "bytesInOutput": 1665
+          "bytesInOutput": 1743
         },
         "packages/host/src/plugins/audit.ts": {
           "bytesInOutput": 323
@@ -48289,7 +48299,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 15917
+          "bytesInOutput": 16010
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13421
@@ -48907,7 +48917,7 @@
           "bytesInOutput": 477
         },
         "packages/agent-runtime/src/authorization/permission-gate.ts": {
-          "bytesInOutput": 1924
+          "bytesInOutput": 2025
         },
         "packages/host/src/authorization/worker-permission-gate.ts": {
           "bytesInOutput": 684
@@ -49345,7 +49355,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5758897
+      "bytes": 5759591
     }
   }
 }
