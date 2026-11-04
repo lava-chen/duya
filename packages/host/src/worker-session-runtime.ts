@@ -20,7 +20,7 @@ import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declaration
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveToolSelection } from '@duya/host/agent-composition';
+import { resolveCacheSelection, resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveToolSelection } from '@duya/host/agent-composition';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
@@ -1115,15 +1115,25 @@ export class WorkerSession implements AgentRuntime {
                 headerKeys: Object.keys(options.runtimeConfig.headers ?? {}),
             });
         }
+        const apiFormat: ApiFormat = options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat');
+        // Plan 624 E1: the cache family and its OpenAI key come from the
+        // composition layer. The key is emitted only on the Responses path,
+        // which is the only place the provider accepts it.
+        const cacheSelection = resolveCacheSelection({
+            protocol: apiFormat === 'anthropic' ? 'anthropic' : apiFormat === 'openai-responses' ? 'openai' : 'other',
+            ...(apiFormat === 'openai-responses' ? { api: 'responses' as const } : {}),
+            ...definedProperties({ sessionId: this.sessionId }),
+        });
         const llmClientOptions: AIClientOptions = {
             apiKey: options.apiKey,
             baseURL,
             model,
             ...definedProperties({ authStyle: options.authStyle }),
-            apiFormat: options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat'),
+            apiFormat,
             providerId: options.runtimeConfig?.providerId ?? provider,
             ...definedProperties({ modelCapabilities: options.runtimeConfig?.modelCompat }),
-            cacheRetention: resolveCacheRetention(provider)
+            cacheRetention: resolveCacheRetention(provider),
+            ...definedProperties({ promptCacheKey: cacheSelection.promptCacheKey })
         };
         if (enableRetry) {
             logger.debug('[duyaAgent] Using retryable LLM client');

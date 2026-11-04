@@ -703,6 +703,9 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
           : {}),
         ...(reasoning ? { reasoning } : {}),
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
+        // Plan 624 E1: opt-in only. Absent unless the caller set it, because
+        // OpenAI-compatible proxies may reject the unknown key.
+        ...(options.promptCacheKey ? { prompt_cache_key: options.promptCacheKey } : {}),
         // Plan 523 P4: `toolChoice: 'none'` omits the tools field so the
         // summarizer model cannot invoke tools (the DSML/tool-call leak guard).
         ...(chatOptions?.tools?.length && chatOptions?.toolChoice !== 'none'

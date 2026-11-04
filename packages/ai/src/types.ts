@@ -492,6 +492,20 @@ export interface AIClientOptions {
    *  it (api.anthropic.com / api.vertex.ai) and is downgraded to ephemeral
    *  elsewhere. Defaults to 'short' (5-minute TTL). */
   cacheRetention?: CacheRetention;
+  /**
+   * OpenAI Responses prompt cache key (plan 624 E1).
+   *
+   * Sent as `prompt_cache_key` only when this is set, never by default: the
+   * field is a Responses-API parameter, and third-party OpenAI-compatible
+   * endpoints may reject unknown request keys. The caller decides when the
+   * endpoint is known to accept it, using the composition layer's
+   * `CacheSelection`.
+   *
+   * Must be stable per conversation and at most 64 characters — the provider
+   * rejects longer keys. `resolveCacheSelection` derives it from the session id
+   * and clamps it.
+   */
+  promptCacheKey?: string;
 }
 
 export interface AIClient {
