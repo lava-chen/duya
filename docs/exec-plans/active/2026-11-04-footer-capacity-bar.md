@@ -46,10 +46,11 @@
 - [x] 三处参考实现对照（pi 无条；minimax-code 有 `[██░]`；duya 只在 `/usage` 有 `▰▱`）
 - [x] 抽出 `capacity-bar.ts` 作为唯一实现
 - [x] footer 第二行的 context 组改成「条 + 百分比」，格数按宽度分档
+- [x] 按用户要求压小尺寸：不新增行，80 列只有 5 格（原方案 8 格会让 80 列零余量）
 - [x] `/context` 面板加 12 格条；`TUIApp.contextBar` 改为委托
 - [x] 用例：新增 `capacity-bar.test.ts`，更新 `footer.test.ts` / `slash-commands.test.ts`
 - [x] 变异验证（三条）
-- [ ] 门禁 + commit + PR
+- [x] 门禁 + commit（`eb082294`）+ PR #618
 
 ## 发现与决策
 
@@ -63,18 +64,25 @@
 3. **非零比例至少填一格。** 8 格下 `Math.round` 把 5% 变成全空，紧挨着 `5%` 打印会被当成坏掉的控件；
    向上取整最多多报一格，而「条少报了占用」才是让人撞上意外压缩的方向。
 4. **空单元格不跟着告警色。** 满格红、空格 muted；整条染红会同时说「快满了」和「空的地方快满了」。
-   这条由 `{yellow-fg}▰▰▰▰▰▰{/yellow-fg}{gray-fg}▱▱{/gray-fg}` 的断言钉住。
-5. **格数按宽度分档而非连续。** 连续伸缩会让整行随每次 resize 重排；4 档足以在 56 列以上留住条。
+   这条由 `{yellow-fg}▰▰▰▰{/yellow-fg}{gray-fg}▱{/gray-fg}` 的断言钉住。
+5. **格数按宽度分档而非连续。** 连续伸缩会让整行随每次 resize 重排。
+6. **尺寸被用户否掉一次。** 首版 80 列 8 格，实测该行正好占满 80 列、模型名零余量，用户要求
+   「不要做两行，就是一个小的区域，还是那一行里」→ 改成 5 格（96 列 6 格、64 列 4 格、<64 无条）。
+   教训：footer 这一行的预算不是「够不够放」，而是「模型名还剩几列」。
 
 ## 验证记录
 
 | SHA / dirty 范围 | 环境 | 命令或操作 | 退出码 / 结果 | 证据 |
 | --- | --- | --- | --- | --- |
-| 工作区 | Windows / Node 22.22.2 | `vitest run capacity-bar.test.ts footer.test.ts` | 0 / 44 passed | 9 + 35 |
-| 工作区 | 同上 | `vitest run packages/cli/src/tui` | 1 / 1466 passed, 1 failed | 失败是 `presets.test.ts` 的 `mode & 0o077`，Windows 权限位，基线即红 |
+| 工作区（5 格版） | Windows / Node 22.22.2 | `vitest run capacity-bar.test.ts footer.test.ts` | 0 / 45 passed | 10 + 35 |
+| 工作区（5 格版） | 同上 | `vitest run packages/cli/src/tui` | 1 / 1471 passed, 1 failed | 失败是 `presets.test.ts` 的 `mode & 0o077`，Windows 权限位，基线即红 |
+| 工作区（5 格版） | 同上 | `env -u CODEBUDDY_SAFE_DELETE_BULK_STATE_DIR npm run typecheck:all` | 0 | 类型门禁 |
+| 工作区（5 格版） | 同上 | `npm run architecture:check` | 0 | 无新增越界（49 条 baseline 指纹已不再命中） |
+| 工作区（变异） | 同上 | 去掉 `Math.max(1, ...)` 下限 | 3 用例转红 | `expected +0 to be 1` / `▱▱▱▱▱ 5%` |
 
 ## 接续 / 结果
 
-未提交：实现 + 用例完成。
-回收：未回收（任务进行中）。
+已提交：`eb082294`（实现 + 用例 + 计划），PR https://github.com/lava-chen/duya/pull/618 （draft）。
+未做：真实 TUI 目视验收（需重建 CLI 产物并起 TUI）。
+
 下一步：构建包后复跑两个文件级失败项与全量门禁，再 commit。
