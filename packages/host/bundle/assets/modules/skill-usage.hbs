@@ -10,6 +10,4 @@ A skill supplies task-specific instructions. Available skills are listed as stru
 - When a skill materially changes the approach, state that in a concise progress update and final handoff.
 {{#if has_skills}}
 - `/<skill-name>` (e.g. `/commit`) is how users invoke a user-invocable skill — it expands to a full prompt. Use the {{TOOL_NAMES.SKILL}} tool for those, and only for skills listed in its user-invocable section; never guess one.
-{{/if}}{{#if show_discover_skills_guidance}}
-- Skills relevant to your task are surfaced automatically each turn. If you are about to do something those do not cover — a mid-task pivot, an unusual workflow, a multi-step plan — call {{TOOL_NAMES.DISCOVER_SKILLS}} with a specific description of what you are doing. Already-visible or loaded skills are filtered out.
 {{/if}}
