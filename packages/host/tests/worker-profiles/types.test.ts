@@ -4,7 +4,7 @@ import {
   PROJECT_COORDINATOR_ALLOWED_TOOLS,
   PROJECT_COORDINATOR_PROFILE_ID,
 } from '../../src/project/identity.js';
-import { resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
+import { isToolVisible, resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
 import { DUYA_APP_TOOL_NAMES } from '@duya/capabilities/AppServer/app-tool-namespace';
 
 describe('PRESET_AGENT_PROFILES', () => {
@@ -44,6 +44,32 @@ describe('PRESET_AGENT_PROFILES', () => {
       if (!name.startsWith('session_')) continue;
       expect(served.has(name)).toBe(true);
     }
+    // The bare `session` this replaces was NOT a `session_` name, so the
+    // prefix guard above would skip it and the drift would pass silently.
+    // Assert the exact names the allowlist must contain, so a regression to
+    // a name the app layer never served fails here.
+    for (const name of PROJECT_COORDINATOR_ALLOWED_TOOLS) {
+      expect(served.has(name) || name === 'project' || name === 'todo').toBe(true);
+    }
+  });
+
+  it('project-coordinator promotes its session tools to direct calls', () => {
+    // The app tools are deferred by default (MCP exposure `search`), and a
+    // deferred tool only becomes directly callable when the profile allowlist
+    // names it EXACTLY — a wildcard would leave it behind a catalog lookup.
+    // The model sees `mcp_duya_app_session_spawn`, so the filter has to
+    // resolve the original name before the exact hit counts. This is the path
+    // that silently broke when the allowlist said `session`.
+    const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
+    const constraints = { profileAllowedPatterns: coordinator.allowedTools };
+    for (const name of [
+      'session_spawn', 'session_get', 'session_reply', 'session_read', 'session_rename',
+      'session_list', 'session_send', 'session_status', 'session_cancel', 'session_control',
+    ]) {
+      expect(isToolVisible(`mcp_duya_app_${name}`, 'deferred', new Set(), constraints)).toBe(true);
+    }
+    expect(isToolVisible('mcp_duya_app_session_fork', 'deferred', new Set(), constraints)).toBe(false);
+    expect(isToolVisible('mcp_duya_app_session_search', 'deferred', new Set(), constraints)).toBe(false);
   });
 
   it('project-coordinator keeps its session lifecycle surface and nothing more', () => {
