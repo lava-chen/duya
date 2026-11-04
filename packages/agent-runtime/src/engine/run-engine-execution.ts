@@ -2,6 +2,7 @@ import { RunEngineImpl } from './run-engine.js';
 import type {
   RunEnginePorts,
   RunInputSnapshot,
+  RepeatedCallStopPolicy,
   TerminalCandidate,
 } from './ports.js';
 import type { RunEvent, RunEventEnvelope, RunManifest, RunTerminalState } from '@duya/agent-protocol';
@@ -14,6 +15,7 @@ export interface ExecuteRunEngineOptions {
   readonly signal: AbortSignal;
   readonly ports: RunEnginePorts;
   readonly maxTurns?: number;
+  readonly repeatedCallStop?: RepeatedCallStopPolicy;
   readonly onEnvelope: (envelope: RunEventEnvelope) => void | Promise<void>;
 }
 
@@ -35,6 +37,7 @@ export async function executeRunEngine(
     input: options.input,
     signal: options.signal,
     maxOutputRecoveries: 3,
+    ...(options.repeatedCallStop === undefined ? {} : { repeatedCallStop: options.repeatedCallStop }),
     ports: options.ports,
   });
 

@@ -7,6 +7,8 @@ import type { LegacyFrameCodec } from '@duya/agent-runtime';
 import type { AssistantMessage, ChatOptions, MessageContent, SSEEvent, TokenUsage } from '@duya/host/worker-run-contracts';
 import type { EngineProductSession } from '@duya/host/worker-run-session-port';
 import type { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
+import { resolveDeadLoopConfig } from '@duya/agent-runtime/turns/TurnLoopTracker';
+import { GET_TASK_OUTPUT_TOOL_NAME } from '@duya/agent-protocol/task-tool-names';
 import { buildLegacyRunInput, buildLegacyRunManifest, composeLegacyRunPorts, createLegacyAssembleTurn, gateRunApproval, runLayerOptions, selectRunDriverLeg, type LegacyRunFacts, type LegacyRunHost, } from '@duya/host/worker-run-composition';
 const RUNTIME_IDENTITY = { name: 'duya-worker-entry', version: '0.1.0' } as const;
 const PROTOCOL = { major: 1, minor: 0 } as const;
@@ -260,12 +262,32 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             emitter: spine.emitter,
             legacyFrameCodec: request.legacyFrameCodec,
         });
+        const deadLoopConfig = options.antiDeadLoop === undefined
+            ? undefined
+            : resolveDeadLoopConfig(options.antiDeadLoop);
         const execution = await executeRunEngine({
             spine,
             manifest,
             input,
             signal: run.signal,
             ports,
+            ...(deadLoopConfig === undefined
+                ? {}
+                : {
+                    repeatedCallStop: {
+                        enabled: deadLoopConfig.enabled,
+                        hardStopAt: deadLoopConfig.hardStopAt,
+                        // A status snapshot explicitly says to wait for the
+                        // completion notification. If the model ignores the
+                        // hard nudge, stop its same-task polling one call later.
+                        toolHardStopAt: {
+                            [GET_TASK_OUTPUT_TOOL_NAME]: Math.min(
+                                deadLoopConfig.hardStopAt,
+                                deadLoopConfig.hardNudgeAt + 1,
+                            ),
+                        },
+                    },
+                }),
             ...(request.maxTurns === undefined ? {} : { maxTurns: request.maxTurns }),
             onEnvelope: (typed) => {
                 // Hand the envelope to the native channel FIRST, while it is

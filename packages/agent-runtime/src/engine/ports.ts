@@ -1442,15 +1442,9 @@ export interface RunCommandOutcome {
  * this class of value. So a host that wants the guard says so, per run, and a
  * host that does not is not silently running one.
  *
- * **This is the obligation the cutover inherits.** Nothing constructs a
- * `RunExecutionRequest` in production today (the legacy loop still drives every
- * run), so an unbound guard costs nothing yet; the moment the legacy's
- * `DuyaAgent.streamChat` is deleted, the host that assembles the request has to
- * map its existing `antiDeadLoop` config onto this field or the capability is
- * gone with no frame reporting the loss. The mapping is
- * `{ enabled: antiDeadLoop.enabled, hardStopAt: antiDeadLoop.hardStopAt }` off
- * the host's own resolved config (`packages/agent/src/hooks/config.ts:80`,
- * which also clamps it).
+ * The production Host driver maps its resolved `ChatOptions.antiDeadLoop`
+ * config here. Keeping the policy per run ensures a disabled guard stays
+ * disabled and a configured threshold is honored by the engine.
  *
  * ## Why the threshold is NOT clamped here
  *
@@ -1479,6 +1473,8 @@ export interface RepeatedCallStopPolicy {
   readonly enabled: boolean;
   /** Consecutive identical dispatched calls at which the run hard-stops. */
   readonly hardStopAt: number;
+  /** Optional per-tool threshold overrides; validated by the host like `hardStopAt`. */
+  readonly toolHardStopAt?: Readonly<Record<string, number>>;
 }
 
 /**

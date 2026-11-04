@@ -67,6 +67,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { TokenUsage } from '@duya/ai';
+import { GET_TASK_OUTPUT_TOOL_NAME } from '@duya/agent-protocol/task-tool-names';
 import type { RunId } from '@duya/agent-protocol';
 import type { EngineRunOutcome } from '@duya/host/worker-engine-driver';
 import type { ChatOptions, Message, SSEEvent } from '@duya/host/worker-run-contracts';
@@ -114,6 +115,7 @@ interface ProviderRequest {
 }
 
 let requests: ProviderRequest[] = [];
+let activeScripts: readonly (readonly SSEEvent[])[];
 
 const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
 
@@ -167,7 +169,7 @@ vi.mock('@duya/ai', async (importOriginal) => {
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         })),
       });
-      const script = SCRIPTS[Math.min(requests.length - 1, SCRIPTS.length - 1)];
+      const script = activeScripts[Math.min(requests.length - 1, activeScripts.length - 1)];
       const signal = options?.signal as AbortSignal | undefined;
       return (async function* () {
         for (const event of script) {
@@ -300,6 +302,7 @@ beforeEach(() => {
   process.env.DUYA_SESSIONS_ROOT = '';
   process.env.DUYA_MEMORY_ROOT = '';
   requests = [];
+  activeScripts = SCRIPTS;
   journalRows = [];
 });
 
@@ -339,7 +342,7 @@ interface Proof {
   readonly usageCalls: readonly TokenUsage[];
 }
 
-async function runChatStart(): Promise<Proof> {
+async function runChatStart(antiDeadLoop?: ChatOptions['antiDeadLoop'], maxTurns = 4): Promise<Proof> {
   installFakeDbIpc();
 
   workspaceDir = mkdtempSync(path.join(os.tmpdir(), 'duya-chatstart-ws-'));
@@ -392,6 +395,7 @@ async function runChatStart(): Promise<Proof> {
   const options = {
     sessionId: SESSION_ID,
     clientMsgId: CLIENT_MSG_ID,
+    ...(antiDeadLoop === undefined ? {} : { antiDeadLoop }),
     mentionedSkills: [SKILL_NAME],
     mentionedPlugins: [
       {
@@ -421,7 +425,7 @@ async function runChatStart(): Promise<Proof> {
       providerId: 'anthropic',
       workingDirectory: workspaceDir,
       permissionMode: 'acceptEdits',
-      maxTurns: 4,
+      maxTurns,
       wakeRun: false,
       imageInputSupported: false,
       turnPipelines,
@@ -457,6 +461,48 @@ function toolRowsOf(request: ProviderRequest): readonly { role: string; content:
 }
 
 describe('a chat:start turn, assembled by the driver the entry calls', () => {
+  it('passes the configured repeated-call hard stop into the production engine', async () => {
+    activeScripts = Array.from({ length: 4 }, (_, index) => [
+      { type: 'result', data: CALL_ONE } as SSEEvent,
+      {
+        type: 'tool_use',
+        data: { id: `poll-${index}`, name: PROBE_TOOL, input: { value: 'alpha' } },
+      } as SSEEvent,
+      DONE,
+    ]);
+
+    const proof = await runChatStart({ enabled: true, hardStopAt: 2 });
+
+    expect(proof.providerRequests).toHaveLength(2);
+    expect(proof.outcome.terminal?.status).toBe('completed');
+    expect(proof.outcome.proposed?.reason).toBe(
+      'the run stopped because the model repeated the same tool call',
+    );
+  });
+
+  it('stops a repeated background-task poll before the generic hard-stop threshold', async () => {
+    activeScripts = Array.from({ length: 20 }, (_, index) => [
+      { type: 'result', data: CALL_ONE } as SSEEvent,
+      {
+        type: 'tool_use',
+        data: {
+          id: `poll-${index}`,
+          name: GET_TASK_OUTPUT_TOOL_NAME,
+          input: { task_ids: ['still-running'] },
+        },
+      } as SSEEvent,
+      DONE,
+    ]);
+
+    const proof = await runChatStart({ enabled: true, hardStopAt: 16, hardNudgeAt: 12 }, 20);
+
+    expect(proof.providerRequests).toHaveLength(13);
+    expect(proof.outcome.terminal?.status).toBe('completed');
+    expect(proof.outcome.proposed?.reason).toBe(
+      'the run stopped because the model repeated the same tool call',
+    );
+  });
+
   it('runs the tool, and the tool left evidence on disk', async () => {
     const proof = await runChatStart();
 
