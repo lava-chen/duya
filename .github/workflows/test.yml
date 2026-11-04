@@ -285,6 +285,15 @@ jobs:
       - name: Bot boundary gate
         run: npm run architecture:bot-boundary
 
+      # A worker process serves several sessions, so a module-level `let` or
+      # `new Map()` is process-wide state standing in for session state. PR
+      # #616 argued exactly that and then shipped both. This ratchet freezes
+      # the existing set: new module-level mutable state in worker-loaded
+      # first-party sources must be reviewed (or explicitly registered), not
+      # discovered by hand three PRs later.
+      - name: Worker module-level state ratchet
+        run: npm run architecture:worker-module-state
+
       # The bundle is tracked, so a source edit that is never rebuilt is a lie
       # the next reader has to discover. This compares the committed bundle
       # against every first-party input changed since the bundle commit; it does

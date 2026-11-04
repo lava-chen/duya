@@ -54,6 +54,7 @@ import type { AgentRuntime } from '@duya/agent-runtime/turns/AgentRuntime';
 import { TurnAssembler } from '@duya/agent-runtime/turns/TurnAssembler';
 import { TurnContext } from '@duya/agent-runtime/turns/TurnContext';
 import { permissionModeFromString } from '@duya/capabilities/permissions';
+import { clearFileReadState } from '@duya/capabilities/file-read-state';
 import { buildPermissions } from '@duya/host/authorization/worker-permission-gate';
 import { normalizeCanUseToolDecision } from '@duya/agent-runtime/authorization/tool-invoke-decision';
 import { CompactionCoordinator, type CompactionRunResult } from '@duya/host/worker-compaction/coordinator';
@@ -1164,7 +1165,7 @@ export class WorkerSession implements AgentRuntime {
         this.compactionManager = createCompactionManager({
             enableReinjection: true,
             maxTokens: resolvedContextWindow.contextWindow,
-        });
+        }, () => clearFileReadState(this.sessionId));
         this.resolvedWindow = {
             contextWindow: resolvedContextWindow.contextWindow,
             windowSource: resolvedContextWindow.source,

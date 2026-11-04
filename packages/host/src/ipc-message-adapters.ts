@@ -603,10 +603,16 @@ function messageToIpcRow(
       ? JSON.stringify({ api: msg.api, providerId: msg.providerId, model: msg.model })
       : null;
   const providerState = metadataProviderState ?? derivedProviderState;
-  // token_usage round-trips through metadata (journal write path), but the
-  // timeline projection also restores the top-level `tokenUsage` field
-  // (LEGACY_KNOWN_KEYS) for in-memory/replayed messages — read both.
-  const rawTokenUsage = msg.metadata?.token_usage ?? (msg as { tokenUsage?: unknown }).tokenUsage;
+  // Read the TOP-LEVEL `tokenUsage` first. It is the authoritative persisted
+  // field: `recordTurnAssistantMessage` writes a SINGLE-CALL block there
+  // (deriveSingleCallUsage), and the rollout projection `/context`, `/cost`
+  // and the Desktop ring all read it. `metadata.token_usage` is the legacy
+  // journal copy and may be the raw turn-CUMULATIVE block from an older
+  // rollout or a third-party writer; preferring it would make the DB/IPC row
+  // disagree with the rollout for the SAME event, and every summing consumer
+  // would count that turn N times (plan 546 double-count).
+  const topLevelUsage = (msg as { tokenUsage?: unknown }).tokenUsage;
+  const rawTokenUsage = topLevelUsage ?? msg.metadata?.token_usage;
   const tokenUsage = rawTokenUsage !== undefined && rawTokenUsage !== null
     ? (typeof rawTokenUsage === 'string' ? rawTokenUsage : JSON.stringify(rawTokenUsage))
     : null;

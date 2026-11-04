@@ -34,12 +34,15 @@ export function createWorkerCompactionRuntimePorts(input: {
   logger: CompactionLoggerPort
   clock: CompactionClockPort
   summarizer?: (text: string, prompt: string) => Promise<string>
+  /** See CompactionRuntimePorts.onTranscriptRewrite. Bound by the session owner. */
+  onTranscriptRewrite?: () => void
 }): CompactionRuntimePorts {
   return {
     contextModel: createWorkerCompactionContextModel(),
     logger: input.logger,
     clock: input.clock,
     ...(input.summarizer === undefined ? {} : { summarizer: input.summarizer }),
+    ...(input.onTranscriptRewrite === undefined ? {} : { onTranscriptRewrite: input.onTranscriptRewrite }),
   }
 }
 

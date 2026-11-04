@@ -239,6 +239,34 @@ function nonResidentInput(input: number, cacheRead: number, cacheWrite: number):
   return cacheRead > input || cacheWrite > input ? input + cacheWrite : input;
 }
 
+/**
+ * Expand one persisted usage block into the individual billed calls it
+ * represents.
+ *
+ * A plan-445 block is TURN-CUMULATIVE: its top-level counters are the SUM of
+ * every LLM call in the turn, while `calls[]` holds each call and `last_call`
+ * holds the final single-call snapshot. Adding the top-level counters for a
+ * block like that is the plan-546 double-count — a tool-heavy turn reports
+ * ~N× the tokens actually billed. `normalizePromptTokens` (the context ring)
+ * and `accumulateMessage` (the worker's history seed) both already prefer the
+ * per-call data; `/cost` has to use the SAME precedence or the three surfaces
+ * disagree about one session.
+ *
+ * This is not a second estimator: no tokens are estimated here, only the
+ * block's own ledger is selected. Legacy pre-plan-445 rows carry neither
+ * sub-block and fall through unchanged as one call.
+ */
+function usageCalls(usage: NonNullable<TranscriptMessage['tokenUsage']>): ReadonlyArray<{
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_hit_tokens?: number;
+  cache_creation_tokens?: number;
+}> {
+  if (usage.calls && usage.calls.length > 0) return usage.calls;
+  if (usage.last_call) return [usage.last_call];
+  return [usage];
+}
+
 /** Session-cumulative token totals from persisted assistant usage blocks. */
 export function sumMessageUsage(messages: readonly TranscriptMessage[]): TokenTotals {
   let newInput = 0;
@@ -251,14 +279,16 @@ export function sumMessageUsage(messages: readonly TranscriptMessage[]): TokenTo
     const usage = message.tokenUsage;
     if (message.role !== 'assistant' || usage === undefined) continue;
     hasUsage = true;
-    const input = usage.input_tokens || 0;
-    const hits = usage.cache_hit_tokens || 0;
-    const writes = usage.cache_creation_tokens || 0;
-    newInput += nonResidentInput(input, hits, writes);
-    rawInput += input;
-    output += usage.output_tokens || 0;
-    cacheRead += hits;
-    cacheWrite += writes;
+    for (const call of usageCalls(usage)) {
+      const input = call.input_tokens || 0;
+      const hits = call.cache_hit_tokens || 0;
+      const writes = call.cache_creation_tokens || 0;
+      newInput += nonResidentInput(input, hits, writes);
+      rawInput += input;
+      output += call.output_tokens || 0;
+      cacheRead += hits;
+      cacheWrite += writes;
+    }
   }
   return { newInput, rawInput, output, cacheRead, cacheWrite, hasUsage };
 }

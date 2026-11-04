@@ -124,6 +124,50 @@ describe('read-first gate switch', () => {
   });
 });
 
+describe('read-first gate switch is session-scoped', () => {
+  it('does not let one session\'s config govern another session\'s tool call', async () => {
+    // The bug a single module-level boolean introduced: session B turning the
+    // gate off silently relaxed it for session A, whose tool calls are still
+    // in flight in the same worker process.
+    setReadFirstGateEnabled(true, 'session-a');
+    setReadFirstGateEnabled(false, 'session-b');
+    expect(isReadFirstGateEnabled('session-a')).toBe(true);
+    expect(isReadFirstGateEnabled('session-b')).toBe(false);
+
+    const path = join(root, 'a.txt');
+    const ctx = (sessionId: string) =>
+      ({ toolUseId: 'tu', options: { sessionId } } as unknown as Parameters<EditTool['execute']>[2]);
+    const input = { file_path: path, old_string: 'beta', new_string: 'BETA' };
+
+    const refused = await new EditTool().execute(input, root, ctx('session-a'));
+    expect(refused.error).toBe(true);
+    expect(String(refused.result)).toContain('File has not been read yet');
+
+    const allowed = await new EditTool().execute(input, root, ctx('session-b'));
+    expect(allowed.error).toBeFalsy();
+  });
+
+  it('falls back to the process default for a scope that was never bound', () => {
+    // Delegated child sessions get their own read-ledger scope but never go
+    // through the worker session factory, so they must inherit the default.
+    setReadFirstGateEnabled(false);
+    setReadFirstGateEnabled(true, 'bound-session');
+    expect(isReadFirstGateEnabled('unbound-child')).toBe(false);
+    expect(isReadFirstGateEnabled('bound-session')).toBe(true);
+  });
+
+  it('drops the previous session\'s bindings on a new top-level session', () => {
+    setReadFirstGateEnabled(false, 'session-a');
+    expect(isReadFirstGateEnabled('session-a')).toBe(false);
+
+    beginFileReadSession('session-b');
+    // The stale binding is gone; session-b has not been configured yet, so it
+    // reads the process default rather than session-a's value.
+    expect(isReadFirstGateEnabled('session-a')).toBe(true);
+    expect(isReadFirstGateEnabled('session-b')).toBe(true);
+  });
+});
+
 describe('beginFileReadSession', () => {
   it('drops entries when the session key changes', () => {
     const path = join(root, 'a.txt');

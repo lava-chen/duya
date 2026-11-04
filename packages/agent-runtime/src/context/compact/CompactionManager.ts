@@ -43,7 +43,6 @@ import { ContextLedger } from '../ContextLedger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { BackgroundPrefire } from './BackgroundPrefire.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
-import { clearFileReadState } from '@duya/capabilities/file-read-state'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
 import { classifySuppressReason, suppressReasonMessage, type SuppressReason } from './compactErrors.js'
@@ -948,7 +947,13 @@ export class CompactionManager {
       // plan 428 introduced the gate to stop. Reinjected context does not
       // change this: it is a budget-bounded excerpt, not a full read, so it
       // cannot anchor a full-view sha comparison either.
-      clearFileReadState()
+      //
+      // Runtime does not import Capabilities: Host binds this port to
+      // `clearFileReadState(sessionId)`, so only THIS session's ledger is
+      // dropped. The unscoped clear this used to call erased every bucket in
+      // the worker, including a concurrently running child session whose
+      // transcript was never rewritten (and whose reads are still valid).
+      this.ports.onTranscriptRewrite?.()
       this.onCompactionSuccess()
       // Plan 577 §3: compaction rewrites the context lineage — a new epoch
       // begins. Stale observations (a result still in flight from the

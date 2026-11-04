@@ -652,7 +652,7 @@ export async function executeEdit(
     // `write` must agree on what "already read" means. The switch only
     // relaxes 'never-read' — a stale read is a wrong edit either way.
     const freshness = evaluateReadFreshness(resolvedPath, currentStat, content, scope);
-    if (freshness === 'never-read' && isReadFirstGateEnabled()) {
+    if (freshness === 'never-read' && isReadFirstGateEnabled(scope)) {
       return {
         id: toolUseId,
         name: 'edit',

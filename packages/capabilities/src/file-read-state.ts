@@ -210,6 +210,10 @@ export function invalidateFileRead(absPath: string, scope?: string): void {
 export function clearFileReadState(scope?: string): void {
   if (scope === undefined) {
     buckets.clear();
+    // The unscoped form is also the test-isolation entry point, so the
+    // per-session switch bindings go with the ledgers. The process default is
+    // deliberately left alone: callers set it explicitly.
+    readFirstGateBySession.clear();
     return;
   }
   buckets.delete(scope);
@@ -222,21 +226,39 @@ export function clearFileReadState(scope?: string): void {
 /**
  * Default on. Turned off only through `[tools] read_first_gate = false` (or
  * `DUYA_TOOLS_READ_FIRST_GATE=0`), which the worker wires at session init.
- * Module-level because tool execution has no per-call config handle and the
- * process is the session's unit of isolation.
+ *
+ * SESSION-SCOPED, not a single module-level boolean. A worker process serves
+ * more than one top-level session over its lifetime and can run child sessions
+ * alongside them; a process-wide switch set by session B would silently change
+ * the policy for a tool call belonging to session A. Once configuration is
+ * per-project (the natural next step), that is a real correctness bug.
+ *
+ * `setReadFirstGateEnabled(enabled, sessionId)` binds the switch for one
+ * session. The no-scope form sets the process default, which is what tests and
+ * context-less legacy call paths use, and remains the fallback for any scope
+ * that was never explicitly configured.
  */
-let readFirstGateEnabled = true;
+let defaultReadFirstGateEnabled = true;
+const readFirstGateBySession = new Map<string, boolean>();
 
-export function setReadFirstGateEnabled(enabled: boolean): void {
-  readFirstGateEnabled = enabled;
+export function setReadFirstGateEnabled(enabled: boolean, sessionId?: string): void {
+  if (sessionId === undefined) {
+    defaultReadFirstGateEnabled = enabled;
+    return;
+  }
+  readFirstGateBySession.set(sessionId, enabled);
 }
 
 /**
  * Whether a never-read file must be refused. Freshness checks ignore this
  * flag: they protect data integrity, not prompt hygiene.
+ *
+ * Callers that have a tool context MUST pass its session scope, so the switch
+ * belongs to the same ledger the read entries are keyed by.
  */
-export function isReadFirstGateEnabled(): boolean {
-  return readFirstGateEnabled;
+export function isReadFirstGateEnabled(sessionId?: string): boolean {
+  if (sessionId === undefined) return defaultReadFirstGateEnabled;
+  return readFirstGateBySession.get(sessionId) ?? defaultReadFirstGateEnabled;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +282,10 @@ export function beginFileReadSession(sessionId: string): void {
   if (activeSessionKey === sessionId) return;
   activeSessionKey = sessionId;
   buckets.clear();
+  // The gate switch is session state too: an old session's per-project config
+  // must not be inherited, and dropping it here bounds the map across a
+  // long-lived worker process that serves many sessions.
+  readFirstGateBySession.clear();
 }
 
 // ---------------------------------------------------------------------------

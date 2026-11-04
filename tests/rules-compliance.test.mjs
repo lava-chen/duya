@@ -158,7 +158,18 @@ test("packages/* 各子包至少有一个规则文件(子包级约束)", async (
     // worktree. Without this, the gate was permanently red in every worktree
     // and green only in a fresh checkout — a gate that cannot run where the
     // work happens.
+    //
+    // A workspace package is a directory with a `package.json`, not just any
+    // directory under `packages/`. Local builds leave behind output-only
+    // directories (`dist/`, `node_modules/`, `*.tsbuildinfo`) with no manifest
+    // and no source; they are invisible to git because every file inside them
+    // is ignored, but `readdir` still sees the parent. Treating them as
+    // packages made this gate permanently red on a developer machine while CI
+    // (a clean checkout) stayed green — the same split the junction workaround
+    // above exists to prevent. No real package can lose coverage here: npm
+    // workspaces cannot exist without a manifest.
     .filter((d) => d.isDirectory() && !d.name.startsWith(".") && !SKIP_DIRS.has(d.name))
+    .filter((d) => existsSync(join(pkgRoot, d.name, "package.json")))
     .map((d) => d.name);
   const files = await walk(pkgRoot);
   const missing = [];

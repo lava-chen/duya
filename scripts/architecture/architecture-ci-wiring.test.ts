@@ -19,5 +19,10 @@ describe('architecture CI wiring', () => {
     // gate could ship as a script nobody runs — the exact failure T14b's
     // comment above the workflow step records for two earlier gates.
     expect(commands).toContain('npm run architecture:bot-boundary');
+    // The worker process is shared across sessions: a new module-level `let`
+    // in worker-loaded code is a session-isolation bug waiting to happen. This
+    // ratchet has a test suite and a baseline, but without a CI step it is
+    // still a script nobody runs.
+    expect(commands).toContain('npm run architecture:worker-module-state');
   });
 });

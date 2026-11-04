@@ -72,22 +72,66 @@ describe('CompactionManager compaction epoch lifecycle', () => {
   })
 
   // Plan 428 introduced the read-first gate to stop edits built from
-  // compacted content. The gate reads a session ledger, so the rewrite has
-  // to retire the entries it invalidated — otherwise a post-compaction edit
-  // is approved against a read result the model can no longer see.
-  it('clears file read-state when the transcript is rewritten', async () => {
+  // compacted content. Runtime must NOTIFY the owner of the rewrite; it does
+  // not own the ledger (that is Capabilities, a lower layer Runtime cannot
+  // import). The old code called a process-wide `clearFileReadState()` which
+  // also erased a concurrently running child session's still-valid reads.
+  it('notifies the transcript rewrite through the port', async () => {
+    const onTranscriptRewrite = vi.fn()
+    const ports = createCompactionTestPorts()
+    const manager = new CompactionManager(
+      { keepRecentTokens: 90 },
+      { ...ports, summarizer: vi.fn(async () => usableSummary), onTranscriptRewrite },
+    )
+
+    await manager.compact(conversation(), { trigger: 'manual' })
+
+    expect(onTranscriptRewrite).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not touch any read ledger when no rewrite port is bound', async () => {
+    // A Runtime-only host has no read-first protocol. Its compaction must not
+    // reach into another package's process state as a side effect.
     const ports = createCompactionTestPorts()
     const manager = new CompactionManager(
       { keepRecentTokens: 90 },
       { ...ports, summarizer: vi.fn(async () => usableSummary) },
     )
-    const path = '/repo/src/edited-before-compaction.ts'
-    recordFileRead(path, { mtimeMs: 1, size: 32, isFullView: true })
+    const path = '/repo/src/unrelated-session.ts'
+    recordFileRead(path, { mtimeMs: 1, size: 32, isFullView: true }, 'child-session')
 
     try {
-      expect(getFileReadState(path)).toBeDefined()
       await manager.compact(conversation(), { trigger: 'manual' })
-      expect(getFileReadState(path)).toBeUndefined()
+      expect(getFileReadState(path, 'child-session')).toBeDefined()
+    } finally {
+      clearFileReadState()
+    }
+  })
+
+  it('invalidates only the compacting session, leaving a concurrent child intact', async () => {
+    // The exact regression: Host binds `onTranscriptRewrite` to
+    // `clearFileReadState(this.sessionId)`. Before, Runtime called the
+    // unscoped clear and erased every bucket in the worker — including a
+    // delegated child session whose transcript was NOT rewritten, so its
+    // reads were still valid and its next edit would be refused as unread.
+    const ports = createCompactionTestPorts()
+    const manager = new CompactionManager(
+      { keepRecentTokens: 90 },
+      {
+        ...ports,
+        summarizer: vi.fn(async () => usableSummary),
+        onTranscriptRewrite: () => clearFileReadState('parent-session'),
+      },
+    )
+    const parentPath = '/repo/src/parent-read.ts'
+    const childPath = '/repo/src/child-read.ts'
+    recordFileRead(parentPath, { mtimeMs: 1, size: 32, isFullView: true }, 'parent-session')
+    recordFileRead(childPath, { mtimeMs: 1, size: 32, isFullView: true }, 'child-session')
+
+    try {
+      await manager.compact(conversation(), { trigger: 'manual' })
+      expect(getFileReadState(parentPath, 'parent-session')).toBeUndefined()
+      expect(getFileReadState(childPath, 'child-session')).toBeDefined()
     } finally {
       clearFileReadState()
     }

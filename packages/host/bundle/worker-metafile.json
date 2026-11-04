@@ -2280,7 +2280,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session/title-generator.ts": {
-      "bytes": 32105,
+      "bytes": 31346,
       "imports": [
         {
           "path": "packages/host/src/worker-logger.ts",
@@ -10418,7 +10418,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/types.ts": {
-      "bytes": 27983,
+      "bytes": 27668,
       "imports": [],
       "format": "esm"
     },
@@ -10428,7 +10428,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/contextFingerprint.ts": {
-      "bytes": 3157,
+      "bytes": 2992,
       "imports": [
         {
           "path": "node:crypto",
@@ -10858,7 +10858,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/modules/mappers/rules.ts": {
-      "bytes": 1280,
+      "bytes": 1213,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/types.ts",
@@ -13211,7 +13211,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/hbs/HbsPromptSystem.ts": {
-      "bytes": 16088,
+      "bytes": 15379,
       "imports": [
         {
           "path": "node:fs",
@@ -13267,7 +13267,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-prompts/PromptSystem.ts": {
-      "bytes": 30517,
+      "bytes": 30780,
       "imports": [
         {
           "path": "packages/host/src/worker-prompts/types.ts",
@@ -15752,7 +15752,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/request-scope.ts": {
-      "bytes": 6945,
+      "bytes": 6903,
       "imports": [],
       "format": "esm"
     },
@@ -15762,12 +15762,12 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/compaction.ts": {
-      "bytes": 14110,
+      "bytes": 14061,
       "imports": [],
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine.ts": {
-      "bytes": 209062,
+      "bytes": 208351,
       "imports": [
         {
           "path": "packages/agent-core/src/index.ts",
@@ -15793,7 +15793,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/engine/run-engine-execution.ts": {
-      "bytes": 3814,
+      "bytes": 3997,
       "imports": [
         {
           "path": "packages/agent-runtime/src/engine/run-engine.ts",
@@ -15952,7 +15952,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/index.ts": {
-      "bytes": 18304,
+      "bytes": 18297,
       "imports": [
         {
           "path": "packages/agent-runtime/src/controller.ts",
@@ -17253,8 +17253,13 @@
       ],
       "format": "esm"
     },
+    "packages/agent-runtime/src/turns/TurnLoopTracker.ts": {
+      "bytes": 6104,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/host/src/run-engine-model.ts": {
-      "bytes": 44930,
+      "bytes": 44846,
       "imports": [
         {
           "path": "packages/ai/src/index.ts",
@@ -17301,7 +17306,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-command-port.ts": {
-      "bytes": 9489,
+      "bytes": 9457,
       "imports": [
         {
           "path": "packages/host/src/worker-session/transcript-commands.ts",
@@ -17407,12 +17412,12 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/adapters/run-engine-ports.ts": {
-      "bytes": 61439,
+      "bytes": 61339,
       "imports": [],
       "format": "esm"
     },
     "packages/host/src/worker-run-composition.ts": {
-      "bytes": 30042,
+      "bytes": 29773,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -17473,7 +17478,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-engine-driver.ts": {
-      "bytes": 15409,
+      "bytes": 16538,
       "imports": [
         {
           "path": "packages/agent-runtime/src/index.ts",
@@ -17489,6 +17494,16 @@
           "path": "packages/agent-protocol/src/index.ts",
           "kind": "import-statement",
           "original": "@duya/agent-protocol"
+        },
+        {
+          "path": "packages/agent-runtime/src/turns/TurnLoopTracker.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-runtime/turns/TurnLoopTracker"
+        },
+        {
+          "path": "packages/agent-protocol/src/task-tool-names.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-protocol/task-tool-names"
         },
         {
           "path": "packages/host/src/worker-run-composition.ts",
@@ -18533,7 +18548,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/turn-pipeline-publisher.ts": {
-      "bytes": 12366,
+      "bytes": 12342,
       "imports": [],
       "format": "esm"
     },
@@ -21922,7 +21937,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/file-read-state.ts": {
-      "bytes": 4308,
+      "bytes": 13886,
       "imports": [
         {
           "path": "node:crypto",
@@ -21948,7 +21963,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ReadTool/ReadTool.ts": {
-      "bytes": 42302,
+      "bytes": 42459,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22348,7 +22363,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/WriteTool/WriteTool.ts": {
-      "bytes": 10772,
+      "bytes": 12706,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22419,7 +22434,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/EditTool/EditTool.ts": {
-      "bytes": 30745,
+      "bytes": 31826,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22583,7 +22598,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-      "bytes": 24392,
+      "bytes": 25610,
       "imports": [
         {
           "path": "node:fs/promises",
@@ -22941,7 +22956,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/AskUserQuestionTool/AskUserQuestionTool.ts": {
-      "bytes": 12174,
+      "bytes": 12990,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -23157,7 +23172,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/index.ts": {
-      "bytes": 8769,
+      "bytes": 8936,
       "imports": [
         {
           "path": "packages/capabilities/src/contracts/index.ts",
@@ -23629,7 +23644,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-config/tool-exposure.ts": {
-      "bytes": 5779,
+      "bytes": 7119,
       "imports": [
         {
           "path": "fs",
@@ -29757,7 +29772,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-compaction/context-model.ts": {
-      "bytes": 1856,
+      "bytes": 2084,
       "imports": [
         {
           "path": "packages/ai/src/index.ts",
@@ -29901,7 +29916,7 @@
       "format": "esm"
     },
     "packages/host/src/authorization/connector-approval-cache.ts": {
-      "bytes": 2076,
+      "bytes": 3530,
       "imports": [],
       "format": "esm"
     },
@@ -29962,7 +29977,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 173333,
+      "bytes": 174354,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -30253,6 +30268,11 @@
           "path": "packages/ai/src/index.ts",
           "kind": "dynamic-import",
           "original": "@duya/ai"
+        },
+        {
+          "path": "packages/host/src/authorization/connector-approval-cache.ts",
+          "kind": "dynamic-import",
+          "original": "./authorization/connector-approval-cache.js"
         },
         {
           "path": "node:crypto",
@@ -30656,7 +30676,7 @@
       "format": "esm"
     },
     "packages/host/src/host-runtime.ts": {
-      "bytes": 4559,
+      "bytes": 4008,
       "imports": [
         {
           "path": "node:fs",
@@ -30665,11 +30685,6 @@
         },
         {
           "path": "node:path",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "node:crypto",
           "kind": "import-statement",
           "external": true
         }
@@ -32206,7 +32221,7 @@
       "format": "esm"
     },
     "packages/memory/src/eligibility.ts": {
-      "bytes": 9108,
+      "bytes": 8876,
       "imports": [],
       "format": "esm"
     },
@@ -32363,7 +32378,7 @@
       "format": "esm"
     },
     "packages/memory/src/extractor.ts": {
-      "bytes": 44839,
+      "bytes": 43715,
       "imports": [
         {
           "path": "crypto",
@@ -33749,7 +33764,7 @@
       "format": "esm"
     },
     "packages/host/src/ipc-message-adapters.ts": {
-      "bytes": 27195,
+      "bytes": 28425,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -33765,6 +33780,11 @@
           "path": "packages/agent-protocol/src/transcript/index.ts",
           "kind": "import-statement",
           "original": "@duya/agent-protocol/transcript"
+        },
+        {
+          "path": "packages/agent-core/src/usage/seed-token-usage.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core/usage/seed-token-usage"
         }
       ],
       "format": "esm"
@@ -33858,7 +33878,7 @@
       "format": "esm"
     },
     "packages/host/src/local-host.ts": {
-      "bytes": 56588,
+      "bytes": 56343,
       "imports": [
         {
           "path": "packages/host/src/plugins/audit.ts",
@@ -34284,7 +34304,7 @@
       "format": "esm"
     },
     "packages/cli/src/tui/background-host.ts": {
-      "bytes": 7587,
+      "bytes": 7474,
       "imports": [
         {
           "path": "node:child_process",
@@ -35565,7 +35585,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/run-agent.ts": {
-      "bytes": 34900,
+      "bytes": 34892,
       "imports": [
         {
           "path": "packages/capabilities/src/AppServer/app-tool-namespace.ts",
@@ -35782,7 +35802,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-run-contracts.ts": {
-      "bytes": 9675,
+      "bytes": 9407,
       "imports": [],
       "format": "esm"
     },
@@ -35877,7 +35897,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/contracts.ts": {
-      "bytes": 3018,
+      "bytes": 2907,
       "imports": [],
       "format": "esm"
     },
@@ -36213,7 +36233,7 @@
       "format": "esm"
     },
     "packages/host/src/authorization/worker-permission-evaluator.ts": {
-      "bytes": 1064,
+      "bytes": 1632,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/permissions/permissions.ts",
@@ -36296,7 +36316,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/authorization/permission-gate.ts": {
-      "bytes": 12844,
+      "bytes": 12668,
       "imports": [
         {
           "path": "packages/agent-runtime/src/authorization/invocation-decision.ts",
@@ -36328,7 +36348,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-compaction/coordinator.ts": {
-      "bytes": 31714,
+      "bytes": 31612,
       "imports": [
         {
           "path": "packages/agent-runtime/src/context/compact/compactErrors.ts",
@@ -36349,7 +36369,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-compaction/engine-sources.ts": {
-      "bytes": 21259,
+      "bytes": 21167,
       "imports": [
         {
           "path": "packages/agent-runtime/src/adapters/run-engine-ports.ts",
@@ -38082,7 +38102,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/context/compact/CompactionManager.ts": {
-      "bytes": 43218,
+      "bytes": 44615,
       "imports": [
         {
           "path": "packages/agent-runtime/src/context/compact/types.ts",
@@ -38158,71 +38178,8 @@
       ],
       "format": "esm"
     },
-    "packages/agent-runtime/src/context/compact/transforms/shared.ts": {
-      "bytes": 1049,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/context/compact/transforms/reformatCompress.ts": {
-      "bytes": 4275,
-      "imports": [
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/shared.ts",
-          "kind": "import-statement",
-          "original": "./shared.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/context/compact/transforms/offloadCompress.ts": {
-      "bytes": 2147,
-      "imports": [
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/shared.ts",
-          "kind": "import-statement",
-          "original": "./shared.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/context/compact/transforms/microTransform.ts": {
-      "bytes": 3672,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/context/compact/transforms/imageTruncationTransform.ts": {
-      "bytes": 7245,
-      "imports": [],
-      "format": "esm"
-    },
-    "packages/agent-runtime/src/context/compact/projectionCompress.ts": {
-      "bytes": 1938,
-      "imports": [
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/reformatCompress.ts",
-          "kind": "import-statement",
-          "original": "./transforms/reformatCompress.js"
-        },
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/offloadCompress.ts",
-          "kind": "import-statement",
-          "original": "./transforms/offloadCompress.js"
-        },
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/microTransform.ts",
-          "kind": "import-statement",
-          "original": "./transforms/microTransform.js"
-        },
-        {
-          "path": "packages/agent-runtime/src/context/compact/transforms/imageTruncationTransform.ts",
-          "kind": "import-statement",
-          "original": "./transforms/imageTruncationTransform.js"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/agent-runtime/src/context/compact/index.ts": {
-      "bytes": 2722,
+      "bytes": 3030,
       "imports": [
         {
           "path": "packages/agent-runtime/src/context/compact/types.ts",
@@ -38260,11 +38217,6 @@
           "original": "./PostCompactReinjector.js"
         },
         {
-          "path": "packages/agent-runtime/src/context/compact/projectionCompress.ts",
-          "kind": "import-statement",
-          "original": "./projectionCompress.js"
-        },
-        {
           "path": "packages/agent-runtime/src/context/compact/historySanitize.ts",
           "kind": "import-statement",
           "original": "./historySanitize.js"
@@ -38298,7 +38250,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-compaction/bound-ports.ts": {
-      "bytes": 632,
+      "bytes": 743,
       "imports": [
         {
           "path": "packages/host/src/worker-compaction/index.ts",
@@ -38314,7 +38266,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-compaction/bound-manager.ts": {
-      "bytes": 773,
+      "bytes": 1138,
       "imports": [
         {
           "path": "packages/agent-runtime/src/context/compact/index.ts",
@@ -38419,7 +38371,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-session-runtime.ts": {
-      "bytes": 141245,
+      "bytes": 142912,
       "imports": [
         {
           "path": "packages/host/src/worker-modes/child-run-ports.ts",
@@ -38620,6 +38572,11 @@
           "path": "packages/capabilities/src/permissions/index.ts",
           "kind": "import-statement",
           "original": "@duya/capabilities/permissions"
+        },
+        {
+          "path": "packages/capabilities/src/file-read-state.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/file-read-state"
         },
         {
           "path": "packages/host/src/authorization/worker-permission-gate.ts",
@@ -39747,7 +39704,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/post-to-room-tool.ts": {
-      "bytes": 9406,
+      "bytes": 10387,
       "imports": [
         {
           "path": "node:crypto",
@@ -40016,61 +39973,8 @@
       ],
       "format": "esm"
     },
-    "packages/capabilities/src/PlanTool/PlanTool.ts": {
-      "bytes": 10798,
-      "imports": [
-        {
-          "path": "node:crypto",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "packages/capabilities/src/BaseTool.ts",
-          "kind": "import-statement",
-          "original": "../BaseTool.js"
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/worker-tool-services/plan.ts": {
-      "bytes": 14208,
-      "imports": [
-        {
-          "path": "fs",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "os",
-          "kind": "import-statement",
-          "external": true
-        },
-        {
-          "path": "path",
-          "kind": "import-statement",
-          "external": true
-        }
-      ],
-      "format": "esm"
-    },
-    "packages/host/src/worker-tool-bindings/plan.ts": {
-      "bytes": 576,
-      "imports": [
-        {
-          "path": "packages/capabilities/src/PlanTool/PlanTool.ts",
-          "kind": "import-statement",
-          "original": "@duya/capabilities/PlanTool/PlanTool"
-        },
-        {
-          "path": "packages/host/src/worker-tool-services/plan.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/worker-tool-services/plan"
-        }
-      ],
-      "format": "esm"
-    },
     "packages/host/src/worker-tools/builtin.ts": {
-      "bytes": 8200,
+      "bytes": 8060,
       "imports": [
         {
           "path": "packages/host/src/worker-tools/worktree.ts",
@@ -40241,17 +40145,12 @@
           "path": "packages/host/src/worker-tool-bindings/app-connector-manage-tools.ts",
           "kind": "import-statement",
           "original": "@duya/host/worker-tool-bindings/app-connector-manage-tools"
-        },
-        {
-          "path": "packages/host/src/worker-tool-bindings/plan.ts",
-          "kind": "import-statement",
-          "original": "@duya/host/worker-tool-bindings/plan"
         }
       ],
       "format": "esm"
     },
     "packages/host/src/worker-tools/assembly.ts": {
-      "bytes": 704,
+      "bytes": 2224,
       "imports": [
         {
           "path": "packages/host/src/worker-session-runtime.ts",
@@ -40262,6 +40161,16 @@
           "path": "packages/host/src/worker-tools/builtin.ts",
           "kind": "import-statement",
           "original": "./builtin.js"
+        },
+        {
+          "path": "packages/host/src/worker-config/tool-exposure.ts",
+          "kind": "import-statement",
+          "original": "../worker-config/tool-exposure.js"
+        },
+        {
+          "path": "packages/capabilities/src/file-read-state.ts",
+          "kind": "import-statement",
+          "original": "@duya/capabilities/file-read-state"
         }
       ],
       "format": "esm"
@@ -42260,11 +42169,6 @@
           "external": true
         },
         {
-          "path": "node:crypto",
-          "kind": "require-call",
-          "external": true
-        },
-        {
           "path": "node:child_process",
           "kind": "require-call",
           "external": true
@@ -43248,26 +43152,6 @@
           "path": "node:crypto",
           "kind": "require-call",
           "external": true
-        },
-        {
-          "path": "fs",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "os",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "path",
-          "kind": "require-call",
-          "external": true
-        },
-        {
-          "path": "node:crypto",
-          "kind": "require-call",
-          "external": true
         }
       ],
       "exports": [],
@@ -43349,7 +43233,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/rollout-events.ts": {
-          "bytesInOutput": 604
+          "bytesInOutput": 591
         },
         "packages/agent-protocol/src/workflow-runs.ts": {
           "bytesInOutput": 30
@@ -44999,7 +44883,7 @@
           "bytesInOutput": 677
         },
         "node_modules/handlebars/dist/cjs/handlebars/compiler/compiler.js": {
-          "bytesInOutput": 8935
+          "bytesInOutput": 8940
         },
         "node_modules/handlebars/node_modules/source-map/lib/base64.js": {
           "bytesInOutput": 369
@@ -45014,10 +44898,10 @@
           "bytesInOutput": 1056
         },
         "node_modules/handlebars/node_modules/source-map/lib/mapping-list.js": {
-          "bytesInOutput": 645
+          "bytesInOutput": 650
         },
         "node_modules/handlebars/node_modules/source-map/lib/source-map-generator.js": {
-          "bytesInOutput": 4704
+          "bytesInOutput": 4709
         },
         "node_modules/handlebars/node_modules/source-map/lib/binary-search.js": {
           "bytesInOutput": 452
@@ -45266,7 +45150,7 @@
           "bytesInOutput": 889
         },
         "packages/memory/src/wakeup.ts": {
-          "bytesInOutput": 425
+          "bytesInOutput": 413
         },
         "packages/host/src/skills/paths.ts": {
           "bytesInOutput": 697
@@ -45395,10 +45279,10 @@
           "bytesInOutput": 2019
         },
         "packages/agent-runtime/src/engine/run-engine.ts": {
-          "bytesInOutput": 21808
+          "bytesInOutput": 21768
         },
         "packages/agent-runtime/src/engine/run-engine-execution.ts": {
-          "bytesInOutput": 907
+          "bytesInOutput": 979
         },
         "packages/agent-runtime/src/engine/tool-side-effect-ledger.ts": {
           "bytesInOutput": 2575
@@ -45443,7 +45327,7 @@
           "bytesInOutput": 1916
         },
         "packages/host/src/managed-shell/paths.ts": {
-          "bytesInOutput": 308
+          "bytesInOutput": 321
         },
         "packages/host/src/managed-shell/output-stream.ts": {
           "bytesInOutput": 370
@@ -46391,7 +46275,7 @@
           "bytesInOutput": 29
         },
         "node_modules/@jimp/plugin-crop/dist/esm/index.js": {
-          "bytesInOutput": 1969
+          "bytesInOutput": 1971
         },
         "node_modules/@jimp/plugin-cover/node_modules/zod/v3/helpers/util.js": {
           "bytesInOutput": 1735
@@ -46868,7 +46752,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 1002
+          "bytesInOutput": 989
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -46877,10 +46761,10 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 246
+          "bytesInOutput": 411
         },
         "packages/host/src/worker-tool-pool.ts": {
-          "bytesInOutput": 9982
+          "bytesInOutput": 9965
         },
         "packages/host/src/worker-subagents/built-in/exploreAgent.ts": {
           "bytesInOutput": 1913
@@ -47030,7 +46914,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 63102
+          "bytesInOutput": 63239
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -47072,7 +46956,7 @@
           "bytesInOutput": 2284
         },
         "packages/agent-core/src/usage/seed-token-usage.ts": {
-          "bytesInOutput": 1498
+          "bytesInOutput": 2514
         },
         "packages/host/src/authorization/worker-approval-card.ts": {
           "bytesInOutput": 1295
@@ -47099,7 +46983,7 @@
           "bytesInOutput": 750
         },
         "packages/host/src/worker-prompts/types.ts": {
-          "bytesInOutput": 4948
+          "bytesInOutput": 4915
         },
         "packages/host/src/worker-prompts/index.ts": {
           "bytesInOutput": 0
@@ -47108,7 +46992,7 @@
           "bytesInOutput": 1195
         },
         "packages/host/src/worker-prompts/contextFingerprint.ts": {
-          "bytesInOutput": 841
+          "bytesInOutput": 694
         },
         "packages/host/src/worker-prompts/constants/promptSections.ts": {
           "bytesInOutput": 145
@@ -47126,10 +47010,10 @@
           "bytesInOutput": 3423
         },
         "packages/host/src/worker-prompts/PromptSystem.ts": {
-          "bytesInOutput": 7423
+          "bytesInOutput": 7022
         },
         "packages/host/src/worker-prompts/hbs/HbsPromptSystem.ts": {
-          "bytesInOutput": 4988
+          "bytesInOutput": 4536
         },
         "packages/host/src/worker-prompts/platformHints.ts": {
           "bytesInOutput": 2559
@@ -47171,7 +47055,7 @@
           "bytesInOutput": 3018
         },
         "packages/host/src/worker-agents-md/nested-loader.ts": {
-          "bytesInOutput": 1880
+          "bytesInOutput": 1874
         },
         "packages/host/src/worker-prompts/modules/mappers/project.ts": {
           "bytesInOutput": 684
@@ -47183,7 +47067,7 @@
           "bytesInOutput": 643
         },
         "packages/host/src/worker-prompts/modules/mappers/rules.ts": {
-          "bytesInOutput": 483
+          "bytesInOutput": 430
         },
         "packages/host/src/worker-prompts/modules/mappers/duyaDesktopContextCode.ts": {
           "bytesInOutput": 80
@@ -47210,7 +47094,7 @@
           "bytesInOutput": 708
         },
         "packages/memory/src/memory_paths.ts": {
-          "bytesInOutput": 616
+          "bytesInOutput": 610
         },
         "packages/host/src/worker-prompts/dynamic/environmentPreBuildHook.ts": {
           "bytesInOutput": 610
@@ -47303,7 +47187,7 @@
           "bytesInOutput": 3028
         },
         "packages/host/src/agent-profile-config.ts": {
-          "bytesInOutput": 704
+          "bytesInOutput": 710
         },
         "packages/host/src/worker-prompts/bot/config-groups.ts": {
           "bytesInOutput": 696
@@ -47399,7 +47283,7 @@
           "bytesInOutput": 1611
         },
         "packages/host/src/worker-transport.ts": {
-          "bytesInOutput": 1454
+          "bytesInOutput": 1452
         },
         "packages/host/src/worker-modes/research-mode/research-events.ts": {
           "bytesInOutput": 330
@@ -47546,10 +47430,13 @@
           "bytesInOutput": 5191
         },
         "packages/host/src/worker-engine-driver.ts": {
-          "bytesInOutput": 4214
+          "bytesInOutput": 4414
+        },
+        "packages/agent-runtime/src/turns/TurnLoopTracker.ts": {
+          "bytesInOutput": 209
         },
         "packages/host/src/worker-run-composition.ts": {
-          "bytesInOutput": 6952
+          "bytesInOutput": 6899
         },
         "packages/host/src/run-engine-model.ts": {
           "bytesInOutput": 3674
@@ -47831,7 +47718,7 @@
           "bytesInOutput": 17
         },
         "packages/capabilities/src/ReadTool/ReadTool.ts": {
-          "bytesInOutput": 15177
+          "bytesInOutput": 15199
         },
         "packages/capabilities/src/ReadTool/schema.ts": {
           "bytesInOutput": 2056
@@ -47843,7 +47730,7 @@
           "bytesInOutput": 1123
         },
         "packages/capabilities/src/file-read-state.ts": {
-          "bytesInOutput": 444
+          "bytesInOutput": 1137
         },
         "packages/capabilities/src/utils/multimodal-detection.ts": {
           "bytesInOutput": 1212
@@ -47852,7 +47739,7 @@
           "bytesInOutput": 4729
         },
         "packages/capabilities/src/WriteTool/WriteTool.ts": {
-          "bytesInOutput": 3759
+          "bytesInOutput": 4425
         },
         "packages/capabilities/src/file-mutation-queue.ts": {
           "bytesInOutput": 696
@@ -47876,7 +47763,7 @@
           "bytesInOutput": 1019
         },
         "packages/capabilities/src/EditTool/EditTool.ts": {
-          "bytesInOutput": 11614
+          "bytesInOutput": 12029
         },
         "packages/capabilities/src/GlobTool/GlobTool.ts": {
           "bytesInOutput": 6684
@@ -47888,7 +47775,7 @@
           "bytesInOutput": 11418
         },
         "packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts": {
-          "bytesInOutput": 7648
+          "bytesInOutput": 7666
         },
         "node_modules/@modelcontextprotocol/sdk/dist/esm/experimental/tasks/server.js": {
           "bytesInOutput": 1885
@@ -47930,7 +47817,7 @@
           "bytesInOutput": 303
         },
         "packages/capabilities/src/AskUserQuestionTool/AskUserQuestionTool.ts": {
-          "bytesInOutput": 3765
+          "bytesInOutput": 3906
         },
         "packages/capabilities/src/AskUserQuestionTool/constants.ts": {
           "bytesInOutput": 26
@@ -47984,7 +47871,7 @@
           "bytesInOutput": 2528
         },
         "packages/host/src/connector-services/apply.ts": {
-          "bytesInOutput": 4603
+          "bytesInOutput": 4602
         },
         "packages/plugin-core/src/types.ts": {
           "bytesInOutput": 282
@@ -48026,7 +47913,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-config/tool-exposure.ts": {
-          "bytesInOutput": 894
+          "bytesInOutput": 1251
         },
         "packages/capabilities/src/MCP/tool-hint.ts": {
           "bytesInOutput": 498
@@ -48083,7 +47970,7 @@
           "bytesInOutput": 866
         },
         "packages/host/src/worker-compaction/context-model.ts": {
-          "bytesInOutput": 341
+          "bytesInOutput": 422
         },
         "packages/host/src/worker-compaction/index.ts": {
           "bytesInOutput": 0
@@ -48167,7 +48054,7 @@
           "bytesInOutput": 7356
         },
         "packages/host/src/host-runtime.ts": {
-          "bytesInOutput": 1185
+          "bytesInOutput": 947
         },
         "packages/cli/src/api/plugin-client.ts": {
           "bytesInOutput": 1286
@@ -48176,7 +48063,7 @@
           "bytesInOutput": 42599
         },
         "packages/cli/src/tui/background-host.ts": {
-          "bytesInOutput": 1743
+          "bytesInOutput": 1665
         },
         "packages/host/src/plugins/audit.ts": {
           "bytesInOutput": 323
@@ -48299,7 +48186,7 @@
           "bytesInOutput": 0
         },
         "packages/host/src/local-host.ts": {
-          "bytesInOutput": 16010
+          "bytesInOutput": 15917
         },
         "packages/host/src/session-api.ts": {
           "bytesInOutput": 13421
@@ -48665,7 +48552,7 @@
           "bytesInOutput": 191
         },
         "packages/host/src/ipc-message-adapters.ts": {
-          "bytesInOutput": 5523
+          "bytesInOutput": 5575
         },
         "packages/host/src/ipc-row-adapters.ts": {
           "bytesInOutput": 5015
@@ -48821,7 +48708,7 @@
           "bytesInOutput": 1067
         },
         "packages/host/src/worker-session-runtime.ts": {
-          "bytesInOutput": 54766
+          "bytesInOutput": 54841
         },
         "packages/host/src/worker-journal/child-journal.ts": {
           "bytesInOutput": 214
@@ -48902,7 +48789,7 @@
           "bytesInOutput": 81
         },
         "packages/host/src/authorization/worker-permission-evaluator.ts": {
-          "bytesInOutput": 196
+          "bytesInOutput": 218
         },
         "packages/host/src/worker-config/cache-config.ts": {
           "bytesInOutput": 572
@@ -48917,7 +48804,7 @@
           "bytesInOutput": 477
         },
         "packages/agent-runtime/src/authorization/permission-gate.ts": {
-          "bytesInOutput": 2025
+          "bytesInOutput": 1924
         },
         "packages/host/src/authorization/worker-permission-gate.ts": {
           "bytesInOutput": 684
@@ -49106,34 +48993,16 @@
           "bytesInOutput": 121
         },
         "packages/agent-runtime/src/context/compact/CompactionManager.ts": {
-          "bytesInOutput": 10670
+          "bytesInOutput": 10705
         },
         "packages/agent-runtime/src/context/compact/message-compaction-controller.ts": {
           "bytesInOutput": 3482
         },
-        "packages/agent-runtime/src/context/compact/transforms/shared.ts": {
-          "bytesInOutput": 341
-        },
-        "packages/agent-runtime/src/context/compact/transforms/reformatCompress.ts": {
-          "bytesInOutput": 1602
-        },
-        "packages/agent-runtime/src/context/compact/transforms/offloadCompress.ts": {
-          "bytesInOutput": 744
-        },
-        "packages/agent-runtime/src/context/compact/transforms/microTransform.ts": {
-          "bytesInOutput": 881
-        },
-        "packages/agent-runtime/src/context/compact/transforms/imageTruncationTransform.ts": {
-          "bytesInOutput": 1787
-        },
-        "packages/agent-runtime/src/context/compact/projectionCompress.ts": {
-          "bytesInOutput": 53
-        },
         "packages/host/src/worker-compaction/bound-ports.ts": {
-          "bytesInOutput": 114
+          "bytesInOutput": 157
         },
         "packages/host/src/worker-compaction/bound-manager.ts": {
-          "bytesInOutput": 97
+          "bytesInOutput": 111
         },
         "packages/host/src/worker-compaction/context-window.ts": {
           "bytesInOutput": 30
@@ -49223,7 +49092,7 @@
           "bytesInOutput": 69
         },
         "packages/host/src/worker-tools/builtin.ts": {
-          "bytesInOutput": 2638
+          "bytesInOutput": 2590
         },
         "packages/host/src/worker-image-generation/ImageGenerateTool.ts": {
           "bytesInOutput": 372
@@ -49280,7 +49149,7 @@
           "bytesInOutput": 70
         },
         "packages/capabilities/src/post-to-room-tool.ts": {
-          "bytesInOutput": 3558
+          "bytesInOutput": 3664
         },
         "packages/host/src/worker-tool-services/room-messaging.ts": {
           "bytesInOutput": 375
@@ -49330,17 +49199,8 @@
         "packages/host/src/worker-tool-bindings/app-connector-manage-tools.ts": {
           "bytesInOutput": 26
         },
-        "packages/capabilities/src/PlanTool/PlanTool.ts": {
-          "bytesInOutput": 5035
-        },
-        "packages/host/src/worker-tool-services/plan.ts": {
-          "bytesInOutput": 6079
-        },
-        "packages/host/src/worker-tool-bindings/plan.ts": {
-          "bytesInOutput": 70
-        },
         "packages/host/src/worker-tools/assembly.ts": {
-          "bytesInOutput": 82
+          "bytesInOutput": 203
         },
         "packages/host/src/worker-workflows/execution-binding.ts": {
           "bytesInOutput": 1395
@@ -49355,7 +49215,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5759591
+      "bytes": 5745888
     }
   }
 }

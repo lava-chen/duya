@@ -188,6 +188,47 @@ describe('slash/shared token accounting', () => {
     expect(totals).toEqual(EMPTY_TOTALS);
     expect(totals.hasUsage).toBe(false);
   });
+
+  it('sums the per-call ledger, not the turn-cumulative top-level counters', () => {
+    // Plan 445: the top-level 120_000 is the SUM of three 40_000 calls.
+    // Reading it as one call is the plan-546 double-count (3× inflation).
+    // The context ring and the worker's history seed both prefer calls[];
+    // /cost must agree with them about the same session.
+    const totals = sumMessageUsage([
+      message('assistant', 'tool-heavy turn', {
+        tokenUsage: {
+          input_tokens: 120_000,
+          output_tokens: 300,
+          last_call: { input_tokens: 40_000, output_tokens: 250 },
+          calls: [
+            { input_tokens: 40_000, output_tokens: 250 },
+            { input_tokens: 40_000, output_tokens: 25 },
+            { input_tokens: 40_000, output_tokens: 25 },
+          ],
+        },
+      }),
+    ]);
+    expect(totals.rawInput).toBe(120_000);
+    expect(totals.output).toBe(300);
+    expect(totals.hasUsage).toBe(true);
+  });
+
+  it('uses last_call as the single-call snapshot when the ledger is missing', () => {
+    // A partial write or a round-trip that stripped calls[] still carries
+    // last_call. Falling back to the cumulative top-level would re-inflate.
+    const totals = sumMessageUsage([
+      message('assistant', 'partial ledger', {
+        tokenUsage: {
+          input_tokens: 120_000,
+          output_tokens: 300,
+          last_call: { input_tokens: 40_000, output_tokens: 250, cache_hit_tokens: 900 },
+        },
+      }),
+    ]);
+    expect(totals.rawInput).toBe(40_000);
+    expect(totals.cacheRead).toBe(900);
+    expect(totals.output).toBe(250);
+  });
 });
 
 describe('slash/shared history projection', () => {

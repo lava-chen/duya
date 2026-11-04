@@ -234,7 +234,7 @@ export class WriteTool extends BaseTool {
             // Unreadable target: let the write itself surface the real error.
           }
         }
-        if (freshness === 'never-read' && isReadFirstGateEnabled()) {
+        if (freshness === 'never-read' && isReadFirstGateEnabled(scope)) {
           return {
             id,
             name: this.name,
