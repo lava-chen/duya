@@ -93,15 +93,21 @@ export interface ToolSelectionInput {
 /**
  * Which constraints apply to the tool surface, and where each came from.
  *
+ * Every list is optional on purpose: `undefined` means "this constraint does
+ * not apply" while an empty array means "this constraint applies and allows
+ * nothing". Collapsing the two would turn an unconstrained profile into a
+ * deny-all surface, so the resolver must preserve the distinction that
+ * `definedProperties` produced.
+ *
  * The resolver deliberately does NOT re-implement `isToolVisible`: duplicating
  * the filter would create a second source of truth for what the model sees.
  * It only names the four inputs the existing filter consumes.
  */
 export interface ToolSelection {
-  readonly profileAllowedPatterns: readonly string[];
-  readonly profileDisallowedPatterns: readonly string[];
-  readonly turnAllowedTools: readonly string[];
-  readonly turnDisabledTools: readonly string[];
+  readonly profileAllowedPatterns?: readonly string[];
+  readonly profileDisallowedPatterns?: readonly string[];
+  readonly turnAllowedTools?: readonly string[];
+  readonly turnDisabledTools?: readonly string[];
   readonly decisions: readonly CompositionDecision[];
 }
 

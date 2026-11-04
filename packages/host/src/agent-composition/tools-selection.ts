@@ -5,22 +5,30 @@
  * origin. The filter itself (`isToolVisible`) stays the single implementation;
  * this resolver only removes the inline `appliedProfile?.x ?? options?.y`
  * assembly from the session.
+ *
+ * `undefined` and `[]` are preserved as distinct values: the filter treats a
+ * present-but-empty allow list as "allow nothing", so flattening the two would
+ * silently deny every tool for an unconstrained profile.
  */
 import type { AgentProfile } from '@duya/agent-core';
 
 import type { CompositionDecision, ToolSelection, ToolSelectionInput } from './contract.js';
 
+function copyIfDefined(list: readonly string[] | undefined): string[] | undefined {
+  return list === undefined ? undefined : [...list];
+}
+
 export function resolveToolSelection(
   profile: AgentProfile | undefined,
   input: ToolSelectionInput = {},
 ): ToolSelection {
-  const profileAllowedPatterns = [...(profile?.allowedTools ?? [])];
-  const profileDisallowedPatterns = [...(profile?.disallowedTools ?? [])];
-  const turnAllowedTools = [...(input.allowedTools ?? [])];
-  const turnDisabledTools = [...(input.disabledTools ?? [])];
+  const profileAllowedPatterns = copyIfDefined(profile?.allowedTools);
+  const profileDisallowedPatterns = copyIfDefined(profile?.disallowedTools);
+  const turnAllowedTools = copyIfDefined(input.allowedTools);
+  const turnDisabledTools = copyIfDefined(input.disabledTools);
   const decisions: CompositionDecision[] = [];
 
-  if (profileAllowedPatterns.length > 0) {
+  if (profileAllowedPatterns !== undefined) {
     decisions.push({
       field: 'tools.profileAllowed',
       value: profileAllowedPatterns.join(','),
@@ -28,7 +36,7 @@ export function resolveToolSelection(
       note: `${profileAllowedPatterns.length} allow pattern(s) from the applied profile`,
     });
   }
-  if (profileDisallowedPatterns.length > 0) {
+  if (profileDisallowedPatterns !== undefined) {
     decisions.push({
       field: 'tools.profileDisallowed',
       value: profileDisallowedPatterns.join(','),
@@ -36,14 +44,14 @@ export function resolveToolSelection(
       note: `${profileDisallowedPatterns.length} deny pattern(s) from the applied profile`,
     });
   }
-  if (turnAllowedTools.length > 0) {
+  if (turnAllowedTools !== undefined) {
     decisions.push({
       field: 'tools.turnAllowed',
       value: turnAllowedTools.join(','),
       source: 'turn-override',
     });
   }
-  if (turnDisabledTools.length > 0) {
+  if (turnDisabledTools !== undefined) {
     decisions.push({
       field: 'tools.turnDisabled',
       value: turnDisabledTools.join(','),
@@ -60,10 +68,10 @@ export function resolveToolSelection(
   }
 
   return {
-    profileAllowedPatterns,
-    profileDisallowedPatterns,
-    turnAllowedTools,
-    turnDisabledTools,
+    ...(profileAllowedPatterns !== undefined ? { profileAllowedPatterns } : {}),
+    ...(profileDisallowedPatterns !== undefined ? { profileDisallowedPatterns } : {}),
+    ...(turnAllowedTools !== undefined ? { turnAllowedTools } : {}),
+    ...(turnDisabledTools !== undefined ? { turnDisabledTools } : {}),
     decisions,
   };
 }

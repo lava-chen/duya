@@ -36,6 +36,17 @@ describe('plan 624 — tool selection', () => {
     ]);
   });
 
+  it('keeps "unconstrained" and "allow nothing" distinguishable', () => {
+    const unconstrained = resolveToolSelection(undefined);
+    const denyAll = resolveToolSelection(undefined, { allowedTools: [] });
+
+    // An absent list means the constraint does not apply; an empty one means it
+    // applies and matches nothing. Collapsing them would deny every tool.
+    expect(unconstrained.turnAllowedTools).toBeUndefined();
+    expect(denyAll.turnAllowedTools).toEqual([]);
+    expect(denyAll.decisions.some((d) => d.field === 'tools.turnAllowed')).toBe(true);
+  });
+
   it('says "unconstrained" explicitly instead of leaving the decision implicit', () => {
     const selection = resolveToolSelection(undefined);
 
@@ -51,19 +62,19 @@ describe('plan 624 — tool selection', () => {
 
   it('copies arrays so a caller cannot mutate the profile', () => {
     const selection = resolveToolSelection(codeExpert);
-    selection.profileAllowedPatterns.push('mutated');
+    selection.profileAllowedPatterns?.push('mutated');
 
     expect(codeExpert.allowedTools).not.toContain('mutated');
   });
 });
 
 describe('plan 624 — mode selection', () => {
-  it('applies no modifier in normal mode', () => {
-    const selection = resolveModeSelection({ mode: 'normal' });
+  it('keeps the collectActiveModes quirk: normal is still an active id, just never an orchestrator', () => {
+    const selection = resolveModeSelection({ mode: 'normal' }, { get: () => ({ orchestrator: {} }) });
 
-    expect(selection.activeModeIds).toEqual([]);
+    expect(selection.activeModeIds).toEqual(['normal']);
     expect(selection.orchestratorModeId).toBeUndefined();
-    expect(selection.decisions[0]?.source).toBe('host-default');
+    expect(selection.decisions[0]?.source).toBe('turn-override');
   });
 
   it('treats a missing or empty mode as normal', () => {

@@ -20,7 +20,7 @@ import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declaration
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { resolvePromptSelection } from '@duya/host/agent-composition';
+import { resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveToolSelection } from '@duya/host/agent-composition';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
@@ -104,7 +104,7 @@ import { modeModifierRegistry, modeTrackerEngine } from '@duya/host/worker-modes
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '@duya/host/worker-modes/modifiers';
 import type { SubagentRunDeps } from '@duya/host/worker-subagents/run-agent';
 import { ModeCoordinator } from '@duya/host/worker-modes/engine';
-import { applyModes, collectActiveModes, composeModePrompt, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
+import { applyModes, composeModePrompt, runExitHooks } from '@duya/host/worker-modes/modifiers/apply-modes';
 import { planModeTracker } from '@duya/host/worker-modes/plan/plan-tracker';
 import { ToolRegistry } from '@duya/host/worker-tool-registry';
 import type { ToolExecutor } from '@duya/host/worker-tool-registry';
@@ -338,7 +338,7 @@ export class WorkerSession implements AgentRuntime {
     }> {
         const { options, turnContext } = input;
         const { registry, constraints, catalogView } = input.resolved;
-        const activeModeIds = collectActiveModes(options ?? {});
+        const activeModeIds = resolveModeSelection(options ?? {}, modeModifierRegistry).activeModeIds;
         this.resolvedModes = activeModeIds.length > 0
             ? modeModifierRegistry.resolve(activeModeIds)
             : undefined;
@@ -468,8 +468,9 @@ export class WorkerSession implements AgentRuntime {
         };
     }
     private _readOrchestratorMode(options?: ChatOptions): ModeModifier | null {
-        const requestedMode = options?.mode || 'normal';
-        if (requestedMode === 'normal')
+        const selection = resolveModeSelection(options ?? {}, modeModifierRegistry);
+        const requestedMode = selection.orchestratorModeId;
+        if (!requestedMode)
             return null;
         const mod = modeModifierRegistry.get(requestedMode);
         return mod?.orchestrator ? mod : null;
@@ -1240,7 +1241,10 @@ export class WorkerSession implements AgentRuntime {
             const file = path.join(dayDir, `${session}-${stamp}-compaction.md`);
             fs.writeFileSync(file, `# Compaction summary\n\n${summary}\n`, 'utf8');
         });
-        this.permissionMode = options.permissionMode || 'default';
+        // Plan 624 C1: the mode and its origin come from the composition layer.
+        // The resolver reproduces the live `||` semantics (an empty string is
+        // absent, not a mode).
+        this.permissionMode = resolvePermissionSelection(options).permissionMode as PermissionMode;
         this.hostToolPermission = options.hostToolPermission;
         this.hasPermissionsToUseTool = createHasPermissionsToUseTool(this.sessionId);
         const ruleSource: PermissionRuleSource = 'userSettings';
@@ -1655,11 +1659,26 @@ export class WorkerSession implements AgentRuntime {
                 .filter((d) => selectedProviders.includes(d.provider))
                 .map((d) => d.name)
             : []);
-        const constraints: ToolVisibilityConstraints = {
-            ...definedProperties({ disabledTools: options?.disabledTools }),
+        // Plan 624 C1: the four constraints and their origin come from the
+        // composition layer. `undefined` vs `[]` is preserved on purpose — an
+        // empty allow list means "allow nothing", not "unconstrained".
+        const toolSelection = resolveToolSelection(appliedProfile, {
             ...definedProperties({ allowedTools: options?.allowedTools }),
-            ...definedProperties({ profileAllowedPatterns: appliedProfile?.allowedTools }),
-            ...definedProperties({ profileDisallowedPatterns: appliedProfile?.disallowedTools })
+            ...definedProperties({ disabledTools: options?.disabledTools })
+        });
+        const constraints: ToolVisibilityConstraints = {
+            ...(toolSelection.turnDisabledTools !== undefined
+                ? { disabledTools: [...toolSelection.turnDisabledTools] }
+                : {}),
+            ...(toolSelection.turnAllowedTools !== undefined
+                ? { allowedTools: [...toolSelection.turnAllowedTools] }
+                : {}),
+            ...(toolSelection.profileAllowedPatterns !== undefined
+                ? { profileAllowedPatterns: [...toolSelection.profileAllowedPatterns] }
+                : {}),
+            ...(toolSelection.profileDisallowedPatterns !== undefined
+                ? { profileDisallowedPatterns: [...toolSelection.profileDisallowedPatterns] }
+                : {})
         };
         if (!registry.has('tool_catalog')) {
             const catalog = new ToolCatalogTool();
@@ -2002,7 +2021,7 @@ export class WorkerSession implements AgentRuntime {
             ? prompt
             : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
         const toolRegistry = this.activeMCPRegistry;
-        const orchestratorActiveModes = collectActiveModes(options ?? {});
+        const orchestratorActiveModes = resolveModeSelection(options ?? {}, modeModifierRegistry).activeModeIds;
         const orchestratorResolved = orchestratorActiveModes.length > 0
             ? modeModifierRegistry.resolve(orchestratorActiveModes)
             : null;
