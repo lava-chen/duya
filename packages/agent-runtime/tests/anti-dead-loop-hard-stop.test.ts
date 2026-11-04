@@ -333,6 +333,17 @@ describe('the engine hard-stops a repeated tool call streak', () => {
     expect(h.reported().reason).toBe('repeated_tool_calls');
   });
 
+  it('uses a tool-specific hard stop before the run-wide threshold', async () => {
+    const h = await run(SAME_CALL_EVERY_TURN, {
+      enabled: true,
+      hardStopAt: 5,
+      toolHardStopAt: { read: 3 },
+    });
+
+    expect(h.dispatched).toHaveLength(3);
+    expect(h.reported().reason).toBe('repeated_tool_calls');
+  });
+
   it('does not stop BELOW the threshold, and finishes normally instead', async () => {
     // Two identical calls is a streak of two, and the host said three.
     const h = await run(identicalThenFinish(2), { enabled: true, hardStopAt: 3 });

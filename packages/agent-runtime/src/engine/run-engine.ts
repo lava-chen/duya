@@ -2080,7 +2080,16 @@ export class RunEngineImpl implements RunEngine {
     // default is invented here; see `RepeatedCallStopPolicy` for why a silent
     // default would be a ceiling nobody agreed to.
     const stopPolicy = ctx.repeatedCallStop;
-    if (stopPolicy !== undefined && stopPolicy.enabled && ctx.repeatedCalls.repeats(stopPolicy.hardStopAt)) {
+    const repeatedCallStats = ctx.repeatedCalls.stats();
+    const repeatedCallThreshold = repeatedCallStats === undefined
+      ? stopPolicy?.hardStopAt
+      : stopPolicy?.toolHardStopAt?.[repeatedCallStats.toolName] ?? stopPolicy?.hardStopAt;
+    if (
+      stopPolicy !== undefined &&
+      stopPolicy.enabled &&
+      repeatedCallThreshold !== undefined &&
+      ctx.repeatedCalls.repeats(repeatedCallThreshold)
+    ) {
       return { reason: 'repeated_tool_calls' };
     }
 

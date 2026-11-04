@@ -1473,6 +1473,8 @@ export interface RepeatedCallStopPolicy {
   readonly enabled: boolean;
   /** Consecutive identical dispatched calls at which the run hard-stops. */
   readonly hardStopAt: number;
+  /** Optional per-tool threshold overrides; validated by the host like `hardStopAt`. */
+  readonly toolHardStopAt?: Readonly<Record<string, number>>;
 }
 
 /**
