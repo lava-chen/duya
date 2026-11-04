@@ -6,7 +6,6 @@ import { getLogger as getPluginLogger } from './worker-logger.js';
 import { hasBackgroundCheckoutLease } from './workspace/task-leases.js';
 import {
   readLocalHostRuntimeFrom,
-  workerBundleSha256,
   type LocalHostRuntime,
 } from './host-runtime.js';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -430,7 +429,6 @@ function removeOwnedFile(filePath: string, matches: (value: Record<string, unkno
 
 /** Start a local, Electron-free Host process composition over @duya/data. */
 export async function startLocalHost(options: StartLocalHostOptions = {}): Promise<LocalHostHandle> {
-  const workerFingerprint = options.workerPath === undefined ? undefined : workerBundleSha256(options.workerPath);
   const dataRoot = path.resolve(options.dataRoot ?? resolveDataRoot());
   const settings = readStorageSettings(dataRoot);
   const previousDefaultPath = previousElectronDatabasePath();
@@ -1107,9 +1105,6 @@ export async function startLocalHost(options: StartLocalHostOptions = {}): Promi
       token,
       pid: process.pid,
       startedAt: Date.now(),
-      ...(workerFingerprint === undefined ? {} : {
-        workerBundleSha256: workerFingerprint,
-      }),
     };
     if (!options.ephemeral) writeRuntimeFile(runtimeFilePath, runtime);
 

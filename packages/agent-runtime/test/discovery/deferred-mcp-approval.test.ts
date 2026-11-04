@@ -49,23 +49,6 @@ function harness(answer: ToolPermissionDecision) {
 }
 
 describe('deferred MCP approval through the real meta tool and source guard', () => {
-  it.each([true, false])('preserves classifier escalation authority without elevating hard denies (%s)', async (classifier) => {
-    const { canUseTool } = buildPermissions({
-      warn: vi.fn(), getPermissionMode: () => 'auto',
-      alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {}, additionalWorkingDirectories: new Map(),
-      getAbortController: () => null, llmClient: {}, model: 'test-model', getMessages: () => [],
-      hasPermissionsToUseTool: async () => ({
-        behavior: 'deny', message: 'blocked',
-        decisionReason: classifier
-          ? { type: 'classifier', classifier: 'auto-mode', reason: 'advisory' }
-          : { type: 'other', reason: 'hard policy' },
-      }),
-      getModeCoordinator: () => undefined,
-    }, { workingDirectory: null, approval: { alwaysAllowTools: new Set() } });
-    expect(await canUseTool('write', { file_path: 'probe.py' }, 'call-1')).toMatchObject({
-      allowed: false, behavior: 'deny', approvalEscalatable: classifier,
-    });
-  });
   it('reuses a consumed persisted grant across the gate, meta dispatcher and MCP guard without another prompt', async () => {
     const h = harness('deny');
     let available = true;

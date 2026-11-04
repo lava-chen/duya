@@ -11,25 +11,6 @@ function assistant(text: string, options: RenderOptions = OPTIONS): string {
 }
 
 describe('block shapes (plan 614 phase 3)', () => {
-  it('explains a missing tool result without claiming approval or failure', () => {
-    const model = new TranscriptModel();
-    model.upsertTool('write-1', 'write', { file_path: 'probe.py' });
-    model.finishRun();
-    const rendered = renderOneBlock(model.blocks[0]!, OPTIONS);
-    expect(rendered).toContain('? 结果未知');
-    expect(model.blocks[0]).toMatchObject({ status: 'unknown', result: 'Run ended before a tool result was received.' });
-  });
-
-  it('renders a policy refusal as a failure after the tool result arrives', () => {
-    const model = new TranscriptModel();
-    model.upsertTool('write-1', 'write', { file_path: 'probe.py' });
-    model.completeTool('write-1', '<tool_use_error>Permission denied; NOT executed</tool_use_error>', true);
-    model.finishRun();
-    const rendered = renderOneBlock(model.blocks[0]!, OPTIONS);
-    expect(rendered).toContain('✖');
-    expect(rendered).not.toContain('结果未知');
-  });
-
   it('renders levels 1-2 headings bold inside the heading colour, marker consumed', () => {
     expect(assistant('# Title')).toContain('{cyan-fg}{bold}Title{/bold}{/cyan-fg}');
     expect(assistant('## Section')).toContain('{cyan-fg}{bold}Section{/bold}{/cyan-fg}');

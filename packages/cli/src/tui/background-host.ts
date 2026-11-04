@@ -120,7 +120,6 @@ export async function startBackgroundHost(options: BackgroundHostOptions = {}): 
         close: async () => {},
         started: false,
         pid: runtime.pid,
-        ...(runtime.workerBundleSha256 === undefined ? {} : { workerBundleSha256: runtime.workerBundleSha256 }),
       };
     }
     if (Date.now() >= deadline) {

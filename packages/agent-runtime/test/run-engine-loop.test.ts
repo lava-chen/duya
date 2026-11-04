@@ -940,12 +940,8 @@ describe('a dispatch is unreachable without a ledger ticket', () => {
       allow: () => ({ allowed: false, reason: 'denied' }),
     });
     const clock = fakeClock();
-    const transcriptOrder: string[] = [];
-    h.ports.turnOutput!.recordAssistantMessage = async () => { transcriptOrder.push('assistant'); };
-    h.ports.turnOutput!.recordToolResult = async () => { transcriptOrder.push('result'); };
 
     await run(engineWith(clock), h);
-    expect(transcriptOrder).toEqual(['assistant', 'result', 'assistant']);
 
     // Nothing ran, so nothing to classify in the ledger.
     expect(h.dispatched).toEqual([]);

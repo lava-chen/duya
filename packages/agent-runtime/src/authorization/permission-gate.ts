@@ -255,8 +255,6 @@ export function buildPermissions(
           allowed: false,
           behavior: 'deny' as const,
           ...(decision.message ? { message: decision.message } : {}),
-          approvalEscalatable: decision.decisionReason?.type === 'classifier'
-            && decision.decisionReason.classifier === 'auto-mode',
         };
       }
       return {
@@ -306,4 +304,4 @@ export type CanUseToolFn = (
   toolName: string,
   input?: Record<string, unknown>,
   invocationId?: string,
-) => Promise<{ allowed: boolean; behavior: 'allow' | 'deny' | 'ask'; message?: string; userApproved?: boolean; approvalEscalatable?: boolean }>;
+) => Promise<{ allowed: boolean; behavior: 'allow' | 'deny' | 'ask'; message?: string; userApproved?: boolean }>;
