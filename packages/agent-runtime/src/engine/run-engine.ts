@@ -1747,7 +1747,11 @@ export class RunEngineImpl implements RunEngine {
       durationMs: 0,
       errorCode: refusal.kind === 'budget' ? 'budget_exhausted' : 'permission_denied_by_policy',
     };
-    await this.#commitToolResult(ctx, item, { toolName: call.name, settleLedger: false });
+    // The model stream is still producing the assistant message containing
+    // this tool_use. Persisting its result now puts the result BEFORE its use;
+    // the provider's pairing repair then drops it as an orphan. Drain after
+    // #handOffMessage, in the same order as results of dispatched calls.
+    ctx.turnWork.pendingRefusals.push({ item, toolName: call.name });
     // Counted separately from `dispatched`, because it is a different fact:
     // `#shouldStop` must reopen the loop for a refused call (the model owes an
     // answer to an answer it has not read yet) without claiming the tool ran.
@@ -1819,6 +1823,10 @@ export class RunEngineImpl implements RunEngine {
     // work after that loop too (`:2858`).
     let results = 0;
     try {
+      for (const refusal of ctx.turnWork.pendingRefusals.splice(0)) {
+        results += 1;
+        await this.#commitToolResult(ctx, refusal.item, { toolName: refusal.toolName, settleLedger: false });
+      }
       for await (const item of ports.tools.drain(signal) as AsyncIterable<ToolDrainItem>) {
         if (isAborted(signal)) {
           ports.tools.discard('abandoned');
@@ -3287,6 +3295,7 @@ export class RunEngineImpl implements RunEngine {
  * loop from outside it.
  */
 class TurnWork {
+  readonly pendingRefusals: Array<{ item: ToolOutcome; toolName: string }> = [];
   dispatched = 0;
   /**
    * Calls this turn that were REFUSED before dispatch, and whose refusal the

@@ -1,7 +1,7 @@
 # 权限拒绝恢复：把「被拒绝的工具调用」变成模型可见的结果
 
-状态：active · 负责人：duya 会话（auto-denial-recovery） · 更新：2026-11-03
-分支：`codex/auto-denial-recovery` · worktree：`E:/Projects/duya/.claude/worktrees/auto-denial-recovery` · base：`203d7d51` · owner：本会话
+状态：active（#603 已合并；生产链路顺序、旧 worker 附着及审批升级边界补修中） · 负责人：Codex · 更新：2026-11-03
+当前分支：`codex/write-denial-recovery-audit` · worktree：`D:/codex/worktrees/inspect-write-tool-stall/duya` · base：`9b8da5e8` · owner：Codex chat `01a1a19c-b965-7c90-988c-44679ba8e8dd`。原始 #603 的分支与工作区保留在下方历史记录。
 
 ## 目标与边界
 
@@ -136,7 +136,7 @@ codex 拒绝时还有一层沙箱内重跑的余地，duya 只有这一刀。
 | --- | --- | --- | --- | --- |
 | 基线 `203d7d51` | Windows / Node 22.22.2 | 待补 | | |
 
-## 接续 / 结果
+## 原始实现接续（#603 历史记录）
 
 worktree `.claude/worktrees/auto-denial-recovery`（分支 `codex/auto-denial-recovery`），实现完成、未提交。
 
@@ -165,3 +165,66 @@ commit `19100cb0`（分支 `codex/auto-denial-recovery`）→
 
 回收：待 PR review/CI 通过并经授权合并后，按 worktree 指南回收本检出。
 下一步：跟踪 CI（architecture/build/test/test scope/typecheck 五项），review 意见回落本计划。
+
+
+## 2026-11-03 Codex 再审与 write 回归
+
+Owner：Codex chat `01a1a19c-b965-7c90-988c-44679ba8e8dd`；分支 `codex/write-denial-recovery-audit`；managed worktree `D:/codex/worktrees/inspect-write-tool-stall/duya`；base `9b8da5e8`。Workspace 工具不可用，以版本化计划、Git 与运行进程对账。
+
+- [x] 对照本地 Codex `fbf5f0d3a716d08c254d3e4941d5b12eaff5afe7`：`core/src/tools/orchestrator.rs` 的 Forbidden 直接 Rejected，沙箱失败重试仍受批准策略限制；`tools/events.rs` 将拒绝转换成 Failure 事件及 RespondToModel，工具调用必须有答案。
+- [x] 核对 #603 已于 20:49 合并，已有模型回灌与 started/completed 配对。现场 TUI 来自 `master.9b8da5e`，但 Host PID 9132 / worker PID 520 来自 `master.cccab45-transparent`，分别在 14:46 / 15:15 启动。新客户端复用了旧引擎。
+- [x] `?` 来自 TranscriptModel.finishRun 将无结果的 running 调用置为 unknown，折叠内容为 Run ended before a tool result was received；不是审批状态。
+- [x] 修复自动附着旧 worker 无提示：Host 启动时记录 worker SHA256；新 TUI 比对配套 worker，缺失/不一致时在创建 session 前拒绝并给出重启指引；不终止其他客户端的 Host。
+- [x] 限制 #603 二次升级为 auto classifier 明确可升级的拒绝；硬规则、plan gate、异常拒绝不可因重复调用升级授权。基线新增 hard-policy 回归失败：第二次得到 allowed:true；原引擎回灌/事件测试通过。
+- [x] 给 unknown 符号补文字说明，验证渲染和错误结果区别。
+- [x] 相关回归、类型/架构门禁、真实 worker/CLI 构建与独立数据目录验收；已提交 Draft PR #606。
+
+策略：保留工作区边界；参考 Codex 的可恢复拒绝与有限审批升级，不能把任何 deny 都当作可升级建议。
+
+### 生产链路发现与实现
+
+生产 worker 验收证明 #603 仍有顺序缺口：`#refuseCall` 在模型流内立即 recordToolResult，而含 tool_use 的 assistant message 要在流结束后才 recordAssistantMessage。历史成为 result→use，Anthropic 配对修复删除孤立 result。受控 provider 第二次收不到拒绝，重发 write 后等待审批；45 秒观察 status=running，7 个事件，目标文件未创建。
+
+修复：把拒绝结果加入每轮 TurnWork 队列，在 assistant 消息落盘后的 drain 阶段调用既有 commitToolResult；保留无 side-effect ticket、started/completed 配对、重试计数。新增断言固定 assistant→result→assistant 顺序。重新构建生产 worker 后，隔离 Host/真实 fork/loopback Anthropic：2 次主模型请求；第二次实际收到 NOT executed；12 个持久事件含 permission_denied_by_policy；run completed；目标文件不存在。Run ID `05657b82-97af-46c2-870b-c73ebe2bf7c1`，本地复跑材料 `docs-local/research/write-denial/worker-smoke.mjs`。未调用真实付费模型，未改用户配置或运行中 Host。
+
+Codex 对照补充：orchestrator 的 Forbidden 在执行前返回 Rejected；只有符合当前审批/沙箱策略的失败才允许重试。events.rs:444–468 将拒绝既映射成 Failure 事件，也返回 RespondToModel。Duya 采用对应语义，但使用既有 run ledger、权限 gate 和 per-turn pipeline，不新增权限引擎；auto classifier 的拒绝由可信 gate 标记可升级，硬拒绝/未知来源缺省不可升级。
+
+### 本轮验证（base 9b8da5e8 + 本任务 dirty）
+
+- Windows / Node v24.16.0；worktree overlay 第三方依赖，workspace 源码和构建来自本检出。
+- 基线：新增 hard-policy deny 用例在 #603 上失败（第二次 allowed:true）；原引擎模型回灌与事件测试通过。生产 worker 另复现上述配对丢失。
+- 初步回归 5 套件 75/75；补充 4 套件 42/42；排序修复后引擎/事件/审批 52/52。最终范围待下方更新。
+- build:packages、build:cli-dev、bundle:worker 退出 0。
+- 真实 CLI 附着用户旧 Host：退出 1，明确提示旧 worker/PID 9132/关闭客户端后重启；未创建会话、未停止用户 Host。
+- 真实 PTY 两项审批验收 2/2。首次与全仓构建并行时 V8 Zone Allocation OOM（未执行用例），构建资源释放后单独重跑通过；ConPTY 清理打印 AttachConsole failed，测试主进程退出 0。
+- architecture:check 退出 0，无新增边界违规、baseline 未改。
+- 源码 git diff --check 通过；生成 minified bundle 含源字符串行尾空格，不手改生成代码；bundle:verify 在未提交状态报告 dirty stale，提交后再核验。
+
+### 当前 Codex / Duya 对照（本轮源码核对）
+
+| 环节 | Codex 本地源码 | Duya 现状与本轮裁定 |
+| --- | --- | --- |
+| 约束与批准 | `tools/orchestrator.rs:164–230` 先计算审批 requirement，Forbidden 直接 Rejected；NeedsApproval 才进入审批 | `authorization/permission-gate.ts` 的硬 deny 与 auto classifier 都返回 deny，但此前来源被丢弃；本轮增加可信 `approvalEscalatable`，仅 auto classifier 可升级 |
+| 受限执行与重试 | `orchestrator.rs:390–551` 沙箱拒绝后还检查 wants_no_sandbox_approval、unsandboxed_allowed、strict_auto_review；不是“第二次就批准” | 原 #603 对所有 deny 计数后 askApproval。本轮保持显式规则、模式闸门、异常 fail-closed，不允许反复调用改变硬策略 |
+| 模型看到的拒绝 | `tools/events.rs:444–468` 同时发 Failure(Rejected) 与 RespondToModel | #603 有结果但时序 result→assistant tool_use；本轮排队到 assistant 落盘后，在统一 drain 中提交，使 provider 真正收到配对结果 |
+| 调用 ID / 副作用真实性 | Codex ToolContext 传 call_id，拒绝发生在工具实际执行前 | Duya 拒绝仍发 started/completed 配对表示接手与回答，但不建立副作用 ticket；错误码 permission_denied_by_policy；未执行的事实不伪装成工具超时 |
+| 审批对象绑定 | Codex ApprovalContext 带 call_id/tool_name/review_context/exec_requirement，审批与所请求的执行 authority 绑定 | Duya #558 的 live target/schema/approved args 绑定保留；本轮不把“用户同意分类器复审”变成权限引擎的通用绕过 |
+| 回合继续与终止 | RespondToModel 走正常工具结果通道，模型可读失败后改路；取消与失败各有分支 | Duya 保留 refused 与 dispatched 分别计数、repeatedCallStop 与 budget 上限；新增真实 worker 验收证明拒绝后下一模型请求有结果，最终能完成 |
+| 运行构建一致性 | Codex 的权限编排位于 core 工具执行路径；不能从 UI 版本推断服务进程已更新 | 本机 Duya 有独立常驻 Host + fork worker，TUI 更新仍自动附着旧进程。增加本地 runtime descriptor worker SHA256，比对缺失/不一致时创建会话前拒绝；显式远程/测试 attach 仍由操作者选择，不强制停止现有进程 |
+| 未收到终态 | Codex 在工具失败事件里明确 rejection 文本；其源码也注明 Rejected 包括部分 setup failures，不能把每个分支都等同于用户拒绝 | Duya finishRun 仅把无结果调用标成 unknown，不能猜成 denied。本轮保留 ? 语义并补“结果未知”；收到已知拒绝结果则正常显示 ✖ |
+
+范围限制：本轮补齐可复现的拒绝恢复、结果顺序、升级边界和本地附着检查；未声称 Duya 已获得 Codex 的 OS 沙箱能力。当前用户 Host 仍是旧构建；PR 合并及安装后，须在活跃任务结束后重启 Host 才会运行新引擎。
+
+### 最终验证与交付接续
+
+- 2026-11-04 集成前重放：在 #607 新树之上重放本 PR，旧 worker bundle 冲突已跳过并按 #607 + 本 PR 的源码合并重建；最新 `master` 起点为 `9f0f8b05`。11 个相关套件 162/162 通过；`typecheck:all` 退出 0（164 条既有基线错误、无新增）；`architecture:check` 退出 0（无新增违规）。
+- #607 更新后的 GitHub `Test` 首轮失败 3 项：`host-child-sessions` 的 budget_exhausted 已在干净 master `9f0f8b05` 独立复现；`chat-tui-host-stop-continue` 在本机单独重跑通过；`tool-protocol-adaptation` 的断言在本 PR 组合树失败，该测试文件与 AI 改动均未被 #606/#607 修改。GitHub 已重跑失败 job，等待结果。当前 PR 未合并。
+- `npm run typecheck:all`：退出 0（保留既有 Electron baseline，无新增错误）。
+- `npm run architecture:check`：退出 0，无新增违规。
+- 最终相关回归：9 套件 122/122，退出 0；真实 PTY 2/2，退出 0。
+- 生产 worker 最终复跑：run `bd7fa3d0-6719-4555-9221-08675f0ef163`，2 次主模型请求、模型收到拒绝、文件未创建、12 个事件、completed；同一真实 Host 的 descriptor 指纹与配套 worker 匹配，附着检查通过。
+- `npm run -w @duya/host build` 与 `npm run build:cli-bundle`：退出 0（最后的 Host 指纹采集移至启动前）。
+- 主 worktree 与用户数据只读。新建本任务独立 managed checkout、分支与隔离验收数据；未停止用户 PID 9132/520，未改安装、用户配置、真实 session。
+- 已实现且本地验证；等待 PR review/CI 与授权集成。工作区保留以便接续；原始材料为 ignored，不入提交。下一步：推送本任务 PR，提交后核对 bundle freshness，记录 PR URL。
+
+交付：Draft PR [#606](https://github.com/lava-chen/duya/pull/606)。运行时/CLI 源码与 bundle 验证提交 `dd55468c`；最后仅追加本计划/索引交付状态。提交后 bundle:verify FRESH（0/1111）。工作区 clean，分支已推送；待最新 head 的 CI/review 和授权集成，保留 managed worktree。用户旧 Host 未重启，安装未变。

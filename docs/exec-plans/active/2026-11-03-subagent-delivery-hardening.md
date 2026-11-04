@@ -1,7 +1,9 @@
 # 子代理回传链路加固与类型收紧
 
-状态：active · 负责人：本会话 · 更新：2026-11-03
+状态：已合并 · 负责人：本会话 · 更新：2026-11-04
 分支：subagent-delivery-fix · worktree：`.claude/worktrees/subagent-delivery-fix` · base：`9b8da5e8` · owner：本会话
+
+集成记录：PR #607 以 merge commit `de54c719c41fbe7c629c0cd1fa728167181bbe2e` 合入 master。CI 的 typecheck/build/architecture/test-scope 与 worker bundle freshness 通过；整仓测试仍有两项已核对的既有失败（`packages/ai/test/tool-protocol-adaptation.test.ts` 未被本 PR 修改；`packages/cli/tests/integration/host-child-sessions.test.ts` 在本地干净 master 基线同样因 budget_exhausted 失败）。
 
 ## 目标与边界
 

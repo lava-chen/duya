@@ -827,7 +827,7 @@ function toolStatusMark(
     case 'running': return styles.accent('⏺');
     case 'ok': return styles.success('✔');
     case 'error': return styles.error('✖');
-    case 'unknown': return styles.muted('?');
+    case 'unknown': return styles.muted('? 结果未知');
   }
 }
 

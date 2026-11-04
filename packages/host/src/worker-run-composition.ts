@@ -310,7 +310,8 @@ export function gateRunApproval(assembly: RunTurnAssembly, askApproval: LegacyRu
     /** Refusals per identical call in this run; see "Why the second refusal escalates". */
     const refusals = new Map<string, number>();
     return async (request, signal) => {
-        const decision = normalizeCanUseToolDecision(await assembly.canUseTool(request.toolName, { ...request.input }, request.callId));
+        const rawDecision = await assembly.canUseTool(request.toolName, { ...request.input }, request.callId);
+        const decision = normalizeCanUseToolDecision(rawDecision);
         if (decision.behavior !== 'deny') {
             return { allowed: true, scope: 'once' } as const;
         }
@@ -321,7 +322,9 @@ export function gateRunApproval(assembly: RunTurnAssembly, askApproval: LegacyRu
         const seen = (refusals.get(key) ?? 0) + 1;
         refusals.set(key, seen);
         const detail = decision.message === undefined ? {} : { detail: decision.message };
-        if (seen > 1) {
+        // Explicit deny rules, plan gates and fail-closed errors remain final.
+        // A human may review an advisory classifier decision only.
+        if (seen > 1 && typeof rawDecision !== 'boolean' && rawDecision.approvalEscalatable === true) {
             const verdict = await askApproval(request, signal);
             if (verdict.allowed) {
                 return verdict;

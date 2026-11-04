@@ -34,6 +34,7 @@ import { HostSessionHttpClient } from '@duya/host/http-client';
 import { readLocalHostRuntime, startLocalHost } from '@duya/host/local-host';
 import { DatabaseOwnerLockError } from '@duya/data';
 import { resolveHostWorkerPath } from './worker-path.js';
+import { workerBundleSha256 } from '@duya/host/host-runtime';
 import { captureConsoleToFile } from './tui/console-capture.js';
 import { startBackgroundHost } from './tui/background-host.js';
 import { holdClientLease } from './tui/client-lease-holder.js';
@@ -104,6 +105,7 @@ export function attachedHostFromEnv(env: NodeJS.ProcessEnv): AttachedHost | null
 /** An attached Host the descriptor named, so the refusal can also report its PID. */
 export interface DiscoveredHost extends AttachedHost {
   readonly pid: number;
+  readonly workerBundleSha256?: string;
 }
 
 /**
@@ -137,6 +139,7 @@ export async function attachedHostFromRuntime(dataRoot?: string): Promise<Discov
     close: async () => {},
     started: false,
     pid: runtime.pid,
+    ...(runtime.workerBundleSha256 === undefined ? {} : { workerBundleSha256: runtime.workerBundleSha256 }),
   };
 }
 
@@ -150,7 +153,7 @@ export async function attachedHostFromRuntime(dataRoot?: string): Promise<Discov
  * `agent_run_execution_unavailable`. Both are answered before a session is
  * created, not after the user typed a message.
  */
-export async function discoveredHostRefusal(host: DiscoveredHost): Promise<string | null> {
+export async function discoveredHostRefusal(host: DiscoveredHost, workerPath = resolveHostWorkerPath()): Promise<string | null> {
   const client = new HostSessionHttpClient(host.origin, host.token);
   let handshake: HostHandshakeV1;
   try {
@@ -158,7 +161,20 @@ export async function discoveredHostRefusal(host: DiscoveredHost): Promise<strin
   } catch (error) {
     return `a Duya Host (pid ${host.pid}) owns this data directory but ${host.origin} is not answering: ${errorMessage(error)}. Stop that process, or set DUYA_DATA_ROOT to run the TUI on its own data directory`;
   }
-  if (handshake.provides?.includes(HOST_RUN_EXECUTION_CAPABILITY) === true) return null;
+  if (handshake.provides?.includes(HOST_RUN_EXECUTION_CAPABILITY) === true) {
+    if (workerPath !== undefined) {
+      let expected: string;
+      try {
+        expected = workerBundleSha256(workerPath);
+      } catch (error) {
+        return `Cannot verify this CLI's worker: ${errorMessage(error)}`;
+      }
+      if (host.workerBundleSha256 !== expected) {
+        return `Duya Host (pid ${host.pid}) is running a different or unverifiable worker build. Updating the TUI does not update an already running Host. Finish active runs, close the clients using that Host, then restart it with this installation; or use DUYA_DATA_ROOT for an independent Host. No session was created.`;
+      }
+    }
+    return null;
+  }
   return `${describeRefusal(handshake, HOST_RUN_EXECUTION_CAPABILITY)}. That Host (pid ${host.pid}) owns the database, so the TUI cannot start its own; quit it, or set DUYA_DATA_ROOT to run the TUI on its own data directory`;
 }
 
@@ -194,6 +210,16 @@ export async function runTuiCommand(options: TuiCommandOptions): Promise<number>
   } catch (error) {
     write(`${RED}${hostUnavailableMessage(error)}${RESET}`);
     return 1;
+  }
+
+  // A simultaneous launcher may have won the descriptor race with an older
+  // installation. Validate that discovered process as well as the initial one.
+  if (discovered === null && explicit === null && 'pid' in host) {
+    const refusal = await discoveredHostRefusal(host as DiscoveredHost);
+    if (refusal !== null) {
+      write(`${RED}${refusal}${RESET}`);
+      return 1;
+    }
   }
 
   const client = new HostSessionHttpClient(host.origin, host.token ?? '');
