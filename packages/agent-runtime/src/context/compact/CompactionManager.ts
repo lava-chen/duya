@@ -570,11 +570,18 @@ export class CompactionManager {
   }
 
   /**
-   * Plan 577 §2: a projection-level shrink was detected by the caller
-   * (compressProjectedToolMessages returned a different reference — tool
-   * results pruned / offloaded). Arms the next observation to replace
-   * `latest` even when smaller, and marks its provenance for the ring-side
-   * downward anchor correction. (Delegates to the ledger.)
+   * Plan 577 §2: a projection-level shrink was detected by the caller — the
+   * message array sent to the provider came back smaller because tool results
+   * were pruned / offloaded. Arms the next observation to replace `latest`
+   * even when smaller, and marks its provenance for the ring-side downward
+   * anchor correction. (Delegates to the ledger.)
+   *
+   * Currently unarmed in production: the projection-compress fold that used to
+   * report this was retired with the legacy request assembly, and nothing else
+   * shrinks the array between the durable history and the provider. The
+   * reader (`wasLastObservationPostShrink`) stays live and simply never sees a
+   * shrink. If a request-time shrink is reintroduced, it MUST call this —
+   * otherwise the accounting ring keeps a pre-shrink anchor.
    */
   noteProjectionShrink(): void {
     this.ledger.noteProjectionShrink()

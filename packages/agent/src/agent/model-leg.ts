@@ -47,13 +47,18 @@
  *
  * ```
  * prePruneMessages   (runtime-prompt substitution, or `messages` unchanged)
- *   -> llmMessages = compressProjectedToolMessages(prePruneMessages)   :2256
+ *   -> llmMessages = prePruneMessages
  *   -> this._applyProviderThreadBoundary(llmMessages)                  :2276
  *   -> await this._injectRuntimeContext(llmMessages, ...)             :2284
  *   -> injectOSContextFragment(llmMessages, runtimePromptMessageId)    :2290
  *   -> injectTurnTimestampReminders(llmMessages)                       :2300
  *   -> runTurnStream({ llmMessages, ... })                            :2356
  * ```
+ *
+ * The projection-compress fold that used to sit on the second line was retired
+ * with this assembly path and its transforms are gone from agent-runtime, so
+ * nothing rewrites tool bodies between the durable history and the provider
+ * anymore.
  *
  * `get messages()` (`DuyaAgent.ts:278`) recomputes
  * `projectTimelinePersistenceMessages(this.timeline.snapshot())` on every read —
@@ -71,12 +76,12 @@
  * `runTurnStream` re-reads the field on every attempt for the same reason.
  *
  * What is NOT load-bearing is WHEN the leg is published, as long as it is
- * published after `llmMessages` is bound. Only `compressProjectedToolMessages`
- * can rebind the array; the four transforms after it mutate entries in place,
- * so an earlier publish of the same reference would still observe their output
- * at request time. `model-leg.test.ts` pins the array identity — the part that
- * is load-bearing — by reading one real turn three ways and finding the leg
- * and the provider agree with each other and disagree with `get messages()`.
+ * published after `llmMessages` is bound: the four transforms after it mutate
+ * entries in place, so an earlier publish of the same reference would still
+ * observe their output at request time. `model-leg.test.ts` pins the array
+ * identity — the part that is load-bearing — by reading one real turn three
+ * ways and finding the leg and the provider agree with each other and
+ * disagree with `get messages()`.
  *
  * ## Why one instance per run, and not a module-level `let`
  *

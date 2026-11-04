@@ -18,12 +18,8 @@ export { SessionMemoryCompactStrategy, createSessionMemoryCompactStrategy, type 
 export { PostCompactReinjector, createPostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 
 // Projection-layer tool compression pipeline (LLM-facing only).
-export {
-  compressProjectedToolMessages,
-  buildDefaultTransforms,
-  DEFAULT_TRANSFORMS,
-  type ProjectionTransform,
-} from './projectionCompress.js'
+// Retired with the legacy request assembly — see the note in
+// `@duya/agent-runtime/context/compact`.
 
 // Tool-call invariant + budget fitting
 export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudget } from './historySanitize.js'

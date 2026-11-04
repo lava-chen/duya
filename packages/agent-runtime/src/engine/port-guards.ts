@@ -1165,13 +1165,17 @@ export const INTER_TURN_CHECKPOINTS_ARE_NAMED: readonly InterTurnCheckpoint[] = 
  *     (`context/os-context/fragment.ts:120-133`).
  *
  * Step 4 is the one link in this chain that rests on the transforms' declared
- * scope rather than on a read of every body. All five are tool-result
+ * scope rather than on a read of every body. All five were tool-result
  * transforms -- reformat, offload, extension history, micro cleanup, image
- * truncation (`compact/projectionCompress.ts:44-48`) -- and a `tool_result`
- * carrier is excluded by the same rule at `turn-time-reminder.ts:79-81`, so on
- * their declared scope none of them can add or remove a reminder-eligible human
- * turn. A sixth transform that rewrote a human user message's content WOULD
- * break the equivalence, and `buildDefaultTransforms` is the place to re-check.
+ * truncation -- and a `tool_result` carrier is excluded by the same rule at
+ * `turn-time-reminder.ts:79-81`, so on their declared scope none of them could
+ * add or remove a reminder-eligible human turn. That pass has since been
+ * retired: the projection-compress fold lost its call site in the move to the
+ * Host engine and its transforms were deleted, so step 4 no longer runs and
+ * the equivalence holds a fortiori. The argument is kept because it is what
+ * admits the host seam, and because a reintroduced transform must satisfy the
+ * same constraint: a transform that rewrote a human user message's content
+ * WOULD break the equivalence.
  *
  * So every reminder-eligible message lives in the HOST's projected timeline,
  * which is what `assemble` returns. A host that runs the pass there produces
