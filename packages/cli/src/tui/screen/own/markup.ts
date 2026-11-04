@@ -23,9 +23,8 @@
  * - **An unknown tag is left alone.** `{nope-fg}` reaches the terminal as
  *   literal text rather than being dropped or guessed at.
  *
- * Only one attribute (`bold`) and two colour slots exist in this vocabulary,
- * so "attributes then colour, innermost wins" fully describes it. Adding a
- * second attribute would need a measurement, not an extrapolation.
+ * The attributes and two colour slots form independent style dimensions;
+ * "attributes then colour, innermost wins" fully describes how they combine.
  *
  * ## The background slot
  *
@@ -40,17 +39,16 @@ import { backgroundParameterFor, colorFromTagBody, sgrParameterFor } from '../..
 import { decodeHyperlinkTag, safeHyperlink } from '../../core/span.js';
 
 /**
- * Attribute tags. `bold` is measured against blessed 0.1.81; `italic` (SGR 3)
- * and `strike` (SGR 9) are NOT in blessed's `_attr` vocabulary — blessed prints
- * them as literal text — so the blessed chain never receives them (see
- * `transcript-view.ts` `stylesOf`, which folds them per renderer). The own
+ * Attribute tags. `bold` and `inverse` follow blessed's `_attr` vocabulary;
+ * `italic` (SGR 3) and `strike` (SGR 9) are own-renderer additions. The own
  * renderer emits them as direct SGR parameters in attribute order
- * (bold → italic → strike), then colour.
+ * (bold → italic → strike → inverse), then colour.
  */
 const ATTRIBUTES: Readonly<Record<string, string>> = {
   bold: '1',
   italic: '3',
   strike: '9',
+  inverse: '7',
 };
 
 /** The effective style at one point in the output. */
@@ -58,6 +56,7 @@ interface Style {
   readonly bold: boolean;
   readonly italic: boolean;
   readonly strike: boolean;
+  readonly inverse: boolean;
   /** An SGR foreground parameter, e.g. `36` or `38;5;241`. */
   readonly fg: string | null;
   /** An SGR background parameter, e.g. `40` or `48;5;236`. */
@@ -65,7 +64,9 @@ interface Style {
   readonly linkId: string | null;
 }
 
-const PLAIN: Style = { bold: false, italic: false, strike: false, fg: null, bg: null, linkId: null };
+const PLAIN: Style = {
+  bold: false, italic: false, strike: false, inverse: false, fg: null, bg: null, linkId: null,
+};
 
 /** The SGR parameters for a style, in the order blessed emits them. */
 function sgrParameters(style: Style): string[] {
@@ -73,6 +74,7 @@ function sgrParameters(style: Style): string[] {
   if (style.bold) parameters.push('1');
   if (style.italic) parameters.push('3');
   if (style.strike) parameters.push('9');
+  if (style.inverse) parameters.push('7');
   if (style.fg !== null) parameters.push(style.fg);
   if (style.bg !== null) parameters.push(style.bg);
   return parameters;
@@ -95,7 +97,15 @@ function openingTag(body: string): Style | null {
   const normalized = body.toLowerCase();
   const attribute = ATTRIBUTES[normalized];
   if (attribute !== undefined) {
-    return { bold: normalized === 'bold', italic: normalized === 'italic', strike: normalized === 'strike', fg: null, bg: null, linkId: null };
+    return {
+      bold: normalized === 'bold',
+      italic: normalized === 'italic',
+      strike: normalized === 'strike',
+      inverse: normalized === 'inverse',
+      fg: null,
+      bg: null,
+      linkId: null,
+    };
   }
   const linkId = decodeHyperlinkTag(body);
   if (linkId !== undefined) return { ...PLAIN, linkId };
@@ -109,6 +119,7 @@ function openingTag(body: string): Style | null {
     bold: false,
     italic: false,
     strike: false,
+    inverse: false,
     fg: background ? null : sgrParameterFor(color),
     bg: background ? backgroundParameterFor(color) : null,
     linkId: null,
@@ -120,6 +131,7 @@ function effective(stack: readonly Style[]): Style {
   let bold = false;
   let italic = false;
   let strike = false;
+  let inverse = false;
   let fg: string | null = null;
   let bg: string | null = null;
   let linkId: string | null = null;
@@ -127,11 +139,12 @@ function effective(stack: readonly Style[]): Style {
     if (frame.bold) bold = true;
     if (frame.italic) italic = true;
     if (frame.strike) strike = true;
+    if (frame.inverse) inverse = true;
     if (frame.fg !== null) fg = frame.fg;
     if (frame.bg !== null) bg = frame.bg;
     if (frame.linkId !== null) linkId = frame.linkId;
   }
-  return { bold, italic, strike, fg, bg, linkId };
+  return { bold, italic, strike, inverse, fg, bg, linkId };
 }
 
 /**
@@ -162,7 +175,7 @@ export function renderMarkup(line: string): string {
 
   /** Whether the terminal is currently in a styled state. */
   const isStyled = (): boolean =>
-    written !== null && (written.bold || written.italic || written.strike || written.fg !== null || written.bg !== null);
+    written !== null && (written.bold || written.italic || written.strike || written.inverse || written.fg !== null || written.bg !== null);
 
   /** Emit the transition into `pending`, if there is one to make. */
   const settle = (): void => {
@@ -177,6 +190,7 @@ export function renderMarkup(line: string): string {
       written.bold === pending.bold &&
       written.italic === pending.italic &&
       written.strike === pending.strike &&
+      written.inverse === pending.inverse &&
       written.fg === pending.fg &&
       written.bg === pending.bg
       && written.linkId === pending.linkId

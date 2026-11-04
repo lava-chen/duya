@@ -253,6 +253,14 @@ describe('RichPanelController', () => {
 });
 
 describe('ListState', () => {
+  it('shows the section empty state until a query actually has no matches', () => {
+    const list = new ListState();
+    list.openSection({ items: [], filterable: true, emptyMessage: 'No configured plugins.' });
+    expect(list.renderRows(5, 80).map(plain)).toEqual(['No configured plugins.']);
+    list.feedCharacter('x');
+    expect(list.renderRows(5, 80).map(plain)).toEqual(['No matches.']);
+  });
+
   it('keeps navigation across a refresh and clamps when the row is gone', () => {
     const list = new ListState();
     list.openSection({ items: INSTALLED, filterable: true });
