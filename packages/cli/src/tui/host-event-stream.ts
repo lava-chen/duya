@@ -115,6 +115,7 @@ export function projectHostEvent(event: RunEvent): LegacyFrame | null {
           result: event.content,
           error: outcome !== 'success' && outcome !== 'indeterminate',
           indeterminate: outcome === 'indeterminate',
+          durationMs: event.durationMs,
           // The producer's structured payload rides along verbatim. A
           // file-mutating tool publishes its change set here, and the TUI
           // renders it instead of re-deriving a diff from the prose result.

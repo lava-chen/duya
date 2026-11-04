@@ -127,6 +127,47 @@ export function isExitCodeLine(line: string): boolean {
   return EXIT_CODE_LINE.test(line.trim());
 }
 
+/** The status header `buildToolResultEnvelope` prepends for the model. */
+const RESULT_HEAD = /^\[(?:completed|failed)\] \S/u;
+
+/** The duration footer the same envelope appends for the model. */
+const RESULT_TAIL = /^\[Duration: \d+ms\]$/u;
+
+/**
+ * Drop the model-facing result envelope.
+ *
+ * `StreamingToolExecutor` wraps a result in a `[completed] <tool>` header and a
+ * `[Duration: Nms]` footer so the LLM can tell how the step went and what it
+ * cost. The transcript is not the model: the header restates the tool name the
+ * row already shows, and the footer is timing that belongs on the row — leaving
+ * it in meant the ONE line a folded call previewed was the envelope, not the
+ * output, and the `[+ N lines]` marker counted two lines that were never
+ * printed.
+ *
+ * Each end is removed only when it matches, so a command whose own output opens
+ * with prose keeps every line of it.
+ */
+export function stripToolResultEnvelope(result: string): string {
+  const lines = result.split('\n');
+  if (lines.length > 1 && RESULT_HEAD.test(lines[0]?.trimEnd() ?? '')) lines.shift();
+  if (lines.length > 1 && RESULT_TAIL.test(lines[lines.length - 1]?.trim() ?? '')) lines.pop();
+  return lines.join('\n');
+}
+
+/**
+ * `0.2s`, `3.2s`, `2m05s` — elapsed time sized for one row.
+ *
+ * A sub-second call rounds UP to `0.1s` rather than down to `0.0s`: `0.0s` reads
+ * as a missing value, and a tool that returned in 40ms is not instantaneous.
+ */
+export function formatDuration(durationMs: number): string {
+  const seconds = durationMs / 1_000;
+  if (seconds < 60) return `${Math.max(0.1, seconds).toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds - minutes * 60);
+  return `${minutes}m${String(rest).padStart(2, '0')}s`;
+}
+
 /**
  * Choose the lines of a shell result worth showing.
  *

@@ -65,6 +65,7 @@ import type { Block, TranscriptModel } from './blocks.js';
 import { splitStreamCommit } from './stream-commit.js';
 import { countTodos, isTodoTool, type TuiTodoStatus, type TuiTodoItem } from './todo.js';
 import {
+  formatDuration,
   formatToolResult,
   isExitCodeLine,
   isLocalShellTool,
@@ -72,6 +73,7 @@ import {
   LOCAL_SHELL_FAMILY,
   LOCAL_SHELL_RESULT_LINES,
   selectShellOutput,
+  stripToolResultEnvelope,
   toolGroupKey,
 } from './tool-render.js';
 import { capLines, codePointWidth, truncateToWidth, visibleWidth, wrapWithCursor } from './width.js';
@@ -1093,7 +1095,7 @@ function toolNodeRow(
   // todo-2)` says nothing a reader did not already know, while the head below
   // says how far the list got.
   if (isTodoTool(block.name)) {
-    return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(todoHeadline(block))}${toolDurationSuffix(block, styles)}`;
   }
   // A subagent spawn is a CHILD AGENT, not a call with a prompt: the row says
   // who it is, what role it plays and what it is spending. See
@@ -1108,17 +1110,17 @@ function toolNodeRow(
   if (isLocalShellTool(block.name)) {
     const target = block.preview === '' ? '' : ` ${paintCommand(block.preview, styles)}`;
     const label = `${styles.bold('You ran')}${target}`;
-    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
   }
   // A shell call names the tool AND shows its command highlighted: the row is
   // what the reader scans while the run streams, so the command it ran is the
   // part that has to be legible at a glance.
   if (isShellTool(block.name) && block.preview !== '') {
     const label = `${styles.bold(block.name)}(${paintCommand(block.preview, styles)})`;
-    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDisclosureOf(block, options, styles)}`;
+    return `${connector} ${toolStatusMark(block.status, styles)} ${label}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
   }
   const label = block.preview === '' ? block.name : `${block.name}(${block.preview})`;
-  return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDisclosureOf(block, options, styles)}`;
+  return `${connector} ${toolStatusMark(block.status, styles)} ${escapeTags(label)}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
 }
 
 /**
@@ -1189,6 +1191,22 @@ function subagentSuffix(block: Extract<Block, { kind: 'tool' }>, styles: Styles)
 }
 
 /**
+ * ` · 0.2s` once the call reported how long it took.
+ *
+ * On the ROW, not in the body: the duration is a fact about the call, and a
+ * folded call spends its one body row on a preview of the output. Absent until
+ * a producer measures it — an unmeasured call is not a zero-length call.
+ */
+function toolDurationSuffix(block: Extract<Block, { kind: 'tool' }>, styles: Styles): string {
+  // A spawn states the CHILD's reported duration on its own row; a second number
+  // beside it would read as one figure that is neither.
+  if (block.subagent !== undefined) return '';
+  const durationMs = block.durationMs;
+  if (durationMs === undefined || durationMs <= 0) return '';
+  return styles.muted(` · ${formatDuration(durationMs)}`);
+}
+
+/**
  * Rows under a spawn: the brief, then the child's answer when it is shown.
  *
  * The brief is NOT behind the disclosure. It is the row's second half — "Robie
@@ -1212,7 +1230,7 @@ function subagentBody(
     lines.push(`${indent}${styles.muted(text)}`);
   }
   if (!toolBodyAllowed(options, block.id)) return lines;
-  const result = block.result?.trimEnd() ?? '';
+  const result = toolResultText(block);
   if (block.status === 'running' || result.trim() === '') return lines;
   const isExpanded = blockExpanded(block.id, options);
   const showDetails = options.collapsedBlockIds?.has(block.id) !== true &&
@@ -1327,7 +1345,7 @@ function groupChildRow(
   const painted = isShellTool(block.name)
     ? paintCommand(target, styles)
     : styles.muted(escapeTags(target));
-  return `${plan.rowPrefix}${painted}${toolDisclosureOf(block, options, styles)}`;
+  return `${plan.rowPrefix}${painted}${toolDurationSuffix(block, styles)}${toolDisclosureOf(block, options, styles)}`;
 }
 
 /**
@@ -1353,6 +1371,18 @@ function toolBodyAllowed(options: RenderOptions, id: string): boolean {
  */
 function bodyResultText(block: Extract<Block, { kind: 'tool' }>, result: string): string {
   return isShellTool(block.name) ? result : formatToolResult(block.name, result);
+}
+
+/**
+ * The result text every renderer reads, with the model-facing envelope gone.
+ *
+ * `block.result` is what the LLM was handed, envelope and all. The row above
+ * already names the tool and the call's own `durationMs` now carries its timing,
+ * so both envelope lines are noise here — and worse than noise, because a fold
+ * previews one line and the footer was reliably that line.
+ */
+function toolResultText(block: Extract<Block, { kind: 'tool' }>): string {
+  return stripToolResultEnvelope(block.result?.trimEnd() ?? '');
 }
 
 /** Whether this call's details are on screen right now. */
@@ -1415,7 +1445,7 @@ function toolDisclosureOf(
   options: RenderOptions,
   styles: Styles,
 ): string {
-  const result = block.result?.trimEnd() ?? '';
+  const result = toolResultText(block);
   if (result.trim() === '') return '';
   if (!toolBodyAllowed(options, block.id)) return '';
   const showDetails = showsToolDetails(block, options);
@@ -1688,7 +1718,7 @@ function nodeBody(
     return todoBody(block.todos ?? [], styles, plan.bodyIndent, options.width);
   }
 
-  const result = block.result?.trimEnd() ?? '';
+  const result = toolResultText(block);
   if (block.status === 'running') {
     // A call that is still being written shows what it is writing. The
     // preview is bounded by the live area, because a block that scrolls out
@@ -1710,11 +1740,11 @@ function nodeBody(
  * A fold that renders nothing is an absence, not a preview: the reader cannot
  * tell a command that printed one clean line from one that printed nothing, and
  * `[+ 20 lines]` with no row under it is a promise with nothing behind it. The
- * LAST line is the one worth a row — that is where a command's conclusion lives,
- * which is why `selectShellOutput` keeps it even when expanding and why a
- * folded thought already previews its newest line.
+ * FIRST line is the one worth a row: it is the call stating what it produced,
+ * and unlike a tail it does not move while the reader watches, so a settled row
+ * keeps the same preview from one frame to the next.
  *
- * Clipped to the pane width, because one line has to mean ONE row: a tail that
+ * Clipped to the pane width, because one line has to mean ONE row: a head that
  * wraps would make the cheapest preview in the transcript the dearest.
  */
 function foldedResultBody(
@@ -1724,17 +1754,16 @@ function foldedResultBody(
   indent: string,
   options: RenderOptions,
 ): string[] {
-  // A file change states its size on the row (`+200 -0`); a prose tail under it
+  // A file change states its size on the row (`+200 -0`); a prose head under it
   // would restate what the diff counts say better. Paired with `shownResultLines`
   // so the marker and the body refuse the same call for the same reason.
   if (block.diff !== undefined && block.diff.length > 0) return [];
   const lines = bodyResultText(block, result).split('\n').filter((line) => line.trim() !== '');
   if (lines.length === 0) return [];
-  // A failure's exit code outranks its last line. `selectShellOutput` hoists it
-  // for the same reason: a tail selection drops the first line, and the exit
-  // code is the one fact about a run that must never be the thing a fold loses.
+  // `BashTool` prepends the exit code, so the head already is it for a failed
+  // command; the lookup keeps that fact true of a producer that puts it elsewhere.
   const exit = block.status === 'error' ? lines.find(isExitCodeLine) : undefined;
-  const raw = exit ?? lines[lines.length - 1] ?? '';
+  const raw = exit ?? lines[0] ?? '';
   const columns = contentColumns(options.width);
   const text = columns === undefined
     ? raw
@@ -1848,16 +1877,7 @@ function thinkingSummary(block: Extract<Block, { kind: 'thinking' }>): string {
   if (!block.finalized) return 'Thinking…';
   const durationMs = block.durationMs;
   if (durationMs === undefined || durationMs <= 0) return 'Thought';
-  return `Thought for ${formatThinkingDuration(durationMs)}`;
-}
-
-/** `1.2s` under a minute, `2m05s` above it — same split minimax-code uses. */
-function formatThinkingDuration(durationMs: number): string {
-  const seconds = durationMs / 1_000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds - minutes * 60);
-  return `${minutes}m${String(rest).padStart(2, '0')}s`;
+  return `Thought for ${formatDuration(durationMs)}`;
 }
 
 /**

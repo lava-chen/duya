@@ -595,10 +595,10 @@ describe('renderTranscript', () => {
       showToolResults: false,
       toolResultLines: 5,
     });
-    expect(compact).not.toContain('first-result');
-    // The fold counts what it WITHHOLDS, and a folded call still shows its last
+    expect(compact).toContain('first-result');
+    // The fold counts what it WITHHOLDS, and a folded call still shows its HEAD
     // line — so two lines in, one row on screen, one behind the marker.
-    expect(compact).toContain('line two');
+    expect(compact).not.toContain('line two');
     expect(compact).toContain('[+ 1 line · Ctrl+T]');
 
     const selected = renderTranscript(model, {
@@ -608,8 +608,10 @@ describe('renderTranscript', () => {
       expandedBlockIds: new Set(first === undefined ? [] : [first.id]),
       ...(first === undefined ? {} : { selectedBlockId: first.id }),
     });
-    expect(selected).toContain('first-result');
-    expect(selected).not.toContain('second-result');
+    // Opening the first call brings its hidden line back; the neighbour is still
+    // folded, so only its head is on screen and its tail stays behind the marker.
+    expect(selected).toContain('line two');
+    expect(selected).not.toContain('second tail');
     expect(selected).toContain('❯');
 
     const globallyExpanded = renderTranscript(model, {
@@ -618,8 +620,8 @@ describe('renderTranscript', () => {
       toolResultLines: 5,
       collapsedBlockIds: new Set(first === undefined ? [] : [first.id]),
     });
-    expect(globallyExpanded).not.toContain('first-result');
-    expect(globallyExpanded).toContain('second-result');
+    expect(globallyExpanded).not.toContain('line two');
+    expect(globallyExpanded).toContain('second tail');
   });
 
   it('previews thinking until expanded', () => {
