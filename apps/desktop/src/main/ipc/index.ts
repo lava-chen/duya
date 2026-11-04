@@ -39,6 +39,7 @@ import { registerBangHandlers } from './bang-handlers';
 import {
   registerSidebarSectionsHandlers,
 } from './db-handlers';
+import { registerPanelWindowHandlers } from './panel-window-handlers';
 
 export {
   registerSystemHandlers,
@@ -74,4 +75,5 @@ export {
   registerBashTaskHandlers,
   registerBangHandlers,
   registerExtensionInstallerHandlers,
+  registerPanelWindowHandlers,
 };

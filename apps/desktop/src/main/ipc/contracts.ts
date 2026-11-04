@@ -177,6 +177,37 @@ export const ApiProviderPatchSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Detached panel windows (panel-window:*)
+// ---------------------------------------------------------------------------
+
+/**
+ * Opaque identifier of a layout pane.
+ *
+ * The renderer owns the pane tree, so the id is a string it made up. It is
+ * bounded because it reaches the filesystem as part of the persisted
+ * always-on-top preference.
+ */
+const PanelIdSchema = z.string().min(1).max(200);
+
+/** Opaque identifier of a panel page (e.g. `terminal`). */
+const PanelPageIdSchema = z.string().min(1).max(200);
+
+export const PanelWindowOpenSchema = z.object({
+  paneId: PanelIdSchema,
+  pageId: PanelPageIdSchema,
+  title: z.string().max(200).optional(),
+});
+
+export const PanelWindowPaneSchema = z.object({
+  paneId: PanelIdSchema,
+});
+
+export const PanelWindowAlwaysOnTopSchema = z.object({
+  paneId: PanelIdSchema,
+  alwaysOnTop: z.boolean(),
+});
+
+// ---------------------------------------------------------------------------
 // Parsing helper
 // ---------------------------------------------------------------------------
 
