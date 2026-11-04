@@ -316,3 +316,14 @@ Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity`
 修复：按实施合同 §2 的 Coordinator 工具面逐个列出注册名，并按 §33「fork/search 等额外 Session 工具可复用，但不因 #579 注册了它们就全部授给 Coordinator」排除 `session_fork` 与 `session_search`。不用 `'session*'` 通配的两个原因：`isToolVisible` 对 deferred 工具只在**精确**命中 allowlist 时才提升为直接可调（`agent-runtime/authorization/tool-filter.ts`），通配会退化成目录查询；且通配会连带授予合同明确不授予的 fork/search。
 
 验证：worker bundle 重建后白名单已更新（`worker-entry.js` 内可见新的 10 项）；`packages/host/tests/worker-profiles/types.test.ts` 12/12 通过；新增两条回归断言——白名单里的每个 `session_*` 必须是 `DUYA_APP_TOOL_NAMES` 实际提供的名字，以及 Coordinator 拿到生命周期工具面但拿不到 fork/search 与任何设备工具。
+
+### CI 结论与两个既有失败（2026-11-04）
+
+PR #619（`fix/coordinator-session-allowlist`）：architecture / typecheck / build / test scope 四项绿；`test` job 红在两个**与本次改动无关的既有失败**上：
+
+- `packages/ai/test/tool-protocol-adaptation.test.ts` — `drops tools entirely at L2 when textified results are also rejected`（`expected '[object Object]' to contain 'does not support tool calling'`）
+- `packages/cli/tests/integration/host-child-sessions.test.ts` — `spawns isolated child runs, follows up, cancels a sibling, and reads results through Session MCP tools`（`budget_exhausted`）
+
+两项都已在 master 上复现，与本次改动无因果关系，两条独立证据：其一，两个 PR 的 diff 都没碰过 `packages/ai` 与 `packages/cli`（`git diff --stat origin/master...HEAD -- packages/ai packages/cli` 为空）；其二，在 base 为原样 `origin/master` 的分支上跑同样两个测试，失败签名逐字相同；把 bundle 换回 master 提交的版本后仍然同样失败，故也不是 bundle 重建引入的。master 的 CI 用 `vitest --changed` 收窄范围，合并提交没把这两个文件拉进 scope，才一直没暴露。
+
+PR #613（`chore/remove-plan-tool`）的 `architecture` job 一度红在 `reference ratchet: FAIL — 775 current / 772 baseline / 3 new`：`agent-retirement-gate` 把「新增对 `packages/agent` 的字面量引用」视为新增退役依赖，而 census 的退休台账**必须**写出被退休的路径，两者对同一批记录要求相反。已按门禁自带的 `RETIREMENT_GATE_FIXTURE_CONTEXT_START/END` 有界豁免（`isBoundedFixtureContext` 把标记区排除出计数，同文件已有先例）修复，验证 `reference ratchet: PASS — 772 current / 772 baseline / 0 new`、退出码 0、census 30/30 通过。
