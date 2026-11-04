@@ -208,7 +208,7 @@ describe('buildFooterLines', () => {
     expect(row).toContain('↑49k');
     expect(row).toContain('↓1.6k');
     expect(row).toContain('Σ51k');
-    expect(row).toContain('5%/1.0M');
+    expect(row).toContain('▰▱▱▱▱ 5%');
     expect(row.endsWith('(deepseek) deepseek-flash • high')).toBe(true);
     expect(visibleWidth(row)).toBe(80);
   });
@@ -237,9 +237,9 @@ describe('buildFooterLines', () => {
   });
 
   it('keeps the three kinds of number as three groups', () => {
-    // Spend, window and speed are three different answers. Printed with a bare
-    // space between every token they read as one undifferentiated run, which is
-    // what made this row look untidy rather than informative.
+    // Spend, occupancy and speed are three different answers. Printed with a
+    // bare space between every token they read as one undifferentiated run,
+    // which is what made this row look untidy rather than informative.
     const row = plain(footer({
       stats: {
         inputTokens: 49_000,
@@ -250,7 +250,51 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: 63,
       },
     })[1] ?? '');
-    expect(row).toContain('↑49k ↓1.6k Σ51k · 5%/1.0M · 63.0 tok/s');
+    expect(row).toContain('↑49k ↓1.6k Σ51k · ▰▱▱▱▱ 5% · 63.0 tok/s');
+  });
+
+  it('leaves the counters off without taking the rest of the row with them', () => {
+    // The default: `/settings` starts with the three running totals hidden. The
+    // context group and the model are the row's point and must survive — the
+    // switch removes one group, not the row.
+    const row = plain(footer({ counters: false })[1] ?? '');
+    expect(row).not.toContain('↑');
+    expect(row).not.toContain('↓');
+    expect(row).not.toContain('Σ');
+    expect(row).toContain('▰▱▱▱▱ 5%');
+    expect(row.endsWith('(deepseek) deepseek-flash • high')).toBe(true);
+  });
+
+  it('drops the rate on its own switch, leaving the counters alone', () => {
+    const stats = {
+      inputTokens: 49_000,
+      outputTokens: 1600,
+      totalTokens: 50_600,
+      contextPercent: 5,
+      contextBudget: 1_000_000,
+      outputTokensPerSecond: 63,
+    };
+    const row = plain(footer({ stats, rate: false })[1] ?? '');
+    expect(row).not.toContain('tok/s');
+    expect(row).toContain('↑49k ↓1.6k Σ51k');
+  });
+
+  it('cannot resurrect a group its profile already dropped', () => {
+    // `location` is "where the session is, no numbers". A switch that turned
+    // the counters back on would make that preset half-true, and the reader who
+    // chose it would have no way to know which half.
+    const stats = {
+      inputTokens: 49_000,
+      outputTokens: 1600,
+      totalTokens: 50_600,
+      contextPercent: 5,
+      contextBudget: 1_000_000,
+      outputTokensPerSecond: 63,
+    };
+    const row = plain(footer({ stats, statusline: 'location', counters: true, rate: true })[1] ?? '');
+    expect(row).not.toContain('↑');
+    expect(row).not.toContain('tok/s');
+    expect(row).not.toContain('▰');
   });
 
   it('colours the rate as the one live measurement on the row', () => {
@@ -326,7 +370,9 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: null,
       },
     })[1] ?? '');
-    expect(row).toContain('?/1.0M');
+    // A hollow bar plus `?`, not a confident `0%`: the window is a property of
+    // the model, the occupancy is not yet a reading.
+    expect(row).toContain('▱▱▱▱▱ ?');
   });
 
   it('keeps a blank second row when there is nothing to report', () => {
@@ -345,7 +391,26 @@ describe('buildFooterLines', () => {
     expect(plain(rows[1] ?? '')).toBe('');
   });
 
-  it('colours the context percentage only when it is a warning', () => {
+  it('draws the context bar with as many cells as the width affords', () => {
+    const stats = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      contextPercent: 50,
+      contextBudget: 1000,
+      outputTokensPerSecond: null,
+    };
+    expect(plain(footer({ width: 120, stats })[1] ?? '')).toContain('▰▰▰▱▱▱ 50%');
+    expect(plain(footer({ width: 80, stats })[1] ?? '')).toContain('▰▰▰▱▱ 50%');
+    expect(plain(footer({ width: 70, stats })[1] ?? '')).toContain('▰▰▱▱ 50%');
+    // Below the narrowest step the percentage carries the reading alone, rather
+    // than the bar appearing and disappearing at a random width.
+    const narrow = plain(footer({ width: 40, stats })[1] ?? '');
+    expect(narrow).toContain('50%');
+    expect(narrow).not.toMatch(/[▰▱]/u);
+  });
+
+  it('colours the context percentage and the filled cells only when it is a warning', () => {
     const hot = footer({
       stats: {
         inputTokens: 1,
@@ -356,7 +421,7 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: null,
       },
     })[1] ?? '';
-    expect(hot).toContain('{bright-red-fg}95%/1.0M{/bright-red-fg}');
+    expect(hot).toContain('{bright-red-fg}▰▰▰▰▰{/bright-red-fg} {bright-red-fg}95%{/bright-red-fg}');
     const warm = footer({
       stats: {
         inputTokens: 1,
@@ -367,7 +432,9 @@ describe('buildFooterLines', () => {
         outputTokensPerSecond: null,
       },
     })[1] ?? '';
-    expect(warm).toContain('{yellow-fg}80%/1.0M{/yellow-fg}');
+    // The EMPTY cells stay muted: painting them yellow too would make the bar
+    // say "barely any room" and "plenty of room" in the same colour.
+    expect(warm).toContain('{yellow-fg}▰▰▰▰{/yellow-fg}{gray-fg}▱{/gray-fg} {yellow-fg}80%{/yellow-fg}');
     // Below the warning threshold it is plain muted, not coloured.
     expect(footer()[1]).not.toContain('bright-red-fg');
   });

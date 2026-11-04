@@ -45,6 +45,8 @@ interface LiveVector {
   readonly toolGroupMode: ToolGroupMode;
   readonly completionRows: number;
   readonly inputRows: number;
+  readonly footerTokens: boolean;
+  readonly footerRate: boolean;
 }
 
 interface Harness {
@@ -120,6 +122,8 @@ function liveVector(preferences: TuiPreferences = DEFAULT_TUI_PREFERENCES): Live
     toolGroupMode: preferences.toolGroupMode,
     completionRows: preferences.completionRows,
     inputRows: preferences.inputRows,
+    footerTokens: preferences.footerTokens,
+    footerRate: preferences.footerRate,
   };
 }
 

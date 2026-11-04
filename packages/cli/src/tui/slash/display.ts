@@ -107,6 +107,8 @@ const DISPLAY_COMMAND: TuiSlashCommandDef = {
       toolGroupMode: saved.toolGroupMode,
       completionRows: saved.completionRows,
       inputRows: saved.inputRows,
+      footerTokens: saved.footerTokens,
+      footerRate: saved.footerRate,
     }, ctx.session.model ?? '');
 
     const requested = profileFromArgs(args);

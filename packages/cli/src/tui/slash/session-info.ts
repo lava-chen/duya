@@ -18,6 +18,7 @@
 
 import type { HostLocalUsagePricingRecord } from '@duya/agent-protocol';
 import { computeContextEstimate, resolveContextWindow } from '@duya/ai/context';
+import { capacityBar } from '../capacity-bar.js';
 import type { TuiSlashCommandDef, TuiSlashContext } from './types.js';
 import {
   countByRole,
@@ -218,9 +219,13 @@ const CONTEXT_COMMAND: TuiSlashCommandDef = {
       lines.push('  used             unknown (no usage anchor yet — run a turn first)');
     } else {
       const ratio = window.contextWindow > 0 ? used / window.contextWindow : 0;
+      // The bar leads, because "how full" is the question and the exact counts
+      // are the evidence. Twelve cells rather than the footer's eight: a panel
+      // has the room, and at this width the bar is precise enough to read a few
+      // points of movement off it.
       lines.push(
-        `  used             ${formatTokens(used)}`,
-        `  window           ${formatTokens(window.contextWindow)}  (${(ratio * 100).toFixed(1)}% used)`,
+        `  used             ${capacityBar(ratio, 12)}  ${formatTokens(used)} (${(ratio * 100).toFixed(1)}%)`,
+        `  window           ${formatTokens(window.contextWindow)}`,
         `  remaining        ${formatTokens(Math.max(0, window.contextWindow - used))}`,
       );
     }
