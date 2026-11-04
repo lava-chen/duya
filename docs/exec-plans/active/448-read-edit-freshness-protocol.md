@@ -1,6 +1,6 @@
 # Plan 448: Read/Edit 新鲜度协议与写路径一致性（harness-comparison 调研落地）
 
-> **Status**: Phase 1 complete（2026-08-26）；Phase 2/3 待开工
+> **Status**: Phase 1 complete（2026-08-26）；2026-11-04 补 428 遗留洞 + Task E/K 落地（见「Follow-up」）；Phase 2 其余（F/G/H/I）待开工
 > **Priority**: P0（Phase 1）/ P1（Phase 2）/ P2（Phase 3）
 > **Created**: 2026-08-24
 > **Related**: [428-harness-signal-contracts](../completed/428-harness-signal-contracts.md)（read-state/mtime 追踪的由来）、[429-harness-gap-closure](./587-agent-harness-monorepo/history/429-harness-gap-closure.md)（建议 3 快照已落地，本 plan 复用 `FileSnapshotStore`）、[docs/references/harness-comparison/read-edit-tools-deep-dive.md](../../references/harness-comparison/read-edit-tools-deep-dive.md)（五 harness 调研依据）
@@ -90,13 +90,13 @@ mutation queue 按 realpath 串行、快照存储复用 429。
 
 ### Task E：WriteTool read-first 门（对应调研 P1-4）
 
-- [ ] 对已存在且非空的目标文件：无 read-state 条目 → 拒绝
+- [x] 对已存在且非空的目标文件：无 read-state 条目 → 拒绝
       （"File has not been read yet..."，含 read 工具指引）；有条目但
       mtime/size stale 且不满足 Task B 豁免 → 拒绝。
-- [ ] 新文件 / 空文件 / 用户显式覆盖确认路径不受限（对齐 cc-haha errorCode
+- [x] 新文件 / 空文件 / 用户显式覆盖确认路径不受限（对齐 cc-haha errorCode
       2/3 的语义：空 old_string 建新文件的等价物 = write 新文件直通）。
-- [ ] 写成功后维持现有 re-anchor 行为（补 `isFullView: true`）。
-- [ ] 单测：盲写已存在文件被拒；读过之后写直通；新文件直通。
+- [x] 写成功后维持现有 re-anchor 行为（补 `isFullView: true`）。
+- [x] 单测：盲写已存在文件被拒；读过之后写直通；新文件直通。
 
 ### Task F：ApplyPatch 两阶段校验（对应调研 P1-5，hermes overlay 方案）
 
@@ -149,10 +149,10 @@ mutation queue 按 realpath 串行、快照存储复用 429。
 
 ### Task K：not-found 诊断附现场
 
-- [ ] Edit 的 `buildNotFoundDiagnostic` 末尾追加当前文件相关片段
+- [x] Edit 的 `buildNotFoundDiagnostic` 末尾追加当前文件相关片段
       （closest match 行 ±5 行，≤800 字符，UTF-16 安全截断）——模型零
       往返自愈（openclaw 内容附录方案）。
-- [ ] 单测：诊断包含片段且不超长。
+- [x] 单测：诊断包含片段且不超长。
 
 ---
 
@@ -176,3 +176,77 @@ Task A（结构前置）→ Task B/C/D（P0 收口，A/B 有依赖，C/D 可并�
 ```
 
 Phase 1 四个 task 合计约半天；Phase 2 约一天；Phase 3 择机。
+
+---
+
+## Follow-up 2026-11-04：read-first 门的三个真实缺陷
+
+起因是一次设计复核（"是否该删掉这个门、向 codex 靠拢"）。结论是不删：codex 不是
+没有读的要求，而是把要求内嵌进了补丁协议（hunk context 只能由看过内容的人写出），
+删门只会把可诊断失败降级成 `old_string not found`。但复核暴露了三处实现缺陷。
+
+### 1. compaction 之后门失效（428 的原始 bug 仍可复现）
+
+`clearFileReadState()` 此前在生产代码里零调用点。summary compaction 会把旧 read
+结果整段替换成摘要，而 read-state 条目仍在，于是门放行"读过但上下文里已经没有原文"
+的编辑——正是 428 要拦的场景。同时确认：`compressProjectedToolMessages`（offload
+投影压缩）在 agent-runtime 里**没有任何生产调用点**，428 当年观察到的占位符来自
+legacy 链路，所以真正的失效面是 summary compaction，不是 offload。
+
+- `CompactionManager.compact()` 成功后 `clearFileReadState()`
+  （`onCompactionSuccess()` 之前，与 `ledger.beginEpoch('compaction')` 同处）。
+- 不 re-anchor reinjected 文件：reinject 是 2000-token 预算内的片段，不是全文，
+  给不了 full-view sha 豁免，按既有"partial view 不免责"原则一律要求重读。
+
+### 2. 状态没有 session 边界
+
+`readStates` 是模块级 Map，worker 进程复用时会继承上一个 session 的条目。新增
+`beginFileReadSession(sessionId)`：key 变化才清空，同 session 重复调用是空操作；
+在 `createWorkerSessionFactory` 里绑定。子会话（`createChildSession`）刻意不走这里
+——子会话共享父时间线，每次 spawn 都清空会逼父会话重读整个工作集。
+
+### 3. 写路径三套判定
+
+抽出 `evaluateReadFreshness(absPath, current, content)` 作为唯一判据（`fresh` /
+`never-read` / `stale`），`edit` 与 `write` 共用，`isMtimeWithinTolerance` 一并搬进
+`file-read-state.ts`。`WriteTool` 从此有了 Task E 的门；`ApplyPatchTool` **不加门**，
+理由写进该文件头注释：补丁协议本身要求真实上下文，加门只会多一次往返。
+
+### 4. killswitch
+
+`[tools] read_first_gate` / `DUYA_TOOLS_READ_FIRST_GATE`（默认 true，经
+`readToolExposureConfig()` 在 session 工厂注入）。只关"从未读过"的硬门；**stale
+永远不关**——那是数据一致性检查，关掉会让陈旧 `old_string` 静默覆盖别人的改动。
+
+### 改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `packages/capabilities/src/file-read-state.ts` | `evaluateReadFreshness`、`beginFileReadSession`、gate 开关、`isMtimeWithinTolerance` 迁入 |
+| `packages/capabilities/src/EditTool/EditTool.ts` | 门改用统一判据；not-found 附 ±5 行片段（≤800 字符，UTF-16 安全） |
+| `packages/capabilities/src/WriteTool/WriteTool.ts` | Task E 门（新文件/空文件直通） |
+| `packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts` | 只加设计定案注释 |
+| `packages/capabilities/src/index.ts` | 导出新 API |
+| `packages/agent-runtime/src/context/compact/CompactionManager.ts` | compaction 成功后清空 read-state |
+| `packages/host/src/worker-config/tool-exposure.ts` | `readFirstGate` 配置项 + env |
+| `packages/host/src/worker-tools/assembly.ts` | session 工厂绑定 gate 与 session key |
+
+### 验证
+
+worktree `.claude/worktrees/edit-read-gate`，分支 `codex/edit-read-gate-fixes`，
+base `7ef8cbd0`。命令与结果：
+
+- `node node_modules/vitest/vitest.mjs run packages/capabilities/tests/EditTool.test.ts packages/capabilities/tests/ApplyPatchTool.test.ts` -> 46 passed
+- `... fileReadState.gate.test.ts WriteTool.read-first.test.ts` -> 17 passed（新增）
+- `... EditTool.diagnostic.test.ts` -> 3 passed（新增）
+- `... CompactionManager.compaction-epoch.test.ts tool-exposure.test.ts` -> 15 passed
+- `npm run typecheck:all`、`npm run architecture:check` -> 见 PR 记录
+
+### 遗留
+
+- 父子会话仍共享 `readStates`：子 agent 读过的文件会让父会话的 edit 通过（误放，
+  安全侧但不等价于"父自己也读过"）。彻底修需要工具调用携带 session identity，
+  超出本切片。
+- `compressProjectedToolMessages` 仍是未接线状态。若之后把它接进请求组装，需要在
+  投影压缩后对 offload 掉的 read 路径 `invalidateFileRead`——否则会出现"投影里是
+  占位符、账本说读过"的新一轮错配。

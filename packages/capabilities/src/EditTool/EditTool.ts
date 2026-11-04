@@ -24,7 +24,12 @@ import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
 import { buildFileDiff } from '../file-diff.js';
 import { TOOL_FILE_DIFF_METADATA_KEY } from '@duya/agent-protocol/tool-file-diff';
-import { computeContentSha, getFileReadState, recordFileRead } from '../file-read-state.js';
+import {
+  computeContentSha,
+  evaluateReadFreshness,
+  isReadFirstGateEnabled,
+  recordFileRead,
+} from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Write/ApplyPatch). */
 const fileSnapshotStore = new FileSnapshotStore();
@@ -335,6 +340,49 @@ function charInfo(line: string, i: number): string {
   return `${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')})`;
 }
 
+/** Max characters of on-disk context attached to a not-found diagnostic. */
+const SNIPPET_MAX_CHARS = 800;
+
+/** Lines of context on each side of the closest match. */
+const SNIPPET_CONTEXT_LINES = 5;
+
+/**
+ * Truncate without splitting a UTF-16 surrogate pair. `String#slice` works
+ * on code units, so a hard cut through an astral character (emoji, some CJK
+ * extension blocks) yields a lone surrogate — invalid in the JSON payload
+ * sent back to the provider.
+ */
+function truncateUtf16(text: string, maxUnits: number): string {
+  if (text.length <= maxUnits) return text;
+  let end = Math.max(0, maxUnits);
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * Render the lines around the closest match (plan 448 Task K) so the model
+ * can self-heal in one round trip instead of re-reading the whole file.
+ * Budget-bounded: long lines are truncated, and the whole block never
+ * exceeds {@link SNIPPET_MAX_CHARS}.
+ */
+function formatClosestSnippet(lines: string[], matchIdx: number): string | undefined {
+  if (matchIdx < 0 || matchIdx >= lines.length) return undefined;
+  const start = Math.max(0, matchIdx - SNIPPET_CONTEXT_LINES);
+  const end = Math.min(lines.length - 1, matchIdx + SNIPPET_CONTEXT_LINES);
+  const header = `File lines ${start + 1}-${end + 1} (closest match in context):`;
+  const out: string[] = [header];
+  let budget = SNIPPET_MAX_CHARS - header.length - 1;
+  for (let i = start; i <= end; i++) {
+    const prefix = `${String(i + 1).padStart(6, ' ')} | `;
+    if (budget <= prefix.length) break;
+    const body = truncateUtf16(lines[i], budget - prefix.length);
+    out.push(prefix + body);
+    budget -= prefix.length + body.length + 1;
+  }
+  return out.length > 1 ? out.join('\n') : undefined;
+}
+
 /**
  * Build a detailed "old_string not found" diagnostic (P0-1). Instead of a
  * bare one-liner, surface the closest match line, the first divergence
@@ -414,6 +462,8 @@ function buildNotFoundDiagnostic(opts: {
         parts.push(`  file context: ...${escapeEol(fileLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
         parts.push(`  old_string : ...${escapeEol(oldLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
       }
+      const snippet = formatClosestSnippet(lines, bestIdx);
+      if (snippet) parts.push(snippet);
     }
   }
 
@@ -439,17 +489,6 @@ function mapFsError(errorMessage: string, filePath: string): string {
     return `Error: Permission denied: ${filePath}`;
   }
   return `Error editing file: ${errorMessage}`;
-}
-
-/**
- * mtime comparison with a small tolerance (plan 448). Windows filesystems
- * plus cloud-sync/AV/indexer churn produce meaningless sub-millisecond
- * mtime bumps between two stat() calls, and float equality across separate
- * stat rounds trips is unreliable. Treat mtimes within 1ms as unchanged;
- * real external edits move mtime by far more.
- */
-function isMtimeWithinTolerance(a: number, b: number): boolean {
-  return Math.abs(a - b) <= 1;
 }
 
 /**
@@ -596,8 +635,22 @@ export async function executeEdit(
       return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
     }
 
-    const readState = getFileReadState(resolvedPath);
-    if (!readState) {
+    // Content must be loaded before the verdict: the full-view exemption
+    // compares the recorded fingerprint against current bytes, and the
+    // gate-disabled path still needs the text to edit.
+    let content: string;
+    try {
+      content = await readFile(resolvedPath, 'utf-8');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
+    }
+
+    // One verdict shared with WriteTool (plan 448 Task E/H): `edit` and
+    // `write` must agree on what "already read" means. The switch only
+    // relaxes 'never-read' — a stale read is a wrong edit either way.
+    const freshness = evaluateReadFreshness(resolvedPath, currentStat, content);
+    if (freshness === 'never-read' && isReadFirstGateEnabled()) {
       return {
         id: toolUseId,
         name: 'edit',
@@ -607,33 +660,7 @@ export async function executeEdit(
         error: true,
       };
     }
-
-    // Content must be loaded regardless so the staleness exemption can
-    // compare fingerprints (plan 448); the edit needs it anyway.
-    let content: string;
-    try {
-      content = await readFile(resolvedPath, 'utf-8');
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
-    }
-
-    // Staleness: mtime within tolerance AND size identical means untouched.
-    // Exemption (claude-code-haha style, plan 448): when mtime/size say the
-    // file drifted but the recorded observation was a FULL view whose sha256
-    // still matches current disk bytes, the drift was cosmetic (OneDrive sync,
-    // antivirus, indexer touching mtime without changing content) and the
-    // edit proceeds. Partial views never qualify — a truncated view cannot
-    // vouch for content it never saw.
-    const mtimeStale = !isMtimeWithinTolerance(readState.mtimeMs, currentStat.mtimeMs);
-    const sizeStale = readState.size !== currentStat.size;
-    let stale = mtimeStale || sizeStale;
-    if (stale && readState.isFullView && readState.contentSha !== undefined) {
-      if (computeContentSha(content) === readState.contentSha) {
-        stale = false;
-      }
-    }
-    if (stale) {
+    if (freshness === 'stale') {
       return {
         id: toolUseId,
         name: 'edit',

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Message } from '@duya/agent-runtime/context/compact'
 import { CompactionManager } from '@duya/agent-runtime/context/compact'
+import { clearFileReadState, getFileReadState, recordFileRead } from '@duya/capabilities/file-read-state'
 import { createCompactionTestPorts } from './test-ports.js'
 
 const usableSummary = [
@@ -68,5 +69,27 @@ describe('CompactionManager compaction epoch lifecycle', () => {
     expect(manager.setObservedUsageForEpoch(8_200, 120, nextEpoch)).toBe(true)
     expect(manager.getLatestInputTokens()).toBe(8_200)
     expect(manager.getContextSnapshot(nextTurn).observation?.inputTokens).toBe(8_200)
+  })
+
+  // Plan 428 introduced the read-first gate to stop edits built from
+  // compacted content. The gate reads a session ledger, so the rewrite has
+  // to retire the entries it invalidated — otherwise a post-compaction edit
+  // is approved against a read result the model can no longer see.
+  it('clears file read-state when the transcript is rewritten', async () => {
+    const ports = createCompactionTestPorts()
+    const manager = new CompactionManager(
+      { keepRecentTokens: 90 },
+      { ...ports, summarizer: vi.fn(async () => usableSummary) },
+    )
+    const path = '/repo/src/edited-before-compaction.ts'
+    recordFileRead(path, { mtimeMs: 1, size: 32, isFullView: true })
+
+    try {
+      expect(getFileReadState(path)).toBeDefined()
+      await manager.compact(conversation(), { trigger: 'manual' })
+      expect(getFileReadState(path)).toBeUndefined()
+    } finally {
+      clearFileReadState()
+    }
   })
 })

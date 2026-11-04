@@ -71,8 +71,13 @@ export {
   getFileReadState,
   invalidateFileRead,
   clearFileReadState,
+  beginFileReadSession,
+  setReadFirstGateEnabled,
+  isReadFirstGateEnabled,
+  isMtimeWithinTolerance,
+  evaluateReadFreshness,
 } from './file-read-state.js';
-export type { FileReadStateEntry, FileReadStateInput } from './file-read-state.js';
+export type { FileReadStateEntry, FileReadStateInput, ReadFreshness } from './file-read-state.js';
 export { withFileMutationQueue } from './file-mutation-queue.js';
 export { withFileSnapshot } from './file-snapshot.js';
 export type { WithFileSnapshotResult } from './file-snapshot.js';

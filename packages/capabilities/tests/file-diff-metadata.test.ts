@@ -148,6 +148,9 @@ describe('write tool publishes a structured diff', () => {
   it('reports the replaced lines when an existing file is overwritten', async () => {
     const file = join(root, 'src', 'old.ts');
     writeFileSync(file, 'a\nb\nc\n');
+    // Plan 448 Task E: overwriting a non-empty existing file requires the
+    // same prior-read anchor as `edit`.
+    markAsRead(file);
     const tool = new WriteTool();
     const result = await tool.execute({ file_path: file, content: 'a\nB\nc\n' }, root);
 

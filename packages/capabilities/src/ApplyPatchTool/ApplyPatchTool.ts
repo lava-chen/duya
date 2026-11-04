@@ -22,6 +22,22 @@
  * Matching is by hunk context rather than exact-string equality, so it is
  * far more tolerant than `edit` to whitespace / line-ending / indentation
  * drift. A single call can edit many files at once.
+ *
+ * ## Why there is no read-first gate here (plan 448 design decision)
+ *
+ * `edit` and `write` refuse to touch a file the model never read; this tool
+ * deliberately does not. Both paths already require real file content — a
+ * hunk's context lines can only be written by a model that has seen them —
+ * so the requirement is enforced *by the patch language* instead of by a
+ * session ledger. That is the same arrangement Codex uses: `apply_patch`
+ * carries no read state, and a wrong context fails deterministically with
+ * the expected lines quoted back. A gate on top would add a round trip and
+ * could only fire for patches that would fail anyway.
+ *
+ * What this tool DOES owe the ledger is hygiene: re-anchor after its own
+ * writes so a following `edit` does not see a phantom stale read, and
+ * invalidate the entry when an op removed or could not apply, so the next
+ * `edit` cannot vouch for a file that no longer matches what was read.
  */
 
 import { readFile, writeFile, rename, rm, mkdir, stat } from 'node:fs/promises';

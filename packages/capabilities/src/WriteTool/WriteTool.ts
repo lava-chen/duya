@@ -4,7 +4,7 @@
  * Adds input validation, enhanced security checks, and atomic writes
  */
 
-import { writeFile, mkdir, access, constants, stat } from 'node:fs/promises';
+import { writeFile, mkdir, access, constants, stat, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ToolResult } from '@duya/ai';
@@ -25,7 +25,7 @@ import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { withFileSnapshot } from '../file-snapshot.js';
 import { buildFileDiff } from '../file-diff.js';
 import { TOOL_FILE_DIFF_METADATA_KEY } from '@duya/agent-protocol/tool-file-diff';
-import { computeContentSha, recordFileRead } from '../file-read-state.js';
+import { computeContentSha, evaluateReadFreshness, isReadFirstGateEnabled, recordFileRead } from '../file-read-state.js';
 
 // ============================================================
 // Input Validation
@@ -214,6 +214,46 @@ export class WriteTool extends BaseTool {
               error: true,
             };
           }
+        }
+
+        // Plan 448 Task E: `write` replaces the whole file, so a blind
+        // overwrite destroys content the model never looked at. Same verdict
+        // EditTool uses, and the same gate switch. Exemptions: a path that
+        // does not exist yet, and an existing EMPTY file (nothing to lose,
+        // and an empty read cannot anchor the sha comparison).
+        let freshness: ReturnType<typeof evaluateReadFreshness> | undefined;
+        if (existsSync(absolutePath)) {
+          try {
+            const targetStat = await stat(absolutePath);
+            if (targetStat.size > 0) {
+              const targetContent = await readFile(absolutePath, 'utf-8');
+              freshness = evaluateReadFreshness(absolutePath, targetStat, targetContent);
+            }
+          } catch {
+            // Unreadable target: let the write itself surface the real error.
+          }
+        }
+        if (freshness === 'never-read' && isReadFirstGateEnabled()) {
+          return {
+            id,
+            name: this.name,
+            result:
+              `Error: File has not been read yet: ${file_path}\n` +
+              'Overwriting it would discard content you have not seen. Read it first with the read tool, ' +
+              'or use the edit tool for a targeted change.',
+            error: true,
+          };
+        }
+        if (freshness === 'stale') {
+          return {
+            id,
+            name: this.name,
+            result:
+              `Error: File was modified after the last read: ${file_path}\n` +
+              'The file changed on disk since it was last read (bash, apply_patch, or an external process may have touched it). ' +
+              'Re-read it with the read tool before overwriting.',
+            error: true,
+          };
         }
 
         const { value: result } = await withFileSnapshot(absolutePath, async (preImageSha, preImageText) => {
