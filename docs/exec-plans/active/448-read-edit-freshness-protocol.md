@@ -240,7 +240,12 @@ base `7ef8cbd0`。命令与结果：
 - `... fileReadState.gate.test.ts WriteTool.read-first.test.ts` -> 17 passed（新增）
 - `... EditTool.diagnostic.test.ts` -> 3 passed（新增）
 - `... CompactionManager.compaction-epoch.test.ts tool-exposure.test.ts` -> 15 passed
-- `npm run typecheck:all`、`npm run architecture:check` -> 见 PR 记录
+- `npm run typecheck:all` -> exit 0
+- `npm run architecture:check` -> no new boundary violations
+- PR: [#616](https://github.com/lava-chen/duya/pull/616)
+
+初次全量跑 capabilities 时有 1 个失败：`file-diff-metadata.test.ts` 覆盖已存在
+文件但没有先读——正是新 `write` 门在起作用；该用例已补上 read anchor。
 
 ### 遗留
 
