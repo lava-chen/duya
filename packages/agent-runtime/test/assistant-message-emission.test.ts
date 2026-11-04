@@ -8,7 +8,7 @@
  * was also the whole of the problem. Those three frames are the only place the
  * model's actual answer exists, and the legacy loop accumulated every one of
  * them into `finalAssistantContent` and pushed it durable
- * (`DuyaAgent.ts:2645-2678`). A turn loop migrated onto this engine would have
+ * (`DuyaAgent`). A turn loop migrated onto this engine would have
  * kept all four decisions and silently dropped every message.
  *
  * ## The shape legacy produced, and what has to survive
@@ -327,7 +327,7 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
     // legacy rule and it is counter-intuitive enough to be worth pinning: the
     // merge looks at the previous block of the BODY (text and tool_use), and
     // thinking is held apart from the body entirely
-    // (`DuyaAgent.ts:2606-2608`), so an interleaved thinking frame does not
+    // (`DuyaAgent`), so an interleaved thinking frame does not
     // break a run of text. The newline belongs to a text block that follows a
     // TOOL CALL, which the next test pins.
     expect(content[2]).toEqual({ type: 'text', text: textOf(frames) });
@@ -353,7 +353,7 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
     const content = onlyFinalized(result.events).content;
     // Three body blocks, and the newline lands on the SECOND text one because
     // the tool call between them is what breaks the run -- without it the
-    // heading is swallowed into the previous paragraph (`DuyaAgent.ts:2610-2620`).
+    // heading is swallowed into the previous paragraph (`DuyaAgent`).
     expect(content.map((block) => block.type)).toEqual(['text', 'tool_use', 'text']);
     expect(content[0]).toEqual({ type: 'text', text: 'before the call' });
     expect(content[2]).toEqual({ type: 'text', text: '\n### after the call' });
@@ -570,7 +570,7 @@ describe('the engine emits the model answer, in the shape the legacy loop produc
 
   it('hands the message over BEFORE any tool result, and finalizes before the terminal', async () => {
     // OpenAI requires `assistant (tool_calls) -> tool (result)`
-    // (`DuyaAgent.ts:2641-2642`), and the message stops changing strictly before
+    // (`DuyaAgent`), and the message stops changing strictly before
     // the run ends. Three different ports, one order.
     const result = await engineRun([
       {

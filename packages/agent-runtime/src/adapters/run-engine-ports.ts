@@ -373,7 +373,7 @@ export interface LegacyEngineSources {
  * The three arms are `RuntimeMailboxDecision`'s three, and the mapping is
  * one-to-one rather than a translation. The legacy builds that decision at five
  * sites inside `_claimMailboxAtCheckpoint` and all five are `continue`
- * (`DuyaAgent.ts:3630`, `:3645`, `:3649`, `:3666`, `:3725`, measured over the
+ * (`DuyaAgent`, `:3645`, `:3649`, `:3666`, `:3725`, measured over the
  * comment-stripped body) -- so the `soft_stop` and `hard_replace` arms are
  * carried because the CALL SITES branch on them (`:2207`, `:2217`, `:3206`),
  * not because any current code path produces them.
@@ -399,7 +399,7 @@ export interface InterTurnSources {
   /**
    * The run's `seqIndex`. REQUIRED, not defaulted.
    *
-   * It is `Date.now()` taken once per `streamChat` call (`DuyaAgent.ts:1792`) and
+   * It is `Date.now()` taken once per `streamChat` call (`DuyaAgent`) and
    * threaded into every durable row the loop writes. Defaulting it would stamp
    * every injected row with a constant index that silently mis-orders it against
    * real transcript rows, and a host that had no value to offer should not be
@@ -444,7 +444,7 @@ export interface ModeExitSources {
  * ## The direction is INVERTED, and that is the whole adapter
  *
  * The legacy pushes onto a `messages` array it was handed
- * (`DuyaAgent.ts:3709`, `:3720`). The engine cannot be offered that array -- it
+ * (`DuyaAgent`, `:3720`). The engine cannot be offered that array -- it
  * holds `assembled.messages` as a `readonly` value it did not build
  * (`run-engine.ts:497`) -- so a fresh capture array goes out and whatever landed
  * in it comes back as a value.
@@ -687,7 +687,7 @@ export interface CompactionSources {
    * One probe against a trigger line. Resolves; a `skip` is a real answer.
    *
    * The legacy DECIDES and then RUNS at two different places -- the preflight
-   * probes and compacts with a verdict between (`DuyaAgent.ts:3018`, `:3022`),
+   * probes and compacts with a verdict between (`DuyaAgent`, `:3022`),
    * and the emergency path only runs once a provider error has been classified
    * (`:3330`, `:3360`) -- which is why the port splits them and why this stays
    * one callback rather than a combined "maybe compact".
@@ -711,7 +711,7 @@ export interface CompactionSources {
    * terminal frame describing a compaction that had already finished, with its
    * progress arriving afterwards as if it were new. The legacy's own pump
    * streams `compact:*` DURING for the same reason: the summarizer takes
-   * minutes (`DuyaAgent.ts:2144-2151`), and a burst afterwards is the bug that
+   * minutes (`DuyaAgent`), and a burst afterwards is the bug that
    * pump was written to fix. So: call `reporter` as progress happens.
    */
   readonly compact: (
@@ -818,7 +818,7 @@ export interface TurnOutputSources {
    *
    * OPTIONAL, and for the same reason `LegacyEngineSources.turnOutput` is: the
    * legacy loop still builds and pushes this message itself
-   * (`DuyaAgent.ts:2645-2678`), so a source that supplied one would push the
+   * (`DuyaAgent`), so a source that supplied one would push the
    * same message twice. The port requires the METHOD; whether a host has
    * anything to do with it is the host's business, and a source with nothing to
    * do hands over a resolved promise.
@@ -1047,7 +1047,7 @@ export function toProviderMessages(
  * ## Why this is a pure exported function
  *
  * The loop this replaces reads the same four things off each update
- * (`DuyaAgent.ts:2677-2698`), and the reason a binding adapter would have been
+ * (`DuyaAgent`), and the reason a binding adapter would have been
  * lossy is that those four reads were spread across 20 lines of a generator
  * mixed with SSE yields, hook dispatch and history writes. A pure function is
  * the only shape in which "did the adapter drop anything" is a question a test
@@ -1124,7 +1124,7 @@ export function toDrainItem(update: MessageUpdate): ToolDrainItem | null {
  *
  * The discriminant is `metadata.type === 'agent_progress'`, which is what the
  * producer stamps (`StreamingToolExecutor.ts:2311`) and what the legacy loop
- * reads (`DuyaAgent.ts:2687`).
+ * reads (`DuyaAgent`).
  *
  * The legacy reads `metadata.agentEvent` and yields ONLY if it is present
  * (`:2691`) -- a progress message with no `agentEvent` is skipped entirely
@@ -1147,7 +1147,7 @@ function readAgentProgress(message: Message): { callId: string; event: AgentProg
   };
 }
 
-/** The legacy two-format tool-result test (`DuyaAgent.ts:2702-2705`). */
+/** The legacy two-format tool-result test (`DuyaAgent`). */
 function isToolResultMessage(message: Message): boolean {
   if (message.role === 'tool') return true;
   const content = message.content;
@@ -1164,7 +1164,7 @@ function isToolResultMessage(message: Message): boolean {
  * splitting them is how a field gets dropped: an earlier version of this
  * function read `callId` from `message.tool_call_id` for both formats, which is
  * empty for the old content-array format -- the id lives on the block
- * (`DuyaAgent.ts:2733`). An empty call id is not a visible failure; it becomes a
+ * (`DuyaAgent`). An empty call id is not a visible failure; it becomes a
  * fragment keyed `tool_result:` and a tool result the ledger cannot attribute to
  * a call.
  *

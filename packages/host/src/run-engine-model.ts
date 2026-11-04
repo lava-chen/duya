@@ -124,7 +124,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
     // ── Narration ─────────────────────────────────────────────────────────
     // Reached by a host through the event store; decides nothing. Both are
     // still mapped rather than dropped, because the legacy loop YIELDS both to
-    // the renderer (`DuyaAgent.ts:2537`, `:3015`) and the renderer is a real
+    // the renderer (`DuyaAgent`, `:3015`) and the renderer is a real
     // consumer of a turn.
     case 'text':
       return { type: 'text', text: event.data };
@@ -140,7 +140,7 @@ export function toModelFrame(event: SSEEvent): ModelFrame | null {
         ...(event.redacted === undefined ? {} : { redacted: event.redacted }),
         // Plan 600 S2 b3a. The payload itself, not just the flag, and this arm
         // used to drop it while the legacy loop kept it
-        // (`DuyaAgent.ts:3094-3095` reads `event.encrypted` into
+        // (`DuyaAgent` reads `event.encrypted` into
         // `redactedEncrypted`). Without it the engine cannot build the redacted
         // block at all, and that block has to LEAD the assistant turn for
         // Anthropic thinking-mode validation -- so the loss was not a degraded
@@ -290,7 +290,7 @@ function toStopReason(reason: StopReasonValue): ModelStopReason {
       return 'error';
     // A provider that finished without saying why stopped producing. That is
     // `end_turn` and not `error`: the legacy loop reads an absent reason as an
-    // ordinary completion (`DuyaAgent.ts:2539` handles `done` with no `reason`
+    // ordinary completion (`DuyaAgent` handles `done` with no `reason`
     // arm failing over to the normal path), and reading it as a failure would
     // turn every provider that omits the field into a failed run.
     case undefined:
@@ -738,8 +738,8 @@ export function toProviderMessages(
  * `OneShotTextRequest.messages` is `readonly ModelMessage[]`
  * (`ports.ts:1685-1690`), and both one-shot call sites already hold
  * `@duya/agent-protocol`'s `Message[]` -- the summarizer builds a one-element
- * array (`DuyaAgent.ts:769-774`) and the side question reuses the projected
- * timeline (`DuyaAgent.ts:4506-4509`). Neither can be passed as-is, so this is
+ * array (`DuyaAgent`) and the side question reuses the projected
+ * timeline (`DuyaAgent`). Neither can be passed as-is, so this is
  * the one adapter on that path. It is the exact inverse of `toProviderMessages`
  * above and lives beside it for that reason: the pair is the model boundary, and
  * only the composition of both is a round trip.
@@ -757,7 +757,7 @@ export function toProviderMessages(
  *    one-shot array can contain one: the summarizer's single user turn, and the
  *    side question's array, which `_projectModelMessages` already reduced to
  *    user/assistant/tool by extracting system content into the prompt
- *    (`DuyaAgent.ts:4938-4946`).
+ *    (`DuyaAgent`).
  *  - `content` -- the runtime vocabulary is a strict SUBSET
  *    (`ports.ts:121-125`): `MessageContent` also has `image` and
  *    `provider_block` (`transcript/content.ts:159-165`). The subset is narrower
@@ -796,7 +796,7 @@ export function fromProviderMessages(messages: readonly Message[]): ModelMessage
  * (`ports.ts`, `OneShotTextRequest`), so the only thing left to supply is the
  * client that opens the request. A `sources` wrapper with one member would be a
  * shape with no decision in it -- and the two call sites need DIFFERENT clients
- * anyway (`DuyaAgent.ts:783` reads `compactClient ?? llmClient`, `:4513` reads
+ * anyway (`DuyaAgent` reads `compactClient ?? llmClient`, `:4513` reads
  * `llmClient`), which is a per-call choice the caller makes by calling this
  * factory twice.
  *
@@ -837,7 +837,7 @@ export function createOneShotTextPort(client: AIClient): OneShotTextPort {
           systemPrompt: request.systemPrompt,
           // NOT `tools: []`. Plan 523 P4.1 added `toolChoice: 'none'` because
           // the summarizer was emitting tool-call tokens instead of a summary
-          // (the flag the summarizer used to pass at `DuyaAgent.ts:799-801`),
+          // (the flag the summarizer used to pass at `DuyaAgent`),
           // and the provider implements it by omitting the tools field from the
           // wire payload (`packages/ai/src/types.ts:497-502`). "No tools
           // available" is a weaker promise than "tools forbidden", and this port

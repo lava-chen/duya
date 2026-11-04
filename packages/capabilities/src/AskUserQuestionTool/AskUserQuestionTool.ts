@@ -133,16 +133,34 @@ export type AskUserQuestionInput = z.infer<typeof askUserQuestionInputSchema>;
 // / handlePermissionRequest). Both are keyed by the same permission
 // request id (= toolUseId): the approval marker gates the retry, this
 // map carries the answer data the retried Phase-2 execute() reads.
-const pendingAnswers = new Map<string, Record<string, string>>();
+const PENDING_ANSWER_TTL_MS = 5 * 60_000;
+const pendingAnswers = new Map<string, { answers: Record<string, string>; storedAt: number }>();
+
+/**
+ * Answers are consumed exactly once, by the tool's Phase-2 retry. When the
+ * retry never happens — the run is aborted, or the decision flips to deny
+ * after the answer landed — nothing would ever read the entry again, so a
+ * long-lived worker climbed by one entry per abandoned question. Entries are
+ * stamped and pruned on write; the TTL matches the 5-minute expiry the
+ * permission payload already advertises.
+ */
+function pruneExpiredPendingAnswers(now: number): void {
+  for (const [permissionId, entry] of pendingAnswers) {
+    if (now - entry.storedAt > PENDING_ANSWER_TTL_MS) pendingAnswers.delete(permissionId);
+  }
+}
 
 /**
  * Store resolved answers keyed by permission request id.
  * Called from agent-process-entry when permission:resolve arrives with updatedInput.
  */
 export function storePendingAnswer(permissionId: string, answers: Record<string, string>): void {
-  pendingAnswers.set(permissionId, answers);
+  const now = Date.now();
+  pruneExpiredPendingAnswers(now);
+  pendingAnswers.set(permissionId, { answers, storedAt: now });
 }
 
+/** Drop an answer whose tool use will never be retried. */
 export function clearPendingAnswer(permissionId: string): void {
   pendingAnswers.delete(permissionId);
 }
@@ -154,9 +172,9 @@ export function clearPendingAnswer(permissionId: string): void {
  * Phase-2 retry does. One-shot — a second call gets undefined.
  */
 export function takePendingAnswer(permissionId: string): Record<string, string> | undefined {
-  const answers = pendingAnswers.get(permissionId);
-  if (answers) pendingAnswers.delete(permissionId);
-  return answers;
+  const entry = pendingAnswers.get(permissionId);
+  if (entry) pendingAnswers.delete(permissionId);
+  return entry?.answers;
 }
 
 // ============================================================
@@ -308,9 +326,8 @@ export class AskUserQuestionTool extends BaseTool {
     const toolUseId = context?.toolUseId || crypto.randomUUID();
 
     // Phase 2: Check if answers are already stored (retry after user responded)
-    const answers = pendingAnswers.get(toolUseId);
+    const answers = takePendingAnswer(toolUseId);
     if (answers) {
-      pendingAnswers.delete(toolUseId);
       return {
         id: toolUseId,
         name: this.name,

@@ -297,7 +297,7 @@ export async function driveTurn(
   const model = config.model ?? 'claude-test';
   // Seed the transcript the way `streamChat`'s caller did. `beginTurnAssembly`
   // honours `options.messages` only on an EMPTY timeline
-  // (`DuyaAgent.ts:1601-1603`), so a suite that primed the agent with
+  // (`DuyaAgent`), so a suite that primed the agent with
   // `agent.setMessages([...])` already carries its history and this is a no-op.
   // Where a suite passed history through `ChatOptions` instead, this is what
   // carries it across.

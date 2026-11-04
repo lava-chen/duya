@@ -482,7 +482,7 @@ describe('a deferred tool context is carried pending and resolved by the next tu
     await run(h);
 
     // The run completed, the real result is still there, and the rejection left
-    // no trace in the model's input. The legacy rule at `DuyaAgent.ts:4215`.
+    // no trace in the model's input. The legacy rule at `DuyaAgent`.
     expect(h.modelSawText()).toContain(RESULT_SENTINEL);
     expect(h.modelSawText()).not.toContain('the review never came');
     expect(h.events.filter((event) => event.type === 'diagnostic')).toHaveLength(0);

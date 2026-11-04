@@ -10,7 +10,7 @@
  *
  * | needed by `createLegacyModelPort` | what it actually is |
  * | --- | --- |
- * | `llmClient` | `private llmClient` (`DuyaAgent.ts:268`) — no getter |
+ * | `llmClient` | `private llmClient` (`DuyaAgent`) — no getter |
  * | `llmMessages` | a per-turn `const`, six transforms downstream of the durable history |
  * | `declaredTools` | the turn's closure-local `tools` |
  * | `turnCount` | the turn loop's counter, closure-local |
@@ -60,7 +60,7 @@
  * nothing rewrites tool bodies between the durable history and the provider
  * anymore.
  *
- * `get messages()` (`DuyaAgent.ts:278`) recomputes
+ * `get messages()` (`DuyaAgent`) recomputes
  * `projectTimelinePersistenceMessages(this.timeline.snapshot())` on every read —
  * a DIFFERENT array, and a strictly less informative one: the transient
  * attachment/deferred-tool context and the OS-context fragment live only on
@@ -115,13 +115,13 @@
  * something nearby looks like it cancelled the provider request", and it is
  * checkable without aborting anything.
  *
- * Which controller that is depends on `DuyaAgent.ts:2224-2227`: the request is
+ * Which controller that is depends on `DuyaAgent`: the request is
  * driven by `this.abortController.signal`, or by a per-request child of it when
  * `llmRequestTimeoutMs` is configured. The publish site passes whichever one it
  * built, so the leg drives exactly the signal `runTurnStream` was handed.
  *
  * The legacy path is untouched by this and still reaches the provider: a
- * run-level abort (`interrupt()`, `DuyaAgent.ts:4398`) fires
+ * run-level abort (`interrupt()`, `DuyaAgent`) fires
  * `this.abortController`, and `createChildAbortController` propagates that to
  * the child. Both callers are still needed until the cutover decides otherwise.
  *
@@ -135,7 +135,7 @@
  * engine assembled and threads the engine's own scoped signal into the provider
  * call. Nothing in `packages/agent-runtime` imports this module, and no live
  * caller passes a publisher: `options.modelLegs` is declared at `types.ts:567`
- * and read at `DuyaAgent.ts:2453`, and nothing constructs one.
+ * and read at `DuyaAgent`, and nothing constructs one.
  *
  * ### What became of the three refusals
  *

@@ -422,7 +422,7 @@ const APPROVAL_VERDICT_CARRIES_NO_RECORD: RecordedOn<ApprovalVerdict> = 'recorde
 /**
  * `RunExecutionRequest.signal` is caller-owned and mandatory, which is what
  * makes pre-model work cancellable. `DuyaAgent.streamChat` builds its own
- * `AbortController` at its first line (`DuyaAgent.ts:963`), so a port that
+ * `AbortController` at its first line (`DuyaAgent`), so a port that
  * created its own would leave context assembly outside cancellation. Making
  * this optional would silently reintroduce that gap.
  */
@@ -483,7 +483,7 @@ export const TURN_OUTPUT_PORT_IS_CONSTRUCTIBLE: TurnOutputPort = {
  * No `seq` on either payload.
  *
  * The legacy assigns `result.message.seq_index = seqIndex`
- * (`DuyaAgent.ts:2723`), and reproducing that field here would make the runtime
+ * (`DuyaAgent`), and reproducing that field here would make the runtime
  * a second authority for "where does this message sit" -- the same reason
  * `RunEvent` carries no `seq` (`ports.ts:47-50`). Ordering is the host's, derived
  * from `turn`.
@@ -517,7 +517,7 @@ const TURN_OUTPUT_SUMMARY_CARRIES_NO_RUN_ID: Extract<KeysOfEveryMember<TurnOutpu
  * No `id`, so durable identity stays with the writer that stores it.
  *
  * The legacy mints `crypto.randomUUID()` when a result has no id
- * (`DuyaAgent.ts:2724-2726`) and then hands the message to `_pushDurable`
+ * (`DuyaAgent`) and then hands the message to `_pushDurable`
  * (`:3515`), which is the thing that journals it. An engine that minted the id
  * would put the identity's authority in a layer that cannot see whether the
  * write landed.
@@ -532,7 +532,7 @@ const TOOL_RESULT_RECORD_CARRIES_NO_ID: Extract<KeysOfEveryMember<ToolResultReco
  * `messageId` is not `id`. It is a run-scoped CORRELATION id -- the value the
  * event stream keys its block map and its finalized map by
  * (`replay/transcript-snapshot.ts:195-200`) -- while the durable row's id is
- * `?? crypto.randomUUID()` (`DuyaAgent.ts:2678`) and belongs to whoever stores
+ * `?? crypto.randomUUID()` (`DuyaAgent`) and belongs to whoever stores
  * the row. Asserting on the exact member name rather than "no id-ish field" is
  * what keeps the two from drifting into one another: a rename of the
  * correlation field to plain `id` is what these probes are here to catch.
@@ -570,7 +570,7 @@ export const TURN_OUTPUT_SURFACE_CANNOT_SETTLE: TurnOutputCannotSettle = false;
 /**
  * The two counts are separate FIELDS, not one aliased number.
  *
- * `results` is the legacy `toolResultMessageCount` (`DuyaAgent.ts:2722`) and
+ * `results` is the legacy `toolResultMessageCount` (`DuyaAgent`) and
  * `dispatched` is `TurnWork.dispatched` (`run-engine.ts:805`); they diverge the
  * moment a turn dispatches two calls and one answers. Collapsing them into one
  * field would make the host's gate a dispatch count with no way to tell.
@@ -682,7 +682,7 @@ export const ONE_SHOT_PORT_IS_CONSTRUCTIBLE: OneShotTextPort = {
  * reason `TOOL_RESULT_RECORD_CARRIES_NO_RUN_ID` gives. There is no ledger to
  * write to and no `seq` to mint: the summarizer's output is stored by
  * `CompactionManager` under its own key (the summarizer is installed at
- * `DuyaAgent.ts:764`).
+ * `DuyaAgent`).
  */
 type OneShotCarriesNoRunIdentity = Extract<keyof OneShotTextRequest, 'runId' | 'runEpoch' | 'seq'>;
 // @ts-expect-error - a one-shot generation is not a run and cannot claim to be one
@@ -710,7 +710,7 @@ export const REQUEST_CAP_IS_A_TYPED_FIELD: Pick<RunExecutionRequest, 'modelReque
 
 /**
  * And it is OPTIONAL, because "absent = no per-request cap" is the legacy rule
- * (`DuyaAgent.ts:2255` arms the timer only when the option is set and positive)
+ * (`DuyaAgent` arms the timer only when the option is set and positive)
  * and the state every run is in today. Making it required would force every
  * composition to state a policy none of them has.
  *
@@ -867,7 +867,7 @@ export const REPLACEMENT_BELONGS_TO_REPLACED_ALONE: ReplacementOnlyOnReplaced = 
  *
  * Positive, and the polarity is the point: the legacy declines without
  * throwing in three places (`probeCompaction` compares a probe,
- * `DuyaAgent.ts:3018`; `compactProactive` returns null, `:3022`;
+ * `DuyaAgent`; `compactProactive` returns null, `:3022`;
  * `CompactOptions.force` documents the nothing-to-summarize early return,
  * `types.ts:66-71`). A port that could not express a declined outcome would
  * force every one of those to either throw or fabricate a compaction, and the
@@ -898,7 +898,7 @@ export const COMPACTION_OUTCOMES_ARE_CLOSED: CompactionOutcomeKindGuard = 'unexp
  * The port carries NO model method, because the summarization already has one.
  *
  * `OneShotTextPort.complete` is the tool-free, cancellable one-shot request the
- * summarizer needs (`ports.ts`, and `DuyaAgent.ts:783` where it is already
+ * summarizer needs (`ports.ts`, and `DuyaAgent` where it is already
  * installed). A second model-shaped method here would either duplicate that
  * surface or -- worse -- reintroduce the tool-calling summarizer that
  * plan 523 P4.1 had to forbid with `toolChoice: 'none'`, a flag `ModelRequest`
@@ -1055,7 +1055,7 @@ export const INTER_TURN_BINDING_IS_NOT_OPTIONAL: InterTurnPortIsRequired = 'opti
  * a port that could not carry one would force the corresponding branch to be
  * deleted as unreachable. The current host returns only `continue` -- measured
  * over the comment-stripped body of `_claimMailboxAtCheckpoint`, whose five
- * exits at `DuyaAgent.ts:3630`, `:3645`, `:3649`, `:3666` and `:3725` are all
+ * exits at `DuyaAgent`, `:3645`, `:3649`, `:3666` and `:3725` are all
  * `continue` -- so these two arms are what keeps that a property of the host
  * rather than of the contract.
  */
@@ -1103,7 +1103,7 @@ export const INTER_TURN_DECISION_ARMS_ARE_CLOSED: InterTurnArmsAreClosed = false
  * A result whose `injected` could be omitted would make "the host injected
  * nothing" and "the host forgot to say" the same value at the type level, which
  * is the ambiguity the port exists to remove: the legacy pushes onto a live
- * `messages` array (`DuyaAgent.ts:3709`, `:3720`), and the engine cannot offer
+ * `messages` array (`DuyaAgent`, `:3720`), and the engine cannot offer
  * that array, so the additions travel back as a value instead.
  */
 export const INTER_TURN_RESULT_ALWAYS_CARRIES_INJECTED: InterTurnSweepResult = {
@@ -1116,7 +1116,7 @@ export const INTER_TURN_RESULT_ALWAYS_CARRIES_INJECTED: InterTurnSweepResult = {
  * are pinned rather than left to a string literal at a call site.
  *
  * The legacy passes these literals into `_claimMailboxAtCheckpoint`
- * (`DuyaAgent.ts:3625`) and they reach the store, which decides what is
+ * (`DuyaAgent`) and they reach the store, which decides what is
  * claimable when. A sweep arriving under a name the store does not recognise
  * would claim nothing -- or claim rows it considers unclaimable at that point,
  * leaving them claimed-but-unread until the next checkpoint.
@@ -1159,7 +1159,7 @@ export const INTER_TURN_CHECKPOINTS_ARE_NAMED: readonly InterTurnCheckpoint[] = 
  *
  *   - steps 2, 3, 6 stamp `metadata.runtimeContext === true`
  *     (`message-projectors.ts:112-115`, `hooks/injection.ts:276-281`,
- *     `DuyaAgent.ts:4990-4996`), and the rule returns `false` for it at
+ *     `DuyaAgent`), and the rule returns `false` for it at
  *     `turn-time-reminder.ts:74`;
  *   - step 7 mutates content IN PLACE on the prompt message and adds no message
  *     (`context/os-context/fragment.ts:120-133`).

@@ -48,7 +48,7 @@
  * takes minutes. They are published from the `onProgress` callback the port is
  * handed, so they are produced while the compaction is still running -- which
  * is the property the legacy's real-time pump was written to preserve
- * (`DuyaAgent.ts:2144-2151`: buffering them made the renderer see nothing for
+ * (`DuyaAgent`: buffering them made the renderer see nothing for
  * minutes and then every row at once).
  *
  * The three terminal frames are reported AFTER the port answers, because that
@@ -70,7 +70,7 @@
  * Classification against the b3a/b3b precedent: **a forgotten binding loses
  * data.** Nothing shrinks the transcript, so it grows past the window, the
  * provider answers `context_length_exceeded`, and the emergency compaction that
- * exists to recover from precisely that error (`DuyaAgent.ts:3360`) has no port
+ * exists to recover from precisely that error (`DuyaAgent`) has no port
  * to call. A forgotten GUARDRAIL, by contrast, would be a bound-but-ignored
  * port, which loses nothing today because the legacy loop still drives every
  * turn and still compacts on its own.
@@ -80,7 +80,7 @@
  * The summarization is a `OneShotTextPort` call made by the HOST's
  * implementation of `CompactionPort.run`, not by this seam. `OneShotTextPort`
  * is the runtime-side port b1 built for exactly that call
- * (`ports.ts`, and `DuyaAgent.ts:783` where the summarizer is already wired
+ * (`ports.ts`, and `DuyaAgent` where the summarizer is already wired
  * through it), and it is TOOL-FREE by construction -- `toolChoice: 'none'
  * unconditionally, the plan-523 P4.1 fix, guarded in `port-guards.ts`. A
  * compaction port that carried its own model call would duplicate that surface
@@ -124,7 +124,7 @@ export interface CompactionPassInput {
  * Run one compaction pass and publish its frames.
  *
  * Ordering is the legacy's own (`CompactionCoordinator.ts:258`, `:295`, `:311`
- * and the live pump at `DuyaAgent.ts:2171-2180`): `started` first, then the
+ * and the live pump at `DuyaAgent`): `started` first, then the
  * progress frames as the port reports them, then exactly ONE terminal frame.
  * A pass that published two terminals, or none, would leave a consumer holding
  * a compaction that never finished.
@@ -136,7 +136,7 @@ export async function runCompactionPass(input: CompactionPassInput): Promise<Com
 
   // The DECISION is a separate await from the run, matching the legacy, where
   // the probe and the compact call are separate statements with a decision
-  // between them (`DuyaAgent.ts:3018` then `:3022`). Publishing `started`
+  // between them (`DuyaAgent` then `:3022`). Publishing `started`
   // before the decision would announce a compaction that then declines.
   const verdict = await port.decide(decision);
   if (verdict.kind === 'skip') return { kind: 'declined', reason: verdict.reason };

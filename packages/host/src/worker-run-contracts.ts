@@ -210,17 +210,12 @@ export interface ToolUseContextOptions {
     }>;
     tools: Tool[];
     commands: Command[];
-    debug?: boolean;
-    verbose?: boolean;
     mainLoopModel: string;
     mcpClients: MCPServerConnection[];
-    mcpResources?: MCPResource[];
     agentDefinitions?: {
         activeAgents: AgentDefinition[];
         allAgents: AgentDefinition[];
     };
-    isNonInteractiveSession?: boolean;
-    appendSystemPrompt?: string;
     sessionId?: string;
     agentProfileId?: string | null;
     workingDirectory?: string;
@@ -246,11 +241,5 @@ export interface MCPServerConnection {
     name: string;
     type: 'connected' | 'disconnected' | 'connecting' | 'error';
     cleanup?: () => Promise<void>;
-}
-export interface MCPResource {
-    uri: string;
-    name?: string;
-    description?: string;
-    mimeType?: string;
 }
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
