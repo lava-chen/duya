@@ -5,16 +5,21 @@
 
 ## 目标与边界
 
-用户能观察到的变化：TUI footer 第二行原本是
+两件事，同一行：
+
+1. footer 数字行的 `5%/1.0M` 换成「条 + 百分比」；
+2. 这一行剩下的两组数字各自一个 `/settings` 开关：**速度默认开**、**三个统计数字默认关**。
+
+改完默认看到的是
 
 ```
-↑49k ↓1.6k Σ51k · 5%/1.0M · 63.0 tok/s
+▰▱▱▱▱ 5% · 63.0 tok/s                              (deepseek) deepseek-flash • high
 ```
 
-改成
+把 Token counters 打开后恢复成
 
 ```
-↑49k ↓1.6k Σ51k · ▰▱▱▱▱ 5% · 63.0 tok/s
+↑49k ↓1.6k Σ51k · ▰▱▱▱▱ 5% · 63.0 tok/s            (deepseek) deepseek-flash • high
 ```
 
 **不新增行**：footer 仍是原来那两行（路径行 + 数字行），条只是数字行里的一小块。用户明确要求
@@ -25,7 +30,12 @@
 `█░`：同一读数用两套字形是本计划要消灭的问题之一。`/context` 面板（独立面板，不占 footer 预算）
 是唯一用 12 格的地方。
 
-允许修改：`packages/cli/src/tui/{footer.ts,capacity-bar.ts,TUIApp.ts,slash/session-info.ts}` 及对应测试。
+开关的语义：profile（`/statusline` 的四档）决定这一行**有没有**这一组，开关决定**这一次要不要**。
+两者是与关系，所以开关打不开 profile 已经去掉的组 —— 预设不能变成半真。
+
+允许修改：`packages/cli/src/tui/{footer.ts,capacity-bar.ts,TUIApp.ts,preferences.ts}`、
+`packages/cli/src/tui/slash/{settings.ts,types.ts,display.ts,session-info.ts}`、`packages/cli/src/chat.ts`
+及对应测试。
 本次不处理：`token_usage` 帧不携带 cache read/write，所以 pi 的 `R`/`W`/`CH` 三组暂时无法显示；
 费用（`$0.123`）也不在 footer 里，它是 `/cost` 的读数，需要 pricing 查询。
 
@@ -51,6 +61,9 @@
 - [x] 用例：新增 `capacity-bar.test.ts`，更新 `footer.test.ts` / `slash-commands.test.ts`
 - [x] 变异验证（三条）
 - [x] 门禁 + commit（`eb082294`）+ PR #618
+- [x] 第二段：速度 / 三个统计数字各一个 `/settings` 开关（默认 开 / 关），profile 与开关取与
+- [x] 开关用例：preferences 解析、footer 单测两条 + profile 不可复活一条、面板真实按键两行、
+      画出来的 footer 真的少一组（`tui-inline-mode` 改为断言默认无 `↑`，另加开着的用例）
 
 ## 发现与决策
 
@@ -69,6 +82,14 @@
 6. **尺寸被用户否掉一次。** 首版 80 列 8 格，实测该行正好占满 80 列、模型名零余量，用户要求
    「不要做两行，就是一个小的区域，还是那一行里」→ 改成 5 格（96 列 6 格、64 列 4 格、<64 无条）。
    教训：footer 这一行的预算不是「够不够放」，而是「模型名还剩几列」。
+7. **开关是与不是或。** `footer.ts` 里是 `profileAllows && input.flag !== false`：profile 已经去掉的组，
+   开关打不开。否则 `/statusline location` 就变成半真，选了它的读者也无法判断哪一半是生效的。
+   `undefined` 保持 profile 说了算，这样 footer 的其他调用方（测试、Desktop 侧复用）行为不变。
+8. **默认值是按「这一行在回答什么」定的。** 条和速度说的是正在跑的这一轮；三个计数器说的是
+   整个会话的账单，`/cost` 也报。所以 counters 默认关、rate 默认开。
+9. **菜单插入位置改了三条靠下移次数定位的用例。** `tui-settings-panel.test.ts` 里那几条注释明说
+   「The count is the assertion」，插入两行后必须同步改 7/6/5，并且那条「列表能画值列」的用例
+   原本断言 `Completion rows`，行数变多后它落到可视窗口之外，改成滚到底再看（注意列表会环绕）。
 
 ## 验证记录
 

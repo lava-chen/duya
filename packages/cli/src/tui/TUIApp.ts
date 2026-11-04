@@ -479,6 +479,10 @@ export interface TUIAppOptions {  /** Window title. */
   /** How many rows a tool run takes. `/display` and `/settings` move it live. */
   readonly toolGroupMode?: ToolGroupMode;
   readonly statusline?: StatuslineProfile;
+  /** Start with the footer's token counters; `/settings` can flip it live. */
+  readonly footerTokens?: boolean;
+  /** Start with the footer's output rate; `/settings` can flip it live. */
+  readonly footerRate?: boolean;
   /** Start with every block expanded — the saved state of the expand key. */
   readonly expandBlocks?: boolean;
   /**
@@ -542,6 +546,8 @@ export interface TuiLivePreferences {
   readonly showToolResults?: boolean;
   readonly toolGroupMode?: ToolGroupMode;
   readonly statusline?: StatuslineProfile;
+  readonly footerTokens?: boolean;
+  readonly footerRate?: boolean;
   readonly completionRows?: number;
   readonly inputRows?: number;
 }
@@ -644,6 +650,10 @@ export class TUIApp {
   /** How many rows a tool run takes: every call, their names, or only the running one. */
   private toolGroupMode: ToolGroupMode;
   private statusline: StatuslineProfile;
+  /** The footer's `↑in ↓out Σtotal` group. Off by default; `/settings` owns it. */
+  private footerTokens: boolean;
+  /** The footer's `tok/s` group. On by default; `/settings` owns it. */
+  private footerRate: boolean;
   /** Per-block transcript state for the Codex-style history navigation keys. */
   private selectedBlockId: string | undefined;
   private readonly expandedBlockIds = new Set<string>();
@@ -876,6 +886,8 @@ export class TUIApp {
     this.showToolResults = options.showToolResults ?? false;
     this.toolGroupMode = options.toolGroupMode ?? 'full';
     this.statusline = options.statusline ?? 'full';
+    this.footerTokens = options.footerTokens ?? false;
+    this.footerRate = options.footerRate ?? true;
     this.maxInputRows = Math.max(1, options.maxInputRows ?? MAX_INPUT_ROWS);
     this.completion = new CompletionController(
       options.completionSources ?? EMPTY_COMPLETION_SOURCES,
@@ -1214,6 +1226,8 @@ export class TUIApp {
     if (patch.showToolResults !== undefined) this.showToolResults = patch.showToolResults;
     if (patch.toolGroupMode !== undefined) this.toolGroupMode = patch.toolGroupMode;
     if (patch.statusline !== undefined) this.statusline = patch.statusline;
+    if (patch.footerTokens !== undefined) this.footerTokens = patch.footerTokens;
+    if (patch.footerRate !== undefined) this.footerRate = patch.footerRate;
     if (patch.completionRows !== undefined) {
       this.completionRows = Math.max(1, patch.completionRows);
     }
@@ -1245,6 +1259,8 @@ export class TUIApp {
     showToolResults: boolean;
     toolGroupMode: ToolGroupMode;
     statusline: StatuslineProfile;
+    footerTokens: boolean;
+    footerRate: boolean;
     completionRows: number;
     inputRows: number;
   } {
@@ -1258,6 +1274,8 @@ export class TUIApp {
       showToolResults: this.showToolResults,
       toolGroupMode: this.toolGroupMode,
       statusline: this.statusline,
+      footerTokens: this.footerTokens,
+      footerRate: this.footerRate,
       completionRows: this.completionRows,
       inputRows: this.maxInputRows,
     };
@@ -2519,6 +2537,8 @@ export class TUIApp {
       pullRequest: this.options.pullRequestBadge?.() ?? null,
       hyperlinks: this.terminalEnv.hyperlinks,
       statusline: this.statusline,
+      counters: this.footerTokens,
+      rate: this.footerRate,
     };
     const statusBar = new StatusBar(props);
     const tagView = tagViewOf(stylesOf({ theme: this.theme.tags, renderer: 'own' }));

@@ -110,6 +110,22 @@ export interface FooterInput {
    */
   readonly hyperlinks?: boolean;
   readonly statusline?: StatuslineProfile;
+  /**
+   * The running token totals (`↑in ↓out Σtotal`), under the profile's verdict.
+   *
+   * `undefined` keeps the profile in charge, which is what every non-TUI
+   * caller wants. `false` removes them even on a profile that shows them:
+   * the three totals are the session's accumulated bill, and the row's other
+   * two groups — how full the window is, how fast it answered — are the ones
+   * about right now. `/settings` owns the switch.
+   *
+   * It cannot turn them ON where the profile dropped them: a profile is a
+   * preset the reader chose for the whole row, and one switch silently undoing
+   * half of it would make the preset a lie.
+   */
+  readonly counters?: boolean;
+  /** The output rate of the last billed call, under the profile's verdict. */
+  readonly rate?: boolean;
 }
 
 /** Between the groups on the stats row: one column each side, like the hints. */
@@ -251,9 +267,10 @@ export function buildFooterLines(input: FooterInput): string[] {
   const showLocation = profile === 'full' || profile === 'compact' || profile === 'location';
   const showBranch = profile === 'full' || profile === 'location';
   const showSession = profile === 'full' || profile === 'location';
-  const showUsage = profile === 'full' || profile === 'compact' || profile === 'usage';
+  const showUsage = (profile === 'full' || profile === 'compact' || profile === 'usage')
+    && input.counters !== false;
   const showContext = profile !== 'location';
-  const showRate = profile === 'full' || profile === 'usage';
+  const showRate = (profile === 'full' || profile === 'usage') && input.rate !== false;
   const showModel = profile !== 'location' || profile === 'location';
   const location = showLocation ? formatCwdForFooter(input.cwd, input.home) : '';
   const branch = showBranch ? input.branch ?? null : null;

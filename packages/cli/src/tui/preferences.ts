@@ -35,6 +35,24 @@ export const TUI_TOOL_GROUP_MODE_SETTING = 'cli.tui.toolGroupMode';
 export const TUI_STARTUP_BANNER_SETTING = 'cli.tui.startupBanner';
 export const TUI_COMPLETION_ROWS_SETTING = 'cli.tui.completionRows';
 export const TUI_INPUT_ROWS_SETTING = 'cli.tui.inputRows';
+/**
+ * The footer's token counters: `↑in ↓out Σtotal` at the left of the stats row.
+ *
+ * Off by default. The row's job is to answer "how full is the window, and how
+ * fast is it answering"; three running totals beside that answer are detail
+ * that costs a third of the line's width, and `/cost` reports them exactly
+ * when somebody actually wants them. Turning it on is a preference, not a
+ * fix — the numbers were never wrong, they were just always there.
+ */
+export const TUI_FOOTER_TOKENS_SETTING = 'cli.tui.footerTokens';
+/**
+ * The footer's output rate (`93.5 tok/s`).
+ *
+ * On by default: it is the one number on the row that is about the turn that
+ * just happened rather than about the session's accumulated bill, and a slow
+ * turn is something the reader wants to notice while it is happening.
+ */
+export const TUI_FOOTER_RATE_SETTING = 'cli.tui.footerRate';
 export const TUI_STATUSLINE_SETTING = 'cli.tui.statusline';
 export type StatuslineProfile = 'full' | 'compact' | 'location' | 'usage';
 /**
@@ -91,6 +109,10 @@ export interface TuiPreferences {
   readonly completionRows: number;
   /** Rows the input box may grow to before it scrolls internally. */
   readonly inputRows: number;
+  /** The three running token totals at the left of the footer's stats row. */
+  readonly footerTokens: boolean;
+  /** The output rate of the most recent billed call. */
+  readonly footerRate: boolean;
   readonly statusline: StatuslineProfile;
 }
 
@@ -128,6 +150,12 @@ export const DEFAULT_TUI_PREFERENCES: TuiPreferences = {
   startupBanner: true,
   completionRows: 8,
   inputRows: 8,
+  // The stats row is a reading, not a bill: the capacity bar and the rate say
+  // where the turn stands, and the counters that restate the session total are
+  // opt-in (`/settings`). Off is the default so a first run is not three
+  // numbers deep before it has anything to say.
+  footerTokens: false,
+  footerRate: true,
   statusline: 'full',
 };
 
@@ -240,6 +268,8 @@ export function parseTuiPreferences(values: Readonly<Record<string, string>>): T
     startupBanner: parseBoolean(values[TUI_STARTUP_BANNER_SETTING], DEFAULT_TUI_PREFERENCES.startupBanner),
     completionRows: parseRangedInt(values[TUI_COMPLETION_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.completionRows, COMPLETION_ROWS_RANGE),
     inputRows: parseRangedInt(values[TUI_INPUT_ROWS_SETTING], DEFAULT_TUI_PREFERENCES.inputRows, INPUT_ROWS_RANGE),
+    footerTokens: parseBoolean(values[TUI_FOOTER_TOKENS_SETTING], DEFAULT_TUI_PREFERENCES.footerTokens),
+    footerRate: parseBoolean(values[TUI_FOOTER_RATE_SETTING], DEFAULT_TUI_PREFERENCES.footerRate),
     statusline: values[TUI_STATUSLINE_SETTING] === 'compact' || values[TUI_STATUSLINE_SETTING] === 'location' || values[TUI_STATUSLINE_SETTING] === 'usage'
       ? values[TUI_STATUSLINE_SETTING]
       : 'full',

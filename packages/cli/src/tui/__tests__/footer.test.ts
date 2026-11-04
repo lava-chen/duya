@@ -253,6 +253,50 @@ describe('buildFooterLines', () => {
     expect(row).toContain('↑49k ↓1.6k Σ51k · ▰▱▱▱▱ 5% · 63.0 tok/s');
   });
 
+  it('leaves the counters off without taking the rest of the row with them', () => {
+    // The default: `/settings` starts with the three running totals hidden. The
+    // context group and the model are the row's point and must survive — the
+    // switch removes one group, not the row.
+    const row = plain(footer({ counters: false })[1] ?? '');
+    expect(row).not.toContain('↑');
+    expect(row).not.toContain('↓');
+    expect(row).not.toContain('Σ');
+    expect(row).toContain('▰▱▱▱▱ 5%');
+    expect(row.endsWith('(deepseek) deepseek-flash • high')).toBe(true);
+  });
+
+  it('drops the rate on its own switch, leaving the counters alone', () => {
+    const stats = {
+      inputTokens: 49_000,
+      outputTokens: 1600,
+      totalTokens: 50_600,
+      contextPercent: 5,
+      contextBudget: 1_000_000,
+      outputTokensPerSecond: 63,
+    };
+    const row = plain(footer({ stats, rate: false })[1] ?? '');
+    expect(row).not.toContain('tok/s');
+    expect(row).toContain('↑49k ↓1.6k Σ51k');
+  });
+
+  it('cannot resurrect a group its profile already dropped', () => {
+    // `location` is "where the session is, no numbers". A switch that turned
+    // the counters back on would make that preset half-true, and the reader who
+    // chose it would have no way to know which half.
+    const stats = {
+      inputTokens: 49_000,
+      outputTokens: 1600,
+      totalTokens: 50_600,
+      contextPercent: 5,
+      contextBudget: 1_000_000,
+      outputTokensPerSecond: 63,
+    };
+    const row = plain(footer({ stats, statusline: 'location', counters: true, rate: true })[1] ?? '');
+    expect(row).not.toContain('↑');
+    expect(row).not.toContain('tok/s');
+    expect(row).not.toContain('▰');
+  });
+
   it('colours the rate as the one live measurement on the row', () => {
     const row = footer({
       stats: {
