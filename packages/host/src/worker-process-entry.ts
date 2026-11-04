@@ -524,7 +524,32 @@ function pushBashTaskSnapshot(): void {
     if (!activeSessionId)
         return;
     const tasks = getBashTaskRegistry().listTasks();
-    sendToMain({ type: 'bash_task:update', sessionId: activeSessionId, tasks });
+    // Background subagent tasks ride the same throttled push so the Host's
+    // background-task index (and the TUI's /tasks snapshot view) can list
+    // them. The Desktop renderer reads only `tasks` (the raw bash rows), so
+    // the extra field is invisible to it.
+    const agentTasks = backgroundAgentLifecycle.getAll().map((task) => ({
+        id: task.taskId,
+        kind: 'subagent' as const,
+        label: task.agentName || task.agentType,
+        agentType: task.agentType,
+        subagentSessionId: task.subAgentSessionId,
+        // The lifecycle's TaskStatus is a superset of the wire union:
+        // `pending` means registered-but-not-yet-streaming (a running row to
+        // every consumer) and `failed` is the wire's `error`. Passing the raw
+        // values through got both silently dropped by the Host index's
+        // status whitelist.
+        status: task.status === 'pending'
+            ? ('running' as const)
+            : task.status === 'failed'
+                ? ('error' as const)
+                : task.status,
+        startTime: task.startedAt,
+        ...(task.completedAt === undefined ? {} : { endTime: task.completedAt }),
+        ...(task.error === undefined ? {} : { error: task.error }),
+        outputFile: task.outputFilePath,
+    }));
+    sendToMain({ type: 'bash_task:update', sessionId: activeSessionId, tasks, agentTasks });
 }
 function scheduleBashTaskPush(): void {
     if (bashTaskPushScheduled)
@@ -536,6 +561,10 @@ function scheduleBashTaskPush(): void {
     }, BASH_TASK_PUSH_THROTTLE_MS);
 }
 getBashTaskRegistry().onAnyChange(scheduleBashTaskPush);
+// Subagent lifecycle changes (register + terminal transitions) refresh the
+// same throttled snapshot so a spawned/finished child shows up in /tasks
+// without waiting for the next bash registry event.
+backgroundAgentLifecycle.onAnyChange = scheduleBashTaskPush;
 const HOOK_TASK_PUSH_THROTTLE_MS = 300;
 let hookTaskPushScheduled = false;
 function pushHookTaskSnapshot(): void {

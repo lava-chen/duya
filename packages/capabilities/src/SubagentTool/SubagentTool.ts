@@ -39,14 +39,55 @@ export interface SubagentToolInput {
   tools?: unknown;
 }
 
+/**
+ * The model-facing agent-type list, built by the host binding from its active
+ * definitions (built-ins plus user/project files). A description, not a schema
+ * enum: definitions change per session and the schema is built once per
+ * worker, so an enum would go stale exactly when custom agents exist.
+ */
+export interface SubagentTypeCatalog {
+  readonly types: readonly string[];
+  /** Pre-rendered `- Type — whenToUse` lines (see agent-core's describeAgentTypes). */
+  readonly guidance: string;
+}
+
+export interface SubagentToolOptions {
+  readonly agentTypeCatalog?: SubagentTypeCatalog;
+}
+
 export class SubagentTool extends BaseTool {
-  constructor(private readonly dispatch: SubagentToolDispatchPort) {
+  constructor(
+    private readonly dispatch: SubagentToolDispatchPort,
+    options?: SubagentToolOptions,
+  ) {
     super();
+    const catalog = options?.agentTypeCatalog;
+    if (catalog !== undefined) {
+      this.description =
+        `${SubagentTool.BASE_DESCRIPTION} ` +
+        `Pick subagent_type from the active agent types listed in the subagent_type description; unknown types are rejected.`;
+      this.input_schema = {
+        ...SubagentTool.BASE_INPUT_SCHEMA,
+        properties: {
+          ...SubagentTool.BASE_INPUT_SCHEMA.properties,
+          subagent_type: {
+            type: 'string',
+            description:
+              `The type of agent to spawn. Must be one of the ACTIVE AGENT TYPES below; an unknown type is rejected with the valid list. Omit for the general-purpose agent.\n\nActive agent types:\n${catalog.guidance}`,
+          },
+        },
+      };
+    }
   }
 
-  readonly name = SUBAGENT_TOOL_NAME;
-  readonly description = 'Launch a new agent to handle complex, multi-step tasks autonomously.';
-  readonly input_schema: Record<string, unknown> = {
+  private static readonly BASE_DESCRIPTION =
+    'Launch a new agent to handle complex, multi-step tasks autonomously.';
+
+  private static readonly BASE_INPUT_SCHEMA: {
+    type: string;
+    properties: Record<string, unknown>;
+    required: string[];
+  } = {
     type: 'object',
     properties: {
       name: {
@@ -73,7 +114,7 @@ export class SubagentTool extends BaseTool {
       },
       auto_wake: {
         type: 'boolean',
-        description: 'Background only. When false, the parent session is NOT resumed when the sub-agent completes — no <task-notification> is delivered. Read the result yourself with get_task_output using the output_file_path from this receipt. Defaults to true.',
+        description: 'Background only. When false, the parent session is NOT resumed when the sub-agent completes — no <task-notification> is delivered. Read the result yourself with get_task_output using the task_id from this receipt. Defaults to true.',
         default: true,
       },
       resume_from: {
@@ -124,6 +165,10 @@ export class SubagentTool extends BaseTool {
     },
     required: ['prompt'],
   };
+
+  readonly name = SUBAGENT_TOOL_NAME;
+  readonly description: string = SubagentTool.BASE_DESCRIPTION;
+  readonly input_schema: Record<string, unknown> = SubagentTool.BASE_INPUT_SCHEMA;
 
   get interruptBehavior(): ToolInterruptBehavior {
     return 'block';

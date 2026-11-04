@@ -39,8 +39,63 @@ const STATUSES: ReadonlySet<string> = new Set<BackgroundTaskStatusV1>([
   'running', 'completed', 'killed', 'disk_limit', 'error', 'lost',
 ]);
 
+/** The subagent half of a snapshot, before narrowing. */
+export interface RawAgentTaskSnapshot {
+  readonly id?: unknown;
+  readonly kind?: unknown;
+  readonly label?: unknown;
+  readonly agentType?: unknown;
+  readonly subagentSessionId?: unknown;
+  readonly status?: unknown;
+  readonly startTime?: unknown;
+  readonly endTime?: unknown;
+  readonly error?: unknown;
+  readonly outputFile?: unknown;
+}
+
 function finite(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function string_(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * Narrow one subagent task from untrusted worker IPC.
+ *
+ * Subagent rows have no `command`; their identity is `label` (agent name
+ * falling back to the agent type). Returns null instead of a half-filled row.
+ */
+export function narrowAgentTask(raw: unknown): IndexedTask | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const task = raw as RawAgentTaskSnapshot;
+  const id = string_(task.id);
+  const status = string_(task.status);
+  const startTime = finite(task.startTime);
+  if (id === undefined || status === undefined || startTime === undefined) return null;
+  if (!STATUSES.has(status)) return null;
+
+  const outputFile = string_(task.outputFile) ?? '';
+  const label = string_(task.label);
+  const agentType = string_(task.agentType);
+  const subagentSessionId = string_(task.subagentSessionId);
+  const error = string_(task.error);
+  const endTime = finite(task.endTime);
+  return {
+    outputFile,
+    summary: {
+      id,
+      kind: 'subagent',
+      ...(label === undefined ? {} : { label }),
+      ...(agentType === undefined ? {} : { agentType }),
+      ...(subagentSessionId === undefined ? {} : { subagentSessionId }),
+      status: status as BackgroundTaskStatusV1,
+      startedAtMs: startTime,
+      ...(endTime === undefined ? {} : { endedAtMs: endTime }),
+      ...(error === undefined ? {} : { error }),
+    },
+  };
 }
 
 /**
@@ -88,29 +143,46 @@ export function narrowBackgroundTask(raw: unknown): IndexedTask | null {
 }
 
 export class BackgroundTaskIndex implements HostLocalBackgroundTaskApiV1 {
-  readonly #bySession = new Map<string, readonly IndexedTask[]>();
+  readonly #bashBySession = new Map<string, readonly IndexedTask[]>();
+  readonly #agentBySession = new Map<string, readonly IndexedTask[]>();
 
-  /** Replace the session's snapshot with what the worker just reported. */
-  apply(sessionId: string, tasks: unknown): void {
+  /**
+   * Replace the session's snapshot with what the worker just reported.
+   *
+   * Two partitions, each wholesale-replaced by its own writer: the bash
+   * registry (`tasks`) and the subagent lifecycle (`agentTasks`). Merging
+   * them here keeps the read API one list without inventing a second writer
+   * for either half's state.
+   */
+  apply(sessionId: string, tasks: unknown, agentTasks?: unknown): void {
     if (sessionId === '') return;
     const source = Array.isArray(tasks) ? tasks : [];
-    const indexed: IndexedTask[] = [];
-    for (const raw of source) {
-      const task = narrowBackgroundTask(raw);
-      if (task !== null) indexed.push(task);
+    this.#bashBySession.set(sessionId, source.map(narrowBackgroundTask).filter(
+      (task): task is IndexedTask => task !== null,
+    ));
+    // An absent agentTasks (an older worker) keeps the previous partition;
+    // it is already narrowed, so it must not go through narrowAgentTask again.
+    let agentSource: readonly IndexedTask[];
+    if (agentTasks === undefined) {
+      agentSource = this.#agentBySession.get(sessionId) ?? [];
+    } else {
+      const raw = Array.isArray(agentTasks) ? agentTasks : [];
+      agentSource = raw.map(narrowAgentTask).filter((task): task is IndexedTask => task !== null);
     }
-    this.#bySession.set(sessionId, indexed);
+    this.#agentBySession.set(sessionId, agentSource);
   }
 
   /** Forget a session (worker terminated, session archived). */
   forget(sessionId: string): void {
-    this.#bySession.delete(sessionId);
+    this.#bashBySession.delete(sessionId);
+    this.#agentBySession.delete(sessionId);
   }
 
   async listBackgroundTasks(sessionId: string): Promise<BackgroundTaskListV1> {
-    const tasks = this.#bySession.get(sessionId);
-    if (tasks === undefined) return { observed: false, tasks: [] };
-    const summaries = tasks.map((task) => task.summary);
+    const bash = this.#bashBySession.get(sessionId);
+    const agent = this.#agentBySession.get(sessionId);
+    if (bash === undefined && agent === undefined) return { observed: false, tasks: [] };
+    const summaries = [...(bash ?? []), ...(agent ?? [])].map((task) => task.summary);
     // Running first, then newest first: the row a reader wants is the one that
     // is still moving. Mirrors the ordering the Desktop section already uses.
     summaries.sort((a, b) => {
@@ -127,7 +199,8 @@ export class BackgroundTaskIndex implements HostLocalBackgroundTaskApiV1 {
     taskId: string,
     maxBytes?: number,
   ): Promise<BackgroundTaskOutputV1 | null> {
-    const task = this.#bySession.get(sessionId)?.find((entry) => entry.summary.id === taskId);
+    const task = [...(this.#bashBySession.get(sessionId) ?? []), ...(this.#agentBySession.get(sessionId) ?? [])]
+      .find((entry) => entry.summary.id === taskId);
     if (task === undefined) return null;
     const limit = maxBytes !== undefined && Number.isSafeInteger(maxBytes) && maxBytes > 0
       ? maxBytes

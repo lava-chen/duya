@@ -1,5 +1,6 @@
 import { SubagentTool as CapabilitySubagentTool } from '@duya/capabilities/SubagentTool';
 import type { ToolUseContext, Tool } from '../worker-run-contracts.js';
+import { describeAgentTypes } from '@duya/agent-core/subagents/agent-type-registry';
 import { getBuiltInAgents } from './built-in-agents.js';
 import { runAgent, runAgentSync } from './run-agent.js';
 import type { AgentDefinition } from './definitions.js';
@@ -40,8 +41,9 @@ export class SubagentTool extends CapabilitySubagentTool {
       runAgentSync: (request) => runAgentSync({ ...request, ...deps }),
       messageRowToMessage: (row) => messageRowToMessage(messageRowFromUnknown(row)),
     });
-    super({
-      execute: (input, workingDirectory, context) => {
+    super(
+      {
+        execute: (input, workingDirectory, context) => {
         if (!isToolUseContext(context)) return service.execute(input, workingDirectory);
         const workerContext: WorkerSubagentExecutionContext<AgentDefinition, ToolUseContext, Tool> = {
           toolUseId: context.toolUseId,
@@ -67,7 +69,18 @@ export class SubagentTool extends CapabilitySubagentTool {
         };
         return service.execute(input, workingDirectory, workerContext);
       },
-    });
+      },
+      // The model-facing type list: strict resolution already rejects unknown
+      // types with the available set, so the schema advertises exactly what
+      // will resolve. Built-ins are the stable floor; user/project definitions
+      // still resolve at call time even when absent from this text.
+      {
+        agentTypeCatalog: {
+          types: getBuiltInAgents().map((agent) => agent.agentType),
+          guidance: describeAgentTypes(getBuiltInAgents()),
+        },
+      },
+    );
   }
 }
 

@@ -267,7 +267,7 @@
       "format": "esm"
     },
     "packages/agent-protocol/src/background-tasks.ts": {
-      "bytes": 3053,
+      "bytes": 3902,
       "imports": [],
       "format": "esm"
     },
@@ -15399,7 +15399,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-      "bytes": 33371,
+      "bytes": 33780,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -16476,7 +16476,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/progress-bridge.ts": {
-      "bytes": 4574,
+      "bytes": 5270,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/progress-tracker.ts",
@@ -17008,7 +17008,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/background-lifecycle.ts": {
-      "bytes": 23616,
+      "bytes": 25376,
       "imports": [
         {
           "path": "packages/host/src/worker-subagents/progress-tracker.ts",
@@ -17063,6 +17063,11 @@
       ],
       "format": "esm"
     },
+    "packages/agent-core/src/subagents/agent-type-registry.ts": {
+      "bytes": 3709,
+      "imports": [],
+      "format": "esm"
+    },
     "packages/capabilities/src/SubagentTool/subagentResult.ts": {
       "bytes": 9824,
       "imports": [
@@ -17106,12 +17111,17 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/service.ts": {
-      "bytes": 48653,
+      "bytes": 49637,
       "imports": [
         {
           "path": "node:crypto",
           "kind": "import-statement",
           "external": true
+        },
+        {
+          "path": "packages/agent-core/src/subagents/agent-type-registry.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core/subagents/agent-type-registry"
         },
         {
           "path": "packages/capabilities/src/SubagentTool/subagentResult.ts",
@@ -29952,7 +29962,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-process-entry.ts": {
-      "bytes": 171769,
+      "bytes": 173333,
       "imports": [
         {
           "path": "packages/host/src/worker-context/defined-properties.ts",
@@ -33403,7 +33413,7 @@
       "format": "esm"
     },
     "packages/host/src/background-task-index.ts": {
-      "bytes": 5450,
+      "bytes": 8434,
       "imports": [
         {
           "path": "packages/host/src/managed-shell/task-registry.ts",
@@ -33414,7 +33424,7 @@
       "format": "esm"
     },
     "packages/host/src/run-execution.ts": {
-      "bytes": 51396,
+      "bytes": 51565,
       "imports": [
         {
           "path": "packages/agent-protocol/src/index.ts",
@@ -35221,7 +35231,7 @@
       "format": "esm"
     },
     "packages/capabilities/src/SubagentTool/SubagentTool.ts": {
-      "bytes": 9184,
+      "bytes": 10844,
       "imports": [
         {
           "path": "packages/capabilities/src/BaseTool.ts",
@@ -35637,12 +35647,17 @@
       "format": "esm"
     },
     "packages/host/src/worker-subagents/bound-tool.ts": {
-      "bytes": 3331,
+      "bytes": 3923,
       "imports": [
         {
           "path": "packages/capabilities/src/SubagentTool/index.ts",
           "kind": "import-statement",
           "original": "@duya/capabilities/SubagentTool"
+        },
+        {
+          "path": "packages/agent-core/src/subagents/agent-type-registry.ts",
+          "kind": "import-statement",
+          "original": "@duya/agent-core/subagents/agent-type-registry"
         },
         {
           "path": "packages/host/src/worker-subagents/built-in-agents.ts",
@@ -35920,7 +35935,7 @@
       "format": "esm"
     },
     "packages/agent-runtime/src/tools/execution/orchestration/classify.ts": {
-      "bytes": 3122,
+      "bytes": 3469,
       "imports": [
         {
           "path": "packages/agent-runtime/src/tools/execution/orchestration/types.ts",
@@ -39101,7 +39116,7 @@
       "format": "esm"
     },
     "packages/host/src/worker-tool-services/background-task.ts": {
-      "bytes": 2483,
+      "bytes": 3191,
       "imports": [
         {
           "path": "packages/host/src/managed-shell/task-registry.ts",
@@ -43309,7 +43324,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/message-timeline.ts": {
-          "bytesInOutput": 54
+          "bytesInOutput": 67
         },
         "packages/agent-protocol/src/session-fork.ts": {
           "bytesInOutput": 955
@@ -43507,7 +43522,7 @@
           "bytesInOutput": 30
         },
         "packages/agent-protocol/src/doctor.ts": {
-          "bytesInOutput": 84
+          "bytesInOutput": 97
         },
         "packages/agent-protocol/src/checkout-api.ts": {
           "bytesInOutput": 30
@@ -45001,10 +45016,10 @@
           "bytesInOutput": 351
         },
         "node_modules/handlebars/node_modules/source-map/lib/source-map-consumer.js": {
-          "bytesInOutput": 11801
+          "bytesInOutput": 11805
         },
         "node_modules/handlebars/node_modules/source-map/lib/source-node.js": {
-          "bytesInOutput": 3620
+          "bytesInOutput": 3625
         },
         "node_modules/handlebars/node_modules/source-map/source-map.js": {
           "bytesInOutput": 144
@@ -45280,7 +45295,7 @@
           "bytesInOutput": 180
         },
         "packages/agent-runtime/src/translate/chat-event-translator.ts": {
-          "bytesInOutput": 9672
+          "bytesInOutput": 9691
         },
         "packages/agent-runtime/src/transport/execution-channel.ts": {
           "bytesInOutput": 190
@@ -45412,7 +45427,7 @@
           "bytesInOutput": 243
         },
         "packages/capabilities/src/ShellCommandTool/constants.ts": {
-          "bytesInOutput": 30
+          "bytesInOutput": 18
         },
         "packages/host/src/managed-shell/process-tree-kill.ts": {
           "bytesInOutput": 1916
@@ -46843,7 +46858,7 @@
           "bytesInOutput": 3130
         },
         "packages/host/src/worker-tool-bindings/app-connection-tools.ts": {
-          "bytesInOutput": 989
+          "bytesInOutput": 1002
         },
         "packages/capabilities/src/shell/prepare-sandbox.ts": {
           "bytesInOutput": 117
@@ -46852,7 +46867,7 @@
           "bytesInOutput": 3315
         },
         "packages/host/src/authorization/connector-approval-cache.ts": {
-          "bytesInOutput": 233
+          "bytesInOutput": 246
         },
         "packages/host/src/worker-tool-pool.ts": {
           "bytesInOutput": 9982
@@ -46876,7 +46891,7 @@
           "bytesInOutput": 3415
         },
         "packages/host/src/worker-subagents/built-in-agents.ts": {
-          "bytesInOutput": 344
+          "bytesInOutput": 341
         },
         "packages/capabilities/src/AppConnectionTool/approval-templates.json": {
           "bytesInOutput": 4405
@@ -47005,7 +47020,7 @@
           "bytesInOutput": 87
         },
         "packages/host/src/worker-process-entry.ts": {
-          "bytesInOutput": 62708
+          "bytesInOutput": 63102
         },
         "packages/host/src/worker-session/persistence.ts": {
           "bytesInOutput": 865
@@ -47443,10 +47458,10 @@
           "bytesInOutput": 601
         },
         "packages/host/src/worker-subagents/progress-bridge.ts": {
-          "bytesInOutput": 1372
+          "bytesInOutput": 1489
         },
         "packages/host/src/worker-subagents/background-lifecycle.ts": {
-          "bytesInOutput": 7947
+          "bytesInOutput": 8398
         },
         "packages/host/src/worker-subagents/task-verification.ts": {
           "bytesInOutput": 1817
@@ -47500,7 +47515,10 @@
           "bytesInOutput": 0
         },
         "packages/host/src/worker-subagents/service.ts": {
-          "bytesInOutput": 16171
+          "bytesInOutput": 16136
+        },
+        "packages/agent-core/src/subagents/agent-type-registry.ts": {
+          "bytesInOutput": 854
         },
         "packages/capabilities/src/SubagentTool/subagentResult.ts": {
           "bytesInOutput": 2430
@@ -48559,7 +48577,7 @@
           "bytesInOutput": 1130
         },
         "packages/host/src/run-execution.ts": {
-          "bytesInOutput": 14973
+          "bytesInOutput": 14986
         },
         "packages/host/src/session-admission.ts": {
           "bytesInOutput": 1324
@@ -48601,7 +48619,7 @@
           "bytesInOutput": 1157
         },
         "packages/host/src/background-task-index.ts": {
-          "bytesInOutput": 1649
+          "bytesInOutput": 2438
         },
         "packages/host/src/idle-shutdown.ts": {
           "bytesInOutput": 1099
@@ -48745,13 +48763,13 @@
           "bytesInOutput": 52
         },
         "packages/capabilities/src/SubagentTool/SubagentTool.ts": {
-          "bytesInOutput": 5277
+          "bytesInOutput": 5884
         },
         "packages/capabilities/src/SubagentTool/index.ts": {
           "bytesInOutput": 5
         },
         "packages/host/src/worker-subagents/bound-tool.ts": {
-          "bytesInOutput": 1060
+          "bytesInOutput": 1131
         },
         "packages/agent-core/src/subagents/agent-definition.ts": {
           "bytesInOutput": 45
@@ -48847,7 +48865,7 @@
           "bytesInOutput": 121
         },
         "packages/agent-runtime/src/tools/execution/orchestration/classify.ts": {
-          "bytesInOutput": 905
+          "bytesInOutput": 947
         },
         "packages/agent-runtime/src/abort/index.ts": {
           "bytesInOutput": 568
@@ -49150,7 +49168,7 @@
           "bytesInOutput": 283
         },
         "packages/host/src/worker-tool-services/background-task.ts": {
-          "bytesInOutput": 917
+          "bytesInOutput": 1019
         },
         "packages/host/src/worker-tools/background-task.ts": {
           "bytesInOutput": 0
@@ -49327,7 +49345,7 @@
           "bytesInOutput": 26
         }
       },
-      "bytes": 5755427
+      "bytes": 5758897
     }
   }
 }
