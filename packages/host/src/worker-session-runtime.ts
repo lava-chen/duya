@@ -1218,7 +1218,7 @@ export class WorkerSession implements AgentRuntime {
         });
         this.permissionMode = options.permissionMode || 'default';
         this.hostToolPermission = options.hostToolPermission;
-        this.hasPermissionsToUseTool = createHasPermissionsToUseTool();
+        this.hasPermissionsToUseTool = createHasPermissionsToUseTool(this.sessionId);
         const ruleSource: PermissionRuleSource = 'userSettings';
         const allRules = settingsJsonToRules(options.permissionRules ?? null, ruleSource);
         this.alwaysAllowRules = this.groupRulesBySource(allRules.filter((r) => r.ruleBehavior === 'allow'));

@@ -17,6 +17,13 @@ export interface PermissionClassifierClient {
 /** Host binds durable grants and optional advisory classifiers to the evaluator. */
 export interface PermissionEvaluationPorts {
   getConnectorDescriptors(): readonly AppConnectionToolDescriptor[];
+  /**
+   * Whether the user approved this connector tool for the session being
+   * evaluated. The evaluator has no session dimension of its own, so the
+   * IMPLEMENTATION must bind one: answering from a process-wide set would let
+   * a second session running in the same process inherit the first one's
+   * grant. An implementation that cannot name its session returns `false`.
+   */
   isSessionApproved(toolName: string): boolean;
   renderConnectorApproval(descriptor: AppConnectionToolDescriptor, input: Record<string, unknown>): string;
   getPermissionPrescreener(): ((toolName: string, input: Record<string, unknown>) => Promise<{
