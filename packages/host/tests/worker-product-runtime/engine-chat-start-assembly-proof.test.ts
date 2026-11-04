@@ -114,6 +114,7 @@ interface ProviderRequest {
 }
 
 let requests: ProviderRequest[] = [];
+let activeScripts: readonly (readonly SSEEvent[])[];
 
 const DONE: SSEEvent = { type: 'done', reason: 'end_turn' };
 
@@ -167,7 +168,7 @@ vi.mock('@duya/ai', async (importOriginal) => {
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         })),
       });
-      const script = SCRIPTS[Math.min(requests.length - 1, SCRIPTS.length - 1)];
+      const script = activeScripts[Math.min(requests.length - 1, activeScripts.length - 1)];
       const signal = options?.signal as AbortSignal | undefined;
       return (async function* () {
         for (const event of script) {
@@ -300,6 +301,7 @@ beforeEach(() => {
   process.env.DUYA_SESSIONS_ROOT = '';
   process.env.DUYA_MEMORY_ROOT = '';
   requests = [];
+  activeScripts = SCRIPTS;
   journalRows = [];
 });
 
@@ -339,7 +341,7 @@ interface Proof {
   readonly usageCalls: readonly TokenUsage[];
 }
 
-async function runChatStart(): Promise<Proof> {
+async function runChatStart(antiDeadLoop?: ChatOptions['antiDeadLoop']): Promise<Proof> {
   installFakeDbIpc();
 
   workspaceDir = mkdtempSync(path.join(os.tmpdir(), 'duya-chatstart-ws-'));
@@ -392,6 +394,7 @@ async function runChatStart(): Promise<Proof> {
   const options = {
     sessionId: SESSION_ID,
     clientMsgId: CLIENT_MSG_ID,
+    ...(antiDeadLoop === undefined ? {} : { antiDeadLoop }),
     mentionedSkills: [SKILL_NAME],
     mentionedPlugins: [
       {
@@ -457,6 +460,25 @@ function toolRowsOf(request: ProviderRequest): readonly { role: string; content:
 }
 
 describe('a chat:start turn, assembled by the driver the entry calls', () => {
+  it('passes the configured repeated-call hard stop into the production engine', async () => {
+    activeScripts = Array.from({ length: 4 }, (_, index) => [
+      { type: 'result', data: CALL_ONE } as SSEEvent,
+      {
+        type: 'tool_use',
+        data: { id: `poll-${index}`, name: PROBE_TOOL, input: { value: 'alpha' } },
+      } as SSEEvent,
+      DONE,
+    ]);
+
+    const proof = await runChatStart({ enabled: true, hardStopAt: 2 });
+
+    expect(proof.providerRequests).toHaveLength(2);
+    expect(proof.outcome.terminal?.status).toBe('completed');
+    expect(proof.outcome.proposed?.reason).toBe(
+      'the run stopped because the model repeated the same tool call',
+    );
+  });
+
   it('runs the tool, and the tool left evidence on disk', async () => {
     const proof = await runChatStart();
 
