@@ -28,6 +28,7 @@ import {
   computeContentSha,
   evaluateReadFreshness,
   isReadFirstGateEnabled,
+  readScopeFromContext,
   recordFileRead,
 } from '../file-read-state.js';
 
@@ -199,7 +200,7 @@ export class EditTool extends BaseTool {
       }
     }
 
-    return executeEdit(crypto.randomUUID(), validation.data, workingDirectory);
+    return executeEdit(crypto.randomUUID(), validation.data, workingDirectory, readScopeFromContext(context));
   }
 
   renderToolResultMessage(result: ToolResult): RenderedToolMessage {
@@ -611,6 +612,7 @@ export async function executeEdit(
   toolUseId: string,
   input: EditToolInput,
   workingDirectory?: string,
+  scope?: string,
 ): Promise<ToolResult> {
   const { file_path, edits } = input;
 
@@ -649,7 +651,7 @@ export async function executeEdit(
     // One verdict shared with WriteTool (plan 448 Task E/H): `edit` and
     // `write` must agree on what "already read" means. The switch only
     // relaxes 'never-read' — a stale read is a wrong edit either way.
-    const freshness = evaluateReadFreshness(resolvedPath, currentStat, content);
+    const freshness = evaluateReadFreshness(resolvedPath, currentStat, content, scope);
     if (freshness === 'never-read' && isReadFirstGateEnabled()) {
       return {
         id: toolUseId,
@@ -771,7 +773,7 @@ export async function executeEdit(
           size: postStat.size,
           isFullView: true,
           contentSha: computeContentSha(result),
-        });
+        }, scope);
       } catch {
         // ignore
       }

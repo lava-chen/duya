@@ -3,11 +3,14 @@ import { mkdtempSync, writeFileSync, rmSync, statSync, utimesSync, readFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EditTool } from '../src/EditTool/EditTool.js';
+import { ReadTool } from '../src/ReadTool/ReadTool.js';
+import { WriteTool } from '../src/WriteTool/WriteTool.js';
 import {
   beginFileReadSession,
   clearFileReadState,
   computeContentSha,
   evaluateReadFreshness,
+  invalidateFileRead,
   isReadFirstGateEnabled,
   recordFileRead,
   setReadFirstGateEnabled,
@@ -138,5 +141,111 @@ describe('beginFileReadSession', () => {
     anchorFullRead(path);
     beginFileReadSession('session-a');
     expect(evaluateReadFreshness(path, statSync(path), readFileSync(path, 'utf-8'))).toBe('fresh');
+  });
+});
+
+describe('per-session ledgers', () => {
+  it('does not let one session borrow another session\'s read', () => {
+    const path = join(root, 'a.txt');
+    beginFileReadSession('parent');
+    const s = statSync(path);
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'parent');
+
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'parent')).toBe('fresh');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'child')).toBe('never-read');
+  });
+
+  it('keeps a child session\'s read out of the active parent ledger', () => {
+    const path = join(root, 'a.txt');
+    beginFileReadSession('parent');
+    const s = statSync(path);
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'child');
+
+    // Active session is still the parent; a scopeless read must not see it.
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'))).toBe('never-read');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'child')).toBe('fresh');
+  });
+
+  it('invalidates one session without touching another', () => {
+    const path = join(root, 'a.txt');
+    const s = statSync(path);
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'parent');
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'child');
+
+    invalidateFileRead(path, 'child');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'child')).toBe('never-read');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'parent')).toBe('fresh');
+  });
+
+  it('clears a single session by scope, and everything without one', () => {
+    const path = join(root, 'a.txt');
+    const s = statSync(path);
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'parent');
+    recordFileRead(path, { mtimeMs: s.mtimeMs, size: s.size, isFullView: true }, 'child');
+
+    clearFileReadState('child');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'child')).toBe('never-read');
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'parent')).toBe('fresh');
+
+    clearFileReadState();
+    expect(evaluateReadFreshness(path, s, readFileSync(path, 'utf-8'), 'parent')).toBe('never-read');
+  });
+
+  it('keeps a spawned child from resetting the parent ledger', () => {
+    const path = join(root, 'a.txt');
+    beginFileReadSession('parent');
+    anchorFullRead(path);
+
+    // A child session is a different scope, not a new top-level session: it
+    // must not call beginFileReadSession, so the parent entry survives.
+    expect(evaluateReadFreshness(path, statSync(path), readFileSync(path, 'utf-8'), 'child')).toBe('never-read');
+    expect(evaluateReadFreshness(path, statSync(path), readFileSync(path, 'utf-8'), 'parent')).toBe('fresh');
+  });
+});
+
+describe('tool-level scoping', () => {
+  const ctx = (sessionId: string) =>
+    ({ toolUseId: 'tu', options: { sessionId } } as unknown as Parameters<EditTool['execute']>[2]);
+
+  it('refuses a parent edit anchored only by the child session', async () => {
+    const path = join(root, 'a.txt');
+    // Child reads the file under its own session id.
+    const read = await new ReadTool().execute({ file_path: path }, root, ctx('child-session'));
+    expect(read.error).toBeFalsy();
+
+    const result = await new EditTool().execute(
+      { file_path: path, old_string: 'beta', new_string: 'BETA' },
+      root,
+      ctx('parent-session'),
+    );
+    expect(result.error).toBe(true);
+    expect(String(result.result)).toContain('File has not been read yet');
+  });
+
+  it('allows an edit anchored by the same session that read', async () => {
+    const path = join(root, 'a.txt');
+    const read = await new ReadTool().execute({ file_path: path }, root, ctx('parent-session'));
+    expect(read.error).toBeFalsy();
+
+    const result = await new EditTool().execute(
+      { file_path: path, old_string: 'beta', new_string: 'BETA' },
+      root,
+      ctx('parent-session'),
+    );
+    expect(result.error).toBeFalsy();
+    expect(readFileSync(path, 'utf-8')).toContain('BETA');
+  });
+
+  it('keeps a parent write out of the child ledger', async () => {
+    const path = join(root, 'a.txt');
+    const result = await new WriteTool().execute(
+      { file_path: path, content: 'rewritten\n' },
+      root,
+      ctx('parent-session'),
+    );
+    // Parent never read it, so the write is refused — proving the gate ran
+    // against the parent's (empty) ledger.
+    expect(result.error).toBe(true);
+    expect(String(result.result)).toContain('File has not been read yet');
   });
 });

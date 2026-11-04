@@ -25,7 +25,7 @@ import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { withFileSnapshot } from '../file-snapshot.js';
 import { buildFileDiff } from '../file-diff.js';
 import { TOOL_FILE_DIFF_METADATA_KEY } from '@duya/agent-protocol/tool-file-diff';
-import { computeContentSha, evaluateReadFreshness, isReadFirstGateEnabled, recordFileRead } from '../file-read-state.js';
+import { computeContentSha, evaluateReadFreshness, isReadFirstGateEnabled, readScopeFromContext, recordFileRead } from '../file-read-state.js';
 
 // ============================================================
 // Input Validation
@@ -222,12 +222,13 @@ export class WriteTool extends BaseTool {
         // does not exist yet, and an existing EMPTY file (nothing to lose,
         // and an empty read cannot anchor the sha comparison).
         let freshness: ReturnType<typeof evaluateReadFreshness> | undefined;
+        const scope = readScopeFromContext(context);
         if (existsSync(absolutePath)) {
           try {
             const targetStat = await stat(absolutePath);
             if (targetStat.size > 0) {
               const targetContent = await readFile(absolutePath, 'utf-8');
-              freshness = evaluateReadFreshness(absolutePath, targetStat, targetContent);
+              freshness = evaluateReadFreshness(absolutePath, targetStat, targetContent, scope);
             }
           } catch {
             // Unreadable target: let the write itself surface the real error.
@@ -272,7 +273,7 @@ export class WriteTool extends BaseTool {
               size: writeStat.size,
               isFullView: true,
               contentSha: computeContentSha(content),
-            });
+            }, scope);
           } catch {
             // ignore
           }

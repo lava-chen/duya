@@ -59,7 +59,7 @@ import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
 import { buildFileDiff } from '../file-diff.js';
 import { TOOL_FILE_DIFF_METADATA_KEY, type ToolFileDiff } from '@duya/agent-protocol/tool-file-diff';
-import { computeContentSha, invalidateFileRead, recordFileRead } from '../file-read-state.js';
+import { computeContentSha, invalidateFileRead, readScopeFromContext, recordFileRead } from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Edit/Write). */
 const fileSnapshotStore = new FileSnapshotStore();
@@ -71,7 +71,7 @@ const fileSnapshotStore = new FileSnapshotStore();
  * the agent itself just wrote. Best-effort: a failed stat just means the
  * next edit asks for a re-read.
  */
-async function reAnchorReadState(path: string, content: string): Promise<void> {
+async function reAnchorReadState(path: string, content: string, scope?: string): Promise<void> {
   try {
     const s = await stat(path);
     recordFileRead(path, {
@@ -79,7 +79,7 @@ async function reAnchorReadState(path: string, content: string): Promise<void> {
       size: s.size,
       isFullView: true,
       contentSha: computeContentSha(content),
-    });
+    }, scope);
   } catch {
     // ignore
   }
@@ -435,6 +435,9 @@ export class ApplyPatchTool extends BaseTool {
     const fileDiffs: ToolFileDiff[] = [];
     const appState = context?.getAppState?.();
     const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
+    // The calling agent's ledger: a patch run by a child session must not
+    // re-anchor (or invalidate) the parent's entries, and vice versa.
+    const scope = readScopeFromContext(context);
 
     for (const op of ops) {
       let resolved = op.path;
@@ -472,7 +475,7 @@ export class ApplyPatchTool extends BaseTool {
             }
             const newContent = (op.content ?? '') + '\n';
             await writeFileAtomic(resolved, newContent);
-            await reAnchorReadState(resolved, newContent);
+            await reAnchorReadState(resolved, newContent, scope);
             applied.push(`added ${op.path}`);
             const diff = buildFileDiff({
               path: resolved,
@@ -494,7 +497,7 @@ export class ApplyPatchTool extends BaseTool {
             await rm(resolved, { force: true });
             // The path no longer exists; drop any stale anchor so a follow-up
             // edit fails with "not been read" instead of a confusing stat error.
-            invalidateFileRead(resolved);
+            invalidateFileRead(resolved, scope);
             applied.push(`deleted ${op.path}`);
             if (existing !== undefined) {
               const diff = buildFileDiff({ path: resolved, oldText: existing, newText: '' });
@@ -581,7 +584,7 @@ export class ApplyPatchTool extends BaseTool {
             if (hadCRLF) result = result.replace(/\n/g, '\r\n');
             if (hasBOM) result = '\uFEFF' + result;
             await writeFileAtomic(resolved, result);
-            await reAnchorReadState(resolved, result);
+            await reAnchorReadState(resolved, result, scope);
             applied.push(`updated ${op.path}`);
             const diff = buildFileDiff({
               path: resolved,

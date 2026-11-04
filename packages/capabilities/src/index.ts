@@ -76,6 +76,7 @@ export {
   isReadFirstGateEnabled,
   isMtimeWithinTolerance,
   evaluateReadFreshness,
+  readScopeFromContext,
 } from './file-read-state.js';
 export type { FileReadStateEntry, FileReadStateInput, ReadFreshness } from './file-read-state.js';
 export { withFileMutationQueue } from './file-mutation-queue.js';

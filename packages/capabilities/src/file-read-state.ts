@@ -1,9 +1,10 @@
 /**
- * file-read-state.ts - Session-level tracking of file reads (plan 428, extended by plan 448)
+ * file-read-state.ts - Session-scoped tracking of file reads (plan 428, extended by plan 448)
  *
- * The compaction layer replaces older read/bash results over 2000 chars
- * with placeholders. When the model later builds an edit's old_string
- * from that compacted (stale or truncated) view, the edit fails with
+ * The compaction layer can drop older read results from the context (summary
+ * compaction rewrites the transcript; the legacy projection pass replaced
+ * long tool bodies with placeholders). When the model later builds an edit's
+ * old_string from that stale or truncated view, the edit fails with
  * "old_string not found". Tracking the state observed at read time lets
  * EditTool refuse edits that are not anchored to a fresh read:
  *
@@ -28,6 +29,26 @@
  * WriteTool (expandPath) all agree on one entry per file even when the raw
  * path strings differ.
  *
+ * ## Buckets: one ledger per conversation, not one per process
+ *
+ * An entry means "THIS model saw this content". A single process-global map
+ * made that claim about the whole process, which is wrong in two directions
+ * the worker actually exercises:
+ *
+ *   - delegated child sessions run in the parent's process. A child reading a
+ *     file would vouch for it when the PARENT later edits it, even though the
+ *     child's read result never enters the parent's context (the parent only
+ *     sees the child's final summary). The reverse holds too.
+ *   - a reused worker process serves one top-level session after another, and
+ *     the second must inherit nothing from the first.
+ *
+ * So entries live in per-session buckets. Callers pass the session they are
+ * acting for — `readScopeFromContext(context)` derives it from the tool call,
+ * which carry the calling agent's own session id (a child session's id is a
+ * fresh UUID, so parent and child never share a bucket). A call with no scope
+ * lands in the active session's bucket, which is what tests and the
+ * context-less legacy call paths get.
+ *
  * ## Where entries die (plan 448 follow-up)
  *
  * An entry only means "the model saw this content". That claim expires when
@@ -38,7 +59,8 @@
  *     results -> `clearFileReadState()` from CompactionManager, otherwise
  *     the gate vouches for content the model can no longer see (which is
  *     exactly the 428 bug this module was introduced to prevent).
- *   - a new session in a reused worker process -> `beginFileReadSession()`.
+ *   - a new session in a reused worker process -> `beginFileReadSession()`,
+ *     which also drops every other bucket.
  *   - an external process touching the file -> the freshness check below.
  *
  * ## Gate switch
@@ -79,10 +101,57 @@ export type FileReadStateInput = {
   contentSha?: string;
 };
 
-const readStates = new Map<string, FileReadStateEntry>();
+/**
+ * Bucket key used when no scope is supplied and no session is active.
+ * Distinct from every real session id (those are UUIDs), so an unscoped
+ * process-level caller can never read a session's entries.
+ */
+const UNSCOPED_BUCKET = '';
+
+type Bucket = Map<string, FileReadStateEntry>;
+
+const buckets = new Map<string, Bucket>();
+
+let activeSessionKey: string | undefined;
 
 function keyFor(absPath: string): string {
   return normalize(absPath);
+}
+
+function bucketKeyFor(scope: string | undefined): string {
+  return scope ?? activeSessionKey ?? UNSCOPED_BUCKET;
+}
+
+function findBucket(scope: string | undefined): Bucket | undefined {
+  return buckets.get(bucketKeyFor(scope));
+}
+
+function ensureBucket(scope: string | undefined): Bucket {
+  const key = bucketKeyFor(scope);
+  let bucket = buckets.get(key);
+  if (!bucket) {
+    bucket = new Map();
+    buckets.set(key, bucket);
+  }
+  return bucket;
+}
+
+/**
+ * The scope a tool call should record/verify against: the calling agent's
+ * own session, as carried on `ToolUseContext.options.sessionId`.
+ *
+ * Every read/write path must derive its scope here rather than reading
+ * `context.options.sessionId` inline. The four tools disagreeing about the
+ * derivation would produce a spurious "File has not been read yet" for a
+ * file the same agent just read, which is worse than the gate being off.
+ *
+ * Typed structurally on purpose: this module is imported by the compaction
+ * layer, which must not pull in the tool contracts.
+ */
+export function readScopeFromContext(
+  context?: { options?: { sessionId?: string } },
+): string | undefined {
+  return context?.options?.sessionId;
 }
 
 /**
@@ -99,9 +168,13 @@ export function computeContentSha(content: string): string {
 }
 
 /** Record (or refresh) the observed state of a file at read/write time. */
-export function recordFileRead(absPath: string, entry: FileReadStateInput): void {
+export function recordFileRead(
+  absPath: string,
+  entry: FileReadStateInput,
+  scope?: string,
+): void {
   const isFullView = entry.isFullView ?? false;
-  readStates.set(keyFor(absPath), {
+  ensureBucket(scope).set(keyFor(absPath), {
     mtimeMs: entry.mtimeMs,
     size: entry.size,
     isFullView,
@@ -112,25 +185,34 @@ export function recordFileRead(absPath: string, entry: FileReadStateInput): void
   });
 }
 
-/** Get the last observed state for a file, if it was read this session. */
-export function getFileReadState(absPath: string): FileReadStateEntry | undefined {
-  return readStates.get(keyFor(absPath));
+/** Get the last observed state for a file in `scope`, if it was read there. */
+export function getFileReadState(
+  absPath: string,
+  scope?: string,
+): FileReadStateEntry | undefined {
+  return findBucket(scope)?.get(keyFor(absPath));
 }
 
 /** Drop the recorded state for one file (next edit will demand a re-read). */
-export function invalidateFileRead(absPath: string): void {
-  readStates.delete(keyFor(absPath));
+export function invalidateFileRead(absPath: string, scope?: string): void {
+  findBucket(scope)?.delete(keyFor(absPath));
 }
 
 /**
- * Drop all recorded state.
+ * Drop recorded state.
  *
- * Production callers: summary compaction (the rewrite dropped the read
- * results the entries vouched for) and a new session in a reused worker
- * process. Tests use it for isolation.
+ * With a `scope`, only that session's ledger is dropped. Without one, every
+ * bucket goes — which is what summary compaction needs, because a compaction
+ * there means the transcript the entries vouched for is gone, and the cost of
+ * over-invalidating is a re-read while the cost of under-invalidating is the
+ * 428 wrong edit. Tests use the unscoped form for isolation.
  */
-export function clearFileReadState(): void {
-  readStates.clear();
+export function clearFileReadState(scope?: string): void {
+  if (scope === undefined) {
+    buckets.clear();
+    return;
+  }
+  buckets.delete(scope);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,22 +243,23 @@ export function isReadFirstGateEnabled(): boolean {
 // Session boundary
 // ---------------------------------------------------------------------------
 
-let activeSessionKey: string | undefined;
-
 /**
- * Bind the tracker to a session. A *different* session in the same process
- * inherits nothing: entries recorded by the previous session's reads would
- * otherwise vouch for content this session's model never saw. Same-session
- * calls are no-ops so a per-turn call site stays cheap.
+ * Bind the tracker to a top-level session and drop every other bucket: a
+ * different session in the same process inherits nothing. Entries recorded by
+ * the previous session's reads would otherwise vouch for content this
+ * session's model never saw. Same-session calls are no-ops so a per-turn call
+ * site stays cheap, and dropping the other buckets bounds memory across a
+ * long-lived worker process.
  *
- * Deliberately not called for delegated child sessions: they share the
- * parent's process and timeline, and clearing on every child spawn would
- * force the parent to re-read its whole working set.
+ * Delegated child sessions do not call this: they run inside the parent's
+ * process but get their own bucket through `readScopeFromContext`, so they
+ * still cannot borrow the parent's observations — and must not reset the
+ * parent's ledger on spawn.
  */
 export function beginFileReadSession(sessionId: string): void {
   if (activeSessionKey === sessionId) return;
   activeSessionKey = sessionId;
-  readStates.clear();
+  buckets.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +279,7 @@ export function isMtimeWithinTolerance(a: number, b: number): boolean {
 export type ReadFreshness =
   /** Anchored to an observation that still describes the bytes on disk. */
   | 'fresh'
-  /** No entry for this path in the current session. */
+  /** No entry for this path in the calling session's ledger. */
   | 'never-read'
   /** An entry exists, but the file drifted since it was recorded. */
   | 'stale';
@@ -213,8 +296,9 @@ export function evaluateReadFreshness(
   absPath: string,
   current: { mtimeMs: number; size: number },
   content: string,
+  scope?: string,
 ): ReadFreshness {
-  const entry = readStates.get(keyFor(absPath));
+  const entry = findBucket(scope)?.get(keyFor(absPath));
   if (!entry) return 'never-read';
 
   const mtimeStale = !isMtimeWithinTolerance(entry.mtimeMs, current.mtimeMs);
