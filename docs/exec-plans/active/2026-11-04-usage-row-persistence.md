@@ -87,6 +87,16 @@
 
 ## 接续 / 结果
 
-未提交：实现进行中。
-回收：未回收（任务进行中）。
-下一步：改 runtime 与 adapter，补两条用例并做变异验证。
+已提交 `abc9615e`，PR #615（draft）：https://github.com/lava-chen/duya/pull/615 。
+
+已实现：runtime 写 `tokenUsage`（单次调用归一化）；adapter 把 DTO 的 `token_usage` 还原成顶层
+`tokenUsage`。已验证：两条新用例 + 三次变异转红 + `typecheck:all` 0 + `architecture:check` 0。
+
+未做：真实 `duya chat` 一轮后核对 rollout 的 `"tokenUsage"` 与 `/context` 输出 —— 需要重建
+worker bundle（`build:packages -- --target @duya/host` + `bundle:worker`）并重启 TUI，属合并前
+的产品验收，尚未执行；老会话无法回填。
+
+未提交路径：无（工作树干净）。
+
+回收：未回收 —— PR 未集成。
+下一步：等 CI 与 review；获集成授权后用 merge commit 合并并重验，再回收检出。
