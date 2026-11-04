@@ -343,14 +343,6 @@
       "types": "./dist/UpdateStateTool/*.d.ts",
       "import": "./dist/UpdateStateTool/*.js"
     },
-    "./PlanTool": {
-      "types": "./dist/PlanTool/index.d.ts",
-      "import": "./dist/PlanTool/index.js"
-    },
-    "./PlanTool/*": {
-      "types": "./dist/PlanTool/*.d.ts",
-      "import": "./dist/PlanTool/*.js"
-    },
     "./ManageRoutineTool": {
       "types": "./dist/ManageRoutineTool/index.d.ts",
       "import": "./dist/ManageRoutineTool/index.js"

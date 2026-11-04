@@ -30,5 +30,3 @@ export { postToRoomTool, PostToRoomTool, POST_TO_ROOM_TOOL_NAME } from './PostTo
 export { reactToMessageTool, ReactToMessageTool, REACT_TO_MESSAGE_TOOL_NAME, resolveReactToMessage } from './ReactToMessageTool/index.js';
 export { createAgentTool, updateAgentTool, CreateAgentTool, UpdateAgentTool, CREATE_AGENT_TOOL_NAME, UPDATE_AGENT_TOOL_NAME, } from './AgentManagementTool/index.js';
 export { manageRoutineTool, ManageRoutineTool, MANAGE_ROUTINE_TOOL_NAME, MAX_ROUTINES_PER_BOT, } from './ManageRoutineTool/index.js';
-export { planTool } from './PlanTool/index.js';
-export { PLAN_TOOL_NAME } from './PlanTool/index.js';

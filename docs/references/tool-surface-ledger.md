@@ -33,7 +33,7 @@
 | --- | --- | --- | --- | --- | --- |
 | `task` | eager | 双见 | 2874 | 保留 | 子 agent 活控制；`Agent` 别名解析缺口见 617 A2 |
 | `get_task_output` / `kill_task` | eager | 双见 | 177 / 131 | 保留 | |
-| `todo` | eager | 双见 | 642 | 保留 | 与产品 `plan` 的重复提示词 W9 去重 |
+| `todo` | eager | 双见 | 642 | 保留 | 原与产品 `plan` 的重复提示词 W9 去重项已随 `plan` 移除而消解 |
 | `AskUserQuestion` | eager | 双见 | 1048 | 保留 | bot 当前也见——死 bot 注册表曾打算 hidden，W4 需裁决 bot 是否应隐藏交互工具 |
 | `EnterPlanMode` / `ExitPlanMode` | deferred | 按需 | 47 / 47 | 按需 | |
 | `SwitchMode` | deferred | 按需 | 245 | 按需 | |
@@ -55,7 +55,7 @@
 | `MessageSession` | deferred | 均无 | 667 | 保持 typed | 更正（2026-10-31 核对）：无 action 枚举——单发同步问答（targetSessionId+message+mode+timeout，唤醒目标跑 turn，非只读，message-session-tool.ts:44-68）；与 `session`（异步管自spawn子会话）语义不同非重叠；活跃有测试，subagent 显式禁用 |
 | `SessionSearch` | deferred | 均无 | 460 | CLI | W6 先补 CLI scope/排除当前会话/FTS 再撤入口；底层检索保留 |
 | `duya_cli` | deferred | 均无 | 33 | CLI | W6 单一解析器（F12）；新会话先撤暴露 |
-| `plan` | eager | 双见 | 1333 | 维持现状 | 与 `todo` 非同源（2026-10-31 核对）：plan=项目级持久文件工件（`~/.duya/projects/<id>/plans/`，PlanTool 只读+归档+搬文件），todo=会话级 `tasks` 表 + todoGateHook loop 控制；消费者互不重叠、无重复存储，收敛无收益；W9 仅在两者 description 澄清分工 |
+| `plan` | 已移除 | — | — | 移除（2026-11-04） | 工具整条实现链删除（capability / Host 存储层 / 两个注册点 / 遗留 agent 壳），见 [移除 plan 工具](../exec-plans/active/2026-11-04-remove-plan-tool.md)。本行原裁定为「维持现状」（与 `todo` 非同源、收敛无收益），由用户直接推翻，非重新评估的结论。删除前核对：工具无 create 路径（计划文件此前只能靠 agent 直接写文件产生），description 承诺的 checkbox 校验从未实现。Plan Mode（`plan-task`）与 `/plan` 命令是独立机制，不在删除范围；`~/.duya/projects/<id>/plans/` 磁盘工件保留 |
 | `update_state` | deferred | bot 见 | 1951 | 保留 | bot 记忆 shard（479/481） |
 | `memory_write` | deferred | 均无 | 261 | 保留 | 主 agent 持久记忆文件端口（写会话 cwd 相对路径 markdown，MemoryWriteTool.ts:46-49）；读取方=prompt 注入链 memoryPreBuildHook（读 `~/.duya/memory/` 固定根）；与 bot `update_state`（tier store，独立读写路径）并行不重叠。坑：写入跟 cwd、读取方固定根，未强制对齐（W9 关注） |
 | `write_stage1_policy` | deferred | 均无 | 128 | 保留（按需） | stage1 记忆抽取器政策热更新开关（写 `memory-config/stage1_policy.md`+version sidecar）；唯一读者=桌面 memory-worker Stage1Extractor（memory-worker.ts:403-407）。坑：写 `<cwd>/memory-config/` 与实际 configRoot 未被代码对齐（W9 关注） |
@@ -87,4 +87,4 @@
 - 2026-10-31 二轮：待决 7 项（9 行）全部核对完毕回写裁定，仅 `AskUserQuestion` bot 可见性仍留 W4（死 bot 注册表曾拟 hidden）；490 计划记录漂移交其 owner 更正。
 - W4 决策输入：`AskUserQuestion` bot 可见性；worktree 三工具 bot 隐藏候选（`'*'` 通配来源已核）；`vision_analyze` 降 deferred 候选（按能力门控机制不存在）；bot `send_message` 修复已合并（#557，`b79e3521`）。
 - W6 决策输入：`duya_cli`/`SessionSearch`/`session` 只读面（`list`/`get`/`rename`）的 CLI 能力清单。
-- W9 决策输入：`progress_update` 注入的解释；`todo`/`plan` description 分工澄清（状态源维持现状）；`memory_write`/`write_stage1_policy` 写入路径与读取根未对齐两处坑。
+- W9 决策输入：`progress_update` 注入的解释；`memory_write`/`write_stage1_policy` 写入路径与读取根未对齐两处坑。原 `todo`/`plan` description 分工澄清一项随 `plan` 工具移除而消解（2026-11-04）。
