@@ -7,7 +7,7 @@
  * Plan 600 item 2 wants `@duya/agent-runtime` to own the
  * `model -> tool -> backfill -> next turn` loop, and the named blocker for
  * binding a real `ToolPort` has been that `ToolExecutionPipeline` is a `const`
- * local inside the `streamChat` generator (`DuyaAgent.ts:2036`), so no handle
+ * local inside the `streamChat` generator (`DuyaAgent`), so no handle
  * reaches the worker entry. Until now the worker entry's answer was to throw
  * (`agent-process-entry.ts:3197`), which is correct and loud: a model that asks
  * for a tool and gets no tool is a hole in the context, and a throw says so.
@@ -20,7 +20,7 @@
  * (`StreamingToolExecutor.ts:728`) AND an ABORTED `siblingAbortController`
  * (`:733`). Clearing either alone does not revive it. The legacy loop calls
  * `discard()` from `onRetryReset` on every model-stream hiccup
- * (`DuyaAgent.ts:2359`), so ONE hoisted instance would go permanently mute
+ * (`DuyaAgent`), so ONE hoisted instance would go permanently mute
  * after the first retry -- accepting tools, draining nothing, and reporting no
  * error at all.
  *
@@ -63,7 +63,7 @@
  *
  * The worker serves sessions concurrently, so a module-level "current pipeline"
  * would let one session's engine dispatch into another session's turn.
- * `DuyaAgent.ts:2032` has exactly that shape for `turnToolUseContext`; this is
+ * `DuyaAgent` has exactly that shape for `turnToolUseContext`; this is
  * not a second copy of it. `agent-process-entry.ts` creates one publisher per
  * `chat:start`, hands the same instance to both `streamChat` and `queueTool`,
  * and closes it when the run's stream ends.

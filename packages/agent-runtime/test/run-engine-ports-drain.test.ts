@@ -4,7 +4,7 @@
  *
  * ## What this file is the proof of
  *
- * `DuyaAgent.ts:2677-2698` reads four things off each update the pipeline
+ * `DuyaAgent` reads four things off each update the pipeline
  * yields. `toDrainItem` is the function that has to carry all four into the
  * engine's port type, because the alternative -- stringifying the extras into
  * `ToolOutcome.content` -- is a lossy adapter: the sub-agent's internal stream
@@ -93,7 +93,7 @@ function oldFormatToolMessage(isError: boolean, text: string): Message {
 }
 
 // ============================================================================
-// Read 1: `result.deferredContext`  (DuyaAgent.ts:2681)
+// Read 1: `result.deferredContext`  (`DuyaAgent`)
 // ============================================================================
 
 describe('the deferred context survives as a PENDING promise', () => {
@@ -127,7 +127,7 @@ describe('the deferred context survives as a PENDING promise', () => {
 });
 
 // ============================================================================
-// Reads 2 and 3: the progress discriminant and its payload (DuyaAgent.ts:2687-2690)
+// Reads 2 and 3: the progress discriminant and its payload (`DuyaAgent`)
 // ============================================================================
 
 describe('the progress frame survives as itself, not as a result', () => {
@@ -157,7 +157,7 @@ describe('the progress frame survives as itself, not as a result', () => {
   });
 
   it('skips a progress message with no `agentEvent`, exactly as the legacy loop does', () => {
-    // `DuyaAgent.ts:2691` yields only `if (agentEvent)`. A progress message with
+    // `DuyaAgent` yields only `if (agentEvent)`. A progress message with
     // no event is not a result either, so it must map to `null` rather than to a
     // result with an empty content.
     const item = toDrainItem({ message: progressMessage({ event: NO_EVENT }) });
@@ -179,7 +179,7 @@ describe('the progress frame survives as itself, not as a result', () => {
 });
 
 // ============================================================================
-// Read 4: `result.message` (DuyaAgent.ts:2701-2752)
+// Read 4: `result.message` (`DuyaAgent`)
 // ============================================================================
 
 describe('a real tool result keeps every field the loop reads', () => {
@@ -190,7 +190,7 @@ describe('a real tool result keeps every field the loop reads', () => {
     if (item?.kind !== 'tool_result') throw new Error('unreachable: kind asserted above');
     expect(item.callId).toBe('call-1');
     expect(item.content).toBe('<tool_error>boom</tool_error>');
-    // `DuyaAgent.ts:2729` infers the error from the text, not from a field.
+    // `DuyaAgent` infers the error from the text, not from a field.
     expect(item.isError).toBe(true);
     expect(item.durationMs).toBe(42);
   });

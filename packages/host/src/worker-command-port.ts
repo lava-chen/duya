@@ -42,7 +42,7 @@
  * ## The order is the legacy's, and it is load-bearing
  *
  * `DuyaAgent.streamChat` tested `/goal` FIRST and the transcript family second
- * (`DuyaAgent.ts:2411` then `:2423`). The two sets do not overlap today, so
+ * (`DuyaAgent` then `:2423`). The two sets do not overlap today, so
  * swapping them would be invisible -- but the order is copied rather than
  * invented so that a future command added to both families resolves the way the
  * product already resolves it, instead of the way this file happened to write.
@@ -69,14 +69,14 @@
  *
  * `handleTranscriptCommand` returns `clipboardText` for `/copy`, and the
  * legacy turns it into a `chat:clipboard_write` event
- * (`DuyaAgent.ts:2430`). That event belongs to the worker's own frame protocol,
+ * (`DuyaAgent`). That event belongs to the worker's own frame protocol,
  * which the runtime knows nothing about, so the write happens HERE -- inside
  * the host's `resolve`, which is the only layer that owns that channel. The
  * engine receives the reply text alone and publishes it as the run's assistant
  * message; it never learns a clipboard existed.
  *
  * Guarded on `sessionId` exactly as the legacy guards it
- * (`DuyaAgent.ts:2429`): with no session there is no renderer to write for, and
+ * (`DuyaAgent`): with no session there is no renderer to write for, and
  * the legacy sends nothing.
  */
 
@@ -122,7 +122,7 @@ export interface LegacyCommandContext {
  *
  * `ModelMessage.content` is `string | readonly ModelContentBlock[]`, and the
  * block arm is what an image attachment arrives as. The legacy's own guard is
- * `typeof prompt === 'string' ? prompt : ''` (`DuyaAgent.ts:2406`), so a
+ * `typeof prompt === 'string' ? prompt : ''` (`DuyaAgent`), so a
  * multi-part prompt yields the empty string, which matches nothing and falls
  * through to the model. Reproduced rather than improved: widening this to
  * "search the text blocks for `/goal`" would make an image-plus-caption turn

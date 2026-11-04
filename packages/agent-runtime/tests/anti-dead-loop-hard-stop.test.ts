@@ -6,7 +6,7 @@
  * The capability lives today in one place only:
  * `packages/agent/src/agent/TurnLoopTracker.ts` counts consecutive identical
  * tool calls and the legacy loop reads `shouldHardStop()` at the top of every
- * turn (`DuyaAgent.ts:4271`). Deleting that loop in a later slice must not
+ * turn (`DuyaAgent`). Deleting that loop in a later slice must not
  * delete the capability, so the invariant moved onto `RunEngineImpl` with the
  * threshold supplied by the host through `RunExecutionRequest.repeatedCallStop`.
  *

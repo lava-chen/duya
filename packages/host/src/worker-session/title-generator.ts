@@ -22,19 +22,6 @@ const TITLE_MIN_LENGTH = 4;
 const TITLE_TIMEOUT_MS = 10000; // 10s timeout, generous for slow models
 
 /**
- * Per-session title generation state
- */
-interface TitleState {
-  generated: boolean;
-  lastTitle?: string;
-}
-
-/**
- * Track title state per session (replaces global boolean)
- */
-const titleStateBySession = new Map<string, TitleState>();
-
-/**
  * Check if the first user message is meaningful enough to generate a title.
  */
 function isMeaningfulFirstMessage(msg: Message | null): boolean {
@@ -790,25 +777,4 @@ export async function generateSessionTitle(
     }, 'SessionTitle');
     return { title: fallback };
   }
-}
-
-/**
- * Get title state for a session
- */
-export function getTitleState(sessionId: string): TitleState | undefined {
-  return titleStateBySession.get(sessionId);
-}
-
-/**
- * Update title state for a session
- */
-export function setTitleState(sessionId: string, state: TitleState): void {
-  titleStateBySession.set(sessionId, state);
-}
-
-/**
- * Clear title state for a session (call when session is closed/deleted)
- */
-export function clearTitleState(sessionId: string): void {
-  titleStateBySession.delete(sessionId);
 }

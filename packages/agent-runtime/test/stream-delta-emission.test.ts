@@ -597,7 +597,7 @@ describe('the blocks still finalize, and the deltas did not replace them', () =>
     expect(blocks.map((event) => [event.index, event.text])).toEqual([
       [0, ANSWER_HEAD],
       // The legacy newline on a text block that follows a tool call
-      // (`DuyaAgent.ts:2610-2620`). The fragment is the raw frame, so the block
+      // (`DuyaAgent`). The fragment is the raw frame, so the block
       // is the authority and the two are not expected to concatenate.
       [1, `\n${ANSWER_TAIL}`],
       [2, ' and again'],

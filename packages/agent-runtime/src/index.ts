@@ -484,7 +484,7 @@ export type {
   InterTurnSweep,
   InterTurnSweepResult,
   // Plan 610 D1 -- mode exit. The run-boundary half of a mode's lifecycle,
-  // which `after_finalize` does NOT carry despite `DuyaAgent.ts:961` saying it
+  // which `after_finalize` does NOT carry despite `DuyaAgent` saying it
   // does: that phase fires CONFIG hooks, and the two registries are disjoint.
   // See `ModeExitPort` for the full enumeration.
   ModeExitPort,

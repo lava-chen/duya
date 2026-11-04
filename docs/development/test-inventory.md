@@ -8,9 +8,9 @@ flags, not the letter.
 
 | metric | value |
 | --- | --- |
-| test files | 1180 |
-| test cases | 12904 |
-| assertions | 31823 |
+| test files | 1175 |
+| test cases | 12882 |
+| assertions | 31786 |
 | module mocks | 681 |
 | measured test time | 329.3s |
 
@@ -26,7 +26,7 @@ one call site into several runtime cases.
 | `packages/cli` | 87 | 1005 | 2307 | 12 | 66.3 | 83 | 4 | 0 |
 | `packages/host` | 161 | 1557 | 4511 | 38 | 50.6 | 153 | 8 | 0 |
 | `scripts` | 29 | 495 | 1029 | 0 | 47.8 | 28 | 1 | 0 |
-| `packages/agent-runtime` | 102 | 1050 | 2923 | 0 | 29.5 | 102 | 0 | 0 |
+| `packages/agent-runtime` | 97 | 1028 | 2886 | 0 | 29.5 | 97 | 0 | 0 |
 | `packages/ui` | 209 | 2147 | 4746 | 283 | 28.8 | 190 | 19 | 0 |
 | `evals` | 10 | 102 | 226 | 0 | 10.3 | 10 | 0 | 0 |
 | `packages/capabilities` | 72 | 604 | 1561 | 8 | 5.4 | 72 | 0 | 0 |

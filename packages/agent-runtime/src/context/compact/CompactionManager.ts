@@ -43,6 +43,7 @@ import { ContextLedger } from '../ContextLedger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { BackgroundPrefire } from './BackgroundPrefire.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
+import { clearFileReadState } from '@duya/capabilities/file-read-state'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
 import { classifySuppressReason, suppressReasonMessage, type SuppressReason } from './compactErrors.js'
@@ -569,11 +570,18 @@ export class CompactionManager {
   }
 
   /**
-   * Plan 577 §2: a projection-level shrink was detected by the caller
-   * (compressProjectedToolMessages returned a different reference — tool
-   * results pruned / offloaded). Arms the next observation to replace
-   * `latest` even when smaller, and marks its provenance for the ring-side
-   * downward anchor correction. (Delegates to the ledger.)
+   * Plan 577 §2: a projection-level shrink was detected by the caller — the
+   * message array sent to the provider came back smaller because tool results
+   * were pruned / offloaded. Arms the next observation to replace `latest`
+   * even when smaller, and marks its provenance for the ring-side downward
+   * anchor correction. (Delegates to the ledger.)
+   *
+   * Currently unarmed in production: the projection-compress fold that used to
+   * report this was retired with the legacy request assembly, and nothing else
+   * shrinks the array between the durable history and the provider. The
+   * reader (`wasLastObservationPostShrink`) stays live and simply never sees a
+   * shrink. If a request-time shrink is reintroduced, it MUST call this —
+   * otherwise the accounting ring keeps a pre-shrink anchor.
    */
   noteProjectionShrink(): void {
     this.ledger.noteProjectionShrink()
@@ -933,6 +941,14 @@ export class CompactionManager {
         }
       }
 
+      // Plan 428/448 follow-up: a successful compaction rewrites the
+      // transcript, so the read results that file-read-state entries vouch
+      // for are no longer in the context. Keeping them would let the edit
+      // gate approve an old_string built from a summary — precisely the bug
+      // plan 428 introduced the gate to stop. Reinjected context does not
+      // change this: it is a budget-bounded excerpt, not a full read, so it
+      // cannot anchor a full-view sha comparison either.
+      clearFileReadState()
       this.onCompactionSuccess()
       // Plan 577 §3: compaction rewrites the context lineage — a new epoch
       // begins. Stale observations (a result still in flight from the

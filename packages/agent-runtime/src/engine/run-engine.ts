@@ -13,10 +13,10 @@
  *
  * | Decision | Method | Was |
  * | --- | --- | --- |
- * | call the model | `streamModel` | `DuyaAgent.ts:2338` `runTurnStream` |
- * | dispatch a tool | `dispatchCall` | `DuyaAgent.ts:2477` `executor.addTool` |
- * | feed the result back | `drainOutcomes` | `DuyaAgent.ts:2677` drain, `:2717` push |
- * | decide to stop | `shouldStop` | `DuyaAgent.ts:3107`, ceiling at `:3097` |
+ * | call the model | `streamModel` | `DuyaAgent` `runTurnStream` |
+ * | dispatch a tool | `dispatchCall` | `DuyaAgent` `executor.addTool` |
+ * | feed the result back | `drainOutcomes` | `DuyaAgent` drain, `:2717` push |
+ * | decide to stop | `shouldStop` | `DuyaAgent`, ceiling at `:3097` |
  *
  * Compaction is NOT a fifth decision and is deliberately not in that table: it
  * never decides whether the run continues. It replaces an INPUT for the turn
@@ -74,7 +74,7 @@
  *
  * `RunExecutionRequest.signal` is caller-owned and mandatory, which is the
  * correction `ports.ts` makes to `DuyaAgent.streamChat`, whose
- * `AbortController` is created at its first line (`DuyaAgent.ts:963`) and
+ * `AbortController` is created at its first line (`DuyaAgent`) and
  * therefore covers none of the setup in front of it. Here the engine checks
  * the signal at six named points and hands the SAME signal to every port call,
  * so a stop reaches context assembly and the first model call rather than only
@@ -105,7 +105,7 @@
  * | on a failed model stream | `emergency` | nothing; the original error stands | YES |
  *
  * The third is the only one that is not a plain call, and the reason is in the
- * legacy: `turnCount--` then `continue` (`DuyaAgent.ts:3369-3370`) re-runs the
+ * legacy: `turnCount--` then `continue` (`DuyaAgent`) re-runs the
  * same turn against the compacted transcript, which is the entire point of an
  * emergency compaction -- the request that failed is retried once it can fit.
  * It is free with respect to the ceiling, because the turn INDEX is reused and
@@ -263,7 +263,7 @@ export class RunEngineImpl implements RunEngine {
     // signal a port receives is not the SAME OBJECT as the caller's, and must
     // not be. What it must be is a signal that becomes aborted when the
     // caller's does — which is the property that makes a stop reach context
-    // assembly and the first model call, the gap `DuyaAgent.ts:963` leaves open
+    // assembly and the first model call, the gap `DuyaAgent` leaves open
     // by building its controller too late to cover them.
     const controller = new AbortController();
     const onCallerAbort = (): void => controller.abort(request.signal.reason);
@@ -389,7 +389,7 @@ export class RunEngineImpl implements RunEngine {
      * at all.
      *
      * The bound is the legacy's own, `FINAL_POLL_MAX_ABSORBS = 3`
-     * (`DuyaAgent.ts:1819`). It exists because an absorbing answer LOOPS BACK
+     * (`DuyaAgent`). It exists because an absorbing answer LOOPS BACK
      * for another turn, so a host that always has something queued would
      * otherwise hold the run open indefinitely -- each iteration costing a full
      * model call.
@@ -408,7 +408,7 @@ export class RunEngineImpl implements RunEngine {
      * rebuilt every iteration. A per-turn counter would reset to 1 on each
      * iteration and the invariant could never fire at any threshold above 1, which
      * is the legacy behaviour this replaces reading `shouldHardStop()` off one
-     * tracker for the whole `streamChat` (`DuyaAgent.ts:2847`, `:4271`).
+     * tracker for the whole `streamChat` (`DuyaAgent`, `:4271`).
      */
     const repeatedCalls: RunScoped<RepeatedCallStreak> = new RepeatedCallStreak();
     /**
@@ -455,7 +455,7 @@ export class RunEngineImpl implements RunEngine {
      * Pinned for the rest of the run once set, because compaction rewrites the
      * lineage rather than editing a turn: the next request is the replacement
      * plus whatever `deferred` carries, which is how the legacy's own
-     * `messages = reProjected.messages` behaves (`DuyaAgent.ts:3041-3042`).
+     * `messages = reProjected.messages` behaves (`DuyaAgent`).
      */
     const compacted: RunScoped<{ current: readonly ModelMessage[] | null }> = { current: null };
     /**
@@ -472,7 +472,7 @@ export class RunEngineImpl implements RunEngine {
      * attempt recovery, this one is how many times the conversation has been
      * rewritten. The legacy keeps the same distinction -- `getContextEpoch` is
      * the manager's generation counter, bumped by compaction at
-     * `CompactionManager.ts:918-921` and read at `DuyaAgent.ts:2380` BEFORE the
+     * `CompactionManager.ts:918-921` and read at `DuyaAgent` BEFORE the
      * stream so usage can be filed against the generation the request was built
      * in. Conflating the two would let a recovery attempt rewind a compaction
      * boundary, which is not what either counter means.
@@ -489,7 +489,7 @@ export class RunEngineImpl implements RunEngine {
      * A cell rather than a per-turn local, and the reason is the same one
      * `compacted` gives: an injection is an edit to the TRANSCRIPT, not to one
      * request. The legacy pushes into the `messages` array that every later turn
-     * is built from (`DuyaAgent.ts:3709`, `:3720`), so on turn 4 the model still
+     * is built from (`DuyaAgent`, `:3720`), so on turn 4 the model still
      * sees a turn-2 notification. Held per-turn it would be forgotten the moment
      * the next turn started, and the correction the user sent while the agent
      * was working would apply to exactly one request and then evaporate.
@@ -525,7 +525,7 @@ export class RunEngineImpl implements RunEngine {
       // short-circuits the `on_start` phase and the loop below to zero
       // iterations. That reproduces the legacy's position rather than inventing
       // a difference: it returns from `streamChat` before its turn loop AND
-      // before the ConfigHooksRunner is built (`DuyaAgent.ts:2411-2438` against
+      // before the ConfigHooksRunner is built (`DuyaAgent` against
       // `:2447`), so `UserPromptSubmit` / `SessionStart` never fire for a
       // control command there either.
       //
@@ -551,7 +551,7 @@ export class RunEngineImpl implements RunEngine {
       // because these are not the same phase and conflating them would make
       // "once per run" unrepresentable: a run that exhausts its budget at the
       // top of turn 1 never reaches a first iteration's body, and the legacy
-      // fires `SessionStart` before it can do that too (`DuyaAgent.ts:2144`).
+      // fires `SessionStart` before it can do that too (`DuyaAgent`).
       //
       // `turn: 0` is the "no turn has begun" answer documented on
       // `ExtensionContext.turn`, not a bug in the call site.
@@ -579,7 +579,7 @@ export class RunEngineImpl implements RunEngine {
         // request, and on turn 1 `#modelRequest` places `carried` before the
         // history -- a session-start context is context the model must have read
         // BEFORE the transcript, which is the legacy's position too
-        // (`DuyaAgent.ts:2155` routes it through the first-turn context rail).
+        // (`DuyaAgent` routes it through the first-turn context rail).
         // `repeatedCalls` is the run-scoped cell, not a fresh value: it is the
         // same object `#dispatchCall` records into and `#shouldStop` reads, and
         // `on_start` contributes before this run has dispatched anything, so its
@@ -690,7 +690,7 @@ export class RunEngineImpl implements RunEngine {
 
         // ── Compaction site 1 of 3: the proactive pass, before the request ──
         // HERE and not at the top of the turn, which is where the legacy pumps it
-        // (`DuyaAgent.ts:2155`). Two reasons, and the first is the load-bearing
+        // (`DuyaAgent`). Two reasons, and the first is the load-bearing
         // one: `assemble` is the only point in the spine where the engine HOLDS
         // a real transcript, and `CompactionDecisionInput.transcript` is
         // "the messages travel, and the port measures them"
@@ -724,7 +724,7 @@ export class RunEngineImpl implements RunEngine {
         // ── Inter-turn injection site 1 of 3: before the model call ──────────
         // HERE and not at the top of the turn, because that is where the legacy
         // puts it: the sweep runs after the proactive pass has settled the
-        // transcript (`DuyaAgent.ts:2155`) and after it has re-projected
+        // transcript (`DuyaAgent`) and after it has re-projected
         // (`:2191-2192`), and before the request is built (`:2338`). A sweep at
         // the loop head would inject into a transcript the compaction pass was
         // about to replace, and the injected text would be dropped along with
@@ -767,7 +767,7 @@ export class RunEngineImpl implements RunEngine {
         ports.events.publish(this.#turnStartedEvent(ctx, modelRequest));
 
         // Read AFTER the proactive pass and BEFORE the stream opens, which is
-        // the legacy's ordering at `DuyaAgent.ts:2380` and the whole reason the
+        // the legacy's ordering at `DuyaAgent` and the whole reason the
         // value is an argument rather than a lookup: the request is filed
         // against the generation it was BUILT in, and a compaction that opens
         // during the stream must not inherit the anchor of the request that
@@ -784,7 +784,7 @@ export class RunEngineImpl implements RunEngine {
           // MINUTES (`ports.ts`, "The summarizer takes MINUTES") on a run the
           // user just asked to stop, with nothing to show for it. The legacy does
           // not have this hazard because its emergency path lives in a `catch`
-          // (`DuyaAgent.ts:3306`) and an abort is not a throw; an injected
+          // (`DuyaAgent`) and an abort is not a throw; an injected
           // `signal` reaches the exit as a value, so the gate has to be explicit.
           //
           // A stop is not a provider error, and saying so is all this gate does.
@@ -796,7 +796,7 @@ export class RunEngineImpl implements RunEngine {
           }
 
           // The one site that is not a plain call, because the legacy retries
-          // the turn: `turnCount--` then `continue` (`DuyaAgent.ts:3369-3370`)
+          // the turn: `turnCount--` then `continue` (`DuyaAgent`)
           // re-runs the SAME turn against the compacted transcript. That is the
           // entire point of an emergency compaction -- the request that just
           // failed is the one that gets another chance, and retrying the NEXT
@@ -1084,7 +1084,7 @@ export class RunEngineImpl implements RunEngine {
    * fatal for the transcript: they are the only place the model's actual answer
    * exists. The legacy loop accumulated all three into
    * `finalAssistantContent` and pushed it durable at the `done` boundary
-   * (`DuyaAgent.ts:2645-2678`), so a turn loop migrated onto this engine
+   * (`DuyaAgent`), so a turn loop migrated onto this engine
    * without the assembly below would keep every decision and lose every
    * message. The frames are still decision-free here; they are no longer
    * discarded.
@@ -1121,7 +1121,7 @@ export class RunEngineImpl implements RunEngine {
    * accumulate a fragment under `(messageId, index)` and then find the completed
    * block already sitting under that key. One divergence is deliberate and is not
    * a numbering bug: a text block that follows a tool call is stored with a
-   * leading newline (`DuyaAgent.ts:2610-2620`) while the published fragment is the
+   * leading newline (`DuyaAgent`) while the published fragment is the
    * raw frame, so a block's deltas concatenate to its text minus that separator.
    * The block is the authority; the deltas are for progressive display.
    *
@@ -1130,7 +1130,7 @@ export class RunEngineImpl implements RunEngine {
    * The order is the legacy one and it is a provider requirement, not a taste:
    * the assistant message must reach the host BEFORE any tool result, because
    * OpenAI requires `assistant (tool_calls) -> tool (result)`
-   * (`DuyaAgent.ts:2641-2642`). `#drainOutcomes` cannot run before this method
+   * (`DuyaAgent`). `#drainOutcomes` cannot run before this method
    * returns, so placing the hand-off at the end of the stream makes the ordering
    * structural -- there is no code path that reaches a tool result first.
    */
@@ -1186,7 +1186,7 @@ export class RunEngineImpl implements RunEngine {
             break;
           case 'tool_use_started':
             // Announces a call, is not one. Legacy pushes the block on `tool_use`
-            // (`DuyaAgent.ts:2576`), so a `tool_use_started` that never completed
+            // (`DuyaAgent`), so a `tool_use_started` that never completed
             // must not put a block in the message.
             //
             // The announcement is still a real producer fact and the protocol has
@@ -1242,7 +1242,7 @@ export class RunEngineImpl implements RunEngine {
             // The compaction anchor, from the provider's own numbers. Fed HERE,
             // on the frame, rather than accumulated and reported once at the end
             // of the stream: the legacy feeds it per `result` event
-            // (`DuyaAgent.ts:3166-3172`) and the round-max defence belongs to the
+            // (`DuyaAgent`) and the round-max defence belongs to the
             // port, which is the only side that knows about epochs
             // (`CompactionManager.ts:502`). A guard, not a call the engine may
             // skip when it feels like it -- `spend` above is the same kind of
@@ -1288,7 +1288,7 @@ export class RunEngineImpl implements RunEngine {
       return null;
     } finally {
       // Both the completing path and the throwing one, which is the legacy's
-      // shape (`try` at `DuyaAgent.ts:2268`, `finally` calling
+      // shape (`try` at `DuyaAgent`, `finally` calling
       // `disposeRequestController` at `:3398-3403`). A `finally` rather than a
       // call at each `return` because there are five exits here and a sixth
       // would be the one that leaks: a pending timer holds the process open, and
@@ -1668,7 +1668,7 @@ export class RunEngineImpl implements RunEngine {
     // Adopted onto the run's rail, so it reaches the NEXT model request. The one
     // in flight was built before this phase, which is the legacy's position:
     // `PreToolUse` injects go onto the working `messages` array
-    // (`DuyaAgent.ts:3375`) and the next request is built from it.
+    // (`DuyaAgent`) and the next request is built from it.
     this.#adopt(ctx.ports, await this.#contribute(ctx, 'before_tool', { call }), ctx.deferred.current);
     ports.tools.dispatch(call, ticket);
     ctx.tickets.set(call.callId, ticket);
@@ -1801,7 +1801,7 @@ export class RunEngineImpl implements RunEngine {
    *    a host that fails to store a result must not also cost the model its
    *    answer.
    * 3. `turnOutput.recordToolResult` -- the six host effects the legacy loop
-   *    performed inline (`DuyaAgent.ts:2721-2823`). After the ledger, never
+   *    performed inline (`DuyaAgent`). After the ledger, never
    *    before: a host appending to its transcript must not be able to record a
    *    result whose ledger row does not exist yet.
    * 4. `#contribute('after_tool')` -- extension contributions. Last, because the
@@ -1812,7 +1812,7 @@ export class RunEngineImpl implements RunEngine {
     const { ports, signal } = ctx;
     // RESULTS that landed, counted here and NOT read off `TurnWork`.
     //
-    // The legacy gate is `toolResultMessageCount` (`DuyaAgent.ts:2722`), and a
+    // The legacy gate is `toolResultMessageCount` (`DuyaAgent`), and a
     // dispatch is not an answer: two calls can come back with one. `finally`
     // rather than a tail statement, because the abort path returns from the
     // middle of the loop and the legacy ran its `toolResultMessageCount > 0`
@@ -1992,7 +1992,7 @@ export class RunEngineImpl implements RunEngine {
         // will see next turn -- see `ToolResultRecord`.
         outcome: item,
         // `''` when this run never dispatched the call, which is the legacy
-        // fallback verbatim (`DuyaAgent.ts:2771`).
+        // fallback verbatim (`DuyaAgent`).
         toolName: options.toolName,
       });
     }
@@ -2013,7 +2013,7 @@ export class RunEngineImpl implements RunEngine {
    * What the engine may decide alone.
    *
    * The FIRST question is the one the legacy loop asked at
-   * `DuyaAgent.ts:3107`: did this turn leave work behind? A turn that
+   * `DuyaAgent`: did this turn leave work behind? A turn that
    * dispatched nothing has nothing to feed back, so another model call would be
    * the same prompt twice. That is the whole of `needsFollowUp`, and it is a
    * fact about what the engine dispatched, not something a host asserts.
@@ -2121,7 +2121,7 @@ export class RunEngineImpl implements RunEngine {
     // Work behind us means the model has results it has not seen yet. Stopping
     // here would strand them: the tool ran, its effect is on disk, and the
     // answer never reaches the model. This is `needsFollowUp` at
-    // `DuyaAgent.ts:3107`, and it is a fact about what the engine dispatched.
+    // `DuyaAgent`, and it is a fact about what the engine dispatched.
     //
     // A REFUSAL counts here too, and for the same reason with a different
     // premise: the tool did not run, but the model asked for it and has not read
@@ -2168,7 +2168,7 @@ export class RunEngineImpl implements RunEngine {
     // to the renderer's resume path.
     //
     // BOUNDED, and the bound is the legacy's own: `FINAL_POLL_MAX_ABSORBS = 3`
-    // (`DuyaAgent.ts:1819`). An absorbing answer loops back, which would
+    // (`DuyaAgent`). An absorbing answer loops back, which would
     // otherwise be an unbounded cycle between a host that always has something
     // to say and a model that always answers. The counter is run-scoped, and its
     // lifetime is the run's rather than this turn's: the loop-back re-enters the
@@ -2324,7 +2324,7 @@ export class RunEngineImpl implements RunEngine {
    *
    * The legacy's `soft_stop` arm pushes an assistant message carrying the
    * summary, commits it, yields it as `text`, and returns `completed`
-   * (`DuyaAgent.ts:2217-2231`). The push and the `text` yield are the HOST's
+   * (`DuyaAgent`). The push and the `text` yield are the HOST's
    * durable-transcript business -- `TurnOutputPort`, which is still unbound
    * because the legacy drain loop performs those writes today -- so what the
    * engine can honestly do here is narrower: it records the text as this run's
@@ -2340,7 +2340,7 @@ export class RunEngineImpl implements RunEngine {
    */
   async #softStop(ctx: RunContext, summary: string): Promise<void> {
     const text = summary.trim() === '' ? 'Stopped as requested.' : summary;
-    // The legacy's own fallback for an empty summary (`DuyaAgent.ts:2218`).
+    // The legacy's own fallback for an empty summary (`DuyaAgent`).
     ctx.ports.events.publish({
       type: 'diagnostic',
       level: 'info',
@@ -2813,13 +2813,13 @@ export class RunEngineImpl implements RunEngine {
    * A `pending` fragment is a tool's follow-up payload that was still being
    * computed when the drain handed it over, so its text does not exist yet. The
    * legacy code resolves it at the same point -- inside context assembly for the
-   * next turn (`DuyaAgent.ts:4204-4224`) -- and treats a rejection as
-   * `continue`, i.e. the fragment simply does not appear (`DuyaAgent.ts:4215`).
+   * next turn (`DuyaAgent`) -- and treats a rejection as
+   * `continue`, i.e. the fragment simply does not appear (`DuyaAgent`).
    * Both rules are reproduced here, because the alternative is a failed fragment
    * failing a turn whose model call had nothing to do with it.
    *
    * The `typeof === 'string'` branch is also the legacy one
-   * (`DuyaAgent.ts:4209-4210`): the value is `Promise<unknown>`, so a structured
+   * (`DuyaAgent`): the value is `Promise<unknown>`, so a structured
    * payload is stringified rather than sent as an object.
    *
    * The unbounded wait is inherited, not introduced: see
@@ -3281,7 +3281,7 @@ export class RunEngineImpl implements RunEngine {
  *
  * Per-turn, and the engine's own count: a turn that dispatched nothing has
  * nothing to feed back, so another model call would send the same prompt twice.
- * This is the `needsFollowUp` decision at `DuyaAgent.ts:3107`, and it is a fact
+ * This is the `needsFollowUp` decision at `DuyaAgent`, and it is a fact
  * about what the engine dispatched rather than something a host asserts — a
  * host that could declare "this turn needs a follow-up" would be deciding the
  * loop from outside it.
@@ -3308,7 +3308,7 @@ class TurnWork {
    *
    * The two are different quantities and the preflight compaction site needs
    * the second: its gate is the legacy's `toolResultMessageCount > 0`
-   * (`DuyaAgent.ts:3009`), and a dispatch is not an answer -- two calls can come
+   * (`DuyaAgent`), and a dispatch is not an answer -- two calls can come
    * back with one result, and a `discard` can leave a dispatched call with none.
    * Counted in the same place the legacy counted it (the top of the
    * `tool_result` arm, `:2722`) so a host effect that throws cannot un-count a
@@ -3350,7 +3350,7 @@ class TurnWork {
  * structure. That is kept rather than defended against: `ToolCallRequest.input`
  * is `Readonly<Record<string, unknown>>` decoded from the provider's JSON, and
  * the legacy has the identical exposure on the identical path
- * (`DuyaAgent.ts:3586`). A guard here would make this tracker count differently
+ * (`DuyaAgent`). A guard here would make this tracker count differently
  * from the one it replaces.
  */
 class RepeatedCallStreak {
@@ -3472,7 +3472,7 @@ interface RunContext {
    * The NAME only, not the whole `ToolCallRequest`. A `Write` call's input is
    * the file's contents, so retaining whole calls for the length of a run would
    * hold every argument payload a session ever passed -- and nothing needs it:
-   * the legacy hook payload sent `tool_input: {}` (`DuyaAgent.ts:2780`) and
+   * the legacy hook payload sent `tool_input: {}` (`DuyaAgent`) and
    * asked only which tool failed (`:2771`).
    */
   readonly toolNames: Map<string, string>;
@@ -3648,7 +3648,7 @@ type RunScoped<T> = T;
  *
  * ## The ORDER is the legacy order, and it is a provider requirement
  *
- * `DuyaAgent.ts:2645-2668` builds the content in this sequence and the sequence
+ * `DuyaAgent` builds the content in this sequence and the sequence
  * is load-bearing at both ends:
  *
  *  1. **the redacted block first.** Anthropic's thinking-mode validation wants
@@ -3713,7 +3713,7 @@ class TurnMessage {
 
   addText(text: string): void {
     // Merge into the previous block when it is also text, which is the legacy
-    // rule (`DuyaAgent.ts:2606-2608`) and not a tidiness: one streamed answer
+    // rule (`DuyaAgent`) and not a tidiness: one streamed answer
     // arrives as many frames, and a row per frame is markdown split down the
     // middle.
     const last = this.#body[this.#body.length - 1];
@@ -3734,7 +3734,7 @@ class TurnMessage {
 
   addThinking(frame: Extract<ModelFrame, { readonly type: 'thinking' }>): void {
     // The redacted payload is taken ONLY when it is a real payload, which is the
-    // legacy condition verbatim (`DuyaAgent.ts:3094`): a `redacted: true` frame
+    // legacy condition verbatim (`DuyaAgent`): a `redacted: true` frame
     // with nothing encrypted behind it is a provider that redacted without
     // giving the blob back, and the block cannot be replayed without it.
     if (frame.redacted === true && typeof frame.encrypted === 'string' && frame.encrypted !== '') {
@@ -3986,7 +3986,7 @@ const LEDGER_DETAIL_LIMIT = 512;
 /**
  * Ceiling on the finalize-boundary poll's loop-backs.
  *
- * The legacy's own value, `FINAL_POLL_MAX_ABSORBS = 3` (`DuyaAgent.ts:1819`),
+ * The legacy's own value, `FINAL_POLL_MAX_ABSORBS = 3` (`DuyaAgent`),
  * reproduced rather than re-chosen: the poll's absorbing answer keeps the run
  * open for another turn, and each of those costs a full model call, so an
  * unbounded poll against a host that always has something queued is a run that
@@ -4136,7 +4136,7 @@ function wrapToolUseError(text: string): string {
  * One fragment's text, resolved.
  *
  * The `typeof === 'string'` branch is the legacy one
- * (`DuyaAgent.ts:4209-4210`): a deferred tool context carries
+ * (`DuyaAgent`): a deferred tool context carries
  * `Promise<unknown>`, so a structured payload is stringified here rather than
  * handed to a provider as an object. Rejects with whatever the tool rejected
  * with, so the caller's `allSettled` decides the policy.

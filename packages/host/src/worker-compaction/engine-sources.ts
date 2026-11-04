@@ -15,7 +15,7 @@
  * `CompactionManager.compact` has ZERO production call sites in
  * `DuyaAgent.streamChat`. That is measured, and it is the reason this file does
  * not wrap it: the loop delegates the proactive pass to
- * `compactionCoordinator.runPreTurn` (`DuyaAgent.ts:2594`), and that single
+ * `compactionCoordinator.runPreTurn` (`DuyaAgent`), and that single
  * call owns the prefire kick, the probe, the cooldown gate, the rearm
  * hysteresis, the suppression ring, the compaction itself, the cooldown
  * re-pinning, the timeline append and the post-compaction re-projection. The
@@ -40,7 +40,7 @@
  * would have to be written deliberately.
  *
  * The property that makes it matter is the legacy's own reason for the pump
- * (`DuyaAgent.ts:2583-2590`): the summarizer takes MINUTES, so a reporter
+ * (`DuyaAgent`): the summarizer takes MINUTES, so a reporter
  * that flushed at the end would put `compaction.step` after
  * `compaction.completed`. The engine binds its reporter straight to
  * `events.publish` (`compaction.ts:150-152`), so a buffered adapter would
@@ -53,7 +53,7 @@
  *
  * 1. **The re-projected system prompt.** `executePreTurn` returns
  *    `{ systemPromptContent, messages }` and the legacy assigns BOTH
- *    (`DuyaAgent.ts:2630-2631`). `CompactionOutcome` has a `replacement` and no
+ *    (`DuyaAgent`). `CompactionOutcome` has a `replacement` and no
  *    system-prompt field, and `#modelRequest` takes `assembled.systemPrompt`
  *    verbatim (`run-engine.ts:2011`). So the post-compaction system prompt --
  *    the one that gains the entry's `reinjectedSystemMessages` -- does not
@@ -87,7 +87,7 @@
  *
  * The port's `noteUsage` is optional and its absence is checkable
  * (`run-engine-ports.ts:518-526`). The legacy already has the exact statement
- * (`DuyaAgent.ts:3565`) and it is epoch-tagged for a reason the port restates
+ * (`DuyaAgent`) and it is epoch-tagged for a reason the port restates
  * (`ports.ts:1979-1994`), so this adapter forwards the caller's anchor rather
  * than dropping it and letting the trigger fall back to the pre-plan-577
  * estimate. The caller supplies it; this file never mints an anchor.
@@ -120,7 +120,7 @@ import { toRuntimeMessage } from '@duya/agent-runtime/adapters/run-engine-ports'
  * exists -- so it is deleted rather than kept as decoration.
  *
  * `model_switch` and `manual` remain. `model_switch` fires at the TOP of
- * `streamChat`, before the turn loop exists (`DuyaAgent.ts:1971-2026`), so the
+ * `streamChat`, before the turn loop exists (`DuyaAgent`), so the
  * engine has no spine point that could host it and it is not a
  * `CompactionPort` trigger at all; `manual` is a slash command handled outside
  * the loop entirely. Neither is a lost recovery path -- declining them is the
@@ -153,7 +153,7 @@ const SERVED_TRIGGERS: ReadonlySet<string> = new Set(['auto', 'emergency', 'pref
 /**
  * The per-run values the coordinator needs and the port cannot supply.
  *
- * Both are the LEGACY LOOP'S OWN locals (`DuyaAgent.ts:2597-2598` passes
+ * Both are the LEGACY LOOP'S OWN locals (`DuyaAgent` passes
  * `systemPromptContent` and `messages` straight into `runPreTurn`), and both
  * are read AT CALL TIME rather than captured: a compaction re-projects them, so
  * a captured copy would hand the second request of a run the first request's
@@ -332,7 +332,7 @@ export function buildCoordinatorCompactionSources(
    *
    * `force` is read off the verdict rather than hardcoded, because the preflight
    * image arm is the one case that bypasses the strategy's own guards
-   * (`DuyaAgent.ts:3423-3425`) and the emergency path never forces. Passing the
+   * (`DuyaAgent`) and the emergency path never forces. Passing the
    * flag from the verdict keeps the bypass the GATE's decision instead of this
    * adapter's.
    */
@@ -380,7 +380,7 @@ export function buildCoordinatorCompactionSources(
 
     async compact(input, reporter, signal) {
       // Checked BEFORE the coordinator is touched. The summarizer runs behind
-      // its own child abort controller (`DuyaAgent.ts:776-780`) and the port
+      // its own child abort controller (`DuyaAgent`) and the port
       // cannot reach it, so an abort observed after the run started is not
       // something this adapter could act on -- and discarding a replacement
       // that DID happen would be worse than reporting it late.

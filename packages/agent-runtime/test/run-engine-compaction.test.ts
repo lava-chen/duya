@@ -20,7 +20,7 @@
  * Every assertion pairs what the scripted PORTS observed (the
  * `CompactionPort`'s own call log and anchors, the messages the `ModelPort` was
  * handed, the frames the event store received) against what the legacy's
- * behaviour says must have happened (`DuyaAgent.ts:2155`, `:3018`/`:3022`,
+ * behaviour says must have happened (`DuyaAgent`, `:3018`/`:3022`,
  * `:3166-3172`, `:3330`/`:3360`/`:3368-3370`). Nothing compares a measured value
  * against itself. The transcript assertions in particular compare the array the
  * model was SENT against the literal `replacement()` returned -- two different
@@ -167,7 +167,7 @@ function harness(options: {
     async run(input: CompactionDecisionInput, reporter: (p: CompactionProgress) => void) {
       compactionLog.push(`run:${input.trigger}`);
       // Reported DURING the run, before it resolves -- the property the legacy's
-      // real-time pump exists for (`DuyaAgent.ts:2144-2151`).
+      // real-time pump exists for (`DuyaAgent`).
       if (options.reportProgress === true) {
         const step: CompactionProgress = { kind: 'step', step: 1, phase: 'summarize' };
         progress.push(step);
@@ -390,7 +390,7 @@ describe('the engine compacts when the port says to', () => {
     await run(h);
 
     // The proactive site runs BETWEEN assembly and the request, which is the
-    // legacy's order (pump at `DuyaAgent.ts:2155`, request built at `:2338`).
+    // legacy's order (pump at `DuyaAgent`, request built at `:2338`).
     // Asserted as an order over the port's OWN log rather than as a count.
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
 
@@ -712,7 +712,7 @@ describe('the emergency path is not the normal path', () => {
     //
     // This is what makes the assembly seam sound for a HOST that derives a
     // turn's messages inside `assemble`. The legacy re-runs its whole
-    // request-assembly chain on the same `continue` (`DuyaAgent.ts:3767-3768`
+    // request-assembly chain on the same `continue` (`DuyaAgent`
     // re-projects, then the loop re-enters at `:2716-2770`), so a host's
     // assemble-time transform is refreshed on the retry exactly as the
     // legacy's is. An engine that re-streamed the already-built request
@@ -783,7 +783,7 @@ describe('the emergency path is not the normal path', () => {
         {
           frames: [
             // Weak wording: the legacy requires local corroboration for this one
-            // (`DuyaAgent.ts:3311-3319`). The engine must not decide that -- it
+            // (`DuyaAgent`). The engine must not decide that -- it
             // forwards the text and the port rules on it.
             { type: 'error', message: 'output limit exceeded', retryable: false },
           ],

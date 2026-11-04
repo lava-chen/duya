@@ -420,7 +420,7 @@ describe('the engine owns the model -> tool -> backfill -> next turn loop', () =
     //
     // The three assistant entries are the b3a emissions, and their POSITIONS are
     // the claim: each turn's `assistant.text_block` lands as its stream closes
-    // and BEFORE that turn's drain (the OpenAI ordering, `DuyaAgent.ts:2641`),
+    // and BEFORE that turn's drain (the OpenAI ordering, `DuyaAgent`),
     // and the single `assistant.message_finalized` lands after the last drain but
     // BEFORE `proposeTerminal`, because the message stops changing strictly
     // before the run ends (`agent-process-entry.ts:3482-3488`). One per run, not

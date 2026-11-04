@@ -4,7 +4,7 @@
  *
  * ## What this file is the proof of
  *
- * The legacy loop (`DuyaAgent.ts:2721-2823`) did, per tool result: assign the
+ * The legacy loop (`DuyaAgent`) did, per tool result: assign the
  * transcript's `seq_index`/`id`, record the catalog schema read, append the
  * message durably, yield a `tool_result` frame, fire `PostToolUseFailure` on an
  * error, and emit `mode_changed` for a mode-switch tool. It also counted RESULTS
@@ -423,7 +423,7 @@ describe('a landed result reaches the host intact', () => {
 
   it('says `\'\'` for a result whose call this run never dispatched', async () => {
     // The legacy fallback verbatim (`turnToolCallIds.get(id) ?? ''`,
-    // `DuyaAgent.ts:2771`): an empty name reaches a hook bus that filters on it,
+    // `DuyaAgent`): an empty name reaches a hook bus that filters on it,
     // where a fabricated one would match a matcher nobody wrote.
     const run = harness({
       calls: [READ_CALL],
@@ -496,7 +496,7 @@ describe('the runtime-side order is settle, defer, record, then finish', () => {
     // landed nothing" is an answer.
     //
     // 'assistant' LEADS each turn, and that is the OpenAI ordering rule from
-    // `DuyaAgent.ts:2641-2642` rather than a cosmetic choice: the assistant
+    // `DuyaAgent` rather than a cosmetic choice: the assistant
     // message has to be stored before any tool result or the next request is
     // rejected. It cannot be otherwise here, because the message exists only
     // once the stream ends and the drain cannot begin before that.
@@ -563,7 +563,7 @@ describe('the runtime-side order is settle, defer, record, then finish', () => {
 
 describe('the result count is not the dispatch count', () => {
   it('reports one result for two dispatches', async () => {
-    // The legacy gate is `toolResultMessageCount > 0` (`DuyaAgent.ts:2722`,
+    // The legacy gate is `toolResultMessageCount > 0` (`DuyaAgent`,
     // `:2858`) and a dispatch is not an answer. A host that gated its
     // `PostToolUse` dispatch or its compaction probe on `dispatched` would be
     // reading a number this run has deliberately put next to the right one.
@@ -600,7 +600,7 @@ describe('the result count is not the dispatch count', () => {
 describe('the summary is reported even when the drain is abandoned', () => {
   it('reports the results seen so far when the run aborts mid-drain', async () => {
     // The legacy ran its `toolResultMessageCount > 0` work after the loop
-    // closed (`DuyaAgent.ts:2858`) with no abort guard of its own, so a result
+    // closed (`DuyaAgent`) with no abort guard of its own, so a result
     // that landed before the stop still counted. The `finally` reproduces that;
     // a tail statement after the loop would have skipped the abort path entirely
     // and the host would never learn the turn produced anything.

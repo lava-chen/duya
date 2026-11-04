@@ -5,7 +5,7 @@
  * ## What this file is the proof of
  *
  * `DuyaAgent.streamChat` builds a child `AbortController` and a timer per model
- * call when `llmRequestTimeoutMs` is set (`DuyaAgent.ts:2252-2261`) and releases
+ * call when `llmRequestTimeoutMs` is set (`DuyaAgent`) and releases
  * both in a `finally` (`:3398-3403`). Measured before this slice: the option and
  * the primitive appear ZERO times in `packages/agent-runtime`, so a turn loop
  * migrated onto the engine would have had nowhere to put the cap and would have
@@ -16,7 +16,7 @@
  *     outlives the request (`run-engine.ts:237`), so a timeout that reached it
  *     would kill the run rather than the call.
  *  2. **No cap means no timer.** Not "the timer happens to be harmless" -- no
- *     timer object is created at all, which is the absence `DuyaAgent.ts:2255`
+ *     timer object is created at all, which is the absence `DuyaAgent`
  *     guards with `if (... && ... > 0)`.
  *  3. **Both are released when the request settles**, on the completing path AND
  *     the throwing one.
@@ -454,7 +454,7 @@ describe('no cap means no timer', () => {
   });
 
   it('treats a cap of zero or less as no cap, as the legacy condition does', async () => {
-    // `DuyaAgent.ts:2255` guards the timer with `> 0`, so 0 and a negative are
+    // `DuyaAgent` guards the timer with `> 0`, so 0 and a negative are
     // both "uncapped" in the legacy. Reproduced rather than tightened, because a
     // run that passes 0 meaning "no limit" must not silently acquire one.
     for (const cap of [0, -1]) {

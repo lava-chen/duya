@@ -1,6 +1,6 @@
 # Plan 448: Read/Edit 新鲜度协议与写路径一致性（harness-comparison 调研落地）
 
-> **Status**: Phase 1 complete（2026-08-26）；Phase 2/3 待开工
+> **Status**: Phase 1 complete（2026-08-26）；2026-11-04 补 428 遗留洞 + Task E/K 落地（见「Follow-up」）；Phase 2 其余（F/G/H/I）待开工
 > **Priority**: P0（Phase 1）/ P1（Phase 2）/ P2（Phase 3）
 > **Created**: 2026-08-24
 > **Related**: [428-harness-signal-contracts](../completed/428-harness-signal-contracts.md)（read-state/mtime 追踪的由来）、[429-harness-gap-closure](./587-agent-harness-monorepo/history/429-harness-gap-closure.md)（建议 3 快照已落地，本 plan 复用 `FileSnapshotStore`）、[docs/references/harness-comparison/read-edit-tools-deep-dive.md](../../references/harness-comparison/read-edit-tools-deep-dive.md)（五 harness 调研依据）
@@ -90,13 +90,13 @@ mutation queue 按 realpath 串行、快照存储复用 429。
 
 ### Task E：WriteTool read-first 门（对应调研 P1-4）
 
-- [ ] 对已存在且非空的目标文件：无 read-state 条目 → 拒绝
+- [x] 对已存在且非空的目标文件：无 read-state 条目 → 拒绝
       （"File has not been read yet..."，含 read 工具指引）；有条目但
       mtime/size stale 且不满足 Task B 豁免 → 拒绝。
-- [ ] 新文件 / 空文件 / 用户显式覆盖确认路径不受限（对齐 cc-haha errorCode
+- [x] 新文件 / 空文件 / 用户显式覆盖确认路径不受限（对齐 cc-haha errorCode
       2/3 的语义：空 old_string 建新文件的等价物 = write 新文件直通）。
-- [ ] 写成功后维持现有 re-anchor 行为（补 `isFullView: true`）。
-- [ ] 单测：盲写已存在文件被拒；读过之后写直通；新文件直通。
+- [x] 写成功后维持现有 re-anchor 行为（补 `isFullView: true`）。
+- [x] 单测：盲写已存在文件被拒；读过之后写直通；新文件直通。
 
 ### Task F：ApplyPatch 两阶段校验（对应调研 P1-5，hermes overlay 方案）
 
@@ -149,10 +149,10 @@ mutation queue 按 realpath 串行、快照存储复用 429。
 
 ### Task K：not-found 诊断附现场
 
-- [ ] Edit 的 `buildNotFoundDiagnostic` 末尾追加当前文件相关片段
+- [x] Edit 的 `buildNotFoundDiagnostic` 末尾追加当前文件相关片段
       （closest match 行 ±5 行，≤800 字符，UTF-16 安全截断）——模型零
       往返自愈（openclaw 内容附录方案）。
-- [ ] 单测：诊断包含片段且不超长。
+- [x] 单测：诊断包含片段且不超长。
 
 ---
 
@@ -176,3 +176,133 @@ Task A（结构前置）→ Task B/C/D（P0 收口，A/B 有依赖，C/D 可并�
 ```
 
 Phase 1 四个 task 合计约半天；Phase 2 约一天；Phase 3 择机。
+
+---
+
+## Follow-up 2026-11-04：read-first 门的三个真实缺陷
+
+起因是一次设计复核（"是否该删掉这个门、向 codex 靠拢"）。结论是不删：codex 不是
+没有读的要求，而是把要求内嵌进了补丁协议（hunk context 只能由看过内容的人写出），
+删门只会把可诊断失败降级成 `old_string not found`。但复核暴露了三处实现缺陷。
+
+### 1. compaction 之后门失效（428 的原始 bug 仍可复现）
+
+`clearFileReadState()` 此前在生产代码里零调用点。summary compaction 会把旧 read
+结果整段替换成摘要，而 read-state 条目仍在，于是门放行"读过但上下文里已经没有原文"
+的编辑——正是 428 要拦的场景。同时确认：`compressProjectedToolMessages`（offload
+投影压缩）在 agent-runtime 里**没有任何生产调用点**，428 当年观察到的占位符来自
+legacy 链路，所以真正的失效面是 summary compaction，不是 offload。
+
+- `CompactionManager.compact()` 成功后 `clearFileReadState()`
+  （`onCompactionSuccess()` 之前，与 `ledger.beginEpoch('compaction')` 同处）。
+- 不 re-anchor reinjected 文件：reinject 是 2000-token 预算内的片段，不是全文，
+  给不了 full-view sha 豁免，按既有"partial view 不免责"原则一律要求重读。
+
+### 2. 状态没有 session 边界
+
+`readStates` 是模块级 Map，worker 进程复用时会继承上一个 session 的条目。新增
+`beginFileReadSession(sessionId)`：key 变化才清空，同 session 重复调用是空操作；
+在 `createWorkerSessionFactory` 里绑定。子会话（`createChildSession`）刻意不走这里
+——子会话共享父时间线，每次 spawn 都清空会逼父会话重读整个工作集。
+
+### 3. 写路径三套判定
+
+抽出 `evaluateReadFreshness(absPath, current, content)` 作为唯一判据（`fresh` /
+`never-read` / `stale`），`edit` 与 `write` 共用，`isMtimeWithinTolerance` 一并搬进
+`file-read-state.ts`。`WriteTool` 从此有了 Task E 的门；`ApplyPatchTool` **不加门**，
+理由写进该文件头注释：补丁协议本身要求真实上下文，加门只会多一次往返。
+
+### 4. killswitch
+
+`[tools] read_first_gate` / `DUYA_TOOLS_READ_FIRST_GATE`（默认 true，经
+`readToolExposureConfig()` 在 session 工厂注入）。只关"从未读过"的硬门；**stale
+永远不关**——那是数据一致性检查，关掉会让陈旧 `old_string` 静默覆盖别人的改动。
+
+### 改动清单
+
+| 文件 | 改动 |
+| --- | --- |
+| `packages/capabilities/src/file-read-state.ts` | `evaluateReadFreshness`、`beginFileReadSession`、gate 开关、`isMtimeWithinTolerance` 迁入 |
+| `packages/capabilities/src/EditTool/EditTool.ts` | 门改用统一判据；not-found 附 ±5 行片段（≤800 字符，UTF-16 安全） |
+| `packages/capabilities/src/WriteTool/WriteTool.ts` | Task E 门（新文件/空文件直通） |
+| `packages/capabilities/src/ApplyPatchTool/ApplyPatchTool.ts` | 只加设计定案注释 |
+| `packages/capabilities/src/index.ts` | 导出新 API |
+| `packages/agent-runtime/src/context/compact/CompactionManager.ts` | compaction 成功后清空 read-state |
+| `packages/host/src/worker-config/tool-exposure.ts` | `readFirstGate` 配置项 + env |
+| `packages/host/src/worker-tools/assembly.ts` | session 工厂绑定 gate 与 session key |
+
+### 验证
+
+worktree `.claude/worktrees/edit-read-gate`，分支 `codex/edit-read-gate-fixes`，
+base `7ef8cbd0`。命令与结果：
+
+- `node node_modules/vitest/vitest.mjs run packages/capabilities/tests/EditTool.test.ts packages/capabilities/tests/ApplyPatchTool.test.ts` -> 46 passed
+- `... fileReadState.gate.test.ts WriteTool.read-first.test.ts` -> 17 passed（新增）
+- `... EditTool.diagnostic.test.ts` -> 3 passed（新增）
+- `... CompactionManager.compaction-epoch.test.ts tool-exposure.test.ts` -> 15 passed
+- `npm run typecheck:all` -> exit 0
+- `npm run architecture:check` -> no new boundary violations
+- PR: [#616](https://github.com/lava-chen/duya/pull/616)
+
+初次全量跑 capabilities 时有 1 个失败：`file-diff-metadata.test.ts` 覆盖已存在
+文件但没有先读——正是新 `write` 门在起作用；该用例已补上 read anchor。
+
+### 遗留（2026-11-04 已全部结清，见下节）
+
+- 父子会话仍共享 `readStates`：子 agent 读过的文件会让父会话的 edit 通过（误放，
+  安全侧但不等价于"父自己也读过"）。彻底修需要工具调用携带 session identity，
+  超出本切片。
+- `compressProjectedToolMessages` 仍是未接线状态。若之后把它接进请求组装，需要在
+  投影压缩后对 offload 掉的 read 路径 `invalidateFileRead`——否则会出现"投影里是
+  占位符、账本说读过"的新一轮错配。
+
+## Phase 4：账本按会话来分（2026-11-04）
+
+### 1. 父子会话不再共享账本
+
+`file-read-state.ts` 从"一个全局 Map"改为"按 session 分桶的 Map"。scope 由
+`readScopeFromContext(context)` 统一派生（`ToolUseContext.options.sessionId`），
+四个读写路径（read/write/edit/apply_patch）都必须走这一个函数：它们各自内联派生
+会让同一 agent 刚读过的文件被自己的 edit 判成 never-read，比门关着更糟。
+
+链路已核实打通：子会话 `WorkerSession.sessionId`（`service.ts` 里
+`crypto.randomUUID()`）→ `TurnAssembler` 写入 `turnContext.sessionId` →
+`buildTurnPipeline` 写入 `ToolUseContext.options.sessionId` → 工具。因此父/子天然
+落在不同桶，不需要 AsyncLocalStorage（异步生成器跨越 `next()` 时上下文不可靠）。
+
+- 无 scope 的调用落到"当前活跃会话"桶，覆盖测试与 legacy 无 context 调用。
+- `beginFileReadSession(id)` 会**清掉其它所有桶**：顶层新会话不继承任何东西，同时
+  给长驻 worker 进程的内存封顶。子会话不调用它（否则每次 spawn 清空父账本）。
+- `clearFileReadState(scope)` 带 scope 只清一个桶；不带 scope 清全部。summary
+  compaction 走不带 scope 的那种——过度失效只是多一次读，失效不足就是 428 的错改。
+
+### 2. 投影压缩子系统已删除
+
+原"遗留"第二条要求"以后接线时必须 invalidate"。核查后改为删除，依据：
+
+- `compressProjectedToolMessages` 在生产路径零调用点；`git log -S` 显示最后一次
+  删掉的调用点全在 `packages/agent` 的测试里（`7c62d533`），Host 迁移
+  （`8f7f5032`）没有把它接回来。
+- 五个变换（shared/offload/reformat/micro/imageTruncation）只能经由该 fold 到达，
+  即整个子系统的唯一消费者是它自己的单测。
+- 真实会话日志里 "truncated by projection-compress" 占位符出现 0 次。
+
+删除范围：agent-runtime 的 6 个源文件 + agent 包的 6 个兼容 re-export + 5 个单测文件；
+`compact/index.ts` 两处导出改为说明性注释；`port-guards.ts` 里引用
+`projectionCompress.ts:44-48` 的等价性论证改为"该 pass 已随 legacy 组装退役，
+结论 a fortiori 成立"。`noteProjectionShrink` 保留但注明"当前无人 arm"——读者
+（`wasLastObservationPostShrink`）仍在生产路径上，且默认 false 本身是正确的。
+
+若确实想要"旧工具结果压缩成占位符"省 token，那是一个独立计划：它会改变每个请求的
+字节，必须单独验证 cache 命中与恢复路径，不能夹在门禁修复里。
+
+### 3. 验证补充
+
+- `... packages/capabilities/tests` -> 357 passed / 2 skipped
+- `... fileReadState.gate.test.ts WriteTool.read-first.test.ts` -> 25 passed（新增 8 个分桶用例）
+- `... packages/agent-runtime/test/context packages/host/tests/runtime-context-contracts` -> 205 passed
+- `npm run check:encoding` / `npm run check:test-coverage` -> OK
+- `node scripts/architecture/architecture-check.mjs` -> no new boundary violations
+- `docs/development/test-inventory.{json,md}` 手工扣掉删除的 5 个测试文件与其
+  22 个 case / 37 个断言（脚本 `--write` 需要 vitest json 报告，否则会丢测量值）
+

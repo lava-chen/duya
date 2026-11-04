@@ -25,10 +25,10 @@
  *
  * | Decision | Today |
  * | --- | --- |
- * | call the model | `DuyaAgent.ts:1794` loop head, `:2338` `runTurnStream(...)` |
- * | dispatch a tool | `DuyaAgent.ts:2477` `executor.addTool(...)` |
- * | feed the result back | `DuyaAgent.ts:2677` drain, `:2717` push into `messages` |
- * | decide to stop | `DuyaAgent.ts:3107` `if (!needsFollowUp)`, ceiling at `:3097` |
+ * | call the model | `DuyaAgent` loop head, `:2338` `runTurnStream(...)` |
+ * | dispatch a tool | `DuyaAgent` `executor.addTool(...)` |
+ * | feed the result back | `DuyaAgent` drain, `:2717` push into `messages` |
+ * | decide to stop | `DuyaAgent` `if (!needsFollowUp)`, ceiling at `:3097` |
  *
  * `ModelPort` / `ToolPort` below are named after those four lines, and nothing
  * else in the engine is allowed to make them. A contribution that also decides
@@ -180,7 +180,7 @@ export type ModelStopReason =
  * would make the port's width an argument about the renderer.
  *
  * So the union below is the subset the loop actually branches on
- * (`DuyaAgent.ts:2379-2412` plus `:2550` for the stop reason). The adapter that
+ * (`DuyaAgent` plus `:2550` for the stop reason). The adapter that
  * narrows `SSEEvent` to these frames is part of the move, not part of this
  * contract.
  */
@@ -197,7 +197,7 @@ export type ModelFrame =
        * Added by plan 600 S2 b3a, and the reason is a MEASURED loss rather than
        * a design preference. `SSEEvent.thinking` carries it
        * (`packages/ai/src/types.ts:188`), the legacy loop reads it
-       * (`DuyaAgent.ts:3094-3095`) and the assembled message cannot be replayed
+       * (`DuyaAgent`) and the assembled message cannot be replayed
        * without it (`packages/ai/src/api/anthropic-messages.ts:1669-1670` sends
        * it back as a native `redacted_thinking` block). A `redacted: true` frame
        * with no payload here is a block the engine cannot rebuild, and the
@@ -208,7 +208,7 @@ export type ModelFrame =
        * Optional-and-therefore-possibly-absent, because a provider that does
        * not redact has no payload to send. The engine emits a redacted block
        * only when this is a non-empty string, which is the legacy rule
-       * verbatim (`DuyaAgent.ts:3094`).
+       * verbatim (`DuyaAgent`).
        */
       readonly encrypted?: string;
     }
@@ -331,9 +331,9 @@ export interface ToolOutcome {
    *
    * Not optional sugar: the legacy loop reads it for two things that have no
    * other source. `recordToolCatalogSchemaRead(catalogView, metadata)`
-   * (`DuyaAgent.ts:2715`) updates the catalog's read-tracking, and the value is
+   * (`DuyaAgent`) updates the catalog's read-tracking, and the value is
    * forwarded into the `tool_result` frame's `metadata` field
-   * (`DuyaAgent.ts:2750`) so the renderer can build previews -- a browser
+   * (`DuyaAgent`) so the renderer can build previews -- a browser
    * screenshot, a `vision_analyze` result. Both consumers read keys this layer
    * cannot enumerate, so the payload is carried whole and the vocabulary stays
    * with the producer.
@@ -348,7 +348,7 @@ export interface ToolOutcome {
  *
  * The legacy shape is a bare `Promise<unknown>` (`StreamingToolExecutor.ts:169`,
  * drained at `:2194`), and `_injectRuntimeContext` awaits it on the NEXT
- * provider turn (`DuyaAgent.ts:4204-4224`). An adapter that resolved the promise
+ * provider turn (`DuyaAgent`). An adapter that resolved the promise
  * inside `drain` would not be adapting -- it would move the await into the
  * drain loop, so a follow-up review that never settles would stall the turn
  * that is draining instead of the one that would have consumed it.
@@ -357,7 +357,7 @@ export interface ToolOutcome {
  *
  * Because the legacy value is genuinely untyped: it may be a string or a
  * structure, and `_injectRuntimeContext` does the `typeof === 'string'` branch
- * itself (`DuyaAgent.ts:4209-4210`). Narrowing here would make the adapter's job
+ * itself (`DuyaAgent`). Narrowing here would make the adapter's job
  * the type's job, and the branch would then have to be re-implemented wherever
  * the value is finally read. A rejection is a SKIP, never a failure -- that is
  * the legacy rule at `:4215` and it is reproduced in `#modelRequest`.
@@ -376,7 +376,7 @@ export interface DeferredToolContext {
  * ## Where this has to end up, and why it is not a field
  *
  * The legacy loop reads `result.message.metadata.agentEvent`
- * (`DuyaAgent.ts:2687-2696`) and yields it as an `agent_progress` frame so the
+ * (`DuyaAgent`) and yields it as an `agent_progress` frame so the
  * UI can show activity. It is a DURABLE-TRANSCRIPT-EXCLUDED, RENDERER-FACING
  * fact, and the protocol already says where such things go: `Durability` is a
  * machine-readable field on every registry entry (`events/registry.ts:53`), so
@@ -422,7 +422,7 @@ export interface SubagentProgressItem {
  *
  * ## What the legacy drain reads, and where it lands here
  *
- * The loop at `DuyaAgent.ts:2677-2698` reads four things off each update, and
+ * The loop at `DuyaAgent` reads four things off each update, and
  * every one of them has a member here:
  *
  * | Legacy read | Lands on |
@@ -444,7 +444,7 @@ export interface ModelPort {
    *
    * `signal` is passed in rather than created here, and that is a correction,
    * not a style choice: `DuyaAgent.streamChat` builds its own
-   * `AbortController` at its first line (`DuyaAgent.ts:963`) and exposes the
+   * `AbortController` at its first line (`DuyaAgent`) and exposes the
    * only handle to it through `DuyaAgent.interrupt()` (`:4356`), so everything
    * a host does BEFORE this call -- history assembly, attachment decode,
    * approval prompts -- sits outside the reach of cancellation. A port that
@@ -485,7 +485,7 @@ export interface ToolPort {
    * Queue one call for execution.
    *
    * Queued, not awaited, because today's pipeline is queued too
-   * (`DuyaAgent.ts:2477` `executor.addTool` during the model stream, drained at
+   * (`DuyaAgent` `executor.addTool` during the model stream, drained at
    * `:2677` afterwards) and because a turn's calls are meant to be able to run
    * concurrently. `drain` is where their results come back.
    */
@@ -496,7 +496,7 @@ export interface ToolPort {
    * Yields `ToolDrainItem`, not `ToolOutcome`, because the legacy channel
    * interleaves two things that are not results -- a pending deferred context
    * and a sub-agent progress frame (`StreamingToolExecutor.getRemainingResults`
-   * drains all three, `DuyaAgent.ts:2677`). A `drain` typed `ToolOutcome` cannot
+   * drains all three, `DuyaAgent`). A `drain` typed `ToolOutcome` cannot
    * name them, which is what pushed an adapter to smelt them into a string.
    *
    * Widening the element type is backward-compatible for an implementor: an
@@ -506,7 +506,7 @@ export interface ToolPort {
   /**
    * Drop everything queued and not yet started.
    *
-   * The engine calls this on a model-stream retry (`DuyaAgent.ts:2359`), on a
+   * The engine calls this on a model-stream retry (`DuyaAgent`), on a
    * truncated-arguments turn (`:2659`), and on abandon (`:3281`). Without it, a
    * replayed model call would double-dispatch calls the first attempt already
    * sent.
@@ -534,11 +534,11 @@ export interface ContextPort {
    * Queue a fragment for the NEXT turn, never for the durable timeline.
    *
    * This is where deferred review payloads land
-   * (`deferredContexts.push(result.deferredContext)`, `DuyaAgent.ts:2682`).
+   * (`deferredContexts.push(result.deferredContext)`, `DuyaAgent`).
    *
    * A `pending` fragment is accepted as-is: the host holds the promise and
    * resolves it when it assembles the next turn, which is the point at which the
-   * legacy code resolves it too (`DuyaAgent.ts:4206`). A host that cannot hold
+   * legacy code resolves it too (`DuyaAgent`). A host that cannot hold
    * one must say so by rejecting, not by awaiting inside `defer` -- an await
    * here happens on the turn that produced the result, which is the stall
    * `DeferredToolContext` exists to avoid.
@@ -614,7 +614,7 @@ export interface ResolvedTransientContextFragment extends TransientFragmentBase 
  * `deferred_tool_context` is produced by a tool that hands back a follow-up
  * payload it has not finished computing (`StreamingToolExecutor.ts:2194`), and
  * the legacy code awaits it during the NEXT turn's context assembly
- * (`DuyaAgent.ts:4206`). A fragment type whose only text is `string` cannot
+ * (`DuyaAgent`). A fragment type whose only text is `string` cannot
  * express that state, so the only way to honour the contract was to resolve
  * early -- which moves the await, as `DeferredToolContext` argues.
  *
@@ -622,7 +622,7 @@ export interface ResolvedTransientContextFragment extends TransientFragmentBase 
  *
  * A `pending` that never settles stalls the turn that resolves it, because
  * `#modelRequest` waits on all of them (`Promise.allSettled`, mirroring
- * `DuyaAgent.ts:4206`). That is the legacy behaviour reproduced exactly, and it
+ * `DuyaAgent`). That is the legacy behaviour reproduced exactly, and it
  * is a pre-existing property of the deferred-review design rather than
  * something this port introduces. A cap belongs where the timeout already
  * exists for the sibling path -- `drainPendingExtraResults` races a 30s
@@ -714,7 +714,7 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  *
  * Six effects hang off the single moment a tool result lands, and the engine
  * performed NONE of them: the legacy loop did, inline
- * (`DuyaAgent.ts:2721-2823`). Every one of them needs something this layer does
+ * (`DuyaAgent`). Every one of them needs something this layer does
  * not have -- a transcript to append to, a renderer to project to, a hook bus,
  * a catalog view, a mode vocabulary -- so the engine's only honest move was to
  * name the moment and let the host decide what it means.
@@ -730,10 +730,10 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  *    run id on every call would be a second, forgeable copy of it.
  *  - **no `seq`** -- the host's transcript mints ordering from `turn`, the same
  *    way the ledger mints `seq` for `RunEvent`s. The legacy
- *    `result.message.seq_index = seqIndex` (`DuyaAgent.ts:2723`) reads a counter
+ *    `result.message.seq_index = seqIndex` (`DuyaAgent`) reads a counter
  *    the transcript owns; reproducing it here would be a second authority for
  *    "where does this message sit".
- *  - **no `id`** -- `?? crypto.randomUUID()` (`DuyaAgent.ts:2724-2726`) is the
+ *  - **no `id`** -- `?? crypto.randomUUID()` (`DuyaAgent`) is the
  *    writer's job, and `_pushDurable` (`:3515`) is the writer. Durable identity
  *    is minted where it is stored.
  *  - **no terminal decision** -- that stays with `RunSession.settle`, and this
@@ -768,7 +768,7 @@ export type ApprovalScope = 'once' | 'always' | 'session';
  * `TurnWork.dispatched` counts calls the engine put on their way
  * (`run-engine.ts:805`), while `results` counts answers that came back. The
  * legacy gate at `:2858` is `toolResultMessageCount > 0` -- RESULTS
- * (`DuyaAgent.ts:2722`) -- and a turn can dispatch two calls and receive one
+ * (`DuyaAgent`) -- and a turn can dispatch two calls and receive one
  * answer. Gating `PostToolUse` or a compaction probe on `dispatched` fires both
  * where the legacy fired neither and skips them where it fired both.
  *
@@ -802,7 +802,7 @@ export interface TurnOutputPort {
    * order, BEFORE `finishTurn` for the same turn.
    *
    * Awaited, because one of the six effects is a hook the legacy code
-   * `yield*`-ed from inside the drain arm (`DuyaAgent.ts:2772-2784`) and a hook
+   * `yield*`-ed from inside the drain arm (`DuyaAgent`) and a hook
    * that injects context has to have landed before the next request is built. A
    * host whose projections are all synchronous may still return a resolved
    * promise; one whose hook bus is asynchronous must be awaited rather than
@@ -823,7 +823,7 @@ export interface TurnOutputPort {
    *
    * Because it is the same obligation `recordToolResult` discharges, at a
    * different point in the same turn. The legacy loop assembled the message
-   * inline at the `done` boundary (`DuyaAgent.ts:2645-2678`) and pushed it
+   * inline at the `done` boundary (`DuyaAgent`) and pushed it
    * durable, in the same closure, with the same six host effects a tool result
    * gets. A sibling port would mean a second optional binding a host could
    * forget -- and this port's own doc comment already names forgetting as the
@@ -833,7 +833,7 @@ export interface TurnOutputPort {
    *
    * ## Why the ORDER against `recordToolResult` is load-bearing
    *
-   * The legacy comment at `DuyaAgent.ts:2641-2642` is explicit: the assistant
+   * The legacy comment at `DuyaAgent` is explicit: the assistant
    * message goes in BEFORE the tool results, because OpenAI requires
    * `assistant (tool_calls) -> tool (result)` and a transcript that stores them
    * the other way round is rejected on the next request. The engine reaches
@@ -848,7 +848,7 @@ export interface TurnOutputPort {
    *
    * This is the host's "results are committed" moment -- the one the legacy
    * `PostToolUse` dispatch and the preflight compaction probe are gated on
-   * (`DuyaAgent.ts:2858`, `:2935`).
+   * (`DuyaAgent`, `:2935`).
    */
   finishTurn(summary: TurnOutputSummary): Promise<void>;
   /**
@@ -910,11 +910,11 @@ export interface TurnOutputPort {
  * ## What is NOT on this record, and where each of those things lives
  *
  *  - **`id`, `timestamp`, `seq_index`** -- the writer's, exactly as
- *    `ToolResultRecord` says: `?? crypto.randomUUID()` (`DuyaAgent.ts:2678`) is
+ *    `ToolResultRecord` says: `?? crypto.randomUUID()` (`DuyaAgent`) is
  *    minted where it is stored, and `ports.ts`'s no-`seq` rule is a second
  *    authority for "where does this message sit".
  *  - **`modelAttribution`** -- the HOST's. `...this.modelAttribution`
- *    (`DuyaAgent.ts:2678`) reads a field on the agent instance that records
+ *    (`DuyaAgent`) reads a field on the agent instance that records
  *    which model this session is bound to; the engine has no session and must
  *    not invent one. `model`/`providerId` below are the turn's own request
  *    facts, carried so the host can decide without re-deriving them, and the
@@ -952,7 +952,7 @@ export interface AssistantMessageRecord {
    * result handler also walks -- so a sum here would double-count every
    * consumer that reads it. With several `usage` frames in one turn the LAST
    * one wins, which is what the provider's final usage report is and what the
-   * legacy `roundResultUsage` held (`DuyaAgent.ts:2703`).
+   * legacy `roundResultUsage` held (`DuyaAgent`).
    */
   readonly usage?: TokenUsage;
   /** The model this turn actually asked, when the request named one. */
@@ -1057,7 +1057,7 @@ export interface ToolResultRecord {
    * From the engine's own dispatch record, so a host does not have to keep a
    * second `callId -> name` map to answer "which tool failed" -- which is
    * exactly what the legacy hook payload needed
-   * (`turnToolCallIds.get(toolResultId) ?? ''`, `DuyaAgent.ts:2771`).
+   * (`turnToolCallIds.get(toolResultId) ?? ''`, `DuyaAgent`).
    *
    * `''` when the engine did not dispatch this call, which is the legacy
    * fallback verbatim: an empty name reaches a hook bus that filters on it,
@@ -1501,7 +1501,7 @@ export interface RunExecutionRequest {
    * It aborts a single model call that overruns EVEN WHILE ITS STREAM IS STILL
    * PRODUCING DATA -- a thinking stream that never converges -- so a hung turn
    * fails fast instead of consuming the whole run budget. That is the legacy
-   * option's own statement (`DuyaAgent.ts:2246-2251`, declared
+   * option's own statement (`DuyaAgent`, declared
    * `llmRequestTimeoutMs` at `types.ts:506` and handed in at
    * `agent-process-entry.ts:3081`), and it is not expressible with `signal`
    * alone: the run's signal outlives every request inside it, so using it would
@@ -1541,7 +1541,7 @@ export interface RunExecutionRequest {
    *
    * PER RUN and not on `RunEngineOptions`, and that placement is the whole
    * design. The legacy resolves this config once per `streamChat` call from the
-   * options it was handed (`DuyaAgent.ts:2847-2848`), so the threshold is a
+   * options it was handed (`DuyaAgent`), so the threshold is a
    * per-run fact like the model and the catalog; a process-lifetime knob would
    * silently ignore a user who changed the setting between two chats.
    * `RunEngineOptions` is for what the engine itself owns (`defaultMaxTurns` is
@@ -1897,7 +1897,7 @@ export interface SubtaskHandle {
  * is being stopped because the model is not converging, which is the diagnosis
  * an operator needs and the one a generic ceiling cannot state.
  *
- * The legacy already reports this string -- `DuyaAgent.ts:4273` yields
+ * The legacy already reports this string -- `DuyaAgent` yields
  * `{ type: 'done', reason: 'repeated_tool_calls' }` -- so keeping it verbatim
  * means deleting the legacy loop does not change what a consumer reads.
  * `chat-event-translator.ts` already names it among the runtime loop outcomes
@@ -1930,7 +1930,7 @@ export interface EngineExit {
  * `after_finalize` are per-RUN, and they are not decoration: the legacy cycle
  * dispatches two hook events at each end of a run that no turn phase can reach.
  * `UserPromptSubmit` and `SessionStart` fire once before the first turn
- * (`DuyaAgent.ts:2130`, `:2144`), and `Stop` / `SessionEnd` fire once after the
+ * (`DuyaAgent`, `:2144`), and `Stop` / `SessionEnd` fire once after the
  * last (`SessionFinalizer.ts:268`, `:248`). A run whose engine dispatches only
  * the five turn phases therefore runs every per-tool hook and none of the
  * per-session ones, and nothing about that failure is visible in a frame.
@@ -2010,8 +2010,8 @@ export interface ExtensionContribution {
  * 3. **Exception.** Fail-open by default: a throwing contributor is logged and
  *    skipped, never fatal. This is not leniency, it is the existing contract --
  *    `PreToolUse` "runs to completion (blocking), fail-open"
- *    (`DuyaAgent.ts:2432-2434`) and the `PreFinalize` bus degrades to "allow"
- *    on hook failure (`DuyaAgent.ts:3140-3141`). The ONE exception is a
+ *    (`DuyaAgent`) and the `PreFinalize` bus degrades to "allow"
+ *    on hook failure (`DuyaAgent`). The ONE exception is a
  *    `binding` veto that throws while blocking: there the engine fails the turn,
  *    because a veto that cannot be evaluated is not a veto.
  * 4. **Cancel.** Every call receives the run's `AbortSignal`, so a stop reaches
@@ -2229,8 +2229,8 @@ export interface WorkerAdapterSurface {
  *
  * | Site | What it generates | Calls the port at |
  * | --- | --- | --- |
- * | compaction summarizer | a summary of the transcript, stored | `DuyaAgent.ts:783` |
- * | side question | a concise answer to a detached question, returned | `DuyaAgent.ts:4513` |
+ * | compaction summarizer | a summary of the transcript, stored | `DuyaAgent` |
+ * | side question | a concise answer to a detached question, returned | `DuyaAgent` |
  *
  * Neither loops, dispatches, nor feeds a tool result back: the summarizer
  * trims and returns the port's text (`:814`), and the side question trims and
@@ -2252,7 +2252,7 @@ export interface WorkerAdapterSurface {
  * `ModelRequest` has no `toolChoice` (`:372-391`). The summarizer needs
  * `toolChoice: 'none'`: plan 523 P4.1 added it because the summarizer was
  * emitting tool-call tokens instead of a summary, and it used to pass the flag
- * at the call site (`DuyaAgent.ts:799-801` now records that the port supplies
+ * at the call site (`DuyaAgent` now records that the port supplies
  * it). `tools: []` is close, and it is a DIFFERENT promise:
  * "no tools are available" still leaves a model free to try, while `'none'` is
  * "tool calling is forbidden for this request", implemented by omitting the
@@ -2339,7 +2339,7 @@ export interface WorkerAdapterSurface {
  * Retries. `ModelPort`'s doc (`:364-366`) places transient retries inside the
  * engine's attempt, and a one-shot call has no attempt. Whether a failed
  * summarizer is retried is the compaction manager's call
- * (`DuyaAgent.ts:764`).
+ * (`DuyaAgent`).
  */
 export interface OneShotTextPort {
   /**
@@ -2363,13 +2363,13 @@ export interface OneShotTextPort {
  * which is the difference between "no tools this time" and "this port is not
  * about tools". `systemPrompt` and `messages` are the caller's, verbatim: the
  * summarizer builds a one-message payload with the transcript and the
- * instructions inside the USER turn on purpose (`DuyaAgent.ts:769-793`), and
+ * instructions inside the USER turn on purpose (`DuyaAgent`), and
  * this port must not be the thing that relocates them.
  *
  * `maxOutputTokens` and `temperature` are optional for the same reason they are
  * on `ModelRequest` (`:387-390`): absent means the CLIENT'S default stays, and
  * a fabricated default here would be a ceiling and a sampling rate that nobody
- * named. Both call sites do pass them (`DuyaAgent.ts:802-803`, `:4517-4518`), so
+ * named. Both call sites do pass them (`DuyaAgent`, `:4517-4518`), so
  * the values they choose survive the crossing -- the default is a contract for
  * future callers, not a claim about these two.
  */
@@ -2416,7 +2416,7 @@ export interface OneShotTextFailure {
  * (`packages/agent/src/compact/types.ts:63`), and the four that reach a
  * `compactProactive` call are all of them: `auto` from the coordinator
  * (`CompactionCoordinator.ts:263`), `emergency` from the context-length path
- * (`DuyaAgent.ts:3360`), `preflight_overflow` from the preflight probe
+ * (`DuyaAgent`), `preflight_overflow` from the preflight probe
  * (`:3022`), `model_switch` from the window-change path (`:1488`).
  *
  * The protocol's `compaction.started` narrows this to `'auto' | 'manual' |
@@ -2435,7 +2435,7 @@ export type CompactionTrigger = 'auto' | 'manual' | 'emergency' | 'preflight_ove
  * from the PROJECTED messages, not from the raw list
  * (`CompactionProbe.tokens`, `CompactionManager.ts`), fed by
  * `compactionController.projectInputMessages()` at both in-loop probe sites
- * (`DuyaAgent.ts:3011`, `:3331`). A probe that received only a number would
+ * (`DuyaAgent`, `:3331`). A probe that received only a number would
  * have to trust that number, which is the "verifiable rather than trusted"
  * distinction `ResolvedPart` draws. So the messages travel, and the port
  * measures them.
@@ -2451,7 +2451,7 @@ export interface CompactionDecisionInput {
    * What the caller observed, when it observed anything.
    *
    * Optional because one of the three sites has no observation to report: the
-   * pre-turn coordinator is a PROACTIVE guess (`DuyaAgent.ts:2155`), while the
+   * pre-turn coordinator is a PROACTIVE guess (`DuyaAgent`), while the
    * other two follow real evidence -- a preflight overflow probe (`:3018`) and
    * a provider `context_length_exceeded` classification (`:3330`,
    * `compactErrors.ts`). A required field would make the proactive caller
@@ -2467,7 +2467,7 @@ export interface CompactionDecisionInput {
  * ## Why the provider's error text crosses the port rather than a verdict on it
  *
  * The emergency path is a CLASSIFICATION, and the legacy classifies with
- * `classifyContextLengthError` (`DuyaAgent.ts:3320`, `compactErrors.ts`),
+ * `classifyContextLengthError` (`DuyaAgent`, `compactErrors.ts`),
  * whose dual-evidence gate is deliberate: an explicit provider claim compacts on
  * its own, while weak wording compacts ONLY alongside local corroboration, and
  * a failed probe is no evidence at all (`:3311-3319`). That rule is a property
@@ -2503,7 +2503,7 @@ export interface CompactionObservation {
  *
  * A three-way union rather than a boolean, because the legacy has three
  * outcomes and two of them are not errors: `probeCompaction` returns a probe
- * and the callers COMPARE it against a line (`DuyaAgent.ts:3018`, `:3330`),
+ * and the callers COMPARE it against a line (`DuyaAgent`, `:3330`),
  * `compactProactive` returns `null` for "nothing to compact" without throwing
  * (`CompactionCoordinator.ts:266`), and a strategy that declines leaves its
  * input unchanged (`CompactOptions.force` documents exactly that early
@@ -2560,7 +2560,7 @@ export type CompactionOutcome =
  *
  * Because an estimate and a measurement are different quantities, and the legacy
  * moved off the estimate deliberately. `setObservedUsageForEpoch` is the
- * observation layer of plan 577 §2 (`DuyaAgent.ts:3166-3172`, fed from the
+ * observation layer of plan 577 §2 (`DuyaAgent`, fed from the
  * `result` event's own `input_tokens`), and its stated purpose is to keep the
  * LARGEST prompt of a turn from collapsing mid-turn when a provider re-reports
  * per-round cache reads. `CompactionDecisionInput.transcript` cannot carry it:
@@ -2581,7 +2581,7 @@ export interface CompactionUsageAnchor {
    * The context generation the request was BUILT in, captured before it opened.
    *
    * Load-bearing, and the legacy is explicit about why: the epoch is read at
-   * `DuyaAgent.ts:2380` -- before the stream -- and the result is filed against
+   * `DuyaAgent` -- before the stream -- and the result is filed against
    * THAT epoch at `:3167`, because compaction rewrites the context lineage and
    * opens a new generation (`CompactionManager.ts:918-921`). Filing a
    * pre-compaction request's tokens into the post-compaction generation would
@@ -2640,7 +2640,7 @@ export type CompactionProgress =
  * summarizer needed), it is CANCELLABLE via a caller-owned signal, and it
  * answers with a three-way union so a provider that died mid-summary is a
  * `failed` rather than a silent empty string (`ports.ts:1653-1677`). The
- * summarizer is installed through it today (`DuyaAgent.ts:783`, wired at
+ * summarizer is installed through it today (`DuyaAgent`, wired at
  * `:764`), so a compaction port that carried its own model call would be a
  * duplicate of a port that already exists and already has the harder tests.
  *
@@ -2653,7 +2653,7 @@ export type CompactionProgress =
  *
  * `onProgress` exists because the summarizer takes MINUTES: the legacy streams
  * `compact:*` out of a live pump precisely so the renderer sees progress during
- * it rather than a burst afterwards (`DuyaAgent.ts:2144-2151`). An
+ * it rather than a burst afterwards (`DuyaAgent`). An
  * outcome-only port would force that buffering back in, which is the bug that
  * pump was written to fix.
  *
@@ -2666,7 +2666,7 @@ export type CompactionProgress =
  * loses data**, not a guardrail. The transcript keeps growing past the window
  * with nothing to shed it, the provider returns `context_length_exceeded`, and
  * the emergency compaction that exists to recover from exactly that
- * (`DuyaAgent.ts:3360`) has no port to call. That is the legacy's failure mode
+ * (`DuyaAgent`) has no port to call. That is the legacy's failure mode
  * reproduced with no seam, and the run ends in an error a user sees. A
  * forgotten GUARDRAIL would be a port that is bound and ignored -- also wrong,
  * but nothing is lost, because the legacy loop is still driving every turn and
@@ -2697,7 +2697,7 @@ export interface CompactionPort {
    * `OneShotTextPort.complete` both take one: the summarizer is the long part,
    * and a run that cannot stop during it is a run that cannot stop at all. The
    * legacy links a child controller for precisely this
-   * (`DuyaAgent.ts:776-780`).
+   * (`DuyaAgent`).
    *
    * `reporter` is how progress reaches the host DURING the run. It is a
    * parameter rather than a field on the port because a port bound for one run
@@ -2756,7 +2756,7 @@ export interface CompactionPort {
  * the mechanism that answers.
  *
  * The legacy passes the literal `'before_model_turn' | 'before_final_answer'`
- * into `_claimMailboxAtCheckpoint` (`DuyaAgent.ts:3625`) and the two strings
+ * into `_claimMailboxAtCheckpoint` (`DuyaAgent`) and the two strings
  * reach the mailbox store, which filters claimable rows by them. They are
  * reproduced here because they are load-bearing on the HOST side -- a sweep
  * that arrived under the wrong name would claim rows the store considers
@@ -2774,7 +2774,7 @@ export type InterTurnCheckpoint = 'before_model_turn' | 'before_final_answer';
  * them unreachable:
  *
  *  - `continue` / `absorbed: false` -- nothing to add. The turn proceeds
- *    exactly as it would have (`DuyaAgent.ts:3648`, the empty-claim arm).
+ *    exactly as it would have (`DuyaAgent`, the empty-claim arm).
  *  - `continue` / `absorbed: true` -- the host injected something. The
  *    messages in `InterTurnSweep.injected` MUST ride the next model request,
  *    and at `before_final_answer` a non-null decision also keeps the run open
@@ -2806,7 +2806,7 @@ export interface InterTurnSweep {
    *
    * Received, never minted, for the same reason `AttemptLeasePort.acquire` takes
    * one: the claim is scoped to a run (`mailboxDb.claimBatch` is called with
-   * `{ sessionId, runId, checkpoint }`, `DuyaAgent.ts:3635-3640`), so a host
+   * `{ sessionId, runId, checkpoint }`, `DuyaAgent`), so a host
    * that invented an identity would be answering a different question than the
    * one the engine asked. It is also what makes two attempts at one run
    * distinguishable to the store.
@@ -2828,7 +2828,7 @@ export interface InterTurnSweep {
  * "notifications that arrived after turn N" would want it. Measured against the
  * legacy, it does not: the value the legacy threads alongside the checkpoint is
  * `seqIndex`, and that is `Date.now()` taken once per `streamChat` call
- * (`DuyaAgent.ts:1792`) -- a per-RUN durable-row index, not a turn counter. So
+ * (`DuyaAgent`) -- a per-RUN durable-row index, not a turn counter. So
  * forwarding the turn would have put a second, differently-meaning number on the
  * wire next to a host that already closes over the real one, and the two would
  * be read as the same fact.
@@ -2846,7 +2846,7 @@ export interface InterTurnSweepResult {
    * ## Why the port RETURNS messages rather than pushing them
    *
    * The legacy mutates a `messages` array it was handed
-   * (`DuyaAgent.ts:3709`, `:3720`) and the array is the live transcript for
+   * (`DuyaAgent`, `:3720`) and the array is the live transcript for
    * the rest of the run. The engine cannot offer that: it holds
    * `assembled.messages` as a `readonly` value it did not build
    * (`run-engine.ts:497`), and handing the host a mutable reference to it
@@ -2872,7 +2872,7 @@ export interface InterTurnSweepResult {
  * `RunInputSnapshot.steering` is fixed at run start (`ports.ts:1204`), so a
  * message that arrives while the run is already going cannot ride it. That
  * leaves a real capability with no home: the legacy asks for a mailbox sweep
- * at three points inside its cycle -- before the model call (`DuyaAgent.ts:2193`)
+ * at three points inside its cycle -- before the model call (`DuyaAgent`)
  * and twice around the stop decision (`:3198`, `:3263`) -- and the engine, as
  * of this contract, asks for nothing. This is the only port in the set whose
  * absence makes the engine SILENTLY correct-looking while dropping work.
@@ -2939,7 +2939,7 @@ export interface InterTurnInputPort {
  * CORRECT, and it is worth recording what the enumeration actually found, because
  * two different subsystems both LOOK like the channel and neither is:
  *
- *  1. **`after_finalize` does not reach it.** `DuyaAgent.ts:961-963` says
+ *  1. **`after_finalize` does not reach it.** `DuyaAgent` says
  *     `runExitHooks` "rides the engine's `after_finalize` phase instead". That
  *     comment is FALSE, and reading it is how a false premise survives three
  *     slices. `after_finalize`'s only producer is `createLegacyHookSource`

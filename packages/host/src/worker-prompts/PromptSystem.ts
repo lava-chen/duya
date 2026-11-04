@@ -276,6 +276,26 @@ export interface PromptSystemConfig {
  * + 5 subclasses. Behavior is fully driven by the PromptSystemConfig passed
  * to the constructor.
  */
+/**
+ * Is `directory` a linked git worktree?
+ *
+ * A linked worktree's `.git` is a FILE whose contents point at
+ * `<main>/.git/worktrees/<name>`. An ordinary checkout has a `.git` DIRECTORY,
+ * and a submodule ALSO has a gitfile — but it points at `.git/modules/<name>`,
+ * which is not an isolated copy of the repository the environment section
+ * describes. So the check is on the gitfile's target, not on "there is a file
+ * called .git".
+ */
+function detectGitWorktree(directory: string): boolean {
+  try {
+    const marker = path.join(directory, '.git')
+    if (!fs.statSync(marker).isFile()) return false
+    return /[\\/]worktrees[\\/]/.test(fs.readFileSync(marker, 'utf8'))
+  } catch {
+    return false
+  }
+}
+
 export class PromptSystem {
   private readonly config: PromptSystemConfig
   private cache: PromptCache
@@ -445,13 +465,11 @@ export class PromptSystem {
       ...(options.userType === undefined ? {} : { userType: options.userType }),
       ...(options.outputStyleConfig === undefined ? {} : { outputStyleConfig: options.outputStyleConfig }),
       ...(options.communicationPlatform === undefined ? {} : { communicationPlatform: options.communicationPlatform }),
-      ...(options.isWorktree === undefined ? {} : { isWorktree: options.isWorktree }),
-      ...(options.isNonInteractiveSession === undefined ? {} : { isNonInteractiveSession: options.isNonInteractiveSession }),
-      ...(options.isReplModeEnabled === undefined ? {} : { isReplModeEnabled: options.isReplModeEnabled }),
-      ...(options.hasEmbeddedSearchTools === undefined ? {} : { hasEmbeddedSearchTools: options.hasEmbeddedSearchTools }),
-      ...(options.isForkSubagentEnabled === undefined ? {} : { isForkSubagentEnabled: options.isForkSubagentEnabled }),
-      ...(options.isVerificationAgentEnabled === undefined ? {} : { isVerificationAgentEnabled: options.isVerificationAgentEnabled }),
-      ...(options.isSkillSearchEnabled === undefined ? {} : { isSkillSearchEnabled: options.isSkillSearchEnabled }),
+      // Derived, not forwarded. No caller ever set `isWorktree`, so a session
+      // running in a linked worktree was never told it was in one — while the
+      // environment section's "do NOT cd to the original repository root" line
+      // exists precisely for that case.
+      isWorktree: options.isWorktree ?? detectGitWorktree(workingDirectory),
       ...(options.scratchpadDir === undefined ? {} : { scratchpadDir: options.scratchpadDir }),
       ...(options.researchIntent === undefined ? {} : { researchIntent: options.researchIntent }),
       ...(options.researchProjectId === undefined ? {} : { researchProjectId: options.researchProjectId }),

@@ -124,8 +124,6 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     ctx.enabledTools.has(TOOL_NAMES.TODO) ||
     ctx.enabledTools.has(TOOL_NAMES.TASK) ||
     ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE);
-  const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false;
-  const isReplModeEnabled = ctx.isReplModeEnabled ?? false;
   const hasPowerShellTool = ctx.enabledTools.has('powershell');
   const hasDuyaCli = ctx.enabledTools.has('duya_cli');
   // The desktop section is gated on `duya_cli` (the legacy duyaDesktopContext
@@ -151,12 +149,8 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     `To read files use ${TOOL_NAMES.READ}`,
     `To edit files use ${TOOL_NAMES.EDIT}. Prefer ${TOOL_NAMES.EDIT} when you have a single file and an exact, unique old_string to replace. Use apply_patch for multi-file changes or when matching must tolerate context drift (the current file may differ from what you read earlier). Do not default to one over the other — pick the tool that fits the change.`,
     `To create files use ${TOOL_NAMES.WRITE}`,
-    ...(hasEmbeddedSearchTools
-      ? []
-      : [
-          `To search for files use ${TOOL_NAMES.GLOB}`,
-          `To search content use ${TOOL_NAMES.GREP}`,
-        ]),
+    `To search for files use ${TOOL_NAMES.GLOB}`,
+    `To search content use ${TOOL_NAMES.GREP}`,
     `Reserve using ${shellToolsLabel} for system commands that require shell execution. Use ${TOOL_NAMES.BASH} for Unix-style shell commands and ${TOOL_NAMES.POWERSHELL} for Windows-native PowerShell commands when available.`,
   ];
 
@@ -195,16 +189,13 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
   const hasAskUserQuestion = ctx.enabledTools.has(TOOL_NAMES.ASK_USER_QUESTION);
   const hasAgentTool = ctx.enabledTools.has(TOOL_NAMES.SUBAGENT);
   const hasSkills = ctx.enabledTools.has(TOOL_NAMES.SKILL);
-  const isNonInteractiveSession = ctx.isNonInteractiveSession ?? false;
-  const isForkSubagentEnabled = ctx.isForkSubagentEnabled ?? false;
-  const searchTools = hasEmbeddedSearchTools
-    ? `\`find\` or \`grep\` via the ${TOOL_NAMES.BASH} tool`
-    : `the ${TOOL_NAMES.GLOB} or ${TOOL_NAMES.GREP}`;
-  const isSkillSearchEnabled = ctx.isSkillSearchEnabled ?? false;
-  const hasDiscoverSkillsTool = ctx.enabledTools.has(TOOL_NAMES.DISCOVER_SKILLS);
-  const showDiscoverSkillsGuidance = isSkillSearchEnabled && hasDiscoverSkillsTool;
-  const isVerificationAgentEnabled = ctx.isVerificationAgentEnabled ?? false;
-  const showVerificationAgentSection = isVerificationAgentEnabled && hasAgentTool;
+  const searchTools = `the ${TOOL_NAMES.GLOB} or ${TOOL_NAMES.GREP}`;
+  // The built-in `verification` agent ships with every install (see
+  // worker-subagents/built-in/verificationAgent.ts) and is reachable whenever
+  // the subagent tool is. There is no separate feature flag to consult, and the
+  // old one was never set — so the section that tells the model to spawn the
+  // verifier never rendered at all.
+  const showVerificationAgentSection = hasAgentTool;
 
   return {
     ctx,
@@ -214,8 +205,6 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     shell: ctx.shell,
     hasTodoTool,
     todo_tool_name: TOOL_NAMES.TODO,
-    hasEmbeddedSearchTools,
-    isReplModeEnabled,
     hasPowerShellTool,
     hasDuyaCli,
     isDesktopSurface,
@@ -255,11 +244,7 @@ export function mapPromptContextToHbs(ctx: PromptContext): Record<string, unknow
     has_ask_user_question: hasAskUserQuestion,
     has_agent_tool: hasAgentTool,
     has_skills: hasSkills,
-    is_non_interactive_session: isNonInteractiveSession,
-    has_embedded_search_tools: hasEmbeddedSearchTools,
-    is_fork_subagent_enabled: isForkSubagentEnabled,
     search_tools: searchTools,
-    show_discover_skills_guidance: showDiscoverSkillsGuidance,
     show_verification_agent_section: showVerificationAgentSection,
     // memory section (preBuildHook populates these)
     memory_root_path: ctx.memoryRootPath ?? '',

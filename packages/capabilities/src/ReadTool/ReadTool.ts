@@ -50,7 +50,7 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from './path-suggest.js';
-import { computeContentSha, recordFileRead } from '../file-read-state.js';
+import { computeContentSha, readScopeFromContext, recordFileRead } from '../file-read-state.js';
 import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
 import {
   parseNotebookJson,
@@ -428,7 +428,7 @@ export class ReadTool extends BaseTool {
       // cells are the content the model actually needs, so it never falls
       // through to the unsupported-binary rejection below.
       if (ext && ext.toLowerCase() === '.ipynb') {
-        return await this.readNotebook(input, id, resolved, statResult);
+        return await this.readNotebook(input, id, resolved, statResult, context);
       }
 
       // The built-in document parser (PDF/DOCX/PPTX extraction) was removed
@@ -465,6 +465,7 @@ export class ReadTool extends BaseTool {
     id: string,
     resolved: string,
     statResult: Stats,
+    context?: ToolUseContext,
   ): Promise<ToolResult> {
     const normalized = normalizePath(resolved);
 
@@ -540,7 +541,7 @@ export class ReadTool extends BaseTool {
         mtimeMs: statResult.mtimeMs,
         size: statResult.size,
         isFullView: false,
-      });
+      }, readScopeFromContext(context));
     } catch {
       // ignore — the read itself already succeeded
     }
@@ -875,6 +876,7 @@ export async function readFileContent(
     // views and never qualify.
     try {
       const readStat = await stat(resolvedPath);
+      const scope = readScopeFromContext(context);
       if (!range && !fullReadTruncated) {
         // Untouched full read: fingerprint enables EditTool's Windows
         // mtime-churn exemption (content-equality fallback).
@@ -883,10 +885,10 @@ export async function readFileContent(
           size: readStat.size,
           isFullView: true,
           contentSha: computeContentSha(content),
-        });
+        }, scope);
       } else {
         // Partial view (line_range, or full read cut by caps): never exempt.
-        recordFileRead(resolvedPath, { mtimeMs: readStat.mtimeMs, size: readStat.size, isFullView: false });
+        recordFileRead(resolvedPath, { mtimeMs: readStat.mtimeMs, size: readStat.size, isFullView: false }, scope);
       }
     } catch {
       // ignore — the read itself already succeeded

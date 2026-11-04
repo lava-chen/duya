@@ -4,7 +4,7 @@
  * ## What this file is
  *
  * Plan 610 rewrites the legacy `DuyaAgent.streamChat` cycle
- * (`DuyaAgent.ts:1825-3300`) into port calls. A previous attempt at exactly
+ * (`DuyaAgent`) into port calls. A previous attempt at exactly
  * that refactor shipped green: `agent-process-entry.ts:2989-3008` records the
  * entry running `RunEngineImpl` per `chat:start` and it being removed again as
  * a "phantom run", with `headless-run-host.ts:22-26` logged as the fake green.
@@ -57,7 +57,7 @@
  * Both are host boundaries, not the turn:
  *
  *   - `this.llmClient` is built inside the constructor by `createAIClient`
- *     (`DuyaAgent.ts:630`, `:636`) with no injection seam, so a scripted
+ *     (`DuyaAgent`, `:636`) with no injection seam, so a scripted
  *     provider must override the two factories. Only those are replaced;
  *     everything else -- the transform chain, the retry policy, the pipeline,
  *     the loop -- is the production code. This is the same seam
@@ -206,7 +206,7 @@ const { initDbClient } = await import('@duya/host/worker-db-client');
  *
  * Covers both carriers the loop can produce: a `role: 'tool'` message with
  * string content, and a message whose content array carries a `tool_result`
- * block. The loop's own backfill (`DuyaAgent.ts:2787-2804`) decides which, so
+ * block. The loop's own backfill (`DuyaAgent`) decides which, so
  * the extraction mirrors both shapes rather than assuming one.
  */
 function toolResultTexts(messages: readonly Message[]): string[] {
