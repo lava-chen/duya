@@ -304,3 +304,15 @@ Owner：当前 Codex；各层沿用原有 worktree（`project-memory-continuity`
   - `npm run typecheck:all`：退出 0。
 - 回收：五个 worktree 均先以 `scripts/remove-worktree.sh --dry-run` 通过身份、锁与清洁检查，再正式移除；本地分支经 `git merge-base --is-ancestor origin/master` 核对后删除（`git branch -d` 因主检出 HEAD 不在 master 上而误判未合并，核对祖先关系后改用 `-D`）。非本栈 worktree（如 `project-coordinator`）未触碰。
 - 剩余未覆盖：真机 UI 验收仍由用户负责；Task 显式验收流、记忆候选复核 UI、每次 run 的 session 级上下文注入等产品缺口按各切片计划后续推进。
+
+### Coordinator 工具白名单的 Session 工具面修复（2026-11-04）
+
+发现：`packages/host/src/project/identity.ts` 的 `PROJECT_COORDINATOR_ALLOWED_TOOLS` 写的是 `['session', 'project', 'todo']`，其中 `'session'` 是一个**死模式**——全仓没有任何名为 `session` 的工具被注册（`sessionTool` 只作为 `session-app.ts` 里 `adaptTool` 的实现底座，模型侧看到的是 `mcp_duya_app_session_*`），`DUYA_APP_TOOL_NAMES` 也没有裸 `'session'`。用真实 `matchToolPattern` 验证：模式 `'session'` 命中 0 个已注册工具。
+
+成因：该字面量由 `74b303d8`（2026-11-03）引入，当时 `session` **确实**是注册名（该 commit 的 `builtin.ts:89` 有 `registry.register(sessionTool.toTool(), sessionTool, ...)`，权威名单第 84 行也含 `'session'`）。随后 `3cb61cff`「feat(session): move session tools to duya_app MCP」把 Session 工具收进 `duya_app` MCP 并拆成 per-action 工具，字面量没跟着改名，从此静默失配。
+
+影响：Coordinator 实际只拿到 `project` 与 `todo`，**整个 Session 面（spawn/get/reply/read/rename/list/send/status/cancel/control）全部失效**，而它按设计正是靠这套工具派发与管理工作 Session。失配不报错——白名单匹配不到任何工具不是错误。
+
+修复：按实施合同 §2 的 Coordinator 工具面逐个列出注册名，并按 §33「fork/search 等额外 Session 工具可复用，但不因 #579 注册了它们就全部授给 Coordinator」排除 `session_fork` 与 `session_search`。不用 `'session*'` 通配的两个原因：`isToolVisible` 对 deferred 工具只在**精确**命中 allowlist 时才提升为直接可调（`agent-runtime/authorization/tool-filter.ts`），通配会退化成目录查询；且通配会连带授予合同明确不授予的 fork/search。
+
+验证：worker bundle 重建后白名单已更新（`worker-entry.js` 内可见新的 10 项）；`packages/host/tests/worker-profiles/types.test.ts` 12/12 通过；新增两条回归断言——白名单里的每个 `session_*` 必须是 `DUYA_APP_TOOL_NAMES` 实际提供的名字，以及 Coordinator 拿到生命周期工具面但拿不到 fork/search 与任何设备工具。

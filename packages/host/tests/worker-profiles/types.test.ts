@@ -1,21 +1,77 @@
 import { describe, it, expect } from 'vitest';
 import { PRESET_AGENT_PROFILES } from '../../src/worker-profiles/types.js';
-import { PROJECT_COORDINATOR_PROFILE_ID } from '../../src/project/identity.js';
+import {
+  PROJECT_COORDINATOR_ALLOWED_TOOLS,
+  PROJECT_COORDINATOR_PROFILE_ID,
+} from '../../src/project/identity.js';
 import { resolveAllowedTools } from '@duya/agent-runtime/authorization/tool-filter';
+import { DUYA_APP_TOOL_NAMES } from '@duya/capabilities/AppServer/app-tool-namespace';
 
 describe('PRESET_AGENT_PROFILES', () => {
   it('project-coordinator runs on the dedicated project prompt system', () => {
     const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
-    expect(coordinator.allowedTools).toEqual(['session', 'project', 'todo']);
+    expect(coordinator.allowedTools).toEqual([...PROJECT_COORDINATOR_ALLOWED_TOOLS]);
     expect(coordinator.promptSystem).toBe('project');
     expect(coordinator.suppressIdentityBlock).toBe(true);
     expect(coordinator.identityPrompt).toBeUndefined();
     expect(coordinator.userVisible).toBe(false);
     const result = resolveAllowedTools(
       coordinator,
-      ['session', 'todo', 'project', 'read', 'write', 'bash', 'task', 'memory'],
+      [
+        'session_spawn', 'session_get', 'session_reply', 'session_read', 'session_rename',
+        'session_list', 'session_send', 'session_status', 'session_cancel', 'session_control',
+        'session_fork', 'session_search',
+        'project', 'todo', 'read', 'write', 'bash', 'task', 'memory',
+      ],
     );
-    expect(result.allowed.sort()).toEqual(['project', 'session', 'todo']);
+    expect(result.allowed.sort()).toEqual([
+      'project', 'session_cancel', 'session_control', 'session_get', 'session_list',
+      'session_read', 'session_rename', 'session_reply', 'session_send', 'session_spawn',
+      'session_status', 'todo',
+    ]);
+    expect(result.isValid).toBe(true);
+  });
+
+  it('project-coordinator allowlist names tools the app layer actually serves', () => {
+    // The whitelist used to name a single `session` tool. When #579 moved the
+    // Session tools into the `duya_app` MCP and split that one tool into
+    // per-action ones, the literal stopped matching anything — and nothing
+    // failed: the Coordinator simply lost its whole Session surface, because
+    // an allowlist that matches no tool is not an error. Checking the names
+    // against the authoritative list is what makes that drift loud.
+    const served = new Set<string>(DUYA_APP_TOOL_NAMES);
+    for (const name of PROJECT_COORDINATOR_ALLOWED_TOOLS) {
+      if (!name.startsWith('session_')) continue;
+      expect(served.has(name)).toBe(true);
+    }
+  });
+
+  it('project-coordinator keeps its session lifecycle surface and nothing more', () => {
+    // The contract grants the Coordinator the Session lifecycle (spawn, get,
+    // read, rename, send, status, cancel, control) and the tools its prompt
+    // tells it to reach for (`session list`, `session reply`). It explicitly
+    // declines to grant every Session tool #579 registered — `session_fork`
+    // and `session_search` stay out of its hand — and it has no device tools.
+    const coordinator = PRESET_AGENT_PROFILES.find((p) => p.id === PROJECT_COORDINATOR_PROFILE_ID)!;
+    const result = resolveAllowedTools(
+      coordinator,
+      [
+        'session_spawn', 'session_get', 'session_reply', 'session_read', 'session_rename',
+        'session_list', 'session_send', 'session_status', 'session_cancel', 'session_control',
+        'session_fork', 'session_search',
+        'project', 'todo', 'read', 'write', 'bash', 'task', 'memory', 'send_message',
+      ],
+    );
+    for (const granted of [
+      'session_spawn', 'session_get', 'session_reply', 'session_read', 'session_rename',
+      'session_list', 'session_send', 'session_status', 'session_cancel', 'session_control',
+      'project', 'todo',
+    ]) {
+      expect(result.allowed).toContain(granted);
+    }
+    for (const denied of ['session_fork', 'session_search', 'read', 'write', 'bash', 'task', 'send_message']) {
+      expect(result.denied).toContain(denied);
+    }
     expect(result.isValid).toBe(true);
   });
   it('includes the memory-curator preset', () => {
