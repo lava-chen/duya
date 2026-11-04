@@ -3143,6 +3143,7 @@ export class TUIApp {
             id: message.tool_call_id,
             result: transcriptText(resultBlock?.content ?? message.content),
             error: message.status === 'error' || resultBlock?.is_error === true,
+            durationMs: message.duration_ms,
           },
         });
         continue;

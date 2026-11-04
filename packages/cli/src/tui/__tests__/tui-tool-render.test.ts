@@ -16,11 +16,13 @@
 import { describe, expect, it } from 'vitest';
 import { TranscriptModel } from '../blocks.js';
 import {
+  formatDuration,
   formatToolResult,
   isLocalShellTool,
   isShellTool,
   selectShellOutput,
   shellCommandOf,
+  stripToolResultEnvelope,
   toolGroupKey,
 } from '../tool-render.js';
 import { DEFAULT_RENDER_OPTIONS, renderTranscript } from '../transcript-view.js';
@@ -118,6 +120,40 @@ describe('selectShellOutput', () => {
 
   it('reports empty output rather than rendering nothing', () => {
     expect(selectShellOutput('', 'ok', 5)).toEqual(['(no output)']);
+  });
+});
+
+describe('stripToolResultEnvelope', () => {
+  it('drops both model-facing envelope lines', () => {
+    expect(stripToolResultEnvelope('[completed] bash\none line\n[Duration: 174ms]')).toBe('one line');
+    expect(stripToolResultEnvelope('[failed] edit\nboom\n[Duration: 12ms]')).toBe('boom');
+  });
+
+  it('drops each end only when it is the envelope', () => {
+    // A command whose own output opens with prose keeps every line of it.
+    expect(stripToolResultEnvelope('total 8\ndrwxr-xr-x\n-rw-r--r--')).toBe('total 8\ndrwxr-xr-x\n-rw-r--r--');
+    expect(stripToolResultEnvelope('a\nb\n[Duration: soon]')).toBe('a\nb\n[Duration: soon]');
+  });
+
+  it('never empties a single-line result', () => {
+    expect(stripToolResultEnvelope('[completed] bash')).toBe('[completed] bash');
+  });
+});
+
+describe('formatDuration', () => {
+  it('spends one decimal below a minute', () => {
+    expect(formatDuration(174)).toBe('0.2s');
+    expect(formatDuration(3_200)).toBe('3.2s');
+    expect(formatDuration(59_999)).toBe('60.0s');
+  });
+
+  it('switches to minutes above a minute', () => {
+    expect(formatDuration(125_000)).toBe('2m05s');
+  });
+
+  it('rounds a sub-tenth call up rather than to zero', () => {
+    // `0.0s` reads as a missing measurement; 40ms is not instantaneous.
+    expect(formatDuration(40)).toBe('0.1s');
   });
 });
 
@@ -268,17 +304,71 @@ describe('rendered transcript', () => {
     expect(rendered).toContain(`$ ${command}`);
   });
 
-  it('folds a shell result to its last line and counts what it hides', () => {
+  it('folds a shell result to its first line and counts what it hides', () => {
     const model = new TranscriptModel();
     model.apply({ type: 'tool_use', data: { id: 'b3', name: 'bash', input: { command: 'npm test' } } });
     model.apply({ type: 'tool_result', data: { id: 'b3', result: 'pass 1\npass 2\npass 3\nfail 4' } });
     const rendered = strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false }));
     // The marker counts the lines BEHIND the fold, not the lines in the result,
-    // and the one row a fold keeps is the LAST one: a command's conclusion sits
-    // at the end, so a folded call that shows nothing shows the wrong thing.
+    // and the one row a fold keeps is the HEAD: it states what the command
+    // produced, and unlike a tail it does not move between frames.
     expect(rendered).toContain('[+ 3 output lines · Ctrl+T]');
-    expect(rendered).toContain('fail 4');
-    expect(rendered).not.toContain('pass 1');
+    expect(rendered).toContain('pass 1');
+    expect(rendered).not.toContain('fail 4');
+  });
+
+  it('keeps the model-facing result envelope off the screen', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 'b5', name: 'bash', input: { command: 'git status' } } });
+    model.apply({
+      type: 'tool_result',
+      // What `buildToolResultEnvelope` hands the model, verbatim.
+      data: {
+        id: 'b5',
+        result: '[completed] bash\nnothing to commit, working tree clean\n[Duration: 174ms]',
+        durationMs: 174,
+      },
+    });
+    const folded = strip(renderTranscript(model, { ...DEFAULT_RENDER_OPTIONS, showToolResults: false }));
+    // Neither envelope line belongs to the reader: the header restates the tool
+    // the row already names, and the footer is timing that now sits on the row.
+    expect(folded).not.toContain('[completed] bash');
+    expect(folded).not.toContain('[Duration:');
+    expect(folded).toContain('nothing to commit, working tree clean');
+    // One output line behind a one-line budget: nothing is hidden, so the
+    // marker that used to count the envelope away is gone too.
+    expect(folded).not.toContain('[+ ');
+    expect(folded).toContain('· 0.2s');
+
+    const expanded = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    expect(expanded).not.toContain('[Duration:');
+    expect(expanded).toContain('nothing to commit, working tree clean');
+  });
+
+  it('puts the call duration on a batch child row', () => {
+    const model = new TranscriptModel();
+    for (const [index, word] of ['first', 'second'].entries()) {
+      const id = `c${index}`;
+      model.apply({ type: 'tool_use', data: { id, name: 'bash', input: { command: `echo ${word}` } } });
+      model.apply({
+        type: 'tool_result',
+        data: { id, result: `[completed] bash\n${word} output\n[Duration: 2500ms]`, durationMs: 2_500 },
+      });
+    }
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    expect(rendered).toContain('echo first · 2.5s');
+    expect(rendered).toContain('echo second · 2.5s');
+    expect(rendered).not.toContain('[Duration:');
+  });
+
+  it('draws no duration for a call whose producer did not measure it', () => {
+    const model = new TranscriptModel();
+    model.apply({ type: 'tool_use', data: { id: 'b6', name: 'bash', input: { command: 'ls' } } });
+    model.apply({ type: 'tool_result', data: { id: 'b6', result: 'a\nb' } });
+    const rendered = strip(renderTranscript(model, DEFAULT_RENDER_OPTIONS));
+    // An unmeasured call is not a zero-length one; `· 0.0s` would be a fabrication.
+    expect(rendered).not.toContain('· 0.0s');
+    expect(rendered).not.toContain('· 0.1s');
   });
 
   it('pins the exit code of a failed command in the body', () => {

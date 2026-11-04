@@ -154,6 +154,15 @@ export interface ToolBlock {
   result?: string;
   status: 'running' | 'ok' | 'error' | 'unknown';
   /**
+   * How long the call took, in the producer's own milliseconds.
+   *
+   * Kept as a number rather than read back out of `result`: the duration rides
+   * the wire twice, once inside the model-facing envelope and once as this
+   * field, and the renderer uses the field so the row can show it without the
+   * envelope ever reaching the screen.
+   */
+  durationMs?: number;
+  /**
    * The UNCLIPPED command of a shell tool.
    *
    * Kept beside `preview` because `preview` is clipped to one line and the
@@ -784,10 +793,14 @@ export class TranscriptModel {
     failed: boolean,
     indeterminate = false,
     metadata?: unknown,
+    durationMs?: number,
   ): ToolBlock | null {
     const block = this.toolsByCallId.get(callId);
     if (block === undefined) return null;
     block.result = result;
+    if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) {
+      block.durationMs = durationMs;
+    }
     // The live tail is superseded, not supplemented: it is what a poller
     // happened to sample, and keeping it would leave an 8 KiB build-log buffer
     // alive for the rest of the session on a block that no longer reads it.
@@ -1053,12 +1066,14 @@ export class TranscriptModel {
         if (!this.toolsByCallId.has(callId)) {
           this.upsertTool(callId, asString(payload['name']), undefined);
         }
+        const rawDuration = payload['durationMs'];
         const block = this.completeTool(
           callId,
           asString(payload['result']),
           payload['error'] === true,
           payload['indeterminate'] === true,
           payload['metadata'],
+          typeof rawDuration === 'number' ? rawDuration : undefined,
         );
         return block === null ? { kind: 'none' } : { kind: 'mutate', block };
       }
