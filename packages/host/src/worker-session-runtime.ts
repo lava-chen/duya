@@ -1,5 +1,7 @@
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
 import { definedProperties } from './worker-context/defined-properties.js';
+import { flattenSystemProjection } from './worker-context/system-projection.js';
+import { buildCompositionSnapshot, checkCompositionConsistency, checkReinjectedSystemContent, type CompositionSnapshot, } from './worker-compaction/composition-consistency.js';
 import { ExecutionLocationError, ExecutionLocationFence, type ExecutionLocationSwitch } from './workspace/execution-location-fence.js';
 import { sessionDb } from './worker-db-client.js';
 import { attachChildJournal } from './worker-journal/child-journal.js';
@@ -81,7 +83,7 @@ import { buildMCPCapabilityCatalog } from '@duya/capabilities/MCP/capability-cat
 import type { MailboxRow } from '@duya/host/worker-mailbox-row';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '@duya/host/worker-hooks/loop';
 import { applyHookInjection, renderHookContextEnvelope, type InjectableMessage, } from '@duya/host/worker-hooks/injection';
-import { applyContextRail, type ContextBlock, } from '@duya/host/worker-context/context-rail';
+import { applyContextRail, collectRailBlockIds, type ContextBlock, } from '@duya/host/worker-context/context-rail';
 import {
     buildPromptSnapshot,
     newPromptLedgerState,
@@ -1052,6 +1054,12 @@ export class WorkerSession implements AgentRuntime {
      * rebuilt every request, so a resumed session simply emits once more.
      */
     private timeReminderState: TimeReminderEmissionState = {};
+    /**
+     * Composition snapshot of the last request actually sent (plan 624 F2).
+     * Used to invalidate the in-memory rail baseline when compaction changes
+     * the conversation window.
+     */
+    private lastCompositionSnapshot: CompositionSnapshot | undefined;
     /**
      * The prompt ledger's per-session state (plan 619 Phase 4): which
      * texts have already been written, so an unchanged one is recorded
@@ -2589,16 +2597,15 @@ export class WorkerSession implements AgentRuntime {
         const projectedSystem = projectSystemPrompt(systemSegments);
         // The projection can return blocks instead of a string when a system
         // segment carries structured content (a `legacy_system` row or a
-        // compaction's `reinjectedSystemMessages`). Those blocks are dropped
-        // here — the model never sees them. Plan 619 defect b tracks the
-        // size of the blind spot before the real fix lands; until then the
-        // drop is counted, not silent.
-        const systemFromProjection = typeof projectedSystem === 'string' ? projectedSystem : '';
-        if (typeof projectedSystem !== 'string' && projectedSystem.length > 0) {
-            const blockCount = projectedSystem.length;
-            this.systemBlockDropCount += blockCount;
+        // compaction's `reinjectedSystemMessages`). Plan 624 B2 flattens the
+        // text blocks instead of discarding the whole projection; only blocks
+        // that cannot live in a string system prompt are counted.
+        const flattenedSystem = flattenSystemProjection(projectedSystem);
+        const systemFromProjection = flattenedSystem.text;
+        if (flattenedSystem.unrepresentableBlocks > 0) {
+            this.systemBlockDropCount += flattenedSystem.unrepresentableBlocks;
             logger.warn(
-                `[Agent] dropped ${blockCount} structured system block(s) from the projection ` +
+                `[Agent] ${flattenedSystem.unrepresentableBlocks} non-text system block(s) cannot live in a string system prompt ` +
                 `(total ${this.systemBlockDropCount}); plan 619 defect b`,
             );
         }
@@ -2643,27 +2650,63 @@ export class WorkerSession implements AgentRuntime {
             this.contextRailBlocks,
             { now: Date.now(), previous: this.lastRailContents },
         );
+        // Plan 624 F2: compaction changes the conversation window while the
+        // rail baseline lives only in memory. Compare what was promised with
+        // what actually reached the provider array; on a mismatch discard the
+        // baseline and re-establish every block from first-contact framing.
+        const compositionSnapshot = buildCompositionSnapshot(
+            String(countTimelineCompactions(this.timeline.snapshot())),
+            this.contextRailBlocks,
+        );
+        const consistency = checkCompositionConsistency(
+            this.lastCompositionSnapshot,
+            compositionSnapshot,
+            collectRailBlockIds(messages as unknown as InjectableMessage[]),
+        );
+        let effectiveRailReport = railReport;
+        if (consistency.restore) {
+            effectiveRailReport = applyContextRail(
+                messages as unknown as InjectableMessage[],
+                this.contextRailBlocks,
+                { now: Date.now() },
+            );
+            logger.info(
+                `[Agent] composition restore: reason=${consistency.reason}, ` +
+                `window=${consistency.snapshot.windowId}, blocks=${consistency.snapshot.blockIds.length}`,
+            );
+        }
+        this.lastCompositionSnapshot = consistency.snapshot;
         // The baseline advances only after the request is built, so the next
         // turn compares against what this turn actually sent.
         this.lastRailContents = new Map(this.contextRailBlocks.map((block) => [block.id, block.content]));
-        if (railReport.changed.length > 0 || railReport.removed.length > 0) {
-            logger.debug(`[Agent] context rail: ${railReport.changed.length} updated (${railReport.changed.join(', ')}), ${railReport.removed.length} removed (${railReport.removed.join(', ')})`);
+        if (effectiveRailReport.changed.length > 0 || effectiveRailReport.removed.length > 0) {
+            logger.debug(`[Agent] context rail: ${effectiveRailReport.changed.length} updated (${effectiveRailReport.changed.join(', ')}), ${effectiveRailReport.removed.length} removed (${effectiveRailReport.removed.join(', ')})`);
         }
         // The projection can return blocks instead of a string when a system
         // segment carries structured content (a `legacy_system` row or a
-        // compaction's `reinjectedSystemMessages`). Those blocks are dropped
-        // here — the model never sees them. Plan 619 defect b tracks the
-        // size of the blind spot before the real fix lands; until then the
-        // drop is counted, not silent.
-        const systemFromProjection = typeof projection.system === 'string'
-            ? projection.system
-            : '';
-        if (typeof projection.system !== 'string' && projection.system.length > 0) {
-            const blockCount = projection.system.length;
-            this.systemBlockDropCount += blockCount;
+        // compaction's `reinjectedSystemMessages`). Plan 624 B2 keeps the text.
+        const flattenedSystem = flattenSystemProjection(projection.system);
+        let systemFromProjection = flattenedSystem.text;
+        if (flattenedSystem.unrepresentableBlocks > 0) {
+            this.systemBlockDropCount += flattenedSystem.unrepresentableBlocks;
             logger.warn(
-                `[Agent] dropped ${blockCount} structured system block(s) from the projection ` +
+                `[Agent] ${flattenedSystem.unrepresentableBlocks} non-text system block(s) cannot live in a string system prompt ` +
                 `(total ${this.systemBlockDropCount}); plan 619 defect b`,
+            );
+        }
+        // Plan 624 F2: a compaction entry promises to reinject system content.
+        // If the projection did not carry it, append it here rather than let
+        // the next request silently lose the post-compaction context.
+        const reinjected = checkReinjectedSystemContent(
+            context.compaction?.reinjectedSystemMessages,
+            systemFromProjection,
+        );
+        if (reinjected.missing.length > 0) {
+            systemFromProjection = [systemFromProjection, ...reinjected.missing]
+                .filter((part) => part.length > 0)
+                .join('\n\n');
+            logger.warn(
+                `[Agent] restored ${reinjected.missing.length}/${reinjected.checked} reinjected system segment(s) after compaction; plan 624 F2`,
             );
         }
         const merged = systemPromptContent && systemFromProjection

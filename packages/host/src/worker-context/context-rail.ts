@@ -143,6 +143,16 @@ export function applyContextRail(
   return { changed, added, removed, unchanged }
 }
 
+/** Ids of the rail blocks actually present in a provider-bound message array. */
+export function collectRailBlockIds(messages: readonly InjectableMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    const key = message.metadata?.[CONTEXT_RAIL_KEY_METADATA];
+    if (typeof key === 'string') ids.push(key);
+  }
+  return ids;
+}
+
 /** Drop rail blocks whose slot is no longer filled; returns the dropped ids. */
 function removeOrphanedRailBlocks(
   messages: InjectableMessage[],
