@@ -58,6 +58,13 @@ import { RenderScheduler } from './render-scheduler.js';
 import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
+import {
+  composeTerminalTitle,
+  screenActive,
+  terminalTitleEnabled,
+  TerminalTitle,
+  type TerminalTitleWriter,
+} from './terminal-title.js';
 import { OverlayState, isDestructiveRequest, type PermissionDecision, type QuestionAnswers } from './overlay.js';
 import {
   DEFAULT_RENDER_OPTIONS,
@@ -308,8 +315,28 @@ export interface RenderConfig {
   readonly unicode: boolean;
 }
 
-export interface TUIAppOptions {  /** Window title. */
+export interface TUIAppOptions {
+  /**
+   * Program name for the window/tab title.
+   *
+   * Written as OSC 0 while the session runs and cleared on exit. It names the
+   * program; `sessionTitle` names the conversation, and the two are composed
+   * by `composeTerminalTitle`.
+   */
   readonly title?: string;
+  /**
+   * Conversation label for the window/tab title, re-read on every write.
+   *
+   * A callback rather than a string: `/resume` and draft adoption switch the
+   * session without rebuilding the TUI.
+   */
+  readonly sessionTitle?: () => string;
+  /**
+   * Where the OSC 0 title goes. Defaults to the terminal the TUI draws on, and
+   * is disabled there when stdout is not a tty. Injectable so a test can read
+   * the bytes without claiming a real terminal.
+   */
+  readonly terminalTitle?: TerminalTitle;
   /** Renderer override; by default DUYA_TUI_RENDERER selects the implementation. */
   readonly renderer?: ScreenRenderer;
   /**
@@ -732,6 +759,17 @@ export class TUIApp {
   private readonly backgroundTasks = new BackgroundTaskModel();
 
   /**
+   * The window/tab title, or a disabled writer when stdout is not a tty.
+   *
+   * Deliberately independent of the frame surface: a title is not screen
+   * content, it survives the alternate buffer, and it is the one output that
+   * still means something when the window is not focused.
+   */
+  private readonly windowTitle: TerminalTitle;
+  /** Program name half of the title; `TUIAppOptions.title`, defaulted. */
+  private readonly appTitle: string;
+
+  /**
    * Whether a modal owns the input. Stored on the tracker (it decides the label)
    * and re-exposed here so the twenty call sites that ask the TUI stay readable.
    */
@@ -741,6 +779,10 @@ export class TUIApp {
 
   private set waitingForPermission(value: boolean) {
     this.activity.waitingForPermission = value;
+    // The single write point for this flag, so the title cannot disagree with
+    // the overlay: a permission prompt is the one state worth telling a user
+    // about while they are looking at another window.
+    this.refreshTerminalTitle();
   }
   /**
    * The working tail's spinner.
@@ -847,6 +889,19 @@ export class TUIApp {
     this.terminal = new TerminalSession({ input: options.input, output: options.output });
     this.writer = this.terminal.writer;
     this.output = this.writer;
+    // `terminal.output`, not `this.writer`: the writer claims `isTTY: true`
+    // unconditionally so blessed-style consumers keep working, which would make
+    // the title try to write OSC bytes into a pipe.
+    const titleWriter = this.terminal.output as TerminalTitleWriter;
+    this.appTitle = options.title ?? 'duya';
+    this.windowTitle = options.terminalTitle ?? new TerminalTitle({
+      writer: titleWriter,
+      // Screen truncates UTF-8 titles to a byte; ASCII is the only safe
+      // encoding there. Read from the environment, not from `terminalEnv`,
+      // which has no multiplexer dimension.
+      encoding: screenActive() ? 'ascii' : 'unicode',
+      enabled: terminalTitleEnabled() && titleWriter.isTTY === true,
+    });
     const proxy = this.writer as unknown as Record<string, unknown>;
 
     // The renderer is owned end to end: nothing sits between this class and the
@@ -976,6 +1031,7 @@ export class TUIApp {
     }
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
+    this.refreshTerminalTitle();
   }
 
   /** Tear down, restoring the terminal. */
@@ -999,6 +1055,11 @@ export class TUIApp {
     this.releaseAltScreen();
     this.inlineSurface?.stop();
     this.stopSpinner();
+    // Before the terminal is released: the title is not screen content, so
+    // leaving the alternate buffer does not restore it, and an interrupted
+    // session would otherwise leave the tab labelled with a conversation the
+    // user has exited.
+    this.windowTitle.clear();
     if (this.inputDriver !== null) {
       // Pop whatever we pushed, BEFORE detaching: a pushed flag left behind
       // outlives the process as a broken keyboard for the shell the user
@@ -1012,6 +1073,24 @@ export class TUIApp {
     // Clipboard images live in a temp directory the worker reads by path only
     // during a turn, so this process exiting ends the file's useful life.
     void disposeClipboardTempDir();
+  }
+
+  /**
+   * Re-compose the window/tab title from the current phase.
+   *
+   * Called on the transitions that carry information — turn start/end, a
+   * permission prompt appearing or clearing, a session switch — plus once at
+   * start. Never per frame and never per spinner tick: every write makes a tab
+   * bar repaint, and a title that animates is a title nobody reads.
+   */
+  refreshTerminalTitle(): void {
+    if (this.disposed) return;
+    this.windowTitle.set(composeTerminalTitle({
+      app: this.appTitle,
+      session: this.options.sessionTitle?.() ?? '',
+      phase: this.waitingForPermission ? 'waiting' : this.busy ? 'working' : 'idle',
+      encoding: this.windowTitle.encoding,
+    }));
   }
 
   /** Repaint external controller state, such as pending follow-ups. */
@@ -3050,6 +3129,7 @@ export class TUIApp {
       if (this.commitBuffers()) this.noteTranscriptMutation();
       if (this.model.finishRun()) this.noteTranscriptMutation();
     }
+    this.refreshTerminalTitle();
     this.scheduleRender();
   }
 

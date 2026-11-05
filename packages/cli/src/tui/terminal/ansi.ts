@@ -33,6 +33,10 @@ import { hasAttr, safeHyperlink, sameStyle, type StyledSpan } from '../core/span
 const CSI = '\x1b[';
 /** ESC. */
 const ESC = '\x1b';
+/** OSC introducer: `ESC ]`. */
+const OSC = '\x1b]';
+/** OSC terminator. BEL rather than ST: see `setWindowTitle`. */
+const BEL = '\x07';
 
 /** Move the cursor to a 1-based row/column. */
 export function cursorTo(row: number, column: number): string {
@@ -101,6 +105,35 @@ export function enterAlternateScreen(): string {
 /** Return from the alternate screen buffer. */
 export function exitAlternateScreen(): string {
   return `${CSI}?1049l`;
+}
+
+/**
+ * Set the window and tab title (OSC 0).
+ *
+ * ## Why OSC 0 and not OSC 2
+ *
+ * OSC 2 sets the window title only; OSC 0 sets the icon name AND the window
+ * title. Every tab bar a user is likely to look at — Windows Terminal, iTerm2,
+ * VS Code with `tabs.title: "${sequence}"`, tmux's `set-titles` — reads the
+ * window title, so the two behave identically there. Where they differ, OSC 0
+ * also renames the taskbar/Dock entry, which is the surface that still answers
+ * "which agent is this" when the terminal is behind another window.
+ *
+ * ## Why BEL and not ST
+ *
+ * Both terminate an OSC, but some terminal integrations surface a ST
+ * terminator in process decorations even though they accept the title update.
+ * BEL is the shorter encoding and the one every implementation accepts.
+ *
+ * ## What this function does NOT do
+ *
+ * It does not sanitise. Title text is assembled from model output, session
+ * names and paths, and a raw `ESC` or `BEL` in that text closes the sequence
+ * early and spills the remainder into the terminal as control bytes. That
+ * policy lives in `terminal-title.ts`, which is the only caller in production.
+ */
+export function setWindowTitle(title: string): string {
+  return `${OSC}0;${title}${BEL}`;
 }
 
 /** Show the cursor. */
