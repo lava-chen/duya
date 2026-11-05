@@ -35,3 +35,24 @@ export {
   MAX_PROMPT_CACHE_KEY_LENGTH,
   ANTHROPIC_CACHE_BREAKPOINTS,
 } from './cache-selection.js';
+export {
+  resolveTimeReminder,
+  inferTimeReminderTurnKind,
+  DEFAULT_TIME_REMINDER_INTERVAL_SECONDS,
+  DEFAULT_TIME_REMINDER_DELIVERY_MODE,
+  TIME_REMINDER_BLOCK_ID,
+  type TimeReminderBlockSelection,
+  type TimeReminderSelection,
+  type TimeReminderSelectionInput,
+} from './reminder-selection.js';
+export {
+  decideTimeReminder,
+  renderTimeReminder,
+  renderTimeUnavailable,
+  type TimeReminderDecision,
+  type TimeReminderDeliveryMode,
+  type TimeReminderEmissionState,
+  type TimeReminderReason,
+  type TimeReminderRequest,
+  type TimeReminderTurnKind,
+} from './time-reminder.js';

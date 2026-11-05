@@ -20,7 +20,7 @@ import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declaration
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { resolveCacheSelection, resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveToolSelection } from '@duya/host/agent-composition';
+import { inferTimeReminderTurnKind, resolveCacheSelection, resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveTimeReminder, resolveToolSelection, type TimeReminderEmissionState } from '@duya/host/agent-composition';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
@@ -482,6 +482,24 @@ export class WorkerSession implements AgentRuntime {
         const resolvedBase = await this._resolveTools(options, appliedProfile);
         const { registry, catalogView } = resolvedBase;
         let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
+        // Plan 624 F1: the clock is a composition decision, not a prompt
+        // section. It rides the volatile rail so the system prefix keeps
+        // its bytes; the window id comes from the compaction count so a
+        // summarised history forces a fresh reading.
+        if (!options?.disableSystemPrompt) {
+            const nowMs = Date.now();
+            const reminder = resolveTimeReminder({
+                nowMs,
+                windowId: String(countTimelineCompactions(this.timeline.snapshot())),
+                turnKind: inferTimeReminderTurnKind(this.messages.at(-1)),
+                state: this.timeReminderState,
+                clockAvailable: Number.isFinite(nowMs) && !Number.isNaN(new Date(nowMs).getTime()),
+            });
+            this.timeReminderState = reminder.state;
+            if (reminder.block) {
+                this.contextRailBlocks.push(reminder.block);
+            }
+        }
         systemPrompt = systemPrompt
             ? `${systemPrompt}\n\n${TOOL_GROUP_PROGRESS_INSTRUCTIONS}`
             : TOOL_GROUP_PROGRESS_INSTRUCTIONS;
@@ -1029,6 +1047,11 @@ export class WorkerSession implements AgentRuntime {
      * session — a resumed session simply sees its first turn as first contact.
      */
     private lastRailContents = new Map<string, string>();
+    /**
+     * Live-clock reminder state (plan 624 F1). In-memory only: the rail is
+     * rebuilt every request, so a resumed session simply emits once more.
+     */
+    private timeReminderState: TimeReminderEmissionState = {};
     /**
      * The prompt ledger's per-session state (plan 619 Phase 4): which
      * texts have already been written, so an unchanged one is recorded
