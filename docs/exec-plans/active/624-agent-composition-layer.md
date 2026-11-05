@@ -307,18 +307,19 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 
 - [x] 现状勘察与缺口确认（619/622/编排三份计划对账，代码证据见上）
 - [x] 分配 worktree、建立分支与依赖链接
-- [x] A1a 契约类型 + 无 IO 的 scope / prompt 选择 resolver（9 用例）
-- [ ] A1b `CompositionPorts` + 其余 4 个 resolver 骨架
-- [ ] A2 shadow 对拍
-- [ ] B1 prompt 维度切换
-- [ ] B2 修 defect b
-- [ ] C1 tools / modes / permissions 切换
-- [ ] D1 SectionRegistry
-- [ ] D2 增量帧
-- [ ] E1 缓存双支持
-- [ ] F1 时间提醒 fragment
-- [ ] F2 压缩一致性
-- [ ] 计划入口与 catalog 登记
+- [x] A1a 契约类型 + 无 IO 的 scope / prompt 选择 resolver（9 用例，`71ed7df6`）
+- [x] A1b tools / modes / permissions / cache 四个 resolver 与单测（`f46042f3`）
+- [x] A2 等价对拍（以对拍测试形式落地，见发现 9；`1100e77a` / `833cf81b`）
+- [x] B1 prompt 维度切换（`1100e77a`）
+- [x] B2 修 defect b（`0ca138f7`）
+- [x] C1 tools / modes / permissions 切换（`833cf81b`）
+- [x] D1 段通道单点注册表（`4c83d4ff`）
+- [x] D2 增量帧（`b6b0ae0b`）
+- [x] E1 缓存双支持：Responses 侧 `prompt_cache_key`（`1bee26b9`）
+- [x] F1 时间提醒 fragment（`7635fe23`）
+- [x] F2 压缩一致性（`0ca138f7`）
+- [x] 计划入口与 catalog 登记（`71ed7df6`）
+- [ ] 提示词系统 v2 剩余项：冻结 `AgentComposition` 计划对象、`ChatOptions` 注入项/用户请求分离、bot 双轨合一、config 改为引用 SectionRegistry（见「接续」）
 
 ## 发现与决策
 
@@ -330,6 +331,11 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 6. **主检出 `worker-session-runtime.ts` 有并行未提交改动。** 本计划 B1/C1 触及同一文件，实施前必须与该任务协调独占路径，否则会产生静默覆盖。
 7. **契约暂时落 `packages/host/src/agent-composition/`，不落 agent-core。** worktree 的 `@duya/*` 经 junction 指向主检出 `dist`，新包源码要先 `build:packages` 才能被消费方解析；而 A 阶段只有 host 消费。等 E1/F1 需要 runtime 侧读取 `CacheComposition` / `ReminderComposition` 时再上移，并同步层表——迁移成本是一次纯类型移动。
 8. **`scope` 不能用 `profile.kind` 单独判定。** 实测 `SPECIAL_AGENT_PROFILES` 含 4 个成员（`gateway`、`cron`、`memory-curator` 及既有项），且 config agent 是 `kind:'main' + isPreset:false`。因此判定顺序必须是 bot → coordinator by id → kind，测试用全量预设表锁住这张映射，新增 preset 若未分类会直接失败。
+9. **A2 以对拍测试落地，没有引入运行时 `DUYA_COMPOSITION_SHADOW=1` 开关。** 六个维度全部切换后，运行时 shadow 只会把同一 resolver 的输出与自身比较，是恒真对拍。等价性改由 `prompt-selection-parity.test.ts` / `selection-parity.test.ts` 对每个 preset 与被替换的表达式逐项断言；将来若再出现新的硬编码路径，才需要重新引入 shadow。
+10. **codex 式 retained-fragment 校验在当前 duya 必然假绿。** rail 不进 timeline（`context-rail.ts:20-22`），`run-engine.ts:2986-2994` 的 `#compactedHistory` 按 `origin === 'context'` 从**当轮**投影重拼，所以「检查片段是否还在保留历史里」恒真。F2 换成两条可失败检查：压缩条目承诺的 `reinjectedSystemMessages` 是否真进了 system prompt；窗口变化或 provider 侧缺块时作废内存基线并全量重建。
+11. **新增跨包子路径无法在 worktree 通过类型检查。** `@duya/agent-core/context/time-reminder` 经 junction 解析到主检出的 `dist`（没有新 `.d.ts`），报 TS2307。F1 的纯决策函数因此留在 host 组合层；它本来就是 host 的发射策略，runtime 不需要读。发现 7 的理由在这里再次成立。
+12. **`tsc --noEmit`（根 tsconfig）只覆盖 UI，不能替代分包类型检查。** `npm run -w @duya/host typecheck` 有 2 个与本计划无关的既有错误：`http-client.ts:404` / `project-api.ts:64` 缺 `getSessionProjectContext`（`HostProjectApiV1` 已加、实现未跟进）。本计划新增文件在这两条之外没有引入任何类型错误。
+13. **全量 host 套件在 worktree 有环境基线失败。** `vitest run packages/host/tests` 报 86 个文件 collect 失败，签名统一为 `Cannot find package '@duya/plugin-core/...'`（缺 `plugin-core/dist`），单独复跑 `project-api-http.test.ts` 复现同一签名；7 个 30s timeout 属 282 workers 并发争用，隔离复跑 5 文件 / 42 用例全绿。相关切片套件 35 文件 / 320 用例全绿。
 
 ## 验证记录
 
@@ -341,16 +347,41 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 | `b5c36035`（本分支 + A1a） | 同上 | `tsc --noEmit`（根 tsconfig） | 0；0 行输出 | 类型门禁 |
 | `b5c36035`（本分支 + A1a） | 同上 | `npm run architecture:check` | 0；无新增违规（3193 tolerated） | 层门禁 |
 | `b5c36035`（本分支 + A1a） | 同上 | `check:manifest-keys` / `check:test-coverage` / `check:no-ts-suppress` / `check:encoding` | 四项均 0 | 清单与卫生门禁 |
+| `f46042f3`（A1b） | 同上 | `vitest run packages/host/tests/agent-composition` | 0；21 用例通过 | 四个新 resolver |
+| `1100e77a`（B1） | 同上 | `vitest run packages/host/tests/agent-composition packages/host/tests/worker-prompts packages/host/tests/worker-context` | 0 | prompt 字节等价对拍 |
+| `833cf81b`（C1） | 同上 | `vitest run packages/host/tests/worker-prompts packages/host/tests/worker-context packages/host/tests/worker-modes packages/host/tests/bot packages/host/tests/agent-composition` | 28 文件 / 280 用例通过；1 个无关文件因缺 `plugin-core` 构建失败 | 三维度切换对拍 |
+| `4c83d4ff`（D1） | 同上 | `vitest run packages/host/tests/worker-prompts packages/host/tests/worker-context packages/host/tests/agent-composition` | 0；18 文件 / 115 用例通过 | 段通道注册表 |
+| `b6b0ae0b`（D2） | 同上 | `vitest run packages/host/tests/worker-context` | 0 | 增量帧 |
+| `1bee26b9`（E1） | 同上 | `vitest run packages/ai/test/openai-prompt-cache-key.test.ts packages/ai/test/openai-responses.test.ts` | 0 | provider 缓存键 |
+| `7635fe23`（F1） | 同上 | `vitest run packages/host/tests/agent-composition packages/host/tests/worker-context packages/host/tests/worker-prompts packages/agent-core/test/context` | 0；22 文件 / 152 用例通过 | 时间提醒 |
+| `7635fe23`（F1） | 同上 | `npm run -w @duya/agent-core typecheck` / `npm run -w @duya/host typecheck` | 0 / 2（既有基线，见发现 12） | 分包类型检查 |
+| `0ca138f7`（B2+F2） | 同上 | `vitest run packages/host/tests/agent-composition packages/host/tests/worker-context packages/host/tests/worker-compaction packages/host/tests/worker-prompts packages/host/tests/runtime-context-contracts packages/host/tests/session-compaction.test.ts` | 0；35 文件 / 320 用例通过 | 压缩一致性 |
+| `0ca138f7`（B2+F2） | 同上 | `npm run -w @duya/host typecheck` / `tsc --noEmit` / `architecture:check` / 四项卫生门禁 | 2（仅既有基线）/ 0 / 0 / 四项 0 | 类型、层、清单门禁 |
+| `0ca138f7`（B2+F2） | 同上 | `vitest run packages/host/tests`（全量，环境基线） | 1；86 文件 collect 失败 + 7 timeout（见发现 13） | 隔离复跑 5 文件 / 42 用例 0 |
 
 ## 接续 / 结果
 
-**已实现**：A1a——契约类型（`packages/host/src/agent-composition/contract.ts`）、`resolveCompositionScope`（`scope.ts`）、`resolvePromptSelection`（`prompt-selection.ts`）、导出面与 `package.json` 子路径。行为未改变，未接入 `beginTurnAssembly`。
-**已验证**：基线 77 用例、新增 9 用例、`tsc --noEmit`、`architecture:check`、四项卫生门禁全部退出码 0。
+**已实现**（10 个 commit，`71ed7df6` → `0ca138f7`）：
+
+- 组合层 `packages/host/src/agent-composition/`：`scope` / `prompt` / `tools` / `modes` / `permissions` / `cache` / `reminders` 七个纯函数 resolver + `time-reminder.ts` 纯决策规则；`index.ts` 统一导出面。
+- `beginTurnAssembly`（`worker-session-runtime.ts:477`）已是唯一裁决入口：prompt 选择、工具约束、mode 集合、permission mode、`promptCacheKey`、时间提醒块全部读 resolver；`sideQuestion` 不消费提醒状态。
+- 提示词系统：`worker-prompts/sections/placement-registry.ts` 单点决定每段通道并带理由；`worker-context/context-rail.ts` 输出 `Updated / added / removed / unchanged` 报告与带段名的更新帧；`collectRailBlockIds` 提供送达块读取。
+- 缓存：`packages/ai/src/types.ts` 加 `promptCacheKey`，`openai-responses.ts` 在显式设置时发 `prompt_cache_key`；Anthropic 断点不变。
+- 时间提醒：按 interval / delivery mode / compaction window 决策，读钟失败有 unavailable 降级；taxonomy 的 `turn_time` 由 `per_turn+persistent` 改为 `mid_turn+transient`。C′ 保留但不接线，两套哲学不混用。
+- 压缩一致性：`worker-context/system-projection.ts` 把结构化 system 投影展平为文本（修 defect b）；`worker-compaction/composition-consistency.ts` 校验 reinjected 文本与窗口基线，缺失时回填 / 全量重发 rail。
+
+**已验证**：相关切片 35 文件 / 320 用例 0；隔离复跑 timeout 文件 5 文件 / 42 用例 0；根 `tsc --noEmit` 0；`architecture:check` 0（无新增违规）；四项卫生门禁 0；`@duya/agent-core` 分包 typecheck 0；`@duya/host` 分包 typecheck 仅 2 个既有基线错误。
 **已合并**：无。
 
-未提交路径：`packages/host/src/agent-composition/**`、`packages/host/tests/agent-composition/**`、`packages/host/package.json`、本文件、`docs/exec-plans/README.md`、`docs/exec-plans/catalog.md`。
+未提交路径：无（`git status` 干净）。
 外部副作用：新建分支 `codex/624-agent-composition` 与 worktree `.claude/worktrees/composition-layer`。
-阻塞：B1/C1 与主检出中 `worker-session-runtime.ts` 的并行改动冲突，需先确认其归属与合并顺序。
+
+阻塞与未决：
+1. **`CompactionOutcome` 没有 systemPrompt 字段**（`agent-runtime/src/engine/ports.ts:2537-2550`），`engine-sources.ts:429` 丢掉 `run.systemPromptContent`，`run-engine.ts:3054` 用压缩前缓存的 `assembled.systemPrompt`。F2 修了 reinjected 文本回填，但「压缩当轮 system 半区与 message 半区不同 snapshot」仍需协议层改动，未在本计划处理。
+2. **bot 双轨未合并**：`configs/bot.ts` 仍无人引用，真实 bot 走 `getBotAssembly().renderSections()`。
+3. **主检出 `worker-session-runtime.ts` 有并行未提交改动**：本分支基于 `b5c36035` 干净，合并前需确认那份改动的归属与顺序。
+4. **提示词系统 v2 剩余**：冻结 `AgentComposition` 计划对象、`ChatOptions` 注入项与用户请求分离、config 改为引用 SectionRegistry、observer 生产 sink、rail 零消息语义（需先有可 replay 的基线）。
+5. **全量 host 套件环境基线**：缺 `plugin-core/dist` 导致 86 文件 collect 失败，需在可构建 dist 的检出重跑全量回归。
 
 回收：分支未合并，worktree 保留。
-下一步：A1b——在 `packages/host/src/agent-composition/` 增加 `CompositionPorts` 与 tools / modes / permissions / cache 四个 resolver，完成判据是每个 resolver 各有 1 组单测且 `tsc --noEmit` 仍为 0。
+下一步：先在可构建的检出重跑全量回归与 `typecheck:all`，再就阻塞 1 单独立项（协议层 `CompactionOutcome.systemPrompt`），随后推进阻塞 2 与 v2 剩余项。
