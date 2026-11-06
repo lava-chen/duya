@@ -342,9 +342,10 @@ async function lastAssistantText(ctx: TuiSlashContext): Promise<string | null> {
 
 /**
  * Platform clipboard helpers, mirroring the agent CLI's approach: try the
- * native tool, and when none exists print the text instead of failing
- * silently — a copy that reports success without copying is worse than one
- * that shows the content.
+ * native tool, then OSC 52 for terminals reached over SSH, and when neither
+ * exists print the text instead of failing silently — a copy that reports
+ * success without copying is worse than one that shows the content. Native
+ * first: it is the only one of the two that can actually confirm success.
  */
 const CLIPBOARD_COMMANDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['darwin', ['pbcopy']],
@@ -380,11 +381,19 @@ const COPY_COMMAND: TuiSlashCommandDef = {
     }
     if (copyToClipboard(text)) {
       ctx.tui.printNotice(`Copied ${text.length} characters to the clipboard.`);
-    } else {
-      ctx.tui.printNotice('No clipboard tool available — here is the reply:');
-      ctx.tui.printNotice('');
-      ctx.tui.printNotice(text);
+      return { kind: 'handled' };
     }
+    // Over SSH the native tool is usually absent, or writes the REMOTE
+    // machine's clipboard. OSC 52 travels back through the pty to the machine
+    // the user is sitting at, and tmux is handled by the integration's DCS
+    // passthrough. There is no acknowledgement: report "sent", not "copied".
+    if (ctx.tui.copyToTerminalClipboard?.(text) === true) {
+      ctx.tui.printNotice(`Sent ${text.length} characters to the terminal clipboard (OSC 52).`);
+      return { kind: 'handled' };
+    }
+    ctx.tui.printNotice('No clipboard available — here is the reply:');
+    ctx.tui.printNotice('');
+    ctx.tui.printNotice(text);
     return { kind: 'handled' };
   },
 };

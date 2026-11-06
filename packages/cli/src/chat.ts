@@ -1258,6 +1258,10 @@ export async function chatTui(
     // to its id prefix — the same eight characters the status bar shows — which
     // is still enough to tell tabs apart.
     sessionTitle: () => activeSession.title || activeSession.id.slice(0, 8),
+    // OSC 7 and the footer both follow the SESSION's directory: `/project`
+    // moves the surface without changing process.cwd(), and a new tab opened
+    // from this window must land where runs actually execute.
+    workspaceDirectory: () => projectDirectory,
     theme: effectivePreferences.theme,
     inline: effectivePreferences.displayMode === 'inline',
     completionSources,

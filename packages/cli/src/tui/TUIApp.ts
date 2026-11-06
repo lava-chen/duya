@@ -59,6 +59,10 @@ import { Pacer } from './pacer.js';
 import { PasteBurstDetector } from './paste-burst.js';
 import { InputEditor } from './editor.js';
 import {
+  TerminalIntegration,
+  type TerminalProgressState,
+} from './terminal-integration.js';
+import {
   composeTerminalTitle,
   screenActive,
   terminalTitleEnabled,
@@ -337,6 +341,12 @@ export interface TUIAppOptions {
    * the bytes without claiming a real terminal.
    */
   readonly terminalTitle?: TerminalTitle;
+  /**
+   * OSC integrations other than the title: cwd, clipboard, notifications,
+   * progress. Injectable for the same reason as `terminalTitle` — a test can
+   * read the bytes without claiming a real terminal.
+   */
+  readonly terminalIntegration?: TerminalIntegration;
   /** Renderer override; by default DUYA_TUI_RENDERER selects the implementation. */
   readonly renderer?: ScreenRenderer;
   /**
@@ -766,6 +776,8 @@ export class TUIApp {
    * still means something when the window is not focused.
    */
   private readonly windowTitle: TerminalTitle;
+  /** OSC 7 / 52 / 9 / 9;4 — gated, de-duplicated, and cleared on exit. */
+  private readonly terminalIntegration: TerminalIntegration;
   /** Program name half of the title; `TUIAppOptions.title`, defaulted. */
   private readonly appTitle: string;
 
@@ -781,7 +793,10 @@ export class TUIApp {
     this.activity.waitingForPermission = value;
     // The single write point for this flag, so the title cannot disagree with
     // the overlay: a permission prompt is the one state worth telling a user
-    // about while they are looking at another window.
+    // about while they are looking at another window. A notification is the
+    // stronger form of the same fact, for a window that is not visible at all
+    // (no-op unless DUYA_TUI_NOTIFY=1).
+    if (value) this.terminalIntegration.notify('Approval needed');
     this.refreshTerminalTitle();
   }
   /**
@@ -901,6 +916,13 @@ export class TUIApp {
       // which has no multiplexer dimension.
       encoding: screenActive() ? 'ascii' : 'unicode',
       enabled: terminalTitleEnabled() && titleWriter.isTTY === true,
+    });
+    // Same raw stream as the title: `this.writer` claims isTTY unconditionally
+    // for blessed-style consumers, which would send OSC bytes into a pipe.
+    this.terminalIntegration = options.terminalIntegration ?? new TerminalIntegration({
+      writer: titleWriter,
+      program: this.terminalEnv.program,
+      enabled: titleWriter.isTTY === true,
     });
     const proxy = this.writer as unknown as Record<string, unknown>;
 
@@ -1032,6 +1054,9 @@ export class TUIApp {
     this.noteTranscriptMutation();
     this.scheduler.requestImmediate();
     this.refreshTerminalTitle();
+    // OSC 7 once at start. paint() re-checks every frame and the integration
+    // de-duplicates, so `/project` moving the surface needs no second wiring.
+    this.syncTerminalCwd();
   }
 
   /** Tear down, restoring the terminal. */
@@ -1060,6 +1085,9 @@ export class TUIApp {
     // session would otherwise leave the tab labelled with a conversation the
     // user has exited.
     this.windowTitle.clear();
+    // A progress indicator is terminal state, not screen content: leaving the
+    // alternate buffer does not remove it, and neither does clearing the title.
+    this.terminalIntegration.dispose();
     if (this.inputDriver !== null) {
       // Pop whatever we pushed, BEFORE detaching: a pushed flag left behind
       // outlives the process as a broken keyboard for the shell the user
@@ -1091,6 +1119,37 @@ export class TUIApp {
       phase: this.waitingForPermission ? 'waiting' : this.busy ? 'working' : 'idle',
       encoding: this.windowTitle.encoding,
     }));
+    // Both channels describe the same turn state, so they share the one set
+    // of transitions that already refreshes the title. Windows Terminal's
+    // states: 2 = indeterminate (running), 3 = paused (waiting on a human),
+    // 0 = remove. Off by default and hard-gated in TerminalIntegration.
+    const progress: TerminalProgressState = this.waitingForPermission ? 3 : this.busy ? 2 : 0;
+    this.terminalIntegration.progress(progress);
+  }
+
+  /**
+   * Re-announce the working directory (OSC 7) when the surface moves.
+   *
+   * Called from paint(), because `/project` changes the session's directory
+   * without rebuilding the TUI and without a dedicated notification to the
+   * terminal layer. The integration compares URIs and writes only on a real
+   * change, so a per-frame check costs one string compare.
+   */
+  private syncTerminalCwd(): void {
+    this.terminalIntegration.reportCwd(this.options.workspaceDirectory?.() ?? process.cwd());
+  }
+
+  /**
+   * Send text to the clipboard of the machine the terminal runs on (OSC 52).
+   *
+   * `/copy` calls this only after the native clipboard tool failed, which is
+   * the normal case over SSH. Returns whether the sequence was SENT — OSC 52
+   * has no portable acknowledgement, so the caller must not claim a confirmed
+   * copy. Optional on `TuiSlashHost` so command tests need no terminal.
+   */
+  copyToTerminalClipboard(text: string): boolean {
+    if (this.disposed) return false;
+    return this.terminalIntegration.copy(text);
   }
 
   /** Repaint external controller state, such as pending follow-ups. */
@@ -1590,6 +1649,7 @@ export class TUIApp {
    */
   private paint(): void {
     if (!this.running) return;
+    this.syncTerminalCwd();
     this.syncSpinner();
     if (this.inlineSurface !== null) {
       this.paintInline();
@@ -3112,8 +3172,13 @@ export class TUIApp {
 
   /** Mark the turn running or idle. */
   setBusy(busy: boolean): void {
+    const wasBusy = this.busy;
     this.busy = busy;
     this.pacer.reset();
+    // A turn finishing is the one transition a user who has switched windows
+    // is waiting for. No notification for an interrupt that never started a
+    // turn, and no duplicate within the throttle window (default: off).
+    if (wasBusy && !busy) this.terminalIntegration.notify('Turn complete');
     if (busy) {
       this.activity.phase = 'working';
       this.clearActiveActivity();
