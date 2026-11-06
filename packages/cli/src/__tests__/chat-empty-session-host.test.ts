@@ -47,6 +47,7 @@ vi.mock('../tui/index.js', () => ({
     stop() {}
     setBusy() {}
     refresh() {}
+    refreshTerminalTitle() {}
     printUser() {}
     printNotice() {}
     printError(message: string) { this.errors.push(message); }
