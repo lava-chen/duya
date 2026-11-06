@@ -1944,7 +1944,9 @@ export class WorkerSession implements AgentRuntime {
                     : agentsMdSection;
             }
         }
-        if (!overrides.disableSystemPrompt && promptSelection.usesBotAssembly && appliedProfile) {
+        // Plan 624 v2 G2: the bot tail is gated by the frozen section plan,
+        // which is the single place that says a bot has assembly sections.
+        if (!overrides.disableSystemPrompt && composition.sections.botSections.length > 0 && appliedProfile) {
             try {
                 const botContext = await loadBotPromptContext(appliedProfile.id);
                 const summaryEpoch = countTimelineCompactions(this.timeline.snapshot());

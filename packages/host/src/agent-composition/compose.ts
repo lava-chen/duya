@@ -48,6 +48,7 @@ import {
   type TimeReminderSelectionInput,
 } from './reminder-selection.js';
 import { resolveCompositionScope } from './scope.js';
+import { resolveSectionPlan } from './section-plan.js';
 import { resolveToolSelection } from './tools-selection.js';
 
 import type { ChatOptions } from '../worker-run-contracts.js';
@@ -196,6 +197,7 @@ export function composeAgent(input: CompositionInput = {}): AgentComposition {
     : scopeWithoutProfile();
 
   const prompt: PromptSelection = resolvePromptSelection(input.profile);
+  const sections = resolveSectionPlan(input.profile);
   const tools: ToolSelection = resolveToolSelection(input.profile, {
     ...(overrides.allowedTools !== undefined ? { allowedTools: overrides.allowedTools } : {}),
     ...(overrides.disabledTools !== undefined ? { disabledTools: overrides.disabledTools } : {}),
@@ -219,6 +221,7 @@ export function composeAgent(input: CompositionInput = {}): AgentComposition {
   const decisions: readonly CompositionDecision[] = freezeDecisions([
     ...scope.decisions,
     ...prompt.decisions,
+    ...sections.decisions,
     ...tools.decisions,
     ...modes.decisions,
     ...permissions.decisions,
@@ -243,6 +246,7 @@ export function composeAgent(input: CompositionInput = {}): AgentComposition {
   const fingerprint = digestOf({
     scope: scope.scope,
     prompt,
+    sections,
     tools,
     modes,
     permissions,
@@ -254,6 +258,7 @@ export function composeAgent(input: CompositionInput = {}): AgentComposition {
   const plan: AgentComposition = {
     scope: scope.scope,
     prompt: freezeSelection(prompt),
+    sections,
     tools: freezeSelection(tools),
     modes: freezeSelection(modes),
     permissions: freezeSelection(permissions),

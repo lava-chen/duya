@@ -1,22 +1,28 @@
 /**
- * Plan 624 D1 — the placement registry.
+ * Plan 624 D1 / v2 G2 — the section registry.
  *
- * Two claims:
- *   - every section declared by any built-in config is registered, and
- *   - a config cannot move a section to the other delivery channel.
+ * Claims pinned here:
+ *   - every section declared by any live config is registered;
+ *   - no config declares a channel any more (the registry owns it);
+ *   - a config cannot move a section to the other delivery channel;
+ *   - the bot assembly's section list is the ONLY bot section directory.
  *
- * The second one is the regression this file exists for: the same section
+ * The channel regression is the reason this file exists: the same section
  * riding the system channel in one profile and the context channel in another
  * silently changes which bytes the provider cache can reuse.
  */
-
 import { describe, expect, it } from 'vitest';
 
-import { SECTION_PLACEMENTS, resolveSectionPlacement } from '@duya/host/worker-prompts/sections/placement-registry';
+import {
+  BOT_ASSEMBLY_SECTION_IDS,
+  SECTION_PLACEMENTS,
+  resolveSectionPlacement,
+  sectionsForConfig,
+  unregisteredSections,
+} from '@duya/host/worker-prompts/sections/placement-registry';
 import { generalConfig } from '@duya/host/worker-prompts/configs/general';
 import { codeConfig } from '@duya/host/worker-prompts/configs/code';
 import { researchConfig } from '@duya/host/worker-prompts/configs/research';
-import { botConfig } from '@duya/host/worker-prompts/configs/bot';
 import { projectConfig } from '@duya/host/worker-prompts/configs/project';
 import type { PromptSystemConfig } from '@duya/host/worker-prompts/PromptSystem';
 
@@ -24,7 +30,6 @@ const configs: ReadonlyArray<readonly [string, PromptSystemConfig]> = [
   ['general', generalConfig],
   ['code', codeConfig],
   ['research', researchConfig],
-  ['bot', botConfig],
   ['project', projectConfig],
 ];
 
@@ -33,22 +38,37 @@ function sectionNames(config: PromptSystemConfig): string[] {
 }
 
 describe('plan 624 — placement registry', () => {
-  it('registers every section declared by a built-in config', () => {
-    const missing = configs
-      .flatMap(([name, config]) => sectionNames(config).map((section) => `${name}:${section}`))
-      .filter((entry) => {
-        const section = entry.slice(entry.indexOf(':') + 1);
-        return SECTION_PLACEMENTS[section] === undefined;
-      });
-
-    expect(missing).toEqual([]);
+  it('registers every section declared by a live config', () => {
+    for (const [name, config] of configs) {
+      expect(unregisteredSections(name, sectionNames(config))).toEqual([]);
+    }
   });
 
-  it('agrees with every config declaration, so no config has to change', () => {
+  it('is the only owner of the delivery channel', () => {
     for (const [name, config] of configs) {
       for (const section of config.sections) {
-        const sectionName = section.name ?? section.module ?? 'anonymous';
-        expect(() => resolveSectionPlacement(sectionName, section.placement, name)).not.toThrow();
+        expect(section.placement).toBeUndefined();
+        expect(() => resolveSectionPlacement(
+          section.name ?? section.module ?? 'anonymous',
+          section.placement,
+          name,
+        )).not.toThrow();
+        // The registry still hands back the registered channel, so removing
+        // the declaration changed no bytes.
+        expect(resolveSectionPlacement(
+          section.name ?? section.module ?? 'anonymous',
+          undefined,
+          name,
+        )).toBe(SECTION_PLACEMENTS[section.name ?? section.module ?? 'anonymous']?.placement);
+      }
+    }
+  });
+
+  it('covers every config section from the registry directory', () => {
+    for (const [name, config] of configs) {
+      const registered = new Set(sectionsForConfig(name));
+      for (const section of sectionNames(config)) {
+        expect(registered.has(section)).toBe(true);
       }
     }
   });
@@ -57,7 +77,6 @@ describe('plan 624 — placement registry', () => {
     for (const name of ['environment', 'mcp', 'skills', 'memory', 'sessionGuidance', 'vision']) {
       expect(SECTION_PLACEMENTS[name]?.placement).toBe('context');
     }
-    // These look volatile but are not: the text is fixed for the session.
     for (const name of ['platform', 'scratchpad', 'tools', 'identity']) {
       expect(SECTION_PLACEMENTS[name]?.placement).toBe('system');
     }
@@ -71,5 +90,22 @@ describe('plan 624 — placement registry', () => {
   it('lets an unregistered section keep its declaration', () => {
     expect(resolveSectionPlacement('brand-new-section', undefined, 'general')).toBe('system');
     expect(resolveSectionPlacement('brand-new-section', 'context', 'general')).toBe('context');
+  });
+});
+
+describe('plan 624 v2 — the bot section directory', () => {
+  it('registers every assembly section and nothing else under "bot"', () => {
+    expect(BOT_ASSEMBLY_SECTION_IDS.length).toBeGreaterThan(0);
+    expect(sectionsForConfig('bot')).toEqual([...BOT_ASSEMBLY_SECTION_IDS]);
+    for (const id of BOT_ASSEMBLY_SECTION_IDS) {
+      expect(SECTION_PLACEMENTS[id]?.kind).toBe('bot-assembly');
+      expect(SECTION_PLACEMENTS[id]?.placement).toBe('system');
+    }
+  });
+
+  it('does not register a bot PromptSystem config', async () => {
+    const { PromptsRegistry } = await import('@duya/host/worker-prompts/registry');
+    expect(PromptsRegistry.has('bot')).toBe(false);
+    expect(PromptsRegistry.getRegisteredNames().sort()).toEqual(['code', 'general', 'project', 'research']);
   });
 });

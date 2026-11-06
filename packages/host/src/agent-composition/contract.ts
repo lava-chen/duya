@@ -196,6 +196,7 @@ export interface TurnOverrides {
 export interface AgentComposition {
   readonly scope: CompositionScope;
   readonly prompt: PromptSelection;
+  readonly sections: import('./section-plan.js').SectionPlan;
   readonly tools: ToolSelection;
   readonly modes: ModeSelection;
   readonly permissions: PermissionSelection;

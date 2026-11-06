@@ -38,6 +38,7 @@ export {
   type TurnOverrideInput,
 } from './compose.js';
 export { resolveCompositionScope } from './scope.js';
+export { resolveSectionPlan, type SectionPlan } from './section-plan.js';
 export { resolvePromptSelection } from './prompt-selection.js';
 export { resolveToolSelection } from './tools-selection.js';
 export { resolveModeSelection, type ModeModifierLookup } from './modes-selection.js';

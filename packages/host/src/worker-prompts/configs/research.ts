@@ -41,7 +41,6 @@ export const researchConfig: PromptSystemConfig = {
     {
       name: 'outputFormat',
       cachePolicy: 'every-call',
-      placement: 'context',
       // Compute intent inline — resolveResearchIntent is a cheap context fallback.
       compute: (ctx) => getOutputFormatPromptSection(resolveResearchIntent(ctx)),
       description: 'Intent-specific output format',
@@ -50,7 +49,6 @@ export const researchConfig: PromptSystemConfig = {
       name: 'vision',
       template: 'dynamic/vision.hbs',
       cachePolicy: 'every-call',
-      placement: 'context',
       description: 'Vision capability and visual verification',
     },
   ],
