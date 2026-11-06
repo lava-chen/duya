@@ -2,6 +2,8 @@
 
 查阅：2026-11-02。直接读取以下原文；研究对象为新版 Claude Code Projects，不将旧 Chat/Cowork 的项目文件夹机制与新版混用。原始网页留在 ignored 的 docs-local，本文是可供其他 Agent 使用的结论与来源。
 
+2026-11-06 的复核与一手使用反馈见本文末尾；工具到提示词的实际闭环及 Duya 接口缺口见 [提示词系统 §12](../design-docs/project-coordinator-prompts.md#12-工具与提示词闭环2026-11-06-补充)。早期逆向工具名不得作为当前调用合同。
+
 ## 来源与证据等级
 
 | 标识 | 原文与范围 |
@@ -59,3 +61,33 @@ R1 还点名 list_devices、no_reply_needed，以及 Thread 的 reply/update_sta
 ## 研究边界
 
 已直接查阅 O1/O2/O3/O4 与 R1，未登录作者账号、未导出 Claude 私有 MCP schema、未独立复现其设备行为。官方当前文档优先解释产品现状；R1 用于理解当时的内部接缝，Duya 的实现选择明确标 D。官方 Projects 仍在 beta，未来更新需重新核对；不以参考资料证明 Duya 代码已落地。
+
+## 2026-11-06：一手体验、技术解析与工具闭环复核
+
+本轮直接读取 O2 的 `.md` 正文（HTTP 200，62,960 字符），原始材料留在 ignored research 目录。正文区分项目主对话、执行 Thread、本机运行和审批；主对话的 connectors 不能从执行 Thread 反推。未登录产品，未抓取私有工具 schema，也没有发现可据此比较 Duya/Projects 成功率的受控测评。
+
+### 新增阅读与证据等级
+
+| 来源/日期 | 性质与实际阅读内容 | 对 Duya 的设计影响；不是外部产品的通用结论 |
+| --- | --- | --- |
+| O2，复核 11-06，[官方 Projects 文档](https://code.claude.com/docs/en/claude-projects) | 当前产品合同；区分指令、记忆、执行环境、项目与 Thread 控制；说明主对话只见报告，审批在实际 Thread | 设备/环境能力按执行位置装配；读状态、给指令、审批和停止要分别验证，不能从一句对话推导所有副作用 |
+| R1，10-05，[Aaddrick 内部拆解](https://aaddrick.com/blog/claude-code-projects-beta-under-the-hood) | 作者客户端/日志逆向；本轮重读工具、session-context 与报告路径 | 工具目录、输入封装和可见消息投递共同决定角色；工具数和名称只是当时快照 |
+| U1，10-14，[Tim Cakir 的实际使用](https://weekly.aioperator.com/p/claude-code-projects) | 作者在自己与客户开发项目中试用；边界清楚的代码仓库体验较好，跨文件夹业务工作仍需检查 | 派发前核对资料和工作位置，不能在缺上下文时继续扩散任务；个人体验不等于统计质量证明 |
+| U2，10-14，[のさ：Projects beta 体验](https://zenn.dev/nossa/articles/ac57ee10ff0368) | Muntin 项目一手体验；认可任务安排和 Overview；不满意输入等待、权限介入、外部评审迁移和可见性 | 让状态可解释，保留用户直接进入工作的入口；主动协调不能代替真实权限回答或假称预防所有分支冲突 |
+| U3，10-08，[Alva：非编程项目实测](https://www.getseenplaybook.com/blog/claude-projects-update) | 作者在招募规划测试项目中更新 tracker、保存项目指令、把追问续接到已有 Thread | Coordinator 适用面包含文档/数据工作。需要成果引用、同任务续接和明确的项目配置写能力，不限于代码派工 |
+| U4，10-14，[Alva：迁移记录](https://www.getseenplaybook.com/blog/move-to-new-claude-projects) | 自己账号升级的图文记录；核对文件、instructions、memory 的迁移 | 项目配置/资料继承要有可观察回执；本文不据此推导任意旧会话会自动继承所有本机设置 |
+| A1，09-19，[Automater 的 abort ownership 技术解析](https://automater.ai/intel/claude-code-projects-cloud-coordinator/) | 基于官方资料的作者分析；讨论停止粒度、执行归属与副作用残留，不是独立重现或性能测评 | 为 cancel 请求、Run 终态、子工作和已产生 PR/文件分别定义验收，不能把取消回执当回滚证明 |
+| B1，09-30，[用户反馈 #98355](https://github.com/anthropics/claude-code/issues/98355) | 报告协调者不及时汇报、问题上抛不合理、todo 状态过期；11-04 有附议。未独立复现 | 需要中途阻塞/待输入事件，不能只在终态唤醒；从同一事实投影进度，减少用户主动追问 |
+| B2，10-02，[用户报告 #99091](https://github.com/anthropics/claude-code/issues/99091) | 作者报告 Thread 卡住和后台任务挂起。其频率属于个人样本，不引用为产品故障率 | 识别 running、waiting、stale/unknown，提供精确停止/恢复目标，不按 spinner 猜工作健康 |
+| B3，10-21，[工具丢失报告 #104059](https://github.com/anthropics/claude-code/issues/104059) | 作者比较 Coordinator recycle 前后工具列表；报告决策卡/widget 缺失及部分工具重命名，另有用户附议 | 恢复后重新装配并核验真实目录；不把旧 prompt 中的工具名当当前能力 |
+| B4，10-18，[指令送达报告 #103294](https://github.com/anthropics/claude-code/issues/103294) | 作者报告项目指令间歇缺失、记忆索引未含新文件；issue 仍标有 `invalid`，作者补充其为新版 Projects。没有官方根因确认 | 当作反例 fixture：新 worker 的上下文版本/送达与来源可核验，不宣称是已确认产品缺陷 |
+| B5，10-11，[本机指令截断报告 #101398](https://github.com/anthropics/claude-code/issues/101398) | 作者按末尾 marker 和 UTF-8 字节做复现，版本 2.1.295；11-02 加 Desktop 标签。未独立复现 | 多字节、长指令、本机/云端不同路径都要验收；长度与截断回执由真实发送内容计算 |
+
+### 筛选与结论边界
+
+- 排除把旧 Chat Projects 作为测试对象的文章；例如 [AI Alleyway](https://aialleyway.com/claude-projects/) 自己明确新版 Code Projects 未测试，不能用其中容量/记忆测量评价 Coordinator。
+- 从资讯摘要追到 Zenn 原作者后，只使用原文。把通用多代理论文的并发数字套到 Projects 的文章不作为本产品性能证据。
+- 这组材料足以形成行为和故障场景，不能证明某套私有系统提示词、工具数量或修复状态永久有效。
+- 共同的产品问题是任务路由、共享资料、可见进度、真实停止、审批归属和恢复后能力。Duya 的对照要以这些闭环验收，不以“也有三个工具组”判定功能相同。
+
+本轮 Duya 源码核对固定在设计分支 `185a13eb` / 624 base `54dde175`。已找到的工具限制与 todo 存储冲突风险属于本项目自己的证据，详见设计 §12；没有运行 Claude 的上述缺陷复现，也没有在用户真实数据库执行破坏性验证。

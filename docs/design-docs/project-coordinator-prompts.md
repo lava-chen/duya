@@ -4,6 +4,8 @@
 
 本设计让 Coordinator 在长期项目中理解用户意图、复用已有工作、组织执行、核对结果并保留可恢复状态。交付包括常驻提示词正文、上下文与事件的输入合同、注入生命周期、工作 Session 交接和行为评估；本轮不修改运行时。
 
+第二轮补充：[Claude 一手体验/技术/缺陷资料](../references/claude-projects-coordinator.md#2026-11-06一手体验技术解析与工具闭环复核) 与本文 §12。§12 核对实际 action、回执和存储路径，修正自动唤醒、全文读取和 todo 独立性的假设；当前生产白名单仍未改变。
+
 ## 1. 已理解的实现与真实边界
 
 ```mermaid
@@ -33,7 +35,7 @@ flowchart TD
 | `project/tool-service.ts` | 从 caller Session 解析 Project；提供 get/context/update_state/record_decision/record_memory；CAS 与用户动作限制 | 模型不能自选 projectId 越权，不能代用户接受决定或激活记忆 |
 | `project/reconciliation.ts` | 终态写 Activity，按 Run 幂等入 mailbox，可唤醒当前 Coordinator | 通知是核对入口，不是成功证明；不要不断 get 轮询 |
 | Session control leases | 用户接管约束 Coordinator 新指导；在途工具另有生命周期 | 提示词不能解释成“暂停必已中断工具”，不能用新 Session 绕过接管 |
-| `worker-profiles/types.ts`、`project/identity.ts` | 专用 `project` prompt；仅 session/project/todo；抑制通用 identity | Coordinator 不加载通用执行代理的设备与文件操作规则 |
+| `worker-profiles/types.ts`、`project/identity.ts` | 专用 `project` prompt；当前仅 session/project/todo；抑制通用 identity | Coordinator 不加载通用执行代理的设备与文件操作规则；todo 的保留须通过 §12 的存储隔离条件 |
 | `worker-prompts/configs/project.ts` | 四个 Project 行为段 + system/finalAnswer | 已有框架可演进，当前 operation/delegation 有重复，不再叠加第二份总指令 |
 | `project/context.ts` | 选 accepted decisions、active memories、未完成/待验收 Task、近期 Activity，保留来源引用 | 候选记忆不混入有效事实；原始 transcript 按需读取 |
 | 624 `composeAgent` → RunHandle → assembly | 一次冻结策略选择；段目录、工具/模式/权限与来源统一 | IO 先准备事实，再交给纯选择器；不在模板或 renderer 中偷偷读取新状态 |
@@ -130,7 +132,10 @@ answer; it does not authorize new work. Respect an explicit stop or cancellation
 Use the attached project snapshot when it is sufficient. Read current records
 with project get before a consequential coordination decision if the snapshot
 is absent, stale, incomplete, or contradicted by a new event. Use project context
-for a bounded Task brief, and Session reads for the specific missing evidence.
+for a bounded Task brief. Use session get for its recorded result and status.
+If that output is insufficient, request focused evidence through an authorized
+work Session or a read capability actually offered by this Host. Do not assume
+that a transcript reader exists because you can see a Session id.
 
 Choose among answering directly, continuing an existing work Session, starting
 a distinct deliverable, or asking one focused question. Resolve routine details
@@ -143,15 +148,19 @@ the same deliverable, including work started by an earlier Coordinator. Start
 separate work for independent outcomes when its benefits justify coordination
 and the Host permits it. Sequence overlapping writes or dependencies.
 
-After dispatching, continue distinct coordination work or end the turn while
-the work runs. The project intent remains active while awaiting its result.
-Use Session reads to answer a concrete question, not to repeat unchanged polls.
-Never promise an automatic follow-up unless this surface provides its wake path.
+Follow the completion policy returned by each spawn or reply. When automatic
+delivery is confirmed, continue distinct coordination work or end the turn while
+the work runs. When the Host requires queries, use session get at a meaningful
+checkpoint or in response to a status request; do not spin on unchanged reads.
+The project intent remains active, but a pending next step is not a scheduled
+wake. Explain any follow-up limitation rather than promising automatic progress.
 
 Record meaningful progress, blockers, and the next executable step in project
 state. Use the revision just read; on conflict, read the current value and
-reconcile before writing again. Keep todo for your own short coordination steps,
-not as a competing copy of the Project Task ledger.
+reconcile before writing again. Keep short coordination progress in that state.
+Use a separate coordination checklist only when the Host explicitly isolates it
+from canonical Project Tasks. Do not replace a shared task list or use project
+Task ids as checklist ids.
 ```
 
 ### projectDelegation
@@ -445,7 +454,7 @@ result path; do not invent a second message delivery mechanism.
 
 | 切片 | 主要路径/改动 | 完成条件 |
 | --- | --- | --- |
-| P0 对账基线 | 624 与主检出 Project dirty 切片、当前 API | 一个可构建集成基线；不覆盖并行成果，bundle freshness 问题单独解决 |
+| P0 对账基线 | 624 与主检出 Project dirty 切片、当前 API、§12 工具缺口 | 一个可构建集成基线；先阻断 todo 对 Project Task 的混写，再校对读取/唤醒/控制合同；不覆盖并行成果 |
 | P1 收敛常驻正文 | `worker-prompts/assets/project/*.hbs`、`configs/project.ts`、段注册 | 五段职责唯一；通用段/hook/host tails 冲突清除；真实工具名/返回一致 |
 | P2 接入可信上下文 | `project/context.ts`、Session context API、worker bootstrap/assembly | Coordinator/work 均从绑定取上下文；来源、revision、缺失/裁剪可表达 |
 | P3 生命周期 | 624 composition、rail、compaction、mailbox | Run 内刷新、替代/撤销与恢复合同落地；保持权限和策略计划边界 |
@@ -455,3 +464,81 @@ result path; do not invent a second message delivery mechanism.
 本轮仅交付设计，不提前把草案 `.hbs` 接入线上。实施每片先记录测试基线，再跑相关测试、根类型/架构门禁；涉及 bundle/装配边界时重建并通过 freshness/桌面验收。
 
 发布前需明确证明：工具准入、派发/租约和幂等是 Host 事实；prompt 只描述可用能力。保留 prompt 版本与段 hash/长度/来源诊断，不默认记录私有上下文正文。真实模型评估或产品链路未验收时保持 Draft，不把设计完整误写成产品已验证。
+
+## 12. 工具与提示词闭环（2026-11-06 补充）
+
+核对点为文档分支 `185a13eb`，生产源码来自 624 base `54dde175`。下面区分当前可调用能力、提示词选择和必须补的运行时合同。用户看到一个协调对话，不应承担在多个 Session 之间搬运消息的工作；但减少协调负担不等于跨越审批。
+
+### 12.1 现有工具实际支持什么
+
+源码入口：[session tool](../../packages/capabilities/src/session-tool.ts)、[project tool](../../packages/capabilities/src/project/tool.ts)、[Host Session 服务](../../packages/host/src/session-service.ts)、[Project 工具服务](../../packages/host/src/project/tool-service.ts)。三个顶层工具名不代表只有三个操作，也不能按 Claude 历史工具数量补造名称。
+
+| 工具/action | 何时用/最少输入 | 返回后如何行动 | 当前限制 |
+| --- | --- | --- | --- |
+| `project get` | 项目恢复、派工前对账、结果核对；可给 Activity `afterCursor/limit` | 读取 state revision、Task/Session 绑定、验收、决定/记忆状态和活动来源 | Activity 分页不等于 Task/证据分页；格式化内容有预算，不能假定全文可见 |
+| `project context` | 为已知 Task 准备背景；`taskId` 可选，`maxCharacters` 200–16000 | 相关背景和 source refs 用于 brief；不授予源引用的读取权限 | 它是有界投影，不是任意 transcript、文件或 artifact 读取器 |
+| `project update_state` | 有实质进展；`expectedRevision/currentState/nextStep` | 成功后使用新 revision；冲突重读后对账 | 不能创建依赖 DAG、修改项目配置、验收 Task 或安排后台唤醒 |
+| `project record_decision` | `key/content/expectedRevision`；status 仅 proposed/superseded | 等真实用户确认链路，不把 proposal 当 accepted | 来源由 Host 记为当前 Session；不伪造用户消息来源 |
+| `project record_memory` | `key/content/expectedRevision`；candidate/superseded/retired | candidate 可供复核，active 才是正常注入事实 | 自动激活被拒绝；用户说“记住”也不能绕过现有受保护写入口 |
+| `session list` | 续接/去重/Coordinator 更换后发现旧工作 | 按项目绑定与用户意图区分是否复用 | 工具说明仍偏 parent-only；Host 另允许当前 Coordinator 管项目绑定旧 Session，需要统一文案 |
+| `session spawn` | 绑定工作根的 `workingDirectory`、执行 `prompt`、`projectTask.subject/description`；独立分支显式 `use_worktree=true` | 保存返回的实际 Task/Session/工作目录；遵守 completion policy | Host 检查父工作目录，不能任意指定另一个根。只支持 `model` 覆盖，没有 worker profile 参数；默认 work 为 code-expert |
+| `session get` | 已知 `sessionId` 的状态/结果问题 | 核对追踪 Run、工作目录、diff stats 与结果；缺证据时定向补查 | 结果最多 16000 字符，无 transcript cursor、按 Run 定位原文或 artifact 正文读取 |
+| `session reply` | 同交付续接；`sessionId/prompt`，可选 model | 关注新 Run 的回执；现有 Run 仍 running 时会被拒绝 | 不是对活 Run 的通用 steer API，也不是批准该 Session 工具审批 |
+| `session cancel` | 用户明确停止或已有范围授权内的中止；`sessionId` | 回执只是 requested；后续核对原 Run 是否终态和产物是否保留 | 不是撤销文件/PR，也没有项目总暂停或全部后代停止合同 |
+| `session rename` | 改工作标题；`sessionId/title` | 用可辨识标题帮助找工作 | 不代表完成、归档、resolve 或重新归属 |
+| `todo` | 当前实现为 Session TaskStore 上的 checklist 写工具 | 必须先通过下节隔离条件，才允许承担协调 checklist | 与项目 Task 可能共用来源 Session 和底层表，不能仅靠提示词区分 |
+
+`duya_app` 的 `session_read`、`session_control` 等能力虽然在仓库中存在，不能据此宣称 Coordinator 可用：当前白名单只有 `session/project/todo`，通用 `session` schema 没有 read/control action。现有 MCP `session_spawn` 包装 schema 也没有传 `projectTask`；若未来切换到该别名，先补齐字段与授权对拍，不直接改提示词名称。
+
+### 12.2 提示词还不能兑现的能力
+
+| 接缝 | 本轮证据 | 设计裁定/实施要求 |
+| --- | --- | --- |
+| todo 与项目任务隔离 | `dispatch.createTask` 把 canonical Task 记在 caller Session；`worker-task-store` 按 Session 列出全部 Task；`TodoTool.applyReplace` 删除所有非 `_` id；`task-api.deleteTask` 直接删除单项 | **建议新 Coordinator 默认仅保留 project/session**，先用 currentState/nextStep 管协调进度。若要保留 todo，由 Host 提供 scoped adapter，列表、按 id 读/写/删和 replace 都必须隔离，不能只约定 id 前缀。当前代码未改 |
+| 完整证据读面 | `project get` 不投影 continuity 的 transcript refs；`session get` 只有截断结果；session_read 不在当前准入 | 扩展 project 的有界工作读取，或把既有 Session reader 适配成 project-bound scope。按可信 Task→Session→Run 验权，支持 cursor/budget/来源。接入前只能请求工作 Session 提供更窄证据，不能声称自己查过原文 |
+| 自动唤醒合同 | standalone `session-service` 的 spawn/reply 返回 `completionNotification:'query'`；ProjectTool description 却写 Host 自动唤醒；settlement 的 surface wake 是可选回调 | 收口 description、回执和真实唤醒能力。automatic 必须由当前 surface 注册并验收，query 不能让提示词忙轮询或凭 nextStep 声称已安排后台继续 |
+| 中途阻塞 | 当前 project settlement 只接受 Run 终态；running 被跳过 | 从现有待审批/待输入/执行状态投影中途事件和工作状态，去重持久交给协调对话。让模型处理可自行回答的问题，审批仍到实际请求所属 UI；不要新建平行任务状态机 |
+| 用户决定/验收/配置 | project 只有五个 action；没有结构化提问、设置更新、Task resolve/reopen 或用户验收写动作 | 普通 assistant 问答可用；结构化决定和受保护写走既有 UI/Host 用户动作。没有配置写工具时可提出项目规则草案，不能报告“已保存项目 instructions” |
+| 活 Run 指导和接管 | session reply 拒绝 `run_in_progress`；通用工具未暴露 steer 或 lease 读面 | 需要继续使用既有 session input/lease API 的项目适配；先核对真实 actor、Run 与控制权，不把 reply 当万能消息通道 |
+| PR/成果/进度 | 顶层管理工具没有独立 PR 检查/合并工具、library 或 worker 能力目录 | 让工作 Session 用其实际能力完成并返回引用；Coordinator 的“已合并”“测试全绿”仍须对应观察证据，不能从通用工具存在推断可用 |
+| 大项目枚举与截断 | project tool 格式化会裁剪描述、活动 payload 和总结果；Task 不是按 Activity cursor 分页 | 把 omitted/总数/稳定 Task id 与后续读取路径纳入输出合同；模型不能把截断后的缺项说成“没有其他工作” |
+
+todo 风险已用本检出的已构建 capability 做**内存复现**：向假 TaskStore 放入 `project-task-1`，执行 `merge:false` 的一个协调 todo；观察到 `delete(project-task-1)` 再 `create(coord-step-1)`。这证明通用工具本身不隔离两类 Task；结合上述源码是可达风险，未在用户真实数据库执行删除，也没有宣称已通过完整 Desktop 复现。
+
+### 12.3 一条可审阅的工具轨迹
+
+下面是**示意输入与回执判定**，不是本轮实际派工。工作根必须来自可信绑定，`T/S/R` 代表真实工具返回的 id；不用例子里的字母充当真实句柄。
+
+1. 用户给新任务：`project {action:"get"}`。记录 current revision，核对现有 Task。若已有同交付绑定 `T→S`，先 `session {action:"get",sessionId:S}`，再决定续接而不是重复 spawn。
+2. 新工作确有必要时，读取 `project {action:"context"}`；为**尚不存在**的 Task 不填一个臆造 taskId。已有 T 则给 `{action:"context",taskId:T,maxCharacters:8000}`。
+3. `session {action:"spawn",workingDirectory:<绑定绝对根>,use_worktree:true,projectTask:{subject:<交付标题>,description:<目标/边界/验收/引用>},prompt:<执行指令>}`。description 保存规范交付，prompt 用于启动执行，两者不能互相矛盾。不传不存在的 `profile`、`priority`、`dependencies` 字段。
+4. 检查返回的 Task/Session/checkout 与 completion policy。automatic 路径等真实通知；query 路径只在有意义检查点 `get`，并明确当前 surface 的跟进限制。派发超时先核对是否已启动，不能盲重派。
+5. 收到 R 终态或用户问进度：`session get(S)` + 必要的 `project get`。比较成果、验收要求和证据。若 16000 字符结果不足，只请求特定检查；缺失的原文读取能力标记为缺口。
+6. `project {action:"update_state",expectedRevision:<刚读版本>,currentState:<观察事实和限制>,nextStep:<实际下一动作>}`。报告“已产出，待复核/验收”，不发不存在的 `project accept`；真实用户动作确认后再次读取验收状态。
+7. 可复用结论以 stable key 调 `record_memory`/`record_decision`，新 key 的 expectedRevision=0，既有 key 用读到的 revision；不能把执行步骤再抄成长期记忆。
+
+用户在步骤 4 说“先停”：调用目标 S 的 cancel 后，只报告已请求停止；查询所跟踪 R 的终态，并解释已经产生的文件/PR是否仍在。没有 Host 的停止级联证明，就不承诺整个项目、所有后代和外部副作用都已停止。
+
+### 12.4 工具说明也属于提示词系统
+
+常驻正文只定义判断原则；实际 action、参数限制、输出和失败原因由同一 capability 定义提供。实施 P1 必须同时审阅工具 description，不能靠更高层提示词“压过”错误说明。
+
+- `session` 的 parent-only 描述要解释当前 Coordinator 的项目绑定授权例外。
+- completion policy 使用同一实际回执生成描述；不得默认把 missing 当 automatic。query-only 且没有等待/唤醒设施时，必须承认自主跟踪能力未闭环。
+- `todo` 当前“3+ 步必用、整表 replace”不适合直接用于 Coordinator。移除准入或接 scoped adapter 后再生成对应说明。
+- `project` 的状态 enum 不应向模型暗示 accepted/active 是可调用的写值；schema、描述与 Host 拒绝规则需对拍。
+- 派工前配置/资料核对属于任务背景检查；跨根路径、项目设置、模型/profile、connector 准入分别按真实 API，不能用一段“善于规划”代替能力发现。
+
+在 A/B 评估外新增以下工具验收；本轮只记录目标和上述内存复现，不声称已实现。
+
+| 编号 | 条件 | 必须证明 |
+| --- | --- | --- |
+| T1 | 普通/项目旧 Coordinator 两种工作归属 | 工具说明、真实授权和 list/get/reply 行为一致 |
+| T2 | todo replace/merge/按 id 操作 | 不读取、修改或删除 canonical Project Task；禁用时无引导调用 |
+| T3 | automatic / query / 未知回执 | 跟进承诺和实际事件送达一致，无忙轮询或虚构后台计划 |
+| T4 | work 仍 running 但等待用户/审批 | Coordinator 能见到可解释状态和请求归属；不能代审批，也不等终态才发现阻塞 |
+| T5 | 结果截断、长 transcript、大 Task 列表 | 有界读取有可继续路径，引用与真正已读内容对应 |
+| T6 | 新 work Session、多字节长项目指令 | 指令版本/hash/长度与实际发送相符；截断不静默、不切坏 UTF-8 |
+| T7 | Coordinator recycle / 模型或配置变更 | 有效工具重新核验，旧名称/旧提示词不能凭历史继续调用 |
+| T8 | cancel requested、迟到结果和已生成 PR | 请求、实际终态、保留产物分别报告，不把停止当回滚 |
+| T9 | 用户要配置、记忆或验收 | 只调用实际写面；需要用户 actor 的字段保持受保护，未保存不得声称已保存 |
