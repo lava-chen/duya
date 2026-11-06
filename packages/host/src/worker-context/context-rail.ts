@@ -20,6 +20,19 @@
  * The rail lives in the working array only: it is never appended to the
  * session timeline, so it cannot pile up and does not survive into the
  * transcript.
+ *
+ * ## Why there is no "zero-message" mode (plan 624 v2 G3)
+ *
+ * pi can skip unchanged sections because it replays a transcript that already
+ * holds the previous system message and patches it in place. Duya rebuilds
+ * the provider message array from the timeline on EVERY request, and the rail
+ * is deliberately absent from the timeline. Omitting an unchanged block here
+ * would therefore delete that context from the current request outright.
+ * `ContextRailReport.unchanged` is diagnostic only; unchanged blocks are
+ * still delivered. A zero-message mode becomes possible only when there is a
+ * replayable baseline that survives between requests (persisted rail rows, or
+ * a provider response chain the runtime can patch) — that changes the
+ * fork/resume/compaction contract and needs its own plan.
  */
 
 import { createHash, randomUUID } from 'node:crypto';

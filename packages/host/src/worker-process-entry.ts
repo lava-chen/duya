@@ -25,6 +25,7 @@ import { getSteeringConfig } from '@duya/host/worker-hooks/config';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '@duya/host/worker-prompts/modes/types';
 import { isBotAgentProfile } from '@duya/host/worker-prompts/index';
+import { installProductionPromptObserver } from './worker-prompts/production-observer.js';
 import type { AppConnectionToolDescriptor } from './worker-tool-bindings/app-connection-tools.js';
 let _appConnectionModule: any = null;
 import type { WorkerSession } from './worker-session-runtime.js';
@@ -3876,6 +3877,10 @@ function installProcessLifecycleHandlers(): void {
 }
 export async function startWorkerProcess(options: WorkerProcessStartOptions): Promise<void> {
     processAssembly = options.assembly;
+    // Plan 624 v2 G3: opt-in prompt-section digests go to the structured
+    // worker log. Off by default, so an uninstrumented build still skips the
+    // hashing entirely.
+    installProductionPromptObserver();
     installProcessLifecycleHandlers();
     await main(options);
 }
