@@ -1,6 +1,6 @@
 # Project Coordinator 提示词系统
 
-状态：设计草案，未接入生产 · 2026-11-06。实施基线为未合并的 624 PR [#621](https://github.com/lava-chen/duya/pull/621) head `54dde175`（源码调查时为 `7eaad892`，其后仅新增 bundle 与依赖计划记录），不是主检出的未提交切片。执行与验证见 [本次计划](../exec-plans/active/2026-11-06-project-coordinator-prompts.md)；写作方法和 Codex 固定源码见 [参考](../references/codex-prompt-composition.md)。
+状态：设计草案，未接入生产 · 2026-11-06。源码基线为 624 PR [#621](https://github.com/lava-chen/duya/pull/621) head `54dde175`，该依赖已于本轮调查期间由外部流程合入 master `beb0d512`，两者 tree 相同。源码初查为 `7eaad892`，其后仅新增 bundle 与依赖计划记录；主检出的其他未提交切片不属于本设计基线。执行与验证见 [本次计划](../exec-plans/active/2026-11-06-project-coordinator-prompts.md)；写作方法和 Codex 固定源码见 [参考](../references/codex-prompt-composition.md)。
 
 本设计让 Coordinator 在长期项目中理解用户意图、复用已有工作、组织执行、核对结果并保留可恢复状态。交付包括常驻提示词正文、上下文与事件的输入合同、注入生命周期、工作 Session 交接和行为评估；本轮不修改运行时。
 

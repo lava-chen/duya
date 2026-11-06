@@ -5,7 +5,7 @@
 
 ## 目标与边界
 
-在未合并的 624 组合层基础上设计完整 Project Coordinator 提示词系统：职责、写法、角色与数据权威、段结构、注入与刷新、派工、结果处理、记忆、恢复和评估。先交付可审阅设计与提示词正文草案，不在本轮改生产 Runtime 或替其他任务合并 624。
+在 624 组合层基础上设计完整 Project Coordinator 提示词系统：职责、写法、角色与数据权威、段结构、注入与刷新、派工、结果处理、记忆、恢复和评估。先交付可审阅设计与提示词正文草案，不在本轮改生产 Runtime 或替其他任务合并 624。开工时依赖未合并，第二轮调查中已由外部流程集成，见后文对账。
 
 关联：[Coordinator 主计划](2026-11-02-project-coordinator.md)、[624 组合层](624-agent-composition-layer.md)、[首版合同](../../design-docs/project-coordinator-contract.md)。独占新增设计/参考文件与本计划；索引仅添加本任务入口。
 
@@ -62,6 +62,7 @@
 
 已交付：无生产改动。[设计](../../design-docs/project-coordinator-prompts.md) 与源码参考已完成；文档提交 `21faa618` 已推送，Draft PR [#622](https://github.com/lava-chen/duya/pull/622)，base=`codex/624-agent-composition` / `54dde175`。后续仅补充本段交付记录；最终 head 以 PR/Git 为准，提交后未提交路径应为空。
 第二轮从文档 checkpoint `185a13eb` 接续，更新完整设计 §12、既有 Claude 参考与本计划，仍通过同一 #622 交付；提交后要求三份文档均干净。这一轮纠正的是设计中对工具能力的假设，没有实施接口补齐或 todo 隔离修复。
+第二轮正文提交 `2ce49931` 已推送。随后复核发现依赖 #621 在 2026-11-06 20:23:22（Asia/Shanghai）由外部流程合入 `beb0d512`，GitHub 已把 #622 base 改为 master；`git diff --stat 54dde175..origin/master` 为空，代码与已验证基线一致。核对 #622 仍是 Draft，diff 仅 8 份文档；本 agent 未执行依赖或本任务合并。最新 head 以 PR/Git 为准。
 外部副作用：创建 managed worktree、本地/远端任务分支、Draft PR、ignored 依赖 junction 与本检出构建产物。未合并、未发布、未修改主检出或 Codex clone。完整类型与架构检查在相同生产源码上通过；接到依赖时只改变已有 bundle 和依赖计划，未重复全量构建。真实模型质量/成本对照与 Desktop 端到端验收属于后续实施，尚未执行。
 回收：成果尚未交付和集成，保留检出。
 下一步：审阅 #622 的 §12 工具闭环，先裁定并实施 todo 隔离/默认准入、项目范围证据读面与真实唤醒/中途阻塞合同，再按 P1–P5 落地正文和产品验收。未经授权不合并依赖或本任务。
