@@ -6,6 +6,8 @@
 
 三个任务共用已核验的 [Claude 调研/工具映射](../references/claude-projects-coordinator.md)与[首版实施合同](../design-docs/project-coordinator-contract.md)，不再各自探索工具和状态模型。
 
+Coordinator 的完整提示词设计见 [2026-11-06 提示词系统](active/2026-11-06-project-coordinator-prompts.md)：基于 624 装配层，先交付正文、上下文注入与恢复合同及评估方案。
+
 ## Active Plans
 
 | 范围 | 入口 | 下一动作 |
