@@ -1,6 +1,6 @@
 # 624 — Agent 组合层与提示词系统重构
 
-状态：active · 负责人：workbuddy-12f8ee39 · 更新：2026-11-06
+状态：active · 负责人：workbuddy-12f8ee39 · 更新：2026-11-06 · PR [#621](https://github.com/lava-chen/duya/pull/621)
 分支：`codex/624-agent-composition` · worktree：`.claude/worktrees/composition-layer` · base：`b5c36035` · owner：workbuddy-12f8ee39
 
 ## 目标与边界
@@ -327,7 +327,9 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 - [x] G4 `CompactionOutcome.systemPrompt` 协议与引擎接线（`383a547d`）
 - [x] 全量回归环境基线：补齐 worktree 的 `plugin-core` / `connectors` / `host` dist 链接
 - [x] G5 全量验证与计划收口：`typecheck:all` 退出码 0（全链路 18 个子命令）
-- [ ] 合并前：重建 worker bundle 并跑 `bundle:verify`；与主检出 `worker-session-runtime.ts` 的并行改动协调；推 PR（见「接续」）
+- [x] 合并前重建 worker bundle 并跑 `bundle:verify`（`8e99ac6a`，`verdict: fresh`）
+- [x] 推送分支并开 PR [#621](https://github.com/lava-chen/duya/pull/621)
+- [ ] 等 CI 通过后合并 PR #621；与主检出 `worker-session-runtime.ts` 的并行改动协调（见「接续」）
 
 ## 发现与决策
 
@@ -385,6 +387,7 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 | `383a547d`（全量） | 同上 | `architecture:check` / 四项卫生门禁 / 根 `tsc --noEmit` | 0 / 四项 0 / 0 | 层门禁与清单门禁 |
 | `383a547d`（全量） | 同上 | `npm run typecheck:all`（18 个子命令：5 项 `check:*` → `build:packages` → 11 个 typecheck 子命令 → `eval:agent:core:check`） | **0**；全链路通过，`typecheck-electron-gate: OK — no new type errors (164 known across 90 key(s))`；唯一告警是 `WidgetErrorBoundary.tsx` 既有 Rollup 动静态重复导入提示 | 全仓类型门禁，日志 708 行 |
 | `3c7bc9f3`（G5 诊断） | 同上 | `CODEBUDDY_SAFE_DELETE_ENABLED=0 node scripts/architecture/bundle-verify.mjs --json` | **1 / `stale`**；17/1105 输入在 bundle commit `b5c36035` 之后变化（16 个已提交 + 1 个工作树假 M），详见阻塞 1 | 只读诊断，确认合并前必须重建 bundle |
+| `8e99ac6a`（bundle） | 同上 | `build:packages -- --target @duya/host` → `bundle:worker` → `bundle:verify --json` | `build:packages` 15 个包 0、`bundle:worker` 0；**`verdict: fresh`，EXIT=0**，`0/1119 bundle inputs changed after the bundle commit`，bundle commit = `8e99ac6a` | 产物与源码同源，CI `bundle:verify` 转绿 |
 
 ## 接续 / 结果
 
@@ -398,7 +401,8 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 - 既有 A1–F2 成果不变：段通道单点、增量帧、provider 缓存双支持、时间提醒、defect b 与压缩一致性（详见上文）。
 
 **已验证**：全量 `vitest run packages/host/tests packages/agent-runtime/test` 0；397 文件 / 3727 用例通过（1 文件 / 5 用例 skipped），此前 86 文件 collect 失败与 timeout 已由三个 dist junction 消除。`architecture:check` 0（无新增违规）、四项卫生门禁 0、根 `tsc --noEmit` 0、`@duya/agent-runtime` 分包 typecheck 0；`@duya/host` 分包 typecheck 仅 2 个与本计划无关的既有错误（发现 12）。`typecheck:all` 退出码 0：`check:encoding` / `check:manifest-keys` / `check:test-coverage` / `check:no-ts-suppress` / `check:packaged-artifacts` 全 0，`build:packages` 全包构建通过，11 个 typecheck 子命令与 `eval:agent:core:check` 全部通过（electron gate 无新增类型错误）；日志内唯一的告警是 `WidgetErrorBoundary.tsx` 既有的 Rollup 动态/静态重复导入提示，与本计划无关。
-**已合并**：无。
+**集成**：PR [#621](https://github.com/lava-chen/duya/pull/621)（base `master` = `7ef8cbd0`，head `8e99ac6a`），待 CI 通过后用 merge commit 合并；实际合并结果与 merge SHA 记在 `.workbuddy/memory/2026-11-06.md`，本计划在集成后归档。
+**已合并**：以 GitHub PR #621 的状态与远端 master 为准。
 
 未提交路径：无（`git status` 干净）。`inline-content.ts` 的 CRLF 假 M 已用内容中性的 `git add` 清掉（发现 23），未产生 staged diff、未改 HEAD。
 外部副作用：分支 `codex/624-agent-composition` 与 worktree `.claude/worktrees/composition-layer`；三个指向主检出 dist 的 junction（`plugin-core` / `connectors` / `host`，gitignored，仅用于本检出测试），其双向写入影响见发现 22。
@@ -406,10 +410,10 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 **已关闭的未决项**：`CompactionOutcome.systemPrompt`（G4）、bot 双轨（G2）、冻结 `AgentComposition` 与 `ChatOptions` 注入项分离（G1）、config 引用 SectionRegistry（G2）、observer 生产 sink（G3）、全量 host 套件环境基线（发现 21）。rail 零消息语义经评估**明确不做**，理由与准入条件见发现 19，并有测试锁住 unchanged 块必须送达。
 
 阻塞与未决（仅剩集成事项）：
-1. **合并前必须重建 worker bundle 并跑 `bundle:verify`**：只读诊断 `bundle-verify.mjs --json` 已给出 `verdict: stale`、退出码 1，`summary: 17/1105 bundle inputs changed after the bundle commit`（bundle commit `b5c36035`）；其中 16 个是本分支已提交的源码（`agent-runtime/engine/{compaction,run-engine}.ts`、`host/worker-compaction/engine-sources.ts`、`worker-session-runtime.ts`、四份 live config、`registry.ts` 等），另 1 个是工作树 CRLF 假 M（发现 23，已清除）。CI 的 `bundle:verify` 目前必红；需按 `build:packages -- --target @duya/host` → `bundle:worker` → 提交 bundle 产物 → `bundle:verify` 才转绿。主检出已有并行未提交的 `bundle/worker-entry.js` / `worker-metafile.json` 改动，重建顺序需先协调。
-2. **主检出 `worker-session-runtime.ts` 有并行未提交改动**：本分支基于 `b5c36035`，合并前需确认归属与顺序。
-3. **未建 PR、未推送、未合并**：本地 master 领先 `origin/master` 31 个提交，推 PR 前须对齐目标分支。
+1. ~~合并前必须重建 worker bundle 并跑 `bundle:verify`~~ **已关闭**：`8e99ac6a` 重建并提交 bundle 产物，`bundle:verify --json` 给出 `verdict: fresh` / `0/1119` inputs changed；`test.yml:301` 与 `model-catalog.yml:183` 的门禁转绿。
+2. **主检出 `worker-session-runtime.ts` 有并行未提交改动**：本分支基于 `b5c36035`，主检出另有 29 个未提交路径（project-coordinator 车道，含该文件与 `bundle/worker-entry.js` / `worker-metafile.json`）；合并后同步本地 master 前需确认归属与顺序，勿用整树 restore。
+3. **PR base 异常**：远端 `master` = `7ef8cbd0`，本分支 base `b5c36035` 在 GitHub 上不存在（`gh api commits/...` 422）。推送后 PR #621 的 diff 含 48 个提交（31 个本地集成 merge commits + 17 个本计划提交）；#612–#618 仍为 OPEN/DRAFT，合并后需各自关闭。
 4. **bot 兼容夹具**：`configs/bot.ts` 保留给 `packages/agent` legacy 重导出与两个测试，运行时永不实例化；若 legacy 层退役可一并删除。
 
 回收：分支未合并，worktree 保留。
-下一步（`typecheck:all` 已跑完、`bundle:verify` 只读诊断已确认 stale）：在可构建检出执行 `build:packages -- --target @duya/host` + `bundle:worker` + 提交 bundle 产物 + `bundle:verify` → 与主检出并行改动协调后推 PR → review / CI → 授权集成。
+下一步：等 PR #621 的 CI 检查通过 → 用 merge commit 合并 → 同步本地 master 并重验 → 核对 #612–#618 状态 → 归档本计划。
