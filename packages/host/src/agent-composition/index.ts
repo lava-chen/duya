@@ -1,14 +1,16 @@
 /**
- * Plan 624 — agent composition layer.
+ * Plan 624 v2 — agent composition layer.
  *
  * The single policy point between the control layer (session / bot / TUI /
  * coordinator / desktop / gateway) and the zero-policy execution layer.
  *
- * Slice A1 scope: contract types plus the IO-free resolvers. Shadow comparison
- * against the live assembly lands in A2; nothing here is wired into
- * `beginTurnAssembly` yet, so behaviour is unchanged.
+ * `composeAgent()` produces ONE frozen `AgentComposition` per run. Every
+ * downstream phase consumes that plan; none of them re-decides a dimension.
+ * `composeStartup()` does the same for the two session-level facts decided
+ * before a profile exists (provider cache family, initial permission mode).
  */
 export type {
+  AgentComposition,
   AgentCompositionRequest,
   CacheSelection,
   CacheSelectionInput,
@@ -22,9 +24,19 @@ export type {
   PromptSelection,
   ProviderCacheFamily,
   ScopeResolution,
+  StartupComposition,
   ToolSelection,
   ToolSelectionInput,
+  TurnOverrides,
 } from './contract.js';
+export {
+  composeAgent,
+  composeStartup,
+  readTurnOverrides,
+  type CompositionInput,
+  type StartupCompositionInput,
+  type TurnOverrideInput,
+} from './compose.js';
 export { resolveCompositionScope } from './scope.js';
 export { resolvePromptSelection } from './prompt-selection.js';
 export { resolveToolSelection } from './tools-selection.js';

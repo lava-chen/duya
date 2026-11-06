@@ -159,3 +159,66 @@ export interface CacheSelection {
   readonly decisions: readonly CompositionDecision[];
 }
 
+/**
+ * The injection half of a turn request.
+ *
+ * Plan 624 v2: these fields used to be read directly from `ChatOptions` by
+ * `_buildSystemPrompt`, `_resolveTools` and `applyTurnModes`. That made every
+ * renderer a second policy point — a caller could change the system prompt
+ * without the composition layer ever seeing it. `readTurnOverrides()` is now
+ * the ONLY function that interprets them; everything downstream reads the
+ * frozen `AgentComposition.overrides`.
+ *
+ * The types are picked from `ChatOptions` (type-only) so this contract cannot
+ * drift from the wire shape, while still carrying no runtime import.
+ */
+export interface TurnOverrides {
+  readonly systemPrompt?: string;
+  readonly disableSystemPrompt: boolean;
+  readonly systemPromptPrefix?: string;
+  readonly outputStyleConfig?: import('../worker-run-contracts.js').ChatOptions['outputStyleConfig'];
+  readonly researchIntent?: import('../worker-run-contracts.js').ChatOptions['researchIntent'];
+  readonly researchProjectId?: string;
+  readonly mode?: string;
+  readonly allowedTools?: readonly string[];
+  readonly disabledTools?: readonly string[];
+}
+
+/**
+ * The frozen plan for ONE turn.
+ *
+ * This is the object the control layer hands to the execution layer. It is
+ * produced once per run by `composeAgent()` and never mutated: a later phase
+ * cannot quietly re-decide the prompt system, tool constraints, modes or
+ * permission mode. `decisions` is the flattened provenance of every dimension,
+ * and `fingerprint` lets a rollout prove which plan a turn actually used.
+ */
+export interface AgentComposition {
+  readonly scope: CompositionScope;
+  readonly prompt: PromptSelection;
+  readonly tools: ToolSelection;
+  readonly modes: ModeSelection;
+  readonly permissions: PermissionSelection;
+  readonly cache: CacheSelection;
+  /** Undefined when this run must not consume the reminder state (side questions, startup). */
+  readonly reminders?: import('./reminder-selection.js').TimeReminderBlockSelection;
+  readonly overrides: TurnOverrides;
+  readonly decisions: readonly CompositionDecision[];
+  /** Deterministic digest of the plan, excluding the live clock. */
+  readonly fingerprint: string;
+}
+
+/**
+ * Session-startup facts that are decided once, before any agent profile exists.
+ *
+ * The client's cache family and the initial permission mode are session-level
+ * constants, not per-agent routing decisions, but they still go through the
+ * composition layer so no resolver is called from an arbitrary code path.
+ */
+export interface StartupComposition {
+  readonly cache: CacheSelection;
+  readonly permissions: PermissionSelection;
+  readonly decisions: readonly CompositionDecision[];
+  readonly fingerprint: string;
+}
+

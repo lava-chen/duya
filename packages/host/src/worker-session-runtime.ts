@@ -22,7 +22,7 @@ import { PLUGIN_UI_RESOURCE_MAX_BYTES } from '@duya/plugin-core/apps/declaration
 import { validateCatalogToolArguments } from '@duya/agent-runtime/tools/discovery/dispatcherFromRegistry';
 import type { ToolCatalogEntry } from '@duya/agent-runtime/tools/catalog/catalog-types';
 import type { AgentOptions, AgentRuntimeMode, ChatOptions, FileAttachment, Message, AssistantMessage, MessageContent, ToolUseContent, Tool, ToolUse, SSEEvent, SessionInfo, ToolUseContext, ToolResultContent, AgentProgressEvent, AppState, } from '@duya/host/worker-run-contracts';
-import { inferTimeReminderTurnKind, resolveCacheSelection, resolveModeSelection, resolvePermissionSelection, resolvePromptSelection, resolveTimeReminder, resolveToolSelection, type TimeReminderEmissionState } from '@duya/host/agent-composition';
+import { composeAgent, composeStartup, inferTimeReminderTurnKind, readTurnOverrides, type AgentComposition, type CacheSelectionInput, type TimeReminderEmissionState, type TurnOverrides } from '@duya/host/agent-composition';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, hasPromptObserver, reportPromptDigests, sectionDigest, } from '@duya/host/worker-prompts/index';
 import { handleGoalCommand, isGoalControlCommand } from '@duya/host/worker-modes/goal/goal-commands';
 import { handleTranscriptCommand, isTranscriptControlCommand, } from '@duya/host/worker-session/transcript-commands';
@@ -304,7 +304,7 @@ export class WorkerSession implements AgentRuntime {
      * volatile blocks that travelled on the message channel. Failures
      * here must not break the turn — the prompt is already on its way.
      */
-    private _recordPromptSnapshot(systemPrompt: string, options?: ChatOptions): void {
+    private _recordPromptSnapshot(systemPrompt: string, overrides: TurnOverrides): void {
         if (!this.journal || !this.currentTurnId) return;
         if (!promptLedgerEnabled()) return;
         try {
@@ -312,7 +312,7 @@ export class WorkerSession implements AgentRuntime {
                 turnId: this.currentTurnId,
                 systemPrompt,
                 contextBlocks: toRecordedBlocks(this.contextRailBlocks),
-                overridden: options?.systemPrompt !== undefined,
+                overridden: overrides.systemPrompt !== undefined,
             });
             if (!snapshot) return;
             this.journal.promptSnapshot(this.currentTurnId, snapshot);
@@ -330,7 +330,7 @@ export class WorkerSession implements AgentRuntime {
         await runExitHooks(this.resolvedModes, this.modeCtx);
     }
     private async applyTurnModes(input: {
-        readonly options: ChatOptions | undefined;
+        readonly composition: AgentComposition;
         readonly turnContext: TurnContext;
         readonly systemPrompt: string;
         readonly resolved: ResolvedTurnTools;
@@ -338,9 +338,9 @@ export class WorkerSession implements AgentRuntime {
         readonly systemPrompt: string;
         readonly resolved: ResolvedTurnTools;
     }> {
-        const { options, turnContext } = input;
+        const { turnContext } = input;
         const { registry, constraints, catalogView } = input.resolved;
-        const activeModeIds = resolveModeSelection(options ?? {}, modeModifierRegistry).activeModeIds;
+        const activeModeIds = input.composition.modes.activeModeIds;
         this.resolvedModes = activeModeIds.length > 0
             ? modeModifierRegistry.resolve(activeModeIds)
             : undefined;
@@ -437,6 +437,10 @@ export class WorkerSession implements AgentRuntime {
         const turnContext = this.assembleTurnContext(options, prompt);
         const appliedProfile = await this._resolveAgentProfile(options);
         this.lastAppliedAgentProfile = appliedProfile;
+        // Plan 624 v2: ONE frozen plan per run. Every downstream phase reads
+        // it; no phase re-decides a dimension.
+        const composition = this._composeTurn({ options, appliedProfile, turnContext });
+        this.currentComposition = composition;
         let closed = false;
         return {
             turnId: this.currentTurnId,
@@ -444,7 +448,8 @@ export class WorkerSession implements AgentRuntime {
             appliedProfile,
             requestedMode: options?.mode || 'normal',
             request,
-            orchestrator: this._readOrchestratorMode(options),
+            orchestrator: this._readOrchestratorMode(composition),
+            composition,
             signal: controller.signal,
             controller,
             abort: (reason?: unknown) => { controller.abort(reason); },
@@ -469,37 +474,72 @@ export class WorkerSession implements AgentRuntime {
             },
         };
     }
-    private _readOrchestratorMode(options?: ChatOptions): ModeModifier | null {
-        const selection = resolveModeSelection(options ?? {}, modeModifierRegistry);
-        const requestedMode = selection.orchestratorModeId;
+    private _readOrchestratorMode(composition: AgentComposition): ModeModifier | null {
+        // Plan 624 v2: the orchestrator id is part of the frozen plan, not a
+        // second lookup against the raw request.
+        const requestedMode = composition.modes.orchestratorModeId;
         if (!requestedMode)
             return null;
         const mod = modeModifierRegistry.get(requestedMode);
         return mod?.orchestrator ? mod : null;
     }
-    async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
-        const { options, prompt, appliedProfile, publisher, turnContext } = request;
-        let replacement: RunTurnAssembly | undefined;
-        const executionLocation = this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined);
-        const resolvedBase = await this._resolveTools(options, appliedProfile);
-        const { registry, catalogView } = resolvedBase;
-        let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, options, appliedProfile);
-        // Plan 624 F1: the clock is a composition decision, not a prompt
-        // section. It rides the volatile rail so the system prefix keeps
-        // its bytes; the window id comes from the compaction count so a
-        // summarised history forces a fresh reading.
-        if (!options?.disableSystemPrompt) {
-            const nowMs = Date.now();
-            const reminder = resolveTimeReminder({
+    /**
+     * Build the frozen plan for one run. All IO-shaped facts (clock, timeline,
+     * live messages, session id) are read HERE and nowhere else in the
+     * composition layer, so `composeAgent` itself stays pure.
+     */
+    private _composeTurn(input: {
+        readonly options?: ChatOptions | undefined;
+        readonly appliedProfile?: AgentProfile | undefined;
+        readonly turnContext?: TurnContext | undefined;
+        readonly withReminder?: boolean;
+    }): AgentComposition {
+        const overrides = readTurnOverrides(input.options);
+        const nowMs = Date.now();
+        const reminder = input.withReminder === false || overrides.disableSystemPrompt
+            ? null
+            : {
                 nowMs,
                 windowId: String(countTimelineCompactions(this.timeline.snapshot())),
                 turnKind: inferTimeReminderTurnKind(this.messages.at(-1)),
                 state: this.timeReminderState,
                 clockAvailable: Number.isFinite(nowMs) && !Number.isNaN(new Date(nowMs).getTime()),
-            });
-            this.timeReminderState = reminder.state;
-            if (reminder.block) {
-                this.contextRailBlocks.push(reminder.block);
+            };
+        return composeAgent({
+            ...(input.appliedProfile ? { profile: input.appliedProfile } : {}),
+            overrides,
+            modeLookup: modeModifierRegistry,
+            ...(this.cacheInput ? { cache: this.cacheInput } : {}),
+            permissions: { permissionMode: this.permissionMode },
+            reminder,
+            environment: {
+                ...(this.sessionId ? { sessionId: this.sessionId } : {}),
+                ...(input.turnContext?.workingDirectory !== undefined
+                    ? { workingDirectory: input.turnContext.workingDirectory }
+                    : {}),
+            },
+        });
+    }
+    async beginTurnAssembly(request: RunAssemblyRequest): Promise<RunTurnAssembly> {
+        const { options, prompt, appliedProfile, publisher, turnContext } = request;
+        // Plan 624 v2: consume the run's frozen plan. The fallback exists only
+        // for direct callers (tests, side paths) that skip `beginRun`.
+        const composition = request.composition
+            ?? this.currentComposition
+            ?? this._composeTurn({ options, appliedProfile, turnContext });
+        this.currentComposition = composition;
+        let replacement: RunTurnAssembly | undefined;
+        const executionLocation = this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined);
+        const resolvedBase = await this._resolveTools(options, composition, appliedProfile);
+        const { registry, catalogView } = resolvedBase;
+        let systemPrompt = await this._buildSystemPrompt(resolvedBase.tools, composition, appliedProfile);
+        // Plan 624 F1 / v2: the clock decision belongs to the frozen plan.
+        // `beginRun` decided it once; this is the single consumption point,
+        // which also keeps the state update adjacent to the rail rebuild.
+        if (composition.reminders) {
+            this.timeReminderState = composition.reminders.state;
+            if (composition.reminders.block) {
+                this.contextRailBlocks.push(composition.reminders.block);
             }
         }
         systemPrompt = systemPrompt
@@ -516,13 +556,13 @@ export class WorkerSession implements AgentRuntime {
         // budget on every turn.
         const projectionSystemPrompt = this._projectSystemPrompt(systemPrompt);
         const moded = await this.applyTurnModes({
-            options,
+            composition,
             turnContext,
             systemPrompt: projectionSystemPrompt,
             resolved: resolvedBase,
         });
         systemPrompt = moded.systemPrompt;
-        this._recordPromptSnapshot(systemPrompt, options);
+        this._recordPromptSnapshot(systemPrompt, composition.overrides);
         let progressToolName = PROGRESS_UPDATE_TOOL_NAME;
         while (moded.resolved.tools.some((tool) => tool.name === progressToolName)) {
             progressToolName = `duya_${progressToolName}`;
@@ -587,7 +627,7 @@ export class WorkerSession implements AgentRuntime {
                 if (replacement) { await replacement.prepare?.(); return; }
                 if (executionLocation.revision !== this.executionLocationFence.capture().revision) {
                     const refreshed = new TurnContext({ ...turnContext, workingDirectory: this.workingDirectory ?? null });
-                    replacement = await this.beginTurnAssembly({ ...request, turnContext: refreshed });
+                    replacement = await this.beginTurnAssembly({ ...request, turnContext: refreshed, composition });
                 }
             },
             get resolved() { return replacement?.resolved ?? resolved; },
@@ -1055,6 +1095,13 @@ export class WorkerSession implements AgentRuntime {
      */
     private timeReminderState: TimeReminderEmissionState = {};
     /**
+     * The frozen plan for the current run (plan 624 v2). Created by
+     * `beginRun`, carried on the run handle, consumed by `beginTurnAssembly`.
+     */
+    private currentComposition: AgentComposition | undefined;
+    /** Provider cache facts decided at construction, reused by every plan. */
+    private cacheInput: CacheSelectionInput | undefined;
+    /**
      * Composition snapshot of the last request actually sent (plan 624 F2).
      * Used to invalidate the in-memory rail baseline when compaction changes
      * the conversation window.
@@ -1147,14 +1194,19 @@ export class WorkerSession implements AgentRuntime {
             });
         }
         const apiFormat: ApiFormat = options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat');
-        // Plan 624 E1: the cache family and its OpenAI key come from the
-        // composition layer. The key is emitted only on the Responses path,
-        // which is the only place the provider accepts it.
-        const cacheSelection = resolveCacheSelection({
+        // Plan 624 E1 / v2: startup facts (cache family, initial permission
+        // mode) are composed once here, not resolved ad hoc in two places.
+        const cacheInput: CacheSelectionInput = {
             protocol: apiFormat === 'anthropic' ? 'anthropic' : apiFormat === 'openai-responses' ? 'openai' : 'other',
             ...(apiFormat === 'openai-responses' ? { api: 'responses' as const } : {}),
             ...definedProperties({ sessionId: this.sessionId }),
+        };
+        this.cacheInput = cacheInput;
+        const startup = composeStartup({
+            cache: cacheInput,
+            ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
         });
+        const cacheSelection = startup.cache;
         const llmClientOptions: AIClientOptions = {
             apiKey: options.apiKey,
             baseURL,
@@ -1291,10 +1343,9 @@ export class WorkerSession implements AgentRuntime {
             const file = path.join(dayDir, `${session}-${stamp}-compaction.md`);
             fs.writeFileSync(file, `# Compaction summary\n\n${summary}\n`, 'utf8');
         });
-        // Plan 624 C1: the mode and its origin come from the composition layer.
-        // The resolver reproduces the live `||` semantics (an empty string is
-        // absent, not a mode).
-        this.permissionMode = resolvePermissionSelection(options).permissionMode as PermissionMode;
+        // Plan 624 C1 / v2: the initial permission mode comes from the frozen
+        // startup plan; `setPermissionMode` remains the runtime override.
+        this.permissionMode = startup.permissions.permissionMode as PermissionMode;
         this.hostToolPermission = options.hostToolPermission;
         this.hasPermissionsToUseTool = createHasPermissionsToUseTool(this.sessionId);
         const ruleSource: PermissionRuleSource = 'userSettings';
@@ -1687,7 +1738,7 @@ export class WorkerSession implements AgentRuntime {
             return undefined;
         }
     }
-    private async _resolveTools(options?: ChatOptions, appliedProfile?: AgentProfile): Promise<ResolvedTurnTools> {
+    private async _resolveTools(options: ChatOptions | undefined, composition?: AgentComposition | undefined, appliedProfile?: AgentProfile): Promise<ResolvedTurnTools> {
         logger.info(`[Agent] streamChat: Loading tools...`);
         let registry = options?.toolRegistry;
         if (!registry) {
@@ -1709,13 +1760,15 @@ export class WorkerSession implements AgentRuntime {
                 .filter((d) => selectedProviders.includes(d.provider))
                 .map((d) => d.name)
             : []);
-        // Plan 624 C1: the four constraints and their origin come from the
-        // composition layer. `undefined` vs `[]` is preserved on purpose — an
-        // empty allow list means "allow nothing", not "unconstrained".
-        const toolSelection = resolveToolSelection(appliedProfile, {
-            ...definedProperties({ allowedTools: options?.allowedTools }),
-            ...definedProperties({ disabledTools: options?.disabledTools })
-        });
+        // Plan 624 C1 / v2: the four constraints come from the frozen plan.
+        // `undefined` vs `[]` is preserved on purpose — an empty allow list
+        // means "allow nothing", not "unconstrained". Direct callers that skip
+        // `beginRun` still go through `composeAgent`; they never get a second
+        // hard-coded decision path.
+        const plan = composition
+            ?? this.currentComposition
+            ?? this._composeTurn({ options, appliedProfile, withReminder: false });
+        const toolSelection = plan.tools;
         const constraints: ToolVisibilityConstraints = {
             ...(toolSelection.turnDisabledTools !== undefined
                 ? { disabledTools: [...toolSelection.turnDisabledTools] }
@@ -1802,11 +1855,12 @@ export class WorkerSession implements AgentRuntime {
         logger.info(`[Agent] streamChat: Loaded ${agentDefinitions.length} agent definitions`);
         return { tools, registry, agentDefinitions, constraints, catalogTool, catalogView, toolInvokeExecutor };
     }
-    private async _buildSystemPrompt(tools: Tool[], options?: ChatOptions, appliedProfile?: AgentProfile): Promise<string> {
-        // Plan 624 B1: the decision "which prompt system" now comes from the
-        // composition layer. The section overrides stay on their existing path
-        // (a pure pass-through) so this step changes no bytes.
-        const promptSelection = resolvePromptSelection(appliedProfile);
+    private async _buildSystemPrompt(tools: Tool[], composition: AgentComposition, appliedProfile?: AgentProfile): Promise<string> {
+        // Plan 624 B1 / v2: the prompt system, the section overrides and the
+        // caller injections all come from the frozen plan. This method renders;
+        // it no longer decides.
+        const promptSelection = composition.prompt;
+        const overrides = composition.overrides;
         const sysName = promptSelection.promptSystem;
         const promptProfile = appliedProfile
             ? getPromptProfileForAgentProfile(appliedProfile)
@@ -1826,12 +1880,12 @@ export class WorkerSession implements AgentRuntime {
         // delivered through the message channel, not the system prompt,
         // so the system prefix keeps the same bytes from turn to turn.
         const contextBlocks: ContextBlock[] = [];
-        if (options?.disableSystemPrompt) {
+        if (overrides.disableSystemPrompt) {
             systemPromptContent = '';
             logger.info('[Agent] streamChat: System prompt disabled (empty)');
         }
-        else if (options?.systemPrompt) {
-            systemPromptContent = options.systemPrompt;
+        else if (overrides.systemPrompt) {
+            systemPromptContent = overrides.systemPrompt;
         }
         else {
             const enabledToolNames = tools.map((t) => t.name);
@@ -1841,9 +1895,9 @@ export class WorkerSession implements AgentRuntime {
                 modelId: this.model,
                 modelName: this.model,
                 enabledTools: new Set(enabledToolNames),
-                ...definedProperties({ outputStyleConfig: options?.outputStyleConfig }),
-                ...definedProperties({ researchIntent: options?.researchIntent }),
-                ...definedProperties({ researchProjectId: options?.researchProjectId }),
+                ...definedProperties({ outputStyleConfig: overrides.outputStyleConfig }),
+                ...definedProperties({ researchIntent: overrides.researchIntent }),
+                ...definedProperties({ researchProjectId: overrides.researchProjectId }),
                 ...definedProperties({ communicationPlatform: this.communicationPlatform }),
                 ...definedProperties({ language: this.language }),
                 ...definedProperties({ projectHome: this.projectHome })
@@ -1854,7 +1908,7 @@ export class WorkerSession implements AgentRuntime {
                 contextBlocks.push({ id: section.name, source: 'volatile_context', content: section.content });
             }
         }
-        if (!options?.disableSystemPrompt) {
+        if (!overrides.disableSystemPrompt) {
             if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
@@ -1871,9 +1925,9 @@ export class WorkerSession implements AgentRuntime {
         // The rail is replaced wholesale every build: a block that stopped
         // rendering must not keep its stale text in the next request.
         this.contextRailBlocks = contextBlocks;
-        if (options?.systemPromptPrefix) {
-            hostBlocks.push({ name: 'host:prefix', content: options.systemPromptPrefix });
-            systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
+        if (overrides.systemPromptPrefix) {
+            hostBlocks.push({ name: 'host:prefix', content: overrides.systemPromptPrefix });
+            systemPromptContent = overrides.systemPromptPrefix + '\n\n' + systemPromptContent;
             logger.info('[Agent] streamChat: Added system prompt prefix');
         }
         if (appliedProfile && !promptSelection.suppressIdentityBlock) {
@@ -1881,7 +1935,7 @@ export class WorkerSession implements AgentRuntime {
             hostBlocks.push({ name: 'host:identity', content: identityBlock });
             systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
         }
-        if (!this.omitAgentsMd && !options?.disableSystemPrompt) {
+        if (!this.omitAgentsMd && !overrides.disableSystemPrompt) {
             const agentsMdSection = getAgentsMdManager().buildAgentsMdSection();
             if (agentsMdSection) {
                 hostBlocks.push({ name: 'host:agents_md', content: agentsMdSection });
@@ -1890,7 +1944,7 @@ export class WorkerSession implements AgentRuntime {
                     : agentsMdSection;
             }
         }
-        if (!options?.disableSystemPrompt && promptSelection.usesBotAssembly && appliedProfile) {
+        if (!overrides.disableSystemPrompt && promptSelection.usesBotAssembly && appliedProfile) {
             try {
                 const botContext = await loadBotPromptContext(appliedProfile.id);
                 const summaryEpoch = countTimelineCompactions(this.timeline.snapshot());
@@ -1919,7 +1973,7 @@ export class WorkerSession implements AgentRuntime {
                 logger.warn(`[Agent] bot prompt sections skipped: ${err instanceof Error ? err.message : String(err)}`);
             }
         }
-        if (!options?.disableSystemPrompt &&
+        if (!overrides.disableSystemPrompt &&
             tools.some((tool) => tool.name === 'tool_catalog') &&
             tools.some((tool) => tool.name === 'tool_invoke')) {
             const deferredToolProtocol = [
@@ -2064,14 +2118,17 @@ export class WorkerSession implements AgentRuntime {
             throw new Error(`orchestratorFramesFor: run requested mode "${run.requestedMode}", which resolved to no orchestrator; ` +
                 'this run is an ordinary turn and must be assembled, not dispatched');
         }
-        return this._dispatchOrchestratorMode(mod, run.request.prompt, run.request.options, run.controller);
+        const composition = run.composition
+            ?? this.currentComposition
+            ?? this._composeTurn({ options: run.request.options, withReminder: false });
+        return this._dispatchOrchestratorMode(mod, run.request.prompt, run.request.options, run.controller, composition);
     }
-    private async *_dispatchOrchestratorMode(mod: ModeModifier, prompt: string | MessageContent[], options: ChatOptions | undefined, runController: AbortController): AsyncGenerator<SSEEvent, void, unknown> {
+    private async *_dispatchOrchestratorMode(mod: ModeModifier, prompt: string | MessageContent[], options: ChatOptions | undefined, runController: AbortController, composition: AgentComposition): AsyncGenerator<SSEEvent, void, unknown> {
         const queryText = typeof prompt === 'string'
             ? prompt
             : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
         const toolRegistry = this.activeMCPRegistry;
-        const orchestratorActiveModes = resolveModeSelection(options ?? {}, modeModifierRegistry).activeModeIds;
+        const orchestratorActiveModes = composition.modes.activeModeIds;
         const orchestratorResolved = orchestratorActiveModes.length > 0
             ? modeModifierRegistry.resolve(orchestratorActiveModes)
             : null;
@@ -2180,7 +2237,8 @@ export class WorkerSession implements AgentRuntime {
             throw new Error('Side question cannot be empty');
         }
         const profile = await this._resolveAgentProfile({});
-        const systemPromptBase = await this._buildSystemPrompt([], {}, profile);
+        const composition = this._composeTurn({ appliedProfile: profile, withReminder: false });
+        const systemPromptBase = await this._buildSystemPrompt([], composition, profile);
         const { systemPromptContent, messages } = this._projectModelMessages(systemPromptBase);
         let llmMessages = messages;
         while (llmMessages.length > 0 &&

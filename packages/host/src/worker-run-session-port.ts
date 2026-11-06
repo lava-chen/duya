@@ -79,6 +79,12 @@ export interface RunHandle {
     readonly requestedMode: string;
     readonly request: RunStartRequest;
     readonly orchestrator: ModeModifier | null;
+    /**
+     * The frozen per-run composition plan (plan 624 v2). Optional only because
+     * test harnesses construct handles directly; production `beginRun` always
+     * supplies one and `beginTurnAssembly` falls back to composing it itself.
+     */
+    readonly composition?: import('./agent-composition/index.js').AgentComposition;
     readonly signal: AbortSignal;
     readonly controller: AbortController;
     readonly abort: (reason?: unknown) => void;
@@ -90,6 +96,8 @@ export interface RunAssemblyRequest {
     readonly appliedProfile?: AgentProfile;
     readonly turnContext: TurnContext;
     readonly publisher: TurnPipelinePublisher | undefined;
+    /** The run's frozen plan; when absent `beginTurnAssembly` composes one. */
+    readonly composition?: import('./agent-composition/index.js').AgentComposition;
 }
 export interface PromptUserRowCommit {
     readonly committed: boolean;
