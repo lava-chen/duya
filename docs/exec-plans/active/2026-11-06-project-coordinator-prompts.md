@@ -22,7 +22,7 @@
 - [x] 学习官方提示词/上下文工程方法，核对本地 Codex 实现。
 - [x] 追踪 Duya 实际协调与装配路径，区分现状和设计缺口。
 - [x] 编写完整设计、英文提示词正文、验收与实施顺序。
-- [ ] 验证文档、执行门禁并通过 Draft PR 交付。
+- [x] 验证文档、执行门禁并通过 Draft PR 交付。
 
 ## 发现与决策
 
@@ -46,10 +46,11 @@
 | `226339c4`（文档 checkpoint）/ base `54dde175` | Windows | `git rebase --onto origin/codex/624-agent-composition 7eaad892` | 0 | 仅重放本任务文档提交；对依赖 diff 为 7 份文档，无源码 |
 | 同上 | Windows | `node scripts/architecture/bundle-verify.mjs --json` | 0 | FRESH，0/1119 inputs changed；本轮未重建 worker |
 | 文档切片 | Windows | `npm run check:encoding`、`git diff --check` | 0 | 无新增编码或 whitespace 违规 |
+| `21faa618` | Python / UTF-8 | 新文档与新增索引链接、fenced blocks 检查 | 0 | 三份新文档与 4 条新增入口通过；已有无关断链未计为本任务通过 |
 
 ## 接续 / 结果
 
-已实现：无生产改动。[设计](../../design-docs/project-coordinator-prompts.md) 与源码参考已完成；本任务文档 checkpoint `226339c4`，后续仅补充验证/交付记录，最新 head 以 Git 与 PR 为准。未提交路径：当前仅本设计与计划的交付记录，提交前逐项复核。
-外部副作用：创建 managed worktree、本地分支、ignored 依赖 junction 与本检出构建产物；尚无推送/本任务 PR/合并。完整类型与架构检查在相同生产源码上通过；接到依赖时只改变已有 bundle 和依赖计划，未重复全量构建。真实模型质量/成本对照与 Desktop 端到端验收属于后续实施，尚未执行。
+已交付：无生产改动。[设计](../../design-docs/project-coordinator-prompts.md) 与源码参考已完成；文档提交 `21faa618` 已推送，Draft PR [#622](https://github.com/lava-chen/duya/pull/622)，base=`codex/624-agent-composition` / `54dde175`。后续仅补充本段交付记录；最终 head 以 PR/Git 为准，提交后未提交路径应为空。
+外部副作用：创建 managed worktree、本地/远端任务分支、Draft PR、ignored 依赖 junction 与本检出构建产物。未合并、未发布、未修改主检出或 Codex clone。完整类型与架构检查在相同生产源码上通过；接到依赖时只改变已有 bundle 和依赖计划，未重复全量构建。真实模型质量/成本对照与 Desktop 端到端验收属于后续实施，尚未执行。
 回收：成果尚未交付和集成，保留检出。
-下一步：提交交付记录，创建以 `codex/624-agent-composition` 为 base 的文档 Draft PR；不合并依赖或本任务。
+下一步：审阅 #622 的正文、权威划分与验收边界；设计采纳后从 P0 对账 624 与主检出的 Project 连续性切片，再按 P1–P5 实施。未经授权不合并依赖或本任务。
