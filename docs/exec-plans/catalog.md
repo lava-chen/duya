@@ -24,6 +24,7 @@
 | [2026-10-25-data-read-range-fd](active/2026-10-25-data-read-range-fd.md) | — | 读路径：投影会话时复用同一个文件句柄，不再逐行 open/close（8000 条投影 656ms → 68ms）；PR #466 已合并 |
 | [2026-10-25-data-append-index-lookup](active/2026-10-25-data-append-index-lookup.md) | — | 消息写路径：`appendBatch` 去重检查按批内 id 点查，不再全量扫会话索引（去掉 O(N²)） |
 | [624 Agent 组合层与提示词重构](active/624-agent-composition-layer.md) | P0 | A1–F2 十个切片已落地（10 个 commit，相关套件 35 文件 / 320 用例通过）；剩余：`CompactionOutcome.systemPrompt` 协议缺口、bot 双轨、冻结 `AgentComposition` 与 `ChatOptions` 注入项分离 |
+| [Coordinator 提示词系统](active/2026-11-06-project-coordinator-prompts.md) | P0 | 完整设计草案：常驻正文、动态上下文、注入/恢复、工作交接与装配/模型两层评估；本轮不改生产 Runtime |
 | [623 网关通道能力补全](active/623-gateway-channel-capability-parity.md) | P1 | 适配器层已交付（能力表 + 5 个新通道 + 既有通道缺口）；下一步按计划 Phase 3 接线 Host/Desktop 的 10 处硬编码平台枚举 |
 | [610 架构主线](active/610-architecture-series/README.md) | P0 | 按 [19 执行队列](active/610-architecture-series/19-fast-track-queue.md) 的追踪表核对；不在此复制卡片状态 |
 | [622 平台收口](active/622-agent-platform-convergence/README.md) | P0 | 依赖测量先行：01 修切片图解析（= T19 执行版）→ 02 门禁接线与口径收敛 → 03 `@duya/host` 层归属裁决 → 04 其余无层包；05 客户端轴门禁 · 06 runtime 纯净度 · 07 DAG 并行 · 08 生命周期落盘 · 09 安全治理 · 10 退役与文档事实源 · 11 常驻对账 |
