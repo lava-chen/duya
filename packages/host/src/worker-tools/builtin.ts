@@ -19,6 +19,7 @@ import { exitPlanModeTool } from '@duya/host/worker-tool-bindings/exit-plan-mode
 import { switchModeTool } from '@duya/host/worker-tool-bindings/switch-mode';
 import { skillTool } from '@duya/host/worker-tool-bindings/skill';
 import { briefTool } from '@duya/capabilities/BriefTool/BriefTool';
+import { sessionTool } from '@duya/host/worker-tool-bindings/session';
 import { projectTool } from '@duya/host/worker-tool-bindings/project';
 import { VisionTool } from '@duya/capabilities/VisionTool/VisionTool';
 import { imageGenerateTool } from '@duya/host/worker-image-generation';
@@ -44,6 +45,10 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     enabledPluginIds?: Set<string>;
 }): ToolRegistry {
     const registry = new ToolRegistry();
+    // Coordinator dispatch requires projectTask, which the duya_app spawn
+    // wrapper does not yet carry. Exact profile allowlisting promotes this
+    // canonical capability; ordinary sessions keep it deferred.
+    registry.register(sessionTool.toTool(), sessionTool, { exposure: 'deferred' });
     for (const action of ['enter', 'exit', 'sync'] as const) {
         const tool = new WorktreeControlTool(action);
         registry.register(tool.toTool(), tool, { exposure: 'eager', riskTier: 'write' });

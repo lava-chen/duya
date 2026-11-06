@@ -1,17 +1,17 @@
 # Project Coordinator 提示词系统
 
-状态：设计草案，未接入生产 · 2026-11-06。源码基线为 624 PR [#621](https://github.com/lava-chen/duya/pull/621) head `54dde175`，该依赖已于本轮调查期间由外部流程合入 master `beb0d512`，两者 tree 相同。源码初查为 `7eaad892`，其后仅新增 bundle 与依赖计划记录；主检出的其他未提交切片不属于本设计基线。执行与验证见 [本次计划](../exec-plans/active/2026-11-06-project-coordinator-prompts.md)；写作方法和 Codex 固定源码见 [参考](../references/codex-prompt-composition.md)。
+状态：提示词与 Session 绑定上下文已实现，验证见本次计划；尚未合并 · 2026-11-06。源码基线为 624 PR [#621](https://github.com/lava-chen/duya/pull/621) head `54dde175`，该依赖已于本轮调查期间由外部流程合入 master `beb0d512`，两者 tree 相同。源码初查为 `7eaad892`，其后仅新增 bundle 与依赖计划记录；主检出的其他未提交切片不属于本设计基线。执行与验证见 [本次计划](../exec-plans/active/2026-11-06-project-coordinator-prompts.md)；写作方法和 Codex 固定源码见 [参考](../references/codex-prompt-composition.md)。
 
-本设计让 Coordinator 在长期项目中理解用户意图、复用已有工作、组织执行、核对结果并保留可恢复状态。交付包括常驻提示词正文、上下文与事件的输入合同、注入生命周期、工作 Session 交接和行为评估；本轮不修改运行时。
+本设计让 Coordinator 在长期项目中理解用户意图、复用已有工作、组织执行、核对结果并保留可恢复状态。交付包括常驻提示词正文、上下文与事件的输入合同、注入生命周期、工作 Session 交接和行为评估；当前实施已接入运行时。
 
-第二轮补充：[Claude 一手体验/技术/缺陷资料](../references/claude-projects-coordinator.md#2026-11-06一手体验技术解析与工具闭环复核) 与本文 §12。§12 核对实际 action、回执和存储路径，修正自动唤醒、全文读取和 todo 独立性的假设；当前生产白名单仍未改变。
+第二轮补充：[Claude 一手体验/技术/缺陷资料](../references/claude-projects-coordinator.md#2026-11-06一手体验技术解析与工具闭环复核) 与本文 §12。§12 核对实际 action、回执和存储路径，修正自动唤醒、全文读取和 todo 独立性的假设；实施默认准入已收敛为 project/session，并禁用 Coordinator 的 catalog/invoke 路由。
 
 ## 1. 已理解的实现与真实边界
 
 ```mermaid
 flowchart TD
   U[用户与 Desktop 项目工作台] --> C[Coordinator Session / Run]
-  C --> M[session / project / todo 管理工具]
+  C --> M[session / project 管理工具]
   M --> H[Host 授权、租约与派发]
   H --> T[唯一 Task 与 Project 绑定]
   H --> W[工作 Session / Run]
@@ -25,7 +25,7 @@ flowchart TD
   A --> S
 ```
 
-图中上下文到 C/W 的自动注入是设计接入目标，不能仅凭已有 `getProjectContext` 就认定两条链路已实现。
+上下文到 Coordinator/work 的注入已通过可信 worker attempt → Project service → durable Session 绑定 → volatile rail 接通；每次模型请求刷新，旧 Desktop cwd 快照注入已移除。控制/审批状态仍未纳入此快照，模型需按可用工具补读。
 
 | 对象/路径 | 已核对的行为 | 对提示词的约束 |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ flowchart TD
 | `project/tool-service.ts` | 从 caller Session 解析 Project；提供 get/context/update_state/record_decision/record_memory；CAS 与用户动作限制 | 模型不能自选 projectId 越权，不能代用户接受决定或激活记忆 |
 | `project/reconciliation.ts` | 终态写 Activity，按 Run 幂等入 mailbox，可唤醒当前 Coordinator | 通知是核对入口，不是成功证明；不要不断 get 轮询 |
 | Session control leases | 用户接管约束 Coordinator 新指导；在途工具另有生命周期 | 提示词不能解释成“暂停必已中断工具”，不能用新 Session 绕过接管 |
-| `worker-profiles/types.ts`、`project/identity.ts` | 专用 `project` prompt；当前仅 session/project/todo；抑制通用 identity | Coordinator 不加载通用执行代理的设备与文件操作规则；todo 的保留须通过 §12 的存储隔离条件 |
+| `worker-profiles/types.ts`、`project/identity.ts` | 专用 `project` prompt；当前仅 session/project（catalog/invoke 显式拒绝）；抑制通用 identity | Coordinator 不加载通用执行代理的设备与文件操作规则；todo 的保留须通过 §12 的存储隔离条件 |
 | `worker-prompts/configs/project.ts` | 四个 Project 行为段 + system/finalAnswer | 已有框架可演进，当前 operation/delegation 有重复，不再叠加第二份总指令 |
 | `project/context.ts` | 选 accepted decisions、active memories、未完成/待验收 Task、近期 Activity，保留来源引用 | 候选记忆不混入有效事实；原始 transcript 按需读取 |
 | 624 `composeAgent` → RunHandle → assembly | 一次冻结策略选择；段目录、工具/模式/权限与来源统一 | IO 先准备事实，再交给纯选择器；不在模板或 renderer 中偷偷读取新状态 |
@@ -85,7 +85,7 @@ flowchart TD
 | `project_snapshot`（新） | 当前 state、next step、相关 Task/Run 与验收、有效决定/记忆 | 动态 rail；Run 开始读取，发生相关事件后刷新 |
 | `project_control`（新） | 相关 Session 控制权、等待审批、Host 提供的资源约束 | 动态 rail；有事实才渲染，不能默认假定拥有控制权 |
 | 当前输入/结果事件 | 真实用户消息，或 Host 已持久化的既有通知 | 沿用原消息/mailbox 车道；不要另在 rail 复制一份事件正文 |
-| 工具参数与结果 | session/project/todo schema 和真实返回 | 工具通道；接口定义保持唯一来源 |
+| 工具参数与结果 | session/project schema 和真实返回 | 工具通道；接口定义保持唯一来源 |
 
 稳定段进入 Duya 的 system 投影；支持 developer 的 provider 如何映射由既有 provider 适配负责，本轮不引入新消息角色。动态块沿用当前 user-role reminder rail；“系统附带上下文”的说明只解释来源，不声称其自由文本与 system 同权。新的来源分类须登记现有 reminder taxonomy。
 
@@ -95,7 +95,7 @@ Coordinator 只获得自己的管理能力说明。应用/MCP 全局目录不能
 
 ## 5. 常驻提示词正文草案
 
-以下英文正文为本项目原创草案，按当前四段和新增 context policy 拆分。英文方便与现有资产一致，用户可见语言跟随用户/产品语言设置。它不执行本文设计，也不证明所述新上下文段已存在。
+以下是原创正文的设计记录；生产正文以 `worker-prompts/assets/project/` 为准，已分成五段并补齐现有工具的限制说明。英文与现有资产一致，用户可见语言跟随用户/产品语言设置。后续扩展字段和评估目标需按实际实现核对。
 
 ### projectIdentity
 
@@ -461,7 +461,7 @@ result path; do not invent a second message delivery mechanism.
 | P4 工作交接与评估 | work-context 段、现有 Host 测试与 eval harness | A/B 用例有真实结果；若 schema 不支持某动作，修合同后再提示 |
 | P5 产品验收 | 当前检出的 worker bundle、Desktop 真链路 | 用户请求→派工→终态唤醒→核对→用户验收/记忆复核→恢复续接全部可观察 |
 
-本轮仅交付设计，不提前把草案 `.hbs` 接入线上。实施每片先记录测试基线，再跑相关测试、根类型/架构门禁；涉及 bundle/装配边界时重建并通过 freshness/桌面验收。
+当前已实施五段 `.hbs`、work-context、Session 绑定上下文、请求前刷新和默认工具隔离。测试先记基线，覆盖真实 DB 与 provider 请求；构建与桌面验收见执行计划。全文证据读取、活 Run steer、中途阻塞唤醒、结构化用户决定/验收写面与真实模型质量/成本评估仍是独立未完成项，本文不把提示词当作这些能力的实现。
 
 发布前需明确证明：工具准入、派发/租约和幂等是 Host 事实；prompt 只描述可用能力。保留 prompt 版本与段 hash/长度/来源诊断，不默认记录私有上下文正文。真实模型评估或产品链路未验收时保持 Draft，不把设计完整误写成产品已验证。
 
@@ -488,13 +488,13 @@ result path; do not invent a second message delivery mechanism.
 | `session rename` | 改工作标题；`sessionId/title` | 用可辨识标题帮助找工作 | 不代表完成、归档、resolve 或重新归属 |
 | `todo` | 当前实现为 Session TaskStore 上的 checklist 写工具 | 必须先通过下节隔离条件，才允许承担协调 checklist | 与项目 Task 可能共用来源 Session 和底层表，不能仅靠提示词区分 |
 
-`duya_app` 的 `session_read`、`session_control` 等能力虽然在仓库中存在，不能据此宣称 Coordinator 可用：当前白名单只有 `session/project/todo`，通用 `session` schema 没有 read/control action。现有 MCP `session_spawn` 包装 schema 也没有传 `projectTask`；若未来切换到该别名，先补齐字段与授权对拍，不直接改提示词名称。
+`duya_app` 的 `session_read`、`session_control` 等能力虽然在仓库中存在，不能据此宣称 Coordinator 可用：当前白名单只有 `session/project`，通用 `session` schema 没有 read/control action。现有 MCP `session_spawn` 包装 schema 也没有传 `projectTask`；若未来切换到该别名，先补齐字段与授权对拍，不直接改提示词名称。
 
 ### 12.2 提示词还不能兑现的能力
 
 | 接缝 | 本轮证据 | 设计裁定/实施要求 |
 | --- | --- | --- |
-| todo 与项目任务隔离 | `dispatch.createTask` 把 canonical Task 记在 caller Session；`worker-task-store` 按 Session 列出全部 Task；`TodoTool.applyReplace` 删除所有非 `_` id；`task-api.deleteTask` 直接删除单项 | **建议新 Coordinator 默认仅保留 project/session**，先用 currentState/nextStep 管协调进度。若要保留 todo，由 Host 提供 scoped adapter，列表、按 id 读/写/删和 replace 都必须隔离，不能只约定 id 前缀。当前代码未改 |
+| todo 与项目任务隔离 | `dispatch.createTask` 把 canonical Task 记在 caller Session；`worker-task-store` 按 Session 列出全部 Task；`TodoTool.applyReplace` 删除所有非 `_` id；`task-api.deleteTask` 直接删除单项 | **建议新 Coordinator 默认仅保留 project/session**，先用 currentState/nextStep 管协调进度。若要保留 todo，由 Host 提供 scoped adapter，列表、按 id 读/写/删和 replace 都必须隔离，不能只约定 id 前缀。本次已移除 Coordinator 的 todo 准入；通用 todo 实现保留给其他角色 |
 | 完整证据读面 | `project get` 不投影 continuity 的 transcript refs；`session get` 只有截断结果；session_read 不在当前准入 | 扩展 project 的有界工作读取，或把既有 Session reader 适配成 project-bound scope。按可信 Task→Session→Run 验权，支持 cursor/budget/来源。接入前只能请求工作 Session 提供更窄证据，不能声称自己查过原文 |
 | 自动唤醒合同 | standalone `session-service` 的 spawn/reply 返回 `completionNotification:'query'`；ProjectTool description 却写 Host 自动唤醒；settlement 的 surface wake 是可选回调 | 收口 description、回执和真实唤醒能力。automatic 必须由当前 surface 注册并验收，query 不能让提示词忙轮询或凭 nextStep 声称已安排后台继续 |
 | 中途阻塞 | 当前 project settlement 只接受 Run 终态；running 被跳过 | 从现有待审批/待输入/执行状态投影中途事件和工作状态，去重持久交给协调对话。让模型处理可自行回答的问题，审批仍到实际请求所属 UI；不要新建平行任务状态机 |

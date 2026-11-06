@@ -33,6 +33,8 @@ import type {
   ProjectToolState,
 } from '@duya/capabilities/project';
 
+import type { ProjectSessionPromptContext } from './context.js';
+
 const PROJECT_TOOL_ACTIONS: ReadonlySet<string> = new Set([
   'get',
   'context',
@@ -47,7 +49,7 @@ const DEFAULT_CONTEXT_CHARACTERS = 8_000;
 const MAX_CONTEXT_CHARACTERS = 16_000;
 
 export interface ProjectToolServiceStores {
-  readonly projects: Pick<ProjectStore, 'getByCoordinatorSession'>;
+  readonly projects: Pick<ProjectStore, 'getByCoordinatorSession' | 'getTaskLinkByWorkSession'>;
 }
 
 export interface ProjectToolServiceOptions {
@@ -63,6 +65,8 @@ export interface ProjectToolServiceOptions {
 }
 
 export interface ProjectToolService {
+  /** Read-only worker assembly input; identity comes from the transport. */
+  getSessionContext(callerSessionId: string): Promise<ProjectSessionPromptContext | null>;
   /**
    * Serve one project tool call. `callerSessionId` comes from the trusted
    * transport, never from the tool payload.
@@ -78,6 +82,15 @@ export function createProjectToolService(options: ProjectToolServiceOptions): Pr
   const { stores, projectApi } = options;
 
   return {
+    async getSessionContext(callerSessionId) {
+      const coordinator = stores.projects.getByCoordinatorSession(callerSessionId);
+      const link = coordinator ? null : stores.projects.getTaskLinkByWorkSession(callerSessionId);
+      const projectId = coordinator?.project_id ?? link?.project_id;
+      if (!projectId) return null;
+      const context = await projectApi.getProjectContext(projectId, link?.task_id, DEFAULT_CONTEXT_CHARACTERS);
+      if (!context) throw new Error('Bound project context unavailable');
+      return { ...context, projectId, role: coordinator ? 'coordinator' : 'work', taskId: link?.task_id ?? null };
+    },
     async dispatch({ action, payload, callerSessionId }) {
       if (!PROJECT_TOOL_ACTIONS.has(action)) {
         return refuse(`unsupported_action:${action}`);

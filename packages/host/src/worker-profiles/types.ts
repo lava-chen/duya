@@ -55,9 +55,10 @@ export const MAIN_AGENT_PROFILES: AgentProfile[] = [
     kind: 'main',
     name: 'Project Coordinator',
     description: 'Coordinates project work through tasks and delegated Sessions',
-    // The coordinator can track its task list and manage child Sessions. It has
-    // no direct filesystem, shell, browser, or device execution capability.
+    // Canonical Tasks are managed through project/session, never the shared
+    // todo list. This role needs no deferred discovery or arbitrary routing.
     allowedTools: [...PROJECT_COORDINATOR_ALLOWED_TOOLS],
+    disallowedTools: ['tool_catalog', 'tool_invoke'],
     // Dedicated composition: the coordinator must not inherit the general
     // agent's file-editing, shell, or desktop-tool guidance. Its identity is
     // the first section of that system, so the runtime's generic identity

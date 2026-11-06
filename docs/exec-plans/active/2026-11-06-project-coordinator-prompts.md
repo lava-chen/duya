@@ -5,7 +5,7 @@
 
 ## 目标与边界
 
-在 624 组合层基础上设计完整 Project Coordinator 提示词系统：职责、写法、角色与数据权威、段结构、注入与刷新、派工、结果处理、记忆、恢复和评估。先交付可审阅设计与提示词正文草案，不在本轮改生产 Runtime 或替其他任务合并 624。开工时依赖未合并，第二轮调查中已由外部流程集成，见后文对账。
+在 624 组合层基础上设计完整 Project Coordinator 提示词系统：职责、写法、角色与数据权威、段结构、注入与刷新、派工、结果处理、记忆、恢复和评估。前两轮交付设计与正文草案；用户于 2026-11-06 授权实施后，当前范围包括生产提示词、可信 Session 上下文、请求前刷新、工具准入与真实链路验证。开工时依赖未合并，第二轮调查中已由外部流程集成，见后文对账。
 
 关联：[Coordinator 主计划](2026-11-02-project-coordinator.md)、[624 组合层](624-agent-composition-layer.md)、[首版合同](../../design-docs/project-coordinator-contract.md)。独占新增设计/参考文件与本计划；索引仅添加本任务入口。
 
@@ -17,6 +17,15 @@
 - 文档相对链接、编码、Git diff 检查通过；提交前执行根要求的类型与架构门禁，记录实际结果。
 
 ## 进度
+
+2026-11-06 用户授权开始实施，复用本任务 managed worktree / PR #622。生产切片独占 `worker-prompts` 的 Project 资产/注册、`project/context.ts` / `tool-service.ts` / `identity.ts`、worker 上下文装配与 DB bridge 的必要接线及对应测试。共享检出的连续性/UI/role-policy dirty 成果只读保留，不整体复制。后续沿真实链路扩展本检出的 router：移除 cwd 派生的固定 system 快照，给新上下文请求补可信 attempt 关联；补注册缺失的 session capability（deferred，由 Coordinator 精确 allowlist 提升）。
+
+- [x] 实施：五段正文、work context 行为、工具说明与 Coordinator todo 默认准入修复。
+- [x] 实施：通过可信 Session 绑定读取 Coordinator/work 上下文，按模型请求刷新；revision、裁剪与来源诚实呈现。
+- [x] 实施：覆盖绑定隔离、裁剪、失效、恢复与真实模型请求装配；重建 worker / Desktop 并跑门禁。
+- [ ] 实施：提交代码、更新同一 PR 与接续记录；未经授权不合并。
+
+开工基线：`c1191047` / clean，Windows / Node v24.16.0；`npx vitest run` 执行 Project prompt/tool-service/tool-bridge/dispatch/work-session-continuity、agent-composition 与 worker-context：22 files / 143 tests，exit 0。Workspace 工具仍不可调用，按 Git/计划对账。#622 当前 Open/Draft，base=master。
 
 - [x] 核对共享状态；创建独立 managed worktree，基于 624 已提交 head。
 - [x] 学习官方提示词/上下文工程方法，核对本地 Codex 实现。
@@ -58,7 +67,7 @@
 | 同上 | Windows / 已构建本检出 capability | `node docs-local/research/project-coordinator-prompts/todo-scope-repro.mjs` | 0（按预期复现风险） | 内存调用序列为 delete(project-task-1)、create(coord-step-1)，canonicalTaskRemains=false；未连接真实 DB |
 | 同上 | Python / UTF-8 / PowerShell | 更新文档链接/fences、`check:encoding`、`git diff --check` | 0 | 三份更新文档无新增断链、编码或 whitespace 问题 |
 
-## 接续 / 结果
+## 设计阶段交付历史（当前见实施接续）
 
 已交付：无生产改动。[设计](../../design-docs/project-coordinator-prompts.md) 与源码参考已完成；文档提交 `21faa618` 已推送，Draft PR [#622](https://github.com/lava-chen/duya/pull/622)，base=`codex/624-agent-composition` / `54dde175`。后续仅补充本段交付记录；最终 head 以 PR/Git 为准，提交后未提交路径应为空。
 第二轮从文档 checkpoint `185a13eb` 接续，更新完整设计 §12、既有 Claude 参考与本计划，仍通过同一 #622 交付；提交后要求三份文档均干净。这一轮纠正的是设计中对工具能力的假设，没有实施接口补齐或 todo 隔离修复。
@@ -66,3 +75,30 @@
 外部副作用：创建 managed worktree、本地/远端任务分支、Draft PR、ignored 依赖 junction 与本检出构建产物。未合并、未发布、未修改主检出或 Codex clone。完整类型与架构检查在相同生产源码上通过；接到依赖时只改变已有 bundle 和依赖计划，未重复全量构建。真实模型质量/成本对照与 Desktop 端到端验收属于后续实施，尚未执行。
 回收：成果尚未交付和集成，保留检出。
 下一步：审阅 #622 的 §12 工具闭环，先裁定并实施 todo 隔离/默认准入、项目范围证据读面与真实唤醒/中途阻塞合同，再按 P1–P5 落地正文和产品验收。未经授权不合并依赖或本任务。
+
+
+## 实施接续（2026-11-06）
+
+已实现：五段稳定 Project 正文与 work-context 资产；独立 context policy；Coordinator 仅准入 session/project 并显式拒绝 catalog/invoke；generic system 的 hooks 权威说明与无关 Apps/MCP 提示不再混入 Coordinator；修正 session/project description 的 completion/query、reply/取消与跨 Coordinator 授权说明。
+
+上下文：共享 Project service 从可信 Session 查询 coordinator/work 绑定，work 限自己的 Task；worker DB / Desktop / Agent Server 可信 attempt 三段接通。Run 内工具轮次在 prepare 前刷新同一 rail slot；恢复时重读；失败/unbound 显式失效，快照不写 timeline。Host renderer 保留 revision/acceptance、整条记录和裁剪标记，仅返回已展示的来源；旧 cwd 启动快照已移除。没有引入第二持久存储或猜测控制/审批状态。
+
+验证阶段发现并修复三处接缝：Run 装配只一次（刷新必须进 prepare）；新 DB action 未列入可信 attempt 关联；session capability 的 schema/port 已有但 builtin 没注册。真实 Electron 测试已在独立 namespace、当前 dist/worker 下完成 project update_state → 下一请求 revision=1 / 新状态 / 稳定 system 前缀 / session+project 工具表，1/1 passed（loopback Anthropic，模型受控，无真实模型质量结论）。初次 E2E fixture 用错 closeDuya 参数，已修正并核对本任务 namespace 的测试进程，未触碰用户运行实例。
+
+尚未实现的产品能力：Project 范围 transcript/artifact 全文读取、活 Run steer、中途 blocked/approval 事件投影、结构化用户决定/验收/设置写面。提示词按现有 schema 工作，不声称这些能力已提供。端到端测试不等同于真实模型对派工质量、歧义处理与成本的行为评估；B1–B15 仍待评估。
+
+
+实施验证（基线 `c1191047` + 上述生产/文档/测试切片；Windows / Node v24.16.0 / npm 11.13.0）：
+
+| 命令 / 范围 | 结果 |
+| --- | --- |
+| 开工相关测试 | 22 files / 143 tests，exit 0 |
+| 最终相关 Vitest（Project、prompts、composition、rail、tool census、transport） | 42 files / 280 tests，exit 0；工具集预期随禁用 todo 合同更新，未跳过或放宽行为断言 |
+| `npm run electron:build` | exit 0；随后因可信 action 和 session 注册修复，重建 `build-electron.mjs` / `bundle:worker`，均 exit 0 |
+| `npx playwright test --config <本地 preview 配置> e2e/turn/project-prompt.spec.ts --project turn` | 1/1 passed，exit 0，14.7s；当前 dist renderer / main / worker，独立 namespace，无 Vite 复用；loopback 模型 |
+| `npm run architecture:check` | exit 0，3203 tolerated（含 permitted edges），无新增阻断；未改 baseline |
+| `npm run typecheck:all`（最终生产切片） | exit 0；含 4 项 eval recorder 检查；Electron 维持已有 baseline，无新增类型错误 |
+| 六份 Project 模板 source / bundle 逐字节比较 | 全部相同 |
+| `git -c core.whitespace=cr-at-eol diff --check -- . ':!packages/host/bundle'` | exit 0；保留 router 既有 tracked CRLF。生成 bundle 的 vendor 空白未手改 |
+
+本轮边界：未调用真实供应商模型；未改用户共享检出，未合并或发布，未创建第二事实存储；保留 managed worktree。PR #622 仍 Draft，提交后检查和最终 head 以 Git / PR 为准。现有 whole-repo typecheck 包含 Electron 既有错误 baseline，不能称全仓零错误。

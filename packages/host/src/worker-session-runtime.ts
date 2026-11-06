@@ -1,3 +1,4 @@
+import { buildProjectSessionContextBlock } from './worker-context/project-context.js';
 import { createGoalModeToolPorts, createResearchModeToolPorts } from './worker-modes/child-run-ports.js';
 import { definedProperties } from './worker-context/defined-properties.js';
 import { flattenSystemProjection } from './worker-context/system-projection.js';
@@ -529,6 +530,7 @@ export class WorkerSession implements AgentRuntime {
             ?? this._composeTurn({ options, appliedProfile, turnContext });
         this.currentComposition = composition;
         let replacement: RunTurnAssembly | undefined;
+        let projectContextPrepared = false;
         const executionLocation = this.executionLocationFence.capture(turnContext.workingDirectory ?? undefined);
         const resolvedBase = await this._resolveTools(options, composition, appliedProfile);
         const { registry, catalogView } = resolvedBase;
@@ -628,7 +630,19 @@ export class WorkerSession implements AgentRuntime {
                 if (executionLocation.revision !== this.executionLocationFence.capture().revision) {
                     const refreshed = new TurnContext({ ...turnContext, workingDirectory: this.workingDirectory ?? null });
                     replacement = await this.beginTurnAssembly({ ...request, turnContext: refreshed, composition });
+                    await replacement.prepare?.();
+                    return;
                 }
+                // Assembly is frozen once per Run, but project evidence must
+                // be refreshed before each subsequent model request.
+                if (projectContextPrepared && !composition.overrides.disableSystemPrompt && this.sessionId &&
+                    (composition.scope === 'coordinator' || composition.scope === 'main-session')) {
+                    const block = await buildProjectSessionContextBlock(composition.scope === 'coordinator');
+                    this.contextRailBlocks = this.contextRailBlocks.filter((item) => item.id !== 'project_snapshot');
+                    if (block) this.contextRailBlocks.push(block);
+                    this._recordPromptSnapshot(systemPrompt, composition.overrides);
+                }
+                projectContextPrepared = true;
             },
             get resolved() { return replacement?.resolved ?? resolved; },
             get turnContext() { return replacement?.turnContext ?? turnContext; },
@@ -1908,7 +1922,7 @@ export class WorkerSession implements AgentRuntime {
                 contextBlocks.push({ id: section.name, source: 'volatile_context', content: section.content });
             }
         }
-        if (!overrides.disableSystemPrompt) {
+        if (!overrides.disableSystemPrompt && composition.scope !== 'coordinator') {
             if (shouldInjectMcpCatalog(readToolExposureConfig().exposure)) {
                 const mcpCatalog = buildMCPCapabilityCatalog(this.activeMCPRegistry.getAllTools().filter((tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp'), { entryPoint: 'tool_catalog' });
                 if (mcpCatalog) {
@@ -1921,6 +1935,13 @@ export class WorkerSession implements AgentRuntime {
             if (appsSection) {
                 contextBlocks.push({ id: 'apps', source: 'volatile_context', content: appsSection });
             }
+        }
+        // Re-read durable bindings for each model request, including tool-loop
+        // turns and post-compaction assembly. IO stays outside composeAgent.
+        if (!overrides.disableSystemPrompt && this.sessionId &&
+            (composition.scope === 'coordinator' || composition.scope === 'main-session')) {
+            const projectBlock = await buildProjectSessionContextBlock(composition.scope === 'coordinator');
+            if (projectBlock) contextBlocks.push(projectBlock);
         }
         // The rail is replaced wholesale every build: a block that stopped
         // rendering must not keep its stale text in the next request.

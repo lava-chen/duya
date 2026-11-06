@@ -113,7 +113,7 @@ export class ProjectTool extends BaseTool {
 ## Rules
 - Only the user can accept a decision, activate a memory candidate, or accept a Task. This tool refuses those statuses; record them as proposed/candidate and ask the user.
 - A finished Run is evidence, not acceptance. Use "get" to reconcile Task status, then report the observed result.
-- Do not poll. Read once when you need current state; the Host wakes you when a dispatched Run ends.
+- Follow the completionNotification returned by session spawn/reply. Query with session get when required; automatic wake is Host-dependent. Avoid repeated unchanged reads.
 
 ## Restriction
 - The project is resolved from the calling Coordinator session. A session that is not the currently bound Coordinator is refused.`;
