@@ -386,7 +386,7 @@ node node_modules/vitest/vitest.mjs run packages/host/tests/worker-prompts packa
 
 ## 接续 / 结果
 
-**已实现**（14 个 commit，`71ed7df6` → `383a547d`；`git rev-list --count b5c36035..HEAD` 复核为 14）：
+**已实现**（`71ed7df6` → `383a547d` 共 14 个 commit：13 个实现切片 + `75a51b21` 文档收口；G5 计划收口为 `90bcbda4` 起的文档提交，单独计数）：
 
 - 组合层 `packages/host/src/agent-composition/`：七个纯函数 resolver + `time-reminder.ts`；`compose.ts` 提供**每轮一次的冻结 `AgentComposition`**（scope / prompt / sections / tools / modes / permissions / cache / reminders / overrides / decisions / fingerprint）与 `composeStartup()`；`readTurnOverrides()` 是 `ChatOptions` 注入项的唯一解读点；`section-plan.ts` 从注册表派生每个 agent 形状的段清单。
 - 控制层接线：`beginRun` 生成计划 → `RunHandle.composition` → `worker-engine-driver` → `RunAssemblyRequest.composition` → `beginTurnAssembly` 消费；构造期的 cache family / 初始 permission mode 走 `composeStartup`。`_buildSystemPrompt` / `_resolveTools` / `applyTurnModes` / `_readOrchestratorMode` / `_dispatchOrchestratorMode` 不再调任何 resolver，也不再读 `ChatOptions` 的提示词字段。
