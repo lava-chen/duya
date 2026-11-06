@@ -23,7 +23,7 @@
 - [x] 实施：五段正文、work context 行为、工具说明与 Coordinator todo 默认准入修复。
 - [x] 实施：通过可信 Session 绑定读取 Coordinator/work 上下文，按模型请求刷新；revision、裁剪与来源诚实呈现。
 - [x] 实施：覆盖绑定隔离、裁剪、失效、恢复与真实模型请求装配；重建 worker / Desktop 并跑门禁。
-- [ ] 实施：提交代码、更新同一 PR 与接续记录；未经授权不合并。
+- [x] 实施：提交代码、更新同一 PR 与接续记录；未经授权不合并。
 
 开工基线：`c1191047` / clean，Windows / Node v24.16.0；`npx vitest run` 执行 Project prompt/tool-service/tool-bridge/dispatch/work-session-continuity、agent-composition 与 worker-context：22 files / 143 tests，exit 0。Workspace 工具仍不可调用，按 Git/计划对账。#622 当前 Open/Draft，base=master。
 
@@ -102,3 +102,8 @@
 | `git -c core.whitespace=cr-at-eol diff --check -- . ':!packages/host/bundle'` | exit 0；保留 router 既有 tracked CRLF。生成 bundle 的 vendor 空白未手改 |
 
 本轮边界：未调用真实供应商模型；未改用户共享检出，未合并或发布，未创建第二事实存储；保留 managed worktree。PR #622 仍 Draft，提交后检查和最终 head 以 Git / PR 为准。现有 whole-repo typecheck 包含 Electron 既有错误 baseline，不能称全仓零错误。
+
+
+代码交付：`7b492c5c18e65cd054d5d3572fdd6b41a79709ce` 已推送到本任务分支 / PR #622。提交后 worktree clean；`bundle-verify.mjs --json` exit 0 / FRESH / 0 of 1120 inputs changed，worker-entry 与 BashWorker 均 fresh。随后仅补本计划交付记录，最终文档 head 以 PR / Git 为准。
+
+当前下一步：对最新 PR head 执行 review/CI；评估 B1–B15 的真实模型协调质量，再按工具合同拆分后续产品能力。没有用户集成授权，不合并、不回收工作树。本次没有修改主检出的 dirty 项目连续性切片；跨切片集成时应对拍 Session context API 与本实现共享 Project service 的读取路径，保持单一绑定与存储权威。
