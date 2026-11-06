@@ -123,6 +123,15 @@ export interface TuiSlashHost {
   effectiveKeyBindings?(): readonly ActionDef[];
   /** Repaint now — used after a preference that the TUI itself does not hold. */
   refresh?(): void;
+  /**
+   * Send text to the clipboard of the machine the TERMINAL runs on (OSC 52).
+   *
+   * Used by `/copy` when the native clipboard tool is unavailable, which is
+   * the normal case over SSH. Returns whether the sequence was sent — OSC 52
+   * has no acknowledgement, so callers must say "sent", not "copied".
+   * Optional so command tests with no tty keep their existing behaviour.
+   */
+  copyToTerminalClipboard?(text: string): boolean;
   /** Enter the background task view (same as F6). */
   openTasks?(): void;
 }

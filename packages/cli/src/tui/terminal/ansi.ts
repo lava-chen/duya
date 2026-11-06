@@ -33,6 +33,10 @@ import { hasAttr, safeHyperlink, sameStyle, type StyledSpan } from '../core/span
 const CSI = '\x1b[';
 /** ESC. */
 const ESC = '\x1b';
+/** OSC introducer: `ESC ]`. */
+const OSC = '\x1b]';
+/** OSC terminator. BEL rather than ST: see `setWindowTitle`. */
+const BEL = '\x07';
 
 /** Move the cursor to a 1-based row/column. */
 export function cursorTo(row: number, column: number): string {
@@ -101,6 +105,106 @@ export function enterAlternateScreen(): string {
 /** Return from the alternate screen buffer. */
 export function exitAlternateScreen(): string {
   return `${CSI}?1049l`;
+}
+
+/**
+ * Set the window and tab title (OSC 0).
+ *
+ * ## Why OSC 0 and not OSC 2
+ *
+ * OSC 2 sets the window title only; OSC 0 sets the icon name AND the window
+ * title. Every tab bar a user is likely to look at — Windows Terminal, iTerm2,
+ * VS Code with `tabs.title: "${sequence}"`, tmux's `set-titles` — reads the
+ * window title, so the two behave identically there. Where they differ, OSC 0
+ * also renames the taskbar/Dock entry, which is the surface that still answers
+ * "which agent is this" when the terminal is behind another window.
+ *
+ * ## Why BEL and not ST
+ *
+ * Both terminate an OSC, but some terminal integrations surface a ST
+ * terminator in process decorations even though they accept the title update.
+ * BEL is the shorter encoding and the one every implementation accepts.
+ *
+ * ## What this function does NOT do
+ *
+ * It does not sanitise. Title text is assembled from model output, session
+ * names and paths, and a raw `ESC` or `BEL` in that text closes the sequence
+ * early and spills the remainder into the terminal as control bytes. That
+ * policy lives in `terminal-title.ts`, which is the only caller in production.
+ */
+export function setWindowTitle(title: string): string {
+  return `${OSC}0;${title}${BEL}`;
+}
+
+/** OSC string terminator (`ST`). Only the iTerm2 notification form needs it. */
+const ST = `${ESC}\\`;
+
+/**
+ * Report the current working directory (OSC 7).
+ *
+ * Terminals use this for "open a new tab in the same directory". The URI is
+ * built by `terminal-integration.ts`; this function only encodes it, because
+ * a Windows path or a space in a directory name is not valid inside a `file:`
+ * URI and a raw `BEL` in one would end the sequence early.
+ */
+export function reportWorkingDirectory(uri: string): string {
+  return `${OSC}7;${uri}${BEL}`;
+}
+
+/**
+ * Write to the terminal's clipboard (OSC 52, selection `c` = CLIPBOARD).
+ *
+ * This is the only clipboard path that works when the process is on the other
+ * end of SSH: `pbcopy` / `clip` / `xclip` write the REMOTE machine's clipboard,
+ * or do not exist at all, while OSC 52 travels back through the pty to the
+ * machine the user is sitting at. Payload is base64 because an OSC body may
+ * not contain BEL, ESC or a newline.
+ */
+export function setClipboard(base64: string): string {
+  return `${OSC}52;c;${base64}${BEL}`;
+}
+
+/**
+ * Desktop notification (OSC 9): kitty / WezTerm / Ghostty / Warp.
+ *
+ * iTerm2 has its own titled form below; Windows Terminal and VS Code ignore
+ * OSC 9 entirely, which is why `notificationBackend` never selects this for
+ * them.
+ */
+export function desktopNotification(text: string): string {
+  return `${OSC}9;${text}${BEL}`;
+}
+
+/**
+ * iTerm2's titled notification (OSC 777).
+ *
+ * Uses ST because that is the terminator iTerm2 documents for `notify` (BEL
+ * is accepted by most terminals, but not part of this form's contract). The
+ * title is fixed here — only the body is caller-supplied, and the caller
+ * sanitises it.
+ */
+export function itermNotification(body: string): string {
+  return `${OSC}777;notify;duya;${body}${ST}`;
+}
+
+/** Audible bell: the notification fallback when no OSC form is available. */
+export function bell(): string {
+  return BEL;
+}
+
+/**
+ * Windows Terminal taskbar progress states (OSC 9;4).
+ *
+ * 0 removes the indicator, 1 sets a percentage, 2 is indeterminate, 3 is
+ * paused, 4 is an error. The prefix is shared with OSC 9 notifications, which
+ * is why `terminal-integration.ts` refuses to emit it outside Windows Terminal:
+ * a terminal that reads `9;4;...` as `9;...` shows a garbage notification.
+ */
+export type TerminalProgressState = 0 | 1 | 2 | 3 | 4;
+
+export function setProgress(state: TerminalProgressState, value = 0): string {
+  const percent = Math.max(0, Math.min(100, Math.round(value)));
+  return `${OSC}9;4;${state};${percent}${BEL}`;
 }
 
 /** Show the cursor. */
@@ -255,12 +359,20 @@ function isStyled(span: StyledSpan | null): boolean {
  * the tag side, reached independently here — which is why the test asserting
  * the two agree is a real check rather than a tautology.
  *
- * ## OSC 8 is deliberately absent
+ * ## OSC 8 is a style transition, not a separate renderer
  *
- * `linkId` is carried on the span and ignored here. Hyperlinks change what the
- * terminal does with a click, not what it draws, and the tag vocabulary has no
- * spelling for them yet; emitting them now would make the two paths differ for
- * a feature nobody has asked to see on screen (plan 615 §O3).
+ * `linkId` rides on the span and is part of `sameStyle`, so a link boundary is
+ * a real style transition here. `safeHyperlink` validates the URL before any
+ * OSC 8 goes out, and the tag path has an equivalent vocabulary —
+ * `{link-<base64url>}` from `encodeHyperlinkTag` in `core/span.ts`, decoded by
+ * `own/markup.ts` into the same `ESC]8;;…` bytes. Whether a link is CREATED
+ * at all is decided upstream by `terminalEnv.hyperlinks` (see the footer
+ * input at TUIApp.ts), not by either renderer: keeping that decision in one
+ * place is what lets the parity tests compare the two byte streams.
+ *
+ * An older revision of this comment said OSC 8 was deliberately absent and
+ * that the tag vocabulary did not exist. Both halves are stale — the code
+ * below emits OSC 8, and `core/tags.ts` decodes the tag form.
  */
 export function spansToAnsi(spans: readonly StyledSpan[]): string {
   let out = '';
