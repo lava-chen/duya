@@ -147,7 +147,7 @@ flowchart TD
 - `write` / `edit` / `apply_patch`：保留实现；不同模型/任务的默认集合由能力配置和 W7 评测决定，显式用户选择优先。freeform 只在 provider 支持且整条调用链验收后启用，JSON fallback 必须可用。
 - `glob` / `grep` / `read`：先提升参数与结果契约、读取预算、分页/截断和失败反馈；是否合并以正确率与往返测量决定，不凭工具数删。
 - `bash` / `powershell`：明确平台默认、shell 身份、cwd、PTY/后台 session、stdin、timeout、取消、输出预算和退出码。是否统一工具入口单列兼容评估，不混淆两种语法。
-- `todo` 与产品 `plan`：明确会话内进度和持久计划区别，去掉重复提示词；是否收敛状态源先审计消费者与恢复，不直接删除一边。
+- `todo` 与产品 `plan`：明确会话内进度和持久计划区别，去掉重复提示词；是否收敛状态源先审计消费者与恢复，不直接删除一边。**已由 2026-11-04 用户裁定终止**：`plan` 工具整条实现链删除（见 [移除 plan 工具](2026-11-04-remove-plan-tool.md)），该对不再需要收敛。
 - `Brief`、`memory_write`、`write_stage1_policy`、`update_state`、`vision`、`image_generate`、`read_module`、`show_widget`、`send_artifact`：W0 逐一登记角色/来源/消费者和重叠能力。没有验收依据的不顺手删，低频能力优先按需暴露。
 - `tool_catalog` / `tool_invoke`：通用 fallback 保留；已知 ID 可直接 invoke，未知参数可查 detail。同步描述、guard 错误与 skill，不能一处说可直接调用、另一处强制每次先 detail。
 - Browser / Computer Use / 已外置 Canvas：只核验发现和调用兼容，不逆转既有外置方向。

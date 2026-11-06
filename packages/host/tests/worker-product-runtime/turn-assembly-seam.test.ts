@@ -727,7 +727,7 @@ interface SeamRun {
  * snapshot, not from `options` (`turnShape.ts:156-157`), so two contexts built
  * from different options are the same object and cannot discriminate a stale
  * one. `buildTurnPipeline` reads exactly three fields off it
- * (`DuyaAgent.ts:493,496,503`), so those three are supplied directly and the
+ * (`DuyaAgent`), so those three are supplied directly and the
  * test observes what the seam FORWARDED rather than what the assembler derived.
  */
 function standInTurnContext(sessionId: string, workingDirectory: string): TurnContextLike {

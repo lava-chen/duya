@@ -21,9 +21,7 @@ function hasTodoTool(ctx: PromptContext): boolean {
 
 export function mapRulesSlots(ctx: PromptContext): Record<string, unknown> {
   const taskTool = hasTodoTool(ctx) ? TOOL_NAMES.TODO : null
-  const searchTools = ctx.hasEmbeddedSearchTools
-    ? 'the provided search tools'
-    : `${TOOL_NAMES.GREP} and ${TOOL_NAMES.GLOB}`
+  const searchTools = `${TOOL_NAMES.GREP} and ${TOOL_NAMES.GLOB}`
   return {
     rules_search_tools: searchTools,
     rules_file_tools: `${TOOL_NAMES.READ}/${TOOL_NAMES.EDIT}/${TOOL_NAMES.WRITE}`,

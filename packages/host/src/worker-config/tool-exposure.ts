@@ -76,14 +76,35 @@ export interface ToolExposureConfig {
    * callers that predate the tier model; prefer `exposure`.
    */
   onDemandDiscovery: boolean;
+  /**
+   * Plan 448 follow-up: whether `edit` / `write` refuse to touch a file the
+   * model never read. Default `true`.
+   *
+   * Only the "never read at all" refusal is switchable. A file that changed
+   * on disk since the read is still refused — that is a data-integrity
+   * check, not prompt hygiene, and turning it off would let a stale
+   * old_string silently clobber someone else's change.
+   */
+  readFirstGate: boolean;
 }
 
 const DEFAULTS: ToolExposureConfig = {
   exposure: 'search',
   onDemandDiscovery: true,
+  readFirstGate: true,
 };
 
 const EXPOSURE_VALUES: readonly string[] = ['full', 'hint', 'search'];
+
+/** TOML booleans, plus the string spellings people write by hand / in env. */
+function parseBooleanFlag(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === '1' || normalized === 'true' || normalized === 'on') return true;
+  if (normalized === '0' || normalized === 'false' || normalized === 'off') return false;
+  return undefined;
+}
 
 function parseExposure(value: unknown): MCPExposureMode | undefined {
   if (typeof value !== 'string') return undefined;
@@ -105,6 +126,7 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
         tools?: {
           exposure?: unknown;
           on_demand_discovery?: unknown;
+          read_first_gate?: unknown;
         };
       };
       const toolsSection = doc?.tools;
@@ -115,6 +137,10 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
         } else if (toolsSection.on_demand_discovery === true) {
           // Legacy boolean maps to the 'search' policy.
           config.exposure = 'search';
+        }
+        const readFirstGate = parseBooleanFlag(toolsSection.read_first_gate);
+        if (readFirstGate !== undefined) {
+          config.readFirstGate = readFirstGate;
         }
       }
     }
@@ -136,5 +162,9 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
     }
   }
   config.onDemandDiscovery = config.exposure === 'search';
+  const envReadFirstGate = parseBooleanFlag(process.env.DUYA_TOOLS_READ_FIRST_GATE);
+  if (envReadFirstGate !== undefined) {
+    config.readFirstGate = envReadFirstGate;
+  }
   return config;
 }

@@ -145,17 +145,17 @@ const REMINDER_SOURCE_DESCRIPTORS: Record<ReminderSourceId, ReminderSourceDescri
     persisted: false,
     evidenceLabel: 'sr.git_safety',
   },
-  // Persistent turn-context injection: `Message sent at <UTC ISO>` reminder
-  // re-rendered deterministically on every model request for every
-  // human-turn user message (historical ones included), from the persisted
-  // `message.timestamp` payload with a code-versioned rule (v1). The
-  // rendered block never rides in the persisted timeline (canonical user
-  // content stays clean) but is fully reconstructible, so replay bytes are
-  // stable and the provider cache prefix never diverges at the injection
-  // point. Replaces the old `Current date and time:` system-prompt line.
+  // Live clock observation (plan 624 F1): appended on a cadence set by
+  // `intervalSeconds`, suppressed on a pure assistant turn when the delivery
+  // mode says so, and re-emitted when the window changes (compaction).
+  // Transient: every emission is a new message; nothing is reconstructed from
+  // history. The C′ alternative — deterministic re-rendering of every
+  // historical user message from its persisted timestamp — still lives in
+  // `turn-time-reminder.ts` and is intentionally NOT wired: the two
+  // philosophies must not be mixed.
   turn_time: {
-    channel: 'per_turn',
-    lifecycle: 'persistent',
+    channel: 'mid_turn',
+    lifecycle: 'transient',
     persisted: false,
     evidenceLabel: 'sr.turn_time',
   },

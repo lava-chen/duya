@@ -24,10 +24,10 @@
  *
  * | Decision | Production today | Asserted here |
  * | --- | --- | --- |
- * | call the model | `DuyaAgent.ts:1794`, `:2338` | `calls the model once per turn` |
- * | dispatch a tool | `DuyaAgent.ts:2477` | `dispatches only after approval and a ledger ticket` |
- * | feed the result back | `DuyaAgent.ts:2677`, `:2717` | `feeds the tool result into the next turn` |
- * | decide to stop | `DuyaAgent.ts:3107`, `:3097` | `proposes exactly one terminal candidate, and never settles` |
+ * | call the model | `DuyaAgent`, `:2338` | `calls the model once per turn` |
+ * | dispatch a tool | `DuyaAgent` | `dispatches only after approval and a ledger ticket` |
+ * | feed the result back | `DuyaAgent`, `:2717` | `feeds the tool result into the next turn` |
+ * | decide to stop | `DuyaAgent`, `:3097` | `proposes exactly one terminal candidate, and never settles` |
  *
  * ## Where the type-level assertions live instead
  *
@@ -232,7 +232,7 @@ function scriptedEngine(ports: RunEnginePorts): RunEngine {
 
           // Context assembly is work that happens BEFORE the model call. It is
           // inside the signal's reach here, which is the correction the port
-          // exists to make: today it is not (`DuyaAgent.ts:963`).
+          // exists to make: today it is not (`DuyaAgent`).
           if (controller.signal.aborted) break;
           const assembled: AssembledTurn = await p.context.assemble(assembly);
           if (controller.signal.aborted) break;
@@ -635,7 +635,7 @@ describe('RunEngine port', () => {
     await handle.completed();
 
     // This is the correction the port exists for. `DuyaAgent.streamChat` creates
-    // its AbortController at its first line (`DuyaAgent.ts:963`), so a host
+    // its AbortController at its first line (`DuyaAgent`), so a host
     // holding a signal has no way to stop work that happens before the call.
     expect(model.calls).toHaveLength(0);
   });

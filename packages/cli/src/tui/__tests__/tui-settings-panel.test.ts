@@ -102,17 +102,28 @@ describe('/settings in the TUI', () => {
     press(input, 'down');
     await settle();
 
-    const panel = (app as unknown as { inlineInputLines: string[] }).inlineInputLines.map(plain).join('\n');
+    const panelText = (): string => (app as unknown as { inlineInputLines: string[] })
+      .inlineInputLines.map(plain).join('\n');
     // Values are on the row, not hidden behind a submenu.
+    const panel = panelText();
     expect(panel).toContain('Theme');
     expect(panel).toContain('Match terminal');
     expect(panel).toContain('Reasoning effort');
-    expect(panel).toContain('Completion rows');
-    expect(panel).toContain('8 rows');
+    expect(panel).toContain('Output speed');
     expect(panel).toContain('Switches immediately');
     expect(panel).not.toContain('Applies on the next launch');
     expect(panel).toContain('type to filter');
     expect(out()).not.toContain(ALT_BUFFER_ON);
+
+    // The list is taller than the composer slot it borrows, so the last rows
+    // are reachable by scrolling rather than by growing the panel: walk down to
+    // them and the same value column is there. Twelve steps from Theme, not
+    // thirteen: the list WRAPS, and one step too many is back at the top with a
+    // green test that proves nothing.
+    for (let step = 0; step < 12; step += 1) press(input, 'down');
+    await settle();
+    expect(panelText()).toContain('Completion rows');
+    expect(panelText()).toContain('8 rows');
 
     press(input, 'escape');
     await running;
@@ -185,10 +196,11 @@ describe('/settings in the TUI', () => {
     const running = command.run({ client: fake as never, session: SESSION as never, tui: app, busy: false }, '');
     await settle();
 
-    // Row six is Thinking blocks: language, theme, display mode, effort,
-    // per-model effort, then it. The count is the assertion — a row inserted
-    // above this one silently moves this test onto the wrong switch.
-    for (let step = 0; step < 5; step += 1) press(input, 'down');
+    // Row eight is Thinking blocks: language, theme, display mode, the two
+    // footer switches, effort, per-model effort, then it. The count is the
+    // assertion — a row inserted above this one silently moves this test onto
+    // the wrong switch.
+    for (let step = 0; step < 7; step += 1) press(input, 'down');
     await settle();
     press(input, 'return');
     await settle();
@@ -200,10 +212,78 @@ describe('/settings in the TUI', () => {
     await running;
     app.stop();
   });
+
+  it('switches the footer counters on and the speed off, and saves both', async () => {
+    const { app, input } = makeApp();
+    app.start();
+    await settle();
+    // The saved defaults: counters hidden, speed shown.
+    expect(app.liveTuiPreferences().footerTokens).toBe(false);
+    expect(app.liveTuiPreferences().footerRate).toBe(true);
+
+    const command = resolveTuiSlashCommand('settings');
+    if (command === undefined) throw new Error('/settings is not registered');
+    const fake = client();
+    const running = command.run({ client: fake as never, session: SESSION as never, tui: app, busy: false }, '');
+    await settle();
+
+    // Row four is Token counters, row five Output speed: language, theme,
+    // display mode, then them.
+    for (let step = 0; step < 3; step += 1) press(input, 'down');
+    await settle();
+    press(input, 'return');
+    await settle();
+    press(input, 'down');
+    await settle();
+    press(input, 'return');
+    await settle();
+
+    expect(fake.calls).toEqual([
+      ['cli.tui.footerTokens', 'true'],
+      ['cli.tui.footerRate', 'false'],
+    ]);
+    // Both directions of the switch, on the object the renderer reads: a menu
+    // that only wrote the key would leave the footer at its old width.
+    expect(app.liveTuiPreferences().footerTokens).toBe(true);
+    expect(app.liveTuiPreferences().footerRate).toBe(false);
+
+    press(input, 'escape');
+    await running;
+    app.stop();
+  });
+});
+
+describe('the footer switches in the painted row', () => {
+  it('adds the counters and drops the speed when the switches say so', async () => {
+    const { app } = makeApp();
+    app.start();
+    await settle();
+    // One billed call: 4k out in 4s, 5.2k total. What the row draws is what
+    // these two switches decide, not what the settings menu wrote down.
+    app.push({
+      type: 'token_usage',
+      data: { input_tokens: 1200, output_tokens: 4000, total_tokens: 5200, request_duration_ms: 4000 },
+    });
+    await settle();
+
+    const footer = (): string => (app as unknown as { inlineStatusLines: string[] })
+      .inlineStatusLines.map(plain).join('\n');
+
+    // Default: no counters, a rate.
+    expect(footer()).not.toContain('↑');
+    expect(footer()).toContain('tok/s');
+
+    app.applyTuiPreferences({ footerTokens: true, footerRate: false });
+    await settle();
+    expect(footer()).toContain('↑1.2k');
+    expect(footer()).toContain('Σ5.2k');
+    expect(footer()).not.toContain('tok/s');
+    app.stop();
+  });
 });
 
 describe('/settings per-model effort', () => {
-  /** Row five: language, theme, display mode, effort, then this one. */
+  /** Row seven: language, theme, display mode, two footer switches, effort, then this one. */
   async function openOnModelEffort(saved: Readonly<Record<string, string>> = {}) {
     const { app, input } = makeApp();
     app.start();
@@ -235,7 +315,7 @@ describe('/settings per-model effort', () => {
 
   it('writes one JSON key, not a per-model setting that could never be listed', async () => {
     const open = await openOnModelEffort();
-    for (let step = 0; step < 4; step += 1) press(open.input, 'down');
+    for (let step = 0; step < 6; step += 1) press(open.input, 'down');
     await settle();
     press(open.input, 'return');
     await settle();
@@ -258,7 +338,7 @@ describe('/settings per-model effort', () => {
     // row's detail — so walk down to it before reading its explanation. Two
     // effort rows showing different values with no note reads as a menu that
     // disagrees with itself.
-    for (let step = 0; step < 3; step += 1) press(open.input, 'down');
+    for (let step = 0; step < 5; step += 1) press(open.input, 'down');
     await settle();
     expect(open.panel()).toContain('overrides it with High');
 

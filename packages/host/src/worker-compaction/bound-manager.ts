@@ -13,11 +13,19 @@ export {
 } from '@duya/agent-runtime/context/compact'
 
 export class CompactionManager extends RuntimeCompactionManager {
-  constructor(config: CompactionManagerConfig = {}) {
-    super(config, createLegacyCompactionRuntimePorts())
+  constructor(config: CompactionManagerConfig = {}, onTranscriptRewrite?: () => void) {
+    super(config, createLegacyCompactionRuntimePorts(undefined, onTranscriptRewrite))
   }
 }
 
-export function createCompactionManager(config: CompactionManagerConfig = {}): CompactionManager {
-  return new CompactionManager(config)
+/**
+ * `onTranscriptRewrite` is bound by the session owner so the invalidation is
+ * scoped to that session. Omitting it leaves Runtime with no callback, which
+ * is the right behaviour for callers that do not own a read-first ledger.
+ */
+export function createCompactionManager(
+  config: CompactionManagerConfig = {},
+  onTranscriptRewrite?: () => void,
+): CompactionManager {
+  return new CompactionManager(config, onTranscriptRewrite)
 }

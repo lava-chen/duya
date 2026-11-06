@@ -280,7 +280,7 @@ async function driveComposedRun(turns: readonly ('tool' | 'text')[]): Promise<Ob
   let currentTurn = 1;
   // Who publishes a turn's pipeline under the engine is the DRIVER FLIP's job:
   // `streamChat` does it today by constructing the executor itself
-  // (`DuyaAgent.ts:2097`), and an engine-driven run never enters that generator.
+  // (`DuyaAgent`), and an engine-driven run never enters that generator.
   // So the harness publishes from `assembleTurn`, which the engine calls once per
   // turn BEFORE the model request and therefore before any `queueTool`.
   //

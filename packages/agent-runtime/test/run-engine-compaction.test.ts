@@ -20,7 +20,7 @@
  * Every assertion pairs what the scripted PORTS observed (the
  * `CompactionPort`'s own call log and anchors, the messages the `ModelPort` was
  * handed, the frames the event store received) against what the legacy's
- * behaviour says must have happened (`DuyaAgent.ts:2155`, `:3018`/`:3022`,
+ * behaviour says must have happened (`DuyaAgent`, `:3018`/`:3022`,
  * `:3166-3172`, `:3330`/`:3360`/`:3368-3370`). Nothing compares a measured value
  * against itself. The transcript assertions in particular compare the array the
  * model was SENT against the literal `replacement()` returned -- two different
@@ -80,6 +80,8 @@ interface Harness {
   readonly progress: CompactionProgress[];
   /** Messages the model was actually sent, per call, in order. */
   readonly sentMessages: ModelMessage[][];
+  /** System prompt the model was actually sent, per call, in order. */
+  readonly sentSystemPrompts: string[];
   /** Events the engine published, in order. */
   readonly events: RunEvent[];
   /** `tools.discard:<reason>`, in order. */
@@ -100,6 +102,8 @@ function harness(options: {
   readonly decide: (input: CompactionDecisionInput) => CompactionDecision;
   /** The transcript the replacement produces. Omit to make `run` return failed. */
   readonly replacement?: readonly ModelMessage[];
+  /** Post-compaction system snapshot the port reports (plan 624 G4). */
+  readonly compactionSystemPrompt?: string;
   /** Report progress while running, to pin the mid-run frame ordering. */
   readonly reportProgress?: boolean;
   /** Omit `noteUsage` from the port entirely. */
@@ -125,6 +129,7 @@ function harness(options: {
   const anchors: CompactionUsageAnchor[] = [];
   const progress: CompactionProgress[] = [];
   const sentMessages: ModelMessage[][] = [];
+  const sentSystemPrompts: string[] = [];
   const events: RunEvent[] = [];
   const discards: string[] = [];
   const terminals: { state: string; reason: string }[] = [];
@@ -140,6 +145,7 @@ function harness(options: {
       const scripted = options.turns[turnIndex];
       turnIndex += 1;
       sentMessages.push([...request.messages]);
+      sentSystemPrompts.push(String(request.systemPrompt ?? ''));
       if (scripted === undefined) {
         yield { type: 'turn_stopped', reason: 'end_turn' };
         return;
@@ -167,7 +173,7 @@ function harness(options: {
     async run(input: CompactionDecisionInput, reporter: (p: CompactionProgress) => void) {
       compactionLog.push(`run:${input.trigger}`);
       // Reported DURING the run, before it resolves -- the property the legacy's
-      // real-time pump exists for (`DuyaAgent.ts:2144-2151`).
+      // real-time pump exists for (`DuyaAgent`).
       if (options.reportProgress === true) {
         const step: CompactionProgress = { kind: 'step', step: 1, phase: 'summarize' };
         progress.push(step);
@@ -181,6 +187,9 @@ function harness(options: {
         replacement: options.replacement,
         boundaryId: 'boundary-1',
         compactedMessageIds: ['m-1', 'm-2'],
+        ...(options.compactionSystemPrompt === undefined
+          ? {}
+          : { systemPrompt: options.compactionSystemPrompt }),
       };
     },
     nextCompactionId(): string {
@@ -282,6 +291,7 @@ function harness(options: {
     anchors,
     progress,
     sentMessages,
+    sentSystemPrompts,
     events,
     discards,
     terminals,
@@ -390,7 +400,7 @@ describe('the engine compacts when the port says to', () => {
     await run(h);
 
     // The proactive site runs BETWEEN assembly and the request, which is the
-    // legacy's order (pump at `DuyaAgent.ts:2155`, request built at `:2338`).
+    // legacy's order (pump at `DuyaAgent`, request built at `:2338`).
     // Asserted as an order over the port's OWN log rather than as a count.
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
 
@@ -712,7 +722,7 @@ describe('the emergency path is not the normal path', () => {
     //
     // This is what makes the assembly seam sound for a HOST that derives a
     // turn's messages inside `assemble`. The legacy re-runs its whole
-    // request-assembly chain on the same `continue` (`DuyaAgent.ts:3767-3768`
+    // request-assembly chain on the same `continue` (`DuyaAgent`
     // re-projects, then the loop re-enters at `:2716-2770`), so a host's
     // assemble-time transform is refreshed on the retry exactly as the
     // legacy's is. An engine that re-streamed the already-built request
@@ -783,7 +793,7 @@ describe('the emergency path is not the normal path', () => {
         {
           frames: [
             // Weak wording: the legacy requires local corroboration for this one
-            // (`DuyaAgent.ts:3311-3319`). The engine must not decide that -- it
+            // (`DuyaAgent`). The engine must not decide that -- it
             // forwards the text and the port rules on it.
             { type: 'error', message: 'output limit exceeded', retryable: false },
           ],
@@ -1026,5 +1036,39 @@ describe('a turn that compacts still ends correctly', () => {
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
     expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
     expect(h.terminals[0]?.state).toBe('completed');
+  });
+});
+
+// ============================================================================
+// Plan 624 G4 — the system half travels with the compacted transcript
+// ============================================================================
+
+describe('the compaction outcome carries the post-compaction system prompt', () => {
+  it('sends the reported system snapshot on the compacting turn', async () => {
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'hi' }] }],
+      decide: () => COMPACT,
+      replacement: replacement(),
+      compactionSystemPrompt: 'post-compaction system',
+    });
+
+    await run(h);
+
+    // Two independent sources: the port's declared snapshot versus what the
+    // model port was handed. Before G4 this was always 'you are a test'.
+    expect(h.sentSystemPrompts[0]).toBe('post-compaction system');
+    expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
+  });
+
+  it('keeps the assembled prompt when the port supplies no snapshot', async () => {
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'hi' }] }],
+      decide: () => COMPACT,
+      replacement: replacement(),
+    });
+
+    await run(h);
+
+    expect(h.sentSystemPrompts[0]).toBe('you are a test');
   });
 });

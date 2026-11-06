@@ -36,7 +36,6 @@ import { reactToMessageTool } from '@duya/host/worker-tool-bindings/react-to-mes
 import { createAgentTool, updateAgentTool, } from '@duya/host/worker-tool-bindings/agent-management';
 import { manageRoutineTool } from '@duya/host/worker-tool-bindings/routine';
 import { listAppConnectorsTool, connectAppTool } from '@duya/host/worker-tool-bindings/app-connector-manage-tools';
-import { planTool } from '@duya/host/worker-tool-bindings/plan';
 const bashTool = new BashTool();
 const powerShellTool = new PowerShellTool();
 const writeTool = new WriteTool();
@@ -114,6 +113,5 @@ export function createBuiltinRegistry( services: BuiltinRegistryServices, deps: 
     registry.register(listAppConnectorsTool.toTool(), listAppConnectorsTool, { exposure: 'deferred' });
     registry.register(connectAppTool.toTool(), connectAppTool, { exposure: 'deferred' });
     registry.register(reactToMessageTool.toTool(), reactToMessageTool, { exposure: 'deferred' });
-    registry.register(planTool.toTool(), planTool, { exposure: 'eager' });
     return registry;
 }

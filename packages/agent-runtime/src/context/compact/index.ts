@@ -44,13 +44,13 @@ export {
 // Post-compact reinjection
 export { PostCompactReinjector, createPostCompactReinjector, extractFileState, type FileStateEntry, type ReinjectorConfig, type ReinjectResult, type SkillContextEntry, type ToolState } from './PostCompactReinjector.js'
 
-// Projection-layer tool compression pipeline (LLM-facing only).
-export {
-  compressProjectedToolMessages,
-  buildDefaultTransforms,
-  DEFAULT_TRANSFORMS,
-  type ProjectionTransform,
-} from './projectionCompress.js'
+// Projection-layer tool compression used to live here (reformat/offload/
+// micro/image-truncation + `compressProjectedToolMessages`). It was retired
+// with the legacy `streamChat` request assembly and never re-wired into the
+// Host engine, so every one of its transforms was reachable only from its own
+// unit test. Removed rather than kept: an unwired transform that shrinks tool
+// results is a trap for the read-first gate (a shrunk `read` result must also
+// invalidate that file's read-state entry, see plan 448).
 
 // Tool-call invariant + budget fitting
 export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudget } from './historySanitize.js'

@@ -31,7 +31,6 @@ export const TOOL_NAMES = {
   TODO: 'todo', // Todo list tool aligned to Grok todo_write
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
-  DISCOVER_SKILLS: 'DiscoverSkills',
   SESSION_SEARCH: 'mcp_duya_app_session_search',
   SLEEP: 'Sleep',
   VISION: 'vision_analyze',
@@ -231,20 +230,14 @@ export interface PromptContext {
     localeCountryCode: string | null
     timezone: string
   }
-  /** Whether this is a git worktree */
+  /**
+   * Whether the working directory is a git worktree — an isolated checkout of
+   * the repository. When a caller does not set it, `PromptSystem.buildContext`
+   * derives it from the directory instead of leaving the environment section
+   * silent: "run all commands from here, do NOT `cd` to the original root" is
+   * only harmless if it is true.
+   */
   isWorktree?: boolean
-  /** Whether this is a non-interactive session */
-  isNonInteractiveSession?: boolean
-  /** Whether REPL mode is enabled */
-  isReplModeEnabled?: boolean
-  /** Whether embedded search tools are available */
-  hasEmbeddedSearchTools?: boolean
-  /** Whether fork subagent is enabled */
-  isForkSubagentEnabled?: boolean
-  /** Whether verification agent is enabled */
-  isVerificationAgentEnabled?: boolean
-  /** Whether skill search is enabled */
-  isSkillSearchEnabled?: boolean
   /** Scratchpad directory path */
   scratchpadDir?: string
   // Plan 550 1d-rest (memory section) — populated by the `memory`
@@ -398,13 +391,8 @@ export interface PromptBuildContextOptions {
   userType?: 'ant' | 'external'
   outputStyleConfig?: OutputStyleConfig | null
   communicationPlatform?: CommunicationPlatform
+  /** Derived from the directory when absent — see `PromptContext.isWorktree`. */
   isWorktree?: boolean
-  isNonInteractiveSession?: boolean
-  isReplModeEnabled?: boolean
-  hasEmbeddedSearchTools?: boolean
-  isForkSubagentEnabled?: boolean
-  isVerificationAgentEnabled?: boolean
-  isSkillSearchEnabled?: boolean
   scratchpadDir?: string
   researchIntent?: import('./research/types.js').ResearchTaskIntent
   researchProjectId?: string

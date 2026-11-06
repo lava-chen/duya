@@ -203,7 +203,7 @@ describe('error classification (G-1)', () => {
 describe('terminal and lifecycle events', () => {
   it('chat:done becomes run.completed, without inventing a stop reason', () => {
     // G-5b is UNRESOLVED: the worker sends no stop reason on `chat:done`, and
-    // the real one lives on a different chain (DuyaAgent.ts:3154) that never
+    // the real one lives on a different chain (`DuyaAgent`) that never
     // reaches this event. So this assertion covers what IS observed and makes
     // no claim about what is not. An earlier version pinned
     // `stopReason: 'end_turn'`, which is a default rather than an observation —

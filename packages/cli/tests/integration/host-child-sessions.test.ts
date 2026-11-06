@@ -320,10 +320,24 @@ describe('Host worker child-session vertical execution', () => {
     const provider = await startScriptedProvider(workspace, clientRef);
     delete process.env.DUYA_TEST;
     process.env.DUYA_DATA_ROOT = root;
+    // `[tools] exposure = "full"` is load-bearing, not decoration.
+    //
+    // The default policy is `search`, which keeps every MCP tool OFF the
+    // request's `tools` array and behind `tool_catalog` → `tool_invoke`.
+    // This test scripts a provider that calls `mcp_duya_app_session_*`
+    // directly, the way the shipped prompts tell the model to call its own
+    // session control plane, so it needs those tools eagerly declared.
+    // Without this line the first `session_spawn` call is rejected by the
+    // declared-tools visibility guard ("not in this request's tool list"),
+    // the parent re-issues the same call every turn, and the run dies as
+    // `budget_exhausted` — which is what CI saw after the default flipped
+    // to `search` in c370814a. Isolation matters too: this is per-test
+    // config, so it cannot leak the eager policy into other suites.
     await fs.writeFile(path.join(root, 'config.toml'),
       `[model]\nprovider = "local-test"\ndefault = "test-model"\n\n` +
       `[providers.local-test]\nproviderType = "anthropic"\nbaseUrl = "${provider.origin}"\n\n` +
-      `[providers.local-test.options]\ndefaultModel = "test-model"\n`, 'utf8');
+      `[providers.local-test.options]\ndefaultModel = "test-model"\n\n` +
+      `[tools]\nexposure = "full"\n`, 'utf8');
     await fs.writeFile(path.join(root, 'secrets.json'), JSON.stringify({ 'providers.local-test.apiKey': 'vertical-test-key' }), 'utf8');
 
     let host: LocalHostHandle | undefined;

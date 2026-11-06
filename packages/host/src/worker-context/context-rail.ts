@@ -20,6 +20,19 @@
  * The rail lives in the working array only: it is never appended to the
  * session timeline, so it cannot pile up and does not survive into the
  * transcript.
+ *
+ * ## Why there is no "zero-message" mode (plan 624 v2 G3)
+ *
+ * pi can skip unchanged sections because it replays a transcript that already
+ * holds the previous system message and patches it in place. Duya rebuilds
+ * the provider message array from the timeline on EVERY request, and the rail
+ * is deliberately absent from the timeline. Omitting an unchanged block here
+ * would therefore delete that context from the current request outright.
+ * `ContextRailReport.unchanged` is diagnostic only; unchanged blocks are
+ * still delivered. A zero-message mode becomes possible only when there is a
+ * replayable baseline that survives between requests (persisted rail rows, or
+ * a provider response chain the runtime can patch) — that changes the
+ * fork/resume/compaction contract and needs its own plan.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -44,6 +57,42 @@ export interface ContextBlock {
   readonly content: string
 }
 
+/** What changed between the previous rail and this one. */
+export interface ContextRailReport {
+  /** Blocks whose text differs from the previous turn. */
+  readonly changed: readonly string[]
+  /** Blocks that appeared for the first time (no previous text). */
+  readonly added: readonly string[]
+  /** Blocks whose slot disappeared; their messages were removed. */
+  readonly removed: readonly string[]
+  /** Blocks resent byte-identically. */
+  readonly unchanged: readonly string[]
+}
+
+/** Options for {@link applyContextRail}. */
+export interface ContextRailOptions {
+  readonly now: number
+  /**
+   * Rendered text per block id from the previous request (plan 624 D2).
+   *
+   * The rail is rebuilt from the timeline every turn and never appended to it,
+   * so there is no `previous` to replay the way pi reads its transcript. The
+   * caller keeps this map in memory instead: it is the diff baseline, and its
+   * absence (first turn, resumed session) simply means "nothing to compare".
+   */
+  readonly previous?: ReadonlyMap<string, string>
+}
+
+/**
+ * The update frame for a changed block (plan 624 D2).
+ *
+ * Without it the model sees the same message silently rewritten and cannot
+ * tell whether the environment changed or the text was always like this.
+ */
+export function renderContextUpdateFrame(id: string, content: string): string {
+  return `Updated system context section "${id}".\n\n${content}`
+}
+
 /**
  * Deliver the rail into a provider message array.
  *
@@ -54,25 +103,37 @@ export interface ContextBlock {
 export function applyContextRail(
   messages: InjectableMessage[],
   blocks: readonly ContextBlock[],
-  opts: { now: number },
-): void {
+  opts: ContextRailOptions,
+): ContextRailReport {
+  const changed: string[] = []
+  const added: string[] = []
+  const unchanged: string[] = []
+
   if (blocks.length === 0) {
-    removeOrphanedRailBlocks(messages, new Set<string>());
-    return;
+    const removed = removeOrphanedRailBlocks(messages, new Set<string>())
+    return { changed, added, removed, unchanged }
   }
 
   const wanted = new Map<string, ContextBlock>();
   for (const block of blocks) {
     wanted.set(block.id, block);
   }
-  removeOrphanedRailBlocks(messages, new Set(wanted.keys()));
+  const removed = removeOrphanedRailBlocks(messages, new Set(wanted.keys()));
 
   for (const block of wanted.values()) {
-    const content = renderUserChannelReminder(block.content, block.source);
+    const previousContent = opts.previous?.get(block.id)
+    const isUpdate = previousContent !== undefined && previousContent !== block.content
+    // First appearance and identical content both go out as-is: an "updated"
+    // frame on the first turn would be noise, not information.
+    const body = isUpdate ? renderContextUpdateFrame(block.id, block.content) : block.content
+    const content = renderUserChannelReminder(body, block.source);
     const hash = hashContext(content);
     const existing = messages.find(
       (message) => message.metadata?.[CONTEXT_RAIL_KEY_METADATA] === block.id,
     );
+    if (previousContent === undefined) added.push(block.id)
+    else if (isUpdate) changed.push(block.id)
+    else unchanged.push(block.id)
     if (existing) {
       existing.content = content;
       existing.metadata = { ...existing.metadata, [CONTEXT_RAIL_HASH_METADATA]: hash };
@@ -91,19 +152,34 @@ export function applyContextRail(
       },
     });
   }
+
+  return { changed, added, removed, unchanged }
 }
 
-/** Drop rail blocks whose slot is no longer filled. */
+/** Ids of the rail blocks actually present in a provider-bound message array. */
+export function collectRailBlockIds(messages: readonly InjectableMessage[]): string[] {
+  const ids: string[] = [];
+  for (const message of messages) {
+    const key = message.metadata?.[CONTEXT_RAIL_KEY_METADATA];
+    if (typeof key === 'string') ids.push(key);
+  }
+  return ids;
+}
+
+/** Drop rail blocks whose slot is no longer filled; returns the dropped ids. */
 function removeOrphanedRailBlocks(
   messages: InjectableMessage[],
   wanted: ReadonlySet<string>,
-): void {
+): string[] {
+  const removed: string[] = []
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const key = messages[i]?.metadata?.[CONTEXT_RAIL_KEY_METADATA];
     if (typeof key !== 'string') continue;
     if (wanted.has(key)) continue;
+    removed.push(key)
     messages.splice(i, 1);
   }
+  return removed
 }
 
 function hashContext(content: string): string {

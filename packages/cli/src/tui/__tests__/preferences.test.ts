@@ -22,6 +22,8 @@ import {
   TUI_COMPLETION_ROWS_SETTING,
   TUI_EFFORT_BY_MODEL_SETTING,
   TUI_EFFORT_SETTING,
+  TUI_FOOTER_RATE_SETTING,
+  TUI_FOOTER_TOKENS_SETTING,
   TUI_INPUT_ROWS_SETTING,
   TUI_SHOW_THINKING_SETTING,
   TUI_STARTUP_BANNER_SETTING,
@@ -41,6 +43,22 @@ describe('parseTuiPreferences', () => {
     expect(parsed.completionRows).toBe(DEFAULT_TUI_PREFERENCES.completionRows);
     expect(parsed.inputRows).toBe(DEFAULT_TUI_PREFERENCES.inputRows);
     expect(parsed.statusline).toBe('full');
+  });
+
+  it('starts with the token counters off and the speed on', () => {
+    // The row is a reading of the turn that is running, not a bill: the bar and
+    // the rate are what a first run needs, the three running totals are one
+    // switch away (`/settings`) and `/cost` reports them exactly.
+    const parsed = parseTuiPreferences({});
+    expect(parsed.footerTokens).toBe(false);
+    expect(parsed.footerRate).toBe(true);
+  });
+
+  it('reads both footer switches, and treats a junk value as unset', () => {
+    expect(parseTuiPreferences({ [TUI_FOOTER_TOKENS_SETTING]: 'true' }).footerTokens).toBe(true);
+    expect(parseTuiPreferences({ [TUI_FOOTER_RATE_SETTING]: 'off' }).footerRate).toBe(false);
+    // A key some other build wrote must not flip a switch it does not describe.
+    expect(parseTuiPreferences({ [TUI_FOOTER_TOKENS_SETTING]: 'maybe' }).footerTokens).toBe(false);
   });
 
   it('accepts supported status line profiles and falls back for unknown values', () => {

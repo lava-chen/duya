@@ -68,7 +68,7 @@ describe('transcript preferences', () => {
 
   it('shows tool results on demand without expanding anything else', () => {
     const base = { expanded: false, toolResultLines: 5 };
-    // A one-line result is never folded. A fold keeps its last line, so there is
+    // A one-line result is never folded. A fold keeps its head, so there is
     // nothing a marker could withhold and nothing worth hiding.
     expect(renderTranscript(model(), { ...base, showToolResults: false })).toContain('hello');
     expect(renderTranscript(model(), { ...base, showToolResults: true })).toContain('hello');
@@ -77,8 +77,8 @@ describe('transcript preferences', () => {
     many.apply({ type: 'tool_use', data: { id: 'c2', name: 'read_file', input: { path: 'a.txt' } } });
     many.apply({ type: 'tool_result', data: { id: 'c2', result: 'head\nmiddle\nlast' } });
     const folded = renderTranscript(many, { ...base, showToolResults: false });
-    expect(folded).not.toContain('head');
-    expect(folded).toContain('last');
+    expect(folded).toContain('head');
+    expect(folded).not.toContain('last');
     expect(renderTranscript(many, { ...base, showToolResults: true })).toContain('head');
   });
 });

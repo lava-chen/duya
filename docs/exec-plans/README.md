@@ -10,10 +10,12 @@
 
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
+| 后台任务重复轮询硬停止 | [2026-11-04 后台任务重复轮询硬停止](active/2026-11-04-background-task-poll-loop.md) | JSONL 确认为 45 次轮询、最长连续 15 次；Host 接通硬停止并加 `get_task_output` 专用阈值；PR #617 draft |
 | Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现；PR #579 待授权集成 |
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |
 | TUI 插件显示名 | [2026-11-03 TUI /plugin 显示插件真名](active/2026-11-03-tui-plugin-display-name.md) | Host 投影 `interface.displayName/shortDescription/longDescription`；`/plugin` 列表、详情与 `@` 补全显示 PDF/Zotero 等真名；相关用例与类型/架构门禁已过，PR #598 待集成 |
 | TUI 插件市场管理 | [631 TUI 插件市场管理界面](active/630-tui-capabilities-series/631-tui-plugin-market-ui.md) | `/plugin` 三 tab 浏览器与 Host 写 API 已实现；PR #601 待最新 CI 与授权集成 |
+| TUI 插件面板修复 | [2026-11-04 样式与 Installed 列表](active/2026-11-04-tui-plugin-panel-fixes.md) | 修复标签 markup 与 Installed 数据来源；验证及 PR 待完成 |
 | TUI 工具折叠与运行期输出 | [636 TUI 工具行的折叠与运行期输出](active/636-tui-live-shell-output.md) | 折叠行至少画一行、`[+ N]` 改为被隐藏行数并在标记内点名 `Ctrl+T`；新增 `tool.output_delta`（Host 惰性尾部轮询 → TUI 运行期预览 → Desktop/Web 既有 `chat:tool_output` 车道）与 worker bundle 重建；PR #610 已集成（merge `836f9ea9`），真机目视由用户判定按现有证据接受 |
 | TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](archive/2026-11-03-tui-transparent-composer-background.md) | `DUYA_TUI_COMPOSER_BG=transparent` 已合并（PR #595，`cccab45e`）；master 临时 CLI 已安装并加入用户 PATH |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
@@ -21,6 +23,7 @@
 | Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | Project 首个闭环后接续；Linux x64 候选已打包，待用户产品测试与反馈 |
 | TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现并合并（PR #567，`203d7d51`）；本计划待归档 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |
+| 移除 plan 工具 | [2026-11-04 移除 plan 工具](active/2026-11-04-remove-plan-tool.md) | 用户裁定删除 `plan` 工具整条实现链（capability / Host 存储层 / 两个注册点 / 遗留 agent 壳）；Plan Mode、`/plan` 命令与磁盘工件保留；待门禁与 PR |
 | TUI 常驻 PR 徽标 | [2026-11-03 TUI PR 徽标](active/2026-11-03-tui-pr-badge.md) | footer 常驻 PR 徽标 + OSC 8 可点 + `/pr` 面板升级已实现；待门禁与 PR |
 | TUI 权限实时切换与 steer 渲染 | [2026-10-31 权限切换与 steer 渲染](archive/2026-10-31-tui-permission-live-switch.md) | worker 读侧补 await + Host 把模式推给运行中的 worker；已发 steer 画成 `↳ sent`；PR #554 已合并（`59cd3e3d`），真机冒烟待用户 |
 | 缓存输入与私有进度工具 | [2026-10-29 计数与进度修复](active/2026-10-29-usage-progress-fixes.md) | 修复 Host usage 转换与私有控制工具执行，真实 worker 回归通过，等待类型门禁与 PR |
@@ -56,6 +59,7 @@
 | Harness 正确性 | [2026-10-24 Harness 审计](active/2026-10-24-harness-correctness-audit.md) | 契约 + H-1~H-6 修复随 base=master 的 PR 进 master；CI 会跑 |
 | 平台收口 | [622 依赖测量先行](active/622-agent-platform-convergence/README.md) | 01 已合入（PR #399）；02 已提交（`73c067c4`）并开 PR #405；architecture/typecheck/build 通过，全量 test 的 2 个 IPC 失败在 base 复现 |
 | 工作区生命周期 | [621 生命周期 Harness](active/621-coding-workspace-lifecycle-harness.md) | P0 #460、P1a #465 未合并；P1b–P4 代码已实现；373 项相关测试与浏览器链路通过，按用户要求通过 [Draft #476](https://github.com/lava-chen/duya/pull/476) 交接；全量类型门禁和完整三端验收待接手 |
+| Agent 组合层 | [624 组合层与提示词重构](active/624-agent-composition-layer.md) | 七个纯函数 resolver 已接进 `beginTurnAssembly`；段通道注册表、增量帧、缓存键、时间提醒、压缩一致性已落地；剩余 bot 双轨与冻结计划对象 |
 | 多 Agent 编排 | [2026-10-23 多 Agent Orchestrator](active/2026-10-23-multi-agent-orchestrator.md) | 评估已出：codex 无队列/DAG/重试可抄；duya 依赖与重试已具备。Phase 1 补测（子 agent 状态机零覆盖）→ Phase 2 DAG 并行 + 失败级联 |
 | Agent Runtime 真实基准 | [2026-10-23 Agent Runtime 基准](active/2026-10-23-agent-runtime-e2e-benchmark.md) | 基准已跑通并定位瓶颈；待 PR 集成 |
 | Desktop 性能爬坡 | [2026-10-23 Desktop 性能爬坡](active/2026-10-23-desktop-performance-hill-climbing.md) | 5 个 Agent 各占一条独占路径：先由 A 交 Harness v1，再由 B/C/D/E 建基线、各出一个可证明收益的 PR |

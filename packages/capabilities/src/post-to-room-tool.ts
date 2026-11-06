@@ -82,15 +82,34 @@ const POST_TO_ROOM_SCHEMA: Record<string, unknown> = {
 
 /**
  * Per-turn message budget: at most 2 room messages per member turn (grok
- * GROUP_MAX_MESSAGES_PER_TURN). Keyed by the run constant exactly like the
- * SendToAgent dmSendLimiter — a worker process serves one bot session, so
- * the process-wide budget IS the per-member budget. The window is
- * time-based: a fresh group turn arrives minutes later and resets it.
+ * GROUP_MAX_MESSAGES_PER_TURN).
+ *
+ * Keyed by the SENDER SESSION, not by a run constant. The earlier version used
+ * one `"default"` key justified by "a worker process serves one bot session",
+ * but the process serves every session it is asked to serve, and the sessions
+ * are distinct members of the room: with a shared key, member A spending its
+ * two messages ended member B's turn before it started. The window is
+ * time-based, so a fresh group turn minutes later resets the entry.
  */
 const TURN_BUDGET_WINDOW_MS = 10 * 60_000;
 const MAX_ROOM_MESSAGES_PER_TURN = 2;
-const RUN_BUDGET_KEY = "default";
+/** Key used only when the port cannot name the sender session. */
+const UNSPECIFIED_SESSION_BUDGET_KEY = "unspecified-session";
+/** Above this many tracked sessions, expired windows are pruned. */
+const MAX_TRACKED_BUDGETS = 64;
 const turnBudgets = new Map<string, { count: number; windowStart: number }>();
+
+/**
+ * Drop windows that are already stale so a long-lived worker does not keep one
+ * entry per session it has ever served. Deliberately lazy: pruning runs only
+ * when the map has grown past the cap, so the steady state costs nothing.
+ */
+function pruneExpiredBudgets(now: number): void {
+  if (turnBudgets.size <= MAX_TRACKED_BUDGETS) return;
+  for (const [key, budget] of turnBudgets) {
+    if (now - budget.windowStart > TURN_BUDGET_WINDOW_MS) turnBudgets.delete(key);
+  }
+}
 
 /** Test seam — clear budget state. */
 export function _resetPostToRoomLimiterForTest(): void {
@@ -198,14 +217,16 @@ export class PostToRoomTool extends BaseTool {
       return { id: randomUUID(), name: this.name, result: `Failed to write: ${message}`, error: true };
     }
 
-    // Per-turn message budget (constant run key — see SendToAgent's
-    // dmSendLimiter for the same pattern).
+    // Per-turn message budget, scoped to the sender session: two sessions
+    // posting into the same room are two members with two separate allowances.
     const now = Date.now();
-    const budget = turnBudgets.get(RUN_BUDGET_KEY);
-    if (!budget || now - budget.windowStart > TURN_BUDGET_WINDOW_MS) {
-      turnBudgets.set(RUN_BUDGET_KEY, { count: 0, windowStart: now });
+    pruneExpiredBudgets(now);
+    const budgetKey = senderSession || UNSPECIFIED_SESSION_BUDGET_KEY;
+    let current = turnBudgets.get(budgetKey);
+    if (!current || now - current.windowStart > TURN_BUDGET_WINDOW_MS) {
+      current = { count: 0, windowStart: now };
+      turnBudgets.set(budgetKey, current);
     }
-    const current = turnBudgets.get(RUN_BUDGET_KEY)!;
     if (current.count >= MAX_ROOM_MESSAGES_PER_TURN) {
       return {
         id: randomUUID(),

@@ -412,6 +412,61 @@ describe('TUIApp integration', () => {
     app.stop();
   });
 
+  // PR #618 wired a capacity bar into the inline footer. `footer.test.ts` and
+  // `capacity-bar.test.ts` prove the FORMATTER with hand-built stats; what they
+  // cannot prove is that a real `token_usage` frame reaches the painted row.
+  // This is that test: frames go through the public `push()` entry and the
+  // assertion is on the bytes the terminal would have received.
+  //
+  // It also pins down which number the bar is allowed to read. The live frame
+  // (`lastUsage`) is the context; `sessionTokens` is the accumulated bill and
+  // `tokenUsage` in the rollout is a PERSISTED, single-call snapshot (PR #615).
+  // Wiring any of the latter two into the bar is the regression this guards.
+  it('paints the footer capacity bar from live token_usage frames, not the session spend', async () => {
+    const out = sink();
+    // A bar needs room: `capacityBarCellsForWidth(99)` affords six cells, which
+    // makes the filled/empty boundary unambiguous at 50% and 90%.
+    (out.stream as unknown as { columns: number }).columns = 100;
+    (out.stream as unknown as { rows: number }).rows = 30;
+    const stdin = input();
+    const app = new TUIApp({
+      output: out.stream,
+      input: stdin,
+      inline: true,
+      onSubmit: () => {},
+      keyOverrides: {},
+      contextBudgetTokens: () => 1000,
+      modelLabel: () => ({ model: 'model-x' }),
+    });
+    // Styled runs reach the stream as ANSI + text + reset, and the bar's filled
+    // and empty halves carry different tones, so the glyphs are separated by
+    // escapes in the raw bytes. Strip both ANSI and any surviving blessed tags
+    // before asserting on the words the reader actually sees.
+    const painted = (): string => plainText(out.text()).replace(/\{[^}]*\}/gu, '');
+
+    app.start();
+    await settleRendered();
+    // No billed call yet: the window size is known, the occupancy is not. A
+    // hollow bar with `?` is the honest reading; an idle prompt claiming 0%
+    // would be a claim, and a missing bar would mean the footer never painted.
+    expect(painted()).toMatch(/▱{6} \?/u);
+
+    // 500 of 1000 tokens → half full, six cells → three filled.
+    app.push({ type: 'token_usage', data: { input_tokens: 400, output_tokens: 100, total_tokens: 500 } });
+    await settleRendered();
+    expect(painted()).toContain('▰▰▰▱▱▱ 50%');
+
+    // A second, larger call REPLACES the window reading. The session sum is now
+    // 1400 (over the 1000 budget), so a footer wired to `sessionTokens` would
+    // saturate at 100% here. What the window holds is the last request: 900.
+    app.push({ type: 'token_usage', data: { input_tokens: 700, output_tokens: 200, total_tokens: 900 } });
+    await settleRendered();
+    const nearlyFull = painted();
+    expect(nearlyFull).toContain('▰▰▰▰▰▱ 90%');
+    expect(nearlyFull).not.toContain('100%');
+    app.stop();
+  });
+
   it('shows the active task state and tool progress in the status bar', async () => {
     const { app, out } = makeApp();
     app.start();
@@ -595,10 +650,10 @@ describe('renderTranscript', () => {
       showToolResults: false,
       toolResultLines: 5,
     });
-    expect(compact).not.toContain('first-result');
-    // The fold counts what it WITHHOLDS, and a folded call still shows its last
+    expect(compact).toContain('first-result');
+    // The fold counts what it WITHHOLDS, and a folded call still shows its HEAD
     // line — so two lines in, one row on screen, one behind the marker.
-    expect(compact).toContain('line two');
+    expect(compact).not.toContain('line two');
     expect(compact).toContain('[+ 1 line · Ctrl+T]');
 
     const selected = renderTranscript(model, {
@@ -608,8 +663,10 @@ describe('renderTranscript', () => {
       expandedBlockIds: new Set(first === undefined ? [] : [first.id]),
       ...(first === undefined ? {} : { selectedBlockId: first.id }),
     });
-    expect(selected).toContain('first-result');
-    expect(selected).not.toContain('second-result');
+    // Opening the first call brings its hidden line back; the neighbour is still
+    // folded, so only its head is on screen and its tail stays behind the marker.
+    expect(selected).toContain('line two');
+    expect(selected).not.toContain('second tail');
     expect(selected).toContain('❯');
 
     const globallyExpanded = renderTranscript(model, {
@@ -618,8 +675,8 @@ describe('renderTranscript', () => {
       toolResultLines: 5,
       collapsedBlockIds: new Set(first === undefined ? [] : [first.id]),
     });
-    expect(globallyExpanded).not.toContain('first-result');
-    expect(globallyExpanded).toContain('second-result');
+    expect(globallyExpanded).not.toContain('line two');
+    expect(globallyExpanded).toContain('second tail');
   });
 
   it('previews thinking until expanded', () => {

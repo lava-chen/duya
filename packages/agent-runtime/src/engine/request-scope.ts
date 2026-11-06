@@ -5,13 +5,13 @@
  * ## What this is
  *
  * The runtime's copy of a discipline the legacy loop already keeps
- * (`DuyaAgent.ts:2252-2266`, released in a `finally` at `:3398-3403`). It exists
+ * (`DuyaAgent`, released in a `finally` at `:3398-3403`). It exists
  * because `llmRequestTimeoutMs` has no home in this package: measured, the name
  * and the primitive it needs (`createChildAbortController`) appear ZERO times
  * across `packages/agent-runtime`, so a turn loop migrated onto this engine
  * would have nowhere to put a per-request cap and would silently lose it.
  *
- * The purpose is the legacy's own words (`DuyaAgent.ts:2246-2251`): end a
+ * The purpose is the legacy's own words (`DuyaAgent`): end a
  * single model call that overruns EVEN WHILE THE STREAM IS STILL PRODUCING DATA
  * -- a thinking stream that never converges -- so a hung turn fails fast
  * instead of consuming the whole run budget. A run-level ceiling cannot do this:
@@ -57,7 +57,7 @@
  * ## Why the timeout is the child's, never the parent's
  *
  * Same reason, one level down. The legacy aborts the child
- * (`requestController?.abort(...)`, `DuyaAgent.ts:2259`) and the parent survives
+ * (`requestController?.abort(...)`, `DuyaAgent`) and the parent survives
  * it, which is what keeps the run stoppable and re-armable afterwards. Aborting
  * the parent instead would turn "this request was slow" into "this run is over",
  * and the run-level signal is the one resource a later turn still needs.
@@ -91,7 +91,7 @@ export interface RequestScope {
  * thing -- no cap -- and all of them take the no-cap path, which creates NO
  * timer and NO child. That is the legacy rule verbatim: the timer is armed
  * inside `if (options?.llmRequestTimeoutMs && options.llmRequestTimeoutMs > 0)`
- * (`DuyaAgent.ts:2255`), so `0`, a negative number and `undefined` all leave the
+ * (`DuyaAgent`), so `0`, a negative number and `undefined` all leave the
  * request uncapped. The `Number.isFinite` case has no legacy counterpart and
  * exists because this function takes a `number | undefined` from a port boundary
  * where a host may have coerced: `NaN` compares false against `> 0`, so it would

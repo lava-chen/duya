@@ -316,7 +316,7 @@ describe('a sweep around the final answer can keep the run open', () => {
 
   it('the finalize POLL is bounded, so a host that always has news cannot hold the run open', async () => {
     // The bound is on the POLL, not on the first stop-decision sweep, and that
-    // asymmetry is the legacy's own: `DuyaAgent.ts:3211-3213` loops on an
+    // asymmetry is the legacy's own: `DuyaAgent` loops on an
     // absorbing answer with no cap, while the finalize poll is capped at
     // `FINAL_POLL_MAX_ABSORBS` (`:1819`, `:3262`). Asserting the cap on the
     // wrong one of the two would pass against a regression in the other.

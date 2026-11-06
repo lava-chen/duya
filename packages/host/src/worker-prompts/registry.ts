@@ -12,14 +12,19 @@ import { PromptsRegistry } from './PromptsRegistry.js'
 import { generalConfig } from './configs/general.js'
 import { codeConfig } from './configs/code.js'
 import { researchConfig } from './configs/research.js'
-import { botConfig } from './configs/bot.js'
 import { projectConfig } from './configs/project.js'
 
 PromptsRegistry.register('general', generalConfig)
 PromptsRegistry.register('code', codeConfig)
 PromptsRegistry.register('research', researchConfig)
-PromptsRegistry.register('bot', botConfig)
 PromptsRegistry.register('project', projectConfig)
+
+// Plan 624 v2: there is intentionally NO 'bot' PromptSystem. A `botConfig`
+// used to be registered here but no profile ever resolved to it, while real
+// bot text came from `BotPromptAssembly.renderSections()`. That was two
+// tracks for one agent shape. The bot's section list now lives in the section
+// registry and the composition layer picks it by scope; see
+// `sections/placement-registry.ts` and `agent-composition/section-plan.ts`.
 
 /**
  * Resolve the prompt system name from an agent profile.

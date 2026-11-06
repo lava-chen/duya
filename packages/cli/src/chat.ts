@@ -1311,6 +1311,11 @@ export async function chatTui(
     showToolResults: effectivePreferences.showToolResults,
     toolGroupMode: effectivePreferences.toolGroupMode,
     statusline: effectivePreferences.statusline,
+    // The two rows of the stats line the reader can switch off on their own.
+    // Seeded here and moved only by `/settings`, like the transcript switches
+    // above: the TUI holds them, no one else writes them.
+    footerTokens: effectivePreferences.footerTokens,
+    footerRate: effectivePreferences.footerRate,
     maxInputRows: effectivePreferences.inputRows,
     completionRows: effectivePreferences.completionRows,
     isBusy: () => busy,

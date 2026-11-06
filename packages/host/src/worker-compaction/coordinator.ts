@@ -26,7 +26,7 @@
  *
  * Plan 610 A3-2b6 moved the two recovery gates in from `DuyaAgent`'s inline
  * cycle body. They were ~55 lines of decision logic written straight into
- * `streamChat` (`DuyaAgent.ts:3360-3371` emergency, `:3009-3026` preflight), so
+ * `streamChat` (`DuyaAgent` emergency, `:3009-3026` preflight), so
  * nothing outside `streamChat` could ask them anything -- and a
  * `CompactionPort` host that has to answer `decide` had no option but to
  * decline by name, which reads at the cutover as "the transcript is fine".
@@ -147,7 +147,7 @@ export interface PreTurnVerdict {
  * "bypassed the cooldown", and neither of these gates HAS a cooldown.
  *
  * `evidence` is DIAGNOSTIC and additive: it exists so the legacy's structured
- * context-length log (`DuyaAgent.ts:3744-3754`, kept because plan 577 review
+ * context-length log (`DuyaAgent`, kept because plan 577 review
  * round 2 made those lines the historical baseline the ContextLedger is
  * verified against) can read the classification and the measured context off
  * the SAME gate that decided, rather than re-probing next to it. Nothing reads
@@ -311,14 +311,14 @@ export class CompactionCoordinator {
    * The proactive gate asks "is the transcript over the line, and is the
    * cooldown over?". The emergency gate asks "did the PROVIDER say it was too
    * long", and it is reached only after a model stream has already FAILED
-   * (`DuyaAgent.ts:3306`, the `catch` around the stream). Two differences are
+   * (`DuyaAgent`, the `catch` around the stream). Two differences are
    * load-bearing and both are inherited, not invented here:
    *
    * 1. **No cooldown and no suppression.** An emergency compaction is the
    *    recovery path for a request the provider already rejected; gating it on
    *    "not too soon after the last compaction" would decline the one
    *    compaction that can fix the turn. The legacy has no such gate at
-   *    `DuyaAgent.ts:3360` and neither does this.
+   *    `DuyaAgent` and neither does this.
    * 2. **The classification is the gate.** `classifyContextLengthError`
    *    (`compactErrors.ts:41`) is the plan-577 rule: an EXPLICIT provider claim
    *    compacts on its own, because the local budget may itself be misresolved
@@ -341,7 +341,7 @@ export class CompactionCoordinator {
    * ## The probe is best-effort and its failure is NOT an exception
    *
    * `projectInputMessages()` can throw, and the legacy swallows it into "no
-   * local evidence" (`DuyaAgent.ts:3311-3319`). A throw here would abandon the
+   * local evidence" (`DuyaAgent`). A throw here would abandon the
    * one pass that can still recover an explicit claim, so it is caught and
    * turns into a null probe.
    */
@@ -395,7 +395,7 @@ export class CompactionCoordinator {
    * gate rather than a second copy of it. `decidePreTurn` compares against
    * `overTriggerLine` (max minus reserve, 78%); this compares against
    * `overHardLimit` (the full window). The legacy is explicit about why
-   * (`DuyaAgent.ts:3001-3008`): a single tool call can blow past the 78% line
+   * (`DuyaAgent`): a single tool call can blow past the 78% line
    * by itself, and waiting for the next turn's proactive check "risks a
    * `context_length_exceeded` round-trip" -- compacting here is cheaper than
    * retrying the turn. Checking the trigger line instead would decline in
@@ -435,7 +435,7 @@ export class CompactionCoordinator {
       return {
         fire: true,
         // Carried so `executePreflightOverflow` can pass `force` through
-        // exactly as the legacy does for the image arm (`DuyaAgent.ts:3423`).
+        // exactly as the legacy does for the image arm (`DuyaAgent`).
         imageTriggered: probe.imageTriggered,
         declinedBecause: null,
       };
@@ -458,13 +458,13 @@ export class CompactionCoordinator {
    * re-projection -- is one statement in both inline legacy sites, and two
    * copies of the re-projection is exactly the drift this coordinator exists to
    * prevent. `force` is threaded rather than hardcoded so the image arm's
-   * bypass is the CALLER's decision, matching `DuyaAgent.ts:3422-3426`.
+   * bypass is the CALLER's decision, matching `DuyaAgent`.
    *
    * ## `force` is threaded rather than hardcoded, and it CHANGES the trigger
    *
    * The image arm of the preflight gate is the one case that forces, and the
    * legacy pairs `force: true` with `trigger: 'auto'` -- not with
-   * `preflight_overflow` (`DuyaAgent.ts:3422-3426`). That pairing is not
+   * `preflight_overflow` (`DuyaAgent`). That pairing is not
    * cosmetic: `CompactionManager` only folds a failure into the suppression
    * ring when the trigger is `auto` (`CompactionManager.ts:941`), so an
    * image-triggered overflow that reported as `preflight_overflow` would stop

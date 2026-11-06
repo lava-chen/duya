@@ -470,6 +470,27 @@ describe('/plugin', () => {
     expect(tab(harness, 'installed')?.items?.[0]?.detail).not.toContain('capabilities');
   });
 
+  it('keeps configured plugins in Installed when their marketplace cache has no catalog rows', async () => {
+    const harness = await open({
+      catalog: { entries: [], marketplaces: [], issues: [], revision: 'rev-1' },
+      inventory: {
+        plugins: [{
+          id: 'com.duya.pdf', name: 'pdf', displayName: 'PDF', enabled: true,
+          marketplace: 'duya-plugins', installed: false,
+        }],
+      },
+    });
+
+    const item = tab(harness, 'installed')?.items?.[0];
+    expect(item?.value).toBe('com.duya.pdf@duya-plugins');
+    expect(item?.valueLabel).toBe('not installed');
+    tab(harness, 'installed')?.rowActions?.['tab']?.('com.duya.pdf@duya-plugins');
+    await harness.flush();
+    expect(harness.calls.setEnabled).toEqual([{
+      pluginId: 'com.duya.pdf', marketplace: 'duya-plugins', enabled: false, expectedRevision: 'rev-1',
+    }]);
+  });
+
   it('adds the component counts the inventory says the plugin brings', async () => {
     const harness = await open({
       inventory: {

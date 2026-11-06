@@ -6,7 +6,7 @@
  * The capability lives today in one place only:
  * `packages/agent/src/agent/TurnLoopTracker.ts` counts consecutive identical
  * tool calls and the legacy loop reads `shouldHardStop()` at the top of every
- * turn (`DuyaAgent.ts:4271`). Deleting that loop in a later slice must not
+ * turn (`DuyaAgent`). Deleting that loop in a later slice must not
  * delete the capability, so the invariant moved onto `RunEngineImpl` with the
  * threshold supplied by the host through `RunExecutionRequest.repeatedCallStop`.
  *
@@ -330,6 +330,17 @@ describe('the engine hard-stops a repeated tool call streak', () => {
     const h = await run(SAME_CALL_EVERY_TURN, { enabled: true, hardStopAt: 5 });
 
     expect(h.dispatched).toHaveLength(5);
+    expect(h.reported().reason).toBe('repeated_tool_calls');
+  });
+
+  it('uses a tool-specific hard stop before the run-wide threshold', async () => {
+    const h = await run(SAME_CALL_EVERY_TURN, {
+      enabled: true,
+      hardStopAt: 5,
+      toolHardStopAt: { read: 3 },
+    });
+
+    expect(h.dispatched).toHaveLength(3);
     expect(h.reported().reason).toBe('repeated_tool_calls');
   });
 

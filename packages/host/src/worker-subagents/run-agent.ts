@@ -580,7 +580,7 @@ export async function* runAgent({
         } as ChatOptions,
         workingDirectory,
         // The SAME expression the child instance above was constructed with
-        // (`DuyaAgent.ts:2773`), so the manifest records the provider the child
+        // (`DuyaAgent`), so the manifest records the provider the child
         // actually resolved rather than the caller's possibly-absent one.
         providerId: toolUseContext.options.provider ?? inferProvider(toolUseContext.options.baseURL ?? ''),
         ...(agentMaxTurns === undefined ? {} : { maxTurns: agentMaxTurns }),

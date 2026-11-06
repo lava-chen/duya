@@ -103,6 +103,8 @@ export interface TuiSlashHost {
     readonly completionRows?: number;
     readonly inputRows?: number;
     readonly statusline?: StatuslineProfile;
+    readonly footerTokens?: boolean;
+    readonly footerRate?: boolean;
   }): void;
   /** The live preferences, so a menu row can describe what is actually in force. */
   liveTuiPreferences?(): {
@@ -114,6 +116,8 @@ export interface TuiSlashHost {
     readonly completionRows: number;
     readonly inputRows: number;
     readonly statusline?: StatuslineProfile;
+    readonly footerTokens: boolean;
+    readonly footerRate: boolean;
   };
   /** The effective key bindings, so `/hotkeys` quotes what is really bound. */
   effectiveKeyBindings?(): readonly ActionDef[];

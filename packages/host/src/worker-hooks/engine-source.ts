@@ -21,8 +21,8 @@
  *
  * | engine phase | hook events | legacy dispatch site |
  * | --- | --- | --- |
- * | `on_start` | `UserPromptSubmit`, `SessionStart` | `DuyaAgent.ts:2130`, `:2144` |
- * | `before_tool` | `PreToolUse` | `DuyaAgent.ts:3349` |
+ * | `on_start` | `UserPromptSubmit`, `SessionStart` | `DuyaAgent`, `:2144` |
+ * | `before_tool` | `PreToolUse` | `DuyaAgent` |
  * | `after_tool` | `PostToolUse` | see "the one difference" below |
  * | `after_finalize` | `Stop`, `SessionEnd` | `SessionFinalizer.ts:268`, `:248`, `:274` |
  *
@@ -52,7 +52,7 @@
  * payload (`tool_name`, `tool_input`, `tool_response`, `tool_use_id`).
  *
  * The legacy does not do that. Its `PostToolUse` goes through the loop bus
- * (`DuyaAgent.ts:3729`) as `BaseHookInput` plus a `turnCount` and a
+ * (`DuyaAgent`) as `BaseHookInput` plus a `turnCount` and a
  * dead-loop streak, and `config-loop.ts:199-215` documents the consequence
  * outright: "PostToolUse is dispatched per turn here, not per tool call". A
  * turn that dispatches three tools fires one `PostToolUse` there and three
@@ -129,7 +129,7 @@ export interface WorkerHookSourceOptions {
   /** Injected settings; defaults to a fresh `readHooksConfig()` in the runner. */
   readonly settings?: HooksSettings;
   /**
-   * Surfaces every matched hook, as the legacy does (`DuyaAgent.ts:2069`).
+   * Surfaces every matched hook, as the legacy does (`DuyaAgent`).
    *
    * Forwarded rather than reimplemented, and it is the ONLY way a host can
    * observe a dispatch today: the engine discards `#contribute`'s return value
@@ -275,7 +275,7 @@ function firesOnExit(event: MappedHookEvent, reason: string | undefined): boolea
   return true;
 }
 
-/** The `${KEY}` expansion values the runner is given, matching `DuyaAgent.ts:2062-2068`. */
+/** The `${KEY}` expansion values the runner is given, matching `DuyaAgent`. */
 function expansionVars(options: WorkerHookSourceOptions): Record<string, string> {
   return { sessionId: options.sessionId, cwd: options.cwd, prompt: options.prompt ?? '' };
 }
@@ -356,7 +356,7 @@ export function createWorkerHookSource(options: WorkerHookSourceOptions): Extens
         // and `after_tool` carries neither -- `ExtensionContext.outcome` is a
         // result, deliberately, because the drain is where a deferred context
         // is not a result. The legacy correlates the same way, with its own
-        // `turnToolCallIds` map (`DuyaAgent.ts:3650`).
+        // `turnToolCallIds` map (`DuyaAgent`).
         seenCalls.set(call.callId, { name: call.name, input: call.input });
         return {
           input: {
@@ -380,7 +380,7 @@ export function createWorkerHookSource(options: WorkerHookSourceOptions): Extens
             // produced for a call the engine never announced, and failing the
             // whole phase over it would lose every other hook on this event.
             // Same fallback the legacy takes for a tool name it cannot
-            // attribute (`DuyaAgent.ts:3650`).
+            // attribute (`DuyaAgent`).
             tool_name: seen?.name ?? '',
             tool_input: seen?.input ?? {},
             tool_response: outcome.content,
@@ -402,7 +402,7 @@ export function createWorkerHookSource(options: WorkerHookSourceOptions): Extens
    * `order` is the event's index within its phase, times a step wide enough to
    * leave room for a host's own contributors at the same phase without
    * colliding. `UserPromptSubmit` before `SessionStart` is the legacy's order
-   * (`DuyaAgent.ts:2130` then `:2144`) and it matters: both feed the same
+   * (`DuyaAgent` then `:2144`) and it matters: both feed the same
    * first-turn context rail, so a session that starts before the prompt is
    * submitted inverts the provenance the envelopes carry.
    */
@@ -448,7 +448,7 @@ export function createWorkerHookSource(options: WorkerHookSourceOptions): Extens
         // PreToolUse advisories for the same tool do not overwrite each other
         // -- which is the behaviour the legacy gets from
         // `applyHookInjection(..., 'PreToolUse:<name>', ...)`
-        // (`DuyaAgent.ts:3375-3378`).
+        // (`DuyaAgent`).
         return result.contexts.map((text, seq): ExtensionContribution => ({
           key: `hook:${event}:${ctx.call?.callId ?? ctx.turn}:${seq}`,
           content: { kind: 'hook_context', key: `hook:${event}:${ctx.call?.callId ?? ctx.turn}:${seq}`, text },

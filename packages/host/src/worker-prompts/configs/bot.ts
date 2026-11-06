@@ -1,8 +1,19 @@
 /**
- * Bot PromptSystem config.
+ * Bot section shape — NOT an instantiable PromptSystem.
  *
- * Path A (Plan 474): a config-driven bot session uses a self-contained
- * system prompt instead of the general profile composition:
+ * Plan 624 v2 G2 removed this config from `PromptsRegistry`: no profile ever
+ * resolved to `'bot'`, so registering it created a second, dead track next to
+ * the real bot prompt (`BotPromptAssembly.renderSections()`). The authoritative
+ * bot section list now lives in the section registry
+ * (`sections/placement-registry.ts`, `BOT_ASSEMBLY_SECTION_IDS`) and is chosen
+ * by `agent-composition/section-plan.ts`.
+ *
+ * This object is kept as a compatibility fixture: the legacy
+ * `packages/agent/src/prompts/configs/bot.ts` re-exports it and the prompt
+ * partition/profile tests use it to pin the generic section subset a bot
+ * surface would need. It is never rendered at runtime.
+ *
+ * Original design notes (plan 474) follow for historical context:
  *
  *   BOT_BASIC_SYSTEM_PROMPT (static base, injected separately — byte-stable)
  *   + this config's dynamic sections (the runtime backbone a bot still needs)

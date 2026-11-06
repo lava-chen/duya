@@ -561,7 +561,7 @@ describe('the summarization is served by OneShotTextPort (G1)', () => {
     // The claim under test: compaction does not need its own model surface. A
     // host implements `CompactionPort.run` with the `OneShotTextPort` it already
     // holds -- the same port the summarizer is already installed on
-    // (`DuyaAgent.ts:783`), whose request is TOOL-FREE by construction
+    // (`DuyaAgent`), whose request is TOOL-FREE by construction
     // (`port-guards.ts`, `ONE_SHOT_REQUEST_CARRIES_NO_TOOLS`).
     //
     // Asserted on three facts from three different sources: the port received

@@ -296,7 +296,7 @@ describe('inline mode', () => {
     app.stop();
   });
 
-  it('shows a two-row footer: the session location, then spend and model', async () => {
+  it('shows a two-row footer: the session location, then the window and the model', async () => {
     const out = sink();
     const app = new TUIApp({
       output: out.stream,
@@ -314,7 +314,29 @@ describe('inline mode', () => {
     const text = out.text();
     // Row one: where the session is.
     expect(text).toContain('duya');
-    // Row two: the counters on the left, the model against the right edge.
+    // Row two: the model against the right edge — and, by default, NOT the
+    // three running totals, which `/settings` keeps off until asked for.
+    expect(text).toContain('(deepseek) deepseek-flash');
+    expect(text).not.toContain('↑49k');
+  });
+
+  it('paints the token counters once the footer switch is on', async () => {
+    const out = sink();
+    const app = new TUIApp({
+      output: out.stream,
+      input: new PassThrough(),
+      inline: true,
+      workspaceDirectory: () => 'E:\\Projects\\duya',
+      modelLabel: () => ({ provider: 'deepseek', model: 'deepseek-flash' }),
+      contextBudgetTokens: () => 1_000_000,
+      footerTokens: true,
+      onSubmit: () => {},
+    });
+    app.start();
+    app.push({ type: 'token_usage', data: { input_tokens: 49_000, output_tokens: 1600, total_tokens: 50_600 } });
+    await settleRendered();
+    app.stop();
+    const text = out.text();
     expect(text).toContain('↑49k');
     expect(text).toContain('↓1.6k');
     expect(text).toContain('(deepseek) deepseek-flash');

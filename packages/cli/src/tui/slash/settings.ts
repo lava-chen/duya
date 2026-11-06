@@ -40,6 +40,8 @@ import {
   TUI_EFFORT_BY_MODEL_SETTING,
   TUI_EFFORT_SETTING,
   TUI_EXPAND_BLOCKS_SETTING,
+  TUI_FOOTER_RATE_SETTING,
+  TUI_FOOTER_TOKENS_SETTING,
   TUI_INPUT_ROWS_SETTING,
   TUI_LOCALE_SETTING,
   TUI_SHOW_THINKING_SETTING,
@@ -63,6 +65,8 @@ export type SettingId =
   | 'language'
   | 'theme'
   | 'display-mode'
+  | 'footer-tokens'
+  | 'footer-rate'
   | 'effort'
   | 'model-effort'
   | 'show-thinking'
@@ -90,6 +94,8 @@ export interface LivePreferences {
   readonly toolGroupMode: ToolGroupMode;
   readonly completionRows: number;
   readonly inputRows: number;
+  readonly footerTokens: boolean;
+  readonly footerRate: boolean;
 }
 
 /** What the running TUI can be told to change right now. */
@@ -104,6 +110,8 @@ export interface LivePatch {
   readonly toolGroupMode?: ToolGroupMode;
   readonly completionRows?: number;
   readonly inputRows?: number;
+  readonly footerTokens?: boolean;
+  readonly footerRate?: boolean;
 }
 
 /** The two halves of one change: what the TUI applies, what the Host saves. */
@@ -194,6 +202,21 @@ export class SettingsState {
         label: 'Display mode',
         valueLabel: describeTuiDisplayMode(prefs.displayMode),
         detail: `Inline scrollback keeps the conversation in the terminal's own history; full screen takes the whole window. ${RESTART_DETAIL}`,
+      },
+      {
+        id: 'footer-tokens',
+        label: 'Token counters',
+        valueLabel: describeEnabled(live.footerTokens),
+        // Off by default, and the row says what is left rather than what is
+        // lost: the window shape and the speed are the two things about the
+        // turn that is running, the counters are the session's accumulated bill.
+        detail: 'The running ↑ in, ↓ out and session total at the left of the footer. Off leaves that row to the context bar and the speed; /cost still reports them.',
+      },
+      {
+        id: 'footer-rate',
+        label: 'Output speed',
+        valueLabel: describeEnabled(live.footerRate),
+        detail: "tok/s of the last answer, measured against the provider's own request duration. Hidden for a call the provider reported no duration for, whatever this says.",
       },
       {
         id: 'effort',
@@ -291,6 +314,18 @@ export class SettingsState {
         const displayMode = nextIn<TuiDisplayMode>(['inline', 'fullscreen'], this.preferences.displayMode);
         this.preferences = { ...this.preferences, displayMode };
         return { patch: {}, settings: { [TUI_DISPLAY_MODE_SETTING]: displayMode } };
+      }
+      case 'footer-tokens': {
+        const footerTokens = !this.live.footerTokens;
+        this.live = { ...this.live, footerTokens };
+        this.preferences = { ...this.preferences, footerTokens };
+        return { patch: { footerTokens }, settings: { [TUI_FOOTER_TOKENS_SETTING]: String(footerTokens) } };
+      }
+      case 'footer-rate': {
+        const footerRate = !this.live.footerRate;
+        this.live = { ...this.live, footerRate };
+        this.preferences = { ...this.preferences, footerRate };
+        return { patch: { footerRate }, settings: { [TUI_FOOTER_RATE_SETTING]: String(footerRate) } };
       }
       case 'effort': {
         const level = nextIn(this.effortLevels, this.effort);
@@ -414,6 +449,8 @@ const SETTINGS_COMMAND: TuiSlashCommandDef = {
       toolGroupMode: saved.toolGroupMode,
       completionRows: saved.completionRows,
       inputRows: saved.inputRows,
+      footerTokens: saved.footerTokens,
+      footerRate: saved.footerRate,
     }, ctx.session.model ?? '');
     try {
       const capability = await ctx.client.getProviderModelCapability(ctx.session.providerId, ctx.session.model);
@@ -457,6 +494,8 @@ export const SETTINGS_ROW_IDS: readonly SettingId[] = [
   'language',
   'theme',
   'display-mode',
+  'footer-tokens',
+  'footer-rate',
   'effort',
   'model-effort',
   'show-thinking',

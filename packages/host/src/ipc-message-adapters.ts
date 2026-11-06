@@ -31,6 +31,7 @@ import {
   DEFAULT_MESSAGE_SOURCE,
 } from '@duya/agent-protocol/message-timeline';
 import { projectTimelinePersistenceMessages } from '@duya/agent-protocol/transcript';
+import { parsePersistedTokenUsage } from '@duya/agent-core/usage/seed-token-usage';
 import type { NewEvent, StoredEvent } from '@duya/data';
 
 /** The legacy `messages` table row shape returned by the read direction. */
@@ -326,6 +327,17 @@ export function ipcMessageToNewEvent(
   // round-trips that drop the MessageEntry-level field).
   const source = inferMessageSource(data);
 
+  // The persisted usage block must survive as a TOP-LEVEL `tokenUsage` field,
+  // not only as the `metadata.token_usage` string below.
+  //
+  // `metadata` is preserved by ingestMessage, but the durable rollout row is
+  // read back through `projectTimelinePersistenceMessages` (CLI `/context`,
+  // `/cost`, the Desktop ring) and by the worker's own reload — both of which
+  // read the top-level field and see nothing in metadata. Parsed with the same
+  // helper the reload uses, so `last_call` / `calls[]` (plan 445) survive with
+  // identical semantics instead of being flattened here a second time.
+  const tokenUsage = parsePersistedTokenUsage(data.token_usage);
+
   // Persist token_usage plus whitelisted snapshot metadata for round-trip
   // (preImageSha/fileSnapshots drive file restore on session rewind).
   const persistedMetadata: Record<string, unknown> = {
@@ -370,6 +382,7 @@ export function ipcMessageToNewEvent(
       ? { providerId: data.provider_id || data.providerId }
       : {}),
     ...(data.api ? { api: data.api as Message['api'] } : {}),
+    ...(tokenUsage === undefined ? {} : { tokenUsage }),
     ...(data.attachments === undefined ? {} : { attachments: data.attachments }),
     source,
     ...(displayContent === null ? {} : { displayContent }),
@@ -590,10 +603,16 @@ function messageToIpcRow(
       ? JSON.stringify({ api: msg.api, providerId: msg.providerId, model: msg.model })
       : null;
   const providerState = metadataProviderState ?? derivedProviderState;
-  // token_usage round-trips through metadata (journal write path), but the
-  // timeline projection also restores the top-level `tokenUsage` field
-  // (LEGACY_KNOWN_KEYS) for in-memory/replayed messages — read both.
-  const rawTokenUsage = msg.metadata?.token_usage ?? (msg as { tokenUsage?: unknown }).tokenUsage;
+  // Read the TOP-LEVEL `tokenUsage` first. It is the authoritative persisted
+  // field: `recordTurnAssistantMessage` writes a SINGLE-CALL block there
+  // (deriveSingleCallUsage), and the rollout projection `/context`, `/cost`
+  // and the Desktop ring all read it. `metadata.token_usage` is the legacy
+  // journal copy and may be the raw turn-CUMULATIVE block from an older
+  // rollout or a third-party writer; preferring it would make the DB/IPC row
+  // disagree with the rollout for the SAME event, and every summing consumer
+  // would count that turn N times (plan 546 double-count).
+  const topLevelUsage = (msg as { tokenUsage?: unknown }).tokenUsage;
+  const rawTokenUsage = topLevelUsage ?? msg.metadata?.token_usage;
   const tokenUsage = rawTokenUsage !== undefined && rawTokenUsage !== null
     ? (typeof rawTokenUsage === 'string' ? rawTokenUsage : JSON.stringify(rawTokenUsage))
     : null;

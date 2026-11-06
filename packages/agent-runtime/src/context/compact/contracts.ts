@@ -123,6 +123,22 @@ export interface CompactionRuntimePorts {
   clock: CompactionClockPort
   /** Provider-backed summarization is an application effect injected by Host. */
   summarizer?: (text: string, prompt: string) => Promise<string>
+  /**
+   * A successful compaction rewrites the transcript, so any state anchored to
+   * read results that were in the OLD context is no longer valid. Runtime owns
+   * the decision (it knows the rewrite happened) but not the state (the
+   * read-first ledger lives in Capabilities, which Runtime must not import).
+   *
+   * Host binds this to a SESSION-SCOPED invalidation: a worker serves several
+   * sessions, and clearing every bucket would also erase a concurrently running
+   * child session's ledger — the child's transcript was not rewritten by this
+   * compaction. The callback takes no scope on purpose; Host closes over the
+   * session id, keeping Runtime free of session identity.
+   *
+   * Optional so a Runtime-only test or a non-worker host can construct a
+   * manager without participating in the read-first protocol.
+   */
+  onTranscriptRewrite?: () => void
 }
 
 export type CompactionMessage = Message

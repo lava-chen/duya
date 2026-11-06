@@ -25,6 +25,7 @@ import { getSteeringConfig } from '@duya/host/worker-hooks/config';
 import { classifyError, APIErrorType, computeContextComposition, normalizePromptTokens, type ContextEstimateSource } from '@duya/ai';
 import type { PromptProfile } from '@duya/host/worker-prompts/modes/types';
 import { isBotAgentProfile } from '@duya/host/worker-prompts/index';
+import { installProductionPromptObserver } from './worker-prompts/production-observer.js';
 import type { AppConnectionToolDescriptor } from './worker-tool-bindings/app-connection-tools.js';
 let _appConnectionModule: any = null;
 import type { WorkerSession } from './worker-session-runtime.js';
@@ -48,7 +49,7 @@ import { hydrateSessionHistory } from '@duya/agent-runtime/session';
 import type { ModelContentBlock } from '@duya/agent-runtime';
 import { TurnPipelinePublisher } from '@duya/agent-runtime/tools/turn-pipeline-publisher';
 import { applyMCPConfiguration, type MCPApplyResult } from './connector-services/worker-permission-binding.js';
-import { storePendingAnswer, takePendingAnswer } from '@duya/capabilities';
+import { clearPendingAnswer, storePendingAnswer, takePendingAnswer } from '@duya/capabilities';
 import { isCDNImageUrl } from '@duya/capabilities/utils/urlSafety';
 import { isModelLikelyMultimodal } from '@duya/capabilities/utils/multimodal-detection';
 import { detectModelCapability } from './worker-context/model-capability-cache.js';
@@ -1839,14 +1840,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         }
         catch {
         }
-        if (approvedAlwaysAllowTools.length > 0) {
-            try {
-                const { rememberSessionApproval } = await import('./authorization/connector-approval-cache.js');
-                for (const tool of approvedAlwaysAllowTools)
-                    rememberSessionApproval(tool);
-            }
-            catch {
-            }
+        // Rebuild this session's approval bucket from the durable rows. The
+        // reset runs even when the read found nothing (or threw): a bucket left
+        // over from an earlier chat in the same recycled worker must never be
+        // merged into a fresh one, and an empty bucket fails closed to "ask".
+        try {
+            const { beginApprovalSession, rememberSessionApproval } = await import('./authorization/connector-approval-cache.js');
+            beginApprovalSession(msg.sessionId);
+            for (const tool of approvedAlwaysAllowTools)
+                rememberSessionApproval(msg.sessionId, tool);
+        }
+        catch {
         }
         const consumeApprovedEffect = async (toolName: string, toolInput?: Record<string, unknown>): Promise<boolean> => {
             try {
@@ -2645,6 +2649,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     finally {
         stopChatHeartbeat();
         permissionScopes.delete(msg.sessionId);
+        // The bucket is a cache of the durable rows, so dropping it on chat end
+        // costs a cache miss on the next start, not the grant. Leaving it also
+        // kept dead memory pinned for every session this worker ever served.
+        try {
+            (await import('./authorization/connector-approval-cache.js')).clearSessionApprovals(msg.sessionId);
+        }
+        catch {
+        }
         turnPipelines.close();
     }
 }
@@ -3474,12 +3486,16 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                         }
                         const connectorDescriptor = (await getAppConnection()).getCachedAppConnectionDescriptors().find((d: any) => d.name === pending.toolName);
                         if (connectorDescriptor) {
-                            (await import('./authorization/connector-approval-cache.js')).rememberSessionApproval(pending.toolName);
+                            (await import('./authorization/connector-approval-cache.js')).rememberSessionApproval(resolveSessionId, pending.toolName);
                         }
                     }
                     pending.resolve('allow');
                 }
                 else {
+                    // An answer can land just before the decision flips. Nothing
+                    // will retry this tool use, so the stored payload would sit
+                    // in the map for the life of the worker.
+                    clearPendingAnswer(id);
                     pending.resolve('deny');
                 }
             }
@@ -3861,6 +3877,10 @@ function installProcessLifecycleHandlers(): void {
 }
 export async function startWorkerProcess(options: WorkerProcessStartOptions): Promise<void> {
     processAssembly = options.assembly;
+    // Plan 624 v2 G3: opt-in prompt-section digests go to the structured
+    // worker log. Off by default, so an uninstrumented build still skips the
+    // hashing entirely.
+    installProductionPromptObserver();
     installProcessLifecycleHandlers();
     await main(options);
 }
