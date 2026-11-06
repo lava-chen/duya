@@ -459,6 +459,14 @@ export class RunEngineImpl implements RunEngine {
      */
     const compacted: RunScoped<{ current: readonly ModelMessage[] | null }> = { current: null };
     /**
+     * The system half produced by the most recent compaction (plan 624 G4).
+     * Tagged with the turn that produced it, so a compaction at the END of one
+     * turn cannot override the prompt the host assembles for the NEXT one.
+     */
+    const compactedSystemPrompt: RunScoped<{
+      current: { readonly systemPrompt: string; readonly turn: number } | undefined;
+    }> = { current: undefined };
+    /**
      * The context generation, bumped by every compaction that replaced the
      * transcript.
      *
@@ -648,6 +656,7 @@ export class RunEngineImpl implements RunEngine {
           lastMessage,
           blockIndex,
           compacted,
+          compactedSystemPrompt,
           contextEpoch,
           injected,
           finalPollAbsorbs,
@@ -2419,6 +2428,9 @@ export class RunEngineImpl implements RunEngine {
 
     if (result.kind === 'replaced') {
       ctx.compacted.current = result.transcript;
+      ctx.compactedSystemPrompt.current = result.systemPrompt === undefined
+        ? undefined
+        : { systemPrompt: result.systemPrompt, turn: ctx.turn };
       // The generation is retired by the compaction that replaced the lineage,
       // and nowhere else. A cell rather than a local for the reason `lastMessage`
       // and `blockIndex` are cells: this method has to write run-scoped state,
@@ -3005,6 +3017,14 @@ export class RunEngineImpl implements RunEngine {
     assembled: AssembledTurn,
   ): Promise<ModelRequest> {
     const { input, manifest } = ctx;
+    // Plan 624 G4: a compaction that replaced the transcript this turn must
+    // also replace the SYSTEM half, otherwise the provider sees a new history
+    // paired with the pre-compaction prompt. Consumed once, on this turn only.
+    const compactedPrompt = ctx.compactedSystemPrompt.current;
+    ctx.compactedSystemPrompt.current = undefined;
+    const systemPrompt = compactedPrompt?.turn === ctx.turn
+      ? compactedPrompt.systemPrompt
+      : assembled.systemPrompt;
     const history = this.#requestHistory(ctx, assembled);
 
     const steering = await this.#fragmentMessages(
@@ -3051,7 +3071,7 @@ export class RunEngineImpl implements RunEngine {
     // manifest carries a REF and resolving a ref needs the secret.
     const selection = manifest.agent;
     return {
-      systemPrompt: assembled.systemPrompt,
+      systemPrompt,
       ...(assembled.maxOutputTokens === undefined ? {} : { maxOutputTokens: assembled.maxOutputTokens }),
       messages,
       tools: assembled.tools,
@@ -3514,6 +3534,10 @@ interface RunContext {
    * neither is the method that declared it. See its declaration in `#run`.
    */
   readonly compacted: RunScoped<{ current: readonly ModelMessage[] | null }>;
+  /** Post-compaction system half, tagged with the turn that produced it. */
+  readonly compactedSystemPrompt: RunScoped<{
+    current: { readonly systemPrompt: string; readonly turn: number } | undefined;
+  }>;
   /**
    * How many compactions have rewritten the context lineage. A CELL, because
    * `#compact` is the only writer. See its declaration in `#run` for why this is

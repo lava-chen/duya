@@ -160,6 +160,9 @@ export async function driveRunWithEngine(request: EngineRunDriverRequest, onFram
             ...(run.appliedProfile === undefined ? {} : { appliedProfile: run.appliedProfile }),
             turnContext: run.turnContext,
             publisher: turnPipelines,
+            // Plan 624 v2: the run handle carries the frozen plan. Passing it
+            // here keeps `beginTurnAssembly` a consumer, not a second decider.
+            ...(run.composition === undefined ? {} : { composition: run.composition }),
         });
         const promptRowId = commit.messageId ?? `prompt-${runId}`;
         const facts: LegacyRunFacts = {

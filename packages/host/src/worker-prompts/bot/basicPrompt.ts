@@ -7,7 +7,9 @@
  * is authored under `prompts/assets/` and hot-editable without touching
  * engine code. This module is a thin loader that keeps the
  * `BOT_BASIC_SYSTEM_PROMPT` export surface stable for the bot assembly
- * (`framework.ts`), the bot config (`configs/bot.ts`), and tests.
+ * (`framework.ts`) and tests. There is no separate `bot` PromptSystem
+ * config: the bot's sections are registered in the section registry
+ * (`sections/placement-registry.ts`) and rendered by the assembly.
  *
  * Authoring rules for the asset (unchanged):
  * - One heading per concern, direct imperative language, no filler.

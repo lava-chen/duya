@@ -379,6 +379,14 @@
       "types": "./dist/worker-prompts/index.d.ts",
       "import": "./dist/worker-prompts/index.js"
     },
+    "./agent-composition": {
+      "types": "./dist/agent-composition/index.d.ts",
+      "import": "./dist/agent-composition/index.js"
+    },
+    "./agent-composition/*": {
+      "types": "./dist/agent-composition/*.d.ts",
+      "import": "./dist/agent-composition/*.js"
+    },
     "./worker-prompts/*": {
       "types": "./dist/worker-prompts/*.d.ts",
       "import": "./dist/worker-prompts/*.js"
