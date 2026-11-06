@@ -106,6 +106,8 @@ export type CompactionPassResult =
       readonly compactionId: string;
       readonly boundaryId: string;
       readonly compactedMessageIds: readonly string[];
+      /** Post-compaction system half, when the port supplied one (plan 624 G4). */
+      readonly systemPrompt?: string;
     }
   | { readonly kind: 'declined'; readonly reason: string }
   | { readonly kind: 'failed'; readonly compactionId: string; readonly message: string }
@@ -172,6 +174,7 @@ export async function runCompactionPass(input: CompactionPassInput): Promise<Com
       compactionId,
       boundaryId: outcome.boundaryId,
       compactedMessageIds: outcome.compactedMessageIds,
+      ...(outcome.systemPrompt === undefined ? {} : { systemPrompt: outcome.systemPrompt }),
     };
   }
 

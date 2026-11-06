@@ -2544,6 +2544,16 @@ export type CompactionOutcome =
       readonly strategy?: string;
       readonly tokensRemoved?: number;
       readonly tokensRetained?: number;
+      /**
+       * The system prompt as re-projected by the compaction (plan 624 G4).
+       *
+       * A replacement rewrites the transcript AND the system half: reinjected
+       * system messages land in the prompt, so handing the provider the
+       * pre-compaction `assembled.systemPrompt` would pair a new history with
+       * an old system snapshot. Optional because a host that has not migrated
+       * still gets the old behaviour.
+       */
+      readonly systemPrompt?: string;
     }
   | { readonly kind: 'declined'; readonly reason: string }
   | { readonly kind: 'failed'; readonly error: { readonly code: string; readonly message: string } }

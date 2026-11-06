@@ -47,19 +47,17 @@
  * publish the terminal frame first and then the progress that belonged before
  * it.
  *
- * ## What is NOT carried, stated plainly
+ * ## What is and is NOT carried, stated plainly
  *
- * Four things, each named here rather than discovered later:
+ * The first item used to be the largest gap in this adapter; plan 624 G4
+ * closed it. The remaining three are still deliberate:
  *
- * 1. **The re-projected system prompt.** `executePreTurn` returns
- *    `{ systemPromptContent, messages }` and the legacy assigns BOTH
- *    (`DuyaAgent`). `CompactionOutcome` has a `replacement` and no
- *    system-prompt field, and `#modelRequest` takes `assembled.systemPrompt`
- *    verbatim (`run-engine.ts:2011`). So the post-compaction system prompt --
- *    the one that gains the entry's `reinjectedSystemMessages` -- does not
- *    reach the next request through this port. The transcript does; the system
- *    prompt does not. This is a property of the PORT SHAPE, not of this
- *    adapter, and it belongs to whoever changes `CompactionOutcome`.
+ * 1. **The re-projected system prompt — CARRIED since plan 624 G4.**
+ *    `CompactionOutcome.replaced` now has an optional `systemPrompt`; this
+ *    adapter fills it from `run.systemPromptContent`, `runCompactionPass`
+ *    forwards it, and `#modelRequest` uses it for the turn whose transcript
+ *    was replaced. A host that does not supply the field still gets the old
+ *    `assembled.systemPrompt`, so the change is backward compatible.
  *
  * 2. **Two of the three decision points.** `runPreTurn` is the proactive
  *    (`auto`) pass, and A3-2b5 declined the other two BY NAME because the
@@ -424,8 +422,12 @@ export function buildCoordinatorCompactionSources(
         return { kind: 'declined', reason: 'the strategy returned the transcript unchanged' };
       }
 
-      return {
-        kind: 'replaced',
+      // Plan 624 G4: the coordinator re-projects BOTH halves. Assigning to
+      // a variable (rather than returning a fresh literal) keeps this adapter
+      // loadable against an older `@duya/agent-runtime` dist that has not
+      // declared the field yet; the runtime reads it by name.
+      const outcome = {
+        kind: 'replaced' as const,
         replacement: run.messages.map(toRuntimeMessage),
         // The boundary is the first message the timeline KEPT, which is what
         // `compaction.completed` means by it (`events/required.ts:184`). The
@@ -437,7 +439,9 @@ export function buildCoordinatorCompactionSources(
         strategy: run.entry.strategy,
         tokensRemoved: run.entry.tokensBefore,
         ...(run.entry.tokensAfter === undefined ? {} : { tokensRetained: run.entry.tokensAfter }),
+        systemPrompt: run.systemPromptContent,
       };
+      return outcome;
     },
 
     nextCompactionId: () => nextCompactionId(),

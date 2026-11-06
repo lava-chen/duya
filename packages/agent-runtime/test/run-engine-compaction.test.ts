@@ -80,6 +80,8 @@ interface Harness {
   readonly progress: CompactionProgress[];
   /** Messages the model was actually sent, per call, in order. */
   readonly sentMessages: ModelMessage[][];
+  /** System prompt the model was actually sent, per call, in order. */
+  readonly sentSystemPrompts: string[];
   /** Events the engine published, in order. */
   readonly events: RunEvent[];
   /** `tools.discard:<reason>`, in order. */
@@ -100,6 +102,8 @@ function harness(options: {
   readonly decide: (input: CompactionDecisionInput) => CompactionDecision;
   /** The transcript the replacement produces. Omit to make `run` return failed. */
   readonly replacement?: readonly ModelMessage[];
+  /** Post-compaction system snapshot the port reports (plan 624 G4). */
+  readonly compactionSystemPrompt?: string;
   /** Report progress while running, to pin the mid-run frame ordering. */
   readonly reportProgress?: boolean;
   /** Omit `noteUsage` from the port entirely. */
@@ -125,6 +129,7 @@ function harness(options: {
   const anchors: CompactionUsageAnchor[] = [];
   const progress: CompactionProgress[] = [];
   const sentMessages: ModelMessage[][] = [];
+  const sentSystemPrompts: string[] = [];
   const events: RunEvent[] = [];
   const discards: string[] = [];
   const terminals: { state: string; reason: string }[] = [];
@@ -140,6 +145,7 @@ function harness(options: {
       const scripted = options.turns[turnIndex];
       turnIndex += 1;
       sentMessages.push([...request.messages]);
+      sentSystemPrompts.push(String(request.systemPrompt ?? ''));
       if (scripted === undefined) {
         yield { type: 'turn_stopped', reason: 'end_turn' };
         return;
@@ -181,6 +187,9 @@ function harness(options: {
         replacement: options.replacement,
         boundaryId: 'boundary-1',
         compactedMessageIds: ['m-1', 'm-2'],
+        ...(options.compactionSystemPrompt === undefined
+          ? {}
+          : { systemPrompt: options.compactionSystemPrompt }),
       };
     },
     nextCompactionId(): string {
@@ -282,6 +291,7 @@ function harness(options: {
     anchors,
     progress,
     sentMessages,
+    sentSystemPrompts,
     events,
     discards,
     terminals,
@@ -1026,5 +1036,39 @@ describe('a turn that compacts still ends correctly', () => {
     expect(h.compactionLog).toEqual(['decide:auto', 'run:auto']);
     expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
     expect(h.terminals[0]?.state).toBe('completed');
+  });
+});
+
+// ============================================================================
+// Plan 624 G4 — the system half travels with the compacted transcript
+// ============================================================================
+
+describe('the compaction outcome carries the post-compaction system prompt', () => {
+  it('sends the reported system snapshot on the compacting turn', async () => {
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'hi' }] }],
+      decide: () => COMPACT,
+      replacement: replacement(),
+      compactionSystemPrompt: 'post-compaction system',
+    });
+
+    await run(h);
+
+    // Two independent sources: the port's declared snapshot versus what the
+    // model port was handed. Before G4 this was always 'you are a test'.
+    expect(h.sentSystemPrompts[0]).toBe('post-compaction system');
+    expect(h.sentMessages[0]).toEqual([...replacement(), PROMPT]);
+  });
+
+  it('keeps the assembled prompt when the port supplies no snapshot', async () => {
+    const h = harness({
+      turns: [{ frames: [{ type: 'text', text: 'hi' }] }],
+      decide: () => COMPACT,
+      replacement: replacement(),
+    });
+
+    await run(h);
+
+    expect(h.sentSystemPrompts[0]).toBe('you are a test');
   });
 });
