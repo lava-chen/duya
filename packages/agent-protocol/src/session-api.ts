@@ -351,6 +351,13 @@ export interface HostMessageReadQuery {
   readonly sources?: readonly string[];
 }
 
+/**
+ * The projection options of a whole-transcript read.
+ *
+ * A whole read has no cursor and no page size: it returns the transcript.
+ */
+export type HostMessageReadAllQuery = Omit<HostMessageReadQuery, 'cursor' | 'limit'>;
+
 export interface HostTimelineAppendInput {
   /** Entry IDs are stable and make retries idempotent at the data layer. */
   readonly entries: readonly DurableTimelineEntry[];
@@ -481,6 +488,16 @@ export interface HostSessionApiV1 {
   countTimeline(sessionId: SessionId): Promise<number>;
   /** Read the message/compaction projection used by chat history views. */
   readMessages(sessionId: SessionId, query?: HostMessageReadQuery): Promise<HostMessagePage>;
+  /**
+   * Read the WHOLE message/compaction projection, projected once.
+   *
+   * `readMessages` pages, and every page re-projects the entire transcript: a
+   * client that reads a transcript end to end through the pages pays for the
+   * transcript once PER PAGE (measured on a 10k-message session: 16.7s of
+   * paging against 0.3s for one projection). A client that wants the whole
+   * transcript asks for it here.
+   */
+  readAllMessages(sessionId: SessionId, query?: HostMessageReadAllQuery): Promise<HostMessagePage>;
   /** Read the repaired, rebased projection including process events for rewind operations. */
   readProjectedTimeline(sessionId: SessionId, query?: HostTimelineReadQuery): Promise<HostTimelinePage>;
   readTimeline(sessionId: SessionId, query?: HostTimelineReadQuery): Promise<HostTimelinePage>;
