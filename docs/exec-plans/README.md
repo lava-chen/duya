@@ -11,7 +11,7 @@
 | 范围 | 入口 | 下一动作 |
 | --- | --- | --- |
 | 后台任务重复轮询硬停止 | [2026-11-04 后台任务重复轮询硬停止](active/2026-11-04-background-task-poll-loop.md) | JSONL 确认为 45 次轮询、最长连续 15 次；Host 接通硬停止并加 `get_task_output` 专用阈值；PR #617 draft |
-| Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现；PR #579 待授权集成 |
+| Session 工具迁移 | [Session tools as a `duya_app` MCP capability group](active/2026-11-02-session-tools-duya-app.md) | Host-owned `duya_app` 覆盖与集成测试已实现，#579 / `b9ab24dd` 已在 master first-parent 历史；此前「待授权集成」为计划状态未同步 |
 | Worktree 根目录与清理（635） | [2026-11-03 Worktree 设置与自动清理](active/2026-11-03-worktree-settings-and-auto-cleanup.md) | P1–P6 已实现并过门禁；PR #594 待集成 |
 | TUI 插件显示名 | [2026-11-03 TUI /plugin 显示插件真名](active/2026-11-03-tui-plugin-display-name.md) | Host 投影 `interface.displayName/shortDescription/longDescription`；`/plugin` 列表、详情与 `@` 补全显示 PDF/Zotero 等真名；相关用例与类型/架构门禁已过，PR #598 待集成 |
 | TUI 插件市场管理 | [631 TUI 插件市场管理界面](active/630-tui-capabilities-series/631-tui-plugin-market-ui.md) | `/plugin` 三 tab 浏览器与 Host 写 API 已实现；PR #601 待最新 CI 与授权集成 |
@@ -19,7 +19,7 @@
 | TUI 工具折叠与运行期输出 | [636 TUI 工具行的折叠与运行期输出](active/636-tui-live-shell-output.md) | 折叠行至少画一行、`[+ N]` 改为被隐藏行数并在标记内点名 `Ctrl+T`；新增 `tool.output_delta`（Host 惰性尾部轮询 → TUI 运行期预览 → Desktop/Web 既有 `chat:tool_output` 车道）与 worker bundle 重建；PR #610 已集成（merge `836f9ea9`），真机目视由用户判定按现有证据接受 |
 | TUI 输入框透明背景 | [2026-11-03 TUI 输入框透明背景](archive/2026-11-03-tui-transparent-composer-background.md) | `DUYA_TUI_COMPOSER_BG=transparent` 已合并（PR #595，`cccab45e`）；master 临时 CLI 已安装并加入用户 PATH |
 | TUI 集中反馈修复 | [2026-11-03 TUI 反馈修复](active/2026-11-03-tui-feedback-fixes.md) | 弹窗（worker `windowsHide`）、slash 命令清理、描述中文化、bash 染色、steer 提示残留已实现并过门禁；PR #589 待合并，真机冒烟待用户 |
-| Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | 任务一交付见 #582；任务二连续性 Host/Data 接口已实现，下一步任务三接入 Task/Activity/transcript refs UI 与用户验收操作 |
+| Project Coordinator（当前主线） | [三个总体任务](active/2026-11-02-project-coordinator.md) | #582–#587 与 Desktop #584 已合入 master；2026-11-04 两轮补完工具集角色隔离、Task/决策/记忆用户动作、Session 权威的每 Run 上下文注入、派工失败对账、Activity/transcript refs 工作台。**代码侧无已知缺口**，剩余仅真机端到端验收（清单与反馈模板见计划页） |
 | Session CLI 发布收尾 | [A/B 两项与 Plugin 边界](backlog/2026-11-01-bot-session-coordination.md) | Project 首个闭环后接续；Linux x64 候选已打包，待用户产品测试与反馈 |
 | TUI 学 codex 表面 | [2026-11-01 输入框纯色背景与已发命令 UI](active/2026-11-01-tui-codex-surface.md) | 背景槽 + composer 纯色背景 + 已发命令背景带已实现并合并（PR #567，`203d7d51`）；本计划待归档 |
 | 工具暴露与 Harness 调用链收敛 | [2026-10-31 工具面与 Harness 计划](active/2026-10-31-tool-surface-and-harness-convergence.md) | W0 census/差分（#555）与 F18/F24 修复（#557/#558）已集成；W1 实施与台账裁定后的暴露变更待开工 |

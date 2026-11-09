@@ -51,10 +51,18 @@ context assembly:
   versioned decisions/memory, cursor-paged Activity, and coordinator/work
   transcript references. Transcript bodies remain in MessageLog.
 - `GET /v1/projects/:id/context?taskId=&maxCharacters=` returns a bounded
-  context string and the source references used to build it. The new Worker
-  bootstrap loads it from Host for a project-bound Session. Relevant unfinished
+  context string and the source references used to build it. Relevant unfinished
   Tasks and completed-but-unaccepted work are included; other transcript text
   is read on demand from its existing Session.
+- `GET /v1/sessions/:id/project-context?maxCharacters=` is what the Worker
+  bootstrap actually calls. The Host derives the Project, the durable role
+  (`coordinator` / `work`) and the work Session's Task from
+  `projects.coordinator_session_id` / `project_task_sessions.work_session_id`;
+  the caller supplies only a Session id. A cwd reverse-lookup cannot supply
+  the Task, cannot tell the two roles apart, and is ambiguous when two projects
+  share a root. `200 { context: null }` is the normal answer for a Session that
+  is not project-bound. The Desktop sends `init` on every chat, so this read
+  happens once per Run, not once per worker process.
 - `PUT /v1/projects/:id/state` replaces the current state/next step using an
   `expectedRevision` and a source reference.
 - `PUT /v1/projects/:id/decisions/:key` uses `proposed`, `accepted`, or
@@ -75,16 +83,20 @@ or a second progress store.
 
 ## Remaining integration for the next slice
 
-1. Add the explicit Project Task completion/acceptance flow and progress
-   reconciliation in the Desktop. The acceptance API already requires an
-   explicit `user_message` source, and a Run terminal or Task status
-   `completed` must still leave acceptance pending; expose the review/confirm
-   controls and reconcile a failed child start safely.
-2. Add the Desktop review flow for project memory candidates and corrections;
-   automatic memory learning remains deferred. Project state, decisions,
-   accepted memory and recent activity are queryable from the Host, and the
-   coordinator reads a bounded context on demand; a session-scoped injection
-   into every new Run is part of the follow-up work.
+1. ~~Add the explicit Project Task completion/acceptance flow in the Desktop.~~
+   **Done (2026-11-04)** — `projects:task:acceptance` plus accept/reject
+   buttons on every pending task in `ProjectWorkPanel`. The main process owns
+   the `user_message` provenance; the renderer supplies only a click id. A Run
+   terminal or Task status `completed` still leaves acceptance pending.
+2. ~~Add the Desktop review flow for project memory candidates and corrections.~~
+   **Done (2026-11-04)** — `projects:continuity` reads candidates, revisions
+   and task acceptance; `projects:decision:review` / `projects:memory:review`
+   carry confirm, correct and discard. This is what makes project memory
+   reachable: the Coordinator tool may only write `candidate`, and only
+   `active` memories are injected into the project context. Automatic memory
+   learning remains deferred. A session-scoped injection into every new Run is
+   still follow-up work — the checkpoint `3bd4f915` is explicitly marked
+   "not for integration" and was not merged.
 3. ~~Extend the Project view to expose Task/activity plus work Session entry
    points.~~ **Done** — the Desktop project workspace reads one unified project
    state, opens or creates the bound coordinator conversation, lists the
@@ -102,12 +114,23 @@ or a second progress store.
    authorization and work-role mapping live in `packages/host/src/project/`
    behind a port supplied by each Host composition, and the coordinator has a
    dedicated `project` prompt system instead of falling back to `general`.
+6. ~~Add a session-scoped project context injection on every new Run.~~
+   **Done (2026-11-04)** — see the Session-keyed route above. The frozen
+   checkpoint `3bd4f915` was NOT cherry-picked: its migration id 65 collides
+   with the `run.terminal` dedupe index on the current main line, and its data
+   layer had already landed through later PRs. Every failure path after a
+   Coordinator `createTask` also rolls the Task back to `pending`, so a failed
+   dispatch cannot leave a phantom in-progress Task. The Desktop now also
+   renders the paged Activity timeline and transcript references.
 
 The first Project chat now creates/binds a restricted Coordinator Session and
 subsequent new-chat entry resumes it. Session dispatch creates and links a real
 Project Task and work Session, settled work results return to the project
 activity/wake path, and a replacement Coordinator can manage the project's work
-Sessions through their durable links. Until items 1 and 2 land, the persisted
-relationships, the Host API and the Desktop project workspace are a stable seam
-and a working surface — not a claim that the end-to-end Project Coordinator is
-complete.
+Sessions through their durable links. Items 1, 2 and 6 landed on 2026-11-04, so
+the user-side loop is closed at the API and Desktop surface and every Run
+receives the Session's current project context. What still prevents a claim
+that the end-to-end Project Coordinator is complete: a real product pass over
+the whole flow with recorded feedback. The executable checklist and the
+pass/fail feedback template are in the Coordinator exec-plan; that step needs
+a human in front of the Desktop and is intentionally left unchecked.

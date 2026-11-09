@@ -13,6 +13,10 @@
 
 import type {
   HostProjectState,
+  HostProjectTaskLink,
+  ProjectContinuitySnapshot,
+  ProjectDecision,
+  ProjectMemory,
   SessionControlLease,
 } from '@duya/agent-protocol';
 
@@ -72,6 +76,69 @@ export type ProjectWorkspaceStatusResult =
   | { readonly success: true; readonly statuses: Readonly<Record<string, string>> }
   | ProjectWorkspaceError;
 
+/**
+ * The project's continuity record: state, decisions, memory candidates and
+ * task acceptance, each with its optimistic-lock revision.
+ *
+ * `HostProjectState` intentionally carries none of these — the task links'
+ * `acceptanceStatus`, the decision/memory lists and their `revision` values
+ * live only in this snapshot. A user action therefore needs this read first:
+ * without it the UI cannot show the candidates, and cannot construct the
+ * `expectedRevision` the Host requires for a write.
+ */
+export type ProjectWorkspaceContinuityResult =
+  | { readonly success: true; readonly continuity: ProjectContinuitySnapshot | null }
+  | ProjectWorkspaceError;
+
+/** Explicit user acceptance of one task's result. */
+export type ProjectWorkspaceTaskAcceptanceResult =
+  | { readonly success: true; readonly task: HostProjectTaskLink | null }
+  | ProjectWorkspaceError;
+
+/** Explicit user review of one project decision. */
+export type ProjectWorkspaceDecisionResult =
+  | { readonly success: true; readonly decision: ProjectDecision | null }
+  | ProjectWorkspaceError;
+
+/** Explicit user review of one project memory candidate. */
+export type ProjectWorkspaceMemoryResult =
+  | { readonly success: true; readonly memory: ProjectMemory | null }
+  | ProjectWorkspaceError;
+
+/**
+ * The renderer supplies an id for the click, never a `source.type`. The main
+ * process owns the provenance and always cites `user_message`, which is what
+ * HostProjectApiV1 requires for accepted decisions and active memories
+ * (project-api.ts). Letting the renderer choose the source type would turn a
+ * button click into a way to forge a user decision.
+ */
+export interface ProjectWorkspaceUserAction {
+  /** Opaque id of this particular click, for auditability. */
+  readonly actionId: string;
+}
+
+export interface ProjectWorkspaceTaskAcceptanceInput extends ProjectWorkspaceUserAction {
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly status: 'accepted' | 'rejected';
+}
+
+export interface ProjectWorkspaceDecisionInput extends ProjectWorkspaceUserAction {
+  readonly projectId: string;
+  readonly key: string;
+  readonly content: string;
+  readonly status: 'proposed' | 'accepted' | 'superseded';
+  readonly expectedRevision: number;
+}
+
+export interface ProjectWorkspaceMemoryInput extends ProjectWorkspaceUserAction {
+  readonly projectId: string;
+  readonly key: string;
+  readonly content: string;
+  readonly status: 'candidate' | 'active' | 'superseded' | 'retired';
+  readonly expectedRevision: number;
+}
+
 /** The whole Project-first surface on the Electron bridge. */
 export interface ProjectWorkspaceAPI {
   /**
@@ -94,6 +161,24 @@ export interface ProjectWorkspaceAPI {
   readonly workSessionStatus: (
     sessionIds: readonly string[],
   ) => Promise<ProjectWorkspaceStatusResult>;
+  /**
+   * The continuity snapshot behind the user's review actions. Read it before
+   * rendering candidates or sending a write: `expectedRevision` comes from
+   * here, and the Host rejects a stale one.
+   *
+   * `afterCursor` pages the Activity timeline. Every other part of the
+   * snapshot (state, decisions, memories, tasks, transcript refs) is a full
+   * current projection, so a page read only extends `activity`.
+   */
+  readonly continuity: (projectId: string, afterCursor?: number) => Promise<ProjectWorkspaceContinuityResult>;
+  /** Accept or reject the result of one task. Requires an explicit user action. */
+  readonly acceptTask: (
+    input: ProjectWorkspaceTaskAcceptanceInput,
+  ) => Promise<ProjectWorkspaceTaskAcceptanceResult>;
+  /** Confirm, correct or supersede one decision proposed by the Coordinator. */
+  readonly reviewDecision: (input: ProjectWorkspaceDecisionInput) => Promise<ProjectWorkspaceDecisionResult>;
+  /** Confirm, correct or retire one memory candidate proposed by the Coordinator. */
+  readonly reviewMemory: (input: ProjectWorkspaceMemoryInput) => Promise<ProjectWorkspaceMemoryResult>;
   /** The per-session control lease: who may direct that session right now. */
   readonly lease: {
     readonly get: (sessionId: string) => Promise<ProjectWorkspaceLeaseResult>;

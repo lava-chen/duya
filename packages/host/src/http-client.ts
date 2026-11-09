@@ -2549,6 +2549,18 @@ export class HostSessionHttpClient implements
     return result.context;
   }
 
+  /**
+   * The project id is NOT a parameter: the Host resolves it from the Session's
+   * durable binding. This is what keeps a work Session from reading a project
+   * it was never dispatched for.
+   */
+  async getSessionProjectContext(sessionId: string, maxCharacters?: number) {
+    const query = maxCharacters === undefined ? '' : `?maxCharacters=${maxCharacters}`;
+    const result = await this.request<{ context: import('@duya/agent-protocol/projects').ProjectSessionContext | null }>(
+      'GET', `/v1/sessions/${encodeURIComponent(sessionId)}/project-context${query}`);
+    return result.context;
+  }
+
   async updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: { type: string; id: string } }) {
     const { projectId, ...body } = input;
     const result = await this.request<{ state: import('@duya/agent-protocol/projects').ProjectContinuityState | null }>(

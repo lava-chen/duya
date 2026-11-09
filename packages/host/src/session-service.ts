@@ -342,6 +342,15 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             if (!created.ok) return { ok: false, reason: created.reason };
             projectTaskId = created.taskId;
           }
+          // Once the canonical Task exists, EVERY early return below must put
+          // it back. A Task whose child never started is not dispatched work:
+          // leaving it at in_progress would make the project report work that
+          // cannot produce a result, and a later retry would see a phantom.
+          // This helper is deliberately placed next to createTask so the
+          // invariant is visible at the point the Task comes into existence.
+          const rollbackProjectTask = (): void => {
+            if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
+          };
 
           let child: HostSessionRecord;
           try {
@@ -368,6 +377,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             };
             child = await options.sessions.create(input);
           } catch (error) {
+            rollbackProjectTask();
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
           }
 
@@ -375,13 +385,14 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
             const linked = options.projectDispatch!.bindWorkSession(dispatchPlan, projectTaskId, child.id);
             if (!linked) {
               await markCreatedChildFailed(child.id, 'project_task_binding_failed');
-              options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
+              rollbackProjectTask();
               return { ok: false, sessionId: child.id, reason: 'project_task_binding_failed' };
             }
           }
 
           if (!callerIsCurrent(caller)) {
             const failureReason = 'caller_attempt_not_current';
+            rollbackProjectTask();
             const failed = await markCreatedChildFailed(child.id, failureReason);
             return {
               ok: false,
@@ -401,6 +412,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
               checkout = prepared.state.checkout;
               requireCurrentCaller(caller);
             } catch (error) {
+              rollbackProjectTask();
               await markCreatedChildFailed(child.id, error instanceof Error ? error.message : String(error));
               return { ok: false, sessionId: child.id, reason: error instanceof Error ? error.message : String(error) };
             }
@@ -409,7 +421,7 @@ export function createHostSessionService(options: HostSessionServiceOptions) {
           if ('reason' in started) {
             const failureReason = started.reason;
             const failed = await markCreatedChildFailed(child.id, failureReason);
-            if (projectTaskId) options.projectDispatch!.setTaskStatus(projectTaskId, 'pending');
+            rollbackProjectTask();
             return {
               ok: false,
               sessionId: child.id,

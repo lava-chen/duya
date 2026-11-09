@@ -52,10 +52,57 @@ Project Coordinator 是当前产品主线：用户进入项目与项目 Agent �
 
 任务一先冻结共享合同并交可运行路径；任务二、三可据该合同准备，最终在同一集成版本完成上述场景。若仍是一个 Agent 接续，按一 → 二 → 三推进。共享 protocol、data migration 和 Host bootstrap 只有一个集成 owner，其他 Agent 独立 worktree，先对齐再修改。
 
-- [ ] 一：项目协调与 Session 派发/反馈已实现；唯一输入/租约权威和工具限制已接通。
+- [x] 一：项目协调与 Session 派发/反馈已实现；唯一输入/租约权威和工具限制已接通（#582 / `04f7645f` 已在 master；此前勾选框未同步，属计划维护滞后，不是代码缺失）。
 - [x] 二：项目状态/记忆/历史分工落地；换协调对话与重启后能继续（Host/Data/API 与按需上下文读取已实现；完整注入与 Desktop 交互归任务三后续）。
 - [x] 三（Desktop 项目工作台切片，已接线可验收）：统一项目状态读取、协调对话、工作 Session/任务/进度、只读查看、用户接管与交还；「结果回项目」的活动流与 Coordinator 唤醒由 #585 补齐。
 - [ ] 三：完整产品流程交用户验收（含 Task 显式验收、记忆候选确认/纠正）；通过范围与未通过反馈分别记录。
+  - 2026-11-04 补完：Task 显式验收与决策/记忆候选的「确认 / 纠正 / 废弃」入口已落地（`projects:continuity` / `projects:task:acceptance` / `projects:decision:review` / `projects:memory:review` 四通道 + `ProjectWorkPanel` 交互），解开了「模型只能写 candidate、只有 accepted/active 才进 prompt」的死锁。
+  - 2026-11-04 第二轮：session 级上下文注入、Activity/transcript refs 展示、派工失败对账缺口均已补齐（见下节）。**代码侧无已知缺口**；本项不勾选的唯一原因是真机端到端验收与反馈记录只能由用户在 Desktop 上完成，清单见本页「真机端到端验收」节。
+
+## 2026-11-04 收尾补完（本轮）
+
+1. **工具集角色隔离**：builtin registry 是进程级共享的，注册层无法按 Session 分流；改在 per-turn 的 `ToolVisibilityConstraints` 注入 deny（`packages/host/src/worker-profiles/tool-role-policy.ts`），一处同时收窄直接 `tools[]`、`tool_catalog` eligible 与 `tool_invoke` 调度。`project` 限定 Coordinator，bot 协作工具限定 `[agents.<id>]` bot；`'*'` 通配符不再等于授权，精确名才豁免。
+2. **用户动作闭环**：见上方勾选说明。`HostProjectState` 不含 `acceptanceStatus`/`decisions`/`memories`/`revision`，所以新增 `projects:continuity` 读通道是三个写通道的前提。`source.type` 由 main 固定为 `user_message`，renderer 只传点击 id，防止伪造用户决定。
+3. **session 级上下文注入**：`3bd4f915`（`codex/project-chain-integration`）提交信息自述 “Local checkpoint only; not for integration”，未进 master、不续做、不 cherry-pick。它的 data 层（work Session 反查）已被后续 PR 吸收，但其迁移号 65 与 `run.terminal` 去重索引冲突，因此不 cherry-pick；本轮按当前主干重新实现，见下节。
+4. **剩余**：仅真机端到端产品验收。
+
+## 2026-11-04 第二轮：闭环补齐（本轮）
+
+1. **Session 权威的上下文注入**：旧 `router.ts` 用 cwd 反查 `projectId` 读连续性，无法区分 Coordinator / work Session、拿不到工作 Session 的 Task，两个项目共用目录时会串。改为 `HostProjectApiV1.getSessionProjectContext(sessionId)` + `GET /v1/sessions/:id/project-context`：Host 从 `projects.coordinator_session_id` 或 `project_task_sessions.work_session_id` 派生 projectId / role / taskId，caller 只能给出自己拥有的 Session id。`handlePostChat` 每个 Run 都重发 `init`，所以每次 Run 都会重新读取；用户刚确认的决策 / 激活的记忆下一轮即可见（`resolveProjectContinuityPrompt` 带反例测试）。
+2. **派工失败对账**：`createTask` 之后原有 5 条失败路径只有 2 条回滚 Task 状态；新增 `rollbackProjectTask()` 统一覆盖 child create / caller 失效 / checkout / bind / startRun，5 项回归测试（含对称成功用例）守住。
+3. **Activity 与 transcript refs UI**：`projects:continuity` 增加校验过的 `afterCursor` 分页，store 按 cursor 合并去重、最新在前，面板新增活动时间线、「加载更多活动」与原始会话引用入口。连续性的其他部分（state / decisions / memories / tasks / refs）仍是全量当前投影。
+4. **本次未做**：真机端到端验收（用户侧）；`session_*` 工具的角色化（产品决策，plan 616 §3.1）。
+
+## 真机端到端验收（待用户执行）
+
+前置：Desktop 以本轮源码构建并启动；已配置可用 provider/model；新建一个项目并进入协调对话。每一步都要把**实际输出或日志片段**贴到反馈表，不以「看起来正常」代替。
+
+| # | 步骤 | 预期（可验证的事实） |
+| --- | --- | --- |
+| A1 | 让 Coordinator 记一条项目决定或项目记忆 | 模型写 `proposed` / `candidate`；右侧面板出现「待确认的决策 / 待确认的项目记忆」 |
+| A2 | 先直接问「你刚记住了什么」，**不点确认** | 回答不应把未确认候选当作已生效事实（`context.ts` 只注入 accepted / active） |
+| A3 | 点「确认」，或「纠正」改成正确内容后「保存并确认」 | 候选从列表消失；Host 以 `source.type=user_message` 写入 accepted / active |
+| A4 | 下一轮协调对话问「上次决定了什么」 | 能复述 A3 的内容；再让一个工作 Session 起新 Run，其 system prompt 含该决定与 `You are a WORK session for task <id>` |
+| A5 | 完全重启应用，重进同一项目再问 | 仍能回答；且 `background_notification` 不重复唤醒 |
+| B1 | 让 Coordinator 派发两个工作 Session | 项目任务与工作会话两个列表都出现，状态来自同一 Host 读 |
+| B2 | 用户「接管」其中一个 | Coordinator 对该 Session 的新指令被 `control_lease_held` 拒绝；在途工具继续；「交还」后恢复 |
+| B3 | 等工作 Run 终态 | 项目活动出现**唯一** `run.terminal`；Task 验收仍为 pending（Run 终态不冒充验收） |
+| B4 | 在面板点「验收」，再点「驳回」另一个 Task | 徽标变成「已验收 / 已驳回」且刷新后保持；Activity 追加 `task.accepted` / `task.rejected` |
+| C1 | 查看「项目活动」并点「加载更多活动」 | 时间线最新在前，翻页不出现重复行；点活动里的会话能打开对应 transcript |
+| C2 | 查看「原始对话」 | 协调对话与工作会话引用可打开，工作台不保存第二份 transcript |
+| D1 | 开一个普通 `'*'` profile 会话，用 `tool_catalog` 枚举 | 不应出现 `project` 与 bot 协作工具（`create_agent` / `send_to_agent` 等） |
+| D2 | 让一次子 Session 创建失败 | Task 不停留 `in_progress`，回到 `pending`；失败原因可见 |
+
+**反馈记录模板**（每步一行，通过范围与未通过原因分开记）：
+
+```
+| 步骤 | 结论 | 实际输出 / 日志片段 | 未通过时的根因 | 后续动作 |
+| --- | --- | --- | --- | --- |
+| A1  | 通过 / 未通过 |                    |                |          |
+| ... |                |                    |                |          |
+```
+
+验收通过后把上方任务三勾选，并把「通过范围 / 未通过反馈」分别补进本节；未通过项另开修复条目，不要把未验证写成已完成。
 
 个人 Bot 工具集和主动性暂缓。原 [#562](https://github.com/lava-chen/duya/pull/562) 只保留 CLI 独立收尾交付，不再作为总体架构入口；旧 Bot-first 文档不覆盖本决策，集成 #562 时必须保留此优先级。Project 首个闭环完成后再排 Session 增强/CLI Release 和后续 Bot。
 

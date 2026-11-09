@@ -23,6 +23,15 @@ const mocks = vi.hoisted(() => ({
   snapshot: null as unknown,
   sessionStatuses: {} as Record<string, string>,
   leases: {} as Record<string, unknown>,
+  continuity: null as unknown,
+  actionError: null as string | null,
+  actionPending: false,
+  continuityHasMoreActivity: false,
+  activityLoading: false,
+  acceptTask: vi.fn(),
+  reviewDecision: vi.fn(),
+  reviewMemory: vi.fn(),
+  loadMoreActivity: vi.fn(),
 }));
 
 vi.mock('@/stores/project-workspace-store', () => ({
@@ -31,6 +40,15 @@ vi.mock('@/stores/project-workspace-store', () => ({
       snapshot: mocks.snapshot,
       sessionStatuses: mocks.sessionStatuses,
       leases: mocks.leases,
+      continuity: mocks.continuity,
+      actionError: mocks.actionError,
+      actionPending: mocks.actionPending,
+      continuityHasMoreActivity: mocks.continuityHasMoreActivity,
+      activityLoading: mocks.activityLoading,
+      loadMoreActivity: mocks.loadMoreActivity,
+      acceptTask: mocks.acceptTask,
+      reviewDecision: mocks.reviewDecision,
+      reviewMemory: mocks.reviewMemory,
     }),
   // The same rule the store applies: a lease is the user's only when the user
   // holds it. The helper itself is covered by the store's own test.
@@ -90,11 +108,59 @@ const SNAPSHOT = {
   observedAt: 1,
 };
 
+const CONTINUITY = {
+  project: SNAPSHOT.project,
+  state: null,
+  tasks: [
+    {
+      task: null,
+      link: {
+        taskId: 'task-1',
+        acceptanceStatus: 'pending',
+        workSessionId: 'session-work',
+        updatedAt: 1,
+      },
+    },
+  ],
+  decisions: [
+    {
+      key: 'arch',
+      content: '用 SQLite',
+      status: 'proposed',
+      revision: 2,
+      source: { type: 'session', id: 'coordinator' },
+      updatedAt: 1,
+    },
+  ],
+  memories: [
+    {
+      key: 'owner',
+      content: '负责人是 A',
+      status: 'candidate',
+      revision: 3,
+      source: { type: 'session', id: 'coordinator' },
+      updatedAt: 1,
+    },
+  ],
+  activity: [],
+  nextCursor: 0,
+  transcriptRefs: [],
+};
+
 describe('ProjectWorkPanel', () => {
   beforeEach(() => {
     mocks.snapshot = SNAPSHOT;
     mocks.sessionStatuses = {};
     mocks.leases = {};
+    mocks.continuity = null;
+    mocks.actionError = null;
+    mocks.actionPending = false;
+    mocks.continuityHasMoreActivity = false;
+    mocks.activityLoading = false;
+    mocks.acceptTask.mockClear();
+    mocks.reviewDecision.mockClear();
+    mocks.reviewMemory.mockClear();
+    mocks.loadMoreActivity.mockClear();
   });
 
   it('lists the project tasks and their state', () => {
@@ -183,5 +249,190 @@ describe('ProjectWorkPanel', () => {
 
     expect(screen.queryByText('project.workspace.holding')).toBeNull();
     expect(screen.getByText('project.workspace.takeOver')).toBeTruthy();
+  });
+
+  it('lets the user accept or reject a task result', () => {
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('project.workspace.acceptTask'));
+    expect(mocks.acceptTask).toHaveBeenCalledWith('task-1', 'accepted');
+
+    fireEvent.click(screen.getByText('project.workspace.rejectTask'));
+    expect(mocks.acceptTask).toHaveBeenCalledWith('task-1', 'rejected');
+  });
+
+  it('stops offering acceptance once the task link says accepted', () => {
+    mocks.continuity = {
+      ...CONTINUITY,
+      tasks: [{ ...CONTINUITY.tasks[0], link: { ...CONTINUITY.tasks[0].link, acceptanceStatus: 'accepted' } }],
+    };
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    expect(screen.queryByText('project.workspace.acceptTask')).toBeNull();
+    expect(screen.getByText('project.workspace.acceptanceAccepted')).toBeTruthy();
+  });
+
+  it('renders only proposed decisions and candidate memories', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    expect(screen.getByText('用 SQLite')).toBeTruthy();
+    expect(screen.getByText('负责人是 A')).toBeTruthy();
+    expect(screen.getAllByTestId('project-review-candidate').length).toBe(2);
+  });
+
+  it('does not offer already-accepted decisions or active memories', () => {
+    mocks.continuity = {
+      ...CONTINUITY,
+      decisions: [{ ...CONTINUITY.decisions[0], status: 'accepted' }],
+      memories: [{ ...CONTINUITY.memories[0], status: 'active' }],
+    };
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    expect(screen.queryAllByTestId('project-review-candidate').length).toBe(0);
+  });
+
+  it('confirming a decision cites its revision and an accepted status', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByText('project.workspace.reviewAccept')[0]);
+
+    expect(mocks.reviewDecision).toHaveBeenCalledWith({
+      key: 'arch',
+      content: '用 SQLite',
+      status: 'accepted',
+      expectedRevision: 2,
+    });
+  });
+
+  it('discarding a decision supersedes it instead of accepting it', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByText('project.workspace.reviewDiscard')[0]);
+
+    expect(mocks.reviewDecision).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'superseded', expectedRevision: 2 }),
+    );
+  });
+
+  it('confirming a memory activates it, which is what lets it reach the prompt', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByText('project.workspace.reviewAccept')[1]);
+
+    expect(mocks.reviewMemory).toHaveBeenCalledWith({
+      key: 'owner',
+      content: '负责人是 A',
+      status: 'active',
+      expectedRevision: 3,
+    });
+  });
+
+  it('discarding a memory retires it', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByText('project.workspace.reviewDiscard')[1]);
+
+    expect(mocks.reviewMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'retired', expectedRevision: 3 }),
+    );
+  });
+
+  it('correcting a candidate sends the edited content, not the original', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getAllByText('project.workspace.reviewCorrect')[0]);
+    fireEvent.change(screen.getByLabelText('project.workspace.reviewCorrect'), {
+      target: { value: '改用 Postgres' },
+    });
+    fireEvent.click(screen.getByText('project.workspace.reviewSave'));
+
+    expect(mocks.reviewDecision).toHaveBeenCalledWith({
+      key: 'arch',
+      content: '改用 Postgres',
+      status: 'accepted',
+      expectedRevision: 2,
+    });
+  });
+
+  it('surfaces a failed user action instead of silently keeping the candidate', () => {
+    mocks.continuity = CONTINUITY;
+    mocks.actionError = 'Only an explicit user decision can accept a project decision';
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    expect(screen.getByTestId('project-action-error').textContent).toContain('explicit user decision');
+  });
+
+  const ACTIVITY = [
+    {
+      cursor: 1, type: 'task.created', taskId: 'task-1', sessionId: null, runId: null,
+      source: { type: 'session', id: 'coordinator' }, payload: {}, createdAt: 1,
+    },
+    {
+      cursor: 2, type: 'run.terminal', taskId: 'task-1', sessionId: 'session-work', runId: 'run-1',
+      source: { type: 'run', id: 'run-1' }, payload: { status: 'completed' }, createdAt: 2,
+    },
+  ];
+
+  it('shows the paged activity timeline with the newest event first', () => {
+    mocks.continuity = { ...CONTINUITY, activity: ACTIVITY };
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+
+    const entries = screen.getAllByTestId('project-activity-entry');
+    expect(entries).toHaveLength(2);
+    expect(entries[0].textContent).toContain('run.terminal');
+    expect(entries[0].textContent).toContain('status: completed');
+    expect(entries[1].textContent).toContain('task.created');
+  });
+
+  it('asks the store for the next activity page and opens the referenced session', () => {
+    mocks.continuity = { ...CONTINUITY, activity: ACTIVITY };
+    mocks.continuityHasMoreActivity = true;
+    const onOpenSession = vi.fn();
+    render(<ProjectWorkPanel onOpenSession={onOpenSession} onTakeOver={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('project.workspace.activityLoadMore'));
+    expect(mocks.loadMoreActivity).toHaveBeenCalledTimes(1);
+
+    // The activity row's own shortcut points at the Session that produced it.
+    const openButtons = screen.getAllByText('project.workspace.open');
+    fireEvent.click(openButtons[openButtons.length - 1]);
+    expect(onOpenSession).toHaveBeenCalledWith('session-work');
+  });
+
+  it('hides the load-more control when the Host has no further page', () => {
+    mocks.continuity = { ...CONTINUITY, activity: ACTIVITY };
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+    expect(screen.queryByText('project.workspace.activityLoadMore')).toBeNull();
+  });
+
+  it('links transcript refs to the original sessions instead of copying them', () => {
+    mocks.continuity = {
+      ...CONTINUITY,
+      transcriptRefs: [
+        { sessionId: 'session-coordinator', role: 'coordinator' },
+        { sessionId: 'session-work', role: 'work', taskId: 'task-1' },
+      ],
+    };
+    const onOpenSession = vi.fn();
+    render(<ProjectWorkPanel onOpenSession={onOpenSession} onTakeOver={vi.fn()} />);
+
+    const refs = screen.getAllByTestId('project-transcript-ref');
+    expect(refs).toHaveLength(2);
+    expect(refs[0].textContent).toContain('project.workspace.transcriptCoordinator');
+    fireEvent.click(refs[1].querySelector('button')!);
+    expect(onOpenSession).toHaveBeenCalledWith('session-work');
+  });
+
+  it('says so when there is no activity yet', () => {
+    mocks.continuity = CONTINUITY;
+    render(<ProjectWorkPanel onOpenSession={vi.fn()} onTakeOver={vi.fn()} />);
+    expect(screen.getByText('project.workspace.activityEmpty')).toBeTruthy();
+    expect(screen.queryByTestId('project-activity-list')).toBeNull();
   });
 });

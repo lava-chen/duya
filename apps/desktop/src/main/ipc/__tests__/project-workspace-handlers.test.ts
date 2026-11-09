@@ -322,3 +322,153 @@ describe('projects:workSessionStatus', () => {
     expect(result.error).toContain('sessionIds');
   });
 });
+
+describe('explicit user actions (projects:*)', () => {
+  async function newProject() {
+    return mocks.hostProjectApi.createProject({
+      name: 'codex',
+      paths: [{ path: '/projects/codex', description: null }],
+    });
+  }
+
+  it('reads the continuity snapshot that carries candidates and revisions', async () => {
+    const project = await newProject();
+    await mocks.hostProjectApi.updateProjectDecision({
+      projectId: project.project_id,
+      key: 'arch',
+      content: 'SQLite',
+      status: 'proposed',
+      expectedRevision: 0,
+      source: { type: 'session', id: 'coordinator' },
+    });
+
+    const result = await invoke('projects:continuity', project.project_id);
+
+    expect(result.success).toBe(true);
+    expect(result.continuity.decisions).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'arch', status: 'proposed', revision: 1 })]),
+    );
+  });
+
+  it('pages the activity timeline with a validated cursor', async () => {
+    const project = await newProject();
+    const spy = vi.spyOn(mocks.hostProjectApi, 'getProjectContinuity');
+
+    await invoke('projects:continuity', project.project_id, 7);
+    expect(spy).toHaveBeenCalledWith(project.project_id, { afterCursor: 7, limit: 50 });
+
+    // A negative / non-integer cursor would silently change which page the
+    // Host returns (`event_id > after`), so it falls back to the first page.
+    await invoke('projects:continuity', project.project_id, -1);
+    expect(spy).toHaveBeenLastCalledWith(project.project_id, { afterCursor: 0, limit: 50 });
+    await invoke('projects:continuity', project.project_id, 'not-a-cursor');
+    expect(spy).toHaveBeenLastCalledWith(project.project_id, { afterCursor: 0, limit: 50 });
+  });
+
+  it('owns the provenance: a forged renderer source cannot accept a decision', async () => {
+    const project = await newProject();
+
+    const result = await invoke('projects:decision:review', {
+      projectId: project.project_id,
+      actionId: 'click-1',
+      key: 'arch',
+      content: 'SQLite',
+      status: 'accepted',
+      expectedRevision: 0,
+      // The renderer must never choose source.type. If the handler forwarded
+      // this value, HostProjectApiV1 would throw and the IPC answer would be
+      // an opaque 500-shaped failure.
+      source: { type: 'session', id: 'forged' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.decision?.status).toBe('accepted');
+    expect(result.decision?.source.type).toBe('user_message');
+    expect(result.decision?.source.id).toContain('desktop-project-workspace:user-action:click-1');
+  });
+
+  it('activates a memory candidate — the step that unblocks context injection', async () => {
+    const project = await newProject();
+
+    const result = await invoke('projects:memory:review', {
+      projectId: project.project_id,
+      actionId: 'click-2',
+      key: 'owner',
+      content: '负责人是 A',
+      status: 'active',
+      expectedRevision: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.memory?.status).toBe('active');
+    expect(result.memory?.source.type).toBe('user_message');
+  });
+
+  it('records explicit task acceptance on the task link', async () => {
+    const project = await newProject();
+    // bindProjectTask refuses a link whose task row does not exist.
+    dataHost!.stores.tasks.create({
+      id: 'task-1',
+      sessionId: 'session-coordinator',
+      subject: '实现登录',
+      description: '',
+      status: 'in_progress',
+    });
+    await mocks.hostProjectApi.bindProjectTask(project.project_id, 'task-1', 'session-coordinator');
+
+    const result = await invoke('projects:task:acceptance', {
+      projectId: project.project_id,
+      actionId: 'click-3',
+      taskId: 'task-1',
+      status: 'accepted',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.task?.acceptanceStatus).toBe('accepted');
+  });
+
+  it('rejects malformed actions with an explainable error before reaching the Host', async () => {
+    const project = await newProject();
+    const base = {
+      projectId: project.project_id,
+      actionId: 'click',
+      key: 'k',
+      content: 'x',
+      status: 'accepted',
+      expectedRevision: 0,
+    };
+
+    expect((await invoke('projects:decision:review', { ...base, actionId: '' })).success).toBe(false);
+    expect((await invoke('projects:decision:review', { ...base, status: 'active' })).success).toBe(false);
+    expect((await invoke('projects:decision:review', { ...base, expectedRevision: -1 })).success).toBe(false);
+    expect((await invoke('projects:memory:review', { ...base, status: 'accepted' })).success).toBe(false);
+    expect((await invoke('projects:task:acceptance', {
+      projectId: project.project_id, actionId: 'click', taskId: 't', status: 'maybe',
+    })).success).toBe(false);
+    expect((await invoke('projects:continuity', '')).success).toBe(false);
+  });
+
+  it('reports a stale revision as a null result, not as a silent success', async () => {
+    const project = await newProject();
+    await mocks.hostProjectApi.updateProjectMemory({
+      projectId: project.project_id,
+      key: 'owner',
+      content: 'old',
+      status: 'candidate',
+      expectedRevision: 0,
+      source: { type: 'session', id: 'coordinator' },
+    });
+
+    const result = await invoke('projects:memory:review', {
+      projectId: project.project_id,
+      actionId: 'click-4',
+      key: 'owner',
+      content: 'new',
+      status: 'active',
+      expectedRevision: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.memory).toBeNull();
+  });
+});

@@ -2180,6 +2180,16 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('projects:coordinator:ensure', projectId),
     workSessionStatus: (sessionIds: readonly string[]) =>
       ipcRenderer.invoke('projects:workSessionStatus', sessionIds),
+    // Explicit user actions. The main process owns the `source.type`
+    // provenance; only the click id crosses the bridge. See the contract.
+    continuity: (projectId: string, afterCursor?: number) =>
+      ipcRenderer.invoke('projects:continuity', projectId, afterCursor),
+    acceptTask: (input: unknown) =>
+      ipcRenderer.invoke('projects:task:acceptance', input),
+    reviewDecision: (input: unknown) =>
+      ipcRenderer.invoke('projects:decision:review', input),
+    reviewMemory: (input: unknown) =>
+      ipcRenderer.invoke('projects:memory:review', input),
     lease: {
       get: (sessionId: string) => ipcRenderer.invoke('session:control:lease:get', sessionId),
       acquire: (sessionId: string, requestId: string, ttlMs?: number) =>

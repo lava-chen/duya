@@ -8,6 +8,7 @@ import type {
   ProjectDecision,
   ProjectMemory,
   ProjectContinuityState,
+  ProjectSessionContext,
   HostProjectState,
   HostProjectTaskState,
   HostProjectWorkSession,
@@ -57,7 +58,7 @@ export interface HostProjectSessionScope {
 
 /** Build the asynchronous project API over the Host-owned Data store. */
 export function createHostProjectApi(
-  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'listTaskLinks' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
+  projects: Pick<ProjectStore, 'list' | 'get' | 'insert' | 'update' | 'delete' | 'deleteBotsByProject' | 'bindCoordinatorSession' | 'getByCoordinatorSession' | 'listTaskLinks' | 'getTaskLinkByWorkSession' | 'bindTask' | 'bindWorkSession' | 'setTaskAcceptance' | 'getContinuityState' | 'updateContinuityState' | 'listDecisions' | 'upsertDecision' | 'listMemories' | 'upsertMemory' | 'listMemoryHistory' | 'listDecisionHistory' | 'appendActivity' | 'listActivity' | 'listRecentActivity'>,
   tasks?: Pick<CoreDataHostStores['tasks'], 'get'>,
   scope?: HostProjectSessionScope,
 ): HostProjectApiV1 {
@@ -199,6 +200,43 @@ export function createHostProjectApi(
         ...(taskId === undefined ? {} : { taskId }),
         ...(maxCharacters === undefined ? {} : { maxCharacters }),
       });
+    },
+
+    /**
+     * The Worker bootstrap asks for context by Session id, not by project id.
+     * The durable binding is the authority: a Coordinator sees the whole
+     * project's open work, while a work Session sees only its own Task.
+     * Neither can claim another project's continuity by naming it.
+     */
+    async getSessionProjectContext(sessionId, maxCharacters) {
+      if (!sessionId) return null;
+      const asCoordinator = projects.getByCoordinatorSession(sessionId);
+      if (asCoordinator) {
+        const context = await this.getProjectContext(asCoordinator.project_id, undefined, maxCharacters);
+        if (!context) return null;
+        return {
+          projectId: asCoordinator.project_id,
+          projectName: asCoordinator.name || asCoordinator.project_id,
+          role: 'coordinator',
+          taskId: null,
+          text: context.text,
+          sourceRefs: context.sourceRefs,
+        } satisfies ProjectSessionContext;
+      }
+      const link = projects.getTaskLinkByWorkSession(sessionId);
+      if (!link) return null;
+      const project = projects.get(link.project_id);
+      if (!project) return null;
+      const context = await this.getProjectContext(link.project_id, link.task_id, maxCharacters);
+      if (!context) return null;
+      return {
+        projectId: project.project_id,
+        projectName: project.name || project.project_id,
+        role: 'work',
+        taskId: link.task_id,
+        text: context.text,
+        sourceRefs: context.sourceRefs,
+      } satisfies ProjectSessionContext;
     },
 
     async updateProjectState(input) {

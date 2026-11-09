@@ -1858,14 +1858,16 @@ export async function dispatchDbAction(
       });
     }
     case 'project:continuity-context': {
-      const projectId = typeof p.projectId === 'string' ? p.projectId : '';
-      if (!projectId) return { success: false, error: 'projectId_required' };
+      // The Project and Task are derived from this Session's DURABLE binding,
+      // never from a project id in the payload. A cwd reverse-lookup cannot
+      // tell a Coordinator from a work Session, cannot resolve the work
+      // Session's Task, and picks the wrong project when two share a root.
+      // `sessionId` here is the Agent Server's own Session id (host-initiated
+      // dbRequest), not a worker-supplied claim.
+      const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+      if (!sessionId) return { success: false, error: 'sessionId_required' };
       try {
-        const context = await getDesktopHostProjectApi().getProjectContext(
-          projectId,
-          typeof p.taskId === 'string' ? p.taskId : undefined,
-          8000,
-        );
+        const context = await getDesktopHostProjectApi().getSessionProjectContext(sessionId, 8000);
         return { success: true, context };
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
