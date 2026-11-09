@@ -33,7 +33,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { BUNDLE_DIR, METAFILE, bundleCommit, changedSince, verifyBundle } from './bundle-verify.mjs';
+import { BUNDLE_DIR, COPY_TREES, METAFILE, bundleCommit, changedSince, verifyBundle } from './bundle-verify.mjs';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 
@@ -79,6 +79,18 @@ function makeFixture(): string {
   fs.writeFileSync(path.join(root, METAFILE), JSON.stringify(meta));
   fs.writeFileSync(path.join(root, BUNDLE_DIR, 'worker-entry.js'), '// fixture output\n');
   fs.writeFileSync(path.join(root, BUNDLE_DIR, 'BashTool', 'BashWorker.js'), '// fixture output\n');
+  // The copied trees need BOTH halves to exist: the source, and the mirror the
+  // build would copy it into. A fixture with only the source would report every
+  // file as missing from the mirror, and a fixture with only the mirror would
+  // report nothing to compare.
+  for (const tree of COPY_TREES) {
+    const source = path.join(root, tree.source);
+    fs.mkdirSync(source, { recursive: true });
+    fs.cpSync(path.join(REPO_ROOT, tree.source), source, { recursive: true });
+    const mirror = path.join(root, tree.mirror);
+    fs.mkdirSync(path.dirname(mirror), { recursive: true });
+    fs.cpSync(source, mirror, { recursive: true });
+  }
   git(root, 'init', '-q', '.');
   git(root, 'config', 'core.autocrlf', 'false');
   git(root, 'config', 'core.eol', 'lf');
@@ -276,6 +288,65 @@ describe('bundle:verify', () => {
       }
     });
   });
+
+  describe('RED when a copied tree drifts from its source', () => {
+    /**
+     * The prompt template the copied-tree cases move around.
+     *
+     * It is a real file in the tree — the gate compares the real trees, not a
+     * stand-in — and it is a `.hbs` because that is the extension a prompt
+     * author edits.
+     */
+    const PROMPT_ASSET = 'packages/host/src/worker-prompts/assets/dynamic/platform.hbs';
+    const PROMPT_ASSET_MIRROR = 'packages/host/bundle/assets/dynamic/platform.hbs';
+
+    it('reports a source file whose mirror copy differs', () => {
+      // The window this half of the gate exists to close: a prompt template is
+      // edited, the bundle is not rebuilt, and the checked-in bundle keeps
+      // serving the old prompt. The eval fixture and the Host integration test
+      // both run that bundle straight out of the checkout, so the stale copy
+      // was the thing under test.
+      fs.appendFileSync(path.join(root, PROMPT_ASSET), '<!-- edited -->\n');
+      const result = verifyBundle({ repoRoot: root });
+      expect(result.verdict).toBe('stale');
+      const tree = result.copyTrees.find((t) => t.name === 'prompt-assets');
+      expect(tree?.differing).toEqual(['dynamic/platform.hbs']);
+      // A copy-tree drift is NOT a metafile input change. The two are counted
+      // separately, and the summary must not fold them into one number.
+      expect(result.staleInputs).toEqual([]);
+    });
+
+    it('reports a source file the mirror never received', () => {
+      fs.rmSync(path.join(root, PROMPT_ASSET_MIRROR));
+      git(root, 'add', '-A');
+      git(root, 'commit', '-qm', 'drop a prompt template from the mirror');
+      const result = verifyBundle({ repoRoot: root });
+      expect(result.verdict).toBe('stale');
+      const tree = result.copyTrees.find((t) => t.name === 'prompt-assets');
+      expect(tree?.missing).toEqual(['dynamic/platform.hbs']);
+    });
+
+    it('reports a mirror file the source no longer has', () => {
+      fs.rmSync(path.join(root, PROMPT_ASSET));
+      git(root, 'add', '-A');
+      git(root, 'commit', '-qm', 'delete a prompt template');
+      const result = verifyBundle({ repoRoot: root });
+      expect(result.verdict).toBe('stale');
+      const tree = result.copyTrees.find((t) => t.name === 'prompt-assets');
+      expect(tree?.extra).toEqual(['dynamic/platform.hbs']);
+    });
+
+    it('is fresh again when the copy is refreshed alongside the edit', () => {
+      // The complete fix, in the order the repo requires: edit the source,
+      // rebuild (which copies it), commit both. Without this direction the
+      // gate could be red unconditionally.
+      fs.appendFileSync(path.join(root, PROMPT_ASSET), '<!-- edited -->\n');
+      fs.copyFileSync(path.join(root, PROMPT_ASSET), path.join(root, PROMPT_ASSET_MIRROR));
+      const result = verifyBundle({ repoRoot: root });
+      expect(result.verdict).toBe('fresh');
+      expect(result.copyTrees.every((tree) => !tree.stale)).toBe(true);
+    });
+  });
 });
 
 describe('bundle:verify refuses to guess', () => {
@@ -345,10 +416,33 @@ describe('bundle:verify on the live tree', () => {
       `${result.staleInputs.length}/${liveDenominator()} bundle inputs changed after the bundle commit`,
     );
     if (result.verdict === 'stale') {
-      expect(result.staleInputs.length).toBeGreaterThan(0);
+      // A stale verdict must name a reason: stale inputs, a copy tree out of
+      // date, or both. "Stale" with nothing named is the failure mode this
+      // gate must never have.
+      const staleCopies = result.copyTrees.filter((tree) => tree.stale);
+      expect(result.staleInputs.length + staleCopies.length).toBeGreaterThan(0);
     } else {
       expect(result.staleInputs).toEqual([]);
+      expect(result.copyTrees.every((tree) => !tree.stale)).toBe(true);
     }
+  });
+
+  it('reports the copied trees it judges, by name and file count', () => {
+    // The two trees the build copies instead of compiling. Their absence from
+    // the report would make the copy-tree half of the gate invisible — and
+    // "invisible" is how it stayed broken.
+    //
+    // Freshness is deliberately NOT asserted here: the live tree is STALE on
+    // purpose at times, and the next rebuild must not force an edit of this
+    // file. `npm run bundle:verify` is the gate that judges freshness.
+    const result = verifyBundle();
+    expect(result.copyTrees.map((tree) => tree.name)).toEqual(['prompt-assets', 'bundled-skills']);
+    for (const tree of result.copyTrees) {
+      expect(tree.fileCount).toBeGreaterThan(0);
+      expect(tree.source.startsWith('packages/host/')).toBe(true);
+      expect(tree.mirror.startsWith('packages/host/bundle/')).toBe(true);
+    }
+    expect(result.copySummary).toContain(`/${result.copyTrees.length} copy trees match their source`);
   });
 
   it('filters node_modules out of the judged set', () => {

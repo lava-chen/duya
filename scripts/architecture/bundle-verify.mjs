@@ -50,31 +50,54 @@
  * 27 of the 2200 inputs changed after the bundle commit, so G8 is RED for a
  * reason and not for noise.
  *
- * ## The two halves it checks, and the one it cannot
+ * ## The halves it checks, and the one it cannot
  *
  *   - STRUCTURAL — every metafile input still exists on disk. A deleted source
  *     file means the bundle was built from a tree that no longer exists.
  *   - CONTENT — no metafile input was modified after the bundle commit, counting
  *     both committed history AND the current working tree (an uncommitted edit
  *     to `run-execution.ts` makes the bundle stale the moment it is saved).
+ *   - COPIES — the two trees the build copies instead of compiling (the prompt
+ *     assets and the bundled skills) carry the same files as their source.
+ *     These never reach `worker-metafile.json`, because esbuild never loads
+ *     them, so the two halves above said nothing about them: editing a `.hbs`
+ *     and not rebuilding left the checked-in bundle serving the old prompt
+ *     while this gate stayed green.
  *
  * Not checked: a NEWLY added source file that the bundle does not import. It is
  * invisible by construction — the bundle does not know about files it never
  * saw. That is the gap a rebuild would close and this cannot; it is named here
  * so the gate is not read as "the bundle contains everything the source has".
  *
+ * ## Why the copies are judged by comparison, not by git history
+ *
+ * The git judgement above answers "did the source move after the bundle was
+ * built?", which is the right question for compiled output. For a copied tree
+ * the direct question is available and better: "does the committed mirror
+ * carry the current source?". The mirror is compared file by file, so a
+ * rebuild that was never committed, a copy step that skipped a file, and a
+ * source file deleted out from under the bundle are all caught, and none of
+ * them depends on how the commits happen to be ordered.
+ *
+ * Line endings are normalized before comparing. A Windows checkout hands the
+ * contributor CRLF while the index holds LF; that difference is invisible to
+ * every consumer of these files and would otherwise make the gate red for
+ * everyone.
+ *
  * ## Why git history is a legitimate source of truth here
  *
  * It assumes the bundle and the source it was built from ship in the SAME
- * commit, which is what `build:packages` + "commit the bundle" already means in
- * this repo. If someone commits only the bundle, the judgement still holds
- * (nothing in the closure changed after it, so it is fresh by this measure) and
- * only a rebuild-first workflow would catch a byte-level difference — which,
- * per the nondeterminism above, cannot be caught by comparison anyway.
+ * commit, which is what `npm run bundle:worker` + "commit the bundle" already
+ * means in this repo. If someone commits only the bundle, the judgement still
+ * holds (nothing in the closure changed after it, so it is fresh by this
+ * measure) and only a rebuild-first workflow would catch a byte-level
+ * difference — which, per the nondeterminism above, cannot be caught by
+ * comparison anyway.
  *
  * ## Exit codes
  *
- *   0  fresh         — no bundle input changed after the bundle commit
+ *   0  fresh         — no bundle input changed after the bundle commit, and
+ *                      every copied tree matches its source
  *   1  stale         — at least one did; the report names them and the rebuild
  *   2  undetermined  — git could not answer (shallow clone, missing metafile,
  *                      not a git checkout). Never reported as clean.
@@ -125,6 +148,36 @@ export const ARTIFACTS = [
     output: path.join('BashTool', 'BashWorker.js'),
     entry: 'packages/host/src/managed-shell/BashWorker.ts',
     metafileBacked: false,
+  },
+];
+
+/**
+ * Directories the build copies into the bundle verbatim, each with the source
+ * it mirrors.
+ *
+ * `worker-metafile.json` records what esbuild LOADED — the TypeScript closure.
+ * These two trees are copied by `fs.cpSync` and never reach the metafile, so
+ * nothing judged the copies: editing a `.hbs` or a SKILL.md without rebuilding
+ * left the checked-in bundle carrying the old prompt while this gate stayed
+ * green. The eval fixture and the Host integration test both run the
+ * PRODUCTION bundle straight out of the checkout, so the stale copy was the
+ * thing under test.
+ *
+ * They are compared against the source directly rather than through git. They
+ * are small text trees, and the question is the direct one — "does the
+ * committed bundle carry the current source?" — which does not depend on
+ * commit ordering the way the git judgement does.
+ */
+export const COPY_TREES = [
+  {
+    name: 'prompt-assets',
+    source: 'packages/host/src/worker-prompts/assets',
+    mirror: 'packages/host/bundle/assets',
+  },
+  {
+    name: 'bundled-skills',
+    source: 'packages/host/skills',
+    mirror: 'packages/host/bundle/skills',
   },
 ];
 
@@ -227,10 +280,150 @@ export function changedSince(commit, paths, repoRoot = REPO_ROOT) {
 }
 
 /**
+ * Files under `dir` that git considers part of the source: tracked, plus
+ * untracked-but-not-ignored.
+ *
+ * The build copies the whole directory, so a NEW file in the source tree is a
+ * file the mirror must carry — that is why untracked files count here, unlike
+ * the metafile inputs, where an untracked file cannot be an input because the
+ * bundle was built before it existed. Ignored files are excluded on purpose:
+ * they are not source, and a scratch file in a source tree must not turn the
+ * gate red.
+ *
+ * Returns null when git cannot answer.
+ */
+function listSourceFiles(dir, repoRoot) {
+  // `core.quotepath=false`: git otherwise escapes a path holding non-ASCII
+  // characters into a quoted form, and the escaped string is not a path this
+  // script can open.
+  const out = git(
+    ['-c', 'core.quotepath=false', 'ls-files', '-c', '-o', '--exclude-standard', '--', dir],
+    repoRoot,
+  );
+  if (out === null) return null;
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * Every file under `dir` on disk, relative to it, with forward slashes.
+ */
+function walkFiles(dir, repoRoot) {
+  const root = path.join(repoRoot, dir);
+  const out = [];
+  const walk = (current, prefix) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = prefix.length > 0 ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(current, entry.name), rel);
+      else out.push(rel);
+    }
+  };
+  walk(root, '');
+  return out;
+}
+
+/**
+ * Whether two files hold the same content, ignoring line-ending differences.
+ *
+ * The comparison is on bytes first and falls back to a line-ending-normalized
+ * text comparison, because a checkout hands a Windows contributor CRLF while
+ * the artifact in the index holds LF. Judging that as a difference would make
+ * the gate red for every contributor, over a difference no prompt renderer
+ * sees.
+ */
+function sameContent(a, b) {
+  const left = fs.readFileSync(a);
+  const right = fs.readFileSync(b);
+  if (left.equals(right)) return true;
+  // A NUL byte means binary: the lossy UTF-8 decode below would collapse
+  // differences it cannot represent, so binary files are compared on bytes
+  // only.
+  if (left.includes(0) || right.includes(0)) return false;
+  return (
+    left.toString('utf8').replace(/\r\n/g, '\n') === right.toString('utf8').replace(/\r\n/g, '\n')
+  );
+}
+
+/**
+ * Compare one copy tree's source against the mirror the build produced.
+ *
+ * Three ways to be out of date, and all three are fixed by the same rebuild:
+ *
+ *   - `missing` — the source has a file the mirror does not. Either the copy
+ *     step skipped it, or the file was added after the last rebuild.
+ *   - `differing` — the mirror carries a different version of a source file.
+ *     The prompt or the skill changed and the bundle was not rebuilt.
+ *   - `extra` — the mirror carries a file the source no longer has. The source
+ *     file was deleted and the bundle still ships the old copy.
+ */
+function compareCopyTree(tree, repoRoot) {
+  const sourceFiles = listSourceFiles(tree.source, repoRoot);
+  if (sourceFiles === null) {
+    return {
+      name: tree.name,
+      source: tree.source,
+      mirror: tree.mirror,
+      stale: true,
+      fileCount: 0,
+      missing: [],
+      differing: [],
+      extra: [],
+      reason: 'git could not list the source tree',
+    };
+  }
+
+  const missing = [];
+  const differing = [];
+  for (const file of sourceFiles) {
+    const sourcePath = path.join(repoRoot, ...file.split('/'));
+    // A file the index still lists but the working tree no longer holds was
+    // deleted without being staged. It is not a source file any more, and the
+    // mirror still carrying it is reported as `extra` below.
+    if (!fs.existsSync(sourcePath)) continue;
+    const rel = file.slice(tree.source.length + 1);
+    const mirrorPath = path.join(repoRoot, tree.mirror, ...rel.split('/'));
+    if (!fs.existsSync(mirrorPath)) {
+      missing.push(rel);
+      continue;
+    }
+    if (!sameContent(sourcePath, mirrorPath)) {
+      differing.push(rel);
+    }
+  }
+
+  // A mirror file the source no longer has is matched against the source ON
+  // DISK, not against its tracked file list: an ignored file sitting in the
+  // source tree is copied by the build, so its presence in the mirror is
+  // correct and must not be reported as a leftover.
+  const onDisk = new Set(walkFiles(tree.source, repoRoot));
+  const extra = walkFiles(tree.mirror, repoRoot).filter((rel) => !onDisk.has(rel));
+
+  return {
+    name: tree.name,
+    source: tree.source,
+    mirror: tree.mirror,
+    stale: missing.length > 0 || differing.length > 0 || extra.length > 0,
+    fileCount: sourceFiles.length,
+    missing: missing.sort(),
+    differing: differing.sort(),
+    extra: extra.sort(),
+    reason: null,
+  };
+}
+
+/**
  * Verify the checked-in bundle against the source it should be built from.
  *
- * Returns `{ verdict, bundleCommit, artifacts, staleInputs, summary, detail }`
- * where `verdict` is `'fresh' | 'stale' | 'undetermined'`.
+ * Returns `{ verdict, bundleCommit, artifacts, staleInputs, copyTrees, summary,
+ * copySummary, detail }` where `verdict` is `'fresh' | 'stale' | 'undetermined'`.
  */
 export function verifyBundle(options = {}) {
   const repoRoot = options.repoRoot ?? REPO_ROOT;
@@ -242,6 +435,7 @@ export function verifyBundle(options = {}) {
       bundleCommit: null,
       artifacts: [],
       staleInputs: [],
+      copyTrees: [],
       summary: '0/0 artifacts checked',
       detail: `${METAFILE} does not exist — the bundle has no recorded input set`,
     };
@@ -256,6 +450,7 @@ export function verifyBundle(options = {}) {
       bundleCommit: null,
       artifacts: [],
       staleInputs: [],
+      copyTrees: [],
       summary: '0/0 artifacts checked',
       detail: `${METAFILE} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
     };
@@ -277,6 +472,7 @@ export function verifyBundle(options = {}) {
       bundleCommit: null,
       artifacts: [],
       staleInputs: [],
+      copyTrees: [],
       summary: `0/${inputs.length} inputs checked`,
       detail: 'git could not name the commit that last wrote the bundle (shallow clone, or not a checkout)',
     };
@@ -300,6 +496,7 @@ export function verifyBundle(options = {}) {
       staleInputs: [],
       changedCommitted: [],
       changedWorkingTree: [],
+      copyTrees: [],
       summary: `0/${inputs.length} inputs checked`,
       detail: `git could not list changes after ${commit.sha.slice(0, 8)}`,
     };
@@ -323,16 +520,27 @@ export function verifyBundle(options = {}) {
     };
   });
 
+  // The two trees the build copies rather than compiles. They are judged
+  // against their source directly, so they are NOT folded into `staleInputs`:
+  // that list is the metafile's input set, and its denominator is the
+  // metafile's input count. Mixing the two would make the summary lie about
+  // what it counted.
+  const copyTrees = COPY_TREES.map((tree) => compareCopyTree(tree, repoRoot));
+  const staleCopies = copyTrees.filter((tree) => tree.stale);
+
   const summary = `${staleInputs.length}/${inputs.length} bundle inputs changed after the bundle commit`;
-  if (staleInputs.length === 0) {
+  const copySummary = `${COPY_TREES.length - staleCopies.length}/${COPY_TREES.length} copy trees match their source`;
+  if (staleInputs.length === 0 && staleCopies.length === 0) {
     return {
       verdict: 'fresh',
       bundleCommit: commit,
       artifacts,
       staleInputs,
+      copyTrees,
       changedCommitted: [],
       changedWorkingTree: [],
       summary,
+      copySummary,
       detail: `every first-party input is unchanged since ${commit.sha.slice(0, 8)} (${commit.iso})`,
     };
   }
@@ -341,13 +549,16 @@ export function verifyBundle(options = {}) {
     bundleCommit: commit,
     artifacts,
     staleInputs,
+    copyTrees,
     changedCommitted: [...changed.committed].sort(),
     changedWorkingTree: [...changed.workingTree].sort(),
     summary,
+    copySummary,
     detail:
       `${staleInputs.length} input(s) changed after ${commit.sha.slice(0, 8)} (${commit.iso}, "${commit.subject}")` +
       ` — ${changed.committed.length} committed, ${changed.workingTree.length} uncommitted` +
-      (missing.length > 0 ? `, ${missing.length} deleted` : ''),
+      (missing.length > 0 ? `, ${missing.length} deleted` : '') +
+      (staleCopies.length > 0 ? `; ${staleCopies.length} copy tree(s) out of date` : ''),
   };
 }
 
@@ -369,22 +580,41 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
           `${artifact.bytes === null ? ' (missing)' : ` (${artifact.bytes} B)`}\n`,
       );
     }
+    for (const tree of result.copyTrees ?? []) {
+      process.stdout.write(
+        `bundle-verify  ${tree.stale ? 'STALE' : 'ok   '}  copy tree ${tree.name} (${tree.fileCount} files)\n`,
+      );
+    }
+    const cap = 12;
+    const section = (title, files) => {
+      if (files.length === 0) return;
+      process.stdout.write(`\n  ${title} (${files.length}):\n`);
+      for (const file of files.slice(0, cap)) process.stdout.write(`    ${file}\n`);
+      if (files.length > cap) {
+        process.stdout.write(`    ... and ${files.length - cap} more (--json for all)\n`);
+      }
+    };
     if (result.staleInputs.length > 0) {
-      const cap = 12;
-      const section = (title, files) => {
-        if (files.length === 0) return;
-        process.stdout.write(`\n  ${title} (${files.length}):\n`);
-        for (const file of files.slice(0, cap)) process.stdout.write(`    ${file}\n`);
-        if (files.length > cap) {
-          process.stdout.write(`    ... and ${files.length - cap} more (--json for all)\n`);
-        }
-      };
       section('changed in history after the bundle commit', result.changedCommitted ?? []);
       section('modified in the working tree, not committed', result.changedWorkingTree ?? []);
+    }
+    for (const tree of result.copyTrees ?? []) {
+      if (!tree.stale) continue;
+      if (tree.reason) {
+        process.stdout.write(`\n  copy tree ${tree.name} could not be judged: ${tree.reason}\n`);
+        continue;
+      }
+      section(`copy tree ${tree.name}: the mirror differs from ${tree.source}`, [
+        ...tree.missing.map((file) => `missing from the mirror: ${file}`),
+        ...tree.differing.map((file) => `differs: ${file}`),
+        ...tree.extra.map((file) => `only in the mirror: ${file}`),
+      ]);
+    }
+    if (result.verdict === 'stale') {
       process.stdout.write(
         '\nThe checked-in worker bundle was built from an older source tree.\n' +
           'Rebuild it and commit the result in the same change:\n\n' +
-          '    npm run build:packages -- --target @duya/host\n' +
+          '    npm run bundle:worker\n' +
           '    git add packages/host/bundle\n',
       );
     } else if (result.verdict === 'undetermined') {
@@ -393,7 +623,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
           'and NOT a clean one — the comparison itself did not run to completion.\n',
       );
     }
-    process.stdout.write(`bundle-verify  ${result.verdict.toUpperCase()}  ${result.summary} — ${result.detail}\n`);
+    process.stdout.write(
+      `bundle-verify  ${result.verdict.toUpperCase()}  ${result.summary}` +
+        `${result.copySummary ? `; ${result.copySummary}` : ''} — ${result.detail}\n`,
+    );
   }
 
   process.exit(result.verdict === 'fresh' ? 0 : result.verdict === 'stale' ? 1 : 2);

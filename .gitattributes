@@ -70,7 +70,6 @@ scripts/migrate-projects-paths.ts   text eol=lf
 *.sqlite     binary
 
 # Force LF for Handlebars prompt templates regardless of core.autocrlf.
-# Force LF for Handlebars prompt templates regardless of core.autocrlf.
 # Without this, on Windows checkouts with core.autocrlf=true, every .hbs
 # file gets rewritten with CRLF, which then leaks through Handlebars.render
 # and breaks byte-level parity tests against the TS source-of-truth. See
@@ -78,3 +77,11 @@ scripts/migrate-projects-paths.ts   text eol=lf
 # pre-existing failure set this resolves.
 *.hbs        text eol=lf
 *.md.hbs     text eol=lf
+
+# The committed worker bundle is a BUILD ARTIFACT, written with LF endings.
+# `* text=auto` still hands a Windows checkout CRLF, so a local rebuild (which
+# writes LF) lands in a working tree the index does not match — the artifact
+# then shows as modified for a reason no one can see. Pinning the checkout to
+# LF makes the committed artifact and a fresh rebuild agree byte for byte.
+packages/host/bundle/**/*.js      text eol=lf
+packages/host/bundle/**/*.json    text eol=lf

@@ -159,8 +159,11 @@ packages/agent/bundle/
 packages/gateway/bundle/
 packages/cli/bundle/
 
-# Bundled output
-
+# packages/host/bundle/ is deliberately NOT ignored. It is the committed worker
+# artifact: the packaged app ships it as resources/harness-bundle/, the CLI
+# spawns it straight out of a checkout, and the eval and integration suites run
+# that committed copy. `npm run bundle:verify` judges whether it still matches
+# its source — see scripts/architecture/bundle-verify.mjs.
 
 .cache/
 
