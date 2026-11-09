@@ -69,6 +69,7 @@ import { logger } from '@duya/host/worker-logger';
 import { createChildAbortController } from '@duya/agent-runtime/abort';
 import { getAgentProfileService } from '@duya/host/worker-profiles/AgentProfileService';
 import { readConfigAgents, toAgentProfile } from '@duya/host/worker-profiles/config-agents';
+import { resolveRoleRestrictedToolDeny, resolveToolRole } from './worker-profiles/tool-role-policy.js';
 import { parseAgentMentions, buildMentionedAgentsContext } from '@duya/agent-core/message/agent-mentions';
 import type { AgentProfile } from '@duya/agent-core';
 import { isToolVisible, type ToolVisibilityConstraints } from '@duya/agent-runtime/authorization/tool-filter';
@@ -1654,11 +1655,22 @@ export class WorkerSession implements AgentRuntime {
                 .filter((d) => selectedProviders.includes(d.provider))
                 .map((d) => d.name)
             : []);
+        // Product toolsets are registered process-wide, so role isolation is
+        // a per-turn decision. A preset with `allowedTools: ['*']` makes the
+        // allow check vacuous; without this deny the Coordinator's `project`
+        // tool and the whole bot collaboration toolset become catalog-eligible
+        // (and therefore tool_invoke-reachable) in an ordinary Session.
+        const roleDeny = resolveRoleRestrictedToolDeny(
+            resolveToolRole(appliedProfile, isBotAgentProfile(appliedProfile)),
+            appliedProfile?.allowedTools,
+        );
         const constraints: ToolVisibilityConstraints = {
             ...definedProperties({ disabledTools: options?.disabledTools }),
             ...definedProperties({ allowedTools: options?.allowedTools }),
             ...definedProperties({ profileAllowedPatterns: appliedProfile?.allowedTools }),
-            ...definedProperties({ profileDisallowedPatterns: appliedProfile?.disallowedTools })
+            ...(appliedProfile?.disallowedTools?.length || roleDeny.length
+                ? { profileDisallowedPatterns: [...(appliedProfile?.disallowedTools ?? []), ...roleDeny] }
+                : {})
         };
         if (!registry.has('tool_catalog')) {
             const catalog = new ToolCatalogTool();
@@ -1685,9 +1697,21 @@ export class WorkerSession implements AgentRuntime {
             .map((entry) => entry.toolId));
         const catalogAllowed = isToolVisible('tool_catalog', 'eager', EMPTY_DISCOVERED, constraints);
         const invokeAllowed = isToolVisible('tool_invoke', 'eager', EMPTY_DISCOVERED, constraints);
+        // Deferred tools are exactly what the catalog exists to surface, so
+        // eligibility deliberately uses the constraint-only ('eager')
+        // projection of isToolVisible: promotion decides the DIRECT array,
+        // not the catalog. Hidden entries are already absent from
+        // snapshot.catalogEntries. The old
+        // `(catalogAllowed && invokeAllowed)` was ORed with `exposure !==
+        // 'deferred'`, which made it a no-op whenever both routers existed;
+        // hoisting it means a deferred tool with no usable router is no
+        // longer advertised as discoverable-but-unreachable.
+        // Role-restricted tools are excluded by `constraints` above.
+        const routerAvailable = catalogAllowed && invokeAllowed;
         const eligibleToolIds = new Set(snapshot.catalogEntries
-            .filter((entry) => isToolVisible(entry.definition.name, 'eager', discoveredSeed, constraints) &&
-            (entry.exposure !== 'deferred' || directToolIds.has(entry.toolId) || (catalogAllowed && invokeAllowed)))
+            .filter((entry) =>
+                (entry.exposure !== 'deferred' || directToolIds.has(entry.toolId) || routerAvailable) &&
+                isToolVisible(entry.definition.name, 'eager', discoveredSeed, constraints))
             .map((entry) => entry.toolId));
         const catalogView: ToolCatalogView = {
             snapshot,
@@ -2021,12 +2045,22 @@ export class WorkerSession implements AgentRuntime {
         const catalogExecutor = toolRegistry.getExecutor('tool_catalog');
         if (catalogExecutor instanceof ToolCatalogTool) {
             const snapshot = toolRegistry.snapshot(this.providerNameToInternalKey);
+            // The orchestrator path rebuilds its catalog view from the same
+            // process-wide registry, so it must apply the same per-turn role
+            // deny. Hidden entries never reach snapshot.catalogEntries, so
+            // the old `hidden ? 'hidden' : 'eager'` branch was unreachable.
+            const orchestratorProfile = this.lastAppliedAgentProfile;
+            const orchestratorRoleDeny = resolveRoleRestrictedToolDeny(
+                resolveToolRole(orchestratorProfile, isBotAgentProfile(orchestratorProfile)),
+                orchestratorProfile?.allowedTools,
+            );
             const constraints: ToolVisibilityConstraints = {
                 ...definedProperties({ disabledTools: options?.disabledTools }),
-                ...definedProperties({ allowedTools: options?.allowedTools })
+                ...definedProperties({ allowedTools: options?.allowedTools }),
+                ...(orchestratorRoleDeny.length ? { profileDisallowedPatterns: orchestratorRoleDeny } : {})
             };
             const eligibleToolIds = new Set(snapshot.catalogEntries
-                .filter((entry) => isToolVisible(entry.definition.name, entry.exposure === 'hidden' ? 'hidden' : 'eager', EMPTY_DISCOVERED, constraints))
+                .filter((entry) => isToolVisible(entry.definition.name, 'eager', EMPTY_DISCOVERED, constraints))
                 .map((entry) => entry.toolId));
             const directToolIds = new Set(snapshot.catalogEntries
                 .filter((entry) => isToolVisible(entry.definition.name, entry.exposure, EMPTY_DISCOVERED, constraints))

@@ -86,7 +86,10 @@ async function startProjectServer(): Promise<{ origin: string; client: HostSessi
     },
   });
   dataHosts.push(dataHost);
-  return startServer({ projectApi: createHostProjectApi(dataHost.stores.projects) });
+  // The Task store is part of the real composition: binding a project Task
+  // reads the canonical Task record, and an API built without it answers 500.
+  const started = await startServer({ projectApi: createHostProjectApi(dataHost.stores.projects, dataHost.stores.tasks) });
+  return { ...started, stores: dataHost.stores };
 }
 
 describe('GET /v1/projects', () => {
@@ -224,5 +227,112 @@ describe('the project list in a running local Host', () => {
     const listed = await client.listProjects();
     expect(listed.map((project) => project.project_id)).toEqual([created.project_id]);
     expect(listed[0]?.paths).toEqual([{ path: '/projects/codex', description: null }]);
+  });
+});
+
+describe('GET /v1/sessions/:id/project-context', () => {
+  /**
+   * The Worker bootstrap used to pass a cwd-derived `projectId`. That lookup
+   * cannot tell a Coordinator from a work Session and cannot resolve the work
+   * Session's Task. Here the Session id is the ONLY input; the Host derives
+   * the project, the role and the task from durable bindings.
+   */
+  async function projectWithCoordinator(name = 'codex') {
+    const { origin, client, stores } = await startProjectServer();
+    const project = await client.createProject({
+      name,
+      paths: [{ path: `/projects/${name}`, description: null }],
+    });
+    await client.bindCoordinatorSession(project.project_id, `session-${name}-coordinator`);
+    return { origin, client, project, stores };
+  }
+
+  it('resolves a Coordinator Session and includes accepted decisions in its context', async () => {
+    const { client, project } = await projectWithCoordinator();
+    await client.updateProjectDecision({
+      projectId: project.project_id,
+      key: 'arch',
+      content: '用 SQLite',
+      status: 'accepted',
+      expectedRevision: 0,
+      source: { type: 'user_message', id: 'user-1' },
+    });
+
+    const context = await client.getSessionProjectContext('session-codex-coordinator');
+
+    expect(context).toMatchObject({
+      projectId: project.project_id,
+      projectName: 'codex',
+      role: 'coordinator',
+      taskId: null,
+    });
+    expect(context?.text).toContain('用 SQLite');
+    expect(context?.sourceRefs).toEqual(expect.arrayContaining([{ type: 'user_message', id: 'user-1' }]));
+  });
+
+  it('resolves a work Session to exactly the Task it was dispatched for', async () => {
+    const { client, project, stores } = await projectWithCoordinator();
+    // The canonical Task lives in the Task store; the project link only binds
+    // it. bindProjectTask refuses an id with no Task record.
+    stores.tasks.create({
+      id: 'task-1',
+      sessionId: 'session-codex-coordinator',
+      subject: '实现登录',
+      description: '把登录做完',
+      status: 'in_progress',
+    });
+    await client.bindProjectTask(project.project_id, 'task-1', 'session-codex-coordinator');
+    // The link table references real Session rows; binding a non-existent
+    // work Session would fail the foreign key with an opaque 500.
+    stores.sessions.create({
+      id: 'session-work', title: '登录实现', workingDirectory: '/projects/codex',
+      parentSessionId: 'session-codex-coordinator',
+    });
+    await client.bindWorkSession(project.project_id, 'task-1', 'session-work');
+
+    const context = await client.getSessionProjectContext('session-work');
+
+    expect(context).toMatchObject({
+      projectId: project.project_id,
+      role: 'work',
+      taskId: 'task-1',
+    });
+    // `getProjectContext(projectId, taskId)` narrows `Current task` to this
+    // Task, instead of listing every open Task in the project.
+    expect(context?.text).toContain('task-1');
+  });
+
+  it('never lets a Session name another project: the route has no project id input', async () => {
+    const { client, project } = await projectWithCoordinator();
+
+    await expect(client.getSessionProjectContext('session-stranger')).resolves.toBeNull();
+    // Two projects with two different Coordinator Sessions stay separated even
+    // though both would look identical to a cwd reverse-lookup from the Host.
+    const second = await client.createProject({
+      name: 'other',
+      paths: [{ path: '/projects/other', description: null }],
+    });
+    await client.bindCoordinatorSession(second.project_id, 'session-other-coordinator');
+
+    await expect(client.getSessionProjectContext('session-other-coordinator'))
+      .resolves.toMatchObject({ projectId: second.project_id, role: 'coordinator' });
+    await expect(client.getSessionProjectContext('session-codex-coordinator'))
+      .resolves.toMatchObject({ projectId: project.project_id, role: 'coordinator' });
+  });
+
+  it('answers 405 for a write and 404 when the Host has no project capability', async () => {
+    const { origin } = await projectWithCoordinator();
+    const write = await fetch(`${origin}/v1/sessions/session-codex-coordinator/project-context`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(write.status).toBe(405);
+
+    const { origin: bareOrigin } = await startServer();
+    const bare = await fetch(`${bareOrigin}/v1/sessions/session-1/project-context`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(bare.status).toBe(404);
+    await expect(bare.json()).resolves.toMatchObject({ error: { code: 'project_api_unavailable' } });
   });
 });

@@ -67,6 +67,31 @@ export interface ProjectActivity {
   readonly source: ProjectContinuitySource; readonly payload: Record<string, unknown>; readonly createdAt: number;
 }
 export interface ProjectTaskSnapshot { readonly task: Task | null; readonly link: HostProjectTaskLink; }
+
+/** Which durable role a Session holds inside a Project. */
+export type ProjectSessionRole = 'coordinator' | 'work';
+
+/**
+ * The bounded project context for ONE Session, resolved from its durable
+ * binding rather than from a caller-supplied project id.
+ *
+ * A cwd-to-project reverse lookup cannot tell a Coordinator Session from a
+ * work Session, cannot supply the work Session's task id, and silently picks
+ * the wrong project when two projects share a working directory. This shape
+ * is derived on the Host from `projects.coordinator_session_id` or
+ * `project_task_sessions.work_session_id`; the caller only supplies a
+ * Session id it already owns.
+ */
+export interface ProjectSessionContext {
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly role: ProjectSessionRole;
+  /** Null for a Coordinator; the dispatched Task for a work Session. */
+  readonly taskId: string | null;
+  readonly text: string;
+  readonly sourceRefs: readonly ProjectContinuitySource[];
+}
+
 export interface ProjectContinuitySnapshot {
   readonly project: HostProjectRecord;
   readonly state: ProjectContinuityState | null;
@@ -155,6 +180,11 @@ export interface HostProjectApiV1 {
   bindWorkSession(projectId: string, taskId: string, workSessionId: string): Promise<HostProjectTaskLink | null>;
   getProjectContinuity(projectId: string, options?: { afterCursor?: number; limit?: number }): Promise<ProjectContinuitySnapshot | null>;
   getProjectContext(projectId: string, taskId?: string, maxCharacters?: number): Promise<{ text: string; sourceRefs: readonly ProjectContinuitySource[] } | null>;
+  /**
+   * Resolve the Project and Task from a Session's durable binding and return
+   * its bounded context. Returns null when the Session is not project-bound.
+   */
+  getSessionProjectContext(sessionId: string, maxCharacters?: number): Promise<ProjectSessionContext | null>;
   updateProjectState(input: { projectId: string; expectedRevision: number; currentState: string; nextStep: string; source: ProjectContinuitySource }): Promise<ProjectContinuityState | null>;
   updateProjectDecision(input: { projectId: string; key: string; content: string; status: ProjectDecision['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectDecision | null>;
   updateProjectMemory(input: { projectId: string; key: string; content: string; status: ProjectMemory['status']; expectedRevision: number; source: ProjectContinuitySource }): Promise<ProjectMemory | null>;

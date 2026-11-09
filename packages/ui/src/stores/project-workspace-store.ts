@@ -30,8 +30,16 @@ import type {
   HostProjectState,
   HostProjectTaskState,
   HostProjectWorkSession,
+  ProjectContinuitySnapshot,
   SessionControlLease,
 } from '@duya/agent-protocol';
+
+/**
+ * One Host Activity page. Kept in step with the `limit: 50` of the
+ * `projects:continuity` IPC handler: a short page is the only signal the
+ * renderer has that the timeline is exhausted.
+ */
+const ACTIVITY_PAGE_SIZE = 50;
 
 export interface ProjectWorkspaceSnapshot {
   project: HostProjectRecord;
@@ -64,6 +72,25 @@ interface ProjectWorkspaceState {
   leases: Record<string, SessionControlLease | null>;
   loading: boolean;
   error: string | null;
+  /**
+   * The continuity record behind the user's review UI. `HostProjectState`
+   * carries neither the decision/memory candidates nor the tasks'
+   * acceptance status nor their optimistic-lock revisions, so this is a
+   * separate Host read — the price of showing a list the user can act on.
+   */
+  continuity: ProjectContinuitySnapshot | null;
+  /** The failure of the last explicit user action, shown next to the panel. */
+  actionError: string | null;
+  /** Whether an accept / review write is in flight. */
+  actionPending: boolean;
+  /**
+   * The Host pages Activity with `event_id > after`. Decisions, memories,
+   * tasks and transcript refs are always a full current projection, so only
+   * the timeline has a "next page".
+   */
+  continuityHasMoreActivity: boolean;
+  /** Whether an Activity page read is in flight. */
+  activityLoading: boolean;
 
   /** Open a project: read its state and make sure it has a coordinator. */
   openProject: (projectId: string) => Promise<void>;
@@ -86,6 +113,60 @@ interface ProjectWorkspaceState {
   acquireLease: (sessionId: string) => Promise<boolean>;
   /** Give a working session back to the project. */
   releaseLease: (sessionId: string) => Promise<boolean>;
+  /** Re-read the continuity snapshot (candidates, acceptance, revisions). */
+  refreshContinuity: () => Promise<void>;
+  /** Extend the Activity timeline with the next Host page. */
+  loadMoreActivity: () => Promise<void>;
+  /** Explicitly accept or reject the result of one task. */
+  acceptTask: (taskId: string, status: 'accepted' | 'rejected') => Promise<boolean>;
+  /** Confirm, correct or supersede one decision proposed by the Coordinator. */
+  reviewDecision: (input: {
+    key: string;
+    content: string;
+    status: 'proposed' | 'accepted' | 'superseded';
+    expectedRevision: number;
+  }) => Promise<boolean>;
+  /** Confirm, correct or retire one memory candidate proposed by the Coordinator. */
+  reviewMemory: (input: {
+    key: string;
+    content: string;
+    status: 'candidate' | 'active' | 'superseded' | 'retired';
+    expectedRevision: number;
+  }) => Promise<boolean>;
+}
+
+/** Every IPC answer in this surface is one of these two shapes. */
+interface UserActionResult {
+  readonly success: boolean;
+  readonly error?: string;
+}
+
+/**
+ * Shared envelope for the three explicit user actions: an id for the click,
+ * a single visible error, and one refresh afterwards. The refresh re-reads
+ * BOTH the state and the continuity snapshot, so a confirmed candidate
+ * disappears from the list and the task's acceptance badge updates together.
+ */
+async function performUserAction(
+  api: NonNullable<ReturnType<typeof bridge>>,
+  call: (actionId: string) => Promise<UserActionResult>,
+  set: (patch: Partial<ProjectWorkspaceState>) => void,
+  refresh: () => Promise<void>,
+): Promise<boolean> {
+  set({ actionPending: true, actionError: null });
+  try {
+    const result = await call(crypto.randomUUID());
+    if (!result.success) {
+      set({ actionPending: false, actionError: result.error ?? 'The user action could not be completed.' });
+      return false;
+    }
+    set({ actionPending: false, actionError: null });
+    await refresh();
+    return true;
+  } catch (error) {
+    set({ actionPending: false, actionError: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
 }
 
 /**
@@ -106,6 +187,11 @@ export const useProjectWorkspaceStore = create<ProjectWorkspaceState>((set, get)
   leases: {},
   loading: false,
   error: null,
+  continuity: null,
+  actionError: null,
+  actionPending: false,
+  continuityHasMoreActivity: false,
+  activityLoading: false,
 
   openProject: async (projectId: string) => {
     // The navigation store owns WHICH project the user is in, and it is the
@@ -140,6 +226,7 @@ export const useProjectWorkspaceStore = create<ProjectWorkspaceState>((set, get)
         error: null,
       });
       await get().refreshSessionStatuses(result.state.workSessions.map((s) => s.sessionId));
+      await get().refreshContinuity();
     } catch (error) {
       set({ loading: false, error: error instanceof Error ? error.message : String(error) });
     }
@@ -241,5 +328,103 @@ export const useProjectWorkspaceStore = create<ProjectWorkspaceState>((set, get)
       set({ error: error instanceof Error ? error.message : String(error) });
       return false;
     }
+  },
+
+  refreshContinuity: async () => {
+    const projectId = get().activeProjectId;
+    const api = bridge();
+    // An older bridge (or a non-Desktop surface) simply has no candidates to
+    // show. Do not turn that into a broken project view.
+    if (!projectId || !api?.continuity) return;
+    try {
+      const result = await api.continuity(projectId);
+      if (!result.success) {
+        set({ continuity: null, actionError: result.error, continuityHasMoreActivity: false });
+        return;
+      }
+      // Newest first: the Host returns `event_id > after` in ascending order,
+      // but a project timeline is read from the latest event backwards.
+      const snapshot = result.continuity;
+      set({
+        continuity: snapshot ? { ...snapshot, activity: [...snapshot.activity].sort((a, b) => b.cursor - a.cursor) } : null,
+        continuityHasMoreActivity: (snapshot?.activity.length ?? 0) >= ACTIVITY_PAGE_SIZE,
+      });
+    } catch (error) {
+      set({ continuity: null, actionError: error instanceof Error ? error.message : String(error), continuityHasMoreActivity: false });
+    }
+  },
+
+  loadMoreActivity: async () => {
+    const projectId = get().activeProjectId;
+    const api = bridge();
+    const current = get().continuity;
+    if (!projectId || !api?.continuity || !current || get().activityLoading) return;
+    const cursor = current.activity.reduce((max, item) => Math.max(max, item.cursor), current.nextCursor);
+    set({ activityLoading: true, actionError: null });
+    try {
+      const result = await api.continuity(projectId, cursor);
+      if (!result.success) {
+        set({ activityLoading: false, actionError: result.error });
+        return;
+      }
+      const extra = result.continuity?.activity ?? [];
+      // Merge by cursor so a page boundary cannot duplicate a row, then keep
+      // the non-activity projection from the freshest read.
+      const byCursor = new Map(current.activity.map((item) => [item.cursor, item]));
+      for (const item of extra) byCursor.set(item.cursor, item);
+      const activity = [...byCursor.values()].sort((a, b) => b.cursor - a.cursor);
+      set({
+        activityLoading: false,
+        continuity: { ...current, activity, nextCursor: result.continuity?.nextCursor ?? current.nextCursor },
+        continuityHasMoreActivity: extra.length >= ACTIVITY_PAGE_SIZE,
+      });
+    } catch (error) {
+      set({ activityLoading: false, actionError: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  acceptTask: async (taskId, status) => {
+    const projectId = get().activeProjectId;
+    const api = bridge();
+    if (!projectId || !api?.acceptTask) {
+      set({ actionError: 'This surface cannot reach the project workspace.' });
+      return false;
+    }
+    return performUserAction(
+      api,
+      (actionId) => api.acceptTask({ projectId, taskId, status, actionId }),
+      set,
+      get().refresh,
+    );
+  },
+
+  reviewDecision: async (input) => {
+    const projectId = get().activeProjectId;
+    const api = bridge();
+    if (!projectId || !api?.reviewDecision) {
+      set({ actionError: 'This surface cannot reach the project workspace.' });
+      return false;
+    }
+    return performUserAction(
+      api,
+      (actionId) => api.reviewDecision({ projectId, ...input, actionId }),
+      set,
+      get().refresh,
+    );
+  },
+
+  reviewMemory: async (input) => {
+    const projectId = get().activeProjectId;
+    const api = bridge();
+    if (!projectId || !api?.reviewMemory) {
+      set({ actionError: 'This surface cannot reach the project workspace.' });
+      return false;
+    }
+    return performUserAction(
+      api,
+      (actionId) => api.reviewMemory({ projectId, ...input, actionId }),
+      set,
+      get().refresh,
+    );
   },
 }));

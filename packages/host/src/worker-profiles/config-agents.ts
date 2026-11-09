@@ -36,9 +36,15 @@ export async function toAgentProfile(id: string, entry: CustomAgentConfig): Prom
   const allow = tools.allow && tools.allow.length ? tools.allow : base.allow;
   const deny = [...base.deny, ...(tools.deny ?? [])];
 
-  // Plan 481 P1.2: every bot profile gets the bot collaboration toolset on
-  // top of its base profile (no-op for '*' allowlists). Explicit denies in
-  // [agents.<id>.tools] still win downstream — ToolFilter applies after.
+  // Plan 481 P1.2: every profile produced here IS a bot — `toAgentProfile`
+  // is only called for `[agents.<id>]` config entries, with `isPreset: false`
+  // and `kind: 'main'`, which is exactly the canonical
+  // `isBotAgentProfile()` predicate in worker-prompts/bot/loader.ts. The
+  // exact-name entries it appends are deliberate deferred-tool promotions
+  // (plan 496) AND the explicit authorization that
+  // worker-profiles/tool-role-policy.ts honours when it denies these tools
+  // to ordinary Sessions. Explicit denies in [agents.<id>.tools] still win
+  // downstream — ToolFilter evaluates deny before allow.
   let globalInstructions: string | undefined;
     try {
       globalInstructions = resolved.agents_md ? await readFile(resolved.agents_md, 'utf8') : undefined;

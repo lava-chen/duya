@@ -88,12 +88,26 @@ function stubBridge(overrides: Record<string, unknown> = {}) {
   });
   const get = vi.fn().mockResolvedValue({ success: true, lease: null });
   const release = vi.fn().mockResolvedValue({ success: true, released: true });
+  const continuity = vi.fn().mockResolvedValue({ success: true, continuity: null });
+  const acceptTask = vi.fn().mockResolvedValue({ success: true, task: null });
+  const reviewDecision = vi.fn().mockResolvedValue({ success: true, decision: null });
+  const reviewMemory = vi.fn().mockResolvedValue({ success: true, memory: null });
   vi.stubGlobal('window', {
     electronAPI: {
-      projectWorkspace: { state, ensureCoordinator, workSessionStatus, lease: { acquire, get, release }, ...overrides },
+      projectWorkspace: {
+        state,
+        ensureCoordinator,
+        workSessionStatus,
+        continuity,
+        acceptTask,
+        reviewDecision,
+        reviewMemory,
+        lease: { acquire, get, release },
+        ...overrides,
+      },
     },
   });
-  return { state, ensureCoordinator, workSessionStatus, acquire, get, release };
+  return { state, ensureCoordinator, workSessionStatus, acquire, get, release, continuity, acceptTask, reviewDecision, reviewMemory };
 }
 
 describe('project-workspace-store', () => {
@@ -105,6 +119,11 @@ describe('project-workspace-store', () => {
       leases: {},
       loading: false,
       error: null,
+      continuity: null,
+      actionError: null,
+      actionPending: false,
+      continuityHasMoreActivity: false,
+      activityLoading: false,
     });
     vi.unstubAllGlobals();
   });
@@ -203,6 +222,155 @@ describe('project-workspace-store', () => {
 
     expect(bridge.workSessionStatus).toHaveBeenCalledWith(['session-work']);
     expect(useProjectWorkspaceStore.getState().sessionStatuses['session-work']).toBe('STREAMING');
+  });
+});
+
+describe('explicit user actions', () => {
+  it('reads the continuity snapshot when a project opens', async () => {
+    const bridge = stubBridge();
+
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    expect(bridge.continuity).toHaveBeenCalledWith('project-1');
+  });
+
+  it('sends a click id and the chosen status on task acceptance', async () => {
+    const bridge = stubBridge();
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    const ok = await useProjectWorkspaceStore.getState().acceptTask('task-1', 'accepted');
+
+    expect(ok).toBe(true);
+    expect(bridge.acceptTask).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      status: 'accepted',
+      actionId: expect.any(String),
+    });
+    // A successful write re-reads both the state and the candidate list.
+    expect(bridge.state).toHaveBeenCalledTimes(2);
+    expect(bridge.continuity).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards expectedRevision unchanged — the Host rejects a stale write', async () => {
+    const bridge = stubBridge();
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    await useProjectWorkspaceStore.getState().reviewMemory({
+      key: 'owner',
+      content: 'corrected by the user',
+      status: 'active',
+      expectedRevision: 7,
+    });
+
+    expect(bridge.reviewMemory).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      key: 'owner',
+      content: 'corrected by the user',
+      status: 'active',
+      expectedRevision: 7,
+      actionId: expect.any(String),
+    });
+  });
+
+  it('surfaces a failed review and does not pretend the candidate changed', async () => {
+    stubBridge({
+      reviewDecision: vi.fn().mockResolvedValue({
+        success: false,
+        error: 'Only an explicit user decision can accept a project decision',
+      }),
+    });
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    const ok = await useProjectWorkspaceStore.getState().reviewDecision({
+      key: 'arch',
+      content: 'x',
+      status: 'accepted',
+      expectedRevision: 0,
+    });
+
+    expect(ok).toBe(false);
+    expect(useProjectWorkspaceStore.getState().actionError).toContain('explicit user decision');
+    expect(useProjectWorkspaceStore.getState().actionPending).toBe(false);
+  });
+
+  it('an older bridge without the action channels does not break the project view', async () => {
+    const bridge = stubBridge();
+    // Simulate a pre-upgrade preload: no continuity / action channels.
+    (window as unknown as { electronAPI: { projectWorkspace: Record<string, unknown> } })
+      .electronAPI.projectWorkspace = {
+        state: bridge.state,
+        ensureCoordinator: bridge.ensureCoordinator,
+        workSessionStatus: bridge.workSessionStatus,
+        lease: { acquire: bridge.acquire, get: bridge.get, release: bridge.release },
+      };
+
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+    expect(useProjectWorkspaceStore.getState().snapshot?.project.name).toBe('duya');
+    expect(useProjectWorkspaceStore.getState().continuity).toBeNull();
+  });
+});
+
+describe('project activity paging', () => {
+  const activity = (cursor: number) => ({
+    cursor, type: `event.${cursor}`, taskId: null, sessionId: null, runId: null,
+    source: { type: 'session', id: 'coordinator' }, payload: {}, createdAt: cursor,
+  });
+  const snapshot = (rows: ReturnType<typeof activity>[], nextCursor: number) => ({
+    project: { project_id: 'project-1', name: 'duya', paths: [] },
+    state: null,
+    tasks: [],
+    decisions: [],
+    memories: [],
+    activity: rows,
+    nextCursor,
+    transcriptRefs: [],
+  });
+
+  it('shows a full page newest-first and offers another page', async () => {
+    const fullPage = Array.from({ length: 50 }, (_, i) => activity(i + 1));
+    stubBridge({
+      continuity: vi.fn().mockResolvedValue({ success: true, continuity: snapshot(fullPage, 50) }),
+    });
+
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    const state = useProjectWorkspaceStore.getState();
+    expect(state.continuity?.activity[0]?.cursor).toBe(50);
+    expect(state.continuity?.activity.at(-1)?.cursor).toBe(1);
+    expect(state.continuityHasMoreActivity).toBe(true);
+  });
+
+  it('loads the next page by cursor, merges it without duplicates, and clears the offer', async () => {
+    const continuity = vi.fn()
+      .mockResolvedValueOnce({ success: true, continuity: snapshot([activity(1)], 1) })
+      // A page boundary repeats a row; the store must not render it twice.
+      .mockResolvedValueOnce({ success: true, continuity: snapshot([activity(1), activity(2)], 2) });
+    stubBridge({ continuity });
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+
+    await useProjectWorkspaceStore.getState().loadMoreActivity();
+
+    expect(continuity).toHaveBeenLastCalledWith('project-1', 1);
+    expect(useProjectWorkspaceStore.getState().continuity?.activity.map((a) => a.cursor)).toEqual([2, 1]);
+    expect(useProjectWorkspaceStore.getState().continuityHasMoreActivity).toBe(false);
+    expect(useProjectWorkspaceStore.getState().activityLoading).toBe(false);
+  });
+
+  it('surfaces a failed page read instead of pretending the timeline ended', async () => {
+    const bridge = stubBridge({
+      continuity: vi.fn()
+        .mockResolvedValueOnce({ success: true, continuity: snapshot([activity(1)], 1) })
+        .mockResolvedValueOnce({ success: false, error: 'Host unavailable' }),
+    });
+    await useProjectWorkspaceStore.getState().openProject('project-1');
+    useProjectWorkspaceStore.setState({ continuityHasMoreActivity: true });
+
+    await useProjectWorkspaceStore.getState().loadMoreActivity();
+
+    expect(useProjectWorkspaceStore.getState().actionError).toBe('Host unavailable');
+    expect(useProjectWorkspaceStore.getState().activityLoading).toBe(false);
+    expect(useProjectWorkspaceStore.getState().continuity?.activity.map((a) => a.cursor)).toEqual([1]);
   });
 });
 

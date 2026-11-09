@@ -37,11 +37,18 @@
 import { ipcMain } from 'electron';
 
 import type {
+  ProjectWorkspaceContinuityResult,
   ProjectWorkspaceCoordinatorResult,
+  ProjectWorkspaceDecisionInput,
+  ProjectWorkspaceDecisionResult,
   ProjectWorkspaceLeaseResult,
+  ProjectWorkspaceMemoryInput,
+  ProjectWorkspaceMemoryResult,
   ProjectWorkspaceReleaseResult,
   ProjectWorkspaceStateResult,
   ProjectWorkspaceStatusResult,
+  ProjectWorkspaceTaskAcceptanceInput,
+  ProjectWorkspaceTaskAcceptanceResult,
 } from '../../contracts/project-workspace';
 import {
   getDesktopHostProjectApi,
@@ -61,8 +68,46 @@ const DEFAULT_LEASE_TTL_MS = 5 * 60_000;
 /** How many working sessions one status read may cover. */
 const MAX_STATUS_SESSIONS = 64;
 
+/** Prefix for the audit id the main process attaches to explicit user actions. */
+const USER_ACTION_SOURCE_PREFIX = 'desktop-project-workspace:user-action:';
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function isRevision(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** The main process owns provenance; the renderer only supplies a click id. */
+function userActionSource(actionId: string): { type: 'user_message'; id: string } {
+  return { type: 'user_message', id: `${USER_ACTION_SOURCE_PREFIX}${actionId}` };
+}
+
+/**
+ * Validate the shape of a user action before it reaches the Host.
+ *
+ * HostProjectApiV1 throws a plain Error when `source.type` is not
+ * `user_message`, and #sendApiError maps that to an opaque 500. The renderer
+ * must therefore never get to choose the source type, and malformed action
+ * shapes must be rejected here with an explainable message.
+ */
+function readUserAction(raw: unknown): { projectId: string; actionId: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  if (!isNonEmptyString(value.projectId) || !isNonEmptyString(value.actionId)) return null;
+  if (value.projectId.length > 512 || value.actionId.length > 200) return null;
+  return { projectId: value.projectId, actionId: value.actionId };
+}
+
+const TASK_ACCEPTANCE_STATUSES: ReadonlySet<string> = new Set(['accepted', 'rejected']);
+const DECISION_STATUSES: ReadonlySet<string> = new Set(['proposed', 'accepted', 'superseded']);
+const MEMORY_STATUSES: ReadonlySet<string> = new Set(['candidate', 'active', 'superseded', 'retired']);
+
+function failure(error: unknown, channel: string) {
+  const message = error instanceof Error ? error.message : String(error);
+  logger.error(`${channel} failed`, error instanceof Error ? error : new Error(message), undefined, LogComponent.DB);
+  return { success: false as const, error: message };
 }
 
 /**
@@ -272,6 +317,112 @@ export function registerProjectWorkspaceHandlers(): void {
           LogComponent.DB,
         );
         return { success: false, error: message };
+      }
+    },
+  );
+
+  // ---- Explicit user actions -------------------------------------------
+  //
+  // The Coordinator may only PROPOSE decisions and memory candidates (see
+  // project/tool-service.ts: `user_action_required`), and only accepted
+  // decisions / active memories are injected into the project context
+  // (project/context.ts). Without these channels project memory is a dead
+  // end: the model can write candidates forever and none of them ever
+  // reaches a prompt. Task acceptance has the same shape — the Host API
+  // exists, but no Desktop surface ever called it.
+
+  ipcMain.handle('projects:continuity', async (
+    _event, rawProjectId: unknown, rawAfterCursor: unknown,
+  ): Promise<ProjectWorkspaceContinuityResult> => {
+    if (!isNonEmptyString(rawProjectId)) {
+      return { success: false, error: 'Invalid projectId: must be a non-empty string' };
+    }
+    // Only a non-negative safe integer may become an Activity cursor. The
+    // Host reads `event_id > after`, so a renderer-supplied negative or NaN
+    // would silently change which page of the timeline comes back.
+    const afterCursor = isRevision(rawAfterCursor) ? rawAfterCursor : 0;
+    try {
+      const continuity = await getDesktopHostProjectApi().getProjectContinuity(rawProjectId, { afterCursor, limit: 50 });
+      return { success: true, continuity };
+    } catch (error) {
+      return failure(error, 'projects:continuity');
+    }
+  });
+
+  ipcMain.handle(
+    'projects:task:acceptance',
+    async (_event, rawInput: unknown): Promise<ProjectWorkspaceTaskAcceptanceResult> => {
+      const action = readUserAction(rawInput);
+      const input = rawInput as Partial<ProjectWorkspaceTaskAcceptanceInput> | null;
+      if (!action || !input || !isNonEmptyString(input.taskId) || !TASK_ACCEPTANCE_STATUSES.has(input.status ?? '')) {
+        return { success: false, error: 'Invalid task acceptance: expected projectId, actionId, taskId and accepted|rejected' };
+      }
+      try {
+        const task = await getDesktopHostProjectApi().updateProjectTaskAcceptance({
+          projectId: action.projectId,
+          taskId: input.taskId,
+          status: input.status as ProjectWorkspaceTaskAcceptanceInput['status'],
+          source: userActionSource(action.actionId),
+        });
+        return { success: true, task };
+      } catch (error) {
+        return failure(error, 'projects:task:acceptance');
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'projects:decision:review',
+    async (_event, rawInput: unknown): Promise<ProjectWorkspaceDecisionResult> => {
+      const action = readUserAction(rawInput);
+      const input = rawInput as Partial<ProjectWorkspaceDecisionInput> | null;
+      if (
+        !action || !input ||
+        !isNonEmptyString(input.key) || !isNonEmptyString(input.content) ||
+        !DECISION_STATUSES.has(input.status ?? '') || !isRevision(input.expectedRevision)
+      ) {
+        return { success: false, error: 'Invalid decision review: expected projectId, actionId, key, content, a valid status and expectedRevision' };
+      }
+      try {
+        const decision = await getDesktopHostProjectApi().updateProjectDecision({
+          projectId: action.projectId,
+          key: input.key,
+          content: input.content,
+          status: input.status as ProjectWorkspaceDecisionInput['status'],
+          expectedRevision: input.expectedRevision,
+          source: userActionSource(action.actionId),
+        });
+        return { success: true, decision };
+      } catch (error) {
+        return failure(error, 'projects:decision:review');
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'projects:memory:review',
+    async (_event, rawInput: unknown): Promise<ProjectWorkspaceMemoryResult> => {
+      const action = readUserAction(rawInput);
+      const input = rawInput as Partial<ProjectWorkspaceMemoryInput> | null;
+      if (
+        !action || !input ||
+        !isNonEmptyString(input.key) || !isNonEmptyString(input.content) ||
+        !MEMORY_STATUSES.has(input.status ?? '') || !isRevision(input.expectedRevision)
+      ) {
+        return { success: false, error: 'Invalid memory review: expected projectId, actionId, key, content, a valid status and expectedRevision' };
+      }
+      try {
+        const memory = await getDesktopHostProjectApi().updateProjectMemory({
+          projectId: action.projectId,
+          key: input.key,
+          content: input.content,
+          status: input.status as ProjectWorkspaceMemoryInput['status'],
+          expectedRevision: input.expectedRevision,
+          source: userActionSource(action.actionId),
+        });
+        return { success: true, memory };
+      } catch (error) {
+        return failure(error, 'projects:memory:review');
       }
     },
   );

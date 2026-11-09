@@ -995,6 +995,15 @@ export class HostSessionHttpServer {
       await this.#routeProjects(req, url, res);
       return;
     }
+    // A Session asks for its project continuity by its OWN id. The Host
+    // derives the Project/Task from the durable binding, so a caller cannot
+    // name another project's records. Match before the generic session
+    // routes below, which only own the single-segment /v1/sessions/:id form.
+    const sessionProjectContextMatch = /^\/v1\/sessions\/([^/]+)\/project-context$/.exec(url.pathname);
+    if (sessionProjectContextMatch) {
+      await this.#routeSessionProjectContext(req, url, res, sessionProjectContextMatch[1]!);
+      return;
+    }
     if (url.pathname === '/v1/checkouts' || url.pathname.startsWith('/v1/checkouts/')) {
       await this.#routeCheckouts(req, url, res);
       return;
@@ -3401,6 +3410,36 @@ export class HostSessionHttpServer {
         return;
       }
       this.#sendJson(res, 404, { error: { code: 'not_found' } });
+    } catch (error) {
+      this.#sendApiError(res, error);
+    }
+  }
+
+  /**
+   * Session-scoped project context. This is deliberately NOT a `/v1/projects`
+   * route: the project id is an output of the lookup, never an input the
+   * caller may choose. `200 { context: null }` means "this Session is not
+   * project-bound" — a normal answer for ordinary chats, not an HTTP error.
+   */
+  async #routeSessionProjectContext(
+    req: IncomingMessage, url: URL, res: ServerResponse, rawSessionId: string,
+  ): Promise<void> {
+    const api = this.#options.projectApi;
+    if (!api) {
+      this.#sendJson(res, 404, { error: { code: 'project_api_unavailable' } });
+      return;
+    }
+    if (req.method !== 'GET') {
+      this.#sendJson(res, 405, { error: { code: 'method_not_allowed' } });
+      return;
+    }
+    const sessionId = this.#decodePathPart(rawSessionId, res);
+    if (sessionId === null) return;
+    const rawMax = Number(url.searchParams.get('maxCharacters') ?? 8000);
+    const maxCharacters = Number.isFinite(rawMax) ? Math.max(500, Math.min(16_000, rawMax)) : 8000;
+    try {
+      const context = await api.getSessionProjectContext(sessionId, maxCharacters);
+      this.#sendJson(res, 200, { context });
     } catch (error) {
       this.#sendApiError(res, error);
     }
