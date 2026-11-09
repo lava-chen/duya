@@ -50,6 +50,7 @@ describe('createWorkerSelfInitMessage', () => {
       ok: true,
       message: {
         type: 'init',
+        origin: 'self-init',
         sessionId: 'session-1',
         providerConfig: {
           apiKey: 'frozen-secret',
@@ -57,6 +58,7 @@ describe('createWorkerSelfInitMessage', () => {
           model: 'manifest-model',
           provider: 'openai',
           authStyle: 'api_key',
+          providerId: 'frozen-provider',
         },
         workingDirectory: 'C:\\workspace\\project',
         language: 'zh',
@@ -75,6 +77,7 @@ describe('createWorkerSelfInitMessage', () => {
       ok: true,
       message: {
         type: 'init',
+        origin: 'self-init',
         sessionId: 'session-2',
         providerConfig: {
           apiKey: 'default-secret',
@@ -82,6 +85,7 @@ describe('createWorkerSelfInitMessage', () => {
           model: 'model-from-config',
           provider: 'anthropic',
           authStyle: 'api_key',
+          providerId: 'default-provider',
         },
         workingDirectory: 'worker-cwd',
         language: 'zh',

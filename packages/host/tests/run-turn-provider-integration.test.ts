@@ -77,6 +77,8 @@ interface ScriptedRequest {
   readonly maxTokens: number | undefined;
   readonly thinking: { readonly type?: string; readonly budget_tokens?: number } | undefined;
   readonly messages: readonly { readonly role?: unknown; readonly content?: unknown }[];
+  /** The model the client put on the wire. */
+  readonly model: string | undefined;
   readonly raw: string;
 }
 
@@ -131,12 +133,14 @@ async function startScriptedProvider(script?: (round: number) => string): Promis
       const payload = JSON.parse(raw) as {
         messages?: { role?: unknown; content?: unknown }[];
         max_tokens?: number;
+        model?: string;
         thinking?: { type?: string; budget_tokens?: number };
       };
       requests.push({
         maxTokens: payload.max_tokens,
         thinking: payload.thinking,
         messages: payload.messages ?? [],
+        model: payload.model,
         raw,
       });
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
@@ -333,6 +337,58 @@ describe('Host turn input contract — production worker and provider', () => {
       // The whole point: the two requests differ because of the effort, not
       // because of anything else the runs had in common.
       expect(lowRequest.thinking?.budget_tokens).not.toBe(unsetRequest.thinking?.budget_tokens);
+    } finally {
+      await provider.close();
+      await host.close();
+    }
+  }, 60_000);
+
+  it('answers the next turn with the model the session switched to', async () => {
+    // The bug this pins: the model is bound into the LLM client when the
+    // worker BUILDS the agent, and the agent was built once, from the first
+    // turn's manifest. A later turn whose manifest named another model ran
+    // under the old agent, so the provider kept being asked with the OLD
+    // model while the run was recorded under the new one.
+    const { host, client, provider, sessionId } = await startHarness();
+    try {
+      const first = await client.startAgentRun({
+        sessionId,
+        prompt: 'HOTSWAP_FIRST_TURN: say nothing useful.',
+        model: 'test-model',
+        providerId: 'local-test',
+        apiFormat: 'anthropic',
+      });
+      expect(first.accepted).toBe(true);
+      if (!first.accepted) return;
+      await drainRun(client, first.runId);
+      expect((await client.getAgentRun(first.runId))?.status).toBe('completed');
+
+      // The switch the way `/model` does it: the session row.
+      const updated = await client.update(sessionId, undefined, { model: 'switched-model' });
+      expect(updated.updated).toBe(true);
+
+      const second = await client.startAgentRun({
+        sessionId,
+        prompt: 'HOTSWAP_SECOND_TURN: say nothing useful.',
+        model: 'switched-model',
+        providerId: 'local-test',
+        apiFormat: 'anthropic',
+      });
+      expect(second.accepted).toBe(true);
+      if (!second.accepted) return;
+      await drainRun(client, second.runId);
+      expect((await client.getAgentRun(second.runId))?.status).toBe('completed');
+
+      const firstRequest = provider.requests.find((request) => request.raw.includes('HOTSWAP_FIRST_TURN'));
+      const secondRequest = provider.requests.find((request) => request.raw.includes('HOTSWAP_SECOND_TURN'));
+      expect(firstRequest, 'the provider never saw the first turn').toBeDefined();
+      expect(secondRequest, 'the provider never saw the second turn').toBeDefined();
+      if (firstRequest === undefined || secondRequest === undefined) return;
+      expect(firstRequest.model).toBe('test-model');
+      // The whole point: the SECOND turn reached the provider under the model
+      // the session was switched to, not under the one the agent was built
+      // with.
+      expect(secondRequest.model).toBe('switched-model');
     } finally {
       await provider.close();
       await host.close();

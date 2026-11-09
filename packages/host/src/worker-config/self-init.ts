@@ -16,12 +16,26 @@ export interface WorkerSelfInitRequest {
 export interface WorkerSelfInitMessage {
   readonly type: 'init';
   readonly sessionId: string;
+  /**
+   * Marks the command as the worker's OWN resolution of the run's frozen
+   * selection. An `init` from the agent server carries no marker: the two are
+   * not the same thing, because only this one may be rebuilt from the
+   * manifest when a later run selects a different model.
+   */
+  readonly origin: 'self-init';
   readonly providerConfig: {
     readonly apiKey: string;
     readonly baseURL?: string;
     readonly model: string;
     readonly provider: 'anthropic' | 'openai';
     readonly authStyle: 'api_key';
+    /**
+     * The provider the selection actually resolved to. The worker needs it to
+     * tell whether the running agent is still bound to the provider the run
+     * names: the protocol discriminator alone cannot, because two providers
+     * can speak the same protocol.
+     */
+    readonly providerId?: string;
   };
   readonly workingDirectory: string;
   readonly language: 'zh';
@@ -67,6 +81,7 @@ export function createWorkerSelfInitMessage(
     ok: true,
     message: {
       type: 'init',
+      origin: 'self-init',
       sessionId: request.sessionId,
       providerConfig: {
         apiKey: provider.apiKey,
@@ -74,6 +89,7 @@ export function createWorkerSelfInitMessage(
         model: provider.model.model,
         provider: provider.protocol,
         authStyle: 'api_key',
+        providerId: provider.id,
       },
       workingDirectory,
       language: 'zh',

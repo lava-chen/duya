@@ -89,6 +89,7 @@ vi.mock('@duya/host/local-host', () => ({ startLocalHost: vi.fn() }));
 vi.mock('@duya/data', () => ({ resolveDataRoot: () => '' }));
 
 import { chatTui } from '../chat.js';
+import type { ChatCommandOptions } from '../chat.js';
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -144,16 +145,38 @@ function envelope(seq: number, runId: string, text: string, sessionId = 'session
   } as RunEventEnvelope;
 }
 
-async function startChat(client: HostSessionHttpClient): Promise<{
+async function startChat(
+  client: HostSessionHttpClient,
+  options: ChatCommandOptions = {},
+): Promise<{
   readonly running: Promise<number>;
   readonly app: FakeTui;
 }> {
-  const running = chatTui(client, 'session-1' as SessionId, {});
+  const running = chatTui(client, 'session-1' as SessionId, options);
   await waitUntil(() => harness.app !== null);
   return { running, app: harness.app! };
 }
 
 describe('chatTui production callback wiring', () => {
+  it('sends the session model with every turn, not the model the process was launched with', async () => {
+    // The bug this pins: the turn carried the launch flag, and the Host
+    // prefers a request-level model over the session row. So `/model` wrote
+    // the session row and every later turn still ran under the flag -- the
+    // switch was a no-op for the rest of the session.
+    const client = makeClient();
+    const { running, app } = await startChat(client, { model: 'launch-flag-model' });
+    app.options.onSubmit('first');
+    await waitUntil(() => vi.mocked(client.startAgentRun).mock.calls.length === 1);
+    const input = vi.mocked(client.startAgentRun).mock.calls[0]?.[0] as {
+      readonly model?: string;
+      readonly providerId?: string;
+    };
+    expect(input.model).toBe('test-model');
+    expect(input.providerId).toBe('anthropic');
+    app.options.onExit();
+    await expect(running).resolves.toBe(0);
+  });
+
   it('refuses admission when a failed cancellation leaves the old run live', async () => {
     const client = makeClient({
       watchAgentRunEvents: vi.fn(async function* (_id: RunId, { signal }: { signal: AbortSignal }) {

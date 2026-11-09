@@ -60,6 +60,7 @@ import { estimateMessagesTokens } from './worker-compaction/token-estimate.js';
 import { canReuseAgentForInit, workerInitDifferences, type WorkerInitShape } from './worker-init-fingerprint.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
 import { createWorkerSelfInitMessage } from '@duya/host/worker-config/self-init';
+import { manifestSelectsDifferentAgent } from '@duya/host/worker-config/agent-binding';
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
     (globalThis as {
         crypto: {
@@ -79,12 +80,22 @@ interface VisionConfig {
 interface InitMessage {
     type: 'init';
     sessionId: string;
+    /**
+     * Set only on the command the worker composes for ITSELF out of the run's
+     * frozen manifest. An `init` from the agent server has no marker, and the
+     * two must not be confused: only a self-initialized agent may be rebuilt
+     * from a later manifest, because the agent server resolves providers on
+     * its own side and would be overridden by that rebuild.
+     */
+    origin?: 'self-init';
     providerConfig: {
         apiKey: string;
         baseURL?: string;
         model: string;
         provider: 'anthropic' | 'openai' | 'ollama';
         authStyle?: 'api_key' | 'auth_token';
+        /** The provider the agent is bound to, when the sender resolved one. */
+        providerId?: string;
         visionConfig?: VisionConfig;
         compactModelConfig?: VisionConfig;
         runtimeConfig?: ProviderRuntimeConfig;
@@ -215,6 +226,18 @@ let existingMessageCount = 0;
  * which the turn needs.
  */
 let currentInitShape: WorkerInitShape | null = null;
+/**
+ * Whether the running agent was built from the run's own frozen manifest
+ * (the worker resolved it) rather than from an `init` the agent server sent.
+ *
+ * The difference decides who owns the model binding. An agent the agent server
+ * initialized is re-initialized by the agent server on every turn, so the
+ * server is the one that has to notice a model change. An agent the worker
+ * resolved itself has no such channel -- the Host only sends `chat:start` --
+ * so the worker has to compare the manifest of the arriving turn against the
+ * agent it is running, and rebuild when they disagree.
+ */
+let agentBoundByManifest = false;
 /**
  * Whether the last MCP handshake threw. The reuse path keeps the agent AND
  * skips a new handshake, so a transient failure must block reuse: the next
@@ -1287,7 +1310,7 @@ async function initAgent(config: InitMessage['providerConfig'] | null | undefine
         throw new Error('No provider config available. Please configure an API provider in Settings.');
     }
     mainModelName = config.model;
-    currentProviderId = config.runtimeConfig?.providerId ?? '';
+    currentProviderId = config.runtimeConfig?.providerId ?? config.providerId ?? '';
     if (config.runtimeConfig) {
         log('[Agent-Process] runtimeConfig present (Phase 2)', {
             providerId: config.runtimeConfig.providerId,
@@ -2903,24 +2926,65 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
     if (msgType !== 'db:response') {
         log('[Agent-Process] Received command:', msgType, 'sessionId:', (msg as Record<string, unknown>).sessionId);
     }
-    if (msgType === 'chat:start' && !agent && !chatInProgress) {
-        const selfInit = buildSelfInitMessage(msg as ChatStartMessage);
-        if (selfInit !== null) {
-            log('[Agent-Process] No init received; self-initializing from config.toml');
-            await handleCommand(selfInit);
-            if (agent !== null) {
-                // Use the normal non-blocking admission path so stdin can
-                // continue delivering approval and interrupt commands.
-                await handleCommand(msg);
+    if (msgType === 'chat:start' && !chatInProgress) {
+        const chatMsg = msg as ChatStartMessage;
+        // The Host sends no `init`: the worker resolved the run's selection
+        // itself, and an agent still bound to an older selection answers this
+        // turn with the OLD model while the run is recorded under the new one.
+        // So the arriving manifest is compared against the running agent, and
+        // a disagreement rebuilds the agent -- the model is part of the agent,
+        // not an argument of a request.
+        if (agent !== null && agentBoundByManifest && manifestSelectsDifferentAgent(
+            chatMsg.manifest?.agent,
+            { model: mainModelName, providerId: currentProviderId },
+        )) {
+            log('[Agent-Process] The run selected a different model; rebuilding the agent for it', {
+                model: mainModelName,
+                selected: chatMsg.manifest?.agent?.model,
+                provider: chatMsg.manifest?.agent?.providerId,
+            });
+            // The rebuild must not be short-circuited by the reuse check: the
+            // payload differs, but the check compares against the shape the
+            // agent was built from, and this agent is being replaced.
+            currentInitShape = null;
+            const selfInit = buildSelfInitMessage(chatMsg);
+            if (selfInit !== null) {
+                await handleCommand(selfInit);
+                if (agent !== null) {
+                    await handleCommand(msg);
+                }
+                else {
+                    sendToMain({
+                        type: 'chat:error',
+                        message: 'worker could not switch to the selected model; see worker logs',
+                        sessionId: chatMsg.sessionId,
+                    });
+                }
             }
-            else {
-                sendToMain({
-                    type: 'chat:error',
-                    message: 'worker self-initialization from config.toml failed; see worker logs',
-                    sessionId: (msg as ChatStartMessage).sessionId,
-                });
-            }
+            // The self-init already reported the failure when it could not
+            // resolve a provider. Answering under the previous model instead
+            // would make the run claim a model it did not use.
             return;
+        }
+        if (!agent) {
+            const selfInit = buildSelfInitMessage(chatMsg);
+            if (selfInit !== null) {
+                log('[Agent-Process] No init received; self-initializing from config.toml');
+                await handleCommand(selfInit);
+                if (agent !== null) {
+                    // Use the normal non-blocking admission path so stdin can
+                    // continue delivering approval and interrupt commands.
+                    await handleCommand(msg);
+                }
+                else {
+                    sendToMain({
+                        type: 'chat:error',
+                        message: 'worker self-initialization from config.toml failed; see worker logs',
+                        sessionId: chatMsg.sessionId,
+                    });
+                }
+                return;
+            }
         }
     }
     switch (msgType) {
@@ -2932,6 +2996,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 sendToMain({ type: 'ready', sessionId: initMsg.sessionId, status: 'deferred', reason: 'chat_in_progress' });
                 break;
             }
+            // Who owns the model binding from here on. The agent server sends
+            // an `init` on every turn and owns the provider resolution; a
+            // self-init means the worker resolved the run's manifest, and the
+            // worker is then the one that has to notice a later run selecting
+            // a different model.
+            agentBoundByManifest = initMsg.origin === 'self-init';
             const previousSessionId = sessionId;
             sessionId = initMsg.sessionId;
             // The agent server sends an `init` on EVERY turn. When the payload

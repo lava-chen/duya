@@ -1644,6 +1644,21 @@ export async function chatTui(
     // unless the controller already echoed them (a steer is shown the moment
     // the user sends it).
     if (!draft.echoed) tui.printUser(prompt);
+    // The model this turn runs under is the SESSION's model, not the model the
+    // process was launched with. `/model` changes the session, and a launch
+    // flag that outranked it would make the switch a no-op for the rest of
+    // the session -- the Host prefers a request-level model over the session
+    // row, so the flag would keep answering with the old model.
+    const sessionModel = activeSession.model !== '' ? activeSession.model : options.model;
+    const sessionProviderId = activeSession.providerId !== '' ? activeSession.providerId : options.providerId;
+    // The launch flag's protocol belongs to the launch provider. Once the
+    // session runs under another provider, the wire protocol is that
+    // provider's to answer, not the flag's.
+    const sessionApiFormat = (
+      options.providerId !== undefined
+      && activeSession.providerId !== ''
+      && activeSession.providerId !== options.providerId
+    ) ? undefined : options.apiFormat;
     try {
       const start = await client.startAgentRun({
         sessionId: runSessionId,
@@ -1662,9 +1677,9 @@ export async function chatTui(
               },
             }
           : {}),
-        ...(options.model !== undefined ? { model: options.model } : {}),
-        ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
-        ...(options.apiFormat !== undefined ? { apiFormat: options.apiFormat } : {}),
+        ...(sessionModel !== undefined ? { model: sessionModel } : {}),
+        ...(sessionProviderId !== undefined ? { providerId: sessionProviderId } : {}),
+        ...(sessionApiFormat !== undefined ? { apiFormat: sessionApiFormat } : {}),
         ...(effort !== null ? { effort } : {}),
         workingDirectory: executionCwd(),
       });

@@ -1034,10 +1034,15 @@ async function handlePostChat(
     const prompt = parsed.prompt || '';
     let providerConfig = parsed.providerConfig;
     let workingDirectory = parsed.workingDirectory;
+    // The session row is read for the execution cursor, and it is also the
+    // record of WHICH model and provider this session runs under: it is where
+    // a `/model` switch lands, in this app and in the TUI alike.
+    let sessionRow: Record<string, unknown> | undefined;
     // Persisted checkout cursors override a client cache; workspace identity stays unchanged.
     try {
       if (dbRequest) {
         const cursorRow = await dbRequest('session:get', { id: sessionId }) as ChatExecutionCursorRow | undefined;
+        sessionRow = cursorRow as Record<string, unknown> | undefined;
         const cursor = decideChatExecutionDirectory(cursorRow, parsed.options);
         if (cursor.kind === 'recover-transition') {
           revertStreamingLock();
@@ -1267,6 +1272,24 @@ async function handlePostChat(
       // workers). Idempotent — a no-op when the flag is already set.
       if (botAgentId) {
         workerManager.setKeepAlive(sessionId, true);
+      }
+
+      // A client that carries no credentials of its own cannot complete the
+      // provider config on its own: the TUI reaches the Desktop Host over
+      // HTTP and names a model, while the API key lives in the Desktop's
+      // provider store. The session row says which provider and model the
+      // session runs under, so the config is completed here rather than
+      // rejecting the turn or running it without a key.
+      if (providerConfig === undefined || typeof providerConfig.apiKey !== 'string') {
+        const completed = await completeProviderConfigFromSession(providerConfig, sessionRow, dbRequest);
+        if (completed !== undefined) {
+          providerConfig = completed;
+          httpLogger.info('Completed the chat provider config from the session row', {
+            sessionId,
+            providerId: completed.providerId,
+            model: completed.model,
+          });
+        }
       }
 
       // Reject early if provider config is missing or incomplete so the
@@ -2506,7 +2529,56 @@ interface ChatInitParams {
 }
 
 /**
- * Build the legacy `InitMessage.providerConfig` shape that the agent
+ * Complete a provider config that carries no credentials of its own.
+ *
+ * The renderer sends the whole config, key included. A client that reaches the
+ * Desktop Host over HTTP -- the TUI does -- cannot: it names a model and a
+ * provider, and the API key stays in the Desktop's provider store. Without
+ * this, such a turn is either rejected as "No provider or model configured"
+ * or runs against a worker that has no key.
+ *
+ * The session row is the record of what the session runs under, and it is
+ * where a `/model` switch lands, so the model comes from there. Fields the
+ * caller DID send win: a request that names a model means that model.
+ */
+export async function completeProviderConfigFromSession(
+  providerConfig: Record<string, unknown> | undefined,
+  sessionRow: Record<string, unknown> | undefined,
+  dbRequest: RouterDeps['dbRequest'],
+): Promise<Record<string, unknown> | undefined> {
+  if (sessionRow === undefined || typeof dbRequest !== 'function') return undefined;
+  const named = providerConfig ?? {};
+  const providerId = typeof named.providerId === 'string' && named.providerId !== ''
+    ? named.providerId
+    : typeof sessionRow.provider_id === 'string' && sessionRow.provider_id !== ''
+      ? sessionRow.provider_id
+      : '';
+  let apiProvider: ApiProvider | undefined;
+  if (providerId !== '' && providerId !== 'env') {
+    try {
+      apiProvider = await dbRequest('config:provider:get', { id: providerId }) as ApiProvider | undefined;
+    } catch {
+      // Fall through to the active provider.
+    }
+  }
+  if (!apiProvider) {
+    try {
+      apiProvider = await dbRequest('config:provider:getActive', {}) as ApiProvider | undefined;
+    } catch {
+      // No provider available; buildInitProviderConfig handles that.
+    }
+  }
+  const resolved = buildInitProviderConfig(sessionRow, apiProvider);
+  if (resolved === undefined) return undefined;
+  return {
+    ...resolved,
+    ...named,
+    model: typeof named.model === 'string' && named.model !== '' ? named.model : resolved.model,
+  };
+}
+
+/**
+ * The legacy `InitMessage.providerConfig` shape that the agent
  * worker expects, from the persisted session row + the resolved
  * `ApiProvider`. The legacy `ApiProvider` DTO does NOT carry a `model`
  * field (it lives on `chat_sessions.model`), and it uses `providerType`
