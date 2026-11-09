@@ -1,3 +1,4 @@
 [
+  "evals/agent/performance/recorder.test.mjs",
   "tests/rules-compliance.test.mjs"
 ]

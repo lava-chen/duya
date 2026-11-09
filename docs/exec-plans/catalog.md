@@ -49,7 +49,8 @@
 | [duya-app-mcp-layer](active/616-duya-app-mcp-layer.md) | P1 | 按本计划的 T 卡与验证记录接续；桌面扩展另见 618 |
 | [612 rollout 恢复](active/612-rollout-recovery-hardening.md) | P1 | 先核对 Phase 1 的实际落地与证据，Phase 2/3 决策见正文 |
 | [617 基础工具 v2](active/617-basic-tool-interface-v2.md) | P1 | 读取本计划切片和依赖，核对基础工具 schema 与生产接线 |
-| [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | Phase 0 观测已落地（逐段 sha256 observer + 分段 dump）；下一步按实测 hash 表确认段归类，再动 Phase 1 的既有缺陷 |
+| [619 提示词组装](active/619-prompt-assembly-context-channel.md) | P0 | Phase 0 观测已落地（逐段 sha256 observer + 分段 dump）；下一步按实测 hash 表确认段归类，再动 Phase 1 的既有缺陷。**Phase 4 被 620 Phase A 阻塞** |
+| [620 会话记录架构](active/620-session-record-architecture.md) | P0 | 从 A1 开始：把 `rollout-events.ts` 的六个 type 收成一处可派生的权威，先不动任何派生点；A 是 619 Phase 4 的硬前置 |
 
 ## 关联切片与待确认提案
 
