@@ -65,6 +65,15 @@ export interface CommandContext {
   readonly hasSession: boolean;
   /** A turn is currently streaming. */
   readonly busy: boolean;
+  /**
+   * Can this surface hold a command until the turn ends and run it then?
+   *
+   * The CLI has a queue for deferred commands; the Desktop does not, so a
+   * command it could only defer is refused there instead. It is a fact about
+   * the SURFACE, in the same way `hasSession` is: the catalog decides the
+   * tiers, the surface says which of them it can honour.
+   */
+  readonly canDefer?: boolean;
 }
 
 export interface CommandSpec {
@@ -98,6 +107,23 @@ export interface CommandSpec {
    * safe; anything that mutates the conversation is not.
    */
   readonly availableWhileBusy?: boolean;
+  /**
+   * May this be QUEUED while a turn is streaming, to run once it ends?
+   *
+   * A command that changes the conversation is not safe WHILE a turn is
+   * reading that conversation — but it is perfectly safe once the turn has
+   * settled: compacting afterwards, or switching the model for the next turn,
+   * is what the user meant.
+   *
+   * This is the middle tier between {@link availableWhileBusy} (run now) and
+   * "refused" (never safe). A surface that cannot queue falls back to
+   * refusing, which is why the Desktop refuses these while the CLI queues
+   * them.
+   *
+   * Mutually exclusive with {@link availableWhileBusy}: a command that may run
+   * right now never waits.
+   */
+  readonly deferWhileBusy?: boolean;
   /** Does the command accept free text after the name (`/rename <title>`)? */
   readonly supportsInlineArgs?: boolean;
   /**
@@ -158,6 +184,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     argsHint: '[messageId]',
     category: 'session',
     surfaces: ['cli'],
+    // Forking copies the conversation as it stands; forking it half-way
+    // through a running turn would copy a conversation that is still being
+    // written. Once the turn settles the copy is of a settled conversation.
+    deferWhileBusy: true,
   },
   {
     name: 'project',
@@ -183,6 +213,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     surfaces: ['desktop', 'cli'],
     supportsInlineArgs: true,
     requiresSession: true,
+    // The title is not the conversation, but writing it now races the running
+    // turn's own writes to the same session row. Renaming after the turn
+    // settles is the same rename, without the conflict.
+    deferWhileBusy: true,
   },
   {
     name: 'archive',
@@ -221,6 +255,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     // The CLI reaches the same worker-side compaction through a Host HTTP exit.
     surfaces: ['desktop', 'cli'],
     requiresSession: true,
+    // Compaction rewrites the context the running turn is reading from, so it
+    // cannot run DURING the turn — but it is exactly what the user wants
+    // right after it: the turn is over, and the conversation is long.
+    deferWhileBusy: true,
   },
   {
     // Plan PR-4. The init: create the repository-root AGENTS.md, so that
@@ -355,6 +393,8 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     descriptionZh: '退出当前聊天',
     category: 'exit',
     surfaces: ['cli'],
+    // Leaving is the one thing that must never be blocked by a running turn.
+    availableWhileBusy: true,
   },
 
   // ── config ────────────────────────────────────────────────────────────
@@ -367,6 +407,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     argsHint: '[model]',
     category: 'config',
     surfaces: ['desktop', 'cli'],
+    // The running turn keeps the model it started with; this changes the model
+    // of the NEXT one. Deferring it means the switch lands on a session that is
+    // not being written to.
+    deferWhileBusy: true,
   },
   {
     // pi's name for the same ladder. duya calls it effort because that is what
@@ -831,14 +875,66 @@ export function canonicalName(token: string): string | undefined {
  */
 export function specsForSurface(
   surface: CommandSurface,
-  options: { readonly hasSession?: boolean; readonly busy?: boolean } = {},
+  options: {
+    readonly hasSession?: boolean;
+    readonly busy?: boolean;
+    readonly canDefer?: boolean;
+  } = {},
 ): readonly CommandSpec[] {
-  return COMMAND_SPECS.filter((spec) => {
-    if (!spec.surfaces.includes(surface)) return false;
-    if (options.hasSession === false && spec.requiresSession === true) return false;
-    if (options.busy === true && spec.availableWhileBusy !== true) return false;
-    return true;
+  return availableSpecsFor(surface, {
+    hasSession: options.hasSession ?? true,
+    busy: options.busy ?? false,
+    canDefer: options.canDefer ?? false,
   });
+}
+
+/**
+ * May this command be OFFERED while a turn is streaming?
+ *
+ * A command that would be refused is not offered: the popup must not offer
+ * something whose only outcome is a refusal. A command that can be run now OR
+ * deferred until the turn ends can be offered, because submitting it does
+ * something sensible either way.
+ *
+ * A surface that cannot defer has no third option, so for it a deferrable
+ * command is offerable only if it is also runnable now.
+ */
+function offerableWhileBusy(spec: CommandSpec, canDefer: boolean): boolean {
+  if (spec.availableWhileBusy === true) return true;
+  return canDefer && spec.deferWhileBusy === true;
+}
+
+/**
+ * How a command may be used while a turn is streaming.
+ *
+ * - `run` — safe to run right now.
+ * - `defer` — not safe to run right now, but safe once the turn ends: the
+ *   surface queues it and runs it afterwards.
+ * - `refuse` — not safe at all; the surface says why and does nothing.
+ */
+export type BusyDisposition = 'run' | 'defer' | 'refuse';
+
+/** What a surface should do with a command right now, and why when it cannot. */
+export type CommandBusyAction =
+  | { readonly kind: 'run' }
+  | { readonly kind: 'defer' }
+  | { readonly kind: 'refuse'; readonly reason: string };
+
+/**
+ * Why this command cannot run right now, or null when it can.
+ *
+ * The two facts a spec can declare that block a run: no session, and a turn
+ * in flight. The reason text comes from the spec, so the surfaces that cannot
+ * queue a command still explain themselves identically.
+ */
+function blockingReason(spec: CommandSpec, context: CommandContext): string | null {
+  if (spec.requiresSession === true && !context.hasSession) {
+    return spec.unavailableReason ?? `Start a session before using /${spec.name}.`;
+  }
+  if (context.busy && spec.availableWhileBusy !== true) {
+    return spec.unavailableReason ?? `Stop the running turn before using /${spec.name}.`;
+  }
+  return null;
 }
 
 /**
@@ -848,28 +944,57 @@ export function specsForSurface(
  * work here". The command stays resolvable (rule 1) so the surface can tell
  * the user WHY instead of forwarding the token to the model as prose.
  *
- * The reason text comes from the spec, so the Desktop and the CLI explain
- * themselves the same way. `availableWhileBusy` and `requiresSession` are the
- * two facts a spec can declare; a spec that declares neither is always
- * available.
+ * "Can run" means "can run NOW". A command that is safe only after the turn
+ * ends is not available, so a surface without a queue refuses it — see
+ * {@link commandBusyAction} for the three-tier answer.
  */
 export function commandAvailability(
   spec: CommandSpec,
   context: CommandContext,
 ): { readonly available: true } | { readonly available: false; readonly reason: string } {
+  const reason = blockingReason(spec, context);
+  return reason === null ? { available: true } : { available: false, reason };
+}
+
+/**
+ * What a surface should do with this command right now, and why when it
+ * cannot.
+ *
+ * The three tiers, in the order they are decided:
+ *
+ * 1. A command that declares `availableWhileBusy` runs right now.
+ * 2. A command that declares `deferWhileBusy` waits for the turn to end: the
+ *    surface queues it and runs it afterwards. This is the tier a surface with
+ *    a queue gets; a surface without one falls back to refusing.
+ * 3. Everything else is refused, with the catalog's reason.
+ *
+ * A command with no session is refused outright: there is nothing to defer
+ * to, and "run it once a session exists" is not a promise this surface can
+ * keep.
+ *
+ * Both this and {@link commandAvailability} read the same spec declarations,
+ * so they cannot disagree about which tier a command is in.
+ */
+export function commandBusyAction(
+  spec: CommandSpec,
+  context: CommandContext,
+): CommandBusyAction {
   if (spec.requiresSession === true && !context.hasSession) {
     return {
-      available: false,
+      kind: 'refuse',
       reason: spec.unavailableReason ?? `Start a session before using /${spec.name}.`,
     };
   }
-  if (spec.availableWhileBusy !== true && context.busy) {
+  if (context.busy && spec.availableWhileBusy !== true) {
+    // A surface that cannot queue has only two answers left: run it now
+    // (unsafe) or refuse it. Refusing is the honest one.
+    if (spec.deferWhileBusy === true && context.canDefer === true) return { kind: 'defer' };
     return {
-      available: false,
+      kind: 'refuse',
       reason: spec.unavailableReason ?? `Stop the running turn before using /${spec.name}.`,
     };
   }
-  return { available: true };
+  return { kind: 'run' };
 }
 
 /**
@@ -883,11 +1008,13 @@ export function availableSpecsFor(
   surface: CommandSurface,
   context: CommandContext,
 ): readonly CommandSpec[] {
-  return COMMAND_SPECS.filter(
-    (spec) =>
-      spec.surfaces.includes(surface) &&
-      commandAvailability(spec, context).available,
-  );
+  const canDefer = context.canDefer === true;
+  return COMMAND_SPECS.filter((spec) => {
+    if (!spec.surfaces.includes(surface)) return false;
+    if (spec.requiresSession === true && !context.hasSession) return false;
+    if (context.busy && !offerableWhileBusy(spec, canDefer)) return false;
+    return true;
+  });
 }
 
 /** Chinese description when present, else the English one. */
