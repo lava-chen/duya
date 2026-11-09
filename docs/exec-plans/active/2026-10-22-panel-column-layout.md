@@ -29,7 +29,7 @@ base：96dadf4d · owner：mavis
 | **A 列树渲染** | `codex/panel-layout-columns` / `panel-layout-columns` | 新增 `packages/ui/src/components/layout/panels/layout-model.ts`；`packages/ui/src/hooks/usePanel.ts`；`packages/ui/src/components/layout/PanelZone.tsx`；`packages/ui/src/components/layout/app-shell.tsx`；`packages/ui/src/styles/workspace.css`；`packages/ui/src/components/layout/PanelZone.test.tsx`；新增 `packages/ui/src/components/layout/__tests__/layout-model.test.ts` | 本计划 |
 | **B 脱窗（Electron 侧）** | `codex/panel-layout-detach` / `panel-layout-detach` | `apps/desktop/src/main/**`；`apps/desktop/src/preload/**` | 本计划（IPC 契约与 A 的数据模型解耦，只用字符串参数） |
 | **C 拖拽换位** | `codex/panel-layout-drag` / `panel-layout-drag` | `packages/ui/src/components/layout/PanelHeader.tsx`；`packages/ui/src/components/layout/ResizeHandle.tsx`；`layout-model.ts`；`usePanel.ts` | **A 落地后** |
-| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css` | 与 A 无冲突，可并行 |
+| **D 用量浮层** | `codex/panel-layout-usage` / `panel-layout-usage` | `packages/ui/src/components/chat/ContextUsageRing.tsx`；新增 `packages/ui/src/components/chat/ContextUsageBreakdown.tsx`（+ 同名测试）；`packages/ui/src/styles/composer-panels.css`；`packages/ui/src/styles/chat.css`；`packages/ui/src/styles/globals.css` | 与 A 无冲突，可并行 |
 
 集成顺序：**A → C**；B、D 独立，可各自先合。
 
@@ -99,6 +99,9 @@ interface WorkspaceLayout { columns: Column[]; activePaneId: PaneId | null }
 - **脱窗有现成基建**：`apps/desktop/src/main/**` 已有 5 处 `new BrowserWindow`（overlay / badge / wake / safe-mode），`core/window-manager.ts` 提供主窗创建与背板处理。状态所有权留在主窗，脱窗窗口只发意图。
 - **颜色必须采样不能目测**：本轮调研中目测曾把 Memory files 的灰色色块看成绿色。用量浮层采样值——MCP tools `#2A78D6`、System tools `#EB6834`、Messages `#1BAF7A`、System prompt `#EDA100`、Skills/Memory files/MCP server instructions `#898781`、Autocompact buffer `#C3C2B7`、Free space `#EEEDEC`；浮层宽 `450px`、内边距 `15px`、色条 `420×5px`、段间 `1–2px` 缝、明细行高 `23px`、色块 `9×9px`。
 - **duya 已有上下文用量体系，切片 D 是「换呈现」不是「从零做」**：`packages/ui/src/components/chat/ContextUsageRing.tsx` 是环形指示器；`packages/ui/src/stores/context-usage-store.ts` 的 `composition` 已按**内容来源**分了 10 个桶（`system` / `conversation` / `injectedContext` / `skills` / `toolDefinitions` / `toolResults` / `attachments` / `memory` / `providerOverhead` + `unattributedObservedTokens`）。这与 Claude 的 9 桶是同一套思路，只是 duya 更细。切片 D = 环形 → **分段色条 + 按来源分桶的展开浮层**；数据侧不用改口径。
+- **切片 D 的 9 桶映射（`composition` → 展示桶）**：`system[]`→系统提示词；`toolDefinitions/toolResults` 中非 MCP 的→系统工具；MCP 相关（标签 `mcp:` / `connector:` / `plugin:`）→MCP 工具；`conversation[] + attachments[]`→对话消息；`skills[]`→技能；`memory[]`→记忆文件；`injectedContext[]`→运行时注入；`providerOverhead[] + unattributed`→其他开销；`contextWindow − usedTokens`→空闲空间。**估算值先缩放到 headline 的 `usedTokens`**（只缩不放），差额显式留在「其他开销」的「未归属余量」里，不静默丢弃——桶占比之和 + 空闲空间恒等于 100%。
+- **切片 D 的配色**：浅色用 Claude 采样值原样（`#EDA100` / `#EB6834` / `#2A78D6` / `#1BAF7A` / `#898781` / `#C3C2B7` / `#EEEDEC`）；深色另取一套同色相提亮值（`#F5B942` / `#FF8A5C` / `#5AA2F0` / `#3FD39B` / `#A8A6A0` / `#7D7B73` / `#45443F`），因为采样值里的琥珀/灰在 `#1e1e1e` 面板上对比度不足。两套都落在 `packages/ui/src/styles/globals.css` 的 `--usage-bucket-*` 变量上，组件只引用变量。
+- **切片 D 的挂载点**：`MessageInput.tsx` / `BotDirectChatView.tsx` 是他人路径，不能改调用点，所以浮层全部实现在 `ContextUsageRing.tsx` 内部——hover 走 `.context-composition-popover`（保留旧 class 名以维持既有测试的 DOM 契约），composer 点击走受控的 `ContextUsagePanel`（展开态由父组件持有，浮层内容挂在面板里）。
 - **注意 `packages/ui/src/components/usage/` 是另一回事**（provider 配额 / 用量看板 / 日 token 图表），不是上下文窗口用量，别混。
 - **本机无 Workspace MCP 工具**（`workspace_get_context` 不可用），按根 AGENTS.md 允许的方式，改从版本化计划与 Git 对账推进共享状态。
 

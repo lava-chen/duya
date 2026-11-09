@@ -145,3 +145,191 @@
   right: auto;
   left: 0;
 }
+
+/* ==========================================================================
+   Context usage breakdown (slice D) - the expanded usage surface.
+   Segmented bar + per-source bucket table, mirroring Claude Desktop's
+   expanded context panel. Palette tokens (--usage-bucket-*) live in
+   globals.css; the shell below is positioned by the ring trigger.
+   ========================================================================== */
+
+.context-composition-popover {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 61;
+  width: min(450px, calc(100vw - 32px));
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-solid, var(--surface));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  color: var(--text);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.context-composition-popover[data-visible='true'] {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+.context-usage-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.context-usage-breakdown__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.context-usage-breakdown__headline {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.context-usage-breakdown__headline strong {
+  font-size: 23px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-breakdown__headline span {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Segmented bar: 5px tall, 2px gaps, pill-shaped outer ends. */
+.context-usage-breakdown__bar {
+  display: flex;
+  gap: 2px;
+  height: 5px;
+}
+
+.context-usage-breakdown__segment {
+  min-width: 2px;
+  border-radius: 2px;
+}
+
+.context-usage-breakdown__segment:first-child {
+  border-radius: 999px 2px 2px 999px;
+}
+
+.context-usage-breakdown__segment:last-child {
+  border-radius: 2px 999px 999px 2px;
+}
+
+.context-usage-breakdown__rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.context-usage-breakdown__row {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 23px;
+  font-size: 12px;
+}
+
+.context-usage-breakdown__chip {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.context-usage-breakdown__label {
+  color: var(--text);
+}
+
+.context-usage-breakdown__label--toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-usage-breakdown__label--toggle::before {
+  content: '▸';
+  font-size: 9px;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+}
+
+.context-usage-breakdown__label--toggle[aria-expanded='true']::before {
+  transform: rotate(90deg);
+}
+
+.context-usage-breakdown__tokens {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-breakdown__percent {
+  min-width: 46px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.context-usage-breakdown__children {
+  padding-left: 18px;
+}
+
+.context-usage-breakdown__child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.context-usage-breakdown__child-tokens {
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage-breakdown__details {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.context-usage-breakdown__details:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.context-usage-breakdown__note,
+.context-usage-breakdown__empty {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-composition-popover {
+    transition: none;
+  }
+}
